@@ -4862,3 +4862,70 @@ async def test_saved_preview_protocol_omission_and_explicit_edits(
     assert result == {"protocol_version": expected}
     assert saved.protocol_version == "2025-11-25"
     assert payload.mcp_info == metadata
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("virtual", [False, True])
+@pytest.mark.parametrize("bearer,claims,expected", [
+    ("sk-guardrail-admission", None, None),
+    ("caller.jwt.assertion", {"sub": "caller"}, "caller.jwt.assertion"),
+    ("upstream-token", None, "upstream-token"),
+])
+async def test_rest_guardrail_bearer_excludes_admission_key(
+    monkeypatch: pytest.MonkeyPatch, virtual: bool,
+    bearer: str, claims: dict[str, str] | None, expected: str | None,
+) -> None:
+    import litellm
+    from litellm.caching.dual_cache import DualCache
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.proxy._experimental.mcp_server.tool_registry import global_mcp_tool_registry
+
+    observed: Final[asyncio.Queue[object]] = asyncio.Queue()
+
+    class CaptureBearer(CustomLogger):
+        async def async_pre_call_hook(
+            self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache,
+            data: dict[str, object], call_type: str,
+        ) -> None:
+            if call_type == "call_mcp_tool" and "incoming_bearer_token" in data:
+                observed.put_nowait(data["incoming_bearer_token"])
+
+    async def echo() -> str:
+        return "guarded-result"
+
+    auth: Final = UserAPIKeyAuth(
+        api_key="sk-guardrail-admission", jwt_claims=claims,
+        object_permission={"object_permission_id": "guarded", "mcp_servers": ["guarded"], "mcp_tool_search_enabled": virtual},
+    )
+    managed: Final = MCPServer(
+        server_id="guarded", name="guarded", transport=MCPTransport.http,
+        spec_path="/catalog.yaml", allow_all_keys=True,
+    )
+    monkeypatch.setitem(rest_endpoints.global_mcp_server_manager.registry, managed.server_id, managed)
+    monkeypatch.setattr(litellm, "callbacks", [CaptureBearer()])
+    global_mcp_tool_registry.register_tool(
+        name="guarded-echo", description="Echo", input_schema={"type": "object"}, handler=echo,
+    )
+    headers: Final = {"authorization": f"Bearer {bearer}", **(
+        {} if claims else {"x-litellm-api-key": "sk-guardrail-admission"}
+    )}
+    payload: Final = {
+        "server_id": "guarded", "name": "mcp_tool_call" if virtual else "guarded-echo",
+        "arguments": {"tool_name": "guarded-echo", "arguments": {}} if virtual else {},
+    }
+    try:
+        result: Final = await rest_endpoints.call_tool_rest_api(
+            _build_request(headers, path="/mcp-rest/tools/call", json_body=payload),
+            user_api_key_dict=auth,
+        )
+        assert result.is_error is False
+        assert observed.qsize() == 1
+        assert observed.get_nowait() == expected
+        if claims is None:
+            list_headers: Final = rest_endpoints._extract_mcp_headers_from_request(
+                _build_request(headers), auth,
+            )[2]
+            authorization: Final = list_headers.get("authorization", "")
+            assert (authorization.removeprefix("Bearer ") or None) == expected
+    finally:
+        global_mcp_tool_registry.unregister_tools_with_prefix("guarded-")

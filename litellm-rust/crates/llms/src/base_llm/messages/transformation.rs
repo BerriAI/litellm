@@ -7,8 +7,6 @@ use super::context::MessagesTransformContext;
 pub use crate::base_llm::auth::{Headers, ValidatedEnvironment};
 use crate::{Error, base_llm::messages::streaming::StreamDecoder};
 
-pub const MESSAGES_PATH_SUFFIX: &str = "/v1/messages";
-
 pub trait BaseMessagesConfig: Sync {
     fn shape_request(
         &self,
@@ -41,6 +39,10 @@ pub trait BaseMessagesConfig: Sync {
         response: MessagesResponse,
     ) -> Result<MessagesResponse, Error> {
         Ok(response)
+    }
+
+    fn reported_cost(&self, _response: &MessagesResponse) -> Option<serde_json::Number> {
+        None
     }
 
     fn secret_names(&self) -> &'static [&'static str];

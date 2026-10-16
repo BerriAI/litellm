@@ -5,6 +5,8 @@ Azure AI Anthropic Token Counter implementation using the CountTokens API.
 import os
 from typing import Any, Final
 
+from pydantic import JsonValue
+
 from litellm._logging import verbose_logger
 from litellm.llms.azure_ai.anthropic.count_tokens.handler import (
     AzureAIAnthropicCountTokensHandler,
@@ -28,11 +30,11 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
     async def count_tokens(
         self,
         model_to_use: str,
-        messages: list[dict[str, object]] | None,
+        messages: list[dict[str, JsonValue]] | None,
         contents: list[dict[str, object]] | None,
         deployment: dict[str, Any] | None = None,
         request_model: str = "",
-        tools: list[dict[str, object]] | None = None,
+        tools: list[dict[str, JsonValue]] | None = None,
         system: object | None = None,
     ) -> TokenCountResponse | None:
         """
@@ -86,12 +88,14 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
             )
 
             if result is not None:
-                return TokenCountResponse(
-                    total_tokens=result.get("input_tokens", 0),
-                    request_model=request_model,
-                    model_used=model_to_use,
-                    tokenizer_type="azure_ai_anthropic_api",
-                    original_response=result,
+                return TokenCountResponse.model_validate(
+                    {
+                        "total_tokens": result.get("input_tokens", 0),
+                        "request_model": request_model,
+                        "model_used": model_to_use,
+                        "tokenizer_type": "azure_ai_anthropic_api",
+                        "original_response": result,
+                    }
                 )
         except AnthropicError as e:
             verbose_logger.warning(

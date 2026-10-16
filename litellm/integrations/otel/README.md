@@ -194,7 +194,10 @@ matching the FastAPI server span); only a genuine error sets `ERROR`.
 - **Server spans** (one per HTTP route) are created by the
   `opentelemetry-instrumentation-fastapi` package. It stamps `http.*` attributes
   and extracts inbound `traceparent` headers. This package does **not** create
-  or modify server spans — request routes never touch spans.
+  server spans. It renames passthrough server spans, sets `litellm.call_id` on
+  them, and returns each sampled server span to the client in a `traceresponse`
+  response header (`trace_response.py`). A relayed upstream `traceresponse` is
+  kept, and the server span links to it when that upstream restarted the trace.
 - **Gen-AI spans** (LLM calls, guardrails, internal service calls) are created
   by this package from LiteLLM's logging callbacks. Request-level spans parent to
   the server span via the captured anchor; DB/service spans parent to the active
@@ -295,7 +298,9 @@ nothing here imports outside it:
 - [`config.py`](./model/config.py) — `OpenTelemetryV2Config`, a pydantic-settings
   model that reads `OTEL_*` / `LITELLM_OTEL_*` env vars, plus the feature gate.
   `capture_span_content` gates whether prompt/response bodies may be written as
-  span attributes; it defaults **off** (`no_content`). The Baggage allowlists are
+  span attributes; it defaults **off** (`no_content`). A team or key can override
+  the global mode per OTel v2 destination with `capture_message_content`; omitted
+  values follow the proxy's own callback for that backend, else the global mode. The Baggage allowlists are
   configurable, not hard-coded: set `LITELLM_OTEL_BAGGAGE_PROMOTED_KEYS` /
   `LITELLM_OTEL_BAGGAGE_METADATA_KEYS` /
   `LITELLM_OTEL_BAGGAGE_TEAM_METADATA_KEYS` (comma-separated) as env vars, or
@@ -309,10 +314,15 @@ nothing here imports outside it:
   `LITELLM_OTEL_EXCLUDED_SERVICES` (comma-separated) or `excluded_services`
   (a YAML list) under `callback_settings.otel`, naming the datastore services
   to withhold (`redis`, `postgres`, `batch_write_to_db`, `redis_*`, or their
-  `db.system.name` spellings `redis` / `postgresql`). Unknown names are logged
-  as an error and ignored. A span is withheld when its `db.system.name` /
+  `db.system.name` spellings `redis` / `postgresql`). Unknown global names are logged
+  as an error and ignored. Team and key callback values are validated when saved,
+  and invalid values are rejected. A span is withheld when its `db.system.name` /
   `db.system` attribute is in the set, so request root, auth, guardrail and
-  model spans can never be excluded.
+  model spans can never be excluded. Team and key destinations can replace the
+  global set with `excluded_services` in their own `callback_vars`; `"none"`
+  means no datastore spans are excluded, while an omitted value follows the
+  global set. These destination overrides require OTel v2 and are accepted only
+  on `langfuse_otel`, `arize`, `weave_otel` and `newrelic` callbacks.
 - [`baggage.py`](./model/baggage.py) — the single definition of which request-identity
   values are promoted into Baggage (so child spans inherit them) and under which
   attribute keys.

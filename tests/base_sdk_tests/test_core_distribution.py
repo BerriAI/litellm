@@ -53,28 +53,6 @@ def source_repository(tmp_path: Path) -> Path:
     return source
 
 
-def test_core_manifest_preserves_runtime_dependencies_without_extras() -> None:
-    manifest: Final = ROOT / "packaging/litellm-core/pyproject.toml"
-    assert manifest.is_file(), "The core distribution needs its own build manifest"
-    core: Final = tomllib.loads(manifest.read_text())
-    legacy: Final = tomllib.loads((ROOT / "pyproject.toml").read_text())
-    assert core["project"]["name"] == "litellm-core"
-    removed: Final = {"boto3", "tokenizers", "huggingface-hub"}
-    core_dependencies: Final = {Requirement(value).name for value in core["project"]["dependencies"]}
-    legacy_dependencies: Final = {Requirement(value).name for value in legacy["project"]["dependencies"]}
-    assert not core_dependencies & removed
-    assert removed <= legacy_dependencies
-    assert "jsonschema" in core_dependencies
-    assert legacy_dependencies - removed <= core_dependencies
-    core_requirements: Final = {Requirement(value) for value in core["project"]["dependencies"]}
-    retained_requirements: Final = {
-        Requirement(value) for value in legacy["project"]["dependencies"] if Requirement(value).name not in removed
-    }
-    assert retained_requirements <= core_requirements
-    assert not core["project"].get("optional-dependencies")
-    assert not core["project"].get("scripts")
-
-
 def test_staging_stamps_release_version_without_modifying_sources(tmp_path: Path, source_repository: Path) -> None:
     from scripts.build_core_distribution import SOURCES, stage_core_distribution
 

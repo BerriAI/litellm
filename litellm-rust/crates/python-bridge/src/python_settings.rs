@@ -3,7 +3,7 @@ use strum::IntoStaticStr;
 
 use crate::coercion::{FieldSpec, ProjectionError};
 
-const MODULE: &str = "litellm.rust_bridge.settings";
+const MODULE: &str = "litellm.rust_bridge.host.settings";
 
 #[derive(Clone, Copy, Debug, IntoStaticStr, PartialEq, Eq)]
 pub(crate) enum PythonSettings {
@@ -220,22 +220,26 @@ import sys
 import types
 previous_modules = {
     name: sys.modules[name]
-    for name in ('litellm', 'litellm.rust_bridge', 'litellm.rust_bridge.settings')
+    for name in ('litellm', 'litellm.rust_bridge', 'litellm.rust_bridge.host', 'litellm.rust_bridge.host.settings')
     if name in sys.modules
 }
 litellm = types.ModuleType('litellm')
 litellm.__path__ = []
 rust_bridge = types.ModuleType('litellm.rust_bridge')
 rust_bridge.__path__ = []
-settings = types.ModuleType('litellm.rust_bridge.settings')
+host = types.ModuleType('litellm.rust_bridge.host')
+host.__path__ = []
+settings = types.ModuleType('litellm.rust_bridge.host.settings')
 def http_settings():
     raise ModuleNotFoundError('No module named certifi', name='certifi')
 settings.http_settings = http_settings
 litellm.rust_bridge = rust_bridge
-rust_bridge.settings = settings
+rust_bridge.host = host
+host.settings = settings
 sys.modules['litellm'] = litellm
 sys.modules['litellm.rust_bridge'] = rust_bridge
-sys.modules['litellm.rust_bridge.settings'] = settings
+sys.modules['litellm.rust_bridge.host'] = host
+sys.modules['litellm.rust_bridge.host.settings'] = settings
 ",
                 Some(&locals),
                 Some(&locals),
@@ -257,7 +261,7 @@ sys.modules['litellm.rust_bridge.settings'] = settings
             );
             py.run(
                 c"
-for name in ('litellm.rust_bridge.settings', 'litellm.rust_bridge', 'litellm'):
+for name in ('litellm.rust_bridge.host.settings', 'litellm.rust_bridge.host', 'litellm.rust_bridge', 'litellm'):
     sys.modules.pop(name, None)
 sys.modules.update(previous_modules)
 ",
@@ -279,22 +283,26 @@ import sys
 import types
 previous_modules = {
     name: sys.modules[name]
-    for name in ('litellm', 'litellm.rust_bridge', 'litellm.rust_bridge.settings')
+    for name in ('litellm', 'litellm.rust_bridge', 'litellm.rust_bridge.host', 'litellm.rust_bridge.host.settings')
     if name in sys.modules
 }
 litellm = types.ModuleType('litellm')
 litellm.__path__ = []
 rust_bridge = types.ModuleType('litellm.rust_bridge')
 rust_bridge.__path__ = []
-settings = types.ModuleType('litellm.rust_bridge.settings')
+host = types.ModuleType('litellm.rust_bridge.host')
+host.__path__ = []
+settings = types.ModuleType('litellm.rust_bridge.host.settings')
 def http_settings():
     raise ImportError('cannot import name setting')
 settings.http_settings = http_settings
 litellm.rust_bridge = rust_bridge
-rust_bridge.settings = settings
+rust_bridge.host = host
+host.settings = settings
 sys.modules['litellm'] = litellm
 sys.modules['litellm.rust_bridge'] = rust_bridge
-sys.modules['litellm.rust_bridge.settings'] = settings
+sys.modules['litellm.rust_bridge.host'] = host
+sys.modules['litellm.rust_bridge.host.settings'] = settings
 ",
                 Some(&locals),
                 Some(&locals),
@@ -308,7 +316,7 @@ sys.modules['litellm.rust_bridge.settings'] = settings
             assert_eq!(error.to_string(), "ImportError: cannot import name setting");
             py.run(
                 c"
-for name in ('litellm.rust_bridge.settings', 'litellm.rust_bridge', 'litellm'):
+for name in ('litellm.rust_bridge.host.settings', 'litellm.rust_bridge.host', 'litellm.rust_bridge', 'litellm'):
     sys.modules.pop(name, None)
 sys.modules.update(previous_modules)
 ",

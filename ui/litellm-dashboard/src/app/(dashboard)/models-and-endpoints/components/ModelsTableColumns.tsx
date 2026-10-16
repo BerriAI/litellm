@@ -1,6 +1,7 @@
 "use client";
 
 import { ColumnDef } from "@tanstack/react-table";
+import { CredentialIdentity } from "@/components/shared/CredentialIdentity";
 import { Copy, Info, Loader2, Pencil, RefreshCw, Trash2 } from "lucide-react";
 
 import { ProviderLogo } from "@/components/molecules/models/ProviderLogo";
@@ -171,10 +172,12 @@ function CredentialsCell({ credentialName, label }: { credentialName: string | u
   }
 
   return (
-    <span className="flex min-w-0 items-center gap-1.5 text-xs font-medium text-info" title={credentialName}>
-      <RefreshCw className="size-3 shrink-0" />
-      <span className="truncate">{label ?? credentialName}</span>
-    </span>
+    <CredentialIdentity
+      credentialName={credentialName}
+      label={label}
+      icon={<RefreshCw className="size-3 shrink-0" />}
+      className="text-xs font-medium text-info"
+    />
   );
 }
 

@@ -362,7 +362,7 @@ def _muse_deployment(scenario: Scenario, scenario_id: str, api_base: str) -> str
     return scenario.model(model=f"meta/{MUSE_MODEL}", api_key=scenario_id, api_base=api_base)
 
 
-def _named_deployment(creator: Gateway, scenario: Scenario, name: str, model: str, scenario_id: str) -> str:
+def _named_deployment_id(creator: Gateway, scenario: Scenario, name: str, model: str, scenario_id: str) -> str:
     created: Final = creator.post(
         "/model/new",
         {
@@ -371,8 +371,21 @@ def _named_deployment(creator: Gateway, scenario: Scenario, name: str, model: st
             "model_info": {},
         },
     )
-    scenario.cleanups.callback(scenario.delete_model, string_value(object_value(created["model_info"])["id"]))
+    model_id: Final = string_value(object_value(created["model_info"])["id"])
+    scenario.cleanups.callback(scenario.delete_model, model_id)
+    return model_id
+
+
+def _named_deployment(creator: Gateway, scenario: Scenario, name: str, model: str, scenario_id: str) -> str:
+    _named_deployment_id(creator, scenario, name, model, scenario_id)
     return name
+
+
+def _whisper_default_on_every_worker(owned: OwnedProxy, scenario: Scenario, scenario_id: str) -> None:
+    model_id: Final = _named_deployment_id(
+        owned.gateway, scenario, WHISPER_DEFAULT, f"openai/{WHISPER_DEFAULT}", scenario_id
+    )
+    eventually(lambda: owned.serves_only_on_every_worker(WHISPER_DEFAULT, model_id), lambda served: served, seconds=70)
 
 
 def _close_code(closed: ConnectionClosed) -> int:
@@ -868,9 +881,7 @@ def test_intent_without_model_routes_to_the_whisper_default_without_an_injected_
     with guardrail_proxy.gateway.scenario() as scenario:
         handle: Final = _scripted(scenario, _transcription_scenario(CLEAN_TRANSCRIPT))
         key: Final = scenario.key()
-        _named_deployment(
-            guardrail_proxy.gateway, scenario, WHISPER_DEFAULT, f"openai/{WHISPER_DEFAULT}", handle.scenario_id
-        )
+        _whisper_default_on_every_worker(guardrail_proxy, scenario, handle.scenario_id)
         session: Final = _transcribe(_ws_base(_owned_url(guardrail_proxy)), TRANSCRIPTION_QUERY, key)
         observed: Final = _observed(guardrail_proxy.gateway.upstream_url, handle.scenario_id)
         forwarded: Final = _with_transcription_model(GA_TRANSCRIPTION_UPDATE, WHISPER_DEFAULT)
@@ -1139,7 +1150,7 @@ def test_muse_session_without_intent_still_delivers_the_transcript_and_the_verdi
         assert _muse_handshake(observed)["model"] == MUSE_MODEL, _muse_handshake(observed)
 
 
-def test_without_a_guardrail_the_proxy_sends_no_session_update_of_its_own(gateway: Gateway) -> None:
+def test_without_a_guardrail_the_proxy_sends_no_session_update_or_response_create_of_its_own(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         transcription: Final = _scripted(scenario, _transcription_scenario(BLOCKED_TRANSCRIPT))
         voice: Final = _scripted(scenario, _voice_scenario(BLOCKED_TRANSCRIPT))
@@ -1147,22 +1158,29 @@ def test_without_a_guardrail_the_proxy_sends_no_session_update_of_its_own(gatewa
         transcribe_model: Final = _openai_deployment(scenario, transcription.scenario_id)
         voice_model: Final = _openai_deployment(scenario, voice.scenario_id, model=VOICE_MODEL)
         transcribed: Final = _transcribe(_ws_base(_proxy_url()), f"model={transcribe_model}&{TRANSCRIPTION_QUERY}", key)
-        talked: Final = _talk(_ws_base(_proxy_url()), f"model={voice_model}", key, _voice_frames(VOICE_UPDATE))
+        talked: Final = _talk_without_a_reply(_ws_base(_proxy_url()), f"model={voice_model}", key)
         observed: Final = _observed_all(gateway.upstream_url)
         transcription_observed: Final = _belonging(observed, transcription.scenario_id)
-        voice_observed: Final = _belonging(observed, voice.scenario_id)
         _assert_transcription_left_alone(
             transcribed, transcription_observed, BLOCKED_TRANSCRIPT, update=GA_TRANSCRIPTION_UPDATE
         )
-        assert talked.types == ("session.created", "session.updated", TRANSCRIPT_COMPLETED, RESPONSE_DONE), talked
-        assert talked.errors == (), talked
-        assert _session_updates(voice_observed) == (VOICE_UPDATE,), _session_updates(voice_observed)
+        _assert_voice_session_ungated(talked, _belonging(observed, voice.scenario_id))
+
+
+def _talk_without_a_reply(ws_base: str, query: str, key: str) -> Session:
+    return _drive(
+        ws_base,
+        query,
+        key,
+        (_step(VOICE_UPDATE_FRAME, COMMIT, until=TRANSCRIPT_COMPLETED), _step(until=RESPONSE_DONE)),
+    )
 
 
 def _assert_voice_session_ungated(session: Session, observed: tuple[dict[str, JsonValue], ...]) -> None:
-    assert session.types == ("session.created", "session.updated", TRANSCRIPT_COMPLETED, RESPONSE_DONE), session
+    assert session.types == ("session.created", "session.updated", TRANSCRIPT_COMPLETED, "timeout"), session
     assert session.transcripts == (BLOCKED_TRANSCRIPT,), session
     assert session.errors == (), session
+    assert _sent_types(observed) == ("session.update", "input_audio_buffer.commit"), _sent(observed)
     assert _session_updates(observed) == (VOICE_UPDATE,), _session_updates(observed)
 
 
@@ -1180,9 +1198,7 @@ def test_key_opted_out_of_the_transcript_guardrail_is_not_gated_by_the_prompt_gu
         handle: Final = _scripted(scenario, _voice_scenario(BLOCKED_TRANSCRIPT))
         key: Final = scenario.key(metadata={"opted_out_global_guardrails": [TRANSCRIPT_GUARDRAIL]})
         model: Final = _openai_deployment(scenario, handle.scenario_id, model=VOICE_MODEL)
-        session: Final = _talk(
-            _ws_base(_owned_url(guardrail_proxy)), f"model={model}", key, _voice_frames(VOICE_UPDATE)
-        )
+        session: Final = _talk_without_a_reply(_ws_base(_owned_url(guardrail_proxy)), f"model={model}", key)
         _assert_voice_session_ungated(session, _observed(guardrail_proxy.gateway.upstream_url, handle.scenario_id))
 
 
@@ -1199,9 +1215,7 @@ def test_team_opted_out_of_the_transcript_guardrail_is_not_gated(guardrail_proxy
         team: Final = scenario.team(metadata={"opted_out_global_guardrails": [TRANSCRIPT_GUARDRAIL]})
         key: Final = scenario.key(team_id=team)
         model: Final = _openai_deployment(scenario, handle.scenario_id, model=VOICE_MODEL)
-        session: Final = _talk(
-            _ws_base(_owned_url(guardrail_proxy)), f"model={model}", key, _voice_frames(VOICE_UPDATE)
-        )
+        session: Final = _talk_without_a_reply(_ws_base(_owned_url(guardrail_proxy)), f"model={model}", key)
         _assert_voice_session_ungated(session, _observed(guardrail_proxy.gateway.upstream_url, handle.scenario_id))
 
 
@@ -1455,9 +1469,7 @@ def test_intent_without_model_blocked_transcript_reports_a_violation_on_the_whis
     with guardrail_proxy.gateway.scenario() as scenario:
         handle: Final = _scripted(scenario, _transcription_scenario(BLOCKED_TRANSCRIPT))
         key: Final = scenario.key()
-        _named_deployment(
-            guardrail_proxy.gateway, scenario, WHISPER_DEFAULT, f"openai/{WHISPER_DEFAULT}", handle.scenario_id
-        )
+        _whisper_default_on_every_worker(guardrail_proxy, scenario, handle.scenario_id)
         session: Final = _transcribe_blocked(_ws_base(_owned_url(guardrail_proxy)), TRANSCRIPTION_QUERY, key)
         observed: Final = _observed(guardrail_proxy.gateway.upstream_url, handle.scenario_id)
         forwarded: Final = _with_transcription_model(GA_TRANSCRIPTION_UPDATE, WHISPER_DEFAULT)
@@ -2064,18 +2076,18 @@ async def _open_sessions(ws_base: str, model: str, key: str) -> tuple[ClientConn
     return sockets
 
 
-async def _sessions_through_worker_kill(ws_base: str, model: str, key: str, root: psutil.Process) -> KillOutcome:
+async def _sessions_through_worker_kill(ws_base: str, model: str, key: str, owned: OwnedProxy) -> KillOutcome:
     sockets: Final = await _open_sessions(ws_base, model, key)
     try:
-        workers: Final = _workers(root)
-        assert len(workers) == WORKERS, [process.pid for process in workers]
+        workers: Final = tuple(sorted(owned.worker_pids()))
+        assert len(workers) == WORKERS, workers
         victim: Final = workers[0]
-        victim.kill()
-        await asyncio.to_thread(victim.wait, 10)
-        served: Final = await asyncio.wait_for(
-            asyncio.gather(*(_one_transcript_or_close(socket) for socket in sockets)), 60
-        )
-        return KillOutcome(served.count(True), served.count(False), victim.pid)
+        with owned.replacing_worker(victim) as kill:
+            await asyncio.to_thread(kill)
+            served: Final = await asyncio.wait_for(
+                asyncio.gather(*(_one_transcript_or_close(socket) for socket in sockets)), 60
+            )
+        return KillOutcome(served.count(True), served.count(False), victim)
     finally:
         await asyncio.gather(*(socket.close() for socket in sockets))
 
@@ -2135,7 +2147,7 @@ def test_worker_kill_then_proxy_restart_keep_transcription_sessions_uninjected(
                 blocked_after_restart.scenario_id,
             )
             root: Final = psutil.Process(owned.process.pid)
-            outcome: Final = asyncio.run(_sessions_through_worker_kill(_ws_base(owned_url), model, key, root))
+            outcome: Final = asyncio.run(_sessions_through_worker_kill(_ws_base(owned_url), model, key, owned))
             record_property(
                 "worker_kill", {"served": outcome.served, "closed": outcome.closed, "killed": outcome.killed_pid}
             )
