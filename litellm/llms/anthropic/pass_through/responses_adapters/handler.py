@@ -4,13 +4,17 @@ Handler for the Anthropic v1/messages -> OpenAI Responses API path.
 Used when the target model is an OpenAI or Azure model.
 """
 
-from collections.abc import AsyncIterator, Coroutine, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Coroutine, Mapping, Sequence
 from typing import Final, TypeAlias
 
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
-from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
+from litellm.integrations.anthropic_cache_control_hook import (
+    AnthropicCacheControlHook,
+    supports_openai_prompt_cache_breakpoint,
+)
+from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import cache_control_as_prompt_cache_breakpoint
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
 from litellm.types.llms.anthropic import (
@@ -26,11 +30,14 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.utils import ProviderConfigManager
 
+from ..adapters.handler import request_safeguards_evaluator
+from ..safeguards import with_safeguard_results
 from ..utils import litellm_logging_obj_from_kwargs, local_model_name
 from .streaming_iterator import AnthropicResponsesStreamWrapper
 from .transformation import LiteLLMAnthropicToResponsesAPIAdapter
 
 AnthropicRequestMessages: TypeAlias = list[AllAnthropicMessageValues] | list[dict[str, object]]
+BlockRewrite: TypeAlias = Callable[[Mapping[str, object]], Mapping[str, object]]
 _BLOCK_LIST: Final = TypeAdapter(list[dict[str, object]])
 
 _ADAPTER: Final = LiteLLMAnthropicToResponsesAPIAdapter()
@@ -60,10 +67,46 @@ def _reads_prompt_cache_breakpoint(model: str, forwarded_kwargs: Mapping[str, ob
     )
 
 
-def _blocks_with_prompt_cache_breakpoints(content: object) -> Sequence[Mapping[str, object]]:
-    """The content's blocks with each ``cache_control`` mark rewritten, empty when it is not a list of blocks."""
+def _model_takes_prompt_cache_breakpoint(model: str, forwarded_kwargs: Mapping[str, object]) -> bool:
+    provider: Final = forwarded_kwargs.get("custom_llm_provider")
+    provider_name: Final = provider if isinstance(provider, str) else None
+    base_model: Final = forwarded_kwargs.get("base_model")
+    return supports_openai_prompt_cache_breakpoint(model, provider_name) or (
+        isinstance(base_model, str)
+        and bool(base_model)
+        and supports_openai_prompt_cache_breakpoint(base_model, provider_name)
+    )
+
+
+def _without_prompt_cache_breakpoint(block: Mapping[str, object]) -> Mapping[str, object]:
+    return {key: value for key, value in block.items() if key != "prompt_cache_breakpoint"}
+
+
+def _prompt_cache_block_rewrite(model: str, forwarded_kwargs: Mapping[str, object]) -> BlockRewrite | None:
+    """Client cache marks become breakpoints for a deployment that reads them, and a model that takes no breakpoints
+    drops raw ones under drop_params."""
+    if _reads_prompt_cache_breakpoint(model, forwarded_kwargs):
+        return cache_control_as_prompt_cache_breakpoint
+    if _model_takes_prompt_cache_breakpoint(model, forwarded_kwargs):
+        return None
+    if normalize_drop_params(forwarded_kwargs.get("drop_params")) is True or litellm.drop_params is True:
+        return _without_prompt_cache_breakpoint
+    return None
+
+
+def _rewritten_block(block: Mapping[str, object], rewrite: BlockRewrite) -> Mapping[str, object]:
+    rewritten: Final = rewrite(block)
+    if rewritten.get("type") != "tool_result":
+        return rewritten
+    inner_blocks: Final = _rewritten_blocks(rewritten.get("content"), rewrite)
+    return {**rewritten, "content": list(inner_blocks)} if inner_blocks else rewritten
+
+
+def _rewritten_blocks(content: object, rewrite: BlockRewrite) -> Sequence[Mapping[str, object]]:
+    """The content's blocks each rewritten, a tool_result's inner blocks included, empty when it is not a list of
+    blocks."""
     try:
-        return [cache_control_as_prompt_cache_breakpoint(block) for block in _BLOCK_LIST.validate_python(content)]
+        return [_rewritten_block(block, rewrite) for block in _BLOCK_LIST.validate_python(content)]
     except ValidationError:
         return ()
 
@@ -92,22 +135,19 @@ def _build_responses_kwargs(
     Build the kwargs dict to pass directly to litellm.responses() / litellm.aresponses().
     """
     forwarded_kwargs: Final = _forwarded_kwargs(extra_kwargs)
-    reads_prompt_cache_breakpoint: Final = _reads_prompt_cache_breakpoint(model, forwarded_kwargs)
+    block_rewrite: Final = _prompt_cache_block_rewrite(model, forwarded_kwargs)
     request_messages: Final[AnthropicRequestMessages] = (
         [
             {
                 **message,
-                "content": list(_blocks_with_prompt_cache_breakpoints(message.get("content")))
-                or message.get("content"),
+                "content": list(_rewritten_blocks(message.get("content"), block_rewrite)) or message.get("content"),
             }
             for message in messages
         ]
-        if reads_prompt_cache_breakpoint
+        if block_rewrite
         else messages
     )
-    request_system: Final = (
-        (list(_blocks_with_prompt_cache_breakpoints(system)) or system) if reads_prompt_cache_breakpoint else system
-    )
+    request_system: Final = (list(_rewritten_blocks(system, block_rewrite)) or system) if block_rewrite else system
 
     # Build a typed AnthropicMessagesRequest for the adapter
     request_data: Final[AnthropicMessagesRequest] = {
@@ -246,6 +286,7 @@ class LiteLLMMessagesToResponsesAPIHandler:
             extra_kwargs=kwargs,
         )
 
+        safeguards_evaluator: Final = request_safeguards_evaluator(kwargs, messages)
         result: Final = await litellm.aresponses(**responses_kwargs)
 
         if stream:
@@ -253,13 +294,14 @@ class LiteLLMMessagesToResponsesAPIHandler:
                 responses_stream=result,
                 model=local_model_name(model, kwargs.get("custom_llm_provider")),
                 litellm_logging_obj=litellm_logging_obj_from_kwargs(responses_kwargs),
+                safeguards_evaluator=safeguards_evaluator,
             )
             return wrapper.async_anthropic_sse_wrapper()
 
         if not isinstance(result, ResponsesAPIResponse):
             raise ValueError(f"Expected ResponsesAPIResponse, got {type(result)}")
 
-        return _ADAPTER.translate_response(result)
+        return await with_safeguard_results(_ADAPTER.translate_response(result), safeguards_evaluator)
 
     @staticmethod
     def anthropic_messages_handler(

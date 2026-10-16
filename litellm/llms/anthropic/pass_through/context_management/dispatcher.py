@@ -13,6 +13,7 @@ from .editors import apply_clear_tool_uses_20250919, apply_compact_20260112
 from .result import PolyfillResult
 
 if TYPE_CHECKING:
+    from litellm.llms.anthropic.pass_through.utils import ProxySubCallLoggingKwargs
     from litellm.router import Router
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
@@ -82,6 +83,8 @@ async def apply_context_management(
     litellm_metadata: dict[str, object] | None = None,
     llm_router: "Router | None" = None,
     user_api_key_auth: "UserAPIKeyAuth | None" = None,
+    sub_call_logging_kwargs: "ProxySubCallLoggingKwargs | None" = None,
+    parent_trace_id: str | None = None,
 ) -> PolyfillResult:
     """Run edits in order; return a single ``PolyfillResult``.
 
@@ -123,6 +126,8 @@ async def apply_context_management(
                 litellm_metadata=litellm_metadata,
                 llm_router=llm_router,
                 user_api_key_auth=user_api_key_auth,
+                sub_call_logging_kwargs=sub_call_logging_kwargs,
+                parent_trace_id=parent_trace_id,
             )
             if editor_is_async
             else await asyncify(editor)(

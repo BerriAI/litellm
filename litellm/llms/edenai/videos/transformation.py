@@ -124,6 +124,7 @@ class EdenAIVideoConfig(OpenAIVideoConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: "LiteLLMLoggingObj",
+        client: "HTTPHandler | None" = None,
     ) -> bytes:
         raw_response.raise_for_status()  # the shared GET helpers return error bodies instead of raising
         return raw_response.content

@@ -222,15 +222,23 @@ class TernaryExportEngine(FocusExportEngine):
         if data.is_empty():
             verbose_logger.debug("Ternary export: no usage data for window %s", window)
             return
-        failed: Final[list[str]] = []  # mutable-ok: days whose upload failed, reported once after all days run
-        for day, day_data in _partition_by_day(data):
-            try:
-                await self._deliver_day(day_data, _day_window(day, window.frequency))
-            except Exception as e:  # noqa: BLE001  # one day's failure must not block the rest; logged and re-raised
-                verbose_logger.warning("Ternary export: upload for %s failed: %s", day, e)
-                failed.append(day)
+        failed: Final = tuple(
+            [
+                day
+                for day, day_data in _partition_by_day(data)
+                if not await TernaryExportEngine._deliver_day_or_warn(self, day, day_data, window.frequency)
+            ]
+        )
         if failed:
             raise RuntimeError(f"Ternary export: {len(failed)} day(s) failed to upload: {', '.join(failed)}")
+
+    async def _deliver_day_or_warn(self, day: str, day_data: _Frame, frequency: str) -> bool:
+        try:
+            await self._deliver_day(day_data, _day_window(day, frequency))
+        except Exception as e:  # noqa: BLE001  # one day's failure must not block the rest; logged and re-raised
+            verbose_logger.warning("Ternary export: upload for %s failed: %s", day, e)
+            return False
+        return True
 
     async def _deliver_day(self, data: _Frame, window: FocusTimeWindow) -> None:
         payload: Final = _day_payload(data, transformer=self._transformer, serializer=self._serializer)

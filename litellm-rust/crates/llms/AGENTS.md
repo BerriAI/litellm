@@ -32,6 +32,13 @@
   - Provider-wide docs (auth, errors, regions): `src/<provider>/`
   - One host's endpoint docs: `src/<provider>/<format>/`
 
+## Streaming
+
+- Each format's `src/base_llm/<format>/streaming.rs` exposes the same three names: `event_stream` (bytes to typed events), `decode` (a whole stream to typed events) and `encode` (one typed event to the SSE frame LiteLLM's proxy sends clients). Callers use the module path, never a vendor prefix
+- SSE framing, `[DONE]` and the generic helpers live in `src/base_llm/sse.rs`. Messages frames are `event:` plus `data:`; Chat Completions and Responses frames are bare `data:`, as Python's proxy writes them
+- Decoding is strict: a malformed event, or `[DONE]` on a Messages stream, is `InvalidResponse` and ends the stream. Python never fails a stream this way; the divergence is deliberate and `src/base_llm/sse.rs` lists what Python does per format. A stream cut inside an event drops that event, as the SSE spec requires
+- What ends or fails a stream belongs on the format's event type (`is_terminal`, `is_failure`). The cache's success check in `inference/src/caching.rs` still matches type strings; move it onto the typed events rather than adding new string matches
+
 ## Python pairs
 
 - Python paths identify counterparts but do not dictate Rust module names or class hierarchy. Preserve behavior and concepts, not structure
@@ -51,6 +58,7 @@
 
 - `AnthropicConfig`, `AmazonConverseConfig` and the non-OCR base traits are partial. Preserve their acceptance gates, passthrough and host fallback contracts
 - `OpenAiResponsesApiConfig` implements WebSocket transformations and direct HTTP Responses, without Python's model-specific param rewriting or Responses-to-Chat emulation
+- OpenAI-compatible Responses hosts (`openrouter`) reuse the OpenAI request and response transforms as free functions and own only their credentials and base URL
 - Chat `supported_openai_param_mappings` lists OpenAI/provider name pairs, unlike Python's name-only list. Audio `map_transcription_params` is a Rust filtering helper
 - Auth resolution is split between configs and route preparation in `inference-<format>`
 

@@ -380,6 +380,10 @@
           "type": "number",
           "minimum": 0
         },
+        "input_cost_per_text_message": {
+          "type": "number",
+          "minimum": 0
+        },
         "input_cost_per_token": {
           "type": "number",
           "minimum": 0,
@@ -1030,6 +1034,9 @@
           "type": "boolean"
         },
         "supports_bedrock_runtime_chat_completions_tools_with_reasoning": {
+          "type": "boolean"
+        },
+        "supports_box_questions": {
           "type": "boolean"
         },
         "supports_computer_use": {

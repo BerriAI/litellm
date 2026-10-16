@@ -6,7 +6,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any, Final
 
 import httpx
-from pydantic import TypeAdapter
+from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
@@ -14,7 +14,7 @@ from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import TokenCountResponse
+from litellm.types.utils import TokenCountMessagesFormat, TokenCountResponse
 
 GEMINI_IMAGE_ASPECT_RATIOS: Final[dict[str, float]] = {
     "1:1": 1 / 1,
@@ -495,16 +495,29 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
         request_model: str = "",
         tools: list[dict[str, object]] | None = None,
         system: object | None = None,
+        messages_format: TokenCountMessagesFormat = "openai",
+        output_format: JsonValue = None,
     ) -> TokenCountResponse | None:
         import copy
 
         from litellm.llms.gemini.count_tokens.handler import GoogleAIStudioTokenCounter
+        from litellm.llms.vertex_ai.count_tokens.context import (
+            VertexGeminiCountContextError,
+            count_context_error_response,
+            vertex_gemini_count_context,
+        )
+
+        count_context: Final = vertex_gemini_count_context(system=system, tools=tools)
+        if isinstance(count_context, VertexGeminiCountContextError):
+            return count_context_error_response(count_context, request_model, model_to_use)
 
         deployment = deployment or {}
         count_tokens_params_request: Final = copy.deepcopy(deployment.get("litellm_params", {}))
         count_tokens_params: Final = {
             "model": model_to_use,
             "contents": contents,
+            "system_instruction": count_context.system_instruction,
+            "tools": count_context.tools,
         }
         count_tokens_params_request.update(count_tokens_params)
         result: Final = await GoogleAIStudioTokenCounter().acount_tokens(
