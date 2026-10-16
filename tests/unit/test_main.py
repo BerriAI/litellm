@@ -4941,7 +4941,7 @@ def test_bridged_responses_with_openai_http_handler_keeps_forwarded_headers_out_
 def test_aiohttp_openai_warns_only_when_http2_enabled(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, http2_on: bool
 ):
-    from litellm.main import base_llm_aiohttp_handler
+    from litellm.native.chat_providers.handlers import base_llm_aiohttp_handler
 
     monkeypatch.setattr(litellm, "http2", http2_on)
     monkeypatch.delenv("LITELLM_HTTP2", raising=False)

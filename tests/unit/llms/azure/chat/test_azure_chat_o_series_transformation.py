@@ -171,7 +171,7 @@ def test_azure_o_series_routing():
         assert "stream" not in mock_create.call_args.kwargs
 
 
-@patch("litellm.main.azure_o1_chat_completions._get_openai_client")
+@patch("litellm.native.chat_providers.handlers.azure_o1_chat_completions._get_openai_client")
 def test_openai_o_series_max_retries_0(mock_get_openai_client):
     import litellm
 
