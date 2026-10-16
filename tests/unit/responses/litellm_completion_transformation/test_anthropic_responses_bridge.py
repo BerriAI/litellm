@@ -10,6 +10,7 @@ import respx
 from pydantic import BaseModel
 
 import litellm
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.responses.litellm_completion_transformation.handler import (
     LiteLLMCompletionTransformationHandler,
@@ -86,8 +87,8 @@ async def test_aresponses_forwards_timeout_to_acompletion():
     and similar providers, with calls falling back to the provider SDK default
     (~600s for Anthropic).
     """
-    with patch("litellm.acompletion", new_callable=AsyncMock) as mock_acompletion:
-        mock_acompletion.return_value = ModelResponse(
+    with patch("litellm.main.aexecute_planned_chat", new_callable=AsyncMock) as mock_chat:
+        mock_chat.return_value = ModelResponse(
             id="id",
             created=0,
             model="anthropic/claude-sonnet-4-5",
@@ -102,8 +103,8 @@ async def test_aresponses_forwards_timeout_to_acompletion():
             api_key="sk-ant-fake",
         )
 
-    assert mock_acompletion.call_count == 1
-    forwarded_timeout = mock_acompletion.call_args.kwargs.get("timeout")
+    assert mock_chat.call_count == 1
+    forwarded_timeout = mock_chat.call_args.args[0].named.get("timeout")
     assert forwarded_timeout == 42, (
         f"timeout was not forwarded to acompletion (got {forwarded_timeout!r}); "
         "this means Router(timeout=N) silently fails for providers on the "
@@ -541,3 +542,44 @@ def test_streamed_responses_over_anthropic_emit_the_responses_event_sequence(res
     assert deltas == "Argentina won."
     assert completed.response.status == "completed"
     assert completed.response.output[0].content[0].text == "Argentina won."
+
+
+class _DeploymentHookCounter(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls = 0
+
+    async def async_pre_call_deployment_hook(self, kwargs: Mapping[str, object], call_type: object) -> None:
+        self.calls += 1
+
+
+@pytest.mark.asyncio
+async def test_bridged_responses_call_runs_deployment_hooks_once(monkeypatch: pytest.MonkeyPatch):
+    counter: Final = _DeploymentHookCounter()
+    monkeypatch.setattr(litellm, "callbacks", [counter])
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    with respx.mock(assert_all_called=False) as upstream:
+        messages_route: Final = upstream.post("http://anthropic.test/v1/messages").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "msg_bridge",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-bridge",
+                    "content": [{"type": "text", "text": "from upstream"}],
+                    "stop_reason": "end_turn",
+                    "stop_sequence": None,
+                    "usage": {"input_tokens": 10, "output_tokens": 5},
+                },
+            )
+        )
+        response: Final = await litellm.aresponses(
+            model="anthropic/claude-bridge", input="hi", api_base="http://anthropic.test", api_key="sk-test"
+        )
+
+    assert response.output[0].content[0].text == "from upstream"
+    assert messages_route.call_count == 1
+    assert counter.calls == 1
