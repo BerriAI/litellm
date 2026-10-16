@@ -782,6 +782,79 @@ def test_a_string_additional_drop_params_still_reaches_claude_on_the_anthropic_r
     assert (route.call_count, response.choices[0].message.content) == (1, "hi")
 
 
+def test_a_five_minute_cache_control_under_a_tools_function_leaves_converse_free_to_send_the_hour(
+    respx_mock: respx.MockRouter,
+):
+    route: Final = respx_mock.post(url__regex=_CONVERSE_ROUTE).respond(json=_CONVERSE_REPLY)
+
+    litellm.completion(
+        model="bedrock/converse/us.anthropic.claude-opus-5-5",
+        messages=[
+            {"role": "system", "content": [{"type": "text", "text": "sys", "prompt_cache_breakpoint": _BREAKPOINT}]},
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "hi", "prompt_cache_breakpoint": _ONE_HOUR_BREAKPOINT}],
+            },
+        ],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "parameters": {"type": "object"},
+                    "cache_control": {"type": "ephemeral", "ttl": "5m"},
+                },
+            }
+        ],
+        **_FAKE_AWS,
+    )
+
+    body: Final = json.loads(route.calls.last.request.content)
+    sent: Final = (*body["system"], *(block for message in body["messages"] for block in message["content"]))
+    assert [block["cachePoint"].get("ttl") for block in sent if "cachePoint" in block] == ["1h", "1h"]
+
+
+def test_a_breakpoint_on_a_tool_search_call_modify_params_answers_takes_a_slot_under_drop_params(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "modify_params", True)
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").respond(
+        json={
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-opus-5-5",
+            "content": [{"type": "text", "text": "hi"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        }
+    )
+
+    litellm.completion(
+        model="anthropic/claude-opus-5-5",
+        messages=[
+            {"role": "system", "content": [{"type": "text", "text": "sys", "prompt_cache_breakpoint": _BREAKPOINT}]},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": str(index), "prompt_cache_breakpoint": _BREAKPOINT} for index in range(3)
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{**_CLAUDE_TOOL_SEARCH_CALL, "prompt_cache_breakpoint": _BREAKPOINT}],
+            },
+            {"role": "user", "content": "And tomorrow?"},
+        ],
+        drop_params=True,
+        api_key="fake",
+    )
+
+    body: Final = json.loads(route.calls.last.request.content)
+    assert (json.dumps(body).count('"cache_control"'), "cache_control" in json.dumps(body["system"])) == (4, False)
+
+
 _WEATHER_TOOL: Final = {"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}
 
 
