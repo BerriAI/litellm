@@ -283,8 +283,8 @@ async def test_bedrock_converse_budget_tokens_preserved():
         usage={"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
     )
 
-    with patch("litellm.acompletion", new_callable=AsyncMock) as mock_acompletion:
-        mock_acompletion.return_value = mock_response
+    with patch("litellm.llms.anthropic.pass_through.adapters.handler.aexecute_planned_chat", new_callable=AsyncMock) as mock_chat:
+        mock_chat.return_value = mock_response
 
         try:
             await messages.acreate(
@@ -296,13 +296,9 @@ async def test_bedrock_converse_budget_tokens_preserved():
         except (ValueError, TypeError, AttributeError):
             pass  # Expected due to response format conversion
 
-        mock_acompletion.assert_called_once()
+        mock_chat.assert_called_once()
 
-        call_kwargs = mock_acompletion.call_args.kwargs
-        print("acompletion call kwargs: ", json.dumps(call_kwargs, indent=4, default=str))
-
-        # Verify thinking parameter is passed through with budget_tokens preserved
-        thinking_param = call_kwargs.get("thinking")
+        thinking_param = mock_chat.call_args.args[0].named.get("thinking")
         assert thinking_param is not None, "thinking parameter should be passed to acompletion"
         assert thinking_param.get("type") == "enabled", "thinking.type should be 'enabled'"
         assert thinking_param.get("budget_tokens") == 1024, (
@@ -1144,7 +1140,7 @@ async def test_messages_streaming_reports_provider_local_model(requested_model, 
         async def __anext__(self):
             raise StopAsyncIteration
 
-    with patch("litellm.acompletion", new=AsyncMock(return_value=_EmptyStream())):
+    with patch("litellm.llms.anthropic.pass_through.adapters.handler.aexecute_planned_chat", new=AsyncMock(return_value=_EmptyStream())):
         stream = await litellm.anthropic.messages.acreate(
             max_tokens=100,
             messages=[{"role": "user", "content": "ping"}],

@@ -1578,7 +1578,7 @@ class CustomStreamWrapper:
                 original_exception=e,
             )
 
-    def set_logging_event_loop(self, loop):
+    def set_logging_event_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         """
         import litellm, asyncio
 
