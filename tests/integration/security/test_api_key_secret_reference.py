@@ -45,6 +45,8 @@ _LISTED_MODEL: Final = "wif-listed-model"
 _VECTOR_STORE: Final = "vs_wif_reference"
 _SEARCH_PATH: Final = f"/v1/vector_stores/{_VECTOR_STORE}/search"
 _BATCH_DEPLOYMENT: Final = "wif-vllm-batch"
+_BEDROCK_MODEL: Final = "bedrock/converse/us.anthropic.claude-sonnet-5-5"
+_PROVIDER_INPUT_TOKENS: Final = 7919
 _UNSUPPORTED_REFERENCE: Final = "oidc/google/https://example.invalid"
 _SOURCES: Final = ("config_credential", "config_inline", "db_credential", "db_inline")
 _UNREADABLE: Final = MappingProxyType(
@@ -130,6 +132,16 @@ def _served(request: Request) -> Reply:
             return chat_reply(f"chatcmpl-{uuid.uuid4().hex}", "gpt-4o-mini", "served", stream=False)
         case "POST", "/v1/responses":
             return responses_reply(f"resp_{uuid.uuid4().hex}", "gpt-4o-mini", "served", stream=False)
+        case "POST", "/v1/responses/input_tokens":
+            return _json_reply({"object": "response.input_tokens", "input_tokens": _PROVIDER_INPUT_TOKENS})
+        case "POST", converse if converse.startswith("/model/") and converse.endswith("/converse"):
+            return _json_reply(
+                {
+                    "output": {"message": {"role": "assistant", "content": [{"text": "served"}]}},
+                    "stopReason": "end_turn",
+                    "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+                }
+            )
         case "POST", "/v1/embeddings":
             return _json_reply(
                 {
@@ -202,6 +214,23 @@ def _config(directory: Path, secrets: _Secrets, provider: str) -> Path:
             _deployment("wif-realtime", _named(_REALTIME_MODEL, "wif-config"), {"mode": "realtime"}),
             _deployment("wif-vllm", {"model": "hosted_vllm/wif-local", **inline}, {"id": _BATCH_DEPLOYMENT}),
             _deployment("openai/*", _named("openai/*", "wif-config")),
+            _deployment(
+                "wif-bedrock-endpoint",
+                {
+                    "model": _BEDROCK_MODEL,
+                    "aws_region_name": "us-east-1",
+                    "api_key": _reference(secrets.token),
+                    "aws_bedrock_runtime_endpoint": provider.removesuffix("/v1"),
+                },
+            ),
+            _deployment(
+                "wif-mistral-passthrough",
+                {
+                    "model": "mistral/mistral-small-latest",
+                    "api_key": _reference(secrets.missing),
+                    "use_in_pass_through": True,
+                },
+            ),
         ],
         "credential_list": [
             _credential("wif-config", _reference(secrets.token), provider),
@@ -318,7 +347,7 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Rig]:
         with owned_proxy_process(
             gateway,
             directory,
-            secrets.overrides(),
+            {**secrets.overrides(), "MISTRAL_API_BASE": provider_wire.url},
             config=_config(directory, secrets, provider_base),
             workers=2,
             healthcheck=WorkerHealthcheck.LENIENT,
@@ -374,7 +403,7 @@ def _anywhere(requests: Sequence[Request], value: str) -> bool:
     )
 
 
-def _chat_on_worker(rig: _Rig, model: str, idle: int) -> tuple[int, tuple[str | None, ...]]:
+def _reached_on_worker(rig: _Rig, model: str, idle: int) -> tuple[int, tuple[Request, ...]]:
     marker: Final = _marker()
     gateway: Final = rig.owned.gateway
     with (
@@ -386,7 +415,12 @@ def _chat_on_worker(rig: _Rig, model: str, idle: int) -> tuple[int, tuple[str | 
             json={"model": model, "messages": [{"role": "user", "content": f"say {marker}"}]},
             headers={"Authorization": f"Bearer {gateway.key}"},
         )
-    return response.status_code, _bearers(_carrying(rig.provider.requests(), marker))
+    return response.status_code, _carrying(rig.provider.requests(), marker)
+
+
+def _chat_on_worker(rig: _Rig, model: str, idle: int) -> tuple[int, tuple[str | None, ...]]:
+    status, reached = _reached_on_worker(rig, model, idle)
+    return status, _bearers(reached)
 
 
 @pytest.mark.parametrize("source", _SOURCES)
@@ -471,6 +505,71 @@ def test_input_token_count_with_an_unreadable_reference_fails_closed(rig: _Rig) 
     )
     reached: Final = _carrying(rig.provider.requests(), marker)
     assert (response.status_code, reached) == (401, ()), (response.text, _bearers(reached))
+    assert str(rig.secrets.allowed) not in response.text, response.text
+
+
+@pytest.mark.parametrize("source", ("config_credential", "config_inline"))
+def test_provider_token_count_sends_the_current_token(rig: _Rig, source: str) -> None:
+    marker: Final = _marker()
+    response: Final = rig.owned.gateway.request(
+        "POST", "/v1/responses/input_tokens", {"model": rig.model(source), "input": f"say {marker}"}, headers=_CLOSE
+    )
+    sent: Final = _bearers(_carrying(rig.provider.requests(), marker))
+    assert (response.status_code, sent) == (200, (f"Bearer {rig.secrets.current()}",)), response.text
+    assert JSON_OBJECT.validate_json(response.content)["input_tokens"] == _PROVIDER_INPUT_TOKENS, response.text
+
+
+def test_pass_through_with_an_unreadable_reference_hides_the_token_path(rig: _Rig) -> None:
+    marker: Final = _marker()
+    response: Final = rig.owned.gateway.request(
+        "POST",
+        "/mistral/v1/chat/completions",
+        {"model": "mistral-small-latest", "messages": [{"role": "user", "content": f"say {marker}"}]},
+        headers=_CLOSE,
+    )
+    assert (response.status_code, _carrying(rig.provider.requests(), marker)) == (401, ()), response.text
+    assert str(rig.secrets.allowed) not in response.text, response.text
+
+
+def test_admin_configured_endpoint_receives_the_current_token(rig: _Rig) -> None:
+    marker: Final = _marker()
+    response: Final = _chat(rig.owned.gateway, "wif-bedrock-endpoint", marker)
+    sent: Final = _bearers(_carrying(rig.provider.requests(), marker))
+    assert (response.status_code, sent) == (200, (f"Bearer {rig.secrets.current()}",)), response.text
+
+
+def _hosts_and_bearers(requests: Sequence[Request]) -> tuple[tuple[str | None, str | None], ...]:
+    return tuple((request.headers.get("host"), request.headers.get("authorization")) for request in requests)
+
+
+def test_updated_api_base_carries_the_token_to_the_new_host(rig: _Rig) -> None:
+    first, second = sorted(eventually(rig.owned.worker_pids, lambda pids: len(pids) == 2))
+    moved_base: Final = rig.provider_base.replace("127.0.0.1", "localhost")
+    with rig.owned.gateway.scenario() as scenario:
+        name, identity = _created_model(
+            rig.owned.gateway,
+            scenario,
+            _deployment(
+                f"db-moved-{uuid.uuid4().hex}",
+                {"model": _CHAT_MODEL, "api_key": _reference(rig.secrets.token), "api_base": rig.provider_base},
+            ),
+        )
+        eventually(partial(rig.owned.serves_only_on_every_worker, name, identity), bool, seconds=120)
+        patched: Final = rig.owned.gateway.request(
+            "PATCH", f"/model/{identity}/update", {"litellm_params": {"api_base": moved_base}}
+        )
+        assert patched.status_code == 200, patched.text
+        expected: Final = ((200, ((httpx.URL(moved_base).netloc.decode(), f"Bearer {rig.secrets.current()}"),)),) * 2
+        reached: Final = eventually(
+            lambda: tuple(
+                (status, _hosts_and_bearers(requests))
+                for status, requests in (_reached_on_worker(rig, name, idle) for idle in (second, first))
+            ),
+            lambda seen: seen == expected,
+            seconds=120,
+            return_last_on_timeout=True,
+        )
+        assert reached == expected, reached
 
 
 def _attack(rig: _Rig, attack: str) -> tuple[str, dict[str, JsonValue]]:
