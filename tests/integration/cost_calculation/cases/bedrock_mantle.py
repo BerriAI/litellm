@@ -5,6 +5,18 @@ from __future__ import annotations
 from typing import Final
 
 from integration.cost_calculation.cases.openai import with_usage
+from integration.cost_calculation.cases.anthropic import (
+    CLAUDE_OPUS_5_5_CACHE_READ,
+    CLAUDE_OPUS_5_5_CACHE_WRITE_1H,
+    CLAUDE_OPUS_5_5_CACHE_WRITE_5M,
+    CLAUDE_OPUS_5_5_INPUT_TEXT,
+    CLAUDE_OPUS_5_5_MESSAGES_INPUT_TEXT,
+    CLAUDE_OPUS_5_5_MESSAGES_STREAM,
+    CLAUDE_OPUS_5_5_STREAM,
+    CLAUDE_OPUS_5_5_THINKING,
+    CLAUDE_OPUS_5_5_TOOL_CALL,
+)
+from integration.cost_calculation.bridge_cost_parity.case import BridgeCostParityTestCase
 from integration.cost_calculation.cost_tracking_case import (
     CostTrackingTestCase,
     Deployment,
@@ -503,6 +515,211 @@ BEDROCK_MANTLE_OPENAI_GPT_6_SOL_TIERED_AT_272K_BOUNDARY: Final = with_usage(
     ExactExpected(spend=0.602932, input_cost=0.5984, output_cost=0.004532, prompt_tokens=272000, completion_tokens=412),
 )
 
+_MANTLE_CLAUDE_OPUS_MODEL: Final = "bedrock_mantle/anthropic.claude-opus-5-5"
+_ADAPTIVE_USAGE: Final = {
+    "input_tokens": 24,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+    "output_tokens": 18,
+    "output_tokens_details": {"thinking_tokens": 6},
+    "service_tier": "standard",
+}
+_ADAPTIVE_EXPECTED: Final = ExactExpected(
+    spend=0.0007524, input_cost=0.0001584, output_cost=0.000594, prompt_tokens=24, completion_tokens=18
+)
+
+BEDROCK_MANTLE_CLAUDE_OPUS_5_5_INPUT_TEXT: Final = with_usage(
+    CLAUDE_OPUS_5_5_INPUT_TEXT,
+    "bedrock_mantle-anthropic.claude-opus-5-5-input_text",
+    _ADAPTIVE_USAGE,
+    _ADAPTIVE_EXPECTED,
+).model_copy(
+    update={
+        "model": _MANTLE_CLAUDE_OPUS_MODEL,
+        "request": {
+            **CLAUDE_OPUS_5_5_INPUT_TEXT.request,
+            "reasoning_effort": "medium",
+            "allowed_openai_params": ["reasoning_effort"],
+        },
+    }
+)
+
+_MANTLE_CLAUDE_STREAM_RESPONSE: Final = SseResponse(
+    content_type="text/event-stream",
+    frames=sse_frames(
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_$REQUEST_ID",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-opus-5-5",
+                "content": [],
+                "stop_reason": None,
+                "stop_sequence": None,
+                "usage": {
+                    "input_tokens": 24,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 0,
+                    "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+                    "output_tokens": 5,
+                    "service_tier": "standard",
+                },
+            },
+        },
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "thinking", "thinking": ""}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": ""}},
+        {"type": "content_block_stop", "index": 0},
+        {"type": "content_block_start", "index": 1, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 1, "delta": {"type": "text_delta", "text": "4"}},
+        {"type": "content_block_stop", "index": 1},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+            "usage": {
+                "input_tokens": 24,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "output_tokens": 18,
+                "output_tokens_details": {"thinking_tokens": 6},
+            },
+        },
+        {"type": "message_stop"},
+    ),
+)
+
+BEDROCK_MANTLE_CLAUDE_OPUS_5_5_STREAM: Final = CLAUDE_OPUS_5_5_STREAM.model_copy(
+    update={
+        "name": "bedrock_mantle-anthropic.claude-opus-5-5-stream",
+        "model": _MANTLE_CLAUDE_OPUS_MODEL,
+        "request": {
+            **CLAUDE_OPUS_5_5_STREAM.request,
+            "reasoning_effort": "medium",
+            "allowed_openai_params": ["reasoning_effort"],
+        },
+        "response": _MANTLE_CLAUDE_STREAM_RESPONSE,
+        "expected": _ADAPTIVE_EXPECTED,
+    }
+)
+
+BEDROCK_MANTLE_CLAUDE_OPUS_5_5_MESSAGES_INPUT_TEXT: Final = with_usage(
+    CLAUDE_OPUS_5_5_MESSAGES_INPUT_TEXT,
+    "bedrock_mantle-anthropic.claude-opus-5-5-messages_input_text",
+    _ADAPTIVE_USAGE,
+    _ADAPTIVE_EXPECTED,
+).model_copy(
+    update={
+        "model": _MANTLE_CLAUDE_OPUS_MODEL,
+        "request": {
+            **CLAUDE_OPUS_5_5_MESSAGES_INPUT_TEXT.request,
+            "thinking": {"type": "adaptive"},
+            "output_config": {"effort": "medium"},
+        },
+    }
+)
+
+BEDROCK_MANTLE_CLAUDE_OPUS_5_5_MESSAGES_STREAM: Final = CLAUDE_OPUS_5_5_MESSAGES_STREAM.model_copy(
+    update={
+        "name": "bedrock_mantle-anthropic.claude-opus-5-5-messages_stream",
+        "model": _MANTLE_CLAUDE_OPUS_MODEL,
+        "request": {
+            **CLAUDE_OPUS_5_5_MESSAGES_STREAM.request,
+            "thinking": {"type": "adaptive"},
+            "output_config": {"effort": "medium"},
+        },
+        "response": _MANTLE_CLAUDE_STREAM_RESPONSE,
+        "expected": _ADAPTIVE_EXPECTED,
+    }
+)
+
+BEDROCK_MANTLE_CLAUDE_OPUS_5_5_CACHE_READ: Final = with_usage(
+    CLAUDE_OPUS_5_5_CACHE_READ,
+    "bedrock_mantle-anthropic.claude-opus-5-5-cache_read",
+    {
+        "input_tokens": 22,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 4203,
+        "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+        "output_tokens": 47,
+        "output_tokens_details": {"thinking_tokens": 35},
+        "service_tier": "standard",
+    },
+    ExactExpected(
+        spend=0.00308319, input_cost=0.00153219, output_cost=0.001551, prompt_tokens=4225, completion_tokens=47
+    ),
+).model_copy(update={"model": _MANTLE_CLAUDE_OPUS_MODEL})
+
+BEDROCK_MANTLE_CLAUDE_OPUS_5_5_CACHE_WRITE_5M: Final = with_usage(
+    CLAUDE_OPUS_5_5_CACHE_WRITE_5M,
+    "bedrock_mantle-anthropic.claude-opus-5-5-cache_write_5m",
+    {
+        "input_tokens": 22,
+        "cache_creation_input_tokens": 4203,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {"ephemeral_5m_input_tokens": 4203, "ephemeral_1h_input_tokens": 0},
+        "output_tokens": 44,
+        "output_tokens_details": {"thinking_tokens": 32},
+        "service_tier": "standard",
+    },
+    ExactExpected(
+        spend=0.03627195, input_cost=0.03481995, output_cost=0.001452, prompt_tokens=4225, completion_tokens=44
+    ),
+).model_copy(update={"model": _MANTLE_CLAUDE_OPUS_MODEL})
+
+BEDROCK_MANTLE_CLAUDE_OPUS_5_5_CACHE_WRITE_1H: Final = with_usage(
+    CLAUDE_OPUS_5_5_CACHE_WRITE_1H,
+    "bedrock_mantle-anthropic.claude-opus-5-5-cache_write_1h",
+    {
+        "input_tokens": 22,
+        "cache_creation_input_tokens": 9003,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 9003},
+        "output_tokens": 12,
+        "output_tokens_details": {"thinking_tokens": 0},
+        "service_tier": "standard",
+    },
+    ExactExpected(
+        spend=0.1193808, input_cost=0.1189848, output_cost=0.000396, prompt_tokens=9025, completion_tokens=12
+    ),
+).model_copy(update={"model": _MANTLE_CLAUDE_OPUS_MODEL})
+
+BEDROCK_MANTLE_CLAUDE_OPUS_5_5_THINKING: Final = with_usage(
+    CLAUDE_OPUS_5_5_THINKING,
+    "bedrock_mantle-anthropic.claude-opus-5-5-thinking",
+    _ADAPTIVE_USAGE,
+    _ADAPTIVE_EXPECTED,
+).model_copy(update={"model": _MANTLE_CLAUDE_OPUS_MODEL})
+
+BEDROCK_MANTLE_CLAUDE_OPUS_5_5_TOOL_CALL: Final = with_usage(
+    CLAUDE_OPUS_5_5_TOOL_CALL,
+    "bedrock_mantle-anthropic.claude-opus-5-5-tool_call",
+    {
+        "input_tokens": 376,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+        "output_tokens": 12,
+        "output_tokens_details": {"thinking_tokens": 0},
+        "service_tier": "standard",
+    },
+    ExactExpected(spend=0.0028776, input_cost=0.0024816, output_cost=0.000396, prompt_tokens=376, completion_tokens=12),
+).model_copy(update={"model": _MANTLE_CLAUDE_OPUS_MODEL})
+
+BEDROCK_MANTLE_CLAUDE_OPUS_5_5_CHAT_BRIDGED_JSON: Final = BEDROCK_MANTLE_CLAUDE_OPUS_5_5_INPUT_TEXT.model_copy(
+    update={
+        "name": "bedrock_mantle-anthropic.claude-opus-5-5-chat_bridged_json",
+        "response": BEDROCK_MANTLE_CLAUDE_OPUS_5_5_MESSAGES_INPUT_TEXT.response,
+    }
+)
+
+BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
+    BridgeCostParityTestCase(
+        native=BEDROCK_MANTLE_CLAUDE_OPUS_5_5_MESSAGES_INPUT_TEXT,
+        bridged=BEDROCK_MANTLE_CLAUDE_OPUS_5_5_CHAT_BRIDGED_JSON,
+    ),
+)
+
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     BEDROCK_MANTLE_OPENAI_GPT_6_SOL_RESPONSES_JSON,
     BEDROCK_MANTLE_OPENAI_GPT_6_SOL_RESPONSES_STREAM,
@@ -512,10 +729,27 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     BEDROCK_MANTLE_OPENAI_GPT_6_SOL_TIERED_INPUT_ABOVE_272K,
     BEDROCK_MANTLE_OPENAI_GPT_6_SOL_TIERED_CACHE_READ_ABOVE_272K,
     BEDROCK_MANTLE_OPENAI_GPT_6_SOL_TIERED_AT_272K_BOUNDARY,
+    BEDROCK_MANTLE_CLAUDE_OPUS_5_5_INPUT_TEXT,
+    BEDROCK_MANTLE_CLAUDE_OPUS_5_5_STREAM,
+    BEDROCK_MANTLE_CLAUDE_OPUS_5_5_MESSAGES_INPUT_TEXT,
+    BEDROCK_MANTLE_CLAUDE_OPUS_5_5_MESSAGES_STREAM,
+    BEDROCK_MANTLE_CLAUDE_OPUS_5_5_CHAT_BRIDGED_JSON,
+    BEDROCK_MANTLE_CLAUDE_OPUS_5_5_CACHE_READ,
+    BEDROCK_MANTLE_CLAUDE_OPUS_5_5_CACHE_WRITE_5M,
+    BEDROCK_MANTLE_CLAUDE_OPUS_5_5_CACHE_WRITE_1H,
+    BEDROCK_MANTLE_CLAUDE_OPUS_5_5_THINKING,
+    BEDROCK_MANTLE_CLAUDE_OPUS_5_5_TOOL_CALL,
 )
 
 PARITY: Final[tuple[StreamParityTestCase, ...]] = (
     StreamParityTestCase(
         plain=BEDROCK_MANTLE_OPENAI_GPT_6_SOL_RESPONSES_JSON, streamed=BEDROCK_MANTLE_OPENAI_GPT_6_SOL_RESPONSES_STREAM
+    ),
+    StreamParityTestCase(
+        plain=BEDROCK_MANTLE_CLAUDE_OPUS_5_5_INPUT_TEXT, streamed=BEDROCK_MANTLE_CLAUDE_OPUS_5_5_STREAM
+    ),
+    StreamParityTestCase(
+        plain=BEDROCK_MANTLE_CLAUDE_OPUS_5_5_MESSAGES_INPUT_TEXT,
+        streamed=BEDROCK_MANTLE_CLAUDE_OPUS_5_5_MESSAGES_STREAM,
     ),
 )
