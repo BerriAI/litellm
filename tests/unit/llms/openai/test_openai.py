@@ -11,6 +11,7 @@ import httpx
 import pytest
 import respx
 from openai import AsyncOpenAI, AzureOpenAI, OpenAI
+from openai._legacy_response import LegacyAPIResponse
 from openai._types import Response as SDKResponse
 from pydantic import BaseModel, ConfigDict, JsonValue
 
@@ -1700,7 +1701,7 @@ async def test_openai_prediction_param_mock():
 def test_openai_max_retries_0(mock_get_openai_client):
     import litellm
 
-    raw_response: Final = MagicMock()
+    raw_response: Final = MagicMock(spec=LegacyAPIResponse)
     raw_response.headers = {}
     raw_response.parse.return_value = ModelResponse(choices=[{"message": {"role": "assistant", "content": "Hello"}}])
     client_stub: Final = MagicMock()

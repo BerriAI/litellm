@@ -352,6 +352,13 @@ _NO_EXTRA_HEADERS: Final[Mapping[str, str]] = types.MappingProxyType({})
 _SDK_OPTION_KEYS: Final = frozenset(("extra_headers", "extra_query", "extra_body"))
 
 
+def _raw_chat_response(
+    result: ChatCompletion | Stream[ChatCompletionChunk] | AsyncStream[ChatCompletionChunk],
+) -> LegacyAPIResponse[ChatCompletion]:
+    assert isinstance(result, LegacyAPIResponse)
+    return result
+
+
 def _request_without_sdk_transform(
     data: Mapping[str, object], timeout: float | httpx.Timeout
 ) -> tuple[Mapping[str, object], RequestOptions]:
@@ -516,8 +523,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         start_time: Final = time.time()
         try:
             body, options = _request_without_sdk_transform(data, timeout)
-            raw_response = cast(  # cast-ok: the raw-response header makes post() return the wrapper
-                "LegacyAPIResponse[ChatCompletion]",
+            raw_response = _raw_chat_response(
                 await openai_aclient.post(
                     "/chat/completions",
                     body=body,
@@ -525,7 +531,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     options=options,
                     stream=bool(data.get("stream")),
                     stream_cls=AsyncStream[ChatCompletionChunk],
-                ),
+                )
             )
             end_time = time.time()
 
@@ -568,8 +574,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         raw_response = None
         try:
             body, options = _request_without_sdk_transform(data, timeout)
-            raw_response = cast(  # cast-ok: the raw-response header makes post() return the wrapper
-                "LegacyAPIResponse[ChatCompletion]",
+            raw_response = _raw_chat_response(
                 openai_client.post(
                     "/chat/completions",
                     body=body,
@@ -577,7 +582,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     options=options,
                     stream=bool(data.get("stream")),
                     stream_cls=Stream[ChatCompletionChunk],
-                ),
+                )
             )
 
             if hasattr(raw_response, "headers"):

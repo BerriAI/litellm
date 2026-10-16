@@ -4,6 +4,7 @@ from typing import Callable, Final, Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
+from openai._legacy_response import LegacyAPIResponse
 
 import litellm
 from litellm import ModelResponse
@@ -175,7 +176,7 @@ def test_azure_o_series_routing():
 def test_openai_o_series_max_retries_0(mock_get_openai_client):
     import litellm
 
-    raw_response: Final = MagicMock()
+    raw_response: Final = MagicMock(spec=LegacyAPIResponse)
     raw_response.headers = {}
     raw_response.parse.return_value = ModelResponse(choices=[{"message": {"role": "assistant", "content": "Hello"}}])
     client_stub: Final = MagicMock()
