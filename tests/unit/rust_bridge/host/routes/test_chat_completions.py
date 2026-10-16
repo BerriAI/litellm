@@ -4,7 +4,7 @@ from typing import Final
 import pytest
 
 import litellm
-from litellm.rust_bridge.host.routes.chat_completions import connection_defaults, response
+from litellm.rust_bridge.host.routes.chat_completions import body_params, connection_defaults, response
 from litellm.types.utils import ModelResponse
 
 
@@ -57,3 +57,20 @@ def test_connection_defaults_preserve_provider_precedence(
     monkeypatch.setattr(litellm, "anthropic_key", provider_key)
     monkeypatch.setattr(litellm, "api_base", "https://configured.invalid")
     assert connection_defaults(provider) == (expected_key, expected_base)
+
+
+def test_body_params_keep_request_params_and_leave_out_transport_and_unset_ones() -> None:
+    body: Final = body_params(
+        MappingProxyType(
+            {
+                "model": "anthropic/claude-sonnet-5-5",
+                "temperature": 0.2,
+                "max_tokens": None,
+                "api_key": "sk-secret",
+                "api_base": "https://example.invalid",
+                "timeout": 30,
+            }
+        )
+    )
+
+    assert body == {"temperature": 0.2}
