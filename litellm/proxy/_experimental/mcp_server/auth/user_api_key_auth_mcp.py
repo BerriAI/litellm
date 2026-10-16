@@ -41,6 +41,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import
 from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credentials import (
     is_session_bearer_shaped,
 )
+from litellm.proxy._experimental.mcp_server.utils import asgi_scope_fields
 from litellm.proxy._types import (
     UI_TEAM_ID,
     LiteLLM_AccessGroupTable,
@@ -306,10 +307,41 @@ def _gateway_dcr_challenge_target(
     targets: Final = _parse_mcp_server_names_from_path(route, mcp_servers)
     if targets is None:
         return None
-    server: Final = global_mcp_server_manager.get_mcp_server_by_name(targets[0], client_ip=client_ip)
+    server: Final = global_mcp_server_manager.get_mcp_server_by_identifier(targets[0], client_ip=client_ip)
     if server is None or not server.advertises_gateway_authorization_server:
         return None
     return targets[0]
+
+
+def gateway_dcr_challenge_scope(
+    route: str,
+    mcp_servers: Sequence[str] | None,
+    client_ip: str | None,
+) -> str | None:
+    if MCPRequestHandler.extract_target_server_names_from_path(route) or not mcp_servers:
+        return None
+    from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import gateway_server_scope
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    resolved: Final = tuple(
+        (entry, global_mcp_server_manager.get_mcp_server_by_identifier(entry, client_ip=client_ip))
+        for entry in dict.fromkeys(mcp_servers)
+    )
+    if any(server is None or not server.advertises_gateway_authorization_server for _, server in resolved):
+        return None
+    servers: Final = tuple((entry, server) for entry, server in resolved if server is not None)
+    first_by_id: Final = {server.server_id: (entry, server) for entry, server in reversed(servers)}
+    unique_servers: Final = tuple(
+        first_by_id[server_id] for server_id in dict.fromkeys(server.server_id for _, server in servers)
+    )
+    tokens: Final = tuple(
+        gateway_server_scope(entry) or gateway_server_scope(server.server_id) for entry, server in unique_servers
+    )
+    if any(token is None for token in tokens):
+        return None
+    return " ".join(token for token in tokens if token is not None)
 
 
 def _is_gateway_dcr_challenge_scope(
@@ -326,9 +358,10 @@ def _is_gateway_dcr_challenge_scope(
     Fires only for a genuine 401 with no client-supplied MCP auth headers (those mean
     the caller is not a cold-start DCR client), on the scopes the gateway's keyless
     flow serves: the aggregate ``/mcp`` endpoint, an ``x-mcp-servers``-scoped request
-    (the resource the client configured is still ``/mcp``), or a per-server path whose
-    single target advertises gateway-owned sign-in. Every other named target keeps
-    its existing behavior, failing closed to the original admission error."""
+    (the resource the client configured is still ``/mcp``; a single eligible header
+    target is also carried in the OAuth scope), or a per-server path whose single target
+    advertises gateway-owned sign-in. Every other named target keeps its existing
+    behavior, failing closed to the original admission error."""
     if not _is_litellm_auth_admission_error(exc):
         return False
     if _has_client_supplied_mcp_auth(mcp_auth_header, mcp_server_auth_headers):
@@ -354,20 +387,23 @@ def _gateway_dcr_challenge(
     present a bearer that failed admission (expired or revoked), telling
     spec-compliant clients to re-authorize rather than retry; a request with
     no credentials at all gets the bare challenge per RFC 6750 section 3.1."""
-    target: Final = _gateway_dcr_challenge_target(route, mcp_servers, IPAddressUtils.get_mcp_client_ip(request))
+    client_ip: Final = IPAddressUtils.get_mcp_client_ip(request)
+    target: Final = _gateway_dcr_challenge_target(route, mcp_servers, client_ip)
+    server_scope: Final = gateway_dcr_challenge_scope(route, mcp_servers, client_ip) if target is None else None
     resource_metadata_url: Final = (
         get_passthrough_resource_metadata_url(request.scope, target)
         if target is not None
         else f"{get_request_base_url(request)}/.well-known/oauth-protected-resource{well_known_root_suffix()}/mcp"
     )
     error_attr: Final = 'error="invalid_token", ' if invalid_token else ""
+    scope_attr: Final = f', scope="{server_scope}"' if server_scope is not None else ""
     return HTTPException(
         status_code=401,
         detail={
             "error": "authentication_required",
             "message": "Authenticate with the gateway to use the MCP endpoint.",
         },
-        headers={"WWW-Authenticate": f'Bearer {error_attr}resource_metadata="{resource_metadata_url}"'},
+        headers={"WWW-Authenticate": f'Bearer {error_attr}resource_metadata="{resource_metadata_url}"{scope_attr}'},
     )
 
 
@@ -693,6 +729,7 @@ class MCPRequestHandler:
                 mcp_auth_header=mcp_auth_header,
                 mcp_server_auth_headers=mcp_server_auth_headers,
                 admitted_credential=admitted_credential,
+                preserve_jwt_subject=bool(validated_user_api_key_auth.jwt_claims),
             )
 
             return (
@@ -732,6 +769,7 @@ class MCPRequestHandler:
         mcp_server_auth_headers: dict[str, dict[str, str]] | None,
         *,
         admitted_credential: str | None,
+        preserve_jwt_subject: bool = False,
     ) -> tuple[dict[str, str] | None, dict[str, str], str | None, dict[str, dict[str, str]] | None]:
         """Remove gateway-shaped credentials and the caller's admitted credential from EVERY egress
         header context: top-level ``Authorization`` (oauth2 + raw), the deprecated ``x-mcp-auth``, and
@@ -745,6 +783,14 @@ class MCPRequestHandler:
 
         # 1. Top-level Authorization → oauth2_headers.
         authz: Final = oauth2_headers.get("Authorization") if oauth2_headers else None
+        preserve_subject: Final = bool(
+            preserve_jwt_subject
+            and not admitted
+            and authz
+            and not _normalize_caller_admission_credential(authz).startswith("sk-")
+            and not MCPRequestHandler._is_gateway_admission_credential(authz)
+            and MCPRequestHandler._is_caller_admission_key(authz, admitted_credential)
+        )
         if admitted or cred(authz):
             oauth2_headers = None
 
@@ -753,7 +799,9 @@ class MCPRequestHandler:
         raw_headers = {
             k: v
             for k, v in raw_headers.items()
-            if k.lower() == "x-litellm-api-key" or not ((admitted and k.lower() == "authorization") or cred(v))
+            if k.lower() == "x-litellm-api-key"
+            or (preserve_subject and k.lower() == "authorization")
+            or not ((admitted and k.lower() == "authorization") or cred(v))
         }
 
         # 3. Deprecated x-mcp-auth value.
@@ -1110,7 +1158,7 @@ class MCPRequestHandler:
             case SessionBearerAdmitted():
                 try:
                     admitted: Final = await MCPRequestHandler.reload_admitted_user(result.principal.user_id)
-                    admitted.mcp_session_resource_server_id = result.principal.resource_server_id
+                    admitted.mcp_session_resource_server_ids = result.principal.resource_server_ids
                     await MCPRequestHandler._enforce_admitted_live_policy(
                         admitted=admitted, request=request, route=route
                     )
@@ -1705,7 +1753,7 @@ class MCPRequestHandler:
         ``Authorization`` headers is malformed for bearer auth anyway (RFC 9110: not
         a comma-combinable field), so fail closed with a 400.
         """
-        raw_headers: Final = scope.get("headers", [])
+        raw_headers: Final = asgi_scope_fields(scope).get("headers", [])
         MCPRequestHandler._reject_duplicate_authorization(raw_headers)
         try:
             # ASGI headers are list of [name: bytes, value: bytes] pairs

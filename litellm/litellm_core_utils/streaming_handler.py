@@ -14,6 +14,7 @@ from typing import Any, Final, NoReturn, Protocol, TypeVar, cast
 
 import anyio
 import httpx
+from openai.types.chat import ChatCompletionChunk
 from pydantic import BaseModel, ValidationError
 from typing_extensions import NotRequired, TypedDict
 
@@ -27,6 +28,7 @@ from litellm.litellm_core_utils.model_response_utils import (
 )
 from litellm.litellm_core_utils.redact_messages import LiteLLMLoggingObject
 from litellm.litellm_core_utils.thread_pool_executor import executor
+from litellm.llms.ollama.common_utils import OllamaResponseIdNormalizer
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import OpenAIChatCompletionChunk
 from litellm.types.router import GenericLiteLLMParams
@@ -79,6 +81,11 @@ def _stamp_served_service_tier(response: ModelResponseStream, complete_streaming
     served_tier: Final = complete_streaming_response.model_dump().get("service_tier")
     if isinstance(served_tier, str) and served_tier:
         setattr(response, "service_tier", served_tier)  # noqa: B010  # pydantic extra, not a declared field
+
+
+def _apply_provider_fields(response: ModelResponseStream, fields: Mapping[str, object]) -> None:
+    for key, value in fields.items():
+        setattr(response, key, value)
 
 
 def is_async_iterable(obj: object) -> bool:
@@ -280,6 +287,7 @@ class CustomStreamWrapper:
 
         self._response_headers = _response_headers
         self.response_id: str | None = None
+        self._ollama_response_ids = OllamaResponseIdNormalizer()
         self.received_model_id: str | None = None
         self.logging_loop = None
         self.rules = Rules()
@@ -819,7 +827,7 @@ class CustomStreamWrapper:
             pass
         else:
             model_response.choices = [StreamingChoices(finish_reason=None)]
-        return model_response
+        return self._ollama_response_ids.apply(model_response)
 
     def is_delta_empty(self, delta: Delta) -> bool:
         is_empty = True
@@ -857,8 +865,7 @@ class CustomStreamWrapper:
         provider_specific_fields: Final = getattr(original_chunk, "provider_specific_fields", None)
         if provider_specific_fields is not None:
             model_response.provider_specific_fields = provider_specific_fields
-            for k, v in provider_specific_fields.items():
-                setattr(model_response, k, v)
+            _apply_provider_fields(model_response, provider_specific_fields)
         return model_response
 
     def is_chunk_non_empty(
@@ -1211,8 +1218,7 @@ class CustomStreamWrapper:
                 "provider_specific_fields" in anthropic_response_obj
                 and anthropic_response_obj["provider_specific_fields"] is not None
             ):
-                for key, value in anthropic_response_obj["provider_specific_fields"].items():
-                    setattr(model_response, key, value)
+                _apply_provider_fields(model_response, anthropic_response_obj["provider_specific_fields"])
 
             response_obj = cast(dict[str, object], anthropic_response_obj)
         elif self.model == "replicate" or self.custom_llm_provider == "replicate":
@@ -1446,8 +1452,14 @@ class CustomStreamWrapper:
         return _ProviderChunkParsed(response_obj)
 
     def chunk_creator(self, chunk: Any):
+        if self.custom_llm_provider != "cached_response" and isinstance(
+            chunk, (ChatCompletionChunk, ModelResponseStream)
+        ):
+            self._ollama_response_ids.observe(chunk)
         if hasattr(chunk, "id"):
             self.response_id = chunk.id
+        if self._ollama_response_ids.response_id is not None:
+            self.response_id = self._ollama_response_ids.response_id
         provider_response_model: Final = _provider_response_model(chunk)
         if provider_response_model is not None:
             self._provider_response_model = provider_response_model

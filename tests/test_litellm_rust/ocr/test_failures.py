@@ -26,7 +26,6 @@ pytestmark = pytest.mark.requires_rust_extension
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
 async def test_ocr_contract_upstream_status(
     server: RecordingServer,
-    ocr_backend: bool,
     asynchronous: bool,
 ) -> None:
     upstream: Final = ResponseSpec(body={"detail": "invalid provider option"}, status=422)
@@ -48,7 +47,6 @@ async def test_ocr_contract_upstream_status(
 @pytest.mark.parametrize("preserved", ["body", "headers"])
 async def test_ocr_contract_provider_error_details(
     server: RecordingServer,
-    ocr_backend: bool,
     asynchronous: bool,
     preserved: str,
 ) -> None:
@@ -71,7 +69,6 @@ async def test_ocr_contract_provider_error_details(
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
 async def test_ocr_contract_invalid_response_format(
     server: RecordingServer,
-    ocr_backend: bool,
     asynchronous: bool,
 ) -> None:
     server.expected_requests = 0
@@ -95,7 +92,6 @@ async def test_ocr_contract_invalid_response_format(
 )
 async def test_ocr_contract_malformed_document_is_actionable(
     server: RecordingServer,
-    ocr_backend: bool,
     asynchronous: bool,
     document: JsonValue,
     field: str,
@@ -115,7 +111,6 @@ async def test_ocr_contract_malformed_document_is_actionable(
 @pytest.mark.parametrize("option,value,field", [("pages", [-1], "pages"), ("features", [1], "features")])
 async def test_ocr_contract_azure_invalid_options_are_bad_requests(
     server: RecordingServer,
-    ocr_backend: bool,
     asynchronous: bool,
     option: str,
     value: JsonValue,

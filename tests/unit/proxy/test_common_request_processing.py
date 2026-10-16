@@ -24,6 +24,7 @@ from litellm.litellm_core_utils.bug_report import (
     bug_report_notice,
     build_bug_report,
 )
+from litellm.types.router import RouterRateLimitError, RouterRateLimitErrorBasic
 from litellm.constants import (
     CLIENT_REQUESTED_MODEL_SCOPE_KEY,
     MAX_LITELLM_CALL_ID_LENGTH,
@@ -4673,6 +4674,21 @@ class TestHandleLLMApiExceptionRetryAfter:
     async def test_handle_llm_api_exception_no_retry_after_for_plain_exception(self):
         proxy_exc = await self._invoke(ValueError("some other failure"))
         assert "retry-after" not in proxy_exc.headers
+
+    @pytest.mark.parametrize(
+        "exc",
+        (
+            RouterRateLimitError(model="gpt-4", cooldown_time=42.3, enable_pre_call_checks=False, cooldown_list=[]),
+            RouterRateLimitErrorBasic(model="gpt-4"),
+        ),
+        ids=("cooldown", "basic"),
+    )
+    async def test_handle_llm_api_exception_answers_a_cooldown_with_429_and_no_bug_notice(self, exc, caplog):
+        with caplog.at_level("ERROR"):
+            proxy_exc = await self._invoke(exc)
+
+        assert (proxy_exc.code, proxy_exc.type) == ("429", "rate_limit_error")
+        assert ISSUE_URL_BASE not in caplog.text
 
     async def test_handle_llm_api_exception_strips_bug_report_notice_from_client_message(self, caplog):
         report = build_bug_report(RuntimeError("boom"), surface="sdk")
@@ -10919,3 +10935,63 @@ class TestStreamingContainerOwnershipRecordedBeforeDone:
         assert tuple(chunk for chunk, _ in observed) == self.CHUNKS
         assert tuple(count for _, count in observed) == (0, 0, 0, 0)
         recorder.assert_awaited_once()
+
+
+class TestResponseCostFromLoggingObjForBridgedMessages:
+    """A /v1/messages request answered through the chat bridge arrives here as an Anthropic body whose
+    usage has no reasoning field, while the cost it recomputes must still price the reasoning tokens
+    the provider reported (LIT-9666)."""
+
+    @staticmethod
+    def _logging_obj(model: str):
+        from litellm.litellm_core_utils.litellm_logging import Logging
+
+        logging_obj = Logging(
+            model=model,
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="anthropic_messages",
+            start_time=datetime.datetime.now(),
+            litellm_call_id="lit-9666",
+            function_id="lit-9666",
+        )
+        logging_obj.optional_params = {}
+        return logging_obj
+
+    def test_recomputed_cost_prices_the_reasoning_tokens_of_the_bridged_chat_completion(self):
+        from litellm.types.utils import CompletionTokensDetailsWrapper, ModelResponse, Usage
+        from litellm.llms.anthropic.pass_through.adapters.transformation import LiteLLMAnthropicMessagesAdapter
+
+        model = "dashscope/qwen-turbo"
+        pricing = litellm.get_model_info(model)
+        input_rate = pricing["input_cost_per_token"]
+        output_rate = pricing["output_cost_per_token"]
+        reasoning_rate = pricing["output_cost_per_reasoning_token"]
+        assert input_rate is not None and output_rate is not None and reasoning_rate is not None
+        assert reasoning_rate != output_rate
+        chat_completion = ModelResponse(
+            id="chatcmpl-upstream",
+            model="qwen-turbo",
+            choices=[{"index": 0, "message": {"role": "assistant", "content": "answer"}, "finish_reason": "stop"}],
+            usage=Usage(
+                prompt_tokens=1240,
+                completion_tokens=4040,
+                total_tokens=5280,
+                completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=3480),
+            ),
+        )
+        served = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(response=chat_completion)
+        assert served is not None and "reasoning" not in json.dumps(served["usage"])
+        logging_obj = self._logging_obj(model)
+        logging_obj.record_bridged_model_response(chat_completion)
+
+        cost = ProxyBaseLLMRequestProcessing._response_cost_from_logging_obj(
+            response=dict(served), logging_obj=logging_obj
+        )
+
+        expected_reasoning = 3480 * reasoning_rate
+        expected_output = expected_reasoning + (4040 - 3480) * output_rate
+        assert cost == pytest.approx(1240 * input_rate + expected_output)
+        assert logging_obj.cost_breakdown is not None
+        assert logging_obj.cost_breakdown["output_cost"] == pytest.approx(expected_output)
+        assert logging_obj.cost_breakdown["reasoning_cost"] == pytest.approx(expected_reasoning)

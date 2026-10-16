@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from enum import Enum, auto
 from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol, TypedDict, cast
 
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly
 
 import litellm
@@ -105,6 +106,9 @@ class _ClientWebSocket(ScopedWebSocket, Protocol):
 
 class _LoggingWorker(Protocol):
     def ensure_initialized_and_enqueue(self, async_coroutine: Coroutine[object, object, None]) -> None: ...
+
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _decode_json_object(payload: str) -> Mapping[str, object]:
@@ -293,10 +297,12 @@ class RealTimeStreaming:
         """Extract user text content from client WebSocket events for spend logging."""
         try:
             if isinstance(message, str):
-                msg_obj = json.loads(message)
+                msg_obj = _DECODED_JSON.validate_python(json.loads(message))
             elif isinstance(message, dict):
                 msg_obj = message
             else:
+                return
+            if not isinstance(msg_obj, dict):
                 return
 
             msg_type: Final = msg_obj.get("type", "")
@@ -773,7 +779,7 @@ class RealTimeStreaming:
         if not self._has_audio_transcription_guardrails():
             return setup_message
         try:
-            obj: Final = json.loads(setup_message)
+            obj: Final = _DECODED_JSON.validate_python(json.loads(setup_message))
         except (json.JSONDecodeError, TypeError):
             return setup_message
         setup: Final = obj.get("setup") if isinstance(obj, dict) else None
