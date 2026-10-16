@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 import respx
-from mcp.types import CallToolResult, TextContent
+from mcp.types import CallToolResult, ListToolsResult, TextContent
 from mcp.types import Tool as MCPTool
 
 
@@ -20,6 +20,7 @@ from mcp.types import Tool as MCPTool
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.proxy._experimental.mcp_server.faults.list_outcomes import ServerListOk
 from litellm.proxy.utils import _failure_fields_to_lift
 from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
 from litellm.types.llms.openai import (
@@ -1752,6 +1753,78 @@ async def test_non_stream_auto_execute_tool_log_continues_the_request_trace_with
     assert call_tool.await_args is not None
     tool_metadata: Final = call_tool.await_args.kwargs["litellm_logging_obj"].litellm_params["metadata"]
     assert tool_metadata["existing_trace_id"] == recorder.logged[0]["trace_id"]
+
+
+class _ListingRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.listings: tuple[Mapping[str, object], ...] = ()
+
+    async def async_log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        if kwargs.get("call_type") == "list_mcp_tools":
+            self.listings = (*self.listings, kwargs)
+
+
+@pytest.mark.asyncio
+async def test_non_stream_auto_execute_tool_listing_log_continues_the_request_trace(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    _serve_rounds(respx_mock, monkeypatch, (_ROUND_ONE_BODY, _ROUND_TWO_BODY))
+    echo_tool: Final = MCPTool.model_validate(
+        {"name": "echo", "inputSchema": {"type": "object", "properties": {"value": {"type": "string"}}}},
+        by_name=False,
+    )
+    demo_server: Final = SimpleNamespace(
+        server_id="demo", name="demo", alias="demo", server_name="demo", auth_type=None, extra_headers=None
+    )
+    monkeypatch.setitem(
+        sys.modules, "litellm.proxy.proxy_server", SimpleNamespace(proxy_logging_obj=None, prisma_client=None)
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        SimpleNamespace(
+            catalog=SimpleNamespace(operation=nullcontext),
+            get_registry=MagicMock(return_value={}),
+            call_tool=AsyncMock(return_value=CallToolResult(content=[TextContent(type="text", text="PING")])),
+            get_mcp_server_from_tool_name=MagicMock(return_value=None),
+            get_mcp_server_by_name=MagicMock(return_value=None),
+            get_allowed_mcp_servers=AsyncMock(return_value=["demo"]),
+            get_mcp_servers_from_ids=MagicMock(return_value=[demo_server]),
+        ),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.operations._get_allowed_mcp_servers",
+        AsyncMock(return_value=[demo_server]),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.catalog.get_filtered_server_tools",
+        AsyncMock(return_value=(ListToolsResult(tools=[echo_tool]), ServerListOk(tool_count=1))),
+    )
+    listing_recorder: Final = _ListingRecorder()
+    monkeypatch.setattr(litellm, "_async_success_callback", [listing_recorder])
+    request_recorder: Final = _RoundRecorder()
+
+    await litellm.aresponses(
+        model="openai/gpt-5.6",
+        input="Call echo with PING",
+        tools=[dict(_ECHO_MCP_TOOL)],
+        api_key="sk-mcp-rounds",
+        api_base="https://mcp-rounds.example.com/v1",
+        litellm_call_id="mcp-listing-trace",
+        litellm_logging_obj=_rounds_logging_obj(request_recorder, "mcp-listing-trace"),
+    )
+    await _settle(lambda: len(request_recorder.logged) > 0 and len(listing_recorder.listings) > 0)
+
+    request_trace_id: Final = request_recorder.logged[0]["trace_id"]
+    assert len(listing_recorder.listings) == 1
+    listing: Final = listing_recorder.listings[0]
+    listing_row: Final = cast(StandardLoggingPayload, listing["standard_logging_object"])
+    assert listing_row["trace_id"] == request_trace_id
+    assert cast(Mapping[str, Mapping[str, object]], listing["litellm_params"])["metadata"][
+        "existing_trace_id"
+    ] == request_trace_id
 
 
 @pytest.mark.asyncio

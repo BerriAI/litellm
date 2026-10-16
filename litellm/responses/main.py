@@ -171,6 +171,20 @@ def mock_responses_api_response(
 _REQUEST_KWARGS: Final = TypeAdapter(Mapping[str, object])
 
 
+def _client_trace_id(request_kwargs: Mapping[str, object]) -> str | None:
+    trace_id: Final = request_kwargs.get("litellm_trace_id")
+    return trace_id if isinstance(trace_id, str) else None
+
+
+def _request_trace_id(request_kwargs: Mapping[str, object]) -> str | None:
+    logging_obj: Final = request_kwargs.get("litellm_logging_obj")
+    if isinstance(logging_obj, LiteLLMLoggingObj):
+        return StandardLoggingPayloadSetup.get_standard_logging_payload_trace_id(
+            logging_obj=logging_obj, litellm_params=logging_obj.litellm_params
+        )
+    return _client_trace_id(request_kwargs)
+
+
 async def aresponses_api_with_mcp(
     input: str | ResponseInputParam,
     model: str,
@@ -233,6 +247,10 @@ async def aresponses_api_with_mcp(
         else (None, None, None, None)
     )
 
+    request_kwargs: Final = _REQUEST_KWARGS.validate_python(kwargs)
+    logging_obj: Final = request_kwargs.get("litellm_logging_obj")
+    joins_request_trace: Final = isinstance(logging_obj, LiteLLMLoggingObj)
+
     # Get original MCP tools (for events) and OpenAI tools (for LLM) by reusing existing methods
     (
         original_mcp_tools,
@@ -240,7 +258,8 @@ async def aresponses_api_with_mcp(
     ) = await LiteLLM_Proxy_MCP_Handler.process_mcp_tools_without_openai_transform(
         user_api_key_auth=user_api_key_auth,
         mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
-        litellm_trace_id=kwargs.get("litellm_trace_id"),
+        litellm_trace_id=_client_trace_id(request_kwargs) if stream else _request_trace_id(request_kwargs),
+        joins_request_trace=joins_request_trace and not stream,
         mcp_auth_header=mcp_auth_header,
         mcp_server_auth_headers=mcp_server_auth_headers,
         request_tags=LiteLLM_Proxy_MCP_Handler.get_parent_request_tags(kwargs),
@@ -330,7 +349,6 @@ async def aresponses_api_with_mcp(
             previous_response_id=previous_response_id,
             **initial_call_params,
         )
-    logging_obj: Final = _REQUEST_KWARGS.validate_python(kwargs).get("litellm_logging_obj")
     first_round_breakdown: Final = logging_obj.cost_breakdown if isinstance(logging_obj, LiteLLMLoggingObj) else None
 
     verbose_logger.debug("Initial response %s", response)
@@ -366,18 +384,12 @@ async def aresponses_api_with_mcp(
                     mcp_server_auth_headers=mcp_server_auth_headers,
                     oauth2_headers=oauth2_headers,
                     raw_headers=raw_headers_from_request,
-                    litellm_trace_id=(
-                        StandardLoggingPayloadSetup.get_standard_logging_payload_trace_id(
-                            logging_obj=logging_obj, litellm_params=logging_obj.litellm_params
-                        )
-                        if isinstance(logging_obj, LiteLLMLoggingObj)
-                        else kwargs.get("litellm_trace_id")
-                    ),
+                    litellm_trace_id=_request_trace_id(request_kwargs),
                     request_tags=LiteLLM_Proxy_MCP_Handler.get_parent_request_tags(kwargs),
                     guardrail_context=MCPRequestContext.resolve_guardrail_context(
                         MappingProxyType({**kwargs, "metadata": metadata, "model": model})
                     ),
-                    joins_request_trace=isinstance(logging_obj, LiteLLMLoggingObj),
+                    joins_request_trace=joins_request_trace,
                 )
 
                 if tool_results:

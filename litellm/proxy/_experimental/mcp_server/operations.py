@@ -1160,6 +1160,7 @@ async def _get_tools_from_mcp_servers(
     protocol_version: str | None = None,
     *,
     record_listing: bool = False,
+    joins_request_trace: bool = False,
     enforce_rate_limits: bool = True,
 ) -> AggregateToolListing:
     """
@@ -1206,6 +1207,11 @@ async def _get_tools_from_mcp_servers(
                 "spend_logs_metadata": spend_logs_metadata,
                 "headers": logging_safe_mcp_headers(raw_headers),
                 **({"tags": request_tags} if request_tags else {}),
+                **(
+                    {"existing_trace_id": effective_litellm_trace_id}
+                    if joins_request_trace and effective_litellm_trace_id
+                    else {}
+                ),
             },
             # Provide a small input payload for standard logging
             "input": [

@@ -258,6 +258,7 @@ class LiteLLM_Proxy_MCP_Handler:
         request_tags: list[str] | None = None,
         raw_headers: dict[str, str] | None = None,
         granted_toolsets: "GrantedToolsetIds | None" = None,
+        joins_request_trace: bool = False,
     ) -> tuple[list[MCPTool], list[str]]:
         """
         Get available tools from the MCP server manager.
@@ -343,6 +344,7 @@ class LiteLLM_Proxy_MCP_Handler:
             log_list_tools_to_spendlogs=True,
             list_tools_log_source="responses",
             litellm_trace_id=litellm_trace_id,
+            joins_request_trace=joins_request_trace,
             request_tags=request_tags,
             raw_headers=raw_headers,
         )
@@ -474,6 +476,7 @@ class LiteLLM_Proxy_MCP_Handler:
         mcp_server_auth_headers: dict[str, dict[str, str]] | None = None,
         request_tags: list[str] | None = None,
         raw_headers: dict[str, str] | None = None,
+        joins_request_trace: bool = False,
     ) -> tuple[list[MCPTool], dict[str, str]]:
         """
         Process MCP tools through filtering and deduplication pipeline without OpenAI transformation.
@@ -505,6 +508,7 @@ class LiteLLM_Proxy_MCP_Handler:
             mcp_server_auth_headers=mcp_server_auth_headers,
             request_tags=request_tags,
             raw_headers=raw_headers,
+            joins_request_trace=joins_request_trace,
         )
 
         # Step 2: Filter tools based on allowed_tools parameter
