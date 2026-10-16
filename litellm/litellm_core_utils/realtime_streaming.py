@@ -138,10 +138,10 @@ def _guardrail_event_id() -> str:
     return f"{_GUARDRAIL_EVENT_ID_PREFIX}{uuid.uuid4().hex}"
 
 
-def _is_error_for_guardrail_event(event: Mapping[str, object]) -> bool:
+def _error_event_id(event: Mapping[str, object]) -> str | None:
     error: Final = _mapping_field(event, "error")
     caused_by: Final = None if error is None else error.get("event_id")
-    return isinstance(caused_by, str) and caused_by.startswith(_GUARDRAIL_EVENT_ID_PREFIX)
+    return caused_by if isinstance(caused_by, str) else None
 
 
 _TurnDetectionGate: TypeAlias = Callable[[object], Mapping[str, object]]
@@ -275,6 +275,7 @@ class RealTimeStreaming:
         # that disables provider auto-response for transcription guardrails.
         self._guardrail_turn_detection_update_sent: bool = False
         self._session_gate_sent: bool = False
+        self._guardrail_cancel_event_ids: frozenset[str] = frozenset()
         # Deferred Gemini Live setup: Pipecat may stream audio before session.update.
         # Buffer client audio until the backend acknowledges setup (setupComplete).
         self._backend_setup_complete: bool = provider_config is None or provider_config.requires_session_configuration()
@@ -827,6 +828,14 @@ class RealTimeStreaming:
         """Return a session.update that disables VAD auto-response."""
         return json.dumps(self._make_turn_detection_update(self._gate_turn_detection(None)))
 
+    async def _send_guardrail_cancel(self) -> None:
+        event_id: Final = _guardrail_event_id()
+        self._guardrail_cancel_event_ids = self._guardrail_cancel_event_ids | {event_id}
+        await self._send_to_backend(json.dumps({"type": "response.cancel", "event_id": event_id}))
+
+    def _is_guardrail_cancel_error(self, event: Mapping[str, object]) -> bool:
+        return _error_event_id(event) in self._guardrail_cancel_event_ids
+
     async def _send_session_gate_once(self) -> None:
         """Gate the backend's default turn_detection ahead of the first client session.update, which overrides it."""
         if self._session_gate_sent or not self._should_disable_vad_auto_response():
@@ -1006,9 +1015,7 @@ class RealTimeStreaming:
                 if pre_block_backend_message is not None:
                     await self._send_to_backend(pre_block_backend_message)
                 if not self._is_transcription_session:
-                    await self._send_to_backend(
-                        json.dumps({"type": "response.cancel", "event_id": _guardrail_event_id()})
-                    )
+                    await self._send_guardrail_cancel()
                 # Send the policy violation hint (shows as small gray status text in UI).
                 await self.websocket.send_text(
                     json.dumps(
@@ -1227,7 +1234,7 @@ class RealTimeStreaming:
                 if self._usage_meter is not None:
                     self._usage_meter.observe_backend_event(event)
 
-                if event.get("type") == "error" and _is_error_for_guardrail_event(event):
+                if event.get("type") == "error" and self._is_guardrail_cancel_error(event):
                     verbose_logger.debug("Realtime: not forwarding an error caused by a guardrail event: %s", event)
                     continue
 

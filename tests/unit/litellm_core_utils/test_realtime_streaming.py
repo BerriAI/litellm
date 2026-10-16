@@ -4161,6 +4161,7 @@ async def test_client_never_sees_the_error_caused_by_the_guardrail_cancel(monkey
             lambda: _make_transcript_event("blocked words"),
             lambda: cancel_not_active(proxy_cancel_event_id()),
             lambda: cancel_not_active("evt_from_client"),
+            lambda: cancel_not_active("litellm_guardrail_from_client"),
         )
     )
 
@@ -4183,4 +4184,5 @@ async def test_client_never_sees_the_error_caused_by_the_guardrail_cancel(monkey
     assert [(error["code"], error.get("event_id")) for error in client_errors] == [
         ("content_policy_violation", None),
         ("response_cancel_not_active", "evt_from_client"),
+        ("response_cancel_not_active", "litellm_guardrail_from_client"),
     ]

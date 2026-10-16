@@ -130,6 +130,24 @@ GA_INJECTED_UPDATE: Final[dict[str, JsonValue]] = {
     "audio": {"input": {"turn_detection": {"type": "server_vad", "create_response": False}}},
 }
 BETA_INJECTED_UPDATE: Final[dict[str, JsonValue]] = {"turn_detection": {"type": "server_vad", "create_response": False}}
+XAI_VOICE_MODEL: Final = "grok-voice"
+GEMINI_LIVE_MODEL: Final = "gemini-3.8-live"
+VERTEX_LIVE_LOCATION: Final = "us-central1"
+UNTYPED_GATE: Final[dict[str, JsonValue]] = {"create_response": False}
+SEMANTIC_VAD: Final[dict[str, JsonValue]] = {"type": "semantic_vad", "eagerness": "low"}
+TUNED_SERVER_VAD: Final[dict[str, JsonValue]] = {
+    "type": "server_vad",
+    "prefix_padding_ms": 300,
+    "silence_duration_ms": 500,
+}
+GEMINI_TUNED_DETECTION: Final[dict[str, JsonValue]] = {
+    "disabled": True,
+    "prefixPaddingMs": 300,
+    "silenceDurationMs": 500,
+}
+CLIENT_CANCEL_ID: Final = "client_cancel_1"
+CANCEL_NOT_ACTIVE: Final = ("invalid_request_error", "response_cancel_not_active")
+AUTO_ANSWER_PREFIX: Final = "resp_auto_"
 COMMIT: Final[dict[str, JsonValue]] = {"type": "input_audio_buffer.commit"}
 APPEND: Final[dict[str, JsonValue]] = {"type": "input_audio_buffer.append", "audio": PCM_200MS_24KHZ}
 PUSH_TO_TALK: Final = "PUSH_TO_TALK"
@@ -317,6 +335,30 @@ def _voice_scenario(*transcripts: JsonValue) -> RealtimeResponse:
     return RealtimeResponse(content_type="application/x-realtime", events=tuple(_voice_turns(transcripts)))
 
 
+def _xai_voice_scenario(transcript: str) -> RealtimeResponse:
+    return RealtimeResponse(
+        content_type="application/x-realtime", events=tuple(_voice_turns((transcript,))), dialect="xai"
+    )
+
+
+def _voice_scenario_created_after_the_first_frame(transcript: str) -> RealtimeResponse:
+    return RealtimeResponse(
+        content_type="application/x-realtime", events=tuple(_voice_turns((transcript,))), created_after_first_frame=True
+    )
+
+
+def _live_scenario() -> RealtimeResponse:
+    return RealtimeResponse(content_type="application/x-realtime", events=())
+
+
+def _realtime_update(turn_detection: JsonValue) -> dict[str, JsonValue]:
+    return {"type": "realtime", "audio": {"input": {"turn_detection": turn_detection}}}
+
+
+def _without_auto_response(turn_detection: dict[str, JsonValue]) -> dict[str, JsonValue]:
+    return {**turn_detection, "create_response": False}
+
+
 def _muse_scenario(transcript: str) -> RealtimeResponse:
     return RealtimeResponse(
         content_type="application/x-realtime",
@@ -357,8 +399,41 @@ def _with_transcription_model(update: dict[str, JsonValue], model: str) -> dict[
     return {**update, "audio": {"input": {**audio_input, "transcription": {"model": model}}}}
 
 
-def _muse_deployment(scenario: Scenario, scenario_id: str, api_base: str) -> str:
-    return scenario.model(model=f"meta/{MUSE_MODEL}", api_key=scenario_id, api_base=api_base)
+def _muse_deployment(scenario: Scenario, scenario_id: str, api_base: str, *, drop_params: bool) -> str:
+    return scenario.model(model=f"meta/{MUSE_MODEL}", api_key=scenario_id, api_base=api_base, drop_params=drop_params)
+
+
+def _gemini_studio_deployment(scenario: Scenario, scenario_id: str, upstream_url: str) -> str:
+    return scenario.model(
+        model=f"gemini/{GEMINI_LIVE_MODEL}",
+        api_key=scenario_id,
+        api_base=upstream_url.rstrip("/"),
+        model_info={"mode": "realtime"},
+    )
+
+
+def _vertex_credentials(upstream_url: str) -> str:
+    return json.dumps(
+        {
+            "type": "external_account",
+            "audience": "synthetic-vertex-audience",
+            "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+            "token_url": f"{upstream_url}/_oauth/token",
+            "credential_source": {"url": f"{upstream_url}/health"},
+        }
+    )
+
+
+def _vertex_live_deployment(scenario: Scenario, project: str, upstream_url: str) -> str:
+    upstream: Final = upstream_url.rstrip("/")
+    return scenario.model(
+        model=f"vertex_ai/{GEMINI_LIVE_MODEL}",
+        vertex_project=project,
+        vertex_credentials=_vertex_credentials(upstream),
+        vertex_location=VERTEX_LIVE_LOCATION,
+        api_base=upstream,
+        model_info={"mode": "realtime"},
+    )
 
 
 def _named_deployment_id(creator: Gateway, scenario: Scenario, name: str, model: str, scenario_id: str) -> str:
@@ -548,6 +623,55 @@ def _transcribe(
     return asyncio.run(_session(ws_base, path, query, key, frames, until=until, headers=headers))
 
 
+async def _received_after_sending(
+    socket: ClientConnection, frames: tuple[dict[str, JsonValue], ...], until: str
+) -> AsyncIterator[dict[str, JsonValue]]:
+    try:
+        for frame in frames:
+            await socket.send(json.dumps(frame))
+        async for event in _until(socket, until, STEP_SECONDS):
+            yield event
+    except ConnectionClosed as closed:
+        yield {"type": "closed", "code": _close_code(closed)}
+
+
+def _is_proxy_answer(event: dict[str, JsonValue]) -> bool:
+    if event.get("type") != RESPONSE_DONE:
+        return False
+    return not string_value(object_value(event["response"])["id"]).startswith(AUTO_ANSWER_PREFIX)
+
+
+async def _until_the_proxy_answer(
+    socket: ClientConnection, frames: tuple[dict[str, JsonValue], ...]
+) -> AsyncIterator[dict[str, JsonValue]]:
+    try:
+        yield JSON_OBJECT.validate_json(await asyncio.wait_for(socket.recv(), CREATED_SECONDS))
+        for frame in frames:
+            await socket.send(json.dumps(frame))
+        deadline: Final = asyncio.get_running_loop().time() + STEP_SECONDS
+        while (event := await _next_event(socket, deadline)) is not None:
+            yield event
+            if _is_proxy_answer(event):
+                return
+        yield {"type": "timeout"}
+    except ConnectionClosed as closed:
+        yield {"type": "closed", "code": _close_code(closed)}
+
+
+async def _talked_until_the_proxy_answer(
+    ws_base: str, query: str, key: str, frames: tuple[dict[str, JsonValue], ...]
+) -> Session:
+    headers: Final = {"Authorization": f"Bearer {key}"}
+    async with websockets.connect(f"{ws_base}/v1/realtime?{query}", additional_headers=headers) as socket:
+        return Session(tuple([event async for event in _until_the_proxy_answer(socket, frames)]), None)
+
+
+async def _talked_at_connect(ws_base: str, query: str, key: str, frames: tuple[dict[str, JsonValue], ...]) -> Session:
+    headers: Final = {"Authorization": f"Bearer {key}"}
+    async with websockets.connect(f"{ws_base}/v1/realtime?{query}", additional_headers=headers) as socket:
+        return Session(tuple([event async for event in _received_after_sending(socket, frames, RESPONSE_DONE)]), None)
+
+
 def _talk(
     ws_base: str,
     query: str,
@@ -625,6 +749,32 @@ def _assert_voice_updates(observed: tuple[dict[str, JsonValue], ...], *later: di
 
 def _query(upgrade: dict[str, JsonValue]) -> JsonValue:
     return upgrade["query"]
+
+
+def _declared_turn_detection(update: JsonValue) -> JsonValue:
+    session: Final = object_value(update)
+    audio_input: Final = object_value(object_value(session.get("audio", {})).get("input", {}))
+    return audio_input["turn_detection"] if "turn_detection" in audio_input else session.get("turn_detection")
+
+
+def _upstream_turn_detections(observed: tuple[dict[str, JsonValue], ...]) -> tuple[JsonValue, ...]:
+    return tuple(_declared_turn_detection(update) for update in _session_updates(observed))
+
+
+def _response_ids(session: Session) -> tuple[str, ...]:
+    done: Final = tuple(object_value(event["response"]) for event in session.events if event["type"] == RESPONSE_DONE)
+    return tuple(string_value(response["id"]) for response in done)
+
+
+def _error_event_ids(session: Session) -> tuple[JsonValue, ...]:
+    errors: Final = tuple(object_value(event["error"]) for event in session.events if event["type"] == "error")
+    return tuple(error.get("event_id") for error in errors)
+
+
+def _setup_detection(observed: tuple[dict[str, JsonValue], ...]) -> JsonValue:
+    setups: Final = tuple(object_value(frame["setup"]) for frame in _sent(observed) if "setup" in frame)
+    assert len(setups) == 1, _sent(observed)
+    return object_value(setups[0].get("realtimeInputConfig", {})).get("automaticActivityDetection")
 
 
 def _spend_rows(key: str, count: int) -> list[dict[str, JsonValue]]:
@@ -710,6 +860,7 @@ def _write_config(directory: Path, ca_bundle: Path) -> Path:
                 "litellm_settings": {
                     "ssl_verify": str(ca_bundle),
                     "enable_redis_auth_cache": True,
+                    "gemini_live_defer_setup": True,
                     "cache": True,
                     "cache_params": {"type": "redis", "host": "os.environ/REDIS_HOST", "port": "os.environ/REDIS_PORT"},
                 },
@@ -1015,6 +1166,187 @@ def test_backend_session_created_typed_transcription_skips_the_injection_on_the_
         assert [_query(upgrade) for upgrade in _upgrades(observed)] == [[["model", TRANSCRIBE_MODEL]]]
 
 
+def test_voice_session_typed_turn_detection_keeps_its_type_and_tuning(guardrail_proxy: OwnedProxy) -> None:
+    with guardrail_proxy.gateway.scenario() as scenario:
+        handle: Final = _scripted(scenario, _voice_scenario(CLEAN_TRANSCRIPT))
+        key: Final = scenario.key()
+        model: Final = _openai_deployment(scenario, handle.scenario_id, model=VOICE_MODEL)
+        frames: Final = _voice_frames(_realtime_update(SEMANTIC_VAD))
+        session: Final = _talk(_ws_base(_owned_url(guardrail_proxy)), f"model={model}", key, frames)
+        observed: Final = _observed(guardrail_proxy.gateway.upstream_url, handle.scenario_id)
+        assert session.errors == (), session
+        assert session.types[-1] == RESPONSE_DONE, session
+        assert _session_updates(observed) == (
+            GA_INJECTED_UPDATE,
+            _realtime_update(_without_auto_response(SEMANTIC_VAD)),
+        ), _session_updates(observed)
+
+
+@dataclass(frozen=True, slots=True)
+class LaterUpdateCase:
+    headers: Mapping[str, str]
+    first: dict[str, JsonValue]
+    later: dict[str, JsonValue]
+    forwarded: tuple[dict[str, JsonValue], ...]
+
+
+LATER_UPDATE_CASES: Final = (
+    pytest.param(
+        LaterUpdateCase(
+            {},
+            VOICE_UPDATE,
+            {"type": "realtime", "instructions": "later"},
+            (GA_INJECTED_UPDATE, VOICE_UPDATE_GATED),
+        ),
+        id="ga",
+    ),
+    pytest.param(
+        LaterUpdateCase(
+            BETA_HEADERS,
+            {"turn_detection": {"type": "server_vad"}},
+            {"instructions": "later"},
+            (BETA_INJECTED_UPDATE, BETA_INJECTED_UPDATE),
+        ),
+        id="beta",
+    ),
+)
+
+
+@pytest.mark.parametrize("case", LATER_UPDATE_CASES)
+def test_later_update_without_turn_detection_is_forwarded_verbatim(
+    guardrail_proxy: OwnedProxy, case: LaterUpdateCase
+) -> None:
+    with guardrail_proxy.gateway.scenario() as scenario:
+        handle: Final = _scripted(scenario, _voice_scenario(CLEAN_TRANSCRIPT))
+        key: Final = scenario.key()
+        model: Final = _openai_deployment(scenario, handle.scenario_id, model=VOICE_MODEL)
+        session: Final = _drive(
+            _ws_base(_owned_url(guardrail_proxy)),
+            f"model={model}",
+            key,
+            (_step(_update_frame(case.first), _update_frame(case.later), COMMIT, until=RESPONSE_DONE),),
+            headers=case.headers,
+        )
+        observed: Final = _observed(guardrail_proxy.gateway.upstream_url, handle.scenario_id)
+        assert session.errors == (), session
+        assert session.types[-1] == RESPONSE_DONE, session
+        assert _session_updates(observed) == (*case.forwarded, case.later), _session_updates(observed)
+
+
+def test_session_update_sent_before_session_created_follows_the_gate(guardrail_proxy: OwnedProxy) -> None:
+    with guardrail_proxy.gateway.scenario() as scenario:
+        handle: Final = _scripted(scenario, _voice_scenario_created_after_the_first_frame(CLEAN_TRANSCRIPT))
+        key: Final = scenario.key()
+        model: Final = _openai_deployment(scenario, handle.scenario_id, model=VOICE_MODEL)
+        frames: Final = _voice_frames(_realtime_update(TUNED_SERVER_VAD))
+        session: Final = asyncio.run(
+            _talked_at_connect(_ws_base(_owned_url(guardrail_proxy)), f"model={model}", key, frames)
+        )
+        observed: Final = _observed(guardrail_proxy.gateway.upstream_url, handle.scenario_id)
+        assert session.types == (
+            "session.created",
+            "session.updated",
+            "session.updated",
+            TRANSCRIPT_COMPLETED,
+            RESPONSE_DONE,
+        ), session
+        assert session.errors == (), session
+        assert _session_updates(observed) == (
+            GA_INJECTED_UPDATE,
+            _realtime_update(_without_auto_response(TUNED_SERVER_VAD)),
+        ), _session_updates(observed)
+
+
+def test_client_response_cancel_error_still_reaches_the_client(guardrail_proxy: OwnedProxy) -> None:
+    with guardrail_proxy.gateway.scenario() as scenario:
+        handle: Final = _scripted(scenario, _voice_scenario(CLEAN_TRANSCRIPT))
+        key: Final = scenario.key()
+        model: Final = _openai_deployment(scenario, handle.scenario_id, model=VOICE_MODEL)
+        cancel: Final[dict[str, JsonValue]] = {"type": "response.cancel", "event_id": CLIENT_CANCEL_ID}
+        session: Final = _drive(
+            _ws_base(_owned_url(guardrail_proxy)), f"model={model}", key, (_step(cancel, until="error"),)
+        )
+        assert session.errors == (CANCEL_NOT_ACTIVE,), session
+        assert _error_event_ids(session) == (CLIENT_CANCEL_ID,), session
+
+
+def _xai_blocked_session(guardrail_proxy: OwnedProxy, scenario: Scenario) -> tuple[Session, tuple[JsonValue, ...]]:
+    handle: Final = _scripted(scenario, _xai_voice_scenario(BLOCKED_TRANSCRIPT))
+    key: Final = scenario.key()
+    model: Final = scenario.model(model=f"xai/{XAI_VOICE_MODEL}", api_key=handle.scenario_id)
+    frames: Final = _voice_frames(_realtime_update(TUNED_SERVER_VAD))
+    session: Final = asyncio.run(
+        _talked_until_the_proxy_answer(_ws_base(_owned_url(guardrail_proxy)), f"model={model}", key, frames)
+    )
+    observed: Final = _observed(guardrail_proxy.gateway.upstream_url, handle.scenario_id)
+    return session, _upstream_turn_detections(observed)
+
+
+def test_xai_voice_session_gets_untyped_gates_and_no_unguarded_answer(guardrail_proxy: OwnedProxy) -> None:
+    with guardrail_proxy.gateway.scenario() as scenario:
+        session, turn_detections = _xai_blocked_session(guardrail_proxy, scenario)
+        assert turn_detections == (UNTYPED_GATE, UNTYPED_GATE), turn_detections
+        assert session.transcripts == (BLOCKED_TRANSCRIPT,), session
+        assert GUARDRAIL_VIOLATION in session.errors, session
+        assert not any(response.startswith(AUTO_ANSWER_PREFIX) for response in _response_ids(session)), session
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "xAI answers the guardrail's response.cancel with an error carrying its own event_id, so the proxy cannot "
+        "tell it apart from an error for a client event and forwards it, as the merge base does"
+    ),
+)
+def test_xai_guardrail_cancel_error_does_not_reach_the_client(guardrail_proxy: OwnedProxy) -> None:
+    with guardrail_proxy.gateway.scenario() as scenario:
+        session, _ = _xai_blocked_session(guardrail_proxy, scenario)
+        assert session.errors == (GUARDRAIL_VIOLATION,), session
+
+
+TUNED_VOICE_UPDATES: Final = (
+    pytest.param(_realtime_update(TUNED_SERVER_VAD), id="nested"),
+    pytest.param({"turn_detection": TUNED_SERVER_VAD}, id="flat"),
+)
+
+
+@pytest.mark.parametrize("update", TUNED_VOICE_UPDATES)
+def test_gemini_ai_studio_voice_session_with_vad_tuning_connects_under_the_guardrail(
+    guardrail_proxy: OwnedProxy, update: dict[str, JsonValue]
+) -> None:
+    with guardrail_proxy.gateway.scenario() as scenario:
+        handle: Final = _scripted(scenario, _live_scenario())
+        key: Final = scenario.key()
+        upstream_url: Final = guardrail_proxy.gateway.upstream_url
+        model: Final = _gemini_studio_deployment(scenario, handle.scenario_id, upstream_url)
+        session: Final = _drive(
+            _ws_base(_owned_url(guardrail_proxy)),
+            f"model={model}",
+            key,
+            (_step(_update_frame(update), until="session.updated"),),
+        )
+        observed: Final = _observed(upstream_url, handle.scenario_id)
+        assert session.types == ("session.created", "session.updated"), session
+        assert _setup_detection(observed) == {"disabled": True}, _sent(observed)
+
+
+def test_vertex_live_voice_session_keeps_vad_tuning_under_the_guardrail(guardrail_proxy: OwnedProxy) -> None:
+    with guardrail_proxy.gateway.scenario() as scenario:
+        handle: Final = _scripted(scenario, _live_scenario())
+        key: Final = scenario.key()
+        upstream_url: Final = guardrail_proxy.gateway.upstream_url
+        model: Final = _vertex_live_deployment(scenario, handle.scenario_id, upstream_url)
+        session: Final = _drive(
+            _ws_base(_owned_url(guardrail_proxy)),
+            f"model={model}",
+            key,
+            (_step(_update_frame(_realtime_update(TUNED_SERVER_VAD)), until="session.updated"),),
+        )
+        observed: Final = _observed(upstream_url, handle.scenario_id)
+        assert session.types == ("session.created", "session.updated"), session
+        assert _setup_detection(observed) == GEMINI_TUNED_DETECTION, _sent(observed)
+
+
 MUSE_PUSH_TO_TALK_FRAMES: Final[tuple[dict[str, JsonValue], ...]] = (
     {"binary_bytes": MUSE_PACKET_BYTES},
     {"binary_bytes": MUSE_PACKET_BYTES},
@@ -1042,10 +1374,11 @@ def _muse_session(
     turn_detection: JsonValue,
     *,
     until: str | None = None,
+    drop_params: bool = False,
 ) -> tuple[Session, tuple[dict[str, JsonValue], ...]]:
     handle: Final = _scripted(scenario, _muse_scenario(transcript), control_url=tls_upstream)
     key: Final = scenario.key()
-    model: Final = _muse_deployment(scenario, handle.scenario_id, tls_upstream)
+    model: Final = _muse_deployment(scenario, handle.scenario_id, tls_upstream, drop_params=drop_params)
     verdict: Final = TRANSCRIPT_COMPLETED if BLOCKED_WORD not in transcript else "error"
     session: Final = _talk(
         _ws_base(_owned_url(guardrail_proxy)),
@@ -1119,6 +1452,40 @@ def test_muse_server_vad_transcription_session_keeps_endpointing(
             {"binary_bytes": MUSE_PACKET_BYTES},
             {"binary_bytes": MUSE_REMAINDER_BYTES},
         ), _muse_audio_frames(observed)
+
+
+def test_muse_semantic_vad_under_drop_params_falls_back_to_endpointing(
+    guardrail_proxy: OwnedProxy, tls_upstream: str
+) -> None:
+    with guardrail_proxy.gateway.scenario() as scenario:
+        session, observed = _muse_session(
+            guardrail_proxy,
+            scenario,
+            tls_upstream,
+            CLEAN_TRANSCRIPT,
+            f"&{TRANSCRIPTION_QUERY}",
+            {"type": "semantic_vad"},
+            drop_params=True,
+        )
+        assert session.transcripts == (CLEAN_TRANSCRIPT,), session
+        assert session.errors == (), session
+        assert _muse_handshake(observed)["mode"] == ENDPOINTING, _muse_handshake(observed)
+
+
+def test_muse_semantic_vad_without_drop_params_is_refused(guardrail_proxy: OwnedProxy, tls_upstream: str) -> None:
+    with guardrail_proxy.gateway.scenario() as scenario:
+        session, observed = _muse_session(
+            guardrail_proxy,
+            scenario,
+            tls_upstream,
+            CLEAN_TRANSCRIPT,
+            "",
+            {"type": "semantic_vad"},
+            until=TRANSCRIPT_COMPLETED,
+        )
+        assert session.types[-1] == "closed", session
+        assert session.transcripts == (), session
+        assert _upgrades(observed) == (), observed
 
 
 @pytest.mark.xfail(
