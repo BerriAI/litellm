@@ -15,7 +15,7 @@ from openai.resources.realtime.realtime import (
     AsyncRealtimeConnection,
     AsyncRealtimeConnectionManager,
 )
-from openai.types.websocket_connection_options import WebSocketConnectionOptions
+from openai.types.websocket_connection_options import WebsocketConnectionOptions as WebSocketConnectionOptions
 from typing_extensions import NotRequired, ReadOnly
 
 from litellm._logging import redact_string, verbose_logger
