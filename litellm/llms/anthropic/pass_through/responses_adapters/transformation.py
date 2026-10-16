@@ -26,6 +26,7 @@ from litellm.llms.anthropic.pass_through.messages.utils import (
 )
 from litellm.llms.anthropic.pass_through.utils import (
     is_reasoning_auto_summary_enabled,
+    json_copy_or_original,
     prompt_cache_key_from_user_id,
 )
 from litellm.types.llms.anthropic import (
@@ -96,6 +97,10 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         return None
 
     @staticmethod
+    def _input_image_part(url: str) -> dict[str, object]:  # mutable-ok: API message payload
+        return {"type": "input_image", "image_url": url, "detail": "auto"}
+
+    @staticmethod
     def _translate_anthropic_document_block_to_file_part(
         block: Mapping[str, object],
     ) -> dict[str, str] | None:  # mutable-ok: API message payload
@@ -148,9 +153,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             if block.get("type") == "image"
         )
         return tuple(
-            with_prompt_cache_breakpoint({"type": "input_image", "image_url": url}, breakpoint)
-            for url, breakpoint in sources
-            if url
+            with_prompt_cache_breakpoint(cls._input_image_part(url), breakpoint) for url, breakpoint in sources if url
         )
 
     @classmethod
@@ -356,7 +359,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                             if url:
                                 user_parts.append(
                                     with_prompt_cache_breakpoint(
-                                        {"type": "input_image", "image_url": url}, block.get("prompt_cache_breakpoint")
+                                        self._input_image_part(url), block.get("prompt_cache_breakpoint")
                                     )
                                 )
                         elif btype == "document":
@@ -488,7 +491,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             if "description" in tool_dict:
                 func_tool["description"] = tool_dict["description"]
             if "input_schema" in tool_dict:
-                func_tool["parameters"] = tool_dict["input_schema"]
+                func_tool["parameters"] = json_copy_or_original(tool_dict["input_schema"])
             result.append(func_tool)
         return result
 
@@ -576,6 +579,14 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             result["summary"] = "detailed"
         return result
 
+    @classmethod
+    def system_blocks_to_instructions(cls, system: object) -> str:
+        return "\n".join(
+            text
+            for block in cls._content_blocks(system)
+            if block.get("type") == "text" and isinstance(text := block.get("text"), str) and text
+        )
+
     def translate_request(
         self,
         anthropic_request: AnthropicMessagesRequest,
@@ -625,9 +636,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             if isinstance(system, str):
                 responses_kwargs["instructions"] = system
             elif isinstance(system, list):
-                responses_kwargs["instructions"] = "\n".join(
-                    filter(None, (b.get("text", "") for b in system if isinstance(b, dict) and b.get("type") == "text"))
-                )
+                responses_kwargs["instructions"] = self.system_blocks_to_instructions(system)
 
         # max_tokens -> max_output_tokens
         max_tokens: Final = anthropic_request.get("max_tokens")

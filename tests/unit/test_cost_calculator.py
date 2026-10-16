@@ -6426,6 +6426,78 @@ def test_whisper_azure():
     assert round(cost, 5) == round(expected_cost, 5)
 
 
+@pytest.mark.parametrize(
+    ("provider", "requested_model", "response_extras", "expected_seconds"),
+    [
+        ("openai", "openai/gpt-fake-transcribe", {}, 2.0),
+        ("openai", "openai/gpt-fake-transcribe", {"_audio_transcription_duration": 1.35}, 1.35),
+        ("openai", "openai/gpt-fake-transcribe", {"duration": 1.34}, 1.34),
+        ("openai", "openai/whisper-fake", {}, 0.0),
+        ("azure", "gpt-fake-transcribe", {}, 0.0),
+    ],
+    ids=[
+        "undecodable_upload_bills_provider_seconds",
+        "measured_duration_still_wins",
+        "provider_duration_still_wins",
+        "whisper_models_never_bill_provider_seconds",
+        "azure_never_bills_provider_seconds",
+    ],
+)
+def test_transcription_cost_falls_back_to_provider_billed_seconds(
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+    requested_model: str,
+    response_extras: Mapping[str, float],
+    expected_seconds: float,
+) -> None:
+    model: Final = requested_model.removeprefix(f"{provider}/")
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {"input_cost_per_second": 0.01, "litellm_provider": provider, "mode": "audio_transcription"},
+    )
+    transcription: Final = convert_to_model_response_object(
+        response_object={
+            "text": "What is the weather in Paris?",
+            "usage": {"type": "duration", "seconds": 2},
+            **response_extras,
+        },
+        model_response_object=TranscriptionResponse(),
+        hidden_params={"model": model, "custom_llm_provider": provider},
+        response_type="audio_transcription",
+    )
+
+    cost: Final = completion_cost(
+        completion_response=transcription, model=requested_model, call_type="atranscription"
+    )
+
+    assert cost == pytest.approx(0.01 * expected_seconds)
+
+
+def test_custom_priced_transcription_deployment_bills_provider_seconds(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "priced-deployment",
+        {"input_cost_per_second": 0.000075, "litellm_provider": "openai", "mode": "audio_transcription"},
+    )
+    transcription: Final = convert_to_model_response_object(
+        response_object={"text": "What is the weather in Paris?", "usage": {"type": "duration", "seconds": 2}},
+        model_response_object=TranscriptionResponse(),
+        hidden_params={"model": "gpt-fake-transcribe", "custom_llm_provider": "openai"},
+        response_type="audio_transcription",
+    )
+
+    cost: Final = completion_cost(
+        completion_response=transcription,
+        model="openai/gpt-fake-transcribe",
+        call_type="atranscription",
+        custom_pricing=True,
+        router_model_id="priced-deployment",
+    )
+
+    assert cost == pytest.approx(0.000075 * 2)
+
+
 def test_gpt_image_2_azure_cost_tracking():
     azure_image_generation_response: Final = {
         "created": 1758585600,
@@ -9222,6 +9294,28 @@ def test_live_session_uses_latest_snapshot_when_closed_usage_is_missing(_local_m
     assert cost == pytest.approx(15 * rate)
 
 
+def test_vertex_partner_model_cost_keeps_its_publisher_prefix(_local_model_cost_map: None) -> None:
+    entry: Final = litellm.model_cost["vertex_ai/xai/grok-4.20-non-reasoning"]
+    usage: Final = Usage(
+        prompt_tokens=340,
+        completion_tokens=1,
+        total_tokens=341,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=320),
+    )
+    response: Final = ModelResponse(model="xai/grok-4.20-non-reasoning", usage=usage)
+
+    cost: Final = completion_cost(
+        completion_response=response, model="xai/grok-4.20-non-reasoning", custom_llm_provider="vertex_ai"
+    )
+
+    expected: Final = (
+        20 * entry["input_cost_per_token"]
+        + 320 * entry["cache_read_input_token_cost"]
+        + 1 * entry["output_cost_per_token"]
+    )
+    assert cost == pytest.approx(expected)
+
+
 @pytest.mark.parametrize("query, expected_queries", [("litellm release notes", 1), (["a", "b", "c"], 3)])
 def test_completion_cost_search_uses_search_tool_input_cost_per_query(
     _local_model_cost_map: None, query: str | list[str], expected_queries: int
@@ -9245,3 +9339,23 @@ def test_completion_cost_search_uses_search_tool_input_cost_per_query(
 
     assert map_cost == pytest.approx(expected_queries * litellm.model_cost["agentcore/search"]["input_cost_per_query"])
     assert configured_cost == pytest.approx(expected_queries * 0.05)
+
+
+def test_responses_ws_logging_object_carries_the_completed_responses_id_tier_and_usage() -> None:
+    events = [
+        {"type": "response.created", "response": {"id": "resp_a", "status": "in_progress"}},
+        {
+            "type": "response.completed",
+            "response": {
+                "id": "resp_a",
+                "service_tier": "priority",
+                "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+            },
+        },
+    ]
+
+    logged = ResponsesWebSocketTokenUsageProcessor.create_logging_object(events)
+
+    assert (logged.id, logged.service_tier) == ("resp_a", "priority")
+    assert (logged.usage.prompt_tokens, logged.usage.completion_tokens, logged.usage.total_tokens) == (10, 5, 15)
+    assert ResponsesWebSocketTokenUsageProcessor.create_logging_object([{"type": "error", "error": {}}]).id is None
