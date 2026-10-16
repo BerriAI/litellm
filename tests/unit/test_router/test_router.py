@@ -2022,7 +2022,7 @@ async def test_ageneric_api_call_deployment_model_overrides_alias():
         ]
     )
 
-    def inject_alias_into_kwargs(deployment, kwargs, function_name=None):
+    def inject_alias_into_kwargs(deployment, kwargs, function_name=None, splits_stream_timeout=False):
         # Simulate the alias leaking into kwargs (as happens when
         # _ageneric_api_call_with_fallbacks sets kwargs["model"] = alias before
         # calling the helper through async_function_with_fallbacks).

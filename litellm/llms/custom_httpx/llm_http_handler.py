@@ -2178,7 +2178,7 @@ class BaseLLMHTTPHandler:
         stream: bool,
         custom_llm_provider: str,
     ) -> float | httpx.Timeout | None:
-        from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
+        from litellm.litellm_core_utils.completion_timeout import CompletionTimeout, StreamKind
         from litellm.litellm_core_utils.request_timeout_resolver import (
             get_configured_request_timeout,
         )
@@ -2196,7 +2196,7 @@ class BaseLLMHTTPHandler:
             custom_llm_provider,
             global_timeout=global_timeout,
             supports_httpx_timeout=supports_httpx_timeout,
-            reads_live_stream=stream,
+            stream_kind=StreamKind.LIVE if stream else StreamKind.NOT_STREAMED,
         )
 
     async def async_anthropic_messages_handler(

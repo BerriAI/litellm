@@ -6,7 +6,7 @@ Maps to: litellm/llms/vertex_ai/vertex_gemma_models/transformation.py
 
 import json
 from collections.abc import AsyncIterator
-from typing import cast
+from typing import Final, cast
 from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
@@ -1360,8 +1360,8 @@ def test_sync_gemma_stream(_gemma_cached_access_token):
     assert chunks[1].choices[0].finish_reason == "stop"
 
 
-def test_gemma_stream_is_bounded_by_the_request_timeout_not_the_stream_timeout(_gemma_cached_access_token):
-    stream = litellm.completion(
+def test_gemma_stream_is_bounded_by_the_request_timeout_not_the_stream_timeout(_gemma_cached_access_token: None) -> None:
+    stream: Final = litellm.completion(
         model="vertex_ai/gemma/test-model",
         messages=[{"role": "user", "content": "Reply exactly READY"}],
         stream=True,

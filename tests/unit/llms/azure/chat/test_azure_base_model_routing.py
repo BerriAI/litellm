@@ -24,7 +24,14 @@ _O3_STREAM_ANSWER: Final = (
 )
 
 
-def test_live_stream_on_a_deployment_named_apart_from_its_o3_base_model_keeps_its_stream_timeout() -> None:
+@pytest.mark.parametrize(
+    ("model", "base_model"),
+    [("azure/chat", "azure/o3"), ("azure/gpt4o-pro1", "azure/gpt-4o")],
+    ids=["o3_base_model_streams_natively", "o_series_looking_deployment_of_a_non_o_series_base_model"],
+)
+def test_live_stream_on_a_deployment_named_apart_from_its_base_model_keeps_its_stream_timeout(
+    model: str, base_model: str
+) -> None:
     client: Final = openai.AzureOpenAI(
         api_key="test-key",
         api_version="2024-12-01-preview",
@@ -35,8 +42,8 @@ def test_live_stream_on_a_deployment_named_apart_from_its_o3_base_model_keeps_it
 
     with pytest.raises(litellm.Timeout):
         litellm.completion(
-            model="azure/chat",
-            base_model="azure/o3",
+            model=model,
+            base_model=base_model,
             messages=[{"role": "user", "content": "hi"}],
             stream=True,
             stream_timeout=STREAM_TIMEOUT_SECONDS,

@@ -20,6 +20,7 @@ from unittest.mock import patch, MagicMock
 from tests.unit.llms.bedrock.slow_upstream import (
     STREAM_TIMEOUT_SECONDS,
     UPSTREAM_FIRST_BYTE_SECONDS,
+    slow_upstream_answer,
     slow_upstream_async_client,
 )
 
@@ -143,6 +144,28 @@ def test_unit_test_streaming_timeout(stream):
         assert stream_timeout_val == stream_timeout
     else:
         assert stream_timeout_val == normal_timeout
+
+
+async def _drain_responses_stream(router: Router) -> None:
+    response: Final = await router.aresponses(model="gpt", input="hi", stream=True)
+    _ = [event async for event in response]
+
+
+@pytest.mark.asyncio
+async def test_live_responses_stream_through_the_router_fails_at_the_stream_timeout(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://api.openai.com/v1/responses").mock(side_effect=slow_upstream_answer())
+    router: Final = Router(
+        model_list=[{"model_name": "gpt", "litellm_params": {"model": "openai/gpt-4.1", "api_key": "fake"}}],
+        timeout=UPSTREAM_FIRST_BYTE_SECONDS * 2,
+        stream_timeout=STREAM_TIMEOUT_SECONDS,
+        num_retries=0,
+    )
+
+    with pytest.raises(litellm.Timeout):
+        await _drain_responses_stream(router)
 
 
 @pytest.mark.asyncio

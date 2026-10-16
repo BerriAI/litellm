@@ -28,6 +28,7 @@ from litellm.integrations.anthropic_cache_control_hook import (
     configured_injection_points,
 )
 from litellm.litellm_core_utils.asyncify import run_async_function
+from litellm.litellm_core_utils.completion_timeout import CompletionTimeout, StreamKind
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
@@ -1653,6 +1654,9 @@ def responses(
         if custom_llm_provider is None:
             raise ValueError("custom_llm_provider is required but passed as None")
 
+        fake_stream: Final = responses_api_provider_config.should_fake_stream(
+            model=model, stream=stream, custom_llm_provider=custom_llm_provider
+        )
         response = base_llm_http_handler.response_api_handler(
             model=model,
             input=input,
@@ -1663,12 +1667,14 @@ def responses(
             logging_obj=litellm_logging_obj,
             extra_headers=effective_extra_headers,
             extra_body=extra_body,
-            timeout=timeout or request_timeout,
+            timeout=CompletionTimeout.for_stream(
+                (StreamKind.FAKED if fake_stream else StreamKind.LIVE) if stream is True else StreamKind.NOT_STREAMED,
+                timeout or request_timeout,
+                None if litellm_params.stream_timeout is None else float(litellm_params.stream_timeout),
+            ),
             _is_async=_is_async,
             client=kwargs.get("client"),
-            fake_stream=responses_api_provider_config.should_fake_stream(
-                model=model, stream=stream, custom_llm_provider=custom_llm_provider
-            ),
+            fake_stream=fake_stream,
             litellm_metadata=kwargs.get("litellm_metadata", {}),
             shared_session=kwargs.get("shared_session"),
         )

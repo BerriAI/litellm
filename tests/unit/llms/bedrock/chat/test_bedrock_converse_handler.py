@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime, timedelta, timezone
 from itertools import chain
 from typing import Final
@@ -16,6 +16,7 @@ from unittest.mock import MagicMock, patch
 import boto3
 import httpx
 import pytest
+import respx
 from botocore.credentials import Credentials
 from botocore.exceptions import ClientError
 
@@ -28,6 +29,7 @@ from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
 from tests.unit.llms.bedrock.slow_upstream import (
     STREAM_TIMEOUT_SECONDS,
     UPSTREAM_FIRST_BYTE_SECONDS,
+    slow_upstream_answer,
     slow_upstream_async_client,
     slow_upstream_sync_client,
 )
@@ -340,7 +342,7 @@ _FAKE_STREAMED_REQUESTS: Final = pytest.mark.parametrize(
 )
 
 
-def _router_with_a_stream_timeout_shorter_than_the_upstreams_first_byte(model: str) -> litellm.Router:
+def _bedrock_router(model: str, *, timeout: float, stream_timeout: float) -> litellm.Router:
     return litellm.Router(
         model_list=[
             {
@@ -353,10 +355,14 @@ def _router_with_a_stream_timeout_shorter_than_the_upstreams_first_byte(model: s
                 },
             }
         ],
-        timeout=UPSTREAM_FIRST_BYTE_SECONDS * 2,
-        stream_timeout=STREAM_TIMEOUT_SECONDS,
+        timeout=timeout,
+        stream_timeout=stream_timeout,
         num_retries=0,
     )
+
+
+def _router_with_a_stream_timeout_shorter_than_the_upstreams_first_byte(model: str) -> litellm.Router:
+    return _bedrock_router(model, timeout=UPSTREAM_FIRST_BYTE_SECONDS * 2, stream_timeout=STREAM_TIMEOUT_SECONDS)
 
 
 @_FAKE_STREAMED_REQUESTS
@@ -390,6 +396,79 @@ async def test_async_fake_stream_is_bounded_by_the_request_timeout_not_the_strea
     )
 
     assert "".join([chunk.choices[0].delta.content or "" async for chunk in response]) == "hi"
+
+
+@pytest.mark.asyncio
+async def test_fake_stream_keeps_a_stream_timeout_longer_than_the_request_timeout() -> None:
+    router: Final = _bedrock_router(
+        "bedrock/converse/ai21.jamba-1-5-large-v1:0",
+        timeout=STREAM_TIMEOUT_SECONDS,
+        stream_timeout=UPSTREAM_FIRST_BYTE_SECONDS * 2,
+    )
+    response: Final = await router.acompletion(
+        model="bedrock",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        client=slow_upstream_async_client(_CONVERSE_ANSWER),
+    )
+
+    assert "".join([chunk.choices[0].delta.content or "" async for chunk in response]) == "hi"
+
+
+_BEDROCK_RUNTIME_URL: Final = r"https://bedrock-runtime\.us-east-1\.amazonaws\.com/.*"
+
+
+async def _text_completion_text(router: litellm.Router) -> str:
+    response: Final = await router.atext_completion(model="bedrock", prompt="hi", stream=True)
+    return "".join([chunk.choices[0].text or "" async for chunk in response])
+
+
+async def _anthropic_messages_text(router: litellm.Router) -> str:
+    response: Final = await router.aanthropic_messages(
+        model="bedrock", messages=[{"role": "user", "content": "hi"}], max_tokens=10, stream=True
+    )
+    sse: Final = b"".join([chunk async for chunk in response]).decode()
+    events: Final = [json.loads(line.removeprefix("data: ")) for line in sse.splitlines() if line.startswith("data: ")]
+    return "".join(event["delta"]["text"] for event in events if event["type"] == "content_block_delta")
+
+
+async def _responses_text(router: litellm.Router) -> str:
+    response: Final = await router.aresponses(model="bedrock", input="hi", stream=True)
+    return "".join([event.delta async for event in response if event.type == "response.output_text.delta"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stream_text",
+    [_text_completion_text, _anthropic_messages_text, _responses_text],
+    ids=["text_completion", "anthropic_messages", "responses"],
+)
+async def test_fake_stream_on_each_router_surface_is_bounded_by_the_request_timeout(
+    stream_text: Callable[[litellm.Router], Awaitable[str]],
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post(url__regex=_BEDROCK_RUNTIME_URL).mock(side_effect=slow_upstream_answer(_CONVERSE_ANSWER))
+    router: Final = _router_with_a_stream_timeout_shorter_than_the_upstreams_first_byte(
+        "bedrock/converse/ai21.jamba-1-5-large-v1:0"
+    )
+
+    assert await stream_text(router) == "hi"
+
+
+@pytest.mark.asyncio
+async def test_live_anthropic_messages_stream_through_the_router_fails_at_the_stream_timeout(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post(url__regex=_BEDROCK_RUNTIME_URL).mock(side_effect=slow_upstream_answer())
+    router: Final = _router_with_a_stream_timeout_shorter_than_the_upstreams_first_byte(
+        "bedrock/invoke/anthropic.claude-sonnet-4-5-v1:0"
+    )
+
+    with pytest.raises(litellm.Timeout):
+        await _anthropic_messages_text(router)
 
 
 def test_sync_live_stream_through_the_router_fails_at_the_stream_timeout() -> None:

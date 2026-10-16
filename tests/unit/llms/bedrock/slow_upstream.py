@@ -21,7 +21,7 @@ UPSTREAM_FIRST_BYTE_SECONDS: Final = 2.0
 _TIMEOUT_EXTENSION: Final = TypeAdapter(dict[str, float | None])
 
 
-def _answer_once_the_first_byte_is_due(body: bytes) -> Callable[[httpx.Request], httpx.Response]:
+def slow_upstream_answer(body: bytes = b"") -> Callable[[httpx.Request], httpx.Response]:
     def answer(request: httpx.Request) -> httpx.Response:
         read_timeout: Final = _TIMEOUT_EXTENSION.validate_python(request.extensions["timeout"])["read"]
         if read_timeout is not None and read_timeout < UPSTREAM_FIRST_BYTE_SECONDS:
@@ -32,7 +32,7 @@ def _answer_once_the_first_byte_is_due(body: bytes) -> Callable[[httpx.Request],
 
 
 def slow_upstream_transport(body: bytes = b"") -> httpx.MockTransport:
-    return httpx.MockTransport(_answer_once_the_first_byte_is_due(body))
+    return httpx.MockTransport(slow_upstream_answer(body))
 
 
 def slow_upstream_async_client(body: bytes = b"") -> AsyncHTTPHandler:
