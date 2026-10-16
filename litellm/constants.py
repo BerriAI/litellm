@@ -743,6 +743,9 @@ LITELLM_CHAT_PROVIDERS: Final = [
     "gdc",
     "xai",
     "custom_openai",
+    "byteplus",
+    "digitalocean",
+    "siliconflow",
     "text-completion-openai",
     "cohere",
     "cohere_chat",
@@ -1090,6 +1093,9 @@ openai_compatible_providers: Final[list] = [
     "cometapi",
     "clarifai",
     "docker_model_runner",
+    "byteplus",
+    "digitalocean",
+    "siliconflow",
     "ragflow",
     "pinstripes",  # Pinstripes - JSON-configured provider
     "darkbloom",
@@ -1129,6 +1135,9 @@ openai_text_completion_compatible_providers: Final[list] = [  # providers that s
     "lambda_ai",
     "hyperbolic",
     "wandb",
+    "byteplus",
+    "digitalocean",
+    "siliconflow",
 ]
 _openai_like_providers: Final[list[str]] = [
     "predibase",
