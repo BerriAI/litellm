@@ -1,15 +1,16 @@
 import json
+import re
 from io import BytesIO
 from pathlib import Path
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
+import pytest
 from openai import AsyncOpenAI, OpenAI
+from openai._legacy_response import LegacyAPIResponse
 from openai.types import CreateEmbeddingResponse, Embedding
 from openai.types.create_embedding_response import Usage
-import pytest
-import re
 
 import litellm
 from litellm import completion
@@ -17,7 +18,6 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.litellm_proxy.chat.transformation import LiteLLMProxyChatConfig
 from tests._vcr_conftest_common import rewound_new_episodes_cassette
 from tests.capturing_transport import CapturingTransport
-
 
 _GATEWAY_EMBEDDING_RESPONSE: Final = CreateEmbeddingResponse(
     object="list",
@@ -264,7 +264,7 @@ async def test_litellm_gateway_from_sdk_rerank(is_async):
         patch_target = client.post
 
     with patch.object(client, "post", new=mock_method):
-        mock_response = MagicMock()
+        mock_response = MagicMock(spec=LegacyAPIResponse)
 
         # Create a mock response similar to OpenAI's rerank response
         mock_response.text = json.dumps(
@@ -486,7 +486,7 @@ def test_litellm_gateway_from_sdk_with_response_cost_in_additional_headers():
     openai_client = OpenAI(api_key="fake-key")
 
     # Create mock response object
-    mock_response = MagicMock()
+    mock_response = MagicMock(spec=LegacyAPIResponse)
     mock_response.headers = {"x-litellm-response-cost": "120"}
     mock_response.parse.return_value = litellm.ModelResponse(
         **{
@@ -563,7 +563,7 @@ async def test_litellm_gateway_image_generation_direct(is_async):
         "created": 1,
         "data": [{"url": "https://example.com/image.png"}],
     }
-    mock_raw_response = MagicMock()
+    mock_raw_response = MagicMock(spec=LegacyAPIResponse)
     mock_raw_response.parse.return_value = mock_openai_response
     mock_raw_response.headers = {}
 

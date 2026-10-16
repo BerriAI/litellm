@@ -4,6 +4,7 @@ import os
 from unittest.mock import MagicMock, patch
 
 import pytest
+from openai._legacy_response import LegacyAPIResponse
 
 import litellm
 from litellm import completion
@@ -92,7 +93,7 @@ class TestPerplexityReasoning:
         pydantic_obj = ChatCompletion(**response_object)
 
         def _return_pydantic_obj(*args, **kwargs):
-            new_response = MagicMock()
+            new_response = MagicMock(spec=LegacyAPIResponse)
             new_response.headers = {"content-type": "application/json"}
             new_response.parse.return_value = pydantic_obj
             return new_response

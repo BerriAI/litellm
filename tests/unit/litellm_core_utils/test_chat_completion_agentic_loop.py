@@ -142,7 +142,7 @@ def _raw_response_for(model_response: ModelResponse) -> MagicMock:
     (an object exposing `.headers` and `.parse()` -> something with model_dump)."""
     parsed = MagicMock()
     parsed.model_dump.return_value = model_response.model_dump()
-    raw = MagicMock()
+    raw = MagicMock(spec=LegacyAPIResponse)
     raw.headers = {}
     raw.parse.return_value = parsed
     return raw

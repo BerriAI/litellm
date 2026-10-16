@@ -21,15 +21,22 @@ import httpx
 import pytest
 import respx
 from openai import APITimeoutError, AsyncOpenAI
+from openai._legacy_response import LegacyAPIResponse
 from openai.types.chat.chat_completion import ChatCompletion
 
 import litellm
-from litellm import acompletion, completion
-from litellm import acompletion_with_retries, aresponses_with_retries, completion_with_retries, responses_with_retries
+from litellm import (
+    acompletion,
+    acompletion_with_retries,
+    aresponses_with_retries,
+    completion,
+    completion_with_retries,
+    responses_with_retries,
+)
 from litellm import main as litellm_main
-from litellm.constants import CONTROL_OPTIONS_KEY
 from litellm.caching.base_cache import BaseCache
 from litellm.caching.caching import Cache
+from litellm.constants import CONTROL_OPTIONS_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
@@ -130,7 +137,7 @@ def test_completion_missing_role(openai_api_response):
 
     client = OpenAI(api_key="test_api_key")
 
-    mock_raw_response = MagicMock()
+    mock_raw_response = MagicMock(spec=LegacyAPIResponse)
     mock_raw_response.headers = {
         "x-request-id": "123",
         "openai-organization": "org-123",
@@ -3005,8 +3012,9 @@ def test_stream_chunk_builder_thinking_blocks():
     assert response.choices[0].message.thinking_blocks is not None
 
 
-from litellm.llms.openai.openai import OpenAIChatCompletion
 import traceback
+
+from litellm.llms.openai.openai import OpenAIChatCompletion
 
 user_message = "Write a short poem about the sky"
 messages = [{"content": user_message, "role": "user"}]
@@ -5140,6 +5148,7 @@ def test_drop_params_false_still_rejects_an_invalid_stream_chunk_size() -> None:
 
 def test_acompletion_params():
     import inspect
+
     from litellm.types.completion import CompletionRequest
 
     acompletion_params_odict = inspect.signature(acompletion).parameters
@@ -5170,7 +5179,7 @@ def test_acompletion_params():
 
 
 def _openai_mock_response(*args: object, **kwargs: object) -> MagicMock:
-    new_response: Final = MagicMock()
+    new_response: Final = MagicMock(spec=LegacyAPIResponse)
     new_response.headers = {"hello": "world"}
     response_object: Final = {
         "id": "chatcmpl-123",
@@ -5295,7 +5304,7 @@ def test_completion_perplexity_api():
         pydantic_obj = ChatCompletion(**response_object)
 
         def _return_pydantic_obj(*args, **kwargs):
-            new_response = MagicMock()
+            new_response = MagicMock(spec=LegacyAPIResponse)
             new_response.headers = {"hello": "world"}
 
             new_response.parse.return_value = pydantic_obj
@@ -7262,7 +7271,7 @@ def _openai_hallucinated_tool_call_mock_response(
     *args: object,
     **kwargs: object,
 ) -> MagicMock:
-    new_response: Final = MagicMock()
+    new_response: Final = MagicMock(spec=LegacyAPIResponse)
     new_response.headers = {"hello": "world"}
     response_object: Final = {
         "id": "chatcmpl-123",
@@ -7443,7 +7452,7 @@ def test_completion_novita_ai():
     openai_client = OpenAI(api_key="fake-key")
 
     with patch.object(
-        openai_client, "post"
+        openai_client, "post", return_value=MagicMock(spec=LegacyAPIResponse)
     ) as mock_call:
         mock_call.return_value.headers = {}
         mock_call.return_value.parse.return_value = litellm.ModelResponse(

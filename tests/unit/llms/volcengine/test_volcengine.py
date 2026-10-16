@@ -2,6 +2,7 @@ import os
 import sys
 from unittest.mock import MagicMock, patch
 
+from openai._legacy_response import LegacyAPIResponse
 from pydantic import BaseModel
 
 from litellm.llms.volcengine.chat.transformation import (
@@ -117,7 +118,7 @@ class TestVolcEngineConfig:
 
         client = OpenAI(api_key="test_api_key")
 
-        mock_raw_response = MagicMock()
+        mock_raw_response = MagicMock(spec=LegacyAPIResponse)
         mock_raw_response.headers = {
             "x-request-id": "123",
             "openai-organization": "org-123",
@@ -126,9 +127,7 @@ class TestVolcEngineConfig:
         }
         mock_raw_response.parse.return_value = ModelResponse()
 
-        with patch.object(
-            client, "post", mock_raw_response
-        ) as mock_create:
+        with patch.object(client, "post", MagicMock(return_value=mock_raw_response)) as mock_create:
             completion(
                 model="volcengine/doubao-seed-1.6",
                 messages=[
