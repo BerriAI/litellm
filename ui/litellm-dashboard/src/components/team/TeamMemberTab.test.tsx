@@ -367,6 +367,40 @@ describe("TeamMembersComponent", () => {
     expect(within(user2Row).getByText("7 RPM / 70 TPM")).toBeInTheDocument();
   });
 
+  it("shows a member's new spend and budget once the team is refetched", () => {
+    const baseMembership = createMockTeamData().team_memberships[0];
+    const teamWith = (spend: number, maxBudget: number) =>
+      createMockTeamData({
+        team_memberships: [
+          {
+            ...baseMembership,
+            spend,
+            litellm_budget_table: { ...baseMembership.litellm_budget_table, max_budget: maxBudget },
+          },
+        ],
+      });
+    const renderTab = (teamData: TeamData) => (
+      <TeamMembersComponent
+        teamData={teamData}
+        canEditTeam={false}
+        handleMemberDelete={mockHandleMemberDelete}
+        onMemberSpendReset={mockOnMemberSpendReset}
+        onMemberBudgetReset={mockOnMemberBudgetReset}
+        setSelectedEditMember={mockSetSelectedEditMember}
+        setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
+        setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
+      />
+    );
+
+    const { rerender } = renderWithProviders(renderTab(teamWith(1.25, 250)));
+    rerender(renderTab(teamWith(3.5, 400)));
+
+    const row = screen.getByRole("row", { name: /user1@test\.com/ });
+    expect(within(row).getByText("$3.50")).toBeInTheDocument();
+    expect(within(row).getByText("$400.00")).toBeInTheDocument();
+    expect(within(row).queryByText("$1.25")).not.toBeInTheDocument();
+  });
+
   it("should display formatted budget and Unlimited for member with no budget", () => {
     renderWithProviders(
       <TeamMembersComponent
