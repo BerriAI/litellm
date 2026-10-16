@@ -1222,8 +1222,10 @@ def stream_chunk_builder_text_completion(chunks: list, messages: Sequence | None
     created: Final = chunks[0]["created"]
     model: Final = chunks[0]["model"]
     system_fingerprint: Final = chunks[0].get("system_fingerprint", None)
-    finish_reason: Final = chunks[-1]["choices"][0]["finish_reason"]
-    logprobs: Final = chunks[-1]["choices"][0]["logprobs"]
+    # the include_usage chunk comes last and has no choices; read the finish from the chunk before it
+    last_choice: Final = next((chunk["choices"][0] for chunk in reversed(chunks) if chunk["choices"]), {})
+    finish_reason: Final = last_choice.get("finish_reason")
+    logprobs: Final = last_choice.get("logprobs")
 
     content_list: Final = []
     for chunk in chunks:

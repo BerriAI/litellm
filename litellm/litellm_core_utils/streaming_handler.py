@@ -1933,6 +1933,7 @@ class CustomStreamWrapper:
                         complete_streaming_response = None
 
                 response = self.model_response_creator()
+                response.choices = []
                 if complete_streaming_response is not None:
                     self._propagate_usage_cost_to_hidden_params(complete_streaming_response, self.custom_llm_provider)
 
@@ -2197,6 +2198,7 @@ class CustomStreamWrapper:
                     complete_streaming_response = None
 
             response: Final = self.model_response_creator()
+            response.choices = []
             if complete_streaming_response is not None:
                 self._propagate_usage_cost_to_hidden_params(complete_streaming_response, self.custom_llm_provider)
 
