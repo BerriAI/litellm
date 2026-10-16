@@ -813,8 +813,6 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
                 route=ROUTE_ENDPOINT_MAPPING.get(route_type, route_type),
                 param="model",
             )
-        # Vector store routes match the team deployment to the store's provider
-        # instead of taking the team's first deployment.
         custom_llm_provider: Final[object] = (
             JSON_OBJECT_ADAPTER.validate_python(data).get("custom_llm_provider")
             if route_type

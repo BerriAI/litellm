@@ -22567,9 +22567,11 @@ def _team_deployment(public_name: str, litellm_model: str, team_id: str = "team-
     }
 
 
-_LANGGRAPH_AGENT: Final = _team_deployment("a-langgraph-agent", "langgraph/repro-agent")
-_BEDROCK_CLAUDE: Final = _team_deployment("a-bedrock-claude", "bedrock/anthropic.claude-sonnet-4-6")
-_OPENAI_GPT: Final = _team_deployment("a-gpt", "openai/gpt-4o-mini")
+_LANGGRAPH_AGENT: Final[DeploymentTypedDict] = _team_deployment("a-langgraph-agent", "langgraph/repro-agent")
+_BEDROCK_CLAUDE: Final[DeploymentTypedDict] = _team_deployment(
+    "a-bedrock-claude", "bedrock/anthropic.claude-sonnet-4-6"
+)
+_OPENAI_GPT: Final[DeploymentTypedDict] = _team_deployment("a-gpt", "openai/gpt-4o-mini")
 
 
 @pytest.mark.parametrize(
@@ -22588,23 +22590,28 @@ _OPENAI_GPT: Final = _team_deployment("a-gpt", "openai/gpt-4o-mini")
     ],
 )
 def test_map_team_model_without_model_picks_deployment_serving_the_requested_provider(
-    team_models, custom_llm_provider, expected
-):
+    team_models: list[DeploymentTypedDict], custom_llm_provider: str | None, expected: str | None
+) -> None:
     """A model-less vector store call routed through the team's first deployment, so a langgraph
     team model made a Bedrock vector store search fail with "not supported for langgraph"."""
     router = Router(model_list=team_models)
 
     result = router.map_team_model(None, "team-a", custom_llm_provider=custom_llm_provider)
 
-    assert result == expected, f"team models {[m['litellm_params']['model'] for m in team_models]}, provider {custom_llm_provider}"
+    assert result == expected, (
+        f"team models {[m['litellm_params']['model'] for m in team_models]}, provider {custom_llm_provider}"
+    )
 
 
-def test_map_team_model_with_explicit_model_ignores_requested_provider():
+def test_map_team_model_with_explicit_model_ignores_requested_provider() -> None:
     router = Router(model_list=[_LANGGRAPH_AGENT, _BEDROCK_CLAUDE])
 
     result = router.map_team_model("a-langgraph-agent", "team-a", custom_llm_provider="bedrock")
 
-    assert result == "a-langgraph-agent", "an explicit model is the caller's choice and must not be re-picked by provider"
+    assert result == "a-langgraph-agent", (
+        "an explicit model is the caller's choice and must not be re-picked by provider"
+    )
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
 class TestPreCallChecksOptimization:
