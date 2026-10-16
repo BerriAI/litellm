@@ -607,10 +607,13 @@ def test_route_that_rewrites_part_of_the_model_name_lists_no_ids(
     monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None, model_name: str, deployment_model: str
 ) -> None:
     import litellm
-    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.proxy.auth.model_checks import expand_wildcard_deployments_for_model_info, get_known_models_from_wildcard
     from litellm.types.router import LiteLLM_Params
 
     monkeypatch.setattr(litellm, "check_provider_endpoint", False)
+    model_info_rows: Final = expand_wildcard_deployments_for_model_info(
+        [{"model_name": model_name, "litellm_params": {"model": deployment_model}}]
+    )
 
     assert get_known_models_from_wildcard(
         wildcard_model=deployment_model, litellm_params=LiteLLM_Params(model=deployment_model)
@@ -619,6 +622,7 @@ def test_route_that_rewrites_part_of_the_model_name_lists_no_ids(
         get_known_models_from_wildcard(wildcard_model=model_name, litellm_params=LiteLLM_Params(model=deployment_model))
         == []
     )
+    assert [row["model_name"] for row in model_info_rows] == [model_name]
 
 
 def test_partial_wildcard_without_a_deployment_lists_the_same_ids_as_with_one(
@@ -637,6 +641,31 @@ def test_partial_wildcard_without_a_deployment_lists_the_same_ids_as_with_one(
     assert without_deployment == get_known_models_from_wildcard(
         wildcard_model=wildcard, litellm_params=LiteLLM_Params(model=wildcard)
     )
+
+
+def test_explicit_model_that_a_wildcard_also_covers_is_listed_once(local_model_cost_map: None) -> None:
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    listed: Final = get_complete_model_list(
+        key_models=[],
+        team_models=[],
+        proxy_model_list=["openai/gpt-4o-mini", "openai/*"],
+        user_model=None,
+        infer_model_from_keys=False,
+    )
+
+    assert "openai/gpt-4o-mini" in listed
+    assert len(listed) == len(set(listed))
+
+
+@pytest.mark.timeout(5)
+def test_key_wildcard_with_many_stars_lists_promptly(local_model_cost_map: None) -> None:
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+
+    many_stars: Final = "openai/" + "*" * 30
+
+    assert get_known_models_from_wildcard(wildcard_model=f"{many_stars}!", litellm_params=None) == []
+    assert "openai/gpt-4o" in get_known_models_from_wildcard(wildcard_model=f"{many_stars}o", litellm_params=None)
 
 
 @pytest.mark.parametrize(

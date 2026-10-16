@@ -1541,6 +1541,20 @@ def test_wildcard_health_check_models_strips_the_provider_family_prefix():
     )
 
 
+def test_wildcard_health_check_models_treats_glob_characters_other_than_star_literally():
+    assert _wildcard_health_check_models("gpt-4?*", "openai", ["gpt-4o", "gpt-4?-preview"]) == (
+        "openai/gpt-4?-preview",
+    )
+    assert _wildcard_health_check_models("gpt-[4]*", "openai", ["gpt-4o", "gpt-[4]o"]) == ("openai/gpt-[4]o",)
+
+
+@pytest.mark.timeout(5)
+def test_wildcard_health_check_models_with_many_stars_returns_promptly():
+    candidates: Final = ("gpt-4o-mini", "gpt-4.1-nano")
+
+    assert _wildcard_health_check_models("*" * 30 + "!", "openai", candidates) == candidates
+
+
 def test_wildcard_health_check_models_partial_prefix_matching_nothing_keeps_cheapest_candidates():
     assert _wildcard_health_check_models("ft:*", "openai", ["gpt-4o-mini", "gpt-4.1-nano"]) == (
         "gpt-4o-mini",

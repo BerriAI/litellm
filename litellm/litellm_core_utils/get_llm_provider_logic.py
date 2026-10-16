@@ -1,3 +1,5 @@
+import re
+from fnmatch import fnmatchcase
 from typing import Final, cast
 from urllib.parse import urlparse
 
@@ -17,6 +19,7 @@ from ..types.router import GenericLiteLLMParams, LiteLLM_Params
 from ..types.utils import LlmProviders
 
 _KNOWN_PROVIDERS: Final = frozenset(provider.value for provider in LlmProviders)
+_GLOB_CHARS_OTHER_THAN_STAR: Final = re.compile(r"[\[?]")
 
 
 def _endpoint_matches_api_base(endpoint: str, api_base: str) -> bool:
@@ -157,6 +160,10 @@ def strip_provider_family_prefix(model: str, custom_llm_provider: str) -> str:
         leading in _KNOWN_PROVIDERS and custom_llm_provider.startswith(f"{leading}_")
     )
     return model_id if is_provider_family else model
+
+
+def model_matches_wildcard(model_id: str, wildcard: str) -> bool:
+    return fnmatchcase(model_id, _GLOB_CHARS_OTHER_THAN_STAR.sub(r"[\g<0>]", wildcard))
 
 
 def inferred_provider(model: str | None) -> str | None:

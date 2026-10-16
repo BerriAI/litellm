@@ -3,12 +3,11 @@ Helper functions for health check calls.
 """
 
 import base64
-import re
 import sys
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Literal
 
-from litellm.litellm_core_utils.get_llm_provider_logic import strip_provider_family_prefix
+from litellm.litellm_core_utils.get_llm_provider_logic import model_matches_wildcard, strip_provider_family_prefix
 from litellm.llms.base_llm.ocr.transformation import DocumentType
 from litellm.rust_bridge import runtime
 from litellm.rust_bridge.ocr.entrypoints import NATIVE_OCR_HEALTH_CHECK_DOCUMENT
@@ -88,10 +87,11 @@ def _wildcard_health_check_models(
 ) -> tuple[str, ...]:
     if wildcard_suffix == "*":
         return tuple(candidate_models[:3])
-    suffix_regex: Final = re.compile(re.escape(wildcard_suffix).replace(r"\*", ".*"))
     model_ids: Final = (strip_provider_family_prefix(model, custom_llm_provider) for model in candidate_models)
     matching: Final = tuple(
-        f"{custom_llm_provider}/{model_id}" for model_id in model_ids if suffix_regex.fullmatch(model_id)
+        f"{custom_llm_provider}/{model_id}"
+        for model_id in model_ids
+        if model_matches_wildcard(model_id, wildcard_suffix)
     )
     return matching[:3] or tuple(candidate_models[:3])
 

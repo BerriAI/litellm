@@ -1,7 +1,6 @@
 # What is this?
 ## Common checks for /v1/models and `/model/info`
 import copy
-import re
 from collections.abc import Sequence
 from itertools import chain
 from typing import Final
@@ -9,7 +8,7 @@ from typing import Final
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
-from litellm.litellm_core_utils.get_llm_provider_logic import strip_provider_family_prefix
+from litellm.litellm_core_utils.get_llm_provider_logic import model_matches_wildcard, strip_provider_family_prefix
 from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.router import Router
@@ -249,9 +248,7 @@ def get_complete_model_list(
         team_id=team_id,
     )
 
-    complete_model_list: Final = unique_models + all_wildcard_models
-
-    return complete_model_list
+    return list(dict.fromkeys(chain(unique_models, all_wildcard_models)))
 
 
 def _hydrate_litellm_credential_name(
@@ -298,10 +295,11 @@ def get_known_models_from_wildcard(wildcard_model: str, litellm_params: LiteLLM_
     if provider_models is None:
         return []
 
-    model_regex: Final = re.compile(re.escape(model_pattern).replace(r"\*", ".*"))
     model_ids: Final = (strip_provider_family_prefix(model, provider) for model in provider_models)
     return list(
-        dict.fromkeys(f"{route_namespace}{model_id}" for model_id in model_ids if model_regex.fullmatch(model_id))
+        dict.fromkeys(
+            f"{route_namespace}{model_id}" for model_id in model_ids if model_matches_wildcard(model_id, model_pattern)
+        )
     )
 
 
@@ -320,18 +318,8 @@ def expand_wildcard_deployments_for_model_info(
         model_name = str(deployment.get("model_name") or "")
         raw_params = deployment.get("litellm_params")
         litellm_params_dict: dict[str, object] = raw_params if isinstance(raw_params, dict) else {}
-        litellm_model = str(litellm_params_dict.get("model") or "")
 
-        # Determine the wildcard pattern to expand.
-        # Branch order matters: only fall to litellm_model when model_name is
-        # also a wildcard, so a concrete model_name is never overwritten.
-        if _check_wildcard_routing(model_name) and "/" in model_name:
-            wildcard_pattern = model_name
-        elif _check_wildcard_routing(model_name) and _check_wildcard_routing(litellm_model):
-            wildcard_pattern = litellm_model
-        elif _check_wildcard_routing(model_name):
-            wildcard_pattern = model_name
-        else:
+        if not _check_wildcard_routing(model_name):
             expanded.append(deployment)
             continue
 
@@ -341,7 +329,7 @@ def expand_wildcard_deployments_for_model_info(
             expanded.append(deployment)
             continue
         expanded_names = get_known_models_from_wildcard(
-            wildcard_model=wildcard_pattern,
+            wildcard_model=model_name,
             litellm_params=litellm_params,
         )
         if not expanded_names:
