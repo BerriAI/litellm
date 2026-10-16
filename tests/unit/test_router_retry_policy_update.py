@@ -300,6 +300,21 @@ def test_update_settings_persists_retry_policy_dict():
     assert router.retry_policy.TimeoutErrorRetries == 3
 
 
+def test_update_settings_fallback_on_unsupported_params_round_trips_through_get_settings():
+    router = _build_router()
+    assert router.get_settings()["fallback_on_unsupported_params"] is True
+
+    router.update_settings(fallback_on_unsupported_params=False)
+
+    assert router.fallback_on_unsupported_params is False
+    assert router.get_settings()["fallback_on_unsupported_params"] is False
+
+
+def test_update_router_config_keeps_fallback_on_unsupported_params_payload():
+    payload = UpdateRouterConfig(fallback_on_unsupported_params=False).model_dump(exclude_none=True)
+    assert payload["fallback_on_unsupported_params"] is False
+
+
 def test_update_settings_accepts_retry_policy_object_unchanged():
     """A pre-built ``RetryPolicy`` instance must pass through verbatim so
     callers that already constructed one (e.g. tests or programmatic
@@ -439,7 +454,7 @@ async def test_config_update_persists_and_reads_back_retry_policy(monkeypatch):
     await proxy_server.update_config(
         config_info=ConfigYAML(router_settings=posted),
         request=request,
-        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234"),
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-9876"),
     )
 
     persisted = fake_table.rows["router_settings"].param_value["retry_policy"]
@@ -455,7 +470,7 @@ async def test_config_update_persists_and_reads_back_retry_policy(monkeypatch):
     read_back = (
         await proxy_server.get_config(
             user_api_key_dict=UserAPIKeyAuth(
-                user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234"
+                user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-9876"
             )
         )
     )["router_settings"]["retry_policy"]

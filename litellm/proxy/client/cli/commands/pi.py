@@ -16,8 +16,10 @@ from types import MappingProxyType
 from typing import Annotated, Final
 
 import requests
-from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError, model_validator
+from pydantic import ConfigDict, JsonValue, TypeAdapter, ValidationError, model_validator
 from pydantic.types import StringConstraints
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 PI_CONFIG_DIR_ENV: Final = "PI_CODING_AGENT_DIR"
 PI_PROVIDER_NAME: Final = "litellm"
@@ -55,14 +57,14 @@ class ModelLimits:
 _NonEmptyString = Annotated[str, StringConstraints(min_length=1)]
 
 
-class ListedModel(BaseModel):
+class ListedModel(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     id: _NonEmptyString
     source_model: _NonEmptyString | None = None
 
 
-class _ModelList(BaseModel):
+class _ModelList(LiteLLMBaseModel):
     data: tuple[ListedModel, ...]
 
     @model_validator(mode="after")
@@ -73,13 +75,13 @@ class _ModelList(BaseModel):
         return self
 
 
-class _ModelGroup(BaseModel):
+class _ModelGroup(LiteLLMBaseModel):
     model_group: str
     max_input_tokens: float | None = None
     max_output_tokens: float | None = None
 
 
-class _ModelGroupList(BaseModel):
+class _ModelGroupList(LiteLLMBaseModel):
     data: tuple[_ModelGroup, ...]
 
 
@@ -188,10 +190,16 @@ def provider_block(
 
     Real contextWindow/maxTokens matter: pi otherwise assumes 128k/16384, which
     breaks compaction thresholds and over-asks models with smaller output caps.
+    pi sniffs compat from the base URL, and one gateway URL fronts models with
+    different capabilities, so both flags are pinned off.
     """
     return {
         "baseUrl": base_url.rstrip("/") + "/v1",
         "api": "openai-completions",
+        "compat": {
+            "supportsStore": False,
+            "supportsLongCacheRetention": False,
+        },
         "apiKey": f"${LITELLM_PROXY_API_KEY_ENV}",
         "models": [_model_entry(model_id, limits) for model_id in model_ids],
     }

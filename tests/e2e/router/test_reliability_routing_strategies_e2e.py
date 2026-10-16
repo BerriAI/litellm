@@ -63,6 +63,7 @@ import pytest
 from complexity_router_client import ComplexityRouterClient
 from e2e_config import unique_marker
 from e2e_http import StreamChunk, StreamHead, StreamStep, StreamTruncation
+from e2e_metadata import Domain, Mode, Provider, Subject, meta
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody, ModelInfoBody, ModelNewBody, RouterSettingsOverride, RoutingStrategy
 from reliability_support import REAL_KEY, REAL_MODEL, chat_override, model_id_of, open_chat_stream
@@ -173,6 +174,14 @@ def _assert_shuffle_control_lands_on(client: ComplexityRouterClient, key: str, g
 
 class TestReliabilityRoutingStrategies:
     @pytest.mark.covers("reliability.routing.simple_shuffle.picks_healthy_deployment")
+    @meta(
+        Subject(
+            domain=Domain.ROUTING,
+            providers=(Provider.OPENAI,),
+            models=(REAL_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_simple_shuffle_honors_weights(
         self, client: ComplexityRouterClient, resources: ResourceManager, scoped_key: str
     ) -> None:
@@ -191,6 +200,14 @@ class TestReliabilityRoutingStrategies:
         )
 
     @pytest.mark.covers("reliability.routing.cost_based.picks_lowest_cost")
+    @meta(
+        Subject(
+            domain=Domain.ROUTING,
+            providers=(Provider.OPENAI,),
+            models=(REAL_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_cost_based_picks_cheapest_deployment(
         self, client: ComplexityRouterClient, resources: ResourceManager, scoped_key: str
     ) -> None:
@@ -206,6 +223,14 @@ class TestReliabilityRoutingStrategies:
         _assert_shuffle_control_lands_on(client, scoped_key, group, pricey)
 
     @pytest.mark.covers("reliability.routing.usage_based.picks_under_tpm")
+    @meta(
+        Subject(
+            domain=Domain.ROUTING,
+            providers=(Provider.OPENAI,),
+            models=(REAL_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_usage_based_picks_deployment_with_tpm_headroom(
         self, client: ComplexityRouterClient, resources: ResourceManager, scoped_key: str
     ) -> None:
@@ -223,6 +248,14 @@ class TestReliabilityRoutingStrategies:
         "so latency-based has no signal to route on"
     )
     @pytest.mark.covers("reliability.routing.latency_based.picks_lowest_latency")
+    @meta(
+        Subject(
+            domain=Domain.ROUTING,
+            providers=(Provider.OPENAI,),
+            models=(REAL_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_latency_based_routes_around_deployment_that_times_out(
         self, client: ComplexityRouterClient, resources: ResourceManager, scoped_key: str
     ) -> None:
@@ -253,6 +286,13 @@ class TestReliabilityRoutingStrategies:
         "so least-busy has no signal to route on"
     )
     @pytest.mark.covers("reliability.routing.least_busy.picks_lowest_traffic")
+    @meta(
+        Subject(
+            domain=Domain.ROUTING,
+            providers=(Provider.OPENAI,),
+            models=(REAL_MODEL,),
+        )
+    )
     def test_least_busy_avoids_deployment_with_request_in_flight(
         self, client: ComplexityRouterClient, resources: ResourceManager, scoped_key: str
     ) -> None:

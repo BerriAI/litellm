@@ -12,13 +12,14 @@ import click
 import requests
 from InquirerPy import inquirer
 from InquirerPy.base.control import Choice
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from litellm.proxy.common_utils.model_listing_utils import (
     CLAUDE_CODE_CLIENT,
     CLAUDE_CODE_PICKER_PATTERN,
     GATEWAY_CLIENT_HEADER,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 
 from .agents import codex_config_path
 from .claude_settings import (
@@ -68,7 +69,7 @@ _TARGET_SELECTION: Final = TypeAdapter(tuple[Target, ...])
 _MODEL_SELECTION: Final = TypeAdapter(str)
 
 
-class ConnectionSettings(BaseModel):
+class ConnectionSettings(LiteLLMBaseModel):
     base_url: str
     base_url_explicit: bool = False
     api_key: str | None = None

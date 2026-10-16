@@ -225,6 +225,9 @@ class _InMemoryBatcher:
     def __init__(self, table: _InMemoryUsageTable) -> None:
         self.litellm_dailymodelusage = table
 
+    def execute_raw(self, query: str, *args: object) -> None:
+        return None
+
     async def __aenter__(self) -> "_InMemoryBatcher":
         return self
 

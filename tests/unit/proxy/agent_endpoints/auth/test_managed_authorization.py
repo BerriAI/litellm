@@ -451,6 +451,20 @@ def test_managed_realtime_requires_a_model_and_ignores_completion_defaults(route
     )
 
 
+@pytest.mark.parametrize("route", ["/live/sessions", "/v1/live/sessions", "/openai/v1/live/sessions"])
+def test_managed_live_upgrade_defers_the_model_to_the_session_start_frame(route: str) -> None:
+    from litellm.proxy.agent_endpoints.auth.managed_authorization import (
+        managed_agent_route_allowed,
+        managed_inference_request,
+    )
+
+    assert managed_agent_route_allowed(route, "GET")
+    assert managed_inference_request(route, {}, {"completion_model": "allowed-default"}, "cli") == {}
+    assert managed_inference_request(
+        route, {"model": "frame-model"}, {"completion_model": "allowed-default"}, "cli"
+    ) == {"model": "frame-model"}
+
+
 @pytest.mark.parametrize("mode,user", [("autonomous", None), ("delegated", "verified-human")])
 def test_matching_identity_revision_and_execution_mode_pass_admission(mode: str, user: str | None) -> None:
     context: Final = ManagedAgentContext.model_validate(

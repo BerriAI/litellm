@@ -11,10 +11,10 @@ from __future__ import annotations
 
 import asyncio
 import importlib
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass
-from types import MappingProxyType, ModuleType
-from typing import TYPE_CHECKING, Any
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Protocol
 
 from litellm.harness.context import SessionContext
 from litellm.harness.errors import HarnessError, HarnessInstallFailed
@@ -51,21 +51,28 @@ if TYPE_CHECKING:
     from langgraph.types import Command
 
     from litellm.llms.base_llm.harness.transformation import BaseHarnessConfig
+    from litellm.llms.deepagents.harness.sandbox_backend import SandboxBackend, ToolFilterMiddleware, UsageCallback
 
 _MODEL_NODE = "model"
+
+
+class _SandboxBackendModule(Protocol):
+    SandboxBackend: type[SandboxBackend]
+    UsageCallback: type[UsageCallback]
+    ToolFilterMiddleware: type[ToolFilterMiddleware]
 
 
 @dataclass(frozen=True)
 class DeepAgentsDeps:
     """The optional-dependency entrypoints this handler uses."""
 
-    create_deep_agent: Any
-    chat_litellm: Any
-    checkpointer_cls: Any
-    command_cls: Any
-    subagent_defaults: Mapping[str, Any]
+    create_deep_agent: Callable[..., CompiledStateGraph]
+    chat_litellm: Callable[..., BaseChatModel]
+    checkpointer_cls: Callable[[], BaseCheckpointSaver]
+    command_cls: Callable[..., Command]
+    subagent_defaults: Mapping[str, object]
     convert_to_openai_messages: Any
-    backend: ModuleType
+    backend: _SandboxBackendModule
 
 
 def load_deps() -> DeepAgentsDeps:
@@ -77,7 +84,7 @@ def load_deps() -> DeepAgentsDeps:
         memory = importlib.import_module("langgraph.checkpoint.memory")
         lg_types = importlib.import_module("langgraph.types")
         messages = importlib.import_module("langchain_core.messages")
-        backend = importlib.import_module("litellm.llms.deepagents.harness.sandbox_backend")
+        from litellm.llms.deepagents.harness import sandbox_backend as backend
     except ImportError as e:
         raise HarnessInstallFailed(f"{INSTALL_HINT} ({e})") from e
     return DeepAgentsDeps(
@@ -112,7 +119,7 @@ class DeepAgentsHandler(BaseHarnessHandler):
     def __init__(self, config: BaseHarnessConfig) -> None:
         super().__init__(config)
         self._deps: DeepAgentsDeps | None = None
-        self._agent: Any = None
+        self._agent: CompiledStateGraph | None = None
         self._thread_id: str | None = None
         self._skip_tools: frozenset[str] = frozenset()
 
@@ -158,7 +165,7 @@ class DeepAgentsHandler(BaseHarnessHandler):
         agent, deps = self._require_agent()
         snapshot = await agent.aget_state(self._run_config(ctx, None))
         messages = (snapshot.values or MappingProxyType({})).get("messages") or ()
-        converted: list[dict[str, Any]] = deps.convert_to_openai_messages(  # mutable-ok: LangChain returns a list
+        converted: list[dict[str, object]] = deps.convert_to_openai_messages(  # mutable-ok: LangChain returns a list
             messages
         )
         return converted
@@ -174,7 +181,7 @@ class DeepAgentsHandler(BaseHarnessHandler):
                 yield event
             if not state.interrupts:
                 break
-            resume: dict[str, Any] = {}  # mutable-ok: Command(resume=) payload, filled per answered approval
+            resume: dict[str, object] = {}  # mutable-ok: Command(resume=) payload, filled per answered approval
             for interrupt in state.interrupts:
                 decisions: list[dict[str, Any]] = []  # mutable-ok: HITL decisions collected across awaited approvals
                 for request in approval_requests(getattr(interrupt, "value", None)):
@@ -221,7 +228,7 @@ class DeepAgentsHandler(BaseHarnessHandler):
         if ctx.output is not None:
             ctx.output_json = structured_json(values.get("structured_response"))
 
-    def _require_agent(self) -> tuple[Any, DeepAgentsDeps]:
+    def _require_agent(self) -> tuple[CompiledStateGraph, DeepAgentsDeps]:
         if self._agent is None or self._deps is None:
             raise HarnessError("Deep Agents session is not started")
         return self._agent, self._deps
@@ -236,13 +243,13 @@ class DeepAgentsHandler(BaseHarnessHandler):
         return run_config
 
     @staticmethod
-    def _middleware(deps: DeepAgentsDeps, blocked: frozenset[str]) -> list[Any]:  # mutable-ok: deepagents API
+    def _middleware(deps: DeepAgentsDeps, blocked: frozenset[str]) -> list[object]:  # mutable-ok: deepagents API
         filters = (deps.backend.ToolFilterMiddleware(blocked),) if blocked else ()
         return list(filters)  # mutable-ok: deepagents create_deep_agent(middleware=) takes a list
 
     def _subagents(
         self, ctx: SessionContext, deps: DeepAgentsDeps, blocked: frozenset[str]
-    ) -> list[Any]:  # mutable-ok: deepagents create_deep_agent(subagents=) takes a list
+    ) -> list[object]:  # mutable-ok: deepagents create_deep_agent(subagents=) takes a list
         """User subagents, plus a general-purpose one that honours disable_tools when set."""
         options = ctx.options if isinstance(ctx.options, DeepAgentsOptions) else None
         user_subagents = tuple(options.subagents) if options is not None else ()

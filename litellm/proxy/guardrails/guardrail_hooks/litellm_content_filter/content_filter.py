@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypedDict, cast
 
 import yaml
 from fastapi import HTTPException
+from pydantic import TypeAdapter
 
 from litellm import Router
 from litellm._logging import verbose_proxy_logger
@@ -42,6 +43,7 @@ from litellm.types.utils import (
     GenericGuardrailAPIInputs,
     GuardrailStatus,
     GuardrailTracingDetail,
+    Message,
     ModelResponse,
     ModelResponseStream,
 )
@@ -73,6 +75,7 @@ from .competitor_intent import (
 from .patterns import PATTERN_EXTRA_CONFIG, get_compiled_pattern
 
 MAX_KEYWORD_VALUE_GAP_WORDS: Final = 1
+_DECODED_ARGUMENTS: Final = TypeAdapter(object)
 GAP_WORD_TOKENIZER: Final = re.compile(r"\b\w+\b")
 SENTENCE_TERMINATORS: Final = re.compile(r"[.!?]+")
 
@@ -1516,7 +1519,7 @@ class ContentFilterGuardrail(CustomGuardrail):
     @staticmethod
     def _describe_image_response_content(response: ModelResponse) -> str | None:
         choice = response.choices[0]
-        message = getattr(choice, "message", None)
+        message: Final[Message | None] = getattr(choice, "message", None)
         if message and getattr(message, "content", None):
             return message.content
         return None
@@ -1850,7 +1853,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         detections: list[ContentFilterDetection],  # mutable-ok: _filter_single_text appends into a caller-owned list
     ) -> str:
         try:
-            parsed: Final[object] = json.loads(arguments)
+            parsed: Final = _DECODED_ARGUMENTS.validate_python(json.loads(arguments))
         except (json.JSONDecodeError, TypeError, ValueError):
             return self._filter_single_text(arguments, detections=detections)
         if not isinstance(parsed, (dict, list)):

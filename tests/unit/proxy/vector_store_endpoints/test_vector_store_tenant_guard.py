@@ -1,3 +1,5 @@
+import base64
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -5,6 +7,12 @@ from fastapi import HTTPException, Request, Response
 
 import litellm
 from litellm.proxy._types import LiteLLM_ManagedVectorStoresTable, UserAPIKeyAuth
+from litellm.types.utils import SpecialEnums
+from litellm.types.vector_store_files import (
+    VectorStoreFileListResponse,
+    VectorStoreFileObject,
+    VectorStoreFileStatus,
+)
 
 
 def _mock_request() -> MagicMock:
@@ -29,7 +37,7 @@ async def test_vector_store_search_forces_path_id_over_body_id():
     request = _mock_request()
     with (
         patch(
-            "litellm.proxy.proxy_server._read_request_body",
+            "litellm.proxy.proxy_server.read_request_body",
             new=AsyncMock(
                 return_value={
                     "vector_store_id": "vs_body_victim",
@@ -77,7 +85,7 @@ async def test_vector_store_file_create_forces_path_id_over_body_id():
     request = _mock_request()
     with (
         patch(
-            "litellm.proxy.proxy_server._read_request_body",
+            "litellm.proxy.proxy_server.read_request_body",
             new=AsyncMock(
                 return_value={
                     "vector_store_id": "vs_body_victim",
@@ -107,18 +115,50 @@ async def test_vector_store_file_create_forces_path_id_over_body_id():
 
 
 @pytest.mark.asyncio
-async def test_vector_store_file_list_resolves_managed_vector_store_before_team_fallback():
-    import base64
-
+async def test_vector_store_file_list_resolves_managed_ids_and_cursors():
     from litellm.proxy.vector_store_files_endpoints.endpoints import (
         vector_store_file_list,
     )
 
     captured_data = {}
+    provider_file_id: Final = "file-list-owned"
+    managed_file_data: Final = SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
+        "application/json",
+        "unified-file",
+        "managed-deployment",
+        provider_file_id,
+        "managed-deployment-id",
+    )
+    managed_file_id: Final = base64.urlsafe_b64encode(managed_file_data.encode()).decode().rstrip("=")
+    user_api_key_dict: Final = UserAPIKeyAuth(team_models=["team-openai"])
+    managed_file: Final[VectorStoreFileObject] = {
+        "id": provider_file_id,
+        "object": "vector_store.file",
+        "created_at": 1700000000,
+        "usage_bytes": 100,
+        "vector_store_id": "vs_provider_native",
+        "status": VectorStoreFileStatus.COMPLETED,
+        "last_error": None,
+        "chunking_strategy": {"type": "auto"},
+        "attributes": {"source": "test"},
+    }
+    provider_response: Final[VectorStoreFileListResponse] = {
+        "object": "list",
+        "data": [managed_file],
+        "first_id": provider_file_id,
+        "last_id": provider_file_id,
+        "has_more": False,
+    }
+    expected_response: Final[VectorStoreFileListResponse] = {
+        **provider_response,
+        "data": [{**managed_file, "id": managed_file_id}],
+        "first_id": managed_file_id,
+        "last_id": managed_file_id,
+    }
 
     async def fake_base_process(self, **kwargs):
         captured_data.update(self.data)
-        return {"ok": True}
+        return provider_response
 
     raw_vector_store_id = (
         "litellm_proxy:vector_store;"
@@ -127,13 +167,11 @@ async def test_vector_store_file_list_resolves_managed_vector_store_before_team_
         "provider_resource_id,vs_provider_native;"
         "model_id,managed-deployment"
     )
-    vector_store_id = (
-        base64.urlsafe_b64encode(raw_vector_store_id.encode()).decode().rstrip("=")
-    )
+    vector_store_id = base64.urlsafe_b64encode(raw_vector_store_id.encode()).decode().rstrip("=")
 
     request = _mock_request()
     request.method = "GET"
-    request.query_params = {"limit": "10"}
+    request.query_params = {"after": managed_file_id, "limit": "10"}
     request.url.path = f"/v1/vector_stores/{vector_store_id}/files"
 
     llm_router = MagicMock()
@@ -147,6 +185,11 @@ async def test_vector_store_file_list_resolves_managed_vector_store_before_team_
         }
 
     llm_router.get_deployment_credentials_with_provider.side_effect = get_credentials
+    managed_files_obj = MagicMock()
+    resolver = AsyncMock(return_value={provider_file_id: managed_file_id})
+    managed_files_obj.get_unified_file_ids_for_provider_file_ids = resolver
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.get_proxy_hook.return_value = managed_files_obj
 
     with (
         patch(
@@ -154,6 +197,7 @@ async def test_vector_store_file_list_resolves_managed_vector_store_before_team_
             new=AsyncMock(return_value=None),
         ),
         patch("litellm.proxy.proxy_server.llm_router", llm_router),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj),
         patch(
             "litellm.proxy.vector_store_files_endpoints.endpoints.ProxyBaseLLMRequestProcessing.base_process_llm_request",
             new=fake_base_process,
@@ -163,15 +207,19 @@ async def test_vector_store_file_list_resolves_managed_vector_store_before_team_
             vector_store_id=vector_store_id,
             request=request,
             fastapi_response=Response(),
-            user_api_key_dict=UserAPIKeyAuth(team_models=["team-openai"]),
+            user_api_key_dict=user_api_key_dict,
         )
 
-    assert response == {"ok": True}
+    assert response == expected_response
+    assert captured_data["after"] == provider_file_id
     assert captured_data["vector_store_id"] == "vs_provider_native"
     assert captured_data["api_key"] == "sk-managed-deployment"
     assert captured_data["model"] == "openai/managed-deployment"
-    llm_router.get_deployment_credentials_with_provider.assert_called_once_with(
-        model_id="managed-deployment"
+    llm_router.get_deployment_credentials_with_provider.assert_called_once_with(model_id="managed-deployment")
+    proxy_logging_obj.get_proxy_hook.assert_called_once_with("managed_files")
+    resolver.assert_awaited_once_with(
+        provider_file_ids=(provider_file_id,),
+        user_api_key_dict=user_api_key_dict,
     )
 
 
@@ -191,7 +239,7 @@ async def test_vector_store_file_create_denies_other_team_path_store():
     request = _mock_request()
     with (
         patch(
-            "litellm.proxy.proxy_server._read_request_body",
+            "litellm.proxy.proxy_server.read_request_body",
             new=AsyncMock(return_value={"file_id": "file_123"}),
         ),
         patch.object(litellm, "vector_store_registry", mock_registry),
@@ -226,7 +274,7 @@ async def test_rag_query_denies_nested_other_team_vector_store():
     request = _mock_request()
     with (
         patch(
-            "litellm.proxy.rag_endpoints.endpoints._read_request_body",
+            "litellm.proxy.rag_endpoints.endpoints.read_request_body",
             new=AsyncMock(
                 return_value={
                     "model": "gpt-4o-mini",
@@ -445,9 +493,7 @@ async def test_get_managed_vector_store_uses_shared_cache_helper_for_db_fallback
             new=cache_helper,
         ),
     ):
-        vector_store = await get_litellm_managed_vector_store(
-            vector_store_id="vs_cached"
-        )
+        vector_store = await get_litellm_managed_vector_store(vector_store_id="vs_cached")
 
     assert vector_store is not None
     assert vector_store["vector_store_id"] == "vs_cached"
@@ -462,9 +508,7 @@ async def test_get_managed_vector_store_fails_closed_on_lookup_error():
     )
 
     mock_registry = MagicMock()
-    mock_registry.get_litellm_managed_vector_store_from_registry.side_effect = (
-        RuntimeError("registry unavailable")
-    )
+    mock_registry.get_litellm_managed_vector_store_from_registry.side_effect = RuntimeError("registry unavailable")
 
     with patch.object(litellm, "vector_store_registry", mock_registry):
         with pytest.raises(HTTPException) as exc_info:
@@ -568,8 +612,8 @@ async def test_azure_passthrough_denies_other_team_vector_store_index():
     index_object.litellm_params.vector_store_name = "tenant-b-store"
 
     mock_index_registry = MagicMock()
-    mock_index_registry.is_vector_store_index.side_effect = (
-        lambda vector_store_index_name: vector_store_index_name == "managed_index"
+    mock_index_registry.is_vector_store_index.side_effect = lambda vector_store_index_name: (
+        vector_store_index_name == "managed_index"
     )
     mock_index_registry.get_vector_store_index_by_name.return_value = index_object
 

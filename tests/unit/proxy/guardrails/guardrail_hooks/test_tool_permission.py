@@ -750,6 +750,78 @@ class TestToolPermissionGuardrail:
         assert new_data["function_call"] == "none"
         assert new_data["tool_choice"] == "none"
 
+    @staticmethod
+    def _tool_search_turn(*loaded_names: str) -> dict:
+        return {
+            "role": "assistant",
+            "content": None,
+            "provider_specific_fields": {
+                "tool_search_items": [
+                    {"type": "tool_search_call", "call_id": "ts_1", "execution": "client"},
+                    {
+                        "type": "tool_search_output",
+                        "call_id": "ts_1",
+                        "tools": [{"type": "function", "name": name} for name in loaded_names],
+                    },
+                ]
+            },
+        }
+
+    def _replayed_run_shell_request(self) -> dict:
+        return {
+            "tools": [{"type": "function", "function": {"name": "get_weather"}}, {"type": "tool_search"}],
+            "messages": [
+                {"role": "user", "content": "check the weather, then clean up the disk"},
+                self._tool_search_turn("get_weather"),
+                self._tool_search_turn("run_shell"),
+            ],
+        }
+
+    @staticmethod
+    def _deny_run_shell(on_disallowed_action: str) -> ToolPermissionGuardrail:
+        return ToolPermissionGuardrail(
+            guardrail_name="test-tool-permission",
+            rules=[{"id": "deny_shell", "tool_name": r"^run_shell$", "decision": "deny"}],
+            default_action="allow",
+            on_disallowed_action=on_disallowed_action,
+        )
+
+    @pytest.mark.asyncio
+    async def test_async_pre_call_hook_blocks_tool_loaded_by_replayed_tool_search(self):
+        guardrail = self._deny_run_shell("block")
+
+        with patch.object(guardrail, "should_run_guardrail", return_value=True):
+            with pytest.raises(HTTPException) as excinfo:
+                await guardrail.async_pre_call_hook(
+                    user_api_key_dict=UserAPIKeyAuth(),
+                    cache=DualCache(default_in_memory_ttl=1),
+                    data=self._replayed_run_shell_request(),
+                    call_type="completion",
+                )
+
+        assert excinfo.value.status_code == 400
+        assert "run_shell" in json.dumps(excinfo.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_async_pre_call_hook_rewrite_drops_replayed_tool_search_loading_denied_tool(self):
+        guardrail = self._deny_run_shell("rewrite")
+        data = self._replayed_run_shell_request()
+
+        with patch.object(guardrail, "should_run_guardrail", return_value=True):
+            new_data = await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                cache=DualCache(default_in_memory_ttl=1),
+                data=data,
+                call_type="completion",
+            )
+
+        assert isinstance(new_data, dict)
+        user_turn, weather_search, shell_search = new_data["messages"]
+        assert user_turn == {"role": "user", "content": "check the weather, then clean up the disk"}
+        assert weather_search == self._tool_search_turn("get_weather")
+        assert shell_search == {"role": "assistant", "content": None, "provider_specific_fields": {}}
+        assert [tool.get("function", {}).get("name") for tool in new_data["tools"]] == ["get_weather", None]
+
     @pytest.mark.asyncio
     async def test_async_post_call_streaming_iterator_hook_plain_text_yields_chunks(
         self,

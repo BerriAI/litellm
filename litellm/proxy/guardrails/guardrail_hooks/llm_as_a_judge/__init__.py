@@ -6,7 +6,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Generic, Literal, Optional, TypeVar
 
 from fastapi import HTTPException
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import ConfigDict, ValidationError
 from typing_extensions import NotRequired, ReadOnly, TypedDict, Unpack
 
 import litellm
@@ -21,6 +21,7 @@ from litellm.litellm_core_utils.llm_judge import (
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import get_last_user_message
 from litellm.types.guardrails import GuardrailEventHooks, Mode, SupportedGuardrailIntegrations
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import LLM_AS_A_JUDGE_GUARDRAIL_CALL_ORIGIN, GenericGuardrailAPIInputs, GuardrailStatus
 
 if TYPE_CHECKING:
@@ -72,7 +73,7 @@ _JUDGE_CALL_METADATA: Final = MappingProxyType(
 )
 
 
-class _LoggedCallParams(BaseModel):
+class _LoggedCallParams(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     metadata: Mapping[str, object] | None = None

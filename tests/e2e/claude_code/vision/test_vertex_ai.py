@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import pytest
 
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
 from claude_code._env import require_proxy
 from claude_code.cli_driver import (
     ClaudeCLIError,
@@ -83,6 +84,16 @@ def _build_stdin_input() -> str:
 
 
 @pytest.mark.covers("llm.messages.vertex.vision.nonstream.works")
+@meta(
+    Subject(
+        domain=Domain.LLM_TRANSLATION,
+        route=Route.MESSAGES,
+        providers=(Provider.VERTEX_AI,),
+        models=tuple(VERTEX_AI_MODELS),
+        capabilities=(Capability.VISION,),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_vision_vertex_ai(compat_result):
     """Drive the `claude` CLI against the LiteLLM proxy with an image
     attached via stream-json input and assert a non-empty reply."""
