@@ -60,7 +60,7 @@ test("the Logs drawer renders the stored request without the deployment api_key"
   const upstream = (
     process.env.INTEGRATION_UPSTREAM_URL ?? "http://127.0.0.1:8190"
   ).replace(/\/+$/, "");
-  const auth = { Authorization: `Bearer ${master}` };
+  const auth = { Authorization: `Bearer ${master}`, Connection: "close" };
   const canaryCore = unhex();
   const deploymentKey = `lkc-B1-${canaryCore}`;
   const forms = canaryForms(canaryCore);

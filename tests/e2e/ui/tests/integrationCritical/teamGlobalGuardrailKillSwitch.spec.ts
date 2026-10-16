@@ -8,7 +8,7 @@ import { randomUUID } from "node:crypto";
 import { masterKey } from "../../helpers/traffic";
 
 const master = masterKey();
-const headers = { Authorization: `Bearer ${master}` };
+const headers = { Authorization: `Bearer ${master}`, Connection: "close" };
 
 async function createTeam(request: APIRequestContext): Promise<string> {
   const created = await request.post("/team/new", {

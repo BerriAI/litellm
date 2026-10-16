@@ -5,7 +5,7 @@ import { navigateToPage } from "../../helpers/navigation";
 import { captureRequestBody } from "../../helpers/roundTrip";
 
 const master = process.env.LITELLM_MASTER_KEY ?? "sk-integration-master";
-const headers = { Authorization: `Bearer ${master}` };
+const headers = { Authorization: `Bearer ${master}`, Connection: "close" };
 const upstream = (process.env.INTEGRATION_UPSTREAM_URL ?? "http://127.0.0.1:8190").replace(/\/+$/, "");
 const CORALBRICKS_MODEL = "deepseek-v4.1-flash-fast";
 const UI_KEY = "cb_ui_integration_key";
