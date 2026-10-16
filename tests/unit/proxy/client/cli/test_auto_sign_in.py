@@ -453,14 +453,15 @@ def test_a_sibling_key_the_proxy_also_rejects_falls_through_to_one_sign_in(
     assert get_stored_api_key(BASE_URL, vault=vault) == SIGNED_IN_KEY
 
 
+@pytest.mark.parametrize("key_check_status", [200, 404], ids=["virtual_key", "browser_login_without_a_key_row"])
 def test_a_stored_login_the_proxy_accepts_but_a_command_refuses_reports_a_missing_role_without_a_browser(
-    requests_mock: Mocker, secret_vault_factory: type[FakeSecretVault]
+    requests_mock: Mocker, secret_vault_factory: type[FakeSecretVault], key_check_status: int
 ) -> None:
     vault: Final = secret_vault_factory()
     save_token(_classic_login("sk-member"), vault=vault)
     requests_mock.get(f"{BASE_URL}/v1/models", status_code=200, json={"data": []})
     route: Final = requests_mock.get(f"{BASE_URL}/credentials", status_code=401, json=REJECTED)
-    key_check: Final = _key_check(requests_mock, 200)
+    key_check: Final = _key_check(requests_mock, key_check_status)
     sign_in: Final = FakeBrowserSignIn(_credential())
     writes_before: Final = list(vault.writes)
 

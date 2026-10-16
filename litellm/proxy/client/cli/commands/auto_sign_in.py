@@ -5,6 +5,7 @@ import webbrowser
 from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
+from http import HTTPStatus
 from pathlib import Path
 from typing import Final, Literal, Protocol
 
@@ -27,6 +28,7 @@ class BrowserSignIn(Protocol):
 _TEXT_MODE_BROWSERS: Final = frozenset({"www-browser", "links", "elinks", "lynx", "w3m"})
 _SSH_SESSION_VARIABLES: Final = ("SSH_CONNECTION", "SSH_TTY")
 _DISPLAY_VARIABLES: Final = ("DISPLAY", "WAYLAND_DISPLAY")
+_SIGNED_IN_LOGIN_WITHOUT_KEY_ROW: Final = HTTPStatus.NOT_FOUND
 
 
 def _runs_in_ci(environ: Mapping[str, str]) -> bool:
@@ -164,7 +166,7 @@ def _proxy_accepts(base_url: str, api_key: str) -> bool:
         )
     except requests.RequestException:
         return False
-    return response.ok
+    return response.ok or response.status_code == _SIGNED_IN_LOGIN_WITHOUT_KEY_ROW
 
 
 def _sign_in_lock() -> FileLock:
