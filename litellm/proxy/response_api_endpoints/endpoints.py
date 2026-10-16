@@ -1823,10 +1823,10 @@ class _PreCallGuardrailWalk(Protocol):
         self,
         *,
         user_api_key_dict: UserAPIKeyAuth,
-        data: dict[str, object],
+        data: dict[str, object],  # mutable-ok: ProxyLogging.pre_call_hook hands the guardrails a dict they edit
         call_type: Literal["aresponses"],
         guardrails_only: bool,
-    ) -> dict[str, object]: ...
+    ) -> dict[str, object]: ...  # mutable-ok: ProxyLogging.pre_call_hook returns the guardrails' own dict
 
 
 def _responses_ws_frame_guard(
@@ -1847,7 +1847,7 @@ def _responses_ws_frame_guard(
 
     async def guard(frame: str) -> GuardedResponsesWsFrame:
         frame_obj: Final = _WS_FRAME.validate_json(frame)
-        frame_data: Final[dict[str, object]] = {
+        frame_data: Final = {
             **{key: value for key, value in frame_obj.items() if key != "type"},
             "model": model,
             metadata_key: copy.deepcopy(bucket),
@@ -1861,7 +1861,7 @@ def _responses_ws_frame_guard(
             if isinstance(guarded_bucket, dict)
             else None
         )
-        rewritten: Final[dict[str, object]] = {
+        rewritten: Final = {
             **frame_obj,
             **{key: guarded_data[key] for key in _GUARDED_FRAME_FIELDS if key in guarded_data},
         }

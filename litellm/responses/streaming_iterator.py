@@ -1996,7 +1996,9 @@ def _replace_guardrail_information(bucket: object, guardrail_information: tuple[
         return
     bucket.pop(_GUARDRAIL_INFORMATION_KEY, None)
     if guardrail_information:
-        bucket[_GUARDRAIL_INFORMATION_KEY] = [dict(entry) for entry in guardrail_information]
+        bucket[_GUARDRAIL_INFORMATION_KEY] = [  # rebind-ok: the turn copy's own metadata bucket
+            dict(entry) for entry in guardrail_information
+        ]
 
 
 def _logged_user_messages(client_frame: object) -> tuple[Mapping[str, object], ...]:
