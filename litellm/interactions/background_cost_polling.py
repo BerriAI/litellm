@@ -354,7 +354,7 @@ async def _claim(context: BackgroundInteractionPollContext) -> bool | None:
 async def _record(context: BackgroundInteractionPollContext, outcome: SettlementOutcome) -> SettlementOutcome:
     try:
         await context.store.record_outcome(context.interaction_id, outcome)
-    except Exception:  # noqa: BLE001  # the outcome is an audit trail; the claim already made the settlement exclusive
+    except Exception:  # noqa: BLE001  # a takeover of the lapsed claim finds the spend row and records the outcome
         verbose_logger.exception("Could not record the settlement of background interaction %s", context.interaction_id)
     return outcome
 

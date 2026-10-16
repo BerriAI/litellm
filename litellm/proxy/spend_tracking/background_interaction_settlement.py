@@ -28,7 +28,7 @@ from litellm.interactions.background_cost_polling import (
     fetch_background_interaction,
     resume_unsettled_background_interactions,
 )
-from litellm.repositories.table_repositories import BackgroundInteractionSettlementRepository
+from litellm.repositories.table_repositories import BackgroundInteractionSettlementRepository, SpendLogsRepository
 from litellm.types.interactions import InteractionsAPIResponse
 from litellm.types.router import CredentialLiteLLMParams
 
@@ -63,7 +63,8 @@ class _RowKey(TypedDict):
     interaction_id: ReadOnly[str]
 
 
-class _Unclaimed(TypedDict):
+class _UnclaimedRowKey(TypedDict):
+    interaction_id: ReadOnly[str]
     claimed_at: ReadOnly[None]
 
 
@@ -71,14 +72,10 @@ class _Before(TypedDict):
     lt: ReadOnly[datetime]
 
 
-class _ExpiredClaim(TypedDict):
+class _ExpiredClaimRowKey(TypedDict):
+    interaction_id: ReadOnly[str]
     settled_at: ReadOnly[None]
     claimed_at: ReadOnly[_Before]
-
-
-class _ClaimableRowKey(TypedDict):
-    interaction_id: ReadOnly[str]
-    OR: ReadOnly[tuple[_Unclaimed, _ExpiredClaim]]
 
 
 class _UnsettledRows(TypedDict):
@@ -103,7 +100,17 @@ class _SettlementTableActions(Protocol):
 
     def find_many(self, *, where: _UnsettledRows) -> Awaitable[Sequence[_SettlementRow]]: ...
 
-    def update_many(self, *, data: _Claim | _Outcome, where: _RowKey | _ClaimableRowKey) -> Awaitable[int]: ...
+    def update_many(
+        self, *, data: _Claim | _Outcome, where: _RowKey | _UnclaimedRowKey | _ExpiredClaimRowKey
+    ) -> Awaitable[int]: ...
+
+
+class _SpendLogKey(TypedDict):
+    request_id: ReadOnly[str]
+
+
+class _SpendLogLookup(Protocol):
+    def find_unique(self, *, where: _SpendLogKey) -> Awaitable[object | None]: ...
 
 
 _CLEARED_CREATE_CONTEXT: Final[Mapping[str, object]] = MappingProxyType({})
@@ -152,10 +159,13 @@ class PrismaBackgroundSettlementStore:
     or releases it and then records the outcome, so a row claimed longer ago
     than the lease with no outcome belongs to a settler that died in between,
     and any settler may claim it again. The lease is far longer than settling
-    takes, so a live settler is never overtaken.
+    takes, so a live settler is never overtaken. The settler before may have
+    billed and then died or failed to record it, so a takeover bills only when
+    the interaction has no spend row yet, and otherwise records it as billed.
     """
 
     table: _SettlementTableActions
+    spend_logs: _SpendLogLookup
     claimed_by: str
     claim_lease_seconds: float = BACKGROUND_INTERACTION_SETTLEMENT_CLAIM_LEASE_SECONDS
 
@@ -180,21 +190,31 @@ class PrismaBackgroundSettlementStore:
         return row is not None and self._is_owned(row)
 
     async def claim(self, interaction_id: str) -> bool:
-        now: Final = datetime.now(timezone.utc)
+        if await self._claim_where(_UnclaimedRowKey(interaction_id=interaction_id, claimed_at=None)):
+            return True
+        took_over: Final = await self._claim_where(
+            _ExpiredClaimRowKey(
+                interaction_id=interaction_id,
+                settled_at=None,
+                claimed_at=_Before(lt=datetime.now(timezone.utc) - self._lease),
+            )
+        )
+        return took_over and not await self._already_billed(interaction_id)
+
+    async def _claim_where(self, where: _UnclaimedRowKey | _ExpiredClaimRowKey) -> bool:
         claimed_rows: Final = await _read_from_a_table_that_may_not_exist(
             self.table.update_many(
-                data=_Claim(claimed_at=now, claimed_by=self.claimed_by),
-                where=_ClaimableRowKey(
-                    interaction_id=interaction_id,
-                    OR=(
-                        _Unclaimed(claimed_at=None),
-                        _ExpiredClaim(settled_at=None, claimed_at=_Before(lt=now - self._lease)),
-                    ),
-                ),
+                data=_Claim(claimed_at=datetime.now(timezone.utc), claimed_by=self.claimed_by), where=where
             ),
             when_missing=0,
         )
         return claimed_rows == 1
+
+    async def _already_billed(self, interaction_id: str) -> bool:
+        if await self.spend_logs.find_unique(where=_SpendLogKey(request_id=interaction_id)) is None:
+            return False
+        await self.record_outcome(interaction_id, "billed")
+        return True
 
     @property
     def _lease(self) -> timedelta:
@@ -256,13 +276,14 @@ def fetch_with_deployment_credentials(
 
 async def configure_background_interaction_settlement(
     table: _SettlementTableActions,
+    spend_logs: _SpendLogLookup,
     claimed_by: str,
     fetch_interaction: FetchInteraction = fetch_background_interaction,
     schedule: PollSchedule = DEFAULT_POLL_SCHEDULE,
 ) -> tuple["asyncio.Task[SettlementOutcome | None]", ...]:
     if not BACKGROUND_INTERACTION_COST_POLLING_ENABLED:
         return ()
-    store: Final = PrismaBackgroundSettlementStore(table=table, claimed_by=claimed_by)
+    store: Final = PrismaBackgroundSettlementStore(table=table, spend_logs=spend_logs, claimed_by=claimed_by)
     configure_background_settlement_store(store)
     resumed: Final = await resume_unsettled_background_interactions(store, fetch_interaction, schedule)
     if resumed:
@@ -276,6 +297,7 @@ async def install_background_interaction_settlement(
     try:
         await configure_background_interaction_settlement(
             table=BackgroundInteractionSettlementRepository(prisma_client).table,
+            spend_logs=SpendLogsRepository(prisma_client).table,
             claimed_by=f"{socket.gethostname()}:{os.getpid()}",
             fetch_interaction=fetch_with_deployment_credentials(router),
         )

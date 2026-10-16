@@ -91,12 +91,20 @@ def _matches(row: "_Row", where: dict) -> bool:
 
 
 def _satisfies(row: "_Row", column: str, condition) -> bool:
-    if column == "OR":
-        return any(_matches(row, alternative) for alternative in condition)
     value = getattr(row, column)
     if isinstance(condition, dict):
         return value is not None and value < condition["lt"]
     return value == condition
+
+
+class _FakeSpendLogs:
+    """The spend log table, holding only the request ids of the rows written so far."""
+
+    def __init__(self, request_ids: tuple[str, ...] = ()):
+        self.request_ids = request_ids
+
+    async def find_unique(self, *, where):
+        return where["request_id"] if where["request_id"] in self.request_ids else None
 
 
 def _logging_obj(metadata: Optional[dict] = None) -> LitellmLogging:
@@ -177,7 +185,7 @@ def _capturing_fetch():
 @pytest.mark.asyncio
 async def test_registered_row_reads_back_as_the_same_pending_interaction():
     table = _FakeSettlementTable()
-    store = PrismaBackgroundSettlementStore(table=table, claimed_by="replica-a:1")
+    store = PrismaBackgroundSettlementStore(table=table, spend_logs=_FakeSpendLogs(), claimed_by="replica-a:1")
     pending = _pending("interactions/bg-1")
 
     await store.register(pending)
@@ -189,8 +197,8 @@ async def test_registered_row_reads_back_as_the_same_pending_interaction():
 @pytest.mark.asyncio
 async def test_claim_is_won_by_exactly_one_settler():
     table = _FakeSettlementTable()
-    replica_a = PrismaBackgroundSettlementStore(table=table, claimed_by="replica-a:1")
-    replica_b = PrismaBackgroundSettlementStore(table=table, claimed_by="replica-b:1")
+    replica_a = PrismaBackgroundSettlementStore(table=table, spend_logs=_FakeSpendLogs(), claimed_by="replica-a:1")
+    replica_b = PrismaBackgroundSettlementStore(table=table, spend_logs=_FakeSpendLogs(), claimed_by="replica-b:1")
     await replica_a.register(_pending("interactions/bg-1"))
 
     assert await replica_b.claim("interactions/bg-1") is True
@@ -233,7 +241,7 @@ class _MissingSettlementTable:
 async def test_a_missing_table_holds_no_rows_and_takes_no_registration():
     from prisma.errors import TableNotFoundError
 
-    store = PrismaBackgroundSettlementStore(table=_MissingSettlementTable(), claimed_by="replica-a:1")
+    store = PrismaBackgroundSettlementStore(table=_MissingSettlementTable(), spend_logs=_FakeSpendLogs(), claimed_by="replica-a:1")
 
     with pytest.raises(TableNotFoundError):
         await store.register(_pending("interactions/bg-1"))
@@ -255,7 +263,7 @@ async def test_unsettled_lists_claimed_rows_with_no_outcome_and_when_their_lease
             _stored_row("interactions/bg-from-the-future", create_context={"schema": "unknown"}),
         )
     )
-    store = PrismaBackgroundSettlementStore(table=table, claimed_by="replica-b:1", claim_lease_seconds=300)
+    store = PrismaBackgroundSettlementStore(table=table, spend_logs=_FakeSpendLogs(), claimed_by="replica-b:1", claim_lease_seconds=300)
 
     unsettled = await store.unsettled()
 
@@ -277,8 +285,8 @@ async def test_a_claim_whose_settler_died_is_taken_over_once_its_lease_runs_out(
             _stored_row("interactions/bg-settled", claimed_at=_minutes_ago(10), settled=True),
         )
     )
-    replica_b = PrismaBackgroundSettlementStore(table=table, claimed_by="replica-b:1", claim_lease_seconds=300)
-    replica_c = PrismaBackgroundSettlementStore(table=table, claimed_by="replica-c:1", claim_lease_seconds=300)
+    replica_b = PrismaBackgroundSettlementStore(table=table, spend_logs=_FakeSpendLogs(), claimed_by="replica-b:1", claim_lease_seconds=300)
+    replica_c = PrismaBackgroundSettlementStore(table=table, spend_logs=_FakeSpendLogs(), claimed_by="replica-c:1", claim_lease_seconds=300)
 
     assert await replica_b.is_claimed("interactions/bg-dead-settler") is False
     assert await replica_b.pending("interactions/bg-dead-settler") is not None
@@ -296,7 +304,7 @@ async def test_a_claim_whose_settler_died_is_taken_over_once_its_lease_runs_out(
 @pytest.mark.asyncio
 async def test_record_outcome_keeps_the_audit_trail_and_drops_the_stored_request_context():
     table = _FakeSettlementTable()
-    store = PrismaBackgroundSettlementStore(table=table, claimed_by="replica-a:1")
+    store = PrismaBackgroundSettlementStore(table=table, spend_logs=_FakeSpendLogs(), claimed_by="replica-a:1")
     await store.register(_pending("interactions/bg-1"))
     assert await store.claim("interactions/bg-1")
     assert table.rows["interactions/bg-1"].create_context
@@ -308,6 +316,40 @@ async def test_record_outcome_keeps_the_audit_trail_and_drops_the_stored_request
     assert row.settled_at is not None
     assert row.claimed_at <= row.settled_at
     assert row.create_context == {}
+
+
+@pytest.mark.asyncio
+async def test_a_takeover_records_the_bill_a_settler_wrote_before_dying_instead_of_billing_again():
+    """
+    The regression: a settler that billed and then died, or failed to record
+    the outcome, left its claim to lapse with no outcome, and the replica that
+    took the claim over billed the interaction a second time.
+    """
+    table = _FakeSettlementTable(
+        rows=(
+            _stored_row("interactions/bg-billed-then-died", claimed_at=_past_the_default_lease()),
+            _stored_row("interactions/bg-died-before-billing", claimed_at=_past_the_default_lease()),
+        )
+    )
+    fetch, _ = _capturing_fetch()
+    previous_store = bg._STORE.store
+    try:
+        resumed = await configure_background_interaction_settlement(
+            table=table,
+            spend_logs=_FakeSpendLogs(request_ids=("interactions/bg-billed-then-died",)),
+            claimed_by="replica-b:1",
+            fetch_interaction=fetch,
+            schedule=FAST_SCHEDULE,
+        )
+
+        assert [await asyncio.wait_for(task, timeout=5) for task in resumed] == [None, "billed"]
+        assert [(row.claimed_by, row.outcome) for row in table.rows.values()] == [
+            ("replica-b:1", "billed"),
+            ("replica-b:1", "billed"),
+        ]
+        assert await bg._STORE.store.unsettled() == ()
+    finally:
+        configure_background_settlement_store(previous_store)
 
 
 @pytest.mark.asyncio
@@ -323,7 +365,11 @@ async def test_configure_installs_the_store_and_resumes_the_orphaned_rows():
     previous_store = bg._STORE.store
     try:
         resumed = await configure_background_interaction_settlement(
-            table=table, claimed_by="replica-b:1", fetch_interaction=fetch, schedule=FAST_SCHEDULE
+            table=table,
+            spend_logs=_FakeSpendLogs(),
+            claimed_by="replica-b:1",
+            fetch_interaction=fetch,
+            schedule=FAST_SCHEDULE,
         )
 
         assert [await asyncio.wait_for(task, timeout=5) for task in resumed] == ["billed", "billed"]
@@ -376,7 +422,7 @@ class _JsonLike:
 async def test_a_resumed_row_still_under_a_live_claim_waits_for_the_lease_before_settling():
     claimed_at = datetime.now(timezone.utc)
     table = _FakeSettlementTable(rows=(_stored_row("interactions/bg-mid-settlement", claimed_at=claimed_at),))
-    store = PrismaBackgroundSettlementStore(table=table, claimed_by="replica-b:1", claim_lease_seconds=0.2)
+    store = PrismaBackgroundSettlementStore(table=table, spend_logs=_FakeSpendLogs(), claimed_by="replica-b:1", claim_lease_seconds=0.2)
     fetched_at = []
 
     async def fetch(context):
@@ -427,6 +473,7 @@ async def test_a_resumed_poll_fetches_with_the_credentials_of_the_deployment_tha
     try:
         (resumed,) = await configure_background_interaction_settlement(
             table=table,
+            spend_logs=_FakeSpendLogs(),
             claimed_by="replica-b:1",
             fetch_interaction=fetch_with_deployment_credentials(lambda: router, fetch),
             schedule=FAST_SCHEDULE,
