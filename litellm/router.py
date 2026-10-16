@@ -270,6 +270,7 @@ from litellm.router_utils.pre_call_checks.continuation_prefill_check import (
     ContinuedPartial,
     constrains_continuation,
     continuation_deployments,
+    continuation_output_ceilings,
     continued_text,
     deployment_can_continue,
 )
@@ -3378,7 +3379,12 @@ class Router:
                     )
                     continuation_output: Final = (
                         ContinuationOutput(
-                            e.generated_content, continuation_messages[-1], model_group, complete_response_object
+                            e.generated_content,
+                            continuation_messages[-1],
+                            model_group,
+                            complete_response_object,
+                            checks_post_call_rules=initial_kwargs.get(MID_STREAM_CONTINUATION_KWARG)
+                            is not MID_STREAM_CONTINUATION_MARKER,
                         )
                         if continuation_messages is not None
                         else None
@@ -3392,7 +3398,7 @@ class Router:
                         emitted_tokens: Final = int(
                             getattr(complete_response_object_usage, "completion_tokens", 0) or 0
                         )
-                        reduced_ceilings: Final = self._continuation_output_ceilings(initial_kwargs, emitted_tokens)
+                        reduced_ceilings: Final = continuation_output_ceilings(initial_kwargs, emitted_tokens)
                         if reduced_ceilings is None or continuation_messages is None:
                             self._raise_original_mid_stream_error(e)
                         await model_response.wait_for_failure_logging(timeout=MID_STREAM_FAILURE_LOG_WAIT_SECONDS)
@@ -3664,36 +3670,22 @@ class Router:
         )
 
     @staticmethod
-    def _continuation_output_ceilings(
-        request_kwargs: Mapping[str, object],
-        emitted_tokens: int,
-    ) -> Mapping[str, int] | None:
-        """The caller's output ceilings minus the tokens already emitted, or None once nothing is left."""
-        ceilings: Final = MappingProxyType(
-            {
-                key: value - emitted_tokens
-                for key in ("max_tokens", "max_completion_tokens")
-                if isinstance(value := request_kwargs.get(key), int)
-            }
-        )
-        if ceilings and min(ceilings.values()) <= 0:
-            return None
-        return ceilings
-
-    @staticmethod
     def _build_completion_continuation_input(
         messages: Sequence[Mapping[str, object]],
         generated_content: str,
     ) -> Sequence[Mapping[str, object]] | None:
         """Append the partial output as an assistant prefill, or extend a trailing `prefix: True` assistant turn in
         place so the request never ends in two assistant messages. None when the request ends in a plain assistant
-        turn, or in a prefill turn whose content has a shape this cannot extend."""
+        turn, in a prefill turn whose content has a shape this cannot extend, or when the cut came mid-echo of the
+        prefill."""
         last: Final = messages[-1] if messages else None
         if last is None or last.get("role") != "assistant":
             return [*messages, {"role": "assistant", "content": generated_content, "prefix": True}]
         if last.get("prefix") is not True:
             return None
         new_text: Final = continued_text(last, generated_content)
+        if new_text is None:
+            return None
         content: Final = last.get("content")
         if content is None or isinstance(content, str):
             return [*messages[:-1], {**last, "content": f"{content or ''}{new_text}", "prefix": True}]

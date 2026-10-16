@@ -28,6 +28,7 @@ MID_STREAM_CONTINUATION_MARKER: Final = _ContinuationMarker()
 _STR_KEYED_DICT_ADAPTER: Final = TypeAdapter(dict[str, object])
 _NO_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
 _UNCONSTRAINED_RESPONSE_FORMAT: Final[Mapping[str, str]] = MappingProxyType({"type": "text"})
+_OUTPUT_CEILING_KEYS: Final = ("max_tokens", "max_completion_tokens")
 
 
 def _str_keyed(value: object) -> Mapping[str, object]:
@@ -117,11 +118,34 @@ def _resendable_whitespace(prefill: str) -> str:
     return prefill[len(prefill.rstrip()) :] if prefill.strip() else ""
 
 
-def continued_text(prefill_message: Mapping[str, object], generated_content: str) -> str:
+def continued_text(prefill_message: Mapping[str, object], generated_content: str) -> str | None:
     prefill: Final = _prefill_text(prefill_message)
+    if generated_content and len(generated_content) < len(prefill) and prefill.startswith(generated_content):
+        return None
     echo: Final = len(prefill) if prefill and generated_content.startswith(prefill) else 0
     after_echo: Final = generated_content[echo:]
     return after_echo[len(commonprefix((after_echo, _resendable_whitespace(prefill)))) :]
+
+
+def _reduced_ceilings(params: Mapping[str, object], emitted_tokens: int) -> Mapping[str, int]:
+    return MappingProxyType(
+        {key: value - emitted_tokens for key in _OUTPUT_CEILING_KEYS if isinstance(value := params.get(key), int)}
+    )
+
+
+def continuation_output_ceilings(
+    request_kwargs: Mapping[str, object], emitted_tokens: int
+) -> Mapping[str, object] | None:
+    """The caller's output ceilings, top-level and in extra_body, minus the tokens already emitted, or None once
+    nothing is left."""
+    extra_body: Final = _str_keyed(request_kwargs.get("extra_body"))
+    top_level: Final = _reduced_ceilings(request_kwargs, emitted_tokens)
+    in_extra_body: Final = _reduced_ceilings(extra_body, emitted_tokens)
+    if any(ceiling <= 0 for ceiling in (*top_level.values(), *in_extra_body.values())):
+        return None
+    if not in_extra_body:
+        return top_level
+    return MappingProxyType({**top_level, "extra_body": {**extra_body, **in_extra_body}})
 
 
 def _with_first_delta(chunk: ModelResponseStream, update: Mapping[str, object]) -> ModelResponseStream:
@@ -168,7 +192,8 @@ class ContinuationOutput:
     """Splices a fallback's continuation onto the stream the client already received. Drops a leading echo of the
     prefill, since some providers (Mistral) return the prefix inside the completion, and the prefill's trailing
     whitespace sent again by a provider that strips it (Anthropic), keeps the primary's chunk id, created time and single role delta, and
-    runs litellm.post_call_rules over the joined text, since each stream wrapper only sees its own fragment."""
+    runs litellm.post_call_rules over the joined text, since each stream wrapper only sees its own fragment. A
+    continuation nested in another leaves the rules to the outermost one, the only one holding the whole text."""
 
     def __init__(
         self,
@@ -176,8 +201,10 @@ class ContinuationOutput:
         prefill_message: Mapping[str, object],
         model: str,
         primary_response: object,
+        checks_post_call_rules: bool = True,
     ) -> None:
         self._text = emitted_text
+        self._checks_post_call_rules: Final = checks_post_call_rules
         self._prefill_text: Final = _prefill_text(prefill_message)
         self._model: Final = model
         self._identity: Final = _stream_identity(primary_response)
@@ -229,7 +256,7 @@ class ContinuationOutput:
         return _without_leading_text(chunk, matched)
 
     def _observed(self, chunks: tuple[ModelResponseStream, ...]) -> tuple[ModelResponseStream, ...]:
-        if not litellm.post_call_rules:
+        if not self._checks_post_call_rules or not litellm.post_call_rules:
             return chunks
         for chunk in chunks:
             self._text += _delta_text(chunk)

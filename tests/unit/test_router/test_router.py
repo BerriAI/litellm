@@ -2935,10 +2935,12 @@ async def test_acompletion_streaming_iterator():
     print("\n=== All tests passed! ===")
 
 
-def _make_midstream_source(error, chunks=None):
+def _make_midstream_source(error, chunks=None, first_chunk=None):
     from unittest.mock import MagicMock
 
-    first_chunk = MagicMock(choices=[MagicMock(delta=MagicMock(content="Hello"))])
+    opening_chunk = (
+        first_chunk if first_chunk is not None else MagicMock(choices=[MagicMock(delta=MagicMock(content="Hello"))])
+    )
 
     class _Source:
         def __init__(self):
@@ -2954,7 +2956,7 @@ def _make_midstream_source(error, chunks=None):
         async def __anext__(self):
             if self.index == 0:
                 self.index += 1
-                return first_chunk
+                return opening_chunk
             raise error
 
         async def wait_for_failure_logging(self, timeout):
@@ -3073,6 +3075,59 @@ async def test_acompletion_streaming_iterator_continuation_runs_post_call_rules_
                     pass
         else:
             assert fallback_chunk in [chunk async for chunk in result]
+
+
+@pytest.mark.asyncio
+async def test_a_second_cut_runs_post_call_rules_only_on_the_text_the_caller_received(monkeypatch):
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.router_utils.pre_call_checks.continuation_prefill_check import (
+        MID_STREAM_CONTINUATION_KWARG,
+        MID_STREAM_CONTINUATION_MARKER,
+    )
+
+    checked_texts = []
+    monkeypatch.setattr(litellm, "post_call_rules", [lambda output: checked_texts.append(output) is None])
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "gpt-4", "litellm_params": {"model": "gpt-4", "api_key": "k1"}},
+            {"model_name": "backup", "litellm_params": {"model": "anthropic/claude-3-opus-20240229", "api_key": "k2"}},
+        ],
+        fallbacks=[{"gpt-4": ["backup"]}],
+        enable_mid_stream_fallback_continuation=True,
+    )
+
+    def cut(generated_content):
+        return MidStreamFallbackError(
+            message="Connection lost", model="gpt-4", llm_provider="openai", generated_content=generated_content,
+            is_pre_first_chunk=False, emitted_disqualifying_content=False,
+        )
+
+    messages = [{"role": "user", "content": "Hi"}]
+    middle_leg = await router._acompletion_streaming_iterator(
+        model_response=_make_midstream_source(
+            cut(" there"),
+            first_chunk=litellm.ModelResponseStream(choices=[{"index": 0, "delta": {"content": " there"}}]),
+        ),
+        messages=[*messages, {"role": "assistant", "content": "Hello", "prefix": True}],
+        initial_kwargs={"model": "gpt-4", "stream": True, MID_STREAM_CONTINUATION_KWARG: MID_STREAM_CONTINUATION_MARKER},
+    )
+    backup_leg = _FakeFallbackStream(
+        litellm.ModelResponseStream(choices=[{"index": 0, "delta": {"content": " friend"}}])
+    )
+
+    with patch.object(
+        router, "async_function_with_fallbacks_common_utils", new=AsyncMock(side_effect=[middle_leg, backup_leg])
+    ):
+        result = await router._acompletion_streaming_iterator(
+            model_response=_make_midstream_source(cut("Hello")),
+            messages=messages,
+            initial_kwargs={"model": "gpt-4", "stream": True},
+        )
+        _ = [chunk async for chunk in result]
+
+    assert checked_texts == ["Hello there", "Hello there friend"]
 
 
 @pytest.mark.asyncio
@@ -3977,6 +4032,20 @@ def test_build_completion_continuation_input_does_not_double_an_echoed_prefill(p
 
 
 @pytest.mark.parametrize(
+    "cut_partial,expected_content",
+    [("Hel", None), ("Hello", "Hello"), ("Hello wor", "Hello wor")],
+    ids=["cut_mid_echo", "cut_after_a_full_echo", "cut_after_new_text"],
+)
+def test_build_completion_continuation_input_declines_a_cut_in_the_middle_of_a_prefill_echo(
+    cut_partial, expected_content
+):
+    messages = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "Hello", "prefix": True}]
+    built = litellm.Router._build_completion_continuation_input(messages, cut_partial)
+    expected = None if expected_content is None else [messages[0], {**messages[1], "content": expected_content}]
+    assert built == expected
+
+
+@pytest.mark.parametrize(
     "assistant_content", ["Earlier answer.", [{"type": "text", "text": "Earlier answer."}]], ids=["string", "blocks"]
 )
 def test_build_completion_continuation_input_declines_a_trailing_plain_assistant_turn(assistant_content):
@@ -4038,26 +4107,6 @@ def test_build_completion_continuation_input_keeps_structured_assistant_content(
         litellm.Router._build_completion_continuation_input([{"role": "assistant", "content": 42, "prefix": True}], "x")
         is None
     )
-
-
-def test_continuation_output_ceilings_reduces_by_emitted_tokens():
-    """A continuation must complete within the caller's original allowance, so each
-    output ceiling is reduced by the tokens already emitted."""
-    assert litellm.Router._continuation_output_ceilings({"max_tokens": 100}, 30) == {"max_tokens": 70}
-    assert litellm.Router._continuation_output_ceilings({"max_tokens": 100, "max_completion_tokens": 40}, 25) == {
-        "max_tokens": 75,
-        "max_completion_tokens": 15,
-    }
-    # no ceiling configured -> nothing to reduce, continuation proceeds as before
-    assert litellm.Router._continuation_output_ceilings({}, 50) == {}
-
-
-def test_continuation_output_ceilings_none_when_allowance_exhausted():
-    """When the emitted tokens already meet or exceed a ceiling, there is no budget
-    left to continue, so the helper signals a decline rather than a fresh allowance."""
-    assert litellm.Router._continuation_output_ceilings({"max_tokens": 20}, 20) is None
-    assert litellm.Router._continuation_output_ceilings({"max_tokens": 20}, 25) is None
-    assert litellm.Router._continuation_output_ceilings({"max_tokens": 100, "max_completion_tokens": 10}, 10) is None
 
 
 def test_mid_stream_continuation_eligible_allows_text_response_format():

@@ -6,6 +6,7 @@ from litellm.router_utils.pre_call_checks.continuation_prefill_check import (
     MID_STREAM_CONTINUATION_MARKER,
     ContinuationOutput,
     ContinuationPrefillDeploymentCheck,
+    continuation_output_ceilings,
     deployment_supports_prefill,
 )
 
@@ -250,3 +251,38 @@ async def test_continuation_output_drops_only_whitespace_the_client_already_has(
     released = [chunk async for chunk in output.splice(fallback_stream())]
 
     assert tuple(chunk.choices[0].delta.content for chunk in released) == expected_texts
+
+
+@pytest.mark.parametrize(
+    "request_kwargs,expected",
+    [
+        ({"max_tokens": 100}, {"max_tokens": 70}),
+        ({"max_tokens": 100, "max_completion_tokens": 40}, {"max_tokens": 70, "max_completion_tokens": 10}),
+        ({}, {}),
+        (
+            {"max_tokens": 100, "extra_body": {"max_tokens": 50, "top_k": 3}},
+            {"max_tokens": 70, "extra_body": {"max_tokens": 20, "top_k": 3}},
+        ),
+        ({"extra_body": {"max_completion_tokens": 45}}, {"extra_body": {"max_completion_tokens": 15}}),
+        ({"extra_body": {"top_k": 3}}, {}),
+    ],
+    ids=["max_tokens", "both_ceilings", "no_ceiling", "extra_body_max_tokens", "extra_body_only", "extra_body_no_ceiling"],
+)
+def test_continuation_output_ceilings_take_the_emitted_tokens_off_every_ceiling_the_request_sends(
+    request_kwargs, expected
+):
+    assert continuation_output_ceilings(request_kwargs, 30) == expected
+
+
+@pytest.mark.parametrize(
+    "request_kwargs",
+    [
+        {"max_tokens": 30},
+        {"max_tokens": 20},
+        {"max_tokens": 100, "max_completion_tokens": 30},
+        {"max_tokens": 100, "extra_body": {"max_tokens": 30}},
+    ],
+    ids=["max_tokens_met", "max_tokens_exceeded", "one_of_two_met", "extra_body_met"],
+)
+def test_continuation_output_ceilings_decline_once_a_ceiling_has_no_tokens_left(request_kwargs):
+    assert continuation_output_ceilings(request_kwargs, 30) is None
