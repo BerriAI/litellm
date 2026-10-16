@@ -69,7 +69,7 @@ def responses_api_bridge_check(
         return model_info, model
 
     try:
-        model_info = cast(
+        model_info = cast(  # cast-ok: provider metadata helper returns the bridge model-info mapping
             dict,
             get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider),
         )

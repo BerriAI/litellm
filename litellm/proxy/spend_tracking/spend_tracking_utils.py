@@ -43,8 +43,12 @@ from litellm.litellm_core_utils.core_helpers import (
     proxy_stamped_used_client_oauth_token,
     reconstruct_model_name,
 )
-from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
-from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call
+from litellm.litellm_core_utils.get_llm_provider_logic import (
+    declared_authenticating_provider,
+)
+from litellm.litellm_core_utils.internal_call_metadata import (
+    is_unbilled_non_inference_call,
+)
 from litellm.litellm_core_utils.litellm_logging import (
     coerce_model_access_groups,
     is_valid_sha256_hash,
@@ -310,16 +314,20 @@ def _cost_row_request_id_suffix(call_type: str, metadata: Mapping[str, object]) 
 
 
 def get_spend_logs_id(
-    call_type: str, response_obj: dict, kwargs: dict, metadata: Mapping[str, object] = EMPTY_MAPPING
+    call_type: str,
+    response_obj: Mapping[str, object],
+    kwargs: Mapping[str, object],
+    metadata: Mapping[str, object] = EMPTY_MAPPING,
 ) -> str | None:
     standard_logging_payload = kwargs.get("standard_logging_object")
     candidate_ids: Final = (
         response_obj.get("id"),
-        standard_logging_payload.get("id") if isinstance(standard_logging_payload, dict) else None,
+        standard_logging_payload.get("id") if isinstance(standard_logging_payload, Mapping) else None,
         kwargs.get("litellm_call_id"),
     )
     resolved_id: Final = next(
-        (candidate for candidate in candidate_ids if isinstance(candidate, str) and candidate), None
+        (candidate for candidate in candidate_ids if isinstance(candidate, str) and candidate),
+        None,
     )
     if resolved_id is None:
         return None
@@ -400,7 +408,9 @@ def _extract_usage_for_ocr_call(response_obj: object, response_obj_dict: dict) -
         return {}
 
 
-def get_request_model_access_groups(kwargs: Mapping[str, object] | None) -> tuple[str, ...]:
+def get_request_model_access_groups(
+    kwargs: Mapping[str, object] | None,
+) -> tuple[str, ...]:
     """Model access groups that authorized this request, as stamped onto request metadata at auth time."""
     if kwargs is None:
         return ()
@@ -435,7 +445,8 @@ def _deployment_provider(deployment: DeploymentTypedDict) -> str | None:
         return declared
     try:
         _, provider, _, _ = litellm.get_llm_provider(
-            model=litellm_params.model, custom_llm_provider=litellm_params.custom_llm_provider
+            model=litellm_params.model,
+            custom_llm_provider=litellm_params.custom_llm_provider,
         )
     except litellm.exceptions.BadRequestError:
         return None
@@ -506,7 +517,9 @@ def _scrub_raw_model_split_by_truncation(text: str, spellings: tuple[str, ...]) 
 
 def _scrub_raw_model_from_error_text(text: str, spellings: tuple[str, ...]) -> str:
     whole_occurrences_scrubbed: Final = reduce(
-        lambda scrubbed, spelling: scrubbed.replace(spelling, UNKNOWN_MODEL_SPEND_LOG_MODEL), spellings, text
+        lambda scrubbed, spelling: scrubbed.replace(spelling, UNKNOWN_MODEL_SPEND_LOG_MODEL),
+        spellings,
+        text,
     )
     return _scrub_raw_model_split_by_truncation(whole_occurrences_scrubbed, spellings)
 
@@ -544,7 +557,10 @@ def get_logging_payload(
     elif not isinstance(response_obj, BaseModel) and not isinstance(response_obj, dict):
         response_obj = {"result": str(response_obj)}
     # standardize this function to be used across, s3, dynamoDB, langfuse logging
-    litellm_params: Final = kwargs.get("litellm_params", {})
+    litellm_params_value: Final[object] = kwargs.get("litellm_params", {})
+    litellm_params: Final[Mapping[str, object]] = (
+        litellm_params_value if isinstance(litellm_params_value, Mapping) else EMPTY_MAPPING
+    )
     metadata: Final = get_litellm_metadata_from_kwargs(kwargs)
     completion_start_time: Final = kwargs.get("completion_start_time", end_time)
     call_type: Final = kwargs.get("call_type")
@@ -752,11 +768,12 @@ def get_logging_payload(
             metadata=metadata,
             requested_model=persisted_model_group,
             selected_model=model_name,
-            selected_provider=custom_llm_provider,
+            selected_provider=(custom_llm_provider if isinstance(custom_llm_provider, str) else None),
             router_correlation_id=litellm_call_id,
         ),
         used_client_oauth_token=resolve_used_client_oauth_token(
-            proxy_stamped_used_client_oauth_token(litellm_params.get("metadata"), litellm_params), custom_llm_provider
+            proxy_stamped_used_client_oauth_token(litellm_params.get("metadata"), litellm_params),
+            custom_llm_provider,
         ),
         azure_spillover=azure_spillover(
             response_headers=kwargs.get("response_headers")
@@ -808,7 +825,12 @@ def get_logging_payload(
     elif litellm_params.get("preset_cache_key") is not None:
         cache_key = litellm_params["preset_cache_key"]
     else:
-        cache_key = litellm.cache.get_cache_key(**kwargs)
+        cache_key = (
+            litellm.cache.get_cache_key(
+                **cast(dict[str, object], kwargs)  # cast-ok: spend-log kwargs are string keyed
+            )
+            or "Cache OFF"
+        )
     if cache_hit is True:
         import time
 
@@ -1477,7 +1499,10 @@ def sanitize_error_information_for_spend_logs(
         return None
 
     persisted: Final = (
-        {**error_information, "error_message": original_exception.spend_log_error_message}
+        {
+            **error_information,
+            "error_message": original_exception.spend_log_error_message,
+        }
         if isinstance(original_exception, ProxyModelNotFoundError)
         else error_information
     )
@@ -1555,7 +1580,9 @@ def _convert_to_json_serializable_dict(obj: object, visited: set[int] | None = N
             visited.remove(obj_id)
 
 
-def _convert_mapping_to_json_serializable(obj: Mapping[str, object]) -> dict[str, object]:
+def _convert_mapping_to_json_serializable(
+    obj: Mapping[str, object],
+) -> Mapping[str, object]:
     converted: Final = _convert_to_json_serializable_dict(obj)
     if isinstance(converted, dict):
         return converted
@@ -1573,7 +1600,10 @@ def _placeholder_stored_request_body_metadata(
         {
             "model_group": persisted_model_group,
             "error_information": _scrub_raw_model_from_error_information(
-                cast(StandardLoggingPayloadErrorInformation, error_information), raw_model
+                cast(  # cast-ok: validated mapping is the logging error-information contract
+                    StandardLoggingPayloadErrorInformation, error_information
+                ),
+                raw_model,
             )
             if isinstance(error_information, Mapping)
             else error_information,
@@ -1657,7 +1687,12 @@ def _masked_ipv6_address(candidate: re.Match[str]) -> str:
     """Masks the candidate when it, or it without a leading label or a trailing port group, is an IPv6 address."""
     text: Final = candidate.group(0)
     unlabelled: Final = text.partition(":")[2]
-    for address in (text, text.rpartition(":")[0], unlabelled, unlabelled.rpartition(":")[0]):
+    for address in (
+        text,
+        text.rpartition(":")[0],
+        unlabelled,
+        unlabelled.rpartition(":")[0],
+    ):
         try:
             ipaddress.IPv6Address(address)
         except ValueError:
@@ -1704,7 +1739,9 @@ def _masked_ip_text(text: str) -> str:
     )
 
 
-def _error_information_without_ip_addresses(error_information: Mapping[object, object]) -> Mapping[object, object]:
+def _error_information_without_ip_addresses(
+    error_information: Mapping[object, object],
+) -> Mapping[object, object]:
     """The error information with every IP address in its error message and traceback masked."""
     return {
         key: _masked_ip_text(value) if key in _SCRUBBED_ERROR_TEXT_FIELDS and isinstance(value, str) else value
@@ -1734,14 +1771,18 @@ def _without_requester_ip_address(value: object, *, headers: bool = False) -> ob
     return value
 
 
-def _request_metadata_without_requester_ip_address(request_body: Mapping[object, object]) -> Mapping[object, object]:
+def _request_metadata_without_requester_ip_address(
+    request_body: Mapping[object, object],
+) -> Mapping[object, object]:
     return {
         key: _without_requester_ip_address(value) if key in _REQUEST_METADATA_KEYS else value
         for key, value in request_body.items()
     }
 
 
-def _stored_request_without_requester_ip_address(request_body: Mapping[object, object]) -> Mapping[object, object]:
+def _stored_request_without_requester_ip_address(
+    request_body: Mapping[object, object],
+) -> Mapping[object, object]:
     """The request body, and the classifier input and originating request a classifier row stores in it, with
     `requester_ip_address` set to null, client-IP forwarding headers dropped and every IP address in the other header
     values and in the error text masked inside their metadata."""

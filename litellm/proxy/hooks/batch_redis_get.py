@@ -4,6 +4,7 @@
 ### [BETA] this is in Beta. And might change.
 
 import traceback
+from collections.abc import Mapping
 from typing import Final, Literal
 
 from fastapi import HTTPException
@@ -93,16 +94,23 @@ class _PROXY_BatchRedisRequests(CustomLogger):
             - return redis cache request
         """
         try:  # never block execution
+            if litellm.cache is None:
+                return None
             cache_key: str | None = None
             if "cache_key" in kwargs:
-                cache_key = kwargs["cache_key"]
-            elif litellm.cache is not None:
+                cache_key = litellm.cache.prepare_explicit_cache_key(  # rebind-ok: normalize explicit caller key
+                    kwargs["cache_key"], **kwargs
+                )
+            else:
                 cache_key = litellm.cache.get_cache_key(
                     *args, **kwargs
                 )  # returns "<cache_key_name>:<hash>" - we pass redis_namespace in async_pre_call_hook. Done to avoid rewriting the async_set_cache logic
 
-            if cache_key is not None and self.in_memory_cache is not None and litellm.cache is not None:
-                cache_control_args: Final = kwargs.get("cache", {})
+            if cache_key is not None and self.in_memory_cache is not None:
+                cache_control_value: Final[object] = kwargs.get("cache", {})
+                cache_control_args: Final[Mapping[str, object]] = (
+                    cache_control_value if isinstance(cache_control_value, Mapping) else {}
+                )
                 max_age: Final = cache_control_args.get("s-max-age", cache_control_args.get("s-maxage", float("inf")))
                 cached_result = self.in_memory_cache.get_cache(cache_key, *args, **kwargs)
                 if cached_result is None:

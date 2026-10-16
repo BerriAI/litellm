@@ -9,6 +9,7 @@ Pins covered:
 from __future__ import annotations
 
 import asyncio
+import importlib
 import json
 import logging
 import os
@@ -26,9 +27,12 @@ import pytest
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 import litellm
-from litellm.proxy._types import CommonProxyErrors, ConfigGeneralSettings
+import litellm.proxy.proxy_server as proxy_server
+from litellm.proxy._types import CommonProxyErrors, ConfigGeneralSettings, UserAPIKeyAuth
+from litellm.proxy.utils import PrismaClient
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.types.router import Deployment, LiteLLM_Params
+from litellm import Router
 from litellm.proxy.proxy_server import (
     ProxyConfig,
     _is_remote_module_url,
@@ -132,6 +136,133 @@ async def test_proxy_config_keeps_database_models_and_deletes_stale_models(
 from tests._master_key import MASTER_KEY
 
 
+def _db_router_model() -> MagicMock:
+    record = MagicMock()
+    record.model_id = "db-id-1"
+    record.model_name = "fake-model"
+    record.litellm_params = {"model": "fake-model"}
+    record.model_info = {"id": "db-id-1"}
+    record.created_by = "default_user_id"
+    record.created_at = None
+    record.updated_at = None
+    record.updated_by = None
+    return record
+
+
+@pytest.mark.asyncio
+async def test_db_router_rebuild_serves_same_proxy_caller_from_cache_and_isolates_callers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A DB router rebuild must cache without crossing authenticated callers."""
+    proxy_config: Final = ProxyConfig()
+    fake_model_list: Final = [
+        {
+            "model_name": "fake-model",
+            "litellm_params": {
+                "model": "openai/fake-model",
+                "api_key": "sk-fake",
+                "mock_response": "cached response",
+            },
+        }
+    ]
+    cache: Final = litellm.Cache()
+    monkeypatch.setattr(litellm, "cache", cache)
+    cache_write_complete: Final = asyncio.Event()
+    original_async_add_cache = cache.async_add_cache
+
+    async def tracked_async_add_cache(*args: object, **kwargs: object) -> object:
+        result = await original_async_add_cache(*args, **kwargs)
+        cache_write_complete.set()
+        return result
+
+    monkeypatch.setattr(cache, "async_add_cache", tracked_async_add_cache)
+    provider_calls: int = 0
+    litellm_main = importlib.import_module("litellm.main")
+    original_mock_completion = litellm_main.mock_completion
+
+    def tracked_mock_completion(*args: object, **kwargs: object) -> object:
+        nonlocal provider_calls
+        provider_calls += 1
+        return original_mock_completion(*args, **kwargs)
+
+    monkeypatch.setattr(litellm_main, "mock_completion", tracked_mock_completion)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-test")
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_model_list", [])
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+
+    async def empty_config() -> Mapping[str, object]:
+        return {}
+
+    async def no_router_settings(_router: Router | None, _prisma: PrismaClient | None) -> None:
+        return None
+
+    await proxy_config._update_llm_router(
+        new_models=[_db_router_model()],
+        proxy_logging_obj=MagicMock(),
+        config_loader=empty_config,
+        model_decryptor=lambda _models: fake_model_list,
+        router_settings_loader=no_router_settings,
+    )
+    router = proxy_server.llm_router
+    assert router is not None
+
+    request: Final = [{"role": "user", "content": "cache canary"}]
+    # Use the proxy-injected authentication object, rather than a
+    # caller-controlled request field, while keeping the request body identical.
+    caller_a: Final = {"user_api_key_auth": UserAPIKeyAuth(token="hash-a", key_alias="caller-a")}
+    caller_b: Final = {"user_api_key_auth": UserAPIKeyAuth(token="hash-b", key_alias="caller-b")}
+    first = await router.acompletion(model="fake-model", messages=request, metadata=caller_a)
+    await cache_write_complete.wait()
+    same_caller = await router.acompletion(model="fake-model", messages=request, metadata=caller_a)
+    assert same_caller.id == first.id
+    assert provider_calls == 1
+
+    other_caller = await router.acompletion(model="fake-model", messages=request, metadata=caller_b)
+    assert other_caller.id != first.id
+    assert provider_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_db_router_rebuild_cache_disabled_does_not_reuse_responses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A DB router must preserve uncached behavior when the global cache is absent."""
+    proxy_config: Final = ProxyConfig()
+    fake_model_list: Final = [
+        {
+            "model_name": "fake-model",
+            "litellm_params": {"model": "openai/fake-model", "api_key": "sk-fake", "mock_response": "uncached"},
+        }
+    ]
+    monkeypatch.setattr(litellm, "cache", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-test")
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_model_list", [])
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+
+    async def empty_config() -> Mapping[str, object]:
+        return {}
+
+    async def no_router_settings(_router: Router | None, _prisma: PrismaClient | None) -> None:
+        return None
+
+    await proxy_config._update_llm_router(
+        new_models=[_db_router_model()],
+        proxy_logging_obj=MagicMock(),
+        config_loader=empty_config,
+        model_decryptor=lambda _models: fake_model_list,
+        router_settings_loader=no_router_settings,
+    )
+    router = proxy_server.llm_router
+    assert router is not None
+    request: Final = [{"role": "user", "content": "uncached canary"}]
+    first = await router.acompletion(model="fake-model", messages=request)
+    second = await router.acompletion(model="fake-model", messages=request)
+    assert router.cache_responses is False
+    assert second.id != first.id
+
+
 @pytest.mark.asyncio
 async def test_proxy_config_loads_lens_store_from_yaml(tmp_path, monkeypatch) -> None:
     config_file: Final = tmp_path / "tracing.yaml"
@@ -142,7 +273,6 @@ async def test_proxy_config_loads_lens_store_from_yaml(tmp_path, monkeypatch) ->
 
     _, _, settings = await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
     assert is_lens_tracing_enabled(settings["tracing"], {}) is True
-
 
 
 @pytest.mark.asyncio
@@ -170,7 +300,9 @@ async def test_tracing_config_automatically_exports_spend_without_a_storage_depe
     outcome: Final = pytest.raises(RuntimeError, match="shutdown failure") if shutdown_error else nullcontext()
     with outcome:
         async with manage_tracing(enabled=True, client_factory=client):
-            logger: Final = next(callback for callback in litellm._async_success_callback if isinstance(callback, LensExporter))
+            logger: Final = next(
+                callback for callback in litellm._async_success_callback if isinstance(callback, LensExporter)
+            )
             await logger.async_log_success_event(
                 {"standard_logging_object": {"id": "response-1", "response_cost": 0.25}}, None, None, None
             )
@@ -4897,7 +5029,9 @@ async def test_ProxyConfig__update_config_from_db_keeps_keys_the_config_file_omi
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("ui_settings_already_synced", [False, True])
-async def test_ProxyConfig_add_deployment_continues_after_null_pass_through_endpoints(monkeypatch, ui_settings_already_synced):
+async def test_ProxyConfig_add_deployment_continues_after_null_pass_through_endpoints(
+    monkeypatch, ui_settings_already_synced
+):
     from litellm.proxy import proxy_server
 
     pc = ProxyConfig()
