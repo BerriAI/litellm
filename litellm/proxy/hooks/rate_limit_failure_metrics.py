@@ -49,6 +49,10 @@ class _RateLimiterFailureCounterRegistry:
 _registry: Final[_RateLimiterFailureCounterRegistry] = _RateLimiterFailureCounterRegistry()
 
 
+def get_counter() -> Counter | None:
+    return _registry.get_counter()
+
+
 def increment_rate_limiter_failure_counter(
     limiter_type: str,
     error_type: str,
