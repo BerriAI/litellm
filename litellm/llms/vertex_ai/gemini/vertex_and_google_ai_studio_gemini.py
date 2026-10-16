@@ -11,7 +11,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, Union, cast, get_args
 
 import httpx
-from pydantic import JsonValue
+from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm import verbose_logger
@@ -212,6 +212,9 @@ _GEMINI_SPEECH_CONFIG_KEY_MAP: Final[Mapping[str, str]] = MappingProxyType(
 )
 
 
+_SPEECH_CONFIG_ITEMS: Final = TypeAdapter(list[object])
+
+
 def _normalize_gemini_speech_config_item(value: Mapping[str, object]) -> Mapping[str, object]:
     normalized: Final[dict[str, object]] = {}  # mutable-ok: iterative traversal fills nested output without recursion
 
@@ -230,10 +233,12 @@ def _normalize_gemini_speech_config_item(value: Mapping[str, object]) -> Mapping
                 normalized_key = len(target)
 
             child: object
-            if isinstance(item, Mapping):
-                child = {}
+            if (mapping_item := as_str_mapping(item)) is not None:
+                pending.append((child_mapping := dict[str, object](), mapping_item))
+                child = child_mapping
             elif isinstance(item, list):
-                child = []
+                pending.append((child_items := list[object](), _SPEECH_CONFIG_ITEMS.validate_python(item)))
+                child = child_items
             else:
                 child = item
 
@@ -243,8 +248,6 @@ def _normalize_gemini_speech_config_item(value: Mapping[str, object]) -> Mapping
             else:
                 target.append(child)
 
-            if isinstance(child, (dict, list)) and isinstance(item, (Mapping, list)):
-                pending.append((child, item))
     return normalized
 
 
