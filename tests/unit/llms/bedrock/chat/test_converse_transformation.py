@@ -4885,8 +4885,8 @@ def _converse_request_for_json_schema(model: str, stream: bool) -> tuple[dict, d
 def test_json_schema_shape_follows_each_inference_profile_own_native_output_flag(
     set_native_structured_output, native_profile, tool_profile, stream
 ):
-    set_native_structured_output(native_profile, True)
-    set_native_structured_output(tool_profile, False)
+    set_native_structured_output(native_profile, "bedrock")
+    set_native_structured_output(tool_profile, None)
 
     native_params, native_request = _converse_request_for_json_schema(model=native_profile, stream=stream)
     tool_params, tool_request = _converse_request_for_json_schema(model=tool_profile, stream=stream)
@@ -4902,7 +4902,7 @@ def test_json_schema_shape_follows_each_inference_profile_own_native_output_flag
 
 def test_adaptive_thinking_is_kept_next_to_json_schema_on_a_native_output_profile(set_native_structured_output):
     model: Final = "us.anthropic.claude-opus-5"
-    set_native_structured_output(model, True)
+    set_native_structured_output(model, "bedrock")
     config: Final = AmazonConverseConfig()
     thinking: Final = {"type": "adaptive", "display": "summarized"}
 
@@ -4934,7 +4934,6 @@ CONSTRAINED_PERSON_SCHEMA: Final = {
         "contact": {"oneOf": [{"type": "string"}, {"type": "integer"}]},
     },
     "required": ["age", "tags", "contact"],
-    "additionalProperties": True,
 }
 RECURSIVE_TREE_SCHEMA: Final = {
     "type": "object",
@@ -4947,6 +4946,11 @@ RECURSIVE_TREE_SCHEMA: Final = {
             "required": ["name", "children"],
         }
     },
+}
+OPEN_OBJECT_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"counts": {"type": "object", "additionalProperties": {"type": "integer"}}},
+    "required": ["counts"],
 }
 
 
@@ -4975,9 +4979,12 @@ def _converse_request_for_schema(model: str, schema: dict) -> dict:
     )
 
 
-def test_native_output_schema_drops_keywords_bedrock_rejects_and_closes_objects(set_native_structured_output):
+@pytest.mark.parametrize("native_key", ["legacy", "bedrock"])
+def test_native_output_schema_drops_keywords_bedrock_rejects_and_closes_objects(
+    set_native_structured_output, native_key
+):
     model: Final = "us.anthropic.claude-opus-4-8"
-    set_native_structured_output(model, True)
+    set_native_structured_output(model, native_key)
 
     request: Final = _converse_request_for_schema(model, CONSTRAINED_PERSON_SCHEMA)
 
@@ -4988,16 +4995,57 @@ def test_native_output_schema_drops_keywords_bedrock_rejects_and_closes_objects(
     assert "minimum value: 0" in sent["properties"]["age"]["description"]
 
 
-def test_recursive_schema_on_a_native_output_profile_keeps_the_tool_path(set_native_structured_output):
+@pytest.mark.parametrize(
+    ("schema", "kept_keyword"),
+    [(RECURSIVE_TREE_SCHEMA, "$ref"), (OPEN_OBJECT_SCHEMA, "additionalProperties")],
+    ids=["recursive", "open-object"],
+)
+def test_schema_native_output_cannot_hold_keeps_the_tool_path_on_a_bedrock_native_profile(
+    set_native_structured_output, schema, kept_keyword
+):
     model: Final = "us.anthropic.claude-opus-4-8"
-    set_native_structured_output(model, True)
+    set_native_structured_output(model, "bedrock")
 
-    request: Final = _converse_request_for_schema(model, RECURSIVE_TREE_SCHEMA)
+    request: Final = _converse_request_for_schema(model, schema)
 
     assert "outputConfig" not in request
     tool_spec: Final = request["toolConfig"]["tools"][0]["toolSpec"]
     assert tool_spec["name"] == "json_tool_call"
-    assert "$ref" in _schema_keys(tool_spec["inputSchema"]["json"])
+    assert kept_keyword in _schema_keys(tool_spec["inputSchema"]["json"])
+
+
+@pytest.mark.parametrize("schema", [RECURSIVE_TREE_SCHEMA, OPEN_OBJECT_SCHEMA], ids=["recursive", "open-object"])
+def test_schema_native_output_cannot_hold_still_goes_native_on_a_legacy_native_profile(
+    set_native_structured_output, schema
+):
+    model: Final = "us.anthropic.claude-sonnet-4-6"
+    set_native_structured_output(model, "legacy")
+
+    request: Final = _converse_request_for_schema(model, schema)
+
+    sent: Final = json.loads(request["outputConfig"]["textFormat"]["structure"]["jsonSchema"]["schema"])
+    assert sent["properties"] == schema["properties"]
+    assert "toolConfig" not in request
+
+
+@pytest.mark.parametrize(
+    ("native_key", "forwarded"), [("legacy", True), ("bedrock", False)], ids=["legacy-key", "bedrock-key"]
+)
+def test_recursive_output_config_format_follows_the_profile_native_key(
+    set_native_structured_output, native_key, forwarded
+):
+    model: Final = "us.anthropic.claude-opus-4-8"
+    set_native_structured_output(model, native_key)
+
+    request: Final = AmazonConverseConfig()._transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "Fill in a plausible example."}],
+        optional_params={"output_config": {"format": {"type": "json_schema", "schema": RECURSIVE_TREE_SCHEMA}}},
+        litellm_params={},
+        headers={},
+    )
+
+    assert ("outputConfig" in request) is forwarded
 
 
 def test_sonnet_4_6_json_schema_still_uses_native_output_config(monkeypatch):
@@ -8106,7 +8154,7 @@ def test_response_format_avoids_native_and_forced_tool_choice_on_fable_5_1_conve
     """Regression: Bedrock rejects forced tool_choice for Fable 5.1, so on a profile
     without native structured output response_format must map to a tool without a
     forced tool_choice."""
-    set_native_structured_output(model, False)
+    set_native_structured_output(model, None)
     config = AmazonConverseConfig()
 
     result = config.map_openai_params(

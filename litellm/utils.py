@@ -6463,6 +6463,9 @@ def get_model_info_helper(
                 supports_embedding_image_input=_model_info.get("supports_embedding_image_input", None),
                 supports_native_streaming=_model_info.get("supports_native_streaming", None),
                 supports_native_structured_output=_model_info.get("supports_native_structured_output", None),
+                supports_bedrock_native_structured_output=_model_info.get(
+                    "supports_bedrock_native_structured_output", None
+                ),
                 supports_web_search=_model_info.get("supports_web_search", None),
                 supports_url_context=_model_info.get("supports_url_context", None),
                 supports_reasoning=_model_info.get("supports_reasoning", None),

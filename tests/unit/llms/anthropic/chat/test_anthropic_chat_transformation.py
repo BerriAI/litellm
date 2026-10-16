@@ -9385,7 +9385,7 @@ def test_map_openai_params_judges_tool_search_on_the_real_model_when_tool_based_
 ):
     from litellm.responses.litellm_completion_transformation.tool_search import anthropic_tool_search_chat_tool
 
-    set_native_structured_output(model_cost_key, False)
+    set_native_structured_output(model_cost_key, None)
     assert litellm.supports_tool_search(model, provider)
     mapped: Final = config.map_openai_params(
         non_default_params={

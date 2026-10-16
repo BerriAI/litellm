@@ -27,6 +27,7 @@ from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     DEFS_MAX_INLINED_BYTES,
     sanitize_input_schema_for_anthropic,
+    schema_has_open_object,
     schema_has_ref,
     unpack_defs,
 )
@@ -1633,23 +1634,31 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         return json_schema
 
     @staticmethod
-    def native_output_schema(json_schema: Mapping[str, object]) -> Mapping[str, object] | None:
+    def _defs_unpacked(json_schema: Mapping[str, object]) -> Mapping[str, object]:
         unpacked: Final = copy.deepcopy(dict(json_schema))
         defs: Final = unpacked.pop("$defs", unpacked.pop("definitions", None))
         if isinstance(defs, dict) and defs:
             unpack_defs(unpacked, defs, max_inlined_bytes=DEFS_MAX_INLINED_BYTES)
-        if schema_has_ref(unpacked):
+        return unpacked
+
+    @staticmethod
+    def native_output_schema(json_schema: Mapping[str, object]) -> Mapping[str, object] | None:
+        unpacked: Final = AnthropicConfig._defs_unpacked(json_schema)
+        if schema_has_ref(unpacked) or schema_has_open_object(unpacked):
             return None
-        return AnthropicConfig.filter_anthropic_output_schema(unpacked)
+        return AnthropicConfig.filter_anthropic_output_schema(dict(unpacked))
+
+    def uses_native_structured_output_for_schema(self, model: str, json_schema: Mapping[str, object] | None) -> bool:
+        return self.uses_native_structured_output(model)
 
     def map_response_format_to_anthropic_output_format(self, value: dict | None) -> AnthropicOutputSchema | None:
         json_schema: Final = self._extract_json_schema_from_response_format(value)
         if json_schema is None:
             return None
-        native_schema: Final = self.native_output_schema(json_schema)
-        if native_schema is None:
-            return None
-        return AnthropicOutputSchema(type="json_schema", schema=dict(native_schema))
+        return AnthropicOutputSchema(
+            type="json_schema",
+            schema=self.filter_anthropic_output_schema(dict(self._defs_unpacked(json_schema))),
+        )
 
     def map_response_format_to_anthropic_tool(
         self, value: dict | None, optional_params: dict, is_thinking_enabled: bool
@@ -1816,17 +1825,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     output_key=param,
                 )
             elif param == "response_format" and isinstance(value, dict):
-                _output_format = (
-                    self.map_response_format_to_anthropic_output_format(value)
-                    if self.uses_native_structured_output(model)
-                    else None
-                )
-                if _output_format is not None:
-                    optional_params["output_format"] = _output_format
-                elif (
-                    not self.uses_native_structured_output(model)
-                    or self._extract_json_schema_from_response_format(value) is not None
+                if self.uses_native_structured_output_for_schema(
+                    model, self._extract_json_schema_from_response_format(value)
                 ):
+                    _output_format = self.map_response_format_to_anthropic_output_format(value)
+                    if _output_format is not None:
+                        optional_params["output_format"] = _output_format
+                else:
                     _tool = self.map_response_format_to_anthropic_tool(value, optional_params, is_thinking_enabled)
                     if _tool is None:
                         continue

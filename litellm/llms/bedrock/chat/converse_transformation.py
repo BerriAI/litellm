@@ -58,6 +58,8 @@ from litellm.llms.bedrock.chat.tool_result_images import place_tool_result_image
 from litellm.llms.bedrock.common_utils import (
     bedrock_model_supports_regex_lookaround,
     bedrock_native_output_format,
+    bedrock_native_output_schema,
+    bedrock_supports_native_structured_output,
     bedrock_supports_tool_search,
 )
 from litellm.llms.bedrock.request_metadata import (
@@ -946,14 +948,11 @@ class AmazonConverseConfig(BaseConfig):
     def _supports_native_structured_outputs(model: str, custom_llm_provider: str | None = None) -> bool:
         """Check if the Bedrock model supports native structured outputs (outputConfig.textFormat).
 
-        Delegates to the standard ``supports_native_structured_output`` utility
-        which looks up the flag in ``litellm.model_cost`` via
-        ``_get_model_info_helper``.
+        Reads ``supports_native_structured_output`` or
+        ``supports_bedrock_native_structured_output`` from ``litellm.model_cost``.
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/structured-output.html
         """
-        from litellm.utils import supports_native_structured_output
-
-        return supports_native_structured_output(model=model, custom_llm_provider=custom_llm_provider)
+        return bedrock_supports_native_structured_output(model, custom_llm_provider or "bedrock_converse")
 
     @staticmethod
     def _add_additional_properties_to_schema(schema: dict) -> dict:
@@ -991,20 +990,23 @@ class AmazonConverseConfig(BaseConfig):
 
         return result
 
-    @staticmethod
-    def _native_output_schema(model: str, json_schema: Mapping[str, object]) -> Mapping[str, object] | None:
+    def _native_output_schema(self, model: str, json_schema: Mapping[str, object]) -> Mapping[str, object] | None:
+        provider: Final = self.custom_llm_provider or "bedrock_converse"
         if BedrockModelInfo.get_base_model(model).startswith("anthropic"):
-            return AnthropicConfig.native_output_schema(json_schema)
-        return json_schema
+            return bedrock_native_output_schema(model, json_schema, provider)
+        return json_schema if self._supports_native_structured_outputs(model, provider) else None
 
-    @staticmethod
-    def _output_config_for_anthropic_format(output_config_format: Mapping[str, object]) -> OutputConfigBlock | None:
-        native_format: Final = bedrock_native_output_format(output_config_format)
+    def _output_config_for_anthropic_format(
+        self, model: str, output_config_format: Mapping[str, object]
+    ) -> OutputConfigBlock | None:
+        native_format: Final = bedrock_native_output_format(
+            model, output_config_format, self.custom_llm_provider or "bedrock_converse"
+        )
         if native_format is None:
             return None
         schema, name, description = (native_format.get(key) for key in ("schema", "name", "description"))
         return AmazonConverseConfig._create_output_config_for_response_format(
-            json_schema=dict(schema) if isinstance(schema, Mapping) else None,
+            json_schema={**schema} if isinstance(schema, Mapping) else None,
             name=name if isinstance(name, str) else None,
             description=description if isinstance(description, str) else None,
         )
@@ -1318,11 +1320,7 @@ class AmazonConverseConfig(BaseConfig):
         if "type" in value and value["type"] == "text":
             return optional_params
 
-        native_schema: Final = (
-            self._native_output_schema(model, json_schema)
-            if json_schema is not None and self._supports_native_structured_outputs(model, self.custom_llm_provider)
-            else None
-        )
+        native_schema: Final = self._native_output_schema(model, json_schema) if json_schema is not None else None
         if native_schema is not None:
             # Use Bedrock's native structured outputs API (outputConfig.textFormat)
             # No synthetic tool injection, no fake_stream needed.
@@ -1714,16 +1712,15 @@ class AmazonConverseConfig(BaseConfig):
             and output_config_format is not None
             and output_config_format.get("type") == "json_schema"
             and base_model.startswith("anthropic")
-            and self._supports_native_structured_outputs(model, self.custom_llm_provider)
         ):
-            output_config = self._output_config_for_anthropic_format(output_config_format)
+            output_config = self._output_config_for_anthropic_format(model, output_config_format)
         if output_config is None and output_config_format is not None:
             litellm.verbose_logger.warning(
                 "Bedrock Converse: dropping `output_config.format` for model=%s — "
-                "model does not advertise `supports_native_structured_output` in "
-                "model_prices_and_context_window.json, or the schema has a recursive "
-                "or unresolved `$ref`. The schema will not be enforced; pass "
-                "`response_format` to use the synthetic tool-call fallback.",
+                "model does not take native structured output for this schema per "
+                "model_prices_and_context_window.json. The schema will not be "
+                "enforced; pass `response_format` to use the synthetic tool-call "
+                "fallback.",
                 model,
             )
 

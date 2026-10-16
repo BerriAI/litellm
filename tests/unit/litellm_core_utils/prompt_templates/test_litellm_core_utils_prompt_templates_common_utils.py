@@ -29,6 +29,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     parse_tool_call_arguments,
     responses_reasoning_items_from_thinking_blocks,
     salvage_concatenated_tool_arguments,
+    schema_has_open_object,
     split_concatenated_json_objects,
     strip_encrypted_reasoning_from_messages,
     strip_litellm_response_only_fields,
@@ -2362,3 +2363,23 @@ def test_strip_litellm_response_only_fields_drops_nested_tool_call_provider_fiel
     assert "provider_specific_fields" not in function
     assert function["name"] == "get_weather"
     assert function["arguments"] == '{"city": "Paris"}'
+
+
+@pytest.mark.parametrize(
+    ("schema", "is_open"),
+    [
+        ({"type": "object", "properties": {"a": {"type": "string"}}}, False),
+        ({"type": "object", "properties": {}}, False),
+        ({"type": "object", "additionalProperties": False}, False),
+        ({"type": "string"}, False),
+        ({"type": "object"}, True),
+        ({"type": ["object", "null"]}, True),
+        ({"type": "object", "properties": {"a": {"type": "string"}}, "additionalProperties": True}, True),
+        ({"type": "object", "additionalProperties": {"type": "integer"}}, True),
+        ({"type": "object", "properties": {}, "patternProperties": {"^x": {"type": "string"}}}, True),
+        ({"type": "object", "properties": {"inner": {"anyOf": [{"type": "object"}, {"type": "null"}]}}}, True),
+        ({"type": "array", "items": {"type": "object", "additionalProperties": {"type": "string"}}}, True),
+    ],
+)
+def test_schema_has_open_object_flags_any_node_that_accepts_unlisted_keys(schema, is_open):
+    assert schema_has_open_object(schema) is is_open

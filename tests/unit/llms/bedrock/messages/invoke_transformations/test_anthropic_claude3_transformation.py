@@ -1099,7 +1099,7 @@ def test_bedrock_messages_converts_output_config_format_to_inline_schema():
 
     with patch(
         "litellm.llms.bedrock.common_utils._bedrock_model_supports",
-        side_effect=lambda _model, key: key == "supports_output_config",
+        side_effect=lambda _model, key, *_: key == "supports_output_config",
     ):
         result = cfg.transform_anthropic_messages_request(
             model="anthropic.claude-opus-4-7",
@@ -1171,7 +1171,7 @@ def test_bedrock_messages_does_not_mutate_callers_messages_when_embedding_schema
 
     with patch(
         "litellm.llms.bedrock.common_utils._bedrock_model_supports",
-        side_effect=lambda _model, key: key == "supports_output_config",
+        side_effect=lambda _model, key, *_: key == "supports_output_config",
     ):
         result = cfg.transform_anthropic_messages_request(
             model="anthropic.claude-opus-4-7",
@@ -3168,7 +3168,7 @@ def test_bedrock_messages_inlines_schema_for_a_profile_without_native_output(set
     inline-text path instead of a deterministic 400."""
     from litellm.types.router import GenericLiteLLMParams
 
-    set_native_structured_output("us.anthropic.claude-sonnet-5", False)
+    set_native_structured_output("us.anthropic.claude-sonnet-5", None)
     cfg = AmazonAnthropicClaudeMessagesConfig()
     schema = {
         "type": "object",
@@ -3208,7 +3208,7 @@ def _bedrock_messages_request_with_schema(model: str, schema: dict) -> dict:
 
 def test_bedrock_messages_native_output_drops_schema_keywords_bedrock_rejects(set_native_structured_output):
     model: Final = "us.anthropic.claude-sonnet-5"
-    set_native_structured_output(model, True)
+    set_native_structured_output(model, "bedrock")
     schema: Final = {
         "type": "object",
         "properties": {
@@ -3226,24 +3226,49 @@ def test_bedrock_messages_native_output_drops_schema_keywords_bedrock_rejects(se
     assert sent["additionalProperties"] is False
 
 
-def test_bedrock_messages_recursive_schema_on_a_native_output_profile_is_inlined(set_native_structured_output):
+MESSAGES_TREE_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"root": {"$ref": "#/$defs/Node"}},
+    "$defs": {
+        "Node": {
+            "type": "object",
+            "properties": {"children": {"type": "array", "items": {"$ref": "#/$defs/Node"}}},
+        }
+    },
+}
+MESSAGES_OPEN_OBJECT_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"counts": {"type": "object", "additionalProperties": {"type": "integer"}}},
+}
+
+
+@pytest.mark.parametrize(
+    "schema", [MESSAGES_TREE_SCHEMA, MESSAGES_OPEN_OBJECT_SCHEMA], ids=["recursive", "open-object"]
+)
+def test_bedrock_messages_schema_native_output_cannot_hold_is_inlined_on_a_bedrock_native_profile(
+    set_native_structured_output, schema
+):
     model: Final = "us.anthropic.claude-sonnet-5"
-    set_native_structured_output(model, True)
-    schema: Final = {
-        "type": "object",
-        "properties": {"root": {"$ref": "#/$defs/Node"}},
-        "$defs": {
-            "Node": {
-                "type": "object",
-                "properties": {"children": {"type": "array", "items": {"$ref": "#/$defs/Node"}}},
-            }
-        },
-    }
+    set_native_structured_output(model, "bedrock")
 
     result: Final = _bedrock_messages_request_with_schema(model, schema)
 
     assert "output_config" not in result
     assert json.loads(result["messages"][-1]["content"][-1]["text"]) == schema
+
+
+@pytest.mark.parametrize(
+    "schema", [MESSAGES_TREE_SCHEMA, MESSAGES_OPEN_OBJECT_SCHEMA], ids=["recursive", "open-object"]
+)
+def test_bedrock_messages_schema_native_output_cannot_hold_is_forwarded_on_a_legacy_native_profile(
+    set_native_structured_output, schema
+):
+    model: Final = "us.anthropic.claude-sonnet-4-6"
+    set_native_structured_output(model, "legacy")
+
+    result: Final = _bedrock_messages_request_with_schema(model, schema)
+
+    assert result["output_config"]["format"]["schema"] == schema
 
 
 def test_bedrock_messages_legacy_output_format_wins_over_output_config_format(local_model_cost_map):

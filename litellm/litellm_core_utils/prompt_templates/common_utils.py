@@ -1427,8 +1427,24 @@ def _schema_levels(schema: Mapping[str, object]) -> Iterator[tuple[Mapping[str, 
 
 
 def schema_has_ref(schema: Mapping[str, object]) -> bool:
-    nodes: Final = chain.from_iterable(islice(_schema_levels(schema), _MAX_SCHEMA_NESTING))
-    return any("$ref" in node for node in nodes)
+    return any("$ref" in node for node in _schema_nodes(schema))
+
+
+def schema_has_open_object(schema: Mapping[str, object]) -> bool:
+    return any(_is_open_object(node) for node in _schema_nodes(schema))
+
+
+def _schema_nodes(schema: Mapping[str, object]) -> Iterator[Mapping[str, object]]:
+    return chain.from_iterable(islice(_schema_levels(schema), _MAX_SCHEMA_NESTING))
+
+
+def _is_open_object(node: Mapping[str, object]) -> bool:
+    additional_properties: Final = node.get("additionalProperties")
+    if additional_properties is True or isinstance(additional_properties, dict) or "patternProperties" in node:
+        return True
+    node_type: Final = node.get("type")
+    is_object: Final = node_type == "object" or (isinstance(node_type, list) and "object" in node_type)
+    return is_object and "properties" not in node and additional_properties is not False
 
 
 def _subschemas(node: Mapping[str, object]) -> Iterator[Mapping[str, object]]:

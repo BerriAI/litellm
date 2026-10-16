@@ -249,19 +249,38 @@ def convert_bedrock_invoke_output_format_to_inline_schema(
     request_body["messages"] = new_messages
 
 
-def _bedrock_model_supports(model: str, key: str) -> bool:
+def _bedrock_model_supports(model: str, key: str, custom_llm_provider: str = "bedrock") -> bool:
     from litellm.utils import supports_factory
 
-    return supports_factory(model=model, custom_llm_provider="bedrock", key=key)
+    return supports_factory(model=model, custom_llm_provider=custom_llm_provider, key=key)
 
 
-def bedrock_native_output_format(output_format: Mapping[str, object]) -> Mapping[str, object] | None:
+def bedrock_supports_native_structured_output(model: str, custom_llm_provider: str = "bedrock") -> bool:
+    return _bedrock_model_supports(
+        model, "supports_native_structured_output", custom_llm_provider
+    ) or _bedrock_model_supports(model, "supports_bedrock_native_structured_output", custom_llm_provider)
+
+
+def bedrock_native_output_schema(
+    model: str, schema: Mapping[str, object], custom_llm_provider: str = "bedrock"
+) -> Mapping[str, object] | None:
     from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 
+    native_schema: Final = AnthropicConfig.native_output_schema(schema)
+    if _bedrock_model_supports(model, "supports_native_structured_output", custom_llm_provider):
+        return schema if native_schema is None else native_schema
+    if _bedrock_model_supports(model, "supports_bedrock_native_structured_output", custom_llm_provider):
+        return native_schema
+    return None
+
+
+def bedrock_native_output_format(
+    model: str, output_format: Mapping[str, object], custom_llm_provider: str = "bedrock"
+) -> Mapping[str, object] | None:
     schema: Final = output_format.get("schema")
     if not isinstance(schema, Mapping):
-        return output_format
-    native_schema: Final = AnthropicConfig.native_output_schema(schema)
+        return output_format if bedrock_supports_native_structured_output(model, custom_llm_provider) else None
+    native_schema: Final = bedrock_native_output_schema(model, schema, custom_llm_provider)
     if native_schema is None:
         return None
     return {**output_format, "schema": native_schema}
@@ -289,11 +308,7 @@ def apply_bedrock_invoke_structured_output(
     if schema_format is None:
         return
 
-    native_format: Final = (
-        bedrock_native_output_format(schema_format)
-        if _bedrock_model_supports(model, "supports_native_structured_output")
-        else None
-    )
+    native_format: Final = bedrock_native_output_format(model, schema_format)
     if native_format is not None:
         existing_output_config: Final = request_body.get("output_config")
         if isinstance(existing_output_config, dict):
@@ -303,10 +318,9 @@ def apply_bedrock_invoke_structured_output(
         return
 
     verbose_logger.warning(
-        "Bedrock Invoke: model=%s does not advertise `supports_native_structured_output` "
-        "in model_prices_and_context_window.json, or the schema has a recursive or "
-        "unresolved `$ref`, so the JSON schema was inlined into the last user message "
-        "and is NOT enforced by the model.",
+        "Bedrock Invoke: model=%s does not take native structured output for this schema "
+        "per model_prices_and_context_window.json, so the JSON schema was inlined into "
+        "the last user message and is NOT enforced by the model.",
         model,
     )
     convert_bedrock_invoke_output_format_to_inline_schema(

@@ -482,7 +482,7 @@ def test_output_config_format_converted_for_bedrock_chat_invoke_request():
 
     with patch(  # test-quality-ok: pin non-native path
         "litellm.llms.bedrock.common_utils._bedrock_model_supports",
-        side_effect=lambda _model, key: key == "supports_output_config",
+        side_effect=lambda _model, key, *_: key == "supports_output_config",
     ):
         result = config.transform_request(
             model="anthropic.claude-opus-4-7",
@@ -509,7 +509,7 @@ def test_output_config_format_inlined_for_bedrock_chat_invoke_profile_without_na
 ):
     """On a profile without native structured output the Invoke chat path inlines the
     schema into the last user message and keeps effort."""
-    set_native_structured_output(model, False)
+    set_native_structured_output(model, None)
     schema = {"type": "object", "properties": {"answer": {"type": "string"}}}
 
     result = AmazonAnthropicClaudeConfig().transform_request(
@@ -527,29 +527,65 @@ def test_output_config_format_inlined_for_bedrock_chat_invoke_profile_without_na
     assert json.loads(result["messages"][-1]["content"][-1]["text"]) == schema
 
 
-def test_recursive_response_format_on_a_native_output_profile_keeps_the_tool_path(set_native_structured_output):
-    model = "us.anthropic.claude-opus-4-8"
-    set_native_structured_output(model, True)
-    tree_schema = {
-        "type": "object",
-        "properties": {"root": {"$ref": "#/$defs/Node"}},
-        "$defs": {
-            "Node": {
-                "type": "object",
-                "properties": {"children": {"type": "array", "items": {"$ref": "#/$defs/Node"}}},
-            }
-        },
-    }
+TREE_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"root": {"$ref": "#/$defs/Node"}},
+    "$defs": {
+        "Node": {
+            "type": "object",
+            "properties": {"children": {"type": "array", "items": {"$ref": "#/$defs/Node"}}},
+        }
+    },
+}
+OPEN_OBJECT_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"counts": {"type": "object", "additionalProperties": {"type": "integer"}}},
+}
 
-    result = AmazonAnthropicClaudeConfig().map_openai_params(
-        non_default_params={"response_format": {"type": "json_schema", "json_schema": {"name": "tree", "schema": tree_schema}}},
+
+def _invoke_params_for_schema(model: str, schema: dict) -> dict:
+    return AmazonAnthropicClaudeConfig().map_openai_params(
+        non_default_params={"response_format": {"type": "json_schema", "json_schema": {"name": "out", "schema": schema}}},
         optional_params={},
         model=model,
         drop_params=False,
     )
 
+
+@pytest.mark.parametrize("schema", [TREE_SCHEMA, OPEN_OBJECT_SCHEMA], ids=["recursive", "open-object"])
+def test_schema_native_output_cannot_hold_keeps_the_tool_path_on_a_bedrock_native_profile(
+    set_native_structured_output, schema
+):
+    model = "us.anthropic.claude-opus-4-8"
+    set_native_structured_output(model, "bedrock")
+
+    result = _invoke_params_for_schema(model, schema)
+
     assert "output_format" not in result
     assert [tool["name"] for tool in result["tools"]] == ["json_tool_call"]
+
+
+@pytest.mark.parametrize("native_key", ["legacy", "bedrock"])
+def test_closed_schema_goes_native_on_either_native_key(set_native_structured_output, native_key):
+    model = "us.anthropic.claude-opus-4-8"
+    set_native_structured_output(model, native_key)
+    schema = {"type": "object", "properties": {"age": {"type": "integer", "minimum": 0}}, "required": ["age"]}
+
+    result = _invoke_params_for_schema(model, schema)
+
+    assert result["output_format"]["schema"]["properties"]["age"]["type"] == "integer"
+    assert "minimum" not in result["output_format"]["schema"]["properties"]["age"]
+    assert "tools" not in result
+
+
+def test_recursive_schema_still_goes_native_on_a_legacy_native_profile(set_native_structured_output):
+    model = "us.anthropic.claude-sonnet-4-6"
+    set_native_structured_output(model, "legacy")
+
+    result = _invoke_params_for_schema(model, TREE_SCHEMA)
+
+    assert '"$ref": "#/$defs/Node"' in json.dumps(result["output_format"]["schema"])
+    assert "tools" not in result
 
 
 def test_output_config_format_forwarded_for_bedrock_chat_invoke_request(local_model_cost_map):
@@ -744,7 +780,7 @@ def test_bedrock_chat_invoke_fable_5_1_response_format_avoids_forced_tool_choice
     """Regression: Bedrock rejects forced tool_choice for Fable 5.1, so on a profile
     without native structured output invoke must use the tool-based path without a
     forced ``tool_choice``."""
-    set_native_structured_output(model, False)
+    set_native_structured_output(model, None)
     result = AmazonAnthropicClaudeConfig().map_openai_params(
         non_default_params={
             "response_format": {
@@ -769,7 +805,7 @@ def test_bedrock_chat_invoke_fable_5_1_response_format_avoids_forced_tool_choice
 def test_bedrock_chat_invoke_tool_based_response_format_still_upgrades_legacy_thinking(
     set_native_structured_output, model
 ):
-    set_native_structured_output(model, False)
+    set_native_structured_output(model, None)
     result = AmazonAnthropicClaudeConfig().map_openai_params(
         non_default_params={
             "response_format": {
@@ -795,7 +831,7 @@ def test_bedrock_chat_invoke_tool_based_response_format_still_upgrades_legacy_th
 def test_bedrock_chat_invoke_adaptive_thinking_keeps_the_forced_response_format_tool(set_native_structured_output):
     """Anthropic accepts a forced tool_choice next to adaptive thinking, and dropping
     it lets the model answer in prose instead of the requested JSON."""
-    set_native_structured_output("us.anthropic.claude-opus-5", False)
+    set_native_structured_output("us.anthropic.claude-opus-5", None)
     result = AmazonAnthropicClaudeConfig().map_openai_params(
         non_default_params={
             "response_format": {
