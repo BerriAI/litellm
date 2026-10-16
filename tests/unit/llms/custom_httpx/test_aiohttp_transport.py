@@ -178,9 +178,12 @@ async def test_server_disconnect_mid_body_stays_a_read_error() -> None:
     stream: Final = AiohttpResponseStream(mock_response)  # pyright: ignore[reportArgumentType]  # duck-typed response
     received_chunks: Final[list[bytes]] = []  # mutable-ok: collects what the stream yielded before the cut
 
-    with pytest.raises(httpx.ReadError):
+    async def _drain() -> None:
         async for chunk in stream:
             received_chunks.append(chunk)
+
+    with pytest.raises(httpx.ReadError):
+        await _drain()
 
     assert received_chunks == [b"data: one\n\n"]
     assert mock_response.closed is True

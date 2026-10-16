@@ -156,13 +156,22 @@ def _extract_inbound_headers(
 
 
 def _is_contained_in(part: JsonValue, whole: JsonValue) -> bool:
-    match part, whole:
-        case dict(), dict():
-            return all(key in whole and _is_contained_in(value, whole[key]) for key, value in part.items())
-        case list(), list():
-            return len(part) == len(whole) and all(map(_is_contained_in, part, whole))
-        case _:
-            return part == whole
+    pending: Final[list[tuple[JsonValue, JsonValue]]] = [(part, whole)]  # mutable-ok: worklist, recursion is banned
+    while pending:
+        match pending.pop():
+            case dict() as part_dict, dict() as whole_dict:
+                if not part_dict.keys() <= whole_dict.keys():
+                    return False
+                pending.extend((value, whole_dict[key]) for key, value in part_dict.items())
+            case list() as part_list, list() as whole_list:
+                if len(part_list) != len(whole_list):
+                    return False
+                pending.extend(zip(part_list, whole_list, strict=True))
+            case part_leaf, whole_leaf if part_leaf != whole_leaf:
+                return False
+            case _:
+                pass
+    return True
 
 
 def _is_echo(original: AllMessageValues, returned: AllMessageValues) -> bool:
