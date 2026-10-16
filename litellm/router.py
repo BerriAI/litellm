@@ -3609,11 +3609,16 @@ class Router:
     def _params_sent_to_deployment(
         self, request_kwargs: Mapping[str, object], deployment_id: object
     ) -> Mapping[str, object]:
-        """The request as the deployment received it: its litellm_params under the router defaults and the caller's."""
+        """The request as the deployment received it, merged in the order _update_kwargs_with_deployment applies."""
         deployment: Final = self.get_deployment(model_id=deployment_id) if isinstance(deployment_id, str) else None
         deployment_params: Final = deployment.litellm_params.model_dump(exclude_none=True) if deployment else {}
         defaults: Final = {key: value for key, value in self.default_litellm_params.items() if value is not None}
-        return MappingProxyType({**deployment_params, **defaults, **request_kwargs})
+        deployment_tool_choice: Final = (
+            {"tool_choice": deployment_params["tool_choice"]}
+            if deployment_params.get("tool_choice") is not None
+            else {}
+        )
+        return MappingProxyType({**deployment_params, **defaults, **deployment_tool_choice, **request_kwargs})
 
     def _names_deployment_without_prefill(self, target: object) -> bool:
         name: Final = fallback_target_name(target)

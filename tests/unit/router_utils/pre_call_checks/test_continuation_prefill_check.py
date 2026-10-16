@@ -83,11 +83,11 @@ def test_deployment_model_info_override_wins_over_cost_map():
         "base_model_wins_over_model",
     ],
 )
-def testdeployment_supports_prefill_reads_the_cost_map_key_of_the_base_model(deployment, expected):
+def test_deployment_supports_prefill_reads_the_cost_map_key_of_the_base_model(deployment, expected):
     assert deployment_supports_prefill(deployment) is expected
 
 
-def testdeployment_supports_prefill_rejects_malformed_deployments():
+def test_deployment_supports_prefill_rejects_malformed_deployments():
     assert deployment_supports_prefill({}) is False
     assert deployment_supports_prefill({"litellm_params": {}}) is False
     assert deployment_supports_prefill("not-a-dict") is False

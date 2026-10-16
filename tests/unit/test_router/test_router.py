@@ -3798,6 +3798,8 @@ async def test_mid_stream_continuation_declines_a_fallback_naming_a_deployment_w
         ({}, {"response_format": {"type": "json_object"}}, False),
         ({"response_format": {"type": "text"}}, None, True),
         ({"temperature": 0.2}, None, True),
+        ({"tool_choice": "required"}, {"tool_choice": "auto"}, False),
+        ({"response_format": {"type": "json_object"}}, {"response_format": {"type": "text"}}, True),
     ],
     ids=[
         "deployment_response_format",
@@ -3807,6 +3809,8 @@ async def test_mid_stream_continuation_declines_a_fallback_naming_a_deployment_w
         "router_default_response_format",
         "deployment_plain_text_format",
         "deployment_unrelated_param",
+        "deployment_tool_choice_over_router_default",
+        "router_default_format_over_deployment",
     ],
 )
 async def test_mid_stream_continuation_reads_constraints_configured_on_the_cut_deployment(
