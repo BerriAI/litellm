@@ -1254,24 +1254,27 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         Replace PII tokens in *text* with their original values.
 
         Includes a fallback for tokens that were truncated by ``max_tokens``:
-        if the *end* of ``text`` matches the *beginning* of a token and the
-        overlap is long enough, the truncated suffix is replaced with the
-        original value.  The minimum overlap length is
-        ``min(20, len(token) // 2)`` to reduce the risk of false positives
-        when multiple tokens share a common prefix.
+        if the *end* of ``text`` matches the *beginning* of exactly one token
+        and the overlap is long enough, the truncated suffix is replaced with
+        that token's original value. A suffix shared by more than one token
+        (e.g. ``<PERSON_`` of two people) is left as-is rather than guessing
+        which one it was. A token only ever starts with ``<``, so the one
+        candidate suffix is the text after the last ``<`` — checking just
+        that keeps this linear in the number of tokens.
         """
         for token, original_text in pii_tokens.items():
             if token in text:
                 text = text.replace(token, original_text)
-            else:
-                # FALLBACK: Handle truncated tokens (token cut off by max_tokens)
-                # Only check at the very end of the text.
-                min_overlap = min(20, len(token) // 2)
-                for i in range(max(0, len(text) - len(token)), len(text)):
-                    sub = text[i:]
-                    if token.startswith(sub) and len(sub) >= min_overlap:
-                        text = text[:i] + original_text
-                        break
+
+        start = text.rfind("<")
+        if start == -1:
+            return text
+        suffix = text[start:]
+        matches = [token for token in pii_tokens if token.startswith(suffix)]
+        if len(matches) == 1:
+            token = matches[0]
+            if len(suffix) >= min(20, len(token) // 2):
+                return text[:start] + pii_tokens[token]
         return text
 
     @staticmethod
@@ -1571,21 +1574,50 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         return "data: " + json.dumps(event, ensure_ascii=False)
 
     @staticmethod
-    def _unmask_sse_bytes_chunk(chunk: bytes, pii_tokens: Mapping[str, str], carried_in: str) -> tuple[bytes, str]:
+    def _flush_pending_sse(pending_text: str, pending_bytes: bytes, pii_tokens: Mapping[str, str]) -> list[bytes]:
         """
-        Unmask PII tokens in a raw Anthropic SSE bytes chunk, carrying over any
-        trailing text that might be the start of a token split across multiple
-        streamed deltas. Returns the rewritten chunk and the carry-over text to
-        pass into the next call for the same stream.
+        Whatever ``_unmask_sse_bytes_chunk`` was still holding when the stream
+        ended or the upstream iterator raised: a token held back in case it
+        kept growing, and/or a ``data: ...`` line whose trailing bytes never
+        arrived. Flushing both here means neither is silently dropped.
         """
+        flushed: list[bytes] = []
+        if pending_text:
+            line = OPTIONAL_PresidioPIIMasking._flush_pending_as_sse_text_delta(pending_text, pii_tokens, 0)
+            flushed.append((line + "\n\n").encode("utf-8"))
+        if pending_bytes:
+            flushed.append(pending_bytes)
+        return flushed
+
+    @staticmethod
+    def _unmask_sse_bytes_chunk(
+        chunk: bytes, pii_tokens: Mapping[str, str], carried_in: str, carried_bytes: bytes = b""
+    ) -> tuple[bytes, str, bytes]:
+        """
+        Unmask PII tokens in a raw Anthropic SSE bytes chunk, carrying state
+        across calls for two kinds of boundary splits: trailing text that
+        might be the start of a token split across multiple streamed deltas
+        (*carried_in*), and a ``data: ...`` line cut mid-JSON by a raw network
+        chunk boundary (*carried_bytes*, prepended to this chunk before
+        anything is parsed). Returns the rewritten chunk plus both carry-overs
+        to pass into the next call for the same stream.
+        """
+        data: Final = carried_bytes + chunk
         try:
-            text: Final = chunk.decode("utf-8")
+            text: Final = data.decode("utf-8")
         except UnicodeDecodeError:
-            return chunk, carried_in
+            return data, carried_in, b""
+
+        if "\n" not in text:
+            # No complete line yet in this chunk; wait for the rest of it.
+            return b"", carried_in, data
+
+        lines = text.split("\n")
+        incomplete_tail = lines.pop()  # rebind-ok: the segment after the last "\n", not a full line yet
 
         pending = carried_in  # rebind-ok: grows/flushes per delta as the chunk's lines are scanned
         result_lines: Final[list[str]] = []
-        for line in text.split("\n"):
+        for line in lines:
             line = line.rstrip("\r")
             if line.startswith("data: ") and line != "data: [DONE]":
                 raw_json = line[6:]
@@ -1620,7 +1652,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     pass
             result_lines.append(line)
 
-        return "\n".join(result_lines).encode("utf-8"), pending
+        rewritten: Final = ("\n".join(result_lines) + "\n").encode("utf-8")
+        return rewritten, pending, incomplete_tail.encode("utf-8")
 
     def _unmask_responses_api_completed_chunk(self, chunk: object, pii_tokens: dict[str, str]) -> None:
         """
@@ -1695,6 +1728,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         remaining_chunks: list[ModelResponseStream] = []
         saw_non_chat_chunk = False
         pending_sse_text = ""  # rebind-ok: carries a split token across SSE chunks
+        pending_sse_bytes = b""  # rebind-ok: carries a data: line split across byte chunks
         try:
             async for chunk in response:
                 if isinstance(chunk, ModelResponseStream):
@@ -1704,8 +1738,11 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         remaining_chunks.append(chunk)
                 elif isinstance(chunk, bytes):
                     if pii_tokens:
-                        rewritten, pending_sse_text = self._unmask_sse_bytes_chunk(chunk, pii_tokens, pending_sse_text)
-                        yield rewritten
+                        rewritten, pending_sse_text, pending_sse_bytes = self._unmask_sse_bytes_chunk(
+                            chunk, pii_tokens, pending_sse_text, pending_sse_bytes
+                        )
+                        if rewritten:
+                            yield rewritten
                     else:
                         yield chunk
                     continue
@@ -1723,13 +1760,12 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     saw_non_chat_chunk = True
                     yield chunk
 
-            if pending_sse_text:
-                line: Final = self._flush_pending_as_sse_text_delta(
-                    pending_sse_text,
-                    pii_tokens,  # pyright: ignore[reportUnknownArgumentType]  # request_data is an untyped dict
-                    0,
-                )
-                yield (line + "\n\n").encode("utf-8")
+            for flushed in self._flush_pending_sse(
+                pending_sse_text,
+                pending_sse_bytes,
+                pii_tokens,  # pyright: ignore[reportUnknownArgumentType]  # request_data is an untyped dict
+            ):
+                yield flushed
 
             if not saw_non_chat_chunk:
                 async for chunk in self._finalize_non_sse_stream(
@@ -1740,6 +1776,12 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
         except Exception as e:
             verbose_proxy_logger.error("Error in PII streaming processing: %s", e)
+            for flushed in self._flush_pending_sse(
+                pending_sse_text,
+                pending_sse_bytes,
+                pii_tokens,  # pyright: ignore[reportUnknownArgumentType]  # request_data is an untyped dict
+            ):
+                yield flushed
             for chunk in remaining_chunks:
                 yield chunk
 
