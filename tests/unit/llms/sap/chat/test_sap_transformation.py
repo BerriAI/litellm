@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import warnings
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final
 from unittest.mock import MagicMock
 
@@ -659,7 +660,7 @@ class TestDeploymentUrlResolution:
     def mock_config(self) -> GenAIHubOrchestrationConfig:
         from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
 
-        config = GenAIHubOrchestrationConfig()
+        config: Final = GenAIHubOrchestrationConfig()
         config.token_creator = lambda: "Bearer TEST_TOKEN"
         config._base_url = "https://api.test-sap.com"
         config._resource_group = "test-group"
@@ -668,7 +669,7 @@ class TestDeploymentUrlResolution:
 
     @staticmethod
     def _mock_client(*names: str) -> MagicMock:
-        resources: list[dict[str, str]] = [
+        resources: Final[tuple[Mapping[str, str], ...]] = tuple(
             {
                 "scenarioId": "orchestration",
                 "configurationId": f"cfg-{n}",
@@ -676,21 +677,21 @@ class TestDeploymentUrlResolution:
                 "createdAt": f"2024-01-{i + 1:02d}T00:00:00Z",
             }
             for i, n in enumerate(names)
-        ]
-        configs: dict[str, dict[str, str]] = {
+        )
+        configs: Final[Mapping[str, Mapping[str, str]]] = {
             f"cfg-{n}": {"executableId": "orchestration", "name": n} for n in names
         }
 
-        def fake_get(url: str, headers: dict[str, str] | None = None) -> MagicMock:
-            resp = MagicMock()
+        def fake_get(url: str, headers: Mapping[str, str] | None = None) -> MagicMock:
+            resp: Final = MagicMock()
             if "/lm/deployments" in url:
                 resp.json.return_value = {"resources": resources}
             else:
-                cfg_id = url.split("/")[-1]
+                cfg_id: Final = url.split("/")[-1]
                 resp.json.return_value = configs.get(cfg_id, {})
             return resp
 
-        client = MagicMock()
+        client: Final = MagicMock()
         client.get.side_effect = fake_get
         return client
 
@@ -698,10 +699,10 @@ class TestDeploymentUrlResolution:
         self, mock_config: GenAIHubOrchestrationConfig, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         explicit: Final[str] = "https://custom.sap.com/deployments/abc"
-        mock_client = MagicMock()
+        mock_client: Final = MagicMock()
         monkeypatch.setattr("litellm.module_level_client", mock_client)
 
-        url = mock_config.get_complete_url(None, None, "gpt-4o", {"deployment_url": explicit}, {})
+        url: Final = mock_config.get_complete_url(None, None, "gpt-4o", {"deployment_url": explicit}, {})
 
         assert url == f"{explicit}/v2/completion"
         assert not mock_client.get.called
@@ -711,7 +712,7 @@ class TestDeploymentUrlResolution:
     ) -> None:
         monkeypatch.setattr("litellm.module_level_client", MagicMock())
 
-        url = mock_config.get_complete_url(
+        url: Final = mock_config.get_complete_url(
             None, None, "gpt-4o", {"deployment_url": "https://custom.sap.com/deployments/abc/"}, {}
         )
 
@@ -721,11 +722,11 @@ class TestDeploymentUrlResolution:
         self, mock_config: GenAIHubOrchestrationConfig, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         env_url: Final[str] = "https://env.sap.com/deployments/env"
-        mock_client = MagicMock()
+        mock_client: Final = MagicMock()
         monkeypatch.setattr("litellm.module_level_client", mock_client)
         monkeypatch.setenv("AICORE_ORCHESTRATION_DEPLOYMENT_URL", env_url)
 
-        url = mock_config.get_complete_url(None, None, "gpt-4o", {}, {})
+        url: Final = mock_config.get_complete_url(None, None, "gpt-4o", {}, {})
 
         assert url == f"{env_url}/v2/completion"
         assert not mock_client.get.called
@@ -751,7 +752,7 @@ class TestDeploymentUrlResolution:
         monkeypatch.setenv("AICORE_ORCHESTRATION_DEPLOYMENT_URL", "")
 
         with caplog.at_level("WARNING"):
-            url = mock_config.get_complete_url(None, None, "gpt-4o", {}, {})
+            url: Final = mock_config.get_complete_url(None, None, "gpt-4o", {}, {})
 
         assert url == "https://deploy-newer.sap.com/v2/completion"
         assert any(
