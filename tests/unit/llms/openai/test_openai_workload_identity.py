@@ -1705,6 +1705,26 @@ class TestDeploymentKeyBesideIdentity:
         assert bearer_of(route) == "Bearer sk-shared"
         assert exchange.call_count == 0
 
+    @respx.mock
+    def test_secret_manager_key_beats_deployment_identity_without_an_exchange(
+        self,
+        deployment_wif: dict[str, str],
+        monkeypatch: pytest.MonkeyPatch,
+        url: str,
+        response: httpx.Response,
+        invoke: Callable[[dict[str, str]], object],
+    ) -> None:
+        monkeypatch.setattr(litellm, "secret_manager_client", _VaultHoldingOpenAIKey())
+        monkeypatch.setattr(litellm, "_key_management_system", KeyManagementSystem.CUSTOM)
+        monkeypatch.setattr(litellm, "_key_management_settings", KeyManagementSettings(access_mode="read_only"))
+        exchange: Final = mock_token_exchange()
+        route: Final = respx.route(url__startswith=url).mock(return_value=response)
+
+        invoke(deployment_wif)
+
+        assert bearer_of(route) == "Bearer sk-from-vault"
+        assert exchange.call_count == 0
+
 
 class _VaultHoldingOpenAIKey(CustomSecretManager):
     def __init__(self) -> None:

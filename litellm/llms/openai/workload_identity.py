@@ -185,7 +185,7 @@ def build_openai_client(
             None if static_key_http_client_factory is None else static_key_http_client_factory()
         )
         return OpenAI(
-            api_key=api_key,
+            api_key=openai_static_api_key(api_key),
             base_url=api_base,
             timeout=timeout,
             max_retries=retries,
@@ -241,7 +241,7 @@ def build_async_openai_client(
             None if static_key_http_client_factory is None else static_key_http_client_factory()
         )
         return AsyncOpenAI(
-            api_key=api_key,
+            api_key=openai_static_api_key(api_key),
             base_url=api_base,
             timeout=timeout,
             max_retries=retries,

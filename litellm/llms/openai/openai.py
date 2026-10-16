@@ -63,6 +63,7 @@ from .common_utils import (
 from .workload_identity import (
     build_async_openai_client,
     build_openai_client,
+    openai_static_api_key,
     resolve_openai_workload_identity_config,
 )
 
@@ -428,7 +429,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     )
                     if workload_identity_config is not None
                     else AsyncOpenAI(
-                        api_key=api_key,
+                        api_key=openai_static_api_key(api_key),
                         base_url=api_base,
                         http_client=async_http_client,
                         timeout=timeout,
@@ -450,7 +451,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     )
                     if workload_identity_config is not None
                     else OpenAI(
-                        api_key=api_key,
+                        api_key=openai_static_api_key(api_key),
                         base_url=api_base,
                         http_client=sync_http_client,
                         timeout=timeout,
