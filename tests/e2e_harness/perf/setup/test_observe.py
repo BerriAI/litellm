@@ -5,7 +5,7 @@ from typing import Final
 
 from cases.small_bodies_5rps import CASE
 from memory_readings import RssCapture
-from setup.datastore import DbCounters
+from setup.datastore import DbCounters, StatementCalls
 from setup.observe import Observation, evaluate, junit_properties
 from setup.performance_test_case import Limit
 from setup.wire import WireRecord
@@ -35,6 +35,10 @@ def served(seq: int, total_s: float) -> WireRecord:
     )
 
 
+def _key_lookup(calls: int) -> StatementCalls:
+    return StatementCalls(queryid=1, query='SELECT * FROM "LiteLLM_VerificationToken" WHERE token = $1', calls=calls)
+
+
 def test_junit_properties_carry_each_observed_metric_and_each_limit_including_unobserved_ones() -> None:
     case: Final = replace(
         CASE,
@@ -50,8 +54,8 @@ def test_junit_properties_carry_each_observed_metric_and_each_limit_including_un
         rss_before=NO_RSS,
         rss_after=NO_RSS,
         wall_seconds=3.0,
-        db_before=DbCounters(commits=100),
-        db_after=DbCounters(commits=130),
+        db_before=DbCounters(commits=100, statements=(_key_lookup(calls=100),)),
+        db_after=DbCounters(commits=130, statements=(_key_lookup(calls=130),)),
     )
     rows, _ = evaluate(case, observation)
 
@@ -64,5 +68,6 @@ def test_junit_properties_carry_each_observed_metric_and_each_limit_including_un
         "perf_gateway_added_seconds_p50_limit": 0.625,
         "perf_gateway_added_seconds_p99": 0.75,
         "perf_postgres_calls_per_request": 10.0,
+        "perf_postgres_background_calls_per_request": 0.0,
         "perf_redis_calls_per_request_limit": 35.0,
     }

@@ -71,12 +71,6 @@ def resolve_openai_workload_identity_config(
     return _configured_openai_workload_identity(api_base=api_base, litellm_params=litellm_params)
 
 
-def openai_workload_identity_requested(api_base: str | None, litellm_params: Mapping[str, object] | None) -> bool:
-    if _carries_deployment_identity(litellm_params):
-        return _targets_openai_api(_effective_openai_api_base(api_base))
-    return _configured_openai_workload_identity(api_base=api_base, litellm_params=litellm_params) is not None
-
-
 def _effective_openai_api_base(api_base: str | None) -> str | None:
     return api_base or litellm.api_base or get_secret_str("OPENAI_BASE_URL") or get_secret_str("OPENAI_API_BASE")
 

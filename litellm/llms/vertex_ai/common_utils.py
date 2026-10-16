@@ -738,13 +738,13 @@ def build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
     # refs recursively and correctly detects/skips circular references.
     unpack_defs(parameters, defs)
 
+    _convert_schema_types(parameters)
+
     # 5. Nullable fields:
     #     * https://github.com/pydantic/pydantic/issues/1270
     #     * https://stackoverflow.com/a/58841311
     #     * https://github.com/pydantic/pydantic/discussions/4872
     convert_anyof_null_to_nullable(parameters)
-
-    _convert_schema_types(parameters)
 
     # Handle empty strings in enum values - Gemini doesn't accept empty strings in enums
     _fix_enum_empty_strings(parameters)
@@ -926,34 +926,28 @@ def convert_anyof_null_to_nullable(schema, depth=0):
         )
     """ Converts null objects within anyOf by removing them and adding nullable to all remaining objects """
     anyof: Final = schema.get("anyOf", None)
-    if anyof is not None:
-        contains_null = False
+    if isinstance(anyof, list):
+        non_null_branches: Final = [
+            atype for atype in anyof if not (isinstance(atype, dict) and atype.get("type") == "null")
+        ]
+        contains_null: Final = len(non_null_branches) < len(anyof)
+        anyof[:] = non_null_branches or anyof[:1]
         for atype in anyof:
-            if isinstance(atype, dict) and atype.get("type") == "null":
-                # remove null type
-                anyof.remove(atype)
-                contains_null = True
-            elif "type" not in atype and len(atype) == 0:
-                # Handle empty object case
+            if not isinstance(atype, dict):
+                continue
+            if not atype:
                 atype["type"] = "object"
-
-        if len(anyof) == 0:
-            # Edge case: response schema with only null type present is invalid in Vertex AI
-            raise ValueError(
-                "Invalid input: AnyOf schema with only null type is not supported. Please provide a non-null type."
-            )
-
-        if contains_null:
-            # set all types to nullable following guidance found here: https://cloud.google.com/vertex-ai/generative-ai/docs/samples/generativeaionvertexai-gemini-controlled-generation-response-schema-3#generativeaionvertexai_gemini_controlled_generation_response_schema_3-python
-            # Empty `items: {}` on array branches is left in place; downstream
-            # process_items() converts it to {"type": "object"}, which Vertex
-            # requires whenever type == "array" (even inside anyOf).
-            for atype in anyof:
+            if contains_null:
+                # set all types to nullable following guidance found here: https://cloud.google.com/vertex-ai/generative-ai/docs/samples/generativeaionvertexai-gemini-controlled-generation-response-schema-3#generativeaionvertexai_gemini_controlled_generation_response_schema_3-python
+                # Empty `items: {}` on array branches is left in place; downstream
+                # process_items() converts it to {"type": "object"}, which Vertex
+                # requires whenever type == "array" (even inside anyOf).
                 atype["nullable"] = True
+            convert_anyof_null_to_nullable(atype, depth=depth + 1)
 
     properties: Final = schema.get("properties", None)
     if properties is not None:
-        for name, value in properties.items():
+        for value in properties.values():
             convert_anyof_null_to_nullable(value, depth=depth + 1)
 
     items: Final = schema.get("items", None)
@@ -1362,6 +1356,7 @@ class VertexAITokenCounter(BaseTokenCounter):
                 gemini_count_contents,
                 inference_request_view,
                 provider_error_response,
+                unconvertible_messages_error,
                 vertex_gemini_count_context,
             )
             from litellm.llms.vertex_ai.count_tokens.handler import VertexAITokenCounter
@@ -1370,6 +1365,9 @@ class VertexAITokenCounter(BaseTokenCounter):
             count_context: Final = vertex_gemini_count_context(system=request_view.system, tools=tools)
             if isinstance(count_context, VertexGeminiCountContextError):
                 return count_context_error_response(count_context, request_model, model_to_use)
+            blocks_error: Final = unconvertible_messages_error(request_view.messages, messages_format)
+            if blocks_error is not None:
+                return count_context_error_response(blocks_error, request_model, model_to_use)
 
             resolved_contents: Final = (
                 contents

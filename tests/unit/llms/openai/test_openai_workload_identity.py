@@ -25,11 +25,11 @@ from litellm.llms.openai.containers.transformation import OpenAIContainerConfig
 from litellm.llms.openai.evals.transformation import OpenAIEvalsConfig
 from litellm.llms.openai.image_edit.transformation import OpenAIImageEditConfig
 from litellm.llms.openai.openai import OpenAIChatCompletion
+from litellm.llms.openai.responses.count_tokens.token_counter import OpenAITokenCounter
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.llms.openai.vector_store_files.transformation import OpenAIVectorStoreFilesConfig
 from litellm.llms.openai.vector_stores.transformation import OpenAIVectorStoreConfig
 from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
-from litellm.llms.openai.responses.count_tokens.token_counter import OpenAITokenCounter
 from litellm.llms.openai.workload_identity import (
     OpenAIWorkloadIdentityConfig,
     _workload_identity_auth,
@@ -1807,21 +1807,24 @@ class TestCountTokensFromDeployment:
         assert bearer_of(route) == "Bearer sk-from-vault"
         assert exchange.call_count == 0
 
-    @pytest.mark.asyncio
-    async def test_nothing_configured_falls_back_to_local_counting(self, deployment_wif: dict[str, str]) -> None:
-        assert await self.count({"model": "gpt-4o-mini"}) is None
-
     @respx.mock
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("module_key", ["api_key", "openai_key"])
-    async def test_module_level_key_without_deployment_identity_keeps_local_counting(
-        self, deployment_wif: dict[str, str], monkeypatch: pytest.MonkeyPatch, module_key: str
-    ) -> None:
-        monkeypatch.setattr(litellm, module_key, "sk-module-level")
+    async def test_partial_deployment_identity_answers_a_401_naming_the_gap_without_a_count_call(self) -> None:
+        exchange: Final = mock_token_exchange()
         route: Final = respx.post(INPUT_TOKENS_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 7}))
 
-        assert await self.count({"model": "gpt-4o-mini"}) is None
+        result: Final = await OpenAITokenCounter().count_tokens(
+            model_to_use="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            contents=None,
+            deployment={"litellm_params": {"openai_identity_provider_id": "idp-only"}},
+        )
+
+        assert result is not None
+        assert (result.error, result.status_code, result.total_tokens) == (True, 401, 0)
+        assert "openai_service_account_id" in (result.error_message or "")
         assert route.call_count == 0
+        assert exchange.call_count == 0
 
 
 SLOW_EXCHANGE_SECONDS: Final = 0.4
@@ -1945,3 +1948,56 @@ class TestTokenExchangeLeavesTheEventLoopFree:
 
         assert stall < SLOW_EXCHANGE_SECONDS / 2
         assert bearer_of(upstream) == "Bearer unblocked-bearer"
+
+
+class TestCountTokens:
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_count_authenticates_with_the_workload_identity_bearer(
+        self, wif_env: OpenAIWorkloadIdentityConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from litellm.llms.openai.responses.count_tokens.token_counter import OpenAITokenCounter
+
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        monkeypatch.setattr(litellm, "api_key", None)
+        monkeypatch.setattr(litellm, "openai_key", None)
+        mock_token_exchange()
+        count_route: Final = respx.post("https://api.openai.com/v1/responses/input_tokens").mock(
+            return_value=httpx.Response(200, json={"input_tokens": 12})
+        )
+        result: Final = await OpenAITokenCounter().count_tokens(
+            model_to_use="gpt-4o",
+            messages=[{"role": "user", "content": "hi"}],
+            contents=None,
+            deployment={"litellm_params": {}},
+            request_model="openai/gpt-4o",
+        )
+        assert result is not None
+        assert result.error is False
+        assert result.total_tokens == 12
+        assert count_route.calls.last.request.headers["authorization"] == "Bearer exchanged-bearer-token"
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_failed_mint_becomes_a_count_error_response(
+        self, wif_env: OpenAIWorkloadIdentityConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from litellm.llms.openai.responses.count_tokens.token_counter import OpenAITokenCounter
+
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        monkeypatch.setattr(litellm, "api_key", None)
+        monkeypatch.setattr(litellm, "openai_key", None)
+        respx.post(TOKEN_EXCHANGE_URL).mock(return_value=httpx.Response(400, json={"error": "invalid_grant"}))
+        count_route: Final = respx.post("https://api.openai.com/v1/responses/input_tokens")
+        result: Final = await OpenAITokenCounter().count_tokens(
+            model_to_use="gpt-4o",
+            messages=[{"role": "user", "content": "hi"}],
+            contents=None,
+            deployment={"litellm_params": {}},
+            request_model="openai/gpt-4o",
+        )
+        assert result is not None
+        assert result.error is True
+        assert result.status_code == 401
+        assert result.total_tokens == 0
+        assert not count_route.called
