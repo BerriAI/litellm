@@ -908,6 +908,13 @@ async def test_async_data_generator_mid_stream_exception_yields_error_payload(
 
 
 _BLOCK_MESSAGE: Final = "Content blocked: keyword 'keeper' detected"
+_BLOCK_ERROR: Final = {
+    "message": _BLOCK_MESSAGE,
+    "type": "invalid_request_error",
+    "param": None,
+    "code": "400",
+    "provider_specific_fields": {"error": _BLOCK_MESSAGE},
+}
 _UNSERIALIZABLE_SPAN: Final = object()
 
 
@@ -1043,7 +1050,7 @@ class _ReplacesClientErrors(CustomLogger):
     ],
 )
 async def test_guardrail_block_sends_the_failure_hook_replacement(
-    monkeypatch, chunks_before_block: int, expected_status: int
+    monkeypatch: pytest.MonkeyPatch, chunks_before_block: int, expected_status: int
 ) -> None:
     monkeypatch.setattr(litellm, "callbacks", [_ReplacesClientErrors()])
 
@@ -1051,8 +1058,12 @@ async def test_guardrail_block_sends_the_failure_hook_replacement(
 
     assert status_code == expected_status
     assert _BLOCK_MESSAGE not in "".join(frames)
-    assert _error_of(frames[-2])["message"] == "Request blocked by policy"
-    assert _error_of(frames[-2])["code"] == "403"
+    assert _error_of(frames[-2]) == {
+        "message": "Request blocked by policy",
+        "type": "permission_error",
+        "param": None,
+        "code": "403",
+    }
     assert frames[-1] == "data: [DONE]"
 
 
@@ -1061,10 +1072,31 @@ async def test_guardrail_block_before_the_first_chunk_keeps_its_http_status() ->
     status_code, media_type, frames = await _served(_blocked_after(0, {"error": _BLOCK_MESSAGE}))
 
     assert (status_code, media_type) == (400, "text/event-stream")
+    assert len(frames) == 2
+    assert _error_of(frames[0]) == _BLOCK_ERROR
+    assert frames[1] == "data: [DONE]"
+
+
+
+
+async def _blocked_after_a_stall() -> AsyncIterator[ModelResponseStream]:
+    await asyncio.sleep(1.5)
+    async for chunk in _blocked_after(0, {"error": _BLOCK_MESSAGE}):
+        yield chunk
+
+
+@pytest.mark.asyncio
+async def test_guardrail_block_after_a_keepalive_ping_ends_the_stream_with_an_error_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "sse_keepalive_ping_interval_seconds", 1)
+
+    status_code, _, frames = await _served(_blocked_after_a_stall())
+
+    assert status_code == 200
+    assert frames[0] == ": ping"
+    assert _error_of(frames[-2]) == _BLOCK_ERROR
     assert frames[-1] == "data: [DONE]"
-    assert _error_of(frames[0])["message"] == _BLOCK_MESSAGE
-
-
 
 class _BlocksKeeperPerChunk(CustomLogger):
     async def async_post_call_streaming_hook(self, user_api_key_dict: UserAPIKeyAuth, response: str) -> None:
@@ -1086,7 +1118,7 @@ async def _chunks(*contents: str) -> AsyncIterator[ModelResponseStream]:
     ],
 )
 async def test_per_chunk_guardrail_block_keeps_early_blocks_on_their_status_and_ends_later_ones_in_band(
-    monkeypatch, contents: tuple[str, ...], expected_status: int, expected_frames: int
+    monkeypatch: pytest.MonkeyPatch, contents: tuple[str, ...], expected_status: int, expected_frames: int
 ) -> None:
     monkeypatch.setattr(litellm, "callbacks", [_BlocksKeeperPerChunk()])
 
@@ -1094,7 +1126,7 @@ async def test_per_chunk_guardrail_block_keeps_early_blocks_on_their_status_and_
 
     assert (status_code, media_type) == (expected_status, "text/event-stream")
     assert len(frames) == expected_frames
-    assert _error_of(frames[-2])["message"] == _BLOCK_MESSAGE
+    assert _error_of(frames[-2]) == _BLOCK_ERROR
     assert frames[-1] == "data: [DONE]"
 
 

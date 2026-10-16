@@ -10244,7 +10244,7 @@ async def async_data_generator(
         else response
     )
     stream_source: AsyncIterator[object] | None = None  # rebind-ok: bound once the keepalive policy resolves
-    stream_started: bool = False  # rebind-ok: set after the first chunk clears its hooks, then errors go in-band
+    stream_started: bool = False  # rebind-ok: set once a ping or a hook-cleared chunk is sent, then errors go in-band
     try:
         error_message: str | None = None
         requested_model_from_client: Final = _get_client_requested_model_for_streaming(request_data=request_data)
@@ -10301,6 +10301,7 @@ async def async_data_generator(
                 await asyncio.sleep(0)
                 loop_released_at = time.monotonic()
             if item is _STREAM_KEEPALIVE:
+                stream_started = True
                 yield ": ping\n\n"
                 continue
             chunk = item
