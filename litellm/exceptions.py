@@ -238,7 +238,7 @@ class OpenRouterRegionNotSupportedError(NotFoundError):
         max_retries: int | None = None,
         num_retries: int | None = None,
         region: str | None = None,
-    ):
+    ) -> None:
         self.region = region
         super().__init__(
             message=message,

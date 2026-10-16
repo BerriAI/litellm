@@ -52,8 +52,8 @@ class OpenrouterConfig(OpenAIGPTConfig):
     def __init__(
         self,
         region: str | None = None,
-        **kwargs,
-    ):
+        **kwargs: object,
+    ) -> None:
         self.region = region
         super().__init__(**kwargs)
 
