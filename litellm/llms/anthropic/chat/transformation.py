@@ -150,7 +150,6 @@ _ANTHROPIC_TOOL_NAME_MAX_LEN: Final = 128
 _DEFER_LOADING_ADAPTER: Final = TypeAdapter(bool)
 _TOOL_FIELDS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _TOOLS_ADAPTER: Final = TypeAdapter(list[object])
-_RESPONSE_BODY: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
 
 
 def _tool_type(tool: object) -> str | None:
@@ -3047,7 +3046,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         ## RESPONSE OBJECT
         try:
-            completion_response: Final = _RESPONSE_BODY.validate_python(raw_response.json())
+            completion_response: Final = raw_response.json()
         except Exception as e:
             response_headers: Final = getattr(raw_response, "headers", None)
             raise AnthropicError(
