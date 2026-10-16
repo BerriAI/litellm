@@ -877,6 +877,24 @@ async def test_seconds_size_and_extra_body_content_reach_the_wire():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "fields",
+    [{"parameters": {"seed": 3}}, {"extra_body": {"parameters": {"seed": 3}}}],
+    ids=["top_level", "extra_body"],
+)
+async def test_parameters_reach_the_wire_unpacked_whether_sent_top_level_or_in_extra_body(fields: dict[str, object]):
+    body = await _wire_body(model=f"volcengine/{SEEDANCE_2_5}", prompt="p", seconds="4", **fields)
+
+    assert body == {
+        "model": SEEDANCE_2_5,
+        "content": [{"type": "text", "text": "p"}],
+        "resolution": "720p",
+        "duration": 4,
+        "seed": 3,
+    }
+
+
+@pytest.mark.asyncio
 async def test_an_extra_body_duration_of_minus_one_is_rejected_before_anything_is_sent():
     with pytest.raises(UnsupportedParamsError, match="Ark-picked length"):
         _ = await _wire_body(model=f"volcengine/{SEEDANCE_2_5}", prompt="p", extra_body={"duration": -1})

@@ -592,8 +592,13 @@ class VolcEngineVideoConfig(BaseVideoConfig):
         and an omitted length is sent as OpenAI's documented default of 4 seconds, since the 2.5 family's own default
         is ``-1``.
         """
-        params: Final = video_create_optional_request_params
         drop_params: Final = _drops_params(litellm_params)
+        params: Final = MappingProxyType(
+            {
+                **{key: value for key, value in video_create_optional_request_params.items() if key != "parameters"},
+                **_parameters_fields(video_create_optional_request_params.get("parameters"), model, drop_params),
+            }
+        )
         content: Final = _sent_content(prompt, params, model, drop_params)
         if params.get("frames") is not None and not drop_params:
             raise _droppable(model, "frames is not supported through litellm, pass seconds instead")
