@@ -1384,6 +1384,92 @@ class TestUpdateModel:
     Tests for the update_model (POST /model/update) handler.
     """
 
+    @staticmethod
+    async def _persisted_model_info(stored_model_info: Mapping[str, object], model_info: ModelInfo) -> object:
+        from litellm.proxy.management_endpoints.model_management_endpoints import update_model
+
+        existing_row = MagicMock()
+        existing_row.litellm_params = {"model": "azure/my-deployment", "api_key": "sk-existing"}
+        existing_row.model_dump.return_value = {
+            "model_name": "my-model",
+            "litellm_params": existing_row.litellm_params,
+            "model_info": dict(stored_model_info),
+        }
+        existing_row.model_dump_json.return_value = "{}"
+        updated_row = MagicMock()
+        updated_row.model_dump_json.return_value = "{}"
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=existing_row)
+        mock_prisma.db.litellm_proxymodeltable.update = AsyncMock(return_value=updated_row)
+        mock_router = MagicMock()
+        mock_router.get_model_ids.return_value = [stored_model_info["id"]]
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+            patch("litellm.proxy.proxy_server.llm_router", mock_router),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),
+            patch("litellm.proxy.proxy_server.premium_user", True),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
+                new=AsyncMock(return_value=None),
+            ),
+            patch(  # test-quality-ok: [TQ008] isolate persistence from encryption implementation
+                "litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper",
+                side_effect=lambda value: value,
+            ),
+            patch(  # test-quality-ok: [TQ008] isolate persistence from router reload implementation
+                "litellm.proxy.management_endpoints.model_management_endpoints.clear_cache",
+                new=AsyncMock(return_value=ReconcileOutcome(still_desired=None, live_after=None)),
+            ),
+        ):
+            await update_model(
+                model_params=updateDeployment(litellm_params=updateLiteLLMParams(), model_info=model_info),
+                user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+            )
+
+        written = mock_prisma.db.litellm_proxymodeltable.update.await_args.kwargs["data"]
+        return json.loads(written["model_info"]) if "model_info" in written else None
+
+    @pytest.mark.asyncio
+    async def test_update_model_persists_sent_model_info_over_stored_fields(self):
+        stored = {"id": "m1", "db_model": True, "base_model": "my-deployment", "tier": "paid", "team_id": "team-a"}
+
+        persisted = await self._persisted_model_info(
+            stored, ModelInfo(id="m1", base_model="azure/gpt-4o", mode="chat", db_model=False, team_id="team-b")
+        )
+
+        assert persisted is not None
+        assert persisted["base_model"] == "azure/gpt-4o"
+        assert persisted["mode"] == "chat"
+        assert {k: persisted[k] for k in ("db_model", "tier", "team_id")} == {
+            "db_model": True,
+            "tier": "paid",
+            "team_id": "team-a",
+        }
+
+    @pytest.mark.asyncio
+    async def test_update_model_with_only_an_id_leaves_model_info_untouched(self):
+        assert await self._persisted_model_info({"id": "m1", "base_model": "my-deployment"}, ModelInfo(id="m1")) is None
+
+    @pytest.mark.asyncio
+    async def test_update_model_does_not_pin_values_echoed_from_model_info(self):
+        import litellm
+
+        catalog_entry = litellm.get_model_info(model="azure/gpt-4o")
+        echoed = ModelInfo(
+            id="m1",
+            base_model="azure/gpt-4o",
+            key=catalog_entry["key"],
+            max_tokens=catalog_entry["max_tokens"],
+            input_cost_per_token=catalog_entry["input_cost_per_token"],
+        )
+
+        persisted = await self._persisted_model_info({"id": "m1"}, echoed)
+
+        assert persisted is not None
+        assert persisted["base_model"] == "azure/gpt-4o"
+        assert not {"key", "max_tokens", "input_cost_per_token"} & persisted.keys()
+
     @pytest.mark.asyncio
     async def test_update_model_clears_cache_after_db_write(self):
         """

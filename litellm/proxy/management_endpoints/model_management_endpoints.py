@@ -1055,6 +1055,52 @@ def _loaded_catalog_entry(
     return loaded_catalog().get(catalog_key, MappingProxyType({}))
 
 
+_LEGACY_UPDATE_IGNORED_MODEL_INFO_FIELDS: Final = frozenset(
+    {
+        "id",
+        "db_model",
+        "created_at",
+        "created_by",
+        "updated_at",
+        "updated_by",
+        "blocked",
+        "member_auto_router",
+        "team_id",
+        "team_public_model_name",
+        COST_MAP_LOOKUP_KEY,
+        *PTU_MODEL_INFO_FIELDS,
+    }
+)
+
+
+def legacy_update_model_info_changes(
+    db_model: Deployment,
+    incoming_model_info: ModelInfo,
+    loaded_catalog: LoadedCatalog = GetModelCostMap.loaded_model_cost_map,
+) -> Mapping[str, object]:
+    """The ``model_info`` fields ``POST /model/update`` persists from its request.
+
+    Only fields the caller sent count, so ``ModelInfo`` defaults never overwrite stored
+    values. Server-owned, team, PTU and pricing fields keep their dedicated write paths,
+    and values echoed from a ``/model/info`` response stay display-only.
+    """
+    sent: Final = {
+        k: v
+        for k, v in incoming_model_info.model_dump(exclude_unset=True, exclude_none=True).items()
+        if k not in _LEGACY_UPDATE_IGNORED_MODEL_INFO_FIELDS
+    }
+    echoed: Final = frozenset(
+        echoed_cost_map_fields(
+            incoming_model_info.model_dump(exclude_none=True),
+            _cost_map_entry(db_model, sent),
+            _loaded_catalog_entry(incoming_model_info.model_dump(exclude_none=True), loaded_catalog),
+        )
+    )
+    return MappingProxyType(
+        {k: getattr(incoming_model_info, k) for k in without_server_derived_pricing(sent) if k not in echoed}
+    )
+
+
 def update_db_model(
     db_model: Deployment,
     updated_patch: updateDeployment,
@@ -2857,14 +2903,20 @@ async def update_model(
             renamed_update: Final[PrismaCompatibleUpdateDBModel] = (
                 {**base_update, "model_name": renamed_to} if renamed_to is not None else base_update
             )
+            model_info_changes: Final = MappingProxyType(
+                {
+                    **legacy_update_model_info_changes(deployment, _model_info),
+                    **({"member_auto_router": member_marker} if member_marker is not None else {}),
+                }
+            )
             _data: Final[PrismaCompatibleUpdateDBModel] = (
                 {
                     **renamed_update,
-                    "model_info": deployment.model_info.model_copy(
-                        update=MappingProxyType({"member_auto_router": member_marker})
-                    ).model_dump_json(exclude_none=True),
+                    "model_info": deployment.model_info.model_copy(update=model_info_changes).model_dump_json(
+                        exclude_none=True
+                    ),
                 }
-                if member_marker is not None
+                if model_info_changes
                 else renamed_update
             )
             async with _auto_router_capability_slot(
