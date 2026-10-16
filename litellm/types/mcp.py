@@ -73,6 +73,8 @@ def validate_mcp_protocol_transport(protocol_version: MCPUpstreamProtocol, trans
 
 MCPAdvertisedVersion: TypeAlias = MCPLegacyVersion | Literal["2026-07-28"]
 MCPAdvertisedVersions: TypeAlias = Annotated[tuple[MCPAdvertisedVersion, ...], Field(min_length=1)]
+MCPDisableableCapability: TypeAlias = Literal["prompts", "resources"]
+MCPDisabledCapabilities: TypeAlias = tuple[MCPDisableableCapability, ...]
 MCPSpecVersionType = Literal[
     MCPSpecVersion.nov_2024,
     MCPSpecVersion.mar_2025,
@@ -245,6 +247,12 @@ class MCPCredentials(TypedDict, total=False):
     """
     Optional RFC 8707 resource indicator sent on ID-JAG leg 1
     """
+
+    id_jag_resource_client_id: ReadOnly[str | None]
+    """OAuth client identifier used at the ID-JAG resource authorization server."""
+
+    id_jag_resource_client_secret: str | None  # writable-ok: encrypt_credentials updates this field
+    """OAuth client secret used at the ID-JAG resource authorization server."""
 
     upstream_resource: str | None
     """

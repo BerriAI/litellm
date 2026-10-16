@@ -1,7 +1,6 @@
 import asyncio
 import json
 import re
-import signal
 import threading
 import uuid
 from collections.abc import Iterator, Mapping
@@ -353,14 +352,14 @@ async def test_x3_killing_one_worker_mid_burst_leaves_the_sibling_timing_its_str
             held_by: Final = {pid: _open_upstream_connections(pid, peer.wire.url) for pid in workers}
             assert sum(held_by.values()) == 20, held_by
             victim_pid, survivor_pid = sorted(workers, key=held_by.__getitem__)
-            victim: Final = psutil.Process(victim_pid)
-            victim.suspend()
-            victim.send_signal(signal.SIGKILL)
-            served: Final = await burst
-            assert held_by[survivor_pid] >= 10, held_by
-            assert len(served) == held_by[survivor_pid], (held_by, len(served))
-            for item in served:
-                _assert_timed_out(item, _KILL_TIMEOUT_SECONDS)
+            with owned.replacing_worker(victim_pid) as kill:
+                kill.freeze()
+                await asyncio.to_thread(kill)
+                served: Final = await burst
+                assert held_by[survivor_pid] >= 10, held_by
+                assert len(served) == held_by[survivor_pid], (held_by, len(served))
+                for item in served:
+                    _assert_timed_out(item, _KILL_TIMEOUT_SECONDS)
             peer.hold.clear()
             _assert_answered(await _one(owned.gateway, _KILL_MODEL, _Call("chat")))
             assert len(peer.wire.drain()) == 21

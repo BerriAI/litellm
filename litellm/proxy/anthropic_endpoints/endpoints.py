@@ -2,10 +2,12 @@
 Unified /v1/messages endpoint - (Anthropic Spec)
 """
 
+from collections.abc import Mapping
 from typing import Final
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
+from pydantic import JsonValue
 
 import litellm
 from litellm.anthropic_interface.exceptions import (
@@ -86,7 +88,7 @@ def _anthropic_error_json_response(exc: ProxyException, request: Request) -> JSO
     return JSONResponse(status_code=status_code, content=content, headers=exc.headers)
 
 
-def _strip_total_tokens_from_anthropic_response(response: Any) -> None:
+def _strip_total_tokens_from_anthropic_response(response: object) -> None:
     """Remove the OpenAI-flavored `usage.total_tokens` field that LiteLLM
     injects into Anthropic /v1/messages responses.
 
@@ -289,6 +291,14 @@ async def anthropic_response(
         )
 
 
+def _requested_output_format(data: Mapping[str, JsonValue]) -> JsonValue:
+    output_format: Final = data.get("output_format")
+    output_config: Final = data.get("output_config")
+    if isinstance(output_format, dict) or not isinstance(output_config, dict):
+        return output_format
+    return output_config.get("format")
+
+
 @router.post(
     "/v1/messages/count_tokens",
     tags=["[beta] Anthropic Messages Token Counting"],
@@ -318,7 +328,7 @@ async def count_tokens(
     
     Returns: {"input_tokens": <number>}
     """
-    from litellm.proxy.proxy_server import token_counter as internal_token_counter
+    from litellm.proxy.proxy_server import count_request_tokens
 
     litellm_call_id: Final = resolve_litellm_call_id(request.headers.get("x-litellm-call-id"))
     try:
@@ -345,10 +355,11 @@ async def count_tokens(
             system=data.get("system"),
         )
 
-        # Call the internal token counter function with direct request flag set to False
-        token_response: Final = await internal_token_counter(
+        token_response: Final = await count_request_tokens(
             request=token_request,
             call_endpoint=True,
+            messages_format="anthropic",
+            output_format=_requested_output_format(data),
         )
         _token_response_dict: dict = {}
         if isinstance(token_response, TokenCountResponse):

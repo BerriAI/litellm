@@ -64,7 +64,7 @@ export const removeAt = <T>(items: readonly T[], index: number): T[] =>
 export const blankQuestion = (): ChoiceQuestion => ({
   type: "choice",
   instructions: "",
-  criteria: { option_1: "", option_2: "" },
+  criteria: {},
 });
 
 export const retype = (question: FormQuestion, type: QuestionType): FormQuestion => {

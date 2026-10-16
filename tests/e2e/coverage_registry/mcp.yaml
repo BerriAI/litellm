@@ -39,6 +39,14 @@
   assertions: [denied_without_permission]
   source: "rest_endpoints.py:305-386"
   rationale: Tool-level permission guard; multi-tenant safety
+- id: mcp.tool_search.api_key.oversized_description_omitted
+  module: mcp
+  tier: P0
+  operation: tool_search
+  auth_family: api_key
+  assertions: [oversized_description_omitted]
+  source: "test_mcp_tool_search_e2e.py"
+  rationale: Native semantic search omits tools whose descriptions exceed the embedding input limit
 - id: mcp.list_tools.bearer.succeeds
   module: mcp
   tier: P1
@@ -135,3 +143,11 @@
   assertions: [toolset_scoped]
   source: "user_api_key_auth_mcp.py:2137"
   rationale: "A key granted a toolset lists exactly the toolset's tools: the rest of the server's catalog stays hidden and every stored name resolves"
+- id: mcp.list_tools.api_key.semantic_filtered
+  module: mcp
+  tier: P1
+  operation: list_tools
+  auth_family: api_key
+  assertions: [semantic_filtered]
+  source: "litellm/proxy/hooks/mcp_semantic_filter/hook.py"
+  rationale: The semantic tool filter must cut a large MCP catalog to top_k and keep the tool the prompt needs

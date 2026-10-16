@@ -7,6 +7,7 @@ from types import MappingProxyType
 from typing import Final, Protocol, cast
 
 import httpx
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import _ENABLE_SECRET_REDACTION, redact_string, verbose_logger
@@ -15,6 +16,7 @@ from litellm.litellm_core_utils.bug_report import (
     build_bug_report,
     should_report_bug,
 )
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.secret_redaction import redact_string as redact_secret_string
 from litellm.types.utils import LlmProviders
 
@@ -112,6 +114,9 @@ class ExceptionCheckers:
         if "maximum input length is" in _error_str_lowercase and "tokens" in _error_str_lowercase:
             return True
 
+        if "input too long:" in _error_str_lowercase and "input tokens, limit is" in _error_str_lowercase:
+            return True
+
         return False
 
     @staticmethod
@@ -181,12 +186,20 @@ def get_error_message(error_obj) -> str | None:
 
 
 ####### EXCEPTION MAPPING ################
+_DECODED_ERROR_BODY: Final = TypeAdapter(object)
+
+
 def _get_body_error_code(error_str: str) -> int | None:
     """Return error.code from a JSON error body, or None if not parseable."""
     try:
-        body: Final = json.loads(error_str)
-        code: Final = body.get("error", {}).get("code")
-        return int(code) if code is not None else None
+        body: Final = as_str_mapping(_DECODED_ERROR_BODY.validate_python(json.loads(error_str)))
+        if body is None:
+            return None
+        error: Final = as_str_mapping(body.get("error", {}))
+        if error is None:
+            return None
+        code: Final = error.get("code")
+        return int(code) if isinstance(code, (str, int, float)) else None
     except Exception:
         return None
 
@@ -256,6 +269,23 @@ class _ProviderHTTPException(Protocol):
     llm_provider: str
 
 
+_ERROR_BODY_ADAPTER: Final = TypeAdapter(dict[str, object])
+
+
+def _openai_cyber_policy_body(original_exception: _ProviderHTTPException) -> Mapping[str, object] | None:
+    raw_body: Final[object] = getattr(original_exception, "body", None)
+    try:
+        body: Final = (
+            _ERROR_BODY_ADAPTER.validate_python(raw_body)
+            if raw_body is not None
+            else _ERROR_BODY_ADAPTER.validate_json(getattr(original_exception, "message", ""))
+        )
+        error: Final = _ERROR_BODY_ADAPTER.validate_python(body.get("error", body))
+    except ValidationError:
+        return None
+    return error if error.get("code") == "cyber_policy" else None
+
+
 def _litellm_proxy_response(
     original_exception: _ProviderHTTPException, custom_llm_provider: str
 ) -> httpx.Response | None:
@@ -284,6 +314,15 @@ def _map_openai_exception(
     extra_information: str,
 ) -> None:
     response: Final = _litellm_proxy_response(original_exception, custom_llm_provider)
+    if (cyber_policy_body := _openai_cyber_policy_body(original_exception)) is not None:
+        raise ContentPolicyViolationError(
+            message=f"ContentPolicyViolationError: {exception_provider} - {original_exception}",
+            llm_provider=custom_llm_provider,
+            model=model,
+            response=response,
+            litellm_debug_info=extra_information,
+            body=dict(cyber_policy_body),
+        )
     # custom_llm_provider is openai, make it OpenAI
     message = get_error_message(error_obj=original_exception)
     if message is None:
@@ -853,21 +892,37 @@ def _map_openai_like_exception(
 
 
 _BEDROCK_MANTLE_CONTEXT_WINDOW_PATTERN: Final = re.compile(r"prompt tokens \((\d+)\) exceed model maximum \((\d+)\)")
+_BEDROCK_MANTLE_CONTEXT_LENGTH_EXCEEDED_CODE_PATTERN: Final = re.compile(
+    r"""\\?["']code\\?["']\s*:\s*\\?["']context_length_exceeded\\?["']"""
+)
+_BEDROCK_MANTLE_CONTEXT_WINDOW_GENERIC_MESSAGE: Final = (
+    "prompt is too long: your prompt exceeds the model's context window"
+)
+
+
+def _bedrock_mantle_context_window_response(original_exception: _ProviderHTTPException) -> httpx.Response:
+    original_response: Final = getattr(original_exception, "response", None)
+    if not isinstance(original_response, httpx.Response) or getattr(original_response, "_request", None) is None:
+        return httpx.Response(status_code=400, request=httpx.Request(method="POST", url="https://api.openai.com/v1/"))
+    if original_response.status_code == 400:
+        return original_response
+    return httpx.Response(status_code=400, headers=original_response.headers, request=original_response.request)
 
 
 def _get_bedrock_mantle_context_window_message(error_str: str) -> str | None:
     """
-    Mantle reports context overflow as a structured validation error rather than
-    the plain-text patterns Bedrock itself uses, so it needs its own detection and a
-    message clients recognize as context overflow (litellm/litellm#36546).
+    Mantle reports context overflow as a validation_error carrying the token counts, or as
+    OpenAI's context_length_exceeded code, either in a 400 body or in a streamed error event
+    with no error type. Clients such as Claude Code only treat "prompt is too long" as
+    overflow (litellm/litellm#36546).
     """
-    if "invalid_request_error" not in error_str and "validation_error" not in error_str:
-        return None
     match = _BEDROCK_MANTLE_CONTEXT_WINDOW_PATTERN.search(error_str)
-    if match is None:
-        return None
-    prompt_tokens, max_tokens = match.groups()
-    return f"prompt is too long: {prompt_tokens} tokens > {max_tokens} maximum"
+    if match is not None:
+        prompt_tokens, max_tokens = match.groups()
+        return f"prompt is too long: {prompt_tokens} tokens > {max_tokens} maximum"
+    if _BEDROCK_MANTLE_CONTEXT_LENGTH_EXCEEDED_CODE_PATTERN.search(error_str) is not None:
+        return _BEDROCK_MANTLE_CONTEXT_WINDOW_GENERIC_MESSAGE
+    return None
 
 
 def _map_bedrock_exception(
@@ -887,7 +942,7 @@ def _map_bedrock_exception(
                 message=mantle_context_window_message,
                 model=model,
                 llm_provider=custom_llm_provider,
-                response=getattr(original_exception, "response", None),
+                response=_bedrock_mantle_context_window_response(original_exception),
             )
     if (
         "too many tokens" in error_str

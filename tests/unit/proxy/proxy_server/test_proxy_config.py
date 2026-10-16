@@ -28,6 +28,7 @@ from pydantic import JsonValue, TypeAdapter, ValidationError
 import litellm
 from litellm.proxy._types import CommonProxyErrors, ConfigGeneralSettings
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+from litellm.types.router import Deployment, LiteLLM_Params
 from litellm.proxy.proxy_server import (
     ProxyConfig,
     _is_remote_module_url,
@@ -43,6 +44,91 @@ from litellm.proxy.proxy_server import (
 from litellm.tracing.config import is_lens_tracing_enabled
 
 from .conftest import normalize
+
+
+def _deployment(model_id: str, model_name: str = "gpt-3.5-turbo") -> Deployment:
+    return Deployment(
+        model_name=model_name,
+        litellm_params=LiteLLM_Params(model="openai/gpt-3.5-turbo"),
+        model_info={"id": model_id},
+    )
+
+
+def _db_model(model_id: str, model_name: str = "gpt-3.5-turbo") -> SimpleNamespace:
+    return SimpleNamespace(
+        model_id=model_id,
+        model_name=model_name,
+        model_info={"id": model_id},
+        litellm_params={"model": encrypt_value_helper("openai/gpt-3.5-turbo")},
+        blocked=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_proxy_config_adds_and_deletes_stale_deployment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    router = litellm.Router(model_list=[])
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-proxy-config-test-salt")
+    config_path = tmp_path / "config.json"
+    config_path.write_text('{"model_list": []}')
+    monkeypatch.setattr(proxy_server, "user_config_file_path", str(config_path))
+    model = _db_model("db-deployment")
+
+    assert ProxyConfig()._add_deployment(db_models=[model]) == 1
+    assert router.get_model_ids() == ["db-deployment"]
+    assert router.get_deployment(model_id="db-deployment").litellm_params.model == "openai/gpt-3.5-turbo"
+    await ProxyConfig()._delete_deployment(db_models=[])
+    assert router.get_model_ids() == []
+
+
+def test_proxy_config_upserts_existing_deployment_without_duplicating_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    router = litellm.Router(model_list=[_deployment("existing-deployment").to_json(exclude_none=True)])
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-proxy-config-test-salt")
+
+    ProxyConfig()._add_deployment(db_models=[_db_model("existing-deployment")])
+    assert len(router.model_list) == 1
+    assert router.get_model_ids() == ["existing-deployment"]
+
+
+@pytest.mark.asyncio
+async def test_proxy_config_preserves_models_when_config_read_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    router = litellm.Router(model_list=[_deployment("config-deployment").to_json(exclude_none=True)])
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "user_config_file_path", str(tmp_path / "missing.json"))
+
+    assert await ProxyConfig()._delete_deployment(db_models=[]) is None
+    assert router.get_model_ids() == ["config-deployment"]
+
+
+@pytest.mark.asyncio
+async def test_proxy_config_keeps_database_models_and_deletes_stale_models(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy import proxy_server
+
+    router = litellm.Router(
+        model_list=[
+            _deployment("kept-deployment").to_json(exclude_none=True),
+            _deployment("stale-deployment", "stale-model").to_json(exclude_none=True),
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-proxy-config-test-salt")
+    config_path = tmp_path / "config.json"
+    config_path.write_text('{"model_list": []}')
+    monkeypatch.setattr(proxy_server, "user_config_file_path", str(config_path))
+
+    desired = await ProxyConfig()._delete_deployment(db_models=[_db_model("kept-deployment")])
+
+    assert desired == frozenset({"kept-deployment"})
+    assert router.get_model_ids() == ["kept-deployment"]
 from tests._master_key import MASTER_KEY
 
 
@@ -99,6 +185,68 @@ async def test_tracing_config_automatically_exports_spend_without_a_storage_depe
     assert logger not in litellm._async_success_callback
     assert logger.task is not None and logger.task.done() and not logger.task.cancelled()
 
+
+@pytest.mark.asyncio
+async def test_tracing_logs_an_error_naming_the_store_when_lens_is_misconfigured(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from litellm.proxy.tracing_runtime import manage_tracing
+
+    monkeypatch.delenv("LITELLM_LENS_URL", raising=False)
+    monkeypatch.delenv("LITELLM_LENS_SERVICE_TOKEN", raising=False)
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"):
+        async with manage_tracing(enabled=True) as receiver:
+            assert receiver is None
+
+    failures: Final = [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno == logging.ERROR and "lens" in record.getMessage()
+    ]
+    assert len(failures) == 1
+    assert "LITELLM_LENS_URL" in failures[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "config_text",
+    (
+        "model_list: []\nlitellm_settings:\n  failure_callback:\n    - sentry\n",
+        "model_list: []\nlitellm_settings:\n  success_callback:\n    - sentry\n",
+        "model_list: []\nlitellm_settings:\n  input_callback:\n    - sentry\n",
+        "model_list: []\ngeneral_settings:\n  alerting:\n    - sentry\n",
+    ),
+    ids=("failure_callback", "success_callback", "input_callback", "alerting"),
+)
+async def test_proxy_config_starts_sentry_at_boot_without_request_bodies(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, config_text: str
+) -> None:
+    import sentry_sdk
+
+    from litellm.litellm_core_utils import litellm_logging
+
+    init: Final = MagicMock()
+    monkeypatch.setattr(sentry_sdk, "init", init)
+    monkeypatch.setenv("SENTRY_DSN", "https://key@sentry.example/1")
+    monkeypatch.setattr(litellm_logging, "sentry_sdk_instance", None)
+    litellm_logging.start_sentry.cache_clear()
+    monkeypatch.setattr(litellm_logging, "capture_exception", None)
+    monkeypatch.setattr(litellm_logging, "add_breadcrumb", None)
+    monkeypatch.setattr(litellm, "input_callback", [])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+    config_file: Final = tmp_path / "sentry.yaml"
+    config_file.write_text(config_text)
+
+    await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
+
+    init.assert_called_once()
+    assert init.call_args.kwargs["max_request_body_size"] == "never"
+    assert litellm_logging.sentry_sdk_instance is sentry_sdk
 
 
 # ---------------------------------------------------------------------------
@@ -2234,7 +2382,7 @@ async def test_load_config_legacy_secret_manager_flags_capture_the_initialized_c
     else:
         client_type: Final = pytest.importorskip("google.cloud.kms_v1").KeyManagementServiceClient
 
-    from litellm.rust_bridge.secret_manager import native_secret_manager_config
+    from litellm.rust_bridge.host.secret_manager import native_secret_manager_config
 
     credentials_file: Final = tmp_path / "credentials.json"
     credentials_file.write_text(
