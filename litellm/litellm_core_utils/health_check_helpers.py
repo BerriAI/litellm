@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Final, Literal
 
 from litellm.litellm_core_utils.get_llm_provider_logic import (
     model_matches_wildcard,
+    model_name_at_provider,
     split_route_type_prefix,
     strip_provider_family_prefix,
 )
@@ -101,6 +102,17 @@ def _wildcard_health_check_models(
     return matching[:3] or tuple(dict.fromkeys(candidate_models))[:3]
 
 
+def _wildcard_probe_models(
+    wildcard_suffix: str, custom_llm_provider: str, cheapest_models: Sequence[str]
+) -> tuple[str, ...]:
+    route_models: Final = _wildcard_health_check_models(wildcard_suffix, custom_llm_provider, cheapest_models)
+    probed: Final = frozenset(model_name_at_provider(model, custom_llm_provider) for model in route_models)
+    provider_models: Final = (
+        model for model in cheapest_models[:3] if model_name_at_provider(model, custom_llm_provider) not in probed
+    )
+    return (*route_models, *provider_models)
+
+
 class HealthCheckHelpers:
     @staticmethod
     async def ahealth_check_wildcard_models(
@@ -121,9 +133,7 @@ class HealthCheckHelpers:
             raise Exception(
                 f"Unable to health check wildcard model for provider {custom_llm_provider}. Add a model on your config.yaml or contribute here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
             )
-        candidates: Final = _wildcard_health_check_models(
-            wildcard_suffix=model, custom_llm_provider=custom_llm_provider, candidate_models=cheapest_models
-        )
+        candidates: Final = _wildcard_probe_models(model, custom_llm_provider, cheapest_models)
         fallback_models: Final = list(candidates[1:]) or None
         model_params["model"] = candidates[0]
         model_params["litellm_logging_obj"] = litellm_logging_obj

@@ -8,6 +8,7 @@ from types import MappingProxyType
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 import respx
 
@@ -19,6 +20,7 @@ from litellm.litellm_core_utils.health_check_helpers import (
     default_health_check_mode,
     native_health_check_mode,
     _wildcard_health_check_models,
+    _wildcard_probe_models,
 )
 from litellm.main import ahealth_check
 from litellm.proxy._types import UserAPIKeyAuth
@@ -1578,6 +1580,53 @@ def test_wildcard_health_check_models_probes_through_the_route_type_prefix(
     candidates: Final = (f"{custom_llm_provider}/amazon.nova-micro-v1:0", "anthropic.claude-v2")
 
     assert _wildcard_health_check_models(wildcard_suffix, custom_llm_provider, candidates) == expected
+
+
+def test_wildcard_probe_models_probe_each_provider_model_once_for_a_full_wildcard():
+    candidates: Final = ("openai/gpt-4o-mini", "gpt-4.1-nano", "o3-mini", "gpt-5-nano")
+
+    assert _wildcard_probe_models("*", "openai", candidates) == (
+        "openai/gpt-4o-mini",
+        "openai/gpt-4.1-nano",
+        "openai/o3-mini",
+    )
+
+
+@pytest.mark.asyncio
+async def test_ahealth_check_partial_wildcard_is_healthy_when_only_a_provider_model_answers(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        model: Final = json.loads(request.content)["model"]
+        if model.startswith("gpt-4o"):
+            return httpx.Response(404, json={"error": {"message": "not found", "type": "invalid_request_error"}})
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-1",
+                "object": "chat.completion",
+                "created": 0,
+                "model": model,
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+
+    upstream: Final = respx_mock.post("https://oai.test/v1/chat/completions").mock(side_effect=answer)
+
+    result: Final = await ahealth_check(
+        model_params={"model": "openai/gpt-4o*", "api_key": "x", "api_base": "https://oai.test/v1"},
+        mode="chat",
+    )
+
+    probed: Final = [json.loads(call.request.content)["model"] for call in upstream.calls]
+    assert "error" not in result, result
+    assert probed[0].startswith("gpt-4o")
+    assert not probed[-1].startswith("gpt-4o")
 
 
 def test_wildcard_health_check_models_partial_prefix_matching_nothing_keeps_cheapest_candidates():

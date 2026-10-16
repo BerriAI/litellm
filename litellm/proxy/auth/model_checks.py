@@ -352,17 +352,33 @@ def _listings_served_by_route(
     )
 
 
-def _rows_served_by_route(
-    wildcard_model: str,
-    litellm_params: LiteLLM_Params | None,
-    pattern_router: PatternMatchRouter | None,
-    exact_model_names: frozenset[str],
-) -> tuple[_WildcardListing, ...]:
+@dataclass(frozen=True, slots=True)
+class _ModelInfoRow:
+    listing: _WildcardListing
+    shadowed: bool
+
+
+def _model_info_rows(
+    deployment: dict[str, object], pattern_router: PatternMatchRouter | None, exact_model_names: frozenset[str]
+) -> tuple[_ModelInfoRow, ...]:
+    model_name: Final = str(deployment.get("model_name") or "")
+    raw_params: Final = deployment.get("litellm_params")
+    if not _check_wildcard_routing(model_name):
+        return ()
+    try:
+        litellm_params: Final = (
+            LiteLLM_Params.model_validate(raw_params) if isinstance(raw_params, dict) and raw_params else None
+        )
+    except Exception:
+        return ()
     return tuple(
-        listing
-        for listing in _wildcard_listings(wildcard_model, litellm_params)
+        _ModelInfoRow(
+            listing=listing,
+            shadowed=pattern_router is not None
+            and pattern_router.shadowing_regex(listing.listed_id, model_name) is not None,
+        )
+        for listing in _listings_served_by_route(model_name, litellm_params, pattern_router)
         if listing.listed_id not in exact_model_names
-        and not (pattern_router is not None and pattern_router.shadowing_regex(listing.listed_id, wildcard_model))
     )
 
 
@@ -383,22 +399,19 @@ def expand_wildcard_deployments_for_model_info(
     """
     model_names: Final = tuple(str(deployment.get("model_name") or "") for deployment in deployments)
     exact_model_names: Final = frozenset(name for name in model_names if not _check_wildcard_routing(name))
+    rows_by_deployment: Final = tuple(
+        _model_info_rows(deployment, pattern_router, exact_model_names) for deployment in deployments
+    )
+    served_ids: Final = frozenset(
+        candidate.listing.listed_id for candidate in chain.from_iterable(rows_by_deployment) if not candidate.shadowed
+    )
     expanded: Final[list[dict[str, object]]] = []
-    for deployment in deployments:
-        model_name = str(deployment.get("model_name") or "")
-        raw_params = deployment.get("litellm_params")
-        litellm_params_dict: dict[str, object] = raw_params if isinstance(raw_params, dict) else {}
-
-        if not _check_wildcard_routing(model_name):
-            expanded.append(deployment)
-            continue
-
-        try:
-            litellm_params = LiteLLM_Params.model_validate(litellm_params_dict) if litellm_params_dict else None
-        except Exception:
-            expanded.append(deployment)
-            continue
-        listings = _rows_served_by_route(model_name, litellm_params, pattern_router, exact_model_names)
+    for deployment, candidates in zip(deployments, rows_by_deployment):
+        listings = tuple(
+            candidate.listing
+            for candidate in candidates
+            if not (candidate.shadowed and candidate.listing.listed_id in served_ids)
+        )
         if not listings:
             expanded.append(deployment)
             continue

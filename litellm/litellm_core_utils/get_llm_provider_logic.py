@@ -190,6 +190,13 @@ def split_route_type_prefix(model_path: str, custom_llm_provider: str) -> tuple[
     return prefix, model_path.removeprefix(prefix)
 
 
+def model_name_at_provider(model: str, custom_llm_provider: str | None) -> str:
+    leading, sep, path = model.partition("/")
+    provider: Final = custom_llm_provider or (leading if sep else "")
+    model_path: Final = path if sep and leading == provider else model
+    return strip_provider_family_prefix(split_route_type_prefix(model_path, provider)[1], provider)
+
+
 def inferred_provider(model: str | None) -> str | None:
     if not model:
         return None

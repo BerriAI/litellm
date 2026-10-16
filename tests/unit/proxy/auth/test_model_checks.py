@@ -1225,6 +1225,56 @@ def test_key_scoped_to_a_wide_route_lists_ids_a_narrower_route_sends_to_the_same
     assert sorted(listed) == ["openai/gpt-4.1-mini", "openai/gpt-4.1-nano", "openai/gpt-4o"]
 
 
+def _wide_route_beside_a_narrower_route_to_another_provider(monkeypatch: pytest.MonkeyPatch):
+    import litellm
+    from litellm import Router
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", False)
+    monkeypatch.setitem(litellm.models_by_provider, "openai", ["gpt-4o", "gpt-4o-mini", "gpt-4.1-mini"])
+    monkeypatch.setitem(litellm.models_by_provider, "azure", [])
+    return Router(
+        model_list=[
+            {"model_name": "az/*", "litellm_params": {"model": "openai/*"}, "model_info": {"id": "wide"}},
+            {"model_name": "az/gpt-4o*", "litellm_params": {"model": "azure/gpt-4o*"}, "model_info": {"id": "narrow"}},
+        ]
+    )
+
+
+def test_listing_keeps_ids_a_narrower_route_sends_to_the_same_model_at_another_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    router: Final = _wide_route_beside_a_narrower_route_to_another_provider(monkeypatch)
+
+    listed: Final = get_complete_model_list(
+        key_models=[],
+        team_models=[],
+        proxy_model_list=["az/*", "az/gpt-4o*"],
+        user_model=None,
+        infer_model_from_keys=False,
+        llm_router=router,
+    )
+
+    assert {"az/gpt-4o", "az/gpt-4o-mini", "az/gpt-4.1-mini"} <= set(listed)
+
+
+def test_model_info_keeps_rows_a_narrower_route_cannot_list_but_sends_to_the_same_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.auth.model_checks import expand_wildcard_deployments_for_model_info
+
+    router: Final = _wide_route_beside_a_narrower_route_to_another_provider(monkeypatch)
+
+    rows: Final = expand_wildcard_deployments_for_model_info(router.get_model_list(), router.pattern_router)
+
+    assert sorted(row["model_name"] for row in rows if row["model_info"]["id"] == "wide") == [
+        "az/gpt-4.1-mini",
+        "az/gpt-4o",
+        "az/gpt-4o-mini",
+    ]
+
+
 def test_expand_wildcard_concrete_model_name_with_wildcard_litellm_params():
     """Concrete model_name must not be overwritten when only litellm_params.model is wildcard."""
     from litellm.proxy.auth.model_checks import (

@@ -5,13 +5,15 @@ Class to handle llm wildcard routing and regex pattern matching
 import copy
 import re
 from fnmatch import fnmatchcase
+from functools import reduce
+from itertools import accumulate
 from re import Match
 from typing import Final
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 from litellm._logging import verbose_router_logger
-from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
+from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider, model_name_at_provider
 from litellm.types.router import LiteLLM_Params
 
 
@@ -31,6 +33,31 @@ def matches_from_start(regex: str, request: str) -> bool:
         _ESCAPED_CHARACTER.sub(r"\1", segment).translate(_GLOB_LITERALS) for segment in regex.split("(.*)")
     )
     return fnmatchcase(request, "*".join(literals) + "*")
+
+
+def greedy_captures(regex: str, request: str) -> tuple[str, ...] | None:
+    segments: Final = tuple(_ESCAPED_CHARACTER.sub(r"\1", segment) for segment in regex.split("(.*)"))
+    prefix: Final = segments[0]
+    literals: Final = segments[1:]
+    starts: Final = tuple(
+        accumulate(
+            reversed(literals),
+            lambda ceiling, literal: -1 if ceiling < 0 else request.rfind(literal, len(prefix), ceiling),
+            initial=len(request),
+        )
+    )[:0:-1]
+    if not request.startswith(prefix) or -1 in starts:
+        return None
+    ends: Final = (len(prefix), *(start + len(literal) for start, literal in zip(starts, literals)))
+    return tuple(request[end:start] for end, start in zip(ends, starts))
+
+
+def fill_wildcards(segments: tuple[str, ...], deployment_model: str, request: str) -> str:
+    if "*" not in deployment_model:
+        return deployment_model
+    if len(segments) > deployment_model.count("*"):
+        return request
+    return reduce(lambda model, segment: model.replace("*", segment, 1), segments, deployment_model)
 
 
 class PatternUtils:
@@ -191,12 +218,17 @@ class PatternMatchRouter:
 
     def routes_elsewhere(self, request: str, wildcard: str, routed_model: str) -> bool:
         serving_regex: Final = self.shadowing_regex(request, wildcard)
-        matched: Final = re.match(serving_regex, request) if serving_regex is not None else None
-        if serving_regex is None or matched is None:
+        captures: Final = greedy_captures(serving_regex, request) if serving_regex is not None else None
+        if serving_regex is None or captures is None:
             return False
         deployments: Final = _ROUTED_DEPLOYMENTS.validate_python(self.patterns[serving_regex])
+        listed_model: Final = model_name_at_provider(routed_model, None)
         return all(
-            self.set_deployment_model_name(matched, deployment.litellm_params.model) != routed_model
+            model_name_at_provider(
+                fill_wildcards(captures, deployment.litellm_params.model, request),
+                deployment.litellm_params.custom_llm_provider,
+            )
+            != listed_model
             for deployment in deployments
         )
 
@@ -240,22 +272,7 @@ class PatternMatchRouter:
         if model_name = "hello-world-meta.llama3-70b" -> model = "bedrock/meta.llama3-70b"
         """
 
-        ## BASE CASE: if the deployment model name does not contain a wildcard, return the deployment model name
-        if "*" not in litellm_deployment_litellm_model:
-            return litellm_deployment_litellm_model
-
-        wildcard_count: Final = litellm_deployment_litellm_model.count("*")
-
-        # Extract all dynamic segments from the request
-        dynamic_segments: Final = matched_pattern.groups()
-
-        if len(dynamic_segments) > wildcard_count:
-            return matched_pattern.string  # default to the user input, if unable to map based on wildcards.
-        # Replace the corresponding wildcards in the litellm model pattern with extracted segments
-        for segment in dynamic_segments:
-            litellm_deployment_litellm_model = litellm_deployment_litellm_model.replace("*", segment, 1)
-
-        return litellm_deployment_litellm_model
+        return fill_wildcards(matched_pattern.groups(), litellm_deployment_litellm_model, matched_pattern.string)
 
     def get_pattern(self, model: str | None, custom_llm_provider: str | None = None) -> list[dict] | None:
         """
