@@ -1,9 +1,8 @@
 "use client";
 
-import { useState, type KeyboardEvent, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Plus } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import {
   Combobox,
   ComboboxCollection,
@@ -30,15 +29,8 @@ const toItems = (groups: readonly OptionGroup[]): GroupItems[] =>
     .filter((group) => group.options.length > 0)
     .map((group) => ({ value: group.label, items: group.options.map((option) => option.value) }));
 
-export const hasMatch = (labels: readonly string[], query: string): boolean =>
-  labels.some((label) => label.toLowerCase().includes(query.toLowerCase()));
-
-export const commitOnEnter =
-  (shouldCommit: () => boolean, commit: () => void) => (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.key !== "Enter" || !shouldCommit()) return;
-    event.preventDefault();
-    commit();
-  };
+const isListed = (index: ReadonlyMap<string, PickerOption>, name: string): boolean =>
+  index.has(name) || [...index.values()].some((option) => option.label === name);
 
 const optionIndex = (groups: readonly OptionGroup[]): ReadonlyMap<string, PickerOption> =>
   new Map(groups.flatMap((group) => group.options.map((option) => [option.value, option] as const)));
@@ -52,11 +44,12 @@ function GroupedOptions({ index, mono = false }: { index: ReadonlyMap<string, Pi
           <ComboboxCollection>
             {(value: string) => {
               const option = index.get(value);
+              if (!option) return <CustomItem key={value} value={value} />;
               return (
                 <ComboboxItem key={value} value={value} className={cn("items-start", mono && "font-mono text-xs")}>
                   <span className="flex min-w-0 flex-col">
-                    <span className="truncate">{option?.label ?? value}</span>
-                    {option?.description && (
+                    <span className="truncate">{option.label}</span>
+                    {option.description && (
                       <span className="truncate font-sans text-xs text-muted-foreground">{option.description}</span>
                     )}
                   </span>
@@ -67,6 +60,17 @@ function GroupedOptions({ index, mono = false }: { index: ReadonlyMap<string, Pi
         </ComboboxGroup>
       )}
     </ComboboxList>
+  );
+}
+
+function CustomItem({ value }: { value: string }) {
+  return (
+    <ComboboxItem value={value} className="font-mono text-xs">
+      <Plus />
+      <span className="min-w-0 truncate">
+        <span className="font-sans">Use</span> {value}
+      </span>
+    </ComboboxItem>
   );
 }
 
@@ -150,13 +154,10 @@ export function TargetPicker({
 }) {
   const [query, setQuery] = useState("");
   const index = optionIndex(groups);
-  const items = toItems(groups);
   const custom = query.trim();
+  const offerCustom = allowCustom && custom !== "" && !isListed(index, custom);
+  const items = [...toItems(groups), ...(offerCustom ? [{ value: "Custom name", items: [custom] }] : [])];
   const unsetText = isLoading ? `Loading ${label.toLowerCase()}s` : placeholder;
-  const commitCustom = () => {
-    onValueChange(custom);
-    setQuery("");
-  };
   return (
     <Combobox
       items={items}
@@ -181,32 +182,9 @@ export function TargetPicker({
         </span>
       </ComboboxTrigger>
       <ComboboxContent side="top" className="w-80">
-        <ComboboxInput
-          showTrigger={false}
-          placeholder={`Search ${label.toLowerCase()}s`}
-          onKeyDown={commitOnEnter(
-            () =>
-              allowCustom &&
-              custom !== "" &&
-              !hasMatch(
-                [...index.values()].map((option) => option.label),
-                custom,
-              ),
-            commitCustom,
-          )}
-        />
-        <ComboboxEmpty className="flex-col items-stretch gap-1 px-1 pb-1">
-          <span className="py-1">
-            {items.length === 0 && !custom ? emptyText : `No matching ${label.toLowerCase()}`}
-          </span>
-          {allowCustom && custom && (
-            <Button variant="ghost" size="sm" className="min-w-0 justify-start" onClick={commitCustom}>
-              <Plus />
-              <span className="min-w-0 truncate">
-                Use <span className="font-mono">{custom}</span>
-              </span>
-            </Button>
-          )}
+        <ComboboxInput showTrigger={false} placeholder={`Search ${label.toLowerCase()}s`} />
+        <ComboboxEmpty>
+          {items.length === 0 && !custom ? emptyText : `No matching ${label.toLowerCase()}`}
         </ComboboxEmpty>
         <GroupedOptions index={index} mono />
       </ComboboxContent>

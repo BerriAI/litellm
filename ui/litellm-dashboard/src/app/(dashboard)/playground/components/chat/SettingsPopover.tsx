@@ -28,7 +28,6 @@ import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import type { Capabilities } from "./endpointCapabilities";
 import { CopyIconButton } from "./ModelName";
-import { commitOnEnter, hasMatch } from "./Pickers";
 import type { KeySource, PlaygroundSettings } from "./playgroundSettings";
 import type { SettingsUpdate } from "./usePlaygroundSettings";
 
@@ -51,11 +50,8 @@ function TagField({
   const anchor = useComboboxAnchor();
   const [query, setQuery] = useState("");
   const custom = query.trim();
-  const items = [...new Set([...options, ...value])];
-  const addCustom = () => {
-    onChange([...value.filter((tag) => tag !== custom), custom]);
-    setQuery("");
-  };
+  const known = [...new Set([...options, ...value])];
+  const items = custom === "" || known.includes(custom) ? known : [...known, custom];
   return (
     <Combobox
       items={items}
@@ -70,27 +66,21 @@ function TagField({
         <ComboboxValue>
           {(values: string[]) => values.map((tag) => <ComboboxChip key={tag}>{tag}</ComboboxChip>)}
         </ComboboxValue>
-        <ComboboxChipsInput
-          id="playground-tags"
-          placeholder={value.length === 0 ? "Add a tag" : ""}
-          onKeyDown={commitOnEnter(() => custom !== "" && !hasMatch(items, custom), addCustom)}
-        />
+        <ComboboxChipsInput id="playground-tags" placeholder={value.length === 0 ? "Add a tag" : ""} />
       </ComboboxChips>
       <ComboboxContent anchor={anchor}>
-        <ComboboxEmpty className="flex-col items-stretch gap-1 px-1 pb-1">
-          {custom ? (
-            <Button variant="ghost" size="sm" className="min-w-0 justify-start" onClick={addCustom}>
-              <Plus />
-              <span className="min-w-0 truncate">Add {custom}</span>
-            </Button>
-          ) : (
-            <span className="py-1">No tags yet, type one to add it</span>
-          )}
-        </ComboboxEmpty>
+        <ComboboxEmpty>No tags yet, type one to add it</ComboboxEmpty>
         <ComboboxList>
           {(tag: string) => (
             <ComboboxItem key={tag} value={tag}>
-              {tag}
+              {known.includes(tag) ? (
+                tag
+              ) : (
+                <>
+                  <Plus />
+                  Add {tag}
+                </>
+              )}
             </ComboboxItem>
           )}
         </ComboboxList>
@@ -180,6 +170,32 @@ function ProxyBaseUrlField({
   );
 }
 
+const parseTemperature = (text: string): number | null | undefined => {
+  if (text.trim() === "") return null;
+  const parsed = Number(text);
+  return Number.isFinite(parsed) && parsed >= 0 && parsed <= 2 ? parsed : undefined;
+};
+
+function TemperatureInput({ value, onChange }: { value: number | null; onChange: (value: number | null) => void }) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const edit = (text: string) => {
+    setDraft(text);
+    const parsed = parseTemperature(text);
+    if (parsed !== undefined) onChange(parsed);
+  };
+  return (
+    <Input
+      aria-label="Temperature value"
+      inputMode="decimal"
+      placeholder="Default"
+      value={draft ?? value?.toString() ?? ""}
+      onChange={(event) => edit(event.target.value)}
+      onBlur={() => setDraft(null)}
+      className="h-8 w-16 shrink-0 text-right text-xs tabular-nums"
+    />
+  );
+}
+
 function SamplingFields({
   settings,
   update,
@@ -202,19 +218,7 @@ function SamplingFields({
           value={[temperature]}
           onValueChange={(value) => update({ temperature: Array.isArray(value) ? value[0] : value })}
         />
-        {settings.temperature === null ? (
-          <span className="w-14 shrink-0 text-right text-sm text-muted-foreground">Default</span>
-        ) : (
-          <Button
-            variant="ghost"
-            size="xs"
-            className="w-14 shrink-0 justify-end tabular-nums"
-            aria-label="Reset temperature to the model default"
-            onClick={() => update({ temperature: null })}
-          >
-            {temperature.toFixed(1)}
-          </Button>
-        )}
+        <TemperatureInput value={settings.temperature} onChange={(temperature) => update({ temperature })} />
       </Field>
       <Field orientation="horizontal">
         <FieldLabel htmlFor="playground-max-tokens" className="w-28 shrink-0 font-normal">

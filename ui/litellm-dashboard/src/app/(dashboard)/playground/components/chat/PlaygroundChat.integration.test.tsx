@@ -5,7 +5,7 @@ import { renderWithProviders as render, testQueryClient } from "@/../tests/test-
 import { makeOpenAIChatCompletionRequest } from "@/components/llm_calls/chat_completion";
 import { fetchAvailableModels } from "@/components/llm_calls/fetch_models";
 import { makeOpenAIResponsesRequest } from "@/components/llm_calls/responses_api";
-import { callMCPTool, fetchMCPServers, fetchMCPToolsets, listMCPTools } from "@/components/networking";
+import { callMCPTool, fetchMCPServers, fetchMCPToolsets, listMCPTools, tagListCall } from "@/components/networking";
 import { setSecureItem } from "@/utils/secureStorage";
 import { fetchClient } from "@/lib/http/api";
 import { PlaygroundChat } from "./PlaygroundChat";
@@ -177,6 +177,44 @@ describe("PlaygroundChat", () => {
     expect(args[13]).toEqual(["srv-1"]);
     expect(args[25]).toBe(false);
     expect(args[26]).toMatchObject({ "x-team": "blue" });
+  });
+
+  it("sends a custom model and tag that are prefixes of listed ones", async () => {
+    const user = userEvent.setup();
+    chatRequest.mockImplementation(replyWith("Hi there"));
+    vi.mocked(tagListCall).mockResolvedValueOnce({
+      production: { name: "production", models: [], created_at: "", updated_at: "" },
+    });
+    renderChat();
+
+    await user.click(screen.getByRole("combobox", { name: "Model" }));
+    await user.type(await screen.findByPlaceholderText("Search models"), "gpt-f");
+    await user.click(await screen.findByRole("option", { name: "Use gpt-f" }));
+    await user.click(screen.getByRole("button", { name: "Settings" }));
+    await user.type(await screen.findByLabelText("Tags"), "prod");
+    await user.click(await screen.findByRole("option", { name: "Add prod" }));
+    await send(user, "hello");
+
+    await waitFor(() => expect(chatRequest).toHaveBeenCalledTimes(1));
+    const args = chatRequest.mock.calls[0] as ChatArgs;
+    expect(args[2]).toBe("gpt-f");
+    expect(args[4]).toEqual(["prod"]);
+  });
+
+  it("sends a temperature typed with two decimals", async () => {
+    const user = userEvent.setup();
+    chatRequest.mockImplementation(replyWith("Hi there"));
+    preload({ selectedModel: "gpt-fast" });
+    renderChat();
+
+    await user.click(screen.getByRole("button", { name: "Settings" }));
+    await user.click(await screen.findByRole("button", { name: "Advanced" }));
+    await user.type(screen.getByLabelText("Temperature value"), "0.05");
+    await user.keyboard("{Escape}");
+    await send(user, "hello");
+
+    await waitFor(() => expect(chatRequest).toHaveBeenCalledTimes(1));
+    expect((chatRequest.mock.calls[0] as ChatArgs)[16]).toBe(0.05);
   });
 
   it("keeps the saved MCP selection when the server list cannot be fetched", async () => {
