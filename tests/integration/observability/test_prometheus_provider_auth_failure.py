@@ -232,6 +232,16 @@ def config(directory: Path, upstream: Wire) -> Path:
         *(caller_credential_deployment(cell, field, upstream.url) for cell, field in CALLER_CREDENTIAL_CELLS),
         *(token_exchange_deployment(cell) for cell in TOKEN_EXCHANGE_CELLS),
         {
+            "model_name": name("caller-api-base"),
+            "litellm_params": {
+                "model": f"openai/{REJECTS}",
+                "api_key": "sk-deployment-credential-caller-api-base",
+                "api_base": api_base,
+                "configurable_clientside_auth_params": ["api_base"],
+            },
+            "model_info": {"id": identity("caller-api-base")},
+        },
+        {
             "model_name": name("caller-credential"),
             "litellm_params": {
                 "model": "github_copilot/gpt-4o",
@@ -648,6 +658,30 @@ def test_a_token_exchange_deployment_rejecting_a_caller_without_an_identity_toke
     assert {metric: values(samples, metric, model_id=identity(cell)) for metric in DEPLOYMENT_SERIES} == {
         metric: [] for metric in DEPLOYMENT_SERIES
     }, recorded(samples, requested_model=name(cell))
+
+
+def test_a_provider_401_at_an_api_base_the_caller_sends_counts_against_a_one_off_deployment(rig: Rig) -> None:
+    caller_api_base: Final = f"{rig.upstream.url}/caller-endpoint-{RUN}/v1"
+    rig.upstream.drain()
+    response: Final = rig.gateway.request(
+        "POST",
+        "/v1/chat/completions",
+        {"model": name("caller-api-base"), "messages": messages("caller-api-base"), "api_base": caller_api_base},
+    )
+    assert response.status_code == 401, response.text
+    assert [(reached.target, reached.headers["authorization"]) for reached in rig.upstream.drain()] == [
+        (f"/caller-endpoint-{RUN}/v1/chat/completions", "Bearer sk-deployment-credential-caller-api-base")
+    ]
+    samples: Final = until(rig.gateway, FAILURES, api_base=caller_api_base)
+    one_off: Final = {sample.labels["model_id"] for sample in series(samples, FAILURES, api_base=caller_api_base)}
+    assert len(one_off) == 1 and identity("caller-api-base") not in one_off, recorded(samples, api_base=caller_api_base)
+    assert values(samples, FAILURES, api_base=caller_api_base, exception_status="401") == [1.0]
+    assert values(samples, TOTALS, api_base=caller_api_base) == [1.0]
+    assert values(samples, STATE, api_base=caller_api_base) == [1.0]
+    assert values(samples, LLM_FAILED, model_id=next(iter(one_off))) == [1.0]
+    assert {metric: values(samples, metric, model_id=identity("caller-api-base")) for metric in DEPLOYMENT_SERIES} == {
+        metric: [] for metric in DEPLOYMENT_SERIES
+    }
 
 
 def _gated_key(scenario: Scenario, cell: str) -> str | None:
