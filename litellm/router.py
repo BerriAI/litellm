@@ -12466,6 +12466,10 @@ class Router:
             request_kwargs
         )
 
+        original_function_name: Final = getattr((request_kwargs or {}).get("original_function"), "__name__", None)
+        requires_ocr_capability: Final = original_function_name in {"ocr", "aocr"}
+
+
         ## get model group RPM ##
         dt: Final = get_utc_datetime()
         current_minute: Final = dt.strftime("%H-%M")
@@ -12486,6 +12490,15 @@ class Router:
                     base_model = _litellm_params.get("base_model", None)
                 _deployment_model = base_model or _litellm_params.get("model", None)
                 model_info = self.get_router_model_info(deployment=deployment, received_model_name=model)
+
+                if requires_ocr_capability and isinstance(model_info, dict) and model_info.get("mode") != "ocr":
+                    invalid_model_indices.add(idx)
+                    verbose_router_logger.debug(
+                        "Skipping deployment %s for OCR request: declared mode=%s",
+                        _deployment_model,
+                        model_info.get("mode"),
+                    )
+                    continue
 
                 max_input_tokens = model_info.get("max_input_tokens") if isinstance(model_info, dict) else None
                 if isinstance(max_input_tokens, int) and has_countable_input:
