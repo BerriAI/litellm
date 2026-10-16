@@ -22,6 +22,7 @@ from litellm.types.utils import ChatCompletionMessageToolCall
 from litellm.utils import CustomStreamWrapper, ModelResponse
 
 if TYPE_CHECKING:
+    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.router import Router
 
 # ---------------------------------------------------------------------------
@@ -461,6 +462,10 @@ def _sse(event: SSEEvent) -> str:
     return f"data: {json.dumps(event)}\n\n"
 
 
+def _resolve_model(model: str | None) -> str:
+    return (model or "").strip() or DEFAULT_COMPETITOR_DISCOVERY_MODEL
+
+
 def _router_knows_model(router: "Router", model: str) -> bool:
     if router.is_recognized_model(model):
         return True
@@ -506,6 +511,34 @@ async def _acompletion(
         temperature=USAGE_AI_TEMPERATURE,
         drop_params=True,
     )
+
+
+async def check_usage_ai_chat_model_access(user_api_key_dict: "UserAPIKeyAuth", model: str | None) -> None:
+    from litellm.proxy.auth.auth_checks import (
+        can_key_call_model,
+        can_object_call_model,
+        key_model_aliases_for_auth_check,
+    )
+    from litellm.proxy.proxy_server import llm_model_list, llm_router, prisma_client
+
+    resolved_model: Final = _resolve_model(model)
+    await can_key_call_model(
+        model=resolved_model,
+        llm_model_list=llm_model_list,
+        valid_token=user_api_key_dict,
+        llm_router=llm_router,
+        prisma_client=prisma_client,
+    )
+    if user_api_key_dict.team_models:
+        can_object_call_model(
+            model=resolved_model,
+            llm_router=llm_router,
+            models=user_api_key_dict.team_models,
+            team_model_aliases=user_api_key_dict.team_model_aliases,
+            team_id=user_api_key_dict.team_id,
+            key_model_aliases=key_model_aliases_for_auth_check(user_api_key_dict),
+            object_type="team",
+        )
 
 
 def _resolve_fetch_kwargs(
@@ -635,7 +668,7 @@ async def stream_usage_ai_chat(
     is_admin: bool = False,
 ) -> AsyncGenerator[str, None]:
     """Stream SSE events: status → tool_call → chunk → done."""
-    resolved_model: Final = (model or "").strip() or DEFAULT_COMPETITOR_DISCOVERY_MODEL
+    resolved_model: Final = _resolve_model(model)
     truncated: Final = messages[-MAX_CHAT_MESSAGES:] if len(messages) > MAX_CHAT_MESSAGES else messages
     chat_messages: Final[list[Mapping[str, object]]] = [
         {"role": "system", "content": _build_system_prompt(is_admin)},

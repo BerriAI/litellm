@@ -51,6 +51,7 @@ async def usage_ai_chat(
         user_api_key_has_admin_view,
     )
     from litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat import (
+        check_usage_ai_chat_model_access,
         stream_usage_ai_chat,
     )
 
@@ -60,6 +61,8 @@ async def usage_ai_chat(
     else:
         user_id = require_caller_user_id_for_non_admin(user_api_key_dict)
     messages: Final = [{"role": m.role, "content": m.content} for m in data.messages]
+
+    await check_usage_ai_chat_model_access(user_api_key_dict=user_api_key_dict, model=data.model)
 
     return StreamingResponse(
         wrap_sse_stream_with_keepalive_pings(
