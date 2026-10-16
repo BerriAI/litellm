@@ -803,38 +803,35 @@ def test_volcengine_resolves_to_the_video_config():
     assert type(config) is VolcEngineVideoConfig
 
 
-@pytest.mark.usefixtures("local_model_cost_map")
-@pytest.mark.parametrize(
-    "model,tiers",
-    [
-        (SEEDANCE_2_5, {"480p": (854, 480), "720p": (1280, 720), "1080p": (1920, 1080)}),
-        (SEEDANCE_2_0, {"480p": (864, 496), "720p": (1280, 720), "1080p": (1920, 1080), "4k": (3840, 2160)}),
-        (SEEDANCE_2_0_FAST, {"480p": (864, 496), "720p": (1280, 720)}),
-        ("doubao-seedance-2-0-mini-260615", {"480p": (864, 496), "720p": (1280, 720)}),
-    ],
-)
-def test_each_tier_rate_is_the_base_rate_scaled_by_its_rendered_pixels(model: str, tiers: dict[str, tuple[int, int]]):
-    info = litellm.get_model_info(model=model, custom_llm_provider="volcengine")
-    base_rate: Final = info["output_cost_per_second"]
-
-    assert {tier: info[f"output_cost_per_second_{tier}"] for tier in tiers} == {
-        tier: pytest.approx(base_rate * width * height / (1280 * 720), rel=1e-5)
-        for tier, (width, height) in tiers.items()
-    }
+ARK_VIDEO_TIERS: Final = {
+    SEEDANCE_2_5: {"480p": ((854, 480), 70), "720p": ((1280, 720), 70), "1080p": ((1920, 1080), 77)},
+    SEEDANCE_2_0: {"480p": ((864, 496), 46), "720p": ((1280, 720), 46), "1080p": ((1920, 1080), 51), "4k": ((3840, 2160), 26)},
+    SEEDANCE_2_0_FAST: {"480p": ((864, 496), 37), "720p": ((1280, 720), 37)},
+    "doubao-seedance-2-0-mini-260615": {"480p": ((864, 496), 23), "720p": ((1280, 720), 23)},
+}
+CNY_PER_USD: Final = 7.0
 
 
 @pytest.mark.usefixtures("local_model_cost_map")
-@pytest.mark.parametrize("model", [SEEDANCE_2_5, SEEDANCE_2_0, SEEDANCE_2_0_FAST, "doubao-seedance-2-0-mini-260615"])
-def test_the_16_9_frame_listed_for_each_tier_is_the_one_its_rate_was_derived_from(model: str):
+@pytest.mark.parametrize("model", sorted(ARK_VIDEO_TIERS))
+def test_each_tier_rate_is_its_rendered_pixels_at_arks_price_for_that_tier(model: str):
+    """Ark prices 1080p and 4k per token above and below the 480p/720p rate, so a tier is not the base
+    rate scaled by pixels. Prices and frames are Ark's published per-resolution table, read 2026-10-16
+    from https://www.volcengine.com/docs/82379/1544106, whose own 2.0 examples agree: 1080p 16:9 5s bills
+    2.48 CNY/s and 4k bills 5.05 CNY/s."""
     info = litellm.get_model_info(model=model, custom_llm_provider="volcengine")
     frames = info["provider_specific_entry"]["volcengine_video_frames"]
-    base_rate: Final = info["output_cost_per_second"]
 
-    for tier, by_ratio in frames.items():
-        width, height = (int(side) for side in by_ratio["16:9"].split("x"))
-        assert info[f"output_cost_per_second_{tier}"] == pytest.approx(
-            base_rate * width * height / (1280 * 720), rel=1e-5
-        ), tier
+    assert {tier: info[f"output_cost_per_second_{tier}"] for tier in ARK_VIDEO_TIERS[model]} == {
+        tier: pytest.approx(width * height * 24 / 1024 * cny_per_million / 1e6 / CNY_PER_USD, rel=1e-5)
+        for tier, ((width, height), cny_per_million) in ARK_VIDEO_TIERS[model].items()
+    }
+
+    assert {
+        tier: tuple(int(side) for side in frames[tier]["16:9"].split("x"))
+        for tier in ARK_VIDEO_TIERS[model]
+        if tier in frames
+    } == {tier: frame for tier, (frame, _) in ARK_VIDEO_TIERS[model].items() if tier in frames}
 
 
 async def _wire_body(**kwargs: object) -> dict[str, object]:
