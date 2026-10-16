@@ -3631,6 +3631,157 @@ def test_add_litellm_metadata_groups_opencode_turns_into_one_session():
         assert turn["litellm_trace_id"] == OPENCODE_SESSION_ID
 
 
+PI_AI_SESSION_ID = "web:alice.smith:7f3e9c2a-5b1d-4e8f-9a6c-0d2b4f6e8a1c"
+
+
+def _session_from_affinity_only(data: dict[str, object] | None = None) -> object:
+    """Control for the precedence tests: with the competing source removed, x-session-affinity
+    must win, so a test that passes while the header is ignored entirely is caught."""
+    payload = data if data is not None else {"metadata": {}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers={"x-session-affinity": PI_AI_SESSION_ID}, data=payload, _metadata_variable_name="metadata"
+    )
+    return payload.get("litellm_session_id")
+
+
+@pytest.mark.parametrize(
+    "session_affinity",
+    [
+        PI_AI_SESSION_ID,
+        "cron:nightly.report:fire:9f8e7d6c5b4a",
+        "7f3e9c2a-5b1d-4e8f-9a6c-0d2b4f6e8a1c:task:3",
+        "ses_f91e6e825ffeuhlu5EbglxjAN2",
+    ],
+)
+def test_add_litellm_metadata_session_affinity_alone_sets_session_and_trace(session_affinity: str):
+    """pi-ai and opencode send the session only in x-session-affinity, with ids that carry colons
+    and dots, so that header alone must group the turns instead of a fresh per-call id."""
+    data = {"metadata": {}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers={"X-Session-Affinity": session_affinity}, data=data, _metadata_variable_name="metadata"
+    )
+
+    assert data["litellm_session_id"] == session_affinity
+    assert data["litellm_trace_id"] == session_affinity
+    assert data["metadata"]["session_id"] == session_affinity
+    assert data["metadata"]["trace_id"] == session_affinity
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["", "short", "web:alice smith:1234", "web:alice/1234567", f"{PI_AI_SESSION_ID}\n", "a" * 257, "web:alice:1234567\x00"],
+)
+def test_session_affinity_rejects_junk_values(value: str):
+    from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
+
+    data = {"metadata": {}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers={"x-session-affinity": value}, data=data, _metadata_variable_name="metadata"
+    )
+
+    assert get_chain_id_from_headers({"x-session-affinity": value}) is None
+    assert "litellm_session_id" not in data
+    assert "litellm_trace_id" not in data
+    assert data["metadata"] == {}
+    assert _session_from_affinity_only() == PI_AI_SESSION_ID
+
+
+@pytest.mark.parametrize("value", ["web:alice:1234", "a" * 256])
+def test_session_affinity_accepts_colons_at_both_length_bounds(value: str):
+    from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
+
+    assert get_chain_id_from_headers({"x-session-affinity": value}) == value
+
+
+@pytest.mark.parametrize(
+    "winning_headers",
+    [
+        {"x-litellm-trace-id": "other-session-1234"},
+        {"x-litellm-session-id": "other-session-1234"},
+        {"x-claude-code-session-id": "other-session-1234"},
+        {"session-id": "other-session-1234", "user-agent": "codex_cli_rs/0.104.0 (Mac OS 15.6.1; arm64) iTerm.app"},
+        {"x-session-id": "other-session-1234"},
+    ],
+)
+def test_every_session_header_beats_session_affinity_everywhere(winning_headers: dict[str, str]):
+    """Both the LLM-route path and the raw-header path MCP, pass-through and A2A use must rank
+    x-session-affinity last, so a client that also sends a specific session header keeps it."""
+    from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
+
+    headers = {**winning_headers, "x-session-affinity": PI_AI_SESSION_ID}
+    data = {"metadata": {}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="metadata"
+    )
+
+    assert get_chain_id_from_headers(headers) == "other-session-1234"
+    assert data["litellm_session_id"] == "other-session-1234"
+    assert data["litellm_trace_id"] == "other-session-1234"
+    assert data["metadata"]["session_id"] == "other-session-1234"
+    assert get_chain_id_from_headers({"x-session-affinity": PI_AI_SESSION_ID}) == PI_AI_SESSION_ID
+    assert _session_from_affinity_only() == PI_AI_SESSION_ID
+
+
+def test_anthropic_metadata_session_beats_session_affinity():
+    data = {"metadata": {"user_id": "user_abc123_account__session_e96634a3-fa28-4083-b354-55542e2dca01"}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers={"x-session-affinity": PI_AI_SESSION_ID}, data=data, _metadata_variable_name="metadata"
+    )
+
+    assert data["litellm_session_id"] == "e96634a3-fa28-4083-b354-55542e2dca01"
+    assert data["metadata"]["session_id"] == "e96634a3-fa28-4083-b354-55542e2dca01"
+    assert "litellm_trace_id" not in data
+    assert _session_from_affinity_only({"metadata": {"user_id": "user_abc123_account"}}) == PI_AI_SESSION_ID
+
+
+def test_baggage_session_beats_session_affinity():
+    data = {"metadata": {}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers={"baggage": "session.id=baggage-session-42", "x-session-affinity": PI_AI_SESSION_ID},
+        data=data,
+        _metadata_variable_name="metadata",
+    )
+
+    assert data["litellm_session_id"] == "baggage-session-42"
+    assert data["metadata"]["session_id"] == "baggage-session-42"
+    assert "litellm_trace_id" not in data
+    assert _session_from_affinity_only() == PI_AI_SESSION_ID
+
+
+def test_traceparent_keeps_trace_id_while_session_affinity_fills_session_id():
+    data = {"metadata": {}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers={
+            "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+            "x-session-affinity": PI_AI_SESSION_ID,
+        },
+        data=data,
+        _metadata_variable_name="metadata",
+    )
+
+    assert data["litellm_trace_id"] == "4bf92f3577b34da6a3ce929d0e0e4736"
+    assert data["metadata"]["trace_id"] == "4bf92f3577b34da6a3ce929d0e0e4736"
+    assert data["litellm_session_id"] == PI_AI_SESSION_ID
+    assert data["metadata"]["session_id"] == PI_AI_SESSION_ID
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"metadata": {"session_id": "caller-session"}},
+        {"metadata": {}, "litellm_session_id": "caller-session"},
+    ],
+)
+def test_caller_body_session_beats_session_affinity(body: dict[str, object]):
+    data = copy.deepcopy(body)
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers={"x-session-affinity": PI_AI_SESSION_ID}, data=data, _metadata_variable_name="metadata"
+    )
+
+    assert data == body
+    assert _session_from_affinity_only() == PI_AI_SESSION_ID
+
+
 @pytest.mark.parametrize("value", ["short", "has spaces!!", ""])
 def test_get_chain_id_from_headers_bare_session_id_ignores_implausible_value(value: str):
     from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
@@ -8475,6 +8626,39 @@ async def test_missing_session_id_reject_accepts_baggage_session_id(path: str, c
     )
 
     assert updated["litellm_session_id"] == "baggage-session-42"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("path", "client_body", "metadata_key"),
+    [
+        ("/v1/chat/completions", {"model": "gpt-4o", "messages": []}, "metadata"),
+        ("/v1/messages", {"model": "claude-haiku-4-5", "messages": [], "max_tokens": 5}, "litellm_metadata"),
+        ("/v1/responses", {"model": "gpt-4o", "input": "hi"}, "litellm_metadata"),
+    ],
+)
+async def test_session_affinity_header_groups_spend_log_session_on_every_llm_route(
+    path: str, client_body: dict[str, object], metadata_key: str
+):
+    """Two turns of a pi-ai session carrying only x-session-affinity must land in SpendLogs under
+    that id on every LLM route, instead of one random session per request."""
+    request = _request_for(path)
+    request.headers = {"x-session-affinity": PI_AI_SESSION_ID}
+
+    turns = [
+        await add_litellm_data_to_request(
+            data=copy.deepcopy(client_body),
+            request=request,
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+            proxy_config=MagicMock(),
+            general_settings={},
+        )
+        for _ in range(2)
+    ]
+
+    for turn in turns:
+        assert _spend_log_session_id(turn, metadata_key=metadata_key) == PI_AI_SESSION_ID
+        assert turn["litellm_trace_id"] == PI_AI_SESSION_ID
 
 
 @pytest.mark.asyncio

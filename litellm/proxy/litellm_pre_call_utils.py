@@ -105,6 +105,8 @@ _CODEX_SESSION_ID_HEADERS: Final = ("session-id", "session_id", "thread-id", "co
 # Session-id values must be non-empty strings of alphanumerics, hyphens, or underscores
 # (covers UUIDs and most common session-id formats).
 _SESSION_ID_VALUE_RE: Final = re.compile(r"^[a-zA-Z0-9_\-]{8,}$")
+_SESSION_AFFINITY_HEADER: Final = "x-session-affinity"
+_SESSION_AFFINITY_VALUE_RE: Final = re.compile(r"^[a-zA-Z0-9_\-.:]{8,256}$")
 
 _SHA256_HEX_RE: Final = re.compile(r"^[0-9a-f]{64}$")
 
@@ -185,6 +187,12 @@ def _caller_trace_field(data: Mapping[str, object], metadata_variable_name: str,
     requester_map: Final = cast(Mapping[str, object], requester)  # cast-ok: isinstance above, free-form JSON values
     requester_value: Final = requester_map.get(field)
     return requester_value if isinstance(requester_value, str) and requester_value else None
+
+
+def _request_carries_trace_field(data: Mapping[str, object], metadata_variable_name: str, field: str) -> bool:
+    """True once any earlier source (a header, Anthropic metadata, W3C context or the
+    caller's own body) has set ``litellm_<field>`` or the caller's metadata ``field``."""
+    return f"litellm_{field}" in data or _caller_trace_field(data, metadata_variable_name, field) is not None
 
 
 def _stampable_key_hash(user_api_key_dict: UserAPIKeyAuth) -> str | None:
@@ -726,7 +734,7 @@ def _promoted_trace_control_fields(
 
 
 def _extract_generic_session_id_from_headers(
-    normalized: dict[str, str],
+    normalized: Mapping[str, str],
 ) -> str | None:
     """
     Scan a normalised (lower-cased keys) header dict for any header that looks
@@ -794,6 +802,36 @@ def _extract_bare_session_id_from_headers(
     return None
 
 
+def _extract_session_affinity_from_headers(
+    normalized: Mapping[str, str],
+) -> str | None:
+    """
+    Read ``x-session-affinity``, the only session header some agent clients
+    (pi-ai, opencode) send. Their ids look like ``web:<principal>:<uuid>`` or
+    ``<ref>:task:<n>``, so this header alone also accepts colons and dots, with
+    a length cap. Checked after every other session source so a client that
+    also sends a more specific header keeps that one.
+    """
+    value: Final = normalized.get(_SESSION_AFFINITY_HEADER)
+    if isinstance(value, str) and _SESSION_AFFINITY_VALUE_RE.fullmatch(value):
+        return value
+    return None
+
+
+def _normalize_header_keys(headers: Mapping[str, str]) -> Mapping[str, str]:
+    return MappingProxyType({k.lower(): v for k, v in headers.items() if isinstance(k, str)})
+
+
+def _extract_session_header_chain_id(normalized: Mapping[str, str]) -> str | None:
+    return (
+        normalized.get("x-litellm-trace-id")
+        or normalized.get("x-litellm-session-id")
+        or _extract_generic_session_id_from_headers(normalized)
+        or _extract_codex_session_id_from_headers(normalized)
+        or _extract_bare_session_id_from_headers(normalized)
+    )
+
+
 def get_chain_id_from_headers(headers: dict[str, str] | None) -> str | None:
     """
     Extract chain id for call chaining from request headers.
@@ -805,6 +843,7 @@ def get_chain_id_from_headers(headers: dict[str, str] | None) -> str | None:
        (alphanumeric / UUID, at least 8 chars).  E.g. ``x-claude-code-session-id``.
     4. Codex's unprefixed ``session-id`` / ``thread-id``, for Codex callers only.
     5. A vendor-less ``x-session-id`` header (e.g. opencode), same value rules.
+    6. ``x-session-affinity`` (pi-ai, opencode), which also allows ``:`` and ``.``.
 
     Header keys are matched case-insensitively so this works with raw header
     dicts from any transport.
@@ -814,14 +853,8 @@ def get_chain_id_from_headers(headers: dict[str, str] | None) -> str | None:
     """
     if not headers:
         return None
-    normalized: Final = {k.lower(): v for k, v in headers.items() if isinstance(k, str)}
-    return (
-        normalized.get("x-litellm-trace-id")
-        or normalized.get("x-litellm-session-id")
-        or _extract_generic_session_id_from_headers(normalized)
-        or _extract_codex_session_id_from_headers(normalized)
-        or _extract_bare_session_id_from_headers(normalized)
-    )
+    normalized: Final = _normalize_header_keys(headers)
+    return _extract_session_header_chain_id(normalized) or _extract_session_affinity_from_headers(normalized)
 
 
 def _get_anthropic_session_id_from_metadata(metadata: object) -> str | None:
@@ -1632,8 +1665,9 @@ class LiteLLMProxyRequestSetup:
         #########################################################################################
 
         agent_id_from_header: Final = headers.get("x-litellm-agent-id")
+        normalized_headers: Final = _normalize_header_keys(headers)
         # Explicit litellm headers take precedence; fall back to any x-*-session-id header.
-        chain_id: Final = get_chain_id_from_headers(dict(headers))
+        chain_id: Final = _extract_session_header_chain_id(normalized_headers)
 
         if agent_id_from_header:
             metadata_from_headers["agent_id"] = agent_id_from_header
@@ -1663,7 +1697,6 @@ class LiteLLMProxyRequestSetup:
         # - but lets a caller's existing traceparent/baggage headers (from
         # real OTel instrumentation) correlate with litellm's own logs instead
         # of generating an unrelated trace_id.
-        normalized_headers: Final = MappingProxyType({k.lower(): v for k, v in headers.items() if isinstance(k, str)})
         if "litellm_trace_id" not in data:
             traceparent: Final = normalized_headers.get("traceparent")
             if isinstance(traceparent, str):
@@ -1700,6 +1733,15 @@ class LiteLLMProxyRequestSetup:
                     metadata_from_headers["session_id"] = session_id_from_baggage
                     data["litellm_session_id"] = session_id_from_baggage  # rebind-ok: data is an out-param
                     verbose_proxy_logger.debug("Extracted session_id from W3C baggage header")
+        session_affinity: Final = _extract_session_affinity_from_headers(normalized_headers)
+        body: Final = cast(Mapping[str, object], data)  # cast-ok: request body is a str-keyed JSON object
+        if session_affinity and not _request_carries_trace_field(body, _metadata_variable_name, "session_id"):
+            metadata_from_headers["session_id"] = session_affinity
+            data["litellm_session_id"] = session_affinity  # rebind-ok: data is an out-param
+            verbose_proxy_logger.debug("Extracted session_id from x-session-affinity header")
+            if not _request_carries_trace_field(body, _metadata_variable_name, "trace_id"):
+                metadata_from_headers["trace_id"] = session_affinity
+                data["litellm_trace_id"] = session_affinity  # rebind-ok: data is an out-param
 
         if isinstance(data[_metadata_variable_name], dict):
             data[_metadata_variable_name].update(metadata_from_headers)
