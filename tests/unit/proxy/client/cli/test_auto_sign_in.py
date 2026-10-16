@@ -10,7 +10,7 @@ from click.testing import CliRunner, Result
 
 from litellm.proxy.client.cli import cli
 from litellm.proxy.client.cli.commands.auth import CliTokenData, get_stored_api_key, save_token
-from litellm.proxy.client.cli.commands.auto_sign_in import pkce_browser_sign_in
+from litellm.proxy.client.cli.commands.auto_sign_in import open_browser_off_stdout, pkce_browser_sign_in
 from litellm.proxy.client.cli.commands.pkce_login import PkceCredential, PkceFailure, pkce_token_record
 
 BASE_URL: Final = "https://proxy.example.com"
@@ -213,6 +213,19 @@ def test_a_browser_the_user_picked_starts_the_sign_in_and_names_how_long_it_wait
         "lite is opening your browser to sign in and waits up to 5 minutes for you to approve it. "
         "A shell or agent that stops commands sooner should run this one with a longer timeout."
     ]
+
+
+def test_the_browser_launcher_keeps_stdout_clean_and_never_rings_the_terminal_bell(
+    capfd: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    chatty_browser = tmp_path / "chatty-browser"
+    chatty_browser.write_text('#!/bin/sh\necho "Opening in existing browser session."\n')
+    chatty_browser.chmod(0o755)
+    monkeypatch.setenv("BROWSER", str(chatty_browser))
+
+    open_browser_off_stdout(f"{BASE_URL}/v1/cli/authorize?state=fake")
+
+    assert capfd.readouterr() == ("", "Opening in existing browser session.\n")
 
 
 @pytest.mark.parametrize(

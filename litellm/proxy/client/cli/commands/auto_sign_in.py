@@ -28,8 +28,11 @@ def _runs_in_ci(environ: Mapping[str, str]) -> bool:
     return environ.get("CI", "").strip().lower() not in {"", "0", "false"}
 
 
-def _open_browser_off_stdout(url: str) -> bool:
-    return subprocess.run((sys.executable, "-I", "-m", "webbrowser", url), stdout=2, check=False).returncode == 0
+_OPEN_URL_IN_BROWSER: Final = "import sys, webbrowser; webbrowser.open(sys.argv[1])"
+
+
+def open_browser_off_stdout(url: str) -> None:
+    subprocess.run((sys.executable, "-I", "-c", _OPEN_URL_IN_BROWSER, url), stdout=2, check=False)
 
 
 def pkce_browser_sign_in(
@@ -37,7 +40,7 @@ def pkce_browser_sign_in(
     echo: Callable[[str], None],
     find_browser: Callable[[], webbrowser.BaseBrowser] = webbrowser.get,
     environ: Mapping[str, str] = os.environ,
-    open_browser: Callable[[str], object] = _open_browser_off_stdout,
+    open_browser: Callable[[str], object] = open_browser_off_stdout,
 ) -> PkceCredential | PkceFailure:
     if _runs_in_ci(environ):
         return PkceFailure("the CI environment variable is set, so lite does not open a browser")
