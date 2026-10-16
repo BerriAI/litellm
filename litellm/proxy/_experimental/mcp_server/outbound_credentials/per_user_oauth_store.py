@@ -15,10 +15,14 @@ from collections.abc import Callable, Mapping
 from functools import partial
 from typing import TYPE_CHECKING, Final
 
+import httpx
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+
 from litellm._logging import verbose_logger
 from litellm.proxy._experimental.mcp_server.oauth_identity_binding import credential_binding_matches
 from litellm.proxy._experimental.mcp_server.outbound_credentials.authz_code_refresher import (
     AuthorizationCodeRefresher,
+    classify_token_endpoint_refusal,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.dual_cache_token_backend import (
     AsyncCache,
@@ -33,8 +37,12 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_sto
     TokenCacheBackend,
     TokenStoreUnavailable,
 )
+from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Error, Ok, Result
 from litellm.proxy._experimental.mcp_server.outbound_credentials.runtime_refresh_coordinator import (
     runtime_refresh_coordinator,
+)
+from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_refresher import (
+    RefreshFailure,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.token_cache_codec import (
     OAuthTokenCacheCodec,
@@ -95,7 +103,25 @@ async def _persist_credential(
     )
 
 
-async def _post_token_endpoint(url: str, form: dict[str, str], headers: dict[str, str]) -> dict[str, object] | None:
+async def _purge_credential(user_id: str, server_id: str, refresh_token: str) -> None:
+    from litellm.proxy._experimental.mcp_server.db import (  # noqa: PLC0415  # avoids a proxy_server import cycle
+        delete_user_oauth_credential_holding_refresh_token,
+    )
+    from litellm.proxy.proxy_server import prisma_client  # noqa: PLC0415  # avoids a proxy_server import cycle
+
+    if prisma_client is None:
+        return
+    try:
+        await delete_user_oauth_credential_holding_refresh_token(prisma_client, user_id, server_id, refresh_token)
+    except Exception as exc:  # noqa: BLE001  # the refresh already failed closed; the next refusal retries the purge
+        verbose_logger.warning(
+            "Failed to remove revoked MCP OAuth credential for user=%s server=%s: %s", user_id, server_id, exc
+        )
+
+
+async def _post_token_endpoint(
+    url: str, form: dict[str, str], headers: dict[str, str]
+) -> Result[Mapping[str, object], RefreshFailure]:
     from litellm.llms.custom_httpx.http_handler import (  # noqa: PLC0415
         get_async_httpx_client,  # pyright: ignore
     )
@@ -105,17 +131,35 @@ async def _post_token_endpoint(url: str, form: dict[str, str], headers: dict[str
     # object and the refresher validates each field, so the untyped boundary is contained here.
     provider: Final = httpxSpecialProvider.Oauth2Check
     request_headers: Final = {"Accept": "application/json", **headers}
-    # A failed refresh is a miss, not a 500 (matches v1), so any error becomes None.
     try:
         client: Final = get_async_httpx_client(llm_provider=provider)  # pyright: ignore
         response: Final = await client.post(url, headers=request_headers, data=form)  # pyright: ignore
         response.raise_for_status()  # pyright: ignore
-        body: Final[dict[str, object]] = response.json()  # pyright: ignore
+        content: Final[bytes] = response.content  # pyright: ignore
+    except httpx.HTTPStatusError as exc:
+        return Error(classify_token_endpoint_refusal(exc.response.status_code, _token_error_code(exc.response.content)))
     except Exception as exc:  # noqa: BLE001
-        verbose_logger.warning("MCP OAuth refresh request failed: %s", exc)
+        return Error(RefreshFailure.of_unavailable(f"the token endpoint request failed ({type(exc).__name__})"))
+    try:
+        return Ok(_TOKEN_RESPONSE.validate_json(content))
+    except ValidationError:
+        return Error(RefreshFailure.of_unavailable("the token endpoint returned a malformed response"))
+
+
+class _TokenErrorBody(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    error: str | None = None
+
+
+_TOKEN_RESPONSE: Final = TypeAdapter(Mapping[str, object])
+
+
+def _token_error_code(content: bytes) -> str | None:
+    try:
+        return _TokenErrorBody.model_validate_json(content).error
+    except ValidationError:
         return None
-    else:
-        return body  # pyright: ignore
 
 
 def _redis_cache_is_available() -> bool:
@@ -164,7 +208,9 @@ def _build_per_user_oauth_token_store(
     server_lookup: ServerLookup,
 ) -> tuple[CachedOAuthTokenStore, bool]:
     backend, coordinator, uses_redis = _runtime_backend_and_coordinator()
-    refresher: Final = AuthorizationCodeRefresher(server_lookup, _post_token_endpoint, _persist_credential)
+    refresher: Final = AuthorizationCodeRefresher(
+        server_lookup, _post_token_endpoint, _persist_credential, purge=_purge_credential
+    )
     refreshing: Final = RefreshingTokenStore(
         V2PerUserTokenStore(partial(_read_bound_credential, server_lookup)), refresher, coordinator=coordinator
     )
