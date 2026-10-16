@@ -3907,6 +3907,20 @@ async def _apply_key_end_user_default_budget_to_token(
         valid_token.end_user_model_max_budget = default_budget.model_max_budget
 
 
+def _resolve_budget_fail_closed_for_auth(
+    general_settings: Mapping[str, object],
+    has_billing_agent_policy: bool,
+) -> bool:
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+        fail_closed_rate_limit_enforcement_enabled,
+    )
+
+    budget_setting: Final = general_settings.get("fail_closed_budget_enforcement")
+    if budget_setting is None:
+        budget_setting = fail_closed_rate_limit_enforcement_enabled(general_settings)
+    return budget_setting is True or has_billing_agent_policy
+
+
 async def _reserve_budget_after_common_checks(
     user_api_key_auth_obj: UserAPIKeyAuth,
     request_data: dict,
@@ -3942,9 +3956,9 @@ async def _reserve_budget_after_common_checks(
             end_user_id=end_user_id,
             end_user_object=end_user_object,
             apply_user_budget_to_team_keys=general_settings.get("apply_user_budget_to_team_keys") is True,
-            fail_closed_budget_enforcement=(
-                general_settings.get("fail_closed_budget_enforcement") is True
-                or user_api_key_auth_obj.billing_agent_policy is not None
+            fail_closed_budget_enforcement=_resolve_budget_fail_closed_for_auth(
+                general_settings=general_settings,
+                has_billing_agent_policy=user_api_key_auth_obj.billing_agent_policy is not None,
             ),
             raw_body=await read_raw_json_body(request=request),
         )
