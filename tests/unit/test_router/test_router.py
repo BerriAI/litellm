@@ -3720,6 +3720,8 @@ async def test_mid_stream_continuation_declines_while_an_output_guardrail_is_reg
         ([{"*": [{"model": "backup", "max_tokens": 300}]}], False),
         ([{"gpt-4": [{"model": "backup"}, "backup"]}], True),
         ([{"gpt-4": ["backup"]}, {"other-group": [{"model": "backup", "stream": False}]}], True),
+        ([{}], True),
+        ([{"gpt-4": 5}], True),
     ],
     ids=[
         "entry_with_its_own_messages",
@@ -3730,6 +3732,8 @@ async def test_mid_stream_continuation_declines_while_an_output_guardrail_is_reg
         "generic_group_target_with_its_own_max_tokens",
         "group_targets_with_model_only",
         "override_only_in_another_groups_chain",
+        "empty_entry",
+        "non_list_chain",
     ],
 )
 async def test_mid_stream_continuation_declines_a_request_fallback_that_overrides_request_params(

@@ -617,10 +617,10 @@ def get_fallback_model_group(
 
 def _resolved_fallback_chain(entries: Sequence[object], lookup_groups: tuple[str, ...]) -> Sequence[object]:
     group_entries: Final[Sequence[Mapping[str, list[str]]]] = tuple(  # mutable-ok: mirrors the fallbacks config shape
-        entry for entry in entries if isinstance(entry, Mapping)
+        entry for entry in entries if isinstance(entry, Mapping) and entry
     )
     chain, _ = get_fallback_model_group_for_lookup_groups(fallbacks=group_entries, lookup_groups=lookup_groups)
-    return chain or ()
+    return chain if isinstance(chain, list) else ()
 
 
 def fallbacks_override_request_params(fallbacks: object, lookup_groups: tuple[str, ...]) -> bool:
