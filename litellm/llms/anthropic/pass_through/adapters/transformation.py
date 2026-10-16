@@ -639,15 +639,15 @@ class LiteLLMAnthropicMessagesAdapter:
         has_conversational_input = any(m.get("role") != "system" for m in replayable_messages)
         has_translated_conversation = any(m.get("role") != "system" for m in new_messages)
         if has_conversational_input and not has_translated_conversation:
-            unrecognized_block_types = sorted(
-                {
-                    str(content.get("type"))
-                    for message in replayable_messages
-                    if message.get("role") != "system" and isinstance(message.get("content"), list)
-                    for content in message["content"]
-                    if isinstance(content, dict) and content.get("type") is not None
-                }
-            )
+            seen_block_types: set[str] = set()
+            for message in replayable_messages:
+                message_content = message.get("content")
+                if message.get("role") == "system" or not isinstance(message_content, list):
+                    continue
+                for content in message_content:
+                    if isinstance(content, dict) and content.get("type") is not None:
+                        seen_block_types.add(str(content.get("type")))
+            unrecognized_block_types = sorted(seen_block_types)
             type_list = ", ".join(json.dumps(block_type) for block_type in unrecognized_block_types) or "unknown"
             raise litellm.BadRequestError(
                 message=f"Anthropic pass-through: every message's content blocks were of unrecognized types ({type_list}), so translation produced an empty conversation. Refusing to dispatch a request with no messages.",
