@@ -1702,6 +1702,37 @@ class TestConverseStreamGuardrailRelay:
         assert relayed == b"".join(stream)
         assert held.received_texts[-1] == [f"Card: {_TEST_CARD} now."]
 
+    @pytest.mark.parametrize("filler_frames", range(8))
+    @pytest.mark.asyncio
+    async def test_a_held_guardrail_still_masks_after_a_sampled_guardrail_ends_the_stream_with_its_message(
+        self, monkeypatch, filler_frames: int
+    ):
+        from litellm.exceptions import ModifyResponseException
+
+        sampled = _RaisingGuardrail(
+            ModifyResponseException(message="Sorry, I can't share that.", model="claude", request_data={}),
+            "FORBIDDEN",
+        )
+        stream = (
+            *_card_stream()[:3],
+            *(
+                _build_event_stream_frame("contentBlockDelta", {"contentBlockIndex": 0, "delta": {"text": " ok"}})
+                for _ in range(filler_frames)
+            ),
+            _build_event_stream_frame("contentBlockDelta", {"contentBlockIndex": 0, "delta": {"text": " FORBIDDEN"}}),
+            _build_event_stream_frame("contentBlockStop", {"contentBlockIndex": 0}),
+            _build_event_stream_frame("messageStop", {"stopReason": "end_turn"}),
+        )
+
+        relayed = await _relay_through_post_call_guardrail(
+            stream, sampled, monkeypatch, outer=(_CardMaskingGuardrail(), True)
+        )
+
+        texts = TestDeAnonymizeConverseStream._deltas_by_block(relayed, "text")
+        assert texts[0].startswith("Card: ****."), texts
+        assert texts[max(texts)] == "Sorry, I can't share that.", texts
+        assert _decoded_frames(relayed)[-1] == ("event", "messageStop", {"stopReason": "guardrail_intervened"})
+
     @pytest.mark.asyncio
     async def test_noma_scans_carry_stream_and_only_the_last_one_the_finished_answer(
         self, monkeypatch, respx_mock: respx.MockRouter

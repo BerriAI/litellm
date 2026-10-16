@@ -48,6 +48,8 @@ END_ONLY: Final = "relay-end-only"
 OUTAGE: Final = "relay-outage"
 STACKED: Final = "relay-stacked"
 RELEASE_ON_SCAN: Final = "relay-release-on-scan"
+REPLACING: Final = "relay-replacing"
+REPLACING_THEN_HELD: Final = "relay-replacing-then-held"
 PARALLEL: Final = "relay-parallel"
 PARALLEL_FIRST: Final = "relay-parallel-first"
 HELD_END_ONLY: Final = "relay-held-end-only"
@@ -59,6 +61,8 @@ BLOCK_REASON: Final = "Violated guardrail policy"
 MASKED_WORD: Final = "Paris"
 MASK: Final = "[CITY]"
 BLOCKED_WORD: Final = "FORBIDDEN"
+REPLACED_WORD: Final = "CLASSIFIED"
+REPLACEMENT: Final = "That answer was withheld"
 
 
 def event_frame(event_type: str, payload: Mapping[str, JsonValue]) -> bytes:
@@ -151,6 +155,22 @@ def bedrock_verdict(request: Request) -> Reply:
                 "action": "GUARDRAIL_INTERVENED",
                 "outputs": [{"text": text.replace(MASKED_WORD, MASK)} for text in texts],
                 "assessments": [{"sensitiveInformationPolicy": {"piiEntities": [pii]}}],
+            }
+        ).encode()
+    )
+
+
+def bedrock_replacing_verdict(request: Request) -> Reply:
+    """ApplyGuardrail blocking ``REPLACED_WORD`` with its blocked message, as a Bedrock word policy does."""
+    if not any(REPLACED_WORD in text for text in bedrock_texts(request)):
+        return Reply(body=json.dumps({"action": "NONE", "outputs": [], "assessments": []}).encode())
+    word: Final = {"match": REPLACED_WORD, "action": "BLOCKED"}
+    return Reply(
+        body=json.dumps(
+            {
+                "action": "GUARDRAIL_INTERVENED",
+                "outputs": [{"text": REPLACEMENT}],
+                "assessments": [{"wordPolicy": {"customWords": [word]}}],
             }
         ).encode()
     )
@@ -261,6 +281,8 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
             return Reply(status=503, body=b'{"error":"guardrail vendor unavailable"}')
         if request.target.startswith(f"/{RELEASE_ON_SCAN}/"):
             return bedrock_verdict(request)
+        if request.target.startswith(f"/{REPLACING}/"):
+            return bedrock_replacing_verdict(request)
         if request.target.startswith(f"/{PARALLEL}/"):
             return parallel_verdict(request)
         if request.target.startswith(f"/{NOMA}/"):
@@ -281,6 +303,22 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
             config["guardrails"] = [
                 _guardrail(PARALLEL, sink, run_in_parallel=True),
                 _guardrail(SAMPLED, sink),
+                {
+                    "guardrail_name": REPLACING,
+                    "litellm_params": {
+                        "guardrail": "bedrock",
+                        "mode": "post_call",
+                        "default_on": False,
+                        "guardrailIdentifier": "relay-replacing",
+                        "guardrailVersion": "1",
+                        "aws_access_key_id": "AKIASYNTHETICGUARD",
+                        "aws_secret_access_key": "synthetic-guardrail-secret",
+                        "aws_region_name": "us-east-1",
+                        "aws_bedrock_runtime_endpoint": f"{sink.url}/{REPLACING}",
+                        "disable_exception_on_block": True,
+                        "streaming_buffer_until_moderated": False,
+                    },
+                },
                 _guardrail(BUFFERED, sink, streaming_buffer_until_moderated=True),
                 _guardrail(FAILING, sink),
                 _guardrail(FAILING_HELD, sink, streaming_buffer_until_moderated=True),
@@ -376,6 +414,7 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
                         {
                             **{name: scenario.key(guardrails=[name]) for name in single},
                             STACKED: scenario.key(guardrails=[SAMPLED, BUFFERED]),
+                            REPLACING_THEN_HELD: scenario.key(guardrails=[REPLACING, BUFFERED]),
                             PARALLEL_FIRST: scenario.key(guardrails=[PARALLEL, BUFFERED]),
                             NOMA_THEN_ALICE: scenario.key(guardrails=[NOMA, ALICE]),
                         },
@@ -701,6 +740,18 @@ def test_sampled_and_held_guardrails_on_one_key_hold_the_stream_and_mask_it(rig:
         request.target.split("/")[1] for request in rig.sink.drain() if marker.encode() in request.body
     }
     assert scanned_by == {SAMPLED, BUFFERED}, scanned_by
+
+
+def test_held_guardrail_still_masks_after_a_sampled_guardrail_replaces_the_rest_of_the_answer(rig: Rig) -> None:
+    marker: Final = f"relay-{uuid.uuid4().hex}"
+    rig.scripts[marker] = Reply(
+        content_type=EVENT_STREAM, chunks=converse_frames((f"{MASKED_WORD} {marker} ", "is", f" {REPLACED_WORD}"))
+    )
+    status, content_type, body = _stream(rig, REPLACING_THEN_HELD, marker)
+    assert (status, content_type) == (200, EVENT_STREAM), body
+    frames: Final = decode(body)
+    assert block_texts(frames) == {0: f"{MASK} {marker} is {REPLACED_WORD}", 1: REPLACEMENT}, frames
+    assert frames[-1] == Frame("event", "messageStop", {"stopReason": "guardrail_intervened"}), frames
 
 
 def test_parallel_guardrail_listed_before_a_masker_still_scans_the_masked_text(rig: Rig) -> None:

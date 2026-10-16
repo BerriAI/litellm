@@ -458,7 +458,12 @@ async def _converse_stream_frames(chunks: AsyncIterable[bytes]) -> AsyncGenerato
 
 
 def _converse_frames(items: Sequence[object]) -> tuple[ConverseStreamFrame, ...]:
-    return tuple(item for item in items if isinstance(item, ConverseStreamFrame))
+    """The frames among ``items``, with the bytes an earlier guardrail's block message added read back into frames."""
+    return tuple(
+        item if isinstance(item, ConverseStreamFrame) else _decode_converse_frame(item)
+        for item in items
+        if isinstance(item, (ConverseStreamFrame, bytes))
+    )
 
 
 def _reads_stream_marks(guardrail: "CustomGuardrail") -> bool:
