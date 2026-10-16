@@ -76,13 +76,19 @@ def _in_package(target: str, package: str) -> bool:
     return target == package or target.startswith(f"{package}.")
 
 
+def _needs_more_of(loaded: types.ModuleType, name: str) -> bool:
+    if name == "*":
+        return type(loaded) is _SDKUntilFirstUse
+    return name not in vars(loaded)
+
+
 def _loads_new_sdk_code(target: str, fromlist: Sequence[str]) -> bool:
     if not _in_package(target, SDK_PACKAGE):
         return False
     loaded: Final = sys.modules.get(target)
     if loaded is None:
         return True
-    return any(name != "*" and name not in vars(loaded) for name in fromlist)
+    return any(_needs_more_of(loaded, name) for name in fromlist)
 
 
 def _load_cli_code(load: Callable[[], types.ModuleType]) -> types.ModuleType:

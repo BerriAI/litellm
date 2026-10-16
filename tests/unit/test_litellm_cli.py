@@ -23,6 +23,8 @@ _HELP_ARGV: Final = (
     ("keys", "list", "--help"),
 )
 
+_COMMAND_ARGV: Final = (("logout",), ("whoami",))
+
 _RUN_EACH_ARGV: Final = """
 import contextlib, io, json, sys
 from {module} import cli
@@ -93,6 +95,19 @@ for thread in threads:
 print(json.dumps({"seen": seen}))
 """
 
+_STAR_IMPORT_AFTER_HELP: Final = """
+import json, sys
+from litellm_cli.main import cli
+sys.argv = ["lite", "--help"]
+try:
+    cli()
+except SystemExit:
+    pass
+before = "completion" in vars(sys.modules["litellm"])
+from litellm import *
+print(json.dumps({"before": before, "completion": callable(globals().get("completion")), "acompletion": callable(globals().get("acompletion"))}))
+"""
+
 _COMMAND_MODULES_LOADED_BY: Final = """
 import json, sys
 from litellm_cli.main import cli
@@ -119,8 +134,8 @@ def _run(source: str, argv: tuple[str, ...], home: Path) -> dict[str, object]:
 
 
 @pytest.fixture(scope="module")
-def help_runs(tmp_path_factory: pytest.TempPathFactory) -> Mapping[str, dict[str, object]]:
-    argv: Final = (json.dumps(_HELP_ARGV),)
+def cli_runs(tmp_path_factory: pytest.TempPathFactory) -> Mapping[str, dict[str, object]]:
+    argv: Final = (json.dumps(_HELP_ARGV + _COMMAND_ARGV),)
     return {
         "thin": _run(_RUN_EACH_ARGV.format(module="litellm_cli.main"), argv, tmp_path_factory.mktemp("thin")),
         "full": _run(
@@ -129,19 +144,19 @@ def help_runs(tmp_path_factory: pytest.TempPathFactory) -> Mapping[str, dict[str
     }
 
 
-def test_lite_runs_commands_without_initializing_the_sdk(help_runs: Mapping[str, dict[str, object]]):
-    assert help_runs["thin"]["sdk_initialized"] is False
-    assert help_runs["full"]["sdk_initialized"] is True
+def test_lite_runs_commands_without_initializing_the_sdk(cli_runs: Mapping[str, dict[str, object]]):
+    assert cli_runs["thin"]["sdk_initialized"] is False
+    assert cli_runs["full"]["sdk_initialized"] is True
 
 
-@pytest.mark.parametrize("argv", _HELP_ARGV, ids=" ".join)
-def test_lite_prints_what_the_full_sdk_cli_prints(argv: tuple[str, ...], help_runs: Mapping[str, dict[str, object]]):
-    thin: Final = help_runs["thin"]["runs"]
-    full: Final = help_runs["full"]["runs"]
+@pytest.mark.parametrize("argv", _HELP_ARGV + _COMMAND_ARGV, ids=" ".join)
+def test_lite_prints_what_the_full_sdk_cli_prints(argv: tuple[str, ...], cli_runs: Mapping[str, dict[str, object]]):
+    thin: Final = cli_runs["thin"]["runs"]
+    full: Final = cli_runs["full"]["runs"]
     assert isinstance(thin, dict) and isinstance(full, dict)
 
     assert thin[" ".join(argv)] == full[" ".join(argv)]
-    assert "Usage:" in thin[" ".join(argv)]["output"]
+    assert thin[" ".join(argv)]["output"]
 
 
 @pytest.mark.parametrize(
@@ -201,13 +216,19 @@ def test_sdk_initializes_in_place_on_first_use_after_lite_imports(
     )
 
 
+def test_star_import_after_lite_imports_gets_the_whole_sdk(tmp_path: Path):
+    assert _run(_STAR_IMPORT_AFTER_HELP, (), tmp_path) == {"before": False, "completion": True, "acompletion": True}
+
+
 def test_threads_that_use_the_sdk_at_once_all_wait_for_one_initialization(tmp_path: Path):
     used: Final = _run(_FIRST_USE_FROM_THREADS, (), tmp_path)
 
     assert used == {"seen": [True, True, True, True]}
 
 
-def test_lite_keeps_an_sdk_that_was_already_imported(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]):
+def test_lite_keeps_an_sdk_that_was_already_imported(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
     monkeypatch.setitem(sys.modules, "litellm", litellm)
     monkeypatch.setattr(litellm, "success_callback", ["kept"])
     monkeypatch.setattr(sys, "argv", ["lite", "--help"])
