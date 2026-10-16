@@ -2045,6 +2045,7 @@ EMBEDDING_FALLBACK_DEPLOYMENT: Final = _embedding_deployment(
         ({"fallbacks": [{"embed-only": ["embed-fallback"]}, {"embed-fallback": ["chat-fallback"]}]}, {}),
         ({"fallbacks": [{"embed-only": ["chat-fallback"]}]}, {"metadata": {"_disable_fallbacks": True}}),
         ({}, {"fallbacks": {"chat-fallback": ["embed-fallback"]}}),
+        ({}, {"fallbacks": [{"embed-only": [{"model": "embed-fallback"}]}]}),
         ({}, {"fallbacks": ["chat-fallback-id"]}),
         ({"fallbacks": [{"embed-only": ["missing-group"]}]}, {}),
         ({}, {"fallbacks": ["embed-fallback", "missing-group"]}),

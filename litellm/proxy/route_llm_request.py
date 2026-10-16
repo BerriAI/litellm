@@ -405,6 +405,7 @@ class ProxyUnsupportedEndpointError(ProxyException):
 _FALLBACK_LIST_ADAPTER: Final[TypeAdapter[list[object]]] = TypeAdapter(  # mutable-ok: router fallbacks are lists
     list[object], config=ConfigDict(strict=True)
 )
+_STANDARD_FALLBACKS_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, list[str]], ...])
 
 
 class _RouterFallbacks(Protocol):
@@ -510,7 +511,7 @@ def _fallback_targets(
     if check_non_standard_fallback_format(fallbacks=fallbacks):
         return fallbacks
     resolved, _ = get_fallback_model_group_for_lookup_groups(
-        fallbacks=fallbacks,
+        fallbacks=_STANDARD_FALLBACKS_ADAPTER.validate_python(fallbacks),
         lookup_groups=fallback_lookup_groups(data, model),
     )
     return resolved or ()
@@ -591,13 +592,14 @@ def _fallback_would_answer(
     raw_fallbacks: Final = _fallbacks_for_request(data, llm_router)
     if raw_fallbacks is None:
         return False
-    try:
-        fallbacks: Final = _FALLBACK_LIST_ADAPTER.validate_python(raw_fallbacks)
-    except ValidationError:
-        return True
     if fallback_lookup_groups(data, model) != (model,):
         return True
-    return _fallbacks_reach_chat(model, data, fallbacks, llm_router, team_id)
+    try:
+        return _fallbacks_reach_chat(
+            model, data, _FALLBACK_LIST_ADAPTER.validate_python(raw_fallbacks), llm_router, team_id
+        )
+    except ValidationError:
+        return True
 
 
 def endpoint_unsupported_by_model(
