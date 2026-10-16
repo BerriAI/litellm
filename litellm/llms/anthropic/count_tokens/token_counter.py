@@ -36,6 +36,7 @@ class AnthropicTokenCounter(BaseTokenCounter):
         system: JsonValue = None,
         messages_format: TokenCountMessagesFormat = "anthropic",
         output_format: JsonValue = None,
+        context_management: JsonValue = None,
     ) -> TokenCountResponse | None:
         """
         Count tokens using Anthropic's CountTokens API.

@@ -132,7 +132,7 @@ def request_safeguards_evaluator(
     )
 
 
-async def _prepare_context_managed_request(
+async def prepare_context_managed_request(
     *,
     model: str,
     messages: _AnthropicMessages,
@@ -684,7 +684,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         sub_call_logging_kwargs: Final = proxy_sub_call_logging_kwargs(request_kwargs)
         sub_call_trace_id: Final = proxy_sub_call_trace_id(request_kwargs)
 
-        polyfill_result: Final = await _prepare_context_managed_request(
+        polyfill_result: Final = await prepare_context_managed_request(
             model=model,
             messages=messages,
             tools=tools,
@@ -834,7 +834,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             proxy_litellm_metadata, user_api_key_auth = _extract_proxy_litellm_metadata(kwargs)
             request_kwargs: Final = _REQUEST_KWARGS.validate_python(kwargs)
             polyfill_result = run_async_function(
-                _prepare_context_managed_request,
+                prepare_context_managed_request,
                 model=model,
                 messages=messages,
                 tools=tools,

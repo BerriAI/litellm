@@ -8,6 +8,7 @@ from typing import Final
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import JsonValue
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.anthropic_interface.exceptions import (
@@ -298,6 +299,18 @@ def _requested_output_format(data: Mapping[str, JsonValue]) -> JsonValue:
     return output_config.get("format")
 
 
+class _CountTokensBodyOptions(TypedDict):
+    output_format: ReadOnly[JsonValue]
+    context_management: ReadOnly[JsonValue]
+
+
+def _count_tokens_body_options(data: Mapping[str, JsonValue]) -> _CountTokensBodyOptions:
+    return {
+        "output_format": _requested_output_format(data),
+        "context_management": data.get("context_management"),
+    }
+
+
 @router.post(
     "/v1/messages/count_tokens",
     tags=["[beta] Anthropic Messages Token Counting"],
@@ -358,7 +371,7 @@ async def count_tokens(
             request=token_request,
             call_endpoint=True,
             messages_format="anthropic",
-            output_format=_requested_output_format(data),
+            **_count_tokens_body_options(data),
         )
     except HTTPException:
         raise

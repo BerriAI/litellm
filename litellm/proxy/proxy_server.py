@@ -14425,6 +14425,7 @@ async def _try_provider_token_count(
     system: str | None = None,
     messages_format: TokenCountMessagesFormat = "openai",
     output_format: JsonValue = None,
+    context_management: JsonValue = None,
 ) -> Optional["TokenCountResponse"]:
     """Attempt provider-specific token counting. Returns result on success, None to fall through to local counting."""
     if not provider_counter.should_use_token_counting_api(custom_llm_provider=custom_llm_provider):
@@ -14440,6 +14441,7 @@ async def _try_provider_token_count(
             system=system,
             messages_format=messages_format,
             output_format=output_format,
+            context_management=context_management,
         )
     except httpx.HTTPStatusError as e:
         error_message: Final = getattr(e, "message", None) or str(e)
@@ -14490,6 +14492,7 @@ async def count_request_tokens(
     call_endpoint: bool = False,
     messages_format: TokenCountMessagesFormat = "openai",
     output_format: JsonValue = None,
+    context_management: JsonValue = None,
 ) -> TokenCountResponse:
     prompt: Final = request.prompt
     messages: Final = request.messages
@@ -14551,6 +14554,7 @@ async def count_request_tokens(
             system=system,
             messages_format=messages_format,
             output_format=output_format,
+            context_management=context_management,
         )
         if result is not None:
             return result

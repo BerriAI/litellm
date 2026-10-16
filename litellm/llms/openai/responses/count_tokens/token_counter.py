@@ -80,6 +80,7 @@ class OpenAITokenCounter(BaseTokenCounter):
         system: object = None,
         messages_format: TokenCountMessagesFormat = "openai",
         output_format: JsonValue = None,
+        context_management: JsonValue = None,
     ) -> TokenCountResponse | None:
         """
         Count tokens using OpenAI's Responses API /input_tokens endpoint.

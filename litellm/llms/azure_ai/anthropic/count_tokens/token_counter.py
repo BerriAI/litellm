@@ -38,6 +38,7 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
         system: object | None = None,
         messages_format: TokenCountMessagesFormat = "anthropic",
         output_format: JsonValue = None,
+        context_management: JsonValue = None,
     ) -> TokenCountResponse | None:
         """
         Count tokens using Azure AI Anthropic's CountTokens API.

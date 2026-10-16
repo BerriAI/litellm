@@ -1280,6 +1280,7 @@ class VertexAITokenCounter(BaseTokenCounter):
         system: object | None = None,
         messages_format: TokenCountMessagesFormat = "openai",
         output_format: JsonValue = None,
+        context_management: JsonValue = None,
     ) -> TokenCountResponse | None:
         import copy
 
@@ -1358,6 +1359,7 @@ class VertexAITokenCounter(BaseTokenCounter):
         else:
             from litellm.llms.vertex_ai.count_tokens.context import (
                 VertexGeminiCountContextError,
+                count_context_edits,
                 count_context_error_response,
                 gemini_count_contents,
                 inference_request_view,
@@ -1367,7 +1369,14 @@ class VertexAITokenCounter(BaseTokenCounter):
             )
             from litellm.llms.vertex_ai.count_tokens.handler import VertexAITokenCounter
 
-            request_view: Final = inference_request_view(messages or [], system, messages_format)
+            request_view: Final = await inference_request_view(
+                messages or [],
+                system,
+                messages_format,
+                count_context_edits(context_management, tools, count_tokens_params_request, model_to_use),
+            )
+            if isinstance(request_view, VertexGeminiCountContextError):
+                return count_context_error_response(request_view, request_model, model_to_use)
             count_context: Final = vertex_gemini_count_context(system=request_view.system, tools=tools)
             if isinstance(count_context, VertexGeminiCountContextError):
                 return count_context_error_response(count_context, request_model, model_to_use)

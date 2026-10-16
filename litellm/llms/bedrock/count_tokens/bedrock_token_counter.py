@@ -109,6 +109,7 @@ class BedrockTokenCounter(BaseTokenCounter):
         system: object | None = None,
         messages_format: TokenCountMessagesFormat = "anthropic",
         output_format: JsonValue = None,
+        context_management: JsonValue = None,
     ) -> TokenCountResponse | None:
         if not messages:
             return None

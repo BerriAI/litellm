@@ -32,6 +32,7 @@ class BaseTokenCounter(ABC):
         system: Any | None = None,
         messages_format: TokenCountMessagesFormat = "openai",
         output_format: JsonValue = None,
+        context_management: JsonValue = None,
     ) -> TokenCountResponse | None:
         pass
 
