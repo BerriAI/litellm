@@ -96,8 +96,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
         )
     });
     let listener = tokio::net::TcpListener::bind((settings.host.as_str(), settings.port)).await?;
+    let address = listener.local_addr()?;
+    // Without TCP_NODELAY, Nagle holds small SSE chunks until the client's delayed ACK (~40 ms per stream).
+    let listener = axum::serve::ListenerExt::tap_io(listener, |stream| {
+        if let Err(error) = stream.set_nodelay(true) {
+            tracing::warn!(%error, "failed to set TCP_NODELAY");
+        }
+    });
 
-    tracing::info!(address = %listener.local_addr()?, models = config.model_list.len(), log_level = %level, "gateway listening");
+    tracing::info!(%address, models = config.model_list.len(), log_level = %level, "gateway listening");
 
     let result = axum::serve(
         listener,

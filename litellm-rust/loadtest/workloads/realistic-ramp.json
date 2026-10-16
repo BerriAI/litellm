@@ -1,0 +1,42 @@
+{
+  "name": "realistic mix, stepped arrival rate to find the knee (about 80 s mean request time, so 60 rps holds about 5,000 open requests)",
+  "stages": [
+    {"duration_s": 600, "rps": 5},
+    {"duration_s": 600, "rps": 15},
+    {"duration_s": 600, "rps": 30},
+    {"duration_s": 600, "rps": 60},
+    {"duration_s": 1200, "rps": 100}
+  ],
+  "nonstream_max_s": 360,
+  "warmup_s": 60,
+  "max_in_flight": 50000,
+  "new_conn_fraction": 0.05,
+  "keys": {"file": "out/keys.txt", "zipf_s": 1.1},
+  "models": {"chat": {"prefix": "gpt-6-astra-", "count": 10}, "messages": {"prefix": "claude-opus-5-5-", "count": 10}},
+  "classes": [
+    {"name": "chat-interactive", "weight": 40, "endpoint": "chat", "stream_fraction": 0.8,
+     "context_tokens": {"dist": "loguniform", "min": 10000, "max": 100000},
+     "ttft_ms": {"dist": "uniform", "min": 300, "max": 1500},
+     "duration_s": {"dist": "loguniform", "min": 1, "max": 60}},
+    {"name": "messages-agent", "weight": 35, "endpoint": "messages", "stream_fraction": 0.9,
+     "context_tokens": {"dist": "loguniform", "min": 20000, "max": 200000},
+     "ttft_ms": {"dist": "uniform", "min": 500, "max": 3000},
+     "duration_s": {"dist": "loguniform", "min": 5, "max": 300}},
+    {"name": "slow-nonstream", "weight": 10, "endpoint": "chat", "stream_fraction": 0,
+     "context_tokens": {"dist": "loguniform", "min": 10000, "max": 100000},
+     "ttft_ms": {"dist": "const", "min": 0},
+     "duration_s": {"dist": "uniform", "min": 30, "max": 360}},
+    {"name": "long-stream", "weight": 5, "endpoint": "messages", "stream_fraction": 1,
+     "context_tokens": {"dist": "loguniform", "min": 50000, "max": 300000},
+     "ttft_ms": {"dist": "uniform", "min": 1000, "max": 5000},
+     "duration_s": {"dist": "uniform", "min": 300, "max": 900}},
+    {"name": "huge-context-messages", "weight": 6, "endpoint": "messages", "stream_fraction": 0.7,
+     "context_tokens": {"dist": "choice", "values": [500000, 800000, 1000000]},
+     "ttft_ms": {"dist": "uniform", "min": 2000, "max": 10000},
+     "duration_s": {"dist": "loguniform", "min": 10, "max": 300}},
+    {"name": "huge-context-chat", "weight": 4, "endpoint": "chat", "stream_fraction": 0.7,
+     "context_tokens": {"dist": "choice", "values": [500000, 800000, 900000]},
+     "ttft_ms": {"dist": "uniform", "min": 2000, "max": 10000},
+     "duration_s": {"dist": "loguniform", "min": 10, "max": 300}}
+  ]
+}

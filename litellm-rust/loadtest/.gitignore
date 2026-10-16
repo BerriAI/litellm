@@ -1,0 +1,7 @@
+out/
+results/
+*.jsonl
+.terraform/
+*.tfstate*
+*.tfvars
+!*.tfvars.example
