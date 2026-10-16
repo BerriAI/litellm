@@ -333,12 +333,12 @@ def _drain(rig: Rig) -> list[JsonValue]:
     return requests
 
 
-def _calls(rig: Rig, interaction_id: str) -> tuple[tuple[str, str], ...]:
-    suffix: Final = f"/v1beta/interactions/{interaction_id}"
+def _calls(rig: Rig, *interaction_ids: str) -> tuple[tuple[str, str], ...]:
+    suffixes: Final = tuple(f"/v1beta/interactions/{interaction_id}" for interaction_id in interaction_ids)
     return tuple(
         (string_value(object_value(entry)["method"]), string_value(object_value(entry)["api_key"]))
         for entry in _drain(rig)
-        if string_value(object_value(entry)["path"]).endswith(suffix)
+        if string_value(object_value(entry)["path"]).endswith(suffixes)
     )
 
 
@@ -460,6 +460,7 @@ def test_a_replica_booting_later_resumes_and_bills_unclaimed_interactions(rig: R
                 _assert_billed(_await_spend_row(item, seconds=90), rates)
                 claimer: Final = _claimer_pid(_await_outcome(item, "billed"))
                 assert claimer in pids or _booted_after(claimer, created_after), (claimer, pids)
+        assert {key for _, key in _calls(rig, *created)} == {_DEPLOYMENT_KEY}
         for item in created:
             assert len(_spend_rows(item)) == 1
 

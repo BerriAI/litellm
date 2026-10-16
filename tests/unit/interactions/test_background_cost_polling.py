@@ -1,4 +1,5 @@
 import asyncio
+import json
 import time
 from datetime import datetime, timedelta, timezone
 from itertools import islice
@@ -23,6 +24,7 @@ from litellm.interactions.background_cost_polling import (
 )
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
+from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.types.interactions import InteractionsAPIResponse
 
 USAGE_BLOCK = {
@@ -85,6 +87,7 @@ def _context(
         initial_interval_seconds=0.001,
         max_interval_seconds=0.002,
         timeout_seconds=timeout_seconds,
+        outcome_write_timeout_seconds=0.01,
         store=store if store is not None else InMemoryBackgroundSettlementStore(),
         resumed=resumed,
     )
@@ -277,19 +280,19 @@ def _provider_error_response(status_code: int) -> httpx.Response:
         litellm.NotFoundError(message="interaction not found", model="gemini-2.5-flash", llm_provider="gemini"),
     ],
 )
-@pytest.mark.parametrize("resumed", [False, True])
 @pytest.mark.asyncio
-async def test_poller_stops_at_the_first_error_no_retry_changes_and_releases_the_reservation(error, resumed):
+async def test_a_resumed_poll_stops_fetching_at_the_first_error_no_retry_changes_and_releases_the_reservation(error):
     """
-    The regression: a fetch the provider refuses for good, like an unknown id
-    or a revoked key, was retried every interval until the poll timed out.
+    The regression: a resumed fetch the provider refuses for good, like an
+    unknown id or a key rotated away, was retried every interval until the
+    poll timed out.
     """
     reservation = _reservation()
     logging_obj = _logging_obj_with_reservation(reservation)
     fetch, calls = _fetch_sequence(error)
 
     outcome = await poll_and_log_background_interaction_cost(
-        _context(logging_obj, timeout_seconds=0.05, resumed=resumed), fetch_interaction=fetch
+        _context(logging_obj, timeout_seconds=0.05, resumed=True), fetch_interaction=fetch
     )
 
     assert outcome == "unsettled"
@@ -337,10 +340,13 @@ async def test_a_resumed_poll_the_provider_refuses_leaves_the_bill_to_the_replic
         litellm.ServiceUnavailableError(message="overloaded", model="gemini-2.5-flash", llm_provider="gemini"),
         litellm.InternalServerError(message="internal error", model="gemini-2.5-flash", llm_provider="gemini"),
         litellm.Timeout(message="timed out", model="gemini-2.5-flash", llm_provider="gemini"),
+        litellm.BadRequestError(message="invalid interaction id", model="gemini-2.5-flash", llm_provider="gemini"),
+        litellm.AuthenticationError(message="API key not valid", model="gemini-2.5-flash", llm_provider="gemini"),
+        litellm.NotFoundError(message="interaction not found", model="gemini-2.5-flash", llm_provider="gemini"),
     ],
 )
 @pytest.mark.asyncio
-async def test_poller_retries_through_a_provider_error_a_retry_can_clear(error):
+async def test_the_creating_poll_retries_through_any_provider_error(error):
     logging_obj = _logging_obj()
     fetch, calls = _fetch_sequence(error, _response("completed", with_usage=True))
 
@@ -396,6 +402,38 @@ async def test_a_release_it_could_not_record_leaves_the_reservation_to_the_settl
     )
 
     assert reservation["finalized"] is False
+
+
+class _FirstOutcomeWriteFails(_OutcomeWritesFail):
+    def __init__(self):
+        super().__init__()
+        self.failed_once = False
+
+    async def record_outcome(self, interaction_id, outcome):
+        if not self.failed_once:
+            self.failed_once = True
+            raise RuntimeError("connection reset")
+        await self.store.record_outcome(interaction_id, outcome)
+
+
+@pytest.mark.asyncio
+async def test_a_release_whose_first_outcome_write_failed_still_frees_the_reservation():
+    """
+    The regression: one failed outcome write left the key's budget
+    reservation held until a later boot or delete took the row over, and an
+    active key's spend counter never expired it in the meantime.
+    """
+    reservation = _reservation()
+    store = _FirstOutcomeWriteFails()
+    fetch, _ = _fetch_sequence(_response("failed", with_usage=False))
+
+    outcome = await poll_and_log_background_interaction_cost(
+        _context(_logging_obj_with_reservation(reservation), store=store), fetch_interaction=fetch
+    )
+
+    assert outcome == "released"
+    assert reservation["finalized"] is True
+    assert await store.store.unsettled() == ()
 
 
 @pytest.mark.asyncio
@@ -1016,7 +1054,9 @@ def _create_through_the_proxy_router(tags: list) -> LitellmLogging:
     )
     logging_obj.update_from_kwargs(
         kwargs={
-            "metadata": _create_metadata(tags=tags, spend_logs_metadata={"job": "nightly"}),
+            "metadata": _create_metadata(
+                tags=tags, spend_logs_metadata={"job": "nightly"}, model_group="client-chosen-group"
+            ),
             "litellm_metadata": {"model_info": {"id": "deployment-1"}, "model_group": "gemini-background"},
         },
         model="gemini-2.5-flash",
@@ -1037,23 +1077,33 @@ def _create_with_header_tags(tags: list) -> LitellmLogging:
 
 
 async def _billed_spend_row(logging_obj: LitellmLogging) -> dict:
-    fetch, _ = _fetch_sequence(_response("completed", with_usage=True))
+    response = _response("completed", with_usage=True)
+    fetch, _ = _fetch_sequence(response)
     assert await poll_and_log_background_interaction_cost(_context(logging_obj), fetch_interaction=fetch) == "billed"
-    payload = logging_obj.model_call_details["standard_logging_object"]
+    settled_at = datetime.now(timezone.utc)
+    row = get_logging_payload(
+        kwargs={**logging_obj.model_call_details, "completion_start_time": settled_at},
+        response_obj=response,
+        start_time=settled_at,
+        end_time=settled_at,
+    )
     return {
-        "request_tags": payload["request_tags"],
-        "model_id": payload["model_id"],
-        "spend_logs_metadata": payload["metadata"]["spend_logs_metadata"],
+        "request_tags": json.loads(row["request_tags"]),
+        "model_id": row["model_id"],
+        "model_group": row["model_group"],
+        "spend_logs_metadata": json.loads(row["metadata"]).get("spend_logs_metadata"),
     }
 
 
 @pytest.mark.parametrize("create", [_create_through_the_proxy_router, _create_with_header_tags])
 @pytest.mark.asyncio
-async def test_a_bill_settled_off_the_creating_worker_carries_the_creating_request_tags(create):
+async def test_a_bill_settled_off_the_creating_worker_matches_the_creating_worker_spend_row(create):
     """
-    The regression: the stored create context kept only the router's metadata
+    The regressions: the stored create context kept only the router's metadata
     on the proxy path, so a row billed after a restart or by another replica
-    lost the request tags that tag-based spend reports group by.
+    lost the request tags that tag-based spend reports group by; then it let
+    the client's request metadata override the router's, so a client-sent
+    model group relabeled the bill another replica wrote.
     """
     creator_row = await _billed_spend_row(create(["team-a", "nightly-batch"]))
     stored = _create_context(create(["team-a", "nightly-batch"]), "gemini")

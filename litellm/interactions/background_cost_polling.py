@@ -41,6 +41,7 @@ single-process behavior unchanged; the proxy installs a database-backed one.
 """
 
 import asyncio
+import itertools
 from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -57,6 +58,7 @@ from litellm.constants import (
     BACKGROUND_INTERACTION_COST_POLL_MAX_INTERVAL_SECONDS,
     BACKGROUND_INTERACTION_COST_POLL_TIMEOUT_SECONDS,
     BACKGROUND_INTERACTION_COST_POLLING_ENABLED,
+    BACKGROUND_INTERACTION_SETTLEMENT_CLAIM_LEASE_SECONDS,
 )
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
 from litellm.types.interactions import InteractionsAPIResponse
@@ -181,6 +183,7 @@ class BackgroundInteractionPollContext:
     max_interval_seconds: float = BACKGROUND_INTERACTION_COST_POLL_MAX_INTERVAL_SECONDS
     timeout_seconds: float = BACKGROUND_INTERACTION_COST_POLL_TIMEOUT_SECONDS
     start_delay_seconds: float = 0.0
+    outcome_write_timeout_seconds: float = BACKGROUND_INTERACTION_SETTLEMENT_CLAIM_LEASE_SECONDS / 2
     store: BackgroundSettlementStore = field(default_factory=InMemoryBackgroundSettlementStore)
     resumed: bool = False
 
@@ -292,15 +295,13 @@ def _as_datetime(start_time: datetime | float) -> datetime:
 
 def _spend_metadata(logging_obj: "LiteLLMLoggingObj") -> Mapping[str, object]:
     """
-    The metadata the creating worker's own spend row is built from: the
-    request's ``metadata`` over the router's ``litellm_metadata``, with the
+    The metadata the creating worker's own spend row is built from, with the
     request tags computed once, header-derived ones included, because a
     rebuilt logging object has no request headers to derive them from.
     """
     litellm_params: Final = _OBJECT_DICT.validate_python(logging_obj.model_call_details.get("litellm_params") or {})
     return {
-        **_OBJECT_MAPPING.validate_python(litellm_params.get("litellm_metadata") or {}),
-        **_OBJECT_MAPPING.validate_python(litellm_params.get("metadata") or {}),
+        **_OBJECT_MAPPING.validate_python(get_litellm_metadata_from_kwargs(kwargs=logging_obj.model_call_details)),
         **_request_tags(litellm_params),
     }
 
@@ -398,13 +399,39 @@ async def _claim(context: BackgroundInteractionPollContext) -> bool | None:
         return None
 
 
-async def _recorded(context: BackgroundInteractionPollContext, outcome: SettlementOutcome) -> bool:
+async def _wrote_outcome(context: BackgroundInteractionPollContext, outcome: SettlementOutcome) -> bool:
     try:
         await context.store.record_outcome(context.interaction_id, outcome)
-    except Exception:  # noqa: BLE001  # the claim lapses unrecorded and a takeover settles the interaction
-        verbose_logger.exception("Could not record the settlement of background interaction %s", context.interaction_id)
+    except Exception as e:  # noqa: BLE001  # a failed write is retried while the claim still shuts out takeovers
+        verbose_logger.warning(
+            "Could not record the settlement of background interaction %s: %s", context.interaction_id, e
+        )
         return False
     return True
+
+
+async def _recorded(context: BackgroundInteractionPollContext, outcome: SettlementOutcome) -> bool:
+    """
+    Retries a failed write for half the claim lease, while no other settler
+    can take the row over, so a database blip does not leave the row to a
+    takeover or hold the budget reservation that only a recorded release frees.
+    """
+    retries: Final = _poll_intervals(
+        initial=context.initial_interval_seconds,
+        maximum=context.max_interval_seconds,
+        timeout=context.outcome_write_timeout_seconds,
+    )
+    for delay in itertools.chain((0.0,), retries):
+        await asyncio.sleep(delay)
+        if await _wrote_outcome(context, outcome):
+            return True
+    verbose_logger.error(
+        "Could not record the settlement of background interaction %s within %ss; the next process to take "
+        "over its lapsed claim settles it",
+        context.interaction_id,
+        context.outcome_write_timeout_seconds,
+    )
+    return False
 
 
 async def _bill(context: BackgroundInteractionPollContext, response: InteractionsAPIResponse) -> SettlementOutcome:
@@ -462,14 +489,6 @@ async def poll_and_log_background_interaction_cost(
                 )
                 if await _settled_elsewhere_before_the_window_ends(context, intervals):
                     return None
-                break
-            if _is_permanent_fetch_error(e):
-                verbose_logger.warning(
-                    "Stopped cost polling for background interaction %s early: the provider answered %s, "
-                    "which no retry changes",
-                    context.interaction_id,
-                    e,
-                )
                 break
             verbose_logger.debug(
                 "Background interaction cost poll for %s failed, will retry: %s",
