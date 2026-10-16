@@ -1933,6 +1933,8 @@ async def _responses_websocket_session(
             request_data=routed_data,
         )
         await websocket.close(code=1011, reason="Internal server error")
+    finally:
+        await proxy_logging_obj.arelease_responses_websocket_slot(user_api_key_dict)
 
 
 @router.websocket("/v1/responses")

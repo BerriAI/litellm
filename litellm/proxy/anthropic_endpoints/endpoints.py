@@ -7,7 +7,7 @@ from typing import Final
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
-from pydantic import ValidationError
+from pydantic import JsonValue, ValidationError
 
 import litellm
 from litellm.anthropic_interface.exceptions import (
@@ -46,7 +46,6 @@ from litellm.proxy.common_utils.openai_error_payload import (
     with_litellm_call_id,
 )
 from litellm.router import Router
-from litellm.types.utils import TokenCountResponse
 
 router: Final = APIRouter()
 
@@ -323,6 +322,14 @@ async def anthropic_response(
         )
 
 
+def _requested_output_format(data: Mapping[str, JsonValue]) -> JsonValue:
+    output_format: Final = data.get("output_format")
+    output_config: Final = data.get("output_config")
+    if isinstance(output_format, dict) or not isinstance(output_config, dict):
+        return output_format
+    return output_config.get("format")
+
+
 @router.post(
     "/v1/messages/count_tokens",
     tags=["[beta] Anthropic Messages Token Counting"],
@@ -352,8 +359,7 @@ async def count_tokens(
     
     Returns: {"input_tokens": <number>}
     """
-    from litellm.proxy.proxy_server import llm_router
-    from litellm.proxy.proxy_server import token_counter as internal_token_counter
+    from litellm.proxy.proxy_server import count_request_tokens, llm_router
 
     litellm_call_id: Final = resolve_litellm_call_id(request.headers.get("x-litellm-call-id"))
     try:
@@ -379,35 +385,21 @@ async def count_tokens(
         if isinstance(token_request, ProxyException):
             return _anthropic_error_json_response(token_request, request)
 
-        # Call the internal token counter function with direct request flag set to False
-        token_response: Final = await internal_token_counter(
+        token_response: Final = await count_request_tokens(
             request=token_request,
             call_endpoint=True,
+            messages_format="anthropic",
+            output_format=_requested_output_format(data),
         )
-        _token_response_dict: dict = {}
-        if isinstance(token_response, TokenCountResponse):
-            _token_response_dict = token_response.model_dump()
-        elif isinstance(token_response, dict):
-            _token_response_dict = token_response
-
-        # Convert the internal response to Anthropic API format
-        return {"input_tokens": _token_response_dict.get("total_tokens", 0)}
-
     except HTTPException:
         raise
     except ProxyException as e:
-        status_code: Final = int(e.code) if e.code and e.code.isdigit() else 500
-        detail: Final = AnthropicExceptionMapping.transform_to_anthropic_error(
-            status_code=status_code,
-            raw_message=e.message,
-        )
-        raise HTTPException(
-            status_code=status_code,
-            detail=detail,
-        )
+        return _anthropic_error_json_response(e, request)
     except Exception as e:
         log_llm_api_exception(e, litellm_call_id)
         raise HTTPException(status_code=500, detail={"error": f"Internal server error: {e}"})
+    else:
+        return {"input_tokens": token_response.total_tokens}
 
 
 @router.post(

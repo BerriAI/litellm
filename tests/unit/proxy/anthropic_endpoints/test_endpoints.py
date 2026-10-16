@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 from litellm import Router
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.types.utils import TokenCountResponse
 
 
 class TestAnthropicEndpoints(unittest.TestCase):
@@ -280,13 +281,17 @@ class TestHttpExceptionDictDetail:
         request.headers = {}
 
         with (
-            patch.object(ep, "read_request_body", new=AsyncMock(return_value={})),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
+            patch.object(
+                ep, "read_request_body", new=AsyncMock(return_value={})
+            ),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
             patch.object(  # test-quality-ok: the guardrail raise happens deep inside this call; the test targets the endpoint's except block
                 ep.ProxyBaseLLMRequestProcessing,
                 "base_process_llm_request",
                 new=AsyncMock(side_effect=exc),
             ),
-            patch.object(proxy_server, "proxy_logging_obj") as mock_logging,  # test-quality-ok: module global imported at call time; no injection seam
+            patch.object(
+                proxy_server, "proxy_logging_obj"
+            ) as mock_logging,  # test-quality-ok: module global imported at call time; no injection seam
         ):
             mock_logging.post_call_failure_hook = AsyncMock()
             response = await ep.anthropic_response(
@@ -377,9 +382,15 @@ class TestErrorLogCarriesCallId:
         request.headers = {}
 
         with (
-            patch.object(ep, "read_request_body", new=AsyncMock(return_value={"model": "claude-sonnet"})),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
-            patch.object(ep.ProxyBaseLLMRequestProcessing, "base_process_llm_request", new=fake_process),  # test-quality-ok: the provider failure happens inside this call; the test targets the endpoint's except block
-            patch.object(proxy_server, "proxy_logging_obj") as mock_logging,  # test-quality-ok: module global imported at call time; no injection seam
+            patch.object(
+                ep, "read_request_body", new=AsyncMock(return_value={"model": "claude-sonnet"})
+            ),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
+            patch.object(
+                ep.ProxyBaseLLMRequestProcessing, "base_process_llm_request", new=fake_process
+            ),  # test-quality-ok: the provider failure happens inside this call; the test targets the endpoint's except block
+            patch.object(
+                proxy_server, "proxy_logging_obj"
+            ) as mock_logging,  # test-quality-ok: module global imported at call time; no injection seam
             caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"),
         ):
             mock_logging.post_call_failure_hook = AsyncMock()
@@ -410,9 +421,15 @@ class TestErrorLogCarriesCallId:
         request.headers = {}
 
         with (
-            patch.object(ep, "read_request_body", new=AsyncMock(return_value={"model": "claude-sonnet"})),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
-            patch.object(ep.ProxyBaseLLMRequestProcessing, "base_process_llm_request", new=fake_process),  # test-quality-ok: the proxy shaped failure happens inside this call; the test targets the endpoint's except block
-            patch.object(proxy_server, "proxy_logging_obj") as mock_logging,  # test-quality-ok: module global imported at call time; no injection seam
+            patch.object(
+                ep, "read_request_body", new=AsyncMock(return_value={"model": "claude-sonnet"})
+            ),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
+            patch.object(
+                ep.ProxyBaseLLMRequestProcessing, "base_process_llm_request", new=fake_process
+            ),  # test-quality-ok: the proxy shaped failure happens inside this call; the test targets the endpoint's except block
+            patch.object(
+                proxy_server, "proxy_logging_obj"
+            ) as mock_logging,  # test-quality-ok: module global imported at call time; no injection seam
         ):
             mock_logging.post_call_failure_hook = AsyncMock()
             response = await ep.anthropic_response(
@@ -442,7 +459,9 @@ class TestErrorLogCarriesCallId:
                 "read_request_body",
                 new=AsyncMock(return_value={"model": "claude-sonnet", "messages": [{"role": "user", "content": "hi"}]}),
             ),
-            patch.object(proxy_server, "token_counter", new=AsyncMock(side_effect=RuntimeError("tokenizer down"))),  # test-quality-ok: module global imported at call time; the test targets the endpoint's except block
+            patch.object(
+                proxy_server, "count_request_tokens", new=AsyncMock(side_effect=RuntimeError("tokenizer down"))
+            ),  # test-quality-ok: module global imported at call time; the test targets the endpoint's except block
             caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"),
             pytest.raises(HTTPException) as raised,
         ):
@@ -466,6 +485,9 @@ def _claude_router() -> Router:
 
 
 _MALFORMED_TOOL_ENTRY: Final = [{"name": "get_weather", "input_schema": "object"}]
+_SEVEN_TOKENS: Final = TokenCountResponse(
+    total_tokens=7, request_model="claude-sonnet", model_used="claude-sonnet", tokenizer_type="test"
+)
 
 
 @pytest.mark.asyncio
@@ -492,7 +514,7 @@ async def test_count_tokens_answers_400_for_malformed_tools_without_counting(mod
 
     with (
         patch.object(ep, "read_request_body", new=AsyncMock(return_value=body)),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
-        patch.object(proxy_server, "token_counter", new=counter),  # test-quality-ok: module global imported at call time; the test asserts it is never reached
+        patch.object(proxy_server, "count_request_tokens", new=counter),  # test-quality-ok: module global imported at call time; the test asserts it is never reached
         patch.object(proxy_server, "llm_router", new=_claude_router()),  # test-quality-ok: module global imported at call time; no injection seam on this route
     ):
         response = await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
@@ -510,12 +532,12 @@ async def test_count_tokens_counts_malformed_tool_entries_for_a_model_the_router
 
     request = MagicMock()
     request.headers = {}
-    counter = AsyncMock(return_value={"total_tokens": 7})
+    counter = AsyncMock(return_value=_SEVEN_TOKENS)
     body = {"model": "team-public-name", "messages": [{"role": "user", "content": "hi"}], "tools": _MALFORMED_TOOL_ENTRY}
 
     with (
         patch.object(ep, "read_request_body", new=AsyncMock(return_value=body)),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
-        patch.object(proxy_server, "token_counter", new=counter),  # test-quality-ok: module global imported at call time; the test asserts what it receives
+        patch.object(proxy_server, "count_request_tokens", new=counter),  # test-quality-ok: module global imported at call time; the test asserts what it receives
         patch.object(proxy_server, "llm_router", new=_claude_router()),  # test-quality-ok: module global imported at call time; no injection seam on this route
     ):
         response = await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
@@ -543,13 +565,13 @@ async def test_count_tokens_drops_malformed_tools_when_drop_params_is_set(
 
     request = MagicMock()
     request.headers = headers
-    counter = AsyncMock(return_value={"total_tokens": 7})
+    counter = AsyncMock(return_value=_SEVEN_TOKENS)
     messages = [{"role": "user", "content": "hi"}]
     body = {"model": "claude-sonnet", "messages": messages, "tools": 5, **dropping}
 
     with (
         patch.object(ep, "read_request_body", new=AsyncMock(return_value=body)),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
-        patch.object(proxy_server, "token_counter", new=counter),  # test-quality-ok: module global imported at call time; the test asserts what it receives
+        patch.object(proxy_server, "count_request_tokens", new=counter),  # test-quality-ok: module global imported at call time; the test asserts what it receives
     ):
         response = await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
 
@@ -582,12 +604,12 @@ async def test_count_tokens_drops_malformed_tools_the_counted_deployment_drops_e
     )
     request = MagicMock()
     request.headers = {}
-    counter = AsyncMock(return_value={"total_tokens": 7})
+    counter = AsyncMock(return_value=_SEVEN_TOKENS)
     body = {"model": "claude-sonnet", "messages": [{"role": "user", "content": "hi"}], "tools": 5}
 
     with (
         patch.object(ep, "read_request_body", new=AsyncMock(return_value=body)),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
-        patch.object(proxy_server, "token_counter", new=counter),  # test-quality-ok: module global imported at call time; the test asserts what it receives
+        patch.object(proxy_server, "count_request_tokens", new=counter),  # test-quality-ok: module global imported at call time; the test asserts what it receives
         patch.object(proxy_server, "llm_router", new=router),  # test-quality-ok: module global imported at call time; no injection seam on this route
     ):
         response = await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
