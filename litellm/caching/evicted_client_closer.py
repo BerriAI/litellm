@@ -36,6 +36,7 @@ alive anything the collector would have reclaimed first.
 import asyncio
 import contextlib
 import inspect
+import itertools
 import threading
 import time
 import weakref
@@ -53,6 +54,9 @@ _CLOSABLE_ANYWHERE: Final = "closable-anywhere"
 _CLOSABLE_ON_ANY_LOOP: Final = "closable-on-any-loop"
 
 _BucketKey = str | int
+_LOOP_TOKENS: Final[weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, int]] = weakref.WeakKeyDictionary()
+_LOOP_TOKEN_COUNTER: Final = itertools.count()
+_LOOP_TOKEN_LOCK: Final = threading.Lock()
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,12 +67,12 @@ class _PendingClose:
     collector would otherwise have reclaimed first.
 
     ``needs_loop`` is set for a client whose close is a coroutine; those can only
-    be closed from the event loop they were evicted on, recorded in ``loop_id``.
+    be closed from the event loop they were evicted on, recorded in ``loop_token``.
     A client that closes synchronously carries neither constraint.
     """
 
     client_ref: "weakref.ref[object]"
-    loop_id: int | None
+    loop_token: int | None
     needs_loop: bool
     close_after: float
 
@@ -77,16 +81,24 @@ def _bucket_key(pending: _PendingClose) -> _BucketKey:
     """Which reaps can close this entry: any at all, any running a loop, or one loop's."""
     if not pending.needs_loop:
         return _CLOSABLE_ANYWHERE
-    if pending.loop_id is None:
+    if pending.loop_token is None:
         return _CLOSABLE_ON_ANY_LOOP
-    return pending.loop_id
+    return pending.loop_token
 
 
-def _running_loop_id() -> int | None:
+def running_loop_token() -> int | None:
     try:
-        return id(asyncio.get_running_loop())
+        loop: Final = asyncio.get_running_loop()
     except RuntimeError:
         return None
+    try:
+        token: Final[int | None] = _LOOP_TOKENS.get(loop)
+        if token is not None:
+            return token
+        with _LOOP_TOKEN_LOCK:
+            return _LOOP_TOKENS.setdefault(loop, next(_LOOP_TOKEN_COUNTER))
+    except TypeError:
+        return id(loop)
 
 
 def _close_function(client: object) -> Callable[[], object] | None:
@@ -202,7 +214,7 @@ class EvictedClientCloser:
         self._enqueue(
             _PendingClose(
                 client_ref=weakref.ref(client),
-                loop_id=_running_loop_id(),
+                loop_token=running_loop_token(),
                 needs_loop=inspect.iscoroutinefunction(close_fn),
                 close_after=self._clock() + self._grace_seconds,
             )
@@ -217,7 +229,7 @@ class EvictedClientCloser:
         if not self._pending_count:
             return
         now: Final = self._clock()
-        for pending in self._take_due(_running_loop_id(), now):
+        for pending in self._take_due(running_loop_token(), now):
             client = pending.client_ref()
             if client is None:
                 continue
@@ -245,8 +257,10 @@ class EvictedClientCloser:
             bucket.append(pending)
             self._pending_count += 1
 
-    def _take_due(self, loop_id: int | None, now: float) -> tuple[_PendingClose, ...]:
-        buckets = (_CLOSABLE_ANYWHERE,) if loop_id is None else (_CLOSABLE_ANYWHERE, _CLOSABLE_ON_ANY_LOOP, loop_id)
+    def _take_due(self, loop_token: int | None, now: float) -> tuple[_PendingClose, ...]:
+        buckets = (
+            (_CLOSABLE_ANYWHERE,) if loop_token is None else (_CLOSABLE_ANYWHERE, _CLOSABLE_ON_ANY_LOOP, loop_token)
+        )
         with self._queue_lock:
             return tuple(pending for key in buckets for pending in self._drain_locked(key, now))
 

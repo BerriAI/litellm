@@ -2,10 +2,9 @@
 Add the event loop to the cache key, to prevent event loop closed errors.
 """
 
-import asyncio
 from typing import Final
 
-from .evicted_client_closer import EvictedClientCloser, default_evicted_client_closer
+from .evicted_client_closer import EvictedClientCloser, default_evicted_client_closer, running_loop_token
 from .in_memory_cache import InMemoryCache
 
 
@@ -48,12 +47,8 @@ class LLMClientCache(InMemoryCache):
         Add the event loop to the cache key, to prevent event loop closed errors.
         If none, use the key as is.
         """
-        try:
-            event_loop: Final = asyncio.get_running_loop()
-            stringified_event_loop: Final = str(id(event_loop))
-            return f"{key}-{stringified_event_loop}"
-        except RuntimeError:  # handle no current running event loop
-            return key
+        token: Final = running_loop_token()
+        return f"{key}-{token}" if token is not None else key
 
     def set_cache(self, key: str, value: object, litellm_owned_client: bool = False, **kwargs):
         """``litellm_owned_client`` marks a client litellm built, so it may be closed once evicted."""

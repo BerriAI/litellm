@@ -10,6 +10,7 @@ See: https://github.com/BerriAI/litellm/pull/22247
 
 import asyncio, gc, httpx, importlib, litellm, os, threading, time, weakref
 import warnings
+from typing import Final
 
 import pytest
 
@@ -26,6 +27,24 @@ from litellm.llms.custom_httpx.http_handler import(
 from litellm.types.utils import LlmProviders
 from litellm.utils import _invalidate_model_cost_lowercase_map
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+
+
+async def _get_and_set_cache(cache: LLMClientCache) -> object | None:
+    cached: Final = await cache.async_get_cache("client")
+    await cache.async_set_cache("client", object())
+    return cached
+
+
+def _cache_result_on_new_loop(cache: LLMClientCache) -> tuple[int, object | None]:
+    loop: Final = asyncio.new_event_loop()
+    loop_id: Final = id(loop)
+    try:
+        result: Final = loop.run_until_complete(_get_and_set_cache(cache))
+    finally:
+        loop.close()
+    del loop
+    gc.collect()
+    return loop_id, result
 
 
 class MockAsyncClient:
@@ -46,6 +65,15 @@ class MockSyncClient:
 
     def close(self):
         self.closed = True
+
+
+def test_async_client_cache_does_not_reuse_clients_between_collected_loops() -> None:
+    cache: Final = LLMClientCache()
+    results: Final = tuple(_cache_result_on_new_loop(cache) for _ in range(50))
+    loop_ids: Final = tuple(loop_id for loop_id, _ in results)
+
+    assert all(result is None for _, result in results)
+    assert len(set(loop_ids)) < len(loop_ids)
 
 
 @pytest.mark.asyncio

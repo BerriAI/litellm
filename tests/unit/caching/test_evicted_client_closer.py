@@ -10,6 +10,7 @@ never closed, because litellm does not own its lifecycle.
 import asyncio
 import gc
 import weakref
+from typing import Final
 from unittest.mock import AsyncMock
 
 import httpx
@@ -39,6 +40,14 @@ class AsyncClient:
 
     async def close(self) -> None:
         self.closed = True
+
+
+class RecordingAsyncClient:
+    def __init__(self) -> None:
+        self.close_calls = 0
+
+    async def aclose(self) -> None:
+        self.close_calls += 1
 
 
 class SyncClient:
@@ -72,6 +81,40 @@ class CountingDeadline(float):
 
 def make_closer(clock: FakeClock, grace_seconds: float = 60.0) -> EvictedClientCloser:
     return EvictedClientCloser(grace_seconds=grace_seconds, clock=clock)
+
+
+async def _schedule_client(closer: EvictedClientCloser, client: RecordingAsyncClient) -> None:
+    closer.schedule(client)
+
+
+async def _reap_and_yield(closer: EvictedClientCloser) -> None:
+    closer.reap()
+    await asyncio.sleep(0)
+
+
+def _reap_after_loop_id_reuse(
+    closer: EvictedClientCloser,
+    client: RecordingAsyncClient,
+    loop_ids: frozenset[int],
+    attempts: int,
+) -> bool:
+    if attempts == 0:
+        return False
+    loop: Final = asyncio.new_event_loop()
+    loop_id: Final = id(loop)
+    if loop_id in loop_ids:
+        try:
+            loop.run_until_complete(_reap_and_yield(closer))
+        finally:
+            loop.close()
+        return True
+    try:
+        loop.run_until_complete(_schedule_client(closer, client))
+    finally:
+        loop.close()
+    del loop
+    gc.collect()
+    return _reap_after_loop_id_reuse(closer, client, loop_ids | {loop_id}, attempts - 1)
 
 
 @pytest.mark.asyncio
@@ -264,6 +307,31 @@ def test_sync_client_evicted_outside_an_event_loop_is_still_closed():
 
     assert client.closed is True
     assert closer.pending_count == 0
+
+
+def test_async_client_from_collected_loop_is_not_closed_by_a_loop_reusing_its_id() -> None:
+    clock: Final = FakeClock()
+    closer: Final = EvictedClientCloser(grace_seconds=0, clock=clock)
+    client: Final = RecordingAsyncClient()
+    closer.mark_owned(client)
+    loop_a: Final = asyncio.new_event_loop()
+    loop_a_id: Final = id(loop_a)
+
+    async def schedule() -> None:
+        closer.schedule(client)
+
+    try:
+        loop_a.run_until_complete(schedule())
+    finally:
+        loop_a.close()
+    del loop_a
+    gc.collect()
+    assert closer.pending_count == 1
+
+    reused_loop_id: Final = _reap_after_loop_id_reuse(closer, client, frozenset({loop_a_id}), attempts=50)
+    assert reused_loop_id, "new event loops did not reuse a collected loop's id"
+
+    assert client.close_calls == 0
 
 
 @pytest.mark.asyncio
