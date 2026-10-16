@@ -32,6 +32,7 @@ from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessin
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException, ModifyResponseException
 from litellm.proxy._types import AwsErrorTypeProxyException, ProxyException
 from litellm.proxy.utils import ProxyLogging
+from litellm.passthrough.main import raise_for_provider_status
 from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
 from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
@@ -1925,15 +1926,41 @@ _THROTTLE_TYPE: Final = "ThrottlingException:http://internal.amazon.com/coral/co
 _THROTTLE_BODY: Final = b'{"message":"Too many requests, please wait before trying again."}'
 
 
+def _status_error(
+    status_code: int,
+    content: bytes,
+    headers: Mapping[str, str],
+    url: str,
+    raise_for_status: Callable[[httpx.Response], None],
+) -> httpx.HTTPStatusError:
+    request: Final = httpx.Request("POST", url)
+    response: Final = httpx.Response(status_code, headers=dict(headers), content=content, request=request)
+    with pytest.raises(httpx.HTTPStatusError) as raised:
+        raise_for_status(response)
+    return raised.value
+
+
 def _bedrock_status_error(
     status_code: int,
     content: bytes,
     headers: Mapping[str, str] = MappingProxyType({}),
     url: str = "https://bedrock-runtime.us-east-1.amazonaws.com/model/m/converse",
 ) -> httpx.HTTPStatusError:
-    request: Final = httpx.Request("POST", url)
-    response: Final = httpx.Response(status_code, headers=dict(headers), content=content, request=request)
-    return httpx.HTTPStatusError("bedrock error", request=request, response=response)
+    """An error Bedrock answered the passthrough request with."""
+    return _status_error(status_code, content, headers, url, raise_for_provider_status)
+
+
+def _guardrail_service_status_error(
+    status_code: int, content: bytes, headers: Mapping[str, str]
+) -> httpx.HTTPStatusError:
+    """An error a guardrail service's own HTTP call raised, from a URL shaped like a Bedrock model call."""
+    return _status_error(
+        status_code,
+        content,
+        headers,
+        "https://bedrock-runtime.us-east-1.amazonaws.com/model/m/converse",
+        httpx.Response.raise_for_status,
+    )
 
 
 def _guardrail_detail(message: str) -> dict[str, str]:
@@ -2017,19 +2044,14 @@ class TestBedrockPassthroughAwsErrors:
                 id="bedrock-without-error-type",
             ),
             pytest.param(
-                _bedrock_status_error(
-                    429,
-                    _THROTTLE_BODY,
-                    {"x-amzn-errortype": _THROTTLE_TYPE},
-                    url="https://guardrail.example/api/model/scan",
-                ),
+                _guardrail_service_status_error(429, _THROTTLE_BODY, {"x-amzn-errortype": _THROTTLE_TYPE}),
                 429,
                 _THROTTLE_BODY.decode(),
                 id="guardrail-service-with-error-type",
             ),
         ),
     )
-    async def test_upstream_error_not_from_a_bedrock_model_operation_keeps_the_litellm_error(
+    async def test_http_error_bedrock_did_not_answer_with_an_aws_error_type_keeps_the_litellm_error(
         self, monkeypatch: pytest.MonkeyPatch, error: httpx.HTTPStatusError, status_code: int, body: str
     ) -> None:
         monkeypatch.setattr(litellm, "callbacks", [])

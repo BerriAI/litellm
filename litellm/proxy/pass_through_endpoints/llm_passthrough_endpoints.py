@@ -68,7 +68,7 @@ from litellm.llms.openai.common_utils import OpenAIError as LiteLLMOpenAIError
 from litellm.llms.openai.workload_identity import get_workload_identity_bearer_token_for_api_base
 from litellm.llms.oss_decision import OssDecisionProvider, oss_connection, validate_oss_request
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
-from litellm.passthrough.main import AsyncPassthroughStreamingResponse
+from litellm.passthrough.main import AsyncPassthroughStreamingResponse, is_provider_error
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import enforced_model_allowlists
 from litellm.proxy.auth.handle_jwt import JWTHandler
@@ -1079,15 +1079,10 @@ def _guardrail_refusal_status(error: Exception) -> int | None:
             return None
 
 
-_BEDROCK_MODEL_OPERATION_PATH: Final = re.compile(rb"/model/[^/?]+/[^/?]+(?:$|\?)")
-
-
 def _bedrock_error_response(error: Exception, handled: HTTPException) -> Response | None:
-    """Bedrock's own error response, for an error a Bedrock model operation (``/model/<model>/<operation>``)
-    answered with an AWS error type."""
-    if not isinstance(error, httpx.HTTPStatusError):
-        return None
-    if _BEDROCK_MODEL_OPERATION_PATH.search(error.request.url.raw_path) is None:
+    """Bedrock's own error response, for an error Bedrock answered the passthrough request with an AWS error
+    type."""
+    if not isinstance(error, httpx.HTTPStatusError) or not is_provider_error(error):
         return None
     upstream: Final = error.response
     if AWS_ERROR_TYPE_HEADER not in upstream.headers:
