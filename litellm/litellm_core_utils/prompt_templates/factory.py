@@ -9,10 +9,11 @@ import xml.etree.ElementTree as ET
 from collections.abc import Container, Iterable, Iterator, Mapping, Sequence
 from enum import Enum
 from types import MappingProxyType
-from typing import Any, Final, TypeAlias, TypedDict, cast, overload
+from typing import Annotated, Any, Final, TypeAlias, TypedDict, cast, overload
 
 from jinja2.sandbox import ImmutableSandboxedEnvironment
-from pydantic import BaseModel, JsonValue, TypeAdapter
+from pydantic import BaseModel, BeforeValidator, ConfigDict, JsonValue, TypeAdapter, ValidationError, model_validator
+from pydantic_core import ErrorDetails, PydanticCustomError
 
 import litellm
 import litellm.types
@@ -5565,7 +5566,7 @@ def function_call_prompt(
     ]
 
 
-def response_schema_prompt(model: str, response_schema: dict) -> str:
+def response_schema_prompt(model: str, response_schema: dict, llm_provider: str) -> str:
     """
     Decides if a user-defined custom prompt or default needs to be used
 
@@ -5581,11 +5582,8 @@ def response_schema_prompt(model: str, response_schema: dict) -> str:
         custom_prompt_details = litellm.custom_prompt_dict["response_schema_prompt"]
 
     if custom_prompt_details is not None:
-        return custom_prompt(
-            role_dict=custom_prompt_details["roles"],
-            initial_prompt_value=custom_prompt_details["initial_prompt_value"],
-            final_prompt_value=custom_prompt_details["final_prompt_value"],
-            messages=response_schema_as_message,
+        return render_custom_prompt_template(
+            template=custom_prompt_details, messages=response_schema_as_message, model=model, llm_provider=llm_provider
         )
     else:
         return default_response_schema_prompt(response_schema=response_schema)
@@ -5605,8 +5603,95 @@ def default_response_schema_prompt(response_schema: dict) -> str:
 
 
 # Custom prompt template
+def _mapping_or_none(value: object) -> object:
+    if value is None or issubclass(type(value), Mapping):
+        return value
+    verbose_logger.warning(
+        "Ignoring a custom prompt template roles value of type %s because it is not a mapping, "
+        "so those messages render without role markers",
+        type(value).__name__,
+    )
+    return None
+
+
+class CustomPromptRole(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    pre_message: str | None = None
+    post_message: str | None = None
+
+
+class CustomPromptRoles(BaseModel):
+    model_config = ConfigDict(frozen=True, title="custom prompt template")
+
+    roles: Mapping[str, Annotated[CustomPromptRole | None, BeforeValidator(_mapping_or_none)]]
+
+
+class CustomPromptTemplate(BaseModel):
+    model_config = ConfigDict(frozen=True, title="custom prompt template")
+
+    roles: Annotated[Mapping[object, object] | None, BeforeValidator(_mapping_or_none)] = None
+    initial_prompt_value: str | None = None
+    final_prompt_value: str | None = None
+
+    @model_validator(mode="after")
+    def _sets_a_rendered_field(self) -> "CustomPromptTemplate":
+        if self.roles is None and self.initial_prompt_value is None and self.final_prompt_value is None:
+            raise PydanticCustomError(
+                "empty_custom_prompt_template",
+                "it sets none of roles, initial_prompt_value, or final_prompt_value",
+            )
+        return self
+
+
+def render_custom_prompt_template(
+    template: Mapping[str, object],
+    messages: Sequence[Mapping[str, object]],
+    model: str,
+    llm_provider: str,
+) -> str:
+    try:
+        return _render_custom_prompt_template(template=template, messages=messages)
+    except ValidationError as error:
+        raise litellm.APIConnectionError(
+            message=f"The custom prompt template for {model} is invalid: {_describe_template_errors(error)}",
+            model=model,
+            llm_provider=llm_provider,
+        ) from error
+
+
+def _describe_template_errors(error: ValidationError) -> str:
+    return "; ".join(
+        _describe_template_error(detail) for detail in error.errors(include_url=False, include_input=False)
+    )
+
+
+def _describe_template_error(detail: ErrorDetails) -> str:
+    location: Final = ".".join(str(part) for part in detail["loc"])
+    return f"{location}: {detail['msg']}" if location else detail["msg"]
+
+
+def _render_custom_prompt_template(template: Mapping[str, object], messages: Sequence[Mapping[str, object]]) -> str:
+    validated: Final = CustomPromptTemplate.model_validate(template)
+    message_roles: Final = frozenset(message.get("role") for message in messages)
+    template_roles: Final = validated.roles or {}
+    used_roles: Final = CustomPromptRoles.model_validate(
+        {"roles": {role: entry for role, entry in template_roles.items() if role in message_roles}}
+    )
+    return custom_prompt(
+        role_dict={
+            role: {"pre_message": entry.pre_message or "", "post_message": entry.post_message or ""}
+            for role, entry in used_roles.roles.items()
+            if entry is not None
+        },
+        initial_prompt_value=validated.initial_prompt_value or "",
+        final_prompt_value=validated.final_prompt_value or "",
+        messages=list(messages),
+    )
+
+
 def custom_prompt(
-    role_dict: dict,
+    role_dict: Mapping[str, Mapping[str, str]],
     messages: list,
     initial_prompt_value: str = "",
     final_prompt_value: str = "",

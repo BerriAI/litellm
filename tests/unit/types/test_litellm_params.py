@@ -199,6 +199,7 @@ OPTION_NAMES: Final = (
     "prompt_label",
     "litellm_system_prompt",
     "custom_prompt_dict",
+    "initial_prompt_value",
     "roles",
     "final_prompt_value",
     "bos_token",

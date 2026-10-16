@@ -260,6 +260,7 @@ class PromptOptions:
     prompt_label: str | None = None
     litellm_system_prompt: str | None = None
     custom_prompt_dict: Mapping[str, object] | None = None
+    initial_prompt_value: str | None = None
     roles: Mapping[str, object] | None = None
     final_prompt_value: str | None = None
     bos_token: str | None = None
