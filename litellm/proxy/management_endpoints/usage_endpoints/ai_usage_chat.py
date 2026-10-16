@@ -471,14 +471,16 @@ def _router_knows_model(router: "Router", model: str) -> bool:
 
 async def _acompletion(
     model: str,
-    messages: list[Mapping[str, object]],
-    tools: list[_ToolDef] | None = None,
+    messages: list[Mapping[str, object]],  # mutable-ok: callers pass the request message list unchanged
+    tools: list[_ToolDef] | None = None,  # mutable-ok: forwarded verbatim to acompletion
     stream: bool = False,
 ) -> ModelResponse | CustomStreamWrapper:
     from litellm.proxy.proxy_server import llm_router
     from litellm.types.llms.openai import AllMessageValues
 
-    completion_messages: Final = cast(list[AllMessageValues], messages)
+    completion_messages: Final = cast(  # cast-ok: acompletion accepts the same Mapping messages it already receives
+        list[AllMessageValues], messages
+    )
     if llm_router is not None and _router_knows_model(llm_router, model):
         if stream:
             return await llm_router.acompletion(  # pyright: ignore[reportUnknownMemberType]  # Router.acompletion overloads carry untyped **kwargs
