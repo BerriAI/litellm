@@ -826,11 +826,7 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
             )
             else None
         )
-        team_model_provider: Final[str | None] = (
-            custom_llm_provider
-            if isinstance(custom_llm_provider, str)
-            else None
-        )
+        team_model_provider: Final[str | None] = custom_llm_provider if isinstance(custom_llm_provider, str) else None
         team_model_name: Final = (
             llm_router.map_team_model(data["model"], team_id, custom_llm_provider=team_model_provider)
             if team_id is not None
