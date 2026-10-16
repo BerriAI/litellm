@@ -1409,6 +1409,28 @@ def test_customer_unblock_requires_loaded_hook(
 
 
 @pytest.mark.asyncio
+async def test_blocked_user_hook_built_before_database_connects_rejects_blocked_customer(
+    mock_prisma_client: MagicMock,
+) -> None:
+    from enterprise.enterprise_hooks.blocked_user_list import ENTERPRISE_BlockedUserList
+
+    blocked_row: Final = PrismaEndUserRow(user_id="config-loaded-customer", blocked=True, spend=0, models=[])
+    read_customer: Final = AsyncMock(return_value=blocked_row)
+    mock_prisma_client.db = SimpleNamespace(litellm_endusertable=SimpleNamespace(find_unique=read_customer))
+    with patch("litellm.blocked_user_list", None):
+        hook: Final = ENTERPRISE_BlockedUserList(prisma_client=None)
+    with pytest.raises(HTTPException, match="User blocked from making LLM API Calls") as error:
+        await hook.async_pre_call_hook(
+            UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+            UserApiKeyCache(),
+            {"user": blocked_row.user_id},
+            "completion",
+        )
+    assert error.value.status_code == 400
+    read_customer.assert_awaited_once_with(where={"user_id": blocked_row.user_id})
+
+
+@pytest.mark.asyncio
 async def test_customer_unblock_database_only_hook_refreshes_cached_block(mock_prisma_client: MagicMock) -> None:
     from enterprise.enterprise_hooks.blocked_user_list import ENTERPRISE_BlockedUserList
 

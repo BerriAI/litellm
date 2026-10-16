@@ -59,6 +59,13 @@ class ENTERPRISE_BlockedUserList(CustomLogger):
         if litellm.set_verbose is True:
             print(print_statement)  # noqa
 
+    def _database(self) -> Optional[PrismaClient]:
+        if self.prisma_client is not None:
+            return self.prisma_client
+        from litellm.proxy.proxy_server import prisma_client
+
+        return prisma_client
+
     @with_service_target(AUTH_OBJECTS_TARGET)
     async def async_pre_call_hook(
         self,
@@ -93,10 +100,11 @@ class ENTERPRISE_BlockedUserList(CustomLogger):
                 end_user_cache_obj: Optional[LiteLLM_EndUserTable] = cache.get_cache(  # type: ignore
                     key=cache_key
                 )
-                if end_user_cache_obj is None and self.prisma_client is not None:
+                database: Final = self._database()
+                if end_user_cache_obj is None and database is not None:
                     # check db
                     end_user_obj = (
-                        await self.prisma_client.db.litellm_endusertable.find_unique(
+                        await database.db.litellm_endusertable.find_unique(
                             where={"user_id": user}
                         )
                     )
