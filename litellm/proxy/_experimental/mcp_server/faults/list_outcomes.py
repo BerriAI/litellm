@@ -176,6 +176,20 @@ def classify_list_exception(exc: BaseException) -> ServerListFault:
     return ServerListFault(tag="internal")
 
 
+def serves_stale_listing(fault: ServerListFault) -> bool:
+    """RFC 5861 stale-if-error: only an upstream outage may be papered over with the caller's last
+    good catalog. Auth faults must reach the client, and the proxy's own rate limit and bugs must not hide."""
+    match fault.tag:
+        case "timeout" | "unreachable":
+            return True
+        case "upstream_error":
+            return fault.status_code is not None and (fault.status_code == 429 or fault.status_code >= 500)
+        case "auth_required" | "forbidden" | "rate_limited" | "internal":
+            return False
+        case _:
+            assert_never(fault.tag)
+
+
 def outcome_wire_value(outcome: ServerOutcome) -> dict[str, object]:
     """The client-visible form of one outcome, for the tools/list result ``_meta`` and the REST
     response: category plus status code only, never upstream prose or URLs."""

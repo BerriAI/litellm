@@ -26,7 +26,7 @@ from collections.abc import (
 )
 from contextlib import AbstractAsyncContextManager, ExitStack, asynccontextmanager, nullcontext
 from dataclasses import dataclass, replace
-from functools import lru_cache
+from functools import lru_cache, partial
 from itertools import chain, groupby
 from types import EllipsisType, MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypedDict, cast
@@ -69,6 +69,8 @@ from litellm.constants import (
     MCP_CLIENT_TIMEOUT,
     MCP_HEALTH_CHECK_TIMEOUT,
     MCP_METADATA_TIMEOUT,
+    MCP_TOOL_LIST_MAX_STALE_SECONDS,
+    MCP_TOOL_LIST_STALE_WAIT_SECONDS,
     MCP_TOOL_LISTING_TIMEOUT,
     MCP_UPSTREAM_SESSION_SHUTDOWN_TIMEOUT_SECONDS,
 )
@@ -92,7 +94,13 @@ from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import ( 
     _is_mcp_admitted_user_subject,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     is_mcp_admitted_user_subject,
 )
-from litellm.proxy._experimental.mcp_server.catalog import _configuration_identity, _DiscoveryCache, _DiscoveryKey
+from litellm.proxy._experimental.mcp_server.catalog import (
+    StaleToolListings,
+    ToolListingKey,
+    _configuration_identity,
+    _DiscoveryCache,
+    _DiscoveryKey,
+)
 from litellm.proxy._experimental.mcp_server.contracts import OperationContext
 from litellm.proxy._experimental.mcp_server.elicitation_handler import (
     MCP_ELICITATION_AVAILABLE,
@@ -1969,6 +1977,7 @@ class MCPServerManager:
         per_user_oauth_token_store: InvalidatableOAuthTokenStore | None = None,
         per_user_token_cache: MCPPerUserTokenCache | None = None,
         discovery_clock: Callable[[], float] = time.monotonic,
+        stale_tool_listings: StaleToolListings | None = None,
     ):
         self._per_user_oauth_token_store = per_user_oauth_token_store or LazyPerUserOAuthTokenStore(
             self.get_mcp_server_by_id
@@ -1987,6 +1996,9 @@ class MCPServerManager:
         )
         self._template_discovery_cache = _DiscoveryCache[ListResourceTemplatesResult](
             discovery_ttl, discovery_clock, TypeAdapter(ListResourceTemplatesResult)
+        )
+        self._stale_tool_listings = stale_tool_listings or StaleToolListings(
+            MCP_TOOL_LIST_MAX_STALE_SECONDS, MCP_TOOL_LIST_STALE_WAIT_SECONDS, discovery_clock
         )
         from litellm.proxy._experimental.mcp_server.catalog import CatalogSnapshots
 
@@ -4524,10 +4536,10 @@ class MCPServerManager:
                     tools=[t.model_copy(update={"name": registered_names[t.name]}) for t in guarded_openapi]
                 )
             else:
-                page: Final = (
-                    await client.list_tools_page(params)
-                    if params is not None
-                    else ListToolsResult(tools=await self._fetch_tools_with_timeout(client, server.name))
+                page: Final = await self._stale_tool_listings.get(
+                    self._tool_listing_key(server, listed_caller, params),
+                    server.name,
+                    partial(self._list_upstream_tools, client, server.name, params),
                 )
                 tools = page.tools
                 self._remember_upstream_initialize_instructions(server, client)
@@ -4598,6 +4610,7 @@ class MCPServerManager:
         self._prompt_discovery_cache.invalidate(server_id)
         self._resource_discovery_cache.invalidate(server_id)
         self._template_discovery_cache.invalidate(server_id)
+        self._stale_tool_listings.invalidate(server_id)
 
     def invalidate_server_definition_caches(self, server_id: str) -> None:
         from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (  # noqa: PLC0415  # lazy: discoverable_endpoints lazily imports this module's manager singleton
@@ -4611,6 +4624,24 @@ class MCPServerManager:
     def _drop_listed_tools(self, server_id: str) -> None:
         self._listed_tools_by_server_id.pop(server_id, None)
         self._listed_tools_generations[server_id] = self._listed_tools_generations.get(server_id, 0) + 1
+
+    async def _list_upstream_tools(
+        self, client: MCPClient, server_name: str, params: PaginatedRequestParams | None
+    ) -> ListToolsResult:
+        if params is not None:
+            return await client.list_tools_page(params)
+        return ListToolsResult(tools=await self._fetch_tools_with_timeout(client, server_name))
+
+    def _tool_listing_key(
+        self, server: MCPServer, caller: ListedToolsCaller, params: PaginatedRequestParams | None
+    ) -> ToolListingKey:
+        material: Final = json.dumps((_configuration_identity(server), self._listed_tools_identity(server, caller)))
+        return (
+            server.server_id,
+            hashlib.sha256(material.encode()).hexdigest(),
+            params is not None,
+            None if params is None else params.cursor,
+        )
 
     def _listed_tools_identity(self, server: MCPServer, caller: ListedToolsCaller | None) -> str | None:
         """Key the listed-tool cache by every request input that can change the served catalog.

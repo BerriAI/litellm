@@ -20276,3 +20276,35 @@ async def test_legacy_upstream_elicitation_rejects_modern_downstream_without_con
     finally:
         active_mcp_request_ctx_var.reset(request_token)
         legacy_server.active_mcp_session_var.reset(session_token)
+
+
+@pytest.mark.asyncio
+async def test_tools_list_serves_each_callers_last_good_catalog_through_an_upstream_timeout(monkeypatch) -> None:
+    from mcp.types import ListToolsResult, PaginatedRequestParams
+
+    from litellm.proxy._experimental.mcp_server.catalog import StaleToolListings
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "stale-tools-test")
+    clock: Final = _DiscoveryClock()
+    manager: Final = MCPServerManager(stale_tool_listings=StaleToolListings(900, 10, clock))
+    server: Final = _notes_server()
+    manager.registry = {server.server_id: server}
+    client: Final = AsyncMock()
+    client._last_initialize_instructions = None
+    client.list_tools_page.return_value = ListToolsResult(tools=[LIST_NOTES])
+    manager.create_mcp_client = AsyncMock(return_value=client)
+    alice: Final = UserAPIKeyAuth(api_key="alice-key", user_id="alice")
+    bob: Final = UserAPIKeyAuth(api_key="bob-key", user_id="bob")
+    params: Final = PaginatedRequestParams()
+
+    await manager.get_tools_page(server, user_api_key_auth=alice, params=params)
+    client.list_tools_page.side_effect = MCPServerListError(ServerListFault(tag="timeout"), server.name)
+
+    served: Final = await manager.get_tools_page(server, user_api_key_auth=alice, params=params)
+    assert [tool.name for tool in served.tools] == ["notes-list_notes"]
+    with pytest.raises(MCPServerListError):
+        await manager.get_tools_page(server, user_api_key_auth=bob, params=params)
+
+    manager.invalidate_server_definition_caches(server.server_id)
+    with pytest.raises(MCPServerListError):
+        await manager.get_tools_page(server, user_api_key_auth=alice, params=params)
