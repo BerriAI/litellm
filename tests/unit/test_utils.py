@@ -9585,6 +9585,33 @@ def test_get_provider_audio_transcription_config_resolves_for_every_provider() -
     assert isinstance(configs[LlmProviders.OPENAI], litellm.OpenAIWhisperAudioTranscriptionConfig)
 
 
+@pytest.mark.parametrize(
+    ("model", "optional_params", "expected_response_format"),
+    [
+        ("whisper-1", {}, "verbose_json"),
+        ("my-transcribe-whisper", {}, "verbose_json"),
+        ("whisper-1", {"response_format": "srt"}, "srt"),
+        ("gpt-4o-mini-transcribe", {}, None),
+        ("gpt-transcribe", {}, None),
+        ("gpt-transcribe", {"response_format": "text"}, "text"),
+    ],
+)
+def test_openai_transcription_defaults_verbose_json_only_for_whisper_models(
+    model: str, optional_params: dict[str, str], expected_response_format: str | None
+) -> None:
+    config: Final = ProviderConfigManager.get_provider_audio_transcription_config(
+        model=model, provider=LlmProviders.OPENAI
+    )
+    assert config is not None
+
+    request: Final = config.transform_audio_transcription_request(
+        model=model, audio_file=b"audio", optional_params=dict(optional_params), litellm_params={}
+    )
+
+    assert isinstance(request.data, dict)
+    assert request.data.get("response_format") == expected_response_format
+
+
 def test_get_valid_models_from_provider_cache_invalidation(monkeypatch):
     """
     Test that get_valid_models returns the correct models for a given provider
