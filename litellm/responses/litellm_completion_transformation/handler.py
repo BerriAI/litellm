@@ -106,6 +106,7 @@ class LiteLLMCompletionTransformationHandler:
                 responses_api_request=bridged_request,
                 custom_llm_provider=custom_llm_provider,
                 litellm_metadata=kwargs.get("litellm_metadata", {}),
+                logs_completion=planned_chat is not None,
             )
         raise ValueError(f"Unexpected response type: {type(litellm_completion_response)}")
 
@@ -155,5 +156,6 @@ class LiteLLMCompletionTransformationHandler:
                 responses_api_request=responses_api_request,
                 custom_llm_provider=litellm_completion_request.get("custom_llm_provider"),
                 litellm_metadata=kwargs.get("litellm_metadata", {}),
+                logs_completion=planned_chat is not None,
             )
         raise ValueError(f"Unexpected response type: {type(litellm_completion_response)}")
