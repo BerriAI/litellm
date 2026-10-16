@@ -22,9 +22,10 @@ Pins covered:
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Final, cast
+from types import MappingProxyType
+from typing import Final, Literal, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -1612,19 +1613,24 @@ async def test_update_cache_user_cache_failure_invalid_state_is_swallowed(monkey
 class _EvictAfterReadUserApiKeyCache(UserApiKeyCache):
     """Runs the real eviction path between ``update_cache``'s read and its write-back."""
 
-    def __init__(self, evict_keys: Sequence[str] = ()) -> None:
+    def __init__(
+        self,
+        evict_keys: Sequence[str] = (),
+        refill: Mapping[str, object] = MappingProxyType({}),
+    ) -> None:
         super().__init__(in_memory_cache=InMemoryCache())
         self._evict_keys: Final = tuple(evict_keys)
+        self._refill: Final = refill
 
     async def async_batch_get_cache(
         self,
-        keys: list,
+        keys: list[str],
         parent_otel_span: Span | None = None,
         local_only: bool = False,
         throttle_redis: bool = True,
-        **kwargs,
+        **kwargs: object,
     ):
-        result = await super().async_batch_get_cache(
+        result: Final = await super().async_batch_get_cache(
             keys,
             parent_otel_span=parent_otel_span,
             local_only=local_only,
@@ -1632,17 +1638,36 @@ class _EvictAfterReadUserApiKeyCache(UserApiKeyCache):
             **kwargs,
         )
         evict_local(self._evict_keys, self)
+        for key, value in self._refill.items():
+            self.set_cache(key, value, local_only=True)
         return result
 
 
-@pytest.mark.parametrize("evicted_mid_flight", [True, False])
+@pytest.mark.parametrize("scenario", ["kept", "evicted", "refilled"])
 @pytest.mark.asyncio
-async def test_update_cache_does_not_resurrect_entry_evicted_mid_flight(evicted_mid_flight):
+async def test_update_cache_does_not_resurrect_entry_evicted_mid_flight(
+    scenario: Literal["kept", "evicted", "refilled"],
+):
     user_id: Final = "user-race-1"
     user_key: Final = ps.update_cache_read_keys(
         user_id=user_id, end_user_id=None, team_id=None, tags=None, response_cost=0.01
     )[0]
-    cache: Final = _EvictAfterReadUserApiKeyCache(evict_keys=(user_key,) if evicted_mid_flight else ())
+    refill: Final = (
+        MappingProxyType(
+            {
+                user_key: CacheCodec.serialize(
+                    LiteLLM_UserTable(user_id=user_id, rpm_limit=1, tpm_limit=100000, spend=0.0),
+                    model_type=LiteLLM_UserTable,
+                )
+            }
+        )
+        if scenario == "refilled"
+        else MappingProxyType({})
+    )
+    cache: Final = _EvictAfterReadUserApiKeyCache(
+        evict_keys=() if scenario == "kept" else (user_key,),
+        refill=refill,
+    )
     seed: Final = CacheCodec.serialize(
         LiteLLM_UserTable(user_id=user_id, rpm_limit=1000, tpm_limit=100000, spend=0.0),
         model_type=LiteLLM_UserTable,
@@ -1663,10 +1688,16 @@ async def test_update_cache_does_not_resurrect_entry_evicted_mid_flight(evicted_
 
     memory: Final = cache.in_memory_cache_for(user_key)
     stored: Final = memory.get_cache(user_key)
-    if evicted_mid_flight:
-        assert stored is None
-    else:
-        user: Final = CacheCodec.deserialize(stored, LiteLLM_UserTable)
-        assert user is not None
-        assert user.spend == pytest.approx(0.01)
-        assert user.rpm_limit == 1000
+    match scenario:
+        case "kept":
+            kept_user: Final = CacheCodec.deserialize(stored, LiteLLM_UserTable)
+            assert kept_user is not None
+            assert kept_user.spend == pytest.approx(0.01)
+            assert kept_user.rpm_limit == 1000
+        case "evicted":
+            assert stored is None
+        case "refilled":
+            refilled_user: Final = CacheCodec.deserialize(stored, LiteLLM_UserTable)
+            assert refilled_user is not None
+            assert refilled_user.rpm_limit == 1
+            assert refilled_user.spend == 0.0

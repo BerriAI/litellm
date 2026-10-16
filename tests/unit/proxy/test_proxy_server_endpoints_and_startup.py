@@ -6279,7 +6279,7 @@ async def test_update_cache_pipeline_honors_user_api_key_cache_ttl():
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
     original_cache = litellm.proxy.proxy_server.user_api_key_cache
-    cache = UserApiKeyCache(in_memory_cache=InMemoryCache(), default_in_memory_ttl=300)
+    cache = UserApiKeyCache(in_memory_cache=InMemoryCache(clock=lambda: 1000.0), default_in_memory_ttl=300)
     setattr(litellm.proxy.proxy_server, "user_api_key_cache", cache)
     seed = {"tag_name": "active-tag", "spend": 1.0}
     cache.in_memory_cache.cache_dict["tag:active-tag"] = seed
@@ -6300,8 +6300,7 @@ async def test_update_cache_pipeline_honors_user_api_key_cache_ttl():
                 tags=["active-tag"],
             )
 
-            expiry = cache.in_memory_cache.ttl_dict["tag:active-tag"]
-            assert time.time() + 250 < expiry <= time.time() + 300
+            assert cache.in_memory_cache.ttl_dict["tag:active-tag"] == 1300.0
             assert cache.in_memory_cache.get_cache("tag:active-tag")["spend"] == 6.0
     finally:
         setattr(litellm.proxy.proxy_server, "user_api_key_cache", original_cache)
