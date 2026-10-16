@@ -62,6 +62,10 @@ spec:
             - name: LITELLM_BACKEND_URL
               value: {{ include "litellm.ui.backendOrigin" . | quote }}
             {{- end }}
+            {{- with .Values.ui.listenIPv6 }}
+            - name: NGINX_LISTEN_IPV6
+              value: {{ . | quote }}
+            {{- end }}
             {{- with .Values.ui.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
