@@ -3916,8 +3916,7 @@ def _resolve_budget_fail_closed_for_auth(
 
     budget_setting: Final = general_settings.get("fail_closed_budget_enforcement")
     resolved_setting: Final = (
-        budget_setting if budget_setting is not None
-        else fail_closed_rate_limit_enforcement_enabled(general_settings)
+        budget_setting if budget_setting is not None else fail_closed_rate_limit_enforcement_enabled(general_settings)
     )
     return resolved_setting is True or has_billing_agent_policy
 
