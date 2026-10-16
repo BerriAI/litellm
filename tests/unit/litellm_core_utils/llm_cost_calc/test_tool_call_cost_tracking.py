@@ -619,10 +619,12 @@ _ASSISTANT_MESSAGE_OUTPUT_ITEM = {
 }
 
 _GPT_IMAGE_1_HIGH_1024_COST_KEY = "high/1024-x-1024/gpt-image-1"
+_GPT_IMAGE_1_TOOLS = [{"type": "image_generation", "model": "gpt-image-1"}]
 
 
-def test_responses_image_generation_call_billed_as_tool_usage_cost(local_model_cost_map):
-    """A completed image_generation_call in the Responses output bills at the gpt-image-1 rate for its quality/size."""
+@pytest.mark.parametrize("custom_llm_provider", ["openai", None])
+def test_responses_image_generation_call_billed_as_tool_usage_cost(local_model_cost_map, custom_llm_provider):
+    """A completed image_generation_call bills at the tools[].model rate for its quality/size, provider given or inferred."""
     expected_image_cost = litellm.model_cost[_GPT_IMAGE_1_HIGH_1024_COST_KEY]["input_cost_per_image"]
     response = _openai_responses_response(
         "gpt-5",
@@ -637,6 +639,36 @@ def test_responses_image_generation_call_billed_as_tool_usage_cost(local_model_c
             },
             dict(_ASSISTANT_MESSAGE_OUTPUT_ITEM),
         ],
+        tools=_GPT_IMAGE_1_TOOLS,
+    )
+
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model="gpt-5",
+        response_object=response,
+        usage=None,
+        custom_llm_provider=custom_llm_provider,
+        standard_built_in_tools_params=None,
+    )
+
+    assert cost > 0
+    assert cost == pytest.approx(expected_image_cost)
+
+
+def test_responses_image_generation_call_without_tool_model_bills_zero(local_model_cost_map):
+    """With no tools[].model to price against, the image tool part bills $0 instead of guessing a model or raising."""
+    response = _openai_responses_response(
+        "gpt-5",
+        [
+            {
+                "type": "image_generation_call",
+                "id": "ig_1",
+                "status": "completed",
+                "quality": "high",
+                "size": "1024x1024",
+                "result": "AAAA",
+            }
+        ],
+        usage=_image_gen_token_usage(10, 0, 50, 0),
     )
 
     cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
@@ -647,8 +679,7 @@ def test_responses_image_generation_call_billed_as_tool_usage_cost(local_model_c
         standard_built_in_tools_params=None,
     )
 
-    assert cost > 0
-    assert cost == pytest.approx(expected_image_cost)
+    assert cost == 0.0
 
 
 def test_responses_web_search_and_image_generation_costs_are_additive(local_model_cost_map):
@@ -667,7 +698,7 @@ def test_responses_web_search_and_image_generation_costs_are_additive(local_mode
 
     combined = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
         model=model,
-        response_object=_openai_responses_response(model, [web_search_item, image_item]),
+        response_object=_openai_responses_response(model, [web_search_item, image_item], tools=_GPT_IMAGE_1_TOOLS),
         usage=None,
         custom_llm_provider="openai",
         standard_built_in_tools_params=None,
@@ -681,7 +712,7 @@ def test_responses_web_search_and_image_generation_costs_are_additive(local_mode
     )
     image_only = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
         model=model,
-        response_object=_openai_responses_response(model, [image_item]),
+        response_object=_openai_responses_response(model, [image_item], tools=_GPT_IMAGE_1_TOOLS),
         usage=None,
         custom_llm_provider="openai",
         standard_built_in_tools_params=None,
@@ -707,6 +738,7 @@ def test_responses_incomplete_image_generation_call_not_billed(local_model_cost_
             },
             dict(_ASSISTANT_MESSAGE_OUTPUT_ITEM),
         ],
+        tools=_GPT_IMAGE_1_TOOLS,
     )
 
     cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
@@ -730,7 +762,9 @@ def test_completion_cost_includes_responses_image_generation_tool_cost(local_mod
         "size": "1024x1024",
         "result": "AAAA",
     }
-    response_with_image = _openai_responses_response("gpt-5", [image_item, dict(_ASSISTANT_MESSAGE_OUTPUT_ITEM)])
+    response_with_image = _openai_responses_response(
+        "gpt-5", [image_item, dict(_ASSISTANT_MESSAGE_OUTPUT_ITEM)], tools=_GPT_IMAGE_1_TOOLS
+    )
     response_without_image = _openai_responses_response("gpt-5", [dict(_ASSISTANT_MESSAGE_OUTPUT_ITEM)])
 
     cost_with_image = litellm.completion_cost(
@@ -906,6 +940,7 @@ def test_responses_auto_size_image_generation_call_billed_at_default_size(local_
                 "result": "AAAA",
             }
         ],
+        tools=_GPT_IMAGE_1_TOOLS,
     )
 
     cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(

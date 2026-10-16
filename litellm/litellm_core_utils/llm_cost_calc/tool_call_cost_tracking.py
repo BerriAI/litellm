@@ -245,14 +245,14 @@ class StandardBuiltInToolCostTracking:
         return max(count, 1)
 
     @staticmethod
-    def _image_generation_tool_model(response_object: ResponsesAPIResponse) -> str:
+    def _image_generation_tool_model(response_object: ResponsesAPIResponse) -> str | None:
         tools: Final[Sequence[object]] = cast(Sequence[object], response_object.tools or ())  # cast-ok: dict tool union
         for tool in tools:
             if _output_item_field(tool, "type") != "image_generation":
                 continue
             if isinstance(model := _output_item_field(tool, "model"), str) and model:
                 return model
-        return "gpt-image-1"
+        return None
 
     @staticmethod
     def _image_generation_call_cost(output_item: object, tool_model: str, custom_llm_provider: str | None) -> float:
@@ -268,7 +268,7 @@ class StandardBuiltInToolCostTracking:
         try:
             return default_image_cost_calculator(
                 model=tool_model,
-                custom_llm_provider=custom_llm_provider or "openai",
+                custom_llm_provider=custom_llm_provider,
                 quality=quality if isinstance(quality, str) and quality != "auto" else None,
                 n=1,
                 size=size if isinstance(size, str) and size != "auto" else None,
@@ -285,9 +285,7 @@ class StandardBuiltInToolCostTracking:
         if tool_usage is None or tool_usage.image_gen is None or tool_usage.image_gen.total_tokens <= 0:
             return None
         try:
-            model_info: Final = litellm.get_model_info(
-                model=tool_model, custom_llm_provider=custom_llm_provider or "openai"
-            )
+            model_info: Final = litellm.get_model_info(model=tool_model, custom_llm_provider=custom_llm_provider)
         except Exception as e:  # noqa: BLE001  # get_model_info raises bare Exception for unmapped models; fall back
             verbose_logger.debug("Could not resolve pricing for image tool model %s: %s", tool_model, e)
             return None
@@ -317,6 +315,9 @@ class StandardBuiltInToolCostTracking:
         if not completed_items:
             return 0.0
         tool_model: Final = StandardBuiltInToolCostTracking._image_generation_tool_model(response_object)
+        if tool_model is None:
+            verbose_logger.debug("Responses API image_generation_call has no tools[].model to price, billing 0.0")
+            return 0.0
         token_cost: Final = StandardBuiltInToolCostTracking._image_generation_token_cost(
             response_object, tool_model, custom_llm_provider
         )
