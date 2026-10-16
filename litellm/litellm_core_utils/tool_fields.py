@@ -20,7 +20,7 @@ ROUTES_WITH_TOOLS: Final = frozenset(
         "acreate_interaction",
     }
 )
-_TOOL_FIELDS: Final = frozenset({"tools", "tool_choice", "parallel_tool_calls", "toolConfig", "tool_config"})
+TOOL_FIELDS: Final = frozenset({"tools", "tool_choice", "parallel_tool_calls", "toolConfig", "tool_config"})
 _TOOLS: Final = TypeAdapter(list[object])
 _FIELD_LIST: Final = TypeAdapter(list[object], config=ConfigDict(strict=True))
 _JSON_OBJECT: Final = TypeAdapter(Json[dict[str, object]])
@@ -99,7 +99,7 @@ def _tool_entry_error(index: int, entry: object) -> str | None:
 
 
 def _without_tool_fields(data: Mapping[str, object]) -> Mapping[str, object]:
-    return {name: value for name, value in data.items() if name not in _TOOL_FIELDS}
+    return {name: value for name, value in data.items() if name not in TOOL_FIELDS}
 
 
 def _malformed_tools(data: Mapping[str, object]) -> MalformedField | None:

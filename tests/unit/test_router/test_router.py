@@ -8568,6 +8568,51 @@ def test_update_kwargs_with_deployment_keeps_deployment_tools_when_malformed_req
     assert kwargs["tools"] == expected_tools
 
 
+_NAMED_REQUEST_TOOL_CHOICE: Final = {"type": "function", "function": {"name": "lookup_order"}}
+
+
+@pytest.mark.parametrize(
+    "deployment_params, expected_tool_fields",
+    [
+        (
+            {"drop_params": True, "tool_choice": "required"},
+            {"tools": [{"type": "web_search"}], "tool_choice": "required"},
+        ),
+        ({"drop_params": True}, {"tools": [{"type": "web_search"}]}),
+        ({}, {"tools": 5, "tool_choice": _NAMED_REQUEST_TOOL_CHOICE, "parallel_tool_calls": False}),
+    ],
+    ids=["deployment_tool_choice_applies", "no_deployment_tool_choice", "no_drop_policy"],
+)
+def test_update_kwargs_with_deployment_drops_request_tool_settings_with_malformed_request_tools(
+    deployment_params: dict, expected_tool_fields: dict
+) -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "o3-deep-research",
+                "litellm_params": {
+                    "model": "openai/o3-deep-research",
+                    "api_key": "fake-key",
+                    "tools": [{"type": "web_search"}],
+                    **deployment_params,
+                },
+            },
+        ],
+    )
+    kwargs: Final[dict] = {
+        "metadata": {},
+        "tools": 5,
+        "tool_choice": _NAMED_REQUEST_TOOL_CHOICE,
+        "parallel_tool_calls": False,
+    }
+    router._update_kwargs_with_deployment(
+        deployment=router.get_deployment_by_model_group_name(model_group_name="o3-deep-research"), kwargs=kwargs
+    )
+
+    tool_fields: Final = ("tools", "tool_choice", "parallel_tool_calls")
+    assert {name: kwargs[name] for name in tool_fields if name in kwargs} == expected_tool_fields
+
+
 def test_credential_name_injected_as_tag():
     """
     Test that litellm_credential_name from deployment litellm_params

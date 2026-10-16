@@ -122,7 +122,7 @@ from litellm.litellm_core_utils.sensitive_data_masker import (
     mask_sensitive_structure,
 )
 from litellm.litellm_core_utils.token_counter import offload_token_count
-from litellm.litellm_core_utils.tool_fields import drop_policy
+from litellm.litellm_core_utils.tool_fields import TOOL_FIELDS, drop_policy
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo, anthropic_error_frame_exception
 from litellm.llms.base_llm.passthrough.transformation import replace_path_segment
 from litellm.llms.base_llm.vector_store.transformation import (
@@ -543,20 +543,19 @@ def _deployment_that_just_failed(request_metadata: object) -> str | None:
     return model_id if isinstance(model_id, str) else None
 
 
-def _merged_tools(
-    deployment_tools: Sequence[object],
-    deployment_params: Mapping[str, object],
-    defaults: Mapping[str, object],
-    request: Mapping[str, object],
-) -> list[object] | None:
-    request_tools: Final = request.get("tools") or []
-    if isinstance(request_tools, (list, tuple)):
-        return [*deployment_tools, *request_tools] if deployment_tools or request_tools else None
-    if not deployment_tools:
-        return None
+def _drops_malformed_request_tools(
+    deployment_params: Mapping[str, object], defaults: Mapping[str, object], request: Mapping[str, object]
+) -> bool:
+    if isinstance(request.get("tools") or [], (list, tuple)) or not deployment_params.get("tools"):
+        return False
     set_defaults: Final = {name: value for name, value in defaults.items() if value is not None}
-    drops_tools: Final = drop_policy({**deployment_params, **set_defaults, **request}).drops("tools")
-    return list(deployment_tools) if drops_tools else None
+    return drop_policy({**deployment_params, **set_defaults, **request}).drops("tools")
+
+
+def _merged_tools(deployment_tools: Sequence[object], request_tools: object) -> list[object] | None:
+    if not isinstance(request_tools, (list, tuple)):
+        return None
+    return [*deployment_tools, *request_tools] if deployment_tools or request_tools else None
 
 
 def _deployment_pick_attributes(model: str, request_kwargs: Mapping[str, object] | None) -> Mapping[str, str | int]:
@@ -4281,7 +4280,10 @@ class Router:
             dep_params = dep_params_raw
         else:
             dep_params = dep_params_raw.model_dump(exclude_none=True)
-        merged_tools: Final = _merged_tools(dep_params.get("tools") or [], dep_params, defaults, kwargs)
+        if _drops_malformed_request_tools(dep_params, defaults, kwargs):
+            for name in TOOL_FIELDS:
+                kwargs.pop(name, None)
+        merged_tools: Final = _merged_tools(dep_params.get("tools") or [], kwargs.get("tools") or [])
         if merged_tools is not None:
             kwargs["tools"] = merged_tools
         if "tool_choice" not in kwargs and dep_params.get("tool_choice") is not None:

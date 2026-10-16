@@ -1096,10 +1096,14 @@ def test_a_drop_params_deployment_group_drops_malformed_tools(rig: _Rig, family:
 
 def test_a_drop_params_deployment_keeps_its_own_tools_when_it_drops_malformed_request_tools(rig: _Rig) -> None:
     marker: Final = _marker()
-    response: Final = _send(rig, CHAT, marker, False, model=rig.tools_drop_group, tools=5)
+    companion, value = CHAT.tool_choice
+    response: Final = _send(
+        rig, CHAT, marker, False, model=rig.tools_drop_group, tools=5, parallel_tool_calls=False, **{companion: value}
+    )
     _assert_answered(CHAT, response, marker)
     sent: Final = _one_delivery(rig, marker, "/v1/chat/completions")
     assert _tool_names(CHAT, sent) == _tool_names(CHAT, {"tools": [CHAT.tool]}), sent
+    assert _tool_values(sent) == frozenset({"tools"}), sent
 
 
 @pytest.mark.parametrize("drop", [False, None], ids=["false", "null"])
