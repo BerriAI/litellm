@@ -2376,23 +2376,23 @@ class ProxyBaseLLMRequestProcessing:
         refresh_proxy_server_request_body_snapshot(self.data, guardrails_applied=True)
         verbose_proxy_logger.debug("receiving data: %s", self.data)
 
-        if "messages" in self.data and self.data["messages"]:
-            logging_obj.update_messages(self.data["messages"])
-        elif route_type == "aresponses":
-            # Same contract as the messages branch above, for the Responses API's
-            # input-shaped body: pre-call guardrails may have rewritten the input
-            # (in place or by rebinding a new list), while the snapshot taken in
-            # function_setup still points at the pre-guardrail objects. Refresh it
-            # in the request's own Responses shape so guarded and unguarded calls
-            # log the same schema.
-            responses_input: Final[object] = self.data.get(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # bag
-                "input"
+        # Input wins over messages for the Responses API: input is what
+        # function_setup snapshotted, what the guardrail rewrote, and what the
+        # provider receives, so a stray messages key must not outrank it in the
+        # logs. Chat-compat bodies carry messages and no input and still take the
+        # messages branch.
+        responses_input: Final[object] = self.data.get("input") if route_type == "aresponses" else None  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # request bag
+        if responses_input is not None:
+            # Guardrails may have rewritten the input (in place or by rebinding a
+            # new list), while the snapshot taken in function_setup still points
+            # at the pre-guardrail objects. Restamp it in the request's own
+            # Responses shape so guarded and unguarded calls log the same schema.
+            refresh_responses_input_logging_snapshot(
+                logging_obj,
+                responses_input,  # pyright: ignore[reportUnknownArgumentType]  # bag value
             )
-            if responses_input is not None:
-                refresh_responses_input_logging_snapshot(
-                    logging_obj,
-                    responses_input,  # pyright: ignore[reportUnknownArgumentType]  # bag value
-                )
+        elif "messages" in self.data and self.data["messages"]:
+            logging_obj.update_messages(self.data["messages"])
 
         if (
             self.served_model is not None

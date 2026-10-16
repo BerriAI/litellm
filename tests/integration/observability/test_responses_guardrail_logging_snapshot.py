@@ -579,8 +579,8 @@ def test_provider_failure_logs_sanitized_messages(rig: Rig) -> None:
     assert MARKER not in body_blob([e.get("messages") for e in events]), events
 
 
-def test_both_input_and_messages_keeps_raw_logged_messages(rig: Rig) -> None:
-    """Row 14: documented corner — a body carrying both keys clobbers the refresh (fix incomplete)."""
+def test_both_input_and_messages_logs_masked_input(rig: Rig) -> None:
+    """Row 14: a body carrying both keys logs the masked input, not the stray messages copy."""
     marker: Final = "row14-" + tag()
     body: Final = {
         "model": "mask-model",
@@ -594,7 +594,8 @@ def test_both_input_and_messages_keeps_raw_logged_messages(rig: Rig) -> None:
     provider: Final = provider_requests(rig, marker)
     assert provider and MARKER not in provider[-1].body.decode(), "provider still gets the masked input"
     events: Final = success_messages(rig, marker)
-    assert MARKER in body_blob(events[-1].get("messages")), "the central update_messages overwrite keeps this raw"
+    assert MARKER not in body_blob(events[-1].get("messages")), events[-1]
+    assert MASK in body_blob(events[-1].get("messages"))
 
 
 def test_presidio_masking_sanitizes_logged_messages(rig: Rig) -> None:
