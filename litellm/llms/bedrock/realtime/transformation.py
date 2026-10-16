@@ -123,11 +123,11 @@ def _integer_setting(value: JsonValue) -> int | None:
     return None if number is None else int(number)
 
 
-def requested_modalities(session_config: Mapping[str, JsonValue]) -> list[str] | None:
+def requested_modalities(session_config: Mapping[str, JsonValue]) -> tuple[str, ...] | None:
     modalities: Final = session_config.get("modalities")
     if not isinstance(modalities, list):
         return None
-    names: Final = [modality for modality in modalities if isinstance(modality, str)]
+    names: Final = tuple(modality for modality in modalities if isinstance(modality, str))
     return names if len(names) == len(modalities) else None
 
 
@@ -136,9 +136,11 @@ _OPENAI_VOICES: Final = frozenset(
 )
 
 
-def _openai_voice(session_config: Mapping[str, JsonValue]) -> str | None:
+def _unplayable_voice(session_config: Mapping[str, JsonValue]) -> str | None:
     voice: Final = session_config.get("voice")
-    return voice if isinstance(voice, str) and voice in _OPENAI_VOICES else None
+    if not isinstance(voice, str):
+        return None
+    return voice if not voice.strip() or voice.lower() in _OPENAI_VOICES else None
 
 
 def _malformed_settings(session_config: Mapping[str, JsonValue]) -> tuple[tuple[str, str], ...]:
@@ -503,7 +505,9 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             else base.tools_json
         )
         system_prompt: Final = instructions if isinstance(instructions, str) else base.system_prompt
-        voice_id: Final = voice if isinstance(voice, str) and _openai_voice(session_config) is None else base.voice_id
+        voice_id: Final = (
+            voice if isinstance(voice, str) and _unplayable_voice(session_config) is None else base.voice_id
+        )
         format_sample_rate: Final = (
             self._map_audio_format_to_sample_rate(output_audio_format, is_output=True)
             if isinstance(output_audio_format, str)
@@ -544,13 +548,13 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
                 ),
                 param=f"session.{name}",
             )
-        unplayable_voice: Final = None if self.drop_params else _openai_voice(session_config)
+        unplayable_voice: Final = None if self.drop_params else _unplayable_voice(session_config)
         if unplayable_voice is not None:
             return BedrockSessionUpdateRejection(
                 code="invalid_value",
                 message=(
-                    f"Invalid value for 'session.voice': '{unplayable_voice}' is an OpenAI voice that Bedrock Nova "
-                    "Sonic cannot play. Set drop_params to drop it instead"
+                    f"Invalid value for 'session.voice': '{unplayable_voice}' is not a Bedrock Nova Sonic voice. "
+                    "Set drop_params to drop it instead"
                 ),
                 param="session.voice",
             )
@@ -883,11 +887,11 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         self,
         model: str,
         logging_obj: LiteLLMLoggingObj,
-        modalities: list[str] | None = None,
+        modalities: Sequence[str] | None = None,
     ) -> OpenAIRealtimeStreamSession:
         session: Final = OpenAIRealtimeStreamSession(
             id=logging_obj.litellm_trace_id,
-            modalities=modalities if modalities is not None else ["text", "audio"],
+            modalities=list(modalities) if modalities is not None else ["text", "audio"],
         )
         if model is not None and isinstance(model, str):
             session["model"] = model
@@ -909,7 +913,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         self,
         model: str,
         logging_obj: LiteLLMLoggingObj,
-        modalities: list[str] | None = None,
+        modalities: Sequence[str] | None = None,
     ) -> OpenAIRealtimeStreamSessionEvents:
         """Build the OpenAI session.updated ack reflecting the client's requested modalities."""
         return OpenAIRealtimeStreamSessionEvents(

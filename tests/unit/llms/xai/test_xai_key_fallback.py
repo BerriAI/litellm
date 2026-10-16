@@ -1,5 +1,4 @@
 import asyncio
-from types import SimpleNamespace
 
 
 import pytest
@@ -201,7 +200,7 @@ def test_realtime_config_uses_xai_key_through_provider_resolution(monkeypatch):
     asyncio.run(
         realtime_main._arealtime(
             model="xai/grok-4-1-fast-non-reasoning",
-            websocket=SimpleNamespace(scope={}),
+            websocket=object(),
             litellm_logging_obj=FakeLogging(),
         )
     )
@@ -229,7 +228,7 @@ def test_realtime_config_uses_xai_key_when_provider_does_not_resolve_key(monkeyp
     asyncio.run(
         realtime_main._arealtime(
             model="xai/grok-4-1-fast-non-reasoning",
-            websocket=SimpleNamespace(scope={}),
+            websocket=object(),
             litellm_logging_obj=FakeLogging(),
         )
     )
@@ -259,7 +258,7 @@ def test_realtime_config_uses_generic_key_when_provider_does_not_resolve_key(
     asyncio.run(
         realtime_main._arealtime(
             model="xai/grok-4-1-fast-non-reasoning",
-            websocket=SimpleNamespace(scope={}),
+            websocket=object(),
             litellm_logging_obj=FakeLogging(),
         )
     )

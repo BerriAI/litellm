@@ -1699,14 +1699,14 @@ class TestBedrockRealtimeUserEventsAndUsage:
         sent: Final = self._voice_and_system_prompt(config, session)
         assert sent == self._voice_and_system_prompt(BedrockRealtimeConfig(), {})
 
-    @pytest.mark.parametrize("voice", ["alloy", "marin"])
-    def test_openai_voice_is_rejected_without_drop_params(self, voice):
+    @pytest.mark.parametrize("voice", ["alloy", "marin", "Alloy", "", " "])
+    def test_openai_or_empty_voice_is_rejected_without_drop_params(self, voice):
         rejection: Final = BedrockRealtimeConfig().session_update_rejection(
             {"type": "session.update", "session": {"voice": voice}}
         )
         assert rejection is not None
         assert (rejection.code, rejection.param) == ("invalid_value", "session.voice")
-        assert voice in rejection.message
+        assert f"'{voice}'" in rejection.message
 
     def test_openai_voice_is_dropped_with_drop_params(self):
         config: Final = BedrockRealtimeConfig(drop_params=True)

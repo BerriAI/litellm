@@ -180,9 +180,9 @@ def _is_session_committed(scope: Mapping[str, object]) -> bool:
     return scope.get(BEDROCK_REALTIME_SESSION_COMMITTED_SCOPE_KEY) is True
 
 
-def raise_if_session_committed(scope: Mapping[str, object]) -> None:
+def raise_if_session_committed(scope: Mapping[str, object] | None) -> None:
     """A fallback attempt on a websocket whose Bedrock stream already took input would silently start over."""
-    if not _is_session_committed(scope):
+    if scope is None or not _is_session_committed(scope):
         return
     committed_failure: Final = scope.get(BEDROCK_REALTIME_COMMITTED_FAILURE_SCOPE_KEY)
     raise BedrockError(

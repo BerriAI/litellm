@@ -5,7 +5,7 @@ from collections.abc import Callable, Coroutine, Mapping, MutableMapping, Sequen
 from dataclasses import dataclass
 from enum import Enum, auto
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol, TypeAlias, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol, TypeAlias, TypedDict, cast, runtime_checkable
 
 from pydantic import TypeAdapter
 from typing_extensions import ReadOnly
@@ -101,9 +101,14 @@ class ScopedWebSocket(Protocol):
     def scope(self) -> _ASGIScope: ...
 
 
+@runtime_checkable
 class _ReplayScopeWebSocket(Protocol):
     @property
     def scope(self) -> MutableMapping[str, object]: ...
+
+
+def client_websocket_scope(websocket: object) -> MutableMapping[str, object] | None:
+    return websocket.scope if isinstance(websocket, _ReplayScopeWebSocket) else None
 
 
 class _ClientWebSocket(ScopedWebSocket, Protocol):
@@ -239,7 +244,7 @@ class RealTimeStreaming:
         logging_worker: _LoggingWorker = GLOBAL_LOGGING_WORKER,
     ):
         self.websocket: _ClientWebSocket = websocket
-        self._replay_scope_websocket: _ReplayScopeWebSocket = websocket
+        self._replay_scope: Final = client_websocket_scope(websocket)
         self.backend_ws = backend_ws
         self.logging_obj = logging_obj
         self._logging_worker = logging_worker
@@ -1458,8 +1463,10 @@ class RealTimeStreaming:
         return item
 
     async def _receive_client_message(self) -> str | None:
-        refused_opening_message: Final = self._replay_scope_websocket.scope.pop(
-            BEDROCK_REALTIME_PENDING_OPENING_MESSAGE_SCOPE_KEY, None
+        refused_opening_message: Final = (
+            None
+            if self._replay_scope is None
+            else self._replay_scope.pop(BEDROCK_REALTIME_PENDING_OPENING_MESSAGE_SCOPE_KEY, None)
         )
         if isinstance(refused_opening_message, str):
             return refused_opening_message
