@@ -138,6 +138,25 @@ def test_unit_test_streaming_timeout(stream):
         assert stream_timeout_val == normal_timeout
 
 
+
+@pytest.mark.parametrize(
+    "stream, expected",
+    (
+        (True, {"timeout": 120.0, "stream_timeout": 15.0}),
+        (False, {"timeout": 120.0}),
+    ),
+)
+def test_chat_completion_timeouts_keep_the_request_timeout_beside_the_stream_timeout(
+    stream: bool, expected: dict[str, float]
+) -> None:
+    router: Final = Router(model_list=[{"model_name": "gpt", "litellm_params": {"model": "gpt-4o"}}])
+
+    assert (
+        router._chat_completion_timeouts(kwargs={"stream": stream}, data={"timeout": 120.0, "stream_timeout": 15.0})
+        == expected
+    )
+
+
 @pytest.mark.asyncio
 async def test_bedrock_timeout_preserves_the_provider_timeout_error(
     respx_mock: respx.MockRouter,

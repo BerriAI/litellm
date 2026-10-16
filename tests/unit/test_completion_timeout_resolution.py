@@ -22,6 +22,7 @@ def test_explicit_timeout_wins():
             "openai",
             global_timeout=None,
             supports_httpx_timeout=supports_httpx_timeout,
+            reads_live_stream=False,
         )
         == 12.5
     )
@@ -35,6 +36,7 @@ def test_kwargs_timeout_when_param_none():
             "azure_ai",
             global_timeout=None,
             supports_httpx_timeout=supports_httpx_timeout,
+            reads_live_stream=False,
         )
         == 21.0
     )
@@ -48,6 +50,7 @@ def test_request_timeout_alias_in_kwargs():
             "bedrock",
             global_timeout=None,
             supports_httpx_timeout=supports_httpx_timeout,
+            reads_live_stream=False,
         )
         == 33.0
     )
@@ -61,6 +64,7 @@ def test_global_timeout_from_litellm_settings():
             "vertex_ai",
             global_timeout=360.0,
             supports_httpx_timeout=supports_httpx_timeout,
+            reads_live_stream=False,
         )
         == 360.0
     )
@@ -76,6 +80,7 @@ def test_explicit_global_timeout_6000_is_preserved():
             "openai",
             global_timeout=6000.0,
             supports_httpx_timeout=supports_httpx_timeout,
+            reads_live_stream=False,
         )
         == 6000.0
     )
@@ -90,6 +95,7 @@ def test_explicit_request_timeout_6000_preserved():
             "openai",
             global_timeout=None,
             supports_httpx_timeout=supports_httpx_timeout,
+            reads_live_stream=False,
         )
         == 6000.0
     )
@@ -103,6 +109,7 @@ def test_explicit_model_timeout_6000_preserved():
             "openai",
             global_timeout=None,
             supports_httpx_timeout=supports_httpx_timeout,
+            reads_live_stream=False,
         )
         == 6000.0
     )
@@ -116,6 +123,7 @@ def test_fallback_600_when_no_global_timeout():
             "azure_ai",
             global_timeout=None,
             supports_httpx_timeout=supports_httpx_timeout,
+            reads_live_stream=False,
         )
         == 600.0
     )
@@ -129,6 +137,7 @@ def test_httpx_timeout_coerced_for_provider_without_httpx_timeout_support():
         "azure_ai",
         global_timeout=None,
         supports_httpx_timeout=supports_httpx_timeout,
+        reads_live_stream=False,
     )
     assert out == 50.0
     assert not isinstance(out, httpx.Timeout)
@@ -142,6 +151,7 @@ def test_httpx_timeout_preserved_for_openai():
         "openai",
         global_timeout=None,
         supports_httpx_timeout=supports_httpx_timeout,
+        reads_live_stream=False,
     )
     assert out is t
     assert isinstance(out, httpx.Timeout)
@@ -158,6 +168,7 @@ def test_sdk_timeout_preserves_components_for_httpx_providers(
         "openai",
         global_timeout=None,
         supports_httpx_timeout=supports_httpx_timeout,
+        reads_live_stream=False,
     )
     assert isinstance(resolved, httpx.Timeout)
     assert resolved.as_dict() == timeout.as_dict()
@@ -174,6 +185,22 @@ def test_sdk_timeout_coerces_read_timeout_for_providers_without_httpx_support(
             "azure_ai",
             global_timeout=None,
             supports_httpx_timeout=supports_httpx_timeout,
+            reads_live_stream=False,
+        )
+        == expected
+    )
+
+
+@pytest.mark.parametrize("reads_live_stream, expected", ((True, 15.0), (False, 120.0)))
+def test_stream_timeout_applies_only_when_reading_a_live_stream(reads_live_stream: bool, expected: float) -> None:
+    assert (
+        CompletionTimeout.resolve(
+            120.0,
+            {"stream_timeout": 15.0},
+            "bedrock",
+            global_timeout=None,
+            supports_httpx_timeout=supports_httpx_timeout,
+            reads_live_stream=reads_live_stream,
         )
         == expected
     )
