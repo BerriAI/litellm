@@ -405,7 +405,8 @@ class RouterBudgetLimiting(CustomLogger):
         Runs once the budget start time exists in Redis Cache (on the 2nd and subsequent requests to the same provider)
 
         - Increments the spend in memory cache (so spend instantly updated in memory)
-        - Queues the increment operation to Redis Pipeline (using batched pipeline to optimize performance. Using Redis for multi instance environment of LiteLLM)
+        - Queues the increment for the batched Redis pipeline when Redis is configured, since only a multi instance
+          deployment has anything to sync
         """
         increment_op: Final = RedisPipelineIncrementOperation(
             key=spend_key,
@@ -418,6 +419,8 @@ class RouterBudgetLimiting(CustomLogger):
                 value=response_cost,
                 ttl=ttl,
             )
+            if self.dual_cache.redis_cache is None:
+                return
             self.redis_increment_operation_queue.append(increment_op)
 
     def _get_redis_increment_queue_lock(self) -> asyncio.Lock:
