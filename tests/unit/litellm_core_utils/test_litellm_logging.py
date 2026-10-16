@@ -32,6 +32,7 @@ from litellm.caching.caching import DualCache
 from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE, REDACTED_BY_LITELLM, SENTRY_PII_DENYLIST
 from litellm.cost_calculator import ocr_batch_cost
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils import litellm_logging
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.litellm_core_utils.litellm_logging import (
     Logging,
@@ -422,6 +423,13 @@ def test_post_call_serializes_dict_with_datetime(logging_obj):
     assert "2026-05-11" in serialized
 
 
+def _reset_sentry_globals(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm_logging, "sentry_sdk_instance", None)
+    litellm_logging.start_sentry.cache_clear()
+    monkeypatch.setattr(litellm_logging, "capture_exception", None)
+    monkeypatch.setattr(litellm_logging, "add_breadcrumb", None)
+
+
 def test_sentry_environment(monkeypatch):
     import sentry_sdk
 
@@ -430,15 +438,59 @@ def test_sentry_environment(monkeypatch):
     monkeypatch.setenv("SENTRY_DSN", "https://test@sentry.io/123456")
     monkeypatch.delenv("SENTRY_ENVIRONMENT", raising=False)
 
+    _reset_sentry_globals(monkeypatch)
     set_callbacks(["sentry"])
     assert mock_init.call_args[1]["environment"] == "production"
 
     for environment in ("development", "staging"):
         monkeypatch.setenv("SENTRY_ENVIRONMENT", environment)
         mock_init.reset_mock()
+        _reset_sentry_globals(monkeypatch)
         set_callbacks(["sentry"])
         mock_init.assert_called_once()
         assert mock_init.call_args[1]["environment"] == environment
+
+
+def test_set_callbacks_initializes_sentry_once_per_dsn(monkeypatch):
+    import sentry_sdk
+
+    mock_init: Final = MagicMock()
+    monkeypatch.setattr(sentry_sdk, "init", mock_init)
+    monkeypatch.setenv("SENTRY_DSN", "https://first@sentry.example/1")
+    _reset_sentry_globals(monkeypatch)
+
+    set_callbacks(["sentry"])
+    set_callbacks(["sentry"])
+    monkeypatch.setenv("SENTRY_DSN", "https://second@sentry.example/2")
+    set_callbacks(["sentry"])
+
+    assert [call.kwargs["dsn"] for call in mock_init.call_args_list] == [
+        "https://first@sentry.example/1",
+        "https://second@sentry.example/2",
+    ]
+    assert litellm_logging.sentry_sdk_instance is sentry_sdk
+    assert litellm_logging.capture_exception is sentry_sdk.capture_exception
+
+
+def test_sentry_started_before_its_dsn_is_loaded_picks_the_dsn_up_later(monkeypatch):
+    import sentry_sdk
+
+    mock_init: Final = MagicMock()
+    monkeypatch.setattr(sentry_sdk, "init", mock_init)
+    monkeypatch.delenv("SENTRY_DSN", raising=False)
+    _reset_sentry_globals(monkeypatch)
+
+    litellm_logging.initialize_sentry()
+    assert litellm_logging.sentry_sdk_instance is None
+
+    monkeypatch.setenv("SENTRY_DSN", "https://from-db@sentry.example/3")
+    set_callbacks(["sentry"])
+
+    mock_init.assert_called_once()
+    assert mock_init.call_args.kwargs["dsn"] == "https://from-db@sentry.example/3"
+    assert litellm_logging.sentry_sdk_instance is sentry_sdk
+
+
 def test_use_custom_pricing_for_model():
     from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
 
@@ -3375,7 +3427,9 @@ def test_sentry_event_scrubber_initialization(monkeypatch):
 
     mock_init = MagicMock()
     monkeypatch.setattr(sentry_sdk, "init", mock_init)
+    monkeypatch.setenv("SENTRY_DSN", "https://key@sentry.example/1")
     monkeypatch.delenv("SENTRY_SEND_DEFAULT_PII", raising=False)
+    _reset_sentry_globals(monkeypatch)
 
     set_callbacks(["sentry"])
 
@@ -3392,7 +3446,9 @@ def test_sentry_send_default_pii_opt_in(monkeypatch):
 
     mock_init = MagicMock()
     monkeypatch.setattr(sentry_sdk, "init", mock_init)
+    monkeypatch.setenv("SENTRY_DSN", "https://key@sentry.example/1")
     monkeypatch.setenv("SENTRY_SEND_DEFAULT_PII", "true")
+    _reset_sentry_globals(monkeypatch)
 
     set_callbacks(["sentry"])
 
@@ -11824,3 +11880,55 @@ def test_masking_function_not_in_metadata_when_not_provided():
     assert "_langfuse_masking_function" not in result
 
     assert result["metadata"]["some_key"] == "some_value"
+
+
+def test_copy_for_new_call_logs_a_turn_under_its_own_call_id_against_the_connections_reservation() -> None:
+    reservation: Final[dict[str, object]] = {"reserved_cost": 0.5, "entries": []}
+    connection: Final = LitellmLogging(
+        model="gpt-5.4",
+        messages=[],
+        stream=False,
+        call_type=CallTypes.aresponses_websocket.value,
+        start_time=time.time(),
+        litellm_call_id="connection-call",
+        function_id="connection-call",
+    )
+    connection.litellm_params = {
+        "litellm_call_id": "connection-call",
+        "metadata": {"user_api_key": "hashed-key", "user_api_key_budget_reservation": reservation},
+    }
+    connection.model_call_details["litellm_params"] = connection.litellm_params
+    turn_start: Final = datetime.datetime(2026, 1, 1, 12, 0, 0)
+
+    turn: Final = connection.copy_for_new_call(litellm_call_id="turn-1", start_time=turn_start)
+
+    assert (turn.litellm_call_id, turn.start_time) == ("turn-1", turn_start)
+    assert (turn.model_call_details["litellm_call_id"], turn.model_call_details["start_time"]) == ("turn-1", turn_start)
+    assert turn.model_call_details["litellm_params"]["litellm_call_id"] == "turn-1"
+    assert turn.litellm_params["metadata"]["user_api_key"] == "hashed-key"
+    assert turn.litellm_params["metadata"]["user_api_key_budget_reservation"] is reservation
+    turn.litellm_params["metadata"]["turn_only"] = True
+    assert "turn_only" not in connection.litellm_params["metadata"]
+    assert (connection.litellm_call_id, connection.model_call_details["litellm_call_id"]) == (
+        "connection-call",
+        "connection-call",
+    )
+
+
+@pytest.mark.parametrize("response_id, expected_row_id", [(None, "turn-7"), ("resp_9", "resp_9")])
+def test_a_websocket_turn_row_is_keyed_by_the_response_id_or_else_its_call_id(
+    logging_obj: LitellmLogging, response_id: str | None, expected_row_id: str
+) -> None:
+    from litellm.litellm_core_utils.litellm_logging import get_standard_logging_object_payload
+
+    now: Final = datetime_unit_test(2026, 1, 1, 12, 0, 0)
+    payload: Final = get_standard_logging_object_payload(
+        kwargs={"litellm_call_id": "turn-7", "litellm_params": {"metadata": {}}},
+        init_response_obj=LiteLLMRealtimeStreamLoggingObject(id=response_id, usage=Usage(), results=[]),
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+    assert payload is not None
+    assert payload["id"] == expected_row_id
