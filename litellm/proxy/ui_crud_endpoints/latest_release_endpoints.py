@@ -53,7 +53,7 @@ class _GitHubRelease(LiteLLMBaseModel):
     draft: bool = False
 
 
-_GitHubReleaseList: Final = TypeAdapter(list[_GitHubRelease])
+_GitHubReleaseList: Final = TypeAdapter(tuple[_GitHubRelease, ...])
 
 
 class _AsyncGetClient(Protocol):
@@ -99,12 +99,14 @@ def _stable_version(tag_name: str) -> tuple[int, int, int] | None:
     return None if match is None else (int(match.group(1)), int(match.group(2)), int(match.group(3)))
 
 
-def earlier_releases_in_line(latest: _GitHubRelease, releases: list[_GitHubRelease]) -> list[_GitHubRelease]:
+def earlier_releases_in_line(
+    latest: _GitHubRelease, releases: tuple[_GitHubRelease, ...]
+) -> tuple[_GitHubRelease, ...]:
     """Stable releases on the same major.minor line as ``latest`` that shipped before it (v1.105.0 for v1.105.1)."""
     latest_version: Final = _stable_version(latest.tag_name)
     if latest_version is None:
-        return []
-    return [
+        return ()
+    return tuple(
         release
         for release in releases
         if not release.prerelease
@@ -112,12 +114,12 @@ def earlier_releases_in_line(latest: _GitHubRelease, releases: list[_GitHubRelea
         and (version := _stable_version(release.tag_name)) is not None
         and version[:2] == latest_version[:2]
         and version[2] < latest_version[2]
-    ]
+    )
 
 
-def summarize_release_line(latest: _GitHubRelease, earlier: list[_GitHubRelease]) -> LatestReleaseInfo:
+def summarize_release_line(latest: _GitHubRelease, earlier: tuple[_GitHubRelease, ...]) -> LatestReleaseInfo:
     """A patch release's notes only list its backports, so count the whole minor line it belongs to."""
-    counts: Final = sum((Counter(count_release_bullets(release.body)) for release in [latest, *earlier]), Counter())
+    counts: Final = sum((Counter(count_release_bullets(release.body)) for release in (latest, *earlier)), Counter())
     return LatestReleaseInfo(
         version=latest.tag_name.removeprefix("v"),
         new_features=counts.get("new_features", 0),
@@ -136,7 +138,7 @@ def parse_github_release(response: httpx.Response) -> _GitHubRelease | LatestRel
         return LatestReleaseUnavailable(reason=f"GitHub release payload was not the expected shape: {e}")
 
 
-def parse_github_release_list(response: httpx.Response) -> list[_GitHubRelease] | LatestReleaseUnavailable:
+def parse_github_release_list(response: httpx.Response) -> tuple[_GitHubRelease, ...] | LatestReleaseUnavailable:
     if response.status_code != 200:
         return LatestReleaseUnavailable(reason=f"GitHub release list responded with status {response.status_code}")
     try:
@@ -154,7 +156,7 @@ async def fetch_latest_release(client: _AsyncGetClient) -> LatestReleaseInfo | L
             return latest
         version: Final = _stable_version(latest.tag_name)
         if version is None or version[2] == 0:
-            return summarize_release_line(latest, [])
+            return summarize_release_line(latest, ())
         releases: Final = parse_github_release_list(
             await client.get(RECENT_RELEASES_URL, timeout=LATEST_RELEASE_FETCH_TIMEOUT_SECONDS)
         )
