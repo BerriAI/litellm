@@ -366,9 +366,11 @@ async def test_proxy_route_rejects_legacy_resource_subscription_before_setup(met
 async def test_only_client_initiated_listeners_consume_server_rate_limit(
     client_requests: tuple[str, ...], tools_list_admitted: bool
 ) -> None:
-    window: Final = asyncio.Semaphore(1)
+    windows: Final = {("alice", "upstream"): asyncio.Semaphore(1)}
 
-    async def admit(_: OperationContext, __: MCPServer) -> None:
+    async def admit(context: OperationContext, server: MCPServer) -> None:
+        caller: Final = context.user_api_key_auth
+        window: Final = windows[(caller.user_id if caller is not None else None, server.server_id)]
         if window.locked():
             raise MCPError(code=-32600, message="Rate limit exceeded for mcp_server")
         await window.acquire()
