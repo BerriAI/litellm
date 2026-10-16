@@ -26702,6 +26702,95 @@ class CompletionCustomHandler(
             self.errors.append(traceback.format_exc())
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_kind", ["raised", "wrapped" ])
+async def test_anthropic_messages_double_failure_holds_back_fallback_lifecycle_frames(failure_kind):
+    router = Router(
+        model_list=[
+            {"model_name": name, "litellm_params": {"model": "anthropic/" + name, "api_key": "sk-test"}}
+            for name in ["primary", "fallback"]
+        ],
+        num_retries=0,
+        fallbacks=[{"primary": ["fallback"]}],
+    )
+    calls = []
+    fallback_error = litellm.APIError(
+        status_code=503, message="fallback also overloaded", llm_provider="anthropic", model="fallback"
+    )
+
+    provider_error = (
+        MidStreamFallbackError(
+            message="fallback also overloaded",
+            model="fallback",
+            llm_provider="anthropic",
+            original_exception=fallback_error,
+            is_pre_first_chunk=True,
+        )
+        if failure_kind == "wrapped"
+        else fallback_error
+    )
+
+    async def provider(**kwargs):
+        calls.append(kwargs["model"])
+        if kwargs["model"] == "anthropic/primary":
+            return _AnthropicMessagesFakeByteStream([_anthropic_messages_overloaded_error_chunk()])
+        return _AnthropicMessagesRaisingByteStream([_anthropic_messages_message_start_chunk()], provider_error)
+
+    stream = await router._aanthropic_messages_with_streaming_fallbacks(
+        original_function=provider,
+        model="primary",
+        stream=True,
+        messages=[{"role": "user", "content": "hi"}],
+        max_tokens=10,
+    )
+    chunks = []
+
+    async def collect_chunks():
+        async for chunk in stream:
+            chunks.append(chunk)
+
+    with pytest.raises(litellm.APIError, match="fallback also overloaded") as caught:
+        await collect_chunks()
+
+    assert caught.value is fallback_error
+
+    assert chunks == []
+    assert calls == ["anthropic/primary", "anthropic/fallback"]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_final_fallback_unwraps_provider_error_and_closes_stream():
+    router = _anthropic_messages_make_router()
+    provider_error = litellm.APIError(
+        status_code=503, message="final fallback overloaded", llm_provider="anthropic", model="fallback"
+    )
+    source = _AnthropicMessagesRaisingByteStream(
+        [_anthropic_messages_message_start_chunk()],
+        MidStreamFallbackError(
+            message="final fallback overloaded",
+            model="fallback",
+            llm_provider="anthropic",
+            original_exception=provider_error,
+            is_pre_first_chunk=True,
+        ),
+    )
+    stream = await router._aanthropic_messages_streaming_iterator(
+        response=source, initial_kwargs={"model": "primary"}, allow_fallback=False
+    )
+    chunks = []
+
+    async def collect_chunks():
+        async for chunk in stream:
+            chunks.append(chunk)
+
+    with pytest.raises(litellm.APIError) as caught:
+        await collect_chunks()
+
+    assert caught.value is provider_error
+    assert chunks == []
+    assert source.closed is True
+
+
 _FALLBACK_WIRE_PRIMARY: Final = "http://primary.wire.test/v1"
 _FALLBACK_WIRE_BACKUP: Final = "http://backup.wire.test/v1"
 _FALLBACK_WIRE_BACKUP_REPLY: Final = {
