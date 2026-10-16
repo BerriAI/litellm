@@ -18,6 +18,7 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.tinyfish_passthr
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.llms.anthropic.pass_through.messages.streaming_iterator import aclose_superseded_attempt
 from litellm.proxy.pass_through_endpoints.streaming_handler import (
     PassThroughStreamingHandler,
 )
@@ -850,12 +851,8 @@ async def test_chunk_processor_logs_a_provider_error_frame_as_a_failure_when_clo
         received.append(chunk)
         if b"event: error" in chunk:
             break
-    await stream.aclose()
-
-    for _ in range(300):
-        if recorder.failure_kwargs:
-            break
-        await asyncio.sleep(0.01)
+    await aclose_superseded_attempt(stream)
+    await _settle(recorder.failure_kwargs)
 
     assert received == list(frames)
     assert recorder.success_kwargs == []
@@ -914,6 +911,44 @@ async def test_chunk_processor_logs_a_stream_that_ended_at_the_provider_error_fr
 
 
 @pytest.mark.asyncio
+async def test_chunk_processor_bills_a_stream_the_client_closed_at_the_provider_error_frame():
+    """The Anthropic SDK raises on a provider `event: error` frame and drops the connection, so a non-retried
+    stream is closed at the frame by the client, not by a retry taking over. Its usage must still reach the
+    success route, or the tokens the provider billed never reach the key's spend."""
+    recorder = _EventRecorder()
+    logging_obj = LiteLLMLoggingObj(
+        model="claude-sonnet-5",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="anthropic_messages",
+        start_time=datetime.now(),
+        litellm_call_id="test-client-closed-at-error-frame",
+        function_id="test-client-closed-at-error-frame",
+        dynamic_async_success_callbacks=[recorder],
+        dynamic_async_failure_callbacks=[recorder],
+    )
+    stream = PassThroughStreamingHandler.chunk_processor(
+        response=_anthropic_stream_of((_anthropic_message_start_frame(), _anthropic_overloaded_error_frame())),
+        request_body={"model": "claude-sonnet-5", "stream": True},
+        litellm_logging_obj=logging_obj,
+        endpoint_type=EndpointType.ANTHROPIC,
+        start_time=datetime.now(),
+        passthrough_success_handler_obj=MagicMock(),
+        url_route="/v1/messages",
+    )
+    async for chunk in stream:
+        if b"event: error" in chunk:
+            break
+    await stream.aclose()
+    await _settle(recorder.success_kwargs)
+
+    assert recorder.failure_kwargs == []
+    success_payload = recorder.success_kwargs[0]["standard_logging_object"]
+    assert success_payload["status"] == "success"
+    assert success_payload["prompt_tokens"] == 52
+
+
+@pytest.mark.asyncio
 async def test_superseded_attempt_failure_log_keeps_its_own_deployment_when_the_retry_rebinds_the_logging_object():
     """The router rebinds the shared logging object to the retry's deployment right after closing the superseded
     stream, before the logging worker runs. The failure log of the superseded attempt must still name the
@@ -944,7 +979,7 @@ async def test_superseded_attempt_failure_log_keeps_its_own_deployment_when_the_
     async for chunk in superseded:
         if b"event: error" in chunk:
             break
-    await superseded.aclose()
+    await aclose_superseded_attempt(superseded)
     logging_obj.update_environment_variables(
         model="claude-sonnet-5-retry", litellm_params={"model_info": {"id": "deployment-2"}}, optional_params={}
     )
@@ -989,7 +1024,7 @@ async def test_retry_success_log_carries_its_own_usage_after_a_provider_error_fr
     async for chunk in superseded:
         if b"event: error" in chunk:
             break
-    await superseded.aclose()
+    await aclose_superseded_attempt(superseded)
     await _settle(recorder.failure_kwargs)
     retry = attempt((_anthropic_message_start_frame("msg_a2", 7), *_anthropic_completed_stream_tail()))
     async for _ in retry:

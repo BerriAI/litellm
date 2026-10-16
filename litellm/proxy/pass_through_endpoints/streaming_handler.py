@@ -294,15 +294,17 @@ class PassThroughStreamingHandler:
 
     @staticmethod
     def _error_frame_closed_at(endpoint_type: EndpointType, raw_bytes: Sequence[bytes]) -> tuple[str, str, int] | None:
-        """The provider `event: error` frame a stream was closed at before it ended: the router closes a
-        /v1/messages stream there when a retry or fallback takes the request over, and that attempt is logged
-        as its own failure, on a copy taken now so the retry's rebinding of the shared logging object never
-        reaches it. A stream that ran to its end, error frame or not, keeps logging through the success route."""
-        if endpoint_type != EndpointType.ANTHROPIC:
-            return None
+        """The provider `event: error` frame of a stream the router closed because a retry or fallback took the
+        request over. That attempt is logged as its own failure, on a copy taken now so the retry's rebinding of
+        the shared logging object never reaches it. A stream that ran to its end or that the client closed keeps
+        logging through the success route, so its usage is still billed."""
         from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
+            closing_superseded_attempt,
             parse_anthropic_error_event,
         )
+
+        if endpoint_type != EndpointType.ANTHROPIC or not closing_superseded_attempt():
+            return None
 
         complete_frames, _ = split_complete_sse_frames(b"".join(raw_bytes))
         return parse_anthropic_error_event(complete_frames)

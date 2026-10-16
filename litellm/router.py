@@ -6035,6 +6035,7 @@ class Router:
         """
         from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
             aclose_if_supported,
+            aclose_superseded_attempt,
             parse_anthropic_error_event,
             parse_anthropic_refusal_stop_details,
         )
@@ -6047,6 +6048,10 @@ class Router:
         async def close_source() -> None:
             with anyio.CancelScope(shield=True), contextlib.suppress(BaseException):
                 await aclose_if_supported(source_iterator)
+
+        async def close_superseded() -> None:
+            with anyio.CancelScope(shield=True), contextlib.suppress(BaseException):
+                await aclose_superseded_attempt(source_iterator)
 
         async def stream_with_fallbacks() -> AsyncGenerator[bytes, None]:
             from litellm.exceptions import MidStreamFallbackError
@@ -6127,7 +6132,6 @@ class Router:
                 for buffered_chunk in buffered_lifecycle_chunks:
                     yield buffered_chunk
             except Exception as stream_error:  # noqa: BLE001  # any raised provider error must reach the fallback gate
-                await close_source()
                 async for item in self._aanthropic_messages_recover_stream_error(
                     stream_error,
                     has_generated_content,
@@ -6135,6 +6139,7 @@ class Router:
                     model,
                     initial_kwargs,
                     wrapper,
+                    close_superseded,
                 ):
                     yield item
             finally:
@@ -6154,6 +6159,7 @@ class Router:
         model: str,
         initial_kwargs: dict[str, Any],  # mutable-ok: handed to _aanthropic_messages_fallback_attempt, which mutates it
         wrapper: "FallbackAwareAnthropicMessagesStream",
+        close_superseded: Callable[[], Awaitable[None]],
     ) -> AsyncGenerator[bytes, None]:
         """Turns a source-iterator failure into a fallback attempt or the error reaching the caller."""
         from litellm.exceptions import MidStreamFallbackError
@@ -6173,6 +6179,7 @@ class Router:
         )
         if fallback_error is None:
             raise stream_error
+        await close_superseded()
         outcome: Final = await self._astream_retry_same_group(
             fallback_error,
             initial_kwargs,
