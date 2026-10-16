@@ -39,10 +39,12 @@ from litellm.proxy.common_request_processing import (
     open_sse_before_first_byte,
     ttft_keepalive_interval,
 )
-from litellm.proxy.common_utils.http_parsing_utils import (
-    _read_request_body,
-    _safe_get_request_headers,
+from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
+    _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     get_form_data,
+    read_request_body,
+    safe_get_request_headers,
 )
 from litellm.proxy.rag_endpoints.upload_security import (
     MAX_UPLOAD_SIZE_BYTES,
@@ -474,13 +476,13 @@ async def parse_rag_ingest_request(
     Returns:
         Tuple of (ingest_options, file_data, file_url, file_id)
     """
-    headers: Final = _safe_get_request_headers(request)
+    headers: Final = safe_get_request_headers(request)
     content_type = headers.get("content-type", "")
 
     file_data: tuple[str, bytes, str] | None = None
     file_url: str | None = None
     file_id: str | None = None
-    ingest_options: dict[str, Any] = {}
+    ingest_options: dict[str, object] = {}
 
     if "multipart/form-data" in content_type:
         # Form upload
@@ -497,15 +499,15 @@ async def parse_rag_ingest_request(
         if request_json_str:
             request_data: Final = orjson.loads(request_json_str)
             ingest_options = request_data.get("ingest_options", {})
-            file_url = _optional_str_field(request_data, "file_url")
-            file_id = _optional_str_field(request_data, "file_id")
+            file_url = _optional_str_field(request_data, "file_url")  # pyright: ignore[reportUnknownArgumentType]  # orjson.loads is untyped
+            file_id = _optional_str_field(request_data, "file_id")  # pyright: ignore[reportUnknownArgumentType]  # orjson.loads is untyped
 
     else:
         # JSON body
-        data: Final = await _read_request_body(request)
+        data: Final = await read_request_body(request)
         ingest_options = data.get("ingest_options", {})
-        file_url = _optional_str_field(data, "file_url")
-        file_id = _optional_str_field(data, "file_id")
+        file_url = _optional_str_field(data, "file_url")  # pyright: ignore[reportUnknownArgumentType]  # read_request_body returns a bare dict
+        file_id = _optional_str_field(data, "file_id")  # pyright: ignore[reportUnknownArgumentType]  # read_request_body returns a bare dict
 
         # Handle base64-encoded file in JSON body
         file_obj = data.get("file")
@@ -602,7 +604,7 @@ async def rag_ingest(
     ## Form upload (for files):
     ```bash
     curl -X POST "http://localhost:4000/v1/rag/ingest" \\
-        -H "Authorization: Bearer sk-1234" \\
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \\
         -F file="@document.pdf" \\
         -F 'ingest_options={"vector_store": {"custom_llm_provider": "openai"}}'
     ```
@@ -610,7 +612,7 @@ async def rag_ingest(
     ## JSON body (for URLs):
     ```bash
     curl -X POST "http://localhost:4000/v1/rag/ingest" \\
-        -H "Authorization: Bearer sk-1234" \\
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \\
         -H "Content-Type: application/json" \\
         -d '{
             "file_url": "https://example.com/document.pdf",
@@ -621,7 +623,7 @@ async def rag_ingest(
     ## Bedrock:
     ```bash
     curl -X POST "http://localhost:4000/v1/rag/ingest" \\
-        -H "Authorization: Bearer sk-1234" \\
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \\
         -F file="@document.pdf" \\
         -F 'ingest_options={"vector_store": {"custom_llm_provider": "bedrock"}}'
     ```
@@ -632,15 +634,13 @@ async def rag_ingest(
         llm_router,
         prisma_client,
         proxy_config,
-        rag_upload_malware_scanner,
         version,
     )
 
+    scanner: Final = proxy_config.rag_ingest_controls.scanner
     try:
         # Parse request
-        ingest_options, file_data, file_url, file_id = await parse_rag_ingest_request(
-            request, scanner=rag_upload_malware_scanner
-        )
+        ingest_options, file_data, file_url, file_id = await parse_rag_ingest_request(request, scanner=scanner)
 
         # INTERNAL_USER_VIEW_ONLY can ingest to existing vector stores only
         if user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value and not ingest_options.get(
@@ -671,11 +671,11 @@ async def rag_ingest(
             raise HTTPException(status_code=400, detail={"error": str(e)})
 
         managed_store: Final = resolved_stores.get(request_vector_store_config.get("vector_store_id"))
-        merged_vector_store_config: Final = {  # mutable-ok: ingestion classes mutate it when loading credentials
+        merged_vector_store_config: Final = {
             **_caller_vector_store_options(request_vector_store_config, managed_store),
             **_managed_store_overrides(managed_store),
         }
-        merged_ingest_options: Final = {  # mutable-ok: litellm.aingest takes a plain dict payload
+        merged_ingest_options: Final = {
             **ingest_options,
             "vector_store": merged_vector_store_config,
         }
@@ -684,11 +684,11 @@ async def rag_ingest(
         if provider_error is not None:
             raise HTTPException(
                 status_code=400,
-                detail={"error": provider_error},  # mutable-ok: FastAPI serializes the detail as JSON
+                detail={"error": provider_error},
             )
 
         uploaded_file_data: Final = (
-            await fetch_and_secure_file_url(file_url, scanner=rag_upload_malware_scanner, fetch_url=fetch_file_url)
+            await fetch_and_secure_file_url(file_url, scanner=scanner, fetch_url=fetch_file_url)
             if file_data is None and file_url is not None
             else file_data
         )
@@ -783,7 +783,7 @@ async def rag_query(
     ## Example Request:
     ```bash
     curl -X POST "http://localhost:4000/v1/rag/query" \\
-        -H "Authorization: Bearer sk-1234" \\
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \\
         -H "Content-Type: application/json" \\
         -d '{
             "model": "gpt-4o-mini",
@@ -799,7 +799,7 @@ async def rag_query(
     ## With Reranking:
     ```bash
     curl -X POST "http://localhost:4000/v1/rag/query" \\
-        -H "Authorization: Bearer sk-1234" \\
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \\
         -H "Content-Type: application/json" \\
         -d '{
             "model": "gpt-4o-mini",
@@ -828,7 +828,7 @@ async def rag_query(
 
     try:
         # Parse request body
-        data: Final = await _read_request_body(request)
+        data: Final = await read_request_body(request)
 
         # Extract required fields
         model: Final = data.get("model")

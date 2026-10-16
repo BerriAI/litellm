@@ -7,7 +7,7 @@ pub enum CredentialPlacement {
 }
 
 impl CredentialPlacement {
-    pub fn header_name(self) -> &'static str {
+    pub const fn header_name(self) -> &'static str {
         match self {
             Self::Bearer => "Authorization",
             Self::Header(name) => name,
@@ -21,13 +21,17 @@ pub fn apply_credential(
     placement: CredentialPlacement,
 ) -> Result<Vec<(String, String)>, Error> {
     if credential.trim().is_empty() {
-        return Err(Error::EmptyCredential);
+        return Err(Error::InvalidConfiguration(
+            "credential cannot be empty".into(),
+        ));
     }
     if headers
         .iter()
         .any(|(name, _)| name.eq_ignore_ascii_case(placement.header_name()))
     {
-        return Err(Error::DuplicateHeader(placement.header_name()));
+        return Err(Error::InvalidConfiguration(
+            crate::ErrorDetail::DuplicateHeader(placement.header_name()),
+        ));
     }
     let value = match placement {
         CredentialPlacement::Bearer => format!("Bearer {credential}"),
@@ -38,21 +42,6 @@ pub fn apply_credential(
             .chain(headers)
             .collect(),
     )
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum RequestAuth {
-    Header {
-        name: &'static str,
-        value: String,
-    },
-    Bearer {
-        token: String,
-    },
-    AwsSigV4 {
-        region: String,
-        service: &'static str,
-    },
 }
 
 #[cfg(test)]

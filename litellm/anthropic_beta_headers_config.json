@@ -33,7 +33,11 @@
     "thinking-binding-controls-2026-08-01": "thinking-binding-controls-2026-08-01",
     "token-efficient-tools-2025-02-19": "token-efficient-tools-2025-02-19",
     "web-fetch-2025-09-10": "web-fetch-2025-09-10",
-    "web-search-2025-03-05": "web-search-2025-03-05"
+    "web-search-2025-03-05": "web-search-2025-03-05",
+    "mid-conversation-output-config-2026-07-01": "mid-conversation-output-config-2026-07-01",
+    "thinking-display-updates-2026-08-18": "thinking-display-updates-2026-08-18",
+    "mid-conversation-tool-changes-2026-07-01": "mid-conversation-tool-changes-2026-07-01",
+    "inline-tools-2026-09-15": "inline-tools-2026-09-15"
   },
   "azure_ai": {
     "advisor-tool-2026-03-01": null,
@@ -46,7 +50,7 @@
     "computer-use-2025-11-24": "computer-use-2025-11-24",
     "context-1m-2025-08-07": "context-1m-2025-08-07",
     "context-management-2025-06-27": "context-management-2025-06-27",
-    "dangerous-tool-use-2026-09-03": null,
+    "dangerous-tool-use-2026-09-03": "dangerous-tool-use-2026-09-03",
     "effort-2025-11-24": "effort-2025-11-24",
     "fast-mode-2026-02-01": null,
     "files-api-2025-04-14": "files-api-2025-04-14",
@@ -57,13 +61,14 @@
     "mcp-servers-2025-12-04": null,
     "output-128k-2025-02-19": null,
     "structured-output-2024-03-01": null,
-    "per-turn-control-2026-07-01": null,
+    "per-turn-control-2026-07-01": "per-turn-control-2026-07-01",
     "prompt-caching-scope-2026-01-05": "prompt-caching-scope-2026-01-05",
     "skills-2025-10-02": "skills-2025-10-02",
     "structured-outputs-2025-11-13": "structured-outputs-2025-11-13",
     "text_editor_20241022": null,
     "text_editor_20250124": null,
     "thinking-binding-controls-2026-08-01": null,
+    "thinking-display-updates-2026-08-18": "thinking-display-updates-2026-08-18",
     "token-efficient-tools-2025-02-19": null,
     "web-fetch-2025-09-10": "web-fetch-2025-09-10",
     "web-search-2025-03-05": "web-search-2025-03-05"
@@ -97,6 +102,7 @@
     "text_editor_20241022": null,
     "text_editor_20250124": null,
     "thinking-binding-controls-2026-08-01": "thinking-binding-controls-2026-08-01",
+    "thinking-display-updates-2026-08-18": "thinking-display-updates-2026-08-18",
     "token-efficient-tools-2025-02-19": null,
     "tool-search-tool-2025-10-19": null,
     "web-fetch-2025-09-10": null,
@@ -134,7 +140,10 @@
     "token-efficient-tools-2025-02-19": null,
     "tool-search-tool-2025-10-19": "tool-search-tool-2025-10-19",
     "web-fetch-2025-09-10": null,
-    "web-search-2025-03-05": null
+    "web-search-2025-03-05": null,
+    "mid-conversation-output-config-2026-07-01": "mid-conversation-output-config-2026-07-01",
+    "thinking-display-updates-2026-08-18": "thinking-display-updates-2026-08-18",
+    "mid-conversation-tool-changes-2026-07-01": "mid-conversation-tool-changes-2026-07-01"
   },
   "bedrock_mantle": {
     "advanced-tool-use-2025-11-20": "tool-search-tool-2025-10-19",
@@ -166,6 +175,7 @@
     "text_editor_20241022": null,
     "text_editor_20250124": null,
     "thinking-binding-controls-2026-08-01": "thinking-binding-controls-2026-08-01",
+    "thinking-display-updates-2026-08-18": "thinking-display-updates-2026-08-18",
     "token-efficient-tools-2025-02-19": "token-efficient-tools-2025-02-19",
     "tool-examples-2025-10-29": "tool-examples-2025-10-29",
     "tool-search-tool-2025-10-19": "tool-search-tool-2025-10-19",
@@ -194,17 +204,19 @@
     "mcp-servers-2025-12-04": null,
     "output-128k-2025-02-19": null,
     "structured-output-2024-03-01": null,
-    "per-turn-control-2026-07-01": null,
+    "per-turn-control-2026-07-01": "per-turn-control-2026-07-01",
     "prompt-caching-scope-2026-01-05": null,
     "skills-2025-10-02": null,
     "structured-outputs-2025-11-13": null,
     "text_editor_20241022": null,
     "text_editor_20250124": null,
     "thinking-binding-controls-2026-08-01": "thinking-binding-controls-2026-08-01",
+    "thinking-display-updates-2026-08-18": "thinking-display-updates-2026-08-18",
     "token-efficient-tools-2025-02-19": null,
     "tool-search-tool-2025-10-19": "tool-search-tool-2025-10-19",
     "web-fetch-2025-09-10": null,
-    "web-search-2025-03-05": "web-search-2025-03-05"
+    "web-search-2025-03-05": "web-search-2025-03-05",
+    "inline-tools-2026-09-15": "inline-tools-2026-09-15"
   },
   "databricks": {
     "advisor-tool-2026-03-01": null,

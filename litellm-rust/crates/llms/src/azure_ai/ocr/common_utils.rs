@@ -1,5 +1,3 @@
-use std::sync::OnceLock;
-
 use litellm_auth::{InputSource, Sourced};
 use litellm_auth_azure::{AzureAuthInputs, AzureAuthService};
 
@@ -20,16 +18,15 @@ pub(crate) fn azure_auth_inputs(request: &PreparedOcrRequest) -> Result<AzureAut
 }
 
 pub(super) async fn resolve_entra(
+    service: &AzureAuthService,
     config: &AzureAuthInputs,
     env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
 ) -> Result<Option<Sourced<String>>, Error> {
-    static SERVICE: OnceLock<AzureAuthService> = OnceLock::new();
-    SERVICE
-        .get_or_init(AzureAuthService::default)
+    service
         .get_azure_ad_token(config, env_lookup)
         .await
         .or_else(|error| match error {
-            litellm_auth::Error::EmptyAzureToken => Ok(None),
+            litellm_auth::Error::EmptyCallerCredential(_) => Ok(None),
             other => Err(other),
         })
         .map(|credential| {
@@ -50,7 +47,10 @@ pub(super) fn validate_destination(
         && connection.api_base_source == InputSource::Request
         && credential_source != InputSource::Request
     {
-        return Err(litellm_auth::Error::RequestAzureCredentialDestination.into());
+        return Err(litellm_auth::Error::InvalidConfiguration(
+            "host credentials cannot be sent to a request-controlled Azure endpoint".into(),
+        )
+        .into());
     }
     Ok(())
 }

@@ -1,6 +1,8 @@
 import json
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 
 from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
@@ -112,10 +114,10 @@ def test_hosted_vllm_supports_thinking():
     assert optional_params["reasoning_effort"] == "low"
 
 
-def test_hosted_vllm_thinking_blocks_prepended_to_assistant_content():
+def test_hosted_vllm_reasoning_content_kept_and_thinking_blocks_removed():
     """
-    Test that thinking_blocks on assistant messages are removed and content
-    stays a string for vLLM compatibility.
+    Test that reasoning_content on assistant messages is forwarded to vLLM
+    while thinking_blocks are removed and content stays a string.
     """
     config = HostedVLLMChatConfig()
     messages = [
@@ -152,7 +154,36 @@ def test_hosted_vllm_thinking_blocks_prepended_to_assistant_content():
     assert isinstance(assistant_msg["content"], str)
     assert assistant_msg["content"] == "Here is my answer."
     assert "thinking_blocks" not in assistant_msg
-    assert "reasoning_content" not in assistant_msg
+    assert assistant_msg["reasoning_content"] == "Let me reason about this..."
+
+
+@pytest.mark.parametrize(
+    ("reasoning_content", "expected"),
+    [
+        ("step one, then step two", "step one, then step two"),
+        ("", ""),
+        (None, "absent"),
+        (42, "absent"),
+        (["step one", "step two"], "absent"),
+        ({"text": "step one"}, "absent"),
+    ],
+)
+def test_hosted_vllm_forwards_only_string_reasoning_content(reasoning_content, expected):
+    config = HostedVLLMChatConfig()
+    transformed = config.transform_request(
+        model="hosted_vllm/qwen3",
+        messages=[
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi", "reasoning_content": reasoning_content},
+            {"role": "user", "content": "Again"},
+        ],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+    assistant_msg = transformed["messages"][1]
+    assert assistant_msg.get("reasoning_content", "absent") == expected
+    assert assistant_msg["content"] == "Hi"
 
 
 def test_hosted_vllm_thinking_blocks_with_list_content():

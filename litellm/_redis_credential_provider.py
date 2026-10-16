@@ -38,7 +38,7 @@ class AzureCredential(Protocol):
     def get_token(self, *scopes: str) -> AzureAccessToken: ...
 
 
-def _generate_gcp_iam_access_token(service_account: str) -> str:
+def generate_gcp_iam_access_token(service_account: str) -> str:
     """
     Generate GCP IAM access token for Redis authentication.
 
@@ -63,6 +63,9 @@ def _generate_gcp_iam_access_token(service_account: str) -> str:
     )
     response: Final = client.generate_access_token(request=request)
     return str(response.access_token)
+
+
+_generate_gcp_iam_access_token = generate_gcp_iam_access_token
 
 
 def _get_cached_gcp_iam_token(service_account: str) -> str:
@@ -93,7 +96,7 @@ def _get_cached_gcp_iam_token(service_account: str) -> str:
             if time.monotonic() < expiry:
                 return token
 
-        token = _generate_gcp_iam_access_token(service_account)
+        token = generate_gcp_iam_access_token(service_account)
         _token_cache[service_account] = (
             token,
             time.monotonic() + _GCP_IAM_TOKEN_TTL_SECONDS,

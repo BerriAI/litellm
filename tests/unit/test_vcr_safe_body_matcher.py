@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import json
 import os
 import sys
+from pathlib import Path
 from types import SimpleNamespace
+from typing import Final
 
 import pytest
+import vcr
+from vcr.request import Request
 
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if _REPO_ROOT not in sys.path:
@@ -384,3 +389,67 @@ def test_before_record_request_is_idempotent_on_the_same_request_object():
     _before_record_request(req)
     assert req.headers[KEY_FINGERPRINT_HEADER] == fp_after_first
     assert fp_after_first != "no-key"
+
+
+LOCAL_UPSTREAM: Final = "http://127.0.0.1:54321/v1/moderations"
+REMOTE_UPSTREAM: Final = "https://api.openai.com/v1/moderations"
+
+
+def _recorder_with_repo_matchers(cassette_dir: Path) -> vcr.VCR:
+    recorder: Final = vcr.VCR(cassette_library_dir=str(cassette_dir))
+    recorder.register_matcher(SAFE_BODY_MATCHER_NAME, _safe_body_matcher)
+    recorder.register_matcher(KEY_FINGERPRINT_MATCHER_NAME, _key_fingerprint_matcher)
+    recorder.register_matcher(TOLERANT_QUERY_MATCHER_NAME, _tolerant_query_matcher)
+    recorder.register_matcher(TOLERANT_PATH_MATCHER_NAME, _tolerant_path_matcher)
+    return recorder
+
+
+def _request_to(uri: str) -> Request:
+    return Request(
+        method="POST",
+        uri=uri,
+        body=b'{"model":"omni-moderation-latest","input":"hi"}',
+        headers={"content-type": "application/json"},
+    )
+
+
+def _response_served_by(server: str) -> dict[str, object]:
+    payload: Final = json.dumps({"served_by": server}).encode()
+    return {
+        "status": {"code": 200, "message": "OK"},
+        "headers": {"content-type": ["application/json"]},
+        "body": {"string": payload},
+    }
+
+
+def _stored_uris(session: vcr.cassette.Cassette) -> list[str]:
+    return [request.uri for request in session.requests]
+
+
+def test_config_never_records_a_test_owned_local_upstream(tmp_path: Path):
+    recorder: Final = _recorder_with_repo_matchers(tmp_path)
+
+    with recorder.use_cassette("local_upstream.yaml", **vcr_config_dict()) as session:
+        session.append(_request_to(LOCAL_UPSTREAM), _response_served_by("the test's own server"))
+        session.append(_request_to(REMOTE_UPSTREAM), _response_served_by("a real provider"))
+
+    assert _stored_uris(session) == [REMOTE_UPSTREAM]
+    assert (tmp_path / "local_upstream.yaml").exists()
+
+
+def test_config_never_replays_a_localhost_response_an_earlier_run_stored(tmp_path: Path):
+    recorder: Final = _recorder_with_repo_matchers(tmp_path)
+    config_that_recorded_localhost: Final = vcr_config_dict() | {"ignore_localhost": False}
+
+    with recorder.use_cassette("stored_by_an_earlier_run.yaml", **config_that_recorded_localhost) as earlier_run:
+        earlier_run.append(_request_to(LOCAL_UPSTREAM), _response_served_by("an earlier run's server"))
+        earlier_run.append(_request_to(REMOTE_UPSTREAM), _response_served_by("a real provider"))
+    assert _stored_uris(earlier_run) == [LOCAL_UPSTREAM, REMOTE_UPSTREAM]
+
+    with recorder.use_cassette("stored_by_an_earlier_run.yaml", **vcr_config_dict()) as session:
+        replayable: Final = tuple(
+            bool(session.can_play_response_for(_request_to(uri))) for uri in (LOCAL_UPSTREAM, REMOTE_UPSTREAM)
+        )
+
+    assert replayable == (False, True)
+    assert _stored_uris(session) == [REMOTE_UPSTREAM]

@@ -16,11 +16,17 @@ import pytest
 from botocore.credentials import Credentials
 from botocore.exceptions import ClientError
 
+import litellm
 from litellm.llms.bedrock.chat.converse_handler import BedrockConverseLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.rust_bridge import configuration
 from litellm.types.utils import ModelResponse
 from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
+from tests.unit.llms.bedrock.slow_upstream import (
+    STREAM_TIMEOUT_SECONDS,
+    slow_upstream_async_client,
+    slow_upstream_sync_client,
+)
 
 RESOLVED_CREDENTIALS = Credentials(
     access_key="AKIARESOLVED",
@@ -273,3 +279,26 @@ def test_session_tags_sign_the_request_and_stay_out_of_the_body(monkeypatch):
     sent = client.post.call_args.kwargs
     assert "Credential=ASIACONVERSETAGGED/" in sent["headers"]["Authorization"]
     assert "aws_session_tags" not in sent["data"]
+
+
+def _converse_streaming_kwargs() -> dict[str, object]:
+    return {
+        "model": "bedrock/anthropic.claude-sonnet-4-5-v1:0",
+        "messages": [{"role": "user", "content": "hi"}],
+        "stream": True,
+        "timeout": STREAM_TIMEOUT_SECONDS,
+        "aws_access_key_id": "fake",
+        "aws_secret_access_key": "fake",
+        "aws_region_name": "us-east-1",
+    }
+
+
+@pytest.mark.asyncio
+async def test_async_converse_streaming_fails_at_the_request_timeout_not_the_upstreams_pace() -> None:
+    with pytest.raises(litellm.Timeout):
+        await litellm.acompletion(client=slow_upstream_async_client(), **_converse_streaming_kwargs())
+
+
+def test_sync_converse_streaming_fails_at_the_request_timeout_not_the_upstreams_pace() -> None:
+    with pytest.raises(litellm.Timeout):
+        litellm.completion(client=slow_upstream_sync_client(), **_converse_streaming_kwargs())

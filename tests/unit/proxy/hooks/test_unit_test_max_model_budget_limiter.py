@@ -1,33 +1,44 @@
 import asyncio
+import time
+from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
+from typing import Final
 from unittest.mock import AsyncMock, patch
-
 
 import pytest
 
 import litellm
 from litellm.caching.caching import DualCache
 from litellm.caching.redis_cache import RedisCache
-from datetime import datetime, timezone
-
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
-from litellm.proxy._types import Litellm_EntityType
+from litellm.proxy._types import Litellm_EntityType, UserAPIKeyAuth
 from litellm.proxy.hooks.model_max_budget_limiter import (
+    PROXY_VirtualKeyModelMaxBudgetLimiter,
     _budget_model_candidates,
-    _PROXY_VirtualKeyModelMaxBudgetLimiter,
     build_model_max_budget_usage,
+    model_budget_spend_cache_key,
+    model_budget_start_time_cache_key,
     resolve_model_budget,
 )
-from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.caching import RedisPipelineIncrementOperation
-from litellm.types.utils import BudgetConfig as GenericBudgetInfo
+
+
+async def _reset_at_of_open_window(
+    cache: DualCache, entity_type: Litellm_EntityType, entity_id: str, budget_model: str, period: str
+) -> str:
+    started_at = await cache.async_get_cache(
+        key=model_budget_start_time_cache_key(
+            entity_type=entity_type, entity_id=entity_id, budget_model=budget_model, budget_duration=period
+        )
+    )
+    return datetime.fromtimestamp(started_at + duration_in_seconds(period), tz=timezone.utc).isoformat()
 
 
 # Test class setup
 @pytest.fixture
 def budget_limiter():
     dual_cache = DualCache()
-    return _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
+    return PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
 
 
 # Test _budget_model_candidates
@@ -462,7 +473,7 @@ async def test_async_log_success_event_pushes_redis_increments_when_redis_config
     """
     dual_cache = DualCache()
     dual_cache.redis_cache = object()  # truthy placeholder; push only checks is not None
-    limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
+    limiter = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
     model = "gpt-4"
     kwargs = {
         "standard_logging_object": {
@@ -491,17 +502,13 @@ async def test_async_log_success_event_pushes_redis_increments_when_redis_config
 @pytest.mark.asyncio
 async def test_model_budget_limiter_initializes_redis_increment_queue_lock():
     dual_cache = DualCache()
-    limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
+    limiter = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
     spend_key = "virtual_key_spend:test-key:gpt-4:1d"
 
-    await limiter._increment_spend_in_current_window(
-        spend_key=spend_key, response_cost=0.01, ttl=86400
-    )
+    await limiter._increment_spend_in_current_window(spend_key=spend_key, response_cost=0.01, ttl=86400)
 
     assert limiter.redis_increment_operation_queue == [
-        RedisPipelineIncrementOperation(
-            key=spend_key, increment_value=0.01, ttl=86400
-        )
+        RedisPipelineIncrementOperation(key=spend_key, increment_value=0.01, ttl=86400)
     ]
 
 
@@ -653,7 +660,7 @@ async def test_logged_spend_is_visible_to_key_info_usage_and_enforcement(request
     actively blocked at 429 while reporting current_spend 0.
     """
     dual_cache = DualCache()
-    limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
+    limiter = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
     key_hash = "vk-hash"
     model_max_budget = {"gpt-4": {"budget_limit": 1.0, "time_period": "1d"}}
 
@@ -680,6 +687,9 @@ async def test_logged_spend_is_visible_to_key_info_usage_and_enforcement(request
             "current_spend": 0.75,
             "budget_limit": 1.0,
             "time_period": "1d",
+            "budget_reset_at": await _reset_at_of_open_window(
+                dual_cache, Litellm_EntityType.KEY, key_hash, "gpt-4", "1d"
+            ),
         }
     }
 
@@ -717,7 +727,7 @@ async def test_user_model_budget_is_tracked_and_enforced():
     enforced, independently of any key-level budget.
     """
     dual_cache = DualCache()
-    limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
+    limiter = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
     user_id = "user-1"
     user_model_max_budget = {"gpt-4": {"budget_limit": 1.0, "time_period": "1mo"}}
 
@@ -747,7 +757,16 @@ async def test_user_model_budget_is_tracked_and_enforced():
         entity_id=user_id,
         model_max_budget=user_model_max_budget,
         cache=dual_cache,
-    ) == {"gpt-4": {"current_spend": 1.5, "budget_limit": 1.0, "time_period": "1mo"}}
+    ) == {
+        "gpt-4": {
+            "current_spend": 1.5,
+            "budget_limit": 1.0,
+            "time_period": "1mo",
+            "budget_reset_at": await _reset_at_of_open_window(
+                dual_cache, Litellm_EntityType.USER, user_id, "gpt-4", "1mo"
+            ),
+        }
+    }
 
     with pytest.raises(litellm.BudgetExceededError) as exc:
         await limiter.is_user_within_model_budget(
@@ -765,7 +784,7 @@ async def test_user_model_budget_counter_is_separate_from_the_key_counter():
     counters, so one request must charge each exactly once.
     """
     dual_cache = DualCache()
-    limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
+    limiter = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
     model_max_budget = {"gpt-4": {"budget_limit": 10.0, "time_period": "1d"}}
 
     await limiter.async_log_success_event(
@@ -793,7 +812,7 @@ async def test_two_models_on_one_key_do_not_share_a_budget_window():
     per model: a shared start lets the shorter period restart the longer one.
     """
     dual_cache = DualCache()
-    limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
+    limiter = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
     model_max_budget = {
         "gpt-4": {"budget_limit": 10.0, "time_period": "1d"},
         "claude-3": {"budget_limit": 10.0, "time_period": "30d"},
@@ -824,7 +843,7 @@ async def test_two_models_on_one_key_do_not_share_a_budget_window():
 @pytest.mark.asyncio
 async def test_no_increment_when_no_scope_budgets_the_model():
     dual_cache = DualCache()
-    limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
+    limiter = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
     with patch.object(limiter, "_increment_spend_for_key", new_callable=AsyncMock) as mock_increment:
         await limiter.async_log_success_event(
             _success_kwargs(
@@ -857,7 +876,9 @@ async def test_build_model_max_budget_usage_skips_unusable_entries():
         },
         cache=dual_cache,
     )
-    assert usage == {"gpt-4": {"current_spend": 3.0, "budget_limit": 10.0, "time_period": "1d"}}
+    assert usage == {
+        "gpt-4": {"current_spend": 3.0, "budget_limit": 10.0, "time_period": "1d", "budget_reset_at": None}
+    }
 
 
 @pytest.mark.asyncio
@@ -869,7 +890,7 @@ async def test_bedrock_traffic_charges_the_bare_family_name_budget():
     the key went.
     """
     dual_cache = DualCache()
-    limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
+    limiter = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
     key_hash = "vk-hash"
     model_max_budget = {"claude-opus-4-8": {"budget_limit": 1.0, "time_period": "18h"}}
     user_api_key = UserAPIKeyAuth(token=key_hash, model_max_budget=model_max_budget)
@@ -896,6 +917,9 @@ async def test_bedrock_traffic_charges_the_bare_family_name_budget():
             "current_spend": 1.5,
             "budget_limit": 1.0,
             "time_period": "18h",
+            "budget_reset_at": await _reset_at_of_open_window(
+                dual_cache, Litellm_EntityType.KEY, key_hash, "claude-opus-4-8", "18h"
+            ),
         }
     }
 
@@ -916,7 +940,7 @@ async def test_user_model_budget_window_resets_when_the_period_elapses():
     )
 
     dual_cache = DualCache()
-    limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
+    limiter = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
     user_id = "user-1"
     user_model_max_budget = {"gpt-4": {"budget_limit": 1.0, "time_period": "1mo"}}
     spend_key = model_budget_spend_cache_key(
@@ -963,7 +987,16 @@ async def test_user_model_budget_window_resets_when_the_period_elapses():
         entity_id=user_id,
         model_max_budget=user_model_max_budget,
         cache=dual_cache,
-    ) == {"gpt-4": {"current_spend": 1.5, "budget_limit": 1.0, "time_period": "1mo"}}
+    ) == {
+        "gpt-4": {
+            "current_spend": 1.5,
+            "budget_limit": 1.0,
+            "time_period": "1mo",
+            "budget_reset_at": await _reset_at_of_open_window(
+                dual_cache, Litellm_EntityType.USER, user_id, "gpt-4", "1mo"
+            ),
+        }
+    }
 
 
 @pytest.mark.asyncio
@@ -976,7 +1009,7 @@ async def test_a_zero_dollar_cap_blocks_the_model():
     mean something.
     """
     dual_cache = DualCache()
-    limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
+    limiter = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
     key = UserAPIKeyAuth(
         token="hash-zero",
         model_max_budget={"gpt-4": {"budget_limit": 0, "time_period": "1d"}},
@@ -995,7 +1028,7 @@ async def test_a_zero_dollar_cap_is_reported_as_a_cap_not_as_absent():
         entity_id="hash-zero",
         model_max_budget={"gpt-4": {"budget_limit": 0, "time_period": "1d"}},
         cache=DualCache(),
-    ) == {"gpt-4": {"current_spend": 0.0, "budget_limit": 0.0, "time_period": "1d"}}
+    ) == {"gpt-4": {"current_spend": 0.0, "budget_limit": 0.0, "time_period": "1d", "budget_reset_at": None}}
 
 
 @pytest.mark.asyncio
@@ -1006,7 +1039,7 @@ async def test_spend_exactly_at_the_cap_is_refused():
     (RouterBudgetLimiting, the key and team budget checks) uses `>=`.
     """
     dual_cache = DualCache()
-    limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
+    limiter = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
     budget = {"gpt-4": {"budget_limit": 2.0, "time_period": "1d"}}
     key = UserAPIKeyAuth(token="hash-exact", model_max_budget=budget)
 
@@ -1033,7 +1066,7 @@ async def test_usage_report_reads_every_counter_in_one_batched_lookup():
     budget = {f"model-{i}": {"budget_limit": 1.0, "time_period": "1d"} for i in range(50)}
 
     with (
-        patch.object(dual_cache, "async_batch_get_cache", new=AsyncMock(return_value=[None] * 50)) as batched,
+        patch.object(dual_cache, "async_batch_get_cache", new=AsyncMock(return_value=[None] * 100)) as batched,
         patch.object(dual_cache, "async_get_cache", new=AsyncMock()) as single,
     ):
         usage = await build_model_max_budget_usage(
@@ -1044,7 +1077,8 @@ async def test_usage_report_reads_every_counter_in_one_batched_lookup():
         )
 
     assert batched.await_count == 1
-    assert len(batched.await_args.kwargs["keys"]) == 50
+    # One spend counter and one window start per budgeted model, all in the same round trip.
+    assert len(batched.await_args.kwargs["keys"]) == 100
     assert single.await_count == 0
     assert len(usage) == 50
 
@@ -1063,7 +1097,161 @@ async def test_usage_report_survives_a_batch_lookup_that_returns_nothing():
             entity_id="hash-none",
             model_max_budget={"gpt-4": {"budget_limit": 1.0, "time_period": "1d"}},
             cache=dual_cache,
-        ) == {"gpt-4": {"current_spend": 0.0, "budget_limit": 1.0, "time_period": "1d"}}
+        ) == {"gpt-4": {"current_spend": 0.0, "budget_limit": 1.0, "time_period": "1d", "budget_reset_at": None}}
+
+
+_WINDOW_OPENED_AT: Final = datetime(2026, 10, 10, 12, 0, tzinfo=timezone.utc)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "seconds_since_window_opened,expected_reset_at",
+    [
+        (0, "2026-10-10T13:00:00+00:00"),
+        (600, "2026-10-10T13:00:00+00:00"),
+        (3599, "2026-10-10T13:00:00+00:00"),
+        (3600, None),
+        (7200, None),
+    ],
+    ids=["just_opened", "mid_window", "last_second", "ended_exactly_now", "long_ended"],
+)
+async def test_usage_reports_when_the_open_window_resets(seconds_since_window_opened, expected_reset_at):
+    """
+    The counter expires at the window's start plus its period, and that is when the
+    model is admitted again. A window that has already run its period is not open,
+    even if its start time is still sitting in the cache, so no reset is reported.
+    """
+    dual_cache = DualCache()
+    key = dict(entity_type=Litellm_EntityType.KEY, entity_id="vk-hash", budget_model="gpt-4", budget_duration="1h")
+    await dual_cache.async_set_cache(key=model_budget_spend_cache_key(**key), value=0.4)
+    await dual_cache.async_set_cache(key=model_budget_start_time_cache_key(**key), value=_WINDOW_OPENED_AT.timestamp())
+
+    usage = await build_model_max_budget_usage(
+        entity_type=Litellm_EntityType.KEY,
+        entity_id="vk-hash",
+        model_max_budget={"gpt-4": {"budget_limit": 1.0, "time_period": "1h"}},
+        cache=dual_cache,
+        now=_WINDOW_OPENED_AT + timedelta(seconds=seconds_since_window_opened),
+    )
+
+    assert usage == {
+        "gpt-4": {"current_spend": 0.4, "budget_limit": 1.0, "time_period": "1h", "budget_reset_at": expected_reset_at}
+    }
+
+
+_DAY: Final = 86400
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "opened_at,read_after_days,window_days",
+    [
+        (datetime(2026, 1, 15, 12, tzinfo=timezone.utc), 26, 31),
+        (datetime(2026, 1, 15, 12, tzinfo=timezone.utc), 29, 31),
+        (datetime(2026, 1, 31, 12, tzinfo=timezone.utc), 20, 28),
+        (datetime(2026, 12, 15, 12, tzinfo=timezone.utc), 30, 31),
+    ],
+    ids=["read_in_a_shorter_month", "read_past_the_shorter_month_length", "clamped_to_february", "across_new_year"],
+)
+async def test_a_monthly_window_resets_a_calendar_month_after_it_opened(opened_at, read_after_days, window_days):
+    """
+    A month is only as long as the month the window opened in, which is the lifetime the
+    counter was given when it opened. Measuring the month from the read instead made a
+    window opened on January 15 and read on February 10 report February 12, and then null
+    while the counter still refused requests until February 15.
+    """
+    dual_cache = DualCache()
+    started_at: Final = opened_at.timestamp()
+    await dual_cache.async_set_cache(
+        key=model_budget_start_time_cache_key(
+            entity_type=Litellm_EntityType.USER, entity_id="user-1", budget_model="gpt-4", budget_duration="1mo"
+        ),
+        value=started_at,
+    )
+
+    usage = await build_model_max_budget_usage(
+        entity_type=Litellm_EntityType.USER,
+        entity_id="user-1",
+        model_max_budget={"gpt-4": {"budget_limit": 1.0, "time_period": "1mo"}},
+        cache=dual_cache,
+        now=opened_at + timedelta(days=read_after_days),
+    )
+
+    assert usage == {
+        "gpt-4": {
+            "current_spend": 0.0,
+            "budget_limit": 1.0,
+            "time_period": "1mo",
+            "budget_reset_at": (opened_at + timedelta(days=window_days)).isoformat(),
+        }
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_monthly_window_reports_no_reset_once_its_month_has_passed():
+    dual_cache = DualCache()
+    opened_at: Final = datetime(2026, 1, 15, 12, tzinfo=timezone.utc)
+    await dual_cache.async_set_cache(
+        key=model_budget_start_time_cache_key(
+            entity_type=Litellm_EntityType.USER, entity_id="user-1", budget_model="gpt-4", budget_duration="1mo"
+        ),
+        value=opened_at.timestamp(),
+    )
+
+    usage = await build_model_max_budget_usage(
+        entity_type=Litellm_EntityType.USER,
+        entity_id="user-1",
+        model_max_budget={"gpt-4": {"budget_limit": 1.0, "time_period": "1mo"}},
+        cache=dual_cache,
+        now=opened_at + timedelta(days=31),
+    )
+
+    assert usage == {
+        "gpt-4": {"current_spend": 0.0, "budget_limit": 1.0, "time_period": "1mo", "budget_reset_at": None}
+    }
+
+
+@pytest.mark.asyncio
+async def test_each_budgeted_model_reports_its_own_window_reset():
+    """Two models on one key own separate windows, so one model's reset must never be reported for the other."""
+    dual_cache = DualCache()
+    hourly = dict(entity_type=Litellm_EntityType.KEY, entity_id="vk-hash", budget_model="gpt-4", budget_duration="1h")
+    daily = dict(entity_type=Litellm_EntityType.KEY, entity_id="vk-hash", budget_model="claude-3", budget_duration="1d")
+    await dual_cache.async_set_cache(
+        key=model_budget_start_time_cache_key(**hourly), value=_WINDOW_OPENED_AT.timestamp()
+    )
+    await dual_cache.async_set_cache(
+        key=model_budget_start_time_cache_key(**daily),
+        value=(_WINDOW_OPENED_AT - timedelta(hours=5)).timestamp(),
+    )
+
+    usage = await build_model_max_budget_usage(
+        entity_type=Litellm_EntityType.KEY,
+        entity_id="vk-hash",
+        model_max_budget={
+            "gpt-4": {"budget_limit": 1.0, "time_period": "1h"},
+            "claude-3": {"budget_limit": 1.0, "time_period": "1d"},
+            "never-used": {"budget_limit": 1.0, "time_period": "1d"},
+        },
+        cache=dual_cache,
+        now=_WINDOW_OPENED_AT,
+    )
+
+    assert usage == {
+        "gpt-4": {
+            "current_spend": 0.0,
+            "budget_limit": 1.0,
+            "time_period": "1h",
+            "budget_reset_at": "2026-10-10T13:00:00+00:00",
+        },
+        "claude-3": {
+            "current_spend": 0.0,
+            "budget_limit": 1.0,
+            "time_period": "1d",
+            "budget_reset_at": "2026-10-11T07:00:00+00:00",
+        },
+        "never-used": {"current_spend": 0.0, "budget_limit": 1.0, "time_period": "1d", "budget_reset_at": None},
+    }
 
 
 @pytest.mark.asyncio
@@ -1075,7 +1263,7 @@ async def test_one_malformed_scope_does_not_abort_the_other_scopes():
     charged despite the user's entry being garbage.
     """
     dual_cache = DualCache()
-    limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
+    limiter = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
     key_budget = {"gpt-4": {"budget_limit": 10.0, "time_period": "1d"}}
 
     await limiter.async_log_success_event(
@@ -1097,7 +1285,16 @@ async def test_one_malformed_scope_does_not_abort_the_other_scopes():
         entity_id="hash-mixed",
         model_max_budget=key_budget,
         cache=dual_cache,
-    ) == {"gpt-4": {"current_spend": 0.25, "budget_limit": 10.0, "time_period": "1d"}}
+    ) == {
+        "gpt-4": {
+            "current_spend": 0.25,
+            "budget_limit": 10.0,
+            "time_period": "1d",
+            "budget_reset_at": await _reset_at_of_open_window(
+                dual_cache, Litellm_EntityType.KEY, "hash-mixed", "gpt-4", "1d"
+            ),
+        }
+    }
 
 
 @pytest.mark.asyncio
@@ -1107,7 +1304,7 @@ async def test_an_unusable_budget_entry_is_not_enforced_instead_of_raising():
     cannot be keyed, so it cannot be enforced; the write path rejects these, so
     reaching here means config.yaml or a direct DB edit.
     """
-    limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+    limiter = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
     key = UserAPIKeyAuth(
         token="hash-malformed",
         model_max_budget={"gpt-4": {"budget_limit": "not-a-number", "time_period": "1d"}},
@@ -1151,7 +1348,7 @@ def test_a_malformed_specific_entry_does_not_hide_a_usable_family_budget():
 async def test_a_malformed_specific_entry_still_enforces_the_family_budget():
     """The fall-through has to reach enforcement, not just resolution."""
     dual_cache = DualCache()
-    limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
+    limiter = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
     budget = {
         "openai/gpt-4": {"budget_limit": "not-a-number", "time_period": "1d"},
         "gpt-4": {"budget_limit": 1.0, "time_period": "1d"},
@@ -1228,7 +1425,7 @@ async def test_a_pre_upgrade_counter_keyed_on_the_request_model_still_enforces(e
     configured-model key finds that counter empty and admits another full budget
     until the window expires.
     """
-    limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+    limiter = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
     model_max_budget = {"gpt-4": {"budget_limit": 10.0, "time_period": "1d"}}
     await limiter.dual_cache.async_set_cache(key=f"{prefix}:entity-1:openai/gpt-4:1d", value=25.0, ttl=86400)
 
@@ -1264,7 +1461,7 @@ async def test_the_pre_upgrade_and_post_upgrade_counters_add_up_over_one_window(
     under-reports the window: 6 + 5 is over a cap of 10 that neither half
     reaches on its own.
     """
-    limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+    limiter = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
     model_max_budget = {"gpt-4": {"budget_limit": 10.0, "time_period": "1d"}}
     await limiter.dual_cache.async_set_cache(
         key="virtual_key_spend:entity-1:openai/gpt-4:1d", value=legacy_spend, ttl=86400
@@ -1293,7 +1490,7 @@ async def test_the_configured_model_counter_is_never_counted_twice():
     added them without noticing would charge 12 against a cap of 10 and refuse a
     key that has spent 6.
     """
-    limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+    limiter = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
     await limiter.dual_cache.async_set_cache(key="virtual_key_spend:entity-1:gpt-4:1d", value=6.0, ttl=86400)
 
     assert (
@@ -1318,7 +1515,7 @@ async def test_the_pre_upgrade_counter_is_no_longer_read_a_window_after_start_up
     """
     import litellm.proxy.hooks.model_max_budget_limiter as limiter_module
 
-    limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+    limiter = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
     model_max_budget = {"gpt-4": {"budget_limit": 10.0, "time_period": "1d"}}
     await limiter.dual_cache.async_set_cache(key="virtual_key_spend:entity-1:openai/gpt-4:1d", value=25.0, ttl=86400)
     user_api_key = UserAPIKeyAuth(token="entity-1", model_max_budget=model_max_budget)
@@ -1339,7 +1536,7 @@ async def test_the_user_scope_has_no_pre_upgrade_counter_to_carry():
     Reading one would invent a counter no previous version ever wrote, which is
     the opposite of preserving one.
     """
-    limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+    limiter = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
     model_max_budget = {"gpt-4": {"budget_limit": 10.0, "time_period": "1d"}}
     await limiter.dual_cache.async_set_cache(key="user_model_spend:u1:openai/gpt-4:1d", value=25.0, ttl=86400)
 
@@ -1368,6 +1565,7 @@ class _SharedFakeRedis(RedisCache):
 
     def __init__(self):
         self._store = MappingProxyType({})
+        self.expiry_seconds = MappingProxyType({})
 
     async def async_set_cache(self, key, value, **kwargs):
         self._store = MappingProxyType({**self._store, key: value})
@@ -1382,6 +1580,7 @@ class _SharedFakeRedis(RedisCache):
         for op in increment_list:
             total = self._store.get(op["key"], 0.0) + op["increment_value"]
             self._store = MappingProxyType({**self._store, op["key"]: total})
+            self.expiry_seconds = MappingProxyType({**self.expiry_seconds, op["key"]: op["ttl"]})
         return [self._store[op["key"]] for op in increment_list]
 
 
@@ -1414,8 +1613,8 @@ async def test_spend_logged_on_one_replica_is_enforced_and_reported_on_another()
     that local share, while the shared counter was already over the cap.
     """
     shared_redis = _SharedFakeRedis()
-    replica_a = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache(redis_cache=shared_redis))
-    replica_b = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache(redis_cache=shared_redis))
+    replica_a = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache(redis_cache=shared_redis))
+    replica_b = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache(redis_cache=shared_redis))
     key_hash = "vk-shared"
     model_max_budget = {"gpt-4": {"budget_limit": 1.0, "time_period": "30d"}}
     user_api_key = UserAPIKeyAuth(token=key_hash, model_max_budget=model_max_budget)
@@ -1436,15 +1635,173 @@ async def test_spend_logged_on_one_replica_is_enforced_and_reported_on_another()
     assert usage_on_b["gpt-4"]["current_spend"] == 1.25
 
     # Control: a replica that never served this key reads the same total.
-    replica_c = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache(redis_cache=shared_redis))
+    replica_c = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache(redis_cache=shared_redis))
     with pytest.raises(litellm.BudgetExceededError):
         await replica_c.is_key_within_model_budget(user_api_key, "gpt-4")
 
 
-def _log_success(limiter, **kwargs):
-    return limiter.async_log_success_event(
-        _success_kwargs(**kwargs), response_obj=None, start_time=None, end_time=None
+@pytest.mark.asyncio
+async def test_a_replica_reports_the_reset_of_a_window_another_replica_opened():
+    """
+    The window start is written by whichever replica served the first charge, so a
+    replica that has never seen this key must read it from the shared Redis, or it
+    would report no reset for a model it is actively refusing.
+    """
+    shared_redis = _SharedFakeRedis()
+    opening_replica = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache(redis_cache=shared_redis))
+    other_replica = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache(redis_cache=shared_redis))
+    model_max_budget = {"gpt-4": {"budget_limit": 1.0, "time_period": "1h"}}
+
+    await _log_spend(opening_replica, key_hash="vk-shared", model_max_budget=model_max_budget, response_cost=0.5)
+
+    usage_on_other: Final = await build_model_max_budget_usage(
+        entity_type=Litellm_EntityType.KEY,
+        entity_id="vk-shared",
+        model_max_budget=model_max_budget,
+        cache=other_replica.dual_cache,
     )
+    started_at: Final = shared_redis._store[
+        model_budget_start_time_cache_key(
+            entity_type=Litellm_EntityType.KEY, entity_id="vk-shared", budget_model="gpt-4", budget_duration="1h"
+        )
+    ]
+    assert usage_on_other == {
+        "gpt-4": {
+            "current_spend": 0.5,
+            "budget_limit": 1.0,
+            "time_period": "1h",
+            "budget_reset_at": (datetime.fromtimestamp(started_at, tz=timezone.utc) + timedelta(hours=1)).isoformat(),
+        }
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("opened_at", "charged_at"),
+    [
+        (datetime(2026, 1, 15, 12, tzinfo=timezone.utc), datetime(2026, 2, 1, 12, tzinfo=timezone.utc)),
+        (datetime(2026, 2, 15, 12, tzinfo=timezone.utc), datetime(2026, 3, 1, 12, tzinfo=timezone.utc)),
+    ],
+    ids=["opened_in_a_long_month", "opened_in_february"],
+)
+async def test_a_monthly_window_is_enforced_until_the_reset_it_reports(opened_at, charged_at):
+    """
+    Each charge sets when the shared spend counter expires, which is when the model is
+    allowed again, so it must match the reset /key/info reports.
+
+    Regression: the expiry was a month counted from the charge instead of the window
+    start, so a window opened in a month of another length stayed blocked past its
+    reported reset, or reported no reset while still blocked.
+    """
+    shared_redis = _SharedFakeRedis()
+    limiter = PROXY_VirtualKeyModelMaxBudgetLimiter(
+        dual_cache=DualCache(redis_cache=shared_redis), clock=charged_at.timestamp
+    )
+    model_max_budget = {"gpt-4": {"budget_limit": 1.0, "time_period": "1mo"}}
+    window: Final = {
+        "entity_type": Litellm_EntityType.KEY,
+        "entity_id": "vk-monthly",
+        "budget_model": "gpt-4",
+        "budget_duration": "1mo",
+    }
+    await shared_redis.async_set_cache(model_budget_start_time_cache_key(**window), opened_at.timestamp())
+
+    await _log_spend(limiter, key_hash="vk-monthly", model_max_budget=model_max_budget, response_cost=0.5)
+
+    usage: Final = await build_model_max_budget_usage(
+        entity_type=Litellm_EntityType.KEY,
+        entity_id="vk-monthly",
+        model_max_budget=model_max_budget,
+        cache=limiter.dual_cache,
+        now=charged_at,
+    )
+    reported_reset: Final = datetime.fromisoformat(usage["gpt-4"]["budget_reset_at"])
+    assert usage["gpt-4"]["current_spend"] == 0.5
+    assert shared_redis.expiry_seconds[model_budget_spend_cache_key(**window)] == int(
+        (reported_reset - charged_at).total_seconds()
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_window_that_ends_past_the_calendar_reports_no_reset():
+    """
+    Regression: a period long enough to end after year 9999 raised while formatting the
+    reset, so /key/info, /user/info and /team/info answered 500.
+    """
+    dual_cache = DualCache()
+    opened_at: Final = datetime(2026, 1, 15, 12, tzinfo=timezone.utc)
+    model_max_budget = {"gpt-4": {"budget_limit": 1.0, "time_period": "99999999h"}}
+    window: Final = {
+        "entity_type": Litellm_EntityType.KEY,
+        "entity_id": "vk-forever",
+        "budget_model": "gpt-4",
+        "budget_duration": "99999999h",
+    }
+    await dual_cache.async_set_cache(model_budget_spend_cache_key(**window), 0.25)
+    await dual_cache.async_set_cache(model_budget_start_time_cache_key(**window), opened_at.timestamp())
+
+    usage: Final = await build_model_max_budget_usage(
+        entity_type=Litellm_EntityType.KEY,
+        entity_id="vk-forever",
+        model_max_budget=model_max_budget,
+        cache=dual_cache,
+        now=opened_at + timedelta(days=1),
+    )
+
+    assert usage == {
+        "gpt-4": {
+            "current_spend": 0.25,
+            "budget_limit": 1.0,
+            "time_period": "99999999h",
+            "budget_reset_at": None,
+        }
+    }
+
+
+@pytest.fixture
+def host_timezone(request, monkeypatch):
+    monkeypatch.setenv("TZ", request.param)
+    time.tzset()
+    yield request.param
+    monkeypatch.undo()
+    time.tzset()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("host_timezone", ["UTC", "Europe/Amsterdam", "America/Los_Angeles"], indirect=True)
+async def test_a_monthly_reset_is_the_same_on_every_host_timezone(host_timezone):
+    """
+    Replicas behind one load balancer can run with different TZ settings, and they
+    must agree on when a monthly window ends.
+
+    Regression: months were counted on the host's local calendar, so a window opened
+    late on January 30 UTC ended a day earlier on a host in Amsterdam.
+    """
+    dual_cache = DualCache()
+    opened_at: Final = datetime(2027, 1, 30, 23, 30, tzinfo=timezone.utc)
+    model_max_budget = {"gpt-4": {"budget_limit": 1.0, "time_period": "1mo"}}
+    window: Final = {
+        "entity_type": Litellm_EntityType.KEY,
+        "entity_id": "vk-anywhere",
+        "budget_model": "gpt-4",
+        "budget_duration": "1mo",
+    }
+    await dual_cache.async_set_cache(model_budget_spend_cache_key(**window), 0.25)
+    await dual_cache.async_set_cache(model_budget_start_time_cache_key(**window), opened_at.timestamp())
+
+    usage: Final = await build_model_max_budget_usage(
+        entity_type=Litellm_EntityType.KEY,
+        entity_id="vk-anywhere",
+        model_max_budget=model_max_budget,
+        cache=dual_cache,
+        now=datetime(2027, 2, 10, tzinfo=timezone.utc),
+    )
+
+    assert usage["gpt-4"]["budget_reset_at"] == "2027-02-28T23:30:00+00:00"
+
+
+def _log_success(limiter, **kwargs):
+    return limiter.async_log_success_event(_success_kwargs(**kwargs), response_obj=None, start_time=None, end_time=None)
 
 
 @pytest.mark.asyncio
@@ -1459,7 +1816,7 @@ async def test_team_model_budget_is_shared_by_every_key_without_an_override(requ
     charge one team counter and are both refused once it is spent.
     """
     dual_cache = DualCache()
-    limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
+    limiter = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
     team_model_max_budget = {"gpt-4": {"budget_limit": 1.0, "time_period": "1d"}}
     check = lambda: limiter.is_team_within_model_budget(
         team_id="team-1",
@@ -1496,7 +1853,16 @@ async def test_team_model_budget_is_shared_by_every_key_without_an_override(requ
         entity_id="team-1",
         model_max_budget=team_model_max_budget,
         cache=dual_cache,
-    ) == {"gpt-4": {"current_spend": pytest.approx(1.2), "budget_limit": 1.0, "time_period": "1d"}}
+    ) == {
+        "gpt-4": {
+            "current_spend": pytest.approx(1.2),
+            "budget_limit": 1.0,
+            "time_period": "1d",
+            "budget_reset_at": await _reset_at_of_open_window(
+                dual_cache, Litellm_EntityType.TEAM, "team-1", "gpt-4", "1d"
+            ),
+        }
+    }
 
 
 @pytest.mark.asyncio
@@ -1507,7 +1873,7 @@ async def test_key_override_replaces_the_team_cap_for_that_model():
     the team counter.
     """
     dual_cache = DualCache()
-    limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
+    limiter = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
     team_model_max_budget = {"gpt-4": {"budget_limit": 1.0, "time_period": "1d"}}
     key_model_max_budget = {"gpt-4": {"budget_limit": 5.0, "time_period": "1d"}}
     await dual_cache.async_set_cache(key="team_model_spend:team-1:gpt-4:1d", value=9.0)
@@ -1540,7 +1906,7 @@ async def test_key_override_replaces_the_team_cap_for_that_model():
 async def test_key_entry_for_another_model_does_not_lift_the_team_cap():
     """A key override only covers the model it names; other models stay on the team counter."""
     dual_cache = DualCache()
-    limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
+    limiter = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
     team_model_max_budget = {"gpt-4": {"budget_limit": 1.0, "time_period": "1d"}}
     key_model_max_budget = {"claude-3": {"budget_limit": 5.0, "time_period": "1d"}}
 
@@ -1567,7 +1933,7 @@ async def test_key_entry_for_another_model_does_not_lift_the_team_cap():
 @pytest.mark.asyncio
 async def test_team_budget_leaves_unconfigured_models_alone():
     dual_cache = DualCache()
-    limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
+    limiter = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
     team_model_max_budget = {"gpt-4": {"budget_limit": 0.0, "time_period": "1d"}}
 
     assert (
@@ -1593,7 +1959,7 @@ async def test_team_budget_leaves_unconfigured_models_alone():
 async def test_team_counters_are_isolated_by_team_model_and_window():
     """Same model on two teams, and two models with different windows on one team, never share a counter."""
     dual_cache = DualCache()
-    limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
+    limiter = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
     team_model_max_budget = {
         "gpt-4": {"budget_limit": 10.0, "time_period": "1d"},
         "claude-3": {"budget_limit": 10.0, "time_period": "30d"},
@@ -1616,7 +1982,7 @@ async def test_team_counters_are_isolated_by_team_model_and_window():
 
 @pytest.mark.asyncio
 async def test_malformed_team_entry_is_skipped_and_its_sibling_still_enforced():
-    limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+    limiter = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
     team_model_max_budget = {
         "gpt-4": {"budget_limit": "not-a-number", "time_period": "1d"},
         "claude-3": {"budget_limit": 0.0, "time_period": "1d"},
@@ -1644,7 +2010,7 @@ async def test_malformed_team_entry_is_skipped_and_its_sibling_still_enforced():
 async def test_malformed_key_entry_does_not_count_as_an_override():
     """A key entry the limiter cannot enforce must not also switch the team cap off."""
     dual_cache = DualCache()
-    limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
+    limiter = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
     team_model_max_budget = {"gpt-4": {"budget_limit": 1.0, "time_period": "1d"}}
     key_model_max_budget = {"gpt-4": {"budget_limit": "not-a-number", "time_period": "1d"}}
 
@@ -1680,7 +2046,7 @@ async def test_malformed_key_entry_does_not_count_as_an_override():
 async def test_key_entry_without_a_spend_cap_does_not_lift_the_team_cap(key_entry):
     """A key row that only rate-limits the model, or has no enforceable cap, leaves the team cap in force."""
     dual_cache = DualCache()
-    limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
+    limiter = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
     team_model_max_budget = {"gpt-4": {"budget_limit": 1.0, "time_period": "1d"}}
     key_model_max_budget = {"gpt-4": key_entry}
 

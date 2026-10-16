@@ -63,6 +63,19 @@ impl EnvironmentProxies {
         .map(|proxy| proxy.no_proxy(no_proxy.clone()))
         .collect()
     }
+    #[cfg(feature = "mcp")]
+    pub(crate) fn mcp_proxies(&self) -> Vec<reqwest_mcp::Proxy> {
+        let no_proxy = reqwest_mcp::NoProxy::from_string(&self.no);
+        [
+            reqwest_mcp::Proxy::http(self.http.as_str()),
+            reqwest_mcp::Proxy::https(self.https.as_str()),
+            reqwest_mcp::Proxy::all(self.all.as_str()),
+        ]
+        .into_iter()
+        .filter_map(Result::ok)
+        .map(|proxy| proxy.no_proxy(no_proxy.clone()))
+        .collect()
+    }
 }
 
 #[cfg(test)]

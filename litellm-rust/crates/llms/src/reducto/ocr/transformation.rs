@@ -14,10 +14,12 @@ use crate::base_llm::ocr::{
     error::Error,
     handler::{CallHooks, OcrClient, build_http_request, guardrail_document},
     transformation::{
-        BaseOcrConfig, LiteLLMOcrResponse, OCR_INLINE_MAX_BYTES, OcrConnection, OcrDocument,
-        OcrPage, OcrRequestContext, OcrResponseFormat, OcrUsageInfo, PreparedOcrRequest,
+        BaseOcrConfig, OCR_INLINE_MAX_BYTES, OcrConnection, OcrRequestContext, PreparedOcrRequest,
         decode_and_normalize_response,
     },
+};
+use litellm_llms_types::formats::ocr::{
+    LiteLLMOcrResponse, OcrDocument, OcrPage, OcrResponseFormat, OcrUsageInfo,
 };
 
 const REDUCTO_API_BASE: &str = "https://platform.reducto.ai";
@@ -72,9 +74,9 @@ struct ReductoResult {
 #[serde_with::serde_as]
 #[derive(Clone, Debug, Default, Deserialize)]
 struct ReductoUsage {
-    #[serde_as(deserialize_as = "Option<litellm_core_utils::serde_compat::LaxI64>")]
+    #[serde_as(deserialize_as = "Option<litellm_llms_types::serde_compat::LaxI64>")]
     pub num_pages: Option<i64>,
-    #[serde_as(deserialize_as = "Option<litellm_core_utils::serde_compat::FiniteF64>")]
+    #[serde_as(deserialize_as = "Option<litellm_llms_types::serde_compat::FiniteF64>")]
     pub credits: Option<f64>,
 }
 
@@ -564,7 +566,10 @@ mod tests {
         let params = ReductoParseV3Config
             .map_ocr_params(&overrides, "parse-v3")
             .unwrap();
-        let client = OcrClient::for_test(reqwest::Client::new(), reqwest::Client::new());
+        let client = OcrClient::for_test(
+            litellm_http::Client::plain_for_test(),
+            litellm_http::Client::no_redirect_for_test(),
+        );
         let connection = OcrConnection::default();
         let document = serde_json::from_value(
             json!({"type":"document_url","document_url":"reducto://ready.pdf"}),

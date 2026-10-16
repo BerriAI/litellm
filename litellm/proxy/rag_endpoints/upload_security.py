@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from types import MappingProxyType
 from typing import Final, Protocol, TypeAlias, runtime_checkable
@@ -149,7 +149,7 @@ def resolve_malware_scanner(
         return EicarTestMalwareScanner()
     try:
         loaded: Final = load_instance(settings.malware_scanner, config_file_path)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001  # importing the operator's scanner module can raise anything
         return RagIngestConfigError(f"{MALWARE_SCANNER_OPTION}={settings.malware_scanner!r} could not be loaded: {e}")
     if isinstance(loaded, type):
         return RagIngestConfigError(
@@ -162,6 +162,27 @@ def resolve_malware_scanner(
         f"{MALWARE_SCANNER_OPTION}={settings.malware_scanner!r} resolved to a {type(loaded).__qualname__}, "
         "which has no scan(content: bytes) -> ScanResult method"
     )
+
+
+@dataclass(frozen=True, slots=True)
+class RagIngestControls:
+    settings: RagIngestSettings = field(default_factory=RagIngestSettings)
+    scanner: MalwareScanner = field(default_factory=EicarTestMalwareScanner)
+
+
+def load_rag_ingest_controls(
+    rag_ingest: object,
+    *,
+    config_file_path: str | None,
+    load_instance: InstanceLoader,
+) -> RagIngestControls | RagIngestConfigError:
+    settings: Final = parse_rag_ingest_settings(rag_ingest)
+    if isinstance(settings, RagIngestConfigError):
+        return settings
+    scanner: Final = resolve_malware_scanner(settings, config_file_path=config_file_path, load_instance=load_instance)
+    if isinstance(scanner, RagIngestConfigError):
+        return scanner
+    return RagIngestControls(settings=settings, scanner=scanner)
 
 
 @dataclass(frozen=True, slots=True)

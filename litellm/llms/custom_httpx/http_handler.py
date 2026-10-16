@@ -11,6 +11,7 @@ import weakref
 import zlib
 from collections.abc import AsyncGenerator, AsyncIterable, Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import aclosing
+from dataclasses import dataclass
 from http.cookiejar import CookieJar, DefaultCookiePolicy
 from io import BytesIO
 from types import MappingProxyType
@@ -62,14 +63,6 @@ try:
 except Exception:
     version = "0.0.0"
 
-try:
-    from brotli import Decompressor as _BrotliInflater
-    from brotli import error as _BrotliError
-except ImportError:
-    _BrotliInflater = None
-
-    class _BrotliError(Exception): ...
-
 
 # aiohttp 3.10+ exposes a `socket_factory` kwarg on TCPConnector. Older
 # versions don't — detect once and skip the keep-alive wiring there.
@@ -83,6 +76,8 @@ _RequestContent: TypeAlias = str | bytes | Iterable[bytes] | AsyncIterable[bytes
 _IPV4_LOCAL_ADDRESS: Final = "0.0.0.0"
 
 _HttpxTransportT = TypeVar("_HttpxTransportT", HTTPTransport, AsyncHTTPTransport)
+
+HTTPEventHooks: TypeAlias = Mapping[str, list[Callable[..., object]]]
 
 
 def http2_enabled() -> bool:
@@ -114,7 +109,7 @@ class _TCPConnectorKwargs(TypedDict, total=False):
     socket_factory: Callable[[_AddrInfo], socket.socket]
 
 
-def _build_aiohttp_keepalive_socket_factory() -> Callable[[_AddrInfo], socket.socket] | None:
+def build_aiohttp_keepalive_socket_factory() -> Callable[[_AddrInfo], socket.socket] | None:
     """
     Build a socket_factory that enables SO_KEEPALIVE on aiohttp TCP sockets.
 
@@ -147,6 +142,9 @@ def _build_aiohttp_keepalive_socket_factory() -> Callable[[_AddrInfo], socket.so
         return sock
 
     return factory
+
+
+_build_aiohttp_keepalive_socket_factory = build_aiohttp_keepalive_socket_factory
 
 
 def get_default_headers() -> dict:
@@ -457,6 +455,18 @@ def get_shared_realtime_ssl_context() -> bool | str | ssl.SSLContext:
     return _shared_realtime_ssl_context
 
 
+def realtime_ssl_for_url(url: str) -> bool | str | ssl.SSLContext | None:
+    if url.startswith("ws://"):
+        return None
+    shared: Final = get_shared_realtime_ssl_context()
+    if shared is not False:
+        return shared
+    unverified: Final = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    unverified.check_hostname = False
+    unverified.verify_mode = ssl.CERT_NONE
+    return unverified
+
+
 def mask_sensitive_info(error_message):
     # Find the start of the key parameter
     if isinstance(error_message, str):
@@ -631,8 +641,10 @@ def _headers_of_the_decoded_body(headers: httpx.Headers) -> httpx.Headers:
 
 
 def _encodings_of(headers: httpx.Headers) -> tuple[str, ...]:
-    declared: Final[str] = headers.get("content-encoding", "identity")
-    names: Final = tuple(name.strip().lower() for name in declared.split(",") if name.strip())
+    declared: Final = header_value(headers, "content-encoding")
+    names: Final = tuple(
+        name.strip().lower() for name in ("identity" if declared is None else declared).split(",") if name.strip()
+    )
     return tuple(name for name in names if name != "identity") or ("identity",)
 
 
@@ -714,9 +726,36 @@ class _ZlibDecoder:
             raise httpx.DecodingError("Compressed response ended before the end of the stream")
 
 
+class _BrotliInflater(Protocol):
+    def process(self, data: bytes, output_buffer_limit: int) -> bytes: ...
+
+    def is_finished(self) -> bool: ...
+
+
+@dataclass(frozen=True, slots=True)
+class _Brotli:
+    new_inflater: Callable[[], _BrotliInflater]
+    error: type[Exception]
+
+
+def _installed_brotli() -> _Brotli | None:
+    try:
+        from brotli import (  # pyright: ignore[reportMissingTypeStubs, reportUnknownVariableType]  # no stubs
+            Decompressor,
+            error,
+        )
+    except ImportError:
+        return None
+    return _Brotli(new_inflater=Decompressor, error=error)  # pyright: ignore[reportUnknownArgumentType]  # brotli has no stubs
+
+
+_BROTLI: Final = _installed_brotli()
+
+
 class _BrotliDecoder:
-    def __init__(self, inflate: "_BrotliInflater") -> None:
-        self._inflate: Final = inflate
+    def __init__(self, brotli: _Brotli) -> None:
+        self._inflate: Final = brotli.new_inflater()
+        self._error: Final = brotli.error
 
     def decode(self, data: bytes, max_output: int) -> bytes:
         def drained() -> Iterator[bytes]:
@@ -725,7 +764,7 @@ class _BrotliDecoder:
             while produced < max_output:
                 try:
                     piece: bytes = self._inflate.process(pending, output_buffer_limit=max_output - produced)
-                except _BrotliError as exc:
+                except self._error as exc:
                     raise httpx.DecodingError(str(exc)) from exc
                 produced += len(piece)
                 pending = b""
@@ -782,14 +821,14 @@ class _ChainedDecoder:
 
 
 def _bounded_decoder(headers: httpx.Headers, max_bytes: int) -> _BoundedDecoder:
-    brotli_inflater: Final = _BrotliInflater
+    brotli: Final = _BROTLI
     factories: Final[Mapping[str, Callable[[], _BoundedDecoder]]] = MappingProxyType(
         {
             "identity": _IdentityDecoder,
             "gzip": lambda: _ZlibDecoder(zlib.MAX_WBITS | 16),
             "x-gzip": lambda: _ZlibDecoder(zlib.MAX_WBITS | 16),
             "deflate": lambda: _ZlibDecoder(zlib.MAX_WBITS),
-            **({} if brotli_inflater is None else {"br": lambda: _BrotliDecoder(brotli_inflater())}),
+            **({} if brotli is None else {"br": lambda: _BrotliDecoder(brotli)}),
         }
     )
     encodings: Final = _encodings_of(headers)
@@ -858,7 +897,7 @@ class AsyncHTTPHandler:
     def create_client(
         self,
         timeout: float | httpx.Timeout | None,
-        event_hooks: Mapping[str, list[Callable[..., object]]] | None,
+        event_hooks: HTTPEventHooks | None,
         ssl_verify: VerifyTypes | None = None,
         shared_session: Optional["ClientSession"] = None,
     ) -> httpx.AsyncClient:
@@ -883,7 +922,7 @@ class AsyncHTTPHandler:
             timeout = _DEFAULT_TIMEOUT
         # Create a client with a connection pool
 
-        transport: Final = AsyncHTTPHandler._create_async_transport(
+        transport: Final = AsyncHTTPHandler.create_async_transport(
             ssl_context=ssl_config if isinstance(ssl_config, ssl.SSLContext) else None,
             ssl_verify=ssl_config if isinstance(ssl_config, bool) else None,
             shared_session=shared_session,
@@ -894,7 +933,7 @@ class AsyncHTTPHandler:
 
         return httpx.AsyncClient(
             transport=transport,
-            mounts=AsyncHTTPHandler._create_httpx_proxy_mounts(transport, verify=ssl_config, cert=cert),
+            mounts=AsyncHTTPHandler.create_httpx_proxy_mounts(transport, verify=ssl_config, cert=cert),
             event_hooks=event_hooks,
             timeout=timeout,
             verify=ssl_config,
@@ -990,7 +1029,8 @@ class AsyncHTTPHandler:
             if response.is_stream_consumed:
                 return _already_read_within(response, max_bytes)
             wire_limit: Final = _wire_byte_limit(response.headers, max_bytes)
-            if int(response.headers.get("content-length", "0")) > wire_limit:
+            content_length: Final = header_value(response.headers, "content-length")
+            if int("0" if content_length is None else content_length) > wire_limit:
                 raise HTTPResponseLimitError("Response exceeds the configured size limit")
             async with aclosing(_wire_bounded(response, wire_limit)) as wire:
                 return httpx.Response(
@@ -1040,12 +1080,13 @@ class AsyncHTTPHandler:
                 _anchor_handler_to(response, self)
             response.raise_for_status()
             return response
-        except (httpx.RemoteProtocolError, httpx.ConnectError):
+        except httpx.ConnectError:
             # Retry the request with a new session if there is a connection error
             new_client: Final = self.create_client(timeout=timeout, event_hooks=self.event_hooks)
             try:
-                return await self.single_connection_post_request(
+                return await self.single_connection_request(
                     url=url,
+                    method="POST",
                     client=new_client,
                     data=data,
                     json=json,
@@ -1181,12 +1222,13 @@ class AsyncHTTPHandler:
             response: Final = await self.client.send(req)
             response.raise_for_status()
             return response
-        except (httpx.RemoteProtocolError, httpx.ConnectError):
+        except httpx.ConnectError:
             # Retry the request with a new session if there is a connection error
             new_client: Final = self.create_client(timeout=timeout, event_hooks=self.event_hooks)
             try:
-                return await self.single_connection_post_request(
+                return await self.single_connection_request(
                     url=url,
+                    method="PATCH",
                     client=new_client,
                     data=data,
                     json=json,
@@ -1252,8 +1294,9 @@ class AsyncHTTPHandler:
             # Retry the request with a new session if there is a connection error
             new_client: Final = self.create_client(timeout=timeout, event_hooks=self.event_hooks)
             try:
-                return await self.single_connection_post_request(
+                return await self.single_connection_request(
                     url=url,
+                    method="DELETE",
                     client=new_client,
                     data=data,
                     json=json,
@@ -1269,9 +1312,10 @@ class AsyncHTTPHandler:
         except Exception as e:
             raise e
 
-    async def single_connection_post_request(
+    async def single_connection_request(
         self,
         url: str,
+        method: str,
         client: httpx.AsyncClient,
         data: dict | str | bytes | None = None,
         json: dict | None = None,
@@ -1281,7 +1325,7 @@ class AsyncHTTPHandler:
         content: _RequestContent | None = None,
     ):
         """
-        Making POST request for a single connection client.
+        Making request for a single connection client.
 
         Used for retrying connection client errors.
         """
@@ -1289,7 +1333,7 @@ class AsyncHTTPHandler:
         request_data, request_content = _prepare_request_data_and_content(data, content)
 
         req: Final = client.build_request(
-            "POST",
+            method,
             url,
             data=request_data,
             json=json,
@@ -1382,7 +1426,7 @@ class AsyncHTTPHandler:
             pass
 
     @staticmethod
-    def _create_async_transport(
+    def create_async_transport(
         ssl_context: ssl.SSLContext | None = None,
         ssl_verify: bool | None = None,
         shared_session: Optional["ClientSession"] = None,
@@ -1404,8 +1448,8 @@ class AsyncHTTPHandler:
         #########################################################
         # AIOHTTP TRANSPORT is off by default
         #########################################################
-        if AsyncHTTPHandler._should_use_aiohttp_transport():
-            return AsyncHTTPHandler._create_aiohttp_transport(
+        if AsyncHTTPHandler.should_use_aiohttp_transport():
+            return AsyncHTTPHandler.create_aiohttp_transport(
                 ssl_context=ssl_context,
                 ssl_verify=ssl_verify,
                 shared_session=shared_session,
@@ -1416,8 +1460,10 @@ class AsyncHTTPHandler:
         #########################################################
         return AsyncHTTPHandler._create_httpx_transport()
 
+    _create_async_transport = create_async_transport
+
     @staticmethod
-    def _should_use_aiohttp_transport() -> bool:
+    def should_use_aiohttp_transport() -> bool:
         """
         AiohttpTransport is the default transport for litellm.
 
@@ -1448,6 +1494,8 @@ class AsyncHTTPHandler:
         verbose_logger.debug("Using AiohttpTransport...")
         return True
 
+    _should_use_aiohttp_transport = should_use_aiohttp_transport
+
     @staticmethod
     def _get_ssl_connector_kwargs(
         ssl_verify: bool | None = None,
@@ -1477,7 +1525,7 @@ class AsyncHTTPHandler:
         return connector_kwargs
 
     @staticmethod
-    def _create_aiohttp_transport(
+    def create_aiohttp_transport(
         ssl_verify: bool | None = None,
         ssl_context: ssl.SSLContext | None = None,
         shared_session: Optional["ClientSession"] = None,
@@ -1526,7 +1574,7 @@ class AsyncHTTPHandler:
             transport_connector_kwargs["limit_per_host"] = AIOHTTP_CONNECTOR_LIMIT_PER_HOST
         # Returns None when SO_KEEPALIVE is disabled or aiohttp is too old to
         # accept socket_factory — version detection lives inside the builder.
-        socket_factory: Final = _build_aiohttp_keepalive_socket_factory()
+        socket_factory: Final = build_aiohttp_keepalive_socket_factory()
         if socket_factory is not None:
             transport_connector_kwargs["socket_factory"] = socket_factory
 
@@ -1554,6 +1602,8 @@ class AsyncHTTPHandler:
             ssl_verify=ssl_for_transport,
         )
 
+    _create_aiohttp_transport = create_aiohttp_transport
+
     @staticmethod
     def _create_httpx_transport() -> AsyncHTTPTransport | None:
         """
@@ -1568,7 +1618,7 @@ class AsyncHTTPHandler:
             return None
 
     @staticmethod
-    def _create_httpx_proxy_mounts(
+    def create_httpx_proxy_mounts(
         transport: LiteLLMAiohttpTransport | AsyncHTTPTransport | None,
         verify: VerifyTypes,
         cert: CertTypes | None,
@@ -1578,6 +1628,8 @@ class AsyncHTTPHandler:
         return _environment_proxy_mounts(
             lambda proxy_url: AsyncHTTPTransport(proxy=proxy_url, verify=verify, cert=cert, http2=http2_enabled())
         )
+
+    _create_httpx_proxy_mounts = create_httpx_proxy_mounts
 
 
 class HTTPHandler:
@@ -1589,10 +1641,12 @@ class HTTPHandler:
         ssl_verify: bool | str | None = None,
         disable_default_headers: bool
         | None = False,  # arize phoenix returns different API responses when user agent header in request
+        follow_redirects: bool = True,
     ):
         self.timeout = timeout
         self.ssl_verify = ssl_verify
         self.disable_default_headers = disable_default_headers
+        self.follow_redirects = follow_redirects
         self._owns_client = client is None
         self._heal_lock = threading.Lock()
         self._client = self.create_client() if client is None else client
@@ -1617,7 +1671,7 @@ class HTTPHandler:
             cert=cert,
             headers=default_headers,
             cookies=blocked_cookie_jar(),
-            follow_redirects=True,
+            follow_redirects=self.follow_redirects,
             http2=http2_enabled(),
         )
 
@@ -1643,7 +1697,7 @@ class HTTPHandler:
         self,
         url: str,
         params: dict | None = None,
-        headers: dict | None = None,
+        headers: Mapping[str, Any] | None = None,
         follow_redirects: bool | None = None,
         timeout: float | httpx.Timeout | None = None,
     ):
@@ -1971,7 +2025,7 @@ def get_async_httpx_client(
     return _new_client
 
 
-def _get_httpx_client(params: dict | None = None) -> HTTPHandler:
+def get_httpx_client(params: dict | None = None) -> HTTPHandler:
     """
     Retrieves the HTTP client from the cache
     If not present, creates a new client
@@ -2015,3 +2069,6 @@ def _get_httpx_client(params: dict | None = None) -> HTTPHandler:
         litellm_owned_client=True,
     )
     return _new_client
+
+
+_get_httpx_client = get_httpx_client

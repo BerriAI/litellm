@@ -11,7 +11,7 @@ Auth: Bearer token (litellm_params.api_key, BEDROCK_MANTLE_API_KEY, or the
 """
 
 from collections.abc import AsyncIterator, Iterator
-from typing import Any, Final
+from typing import TYPE_CHECKING, Final
 
 import httpx
 
@@ -26,11 +26,17 @@ from litellm.llms.openai.chat.gpt_5_transformation import is_gpt_reasoning_serie
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.utils import ModelResponse
 
 from ...base_llm.chat.transformation import BaseLLMException
 from ...bedrock.common_utils import BedrockError
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
 from ..common_utils import mantle_base_segment, split_mantle_region_prefix
+
+if TYPE_CHECKING:
+    from litellm.llms.openai.chat.gpt_transformation import (
+        OpenAIChatCompletionStreamingHandler,
+    )
 
 
 class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
@@ -71,7 +77,7 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
             or get_secret_str("AWS_REGION")
             or BEDROCK_MANTLE_DEFAULT_REGION
         )
-        BaseAWSLLM._validate_aws_region_name(region)
+        BaseAWSLLM.validate_aws_region_name(region)
         # The base path segment is data-driven per model (use_openai_responses_path
         # flag): gemma-4-* and gpt-5.x are served on /openai/v1, everything else on
         # /v1. An explicit api_base still wins over the derived default.
@@ -82,6 +88,15 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
         )
         dynamic_api_key: Final = self._resolve_bearer_token(api_key)
         return api_base, dynamic_api_key
+
+    def get_openai_compatible_provider_info(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+        litellm_params: GenericLiteLLMParams | None = None,
+        model: str | None = None,
+    ) -> tuple[str | None, str | None]:
+        return self._get_openai_compatible_provider_info(api_base, api_key, litellm_params, model)
 
     def validate_environment(
         self,
@@ -117,7 +132,31 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
             )
             if supported and param not in base_params
         )
-        return [*base_params, *extra_params]  # mutable-ok: fresh list required by the inherited signature
+        return [*base_params, *extra_params]
+
+    def map_openai_params(
+        self,
+        non_default_params: dict[str, object],  # mutable-ok: OpenAILikeChatConfig.map_openai_params signature
+        optional_params: dict[str, object],  # mutable-ok: OpenAILikeChatConfig.map_openai_params signature
+        model: str,
+        drop_params: bool,
+        replace_max_completion_tokens_with_max_tokens: bool = True,
+    ) -> dict[str, object]:  # mutable-ok: OpenAILikeChatConfig.map_openai_params signature
+        gpt_reasoning_model: Final = is_gpt_reasoning_series_name(model)
+        mapped_params: Final[dict[str, object]] = super().map_openai_params(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # OpenAILikeChatConfig types its params and result as bare dicts  # mutable-ok: parent returns a dict
+            non_default_params,
+            optional_params,
+            model,
+            drop_params,
+            replace_max_completion_tokens_with_max_tokens and not gpt_reasoning_model,
+        )
+        if not gpt_reasoning_model or "max_tokens" not in mapped_params:
+            return mapped_params
+        return {
+            param: value
+            for param, value in (("max_completion_tokens", mapped_params["max_tokens"]), *mapped_params.items())
+            if param != "max_tokens"
+        }
 
     def _supports_reasoning(self, model: str) -> bool:
         try:
@@ -128,10 +167,10 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
 
     def get_model_response_iterator(
         self,
-        streaming_response: Iterator[str] | AsyncIterator[str] | Any,
+        streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
         json_mode: bool | None = False,
-    ) -> Any:
+    ) -> "OpenAIChatCompletionStreamingHandler":
         from litellm.llms.openai.chat.gpt_transformation import (
             OpenAIChatCompletionStreamingHandler,
         )

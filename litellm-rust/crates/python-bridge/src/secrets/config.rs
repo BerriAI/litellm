@@ -182,14 +182,20 @@ fn parse_optional_system(
     serde_json::from_value(Value::String(value))
         .map(Some)
         .map_err(|error| {
-            ProjectionError::InvalidConfiguration(format!("secret manager system: {error}"))
+            ProjectionError::InvalidConfiguration(crate::coercion::ProjectionDetail::InvalidField {
+                field: "secret manager system",
+                source: error,
+            })
         })
 }
 
 fn parse_access_mode(field: &Field<'_>) -> Result<AccessMode, ProjectionError> {
     let value = field.strict_string()?;
     serde_json::from_value(Value::String(value)).map_err(|error| {
-        ProjectionError::InvalidConfiguration(format!("secret manager access mode: {error}"))
+        ProjectionError::InvalidConfiguration(crate::coercion::ProjectionDetail::InvalidField {
+            field: "secret manager access mode",
+            source: error,
+        })
     })
 }
 

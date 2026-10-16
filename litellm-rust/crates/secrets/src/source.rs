@@ -37,15 +37,14 @@ impl SecretSource for SecretResolver {
     }
 }
 
-#[derive(Default)]
 pub struct EnvironmentSecrets(SecretResolver);
 
 impl EnvironmentSecrets {
-    pub fn python_compatible() -> Self {
+    pub fn python_compatible(client: litellm_http::Client) -> Self {
         Self(SecretResolver::new_python_compatible(
             Arc::new(crate::SecretManagerState::default()),
             Arc::new(litellm_core_utils::settings::ProcessEnvironment),
-            crate::OidcResolver::default(),
+            crate::OidcResolver::new(client),
         ))
     }
 }
