@@ -3415,7 +3415,6 @@ def _complete_openrouter(ctx: CompletionDispatchContext) -> _CompletionDispatchR
 
     api_base = resolve_openrouter_api_base(  # rebind-ok: regional endpoint resolution for openrouter
         api_base=api_base,
-        region=getattr(ctx.provider_config, "region", None) or getattr(litellm.OpenrouterConfig, "region", None),
         litellm_params=litellm_params,
         optional_params=optional_params,  # pyright: ignore[reportUnknownArgumentType]  # untyped optional_params in dispatch context
     )
@@ -6791,7 +6790,6 @@ def embedding(
         elif custom_llm_provider == "openrouter":
             api_base = resolve_openrouter_api_base(  # rebind-ok: regional endpoint resolution for openrouter
                 api_base=api_base,
-                region=getattr(litellm.OpenrouterConfig, "region", None),
                 litellm_params=litellm_params_dict,  # pyright: ignore[reportUnknownArgumentType]  # untyped litellm_params in embedding
                 optional_params=optional_params,  # pyright: ignore[reportUnknownArgumentType]  # untyped optional_params in embedding
             )
