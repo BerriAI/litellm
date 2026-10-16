@@ -303,8 +303,11 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                             elif isinstance(inner, list):
                                 parts = (
                                     c.get("text", "")
-                                    if c.get("type") == "text"
-                                    else f"[Loaded tool: {c.get('tool_name', '')}]"
+                                    if (
+                                        part := cast(Mapping[str, object], c)  # cast-ok: dict checked below
+                                    ).get("type")
+                                    == "text"
+                                    else f"[Loaded tool: {part.get('tool_name', '')}]"
                                     for c in inner
                                     if isinstance(c, dict) and c.get("type") in {"text", "tool_reference"}
                                 )
