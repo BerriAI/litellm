@@ -1,4 +1,5 @@
 from collections.abc import Callable, Mapping
+from copy import deepcopy
 from datetime import datetime
 from functools import reduce
 from typing import Final
@@ -50,7 +51,26 @@ def _wrap_nested_level(value: object, depth: int) -> object:
         (detectors.mock_response, {"mock_response": "hi"}, True),
         (detectors.mock_response, {"mock_response": None}, False),
         (detectors.caller_client, {"client": object()}, True),
+        (detectors.caller_client, {"shared_session": object()}, True),
+        (detectors.caller_client, {"client": None, "shared_session": None}, False),
         (detectors.caller_client, {}, False),
+        (detectors.extra_body, {"extra_body": {"stream": True}}, True),
+        (detectors.extra_body, {"extra_body": {"stream": False}}, True),
+        (detectors.extra_body, {"extra_body": {}}, False),
+        (detectors.extra_body, {"extra_body": None}, False),
+        (detectors.extra_body, {}, False),
+        (detectors.provider_affinity, {"provider_affinity_header": "X-Session-ID", "session_id": "session-1"}, True),
+        (detectors.provider_affinity, {"provider_affinity_header": "X-Session-ID"}, True),
+        (
+            detectors.provider_affinity,
+            {"provider_affinity_header": "X-Session-ID", "extra_headers": {"x-session-id": "session-1"}},
+            True,
+        ),
+        (detectors.provider_affinity, {"provider_affinity_header": "Authorization"}, True),
+        (detectors.provider_affinity, {"provider_affinity_header": "invalid header"}, True),
+        (detectors.provider_affinity, {"provider_affinity_header": ""}, True),
+        (detectors.provider_affinity, {"provider_affinity_header": None, "session_id": "session-1"}, False),
+        (detectors.provider_affinity, {}, False),
         (detectors.streaming, {"stream": True}, True),
         (detectors.streaming, {"stream": False}, False),
         (detectors.timeout_variants, {"request_timeout": 5}, True),
@@ -122,6 +142,47 @@ def test_request_detectors(
 def test_cache_control_marks_handles_deeply_nested_input() -> None:
     nested_input: Final = reduce(_wrap_nested_level, range(5_000), {"cache_control": {}})
     assert detectors.cache_control_marks(call(input=nested_input))
+
+
+@pytest.mark.parametrize(
+    ("input_value", "expected"),
+    (
+        pytest.param(
+            [{"type": "reasoning", "id": "rs_00000000-0000-4000-8000-000000000000", "summary": list[object]()}],
+            True,
+            id="bridge-minted-reasoning",
+        ),
+        pytest.param(
+            [{"type": "reasoning", "encrypted_content": '[{"type":"thinking","thinking":"x","signature":"s"}]'}],
+            True,
+            id="bridge-thinking-blocks",
+        ),
+        pytest.param(
+            [{"type": "function_call", "id": "foreign-id", "call_id": "call_1", "name": "f", "arguments": "{}"}],
+            True,
+            id="foreign-tool-call-id",
+        ),
+        pytest.param(
+            [{"type": "reasoning", "id": "rs_1", "summary": list[object](), "status": None}],
+            True,
+            id="null-reasoning-status",
+        ),
+        pytest.param(
+            [{"type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "f", "arguments": "{}"}],
+            False,
+            id="native-tool-call-id",
+        ),
+        pytest.param([{"type": "reasoning", "id": "rs_1", "summary": list[object]()}], False, id="native-reasoning"),
+        pytest.param([{"role": "user", "content": "hi"}], False, id="message"),
+        pytest.param("hi", False, id="string"),
+        pytest.param([], False, id="empty"),
+        pytest.param(None, False, id="absent"),
+    ),
+)
+def test_input_rewrite_preserves_caller_input(input_value: object, expected: bool) -> None:
+    original: Final = deepcopy(input_value)
+    assert detectors.input_rewrite(call(input=input_value)) is expected
+    assert input_value == original
 
 
 @pytest.mark.parametrize(

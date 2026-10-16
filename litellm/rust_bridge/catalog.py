@@ -39,7 +39,7 @@ class Feature(str, Enum):
     PROXY_MCP_TOOLS = "proxy_mcp_tools"
     """litellm_proxy MCP tools that Python expands and may auto-execute."""
     CALLER_CLIENT = "caller_client"
-    """A caller-supplied HTTP client that Python sends through."""
+    """A caller-supplied HTTP client or shared session that Python sends through."""
     TIMEOUT_VARIANTS = "timeout_variants"
     """request_timeout, stream_timeout or httpx.Timeout phases beyond a plain timeout."""
     DROP_PARAMS = "drop_params"
@@ -60,6 +60,12 @@ class Feature(str, Enum):
     """A deployment id that Python encodes into the returned response id."""
     ENCODED_ITEM_IDS = "encoded_item_ids"
     """Input items carrying litellm-encoded ids that Python restores before sending."""
+    INPUT_REWRITE = "input_rewrite"
+    """Responses input items that Python normalizes or removes before replay."""
+    EXTRA_BODY = "extra_body"
+    """Extra body fields that Python transforms and merges into the provider request."""
+    PROVIDER_AFFINITY = "provider_affinity"
+    """A provider affinity header that Python validates and populates from the session id."""
     PRE_REQUEST_HOOK = "pre_request_hook"
     """A logger overriding async_pre_request_hook, which may rewrite the request."""
     WEBSEARCH_INTERCEPTION = "websearch_interception"
@@ -159,6 +165,9 @@ RESPONSES_PYTHON_FEATURES: Final = COMMON_PYTHON_FEATURES | {
     Feature.RETRIES_FALLBACKS,
     Feature.DEPLOYMENT_RESPONSE_ID,
     Feature.ENCODED_ITEM_IDS,
+    Feature.INPUT_REWRITE,
+    Feature.EXTRA_BODY,
+    Feature.PROVIDER_AFFINITY,
     Feature.RESPONSE_CACHE,
     Feature.MANAGED_RESOURCE_IDS,
     Feature.CACHE_CONTROL_MARKS,

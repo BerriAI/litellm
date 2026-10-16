@@ -16,6 +16,8 @@ from litellm.rust_bridge.catalog import Feature
 from litellm.rust_bridge.public_call import NativeCall, optional_mapping, optional_sequence, optional_str
 
 if TYPE_CHECKING:
+    from openai.types.responses import ResponseInputParam
+
     from litellm.responses.mcp.litellm_proxy_mcp_handler import ToolParam
     from litellm.types.llms.openai import ALL_RESPONSES_API_TOOL_PARAMS, ResponsesAPIOptionalRequestParams
 
@@ -36,7 +38,15 @@ def mock_response(request: NativeCall) -> bool:
 
 
 def caller_client(request: NativeCall) -> bool:
-    return _present(request, "client")
+    return _present(request, "client") or _present(request, "shared_session")
+
+
+def extra_body(request: NativeCall) -> bool:
+    return bool(request.resolved.get("extra_body"))
+
+
+def provider_affinity(request: NativeCall) -> bool:
+    return _present(request, "provider_affinity_header")
 
 
 def streaming(request: NativeCall) -> bool:
@@ -127,6 +137,20 @@ def managed_resource_ids(request: NativeCall) -> bool:
     return update_responses_input_with_model_file_ids(input_value, model_id, file_ids) != input_value or (
         rewritten_tools != tools
     )
+
+
+def input_rewrite(request: NativeCall) -> bool:
+    from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+
+    input_value: Final = request.resolved.get("input")
+    if not isinstance(input_value, list):
+        return False
+    config: Final = OpenAIResponsesAPIConfig()
+    replayable: Final = config._drop_bridge_minted_reasoning_items(  # pyright: ignore[reportPrivateUsage]  # use the handler's replay policy
+        cast("ResponseInputParam", input_value),  # cast-ok: the handler accepts unvalidated input items
+    )
+    normalized: Final = config._validate_input_param(replayable)  # pyright: ignore[reportPrivateUsage]  # use the handler's normalization
+    return config._drop_foreign_tool_call_item_ids(normalized) != input_value  # pyright: ignore[reportPrivateUsage]  # use the handler's id cleanup
 
 
 def _children(value: object) -> tuple[object, ...]:
