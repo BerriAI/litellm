@@ -18,6 +18,7 @@ from litellm.rust_bridge.public_call import (
     optional_sequence,
     optional_str,
     signature,
+    without,
 )
 from litellm.types.utils import ModelResponse
 from litellm.utils import CustomStreamWrapper
@@ -103,7 +104,7 @@ async def acompletion(*args: object, **kwargs: object) -> ChatResult:  # kwargs-
     python: Final = _PYTHON_ACOMPLETION
     return await _ADISPATCH.arun(
         args,
-        kwargs,
+        without(kwargs, "acompletion"),
         python=python,
         binding=NATIVE_ACOMPLETION,
         native=native_call_hook,

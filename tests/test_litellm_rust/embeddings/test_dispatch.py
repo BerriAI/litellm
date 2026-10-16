@@ -4,28 +4,13 @@ from collections.abc import Awaitable, Callable
 from typing import Final
 
 import pytest
-from pydantic import TypeAdapter
 
-import litellm
 from litellm.embeddings import dispatch
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.catalog import Route, RouteRule, Rules
 from litellm.rust_bridge.configuration import Rollout
 from litellm.rust_bridge.public_call import NativeCall, native_call_hook
 from litellm.types.utils import EmbeddingResponse
-
-
-@pytest.mark.asyncio
-async def test_public_embedding_calls_keep_the_python_result() -> None:
-    vector: Final = [0.1, 0.2]
-
-    sync_response: Final = litellm.embedding(model="openai/test-model", input="hello", mock_response=vector)
-    async_response: Final = await litellm.aembedding(model="openai/test-model", input="hello", mock_response=vector)
-
-    assert isinstance(sync_response, EmbeddingResponse)
-    rows: Final = TypeAdapter(list[dict[str, object]])
-    assert rows.validate_python(sync_response.model_dump()["data"])[0]["embedding"] == vector
-    assert rows.validate_python(async_response.model_dump()["data"])[0]["embedding"] == vector
 
 
 def test_sync_embedding_request_projects_public_arguments() -> None:

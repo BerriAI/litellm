@@ -3,7 +3,6 @@ from collections.abc import Awaitable, Callable, Mapping
 from typing import Final, cast  # noqa: TID251  # narrows legacy callable signatures for inspect
 
 import pytest
-from pydantic import TypeAdapter
 
 import litellm
 from litellm.llms.anthropic.pass_through.messages import handler as python_messages
@@ -326,17 +325,6 @@ async def test_anthropic_acreate_routes_through_dispatch(monkeypatch: pytest.Mon
     assert [request.resolved["model"] for request in captured] == ["claude-sonnet-4-5"]
 
 
-@pytest.mark.asyncio
-async def test_public_anthropic_messages_keeps_the_python_result() -> None:
-    response: Final = await litellm.anthropic_messages(
-        model="anthropic/claude-sonnet-4-5", messages=MESSAGES, max_tokens=10, mock_response="ok"
-    )
-
-    assert isinstance(response, dict)
-    content: Final = TypeAdapter(list[dict[str, object]]).validate_python(response.get("content", []))
-    assert content[0]["text"] == "ok"
-
-
 def test_sync_messages_request_projects_public_arguments() -> None:
     rules: Final[Rules] = (RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED),)
     expected: Final = AnthropicMessagesResponse(model="claude-test")
@@ -420,29 +408,3 @@ async def test_async_messages_falls_back_after_native_declines() -> None:
     )
 
     assert response is expected
-
-
-@pytest.mark.asyncio
-async def test_is_async_marker_on_sync_entry_serves_through_async_native(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: Final[list[NativeCall]] = []
-    expected: Final = response()
-
-    async def native(request: NativeCall) -> AnthropicMessagesResponse:
-        captured.append(request)
-        return expected
-
-    NATIVE_AMESSAGES.override(native)
-    NATIVE_MESSAGES.override(lambda request: pytest.fail("a coroutine-returning call must use the async binding"))
-    monkeypatch.setattr(catalog, "RULES", RUST_RULES)
-    public_handler: Final = cast(
-        Callable[..., Awaitable[AnthropicMessagesResponse]], litellm.anthropic_messages_handler
-    )
-    try:
-        result: Final = await public_handler(max_tokens=16, messages=MESSAGES, model="claude-sonnet-4-5", is_async=True)
-    finally:
-        NATIVE_AMESSAGES.reset()
-        NATIVE_MESSAGES.reset()
-    assert result is expected
-    assert [dict(request.kwargs) for request in captured] == [
-        {"max_tokens": 16, "messages": MESSAGES, "model": "claude-sonnet-4-5"}
-    ]

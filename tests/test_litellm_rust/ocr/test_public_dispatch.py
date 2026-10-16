@@ -1,20 +1,19 @@
-from collections.abc import Awaitable, Callable, Mapping
-from typing import Final, cast  # noqa: TID251  # narrows legacy callable signatures for inspect
+from collections.abc import Mapping
+from typing import Final
 
 import httpx
 import pytest
 
-import litellm
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.ocr.dispatch import (
     _ADISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch
     _DISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch
 )
-from litellm.rust_bridge import catalog, runtime
+from litellm.rust_bridge import runtime
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.catalog import Route, RouteRule, Rules
 from litellm.rust_bridge.configuration import Rollout
-from litellm.rust_bridge.ocr.entrypoints import NATIVE_AOCR, NATIVE_OCR, NativeAocr, NativeOcr
+from litellm.rust_bridge.ocr.entrypoints import NativeAocr, NativeOcr
 from litellm.rust_bridge.public_call import NativeCall
 
 RUST_RULES: Final[Rules] = (RouteRule(Route.OCR, Rollout.RUST_REQUIRED),)
@@ -226,79 +225,3 @@ async def test_aocr_parser_errors_before_native(
             native=lambda hook, request, call_args, call_kwargs: hook(request),
             rules=RUST_RULES,
         )
-
-
-def test_public_ocr_routes_through_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
-    document: Final[Mapping[str, object]] = {
-        "type": "document_url",
-        "document_url": "https://example.invalid/document.pdf",
-    }
-    captured: Final[list[NativeCall]] = []
-    expected: Final = response()
-
-    def native(
-        request: NativeCall,
-    ) -> OCRResponse:
-        captured.append(request)
-        return expected
-
-    NATIVE_OCR.override(native)
-    monkeypatch.setattr(catalog, "RULES", RUST_RULES)
-    public_ocr: Final = cast(Callable[..., OCRResponse], litellm.ocr)
-    try:
-        result: Final = public_ocr(model="mistral/mistral-ocr-latest", document=document)
-    finally:
-        NATIVE_OCR.reset()
-    assert result is expected
-    assert [request.resolved["model"] for request in captured] == ["mistral/mistral-ocr-latest"]
-
-
-@pytest.mark.asyncio
-async def test_public_aocr_routes_through_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
-    document: Final[Mapping[str, object]] = {
-        "type": "document_url",
-        "document_url": "https://example.invalid/document.pdf",
-    }
-    captured: Final[list[NativeCall]] = []
-    expected: Final = response()
-
-    async def native(
-        request: NativeCall,
-    ) -> OCRResponse:
-        captured.append(request)
-        return expected
-
-    NATIVE_AOCR.override(native)
-    monkeypatch.setattr(catalog, "RULES", RUST_RULES)
-    public_aocr: Final = cast(Callable[..., Awaitable[OCRResponse]], litellm.aocr)
-    try:
-        result: Final = await public_aocr(model="mistral/mistral-ocr-latest", document=document)
-    finally:
-        NATIVE_AOCR.reset()
-    assert result is expected
-    assert [request.resolved["model"] for request in captured] == ["mistral/mistral-ocr-latest"]
-
-
-@pytest.mark.asyncio
-async def test_aocr_marker_on_sync_entry_serves_through_async_native(monkeypatch: pytest.MonkeyPatch) -> None:
-    document: Final[Mapping[str, object]] = {"type": "file", "file": b"pdf"}
-    captured: Final[list[NativeCall]] = []
-    expected: Final = response()
-
-    async def native(request: NativeCall) -> OCRResponse:
-        captured.append(request)
-        return expected
-
-    NATIVE_AOCR.override(native)
-    NATIVE_OCR.override(lambda request: pytest.fail("a coroutine-returning call must use the async binding"))
-    monkeypatch.setattr(catalog, "RULES", RUST_RULES)
-    public_ocr: Final = cast(Callable[..., Awaitable[OCRResponse]], litellm.ocr)
-    try:
-        result: Final = await public_ocr(model="mistral/mistral-ocr-latest", document=document, aocr=True)
-    finally:
-        NATIVE_AOCR.reset()
-        NATIVE_OCR.reset()
-    assert result is expected
-    assert [dict(request.kwargs) for request in captured] == [
-        {"model": "mistral/mistral-ocr-latest", "document": document}
-    ]

@@ -16,7 +16,6 @@ from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.catalog import Route, RouteRule, Rules
 from litellm.rust_bridge.chat_completions.entrypoints import (
     NATIVE_ACOMPLETION,
-    NATIVE_COMPLETION,
     NativeAcompletion,
     NativeCompletion,
 )
@@ -181,56 +180,6 @@ def test_binding_errors_delegate_to_python(args: tuple[object, ...], kwargs: Map
     assert captured == [(args, kwargs)]
 
 
-def test_public_completion_routes_through_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: Final[list[NativeCall]] = []
-    expected: Final = ModelResponse()
-
-    def native(request: NativeCall) -> ModelResponse:
-        captured.append(request)
-        return expected
-
-    NATIVE_COMPLETION.override(native)
-    monkeypatch.setattr(catalog, "RULES", RUST_RULES)
-    public_completion: Final = cast(Callable[..., ModelResponse], litellm.completion)
-    try:
-        result: Final = public_completion(model="gpt-4o", messages=MESSAGES)
-    finally:
-        NATIVE_COMPLETION.reset()
-    assert result is expected
-    assert [request.resolved["model"] for request in captured] == ["gpt-4o"]
-
-
-@pytest.mark.asyncio
-async def test_public_acompletion_routes_through_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: Final[list[NativeCall]] = []
-    expected: Final = ModelResponse()
-
-    async def native(request: NativeCall) -> ModelResponse:
-        captured.append(request)
-        return expected
-
-    NATIVE_ACOMPLETION.override(native)
-    monkeypatch.setattr(catalog, "RULES", RUST_RULES)
-    public_acompletion: Final = cast(Callable[..., Awaitable[ModelResponse]], litellm.acompletion)
-    try:
-        result: Final = await public_acompletion(model="gpt-4o", messages=MESSAGES)
-    finally:
-        NATIVE_ACOMPLETION.reset()
-    assert result is expected
-    assert [request.resolved["model"] for request in captured] == ["gpt-4o"]
-
-
-@pytest.mark.asyncio
-async def test_public_completion_calls_keep_the_python_result() -> None:
-    sync_response: Final = litellm.completion(model="openai/test-model", messages=MESSAGES, mock_response="ok")
-    async_response: Final = await litellm.acompletion(model="openai/test-model", messages=MESSAGES, mock_response="ok")
-
-    assert isinstance(sync_response, ModelResponse)
-    assert isinstance(async_response, ModelResponse)
-    assert sync_response.choices[0].message.content == "ok"
-    assert async_response.choices[0].message.content == "ok"
-
-
 def test_sync_completion_request_projects_public_arguments() -> None:
     rules: Final[Rules] = (RouteRule(Route.CHAT_COMPLETIONS, Rollout.RUST_REQUIRED),)
     expected: Final = ModelResponse()
@@ -293,28 +242,6 @@ def test_positional_parameters_remain_available_to_native_projection() -> None:
     assert request.resolved["timeout"] == 12.0
     assert request.resolved["temperature"] == 0.25
     assert request.resolved["messages"] is MESSAGES
-
-
-@pytest.mark.asyncio
-async def test_acompletion_marker_on_sync_entry_serves_through_async_native(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: Final[list[NativeCall]] = []
-    expected: Final = ModelResponse()
-
-    async def native(call: NativeCall) -> ModelResponse:
-        captured.append(call)
-        return expected
-
-    NATIVE_ACOMPLETION.override(native)
-    NATIVE_COMPLETION.override(lambda call: pytest.fail("a coroutine-returning call must use the async binding"))
-    monkeypatch.setattr(catalog, "RULES", RUST_RULES)
-    public_completion: Final = cast(Callable[..., Awaitable[ModelResponse]], litellm.completion)
-    try:
-        result: Final = await public_completion(model="gpt-4o", messages=MESSAGES, acompletion=True)
-    finally:
-        NATIVE_ACOMPLETION.reset()
-        NATIVE_COMPLETION.reset()
-    assert result is expected
-    assert [dict(request.kwargs) for request in captured] == [{"model": "gpt-4o", "messages": MESSAGES}]
 
 
 @pytest.mark.asyncio

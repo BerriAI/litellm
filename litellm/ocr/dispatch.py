@@ -16,6 +16,7 @@ from litellm.rust_bridge.public_call import (
     native_call_hook,
     optional_str,
     signature,
+    without,
 )
 
 __all__ = ("aocr", "ocr")
@@ -93,7 +94,7 @@ def ocr(
 async def aocr(*args: object, **kwargs: object) -> OCRResponse:  # kwargs-ok: preserve the public OCR call shape
     return await _ADISPATCH.arun(
         args,
-        kwargs,
+        without(kwargs, "aocr"),
         python=runtime.NO_PYTHON,
         binding=NATIVE_AOCR,
         native=native_call_hook,

@@ -14,6 +14,7 @@ from litellm.rust_bridge.public_call import (
     native_call_hook,
     optional_str,
     signature,
+    without,
 )
 from litellm.rust_bridge.responses.entrypoints import (
     NATIVE_ARESPONSES,
@@ -101,7 +102,7 @@ async def aresponses(*args: object, **kwargs: object) -> ResponsesResult:  # kwa
     python: Final = _PYTHON_ARESPONSES
     return await _ADISPATCH.arun(
         args,
-        kwargs,
+        without(kwargs, "aresponses"),
         python=python,
         binding=NATIVE_ARESPONSES,
         native=native_call_hook,

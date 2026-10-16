@@ -22,6 +22,7 @@ from litellm.rust_bridge.public_call import (
     optional_sequence,
     optional_str,
     signature,
+    without,
 )
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 
@@ -138,7 +139,7 @@ async def anthropic_messages(*args: object, **kwargs: object) -> MessagesResult:
     python: Final = _PYTHON_AMESSAGES
     return await _ADISPATCH.arun(
         args,
-        kwargs,
+        without(kwargs, "is_async"),
         python=python,
         binding=NATIVE_AMESSAGES,
         native=native_call_hook,

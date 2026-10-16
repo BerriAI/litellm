@@ -113,6 +113,10 @@ def _without_bags(legacy: inspect.Signature, named: Mapping[str, object]) -> Map
     return MappingProxyType({name: value for name, value in named.items() if legacy.parameters[name].kind not in _BAGS})
 
 
+def without(kwargs: Mapping[str, object], flag: str) -> Mapping[str, object]:
+    return MappingProxyType({name: value for name, value in kwargs.items() if name != flag})
+
+
 def keyword_arguments(
     legacy: inspect.Signature, args: tuple[object, ...], kwargs: Mapping[str, object], *, without: str
 ) -> Mapping[str, object]:

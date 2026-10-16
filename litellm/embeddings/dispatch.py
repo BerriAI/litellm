@@ -17,6 +17,7 @@ from litellm.rust_bridge.public_call import (
     native_call_hook,
     optional_str,
     signature,
+    without,
 )
 from litellm.types.utils import EmbeddingResponse
 
@@ -85,7 +86,7 @@ def embedding(
 async def aembedding(*args: object, **kwargs: object) -> EmbeddingResponse:  # kwargs-ok: preserve the public call shape
     return await _ADISPATCH.arun(
         args,
-        kwargs,
+        without(kwargs, "aembedding"),
         python=_PYTHON_AEMBEDDING,
         binding=NATIVE_AEMBEDDING,
         native=native_call_hook,
