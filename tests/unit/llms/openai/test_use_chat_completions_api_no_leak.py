@@ -52,7 +52,7 @@ def test_completion_does_not_leak_flag_into_provider_request_body():
     mock_raw_response.parse.return_value = mock_response
 
     mock_client = MagicMock()
-    mock_client.chat.completions.with_raw_response.create.return_value = (
+    mock_client.post.return_value = (
         mock_raw_response
     )
 
@@ -65,7 +65,7 @@ def test_completion_does_not_leak_flag_into_provider_request_body():
     )
 
     create_kwargs = (
-        mock_client.chat.completions.with_raw_response.create.call_args.kwargs
+        mock_client.post.call_args.kwargs
     )
     assert "use_chat_completions_api" not in create_kwargs
     assert "use_chat_completions_api" not in (create_kwargs.get("extra_body") or {})

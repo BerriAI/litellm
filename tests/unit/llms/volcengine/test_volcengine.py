@@ -127,7 +127,7 @@ class TestVolcEngineConfig:
         mock_raw_response.parse.return_value = ModelResponse()
 
         with patch.object(
-            client.chat.completions.with_raw_response, "create", mock_raw_response
+            client, "post", mock_raw_response
         ) as mock_create:
             completion(
                 model="volcengine/doubao-seed-1.6",
@@ -144,11 +144,6 @@ class TestVolcEngineConfig:
             )
 
             mock_create.assert_called_once()
-            print(mock_create.call_args.kwargs)
+            print(mock_create.call_args.kwargs["body"])
             # Fixed: thinking disabled should appear in extra_body with original structure
-            assert (
-                "extra_body" in mock_create.call_args.kwargs
-                and "thinking" in mock_create.call_args.kwargs.get("extra_body", {})
-                and mock_create.call_args.kwargs.get("extra_body", {})["thinking"]
-                == {"type": "disabled"}
-            )
+            assert mock_create.call_args.kwargs["options"]["extra_json"]["thinking"] == {"type": "disabled"}

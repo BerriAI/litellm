@@ -98,7 +98,7 @@ async def test_litellm_gateway_from_sdk():
     openai_client = OpenAI(api_key="fake-key")
 
     with patch.object(
-        openai_client.chat.completions.with_raw_response, "create", new=MagicMock()
+        openai_client, "post", new=MagicMock()
     ) as mock_call:
         try:
             completion(
@@ -114,9 +114,9 @@ async def test_litellm_gateway_from_sdk():
 
         mock_call.assert_called_once()
 
-        print("Call KWARGS - {}".format(mock_call.call_args.kwargs))
+        print("Call KWARGS - {}".format(mock_call.call_args.kwargs["body"]))
 
-        assert "hello" in mock_call.call_args.kwargs["extra_body"]
+        assert "hello" in mock_call.call_args.kwargs["options"]["extra_json"]
 
 
 @pytest.mark.parametrize("is_async", (False, True))
@@ -408,7 +408,7 @@ async def test_litellm_gateway_from_sdk_structured_output():
     openai_client = OpenAI(api_key="fake-key")
 
     with patch.object(
-        openai_client.chat.completions, "create", new=MagicMock()
+        openai_client, "post", new=MagicMock()
     ) as mock_call:
         try:
             litellm.completion(
@@ -427,8 +427,8 @@ async def test_litellm_gateway_from_sdk_structured_output():
 
         mock_call.assert_called_once()
 
-        print("Call KWARGS - {}".format(mock_call.call_args.kwargs))
-        json_schema = mock_call.call_args.kwargs["response_format"]
+        print("Call KWARGS - {}".format(mock_call.call_args.kwargs["body"]))
+        json_schema = mock_call.call_args.kwargs["body"]["response_format"]
         assert "json_schema" in json_schema
 
 
@@ -528,8 +528,7 @@ def test_litellm_gateway_from_sdk_with_response_cost_in_additional_headers():
     )
 
     with patch.object(
-        openai_client.chat.completions.with_raw_response,
-        "create",
+        openai_client, "post",
         return_value=mock_response,
     ) as mock_call:
         response = litellm.completion(

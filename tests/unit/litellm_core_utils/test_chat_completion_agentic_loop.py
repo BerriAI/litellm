@@ -171,7 +171,7 @@ async def test_internal_control_fields_never_leak_into_provider_body(restore_cal
         ]
     )
     mock_client = MagicMock()
-    mock_client.chat.completions.with_raw_response.create = create
+    mock_client.post = create
 
     response = await litellm.acompletion(
         model="openai/gpt-4o-mini",

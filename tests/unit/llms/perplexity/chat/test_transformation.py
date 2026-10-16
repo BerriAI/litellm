@@ -100,8 +100,7 @@ class TestPerplexityReasoning:
         openai_client = OpenAI(api_key="fake-api-key")
 
         with patch.object(
-            openai_client.chat.completions.with_raw_response,
-            "create",
+            openai_client, "post",
             side_effect=_return_pydantic_obj,
         ) as mock_client:
             response = completion(
@@ -121,7 +120,7 @@ class TestPerplexityReasoning:
 
             # Get the request data from the mock call
             call_args = mock_client.call_args
-            request_data = call_args.kwargs
+            request_data = call_args.kwargs["body"]
 
             # Verify reasoning_effort was included in the request
             assert "reasoning_effort" in request_data

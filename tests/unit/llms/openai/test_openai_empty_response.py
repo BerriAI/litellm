@@ -27,7 +27,7 @@ class TestEmptyResponseHandling:
         mock_raw_response.parse.return_value = ""  # Empty string response
 
         mock_client = MagicMock()
-        mock_client.chat.completions.with_raw_response.create.return_value = (
+        mock_client.post.return_value = (
             mock_raw_response
         )
 
@@ -53,7 +53,7 @@ class TestEmptyResponseHandling:
         mock_raw_response.parse.return_value = None
 
         mock_client = MagicMock()
-        mock_client.chat.completions.with_raw_response.create.return_value = (
+        mock_client.post.return_value = (
             mock_raw_response
         )
 
@@ -80,7 +80,7 @@ class TestEmptyResponseHandling:
         mock_raw_response.parse.return_value = mock_response
 
         mock_client = MagicMock()
-        mock_client.chat.completions.with_raw_response.create.return_value = (
+        mock_client.post.return_value = (
             mock_raw_response
         )
 
@@ -109,7 +109,7 @@ class TestEmptyResponseHandling:
         mock_raw_response.parse.return_value = mock_stream
 
         mock_client = MagicMock()
-        mock_client.chat.completions.with_raw_response.create.return_value = (
+        mock_client.post.return_value = (
             mock_raw_response
         )
 
