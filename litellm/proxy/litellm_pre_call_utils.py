@@ -87,6 +87,7 @@ from litellm.types.integrations.anthropic_cache_control_hook import GATEWAY_INJE
 _SPECIAL_HEADERS_CACHE: Final = frozenset(str(v.value).lower() for v in SpecialHeaders)
 
 _REDACTED_HEADER_VALUE: Final = "***REDACTED***"
+_DECODED_JSON: Final = TypeAdapter(object)
 _CREDENTIAL_HEADER_NAMES: Final = SpecialHeaders.litellm_credential_header_names() | frozenset(
     {"cookie", "proxy-authorization"}
 )
@@ -503,7 +504,7 @@ def _normalized_metadata_object(field: str, value: object) -> Mapping[str, objec
     """
     if isinstance(value, dict):
         return value
-    if isinstance(value, str) and isinstance((parsed := safe_json_loads(value)), dict):
+    if isinstance(value, str) and isinstance((parsed := _DECODED_JSON.validate_python(safe_json_loads(value))), dict):
         return parsed
     raise _invalid_metadata_type_error(field=field, value=value)
 
@@ -585,13 +586,17 @@ def _key_or_team_allows_client_pricing_override(
     )
 
 
+def _opts_out_of_message_redaction(fields: Mapping[str, object]) -> bool:
+    return "turn_off_message_logging" in fields and _is_false_like(fields["turn_off_message_logging"])
+
+
 def _strip_client_message_redaction_opt_out(data: dict[str, object]) -> None:
     stripped: Final[list[str]] = []
-    if "turn_off_message_logging" in data and _is_false_like(data["turn_off_message_logging"]):
+    if _opts_out_of_message_redaction(data):
         stripped.append("turn_off_message_logging")
         data.pop("turn_off_message_logging", None)
     for slot_label, metadata in iter_client_callback_metadata_dicts(data):
-        if "turn_off_message_logging" in metadata and _is_false_like(metadata["turn_off_message_logging"]):
+        if _opts_out_of_message_redaction(metadata):
             stripped.append(f"{slot_label}.turn_off_message_logging")
             metadata.pop("turn_off_message_logging", None)
     if stripped:

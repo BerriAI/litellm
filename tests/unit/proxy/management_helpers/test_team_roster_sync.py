@@ -586,6 +586,12 @@ class _PubSubRedisCache:
         return self._client
 
 
+async def _until_reached_or_done(signal: asyncio.Event, sync: "asyncio.Task[object]") -> None:
+    reached: Final = asyncio.create_task(signal.wait())
+    _ = await asyncio.wait((reached, sync), return_when=asyncio.FIRST_COMPLETED)
+    _ = reached.cancel()
+
+
 async def _drain_publishes() -> None:
     await asyncio.gather(*pubsub_module._pending_publishes)  # pyright: ignore[reportPrivateUsage]  # drain module-level tasks
 
@@ -621,8 +627,10 @@ async def test_removing_hundreds_of_members_at_once_broadcasts_every_key_and_mem
 class _WedgedPublishRedisClient:
     def __init__(self) -> None:
         self.release = asyncio.Event()
+        self.reached = asyncio.Event()
 
     async def _send(self, messages: Sequence[str]) -> None:
+        self.reached.set()
         await self.release.wait()
 
     async def publish(self, channel: str, message: str) -> int:
@@ -672,7 +680,7 @@ async def test_removing_members_clears_this_worker_before_waiting_on_a_wedged_re
         return_value=_PubSubRedisCache(client),
     ):
         sync = asyncio.create_task(_sync(prisma, RosterTarget(member_ids=frozenset()), cache))
-        await asyncio.sleep(0.1)
+        await _until_reached_or_done(client.reached, sync)
         still_cached = [key for key in seeded if cache.in_memory_cache_for(key).get_cache(key) is not None]
         client.release.set()
         outcome = await sync
@@ -752,7 +760,7 @@ async def test_removing_members_clears_the_redis_copies_before_waiting_on_a_wedg
         return_value=_PubSubRedisCache(client),
     ):
         sync = asyncio.create_task(_sync(prisma, RosterTarget(member_ids=frozenset()), cache))
-        await asyncio.sleep(0.1)
+        await _until_reached_or_done(client.reached, sync)
         refilled = [key for key in member_keys if await cache.async_get_cache(key=key) is not None]
         client.release.set()
         outcome = await sync
@@ -767,9 +775,11 @@ class _SlowToAcknowledgeRedisCache(_AuthRedisCache):
     def __init__(self, entries: dict[str, object]) -> None:
         super().__init__(entries)
         self.acknowledge = asyncio.Event()
+        self.reached = asyncio.Event()
 
     async def delete_cache_keys(self, keys: Sequence[str]) -> None:
         await super().delete_cache_keys(keys)
+        self.reached.set()
         await self.acknowledge.wait()
 
 
@@ -791,7 +801,7 @@ async def test_a_removed_members_team_key_cannot_refill_from_redis_while_the_evi
     )
 
     sync = asyncio.create_task(_sync(prisma, RosterTarget(member_ids=frozenset()), cache))
-    await asyncio.sleep(0.1)
+    await _until_reached_or_done(redis.reached, sync)
     served_while_waiting = await cache.async_get_cache(key=token)
     redis.acknowledge.set()
     outcome = await sync

@@ -4,6 +4,8 @@ import logging
 import os
 import re
 import time
+from collections.abc import Callable
+from copy import deepcopy
 from typing import Final, List
 from unittest.mock import MagicMock, patch
 
@@ -36,7 +38,8 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     sanitize_messages_for_tool_calling,
     THOUGHT_SIGNATURE_SEPARATOR,
 )
-from litellm.types.llms.openai import ChatCompletionToolMessage
+from litellm.types.llms.openai import ChatCompletionAssistantMessage, ChatCompletionToolMessage
+from litellm.types.utils import ChatCompletionMessageToolCall, Function
 from litellm.utils import (
     _invalidate_model_cost_lowercase_map,
     function_setup,
@@ -67,17 +70,98 @@ from litellm.types.llms.bedrock import BedrockConverseReasoningContentBlock
 from litellm.types.llms.openai import AllMessageValues
 
 
-def test_function_call_prompt_preserves_append_failure_for_non_string_content() -> None:
-    messages = [{"role": "system", "content": None}]
+READ_FILE: Final[list[object]] = [{"name": "read_file", "description": "Read the contents of a file."}]
+USER_TURN: Final[dict[str, object]] = {"role": "user", "content": "Read the file."}
+HELPFUL_PART: Final[dict[str, object]] = {"type": "text", "text": "You are helpful."}
 
-    with pytest.raises(AttributeError):
-        function_call_prompt(messages, [])
+
+def _ollama_function_call_prompt(
+    messages: list[dict[str, object]], functions: list[object], drop_params: bool = False
+) -> list[dict[str, object]]:
+    return function_call_prompt(messages, functions, model="llama3", llm_provider="ollama", drop_params=drop_params)
+
+
+def _read_file_prompt() -> object:
+    prompt: Final = _ollama_function_call_prompt([USER_TURN], READ_FILE)[-1]["content"]
+    assert "Read the contents of a file." in str(prompt)
+    return prompt
+
+
+@pytest.mark.parametrize(
+    ("history", "expected"),
+    (
+        ((USER_TURN,), lambda prompt: [USER_TURN, {"role": "system", "content": prompt}]),
+        (
+            ({"role": "system", "content": "You are helpful."}, USER_TURN),
+            lambda prompt: [{"role": "system", "content": f"You are helpful. {prompt}"}, USER_TURN],
+        ),
+        (
+            ({"role": "system", "content": [HELPFUL_PART]}, USER_TURN),
+            lambda prompt: [
+                {"role": "system", "content": [HELPFUL_PART, {"type": "text", "text": f" {prompt}"}]},
+                USER_TURN,
+            ],
+        ),
+        (
+            ({"role": "system", "content": "You are helpful."}, USER_TURN, {"role": "system", "content": "Be brief."}),
+            lambda prompt: [
+                {"role": "system", "content": f"You are helpful. {prompt}"},
+                USER_TURN,
+                {"role": "system", "content": f"Be brief. {prompt}"},
+            ],
+        ),
+    ),
+    ids=("no_system", "string_content", "list_content", "two_system_messages"),
+)
+def test_function_call_prompt_sends_the_schema_once_per_turn_of_a_reused_history(
+    history: tuple[dict[str, object], ...],
+    expected: Callable[[object], list[dict[str, object]]],
+) -> None:
+    reused_history: Final = deepcopy(list(history))
+
+    turns: Final = tuple(_ollama_function_call_prompt(reused_history, READ_FILE) for _ in range(3))
+
+    assert reused_history == list(history)
+    assert all(turn == expected(_read_file_prompt()) for turn in turns)
+
+
+UNREADABLE_SYSTEM_CONTENT: Final = pytest.mark.parametrize(
+    "content",
+    (
+        None,
+        {"type": "text", "text": "private system prompt"},
+        ({"type": "text", "text": "private system prompt"},),
+        {"private system prompt"},
+        (part for part in ("private system prompt",)),
+    ),
+    ids=("none", "dict", "tuple", "set", "generator"),
+)
+
+
+@UNREADABLE_SYSTEM_CONTENT
+def test_function_call_prompt_answers_400_for_unreadable_system_content_without_echoing_it(content: object) -> None:
+    with pytest.raises(litellm.BadRequestError) as error:
+        _ollama_function_call_prompt([{"role": "system", "content": content}, USER_TURN], READ_FILE)
+
+    assert error.value.status_code == 400
+    assert "private system prompt" not in str(error.value)
+
+
+@UNREADABLE_SYSTEM_CONTENT
+def test_function_call_prompt_sends_only_the_function_prompt_for_unreadable_content_under_drop_params(
+    content: object,
+) -> None:
+    prompted: Final = _ollama_function_call_prompt(
+        [{"role": "system", "content": content}, USER_TURN], READ_FILE, drop_params=True
+    )
+
+    assert prompted == [{"role": "system", "content": _read_file_prompt()}, USER_TURN]
 
 
 def test_function_call_prompt_lets_the_model_answer_after_a_function_result() -> None:
     messages: Final[list[dict[str, object]]] = [{"role": "system", "content": "Be terse."}]
 
-    prompted: Final = function_call_prompt(messages, [{"name": "get_weather"}])
+    prompted: Final = _ollama_function_call_prompt(messages, [{"name": "get_weather"}])
 
     system: Final = str(prompted[0]["content"])
     assert "JSON OUTPUT ONLY" not in system
@@ -3438,6 +3522,67 @@ def test_sanitize_messages_combined_case_a_and_case_d():
         litellm.modify_params = original
 
 
+def test_sanitize_messages_drops_tool_results_the_latest_assistant_turn_did_not_ask_for(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "modify_params", True)
+    weather_call: Final = {"id": "call_a", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+    time_call: Final = ChatCompletionMessageToolCall(
+        id="call_b", type="function", function=Function(name="get_time", arguments="{}")
+    )
+    weather_answer: Final = {"role": "tool", "tool_call_id": "call_a", "content": "18C"}
+    time_answer: Final = {"role": "tool", "tool_call_id": "call_b", "content": "noon"}
+    asked_for_time: Final = {"role": "assistant", "content": None, "tool_calls": [time_call]}
+    done: Final = {"role": "assistant", "content": "Done"}
+    messages: Final = (
+        {"role": "user", "content": "Weather?"},
+        {"role": "assistant", "content": None, "tool_calls": [weather_call]},
+        weather_answer,
+        {"role": "user", "content": "Time?"},
+        asked_for_time,
+        time_answer,
+        weather_answer,
+        done,
+        time_answer,
+    )
+
+    sanitized: Final = sanitize_messages_for_tool_calling(list(messages))
+
+    assert tuple(sanitized) == (*messages[:6], done)
+
+
+def _sanitize_seconds(answers: int) -> float:
+    tool_calls: Final = [
+        {"id": f"call_{index}", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+        for index in range(answers)
+    ]
+    messages: Final = (
+        {"role": "user", "content": "Weather everywhere?"},
+        {"role": "assistant", "content": None, "tool_calls": tool_calls},
+        *({"role": "tool", "tool_call_id": f"call_{index}", "content": "18C"} for index in range(answers)),
+        {"role": "user", "content": "And now?"},
+    )
+
+    def once() -> float:
+        started: Final = time.perf_counter()
+        sanitized: Final = sanitize_messages_for_tool_calling(list(messages))
+        elapsed: Final = time.perf_counter() - started
+        assert tuple(sanitized) == messages
+        return elapsed
+
+    return min(once() for _ in range(3))
+
+
+def test_sanitize_messages_cost_grows_linearly_with_the_number_of_answered_tool_calls(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "modify_params", True)
+
+    growth: Final = _sanitize_seconds(4000) / _sanitize_seconds(1000)
+
+    assert growth < 11.0, f"cost grew {growth:.1f}x for 4x the tool answers"
+
+
 def test_anthropic_messages_pt_file_block_preserves_cache_control():
     """
     Test that cache_control is preserved on file-type content blocks
@@ -4571,44 +4716,42 @@ def test_anthropic_messages_pt_drops_a_system_message_with_no_text():
     assert [m["role"] for m in result] == ["user", "assistant"]
 
 
-def test_anthropic_messages_pt_drops_empty_but_signed_thinking_block():
-    """
-    Anthropic rejects a `thinking` block whose `thinking` text is empty, even
-    when it carries a valid-looking signature, with:
-        400 messages.N.content.M.thinking: each thinking block must contain thinking
-    This shape is reachable via cross-provider replay of a `thinking_blocks`
-    history item (see PR #36033), so `is_unsignable_thinking_block()` must
-    also check the thinking text, not just the signature.
-    """
+@pytest.mark.parametrize(
+    "assistant_message",
+    (
+        {
+            "role": "assistant",
+            "content": "4",
+            "thinking_blocks": [{"type": "thinking", "thinking": "", "signature": "sig_abc123_looks_valid"}],
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "", "signature": "sig_abc123_looks_valid"},
+                {"type": "text", "text": "4"},
+            ],
+        },
+    ),
+    ids=("thinking_blocks", "inline_content"),
+)
+def test_anthropic_messages_pt_keeps_empty_but_signed_thinking_block(
+    assistant_message: ChatCompletionAssistantMessage,
+) -> None:
+    """``display: omitted`` returns signed thinking blocks with empty text, and they
+    must reach the next turn unchanged."""
     from litellm.litellm_core_utils.prompt_templates.factory import (
         anthropic_messages_pt,
     )
 
-    messages = [
-        {"role": "user", "content": "What's 2+2?"},
-        {
-            "role": "assistant",
-            "content": "4",
-            "thinking_blocks": [
-                {
-                    "type": "thinking",
-                    "thinking": "",
-                    "signature": "sig_abc123_looks_valid",
-                }
-            ],
-        },
-    ]
-
     result = anthropic_messages_pt(
-        messages=messages,
-        model="claude-sonnet-4-5-20250929",
+        messages=[{"role": "user", "content": "What's 2+2?"}, assistant_message],
+        model="claude-opus-5-5",
         llm_provider="anthropic",
     )
 
     assistant_msg = result[1]
     assert isinstance(assistant_msg["content"], list)
-    content_types = [block.get("type") for block in assistant_msg["content"]]
-    assert "thinking" not in content_types, "empty-text thinking block must be dropped even though it has a signature"
+    assert assistant_msg["content"][0] == {"type": "thinking", "thinking": "", "signature": "sig_abc123_looks_valid"}
 
 
 def test_anthropic_messages_pt_keeps_non_empty_signed_thinking_block():
@@ -4722,29 +4865,31 @@ def test_anthropic_messages_pt_drops_unsigned_thinking_block():
     assert "thinking" not in content_types, "unsigned thinking block must still be dropped"
 
 
-def test_is_unsignable_thinking_block_treats_whitespace_only_as_empty():
+def test_anthropic_messages_pt_drops_unsigned_empty_thinking_block():
     """
-    Edge case: a `thinking` field that is present but whitespace-only (e.g.
-    a single trailing newline forwarded from another provider's empty
-    reasoning summary) is functionally empty and Anthropic's API will still
-    reject it with "each thinking block must contain thinking". We treat it
-    the same as a fully empty string and drop the block.
-
-    The check lives in the shared `is_unsignable_thinking_block` helper, which
-    `_replayable_thinking_blocks` calls standalone, so the whitespace-aware
-    test has to hold there rather than only at the factory call site.
+    An empty block without a signature is the shape Claude Code replays after a
+    non-Anthropic turn, and Anthropic rejects it, so only the missing signature
+    decides whether a block is dropped.
     """
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
-        is_unsignable_thinking_block,
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        anthropic_messages_pt,
     )
 
-    whitespace_only_block = {
-        "type": "thinking",
-        "thinking": "   \n\t  ",
-        "signature": "sig_abc123_looks_valid",
-    }
+    result = anthropic_messages_pt(
+        messages=[
+            {"role": "user", "content": "What's 2+2?"},
+            {
+                "role": "assistant",
+                "content": [{"type": "thinking", "thinking": "", "signature": ""}, {"type": "text", "text": "4"}],
+            },
+        ],
+        model="claude-opus-5-5",
+        llm_provider="anthropic",
+    )
 
-    assert is_unsignable_thinking_block(whitespace_only_block) is True
+    assistant_msg = result[1]
+    assert isinstance(assistant_msg["content"], list)
+    assert [block.get("type") for block in assistant_msg["content"]] == ["text"]
 
 
 _CONTENT_LESS_USER_MESSAGES: Final = ({"role": "user"}, {"role": "user", "content": None})

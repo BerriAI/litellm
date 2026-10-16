@@ -338,6 +338,50 @@ def test_flagged_placement_handles_a_long_run_of_unanswered_tool_search_uses_in_
     assert elapsed < 1.0
 
 
+def test_flagged_placement_merges_every_system_run_that_shares_a_user_turn():
+    placed: Final = place_mid_conversation_system(
+        [
+            {"role": "user", "content": "q1"},
+            {"role": "system", "content": "first"},
+            {"role": "user", "content": "q2"},
+            {"role": "system", "content": "second"},
+            {"role": "assistant", "content": "a"},
+        ],
+        supports_mid_conversation_system=True,
+    )
+
+    assert _roles(placed) == ["user", "user", "system", "assistant"]
+    assert _texts(placed[2]) == ["first", "second"]
+
+
+def _flagged_placement_seconds(turns: int) -> float:
+    messages: Final = tuple(
+        chain.from_iterable(
+            (
+                {"role": "user", "content": f"q{index}"},
+                {"role": "system", "content": f"reminder {index}"},
+                {"role": "assistant", "content": f"a{index}"},
+            )
+            for index in range(turns)
+        )
+    )
+
+    def once() -> float:
+        started: Final = time.perf_counter()
+        placed: Final = place_mid_conversation_system(messages, supports_mid_conversation_system=True)
+        elapsed: Final = time.perf_counter() - started
+        assert _roles(placed) == ["user", "system", "assistant"] * turns
+        return elapsed
+
+    return min(once() for _ in range(3))
+
+
+def test_flagged_placement_cost_grows_linearly_with_the_number_of_mid_conversation_system_messages():
+    growth: Final = _flagged_placement_seconds(4000) / _flagged_placement_seconds(1000)
+
+    assert growth < 11.0, f"cost grew {growth:.1f}x for 4x the messages"
+
+
 def test_flagged_placement_keeps_a_system_before_a_tool_search_use_the_caller_answered():
     placed = place_mid_conversation_system(
         [
@@ -394,6 +438,7 @@ def test_flagged_placement_keeps_a_system_whose_empty_assistant_follower_ends_th
         },
         {"role": "assistant", "content": None, "thinking_blocks": [{"type": "redacted_thinking", "data": "x"}]},
         {"role": "assistant", "content": [{"type": "thinking", "thinking": "hm", "signature": "s"}]},
+        {"role": "assistant", "content": [{"type": "thinking", "thinking": "", "signature": "s"}]},
         {"role": "assistant", "content": None, "function_call": {"name": "f", "arguments": "{}"}},
         litellm.Message(
             role="assistant",
@@ -414,6 +459,7 @@ def test_flagged_placement_keeps_a_system_whose_empty_assistant_follower_ends_th
         "signed-thinking-block",
         "redacted-thinking-block",
         "signed-thinking-part",
+        "signed-empty-thinking-part",
         "function-call",
         "pydantic-tool-calls",
         "unanswered-tool-search-use-beside-a-client-call",

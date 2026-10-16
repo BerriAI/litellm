@@ -9,6 +9,7 @@ from typing import (
     Any,
     Final,
     Literal,
+    TypeAlias,
     get_args,
 )
 
@@ -1800,6 +1801,9 @@ class PromptTokensDetailsWrapper(
 
     tool_use_tokens: int | None = None
     """Prompt tokens consumed by server-side tool use (e.g. Gemini grounding via googleSearch)."""
+
+    initial_prompt_tokens: int | None = None
+    """The first hop's prompt tokens on a Gemini long decode, the real context size when prompt_tokens sums every hop."""
 
     character_count: int | None = None
     """Character count sent to the model. Used for Vertex AI multimodal embeddings."""
@@ -3669,6 +3673,46 @@ class StandardAuditLogPayload(TypedDict):
     updated_values: str | None
 
 
+class StandardBatchLineItemUsage(TypedDict):
+    prompt_tokens: ReadOnly[int]
+    completion_tokens: ReadOnly[int]
+    total_tokens: ReadOnly[int]
+
+
+class StandardBatchLineItemMetadata(TypedDict):
+    user_api_key_hash: ReadOnly[str | None]
+    user_api_key_alias: ReadOnly[str | None]
+    user_api_key_team_id: ReadOnly[str | None]
+    user_api_key_team_alias: ReadOnly[str | None]
+    user_api_key_user_id: ReadOnly[str | None]
+    user_api_key_org_id: ReadOnly[str | None]
+
+
+class StandardBatchLineItem(TypedDict):
+    """One line of a finished batch, the request line next to the output or error line the provider wrote for it."""
+
+    batch_id: ReadOnly[str]
+    custom_id: ReadOnly[str | None]
+    status: ReadOnly[Literal["success", "failure"]]
+    request: ReadOnly[Mapping[str, object] | None]
+    response: ReadOnly[Mapping[str, object] | None]
+    usage: ReadOnly[StandardBatchLineItemUsage | None]
+    response_cost: ReadOnly[float]
+    model: ReadOnly[str]
+    custom_llm_provider: ReadOnly[str | None]
+    metadata: ReadOnly[StandardBatchLineItemMetadata]
+
+
+class StandardBatchLineItemsPayload(TypedDict):
+    """One part of a finished batch's lines, dispatched to batch_line_item_callbacks. A batch's lines arrive in parts
+    numbered from 0, each holding up to BATCH_LINE_ITEMS_MAX_PART_BYTES of raw request and result lines."""
+
+    batch_id: ReadOnly[str]
+    finished_at: ReadOnly[int]
+    part: ReadOnly[int]
+    lines: ReadOnly[tuple[StandardBatchLineItem, ...]]
+
+
 class ClassifierAudit(TypedDict, total=False):
     classifier_input: ReadOnly[Mapping[str, JsonValue]]
     originating_request_masked: ReadOnly[Mapping[str, JsonValue]]
@@ -4265,6 +4309,7 @@ class LlmProviders(str, Enum):
     TRITON = "triton"
     PREDIBASE = "predibase"
     DATABRICKS = "databricks"
+    DATABRICKS_AGENT = "databricks_agent"
     EMPOWER = "empower"
     GITHUB = "github"
     RAGFLOW = "ragflow"
@@ -4427,6 +4472,9 @@ class LiteLLMLoggingBaseClass:
         pass
 
 
+TokenCountMessagesFormat: TypeAlias = Literal["openai", "anthropic"]
+
+
 class TokenCountResponse(LiteLLMPydanticObjectBase):
     total_tokens: int
     request_model: str
@@ -4539,6 +4587,7 @@ class LiteLLMRealtimeStreamLoggingObject(LiteLLMPydanticObjectBase):
     results: SkipValidation[OpenAIRealtimeStreamList]
     usage: Usage
     service_tier: str | None = None
+    id: str | None = None
     _hidden_params: dict = {}
 
     @property
