@@ -15,15 +15,6 @@ from litellm.router_utils.add_retry_fallback_headers import (
 from .asyncify import run_async_function
 
 
-def _format_fallback_key(fb: object) -> str:
-    if isinstance(fb, dict):
-        try:
-            return json.dumps(fb, sort_keys=True, default=str)
-        except (TypeError, ValueError):
-            return str(fb)
-    return str(fb)
-
-
 async def async_completion_with_fallbacks(**kwargs):
     """
     Asynchronously attempts completion with fallback models if the primary model fails.
@@ -44,31 +35,28 @@ async def async_completion_with_fallbacks(**kwargs):
     nested_kwargs: Final = kwargs.pop("kwargs", {})
     original_model: Final = kwargs["model"]
     model = original_model
-    top_level_fallbacks: Final = kwargs.pop("fallbacks", [])
-    nested_fallbacks: Final = nested_kwargs.pop("fallbacks", [])
-    top_list: Final = (
-        top_level_fallbacks
-        if isinstance(top_level_fallbacks, list)
-        else [top_level_fallbacks]
-        if top_level_fallbacks
-        else []
-    )
-    nested_list: Final = (
-        nested_fallbacks if isinstance(nested_fallbacks, list) else [nested_fallbacks] if nested_fallbacks else []
-    )
-    raw_fallbacks: Final = top_list + nested_list
-
-    # Deduplicate fallbacks while preserving order
     seen_fallbacks: Final[set[str]] = set()  # mutable-ok: tracking seen fallback keys
-    combined_fallbacks: Final = [
-        fb
-        for fb in raw_fallbacks
-        if not ((fb_key := _format_fallback_key(fb)) in seen_fallbacks or seen_fallbacks.add(fb_key))
+    combined_raw: Final[
+        list[object]
+    ] = [  # mutable-ok: candidate fallbacks  # comprehension-ok: flattening fallback sources
+        x
+        for source in (
+            kwargs.pop("fallbacks", None),
+            nested_kwargs.pop("fallbacks", []),
+        )
+        for x in (source if isinstance(source, list) else [source] if source is not None else [])
     ]
-
-    fallbacks: Final = [original_model] + combined_fallbacks
-    kwargs.pop("acompletion", None)  # Remove to prevent keyword conflicts
+    fallbacks: Final[list[object]] = [original_model] + [  # mutable-ok: deduplicated list
+        fb
+        for fb in combined_raw
+        if not (
+            (k := (json.dumps(fb, sort_keys=True, default=str) if isinstance(fb, dict) else str(fb))) in seen_fallbacks
+            or seen_fallbacks.add(k)
+        )
+    ]
     litellm_call_id: Final = str(uuid.uuid4())
+    if "acompletion" in kwargs:
+        del kwargs["acompletion"]  # noqa: RUF051  # rebind-ok: remove keyword conflict
     base_kwargs: Final = {**kwargs, **nested_kwargs, "litellm_call_id": litellm_call_id}
 
     # fields to remove
