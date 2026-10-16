@@ -6066,6 +6066,42 @@ def test_handle_anthropic_messages_response_logging_degrades_on_unparseable_resp
     assert result.usage.prompt_tokens == 4  # type: ignore[attr-defined]
 
 
+@pytest.mark.parametrize(
+    "output",
+    [[], [{"type": "reasoning", "id": "rs_1", "status": "completed", "summary": []}]],
+    ids=["empty", "reasoning-only"],
+)
+def test_degraded_responses_payload_keeps_the_served_service_tier_price(
+    output: list[dict[str, object]], monkeypatch: pytest.MonkeyPatch
+):
+    from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
+
+    rates: Final = {
+        "input_cost_per_token": 1e-06,
+        "output_cost_per_token": 4e-06,
+        "input_cost_per_token_flex": 5e-07,
+        "output_cost_per_token_flex": 2e-06,
+    }
+    monkeypatch.setitem(
+        litellm.model_cost, "flex-fallback-model", {"litellm_provider": "openai", "mode": "responses", **rates}
+    )
+    degraded: Final = _anthropic_messages_logging_obj()._handle_anthropic_messages_response_logging(
+        result=ResponsesAPIResponse(
+            id="resp-flex",
+            created_at=1700000000,
+            status="completed",
+            output=output,
+            service_tier="flex",
+            usage=ResponseAPIUsage(input_tokens=100, output_tokens=50, total_tokens=150),
+        )
+    )
+
+    assert degraded.choices == [] or degraded.choices[0].message.content in (None, "")  # type: ignore[union-attr]
+    assert litellm.completion_cost(completion_response=degraded, model="flex-fallback-model") == pytest.approx(
+        100 * rates["input_cost_per_token_flex"] + 50 * rates["output_cost_per_token_flex"]
+    )
+
+
 class _SuccessCapturingLogger(CustomLogger):
     """Records the success payload. success_payload is populated only in
     async_log_success_event, so it stays None when the buggy no-op

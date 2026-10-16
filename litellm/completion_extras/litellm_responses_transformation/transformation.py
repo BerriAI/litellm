@@ -197,7 +197,7 @@ def _drops_audio_input(model: str, litellm_params: Mapping[str, object]) -> bool
     return not _supports_audio_input(model, litellm_params)
 
 
-def _provider_metadata(response_fields: Mapping[str, object] | None) -> Mapping[str, object]:
+def responses_provider_metadata(response_fields: Mapping[str, object] | None) -> Mapping[str, object]:
     return MappingProxyType(
         {
             key: value
@@ -1455,7 +1455,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         )
 
         model_response.id = _upstream_response_id(raw_response.id) or raw_response.id
-        for key, value in _provider_metadata(raw_response.model_extra).items():
+        for key, value in responses_provider_metadata(raw_response.model_extra).items():
             setattr(model_response, key, value)
 
         # Preserve hidden params from the ResponsesAPIResponse, especially the headers
@@ -2139,7 +2139,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                 from litellm.responses.utils import ResponseAPILoggingUtils
 
                 usage = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(response_data.get("usage"))
-            provider_metadata: Final = _provider_metadata(response_data)
+            provider_metadata: Final = responses_provider_metadata(response_data)
             served_service_tier: Final = response_data.get("service_tier")
             return ModelResponseStream(
                 choices=[
