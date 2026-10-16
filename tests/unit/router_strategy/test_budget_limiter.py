@@ -449,3 +449,47 @@ def cleanup_redis():
             redis_client.delete(key)
     except Exception as e:
         print(f"Error cleaning up Redis: {str(e)}")
+
+
+@pytest.mark.asyncio
+async def test_flush_evicts_in_memory_spend_when_redis_window_expired():
+    """After the Redis window key expires, the frozen in-memory spend must be
+    evicted so the new budget window starts from zero (issue #46879)."""
+    from unittest.mock import AsyncMock
+
+    limiter = RouterBudgetLimiting(
+        dual_cache=DualCache(),
+        provider_budget_config={"openai": BudgetConfig(budget_duration="30m", max_budget=3.5)},
+    )
+    key: Final = "provider_spend:openai:30m"
+    # spend frozen in memory from the expired window
+    await limiter.dual_cache.in_memory_cache.async_set_cache(key=key, value=3.61)
+
+    fake_redis = AsyncMock()
+    fake_redis.async_batch_get_cache = AsyncMock(return_value={key: None})
+    limiter.dual_cache.redis_cache = fake_redis
+
+    await limiter._flush_increments_then_copy_redis_spend()
+
+    assert await limiter.dual_cache.in_memory_cache.async_get_cache(key=key) is None
+
+
+@pytest.mark.asyncio
+async def test_flush_keeps_in_memory_spend_when_redis_key_alive():
+    """Keys still present in Redis are refreshed, not evicted."""
+    from unittest.mock import AsyncMock
+
+    limiter = RouterBudgetLimiting(
+        dual_cache=DualCache(),
+        provider_budget_config={"openai": BudgetConfig(budget_duration="30m", max_budget=3.5)},
+    )
+    key: Final = "provider_spend:openai:30m"
+    await limiter.dual_cache.in_memory_cache.async_set_cache(key=key, value=3.61)
+
+    fake_redis = AsyncMock()
+    fake_redis.async_batch_get_cache = AsyncMock(return_value={key: 4.2})
+    limiter.dual_cache.redis_cache = fake_redis
+
+    await limiter._flush_increments_then_copy_redis_spend()
+
+    assert await limiter.dual_cache.in_memory_cache.async_get_cache(key=key) == 4.2

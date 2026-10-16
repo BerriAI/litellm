@@ -659,7 +659,7 @@ class RouterBudgetLimiting(CustomLogger):
         if redis_cache is None or not await self._flush_queued_increment_operations(redis_cache):
             return
 
-        cache_keys: Final = []
+        cache_keys: Final[list[str]] = []  # mutable-ok: batch-get API takes a list
 
         if self.provider_budget_config is not None:
             for provider, config in self.provider_budget_config.items():
@@ -685,14 +685,23 @@ class RouterBudgetLimiting(CustomLogger):
             return
         async with self._get_redis_increment_queue_lock():
             pending_spend_by_key: Final = _sum_increments_by_key(self.redis_increment_operation_queue)
-            updated_spend_by_key: Final = tuple(
+            updated_spend_by_key: Final[tuple[tuple[str, float], ...]] = tuple(
                 (key, float(value) + pending_spend_by_key.get(key, 0.0))
                 for key, value in redis_values.items()
                 if value is not None
             )
+            refreshed_keys: Final[frozenset[str]] = frozenset(str(key) for key, _ in updated_spend_by_key)
             for key, updated_spend in updated_spend_by_key:
                 await self.dual_cache.in_memory_cache.async_set_cache(key=key, value=updated_spend)
                 verbose_router_logger.debug("Updated in-memory cache for %s: %s", key, updated_spend)
+            # A key missing from Redis means its budget window expired; drop the
+            # frozen in-memory copy so the new window starts from zero.
+            evicted_keys: Final[list[str]] = []  # mutable-ok: fed to async_delete_cache_keys
+            for key in cache_keys:
+                if key not in refreshed_keys:
+                    evicted_keys.append(key)
+            # async_delete_cache_keys no-ops on an empty list
+            await self.dual_cache.async_delete_cache_keys(evicted_keys)
 
     def _get_budget_config_for_deployment(
         self,
