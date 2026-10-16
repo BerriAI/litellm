@@ -14469,14 +14469,26 @@ def _routed_litellm_params(router: Router, model: str) -> tuple[Mapping[str, obj
     return tuple(deployment["litellm_params"] for deployment in router.get_model_list(model_name=model) or ())
 
 
+def _router_default_litellm_params(router: Router) -> Mapping[str, object]:
+    defaults: Final[Mapping[str, object] | None] = getattr(router, "default_litellm_params", None)
+    if defaults is None:
+        return {}
+    return {key: value for key, value in defaults.items() if value is not None}
+
+
 def _count_context_management(
     context_management: JsonValue, model: str, request_litellm_params: Mapping[str, JsonValue]
 ) -> JsonValue:
     from litellm.llms.anthropic.pass_through.adapters.handler import context_management_explicitly_dropped
 
     group: Final = () if llm_router is None else _routed_litellm_params(llm_router, model)
+    router_defaults: Final[Mapping[str, object]] = (
+        {} if llm_router is None else _router_default_litellm_params(llm_router)
+    )
     dropped_by_a_deployment: Final = any(
-        context_management_explicitly_dropped({**params, **request_litellm_params}.get("additional_drop_params"))
+        context_management_explicitly_dropped(
+            {**params, **router_defaults, **request_litellm_params}.get("additional_drop_params")
+        )
         for params in group
     )
     return None if dropped_by_a_deployment else context_management

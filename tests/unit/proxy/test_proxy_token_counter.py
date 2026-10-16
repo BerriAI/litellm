@@ -1218,22 +1218,27 @@ def _agent_turns_with_tool_results(rounds: int) -> list[dict[str, JsonValue]]:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("additional_drop_params", "request_options", "expected_tool_outputs_sent"),
+    ("additional_drop_params", "router_additional_drop_params", "request_options", "expected_tool_outputs_sent"),
     (
-        (None, {}, 1),
-        (["context_management"], {}, 3),
-        (None, {"additional_drop_params": ["context_management"]}, 3),
-        (["context_management"], {"additional_drop_params": []}, 1),
+        (None, None, {}, 1),
+        (["context_management"], None, {}, 3),
+        (None, None, {"additional_drop_params": ["context_management"]}, 3),
+        (["context_management"], None, {"additional_drop_params": []}, 1),
+        (None, ["context_management"], {}, 3),
+        (None, ["context_management"], {"additional_drop_params": []}, 1),
     ),
     ids=(
         "edits-applied",
         "deployment-drops-context-management",
         "request-drops-context-management",
         "request-overrides-the-deployment-drop",
+        "router-default-drops-context-management",
+        "request-overrides-the-router-default-drop",
     ),
 )
 async def test_gemini_messages_count_tokens_applies_the_context_edits_inference_applies(
     additional_drop_params: list[str] | None,
+    router_additional_drop_params: list[str] | None,
     request_options: dict[str, JsonValue],
     expected_tool_outputs_sent: int,
 ) -> None:
@@ -1252,7 +1257,8 @@ async def test_gemini_messages_count_tokens_applies_the_context_edits_inference_
                     "additional_drop_params": additional_drop_params,
                 },
             }
-        ]
+        ],
+        default_litellm_params={"additional_drop_params": router_additional_drop_params},
     )
     request_body: Final[dict[str, JsonValue]] = {
         **request_options,

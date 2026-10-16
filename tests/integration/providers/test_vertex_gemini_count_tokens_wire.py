@@ -4,6 +4,8 @@ import threading
 from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
+from itertools import chain
+from pathlib import Path
 from types import MappingProxyType
 from typing import Final
 from uuid import uuid4
@@ -11,8 +13,8 @@ from uuid import uuid4
 import anthropic
 import httpx
 import pytest
-from integration._support.client import Gateway, Scenario
-from integration._support.process import graceful_stop_seconds
+from integration._support.client import Gateway, Scenario, object_value, string_value
+from integration._support.process import graceful_stop_seconds, owned_proxy_process
 from integration._support.vertex import service_account_json
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
@@ -220,8 +222,15 @@ _CONTENT_BLOCK_BODIES: Final[Mapping[str, Mapping[str, JsonValue]]] = MappingPro
 )
 
 
-def _ai_studio_deployment(scenario: Scenario, api_base: str) -> str:
-    return scenario.model(model=f"gemini/{_MODEL}", api_base=api_base, api_key="scripted-gemini-key")
+_NO_LITELLM_PARAMS: Final[Mapping[str, JsonValue]] = MappingProxyType({})
+
+
+def _ai_studio_deployment(
+    scenario: Scenario, api_base: str, litellm_params: Mapping[str, JsonValue] = _NO_LITELLM_PARAMS
+) -> str:
+    return scenario.model(
+        model=f"gemini/{_MODEL}", api_base=api_base, api_key="scripted-gemini-key", model_info=None, **litellm_params
+    )
 
 
 def _counted_contents(count_body: Mapping[str, JsonValue]) -> JsonValue:
@@ -298,6 +307,241 @@ def test_count_tokens_rejects_blocks_it_cannot_convert(gateway: Gateway, provide
         )
         assert response.status_code == 400, response.text
         assert "document with a text source, search_result, search_result inside a tool_result" in response.text
+        assert peer.drain() == ()
+
+
+_FILE_TEXT: Final = "line of a long file that the agent read earlier. " * 180
+_FILES: Final = 3
+_READ_FILE_TOOL: Final[JsonValue] = {
+    "name": "read_file",
+    "description": "Read a file",
+    "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}},
+}
+_CLEAR_OLDER_TOOL_RESULTS: Final[JsonValue] = {
+    "edits": [
+        {
+            "type": "clear_tool_uses_20250919",
+            "trigger": {"type": "input_tokens", "value": 500},
+            "keep": {"type": "tool_uses", "value": 1},
+        }
+    ]
+}
+_COMPACT_UNDER_THE_MINIMUM_TRIGGER: Final[JsonValue] = {
+    "edits": [{"type": "compact_20260112", "trigger": {"type": "input_tokens", "value": 1000}}]
+}
+
+
+def _provider_deployment(gateway: Gateway, scenario: Scenario, api_base: str, provider: str) -> str:
+    if provider == "vertex_ai":
+        return _deployment(gateway, scenario, api_base)
+    return _ai_studio_deployment(scenario, api_base)
+
+
+def _read_file_round(marker: str, index: int) -> tuple[JsonValue, ...]:
+    return (
+        {"role": "user", "content": f"Read file {index}."},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "tool_use", "id": f"toolu_{index}", "name": "read_file", "input": {"path": f"{index}.txt"}}
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": f"toolu_{index}",
+                    "content": f"<file {marker}-{index}>{_FILE_TEXT}",
+                }
+            ],
+        },
+    )
+
+
+def _agent_body(model: str, marker: str, options: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
+    rounds: Final = tuple(chain.from_iterable(_read_file_round(marker, index) for index in range(_FILES)))
+    return {
+        "model": model,
+        "tools": [_READ_FILE_TOOL],
+        "messages": [*rounds, {"role": "user", "content": "Summarize what you read."}],
+        "context_management": _CLEAR_OLDER_TOOL_RESULTS,
+        **options,
+    }
+
+
+def _files_kept(contents: JsonValue, marker: str) -> tuple[bool, ...]:
+    sent: Final = json.dumps(contents)
+    return tuple(f"<file {marker}-{index}>" in sent for index in range(_FILES))
+
+
+def _contents_sent_upstream(
+    gateway: Gateway, peer: _GeminiPeer, body: Mapping[str, JsonValue]
+) -> tuple[JsonValue, JsonValue]:
+    generated: Final = gateway.request("POST", "/v1/messages", {**body, "max_tokens": 16})
+    assert generated.status_code == 200, generated.text
+    generate_requests: Final = tuple(request for request in peer.drain() if request.target.endswith(":generateContent"))
+    counted: Final = gateway.request("POST", "/v1/messages/count_tokens", body)
+    assert counted.status_code == 200, counted.text
+    assert _JSON_OBJECT.validate_json(counted.content)["input_tokens"] == _COUNT, counted.text
+    count_requests: Final = peer.drain()
+    assert len(generate_requests) == 1
+    assert [request.target.endswith(":countTokens") for request in count_requests] == [True]
+    return _json_body(generate_requests[0])["contents"], _counted_contents(_json_body(count_requests[0]))
+
+
+@pytest.mark.parametrize("provider", ("vertex_ai", "gemini"))
+def test_count_tokens_counts_the_history_messages_sends_after_context_edits(gateway: Gateway, provider: str) -> None:
+    peer: Final = _GeminiPeer()
+    with wire_server(peer) as wire, gateway.scenario() as scenario:
+        model: Final = _provider_deployment(gateway, scenario, wire.url, provider)
+        marker: Final = uuid4().hex
+        generated, counted = _contents_sent_upstream(gateway, peer, _agent_body(model, marker, {}))
+        assert _files_kept(generated, marker) == (False, False, True)
+        assert counted == generated
+
+
+@pytest.mark.parametrize(
+    ("deployment_options", "request_options", "files_kept"),
+    (
+        ({"additional_drop_params": ["context_management"]}, {}, (True, True, True)),
+        ({}, {"additional_drop_params": ["context_management"]}, (True, True, True)),
+        ({"additional_drop_params": ["context_management"]}, {"additional_drop_params": []}, (False, False, True)),
+    ),
+    ids=("deployment-drops", "request-drops", "request-overrides-the-deployment-drop"),
+)
+def test_count_tokens_follows_the_context_management_opt_out_messages_follows(
+    gateway: Gateway,
+    deployment_options: Mapping[str, JsonValue],
+    request_options: Mapping[str, JsonValue],
+    files_kept: tuple[bool, ...],
+) -> None:
+    peer: Final = _GeminiPeer()
+    with wire_server(peer) as wire, gateway.scenario() as scenario:
+        model: Final = _ai_studio_deployment(scenario, wire.url, deployment_options)
+        marker: Final = uuid4().hex
+        generated, counted = _contents_sent_upstream(gateway, peer, _agent_body(model, marker, request_options))
+        assert _files_kept(generated, marker) == files_kept
+        assert counted == generated
+
+
+def test_count_tokens_follows_a_router_default_context_management_opt_out(gateway: Gateway, tmp_path: Path) -> None:
+    peer: Final = _GeminiPeer()
+    with wire_server(peer) as wire:
+        model: Final = f"router-default-{uuid4().hex}"
+        config: Final = tmp_path / "router-default.yaml"
+        config.write_text(
+            json.dumps(
+                {
+                    "model_list": [
+                        {
+                            "model_name": model,
+                            "litellm_params": {
+                                "model": f"gemini/{_MODEL}",
+                                "api_base": wire.url,
+                                "api_key": "scripted-gemini-key",
+                            },
+                        }
+                    ],
+                    "router_settings": {"default_litellm_params": {"additional_drop_params": ["context_management"]}},
+                }
+            ),
+            encoding="utf-8",
+        )
+        with owned_proxy_process(gateway, tmp_path, {}, config=config) as owned:
+            marker: Final = uuid4().hex
+            generated, counted = _contents_sent_upstream(owned.gateway, peer, _agent_body(model, marker, {}))
+            assert _files_kept(generated, marker) == (True, True, True)
+            assert counted == generated
+
+
+def _named_deployment(
+    scenario: Scenario,
+    model_name: str,
+    litellm_params: Mapping[str, JsonValue],
+    model_info: Mapping[str, JsonValue],
+) -> str:
+    created: Final = scenario.gateway.post(
+        "/model/new",
+        {"model_name": model_name, "litellm_params": dict(litellm_params), "model_info": dict(model_info)},
+    )
+    identity: Final = string_value(object_value(created["model_info"])["id"])
+    scenario.cleanups.callback(scenario.delete_model, identity)
+    return identity
+
+
+def test_count_tokens_reads_the_opt_out_of_a_deployment_id_beside_a_wildcard_route(gateway: Gateway) -> None:
+    peer: Final = _GeminiPeer()
+    with wire_server(peer) as wire, gateway.scenario() as scenario:
+        prefix: Final = f"integration-{uuid4().hex}"
+        _named_deployment(
+            scenario,
+            f"{prefix}-*",
+            {"model": "gemini/*", "api_base": wire.url, "api_key": "scripted-gemini-key"},
+            {},
+        )
+        deployment_id: Final = _named_deployment(
+            scenario,
+            prefix,
+            {
+                "model": f"gemini/{_MODEL}",
+                "api_base": wire.url,
+                "api_key": "scripted-gemini-key",
+                "additional_drop_params": ["context_management"],
+            },
+            {"id": f"{prefix}-dropping"},
+        )
+        assert deployment_id == f"{prefix}-dropping"
+        marker: Final = uuid4().hex
+        generated, counted = _contents_sent_upstream(gateway, peer, _agent_body(deployment_id, marker, {}))
+        assert _files_kept(generated, marker) == (True, True, True)
+        assert counted == generated
+
+
+def _error_type(response: httpx.Response) -> JsonValue:
+    return object_value(_JSON_OBJECT.validate_json(response.content)["error"])["type"]
+
+
+def _error_message(response: httpx.Response) -> JsonValue:
+    return object_value(_JSON_OBJECT.validate_json(response.content)["error"])["message"]
+
+
+@pytest.mark.parametrize("provider", ("vertex_ai", "gemini"))
+def test_count_tokens_rejects_a_context_edit_messages_rejects_without_an_upstream_call(
+    gateway: Gateway, provider: str
+) -> None:
+    peer: Final = _GeminiPeer()
+    with wire_server(peer) as wire, gateway.scenario() as scenario:
+        model: Final = _provider_deployment(gateway, scenario, wire.url, provider)
+        body: Final = _agent_body(model, uuid4().hex, {"context_management": _COMPACT_UNDER_THE_MINIMUM_TRIGGER})
+        generated: Final = gateway.request("POST", "/v1/messages", {**body, "max_tokens": 16})
+        counted: Final = gateway.request("POST", "/v1/messages/count_tokens", body)
+        assert generated.status_code == 400, generated.text
+        assert counted.status_code == 400, counted.text
+        assert _error_type(counted) == _error_type(generated)
+        assert peer.drain() == ()
+
+
+def test_count_tokens_answers_for_the_unedited_body_when_a_context_edit_fails_inside_the_proxy(
+    gateway: Gateway,
+) -> None:
+    peer: Final = _GeminiPeer()
+    with wire_server(peer) as wire, gateway.scenario() as scenario:
+        model: Final = _ai_studio_deployment(scenario, wire.url)
+        unedited: Final = gateway.request(
+            "POST", "/v1/messages/count_tokens", {"model": model, "messages": _UNCONVERTIBLE_MESSAGES}
+        )
+        edited: Final = gateway.request(
+            "POST",
+            "/v1/messages/count_tokens",
+            {"model": model, "messages": _UNCONVERTIBLE_MESSAGES, "context_management": _CLEAR_OLDER_TOOL_RESULTS},
+        )
+        assert unedited.status_code == 400, unedited.text
+        assert (edited.status_code, _error_type(edited), _error_message(edited)) == (
+            unedited.status_code,
+            _error_type(unedited),
+            _error_message(unedited),
+        )
         assert peer.drain() == ()
 
 
