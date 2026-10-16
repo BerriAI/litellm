@@ -20,6 +20,7 @@ load_dotenv()
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
+from starlette.types import Message
 
 import litellm
 from litellm import Router
@@ -30,7 +31,7 @@ from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.gemini.count_tokens import handler as gemini_count_tokens_handler
 from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler import VertexAIPartnerModelsTokenCounter
-from litellm.proxy._types import ProxyException, TokenCountRequest
+from litellm.proxy._types import ProxyException, TokenCountRequest, UserAPIKeyAuth
 from litellm.proxy.anthropic_endpoints.endpoints import (
     count_tokens as anthropic_count_tokens,
 )
@@ -1218,6 +1219,24 @@ async def test_anthropic_endpoint_429_rate_limit_error_format():
         proxy_server.count_request_tokens = original_token_counter
 
 
+def _json_request(body: Mapping[str, object], user_agent: str) -> Request:
+    payload: Final = json.dumps(body).encode()
+
+    async def receive() -> Message:
+        return {"type": "http.request", "body": payload, "more_body": False}
+
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/messages/count_tokens",
+            "query_string": b"",
+            "headers": [(b"content-type", b"application/json"), (b"user-agent", user_agent.encode())],
+        },
+        receive,
+    )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("request_drop_params", "user_agent"),
@@ -1226,7 +1245,6 @@ async def test_anthropic_endpoint_429_rate_limit_error_format():
 async def test_anthropic_count_tokens_drops_a_malformed_tool_result_text_when_drop_params_applies(
     monkeypatch: pytest.MonkeyPatch, request_drop_params: dict[str, bool], user_agent: str
 ) -> None:
-    import litellm.proxy.anthropic_endpoints.endpoints as anthropic_endpoints
     import litellm.proxy.proxy_server as proxy_server
 
     body: Final = {
@@ -1255,9 +1273,7 @@ async def test_anthropic_count_tokens_drops_a_malformed_tool_result_text_when_dr
             {"model_name": "gpt-tool-result", "litellm_params": {"model": "openai/gpt-5.6", "api_key": "sk-test"}}
         ]
     )
-    request: Final = MagicMock(spec=Request)
-    request.headers = {"user-agent": user_agent}
-    monkeypatch.setattr(anthropic_endpoints, "read_request_body", AsyncMock(return_value=body))
+    request: Final = _json_request(body, user_agent)
     monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(proxy_server, "proxy_config", proxy_server.ProxyConfig())
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
@@ -1266,7 +1282,7 @@ async def test_anthropic_count_tokens_drops_a_malformed_tool_result_text_when_dr
         route: Final = respx.post("https://api.openai.com/v1/responses/input_tokens").mock(
             return_value=httpx.Response(200, json={"input_tokens": 9})
         )
-        response: Final = await anthropic_count_tokens(request, MagicMock())
+        response: Final = await anthropic_count_tokens(request, UserAPIKeyAuth())
 
     assert response == {"input_tokens": 9}
     sent: Final = json.loads(route.calls.last.request.content)
@@ -1296,7 +1312,6 @@ def _build_log_messages(log_text: JsonValue) -> list[dict[str, JsonValue]]:
 async def _count_on_a_model_without_a_count_api(
     monkeypatch: pytest.MonkeyPatch, body: Mapping[str, object], router_defaults: dict[str, JsonValue] | None = None
 ) -> JSONResponse | dict[str, JsonValue]:
-    import litellm.proxy.anthropic_endpoints.endpoints as anthropic_endpoints
     import litellm.proxy.proxy_server as proxy_server
 
     router: Final = Router(
@@ -1308,13 +1323,11 @@ async def _count_on_a_model_without_a_count_api(
         ],
         default_litellm_params=router_defaults,
     )
-    request: Final = MagicMock(spec=Request)
-    request.headers = {"user-agent": "python-httpx/0.28.1"}
-    monkeypatch.setattr(anthropic_endpoints, "read_request_body", AsyncMock(return_value=body))
+    request: Final = _json_request(body, "python-httpx/0.28.1")
     monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(proxy_server, "proxy_config", proxy_server.ProxyConfig())
     with respx.mock:
-        return await anthropic_count_tokens(request, MagicMock())
+        return await anthropic_count_tokens(request, UserAPIKeyAuth())
 
 
 @pytest.mark.asyncio
