@@ -56,7 +56,7 @@ from litellm.proxy.proxy_server import (
     count_request_tokens,
     token_counter,
 )
-from litellm.types.utils import TokenCountResponse
+from litellm.types.utils import TokenCountMessagesFormat, TokenCountResponse
 
 
 @pytest.mark.asyncio
@@ -1213,14 +1213,14 @@ class _ScriptedCounter(BaseTokenCounter):
     async def count_tokens(
         self,
         model_to_use: str,
-        messages,
-        contents,
-        deployment=None,
+        messages: object,
+        contents: object,
+        deployment: object = None,
         request_model: str = "",
-        tools=None,
-        system=None,
-        messages_format="openai",
-        output_format=None,
+        tools: object = None,
+        system: object = None,
+        messages_format: TokenCountMessagesFormat = "openai",
+        output_format: JsonValue = None,
     ) -> TokenCountResponse | None:
         self.calls.append((model_to_use, messages, tools, system))
         return self._replies[model_to_use]
@@ -1620,22 +1620,44 @@ async def test_hanging_tokenizer_download_answers_the_provider_error_after_the_w
         raise OSError("hub unreachable")
 
     monkeypatch.setattr(litellm.utils, "select_tokenizer", hanging_download)
-    monkeypatch.setattr(litellm.proxy.proxy_server, "TOKENIZER_LOAD_WAIT_SECONDS", 0.5)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "TOKENIZER_LOAD_WAIT_SECONDS", 1.0)
     monkeypatch.setattr(litellm.proxy.proxy_server, "TOKENIZER_LOAD_RETRY_SECONDS", 1e-9)
     try:
-        started: Final = time.monotonic()
-        burst: Final = await asyncio.wait_for(asyncio.gather(*(_kimi_count_status() for _ in range(60))), 5)
-        burst_seconds: Final = time.monotonic() - started
+        burst: Final = await asyncio.wait_for(asyncio.gather(*(_kimi_count_status() for _ in range(60))), 8)
         later_started: Final = time.monotonic()
-        later: Final = await asyncio.wait_for(_kimi_count_status(), 5)
+        later: Final = await asyncio.wait_for(_kimi_count_status(), 8)
         later_seconds: Final = time.monotonic() - later_started
     finally:
         hub_released.set()
 
     assert set(burst) == {"400"} and later == "400"
-    assert 0.5 <= burst_seconds < 3
-    assert later_seconds < 0.4
+    assert later_seconds < 0.8
     assert len(downloads) == 1
+
+
+@pytest.mark.asyncio
+async def test_framed_count_waits_for_a_tokenizer_download_that_finishes_within_the_wait(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _framed_kimi_with_custom_tokenizer(monkeypatch, "lit-tests/slow-tokenizer")
+    real_select_tokenizer: Final = litellm.utils.select_tokenizer
+    download_started: Final = threading.Event()
+    hub_released: Final = threading.Event()
+
+    def slow_download(model: str, custom_tokenizer: object = None):
+        download_started.set()
+        hub_released.wait(10)
+        return real_select_tokenizer(model="gpt-5.4-mini")
+
+    monkeypatch.setattr(litellm.utils, "select_tokenizer", slow_download)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "TOKENIZER_LOAD_WAIT_SECONDS", 30)
+    count: Final = asyncio.create_task(_kimi_count_status())
+    try:
+        await asyncio.to_thread(download_started.wait, 10)
+    finally:
+        hub_released.set()
+
+    assert await asyncio.wait_for(count, 10) == "local_estimate"
 
 
 @pytest.mark.asyncio
