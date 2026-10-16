@@ -232,6 +232,85 @@ async def test_aiter_bytes_valid_chunk_followed_by_unicode_error():
         assert chunks[0]["text"] == "hello"  # Verify the content of the valid chunk
 
 
+class TestSagemakerSplitUtf8Streaming:
+    """Event boundaries need not fall on UTF-8 character boundaries (issue #46876)."""
+
+    @staticmethod
+    def _make_decoder():
+        decoder = AWSEventStreamDecoder.__new__(AWSEventStreamDecoder)
+        decoder.model = "test-model"
+        decoder.parser = MagicMock()
+        decoder.content_blocks = []
+        decoder.is_messages_api = None
+        import codecs
+
+        decoder._utf8_decoder = codecs.getincrementaldecoder("utf-8")()
+        return decoder
+
+    @staticmethod
+    def _make_event(payload: bytes):
+        event = MagicMock()
+        event.to_response_dict.return_value = {"status_code": 200, "headers": {}, "body": payload}
+        return event
+
+    def test_split_multibyte_character_decodes_across_events(self):
+        decoder = self._make_decoder()
+        decoder.parser.parse.return_value = {}
+        full = "caf\u00e9".encode("utf-8")
+        first, second = full[:4], full[4:]  # split inside the 2-byte \u00e9
+
+        assert decoder._parse_message_from_event(self._make_event(first)) == "caf"
+        assert decoder._parse_message_from_event(self._make_event(second)) == "\u00e9"
+
+    def test_chunk_bytes_payload_decodes(self):
+        decoder = self._make_decoder()
+        payload = "héllo".encode("utf-8")
+        decoder.parser.parse.return_value = {"chunk": {"bytes": payload}}
+        assert decoder._parse_message_from_event(self._make_event(b"")) == "héllo"
+
+    def test_non_bytes_chunk_payload_returns_none(self):
+        decoder = self._make_decoder()
+        decoder.parser.parse.return_value = {"chunk": {"bytes": "not-bytes"}}
+        assert decoder._parse_message_from_event(self._make_event(b"")) is None
+
+    def test_non_bytes_body_returns_none(self):
+        decoder = self._make_decoder()
+        decoder.parser.parse.return_value = {}
+        event = MagicMock()
+        event.to_response_dict.return_value = {"status_code": 200, "headers": {}, "body": "not-bytes"}
+        assert decoder._parse_message_from_event(event) is None
+
+    def test_truncated_final_event_raises_on_flush(self):
+        decoder = self._make_decoder()
+        decoder.parser.parse.return_value = {}
+        full = "caf\u00e9".encode("utf-8")
+
+        assert decoder._parse_message_from_event(self._make_event(full[:4])) == "caf"
+        with pytest.raises(UnicodeDecodeError):
+            decoder._utf8_decoder.decode(b"", final=True)
+
+    @pytest.mark.asyncio
+    async def test_aiter_bytes_propagates_non_200_error_event(self):
+        decoder = AWSEventStreamDecoder(model="test-model")
+        mock_event = MagicMock()
+        mock_event.to_response_dict.return_value = {
+            "status_code": 500,
+            "headers": {},
+            "body": b"ModelStreamError",
+        }
+        mock_buffer = MagicMock()
+        mock_buffer.__iter__.return_value = [mock_event]
+
+        with patch("botocore.eventstream.EventStreamBuffer", return_value=mock_buffer):
+
+            async def mock_iterator():
+                yield b""
+
+            with pytest.raises(ValueError, match="Bad response code"):
+                async for _ in decoder.aiter_bytes(mock_iterator()):
+                    pass
+
+
 class TestSagemakerTransform:
     def setup_method(self):
         self.config = SagemakerConfig()
