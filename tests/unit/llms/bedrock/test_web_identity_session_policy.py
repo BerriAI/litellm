@@ -344,6 +344,15 @@ class TestPolicyTransportConditions:
             "to keep parity with the bedrock statement"
         )
 
+    def test_only_the_outbound_identity_statement_requires_a_claude_platform_caller(self):
+        directly_called: Final = tuple(
+            stmt for stmt in _captured_policy()["Statement"] if stmt["Sid"] != "ClaudePlatformOutboundIdentityLiteLLM"
+        )
+        assert directly_called
+        assert all("StringEquals" not in stmt["Condition"] for stmt in directly_called), (
+            "statements LiteLLM calls directly must not require aws:CalledViaLast, or OIDC auth 403s on those routes"
+        )
+
 
 _STS_SESSION_POLICY_PLAINTEXT_LIMIT: Final = 2048
 
