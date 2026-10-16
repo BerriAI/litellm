@@ -11,6 +11,7 @@ from zlib import crc32
 
 import httpx
 import pytest
+import respx
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
@@ -620,7 +621,7 @@ async def test_tool_search_forwards_deferred_tools_and_beta_header(
 
 
 async def _native_output_config_sent(
-    respx_mock, effort: str, model_info: Mapping[str, object] | None, **params: object
+    respx_mock: respx.MockRouter, effort: str, model_info: Mapping[str, object] | None, **params: object
 ) -> object:
     route: Final = respx_mock.post(url__regex=_ANTHROPIC_URL).mock(
         return_value=httpx.Response(200, json=_anthropic_body("claude-sonnet-4-6"))
@@ -642,7 +643,9 @@ async def _native_output_config_sent(
 
 
 @pytest.mark.asyncio
-async def test_native_messages_round_output_config_effort_onto_the_deployment_declaration(respx_mock):
+async def test_native_messages_round_output_config_effort_onto_the_deployment_declaration(
+    respx_mock: respx.MockRouter,
+) -> None:
     declared: Final = {"reasoning_effort_levels": ["low", "high"]}
 
     assert await _native_output_config_sent(respx_mock, "medium", declared) == {"effort": "high"}
@@ -650,7 +653,7 @@ async def test_native_messages_round_output_config_effort_onto_the_deployment_de
 
 
 @pytest.mark.asyncio
-async def test_native_messages_drop_an_undeclared_effort_under_drop_params(respx_mock):
+async def test_native_messages_drop_an_undeclared_effort_under_drop_params(respx_mock: respx.MockRouter) -> None:
     declared: Final = {"reasoning_effort_levels": ["low", "high"]}
 
     assert await _native_output_config_sent(respx_mock, "turbo", declared, drop_params=True) is None
@@ -663,8 +666,8 @@ async def test_native_messages_drop_an_undeclared_effort_under_drop_params(respx
     [({"reasoning_effort_levels": ["low", "high"]}, "high"), (None, "medium")],
 )
 async def test_native_messages_round_a_thinking_budget_on_an_adaptive_claude_deployment(
-    respx_mock, model_info: Mapping[str, object] | None, expected_effort: str
-):
+    respx_mock: respx.MockRouter, model_info: Mapping[str, object] | None, expected_effort: str
+) -> None:
     route: Final = respx_mock.post(url__regex=_ANTHROPIC_URL).mock(
         return_value=httpx.Response(200, json=_anthropic_body("claude-opus-5-5"))
     )

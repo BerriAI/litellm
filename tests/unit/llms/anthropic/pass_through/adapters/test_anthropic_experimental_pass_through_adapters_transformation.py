@@ -2871,7 +2871,7 @@ def test_translate_completion_input_params_drops_a_non_numeric_budget_under_drop
     budget: object, monkeypatch: pytest.MonkeyPatch
 ):
     monkeypatch.setattr(litellm, "drop_params", False)
-    translated = AnthropicAdapter().translate_completion_input_params(
+    translated: Final = AnthropicAdapter().translate_completion_input_params(
         _gemini_request_with_budget(budget, drop_params=True)
     )
     assert translated is not None
