@@ -138,7 +138,7 @@ def _mapping_paths(mappings: tuple[_Mapping, ...]) -> Iterator[str]:
     return chain.from_iterable(chain(mapping.python_paths, mapping.rust_paths) for mapping in mappings)
 
 
-def _manifest_at(repo_root: Path, sha: str, path: str) -> tuple[_Manifest, ...] | DriftError:
+def _manifest_at_path(repo_root: Path, sha: str, path: str) -> tuple[_Manifest, ...] | DriftError:
     listing: Final = _git(repo_root, "ls-tree", "-z", sha, "--", path)
     if isinstance(listing, DriftError):
         return listing
@@ -149,6 +149,16 @@ def _manifest_at(repo_root: Path, sha: str, path: str) -> tuple[_Manifest, ...] 
         return source
     manifest: Final = _read_manifest(source, f"{sha}:{path}")
     return manifest if isinstance(manifest, DriftError) else (manifest,)
+
+
+def _manifest_at(repo_root: Path, sha: str, path: str) -> tuple[_Manifest, ...] | DriftError:
+    existing: Final = _manifest_at_path(repo_root, sha, path)
+    if isinstance(existing, DriftError) or existing:
+        return existing
+    previous_path: Final = _historical_manifest_path(repo_root, sha, path)
+    if isinstance(previous_path, DriftError):
+        return previous_path
+    return () if previous_path == path else _manifest_at_path(repo_root, sha, previous_path)
 
 
 def _matches(paths: tuple[str, ...], selectors: tuple[str, ...]) -> bool:
@@ -179,7 +189,7 @@ def _parse_working_change(record: str, tokens: Iterator[str]) -> _PathChange:
 
 
 def _working_changes(repo_root: Path, selectors: tuple[str, ...]) -> tuple[WorkingTreeChange, ...] | DriftError:
-    source: Final = _git(repo_root, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+    source: Final = _git(repo_root, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--renames")
     if isinstance(source, DriftError):
         return source
     tokens: Final = iter(source.split("\0")[:-1])
@@ -191,11 +201,77 @@ def _working_changes(repo_root: Path, selectors: tuple[str, ...]) -> tuple[Worki
     )
 
 
+def _historical_manifest_path(repo_root: Path, sha: str, path: str) -> str | DriftError:
+    working: Final = _working_changes(repo_root, (path,))
+    if isinstance(working, DriftError):
+        return working
+    staged_path: Final = next(
+        (change.old_path for change in working if change.path == path and change.old_path is not None), None
+    )
+    head_path: Final = staged_path if staged_path is not None else path
+    head: Final = _commit(repo_root, "HEAD")
+    if isinstance(head, DriftError):
+        return head
+    endpoint: Final = _git(
+        repo_root,
+        "diff",
+        "--no-color",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--find-renames=50%",
+        "--name-status",
+        "-z",
+        sha,
+        head,
+    )
+    if isinstance(endpoint, DriftError):
+        return endpoint
+    endpoint_path: Final = next(
+        (
+            change.old_path
+            for change in _parse_changes(endpoint)
+            if change.path == head_path and change.status.startswith("R")
+        ),
+        None,
+    )
+    if endpoint_path is not None:
+        return endpoint_path
+    source: Final = _git(
+        repo_root,
+        "log",
+        "--follow",
+        "--format=",
+        "--no-color",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--find-renames=50%",
+        "--diff-filter=R",
+        "--name-status",
+        "-z",
+        f"{sha}..{head}",
+        "--",
+        head_path,
+    )
+    if isinstance(source, DriftError):
+        return source
+    previous: Final = tuple(change.old_path for change in _parse_changes(source) if change.old_path is not None)
+    return previous[-1] if previous else head_path
+
+
 def _change_report(
     repo_root: Path, baseline: str, target: str, change: _PathChange, mappings: tuple[_Mapping, ...]
 ) -> DriftChange | DriftError:
     patch: Final = _git(
-        repo_root, "diff", "--no-ext-diff", "--no-textconv", "--find-renames=50%", baseline, target, "--", *change.paths
+        repo_root,
+        "diff",
+        "--no-color",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--find-renames=50%",
+        baseline,
+        target,
+        "--",
+        *change.paths,
     )
     if isinstance(patch, DriftError):
         return patch
@@ -234,6 +310,7 @@ def _changed_files(
     source: Final = _git(
         repo_root,
         "diff",
+        "--no-color",
         "--no-ext-diff",
         "--no-textconv",
         "--find-renames=50%",

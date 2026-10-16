@@ -57,6 +57,7 @@ def _manifest(
     checkpoint: str | None,
     *,
     checkpoint_state: str | None = None,
+    pretty: bool = False,
     candidates: tuple[str, ...] = ("litellm/", "litellm-rust/"),
     mappings: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         ("messages", ("litellm/messages/", "litellm/common.py"), ("litellm-rust/messages.rs",)),
@@ -75,7 +76,8 @@ def _manifest(
                     {"id": identifier, "python_paths": python_paths, "rust_paths": rust_paths}
                     for identifier, python_paths, rust_paths in mappings
                 ),
-            }
+            },
+            indent=2 if pretty else None,
         ),
         encoding="utf-8",
     )
@@ -123,6 +125,24 @@ def test_reports_python_rust_shared_and_unmapped_changes_with_real_patches(repos
     assert "+    return 'after'" in python_change.patch
     assert result.manifest_sha256 == hashlib.sha256(original_manifest).hexdigest()
     assert manifest.read_bytes() == original_manifest
+
+
+def test_patch_is_usable_when_git_diff_colors_are_forced(repository: Repository) -> None:
+    _write(repository.root, "litellm/common.py", "TIMEOUT = 20\n")
+    _commit(repository.root)
+    _git(repository.root, "config", "color.ui", "always")
+    _git(repository.root, "config", "color.diff", "always")
+    manifest: Final = _manifest(repository.root, repository.baseline)
+
+    result: Final = inspect_drift(repository.root, manifest)
+
+    assert isinstance(result, DriftReport), result
+    assert len(result.changes) == 1
+    patch: Final = result.changes[0].patch
+    assert "-TIMEOUT = 10\n+TIMEOUT = 20\n" in patch
+    patch_path: Final = repository.root.parent / "change.patch"
+    patch_path.write_text(patch, encoding="utf-8")
+    _git(repository.root, "apply", "--check", "--reverse", str(patch_path))
 
 
 def test_detects_deletions_and_renames_outside_candidate_directories(repository: Repository) -> None:
@@ -388,6 +408,130 @@ def test_since_override_keeps_policy_from_the_stored_checkpoint(repository: Repo
     assert result.comparison_sha == comparison
     assert tuple((change.path, change.mapping_ids) for change in result.changes) == (
         ("litellm/messages/handler.py", ("previous",)),
+    )
+
+
+@pytest.mark.parametrize("rename_state", ("none", "committed", "staged"))
+@pytest.mark.parametrize("use_override", (False, True))
+def test_renamed_manifest_keeps_historical_watch_paths(
+    repository: Repository, rename_state: str, use_override: bool
+) -> None:
+    _write(repository.root, "legacy-owned/handler.py", "ENABLED = False\n")
+    _manifest(
+        repository.root,
+        None,
+        candidates=("legacy-owned/",),
+        mappings=(("messages", ("legacy-owned/",), ("native/",)),),
+        pretty=True,
+    )
+    checkpoint: Final = _commit(repository.root)
+    _manifest(
+        repository.root,
+        checkpoint,
+        candidates=("unrelated/",),
+        mappings=(("messages", ("unrelated/",), ("native/",)),),
+        pretty=True,
+    )
+    (repository.root / "policy").mkdir()
+    _git(repository.root, "mv", "drift.json", "policy/drift.json")
+    comparison: Final = _commit(repository.root)
+    _write(repository.root, "legacy-owned/handler.py", "ENABLED = True\n")
+    _commit(repository.root)
+    if rename_state != "none":
+        _git(repository.root, "mv", "policy/drift.json", "policy/current-drift.json")
+    if rename_state == "committed":
+        _commit(repository.root)
+    if rename_state == "staged":
+        _git(repository.root, "config", "status.renames", "false")
+    manifest: Final = repository.root / ("policy/drift.json" if rename_state == "none" else "policy/current-drift.json")
+
+    result: Final = inspect_drift(repository.root, manifest, since_ref=comparison if use_override else None)
+
+    assert isinstance(result, DriftReport), result
+    assert result.checkpoint_sha == checkpoint
+    assert result.comparison_sha == (comparison if use_override else checkpoint)
+    assert ("legacy-owned/handler.py", ("messages",)) in tuple(
+        (change.path, change.mapping_ids) for change in result.changes
+    )
+    mapping: Final = next(mapping for mapping in result.mappings if mapping.id == "messages")
+    assert mapping.python_paths == ("legacy-owned/", "unrelated/")
+    if rename_state == "staged":
+        assert ("policy/drift.json", "policy/current-drift.json") in tuple(
+            (change.old_path, change.path) for change in result.working_tree_changes
+        )
+
+
+def test_manifest_rename_history_survives_later_large_policy_rewrites(repository: Repository) -> None:
+    _write(repository.root, "legacy-owned/topic0/handler.py", "ENABLED = False\n")
+    _manifest(
+        repository.root,
+        None,
+        candidates=("legacy-owned/",),
+        mappings=tuple(
+            (f"topic{index}", (f"legacy-owned/topic{index}/",), (f"native/topic{index}/",)) for index in range(10)
+        ),
+        pretty=True,
+    )
+    checkpoint: Final = _commit(repository.root)
+    _git(repository.root, "mv", "drift.json", "intermediate-drift.json")
+    comparison: Final = _commit(repository.root)
+    replacement: Final = _manifest(
+        repository.root,
+        checkpoint,
+        candidates=("unrelated/",),
+        mappings=(("current", ("unrelated/",), ("native/",)),),
+        pretty=True,
+    )
+    (repository.root / "intermediate-drift.json").write_bytes(replacement.read_bytes())
+    replacement.unlink()
+    _write(repository.root, "legacy-owned/topic0/handler.py", "ENABLED = True\n")
+    _commit(repository.root)
+    _git(repository.root, "mv", "intermediate-drift.json", "current-drift.json")
+    _commit(repository.root)
+
+    result: Final = inspect_drift(repository.root, repository.root / "current-drift.json", since_ref=comparison)
+
+    assert isinstance(result, DriftReport), result
+    assert ("legacy-owned/topic0/handler.py", ("topic0",)) in tuple(
+        (change.path, change.mapping_ids) for change in result.changes
+    )
+    assert tuple(mapping.id for mapping in result.mappings) == ("current", *(f"topic{index}" for index in range(10)))
+
+
+def test_future_target_recovers_renamed_policy_from_an_older_checkout(repository: Repository) -> None:
+    _manifest(
+        repository.root,
+        None,
+        candidates=("legacy-owned/",),
+        mappings=(("legacy", ("legacy-owned/",), ("native/",)),),
+        pretty=True,
+    )
+    checkpoint: Final = _commit(repository.root)
+    _manifest(
+        repository.root,
+        checkpoint,
+        candidates=("future-owned/",),
+        mappings=(("future", ("future-owned/",), ("native/",)),),
+        pretty=True,
+    )
+    _git(repository.root, "mv", "drift.json", "future-drift.json")
+    _write(repository.root, "future-owned/handler.py", "ENABLED = True\n")
+    target: Final = _commit(repository.root)
+    _git(repository.root, "checkout", "--quiet", "--detach", checkpoint)
+    manifest: Final = _manifest(
+        repository.root,
+        checkpoint,
+        candidates=("legacy-owned/",),
+        mappings=(("legacy", ("legacy-owned/",), ("native/",)),),
+        pretty=True,
+    )
+
+    result: Final = inspect_drift(repository.root, manifest, target_ref=target)
+
+    assert isinstance(result, DriftReport), result
+    assert result.target_sha == target
+    assert ("future-owned/handler.py", ("future",)) in tuple(
+        (change.path, change.mapping_ids) for change in result.changes
     )
 
 

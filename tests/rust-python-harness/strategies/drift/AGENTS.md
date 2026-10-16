@@ -6,7 +6,7 @@ Compare committed Python and Rust changes using this folder's `drift.json`. Run 
 uv run python -m tests.rust-python-harness run drift --target HEAD --output /tmp/litellm-drift.json
 ```
 
-Paths are repository-relative files or directory prefixes ending in `/`. Keep unmapped changes and uncommitted files visible in the report
+Paths are repository-relative files or directory prefixes ending in `/`. Keep unmapped changes and uncommitted files visible in the report. Commit manifest renames separately from mapping edits so Git can follow the old watch paths
 
 `checkpoint_sha` is a comparison snapshot. `checkpoint_state` records `unknown`, `drifted`, or `aligned` at that snapshot. Never update either automatically. `no_changes` does not imply alignment
 

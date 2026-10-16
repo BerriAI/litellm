@@ -13,7 +13,9 @@
     "packaging/litellm-core/",
     "Makefile",
     ".github/workflows/",
-    ".github/CODEOWNERS"
+    ".github/CODEOWNERS",
+    "enterprise/litellm_enterprise/",
+    "enterprise/pyproject.toml"
   ],
   "mappings": [
     {
@@ -39,7 +41,10 @@
         "litellm/llms/github_copilot/messages/",
         "litellm/llms/minimax/messages/",
         "litellm/llms/openai_like/messages/",
-        "litellm/llms/tencent/messages/"
+        "litellm/llms/tencent/messages/",
+        "litellm/llms/anthropic/common_utils.py",
+        "litellm/types/llms/anthropic.py",
+        "litellm/types/llms/anthropic_tool_search.py"
       ],
       "rust_paths": [
         "litellm-rust/crates/inference-messages/",
@@ -58,7 +63,10 @@
         "litellm-rust/crates/llms/src/openai_like/messages/",
         "litellm-rust/crates/llms/src/openrouter/messages/",
         "litellm-rust/crates/llms/src/tencent/messages/",
-        "litellm-rust/crates/llms/src/vertex_ai/messages/"
+        "litellm-rust/crates/llms/src/vertex_ai/messages/",
+        "litellm-rust/crates/llms/src/anthropic/common_utils.rs",
+        "litellm-rust/crates/llms/src/anthropic/beta_headers.rs",
+        "litellm-rust/crates/llms-types/src/providers/anthropic/"
       ]
     },
     {
@@ -90,7 +98,12 @@
         "litellm/llms/perplexity/responses/",
         "litellm/llms/sail/responses/",
         "litellm/llms/volcengine/responses/",
-        "litellm/llms/xai/responses/"
+        "litellm/llms/xai/responses/",
+        "litellm/llms/anthropic/pass_through/responses_adapters/",
+        "litellm/llms/openai/common_utils.py",
+        "litellm/llms/openai/workload_identity.py",
+        "enterprise/litellm_enterprise/proxy/common_utils/check_responses_cost.py",
+        "enterprise/litellm_enterprise/proxy/common_utils/managed_object_attribution.py"
       ],
       "rust_paths": [
         "litellm-rust/crates/inference-responses/",
@@ -118,7 +131,12 @@
         "litellm/caching/",
         "litellm/secret_managers/",
         "litellm/model_prices_and_context_window_backup.json",
-        "model_prices_and_context_window.json"
+        "model_prices_and_context_window.json",
+        "litellm/router_utils/common_utils.py",
+        "litellm/router_utils/cooldown_handlers.py",
+        "litellm/types/router.py",
+        "litellm/types/litellm_params.py",
+        "litellm/proxy/common_request_processing.py"
       ],
       "rust_paths": [
         "litellm-rust/crates/core-utils/",
@@ -134,7 +152,10 @@
         "litellm-rust/crates/router/",
         "litellm-rust/crates/router-types/",
         "litellm-rust/crates/gateway-inference/",
-        "litellm-rust/crates/model-catalog/"
+        "litellm-rust/crates/model-catalog/",
+        "litellm-rust/crates/llms/src/base_llm/sse.rs",
+        "litellm-rust/crates/llms/src/base_llm/auth.rs",
+        "litellm-rust/crates/llms/src/error.rs"
       ]
     }
   ]
