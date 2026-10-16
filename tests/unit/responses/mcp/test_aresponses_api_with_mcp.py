@@ -1,15 +1,18 @@
 import asyncio
 import json
 import logging
+import sys
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import nullcontext
 from datetime import datetime
-from types import MappingProxyType
+from types import MappingProxyType, SimpleNamespace
 from typing import Any, Final, List, cast
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 import respx
+from mcp.types import CallToolResult, TextContent
 from mcp.types import Tool as MCPTool
 
 
@@ -1677,10 +1680,43 @@ async def test_non_stream_auto_execute_bills_the_paid_first_round_when_the_follo
             httpx.Response(400, json=context_window_error),
         ),
     )
+    monkeypatch.setitem(
+        sys.modules, "litellm.proxy.proxy_server", SimpleNamespace(proxy_logging_obj=None, prisma_client=None)
+    )
+    call_tool: Final = AsyncMock(return_value=CallToolResult(content=[TextContent(type="text", text="PING")]))
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        SimpleNamespace(
+            catalog=SimpleNamespace(operation=nullcontext),
+            get_registry=MagicMock(return_value={}),
+            call_tool=call_tool,
+            get_mcp_server_from_tool_name=MagicMock(return_value=None),
+            get_mcp_server_by_name=MagicMock(return_value=None),
+        ),
+    )
+    echo_tool: Final = MCPTool.model_validate(
+        {"name": "echo", "inputSchema": {"type": "object", "properties": {"value": {"type": "string"}}}},
+        by_name=False,
+    )
     recorder: Final = _RoundRecorder()
 
-    with pytest.raises(litellm.BadRequestError):
-        await _auto_execute(_rounds_logging_obj(recorder, "mcp-rounds-follow-up-fails"), _ECHO_MCP_TOOL, "PING")
+    with (
+        patch.object(
+            LiteLLM_Proxy_MCP_Handler,
+            "process_mcp_tools_without_openai_transform",
+            AsyncMock(return_value=([echo_tool], {"echo": "demo"})),
+        ),
+        pytest.raises(litellm.BadRequestError),
+    ):
+        await litellm.aresponses(
+            model="openai/gpt-5.6",
+            input="Call echo with PING",
+            tools=[dict(_ECHO_MCP_TOOL)],
+            api_key="sk-mcp-rounds",
+            api_base="https://mcp-rounds.example.com/v1",
+            litellm_call_id="mcp-rounds-follow-up-fails",
+            litellm_logging_obj=_rounds_logging_obj(recorder, "mcp-rounds-follow-up-fails"),
+        )
     await _settle(lambda: len(recorder.failed) > 0)
 
     assert recorder.logged == ()
@@ -1688,6 +1724,9 @@ async def test_non_stream_auto_execute_bills_the_paid_first_round_when_the_follo
     assert (recorder.failed[0]["prompt_tokens"], recorder.failed[0]["completion_tokens"]) == (71, 19)
     assert recorder.failed[0]["response_cost"] == pytest.approx(_round_cost(_ROUND_ONE_BODY))
     assert recorder.failed[0]["response_cost"] > 0
+    assert call_tool.await_count == 1
+    assert call_tool.await_args is not None
+    assert call_tool.await_args.kwargs["litellm_logging_obj"].litellm_call_id != recorder.failed[0]["id"]
 
 
 @pytest.mark.asyncio

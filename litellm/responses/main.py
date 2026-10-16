@@ -365,7 +365,6 @@ async def aresponses_api_with_mcp(
                     mcp_server_auth_headers=mcp_server_auth_headers,
                     oauth2_headers=oauth2_headers,
                     raw_headers=raw_headers_from_request,
-                    litellm_call_id=kwargs.get("litellm_call_id"),
                     litellm_trace_id=kwargs.get("litellm_trace_id"),
                     request_tags=LiteLLM_Proxy_MCP_Handler.get_parent_request_tags(kwargs),
                     guardrail_context=MCPRequestContext.resolve_guardrail_context(
