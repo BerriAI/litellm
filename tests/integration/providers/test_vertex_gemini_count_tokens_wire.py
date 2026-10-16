@@ -625,6 +625,24 @@ def test_count_tokens_rejects_a_context_edit_messages_rejects_without_an_upstrea
         assert peer.drain() == ()
 
 
+def test_count_tokens_rejects_an_invalid_edit_from_a_coding_agent_that_turns_drop_params_off(
+    gateway: Gateway,
+) -> None:
+    peer: Final = _GeminiPeer()
+    with wire_server(peer) as wire, gateway.scenario() as scenario:
+        model: Final = _ai_studio_deployment(scenario, wire.url)
+        body: Final = _agent_body(
+            model, uuid4().hex, {"context_management": _COMPACT_UNDER_THE_MINIMUM_TRIGGER, "drop_params": False}
+        )
+        claude_code: Final = MappingProxyType({"User-Agent": "claude-cli/2.1.0 (external, cli)"})
+        generated: Final = gateway.request("POST", "/v1/messages", {**body, "max_tokens": 16}, headers=claude_code)
+        counted: Final = gateway.request("POST", "/v1/messages/count_tokens", body, headers=claude_code)
+        assert generated.status_code == 400, generated.text
+        assert counted.status_code == 400, counted.text
+        assert _error_type(counted) == _error_type(generated)
+        assert peer.drain() == ()
+
+
 @pytest.mark.parametrize(
     ("deployment_options", "request_options", "user_agent"),
     (

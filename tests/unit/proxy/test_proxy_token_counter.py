@@ -154,6 +154,7 @@ async def test_anthropic_messages_count_tokens_endpoint():
 
     # Mock request object
     mock_request = MagicMock(spec=Request)
+    mock_request.headers = {}
     mock_request_data = {
         "model": "claude-3-sonnet-20240229",
         "messages": [{"role": "user", "content": "Hello Claude!"}],
@@ -233,6 +234,7 @@ async def test_anthropic_messages_count_tokens_with_non_anthropic_model():
 
     # Mock request object
     mock_request = MagicMock(spec=Request)
+    mock_request.headers = {}
     mock_request_data = {
         "model": "gpt-4",
         "messages": [{"role": "user", "content": "Hello GPT!"}],
