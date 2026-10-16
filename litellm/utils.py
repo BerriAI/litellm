@@ -1374,15 +1374,16 @@ def _dispatch_success_logging(
     is_completion_with_fallbacks: bool,
     is_litellm_internal_call: bool,
 ) -> None:
-    if not is_litellm_internal_call:
-        _schedule_async_success_logging(
-            logging_obj=logging_obj,
-            result=result,
-            start_time=start_time,
-            end_time=end_time,
-            is_completion_with_fallbacks=is_completion_with_fallbacks,
-        )
+    if is_litellm_internal_call:
+        return
 
+    _schedule_async_success_logging(
+        logging_obj=logging_obj,
+        result=result,
+        start_time=start_time,
+        end_time=end_time,
+        is_completion_with_fallbacks=is_completion_with_fallbacks,
+    )
     logging_obj.handle_sync_success_callbacks_for_async_calls(
         result=result,
         start_time=start_time,
@@ -9975,6 +9976,7 @@ class ProviderConfigManager:
     def get_provider_realtime_config(
         model: str,
         provider: LlmProviders,
+        drop_params: bool = False,
     ) -> BaseRealtimeConfig | None:
         if LlmProviders.GEMINI == provider:
             from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
@@ -9983,7 +9985,7 @@ class ProviderConfigManager:
         if LlmProviders.META == provider:
             from litellm.llms.meta.realtime.transformation import MetaRealtimeConfig
 
-            return MetaRealtimeConfig()
+            return MetaRealtimeConfig(drop_params=drop_params)
         return None
 
     @staticmethod
