@@ -1,6 +1,6 @@
 from typing import Final, Literal
 
-from pydantic import Field
+from pydantic import BaseModel, Field
 
 from .base import GuardrailConfigModel
 
@@ -8,7 +8,7 @@ DEFAULT_API_BASE: Final = "https://trustguard.neuraltrust.ai"
 DEFAULT_TIMEOUT: Final = 5.0
 
 
-class NeuralTrustGuardrailConfigModel(GuardrailConfigModel):
+class NeuralTrustGuardrailConfigModel(GuardrailConfigModel[BaseModel]):
     """Config for the NeuralTrust TrustGuard native LiteLLM hook."""
 
     api_key: str | None = Field(

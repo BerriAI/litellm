@@ -6,10 +6,10 @@ Calls TrustGuard POST /v1/evaluate on pre_call (input) and post_call (output).
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from itertools import chain, product
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal
+from typing import TYPE_CHECKING, Final, Literal, Protocol
 
 import httpx
 from fastapi import HTTPException
@@ -20,20 +20,20 @@ from litellm.exceptions import Timeout
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     get_session_id_from_request_data,
-    log_guardrail_information,
 )
-from litellm.llms.custom_httpx.http_handler import (
-    get_async_httpx_client,
-    httpxSpecialProvider,
-)
+from litellm.llms.custom_httpx import http_handler
+from litellm.llms.custom_httpx.http_handler import httpxSpecialProvider
 from litellm.types.guardrails import GuardrailEventHooks, Mode
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.proxy.guardrails.guardrail_hooks.neuraltrust import DEFAULT_API_BASE, DEFAULT_TIMEOUT
+from litellm.types.proxy.guardrails.guardrail_hooks.neuraltrust import (
+    DEFAULT_API_BASE,
+    DEFAULT_TIMEOUT,
+    NeuralTrustGuardrailConfigModel,
+)
 from litellm.types.utils import ChatCompletionMessageToolCall, GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 EVALUATE_PATH: Final = "/v1/evaluate"
 CONSUMER_ID_KEYS: Final = (
@@ -53,6 +53,17 @@ BLOCKING_STATUSES: Final = frozenset({STATUS_BLOCK, STATUS_ASK})
 KNOWN_STATUSES: Final = frozenset({STATUS_ALLOW, STATUS_TRANSFORM, STATUS_REPORT, *BLOCKING_STATUSES})
 UNREACHABLE_HTTP_STATUSES: Final = frozenset({502, 504})
 TRANSFORM_MISSING: Final = "TrustGuard transform missing payload"
+
+
+class _TrustGuardClient(Protocol):
+    async def post(
+        self,
+        url: str,
+        *,
+        json: dict[str, object],
+        headers: dict[str, str],
+        timeout: float | httpx.Timeout | None,
+    ) -> httpx.Response: ...
 
 
 class _TrustGuardUnreachable(Exception):
@@ -192,11 +203,7 @@ class NeuralTrustGuardrail(CustomGuardrail):
     """LiteLLM hook that evaluates prompts and completions with TrustGuard."""
 
     @staticmethod
-    def get_config_model() -> type[GuardrailConfigModel]:
-        from litellm.types.proxy.guardrails.guardrail_hooks.neuraltrust import (
-            NeuralTrustGuardrailConfigModel,
-        )
-
+    def get_config_model() -> type[NeuralTrustGuardrailConfigModel]:
         return NeuralTrustGuardrailConfigModel
 
     @classmethod
@@ -218,9 +225,11 @@ class NeuralTrustGuardrail(CustomGuardrail):
         event_hook: GuardrailEventHooks | Mode | str | Sequence[str] | None = None,
         default_on: bool | None = None,
     ) -> None:
-        self.async_handler = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.GuardrailCallback,
+        factory_adapter: Final[TypeAdapter[Callable[[httpxSpecialProvider], _TrustGuardClient]]] = TypeAdapter(
+            Callable[[httpxSpecialProvider], _TrustGuardClient]
         )
+        client_factory: Final = factory_adapter.validate_python(getattr(http_handler, "get_async_httpx_client"))
+        self.async_handler = client_factory(httpxSpecialProvider.GuardrailCallback)
         self.api_base = (api_base or os.environ.get("TRUSTGUARD_API_BASE") or DEFAULT_API_BASE).rstrip("/")
         self.api_key = api_key or os.environ.get("TRUSTGUARD_API_KEY") or ""
         if not self.api_key:
@@ -245,7 +254,6 @@ class NeuralTrustGuardrail(CustomGuardrail):
             default_on=bool(default_on),
         )
 
-    @log_guardrail_information
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
