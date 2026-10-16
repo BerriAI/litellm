@@ -833,6 +833,11 @@ class RealTimeStreaming:
         self._guardrail_cancel_event_ids = self._guardrail_cancel_event_ids | {event_id}
         await self._send_to_backend(json.dumps({"type": "response.cancel", "event_id": event_id}))
 
+    async def _withdraw_blocked_turn(self, item_id: str | None) -> None:
+        await self._send_guardrail_cancel()
+        if item_id is not None:
+            await self._send_to_backend(json.dumps({"type": "conversation.item.delete", "item_id": item_id}))
+
     def _is_guardrail_cancel_error(self, event: Mapping[str, object]) -> bool:
         return _error_event_id(event) in self._guardrail_cancel_event_ids
 
@@ -1015,7 +1020,7 @@ class RealTimeStreaming:
                 if pre_block_backend_message is not None:
                     await self._send_to_backend(pre_block_backend_message)
                 if not self._is_transcription_session:
-                    await self._send_guardrail_cancel()
+                    await self._withdraw_blocked_turn(item_id)
                 # Send the policy violation hint (shows as small gray status text in UI).
                 await self.websocket.send_text(
                     json.dumps(
@@ -1145,10 +1150,7 @@ class RealTimeStreaming:
                 self.store_message(event_str)
                 self._capture_transcription_usage(event)
                 await self._send_event_to_client(event, event_str)
-                blocked = await self.run_realtime_guardrails(
-                    cast(str, transcript),
-                    item_id=cast(str | None, event.get("item_id")),
-                )
+                blocked = await self.run_realtime_guardrails(cast(str, transcript))
                 if not blocked and self._should_disable_vad_auto_response():
                     await self._send_to_backend(json.dumps({"type": "response.create"}))
                 continue

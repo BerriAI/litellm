@@ -4186,3 +4186,49 @@ async def test_client_never_sees_the_error_caused_by_the_guardrail_cancel(monkey
         ("response_cancel_not_active", "evt_from_client"),
         ("response_cancel_not_active", "litellm_guardrail_from_client"),
     ]
+
+
+@pytest.mark.asyncio
+async def test_blocked_transcript_is_removed_from_the_conversation_before_the_refusal_turn(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    class _BlockingGuardrail(CustomGuardrail):
+        async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+            raise ValueError("blocked")
+
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [
+            _BlockingGuardrail(
+                guardrail_name="blocking", event_hook=GuardrailEventHooks.realtime_input_transcription, default_on=True
+            )
+        ],
+    )
+    client_ws: Final = MagicMock()
+    client_ws.send_text = AsyncMock()
+    backend_ws: Final = MagicMock()
+    backend_ws.send = AsyncMock()
+    backend_frames: Final = iter((_make_transcript_event("blocked words", item_id="item_blocked"),))
+
+    async def recv(**_kwargs: object) -> bytes:
+        frame = next(backend_frames, None)
+        if frame is None:
+            raise ConnectionClosed(None, None)
+        return frame
+
+    backend_ws.recv = recv
+    logging_obj: Final = _mock_logging()
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+
+    await RealTimeStreaming(client_ws, backend_ws, logging_obj).backend_to_client_send_messages()
+
+    sent: Final = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list]
+    assert [event["type"] for event in sent] == [
+        "response.cancel",
+        "conversation.item.delete",
+        "conversation.item.create",
+        "response.create",
+    ]
+    assert sent[1]["item_id"] == "item_blocked"

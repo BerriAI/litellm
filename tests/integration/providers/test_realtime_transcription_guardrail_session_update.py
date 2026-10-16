@@ -8,10 +8,10 @@ while a client frame alone never flips a voice session into one. Every row runs 
 which answers the injected and rewritten updates the way the vendors do.
 
 A blocked transcript on a transcription session reaches the client as a ``guardrail_violation`` error and
-nothing else: the ``response.cancel``, the voiced block prompt and the ``response.create`` a voice session gets
-never go to a backend that cannot speak, while ``on_violation: end_session`` and ``end_session_after_n_fails``
-still close the session. A guardrail that raises anything but a block closes the session the way it does on a
-voice session.
+nothing else: the ``response.cancel``, the blocked item's deletion, the voiced block prompt and the
+``response.create`` a voice session gets never go to a backend that cannot speak, while
+``on_violation: end_session`` and ``end_session_after_n_fails`` still close the session. A guardrail that raises
+anything but a block closes the session the way it does on a voice session.
 """
 
 from __future__ import annotations
@@ -51,6 +51,7 @@ from tests.integration._support.database import read_rows
 from tests.integration._support.process import (
     OwnedProxy,
     UpstreamSlot,
+    graceful_stop_seconds,
     owned_proxy_process,
     owned_upstream,
     stop_root_process,
@@ -60,7 +61,7 @@ from tests.integration.cost_calculation.cost_tracking_case import RealtimeRespon
 
 RecordProperty = Callable[[str, object], None]
 
-pytestmark: Final = pytest.mark.timeout(180)
+pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
 
 WORKERS: Final = 2
 BURST: Final = 20
@@ -189,7 +190,12 @@ GUARDRAIL_END_CLOSE: Final = 1000
 PROXY_FAILURE_CLOSE: Final = 1011
 PROXY_FAILURE_REASON: Final = "proxy failed while relaying the upstream websocket"
 TOOL_OUTPUT_BLOCKED: Final = json.dumps({"error": "Tool output blocked by content policy"})
-VOICE_BLOCK_FRAMES: Final = ("response.cancel", "conversation.item.create", "response.create")
+VOICE_BLOCK_FRAMES: Final = (
+    "response.cancel",
+    "conversation.item.delete",
+    "conversation.item.create",
+    "response.create",
+)
 CREATED_SECONDS: Final = 60.0
 STEP_SECONDS: Final = 15.0
 SDK_SECONDS: Final = 45.0
@@ -1107,9 +1113,7 @@ def test_voice_session_blocked_transcript_is_refused_through_the_backend(guardra
             "session.update",
             "session.update",
             "input_audio_buffer.commit",
-            "response.cancel",
-            "conversation.item.create",
-            "response.create",
+            *VOICE_BLOCK_FRAMES,
         ), _sent(observed)
         _assert_voice_updates(observed)
 
@@ -1143,9 +1147,7 @@ def test_client_declared_transcription_type_does_not_bypass_the_voice_guardrail(
             "session.update",
             "session.update",
             "input_audio_buffer.commit",
-            "response.cancel",
-            "conversation.item.create",
-            "response.create",
+            *VOICE_BLOCK_FRAMES,
         ), _sent(observed)
         assert _session_updates(observed) == (
             GA_INJECTED_UPDATE,
@@ -1293,6 +1295,7 @@ def test_xai_voice_session_gets_untyped_gates_and_no_unguarded_answer(guardrail_
 
 @pytest.mark.xfail(
     strict=True,
+    raises=AssertionError,
     reason=(
         "xAI answers the guardrail's response.cancel with an error carrying its own event_id, so the proxy cannot "
         "tell it apart from an error for a client event and forwards it, as the merge base does"
