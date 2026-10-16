@@ -26,7 +26,7 @@ interface MCPToolPermissionsProps {
   selectedAccessGroups?: readonly string[];
   selectedToolsets?: readonly string[];
   toolPermissions: Record<string, string[]>;
-  onChange: (toolPermissions: Record<string, string[]>) => void;
+  onChange: (toolPermissions: Record<string, string[]>, origin: "default" | "edit") => void;
   disabled?: boolean;
   preserveUnrestrictedServers?: readonly string[];
 }
@@ -141,7 +141,10 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
           const nonDeleteTools = fetchedTools
             .filter((t) => classifyToolOp(t.name, t.description || "") !== "delete")
             .map((t) => t.name);
-          onChange(applyToolPermissionWrite({ toolPermissions: latestPermissions, entry, allowed: nonDeleteTools }));
+          onChange(
+            applyToolPermissionWrite({ toolPermissions: latestPermissions, entry, allowed: nonDeleteTools }),
+            "default",
+          );
         }
       }
     } catch (err) {
@@ -175,7 +178,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
       entry.source.kind !== "toolset" && names.length > 0 && names.every((n) => allowed.includes(n))
         ? [MCP_ALL_TOOLS_WILDCARD]
         : allowed;
-    onChange(applyToolPermissionWrite({ toolPermissions, entry, allowed: next }));
+    onChange(applyToolPermissionWrite({ toolPermissions, entry, allowed: next }), "edit");
   };
 
   const handleSelectAll = (entry: EffectiveMcpServer) => {

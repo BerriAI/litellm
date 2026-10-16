@@ -89,7 +89,9 @@ interface KeyEditViewProps {
   premiumUser?: boolean;
 }
 
-export const KeyEditView = (props: KeyEditViewProps) => <KeyEditSession key={props.keyData.token} {...props} />;
+const sessionKey = (keyData: KeyResponse) => keyData.token || keyData.token_id;
+
+export const KeyEditView = (props: KeyEditViewProps) => <KeyEditSession key={sessionKey(props.keyData)} {...props} />;
 
 function KeyEditSession({
   keyData,
@@ -200,9 +202,7 @@ function KeyEditSession({
   }, [autoRotationEnabled, form]);
 
   useEffect(() => {
-    if (rotationInterval) {
-      form.setValue("rotation_interval", rotationInterval, { shouldDirty: true });
-    }
+    if (rotationInterval) form.setValue("rotation_interval", rotationInterval, { shouldDirty: true });
   }, [rotationInterval, form]);
 
   // Fetch tags for selector
@@ -775,7 +775,9 @@ function KeyEditSession({
               selectedAccessGroups={mcpSelection?.accessGroups || []}
               selectedToolsets={mcpSelection?.toolsets || []}
               toolPermissions={(mcpToolPermissions as Record<string, string[]> | undefined) || {}}
-              onChange={(toolPerms) => form.setValue("mcp_tool_permissions", toolPerms, { shouldDirty: true })}
+              onChange={(perms, origin) =>
+                form.setValue("mcp_tool_permissions", perms, { shouldDirty: origin === "edit" })
+              }
             />
           </div>
 
