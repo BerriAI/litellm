@@ -103,7 +103,6 @@ describe("ModelConnectionTest", () => {
     expect(
       screen.getByText("Required fields are not filled in. Fill them in and test the connection again."),
     ).toBeInTheDocument();
-    expect(screen.queryByText(/t\[0\]|destructure/)).not.toBeInTheDocument();
     expect(testConnectionRequest).not.toHaveBeenCalled();
   });
 

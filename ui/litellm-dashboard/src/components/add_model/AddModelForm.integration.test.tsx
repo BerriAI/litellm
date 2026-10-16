@@ -925,9 +925,12 @@ describe("AddModelForm", () => {
     it("runs the connection test for an Azure deployment name", async () => {
       const { user, clickTestConnect } = await renderForm(Providers.Azure);
       await pickProvider(user, /Azure/);
-      fireEvent.change(screen.getByLabelText(/API Base/), { target: { value: "https://example.openai.azure.com" } });
       fireEvent.change(screen.getByLabelText(/LiteLLM Model Name/), { target: { value: "my-deployment" } });
 
+      await clickTestConnect();
+      await expectBlockedWith("Required");
+
+      fireEvent.change(screen.getByLabelText(/API Base/), { target: { value: "https://example.openai.azure.com" } });
       await clickTestConnect();
 
       await expectTestRun({ model: "azure/my-deployment", api_base: "https://example.openai.azure.com" });
