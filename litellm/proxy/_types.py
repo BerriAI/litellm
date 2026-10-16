@@ -957,6 +957,8 @@ class LiteLLMRoutes(enum.Enum):
             "/user/available_users",
             "/user/available_roles",
             "/user/daily/activity",
+            # Usage > Ask AI: a POST that only reads daily activity aggregates.
+            "/usage/ai/chat",
             "/user/daily/activity/aggregated",
             "/user/daily/activity/aggregated/keys",
             "/user/daily/activity/aggregated/search",
