@@ -17,6 +17,7 @@ import asyncio
 import contextlib
 import json
 from collections.abc import Callable
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -967,7 +968,7 @@ def _delete_callback_roundtrip(
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
     monkeypatch.setattr(ps, "store_model_in_db", True)
 
-    fake_proxy_config = MagicMock()
+    fake_proxy_config: Final = MagicMock()
     fake_proxy_config.get_config = AsyncMock(return_value={"litellm_settings": litellm_settings})
     fake_proxy_config.save_config = AsyncMock()
     fake_proxy_config.add_deployment = AsyncMock()
@@ -975,8 +976,8 @@ def _delete_callback_roundtrip(
     monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
-        response = client.post("/config/callback/delete", json={"callback_name": callback_name})
-    saved = fake_proxy_config.save_config.await_args.kwargs["new_config"]["litellm_settings"]
+        response: Final = client.post("/config/callback/delete", json={"callback_name": callback_name})
+    saved: Final = fake_proxy_config.save_config.await_args.kwargs["new_config"]["litellm_settings"]
     return response, saved
 
 
