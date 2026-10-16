@@ -4805,7 +4805,7 @@ def test_reapply_runtime_registrations_drops_request_scoped_registrations(monkey
         _invalidate_model_cost_lowercase_map()
 
 
-def test_model_cost_walks_survive_a_registration_landing_mid_walk(monkeypatch):
+def test_model_cost_walks_survive_a_registration_landing_mid_walk(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     A price data reload rebuilds the lowercase lookup map and the provider model
     sets by walking litellm.model_cost while request threads keep registering
@@ -4822,7 +4822,7 @@ def test_model_cost_walks_survive_a_registration_landing_mid_walk(monkeypatch):
             return super().lower()
 
     class _EntryRegisteredMidWalk(dict):
-        def get(self, field, default=None):
+        def get(self, field: str, default: object = None) -> object:
             litellm.model_cost.setdefault("lit-5853-registered-during-add-known-models", {"mode": "chat"})
             return super().get(field, default)
 
@@ -4848,7 +4848,7 @@ class _KeyWhoseLoweringLosesTheRace(str):
         return super().lower()
 
 
-def test_case_insensitive_model_cost_lookup_survives_an_invalidation_mid_lookup():
+def test_case_insensitive_model_cost_lookup_survives_an_invalidation_mid_lookup() -> None:
     """
     _get_model_cost_key read the module-level lowercase map after rebuilding it, so a
     registration on another thread that invalidated the map in between turned the
@@ -7068,7 +7068,7 @@ def test_get_model_info_gemini(monkeypatch):
             assert info.get("rpm") is not None, f"{model} does not have rpm"
 
 
-def test_register_model_without_a_provider_never_inherits_another_providers_entry(monkeypatch):
+def test_register_model_without_a_provider_never_inherits_another_providers_entry(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     The router registers a deployment's shared ``{provider}/{model}`` key without
     ``litellm_provider``. Matching the built-in entry as a wildcard then handed

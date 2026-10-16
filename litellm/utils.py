@@ -3285,6 +3285,24 @@ def _without_synthesized_costs(
     )
 
 
+def _without_overridden_price_variants(
+    entry: Mapping[str, object], value: Mapping[str, object]
+) -> Mapping[str, object]:
+    """A caller's flat ``input_cost_per_token`` / ``output_cost_per_token`` is its price at every tier, so the
+    inherited tier, priority, flex and batch variants of that direction, and ``tiered_pricing``, must not override
+    it above a token threshold or for a service tier."""
+    overridden_prefixes: Final = tuple(
+        f"{cost_field}_" for cost_field in _TOKEN_COST_FIELDS if value.get(cost_field) is not None
+    )
+    return MappingProxyType(
+        {
+            name: field_value
+            for name, field_value in entry.items()
+            if not name.startswith(overridden_prefixes) and not (overridden_prefixes and name == "tiered_pricing")
+        }
+    )
+
+
 def _resolve_builtin_model_cost_entry(key: str, provider: str) -> dict[str, object] | None:
     """Best-effort lookup of a built-in ``model_cost`` entry for a custom key
     whose shape ``get_model_info`` cannot resolve (repeated provider prefixes
@@ -3491,7 +3509,7 @@ def register_model(
                 model_cost_key = key
                 builtin_entry = _resolve_builtin_model_cost_entry(key=_key_str, provider=provider)
                 existing_model = (
-                    builtin_entry
+                    dict(_without_overridden_price_variants(builtin_entry, value))
                     if builtin_entry is not None
                     else dict(match_capability_generalizations(_key_str) or {})
                 )

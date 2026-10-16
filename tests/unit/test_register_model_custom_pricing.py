@@ -796,7 +796,7 @@ def test_embedding_direct_sdk_custom_pricing_still_registers_shared_key():
         _invalidate_model_cost_lowercase_map()
 
 
-def test_register_model_prices_a_geo_alias_from_its_builtin_when_the_lookup_fails(monkeypatch):
+def test_register_model_prices_a_geo_alias_from_its_builtin_when_the_lookup_fails(monkeypatch: pytest.MonkeyPatch) -> None:
     """After a price data reload the deployment replay registers every bedrock
     geo deployment (``bedrock/au.anthropic.<model>``) with metadata only. When
     ``get_model_info`` failed for a reason other than the model being unmapped
@@ -841,19 +841,38 @@ def test_register_model_prices_a_geo_alias_from_its_builtin_when_the_lookup_fail
         _invalidate_model_cost_lowercase_map()
 
 
-def test_register_model_keeps_a_catalog_rows_own_prices_when_the_lookup_fails(monkeypatch):
+def test_register_model_keeps_a_catalog_rows_own_prices_when_the_lookup_fails(monkeypatch: pytest.MonkeyPatch) -> None:
     """A catalog row registered under its own key with no provider
     (``au.anthropic.<model>`` from a config ``model_info``) must inherit from
     itself when ``get_model_info`` trips, never from its region-stripped
     sibling, whose prices are the base rate rather than the geo rate.
     """
+    geo_key: Final = "au.anthropic.lit-5853-geo-model"
+    geo_row: Final = {
+        "litellm_provider": "bedrock_converse",
+        "mode": "chat",
+        "input_cost_per_token": 3.3e-06,
+        "output_cost_per_token": 1.65e-05,
+        "cache_read_input_token_cost": 3.3e-07,
+    }
+    sibling_row: Final = {
+        "litellm_provider": "bedrock_converse",
+        "mode": "chat",
+        "input_cost_per_token": 3e-06,
+        "output_cost_per_token": 1.5e-05,
+        "cache_read_input_token_cost": 3e-07,
+    }
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.get_model_cost_map(url=""),
+            geo_key: dict(geo_row),
+            "anthropic.lit-5853-geo-model": sibling_row,
+        },
+    )
     _invalidate_model_cost_lowercase_map()
-    geo_key: Final = "au.anthropic.claude-sonnet-5"
-    geo_row: Final = dict(litellm.model_cost[geo_key])
-    sibling: Final = litellm.model_cost["anthropic.claude-sonnet-5"]
-    assert geo_row["input_cost_per_token"] != sibling["input_cost_per_token"]
 
     def lookup_tripped_by_a_concurrent_registration(model: str, custom_llm_provider: str | None = None) -> NoReturn:
         raise RuntimeError("dictionary changed size during iteration")
@@ -871,7 +890,7 @@ def test_register_model_keeps_a_catalog_rows_own_prices_when_the_lookup_fails(mo
         _invalidate_model_cost_lowercase_map()
 
 
-def test_register_model_inherits_builtin_token_pricing_for_unmapped_key(monkeypatch):
+def test_register_model_inherits_builtin_token_pricing_for_unmapped_key(monkeypatch: pytest.MonkeyPatch) -> None:
     """A key shape ``get_model_info`` cannot resolve inherits the whole built-in
     entry, not just its cache pricing, so ``get_model_info`` on the raw key
     reports the built-in token prices instead of a synthesized $0."""
@@ -894,7 +913,54 @@ def test_register_model_inherits_builtin_token_pricing_for_unmapped_key(monkeypa
         _invalidate_model_cost_lowercase_map()
 
 
-def test_register_model_never_inherits_pricing_across_providers(monkeypatch):
+def test_register_model_keeps_custom_flat_prices_above_an_inherited_tier(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An unmapped alias with custom flat prices inherits a tiered built-in entry, but the flat prices stay
+    its price above 200k prompt tokens instead of the built-in's higher tier."""
+    from litellm.types.utils import ModelResponse, Usage
+
+    builtin_key: Final = "anthropic.lit-5853-tiered-model-v1:0"
+    alias: Final = f"bedrock/ap-northeast-1.{builtin_key}"
+    flat_input: Final = 1e-06
+    flat_output: Final = 2e-06
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.get_model_cost_map(url=""),
+            builtin_key: {
+                "litellm_provider": "bedrock",
+                "mode": "chat",
+                "input_cost_per_token": 3e-06,
+                "output_cost_per_token": 1.5e-05,
+                "input_cost_per_token_above_200k_tokens": 6e-06,
+                "output_cost_per_token_above_200k_tokens": 2.25e-05,
+            },
+        },
+    )
+    _invalidate_model_cost_lowercase_map()
+
+    try:
+        litellm.register_model(
+            {
+                alias: {
+                    "litellm_provider": "bedrock",
+                    "input_cost_per_token": flat_input,
+                    "output_cost_per_token": flat_output,
+                }
+            },
+            persist_across_reloads=False,
+        )
+        usage: Final = Usage(prompt_tokens=250_000, completion_tokens=1_000, total_tokens=251_000)
+        cost: Final = litellm.completion_cost(
+            completion_response=ModelResponse(model=alias, usage=usage), model=alias, custom_llm_provider="bedrock"
+        )
+        assert cost == pytest.approx(250_000 * flat_input + 1_000 * flat_output)
+    finally:
+        _invalidate_model_cost_lowercase_map()
+
+
+def test_register_model_never_inherits_pricing_across_providers(monkeypatch: pytest.MonkeyPatch) -> None:
     """The built-in entry an unmapped key inherits must belong to a provider
     ``get_model_info`` would accept for the registered one, exactly as a direct
     lookup would, so a bedrock key that happens to share a name with an OpenAI
