@@ -275,10 +275,21 @@ database:
 # self-hosted Redis Cluster). The chart emits REDIS_CLUSTER_NODES from
 # `host` / `port` as the single seed; the cluster client discovers the
 # remaining nodes from CLUSTER SLOTS at startup.
+#
+# For a TLS Redis endpoint set `ssl: true`, which the chart emits as REDIS_SSL.
+# `sslCertReqs` (none / optional / required) becomes REDIS_SSL_CERT_REQS and
+# `sslCaCerts` (path to a CA bundle mounted in the pod, e.g. via
+# `extraVolumeMounts`) becomes REDIS_SSL_CA_CERTS. All three are omitted when
+# unset. They apply to `host` / `hostKey` mode only. With `passwordSecret.urlKey`
+# the proxy reads TLS settings from the URL itself, so use `rediss://` and the
+# `ssl_cert_reqs` / `ssl_ca_certs` query parameters there instead.
 redis:
   cluster: false
   host: ""
   port: 6379
+  ssl: false
+  sslCertReqs: ""
+  sslCaCerts: ""
   passwordSecret:
     name: "" # Leave empty for auth-less Redis
     passwordKey: password

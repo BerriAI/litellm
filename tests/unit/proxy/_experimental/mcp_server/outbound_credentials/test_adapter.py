@@ -613,6 +613,10 @@ def test_raise_token_exchange_challenge_is_rfc9728_invalid_token():
     assert 'resource_metadata="/.well-known/oauth-protected-resource/mcp/obo-srv"' in www
     assert 'error="invalid_token"' in www
     assert "error_description=" in www
+    assert exc.detail == (
+        "Missing or invalid subject token. Authenticate with your identity provider and send its token "
+        "in the Authorization Bearer header. LiteLLM API keys and Admin UI sessions cannot be used for token exchange."
+    )
 
 
 def test_raise_token_exchange_challenge_includes_server_root_path(monkeypatch):

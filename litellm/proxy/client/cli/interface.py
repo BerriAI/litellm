@@ -9,7 +9,7 @@ import click
 
 from litellm._logging import verbose_logger
 
-from .commands.auth import context_secret_vault
+from .commands.auth import cli_context_obj, context_secret_vault
 
 ShellScope: TypeAlias = tuple[str, ...]
 SHELL_WORD: Final = re.compile(r"""(?P<prefix>[\w-]+=)?(?P<quoted>"[^"]*"|'[^']*')(?P<rest>\S*)|\S+""")
@@ -120,7 +120,7 @@ def setup_shell(ctx: click.Context):
     show_banner()
 
     # Show server connection info
-    base_url: Final = ctx.obj.get("base_url")
+    base_url: Final = cli_context_obj(ctx).get("base_url")
     click.secho(f"Connected to LiteLLM server: {base_url}\n", fg="green")
 
     show_commands()

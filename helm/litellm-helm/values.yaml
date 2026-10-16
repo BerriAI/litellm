@@ -376,6 +376,30 @@ db:
   endpoint: localhost
   database: litellm
   url: postgresql://$(DATABASE_USERNAME):$(DATABASE_PASSWORD)@$(DATABASE_HOST)/$(DATABASE_NAME)
+  # Authenticate with a short-lived token instead of a password. useIAMAuth is
+  # AWS RDS / Aurora IAM database authentication (the pod needs AWS credentials,
+  # e.g. IRSA or EKS Pod Identity, and the database user needs GRANT rds_iam);
+  # useAzureEntraAuth is Azure Database for PostgreSQL with a Microsoft Entra ID
+  # identity (workload identity). Mutually exclusive, and both need
+  # useExisting: true with deployStandalone: false. The chart then sets
+  # IAM_TOKEN_DB_AUTH or AZURE_POSTGRESQL_AUTH, emits DATABASE_HOST, DATABASE_PORT,
+  # DATABASE_USERNAME and DATABASE_NAME and skips DATABASE_PASSWORD and db.url:
+  # the proxy, the migrations job and the collector sidecar each mint their own
+  # token and build DATABASE_URL from those parts. Set DATABASE_SSLMODE /
+  # DATABASE_SSLROOTCERT under envVars for TLS options you would otherwise put
+  # in db.url.
+  useIAMAuth: false
+  useAzureEntraAuth: false
+  # Postgres port, used to build the token-auth URL (password auth takes the
+  # port from db.url)
+  port: 5432
+  # Postgres schema for the LiteLLM tables, rendered as DATABASE_SCHEMA under
+  # token auth only (password auth carries it as ?schema= in db.url)
+  schema: ""
+  # Database user as a plain value. Empty means read it from
+  # db.secret.usernameKey. With token auth the user name is the only credential
+  # the chart needs, so setting it here removes the need for db.secret entirely.
+  username: ""
   secret:
     name: postgres
     usernameKey: username

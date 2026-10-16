@@ -12,7 +12,6 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
-from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -68,7 +67,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (  # noqa: F401  #
     update_batch_in_database,
     validate_managed_id_requirement,
 )
-from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import request_tags_from_metadata
+from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import request_tags_from_request_data
 from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
 from litellm.proxy.utils import PrismaClient, ProxyLogging, handle_exception_on_proxy, is_known_model
 from litellm.repositories.managed_batch_repository import ManagedBatchRepository
@@ -81,19 +80,11 @@ if TYPE_CHECKING:
     from prisma.models import LiteLLM_ManagedObjectTable
 
 router: Final = APIRouter()
-_METADATA_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 
 
 def _hidden_param_string(hidden_params: Mapping[str, object], key: str) -> str:
     value: Final = hidden_params.get(key)
     return value if isinstance(value, str) else ""
-
-
-def _request_tags(data: Mapping[str, object]) -> tuple[str, ...] | None:
-    metadata: Final = data.get("litellm_metadata")
-    if metadata is None:
-        return None
-    return request_tags_from_metadata(_METADATA_ADAPTER.validate_python(metadata))
 
 
 def _require_batch_response(response: LLMResponseTypes) -> LiteLLMBatch:
@@ -444,7 +435,7 @@ async def create_batch(
                     model=model,
                     provider=executed_provider,
                     user_api_key_dict=user_api_key_dict,
-                    request_tags=_request_tags(_create_batch_data),
+                    request_tags=request_tags_from_request_data(_create_batch_data),
                 )
                 if executed_provider is not None
                 else await _create_provider_batch_for_managed_file(
