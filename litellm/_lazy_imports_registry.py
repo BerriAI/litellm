@@ -170,6 +170,7 @@ LLM_CONFIG_NAMES: Final = (
     "HostedVLLMDecisionsConfig",
     "LayaDecisionsConfig",
     "BespokeDecisionsConfig",
+    "EmpirioLabsDecisionsConfig",
     "OpenAIDecisionsConfig",
     "AzureAIDecisionsConfig",
     "NvidiaNimRerankConfig",
@@ -744,6 +745,7 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     ),
     "LayaDecisionsConfig": (".llms.laya.decisions.transformation", "LayaDecisionsConfig"),
     "BespokeDecisionsConfig": (".llms.bespoke.decisions.transformation", "BespokeDecisionsConfig"),
+    "EmpirioLabsDecisionsConfig": (".llms.empiriolabs.decisions.transformation", "EmpirioLabsDecisionsConfig"),
     "OpenAIDecisionsConfig": (".llms.openai.decisions.transformation", "OpenAIDecisionsConfig"),
     "AzureAIDecisionsConfig": (".llms.azure_ai.decisions.transformation", "AzureAIDecisionsConfig"),
     "NvidiaNimRerankConfig": (

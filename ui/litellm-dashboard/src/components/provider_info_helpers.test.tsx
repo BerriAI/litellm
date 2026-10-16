@@ -206,6 +206,7 @@ describe("provider_info_helpers", () => {
         Providers.DATAROBOT,
         Providers.DOCKER_MODEL_RUNNER,
         Providers.DOTPROMPT,
+        Providers.EMPIRIOLABS,
         Providers.EMPOWER,
         Providers.GALADRIEL,
         Providers.GradientAI,
@@ -528,6 +529,24 @@ describe("provider_info_helpers", () => {
         "typesafe/jev-latest",
         "typesafe/jev-preview",
       ]);
+    });
+
+    it("should list EmpirioLabs AI chat and decision models for the 'EMPIRIOLABS' provider key", () => {
+      const modelMap = {
+        "empiriolabs/aplomb-1": {
+          litellm_provider: "empiriolabs",
+          mode: "chat",
+          supported_endpoints: ["/v1/chat/completions", "/v1/decisions"],
+        },
+        "empiriolabs/qwen3-7-plus": { litellm_provider: "empiriolabs", mode: "chat" },
+        "typesafe/jev-latest": { litellm_provider: "typesafe", mode: "evaluation" },
+      };
+      expect(getProviderModels("EMPIRIOLABS" as Providers, modelMap)).toEqual([
+        "empiriolabs/aplomb-1",
+        "empiriolabs/qwen3-7-plus",
+      ]);
+      expect(getProviderLogoAndName("empiriolabs").displayName).toBe("EmpirioLabs AI");
+      expect(getPlaceholder("EMPIRIOLABS")).toBe("empiriolabs/aplomb-1");
     });
 
     it("should list only strands_decider models for the 'StrandsDecider' provider key", () => {

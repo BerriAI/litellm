@@ -126,6 +126,7 @@ _PROVIDERS: Final[tuple[tuple[str, str, str, str], ...]] = (
         "https://openrouter.ai/api/alpha/decisions",
         "typesafe/jev-1.13",
     ),
+    ("empiriolabs", "empiriolabs/aplomb-1", "https://api.empiriolabs.ai/v1/decisions", "aplomb-1"),
 )
 
 _OPENAI_RESPONSE: Final[Mapping[str, object]] = {
@@ -1439,7 +1440,12 @@ async def test_databricks_router_deployment_sends_its_own_key_to_its_own_base(
 
 
 _PROVIDERS_WHOSE_CHAT_MODELS_ALSO_DECIDE: Final = frozenset(
-    {LlmProviders.OPENAI.value, LlmProviders.OPENROUTER.value, LlmProviders.HOSTED_VLLM.value}
+    {
+        LlmProviders.OPENAI.value,
+        LlmProviders.OPENROUTER.value,
+        LlmProviders.HOSTED_VLLM.value,
+        LlmProviders.EMPIRIOLABS.value,
+    }
 )
 _DEDICATED_DECIDER_PROVIDERS: Final[tuple[str, ...]] = tuple(
     sorted(
@@ -3074,6 +3080,147 @@ async def test_fireworks_ai_bills_cached_input_tokens_at_the_cache_read_rate(
     assert recording_logger.standard_logging_object is not None
     assert recording_logger.standard_logging_object["response_cost"] == pytest.approx(uncached + cached)
     assert recording_logger.standard_logging_object["response_cost"] < 300 * float(prices["input_cost_per_token"])
+
+
+_EMPIRIOLABS_MODEL: Final = "empiriolabs/aplomb-1"
+_EMPIRIOLABS_DEFAULT_URL: Final = "https://api.empiriolabs.ai/v1/decisions"
+_EMPIRIOLABS_STATE: Final = "I was charged twice for order 4411 and want a refund today."
+_EMPIRIOLABS_QUESTIONS: Final[Mapping[str, object]] = MappingProxyType(
+    {"is_refund": {"type": "noul", "instructions": "Is the customer asking for a refund?"}}
+)
+_EMPIRIOLABS_RESPONSE: Final[Mapping[str, object]] = {
+    "model": "aplomb-1",
+    "answers": {"is_refund": {"type": "noul", "noul": 0.97, "confidence": 0.94}},
+    "usage": {"input_tokens": 24, "output_tokens": 0},
+}
+
+
+@pytest.mark.parametrize(
+    ("api_base", "environment_api_base", "url"),
+    (
+        (None, None, _EMPIRIOLABS_DEFAULT_URL),
+        (None, "https://environment-gateway.example/v1", "https://environment-gateway.example/v1/decisions"),
+        (
+            "https://gateway.example/v1/",
+            "https://environment-gateway.example/v1",
+            "https://gateway.example/v1/decisions",
+        ),
+        ("https://gateway.example", None, "https://gateway.example/v1/decisions"),
+    ),
+    ids=("default_base", "environment_base", "explicit_base_over_environment", "explicit_base_without_v1"),
+)
+def test_empiriolabs_posts_the_systemone_body_to_v1_decisions_on_the_resolved_base(
+    api_base: str | None,
+    environment_api_base: str | None,
+    url: str,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("EMPIRIOLABS_API_BASE", raising=False)
+    if environment_api_base is not None:
+        monkeypatch.setenv("EMPIRIOLABS_API_BASE", environment_api_base)
+    route: Final = respx_mock.post(url).respond(json=_EMPIRIOLABS_RESPONSE)
+
+    response: Final = litellm.systemone(
+        model=_EMPIRIOLABS_MODEL,
+        state=_EMPIRIOLABS_STATE,
+        questions=_EMPIRIOLABS_QUESTIONS,
+        api_base=api_base,
+        api_key="caller-key",
+    )
+
+    assert route.call_count == 1
+    assert json.loads(route.calls[0].request.content) == {
+        "model": "aplomb-1",
+        "state": _EMPIRIOLABS_STATE,
+        "questions": {"is_refund": {"type": "noul", "instructions": "Is the customer asking for a refund?"}},
+    }
+    assert response.answers["is_refund"] == NoulAnswer(type="noul", noul=0.97, confidence=0.94)
+    assert response._hidden_params["custom_llm_provider"] == "empiriolabs"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("api_key", "authorization"),
+    ((None, "Bearer environment-key"), ("caller-key", "Bearer caller-key")),
+    ids=("environment_key", "caller_key_over_environment"),
+)
+async def test_empiriolabs_sends_the_caller_key_or_else_the_environment_key(
+    api_key: str | None,
+    authorization: str,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("EMPIRIOLABS_API_BASE", raising=False)
+    monkeypatch.setenv("EMPIRIOLABS_API_KEY", "environment-key")
+    route: Final = respx_mock.post(_EMPIRIOLABS_DEFAULT_URL).respond(json=_EMPIRIOLABS_RESPONSE)
+
+    response: Final = await litellm.adecisions(
+        model=_EMPIRIOLABS_MODEL,
+        input=_EMPIRIOLABS_STATE,
+        questions=[{"type": "predicate", "name": "is_refund", "instructions": "Is the customer asking for a refund?"}],
+        api_key=api_key,
+    )
+
+    assert route.call_count == 1
+    assert route.calls[0].request.headers["authorization"] == authorization
+    assert isinstance(response, OpenAIDecisionResponse)
+    assert [answer.model_dump(mode="json") for answer in response.answers] == [
+        {"type": "predicate", "name": "is_refund", "probability": 0.97}
+    ]
+
+
+def test_empiriolabs_without_a_key_is_refused_before_http(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("EMPIRIOLABS_API_KEY", raising=False)
+    monkeypatch.delenv("EMPIRIOLABS_API_BASE", raising=False)
+
+    with pytest.raises(litellm.AuthenticationError, match="Missing API key for Decisions provider 'empiriolabs'"):
+        litellm.systemone(model=_EMPIRIOLABS_MODEL, state=_EMPIRIOLABS_STATE, questions=_EMPIRIOLABS_QUESTIONS)
+
+    assert len(respx_mock.calls) == 0
+
+
+@pytest.mark.parametrize(
+    ("status", "error_type", "code", "exception"),
+    (
+        (401, "authentication_error", "invalid_api_key", litellm.AuthenticationError),
+        (402, "insufficient_credits", "insufficient_credits", litellm.PaymentRequiredError),
+        (404, "not_found_error", "model_not_found", litellm.NotFoundError),
+        (422, "invalid_request_error", "invalid_request", litellm.BadRequestError),
+        (429, "rate_limit_error", "rate_limit_exceeded", litellm.RateLimitError),
+        (503, "service_unavailable", "model_unavailable", litellm.ServiceUnavailableError),
+    ),
+)
+def test_empiriolabs_upstream_errors_keep_their_status_and_message(
+    status: int,
+    error_type: str,
+    code: str,
+    exception: type[Exception],
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("EMPIRIOLABS_API_BASE", raising=False)
+    message: Final = f"upstream refused the decision with {code}"
+    route: Final = respx_mock.post(_EMPIRIOLABS_DEFAULT_URL).respond(
+        status,
+        json={"error": {"message": message, "type": error_type, "code": code}},
+        headers={"retry-after": "1"},
+    )
+
+    with pytest.raises(exception, match=message) as caught:
+        litellm.systemone(
+            model=_EMPIRIOLABS_MODEL,
+            state=_EMPIRIOLABS_STATE,
+            questions=_EMPIRIOLABS_QUESTIONS,
+            api_key="caller-key",
+            num_retries=0,
+        )
+
+    assert getattr(caught.value, "status_code") == status
+    assert route.call_count == 1
 
 
 _BOX_QUESTION_REQUESTS: Final[tuple[tuple[str, Mapping[str, object]], ...]] = (

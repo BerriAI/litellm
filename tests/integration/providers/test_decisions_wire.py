@@ -133,6 +133,7 @@ _PROVIDERS: Final = (
         False,
         None,
     ),
+    _Provider("empiriolabs", "empiriolabs/aplomb-test", "/v1/decisions", "aplomb-test", _API_KEY, False, None),
 )
 _PERPLEXITY: Final = _PROVIDERS[0]
 _OPENROUTER: Final = _PROVIDERS[2]
