@@ -5,7 +5,6 @@ from typing import Any, Dict, Final, List
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import httpx
-import litellm
 import pytest
 from pydantic import ValidationError
 

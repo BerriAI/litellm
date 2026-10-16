@@ -225,7 +225,7 @@ class PassThroughStreamingHandler:
                         )
                 if pending:
                     yield pending
-            stream_ended = True
+            stream_ended = True  # rebind-ok: the finally reads it to spot a close-at-frame
             # Stream completed cleanly.  When the proxy armed deferred
             # dispatch (post-call guardrails active), park the logging
             # coroutine on logging_obj instead of enqueueing now, so
