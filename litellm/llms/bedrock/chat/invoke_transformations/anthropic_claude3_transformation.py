@@ -86,7 +86,11 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         return AnthropicConfig.native_output_schema(json_schema)
 
     def uses_native_structured_output_for_schema(
-        self, model: str, json_schema: Mapping[str, object] | None, thinking_requested: bool
+        self,
+        model: str,
+        json_schema: Mapping[str, object] | None,
+        thinking_requested: bool,
+        caller_sends_tools: bool,
     ) -> bool:
         return bedrock_chat_uses_native_structured_output(model, thinking_requested) and (
             json_schema is None or bedrock_cleaned_output_schema(model, json_schema) is not None

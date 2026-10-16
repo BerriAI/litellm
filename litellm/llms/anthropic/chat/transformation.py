@@ -1675,12 +1675,17 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         return AnthropicConfig.filter_anthropic_output_schema(dict(json_schema))
 
     def uses_native_structured_output_for_schema(
-        self, model: str, json_schema: Mapping[str, object] | None, thinking_requested: bool
+        self,
+        model: str,
+        json_schema: Mapping[str, object] | None,
+        thinking_requested: bool,
+        caller_sends_tools: bool,
     ) -> bool:
         open_object_takes_forced_json_tool: Final = (
             json_schema is not None
             and schema_has_open_object(json_schema)
             and not thinking_requested
+            and not caller_sends_tools
             and not AnthropicModelInfo.forced_tool_use_unsupported(model)
         )
         return self.uses_native_structured_output(model) and not open_object_takes_forced_json_tool
@@ -1866,6 +1871,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     model,
                     self._extract_json_schema_from_response_format(value),
                     self.is_thinking_requested(REQUEST_PARAMS.validate_python(non_default_params)),
+                    bool(REQUEST_PARAMS.validate_python(non_default_params).get("tools")),
                 ):
                     _output_format = self.map_response_format_to_anthropic_output_format(value)
                     if _output_format is not None:
