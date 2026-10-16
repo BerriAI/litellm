@@ -53,6 +53,7 @@ _AWAITED_TABLES: Final = frozenset(
 )
 _PLUMBING_VERBS: Final = frozenset({"BEGIN", "COMMIT", "ROLLBACK", "DEALLOCATE", "SET", "SHOW"})
 _REDIS_READS: Final = frozenset({"GET", "MGET", "HGET", "HGETALL", "EXISTS", "TTL", "PTTL"})
+_REDIS_NAMESPACE: Final = "litellm.caching:"
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,17 +102,18 @@ class RedisCommand:
         """Budget reads, cooldown reads and the rate-limiter script (with every command it issues) happen
         before the request is forwarded. Spend increments, token counters, config rewrites and cache
         invalidations (PUBLISH, DEL) happen after the response or on a timer."""
+        key: Final = self.key.removeprefix(_REDIS_NAMESPACE)
         if self.inside_script or self.command in {"EVALSHA", "EVAL"}:
             return "awaited"
-        if self.command in {"PUBLISH", "DEL", "SCRIPT", "INFO", "MONITOR"} or self.key.startswith(
+        if self.command in {"PUBLISH", "DEL", "SCRIPT", "INFO", "MONITOR"} or key.startswith(
             ("litellm_config:", "daily_")
         ):
             return "background"
-        if self.key.startswith("spend:"):
+        if key.startswith("spend:"):
             return "awaited" if self.command in _REDIS_READS else "background"
-        if self.key.startswith("deployment:") or self.key.endswith(("}:requests", "}:window")):
+        if key.startswith("deployment:") or key.endswith(("}:requests", "}:window")):
             return "awaited"
-        if self.key.endswith("}:tokens"):
+        if key.endswith("}:tokens"):
             return "background"
         return "unclassified"
 
