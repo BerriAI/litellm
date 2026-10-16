@@ -35,9 +35,9 @@ async def async_completion_with_fallbacks(**kwargs):
     nested_kwargs: Final = kwargs.pop("kwargs", {})
     original_model: Final = kwargs["model"]
     model = original_model
-    top_level_fallbacks = kwargs.pop("fallbacks", [])
-    nested_fallbacks = nested_kwargs.pop("fallbacks", [])
-    raw_fallbacks = []
+    top_level_fallbacks: Final = kwargs.pop("fallbacks", [])
+    nested_fallbacks: Final = nested_kwargs.pop("fallbacks", [])
+    raw_fallbacks: Final[list] = []  # mutable-ok: accumulator list
     if isinstance(top_level_fallbacks, list):
         raw_fallbacks.extend(top_level_fallbacks)
     elif top_level_fallbacks:
@@ -49,8 +49,8 @@ async def async_completion_with_fallbacks(**kwargs):
         raw_fallbacks.append(nested_fallbacks)
 
     # Deduplicate fallbacks while preserving order
-    combined_fallbacks = []
-    seen_fallbacks: set[str] = set()
+    combined_fallbacks: Final[list] = []  # mutable-ok: deduplicated fallbacks list
+    seen_fallbacks: Final[set[str]] = set()  # mutable-ok: tracking seen fallback keys
     for fb in raw_fallbacks:
         if isinstance(fb, dict):
             try:

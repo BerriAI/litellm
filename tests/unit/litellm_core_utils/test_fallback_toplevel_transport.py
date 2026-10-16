@@ -100,3 +100,28 @@ async def test_same_model_distinct_api_base_fallbacks_preserved(monkeypatch):
         ("fb1", "http://127.0.0.1:9/eu"),
         ("fb1", "http://127.0.0.1:9/us"),
     ]
+
+
+@pytest.mark.asyncio
+async def test_string_and_non_list_fallbacks_coverage(upstream):
+    with pytest.raises(Exception, match="All fallback attempts failed"):
+        await async_completion_with_fallbacks(
+            model="openai/primary",
+            fallbacks="openai/single_fb1",
+            kwargs={"fallbacks": "openai/single_fb2"},
+            **_common(),
+        )
+    assert upstream == ["primary", "single_fb1", "single_fb2"]
+
+
+@pytest.mark.asyncio
+async def test_string_list_deduplication_and_custom_objects(upstream):
+    unserializable = {"model": "openai/unserializable", "func": lambda x: x}
+
+    with pytest.raises(Exception, match="All fallback attempts failed"):
+        await async_completion_with_fallbacks(
+            model="openai/primary",
+            fallbacks=["openai/str_fb", "openai/str_fb", unserializable],
+            **_common(),
+        )
+    assert upstream == ["primary", "str_fb", "unserializable"]
