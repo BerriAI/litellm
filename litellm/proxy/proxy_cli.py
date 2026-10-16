@@ -803,6 +803,7 @@ class ProxyInitializationHelpers:
         max_requests_before_restart_jitter: int | None = None,
         max_request_header_size: int | None = None,
         private_listener: PrivateListener | None = None,
+        keepalive_timeout: int | None = None,
     ):
         """
         Run litellm with `gunicorn`
@@ -901,6 +902,9 @@ class ProxyInitializationHelpers:
             else:
                 gunicorn_options["max_requests_jitter"] = max_requests_before_restart_jitter
 
+        if keepalive_timeout is not None:
+            gunicorn_options["keepalive"] = keepalive_timeout
+
         # Clean up prometheus .db files when a worker exits (prevents ghost gauge values)
         if os.environ.get("PROMETHEUS_MULTIPROC_DIR"):
             from litellm.proxy.prometheus_cleanup import mark_worker_exit
@@ -965,8 +969,8 @@ class ProxyInitializationHelpers:
         tls: bool,
         config: str | None,
     ) -> "PythonServer":
-        """``run_gunicorn_server`` never hands ``--keepalive_timeout`` or forwarded IPs to gunicorn, so its workers keep
-        gunicorn's keep-alive and gunicorn's trusted proxies, which include ``::1`` where uvicorn's do not."""
+        """``run_gunicorn_server`` never hands forwarded IPs to gunicorn, so its workers keep gunicorn's trusted
+        proxies, which include ``::1`` where uvicorn's do not."""
         import uvicorn
 
         from litellm.proxy.rust_forward.server import (
@@ -988,7 +992,7 @@ class ProxyInitializationHelpers:
             else Server.UVICORN
         )
         keepalive, trusted_proxies = (
-            ProxyInitializationHelpers.gunicorn_keepalive_and_trusted_proxies()
+            ProxyInitializationHelpers.gunicorn_keepalive_and_trusted_proxies(keepalive_timeout)
             if server is Server.GUNICORN
             else (
                 (
@@ -1013,11 +1017,11 @@ class ProxyInitializationHelpers:
         )
 
     @staticmethod
-    def gunicorn_keepalive_and_trusted_proxies() -> tuple[int, str]:
+    def gunicorn_keepalive_and_trusted_proxies(keepalive_timeout: int | None) -> tuple[int, str]:
         """Loaded only when gunicorn is the server, because gunicorn imports ``fcntl``, which Windows lacks."""
         config: Final = _gunicorn_settings()
         return (
-            TypeAdapter(int).validate_python(config.keepalive),
+            TypeAdapter(int).validate_python(config.keepalive) if keepalive_timeout is None else keepalive_timeout,
             ",".join(TypeAdapter(list[str]).validate_python(config.forwarded_allow_ips)),
         )
 
@@ -1355,7 +1359,9 @@ def control_plane_tls(ssl_keyfile_path: str | None, ssl_certfile_path: str | Non
     "--keepalive_timeout",
     default=None,
     type=int,
-    help="Set the uvicorn keepalive timeout in seconds (uvicorn timeout_keep_alive parameter)",
+    help="Idle keep-alive timeout in seconds (uvicorn timeout_keep_alive, default "
+    f"{DEFAULT_UVICORN_KEEPALIVE_TIMEOUT_SECONDS}s; gunicorn keepalive with --run_gunicorn, default 2s). "
+    "Behind a reverse proxy, set it above the proxy's idle-connection timeout.",
     envvar="KEEPALIVE_TIMEOUT",
 )
 @click.option(
@@ -2222,6 +2228,7 @@ def run_server(
                 max_requests_before_restart_jitter=max_requests_before_restart_jitter,
                 max_request_header_size=max_request_header_size,
                 private_listener=private_listener(forward_mode),
+                keepalive_timeout=keepalive_timeout,
             )
         elif run_hypercorn is True:
             ProxyInitializationHelpers.init_hypercorn_server(

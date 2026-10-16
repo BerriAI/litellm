@@ -2492,6 +2492,58 @@ class TestProxyInitializationHelpers:
         assert seen == ["127.0.0.1"]
 
     @pytest.mark.skipif(os.name == "nt", reason="gunicorn server path skips Windows")
+    @pytest.mark.parametrize(
+        ("args", "env", "expected_keep_alive"),
+        [
+            ([], {}, 2),
+            ([], {"KEEPALIVE_TIMEOUT": "120"}, 120),
+            (["--keepalive_timeout", "60"], {"KEEPALIVE_TIMEOUT": "120"}, 60),
+        ],
+    )
+    def test_run_gunicorn_workers_use_keepalive_timeout(
+        self, monkeypatch: pytest.MonkeyPatch, args: list[str], env: dict[str, str], expected_keep_alive: int
+    ) -> None:
+        """--keepalive_timeout / KEEPALIVE_TIMEOUT reaches the gunicorn uvicorn worker, unset keeps gunicorn's 2s"""
+        pytest.importorskip("gunicorn")
+        from gunicorn.app.base import BaseApplication
+        from gunicorn.glogging import Logger
+        from uvicorn.workers import UvicornWorker
+
+        captured: Final[list[GunicornConfig]] = []
+
+        def capture_run(application: BaseApplication) -> None:
+            captured.append(
+                TypeAdapter(GunicornConfig, config={"arbitrary_types_allowed": True}).validate_python(application.cfg)
+            )
+
+        for name in ("DATABASE_URL", "DIRECT_URL", "KEEPALIVE_TIMEOUT"):
+            monkeypatch.delenv(name, raising=False)
+        proxy_module: Final = MagicMock(
+            app=MagicMock(), ProxyConfig=MagicMock(), KeyManagementSettings=MagicMock(), save_worker_config=MagicMock()
+        )
+        with (
+            patch.dict("sys.modules", {"proxy_server": proxy_module}),
+            patch("gunicorn.app.base.BaseApplication.run", capture_run),
+            patch(  # test-quality-ok: option tests must not start a thread or change the pytest worker's child ownership
+                "litellm.proxy.proxy_cli.start_query_engine_reaper"
+            ),
+            patch("uvicorn.run") as mock_uvicorn_run,
+        ):
+            result: Final = CliRunner().invoke(run_server, ["--local", "--run_gunicorn", *args], env=env)
+
+        assert result.exit_code == 0, result.output
+        mock_uvicorn_run.assert_not_called()
+        for uvicorn_logger in map(logging.getLogger, ("uvicorn.error", "uvicorn.access")):
+            monkeypatch.setattr(uvicorn_logger, "handlers", uvicorn_logger.handlers)
+            monkeypatch.setattr(uvicorn_logger, "level", uvicorn_logger.level)
+            monkeypatch.setattr(uvicorn_logger, "propagate", uvicorn_logger.propagate)
+        cfg: Final = captured[0]
+        worker_class: Final = TypeAdapter(type[UvicornWorker]).validate_python(cfg.worker_class)
+        worker: Final = worker_class(0, os.getpid(), [], MagicMock(), 30, cfg, Logger(cfg))
+
+        assert worker.config.timeout_keep_alive == expected_keep_alive
+
+    @pytest.mark.skipif(os.name == "nt", reason="gunicorn server path skips Windows")
     def test_gunicorn_master_is_reserved_for_forking_before_it_runs(self, fork_reservation):
         """preload forks workers from the master, so native routes are forbidden there first"""
         pytest.importorskip("gunicorn")
@@ -5137,6 +5189,8 @@ class TestRustForwardServer:
     def _served_by_python(params: dict[str, object]) -> tuple[object, ...]:
         if params["run_gunicorn"]:
             gunicorn: Final = GunicornConfig()
+            if params["keepalive_timeout"] is not None:
+                gunicorn.set("keepalive", params["keepalive_timeout"])
             return gunicorn.keepalive, GracefulShutdownManager.get_timeout(), ",".join(gunicorn.forwarded_allow_ips)
         served: Final = uvicorn.Config(
             **ProxyInitializationHelpers.get_default_unvicorn_init_args(
