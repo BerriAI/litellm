@@ -187,7 +187,9 @@ def resolve_local_oidc_reference(value: str) -> str | UnresolvableSecretReferenc
 
 
 def _logged_unresolvable(reference: str, kind: str, reason: str) -> UnresolvableSecretReference:
-    verbose_logger.warning("Secret reference %s could not be resolved: %s", reference, reason)
+    verbose_logger.warning(
+        "Secret reference %s could not be resolved: %s", reference.replace("\r", "").replace("\n", ""), reason
+    )
     return UnresolvableSecretReference(kind=kind, reason=reason)
 
 

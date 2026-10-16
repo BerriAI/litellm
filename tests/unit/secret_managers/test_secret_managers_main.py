@@ -13,6 +13,7 @@ from litellm.integrations.custom_secret_manager import CustomSecretManager
 from litellm.secret_managers.main import (
     get_secret,
     normalize_nonempty_secret_str,
+    resolve_local_oidc_reference,
     secret_manager_would_be_consulted,
 )
 from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
@@ -483,3 +484,15 @@ def test_get_secret_turns_only_boolean_literals_from_the_secret_manager_into_boo
 
     assert secret == expected
     assert type(secret) is type(expected)
+
+
+def test_an_unresolvable_reference_cannot_forge_a_server_log_line(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.delenv("LIT_UNSET_SA_TOKEN", raising=False)
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        resolve_local_oidc_reference("oidc/env/LIT_UNSET_SA_TOKEN\nFORGED ENTRY")
+
+    assert "LIT_UNSET_SA_TOKEN" in caplog.text
+    assert "\nFORGED" not in caplog.text
