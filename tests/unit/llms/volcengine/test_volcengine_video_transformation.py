@@ -929,6 +929,103 @@ async def test_an_extra_body_field_litellm_maps_itself_is_honoured_and_its_lefto
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "fields,misplaced",
+    [
+        ({"parameters": {"seconds": "8"}}, "seconds"),
+        ({"extra_body": {"parameters": {"seconds": "8"}}}, "seconds"),
+        ({"extra_body": {"parameters": {"size": "1920x1080"}}}, "size"),
+        ({"extra_body": {"parameters": {"user": "someone"}}}, "user"),
+        ({"extra_body": {"parameters": {"prompt": "a dog"}}}, "prompt"),
+        ({"extra_body": {"parameters": {"parameters": {"seed": 3}}}}, "parameters"),
+    ],
+    ids=["top_level_seconds", "seconds", "size", "user", "prompt", "nested_parameters"],
+)
+async def test_a_request_field_litellm_maps_itself_is_rejected_inside_parameters(
+    fields: dict[str, object], misplaced: str
+):
+    with pytest.raises(UnsupportedParamsError, match=f"send {misplaced} as top-level request fields"):
+        _ = await _wire_body(model=f"volcengine/{SEEDANCE_2_5}", prompt="p", **fields)
+
+
+@pytest.mark.asyncio
+async def test_a_request_field_inside_parameters_is_dropped_under_drop_params_and_the_rest_is_sent():
+    body = await _wire_body(
+        model=f"volcengine/{SEEDANCE_2_5}",
+        prompt="p",
+        drop_params=True,
+        extra_body={"parameters": {"seconds": "8", "seed": 3}},
+    )
+
+    assert body == {
+        "model": SEEDANCE_2_5,
+        "content": [{"type": "text", "text": "p"}],
+        "resolution": "720p",
+        "duration": 4,
+        "seed": 3,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "extra_body,field",
+    [
+        ({"prompt": "a dog"}, "prompt"),
+        ({"model": SEEDANCE_2_0_FAST}, "model"),
+        ({"extra_headers": {"x-a": "1"}}, "extra_headers"),
+    ],
+    ids=["prompt", "model", "extra_headers"],
+)
+async def test_an_extra_body_copy_of_a_request_field_litellm_does_not_map_is_rejected(
+    extra_body: dict[str, object], field: str
+):
+    with pytest.raises(UnsupportedParamsError, match=f"does not send {field} to Ark"):
+        _ = await _wire_body(model=f"volcengine/{SEEDANCE_2_5}", prompt="p", extra_body=extra_body)
+
+
+@pytest.mark.asyncio
+async def test_a_user_that_is_not_a_string_is_rejected_rather_than_ignored():
+    with pytest.raises(UnsupportedParamsError, match="user must be a string, got int"):
+        _ = await _wire_body(model=f"volcengine/{SEEDANCE_2_5}", prompt="p", extra_body={"user": 5})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "control",
+    [{"drop_params": False}, {"organization": "org-1"}],
+    ids=["drop_params", "organization"],
+)
+async def test_a_litellm_control_field_is_not_mistaken_for_an_ark_field(control: dict[str, object]):
+    body = await _wire_body(model=f"volcengine/{SEEDANCE_2_5}", prompt="p", seconds="4", **control)
+
+    assert body == {
+        "model": SEEDANCE_2_5,
+        "content": [{"type": "text", "text": "p"}],
+        "resolution": "720p",
+        "duration": 4,
+    }
+
+
+@pytest.mark.asyncio
+async def test_additional_drop_params_removes_the_named_ark_fields_from_the_wire():
+    body = await _wire_body(
+        model=f"volcengine/{SEEDANCE_2_5}",
+        prompt="p",
+        seconds="4",
+        additional_drop_params=["seed"],
+        extra_body={"seed": 3, "watermark": False},
+    )
+
+    assert body == {
+        "model": SEEDANCE_2_5,
+        "content": [{"type": "text", "text": "p"}],
+        "resolution": "720p",
+        "duration": 4,
+        "watermark": False,
+    }
+
+
+@pytest.mark.asyncio
 async def test_an_extra_body_duration_of_minus_one_is_rejected_before_anything_is_sent():
     with pytest.raises(UnsupportedParamsError, match="Ark-picked length"):
         _ = await _wire_body(model=f"volcengine/{SEEDANCE_2_5}", prompt="p", extra_body={"duration": -1})

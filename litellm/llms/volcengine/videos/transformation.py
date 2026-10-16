@@ -145,18 +145,22 @@ _CREATE_PASSTHROUGH_KEYS: Final = (
 _REQUEST_METADATA: Final = frozenset({"model", "prompt", "user", "extra_headers", "extra_query", "extra_body"})
 _UNSUPPORTED_BY_VOLCENGINE: Final = frozenset({"characters", "image"})
 _MAPPED_ELSEWHERE: Final = frozenset({*_REQUEST_METADATA, *_UNSUPPORTED_BY_VOLCENGINE, "seconds", "size", "parameters"})
+_READ_FROM_THE_REQUEST: Final = _MAPPED_ELSEWHERE - _UNSUPPORTED_BY_VOLCENGINE
+_LITELLM_CONTROLS: Final = frozenset({"drop_params", "additional_drop_params", "organization"})
+_DROP_KEYS_ADAPTER: Final = TypeAdapter(frozenset[str])
 
 # litellm/videos/utils.py merges the caller's raw ``extra_body`` back over the mapped params, which returns the keys
-# this adapter maps itself (``size``, ``seconds``, ``user``) a second time, as fields of their own. They are already
-# accounted for, so they count as handled rather than unknown. ``characters`` and ``image`` stay out, since Ark has
-# no equivalent and accepting them would hide a parameter that never took effect.
+# this adapter maps itself a second time, as fields of their own. They are already accounted for, so they count as
+# handled rather than unknown.
+_MAPPED_EXTRA_BODY_COPIES: Final = frozenset({"size", "seconds", "user"})
 _CREATE_HANDLED_KEYS: Final = frozenset(
     {
         *_CREATE_PASSTHROUGH_KEYS,
         "content",
         "input_reference",
         "frames",
-        *(_MAPPED_ELSEWHERE - _UNSUPPORTED_BY_VOLCENGINE),
+        *_MAPPED_EXTRA_BODY_COPIES,
+        *_LITELLM_CONTROLS,
     }
 )
 
@@ -286,13 +290,32 @@ def _parameters_fields(parameters: object, model: str, drop_params: bool) -> Map
     if parameters is None:
         return _EMPTY_PARAMS
     try:
-        return _FIELDS_ADAPTER.validate_python(parameters)
+        fields: Final = _FIELDS_ADAPTER.validate_python(parameters)
     except ValidationError:
         if drop_params:
             return _EMPTY_PARAMS
         raise _droppable(
             model, f"parameters must be an object of Ark request fields, got {type(parameters).__name__}"
         ) from None
+    misplaced: Final = tuple(sorted(key for key in fields if key in _READ_FROM_THE_REQUEST))
+    if misplaced and not drop_params:
+        raise _droppable(model, f"send {', '.join(misplaced)} as top-level request fields, not inside parameters")
+    return MappingProxyType({key: value for key, value in fields.items() if key not in _READ_FROM_THE_REQUEST})
+
+
+def _user_fields(user: object, model: str, drop_params: bool) -> Mapping[str, object]:
+    if isinstance(user, str) and user:
+        return MappingProxyType({"safety_identifier": user})
+    if user is None or isinstance(user, str) or drop_params:
+        return _EMPTY_PARAMS
+    raise _droppable(model, f"user must be a string, got {type(user).__name__}")
+
+
+def _additional_drop_keys(params: Mapping[str, object]) -> frozenset[str]:
+    try:
+        return _DROP_KEYS_ADAPTER.validate_python(params.get("additional_drop_params") or ())
+    except ValidationError:
+        return frozenset()
 
 
 def _malformed_fields(fields: Mapping[str, object]) -> tuple[tuple[str, str], ...]:
@@ -545,9 +568,8 @@ class VolcEngineVideoConfig(BaseVideoConfig):
                 if value is not None and key not in _MAPPED_ELSEWHERE
             }
         )
-        user: Final = video_create_optional_params.get("user")
         return {
-            **({"safety_identifier": user} if isinstance(user, str) and user else {}),
+            **_user_fields(video_create_optional_params.get("user"), model, drop_params),
             **_size_fields(video_create_optional_params.get("size"), model, drop_params),
             **_duration_fields(video_create_optional_params.get("seconds"), model, drop_params),
             **passthrough,
@@ -605,11 +627,15 @@ class VolcEngineVideoConfig(BaseVideoConfig):
         is ``-1``.
         """
         drop_params: Final = _drops_params(litellm_params)
-        params: Final = MappingProxyType(
+        dropped_by_config: Final = _additional_drop_keys(video_create_optional_request_params)
+        unpacked: Final = MappingProxyType(
             {
                 **{key: value for key, value in video_create_optional_request_params.items() if key != "parameters"},
                 **_parameters_fields(video_create_optional_request_params.get("parameters"), model, drop_params),
             }
+        )
+        params: Final = MappingProxyType(
+            {key: value for key, value in unpacked.items() if key not in dropped_by_config}
         )
         content: Final = _sent_content(prompt, params, model, drop_params)
         if params.get("frames") is not None and not drop_params:
