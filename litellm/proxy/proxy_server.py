@@ -14507,7 +14507,7 @@ async def _provider_or_fallback_token_count(
 async def _estimate_or_provider_error(estimate: Awaitable[int], provider_failure: ProviderCountFailure | None) -> int:
     try:
         return await estimate
-    except ValueError as e:
+    except Exception as e:
         if provider_failure is None:
             raise
         raise provider_failure.to_proxy_exception() from e

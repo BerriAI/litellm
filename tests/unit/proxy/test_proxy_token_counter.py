@@ -1472,7 +1472,43 @@ async def test_framing_keeps_the_400_for_blocks_the_provider_counter_cannot_conv
 
 
 @pytest.mark.asyncio
-async def test_framed_estimate_that_cannot_read_the_body_answers_the_provider_error(monkeypatch: pytest.MonkeyPatch):
+@pytest.mark.parametrize(
+    "unreadable_body",
+    [
+        pytest.param(
+            {
+                "messages": [
+                    {"role": "user", "content": "What is new?"},
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {"type": "server_tool_use", "id": "srvtoolu_01", "name": "web_search", "input": {"query": "new"}},
+                            {"type": "web_search_tool_result", "tool_use_id": "srvtoolu_01", "content": []},
+                        ],
+                    },
+                ]
+            },
+            id="web_search_blocks",
+        ),
+        pytest.param(
+            {
+                "messages": [{"role": "user", "content": "What is new?"}],
+                "tools": [{"name": "search", "input_schema": {"type": "object", "properties": {"query": True}}}],
+            },
+            id="boolean_subschema_tool",
+        ),
+        pytest.param(
+            {
+                "messages": [{"role": "user", "content": "What is new?"}],
+                "tools": [{"name": "search", "input_schema": {"type": "object", "properties": {"tags": {"type": "array"}}}}],
+            },
+            id="array_schema_without_items",
+        ),
+    ],
+)
+async def test_framed_estimate_that_cannot_read_the_body_answers_the_provider_error(
+    monkeypatch: pytest.MonkeyPatch, unreadable_body: dict[str, list[dict[str, object]]]
+):
     counter: Final = _ScriptedCounter({"us.moonshotai.kimi-k3": _provider_reply("kimi", status_code=400)})
     monkeypatch.setattr(
         litellm.proxy.proxy_server,
@@ -1482,19 +1518,9 @@ async def test_framed_estimate_that_cannot_read_the_body_answers_the_provider_er
     monkeypatch.setattr(
         litellm.proxy.proxy_server, "_get_provider_token_counter", lambda deployment, model: (counter, model, "bedrock")
     )
-    web_search_turn: Final = [
-        {"role": "user", "content": "What is new?"},
-        {
-            "role": "assistant",
-            "content": [
-                {"type": "server_tool_use", "id": "srvtoolu_01", "name": "web_search", "input": {"query": "new"}},
-                {"type": "web_search_tool_result", "tool_use_id": "srvtoolu_01", "content": []},
-            ],
-        },
-    ]
 
     with pytest.raises(ProxyException) as raised:
-        await token_counter(request=TokenCountRequest(model="kimi", messages=web_search_turn), call_endpoint=True)
+        await token_counter(request=TokenCountRequest(model="kimi", **unreadable_body), call_endpoint=True)
     readable: Final = await token_counter(
         request=TokenCountRequest(model="kimi", messages=[{"role": "user", "content": "What is new?"}]),
         call_endpoint=True,

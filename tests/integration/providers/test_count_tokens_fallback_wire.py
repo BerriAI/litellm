@@ -5,12 +5,14 @@ from pathlib import Path
 from typing import Final
 
 import anthropic
+import httpx
 import pytest
 from anthropic.types import MessageCountTokensToolParam, MessageTokensCount
 from integration._support.bedrock_runtime_peer import target_of
 from integration._support.client import Gateway, Scenario, gateway_from_environment
 from integration._support.ports import allocate_port
 from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
+from integration._support.vertex import service_account_json
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
@@ -550,45 +552,127 @@ def _runtime_cannot_count(_request: Request) -> Reply:
     return _json_reply(400, {"message": _UNSUPPORTED})
 
 
+_REPLAYED_WEB_SEARCH: Final[list[JsonValue]] = [
+    {"role": "user", "content": "What is the newest LiteLLM release?"},
+    {
+        "role": "assistant",
+        "content": [
+            {"type": "server_tool_use", "id": "srvtoolu_01", "name": "web_search", "input": {"query": "LiteLLM"}},
+            {
+                "type": "web_search_tool_result",
+                "tool_use_id": "srvtoolu_01",
+                "content": [
+                    {
+                        "type": "web_search_result",
+                        "url": "https://docs.litellm.ai/release_notes",
+                        "title": "Release notes",
+                        "encrypted_content": "",
+                    }
+                ],
+            },
+            {"type": "text", "text": "The newest release is in the release notes."},
+        ],
+    },
+    {"role": "user", "content": "Thanks."},
+]
+_BOOLEAN_SUBSCHEMA_TOOL: Final[dict[str, JsonValue]] = {
+    "name": "lookup",
+    "description": "Look up a value",
+    "input_schema": {"type": "object", "properties": {"query": True}},
+}
+_UNREADABLE_BODIES: Final[dict[str, dict[str, JsonValue]]] = {
+    "web_search_replay": {"messages": _REPLAYED_WEB_SEARCH},
+    "boolean_subschema_tool": {
+        "messages": [{"role": "user", "content": "Look up the value."}],
+        "tools": [_BOOLEAN_SUBSCHEMA_TOOL],
+    },
+}
+_COUNT_ENDPOINTS: Final[dict[str, tuple[str, str]]] = {
+    "messages_count_tokens": ("/v1/messages/count_tokens", "litellm_count_source"),
+    "utils_token_counter": ("/utils/token_counter?call_endpoint=true", "count_source"),
+}
+
+
+def _count_answer(response: httpx.Response, source_key: str) -> tuple[int, str]:
+    if response.status_code not in (200, 400):
+        return response.status_code, response.text
+    body: Final = _JSON_OBJECT.validate_json(response.content)
+    error: Final = body.get("error")
+    if response.status_code == 400 and isinstance(error, dict):
+        return 400, str(error.get("message"))
+    return response.status_code, str(body.get(source_key))
+
+
+@pytest.mark.parametrize("endpoint", sorted(_COUNT_ENDPOINTS))
+@pytest.mark.parametrize("unreadable", sorted(_UNREADABLE_BODIES))
 def test_shipped_framing_never_answers_a_500_for_a_body_the_local_count_cannot_read(
-    counting_proxy: OwnedProxy, runtime_port: int, mantle_port: int
+    counting_proxy: OwnedProxy, runtime_port: int, mantle_port: int, unreadable: str, endpoint: str
 ) -> None:
     gateway: Final = counting_proxy.gateway
-    replayed_web_search: Final[list[JsonValue]] = [
-        {"role": "user", "content": "What is the newest LiteLLM release?"},
-        {
-            "role": "assistant",
-            "content": [
-                {"type": "server_tool_use", "id": "srvtoolu_01", "name": "web_search", "input": {"query": "LiteLLM"}},
-                {
-                    "type": "web_search_tool_result",
-                    "tool_use_id": "srvtoolu_01",
-                    "content": [
-                        {
-                            "type": "web_search_result",
-                            "url": "https://docs.litellm.ai/release_notes",
-                            "title": "Release notes",
-                            "encrypted_content": "",
-                        }
-                    ],
-                },
-                {"type": "text", "text": "The newest release is in the release notes."},
-            ],
-        },
-        {"role": "user", "content": "Thanks."},
-    ]
+    path, source_key = _COUNT_ENDPOINTS[endpoint]
     with (
         wire_server(_runtime_cannot_count, port=runtime_port) as runtime,
         wire_server(_mantle, port=mantle_port) as mantle,
         gateway.scenario() as scenario,
     ):
         response: Final = gateway.request(
-            "POST",
-            "/v1/messages/count_tokens",
-            {"model": _deployment(scenario, runtime_port, _KIMI), "messages": replayed_web_search},
+            "POST", path, {"model": _deployment(scenario, runtime_port, _KIMI), **_UNREADABLE_BODIES[unreadable]}
         )
-        body: Final = _JSON_OBJECT.validate_json(response.content)
-        answer: Final = body.get("litellm_count_source") if response.status_code == 200 else body.get("type")
-        assert (response.status_code, answer) in ((200, "local_estimate"), (400, "error")), response.text
+        status, answer = _count_answer(response, source_key)
+        assert (status, answer) == (200, "local_estimate") or (status == 400 and _UNSUPPORTED in answer), (
+            response.status_code,
+            response.text,
+        )
         assert _runtime_models(runtime) == (_KIMI_BASE,)
         assert _mantle_models(mantle) == ()
+
+
+_GEMINI_MODEL: Final = "gemini-4-argon"
+_VERTEX_PROJECT: Final = "scripted-project"
+_UNCOUNTABLE_TOOL: Final[dict[str, JsonValue]] = {"name": "lookup", "input_schema": "not-a-schema"}
+
+
+def _google_cannot_count(_request: Request) -> Reply:
+    return _json_reply(400, {"error": {"code": 400, "message": "scripted count 400", "status": "INVALID_ARGUMENT"}})
+
+
+def _google_deployment(gateway: Gateway, scenario: Scenario, wire: Wire, provider: str) -> str:
+    framing: Final[dict[str, JsonValue]] = {"token_count_framing": _FRAMING}
+    if provider == "gemini":
+        return scenario.model(
+            model=f"gemini/{_GEMINI_MODEL}", api_base=wire.url, api_key="scripted-gemini-key", model_info=framing
+        )
+    return scenario.model(
+        model=f"vertex_ai/{_GEMINI_MODEL}",
+        api_base=wire.url,
+        api_key=None,
+        vertex_project=_VERTEX_PROJECT,
+        vertex_location="us-east5",
+        vertex_credentials=service_account_json(_VERTEX_PROJECT, gateway.upstream_url.rstrip("/")),
+        model_info=framing,
+    )
+
+
+def _google_count_targets(wire: Wire) -> tuple[bool, ...]:
+    return tuple(request.target.endswith(":countTokens") for request in wire.drain())
+
+
+@pytest.mark.parametrize("provider", ["gemini", "vertex_ai"])
+def test_framing_keeps_the_400_for_tools_the_gemini_count_rejects_before_calling_google(
+    counting_proxy: OwnedProxy, provider: str
+) -> None:
+    gateway: Final = counting_proxy.gateway
+    hello: Final[list[JsonValue]] = [{"role": "user", "content": "hello"}]
+    with wire_server(_google_cannot_count) as google, gateway.scenario() as scenario:
+        model: Final = _google_deployment(gateway, scenario, google, provider)
+        rejected: Final = gateway.request(
+            "POST", "/v1/messages/count_tokens", {"model": model, "messages": hello, "tools": [_UNCOUNTABLE_TOOL]}
+        )
+        assert rejected.status_code == 400, rejected.text
+        error: Final = _JSON_OBJECT.validate_json(rejected.content)["error"]
+        assert isinstance(error, dict) and "JSON object schema" in str(error.get("message")), error
+        assert _google_count_targets(google) == ()
+        estimated: Final = gateway.request("POST", "/v1/messages/count_tokens", {"model": model, "messages": hello})
+        assert estimated.status_code == 200, estimated.text
+        assert _JSON_OBJECT.validate_json(estimated.content).get("litellm_count_source") == "local_estimate"
+        assert _google_count_targets(google) == (True,)
