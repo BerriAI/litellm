@@ -41,7 +41,7 @@ from litellm.constants import (
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
     SESSION_ID_GENERATED_METADATA_KEY,
     SESSION_ID_OMITTED_METADATA_KEY,
-    SESSION_ID_SOURCE_METADATA_KEY,
+    TRACE_ID_SOURCE_METADATA_KEY,
     TYPESAFE_DANGER_ZONE_HEADER_PREFIX,
     X_LITELLM_DISABLE_CALLBACKS,
 )
@@ -204,7 +204,7 @@ def _caller_session_beside_trace_header(
     normalized_headers: Mapping[str, str], data: Mapping[str, object], metadata_variable_name: str
 ) -> str | None:
     session_headers: Final = {key: value for key, value in normalized_headers.items() if key != "x-litellm-trace-id"}
-    return get_chain_id_from_headers(session_headers) or _caller_body_session_id(data, metadata_variable_name)
+    return _session_header_id(session_headers) or _caller_body_session_id(data, metadata_variable_name)
 
 
 def _drop_client_caller_session(request_body: Mapping[str, object]) -> None:
@@ -213,7 +213,7 @@ def _drop_client_caller_session(request_body: Mapping[str, object]) -> None:
             metadata.pop(CALLER_SESSION_ID_METADATA_KEY, None)
 
 
-_PROXY_ONLY_METADATA_KEYS: Final = frozenset({CALLER_SESSION_ID_METADATA_KEY, SESSION_ID_SOURCE_METADATA_KEY})
+_PROXY_ONLY_METADATA_KEYS: Final = frozenset({CALLER_SESSION_ID_METADATA_KEY, TRACE_ID_SOURCE_METADATA_KEY})
 
 
 def _requester_metadata_snapshot(metadata: Mapping[str, object]) -> Mapping[str, object]:
@@ -857,18 +857,23 @@ def _extract_session_header_chain_id(normalized: Mapping[str, str]) -> str | Non
     )
 
 
+def _session_header_id(normalized: Mapping[str, str]) -> str | None:
+    return _extract_session_header_chain_id(normalized) or _extract_session_affinity_from_headers(normalized)
+
+
 SessionSource: TypeAlias = Literal["trace_header", "session_header", "anthropic_metadata", "baggage", "otel_span"]
 _NO_BODY: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 @dataclass(frozen=True, slots=True)
 class SessionContext:
-    """What a request's session and trace ids resolve to. ``session_source`` names what set the
-    session so downstream loggers can tell a session header apart from a real trace id."""
+    """What a request's session and trace ids resolve to, and which source set each, so a
+    downstream logger can tell a trace id that is only a session header's value from a real trace."""
 
     session_id: str | None = None
     trace_id: str | None = None
     session_source: SessionSource | None = None
+    trace_source: SessionSource | None = None
 
 
 def resolve_session_context(
@@ -889,7 +894,7 @@ def resolve_session_context(
     chain_id: Final = _extract_session_header_chain_id(normalized)
     if chain_id:
         source: Final = "trace_header" if chain_id == normalized.get("x-litellm-trace-id") else "session_header"
-        return SessionContext(session_id=chain_id, trace_id=chain_id, session_source=source)
+        return SessionContext(session_id=chain_id, trace_id=chain_id, session_source=source, trace_source=source)
     anthropic_session: Final = _get_anthropic_session_id_from_metadata(body.get("metadata"))
     traceparent: Final = normalized.get("traceparent")
     baggage: Final = normalized.get("baggage")
@@ -902,7 +907,7 @@ def resolve_session_context(
             ((_session_id_from_baggage(baggage) if baggage else None, "baggage"), (affinity, "session_header")),
         )
     )
-    trace_id, _ = _first_agreeing_source(
+    trace_id, trace_source = _first_agreeing_source(
         _caller_body_trace_id(body, metadata_variable_name),
         (
             (_trace_id_from_traceparent(traceparent) if traceparent else None, "trace_header"),
@@ -910,7 +915,9 @@ def resolve_session_context(
             (affinity if session_id == affinity else None, "session_header"),
         ),
     )
-    return SessionContext(session_id=session_id, trace_id=trace_id, session_source=session_source)
+    return SessionContext(
+        session_id=session_id, trace_id=trace_id, session_source=session_source, trace_source=trace_source
+    )
 
 
 def get_chain_id_from_headers(headers: dict[str, str] | None) -> str | None:
@@ -938,12 +945,7 @@ def get_chain_id_from_headers(headers: dict[str, str] | None) -> str | None:
     """
     if not headers:
         return None
-    context: Final = resolve_session_context(headers)
-    if context.trace_id:
-        return context.trace_id
-    if context.session_source == "session_header":
-        return context.session_id
-    return _extract_session_affinity_from_headers(_normalize_header_keys(headers))
+    return resolve_session_context(headers).trace_id or _session_header_id(_normalize_header_keys(headers))
 
 
 def _get_anthropic_session_id_from_metadata(metadata: object) -> str | None:
@@ -1788,7 +1790,7 @@ class LiteLLMProxyRequestSetup:
             data[_metadata_variable_name].update(
                 {
                     **metadata_from_headers,
-                    **({SESSION_ID_SOURCE_METADATA_KEY: context.session_source} if context.session_source else {}),
+                    **({TRACE_ID_SOURCE_METADATA_KEY: context.trace_source} if context.trace_source else {}),
                     **({CALLER_SESSION_ID_METADATA_KEY: spend_log_session_id} if spend_log_session_id else {}),
                 }
             )

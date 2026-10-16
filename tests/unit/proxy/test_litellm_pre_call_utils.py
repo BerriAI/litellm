@@ -3349,6 +3349,22 @@ def test_session_headers_still_beat_the_body_session_with_correlation_logging(
     assert spend_log_session == "hdr-session-1"
 
 
+def test_traceparent_beside_x_litellm_trace_id_is_not_the_spend_log_session(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
+    metadata: Final[dict[str, str]] = {"session_id": "convo-1"}
+    data: Final[dict[str, object]] = {"metadata": metadata}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers={
+            "x-litellm-trace-id": "req-trace-1",
+            "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+        },
+        data=data,
+        _metadata_variable_name="metadata",
+    )
+    assert metadata[CALLER_SESSION_ID_METADATA_KEY] == "convo-1"
+    assert data["litellm_trace_id"] == "req-trace-1"
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("forged_in", ["metadata", "litellm_metadata"])
 @pytest.mark.parametrize(
@@ -3725,7 +3741,6 @@ PI_AI_SESSION_ID = "web:alice.smith:7f3e9c2a-5b1d-4e8f-9a6c-0d2b4f6e8a1c"
 def _apply_session_sources(
     headers: dict[str, str], data: dict[str, object], parent_otel_span: object = None
 ) -> dict[str, object]:
-    """The session/trace step of add_litellm_data_to_request, with the parent OTel span the proxy passes."""
     LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
         headers=headers, data=data, _metadata_variable_name="metadata", parent_otel_span=parent_otel_span
     )
@@ -3733,8 +3748,6 @@ def _apply_session_sources(
 
 
 def _session_from_affinity_only(data: dict[str, object] | None = None) -> object:
-    """Control for the precedence tests: with the competing source removed, x-session-affinity
-    must win, so a test that passes while the header is ignored entirely is caught."""
     payload = data if data is not None else {"metadata": {}}
     _apply_session_sources({"x-session-affinity": PI_AI_SESSION_ID}, payload)
     return payload.get("litellm_session_id")
@@ -3750,8 +3763,6 @@ def _session_from_affinity_only(data: dict[str, object] | None = None) -> object
     ],
 )
 def test_add_litellm_metadata_session_affinity_alone_sets_session_and_trace(session_affinity: str):
-    """pi-ai and opencode send the session only in x-session-affinity, with ids that carry colons
-    and dots, so that header alone must group the turns instead of a fresh per-call id."""
     data = _apply_session_sources({"X-Session-Affinity": session_affinity}, {"metadata": {}})
 
     assert data["litellm_session_id"] == session_affinity
@@ -3794,8 +3805,6 @@ def test_session_affinity_accepts_colons_at_both_length_bounds(value: str):
     ],
 )
 def test_every_session_header_beats_session_affinity_everywhere(winning_headers: dict[str, str]):
-    """Both the LLM-route path and the raw-header path MCP, pass-through and A2A use must rank
-    x-session-affinity last, so a client that also sends a specific session header keeps it."""
     from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
 
     headers = {**winning_headers, "x-session-affinity": PI_AI_SESSION_ID}
@@ -3852,8 +3861,6 @@ def test_traceparent_keeps_trace_id_while_session_affinity_fills_session_id():
 
 
 def test_parent_otel_span_trace_beats_session_affinity():
-    """With OTel on, the request's own span already owns litellm_trace_id, so x-session-affinity
-    may only fill the session, exactly as it does next to a traceparent header."""
     span = NonRecordingSpan(SpanContext(trace_id=0xABCDEF0123456789ABCDEF0123456789, span_id=0x1, is_remote=True))
     data = _apply_session_sources({"x-session-affinity": PI_AI_SESSION_ID}, {"metadata": {}}, parent_otel_span=span)
 
@@ -3865,8 +3872,6 @@ def test_parent_otel_span_trace_beats_session_affinity():
 
 
 def test_mcp_prestamped_session_affinity_still_fills_metadata():
-    """MCP stamps get_chain_id_from_headers into the root fields before request setup; that stamp
-    must not count as a competing source, or metadata.session_id (what spend logs read) stays empty."""
     data = _apply_session_sources(
         {"x-session-affinity": PI_AI_SESSION_ID},
         {"metadata": {}, "litellm_trace_id": PI_AI_SESSION_ID, "litellm_session_id": PI_AI_SESSION_ID},

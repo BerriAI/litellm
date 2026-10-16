@@ -1881,9 +1881,7 @@ def test_session_header_trace_without_call_id_keeps_session_alias():
 
 
 def test_every_proxy_session_header_shape_is_classified_as_a_session_alias():
-    """Every header shape the proxy turns into a chain id is recorded as a session-header source,
-    which is what makes Langfuse give each call its own trace inside that session."""
-    from litellm.constants import SESSION_ID_SOURCE_METADATA_KEY
+    from litellm.constants import TRACE_ID_SOURCE_METADATA_KEY
     from litellm.integrations.langfuse.langfuse import _is_session_header_trace
     from litellm.proxy.litellm_pre_call_utils import (
         _CODEX_SESSION_ID_HEADERS,
@@ -1916,7 +1914,7 @@ def test_every_proxy_session_header_shape_is_classified_as_a_session_alias():
     LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
         headers=explicit_trace, data=data, _metadata_variable_name="metadata"
     )
-    assert data["metadata"][SESSION_ID_SOURCE_METADATA_KEY] == "trace_header"
+    assert data["metadata"][TRACE_ID_SOURCE_METADATA_KEY] == "trace_header"
     assert _is_session_header_trace(data["metadata"], {"headers": explicit_trace}) is False
 
     named_trace: Final = {"x-litellm-session-id": session, "langfuse_trace_id": "explicit-trace"}
@@ -1925,6 +1923,23 @@ def test_every_proxy_session_header_shape_is_classified_as_a_session_alias():
         headers=named_trace, data=data, _metadata_variable_name="metadata"
     )
     assert _is_session_header_trace(data["metadata"], {"headers": named_trace}) is False
+
+
+def test_session_affinity_beside_traceparent_keeps_the_real_trace():
+    from litellm.integrations.langfuse.langfuse import _is_session_header_trace
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+    headers: Final = {
+        "x-session-affinity": "web:alice.smith:7f3e9c2a-5b1d-4e8f-9a6c-0d2b4f6e8a1c",
+        "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+    }
+    data: Final = {"metadata": {}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=dict(headers), data=data, _metadata_variable_name="metadata"
+    )
+    assert data["metadata"]["trace_id"] == "4bf92f3577b34da6a3ce929d0e0e4736"
+    assert data["metadata"]["session_id"] == headers["x-session-affinity"]
+    assert _is_session_header_trace(data["metadata"], {"headers": dict(headers)}) is False
 
 
 @pytest.mark.parametrize(

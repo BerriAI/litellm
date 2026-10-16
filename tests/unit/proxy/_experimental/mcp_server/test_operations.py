@@ -1020,6 +1020,41 @@ async def test_tool_operation_preserves_failure_messages_and_request_trace(failu
 
 
 @pytest.mark.asyncio
+async def test_tool_operation_lets_the_parent_otel_span_own_the_trace_beside_session_affinity():
+    from mcp.types import CallToolRequest, CallToolRequestParams, CallToolResult, TextContent
+    from opentelemetry.trace import NonRecordingSpan, SpanContext
+
+    from litellm.proxy import litellm_pre_call_utils
+
+    affinity: Final = "web:alice.smith:7f3e9c2a-5b1d-4e8f-9a6c-0d2b4f6e8a1c"
+    span: Final = NonRecordingSpan(
+        SpanContext(trace_id=0xABCDEF0123456789ABCDEF0123456789, span_id=0x1, is_remote=False)
+    )
+
+    async def echo_ids(**kwargs: object) -> CallToolResult:
+        return CallToolResult(
+            content=[TextContent(type="text", text=f"{kwargs['litellm_trace_id']} {kwargs['litellm_session_id']}")],
+            isError=False,
+        )
+
+    context = prepare_context(
+        user_api_key_auth=UserAPIKeyAuth(api_key="hashed-key", parent_otel_span=span),
+        raw_headers={"x-session-affinity": affinity},
+    )
+    with (
+        patch.object(operations, "call_mcp_tool", echo_ids),
+        patch.object(
+            litellm_pre_call_utils, "add_litellm_data_to_request", AsyncMock(side_effect=lambda data, **_: data)
+        ),
+    ):
+        result = await GatewayOperations().execute(
+            CallToolRequest(params=CallToolRequestParams(name="catalog-tool", arguments={})), context
+        )
+    assert isinstance(result.content[0], TextContent)
+    assert result.content[0].text == f"abcdef0123456789abcdef0123456789 {affinity}"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "method,helper",
     [

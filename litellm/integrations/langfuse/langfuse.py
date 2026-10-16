@@ -13,7 +13,7 @@ from packaging.version import Version
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.constants import MAX_LANGFUSE_INITIALIZED_CLIENTS, SESSION_ID_SOURCE_METADATA_KEY
+from litellm.constants import MAX_LANGFUSE_INITIALIZED_CLIENTS, TRACE_ID_SOURCE_METADATA_KEY
 from litellm.integrations.langfuse.langfuse_mock_client import (
     create_mock_langfuse_client,
     should_use_langfuse_mock,
@@ -70,10 +70,10 @@ def _widened_items(mapping: Mapping[str, object]) -> Iterable[tuple[object, obje
 
 
 def _is_session_header_trace(metadata: Mapping[str, object], proxy_server_request: object) -> bool:
-    """The proxy records what set the session id. A trace id that is only a session header's value
+    """The proxy records what set the trace id. A trace id that is only a session header's value
     is not a real trace, so each call gets its own trace inside that session, unless the caller
     named a Langfuse trace explicitly."""
-    if metadata.get(SESSION_ID_SOURCE_METADATA_KEY) != "session_header":
+    if metadata.get(TRACE_ID_SOURCE_METADATA_KEY) != "session_header":
         return False
     request: Final = _object_mapping(proxy_server_request)
     raw_headers: Final = _object_mapping(request.get("headers")) if request is not None else None

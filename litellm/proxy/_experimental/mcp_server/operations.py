@@ -3090,7 +3090,10 @@ async def _execute_mcp_server_tool_call(
         # Create a body date for logging
         body_data: Final = {"name": params.name, "arguments": params.arguments}
         # Set trace/session id from raw_headers so spend logs and logging_obj stay consistent (same as A2A)
-        session_context: Final = resolve_session_context(raw_headers or {})
+        session_context: Final = resolve_session_context(
+            raw_headers or {},
+            parent_otel_span=user_api_key_auth.parent_otel_span if user_api_key_auth is not None else None,
+        )
         if session_context.trace_id:
             body_data["litellm_trace_id"] = session_context.trace_id
         if session_context.session_id:
