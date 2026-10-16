@@ -3247,7 +3247,9 @@ class LiteLLMCompletionResponsesConfig:
                     choice=choice,
                 )
                 message_output_items.extend(image_generation_items)
-            elif choice.message.content is not None:
+            elif choice.message.content is not None and (
+                choice.message.content or not getattr(choice.message, "tool_calls", None)
+            ):
                 message_output_items.append(
                     GenericResponseOutputItem(
                         type="message",

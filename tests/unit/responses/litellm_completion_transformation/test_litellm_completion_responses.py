@@ -660,6 +660,46 @@ class TestLiteLLMCompletionResponsesConfig:
         assert "message" not in output_types
         assert "function_call" in output_types
 
+    def test_tool_call_only_response_with_empty_string_content_emits_no_message_item(self):
+        """Providers that return content "" instead of None for a tool-only turn
+        must also emit no message item, matching the streaming path which drops
+        falsy final content and native OpenAI tool-only turns."""
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="claude-sonnet-4-5",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        content="",
+                        role="assistant",
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id="toolu_01OnlyToolCall",
+                                type="function",
+                                function=Function(name="get_weather", arguments='{"city": "SF"}'),
+                            )
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        responses_api_response = (
+            LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+                request_input="what's the weather in SF?",
+                responses_api_request={},
+                chat_completion_response=chat_completion_response,
+            )
+        )
+
+        output_types = [item.type for item in responses_api_response.output]
+        assert "message" not in output_types
+        assert "function_call" in output_types
+
     def test_content_bearing_response_still_emits_message_item(self):
         """Turns with real text content must keep their message output item."""
         chat_completion_response = ModelResponse(
