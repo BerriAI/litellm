@@ -124,6 +124,10 @@ def _attributes(span: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
     }
 
 
+def _batch_attributes(batches: Sequence[Request]) -> Iterator[dict[str, JsonValue]]:
+    return (_attributes(span) for span in itertools.chain.from_iterable(_spans(batch) for batch in batches))
+
+
 @dataclass(frozen=True, slots=True)
 class Collector:
     wire: Wire
@@ -133,7 +137,7 @@ class Collector:
     def span_attributes(self, response_id: str) -> tuple[dict[str, JsonValue], ...]:
         with self.guard:
             batches: Final = tuple(self.accepted)
-        attributes: Final = tuple(_attributes(span) for batch in batches for span in _spans(batch))
+        attributes: Final = tuple(_batch_attributes(batches))
         return tuple(
             found
             for found in attributes
@@ -145,7 +149,7 @@ class Collector:
             batches: Final = tuple(self.accepted)
         responded: Final = (
             object_value(found.get("gen_ai.conversation.id", {})).get("stringValue")
-            for found in (_attributes(span) for batch in batches for span in _spans(batch))
+            for found in _batch_attributes(batches)
             if "gen_ai.response.id" in found
         )
         return tuple(

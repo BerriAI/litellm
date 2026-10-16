@@ -791,7 +791,7 @@ async def test_message_history_replays_real_key_named_tool_payloads() -> None:
 
 
 class _SqliteBackedPrismaDB:
-    def __init__(self, rows: list[tuple[str, str, str, str, str | None, str | None]]):
+    def __init__(self, rows: list[tuple[str, str, str, str, str | None, str | None]]) -> None:
         self._connection = sqlite3.connect(":memory:")
         self._connection.row_factory = sqlite3.Row
         self._connection.execute(
@@ -800,7 +800,7 @@ class _SqliteBackedPrismaDB:
         )
         self._connection.executemany('INSERT INTO "LiteLLM_SpendLogs" VALUES (?, ?, ?, ?, ?, ?)', rows)
 
-    async def query_raw(self, query, *args):
+    async def query_raw(self, query: str, *args: object) -> list[dict[str, object]]:
         return [dict(row) for row in self._connection.execute(query.replace("$1", "?"), args)]
 
 
