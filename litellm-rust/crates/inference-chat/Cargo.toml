@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+bytes.workspace = true
 futures-util.workspace = true
 litellm-auth = { workspace = true, features = ["aws", "azure", "gcp"] }
 litellm-cache-response.workspace = true
@@ -16,7 +17,9 @@ litellm-inference.workspace = true
 litellm-llms.workspace = true
 litellm-llms-types.workspace = true
 litellm-secrets.workspace = true
+reqwest.workspace = true
 serde_json = { workspace = true, features = ["preserve_order"] }
+tokio = { workspace = true, features = ["time"] }
 tracing.workspace = true
 
 [dev-dependencies]
@@ -26,5 +29,5 @@ litellm-http = { workspace = true, features = ["test-support"] }
 litellm-inference-testing.workspace = true
 litellm-tracing.workspace = true
 rstest.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["io-util", "sync"] }
 wiremock.workspace = true

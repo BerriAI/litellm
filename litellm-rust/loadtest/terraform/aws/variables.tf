@@ -103,9 +103,9 @@ variable "deployments_per_group" {
 }
 
 variable "chat_provider" {
-  description = "Provider prefix for chat deployments: openai_like until native openai lands in the Rust gateway, then openai."
+  description = "Provider prefix for chat deployments: openai is served natively, streaming included. openai_like is non-streaming only."
   type        = string
-  default     = "openai_like"
+  default     = "openai"
 }
 
 variable "key_count" {

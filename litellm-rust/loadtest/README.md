@@ -30,7 +30,7 @@ Images are tagged `customer-proxy-<sha>` so every result maps to a commit.
 ```sh
 mkdir -p out
 docker run --rm -v "$PWD/out:/work/out" litellm-loadtest:<tag> genconfig -out out \
-  -mocks http://mockllm:9000 -chat-provider openai_like -keys 100
+  -mocks http://mockllm:9000 -keys 100
 export GATEWAY_IMAGE=litellm-rust-gateway:<tag> TOOLS_IMAGE=litellm-loadtest:<tag>
 docker compose up -d gateway mockllm procmon
 docker compose run --rm loadgen loadgen -workload /workloads/smoke.json \
@@ -93,8 +93,6 @@ gateway samples and mock hit counts, and prints the summary.
   (`KEY=` for `cloud-run.sh`). Once keys are read from Postgres, drop it and set `create_postgres`.
 - `/v1/messages` auth: `-messages-auth x-api-key` sends the key the way the Anthropic SDK does.
   The gateway reads only `Authorization: Bearer` today.
-- Chat: deployments use `openai_like/` because the gateway rejects `openai/`, and chat streaming
-  returns 501.
 - Bedrock: `/v1/messages` to a `bedrock/` deployment returns 501 ("Bedrock invoke messages request
   shaping" is unimplemented in Rust). mockllm already serves Bedrock's `/invoke` and
   `/invoke-with-response-stream` (AWS event-stream framing), so set `-bedrock-fraction 0.5`

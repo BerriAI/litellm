@@ -1,7 +1,7 @@
 # rules
 
 - Chat Completions originated at OpenAI and is the most widely cloned LLM API. Types here describe the format, not OpenAI's deployment of it
-- Spoken natively by OpenAI and OpenAI-compatible hosts, served by `llms/src/openai_like/chat/`
+- Spoken natively by OpenAI, passed through by `llms/src/openai/chat/`, and by OpenAI-compatible hosts, served by `llms/src/openai_like/chat/`
 - Other providers translate into it from their own API (Anthropic Messages, Bedrock Converse) in `llms/src/<provider>/chat/`
 - Compatible hosts commonly
   - accept a subset of parameters, which is recorded per provider in `supported_openai_param_mappings`, not by trimming the type

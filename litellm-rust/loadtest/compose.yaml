@@ -2,7 +2,7 @@
 # containers. Not a perf number (one host), but the same images and workloads as the cloud rig.
 #
 #   docker run --rm -v "$PWD/out:/work/out" litellm-loadtest genconfig -out out \
-#     -mocks http://mockllm:9000 -chat-provider openai_like
+#     -mocks http://mockllm:9000
 #   GATEWAY_IMAGE=litellm-rust-gateway:<tag> TOOLS_IMAGE=litellm-loadtest:<tag> docker compose up -d gateway mockllm
 #   docker compose run --rm loadgen loadgen -workload /workloads/smoke.json \
 #     -target http://gateway:4000 -key sk-loadtest-master -out out/smoke.jsonl
