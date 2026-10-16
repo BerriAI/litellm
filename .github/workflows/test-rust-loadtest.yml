@@ -1,0 +1,78 @@
+name: Rust gateway load-test kit
+
+on:
+  push:
+    paths:
+      - "litellm-rust/loadtest/**"
+      - ".github/workflows/test-rust-loadtest.yml"
+  pull_request:
+    branches:
+      - main
+      - "litellm_**"
+    paths:
+      - "litellm-rust/loadtest/**"
+      - ".github/workflows/test-rust-loadtest.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tools:
+    name: vet, build, image
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: litellm-rust/loadtest
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v6.2.0
+        with:
+          go-version-file: litellm-rust/loadtest/go.mod
+          cache: false
+
+      - name: gofmt
+        run: test -z "$(gofmt -l .)"
+
+      - name: vet
+        run: go vet ./...
+
+      - name: build
+        run: go build -o bin/ ./cmd/...
+
+      - name: image
+        working-directory: .
+        run: docker build -f litellm-rust/loadtest/Dockerfile -t litellm-loadtest:ci litellm-rust/loadtest
+
+  terraform:
+    name: terraform fmt, validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: litellm-rust/loadtest/terraform/aws
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        with:
+          terraform_version: 1.13.3
+          terraform_wrapper: false
+
+      - name: fmt
+        run: terraform fmt -recursive -check -diff
+
+      - name: init
+        run: terraform init -backend=false -input=false
+
+      - name: validate
+        run: terraform validate

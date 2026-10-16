@@ -1,0 +1,18 @@
+{
+  "name": "smoke: both endpoints, streaming and not, small contexts, 1 minute",
+  "stages": [{"duration_s": 60, "rps": 5}],
+  "nonstream_max_s": 360,
+  "warmup_s": 5,
+  "keys": {"file": "out/keys.txt", "zipf_s": 0},
+  "models": {"chat": {"prefix": "gpt-6-astra-", "count": 4}, "messages": {"prefix": "claude-opus-5-5-", "count": 4}},
+  "classes": [
+    {"name": "chat", "weight": 1, "endpoint": "chat", "stream_fraction": 0.5,
+     "context_tokens": {"dist": "loguniform", "min": 10000, "max": 50000},
+     "ttft_ms": {"dist": "uniform", "min": 200, "max": 800},
+     "duration_s": {"dist": "uniform", "min": 1, "max": 5}},
+    {"name": "messages", "weight": 1, "endpoint": "messages", "stream_fraction": 0.5,
+     "context_tokens": {"dist": "loguniform", "min": 10000, "max": 50000},
+     "ttft_ms": {"dist": "uniform", "min": 200, "max": 800},
+     "duration_s": {"dist": "uniform", "min": 1, "max": 5}}
+  ]
+}

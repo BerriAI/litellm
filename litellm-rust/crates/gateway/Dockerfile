@@ -17,6 +17,13 @@ RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
 
+# Release defaults to fat LTO (what ships). Pass --build-arg LTO=off --build-arg CODEGEN_UNITS=16
+# for a several-times-faster build when iterating on perf.
+ARG LTO=fat
+ARG CODEGEN_UNITS=1
+ENV CARGO_PROFILE_RELEASE_LTO=${LTO} \
+    CARGO_PROFILE_RELEASE_CODEGEN_UNITS=${CODEGEN_UNITS}
+
 COPY --from=planner /app/recipe.json ./recipe.json
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \

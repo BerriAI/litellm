@@ -1,0 +1,36 @@
+# Local, out-of-process smoke test: gateway, mock upstream and load generator in separate
+# containers. Not a perf number (one host), but the same images and workloads as the cloud rig.
+#
+#   docker run --rm -v "$PWD/out:/work/out" litellm-loadtest genconfig -out out \
+#     -mocks http://mockllm:9000 -chat-provider openai_like
+#   GATEWAY_IMAGE=litellm-rust-gateway:<tag> TOOLS_IMAGE=litellm-loadtest:<tag> docker compose up -d gateway mockllm
+#   docker compose run --rm loadgen loadgen -workload /workloads/smoke.json \
+#     -target http://gateway:4000 -key sk-loadtest-master -out out/smoke.jsonl
+#   docker compose run --rm loadgen summarize out/smoke.jsonl
+services:
+  mockllm:
+    image: ${TOOLS_IMAGE:-litellm-loadtest:local}
+    command: ["mockllm", "-addr", ":9000", "-faults", "${MOCK_FAULTS:-}"]
+  gateway:
+    image: ${GATEWAY_IMAGE:-litellm-rust-gateway:local}
+    environment:
+      LITELLM_CONFIG: /config/config.yaml
+      PORT: "4000"
+    volumes:
+      - ./out:/config:ro
+    ports:
+      - "4000:4000"
+    depends_on: [mockllm]
+  procmon:
+    image: ${TOOLS_IMAGE:-litellm-loadtest:local}
+    pid: "service:gateway"
+    user: "10001" # the gateway's uid, so /proc/1/fd is readable
+    command: ["procmon", "-pid", "1", "-every", "5s"]
+    depends_on: [gateway]
+  loadgen:
+    image: ${TOOLS_IMAGE:-litellm-loadtest:local}
+    profiles: ["run"]
+    working_dir: /work
+    volumes:
+      - ./out:/work/out
+    depends_on: [gateway]

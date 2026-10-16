@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 520" font-family="-apple-system, Segoe UI, Helvetica, Arial, sans-serif" font-size="14">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#475569"/></marker>
+  </defs>
+  <rect width="960" height="520" fill="#ffffff"/>
+  <text x="24" y="34" font-size="18" font-weight="600" fill="#0f172a">Out-of-process load-test rig (terraform/aws, one VPC, cluster placement group)</text>
+
+  <rect x="24" y="60" width="912" height="360" rx="10" fill="#f8fafc" stroke="#cbd5e1" stroke-dasharray="6 4"/>
+
+  <g>
+    <rect x="48" y="100" width="210" height="250" rx="8" fill="#eff6ff" stroke="#3b82f6"/>
+    <text x="64" y="126" font-weight="600" fill="#1e3a8a">loadgen × N machines</text>
+    <text x="64" y="152" fill="#1e293b">open-loop Poisson arrivals</text>
+    <text x="64" y="174" fill="#1e293b">weighted classes:</text>
+    <text x="76" y="194" fill="#334155" font-size="13">10k to 1M token contexts</text>
+    <text x="76" y="212" fill="#334155" font-size="13">1 s to 6 min non-streaming</text>
+    <text x="76" y="230" fill="#334155" font-size="13">streams up to 30 min</text>
+    <text x="76" y="248" fill="#334155" font-size="13">Zipf over 1000s of keys</text>
+    <text x="64" y="276" fill="#1e293b">-shard i -shards n</text>
+    <text x="64" y="298" fill="#1e293b">one JSON line per request</text>
+    <text x="64" y="320" fill="#334155" font-size="13">planned vs observed timing</text>
+  </g>
+
+  <g>
+    <rect x="330" y="150" width="150" height="80" rx="8" fill="#f1f5f9" stroke="#64748b"/>
+    <text x="405" y="184" text-anchor="middle" font-weight="600" fill="#0f172a">internal NLB</text>
+    <text x="405" y="206" text-anchor="middle" fill="#334155" font-size="13">only if gateways &gt; 1</text>
+    <text x="405" y="222" text-anchor="middle" fill="#334155" font-size="13">TCP idle 600 s</text>
+  </g>
+
+  <g>
+    <rect x="540" y="100" width="180" height="250" rx="8" fill="#ecfdf5" stroke="#10b981"/>
+    <text x="556" y="126" font-weight="600" fill="#064e3b">litellm-gateway</text>
+    <text x="556" y="150" fill="#1e293b">Rust, image tagged</text>
+    <text x="556" y="168" fill="#1e293b">customer-proxy-&lt;sha&gt;</text>
+    <text x="556" y="196" fill="#334155" font-size="13">config.yaml from genconfig:</text>
+    <text x="556" y="214" fill="#334155" font-size="13">many groups × deployments</text>
+    <text x="556" y="232" fill="#334155" font-size="13">keys.txt / keys.sql</text>
+    <rect x="556" y="262" width="148" height="70" rx="6" fill="#ffffff" stroke="#10b981"/>
+    <text x="630" y="286" text-anchor="middle" font-weight="600" fill="#064e3b">procmon</text>
+    <text x="630" y="306" text-anchor="middle" fill="#334155" font-size="12">CPU, RSS, fds, TCP</text>
+    <text x="630" y="322" text-anchor="middle" fill="#334155" font-size="12">from /proc</text>
+  </g>
+
+  <g>
+    <rect x="780" y="100" width="140" height="250" rx="8" fill="#fff7ed" stroke="#f97316"/>
+    <text x="796" y="126" font-weight="600" fill="#7c2d12">mockllm × M</text>
+    <text x="796" y="152" fill="#1e293b" font-size="13">OpenAI chat</text>
+    <text x="796" y="170" fill="#1e293b" font-size="13">Anthropic messages</text>
+    <text x="796" y="188" fill="#1e293b" font-size="13">Bedrock invoke +</text>
+    <text x="796" y="206" fill="#1e293b" font-size="13">event-stream</text>
+    <text x="796" y="234" fill="#334155" font-size="12">timing from prompt:</text>
+    <text x="796" y="252" fill="#334155" font-size="12">[[mock ttft_ms=…</text>
+    <text x="796" y="270" fill="#334155" font-size="12">  dur_ms=… out=…]]</text>
+    <text x="796" y="298" fill="#334155" font-size="12">/d/&lt;id&gt;/ hit counts</text>
+    <text x="796" y="316" fill="#334155" font-size="12">-faults dep=429:rate</text>
+  </g>
+
+  <path d="M258 190 L328 190" stroke="#475569" stroke-width="2" fill="none" marker-end="url(#a)"/>
+  <path d="M480 190 L538 190" stroke="#475569" stroke-width="2" fill="none" marker-end="url(#a)"/>
+  <path d="M720 190 L778 190" stroke="#475569" stroke-width="2" fill="none" marker-end="url(#a)"/>
+  <path d="M258 290 C 400 300, 420 300, 538 290" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="5 4" fill="none" marker-end="url(#a)"/>
+  <text x="300" y="318" fill="#64748b" font-size="12">single gateway: direct</text>
+
+  <rect x="48" y="370" width="872" height="36" rx="6" fill="#ffffff" stroke="#e2e8f0"/>
+  <text x="64" y="393" fill="#334155" font-size="13">ECR repos for both images · optional RDS Postgres for virtual keys · results copied to results/&lt;run&gt;/ by scripts/cloud-run.sh</text>
+
+  <text x="24" y="450" font-weight="600" fill="#0f172a">What a result line measures</text>
+  <text x="24" y="474" fill="#334155">proxy overhead = observed time − time the mock was told to take (first byte, total, and max gap between SSE events)</text>
+  <text x="24" y="496" fill="#334155">summarize groups it by stage, class and context size, and reports input and output tokens/s per stage</text>
+</svg>
