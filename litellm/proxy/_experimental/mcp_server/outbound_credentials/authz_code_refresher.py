@@ -11,10 +11,11 @@ across replicas - is the wrapping store's distributed single-flight, not this re
 from __future__ import annotations
 
 import time
-from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Final, Protocol
+from collections.abc import Awaitable, Callable, Mapping
+from typing import TYPE_CHECKING, Final, Protocol, TypeAlias
 
 from fastapi import HTTPException
+from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
 from litellm.proxy._experimental.mcp_server.auth.token_endpoint_auth import (
@@ -29,12 +30,29 @@ from litellm.proxy._experimental.mcp_server.oauth_utils import build_upstream_oa
 from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (
     OAuthToken,
 )
+from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Error, Result
+from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_refresher import (
+    RefreshFailure,
+)
 
 if TYPE_CHECKING:
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 ServerLookup = Callable[[str], "MCPServer | None"]
-TokenEndpointPost = Callable[[str, dict[str, str], dict[str, str]], Awaitable["dict[str, object] | None"]]
+TokenEndpointPost: TypeAlias = Callable[
+    [str, dict[str, str], dict[str, str]], Awaitable[Result[Mapping[str, object], RefreshFailure]]
+]
+CredentialPurge: TypeAlias = Callable[[str, str, str], Awaitable[None]]
+
+_REVOKED_GRANT_ERRORS: Final = frozenset({"invalid_grant", "invalid_token"})
+
+
+def classify_token_endpoint_refusal(status_code: int, error: str | None) -> RefreshFailure:
+    if 400 <= status_code < 500 and error in _REVOKED_GRANT_ERRORS:
+        return RefreshFailure.of_rejected(f"the token endpoint answered {status_code} {error}")
+    return RefreshFailure.of_unavailable(
+        f"the token endpoint answered {status_code} {error or 'without an error code'}"
+    )
 
 
 class CredentialPersist(Protocol):
@@ -71,13 +89,15 @@ def _parse_scopes(raw: object) -> tuple[str, ...] | None:
 class AuthorizationCodeRefresher:
     """``TokenRefresher`` for authorization_code: refresh_token grant against the server, then persist.
 
-    ``token_endpoint`` POSTs the OAuth form and returns the parsed JSON body (``None`` on any
-    transport/HTTP failure, mirroring v1: a failed refresh is a miss, not a 500). ``persist`` writes
-    the rotated triple for ``(user, server)`` - the v1 ``store_user_oauth_credential`` write, which
-    stays. Returns ``None`` (the arm challenges) when there is no refresh_token, the server lacks a
-    token endpoint, or the grant fails; never a stale or partial token. A rotated refresh_token from
-    the response replaces the old one; an omitted one is carried forward, as are the recorded scopes
-    when the response omits ``scope``.
+    ``token_endpoint`` POSTs the OAuth form and returns the parsed JSON body or a classified
+    ``RefreshFailure``. ``persist`` writes the rotated triple for ``(user, server)`` - the v1
+    ``store_user_oauth_credential`` write, which stays. A ``rejected`` failure (the IdP answered
+    ``invalid_grant`` / ``invalid_token``) means the stored refresh token is dead, so ``purge`` drops
+    the credential that still holds it and the user is challenged to re-authorize; an ``unavailable``
+    one keeps the credential so the next request retries. Returns ``None`` (the arm challenges) when
+    there is no refresh_token, the server lacks a token endpoint, or the grant fails; never a stale or
+    partial token. A rotated refresh_token from the response replaces the old one; an omitted one is
+    carried forward, as are the recorded scopes when the response omits ``scope``.
     """
 
     def __init__(
@@ -86,12 +106,14 @@ class AuthorizationCodeRefresher:
         token_endpoint: TokenEndpointPost,
         persist: CredentialPersist,
         *,
+        purge: CredentialPurge,
         clock: Callable[[], float] = time.time,
         identity_validator: BindingValidator = enforce_oauth_identity_binding,
     ) -> None:
         self._server_lookup = server_lookup
         self._token_endpoint = token_endpoint
         self._persist = persist
+        self._purge = purge
         self._clock = clock
         self._identity_validator = identity_validator
 
@@ -139,9 +161,11 @@ class AuthorizationCodeRefresher:
             "refresh_token": token.refresh_token,
             **token_request.body,
         }
-        body: Final = await self._token_endpoint(token_url, form, token_request.headers)
-        if body is None:
+        outcome: Final = await self._token_endpoint(token_url, form, token_request.headers)
+        if isinstance(outcome, Error):
+            await self._on_failure(user_id, server_id, token.refresh_token, outcome.error)
             return None
+        body: Final = outcome.ok
         access_token: Final = body.get("access_token")
         if not isinstance(access_token, str) or not access_token:
             return None
@@ -177,3 +201,24 @@ class AuthorizationCodeRefresher:
             identity_binding_proof=binding_proof,
             cimd_client_id=cimd_client_id,
         )
+
+    async def _on_failure(self, user_id: str, server_id: str, refresh_token: str, failure: RefreshFailure) -> None:
+        match failure.kind:
+            case "rejected":
+                verbose_logger.warning(
+                    "MCP OAuth refresh rejected for user=%s server=%s (%s); removing the stored credential so "
+                    "the user re-authorizes",
+                    user_id,
+                    server_id,
+                    failure.detail,
+                )
+                await self._purge(user_id, server_id, refresh_token)
+            case "unavailable":
+                verbose_logger.warning(
+                    "MCP OAuth refresh failed for user=%s server=%s (%s); keeping the stored credential",
+                    user_id,
+                    server_id,
+                    failure.detail,
+                )
+            case _:
+                assert_never(failure.kind)

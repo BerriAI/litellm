@@ -1896,6 +1896,26 @@ async def get_user_oauth_credential(
     return _parse_oauth_payload(decoded)
 
 
+async def delete_user_oauth_credential_holding_refresh_token(
+    prisma_client: PrismaClient,
+    user_id: str,
+    server_id: str,
+    refresh_token: str,
+) -> bool:
+    """Delete the user's OAuth credential only while it still holds ``refresh_token``. The delete is
+    keyed on the exact ciphertext read, so a re-authorization that lands concurrently survives."""
+    row: Final = await _db_find_user_credential_row(prisma_client, user_id, server_id)
+    if row is None:
+        return False
+    payload: Final = decode_oauth_payload(row.credential_b64)
+    if payload is None or payload.get("refresh_token") != refresh_token:
+        return False
+    deleted: Final = await _user_credential_actions(prisma_client).delete_many(
+        where={"user_id": user_id, "server_id": server_id, "credential_b64": row.credential_b64}
+    )
+    return deleted > 0
+
+
 def _server_user_credential_item(
     row: "prisma_db_models.LiteLLM_MCPUserCredentials",
 ) -> MCPServerUserCredentialListItem:
