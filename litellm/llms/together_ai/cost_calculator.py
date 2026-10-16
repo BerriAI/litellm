@@ -21,9 +21,14 @@ from litellm.types.utils import CallTypes
 
 def has_together_registry_pricing(model: str, cost_map: Mapping[str, object]) -> bool:
     stripped: Final = model.removeprefix("together_ai/")
-    return any(
-        isinstance(entry, Mapping) and "input_cost_per_token" in entry
-        for entry in (cost_map.get(f"together_ai/{stripped}"), cost_map.get(stripped))
+    provider_entry: Final = cost_map.get(f"together_ai/{stripped}")
+    if isinstance(provider_entry, Mapping) and "input_cost_per_token" in provider_entry:
+        return True
+    bare_entry: Final = cost_map.get(stripped)
+    return (
+        isinstance(bare_entry, Mapping)
+        and "input_cost_per_token" in bare_entry
+        and bare_entry.get("litellm_provider") in (None, "together_ai")
     )
 
 
