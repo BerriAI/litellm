@@ -3,6 +3,14 @@ Prometheus counter for rate limiter failures.
 
 Lazily registers the counter on first use so proxy deployments without
 Prometheus don't pull in the ``prometheus_client`` import at module load.
+
+``limiter_type`` values emitted by callers:
+
+- ``parallel_v3``: max-parallel-requests limiter (v3 Lua script)
+- ``v1_dynamic``: v1 model-group dynamic TPM/RPM limiter
+- ``v3_dynamic``: v3 saturation-aware dynamic limiter
+- ``model_rate_limit_check``: deployment-level static TPM/RPM pre-call check
+- ``budget_reservation``: spend-track budget reservation prepare step
 """
 
 from typing import Final
