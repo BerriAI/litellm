@@ -4,9 +4,9 @@ import logging
 import os
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
-from typing import Final, List
+from typing import Final, List, TypeAlias
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -16,6 +16,7 @@ import respx
 import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import (
     BEDROCK_DOCUMENT_PLACEHOLDER_TEXT,
+    _EMPTY_TEXT_PLACEHOLDER,
     BedrockConverseMessagesProcessor,
     BedrockImageProcessor,
     _bedrock_converse_messages_pt,
@@ -793,6 +794,138 @@ def test_anthropic_messages_pt_keeps_signed_thinking_block():
     assert len(thinking_blocks) == 1
     assert thinking_blocks[0]["signature"] == "ErcBCkgIValidSignatureBytes"
     assert thinking_blocks[0]["thinking"] == "genuine anthropic reasoning"
+
+
+EMPTY_USER_MESSAGES: Final = pytest.mark.parametrize(
+    "empty_user_message",
+    [{"role": "user", "content": None}, {"role": "user", "content": []}, {"role": "user"}],
+    ids=["null", "empty-list", "content-key-dropped"],
+)
+
+Message: TypeAlias = Mapping[str, object]
+
+
+def _convert(messages: Sequence[Message]) -> Sequence[Message]:
+    return anthropic_messages_pt(messages=list(messages), model="claude-opus-5", llm_provider="vertex_ai")
+
+
+@EMPTY_USER_MESSAGES
+def test_anthropic_messages_pt_preserves_trailing_user_message_with_empty_content(empty_user_message: Message) -> None:
+    result: Final = _convert(
+        [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "hello"},
+            empty_user_message,
+        ]
+    )
+
+    assert [message["role"] for message in result] == ["user", "assistant", "user"]
+    assert result[-1]["content"] == [{"type": "text", "text": _EMPTY_TEXT_PLACEHOLDER}]
+
+
+@EMPTY_USER_MESSAGES
+@pytest.mark.parametrize(
+    "cache_control", [{}, {"cache_control": {"type": "ephemeral"}}], ids=["no-cache-control", "with-cache-control"]
+)
+def test_anthropic_messages_pt_empty_user_message_beside_tool_result_keeps_tool_result_only(
+    empty_user_message: Message, cache_control: Message
+) -> None:
+    result: Final = _convert(
+        [
+            {"role": "user", "content": "hi"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{"id": "toolu_1", "type": "function", "function": {"name": "f", "arguments": "{}"}}],
+            },
+            {**empty_user_message, **cache_control},
+            {"role": "tool", "tool_call_id": "toolu_1", "content": "ok"},
+        ]
+    )
+
+    assert [message["role"] for message in result] == ["user", "assistant", "user"]
+    assert [block["type"] for block in result[-1]["content"]] == ["tool_result"]
+
+
+@EMPTY_USER_MESSAGES
+def test_anthropic_messages_pt_empty_user_message_keeps_cache_control_like_an_empty_string(
+    empty_user_message: Message,
+) -> None:
+    def last_turn(last_user_message: Message) -> Message:
+        return _convert(
+            [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "hello"},
+                {**last_user_message, "cache_control": {"type": "ephemeral"}},
+            ]
+        )[-1]
+
+    assert last_turn(empty_user_message)["content"][0]["cache_control"] == {"type": "ephemeral"}
+    assert last_turn(empty_user_message) == last_turn({"role": "user", "content": ""})
+
+
+TOOL_CALL_AND_RESULT: Final[tuple[Message, ...]] = (
+    {"role": "user", "content": "hi"},
+    {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [{"id": "toolu_1", "type": "function", "function": {"name": "f", "arguments": "{}"}}],
+    },
+    {"role": "tool", "tool_call_id": "toolu_1", "content": "ok"},
+)
+
+
+@EMPTY_USER_MESSAGES
+@pytest.mark.parametrize(
+    "messages_before",
+    [
+        [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "hello"},
+            {"role": "user", "content": "q"},
+        ],
+        [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}, {"role": "user", "content": []}],
+        TOOL_CALL_AND_RESULT,
+    ],
+    ids=["after-user-text", "after-another-empty-message", "after-tool-result"],
+)
+def test_anthropic_messages_pt_empty_user_message_beside_other_content_sends_nothing_extra(
+    empty_user_message: Message, messages_before: Sequence[Message]
+) -> None:
+    assert _convert([*messages_before, empty_user_message]) == _convert(messages_before)
+
+
+@EMPTY_USER_MESSAGES
+def test_anthropic_messages_pt_empty_user_message_with_cache_control_after_text_keeps_its_breakpoint(
+    empty_user_message: Message,
+) -> None:
+    def last_turn(last_user_message: Message) -> Message:
+        return _convert(
+            [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "hello"},
+                {"role": "user", "content": "long document"},
+                {**last_user_message, "cache_control": {"type": "ephemeral"}},
+            ]
+        )[-1]
+
+    assert last_turn(empty_user_message)["content"][-1]["cache_control"] == {"type": "ephemeral"}
+    assert last_turn(empty_user_message) == last_turn({"role": "user", "content": ""})
+
+
+def test_anthropic_messages_pt_keeps_every_breakpoint_of_a_long_run_of_empty_user_messages() -> None:
+    result: Final = _convert(
+        [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "hello"},
+            *[{"role": "user", "content": [], "cache_control": {"type": "ephemeral"}}] * 10_000,
+        ]
+    )
+
+    assert (
+        result[-1]["content"]
+        == [{"type": "text", "text": _EMPTY_TEXT_PLACEHOLDER, "cache_control": {"type": "ephemeral"}}] * 10_000
+    )
 
 
 def test_convert_to_azure_openai_messages():
@@ -4933,7 +5066,9 @@ def test_bedrock_converse_messages_pt_user_message_without_content_adds_no_block
 
     assert _bedrock_converse_messages_pt(
         messages=with_message, model="anthropic.claude-haiku-4-5", llm_provider="bedrock"
-    ) == _bedrock_converse_messages_pt(messages=without_message, model="anthropic.claude-haiku-4-5", llm_provider="bedrock")
+    ) == _bedrock_converse_messages_pt(
+        messages=without_message, model="anthropic.claude-haiku-4-5", llm_provider="bedrock"
+    )
 
 
 @pytest.mark.asyncio
@@ -5063,6 +5198,7 @@ def _vcr_outcome_gate(request, vcr):
     yield
     record_vcr_outcome(request, vcr)
 
+
 @pytest.fixture(scope="function")
 def isolate_litellm_state():
     """
@@ -5115,6 +5251,7 @@ def isolate_litellm_state():
             setattr(litellm, attr, original_value)
     _invalidate_model_cost_lowercase_map()
 
+
 _SCALAR_DEFAULTS = {
     "num_retries": getattr(litellm, "num_retries", None),
     "num_retries_per_request": getattr(litellm, "num_retries_per_request", None),
@@ -5134,6 +5271,7 @@ _SCALAR_DEFAULTS = {
     "api_base": getattr(litellm, "api_base", None),
     "api_key": getattr(litellm, "api_key", None),
 }
+
 
 @pytest.fixture(scope="module")
 def setup_and_teardown():
@@ -5156,6 +5294,7 @@ def setup_and_teardown():
         if hasattr(litellm, "in_memory_llm_clients_cache"):
             litellm.in_memory_llm_clients_cache.flush_cache()
     yield
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_function_call_non_openai_model():
@@ -5185,6 +5324,7 @@ def test_function_call_non_openai_model():
         print(e)
         pass
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_empty_content():
     """
@@ -5202,6 +5342,7 @@ def test_empty_content():
         messages=[],
         litellm_call_id=str(uuid.uuid4()),
     )
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_thought_signature_removal_for_non_gemini():
@@ -5251,6 +5392,7 @@ def test_thought_signature_removal_for_non_gemini():
     assert THOUGHT_SIGNATURE_SEPARATOR not in processed_messages[1]["tool_calls"][0]["id"]
     assert THOUGHT_SIGNATURE_SEPARATOR not in processed_messages[2]["tool_call_id"]
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_thought_signature_preserved_for_gemini():
     """
@@ -5296,6 +5438,7 @@ def test_thought_signature_preserved_for_gemini():
     processed_messages = kwargs["messages"]
     assert THOUGHT_SIGNATURE_SEPARATOR in processed_messages[1]["tool_calls"][0]["id"]
     assert THOUGHT_SIGNATURE_SEPARATOR in processed_messages[2]["tool_call_id"]
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_thought_signature_removal_with_multiple_tool_calls():
@@ -5350,6 +5493,7 @@ def test_thought_signature_removal_with_multiple_tool_calls():
     assert processed_messages[1]["tool_calls"][1]["id"] == "call_2"
     assert processed_messages[2]["tool_call_id"] == "call_1"
     assert processed_messages[3]["tool_call_id"] == "call_2"
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_messages_without_tool_calls_unchanged():
