@@ -191,3 +191,27 @@ async def test_undecodable_count_body_becomes_a_500_error_response_carrying_the_
             "status_code": 500,
         }
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("set_base", ("env", "global"), ids=("AZURE_API_BASE", "litellm.api_base"))
+async def test_count_uses_the_shared_api_base_chat_would_use(monkeypatch: pytest.MonkeyPatch, set_base: str) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.delenv("AZURE_AI_API_BASE", raising=False)
+    monkeypatch.delenv("AZURE_API_BASE", raising=False)
+    if set_base == "env":
+        monkeypatch.setenv("AZURE_API_BASE", API_BASE)
+    else:
+        monkeypatch.setattr(litellm, "api_base", API_BASE)
+    with respx.mock:
+        route: Final = respx.post(COUNT_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 6}))
+        result: Final = await AzureAIAnthropicTokenCounter().count_tokens(
+            model_to_use="claude-sonnet-4-5",
+            messages=[{"role": "user", "content": "hi"}],
+            contents=None,
+            deployment={"litellm_params": {"api_key": "azure-key"}},
+            request_model="azure_ai/claude-sonnet-4-5",
+        )
+    assert result is not None
+    assert result.total_tokens == 6
+    assert route.called
