@@ -3613,6 +3613,104 @@ class TestResponsesInputTokens:
         assert response.json()["error"]["message"] == "rate limited"
 
 
+    @pytest.mark.parametrize(
+        "provider_body, status_code, expected_error",
+        [
+            pytest.param(
+                {
+                    "error": {
+                        "message": "Missing required parameter: 'tools[0].name'.",
+                        "type": "invalid_request_error",
+                        "param": "tools[0].name",
+                        "code": "missing_required_parameter",
+                    }
+                },
+                400,
+                {
+                    "message": "Missing required parameter: 'tools[0].name'.",
+                    "type": "invalid_request_error",
+                    "param": "tools[0].name",
+                    "code": "missing_required_parameter",
+                },
+                id="openai_error_passes_through",
+            ),
+            pytest.param(
+                {
+                    "type": "error",
+                    "error": {"type": "invalid_request_error", "message": "tools.0: Input tag 'function' is invalid"},
+                    "request_id": "req_vrtx_1",
+                },
+                400,
+                {
+                    "message": "tools.0: Input tag 'function' is invalid",
+                    "type": "invalid_request_error",
+                    "param": None,
+                    "code": None,
+                },
+                id="anthropic_error_message_unwrapped",
+            ),
+            pytest.param(
+                {"error": {"code": 404, "message": "Publisher model not found.", "status": "NOT_FOUND"}},
+                404,
+                {"message": "Publisher model not found.", "type": "invalid_request_error", "param": None, "code": None},
+                id="google_error_message_unwrapped",
+            ),
+            pytest.param(
+                {"message": "The provided model doesn't support counting tokens."},
+                400,
+                {
+                    "message": "The provided model doesn't support counting tokens.",
+                    "type": "invalid_request_error",
+                    "param": None,
+                    "code": None,
+                },
+                id="bedrock_error_message_unwrapped",
+            ),
+            pytest.param(
+                "upstream count service unavailable",
+                503,
+                {
+                    "message": "upstream count service unavailable",
+                    "type": "internal_server_error",
+                    "param": None,
+                    "code": None,
+                },
+                id="plain_text_error",
+            ),
+        ],
+    )
+    def test_provider_count_error_answers_in_openai_error_shape(self, provider_body, status_code, expected_error):
+        from litellm.proxy._types import ProxyException
+
+        failing_counter = AsyncMock(
+            side_effect=ProxyException(
+                message=provider_body if isinstance(provider_body, str) else json.dumps(provider_body),
+                type="token_counting_error",
+                param="model",
+                code=str(status_code),
+            )
+        )
+        response, _ = self._post_input_tokens({"model": "gpt-4o", "input": "hi"}, counter=failing_counter)
+
+        assert response.status_code == status_code, response.text
+        assert response.json() == {"error": expected_error}
+
+    def test_non_provider_count_error_keeps_its_own_type(self):
+        from litellm.proxy._types import ProxyException
+
+        failing_counter = AsyncMock(
+            side_effect=ProxyException(
+                message="Token counting is disabled and no provider API result available",
+                type="token_counting_disabled",
+                param="model",
+                code=503,
+            )
+        )
+        response, _ = self._post_input_tokens({"model": "gpt-4o", "input": "hi"}, counter=failing_counter)
+
+        assert response.status_code == 503, response.text
+        assert response.json()["error"]["type"] == "token_counting_disabled"
+
 class TestGuardrailBlockedResponsesShape:
     """A pre_call block raises ModifyResponseException before any provider call.
 

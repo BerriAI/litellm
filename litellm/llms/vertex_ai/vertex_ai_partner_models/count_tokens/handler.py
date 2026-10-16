@@ -12,6 +12,18 @@ from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 
+_COUNT_TOKENS_PUBLISHERS: Final = (
+    ("claude", "anthropic"),
+    ("mistral", "mistralai"),
+    ("codestral", "mistralai"),
+    ("llama", "meta"),
+    ("meta/", "meta"),
+)
+
+
+def count_tokens_publisher(model: str) -> str | None:
+    return next((publisher for marker, publisher in _COUNT_TOKENS_PUBLISHERS if marker in model), None)
+
 
 class VertexAIPartnerModelsTokenCounter(VertexBase):
     """
@@ -22,26 +34,10 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
     """
 
     def _get_publisher_for_model(self, model: str) -> str:
-        """
-        Determine the publisher name for the given model.
-
-        Args:
-            model: The model name (e.g., "claude-3-5-sonnet-20241022")
-
-        Returns:
-            Publisher name to use in the Vertex AI endpoint URL
-
-        Raises:
-            ValueError: If the model is not a recognized partner model
-        """
-        if "claude" in model:
-            return "anthropic"
-        elif "mistral" in model or "codestral" in model:
-            return "mistralai"
-        elif "llama" in model or "meta/" in model:
-            return "meta"
-        else:
+        publisher: Final = count_tokens_publisher(model)
+        if publisher is None:
             raise ValueError(f"Unknown partner model: {model}")
+        return publisher
 
     def _build_count_tokens_endpoint(
         self,

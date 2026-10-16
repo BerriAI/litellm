@@ -51,6 +51,27 @@ async def test_vertex_gemini_rejects_non_text_system_blocks_before_request(
     assert "text blocks" in (result.error_message or "")
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model",
+    ("zai-org/glm-5.2-maas", "deepseek-ai/deepseek-v3.2-maas", "qwen/qwen3-coder-480b-a35b-instruct-maas"),
+)
+async def test_vertex_partner_model_without_a_count_api_answers_400_naming_the_model(model: str) -> None:
+    result: Final = await VertexAITokenCounter().count_tokens(
+        model_to_use=model,
+        messages=[{"role": "user", "content": "Count this"}],
+        contents=None,
+        deployment={"litellm_params": {"vertex_project": "test-project", "vertex_location": "global"}},
+        request_model=f"vertex_ai/{model}",
+        messages_format="anthropic",
+    )
+
+    assert result is not None
+    assert result.error is True
+    assert result.status_code == 400
+    assert result.error_message == f"Vertex AI does not support counting tokens for {model}."
+
+
 class _VertexCountTokensPeer:
     def __init__(self, status_code: int) -> None:
         self.status_code: Final = status_code

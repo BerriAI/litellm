@@ -29,6 +29,7 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
+from litellm.anthropic_interface.exceptions.exception_mapping_utils import AnthropicExceptionMapping
 from litellm.constants import EMPTY_MAPPING, MANAGED_BACKGROUND_RESPONSE_METADATA_KEY, TERMINAL_RESPONSE_STATUSES
 from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
@@ -46,11 +47,17 @@ from litellm.proxy.auth.user_api_key_auth import (
     user_api_key_auth_websocket,
 )
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing, cost_headers, create_response
+from litellm.proxy.common_utils.error_body_call_id import error_body_call_id, with_call_id
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
     _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _safe_set_request_parsed_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     read_request_body,
     safe_set_request_parsed_body,
+)
+from litellm.proxy.common_utils.openai_error_payload import (
+    LITELLM_CALL_ID_HEADER,
+    error_status_code,
+    openai_error_type_for_status,
 )
 from litellm.proxy.hooks.responses_id_security import ResponsesIDSecurity, decrypted_response_id
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import (
@@ -1388,6 +1395,57 @@ def _responses_invalid_request_response(message: str, param: str | None, code: s
     return JSONResponse(status_code=400, content=body)
 
 
+class _ProviderErrorMessage(TypedDict):
+    message: ReadOnly[str]
+
+
+class _NestedProviderError(TypedDict):
+    error: ReadOnly[_ProviderErrorMessage]
+
+
+_PROVIDER_COUNT_ERROR_TYPE: Final = "token_counting_error"
+_OPENAI_ERROR_BODY: Final = TypeAdapter(_ResponsesApiErrorBody)
+_NESTED_PROVIDER_ERROR: Final = TypeAdapter(_NestedProviderError)
+
+
+def _provider_error_message(raw_message: str) -> str:
+    try:
+        return _NESTED_PROVIDER_ERROR.validate_json(raw_message)["error"]["message"]
+    except ValidationError:
+        return AnthropicExceptionMapping.extract_error_message(raw_message)
+
+
+def _provider_count_error_body(raw_message: str, status_code: int) -> _ResponsesApiErrorBody:
+    try:
+        return _OPENAI_ERROR_BODY.validate_json(raw_message)
+    except ValidationError:
+        return {
+            "error": {
+                "message": _provider_error_message(raw_message),
+                "type": openai_error_type_for_status(status_code),
+                "param": None,
+                "code": None,
+            }
+        }
+
+
+def _provider_count_error_response(exc: ProxyException, request: Request) -> JSONResponse:
+    from litellm.proxy.proxy_server import (
+        _close_dangling_otel_server_span,  # pyright: ignore[reportPrivateUsage]  # proxy_server keeps the span-close helper private; a route that answers an error itself must stamp the OTel server span like the global ProxyException handler does
+        general_settings_view,
+    )
+
+    status_code: Final = error_status_code(exc, 500)
+    _close_dangling_otel_server_span(request, status_code, exc=exc)
+    body: Final = _provider_count_error_body(exc.message, status_code)
+    call_id: Final = error_body_call_id(general_settings_view(), exc.headers.get(LITELLM_CALL_ID_HEADER))
+    return JSONResponse(
+        status_code=status_code,
+        content={"error": with_call_id({**body["error"]}, call_id)},
+        headers=exc.headers,
+    )
+
+
 def _missing_responses_param_response(param: str) -> JSONResponse:
     return _responses_invalid_request_response(
         message=f"Missing required parameter: '{param}'.",
@@ -1479,7 +1537,12 @@ async def responses_input_tokens(
             message=f"Invalid request for token counting: {e}", param=None, code=None
         )
 
-    token_response: Final = await token_counter(request=token_request, call_endpoint=True)
+    try:
+        token_response: Final = await token_counter(request=token_request, call_endpoint=True)
+    except ProxyException as e:
+        if e.type != _PROVIDER_COUNT_ERROR_TYPE:
+            raise
+        return _provider_count_error_response(e, request)
     result: Final[_ResponsesInputTokensResult] = {
         "object": "response.input_tokens",
         "input_tokens": token_response.total_tokens,

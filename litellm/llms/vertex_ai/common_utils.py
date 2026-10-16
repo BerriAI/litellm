@@ -1278,6 +1278,7 @@ class VertexAITokenCounter(BaseTokenCounter):
     ) -> TokenCountResponse | None:
         import copy
 
+        from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler import count_tokens_publisher
         from litellm.llms.vertex_ai.vertex_ai_partner_models.main import (
             VertexAIError as PartnerVertexAIError,
         )
@@ -1292,6 +1293,17 @@ class VertexAITokenCounter(BaseTokenCounter):
             model_to_use, count_tokens_params_request
         ):
             return None
+
+        if VertexAIPartnerModels.is_vertex_partner_model(model_to_use) and count_tokens_publisher(model_to_use) is None:
+            return TokenCountResponse(
+                total_tokens=0,
+                request_model=request_model,
+                model_used=model_to_use,
+                tokenizer_type="vertex_ai_partner_models",
+                error=True,
+                error_message=f"Vertex AI does not support counting tokens for {model_to_use}.",
+                status_code=400,
+            )
 
         # Check if this is a partner model (Claude, Mistral, etc.)
         if VertexAIPartnerModels.is_vertex_partner_model(model_to_use):
