@@ -1,6 +1,7 @@
 import types
 from typing import Final, Literal
 
+from litellm.litellm_core_utils.hidden_params import set_hidden_param
 from litellm.llms.vertex_ai.common_utils import pop_vertex_request_labels
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import EmbeddingResponse, Usage
@@ -233,6 +234,7 @@ class VertexAITextEmbeddingConfig(LiteLLMBaseModel):
 
         embedding_response: Final = []
         input_tokens: int = 0
+        billable_counts: Final[list[int]] = []  # mutable-ok: per-prediction character counts, summed after the loop
         for idx, element in enumerate(_predictions):
             embedding = element["embeddings"]
             embedding_response.append(
@@ -243,12 +245,19 @@ class VertexAITextEmbeddingConfig(LiteLLMBaseModel):
                 }
             )
             input_tokens += embedding["statistics"]["token_count"]
+            if isinstance(billable := embedding["statistics"].get("billableCharacterCount"), (int, float)):
+                billable_counts.append(int(billable))
 
         model_response.object = "list"
         model_response.data = embedding_response
         model_response.model = model
         usage: Final = Usage(prompt_tokens=input_tokens, completion_tokens=0, total_tokens=input_tokens)
         setattr(model_response, "usage", usage)
+        input_characters: Final = sum(billable_counts)
+        if input_characters > 0:
+            # Google bills some Vertex embedding models per character; the cost
+            # calculator reads this count for per-character pricing
+            set_hidden_param(model_response, "billable_character_count", input_characters)
         return model_response
 
     def _transform_vertex_response_to_openai_for_fine_tuned_models(
