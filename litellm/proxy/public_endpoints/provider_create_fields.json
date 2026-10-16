@@ -3232,6 +3232,34 @@
     "default_model_placeholder": "reka/reka-flash"
   },
   {
+    "provider": "RAINDRAGON",
+    "provider_display_name": "RainDragon",
+    "litellm_provider": "raindragon",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://inference.raindragon.ai/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "raindragon/google/gemma-4-26B-A4B-it"
+  },
+  {
     "provider": "Sail",
     "provider_display_name": "Sail",
     "litellm_provider": "sail",
