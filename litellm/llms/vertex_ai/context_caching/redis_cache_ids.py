@@ -338,6 +338,8 @@ class CacheReference(str):
 
     def restore(self, body: RequestBody) -> None:
         replacement = self.rebuild()
+        if "continuationToken" in body:
+            replacement = {**replacement, "continuationToken": body["continuationToken"]}
         for key in tuple(body):
             del body[key]
         body.update(replacement)

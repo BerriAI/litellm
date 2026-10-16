@@ -62,6 +62,7 @@ _EMPTY_MAPPING: Final[Mapping[str, object]] = MappingProxyType({})
 _EMPTY_MESSAGE: Final[Message] = {"role": "", "content": ""}
 _MAX_PARSED_TOOL_ARGUMENT_CHARS: Final = 256 * 1024
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
+_DECODED_RESPONSE: Final = TypeAdapter(object)
 _SAFE_REDACTED_MESSAGE_ROLES: Final = frozenset(
     {"agent", "assistant", "developer", "function", "model", "system", "tool", "user"}
 )
@@ -815,11 +816,11 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             try:
                 import ast
 
-                response_obj = ast.literal_eval(response_obj)
+                response_obj = _DECODED_RESPONSE.validate_python(ast.literal_eval(response_obj))
             except (ValueError, SyntaxError):
                 try:
                     # fallback to json parsing
-                    response_obj = json.loads(str(response_obj))
+                    response_obj = _DECODED_RESPONSE.validate_python(json.loads(str(response_obj)))
                 except json.JSONDecodeError:
                     return ()
 

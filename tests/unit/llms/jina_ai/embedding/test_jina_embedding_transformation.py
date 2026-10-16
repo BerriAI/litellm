@@ -272,3 +272,20 @@ def test_jina_ai_img_embeddings_transforms_mixed_text_and_image_inputs(
         "input": expected_payload_input,
     }
     assert response.data[0]["embedding"] == [0.1, 0.2]
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "https://gateway.example.com/jina/v1",
+        "https://gateway.example.com/jina/v1/",
+        "https://gateway.example.com/jina/v1/embeddings/",
+    ],
+)
+def test_get_complete_url_ignores_a_trailing_slash_on_api_base(api_base: str):
+    assert (
+        JinaAIEmbeddingConfig().get_complete_url(
+            api_base=api_base, api_key=None, model="jina-embeddings-v3", optional_params={}, litellm_params={}
+        )
+        == "https://gateway.example.com/jina/v1/embeddings"
+    )

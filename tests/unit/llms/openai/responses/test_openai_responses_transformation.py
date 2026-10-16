@@ -79,6 +79,36 @@ def validate_responses_api_response(response: ResponsesAPIResponse, final_chunk:
     return True
 
 
+_CLAUDE_SEARCH_CALL: Final = {
+    "type": "function_call",
+    "call_id": "srvtoolu_01Search",
+    "name": "tool_search_tool_bm25",
+    "arguments": '{"query": "weather"}',
+}
+
+
+_BM25_TOOL: Final = {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"}
+_DEFERRED_WEATHER: Final = {"type": "function", "name": "get_weather", "parameters": {"type": "object"}, "defer_loading": True}
+_CLIENT_TOOL_SEARCH: Final = {
+    "type": "tool_search",
+    "execution": "client",
+    "description": "Search the tool catalog",
+    "parameters": {"type": "object", "properties": {"query": {"type": "string"}}},
+}
+
+
+def _undeferred(tool: Mapping[str, object]) -> dict[str, object]:
+    return {key: value for key, value in tool.items() if key != "defer_loading"}
+
+
+def _openai_model(supports_tool_search: bool) -> str:
+    return next(
+        name
+        for name, info in litellm.model_cost.items()
+        if info.get("litellm_provider") == "openai" and info.get("supports_tool_search", False) is supports_tool_search
+    )
+
+
 class TestOpenAIResponsesAPIConfig:
     def setup_method(self):
         self.config = OpenAIResponsesAPIConfig()
@@ -196,6 +226,248 @@ class TestOpenAIResponsesAPIConfig:
         }
 
         self.validate_responses_api_request_params(result, expected_fields)
+
+    @pytest.mark.parametrize(
+        "tool_type",
+        ["tool_search_tool_bm25_20251119", "tool_search_tool_regex_20251119"],
+    )
+    def test_transform_maps_anthropic_search_tool_and_preserves_deferred_functions(self, tool_type: str) -> None:
+        tools: Final = [
+            {
+                "type": "function",
+                "name": "get_weather",
+                "parameters": {"type": "object"},
+                "defer_loading": True,
+            },
+            {"type": tool_type, "name": "tool_search"},
+            {
+                "type": "function",
+                "name": "get_stock_price",
+                "parameters": {"type": "object"},
+                "defer_loading": True,
+            },
+        ]
+
+        result: Final = self.config.transform_responses_api_request(
+            model=self.model,
+            input="Find a tool",
+            response_api_optional_request_params={"tools": tools},
+            litellm_params=_OPENAI_API,
+            headers={},
+        )
+
+        assert result["tools"] == [
+            tools[0],
+            {"type": "tool_search", "execution": "server"},
+            tools[2],
+        ]
+
+    def test_transform_deduplicates_anthropic_search_tools(self) -> None:
+        tools: Final = [
+            {"type": "function", "name": "get_weather", "parameters": {"type": "object"}},
+            {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"},
+            {"type": "function", "name": "get_stock_price", "parameters": {"type": "object"}},
+            {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
+        ]
+
+        result: Final = self.config.transform_responses_api_request(
+            model=self.model,
+            input="Find a tool",
+            response_api_optional_request_params={"tools": tools},
+            litellm_params=_OPENAI_API,
+            headers={},
+        )
+
+        assert result["tools"] == [
+            tools[0],
+            {"type": "tool_search", "execution": "server"},
+            tools[2],
+        ]
+
+    @pytest.mark.parametrize("execution", [None, "client", "server"])
+    def test_transform_keeps_caller_tool_search_and_drops_anthropic_search_tools(
+        self, execution: str | None
+    ) -> None:
+        caller_tool_search: Final[dict[str, object]] = {
+            "type": "tool_search",
+            **({"execution": execution} if execution is not None else {}),
+        }
+        tools: Final = [
+            {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"},
+            {"type": "function", "name": "get_weather", "parameters": {"type": "object"}},
+            caller_tool_search,
+            {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
+        ]
+
+        result: Final = self.config.transform_responses_api_request(
+            model=self.model,
+            input="Find a tool",
+            response_api_optional_request_params={"tools": tools},
+            litellm_params=_OPENAI_API,
+            headers={},
+        )
+
+        assert result["tools"] == [tools[1], caller_tool_search]
+
+    def test_transform_leaves_tools_without_anthropic_search_unchanged(self) -> None:
+        tools: Final = [
+            {"type": "function", "name": "get_weather", "parameters": {"type": "object"}},
+            {"type": "tool_search", "execution": "client"},
+        ]
+
+        result: Final = self.config.transform_responses_api_request(
+            model=self.model,
+            input="Find a tool",
+            response_api_optional_request_params={"tools": tools},
+            litellm_params=_OPENAI_API,
+            headers={},
+        )
+
+        assert result["tools"] == tools
+
+    def test_transform_forwards_anthropic_search_tool_and_history_unchanged_to_another_gateway(self) -> None:
+        tools: Final = [
+            {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"},
+            {"type": "function", "name": "get_weather", "parameters": {"type": "object"}, "defer_loading": True},
+        ]
+        history: Final = [{"role": "user", "content": "What is the weather in Paris?"}, _CLAUDE_SEARCH_CALL]
+
+        result: Final = self.config.transform_responses_api_request(
+            model=self.model,
+            input=history,
+            response_api_optional_request_params={"tools": tools},
+            litellm_params=_OTHER_HOST,
+            headers={},
+        )
+
+        assert result["tools"] == tools
+        assert result["input"] == history
+
+    def _transform_tools(self, model: str, tools: list[dict[str, object]], drop_params: bool) -> object:
+        return self.config.transform_responses_api_request(
+            model=model,
+            input="Find a tool",
+            response_api_optional_request_params={"tools": tools},
+            litellm_params=GenericLiteLLMParams(api_base="https://api.openai.com/v1", drop_params=drop_params),
+            headers={},
+        )["tools"]
+
+    def test_drop_params_drops_tool_search_for_a_model_that_cannot_run_it(self) -> None:
+        eager: Final = {"type": "function", "name": "get_stock_price", "parameters": {"type": "object"}}
+        namespace: Final = {
+            "type": "namespace",
+            "name": "finance",
+            "description": "Finance tools",
+            "tools": [{**_DEFERRED_WEATHER, "name": "get_quote"}],
+        }
+
+        tools: Final = self._transform_tools(
+            _openai_model(supports_tool_search=False), [_BM25_TOOL, _DEFERRED_WEATHER, eager, namespace], True
+        )
+
+        assert tools == [
+            _undeferred(_DEFERRED_WEATHER),
+            eager,
+            {**namespace, "tools": [_undeferred({**_DEFERRED_WEATHER, "name": "get_quote"})]},
+        ]
+
+    def test_drop_params_drops_tool_search_when_no_tool_is_deferred(self) -> None:
+        tools: Final = self._transform_tools(
+            _openai_model(supports_tool_search=True), [_BM25_TOOL, _undeferred(_DEFERRED_WEATHER)], True
+        )
+
+        assert tools == [_undeferred(_DEFERRED_WEATHER)]
+
+    @pytest.mark.parametrize(
+        ("sent", "expected"),
+        [
+            pytest.param(
+                [{"type": "tool_search"}, _DEFERRED_WEATHER], [{"type": "tool_search"}, _DEFERRED_WEATHER], id="alone"
+            ),
+            pytest.param(
+                [_CLIENT_TOOL_SEARCH, _BM25_TOOL, _undeferred(_DEFERRED_WEATHER)],
+                [_CLIENT_TOOL_SEARCH, _undeferred(_DEFERRED_WEATHER)],
+                id="beside-anthropic-search",
+            ),
+        ],
+    )
+    def test_drop_params_keeps_a_callers_own_tool_search_unchanged(
+        self, sent: list[dict[str, object]], expected: list[dict[str, object]]
+    ) -> None:
+        tools: Final = self._transform_tools(_openai_model(supports_tool_search=False), sent, True)
+
+        assert tools == expected
+
+    @pytest.mark.parametrize("drop_params", [False, True])
+    @pytest.mark.parametrize(
+        "malformed",
+        [
+            pytest.param({"type": None, "name": "x"}, id="null-type"),
+            pytest.param({"type": "namespace", "name": "ns", "description": "d", "tools": "oops"}, id="string-members"),
+            pytest.param({"type": "namespace", "name": "ns", "description": "d", "tools": ["x"]}, id="string-member"),
+        ],
+    )
+    def test_malformed_tool_beside_the_search_tool_reaches_openai_as_sent(
+        self, malformed: dict[str, object], drop_params: bool
+    ) -> None:
+        model: Final = _openai_model(supports_tool_search=True)
+
+        tools: Final = self._transform_tools(model, [_BM25_TOOL, malformed], drop_params)
+
+        assert malformed in tools
+
+    @pytest.mark.parametrize(
+        "deferred",
+        [
+            pytest.param(_DEFERRED_WEATHER, id="function"),
+            pytest.param(
+                {"type": "namespace", "name": "weather", "description": "Weather", "tools": [_DEFERRED_WEATHER]},
+                id="namespace-member",
+            ),
+        ],
+    )
+    def test_drop_params_keeps_tool_search_for_a_model_that_runs_it(self, deferred: dict[str, object]) -> None:
+        tools: Final = self._transform_tools(_openai_model(supports_tool_search=True), [_BM25_TOOL, deferred], True)
+
+        assert tools == [{"type": "tool_search", "execution": "server"}, deferred]
+
+    def test_transform_drops_claude_search_calls_openai_cannot_answer_from_history(self) -> None:
+        answered_search_call: Final = {
+            **_CLAUDE_SEARCH_CALL,
+            "call_id": "srvtoolu_02Answered",
+            "name": "tool_search_tool_regex",
+        }
+        history: Final = [
+            {"role": "user", "content": "What is the weather in Paris?"},
+            _CLAUDE_SEARCH_CALL,
+            answered_search_call,
+            {"type": "function_call_output", "call_id": "srvtoolu_02Answered", "output": "get_weather"},
+            {"type": "function_call", "call_id": "toolu_01Weather", "name": "get_weather", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "toolu_01Weather", "output": "18C and sunny"},
+        ]
+
+        result: Final = self.config.transform_responses_api_request(
+            model=self.model,
+            input=history,
+            response_api_optional_request_params={"tools": [_BM25_TOOL, _DEFERRED_WEATHER]},
+            litellm_params=_OPENAI_API,
+            headers={},
+        )
+
+        assert result["input"] == [item for item in history if item is not _CLAUDE_SEARCH_CALL]
+
+    def test_transform_keeps_history_as_sent_when_no_anthropic_search_tool_is_mapped(self) -> None:
+        history: Final = [{"role": "user", "content": "What is the weather in Paris?"}, _CLAUDE_SEARCH_CALL]
+
+        result: Final = self.config.transform_responses_api_request(
+            model=self.model,
+            input=history,
+            response_api_optional_request_params={"tools": [_undeferred(_DEFERRED_WEATHER)]},
+            litellm_params=_OPENAI_API,
+            headers={},
+        )
+
+        assert result["input"] == history
 
     def test_transform_strips_cache_control_from_input_content_blocks(self):
         """`cache_control` markers (Anthropic-only) must be stripped from
@@ -1121,6 +1393,19 @@ class TestAzureResponsesAPIConfig:
         )
 
         assert result["tools"][0]["parameters"] == {"type": "object"}
+
+    def test_azure_leaves_anthropic_search_tool_unchanged(self) -> None:
+        tool: Final = {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"}
+
+        result: Final = self.config.transform_responses_api_request(
+            model=self.model,
+            input="Find a tool",
+            response_api_optional_request_params={"tools": [tool]},
+            litellm_params={},
+            headers={},
+        )
+
+        assert result["tools"] == [tool]
 
     def test_azure_get_complete_url_with_version_types(self):
         """Test Azure get_complete_url with different API version types"""

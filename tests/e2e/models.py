@@ -67,6 +67,7 @@ class ObjectPermission(BaseModel):
     mcp_servers: list[str] | None = None
     mcp_access_groups: list[str] | None = None
     mcp_toolsets: list[str] | None = None
+    mcp_tool_search_enabled: bool | None = None
 
 
 class KeyGenerateBody(BaseModel):
@@ -637,6 +638,7 @@ class AnthropicMessagesBody(BaseModel):
     stream: bool | None = None
     tools: list[AnthropicTool] | None = None
     tool_choice: AnthropicToolChoice | None = None
+    thinking: ThinkingParam | None = None
     guardrails: list[str] | None = None
     cache: dict[str, bool] | None = {"no-cache": True}
 

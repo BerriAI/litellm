@@ -33,6 +33,7 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import CallTypes, LlmProviders
 from litellm.utils import ProviderConfigManager
 
+from ..litellm_core_utils.core_helpers import normalize_drop_params
 from ..litellm_core_utils.credential_accessor import CredentialAccessor
 from ..litellm_core_utils.get_litellm_params import get_litellm_params
 from ..litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
@@ -153,6 +154,7 @@ async def acreate_realtime_client_secret(
         dynamic_api_base,
     ) = get_llm_provider(
         model=model_name,
+        custom_llm_provider=litellm_params.custom_llm_provider,
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
     )
@@ -221,6 +223,7 @@ async def acreate_realtime_transcription_session(
         dynamic_api_base,
     ) = get_llm_provider(
         model=model_name,
+        custom_llm_provider=litellm_params.custom_llm_provider,
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
     )
@@ -267,7 +270,7 @@ async def arealtime_calls(
     openai_ephemeral_key: str,
     sdp_body: bytes,
     model: str | None = None,
-    session: dict[str, Any] | None = None,
+    session: dict[str, object] | None = None,
     timeout: float | None = None,
     **kwargs,
 ):
@@ -282,6 +285,7 @@ async def arealtime_calls(
         dynamic_api_base,
     ) = get_llm_provider(
         model=model_name,
+        custom_llm_provider=litellm_params.custom_llm_provider,
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
     )
@@ -461,6 +465,7 @@ async def _arealtime(
 
     model, _custom_llm_provider, dynamic_api_key, dynamic_api_base = get_llm_provider(
         model=model,
+        custom_llm_provider=litellm_params.custom_llm_provider,
         api_base=api_base,
         api_key=api_key,
     )
@@ -580,6 +585,7 @@ async def _arealtime(
         aws_bedrock_runtime_endpoint: Final = kwargs.get("aws_bedrock_runtime_endpoint")
         aws_external_id: Final = kwargs.get("aws_external_id")
         aws_session_tags: Final = kwargs.get("aws_session_tags")
+        drop_params: Final = litellm.drop_params is True or normalize_drop_params(kwargs.get("drop_params")) is True
 
         await bedrock_realtime.async_realtime(
             model=model,
@@ -600,6 +606,7 @@ async def _arealtime(
             aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
             aws_external_id=aws_external_id,
             aws_session_tags=aws_session_tags,
+            drop_params=drop_params,
         )
     elif _custom_llm_provider == "xai":
         api_base = (

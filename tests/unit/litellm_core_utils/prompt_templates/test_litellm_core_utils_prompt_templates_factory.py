@@ -3,7 +3,10 @@ import json
 import logging
 import os
 import re
-from typing import Final, List
+import time
+from collections.abc import Callable, Mapping, Sequence
+from copy import deepcopy
+from typing import Final, List, TypeAlias
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -13,6 +16,7 @@ import respx
 import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import (
     BEDROCK_DOCUMENT_PLACEHOLDER_TEXT,
+    _EMPTY_TEXT_PLACEHOLDER,
     BedrockConverseMessagesProcessor,
     BedrockImageProcessor,
     _bedrock_converse_messages_pt,
@@ -35,7 +39,8 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     sanitize_messages_for_tool_calling,
     THOUGHT_SIGNATURE_SEPARATOR,
 )
-from litellm.types.llms.openai import ChatCompletionToolMessage
+from litellm.types.llms.openai import ChatCompletionAssistantMessage, ChatCompletionToolMessage
+from litellm.types.utils import ChatCompletionMessageToolCall, Function
 from litellm.utils import (
     _invalidate_model_cost_lowercase_map,
     function_setup,
@@ -57,22 +62,107 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     llama_2_chat_pt,
     prompt_factory,
 )
-from litellm.litellm_core_utils.prompt_templates.common_utils import get_completion_messages
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    encrypted_reasoning_signature,
+    get_completion_messages,
+)
 from litellm.llms.vertex_ai.gemini.transformation import gemini_convert_messages_with_history
+from litellm.types.llms.bedrock import BedrockConverseReasoningContentBlock
 from litellm.types.llms.openai import AllMessageValues
 
 
-def test_function_call_prompt_preserves_append_failure_for_non_string_content() -> None:
-    messages = [{"role": "system", "content": None}]
+READ_FILE: Final[list[object]] = [{"name": "read_file", "description": "Read the contents of a file."}]
+USER_TURN: Final[dict[str, object]] = {"role": "user", "content": "Read the file."}
+HELPFUL_PART: Final[dict[str, object]] = {"type": "text", "text": "You are helpful."}
 
-    with pytest.raises(AttributeError):
-        function_call_prompt(messages, [])
+
+def _ollama_function_call_prompt(
+    messages: list[dict[str, object]], functions: list[object], drop_params: bool = False
+) -> list[dict[str, object]]:
+    return function_call_prompt(messages, functions, model="llama3", llm_provider="ollama", drop_params=drop_params)
+
+
+def _read_file_prompt() -> object:
+    prompt: Final = _ollama_function_call_prompt([USER_TURN], READ_FILE)[-1]["content"]
+    assert "Read the contents of a file." in str(prompt)
+    return prompt
+
+
+@pytest.mark.parametrize(
+    ("history", "expected"),
+    (
+        ((USER_TURN,), lambda prompt: [USER_TURN, {"role": "system", "content": prompt}]),
+        (
+            ({"role": "system", "content": "You are helpful."}, USER_TURN),
+            lambda prompt: [{"role": "system", "content": f"You are helpful. {prompt}"}, USER_TURN],
+        ),
+        (
+            ({"role": "system", "content": [HELPFUL_PART]}, USER_TURN),
+            lambda prompt: [
+                {"role": "system", "content": [HELPFUL_PART, {"type": "text", "text": f" {prompt}"}]},
+                USER_TURN,
+            ],
+        ),
+        (
+            ({"role": "system", "content": "You are helpful."}, USER_TURN, {"role": "system", "content": "Be brief."}),
+            lambda prompt: [
+                {"role": "system", "content": f"You are helpful. {prompt}"},
+                USER_TURN,
+                {"role": "system", "content": f"Be brief. {prompt}"},
+            ],
+        ),
+    ),
+    ids=("no_system", "string_content", "list_content", "two_system_messages"),
+)
+def test_function_call_prompt_sends_the_schema_once_per_turn_of_a_reused_history(
+    history: tuple[dict[str, object], ...],
+    expected: Callable[[object], list[dict[str, object]]],
+) -> None:
+    reused_history: Final = deepcopy(list(history))
+
+    turns: Final = tuple(_ollama_function_call_prompt(reused_history, READ_FILE) for _ in range(3))
+
+    assert reused_history == list(history)
+    assert all(turn == expected(_read_file_prompt()) for turn in turns)
+
+
+UNREADABLE_SYSTEM_CONTENT: Final = pytest.mark.parametrize(
+    "content",
+    (
+        None,
+        {"type": "text", "text": "private system prompt"},
+        ({"type": "text", "text": "private system prompt"},),
+        {"private system prompt"},
+        (part for part in ("private system prompt",)),
+    ),
+    ids=("none", "dict", "tuple", "set", "generator"),
+)
+
+
+@UNREADABLE_SYSTEM_CONTENT
+def test_function_call_prompt_answers_400_for_unreadable_system_content_without_echoing_it(content: object) -> None:
+    with pytest.raises(litellm.BadRequestError) as error:
+        _ollama_function_call_prompt([{"role": "system", "content": content}, USER_TURN], READ_FILE)
+
+    assert error.value.status_code == 400
+    assert "private system prompt" not in str(error.value)
+
+
+@UNREADABLE_SYSTEM_CONTENT
+def test_function_call_prompt_sends_only_the_function_prompt_for_unreadable_content_under_drop_params(
+    content: object,
+) -> None:
+    prompted: Final = _ollama_function_call_prompt(
+        [{"role": "system", "content": content}, USER_TURN], READ_FILE, drop_params=True
+    )
+
+    assert prompted == [{"role": "system", "content": _read_file_prompt()}, USER_TURN]
 
 
 def test_function_call_prompt_lets_the_model_answer_after_a_function_result() -> None:
     messages: Final[list[dict[str, object]]] = [{"role": "system", "content": "Be terse."}]
 
-    prompted: Final = function_call_prompt(messages, [{"name": "get_weather"}])
+    prompted: Final = _ollama_function_call_prompt(messages, [{"name": "get_weather"}])
 
     system: Final = str(prompted[0]["content"])
     assert "JSON OUTPUT ONLY" not in system
@@ -307,6 +397,31 @@ def test_convert_to_ollama_image_downloads_an_http_image_url_to_bare_base64(monk
 
 
 @pytest.mark.asyncio
+def test_anthropic_messages_pt_drops_the_stream_index_from_replayed_thinking_blocks():
+    """Streamed thinking blocks carry the OpenAI SDK list-position `index`. Anthropic's native thinking block schema
+    rejects unknown fields, so the field must not reach the request when a client replays the streamed message"""
+    messages: Final = [
+        {"role": "user", "content": "Capital of France?"},
+        {
+            "role": "assistant",
+            "content": "Paris",
+            "thinking_blocks": [
+                {"type": "thinking", "thinking": "Step 1.", "signature": "sig-a", "index": 0},
+                {"type": "redacted_thinking", "data": "EmwKAhgB", "index": 1},
+            ],
+        },
+        {"role": "user", "content": "And Spain?"},
+    ]
+
+    replayed: Final = anthropic_messages_pt(messages=messages, model="claude-haiku-4-5", llm_provider="anthropic")
+
+    assert replayed[1]["content"] == [
+        {"type": "thinking", "thinking": "Step 1.", "signature": "sig-a"},
+        {"type": "redacted_thinking", "data": "EmwKAhgB"},
+        {"type": "text", "text": "Paris"},
+    ]
+
+
 async def test_anthropic_bedrock_thinking_blocks_with_none_content():
     """
     Test the specific function that processes thinking_blocks when content is None
@@ -411,6 +526,175 @@ def test_bedrock_converse_assistant_with_empty_thinking_block_and_tool_calls():
     assert len(tool_use_blocks) == 2
 
 
+_NATIVE_REDACTED_DATA: Final = "EmwKAhgBEgy3va3pzix/LafPsn4aDFIT2Xlxh0L5L8rLVyIwxtE3rAFBa8cr3qpP"
+_CONVERSE_REDACTED_DATA: Final = base64.b64encode(_NATIVE_REDACTED_DATA.encode()).decode()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("placement", ["thinking_blocks", "content"])
+async def test_bedrock_converse_replays_redacted_thinking_as_redacted_content(use_async: bool, placement: str):
+    """A redacted_thinking block that Bedrock returned must go back as reasoningContent.redactedContent,
+    in order, ahead of text and toolUse. It used to collapse into an empty unsigned reasoningText and get dropped."""
+    bedrock_reasoning_blocks: Final[list[BedrockConverseReasoningContentBlock]] = [
+        {"reasoningText": {"text": "Let me look this up.", "signature": "sig-abc"}},
+        {"redactedContent": _CONVERSE_REDACTED_DATA},
+    ]
+    thinking_blocks: Final = litellm.AmazonConverseConfig()._transform_thinking_blocks(bedrock_reasoning_blocks)
+    assistant_text: Final = "Checking the weather."
+    assistant_message: Final = (
+        {"role": "assistant", "content": assistant_text, "thinking_blocks": thinking_blocks}
+        if placement == "thinking_blocks"
+        else {"role": "assistant", "content": [*thinking_blocks, {"type": "text", "text": assistant_text}]}
+    )
+    messages: Final = [
+        {"role": "user", "content": "What's the weather in Paris?"},
+        {
+            **assistant_message,
+            "tool_calls": [
+                {
+                    "id": "tooluse_weather_1",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "tooluse_weather_1", "content": "18C, sunny"},
+    ]
+    model: Final = "us.anthropic.claude-sonnet-4-6"
+
+    result: Final = (
+        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages, model=model, llm_provider="bedrock"
+        )
+        if use_async
+        else _bedrock_converse_messages_pt(messages=messages, model=model, llm_provider="bedrock")
+    )
+
+    assistant_content: Final = next(m["content"] for m in result if m["role"] == "assistant")
+    assert assistant_content == [
+        {"reasoningContent": bedrock_reasoning_blocks[0]},
+        {"reasoningContent": bedrock_reasoning_blocks[1]},
+        {"text": assistant_text},
+        {"toolUse": {"toolUseId": "tooluse_weather_1", "name": "get_weather", "input": {"city": "Paris"}}},
+    ]
+
+
+_SENT_REDACTED: Final = [{"reasoningContent": {"redactedContent": _CONVERSE_REDACTED_DATA}}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("placement", ["thinking_blocks", "content"])
+@pytest.mark.parametrize(
+    "block, sent",
+    [
+        pytest.param({"type": "redacted_thinking", "data": _NATIVE_REDACTED_DATA}, _SENT_REDACTED, id="native"),
+        pytest.param(
+            {"type": "redacted_thinking", "data": _CONVERSE_REDACTED_DATA}, _SENT_REDACTED, id="legacy-wrapped"
+        ),
+        pytest.param(
+            {"type": "redacted_thinking", "data": encrypted_reasoning_signature("gAAAA_1")}, [], id="openai-redacted"
+        ),
+        pytest.param(
+            {"type": "thinking", "thinking": "Plan.", "signature": encrypted_reasoning_signature("gAAAA_1")},
+            [],
+            id="openai-thinking",
+        ),
+    ],
+)
+async def test_bedrock_converse_replays_reasoning_to_claude_only_as_base64_of_claude_native_data(
+    use_async: bool, placement: str, block: dict[str, str], sent: list[dict[str, dict[str, str]]]
+):
+    """Converse wants base64 of Claude's own ``data``, which the Anthropic API, Vertex, Bedrock Invoke and now
+    Converse replies all hand out. Histories saved before Converse replies were decoded still hold it wrapped once.
+    Claude cannot verify OpenAI encrypted reasoning from the Responses bridge, so Bedrock 400ed on it."""
+    assistant_message: Final = (
+        {"role": "assistant", "content": "hello", "thinking_blocks": [block]}
+        if placement == "thinking_blocks"
+        else {"role": "assistant", "content": [block, {"type": "text", "text": "hello"}]}
+    )
+    messages: Final = [{"role": "user", "content": "hi"}, assistant_message, {"role": "user", "content": "again"}]
+    model: Final = "us.anthropic.claude-sonnet-4-6"
+
+    result: Final = (
+        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages, model=model, llm_provider="bedrock"
+        )
+        if use_async
+        else _bedrock_converse_messages_pt(messages=messages, model=model, llm_provider="bedrock")
+    )
+
+    assistant_content: Final = next(m["content"] for m in result if m["role"] == "assistant")
+    assert assistant_content == [*sent, {"text": "hello"}]
+
+
+def test_translate_thinking_blocks_keeps_dropping_redacted_data_when_called_the_old_way():
+    """Outside callers that only pass the thinking blocks keep the old behavior, with no redactedContent sent."""
+    assert BedrockConverseMessagesProcessor.translate_thinking_blocks_to_reasoning_content_blocks(
+        [{"type": "redacted_thinking", "data": _CONVERSE_REDACTED_DATA}]
+    ) == [{"reasoningContent": {"reasoningText": {"text": ""}}}]
+
+
+@pytest.mark.parametrize("data", ["", "  "])
+def test_bedrock_converse_drops_redacted_thinking_with_blank_data(data: str):
+    """Bedrock 400s on a blank redactedContent, so a redacted block with no payload is dropped, not sent."""
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": [{"type": "redacted_thinking", "data": data}, {"type": "text", "text": "hello"}],
+            "thinking_blocks": [{"type": "redacted_thinking", "data": data}],
+        },
+        {"role": "user", "content": "again"},
+    ]
+
+    result: Final = _bedrock_converse_messages_pt(
+        messages=messages, model="us.anthropic.claude-sonnet-4-6", llm_provider="bedrock"
+    )
+
+    assistant_content: Final = next(m["content"] for m in result if m["role"] == "assistant")
+    assert assistant_content == [{"text": "hello"}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("placement", ["thinking_blocks", "content"])
+@pytest.mark.parametrize(
+    "model",
+    [
+        "us.amazon.nova-pro-v1:0",
+        "us.meta.llama4-maverick-17b-instruct-v1:0",
+        "us.deepseek.r1-v1:0",
+        "openai.gpt-oss-120b-1:0",
+        "arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/abc123",
+    ],
+)
+async def test_bedrock_converse_keeps_dropping_redacted_thinking_for_non_claude_targets(
+    use_async: bool, placement: str, model: str
+):
+    """Only Claude takes redactedContent back. Any other Converse target 400s on it, so a Claude history replayed
+    there (a Router fallback or a model switch) drops the redacted block and keeps the call working."""
+    redacted: Final = {"type": "redacted_thinking", "data": _CONVERSE_REDACTED_DATA}
+    assistant_message: Final = (
+        {"role": "assistant", "content": "hello", "thinking_blocks": [redacted]}
+        if placement == "thinking_blocks"
+        else {"role": "assistant", "content": [redacted, {"type": "text", "text": "hello"}]}
+    )
+    messages: Final = [{"role": "user", "content": "hi"}, assistant_message, {"role": "user", "content": "again"}]
+
+    result: Final = (
+        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages, model=model, llm_provider="bedrock"
+        )
+        if use_async
+        else _bedrock_converse_messages_pt(messages=messages, model=model, llm_provider="bedrock")
+    )
+
+    assistant_content: Final = next(m["content"] for m in result if m["role"] == "assistant")
+    assert assistant_content == [{"text": "hello"}]
+
+
 @pytest.mark.parametrize(
     "thinking_block",
     [
@@ -458,6 +742,31 @@ def test_anthropic_messages_pt_drops_unsignable_thinking_block(thinking_block):
     )
 
 
+@pytest.mark.parametrize("data", [_NATIVE_REDACTED_DATA, _CONVERSE_REDACTED_DATA], ids=["native", "legacy-wrapped"])
+def test_anthropic_messages_pt_replays_redacted_thinking_as_claude_native_data(data: str):
+    """Histories saved from Converse before its replies were decoded hold the data base64-wrapped, and the
+    Anthropic API, Vertex and Bedrock Invoke 400 on it with "Invalid `data` in `redacted_thinking` block"."""
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": "hello",
+            "thinking_blocks": [{"type": "redacted_thinking", "data": data, "cache_control": {"type": "ephemeral"}}],
+        },
+        {"role": "user", "content": "again"},
+    ]
+
+    result: Final = anthropic_messages_pt(messages=messages, model="claude-sonnet-4-6", llm_provider="anthropic")
+
+    assert result[1] == {
+        "role": "assistant",
+        "content": [
+            {"type": "redacted_thinking", "data": _NATIVE_REDACTED_DATA, "cache_control": {"type": "ephemeral"}},
+            {"type": "text", "text": "hello"},
+        ],
+    }
+
+
 def test_anthropic_messages_pt_keeps_signed_thinking_block():
     """A genuine Anthropic round-trip still holds its original signature, so that
     thinking block must be forwarded unchanged (we only drop unsignable blocks).
@@ -485,6 +794,138 @@ def test_anthropic_messages_pt_keeps_signed_thinking_block():
     assert len(thinking_blocks) == 1
     assert thinking_blocks[0]["signature"] == "ErcBCkgIValidSignatureBytes"
     assert thinking_blocks[0]["thinking"] == "genuine anthropic reasoning"
+
+
+EMPTY_USER_MESSAGES: Final = pytest.mark.parametrize(
+    "empty_user_message",
+    [{"role": "user", "content": None}, {"role": "user", "content": []}, {"role": "user"}],
+    ids=["null", "empty-list", "content-key-dropped"],
+)
+
+Message: TypeAlias = Mapping[str, object]
+
+
+def _convert(messages: Sequence[Message]) -> Sequence[Message]:
+    return anthropic_messages_pt(messages=list(messages), model="claude-opus-5", llm_provider="vertex_ai")
+
+
+@EMPTY_USER_MESSAGES
+def test_anthropic_messages_pt_preserves_trailing_user_message_with_empty_content(empty_user_message: Message) -> None:
+    result: Final = _convert(
+        [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "hello"},
+            empty_user_message,
+        ]
+    )
+
+    assert [message["role"] for message in result] == ["user", "assistant", "user"]
+    assert result[-1]["content"] == [{"type": "text", "text": _EMPTY_TEXT_PLACEHOLDER}]
+
+
+@EMPTY_USER_MESSAGES
+@pytest.mark.parametrize(
+    "cache_control", [{}, {"cache_control": {"type": "ephemeral"}}], ids=["no-cache-control", "with-cache-control"]
+)
+def test_anthropic_messages_pt_empty_user_message_beside_tool_result_keeps_tool_result_only(
+    empty_user_message: Message, cache_control: Message
+) -> None:
+    result: Final = _convert(
+        [
+            {"role": "user", "content": "hi"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{"id": "toolu_1", "type": "function", "function": {"name": "f", "arguments": "{}"}}],
+            },
+            {**empty_user_message, **cache_control},
+            {"role": "tool", "tool_call_id": "toolu_1", "content": "ok"},
+        ]
+    )
+
+    assert [message["role"] for message in result] == ["user", "assistant", "user"]
+    assert [block["type"] for block in result[-1]["content"]] == ["tool_result"]
+
+
+@EMPTY_USER_MESSAGES
+def test_anthropic_messages_pt_empty_user_message_keeps_cache_control_like_an_empty_string(
+    empty_user_message: Message,
+) -> None:
+    def last_turn(last_user_message: Message) -> Message:
+        return _convert(
+            [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "hello"},
+                {**last_user_message, "cache_control": {"type": "ephemeral"}},
+            ]
+        )[-1]
+
+    assert last_turn(empty_user_message)["content"][0]["cache_control"] == {"type": "ephemeral"}
+    assert last_turn(empty_user_message) == last_turn({"role": "user", "content": ""})
+
+
+TOOL_CALL_AND_RESULT: Final[tuple[Message, ...]] = (
+    {"role": "user", "content": "hi"},
+    {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [{"id": "toolu_1", "type": "function", "function": {"name": "f", "arguments": "{}"}}],
+    },
+    {"role": "tool", "tool_call_id": "toolu_1", "content": "ok"},
+)
+
+
+@EMPTY_USER_MESSAGES
+@pytest.mark.parametrize(
+    "messages_before",
+    [
+        [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "hello"},
+            {"role": "user", "content": "q"},
+        ],
+        [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}, {"role": "user", "content": []}],
+        TOOL_CALL_AND_RESULT,
+    ],
+    ids=["after-user-text", "after-another-empty-message", "after-tool-result"],
+)
+def test_anthropic_messages_pt_empty_user_message_beside_other_content_sends_nothing_extra(
+    empty_user_message: Message, messages_before: Sequence[Message]
+) -> None:
+    assert _convert([*messages_before, empty_user_message]) == _convert(messages_before)
+
+
+@EMPTY_USER_MESSAGES
+def test_anthropic_messages_pt_empty_user_message_with_cache_control_after_text_keeps_its_breakpoint(
+    empty_user_message: Message,
+) -> None:
+    def last_turn(last_user_message: Message) -> Message:
+        return _convert(
+            [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "hello"},
+                {"role": "user", "content": "long document"},
+                {**last_user_message, "cache_control": {"type": "ephemeral"}},
+            ]
+        )[-1]
+
+    assert last_turn(empty_user_message)["content"][-1]["cache_control"] == {"type": "ephemeral"}
+    assert last_turn(empty_user_message) == last_turn({"role": "user", "content": ""})
+
+
+def test_anthropic_messages_pt_keeps_every_breakpoint_of_a_long_run_of_empty_user_messages() -> None:
+    result: Final = _convert(
+        [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "hello"},
+            *[{"role": "user", "content": [], "cache_control": {"type": "ephemeral"}}] * 10_000,
+        ]
+    )
+
+    assert (
+        result[-1]["content"]
+        == [{"type": "text", "text": _EMPTY_TEXT_PLACEHOLDER, "cache_control": {"type": "ephemeral"}}] * 10_000
+    )
 
 
 def test_convert_to_azure_openai_messages():
@@ -1147,6 +1588,167 @@ def test_convert_gemini_tool_call_result_with_data_url_extra_params():
     assert inline_parts[0]["mime_type"] == "image/png", (
         f"expected clean 'image/png', got '{inline_parts[0]['mime_type']}'"
     )
+
+
+def _gemini_tool_result_fixture(
+    content: str,
+) -> tuple[ChatCompletionToolMessage, dict]:
+    message = ChatCompletionToolMessage(
+        role="tool",
+        tool_call_id="call_schema",
+        content=content,
+    )
+    last_message_with_tool_calls = {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {
+                "id": "call_schema",
+                "type": "function",
+                "index": 0,
+                "function": {"name": "inspect_schema", "arguments": "{}"},
+            }
+        ],
+    }
+    return message, last_message_with_tool_calls
+
+
+def test_convert_gemini_tool_result_wraps_output_containing_json_schema_ref():
+    """
+    Gemini treats {"$ref": ...} objects inside function_response.response as
+    references to named parts in function_response.parts, so schema-bearing
+    tool output must be delivered opaquely instead of structurally.
+    Fixes: https://github.com/BerriAI/litellm/issues/38223
+    """
+    schema_json = (
+        '{"$defs":{"humanScalar":{"type":"string"}},'
+        '"type":"object","properties":{"value":{"$ref":"#/$defs/humanScalar"}}}'
+    )
+    message, last_message_with_tool_calls = _gemini_tool_result_fixture(schema_json)
+
+    result = convert_to_gemini_tool_call_result(
+        message=message,
+        last_message_with_tool_calls=last_message_with_tool_calls,
+    )
+
+    function_response = result["function_response"]
+    assert function_response["name"] == "inspect_schema"
+    assert function_response["response"] == {"content": schema_json}
+
+
+def test_convert_gemini_tool_result_wraps_deeply_nested_json_schema_ref():
+    """
+    A $ref key at any depth must trigger opaque delivery.
+    Fixes: https://github.com/BerriAI/litellm/issues/38223
+    """
+    nested_json = '{"results":[{"schemas":[{"node":{"$ref":"#/$defs/deep"}}]}]}'
+    message, last_message_with_tool_calls = _gemini_tool_result_fixture(nested_json)
+
+    result = convert_to_gemini_tool_call_result(
+        message=message,
+        last_message_with_tool_calls=last_message_with_tool_calls,
+    )
+
+    function_response = result["function_response"]
+    assert function_response["response"] == {"content": nested_json}
+
+
+def test_convert_gemini_tool_result_wraps_non_schema_string_ref():
+    """Gemini reads any non-empty string $ref as a part name, a MongoDB DBRef included."""
+    dbref_json = '{"owner":{"$ref":"users","$id":{"$oid":"64b7f0c2a1"}}}'
+    message, last_message_with_tool_calls = _gemini_tool_result_fixture(dbref_json)
+
+    result = convert_to_gemini_tool_call_result(
+        message=message,
+        last_message_with_tool_calls=last_message_with_tool_calls,
+    )
+
+    assert result["function_response"]["response"] == {"content": dbref_json}
+
+
+def test_convert_gemini_tool_result_wraps_top_level_ref():
+    """A $ref on the tool result's root object is read as a part name too."""
+    root_ref_json = '{"$ref":"#/$defs/Config","$defs":{"Config":{"type":"object"}}}'
+    message, last_message_with_tool_calls = _gemini_tool_result_fixture(root_ref_json)
+
+    result = convert_to_gemini_tool_call_result(
+        message=message,
+        last_message_with_tool_calls=last_message_with_tool_calls,
+    )
+
+    assert result["function_response"]["response"] == {"content": root_ref_json}
+
+
+def _json_unicode_escape(text: str) -> str:
+    return "".join(f"\\u{ord(char):04x}" for char in text)
+
+
+@pytest.mark.parametrize(
+    "ref_key",
+    ["$ref"[:index] + _json_unicode_escape("$ref"[index]) + "$ref"[index + 1 :] for index in range(4)],
+)
+def test_convert_gemini_tool_result_wraps_unicode_escaped_ref_key(ref_key: str):
+    """A $ref key spelled with JSON unicode escapes still decodes to $ref, so it must be wrapped too."""
+    escaped_json = '{"v":{"' + ref_key + '":"#/a"}}'
+    message, last_message_with_tool_calls = _gemini_tool_result_fixture(escaped_json)
+
+    result = convert_to_gemini_tool_call_result(
+        message=message,
+        last_message_with_tool_calls=last_message_with_tool_calls,
+    )
+
+    assert result["function_response"]["response"] == {"content": escaped_json}
+
+
+@pytest.mark.parametrize(
+    "schema_json",
+    [
+        '{"$defs":{"Foo":{"type":"string"}},"type":"object","properties":{"bar":{"type":"string"}}}',
+        '{"definitions":{"Foo":{"type":"string"}},"type":"object","properties":{"bar":{"type":"string"}}}',
+        '{"status":"ok","count":2,"tags":["a","b"]}',
+        '{"v":{"$ref":null}}',
+        '{"v":{"$ref":""}}',
+        '{"v":{"$ref":5}}',
+        '{"v":{"$ref":true}}',
+        '{"v":{"$ref":{"a":1}}}',
+        '{"v":{"$ref":["#/a"]}}',
+        '{"columns":["user","name"],"rows":[[{"$ref":"#/users/1"},"alice"]]}',
+        '{"a":[1,[{"b":{"$ref":"x"}}]]}',
+    ],
+)
+def test_convert_gemini_tool_result_preserves_structured_passthrough_without_part_references(
+    schema_json: str,
+):
+    """
+    Gemini only rejects a $ref holding a non-empty string outside a list nested
+    directly in a list, so tool output with no $ref, a $ref holding any other
+    value, or a $ref under a list of lists stays structured.
+    Google does not document that rule. It was observed on the Gemini API and
+    Vertex AI (gemini-3.8-flash, gemini-4-argon) on 2026-10-15.
+    Fixes: https://github.com/BerriAI/litellm/issues/38223
+    """
+    message, last_message_with_tool_calls = _gemini_tool_result_fixture(schema_json)
+
+    result = convert_to_gemini_tool_call_result(
+        message=message,
+        last_message_with_tool_calls=last_message_with_tool_calls,
+    )
+
+    function_response = result["function_response"]
+    assert function_response["name"] == "inspect_schema"
+    assert function_response["response"] == json.loads(schema_json)
+
+
+def test_convert_gemini_tool_result_malformed_json_still_wrapped_as_content():
+    """Unparseable tool output keeps taking the existing content-wrapping path."""
+    message, last_message_with_tool_calls = _gemini_tool_result_fixture("{not valid json")
+
+    result = convert_to_gemini_tool_call_result(
+        message=message,
+        last_message_with_tool_calls=last_message_with_tool_calls,
+    )
+
+    assert result["function_response"]["response"] == {"content": "{not valid json"}
 
 
 def test_bedrock_tools_unpack_defs():
@@ -3053,6 +3655,67 @@ def test_sanitize_messages_combined_case_a_and_case_d():
         litellm.modify_params = original
 
 
+def test_sanitize_messages_drops_tool_results_the_latest_assistant_turn_did_not_ask_for(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "modify_params", True)
+    weather_call: Final = {"id": "call_a", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+    time_call: Final = ChatCompletionMessageToolCall(
+        id="call_b", type="function", function=Function(name="get_time", arguments="{}")
+    )
+    weather_answer: Final = {"role": "tool", "tool_call_id": "call_a", "content": "18C"}
+    time_answer: Final = {"role": "tool", "tool_call_id": "call_b", "content": "noon"}
+    asked_for_time: Final = {"role": "assistant", "content": None, "tool_calls": [time_call]}
+    done: Final = {"role": "assistant", "content": "Done"}
+    messages: Final = (
+        {"role": "user", "content": "Weather?"},
+        {"role": "assistant", "content": None, "tool_calls": [weather_call]},
+        weather_answer,
+        {"role": "user", "content": "Time?"},
+        asked_for_time,
+        time_answer,
+        weather_answer,
+        done,
+        time_answer,
+    )
+
+    sanitized: Final = sanitize_messages_for_tool_calling(list(messages))
+
+    assert tuple(sanitized) == (*messages[:6], done)
+
+
+def _sanitize_seconds(answers: int) -> float:
+    tool_calls: Final = [
+        {"id": f"call_{index}", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+        for index in range(answers)
+    ]
+    messages: Final = (
+        {"role": "user", "content": "Weather everywhere?"},
+        {"role": "assistant", "content": None, "tool_calls": tool_calls},
+        *({"role": "tool", "tool_call_id": f"call_{index}", "content": "18C"} for index in range(answers)),
+        {"role": "user", "content": "And now?"},
+    )
+
+    def once() -> float:
+        started: Final = time.perf_counter()
+        sanitized: Final = sanitize_messages_for_tool_calling(list(messages))
+        elapsed: Final = time.perf_counter() - started
+        assert tuple(sanitized) == messages
+        return elapsed
+
+    return min(once() for _ in range(3))
+
+
+def test_sanitize_messages_cost_grows_linearly_with_the_number_of_answered_tool_calls(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "modify_params", True)
+
+    growth: Final = _sanitize_seconds(4000) / _sanitize_seconds(1000)
+
+    assert growth < 11.0, f"cost grew {growth:.1f}x for 4x the tool answers"
+
+
 def test_anthropic_messages_pt_file_block_preserves_cache_control():
     """
     Test that cache_control is preserved on file-type content blocks
@@ -4186,44 +4849,42 @@ def test_anthropic_messages_pt_drops_a_system_message_with_no_text():
     assert [m["role"] for m in result] == ["user", "assistant"]
 
 
-def test_anthropic_messages_pt_drops_empty_but_signed_thinking_block():
-    """
-    Anthropic rejects a `thinking` block whose `thinking` text is empty, even
-    when it carries a valid-looking signature, with:
-        400 messages.N.content.M.thinking: each thinking block must contain thinking
-    This shape is reachable via cross-provider replay of a `thinking_blocks`
-    history item (see PR #36033), so `is_unsignable_thinking_block()` must
-    also check the thinking text, not just the signature.
-    """
+@pytest.mark.parametrize(
+    "assistant_message",
+    (
+        {
+            "role": "assistant",
+            "content": "4",
+            "thinking_blocks": [{"type": "thinking", "thinking": "", "signature": "sig_abc123_looks_valid"}],
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "", "signature": "sig_abc123_looks_valid"},
+                {"type": "text", "text": "4"},
+            ],
+        },
+    ),
+    ids=("thinking_blocks", "inline_content"),
+)
+def test_anthropic_messages_pt_keeps_empty_but_signed_thinking_block(
+    assistant_message: ChatCompletionAssistantMessage,
+) -> None:
+    """``display: omitted`` returns signed thinking blocks with empty text, and they
+    must reach the next turn unchanged."""
     from litellm.litellm_core_utils.prompt_templates.factory import (
         anthropic_messages_pt,
     )
 
-    messages = [
-        {"role": "user", "content": "What's 2+2?"},
-        {
-            "role": "assistant",
-            "content": "4",
-            "thinking_blocks": [
-                {
-                    "type": "thinking",
-                    "thinking": "",
-                    "signature": "sig_abc123_looks_valid",
-                }
-            ],
-        },
-    ]
-
     result = anthropic_messages_pt(
-        messages=messages,
-        model="claude-sonnet-4-5-20250929",
+        messages=[{"role": "user", "content": "What's 2+2?"}, assistant_message],
+        model="claude-opus-5-5",
         llm_provider="anthropic",
     )
 
     assistant_msg = result[1]
     assert isinstance(assistant_msg["content"], list)
-    content_types = [block.get("type") for block in assistant_msg["content"]]
-    assert "thinking" not in content_types, "empty-text thinking block must be dropped even though it has a signature"
+    assert assistant_msg["content"][0] == {"type": "thinking", "thinking": "", "signature": "sig_abc123_looks_valid"}
 
 
 def test_anthropic_messages_pt_keeps_non_empty_signed_thinking_block():
@@ -4337,29 +4998,31 @@ def test_anthropic_messages_pt_drops_unsigned_thinking_block():
     assert "thinking" not in content_types, "unsigned thinking block must still be dropped"
 
 
-def test_is_unsignable_thinking_block_treats_whitespace_only_as_empty():
+def test_anthropic_messages_pt_drops_unsigned_empty_thinking_block():
     """
-    Edge case: a `thinking` field that is present but whitespace-only (e.g.
-    a single trailing newline forwarded from another provider's empty
-    reasoning summary) is functionally empty and Anthropic's API will still
-    reject it with "each thinking block must contain thinking". We treat it
-    the same as a fully empty string and drop the block.
-
-    The check lives in the shared `is_unsignable_thinking_block` helper, which
-    `_drop_unsignable_thinking_blocks` calls standalone, so the whitespace-aware
-    test has to hold there rather than only at the factory call site.
+    An empty block without a signature is the shape Claude Code replays after a
+    non-Anthropic turn, and Anthropic rejects it, so only the missing signature
+    decides whether a block is dropped.
     """
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
-        is_unsignable_thinking_block,
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        anthropic_messages_pt,
     )
 
-    whitespace_only_block = {
-        "type": "thinking",
-        "thinking": "   \n\t  ",
-        "signature": "sig_abc123_looks_valid",
-    }
+    result = anthropic_messages_pt(
+        messages=[
+            {"role": "user", "content": "What's 2+2?"},
+            {
+                "role": "assistant",
+                "content": [{"type": "thinking", "thinking": "", "signature": ""}, {"type": "text", "text": "4"}],
+            },
+        ],
+        model="claude-opus-5-5",
+        llm_provider="anthropic",
+    )
 
-    assert is_unsignable_thinking_block(whitespace_only_block) is True
+    assistant_msg = result[1]
+    assert isinstance(assistant_msg["content"], list)
+    assert [block.get("type") for block in assistant_msg["content"]] == ["text"]
 
 
 _CONTENT_LESS_USER_MESSAGES: Final = ({"role": "user"}, {"role": "user", "content": None})
@@ -4403,7 +5066,9 @@ def test_bedrock_converse_messages_pt_user_message_without_content_adds_no_block
 
     assert _bedrock_converse_messages_pt(
         messages=with_message, model="anthropic.claude-haiku-4-5", llm_provider="bedrock"
-    ) == _bedrock_converse_messages_pt(messages=without_message, model="anthropic.claude-haiku-4-5", llm_provider="bedrock")
+    ) == _bedrock_converse_messages_pt(
+        messages=without_message, model="anthropic.claude-haiku-4-5", llm_provider="bedrock"
+    )
 
 
 @pytest.mark.asyncio
@@ -4533,6 +5198,7 @@ def _vcr_outcome_gate(request, vcr):
     yield
     record_vcr_outcome(request, vcr)
 
+
 @pytest.fixture(scope="function")
 def isolate_litellm_state():
     """
@@ -4585,6 +5251,7 @@ def isolate_litellm_state():
             setattr(litellm, attr, original_value)
     _invalidate_model_cost_lowercase_map()
 
+
 _SCALAR_DEFAULTS = {
     "num_retries": getattr(litellm, "num_retries", None),
     "num_retries_per_request": getattr(litellm, "num_retries_per_request", None),
@@ -4604,6 +5271,7 @@ _SCALAR_DEFAULTS = {
     "api_base": getattr(litellm, "api_base", None),
     "api_key": getattr(litellm, "api_key", None),
 }
+
 
 @pytest.fixture(scope="module")
 def setup_and_teardown():
@@ -4626,6 +5294,7 @@ def setup_and_teardown():
         if hasattr(litellm, "in_memory_llm_clients_cache"):
             litellm.in_memory_llm_clients_cache.flush_cache()
     yield
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_function_call_non_openai_model():
@@ -4655,6 +5324,7 @@ def test_function_call_non_openai_model():
         print(e)
         pass
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_empty_content():
     """
@@ -4672,6 +5342,7 @@ def test_empty_content():
         messages=[],
         litellm_call_id=str(uuid.uuid4()),
     )
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_thought_signature_removal_for_non_gemini():
@@ -4721,6 +5392,7 @@ def test_thought_signature_removal_for_non_gemini():
     assert THOUGHT_SIGNATURE_SEPARATOR not in processed_messages[1]["tool_calls"][0]["id"]
     assert THOUGHT_SIGNATURE_SEPARATOR not in processed_messages[2]["tool_call_id"]
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_thought_signature_preserved_for_gemini():
     """
@@ -4766,6 +5438,7 @@ def test_thought_signature_preserved_for_gemini():
     processed_messages = kwargs["messages"]
     assert THOUGHT_SIGNATURE_SEPARATOR in processed_messages[1]["tool_calls"][0]["id"]
     assert THOUGHT_SIGNATURE_SEPARATOR in processed_messages[2]["tool_call_id"]
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_thought_signature_removal_with_multiple_tool_calls():
@@ -4820,6 +5493,7 @@ def test_thought_signature_removal_with_multiple_tool_calls():
     assert processed_messages[1]["tool_calls"][1]["id"] == "call_2"
     assert processed_messages[2]["tool_call_id"] == "call_1"
     assert processed_messages[3]["tool_call_id"] == "call_2"
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_messages_without_tool_calls_unchanged():
@@ -7110,3 +7784,90 @@ def test_completion_bedrock_invalid_role_exception(monkeypatch):
         str(exc_info.value)
         == "litellm.BadRequestError: Invalid Message passed in {'role': 'very-bad-role', 'content': 'hello'}"
     )
+
+
+def test_anthropic_messages_pt_drops_replayed_tool_search_call_without_its_result():
+    messages: Final = [
+        {"role": "user", "content": "What is the weather in Paris?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "srvtoolu_01Search",
+                    "type": "function",
+                    "function": {"name": "tool_search_tool_regex", "arguments": '{"pattern": "weather"}'},
+                },
+                {
+                    "id": "toolu_01Weather",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+                },
+            ],
+        },
+        {"role": "tool", "tool_call_id": "toolu_01Weather", "content": "18C and cloudy"},
+        {"role": "user", "content": "And tomorrow?"},
+    ]
+
+    result: Final = anthropic_messages_pt(messages=messages, model="claude-sonnet-5-5", llm_provider="anthropic")
+
+    assert [(block["type"], block["id"]) for block in result[1]["content"]] == [("tool_use", "toolu_01Weather")]
+    assert [block["tool_use_id"] for block in result[2]["content"] if block["type"] == "tool_result"] == [
+        "toolu_01Weather"
+    ]
+
+
+def test_anthropic_messages_pt_keeps_a_replayed_tool_search_call_the_caller_answered():
+    messages: Final = [
+        {"role": "user", "content": "What is the weather in Paris?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "srvtoolu_01Search",
+                    "type": "function",
+                    "function": {"name": "tool_search_tool_regex", "arguments": '{"pattern": "weather"}'},
+                },
+                {
+                    "id": "toolu_01Weather",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+                },
+            ],
+        },
+        {"role": "tool", "tool_call_id": "srvtoolu_01Search", "content": '[{"name": "get_weather"}]'},
+        {"role": "tool", "tool_call_id": "toolu_01Weather", "content": "18C and cloudy"},
+    ]
+
+    result: Final = anthropic_messages_pt(messages=messages, model="claude-sonnet-5-5", llm_provider="anthropic")
+
+    assert [(block["type"], block["id"]) for block in result[1]["content"]] == [
+        ("tool_use", "srvtoolu_01Search"),
+        ("tool_use", "toolu_01Weather"),
+    ]
+    assert [block["tool_use_id"] for block in result[2]["content"] if block["type"] == "tool_result"] == [
+        "srvtoolu_01Search",
+        "toolu_01Weather",
+    ]
+
+
+def _merged_assistant_run_cost(run_length: int) -> float:
+    messages: Final = [
+        {"role": "user", "content": "Plan the trip"},
+        *({"role": "assistant", "content": "Working on it", "tool_calls": []} for _ in range(run_length)),
+        {"role": "user", "content": "Go on"},
+    ]
+
+    def once() -> float:
+        started: Final = time.perf_counter()
+        anthropic_messages_pt(messages=messages, model="claude-sonnet-5-5", llm_provider="anthropic")
+        return time.perf_counter() - started
+
+    return min(once() for _ in range(3))
+
+
+def test_anthropic_messages_pt_merges_a_long_assistant_run_in_linear_time():
+    growth: Final = _merged_assistant_run_cost(4000) / _merged_assistant_run_cost(1000)
+
+    assert growth < 8.0, f"cost grew {growth:.1f}x for 4x the assistant run"

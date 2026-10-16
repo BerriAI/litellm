@@ -97,7 +97,7 @@ ignored_function_names = [
     "_async_get_available_deployment_for_pass_through",  # Same, through async_get_available_deployment_for_pass_through in test_router.py
     "_embedding",
     "_aembedding",
-    "_anthropic_stream_pre_content_error",  # Tested through the non-retriable retry error tests in test_router.py
+    "_stream_pre_content_error",  # Tested through the non-retriable retry error tests in test_router.py
     "_deployment_num_retries",  # Tested through the deployment num_retries mid-stream budget test in test_router.py
     "_request_fallback_list",  # Tested through every mid-stream retry test in test_router.py
     "_request_model_group",  # Tested through test_anthropic_messages_retry_budget_precedence_direct_call
@@ -105,13 +105,27 @@ ignored_function_names = [
     "_anthropic_messages_group_retry_policy",  # Tested through the retry budget precedence test in test_router.py
     "_anthropic_messages_resolved_retry_policy",  # Tested through the malformed retry policy tests in test_router.py
     "_anthropic_messages_plain_retry_budget",  # Tested through the retry budget precedence test in test_router.py
-    "_anthropic_messages_should_retry",  # Tested through every mid-stream retry test in test_router.py
-    "_aanthropic_messages_retry_same_group",  # Tested through the dropped-before-content retry tests in test_router.py
+    "_stream_should_retry",  # Tested through every mid-stream retry test in test_router.py
+    "_astream_retry_same_group",  # Tested through the dropped-before-content retry tests in test_router.py
     "_aanthropic_messages_yield_recovered",  # Tested through every mid-stream retry and fallback test in test_router.py
     "_anthropic_messages_policy_retries",  # Tested through the retry budget precedence test in test_router.py
     "_get_wildcard_deployments",  # Tested through the get_model_list_of_routed_group wildcard test in test_router.py
     "_is_fallback_hop",  # Tested through the order fallback hop tests in test_router_order_fallback.py
     "_deployment_that_just_failed",  # Tested through the same-boundary hop test in test_router_order_fallback.py
+    "_collect_ptu_share_teams",  # Cached behind team_ptu_ceiling, tested through the live model list test in test_router.py
+    "_resolve_team_ptu_ceiling",  # Cached behind team_ptu_ceiling, tested through the live model list test in test_router.py
+    "_resolve_pre_call_check_input_tokens",  # Tested through the token-count failure pre-call check tests in test_router.py
+    "_params_neither_dropped_nor_allowed",  # Tested through the allowed-or-dropped param pre-call check tests in test_router.py
+    "_deployment_rejects_params",  # Tested through the unsupported-param pre-call check tests in test_router.py
+    "_deployment_lacks_params",  # Tested through the unsupported-param pre-call check tests in test_router.py
+    "_pre_call_check_requested_chat_params",  # Tested through the unsupported-param pre-call check tests in test_router.py
+    "_deployment_supports_param",  # Tested through the deployment-capability pre-call check tests in test_router.py
+    "_capability_model_and_provider",  # Tested through the authenticating-provider pre-call check test in test_router.py
+    "_exact_base_model_max_input_tokens",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
+    "_base_model_widened_window",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
+    "_provider_model_id",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
+    "_names_route_model",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
+    "_declared_base_model",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
 ]
 
 

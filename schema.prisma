@@ -1179,6 +1179,7 @@ model LiteLLM_ManagedObjectTable { // for batches or finetuning jobs which use t
   org_id String? // creating key's organization at submission time; CheckBatchCost bills org spend against it
   api_key String?
   request_tags Json? @default("[]")
+  end_user_id String?
   updated_at DateTime @updatedAt
   updated_by String?
 
@@ -1588,7 +1589,9 @@ model LiteLLM_AccessGroupTable {
   // Resource memberships - explicit arrays per type
   access_model_names        String[] @default([])
   access_mcp_server_ids   String[] @default([])
+  mcp_tool_permissions    Json?
   access_agent_ids        String[] @default([])
+  access_skill_names      String[] @default([])
 
   assigned_team_ids         String[] @default([])
   assigned_key_ids          String[] @default([])

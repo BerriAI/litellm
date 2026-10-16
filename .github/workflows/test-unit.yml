@@ -346,10 +346,12 @@ jobs:
               tests/unit/llms/tinyfish
               tests/unit/llms/together_ai
               tests/unit/llms/tool_loop
+              tests/unit/llms/topaz
               tests/unit/llms/triton
               tests/unit/llms/v0
               tests/unit/llms/valkey
               tests/unit/llms/vercel_ai_gateway
+              tests/unit/llms/vllm
               tests/unit/llms/volcengine
               tests/unit/llms/voyage
               tests/unit/llms/wandb
@@ -416,6 +418,7 @@ jobs:
               tests/unit/rag
               tests/unit/realtime_api
               tests/unit/rerank_api
+              tests/unit/search
               tests/unit/vector_stores
               tests/unit/videos
             python-version: "3.12"
@@ -453,11 +456,11 @@ jobs:
               tests/unit/telemetry tests/unit/proxy/telemetry
               tests/unit/tracing
             python-version: "3.12"
-            workers: 2
+            workers: 4
             reruns: 0
             timeout-minutes: 20
             job-timeout-minutes: 60
-            dist: loadscope
+            dist: load
 
           - shard: proxy-auth
             test-path: |-
@@ -562,7 +565,6 @@ jobs:
 
           - shard: mcp-elicitation
             test-path: |-
-              --override-ini=pythonpath=tests
               tests/unit/experimental_mcp_client/test_mcp_client.py
               tests/unit/proxy/_experimental/mcp_server/test_capabilities.py
               tests/unit/proxy/_experimental/mcp_server/test_interactions.py
@@ -570,9 +572,8 @@ jobs:
               tests/unit/proxy/_experimental/mcp_server/test_mcp_server_manager.py
               tests/unit/proxy/_experimental/mcp_server/test_mcp_server_tool_calls_and_headers.py
               tests/unit/proxy/_experimental/mcp_server/test_operations.py
-              tests/integration/mcp/test_interactions.py
             python-version: "3.12"
-            workers: 2
+            workers: 4
             reruns: 0
             timeout-minutes: 20
             job-timeout-minutes: 60
@@ -1450,7 +1451,6 @@ jobs:
             tests/unit/caching/test_redis_connection_pool.py \
             tests/unit/caching/test_redis_cluster_cache.py \
             tests/unit/caching/test_evicted_client_closer.py \
-            tests/integration/sdk/test_redis_cluster_iam_auth.py \
             --tb=short -vv -rs -p no:rerunfailures -p no:pytest-retry --timeout=120 --durations=20 \
             --cov=./litellm --cov-report=xml:coverage.xml
 

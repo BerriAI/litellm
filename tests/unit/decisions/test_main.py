@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import copy
 import json
 import re
 import threading
@@ -16,6 +17,7 @@ import respx
 from botocore.auth import SigV4Auth
 from botocore.awsrequest import AWSRequest
 from botocore.credentials import Credentials
+from respx.models import Call
 
 import litellm
 from litellm.constants import AWS_SIGNING_MAX_THREADS
@@ -32,6 +34,7 @@ from litellm.types.decisions import (
     OpenAIDecisionResponse,
     ScoreAnswer,
 )
+from litellm.types.router import ModelInfo
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
 
@@ -537,6 +540,74 @@ async def test_empty_custom_provider_falls_back_to_the_model_prefix(respx_mock: 
     assert route.called
     assert json.loads(respx_mock.calls[0].request.content)["model"] == "pplx-decider-v1-27b"
     assert response._hidden_params["custom_llm_provider"] == "perplexity"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("provider", "model"), (("laya", "english"), ("bespoke", "nimble-latest")))
+async def test_oss_classifier_env_key_goes_only_to_its_env_api_base(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    provider: str,
+    model: str,
+) -> None:
+    monkeypatch.setenv(f"{provider.upper()}_API_BASE", "https://operator-configured.example")
+    monkeypatch.setenv(f"{provider.upper()}_API_KEY", "operator-env-key")
+    env_upstream: Final = respx_mock.post("https://operator-configured.example/v1/systemone").respond(
+        json=_STRANDS_RESPONSE
+    )
+    other_upstream: Final = respx_mock.post("https://deployment-chosen.example/v1/systemone").respond(
+        json=_STRANDS_RESPONSE
+    )
+    questions: Final = {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}}
+
+    await litellm.asystemone(model=f"{provider}/{model}", state="review", questions=questions)
+    await litellm.asystemone(
+        model=f"{provider}/{model}",
+        state="review",
+        questions=questions,
+        api_base="https://deployment-chosen.example",
+        api_key="",
+    )
+    await litellm.asystemone(
+        model=f"{provider}/{model}",
+        state="review",
+        questions=questions,
+        api_base="https://operator-configured.example/",
+    )
+
+    assert [call.request.headers["authorization"] for call in env_upstream.calls] == [
+        "Bearer operator-env-key",
+        "Bearer operator-env-key",
+    ]
+    assert "authorization" not in other_upstream.calls[0].request.headers
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "api_base", "error"),
+    (
+        ("laya/any-checkpoint", "https://laya.example", "laya model must be one of"),
+        ("bespoke/any-checkpoint", "https://bespoke.example", "bespoke model must be one of"),
+        ("laya/english", "https://laya.example?token=x", "must not contain credentials, a query"),
+        ("bespoke/nimble", "http://user:secret@bespoke.example", "must not contain credentials, a query"),
+        ("laya/english", "ftp://laya.example", "must be an HTTP or HTTPS server URL"),
+    ),
+)
+async def test_oss_classifier_rejects_unknown_models_and_ambiguous_bases_before_http(
+    respx_mock: respx.MockRouter,
+    model: str,
+    api_base: str,
+    error: str,
+) -> None:
+    with pytest.raises(litellm.BadRequestError, match=re.escape(error)):
+        await litellm.asystemone(
+            model=model,
+            state="review",
+            questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+            api_base=api_base,
+        )
+
+    assert len(respx_mock.calls) == 0
 
 
 @pytest.mark.asyncio
@@ -3003,3 +3074,274 @@ async def test_fireworks_ai_bills_cached_input_tokens_at_the_cache_read_rate(
     assert recording_logger.standard_logging_object is not None
     assert recording_logger.standard_logging_object["response_cost"] == pytest.approx(uncached + cached)
     assert recording_logger.standard_logging_object["response_cost"] < 300 * float(prices["input_cost_per_token"])
+
+
+_BOX_QUESTION_REQUESTS: Final[tuple[tuple[str, Mapping[str, object]], ...]] = (
+    (
+        "decisions",
+        MappingProxyType(
+            {
+                "input": "review",
+                "questions": (
+                    *_PREDICATE_QUESTIONS,
+                    {"type": "box", "name": "crack", "instructions": "the crack on the screen"},
+                ),
+            }
+        ),
+    ),
+    (
+        "systemone",
+        MappingProxyType(
+            {
+                "state": "review",
+                "questions": {
+                    "is_defect": {"type": "noul", "instructions": "Is this a defect?"},
+                    "crack": {"type": "box", "instructions": "the crack on the screen"},
+                },
+            }
+        ),
+    ),
+)
+_UNSUPPORTED_JEV_PARAMS: Final[tuple[tuple[str, Mapping[str, object], str], ...]] = (
+    *((api, request_kwargs, "box questions") for api, request_kwargs in _BOX_QUESTION_REQUESTS),
+    (
+        "systemone",
+        MappingProxyType(
+            {
+                "state": "review photo-1",
+                "questions": _SYSTEMONE_PREDICATE,
+                "assets": {"photo-1": {"format": "png", "data_base64": "AA=="}},
+            }
+        ),
+        "assets",
+    ),
+)
+
+
+@pytest.mark.parametrize(
+    ("api", "request_kwargs", "param"),
+    _UNSUPPORTED_JEV_PARAMS,
+    ids=("decisions_box", "systemone_box", "systemone_assets"),
+)
+def test_assets_and_box_questions_are_refused_before_http_when_the_provider_cannot_take_them(
+    api: str,
+    request_kwargs: Mapping[str, object],
+    param: str,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post(_PERPLEXITY_DECISIONS_URL).respond(json=_RESPONSE)
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=rf"\['{param}'\].*drop_params") as caught:
+        getattr(litellm, api)(model="perplexity/pplx-decider-v1-27b", api_key="caller-key", **request_kwargs)
+
+    assert caught.value.status_code == 400
+    assert not route.called
+
+
+@pytest.mark.asyncio
+async def test_assets_are_dropped_from_the_wire_under_drop_params(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(_PERPLEXITY_DECISIONS_URL).respond(json=_RESPONSE)
+
+    await litellm.asystemone(
+        model="perplexity/pplx-decider-v1-27b",
+        state="review photo-1",
+        questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        assets={"photo-1": {"format": "png", "data_base64": "AA=="}},
+        api_key="caller-key",
+        drop_params=True,
+    )
+
+    sent: Final[Call] = route.calls.last
+    assert json.loads(sent.request.content) == {
+        "model": "pplx-decider-v1-27b",
+        "state": "review photo-1",
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    }
+
+
+_DROPPED_BOX_ANSWERS: Final[Mapping[str, object]] = MappingProxyType(
+    {
+        "decisions": [
+            {"type": "predicate", "name": "is_defect", "probability": 0.9},
+            {"type": "refusal", "name": "crack"},
+        ],
+        "systemone": {"is_defect": {"type": "noul", "noul": 0.9}},
+    }
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("api", "request_kwargs"), _BOX_QUESTION_REQUESTS, ids=_PREDICATE_REQUEST_IDS)
+async def test_box_questions_are_dropped_under_drop_params_and_answered_as_refusals(
+    api: str, request_kwargs: Mapping[str, object], respx_mock: respx.MockRouter
+) -> None:
+    route: Final = respx_mock.post(_PERPLEXITY_DECISIONS_URL).respond(json=_RESPONSE)
+
+    response: Final = await getattr(litellm, f"a{api}")(
+        model="perplexity/pplx-decider-v1-27b", api_key="caller-key", drop_params=True, **request_kwargs
+    )
+
+    sent: Final[Call] = route.calls.last
+    assert json.loads(sent.request.content)["questions"] == {
+        "is_defect": {"type": "noul", "instructions": "Is this a defect?"}
+    }
+    assert response.model_dump(mode="json")["answers"] == _DROPPED_BOX_ANSWERS[api]
+
+
+_CRACK_BOX_QUESTION: Final[Mapping[str, object]] = MappingProxyType(
+    {"type": "box", "name": "crack", "instructions": "the crack on the screen"}
+)
+_CRACK_BOX_ANSWER: Final[Mapping[str, object]] = MappingProxyType(
+    {"type": "box", "name": "crack", "box": {"top": 0.1, "bottom": 0.4, "left": 0.2, "right": 0.6}, "confidence": 0.7}
+)
+
+
+@pytest.mark.asyncio
+async def test_a_deployment_that_advertises_box_questions_gets_box_answers_from_an_openai_format_provider(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(
+        json={**_OPENAI_RESPONSE, "answers": [dict(_CRACK_BOX_ANSWER)]}
+    )
+
+    response: Final = await litellm.adecisions(
+        model="openai/gpt-6-luna",
+        input="review",
+        questions=[_CRACK_BOX_QUESTION],
+        api_key="deployment-key",
+        model_info={"supports_box_questions": True},
+    )
+
+    assert json.loads(route.calls.last.request.content)["questions"] == [dict(_CRACK_BOX_QUESTION)]
+    assert [answer.model_dump(mode="json") for answer in response.answers] == [dict(_CRACK_BOX_ANSWER)]
+
+
+@pytest.mark.asyncio
+async def test_a_deployment_that_turns_box_questions_off_is_refused_even_when_the_cost_map_allows_them(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post("https://api.typesafe.ai/v1/systemone").respond(json=_RESPONSE)
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=r"\['box questions'\]"):
+        await litellm.adecisions(
+            model="typesafe/jev-1.14.0",
+            input="review",
+            questions=[_CRACK_BOX_QUESTION],
+            api_key="deployment-key",
+            extra_headers={"TypeSafe-Danger-Zone-Images": "true"},
+            model_info={"supports_box_questions": False},
+        )
+
+    assert not route.called
+
+
+@pytest.mark.asyncio
+async def test_a_typesafe_deployment_that_advertises_box_questions_still_needs_the_images_header(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post("https://api.typesafe.ai/v1/systemone").respond(json=_RESPONSE)
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=r"\['box questions'\]"):
+        await litellm.adecisions(
+            model="typesafe/jev-1.14.0",
+            input="review",
+            questions=[_CRACK_BOX_QUESTION],
+            api_key="deployment-key",
+            model_info={"supports_box_questions": True},
+        )
+
+    assert not route.called
+
+
+@pytest.mark.asyncio
+async def test_a_deployment_flag_that_is_not_a_boolean_leaves_the_cost_map_in_charge(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_RESPONSE)
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=r"\['box questions'\]"):
+        await litellm.adecisions(
+            model="openai/gpt-6-luna",
+            input="review",
+            questions=[_CRACK_BOX_QUESTION],
+            api_key="deployment-key",
+            model_info={"supports_box_questions": "true"},
+        )
+
+    assert not route.called
+
+
+@pytest.mark.asyncio
+async def test_an_unflagged_deployment_keeps_box_questions_a_same_model_deployment_advertises(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    backend: Final = "perplexity/pplx-decider-v1-27b"
+    monkeypatch.setitem(litellm.model_cost, backend, copy.deepcopy(litellm.model_cost[backend]))
+    for deployment_id in ("box-flagged", "box-sibling"):
+        monkeypatch.setitem(litellm.model_cost, deployment_id, {})
+    route: Final = respx_mock.post(_PERPLEXITY_DECISIONS_URL).respond(
+        json={
+            "model": "pplx-decider-v1-27b",
+            "answers": {"crack": {k: v for k, v in _CRACK_BOX_ANSWER.items() if k != "name"}},
+            "usage": {"input_tokens": _INPUT_TOKENS, "output_tokens": _OUTPUT_TOKENS},
+        }
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "flagged",
+                "litellm_params": {"model": backend, "api_key": "k"},
+                "model_info": {"id": "box-flagged", "supports_box_questions": True},
+            },
+            {
+                "model_name": "sibling",
+                "litellm_params": {"model": backend, "api_key": "k"},
+                "model_info": {"id": "box-sibling"},
+            },
+        ]
+    )
+
+    response: Final = await router.adecisions(model="sibling", input="review", questions=[_CRACK_BOX_QUESTION])
+
+    assert "crack" in json.loads(route.calls.last.request.content)["questions"]
+    assert [answer.model_dump(mode="json") for answer in response.answers] == [dict(_CRACK_BOX_ANSWER)]
+
+
+@pytest.mark.asyncio
+async def test_a_model_info_object_instead_of_a_dict_still_reaches_the_provider(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_RESPONSE)
+
+    response: Final = await litellm.adecisions(
+        model="openai/gpt-6-luna",
+        input="review",
+        questions=[{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+        api_key="deployment-key",
+        model_info=ModelInfo(id="deployment-1"),
+    )
+
+    assert route.called
+    assert response.answers[0].model_dump(mode="json")["name"] == "is_defect"
+
+
+def test_dropping_every_question_answers_400_before_http(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(_PERPLEXITY_DECISIONS_URL).respond(json=_RESPONSE)
+
+    with pytest.raises(litellm.BadRequestError, match="leaves no questions to answer") as caught:
+        litellm.decisions(
+            model="perplexity/pplx-decider-v1-27b",
+            input="review",
+            questions=[{"type": "box", "name": "crack", "instructions": "the crack on the screen"}],
+            api_key="caller-key",
+            drop_params=True,
+        )
+
+    assert caught.value.status_code == 400
+    assert not route.called
