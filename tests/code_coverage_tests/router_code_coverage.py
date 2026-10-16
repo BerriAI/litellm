@@ -115,6 +115,9 @@ ignored_function_names = [
     "_collect_ptu_share_teams",  # Cached behind team_ptu_ceiling, tested through the live model list test in test_router.py
     "_resolve_team_ptu_ceiling",  # Cached behind team_ptu_ceiling, tested through the live model list test in test_router.py
     "_resolve_pre_call_check_input_tokens",  # Tested through the token-count failure pre-call check tests in test_router.py
+    "_params_neither_dropped_nor_allowed",  # Tested through the allowed-or-dropped param pre-call check tests in test_router.py
+    "_deployment_rejects_params",  # Tested through the unsupported-param pre-call check tests in test_router.py
+    "_pre_call_check_rejectable_params",  # Tested through the unsupported-param pre-call check tests in test_router.py
 ]
 
 

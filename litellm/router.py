@@ -484,6 +484,7 @@ _CLAUDE_CODE_SESSION_ID_RE: Final = re.compile(r"^[a-zA-Z0-9_\-]{8,}$")
 _CLAUDE_CODE_SESSION_ROUTER_TTL_SECONDS: Final = 3600
 CLAUDE_CODE_SESSION_ROUTER_BINDING_TARGET: Final = "claude_code_session_router_binding"
 
+_PRE_CALL_CHECK_FILTERED_PARAMS: Final = frozenset({"response_format"})
 _RUNTIME_TOGGLEABLE_PRE_CALL_CHECKS: Final[Mapping[str, type[CustomLogger]]] = MappingProxyType(
     {
         "prompt_caching": PromptCachingDeploymentCheck,
@@ -13177,20 +13178,15 @@ class Router:
 
     def _resolve_pre_call_check_input_tokens(
         self,
-        model: str,
-        healthy_deployments: Sequence[Mapping[str, object]],
         messages: Sequence[Mapping[str, str]] | None,
         input: str | Sequence[object] | None,
         request_kwargs: Mapping[str, object] | None,
         input_token_count: int | None,
-        skip_inline_token_count: bool,
-        has_countable_input: bool,
+        count_inline: bool,
     ) -> int | None:
         if input_token_count is not None:
             return input_token_count
-        if not has_countable_input or skip_inline_token_count:
-            return None
-        if not self._pre_call_checks_need_token_count(model, healthy_deployments):
+        if not count_inline:
             return None
         try:
             return self._count_pre_call_check_tokens(
@@ -13204,6 +13200,32 @@ class Router:
                 e,
             )
             return None
+
+    @staticmethod
+    def _params_neither_dropped_nor_allowed(params: Mapping[str, object], candidates: frozenset[str]) -> frozenset[str]:
+        if params.get("drop_params") is True:
+            return frozenset()
+        dropped: Final = params.get("additional_drop_params")
+        dropped_names: Final = (
+            frozenset(entry for entry in dropped if isinstance(entry, str))
+            if isinstance(dropped, list)
+            else frozenset()
+        )
+        return candidates - Router._declared_param_allowlist(params) - dropped_names
+
+    @staticmethod
+    def _deployment_rejects_params(deployment: DeploymentTypedDict, group: str, params: frozenset[str]) -> bool:
+        if not params:
+            return False
+        checked: Final = Router._params_neither_dropped_nor_allowed(deployment.get("litellm_params") or {}, params)
+        return any(not Router._deployment_accepts_param(deployment, group, param) for param in checked)
+
+    @staticmethod
+    def _pre_call_check_rejectable_params(request_kwargs: Mapping[str, object]) -> frozenset[str]:
+        requested: Final = litellm.utils.get_non_default_params(passed_params=dict(request_kwargs))
+        return Router._params_neither_dropped_nor_allowed(
+            request_kwargs, frozenset(param for param in requested if param in _PRE_CALL_CHECK_FILTERED_PARAMS)
+        )
 
     def _pre_call_checks(
         self,
@@ -13240,15 +13262,30 @@ class Router:
         has_countable_input: Final = (messages is not None or input is not None) and not compaction_pending(
             request_kwargs
         )
+        deployment_max_input_tokens: Final = tuple(
+            self._deployment_max_input_tokens(model, deployment) for deployment in _returned_deployments
+        )
         input_tokens: Final = self._resolve_pre_call_check_input_tokens(
-            model=model,
-            healthy_deployments=cast(list[Mapping[str, object]], _returned_deployments),  # cast-ok: plain dicts
             messages=messages,
             input=cast(str | list[object] | None, input),  # cast-ok: forwarded to the resolver
             request_kwargs=cast(Mapping[str, object] | None, request_kwargs),  # cast-ok: forwarded to the resolver
             input_token_count=input_token_count,
-            skip_inline_token_count=skip_inline_token_count,
-            has_countable_input=has_countable_input,
+            count_inline=has_countable_input
+            and not skip_inline_token_count
+            and any(limit is not None for limit in deployment_max_input_tokens),
+        )
+        rejectable_params: Final = (
+            self._pre_call_check_rejectable_params(request_kwargs)
+            if request_kwargs is not None and litellm.drop_params is False
+            else frozenset()
+        )
+        deployments_lacking_params: Final = tuple(
+            self._deployment_rejects_params(
+                cast(DeploymentTypedDict, deployment),  # cast-ok: router deployments are plain dicts
+                model,
+                rejectable_params,
+            )
+            for deployment in _returned_deployments
         )
 
         ## get model group RPM ##
@@ -13263,30 +13300,22 @@ class Router:
             _litellm_params = deployment.get("litellm_params", {})
             _model_info = deployment.get("model_info", {})
 
-            # see if we have the info for this model
-            _deployment_model = None  # per-deployment model name (avoids overwriting the outer `model` group name)
-            try:
-                base_model = _model_info.get("base_model", None)
-                if base_model is None:
-                    base_model = _litellm_params.get("base_model", None)
-                _deployment_model = base_model or _litellm_params.get("model", None)
-                model_info = self.get_router_model_info(deployment=deployment, received_model_name=model)
-
-                max_input_tokens = model_info.get("max_input_tokens") if isinstance(model_info, dict) else None
-                if (
-                    isinstance(max_input_tokens, int)
-                    and has_countable_input
-                    and input_tokens is not None
-                    and input_tokens > max_input_tokens
-                ):
-                    invalid_model_indices.add(idx)
-                    _context_window_error = True
-                    _potential_error_str += (
-                        f"Model={_deployment_model}, Max Input Tokens={max_input_tokens}, Got={input_tokens}"
-                    )
-                    continue
-            except Exception as e:
-                verbose_router_logger.exception("An error occurs - %s", e)
+            max_input_tokens = deployment_max_input_tokens[idx]
+            if (
+                max_input_tokens is not None
+                and has_countable_input
+                and input_tokens is not None
+                and input_tokens > max_input_tokens
+            ):
+                invalid_model_indices.add(idx)
+                _context_window_error = True
+                deployment_model = (
+                    _model_info.get("base_model") or _litellm_params.get("base_model") or _litellm_params.get("model")
+                )
+                _potential_error_str += (
+                    f"Model={deployment_model}, Max Input Tokens={max_input_tokens}, Got={input_tokens}"
+                )
+                continue
 
             model_id = _model_info.get("id", "")
             ## RPM CHECK ##
@@ -13319,44 +13348,8 @@ class Router:
                         continue
 
             ## INVALID PARAMS ## -> catch 'gpt-3.5-turbo-16k' not supporting 'response_format' param
-            if request_kwargs is not None and litellm.drop_params is False:
-                # get supported params — use per-deployment model to avoid overwriting the outer model group name
-                _dep_model_for_params: str = _deployment_model or model
-                try:
-                    (
-                        _dep_model_for_params,
-                        custom_llm_provider,
-                        _,
-                        _,
-                    ) = litellm.get_llm_provider(
-                        model=_dep_model_for_params,
-                        litellm_params=LiteLLM_Params.model_validate(_litellm_params),
-                    )
-                except Exception as e:  # noqa: BLE001  # best-effort filter: an unresolvable provider must not fail the request
-                    verbose_router_logger.debug(
-                        "litellm.router.py::_pre_call_checks: skipping supported-params check for model=%s. Got - %s",
-                        _dep_model_for_params,
-                        e,
-                    )
-                    continue
-
-                supported_openai_params = litellm.get_supported_openai_params(
-                    model=_dep_model_for_params,
-                    custom_llm_provider=custom_llm_provider,
-                )
-
-                if supported_openai_params is None:
-                    continue
-                else:
-                    # check the non-default openai params in request kwargs
-                    non_default_params = litellm.utils.get_non_default_params(passed_params=request_kwargs)
-                    special_params = ["response_format"]
-                    # check if all params are supported
-                    for k, v in non_default_params.items():
-                        if k not in supported_openai_params and k in special_params:
-                            # if not -> invalid model
-                            verbose_router_logger.debug("INVALID MODEL INDEX @ REQUEST KWARG FILTERING, k=%s", k)
-                            invalid_model_indices.add(idx)
+            if deployments_lacking_params[idx]:
+                invalid_model_indices.add(idx)
 
         if len(invalid_model_indices) == len(_returned_deployments):
             """
@@ -13365,6 +13358,11 @@ class Router:
             - First check for rate limit errors (if this is true, it means the model passed the context window check but failed the rate limit check)
             """
 
+            if deployments_lacking_params and all(deployments_lacking_params):
+                raise litellm.UnsupportedParamsError(
+                    message=f"no available deployment of model={model} supports {sorted(rejectable_params)}. To drop these, set `litellm.drop_params=True`, or send allowed_openai_params={sorted(rejectable_params)} to pass them through",
+                    model=model,
+                )
             if _rate_limit_error is True:  # allow generic fallback logic to take place
                 raise RouterRateLimitErrorBasic(
                     model=model,
