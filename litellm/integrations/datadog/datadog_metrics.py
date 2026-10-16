@@ -112,19 +112,21 @@ class DatadogMetricsLogger(CustomBatchLogger):
 
         return tags
 
-    def _add_latency_metric(self, metric: str, seconds: float, timestamp: int, tags: Sequence[str]) -> None:
+    def _add_latency_metric(
+        self, gauge_metric: str, distribution_metric: str, seconds: float, timestamp: int, tags: Sequence[str]
+    ) -> None:
         """
-        Queues a latency sample as a gauge (legacy metric name) and as a distribution
-        (`<metric>.distribution`) so Datadog computes percentiles over every request
+        Queues a latency sample as a gauge under its `litellm.*` name and as a distribution
+        under its `litellm_proxy.*` name, which Datadog can compute percentiles over
         """
         gauge: Final[DatadogMetricSeries] = {
-            "metric": metric,
+            "metric": gauge_metric,
             "type": 3,  # gauge
             "points": [{"timestamp": timestamp, "value": seconds}],
             "tags": tags,
         }
         distribution: Final[DatadogDistributionSeries] = {
-            "metric": f"{metric}.distribution",
+            "metric": distribution_metric,
             "type": "distribution",
             "points": ((timestamp, (seconds,)),),
             "tags": tuple(tags),
@@ -150,13 +152,17 @@ class DatadogMetricsLogger(CustomBatchLogger):
         start_time_dt: Final = kwargs.get("start_time")
         if start_time_dt and end_time_dt:
             total_duration: Final = (end_time_dt - start_time_dt).total_seconds()
-            self._add_latency_metric("litellm.request.total_latency", total_duration, timestamp, tags)
+            self._add_latency_metric(
+                "litellm.request.total_latency", "litellm_proxy.request.total_latency", total_duration, timestamp, tags
+            )
 
         # 2. LLM API Latency Metric (Provider alone)
         api_call_start_time: Final = kwargs.get("api_call_start_time")
         if api_call_start_time and end_time_dt:
             llm_api_duration: Final = (end_time_dt - api_call_start_time).total_seconds()
-            self._add_latency_metric("litellm.llm_api.latency", llm_api_duration, timestamp, tags)
+            self._add_latency_metric(
+                "litellm.llm_api.latency", "litellm_proxy.llm_api.latency", llm_api_duration, timestamp, tags
+            )
 
         # 3. LiteLLM Overhead Latency Metric (total - llm_api time)
         hidden_params: Final = log.get("hidden_params", {}) or {}
@@ -164,7 +170,11 @@ class DatadogMetricsLogger(CustomBatchLogger):
         if litellm_overhead_time_ms is not None:
             overhead_tags: Final = self._extract_tags(log)  # no status_code on latency metric
             self._add_latency_metric(
-                "litellm.overhead.latency", litellm_overhead_time_ms / 1000, timestamp, overhead_tags
+                "litellm.overhead.latency",
+                "litellm_proxy.overhead.latency",
+                litellm_overhead_time_ms / 1000,
+                timestamp,
+                overhead_tags,
             )
 
         # 4. Request Count / Status Code

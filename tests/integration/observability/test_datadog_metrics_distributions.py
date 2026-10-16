@@ -2,7 +2,8 @@
 
 Datadog keeps one gauge value per second per tag set, so concurrent requests with the same tags collapse
 into one point and `p95:litellm.request.total_latency` is not a per-request percentile. The
-``datadog_metrics`` callback therefore also sends each latency sample to ``/api/v1/distribution_points``.
+``datadog_metrics`` callback therefore also sends each latency sample to ``/api/v1/distribution_points``
+under a ``litellm_proxy.*`` name, since Datadog refuses to enable percentiles on its integration's ``litellm.*``.
 The owned proxy points ``DD_SITE`` at a TLS double for ``api.localhost`` that inflates every upload, answers
 like the real intake (202, or 503 while an outage is scripted) and records what each flush carried, so the
 cases count samples per request instead of reading Datadog's aggregates.
@@ -37,6 +38,12 @@ from pydantic import JsonValue, TypeAdapter
 SERIES: Final = "/api/v2/series"
 DISTRIBUTIONS: Final = "/api/v1/distribution_points"
 LATENCIES: Final = ("litellm.request.total_latency", "litellm.llm_api.latency", "litellm.overhead.latency")
+DISTRIBUTION_OF: Final = {
+    "litellm.request.total_latency": "litellm_proxy.request.total_latency",
+    "litellm.llm_api.latency": "litellm_proxy.llm_api.latency",
+    "litellm.overhead.latency": "litellm_proxy.overhead.latency",
+}
+GAUGE_OF: Final = {distribution: gauge for gauge, distribution in DISTRIBUTION_OF.items()}
 REQUEST_COUNT_METRIC: Final = "litellm.llm_api.request_count"
 SITE_HOSTS: Final = ("api.localhost",)
 DD_API_KEY: Final = "synthetic-datadog-api-key"
@@ -131,11 +138,11 @@ def _for_model(series: Mapping[str, JsonValue], metric: str, model: str) -> bool
 def distribution_samples(
     intake: DatadogIntake, metric: str, model: str, status_code: str | None = None
 ) -> tuple[float, ...]:
-    """Every sample value Datadog accepted for `<metric>.distribution` from requests to `model`."""
+    """Every sample value Datadog accepted for the distribution of gauge `metric` from requests to `model`."""
     samples: Final[list[float]] = []
     for upload in intake.accepted(DISTRIBUTIONS):
         for series in upload.series:
-            if not _for_model(series, f"{metric}.distribution", model):
+            if not _for_model(series, DISTRIBUTION_OF[metric], model):
                 continue
             if status_code is not None and f"status_code:{status_code}" not in _tags(series):
                 continue
@@ -277,7 +284,7 @@ def test_concurrent_chat_requests_each_reach_datadog_as_a_distribution_sample(ri
             for metric in LATENCIES:
                 samples = distribution_samples(intake, metric, model)
                 assert len(samples) == burst, (
-                    f"{metric}.distribution got {len(samples)} samples for {burst} requests: "
+                    f"{DISTRIBUTION_OF[metric]} got {len(samples)} samples for {burst} requests: "
                     f"{[(upload.target, upload.status) for upload in intake.uploads()]}"
                 )
                 assert all(value >= 0 for value in samples), samples
@@ -343,7 +350,7 @@ def test_every_surface_reports_its_latency_as_distribution_samples(rig_factory: 
                     )
                     assert f"provider:{provider}" in tags, series
                     assert {"env:integration", "service:litellm-integration"} <= set(tags), series
-                    if series["metric"] == "litellm.overhead.latency.distribution":
+                    if series["metric"] == "litellm_proxy.overhead.latency":
                         assert not any(tag.startswith("status_code:") for tag in tags), series
             gauge_tags: Final = {
                 (str(series["metric"]), _tags(series))
@@ -352,7 +359,7 @@ def test_every_surface_reports_its_latency_as_distribution_samples(rig_factory: 
                 if series["metric"] in LATENCIES
             }
             distribution_tags: Final = {
-                (str(series["metric"]).removesuffix(".distribution"), _tags(series))
+                (GAUGE_OF[str(series["metric"])], _tags(series))
                 for upload in intake.accepted(DISTRIBUTIONS)
                 for series in upload.series
             }
@@ -375,7 +382,7 @@ def test_a_set_hostname_tags_every_series_and_distribution(rig_factory: RigFacto
             )
             assert {str(series["metric"]) for series in uploaded} == {
                 *LATENCIES,
-                *(f"{metric}.distribution" for metric in LATENCIES),
+                *DISTRIBUTION_OF.values(),
                 REQUEST_COUNT_METRIC,
             }
             assert {tuple(tag for tag in _tags(series) if tag.startswith("HOSTNAME")) for series in uploaded} == {
@@ -541,7 +548,7 @@ def test_the_health_check_test_request_reaches_datadog_as_a_distribution_sample(
         response: Final = rig.proxy.request("GET", "/health/services", params={"service": "datadog_metrics"})
         assert response.status_code == 200, response.text
         assert response.json()["status"] == "success", response.text
-        metric: Final = f"{LATENCIES[0]}.distribution"
+        metric: Final = DISTRIBUTION_OF[LATENCIES[0]]
         eventually(
             lambda: len(_mock_health_request_series(intake, DISTRIBUTIONS, metric)),
             lambda total: total >= 1,

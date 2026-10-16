@@ -154,7 +154,7 @@ async def test_add_metrics_from_log(clean_env):
 
 @pytest.mark.asyncio
 async def test_latency_metrics_also_emitted_as_distributions(clean_env):
-    """Each latency sample is queued as a distribution point so Datadog can compute per-request percentiles."""
+    """Each latency sample is queued as a `litellm_proxy.*` distribution point so Datadog can compute percentiles."""
     logger = DatadogMetricsLogger(batch_size=100, start_periodic_flush=False)
 
     now = datetime.now()
@@ -173,15 +173,15 @@ async def test_latency_metrics_also_emitted_as_distributions(clean_env):
 
     distributions = {s["metric"]: s for s in logger.log_queue if s["type"] == "distribution"}
     assert set(distributions) == {
-        "litellm.request.total_latency.distribution",
-        "litellm.llm_api.latency.distribution",
-        "litellm.overhead.latency.distribution",
+        "litellm_proxy.request.total_latency",
+        "litellm_proxy.llm_api.latency",
+        "litellm_proxy.overhead.latency",
     }
 
     expected_seconds = {
-        "litellm.request.total_latency.distribution": 2.0,
-        "litellm.llm_api.latency.distribution": 1.0,
-        "litellm.overhead.latency.distribution": 0.25,
+        "litellm_proxy.request.total_latency": 2.0,
+        "litellm_proxy.llm_api.latency": 1.0,
+        "litellm_proxy.overhead.latency": 0.25,
     }
     for metric, seconds in expected_seconds.items():
         ((timestamp, values),) = distributions[metric]["points"]
@@ -191,10 +191,8 @@ async def test_latency_metrics_also_emitted_as_distributions(clean_env):
         assert "provider:openai" in distributions[metric]["tags"]
         assert "model_name:gpt-4o" in distributions[metric]["tags"]
 
-    assert "status_code:200" in distributions["litellm.request.total_latency.distribution"]["tags"]
-    assert not any(
-        tag.startswith("status_code:") for tag in distributions["litellm.overhead.latency.distribution"]["tags"]
-    )
+    assert "status_code:200" in distributions["litellm_proxy.request.total_latency"]["tags"]
+    assert not any(tag.startswith("status_code:") for tag in distributions["litellm_proxy.overhead.latency"]["tags"])
 
 
 @pytest.mark.asyncio
@@ -430,7 +428,7 @@ async def test_async_send_batch_routes_distributions_to_v1_endpoint(clean_env):
             "tags": ["env:test"],
         },
         {
-            "metric": "litellm.request.total_latency.distribution",
+            "metric": "litellm_proxy.request.total_latency",
             "type": "distribution",
             "points": ((timestamp, (1.5,)),),
             "tags": ("env:test",),
@@ -457,7 +455,7 @@ async def test_async_send_batch_routes_distributions_to_v1_endpoint(clean_env):
     assert distribution_payload == {
         "series": [
             {
-                "metric": "litellm.request.total_latency.distribution",
+                "metric": "litellm_proxy.request.total_latency",
                 "type": "distribution",
                 "points": [[timestamp, [1.5]]],
                 "tags": ["env:test"],
@@ -475,7 +473,7 @@ async def test_async_send_batch_skips_v2_when_only_distributions_queued(clean_en
     )
     logger.log_queue = [
         {
-            "metric": "litellm.llm_api.latency.distribution",
+            "metric": "litellm_proxy.llm_api.latency",
             "type": "distribution",
             "points": ((int(time.time()), (0.4,)),),
             "tags": ("env:test",),
@@ -521,7 +519,7 @@ async def test_flush_retries_only_distributions_after_v1_failure(clean_env):
         "tags": ["env:test"],
     }
     distribution = {
-        "metric": "litellm.request.total_latency.distribution",
+        "metric": "litellm_proxy.request.total_latency",
         "type": "distribution",
         "points": ((timestamp, (1.5,)),),
         "tags": ("env:test",),
@@ -560,7 +558,7 @@ async def test_flush_keeps_the_whole_batch_when_the_series_upload_fails(clean_en
         "tags": ["env:test"],
     }
     distribution = {
-        "metric": "litellm.request.total_latency.distribution",
+        "metric": "litellm_proxy.request.total_latency",
         "type": "distribution",
         "points": ((timestamp, (1.5,)),),
         "tags": ("env:test",),
@@ -603,7 +601,7 @@ async def test_flush_cancelled_during_the_distribution_upload_resends_only_distr
         "tags": ["env:test"],
     }
     distribution = {
-        "metric": "litellm.request.total_latency.distribution",
+        "metric": "litellm_proxy.request.total_latency",
         "type": "distribution",
         "points": ((timestamp, (1.5,)),),
         "tags": ("env:test",),
@@ -629,7 +627,7 @@ async def test_flush_keeps_metrics_queued_while_the_upload_was_in_flight(clean_e
     logger.async_client = AsyncMock()
     timestamp = int(time.time())
     late = {
-        "metric": "litellm.request.total_latency.distribution",
+        "metric": "litellm_proxy.request.total_latency",
         "type": "distribution",
         "points": ((timestamp, (2.0,)),),
         "tags": ("env:late",),
