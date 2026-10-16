@@ -3,7 +3,7 @@ from itertools import chain
 from types import MappingProxyType
 from typing import Final
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, ORJSONResponse
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 
@@ -14,7 +14,7 @@ from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_au
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
     log_llm_api_exception,
-    proxy_exception_from_route_error,
+    proxy_exception_from_http_exception,
     resolve_litellm_call_id,
 )
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
@@ -300,9 +300,14 @@ async def google_count_tokens(request: Request, model_name: str):
         token_response: Final = await internal_token_counter(request=token_request, call_endpoint=True)
     except ProxyException as error:
         return _google_error_response(request, error)
+    except HTTPException as error:
+        return _google_error_response(request, proxy_exception_from_http_exception(error, {}))
     except Exception as error:
         log_llm_api_exception(error, resolve_litellm_call_id(request.headers.get("x-litellm-call-id")))
-        return _google_error_response(request, proxy_exception_from_route_error(error))
+        return _google_error_response(
+            request,
+            ProxyException(message="Internal server error", type="internal_server_error", param=None, code=500),
+        )
     original_response: Final[dict] = token_response.original_response or {}
     return TokenCountDetailsResponse(
         totalTokens=original_response.get("totalTokens") or token_response.total_tokens or 0,

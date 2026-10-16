@@ -202,7 +202,7 @@ def test_google_count_tokens_unexpected_failure_uses_the_google_error_envelope()
     error = response.json()["error"]
     assert error["code"] == 500
     assert error["status"] == "INTERNAL"
-    assert "tokenizer unavailable" in error["message"]
+    assert "tokenizer unavailable" not in error["message"]
 
 
 def test_google_count_tokens_uses_normalized_total_when_provider_shape_differs():
