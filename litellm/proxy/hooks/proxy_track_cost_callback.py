@@ -2,6 +2,7 @@ import asyncio
 import traceback
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol, cast
 
 import litellm
@@ -105,13 +106,19 @@ def _str_keyed_fields(value: object) -> Mapping[str, object]:
     return value if is_str_keyed_mapping(value) else {}
 
 
-def _routed_model_group_fallback(request_data: Mapping[str, object]) -> Mapping[str, str]:
-    caller_metadata: Final = request_data.get("metadata")
-    if is_str_keyed_mapping(caller_metadata) and caller_metadata.get("model_group"):
-        return {}
-    routed_metadata: Final = request_data.get("litellm_metadata")
-    model_group: Final = routed_metadata.get("model_group") if is_str_keyed_mapping(routed_metadata) else None
-    return {"model_group": model_group} if isinstance(model_group, str) and model_group else {}
+_ROUTED_METADATA_FIELD_TYPES: Final = MappingProxyType({"model_group": str, "tags": list})
+
+
+def _routed_metadata_fallback(request_data: Mapping[str, object]) -> Mapping[str, object]:
+    caller_metadata: Final = _str_keyed_fields(request_data.get("metadata"))
+    routed_metadata: Final = _str_keyed_fields(request_data.get("litellm_metadata"))
+    return {
+        field: routed_metadata[field]
+        for field, field_type in _ROUTED_METADATA_FIELD_TYPES.items()
+        if not caller_metadata.get(field)
+        and isinstance(routed_metadata.get(field), field_type)
+        and routed_metadata[field]
+    }
 
 
 def _failure_snapshot_with_guardrails_recorded_after_it(
@@ -238,7 +245,7 @@ class _ProxyDBLogger(CustomLogger):
         _metadata["used_client_oauth_token"] = _proxy_stamped_used_client_oauth_token(request_fields, request_route)
 
         existing_metadata: Final[dict] = request_data.get("metadata", None) or {}
-        existing_metadata.update({**_routed_model_group_fallback(request_fields), **_metadata})
+        existing_metadata.update({**_routed_metadata_fallback(request_fields), **_metadata})
 
         litellm_metadata_bucket: Final = request_data.get("litellm_metadata")
         if (

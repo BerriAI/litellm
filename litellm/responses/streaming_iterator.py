@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import copy
 import json
 import time
@@ -1907,17 +1908,40 @@ async def _enforce_frame_project_quota(
         )
 
 
-async def _admit_frame_turn(turn_admission: Callable[[], Awaitable[None]] | None, raw_message: str) -> None:
+async def _admit_frame_turn(turn_admission: Callable[[], Awaitable[None]] | None, raw_message: str) -> Exception | None:
     frame: Final = _json_object_or_none(raw_message)
     if turn_admission is None or frame is None or frame.get("type") != "response.create":
-        return
-    await turn_admission()
+        return None
+    try:
+        await turn_admission()
+    except RateLimitError as refusal:
+        return refusal
+    except Exception as e:
+        verbose_logger.exception("Responses WS turn admission failed: %s", e)
+        return e
+    return None
 
 
 def _turn_refusal_frame(refusal: RateLimitError) -> str:
     return json.dumps(
         {"type": "error", "status": 429, "error": {"type": "rate_limit_exceeded", "message": str(refusal)}}
     )
+
+
+def _turn_admission_error_frame(failure: Exception) -> str:
+    return json.dumps({"type": "error", "status": 500, "error": {"type": "server_error", "message": str(failure)}})
+
+
+async def _answer_rejected_turn(websocket: ResponsesClientWebSocket, rejection: Exception) -> None:
+    match rejection:
+        case RateLimitError():
+            with contextlib.suppress(Exception):
+                await websocket.send_text(_turn_refusal_frame(rejection))
+        case _:
+            with contextlib.suppress(Exception):
+                await websocket.send_text(_turn_admission_error_frame(rejection))
+            with contextlib.suppress(Exception):
+                await websocket.close(code=1011, reason="Internal server error")
 
 
 RESPONSES_WS_LOGGED_EVENT_TYPES: Final = [
@@ -2568,14 +2592,13 @@ class ResponsesWebSocketStreaming:
         except RateLimitError as e:
             await self._send_turn_refusal(e)
             return False
-        try:
-            await _admit_frame_turn(turn_admission, message)
-        except RateLimitError as e:
-            if self._failure is None:
-                self._failure = e
-            await self._send_turn_refusal(e)
-            return False
-        return True
+        rejection: Final = await _admit_frame_turn(turn_admission, message)
+        if rejection is None:
+            return True
+        if self._failure is None:
+            self._failure = rejection
+        await _answer_rejected_turn(self.websocket, rejection)
+        return False
 
     async def _send_turn_refusal(self, refusal: RateLimitError) -> None:
         try:
@@ -2726,10 +2749,8 @@ class ManagedResponsesWebSocketHandler:
         await self._send_frame(json.dumps({"type": "error", "error": {"type": error_type, "message": message}}))
 
     async def _send_frame(self, frame: str) -> None:
-        try:
+        with contextlib.suppress(Exception):
             await self.websocket.send_text(frame)
-        except Exception:
-            pass
 
     def _get_history_messages(self, previous_response_id: str) -> list[dict[str, object]]:
         """
@@ -3108,12 +3129,11 @@ class ManagedResponsesWebSocketHandler:
         except RateLimitError as e:
             await self._send_frame(_turn_refusal_frame(e))
             return
-        try:
-            await _admit_frame_turn(turn_admission, raw_message)
-        except RateLimitError as e:
+        rejection: Final = await _admit_frame_turn(turn_admission, raw_message)
+        if rejection is not None:
             if self._failure is None:
-                self._failure = e
-            await self._send_frame(_turn_refusal_frame(e))
+                self._failure = rejection
+            await _answer_rejected_turn(self.websocket, rejection)
             return
 
         call_kwargs: Final = self._build_base_call_kwargs(msg_obj)

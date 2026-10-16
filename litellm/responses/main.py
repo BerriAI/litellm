@@ -64,7 +64,7 @@ from litellm.llms.openai.data_residency import infer_openai_data_residency
 from litellm.types.responses.main import *
 from litellm.types.responses.streaming_websocket import ResponsesWebSocketRequestDefaults
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import all_litellm_params
+from litellm.types.utils import CallTypes, all_litellm_params
 from litellm.utils import (
     ProviderConfigManager,
     client,
@@ -2490,7 +2490,7 @@ async def _aresponses_websocket(
     litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
     user: Final = kwargs.get("user", None)
     litellm_params: Final = GenericLiteLLMParams(**kwargs)
-    litellm_params_dict: Final = get_litellm_params(**kwargs)
+    litellm_params_dict: Final = {**get_litellm_params(**kwargs), CallTypes.aresponses_websocket.value: True}
 
     (
         provider_model,

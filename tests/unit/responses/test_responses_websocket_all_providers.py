@@ -1357,6 +1357,37 @@ def _admission_refusing_the_next_turn():
     return AsyncMock(side_effect=[RateLimitError(message="crossed budget", llm_provider="", model=""), None])
 
 
+class _ClientSocket:
+    """A client socket that, like Starlette's, stops receiving once the server closes it."""
+
+    def __init__(self, *frames: str) -> None:
+        self._frames: Final = iter(frames)
+        self.sent: Final[list[dict[str, object]]] = []
+        self.close_code: int | None = None
+
+    async def send_text(self, data: str) -> None:
+        self.sent.append(json.loads(data))
+
+    async def receive_text(self) -> str:
+        frame: Final = next(self._frames, None)
+        if self.close_code is not None or frame is None:
+            raise RuntimeError("WebSocket is not connected")
+        return frame
+
+    async def close(self, code: int = 1000, reason: str | None = None) -> None:
+        self.close_code = code
+
+
+def _admission_crashing_the_next_turn():
+    from unittest.mock import AsyncMock
+
+    return AsyncMock(side_effect=ValueError("budget store unreachable"))
+
+
+def _errors(websocket: _ClientSocket) -> list[tuple[object, object]]:
+    return [(frame.get("status"), frame["error"]) for frame in websocket.sent if frame.get("type") == "error"]
+
+
 class TestWebSocketTurnAdmission:
     """A turn after the connection's first is admitted by the deployment again before it reaches the provider."""
 
@@ -1476,6 +1507,76 @@ class TestWebSocketTurnAdmission:
         ]
         assert [(refusal["status"], refusal["error"]["type"]) for refusal in refusals] == [(429, "rate_limit_exceeded")]
 
+
+    @pytest.mark.asyncio
+    async def test_native_relay_ends_the_socket_with_a_500_when_turn_admission_crashes(self):
+        from unittest.mock import AsyncMock
+
+        first, second, third = _turn_frames()
+        backend_ws: Final = MagicMock()
+        backend_ws.send = AsyncMock()
+        backend_ws.close = AsyncMock()
+        backend_ws.recv = AsyncMock(side_effect=Exception("stop"))
+        websocket: Final = _ClientSocket(second, third)
+        handler: Final = _make_streaming(
+            websocket=websocket,
+            backend_ws=backend_ws,
+            request_data={},
+            first_message=first,
+            turn_admission=_admission_crashing_the_next_turn(),
+        )
+
+        failure: Final = await handler.bidirectional_forward()
+
+        assert isinstance(failure, ValueError)
+        assert [json.loads(call.args[0]) for call in backend_ws.send.await_args_list] == [json.loads(first)]
+        assert _errors(websocket) == [(500, {"type": "server_error", "message": "budget store unreachable"})]
+        assert websocket.close_code == 1011
+
+    @pytest.mark.asyncio
+    async def test_managed_relay_ends_the_socket_with_a_500_when_turn_admission_crashes(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        import litellm
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.responses.streaming_iterator import ManagedResponsesWebSocketHandler
+
+        answered: Final[list[object]] = []
+
+        async def fake_aresponses(*args: object, **kwargs: object):
+            answered.append(kwargs.get("input"))
+
+            async def _empty():
+                return
+                yield
+
+            return _empty()
+
+        monkeypatch.setattr(litellm, "aresponses", fake_aresponses)
+        first, second, third = _turn_frames()
+        websocket: Final = _ClientSocket(second, third)
+        handler: Final = ManagedResponsesWebSocketHandler(
+            websocket=websocket,
+            model="test-model",
+            logging_obj=Logging(
+                model="test-model",
+                messages=[],
+                stream=True,
+                call_type="aresponses",
+                start_time=0,
+                litellm_call_id="test-id",
+                function_id="test-func",
+            ),
+            first_message=first,
+            turn_admission=_admission_crashing_the_next_turn(),
+        )
+
+        failure: Final = await handler.run()
+
+        assert isinstance(failure, ValueError)
+        assert answered == ["one"]
+        assert _errors(websocket) == [(500, {"type": "server_error", "message": "budget store unreachable"})]
+        assert websocket.close_code == 1011
 
 def _deployment_defaults():
     from types import MappingProxyType
