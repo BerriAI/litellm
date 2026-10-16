@@ -128,7 +128,7 @@ def anthropic_messages_handler(
         return anthropic_messages(**_FLAG.keywords(args, kwargs))
     return _DISPATCH.run(
         args,
-        kwargs,
+        _FLAG.dropped(kwargs),
         python=python,
         binding=NATIVE_MESSAGES,
         native=native_call_hook,

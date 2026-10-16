@@ -134,22 +134,25 @@ ENTRIES: Final = (
 
 class Form(Enum):
     SYNC = auto()
+    SYNC_FLAG_FALSE = auto()
     ASYNC = auto()
-    SYNC_FLAGGED = auto()
-    ASYNC_FLAGGED = auto()
+    SYNC_FLAG_TRUE = auto()
+    ASYNC_FLAG_TRUE = auto()
 
 
 async def call(entry: Entry, form: Form) -> object:
     match form:
         case Form.SYNC:
             return entry.sync(*entry.args(), **entry.kwargs())
+        case Form.SYNC_FLAG_FALSE:
+            return entry.sync(*entry.args(), **entry.kwargs(**{entry.flag: False}))
         case Form.ASYNC:
             return await entry.asynchronous(*entry.args(), **entry.kwargs())
-        case Form.SYNC_FLAGGED:
+        case Form.SYNC_FLAG_TRUE:
             return await cast(
                 "Awaitable[object]", entry.sync(*entry.args(), **entry.kwargs(**{entry.flag: True}))
-            )  # cast-ok: a flagged sync entry returns a coroutine
-        case Form.ASYNC_FLAGGED:
+            )  # cast-ok: a sync entry with its flag set returns a coroutine
+        case Form.ASYNC_FLAG_TRUE:
             return await entry.asynchronous(*entry.args(), **entry.kwargs(**{entry.flag: True}))
 
 
@@ -247,7 +250,7 @@ async def test_every_public_form_takes_the_path_the_rules_pick(
         return
     assert result is native.result
     [(binding, native_call)] = native.calls
-    assert binding == ("sync" if form is Form.SYNC else "async")
+    assert binding == ("sync" if form in (Form.SYNC, Form.SYNC_FLAG_FALSE) else "async")
     assert {name: native_call.resolved[name] for name in entry.arguments} == entry.arguments
     assert entry.flag not in native_call.resolved
 
@@ -255,7 +258,7 @@ async def test_every_public_form_takes_the_path_the_rules_pick(
 @pytest.mark.parametrize("entry", ENTRIES, ids=entry_id)
 async def test_async_forms_hand_native_the_same_call(entry: Entry, native: Native) -> None:
     with scenario_rules(entry, SCENARIOS["required"]):
-        for form in (Form.ASYNC, Form.SYNC_FLAGGED, Form.ASYNC_FLAGGED):
+        for form in (Form.ASYNC, Form.SYNC_FLAG_TRUE, Form.ASYNC_FLAG_TRUE):
             _ = await call(entry, form)
 
     assert [binding for binding, _ in native.calls] == ["async", "async", "async"]
@@ -264,7 +267,7 @@ async def test_async_forms_hand_native_the_same_call(entry: Entry, native: Nativ
 
 
 @pytest.mark.parametrize("entry", ENTRIES, ids=entry_id)
-async def test_flagged_sync_entry_does_nothing_until_awaited(entry: Entry, native: Native) -> None:
+async def test_sync_entry_with_flag_true_does_nothing_until_awaited(entry: Entry, native: Native) -> None:
     with scenario_rules(entry, SCENARIOS["required"]):
         pending: Final = entry.sync(*entry.args(), **entry.kwargs(**{entry.flag: True}))
 
@@ -275,7 +278,7 @@ async def test_flagged_sync_entry_does_nothing_until_awaited(entry: Entry, nativ
 
 
 @pytest.mark.parametrize("entry", ENTRIES, ids=entry_id)
-async def test_flagged_sync_entry_raises_setup_errors_at_await(entry: Entry, native: Native) -> None:
+async def test_sync_entry_with_flag_true_raises_setup_errors_at_await(entry: Entry, native: Native) -> None:
     with scenario_rules(entry, SCENARIOS["required-without-extension"]):
         pending: Final = entry.sync(*entry.args(), **entry.kwargs(**{entry.flag: True}))
 

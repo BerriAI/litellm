@@ -84,7 +84,7 @@ def ocr(
         return aocr(**_FLAG.keywords(args, kwargs))
     return _DISPATCH.run(
         args,
-        kwargs,
+        _FLAG.dropped(kwargs),
         python=runtime.NO_PYTHON,
         binding=NATIVE_OCR,
         native=native_call_hook,

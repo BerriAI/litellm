@@ -76,7 +76,7 @@ def embedding(
         return aembedding(**_FLAG.keywords(args, kwargs))
     return _DISPATCH.run(
         args,
-        kwargs,
+        _FLAG.dropped(kwargs),
         python=_PYTHON_EMBEDDING,
         binding=NATIVE_EMBEDDING,
         native=native_call_hook,

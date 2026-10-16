@@ -93,7 +93,7 @@ def completion(
         return acompletion(**_FLAG.keywords(args, kwargs))
     return _DISPATCH.run(
         args,
-        kwargs,
+        _FLAG.dropped(kwargs),
         python=python,
         binding=NATIVE_COMPLETION,
         native=native_call_hook,
