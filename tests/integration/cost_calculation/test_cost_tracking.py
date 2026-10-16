@@ -140,6 +140,8 @@ def _prime_prior_response(
 
 @pytest.mark.parametrize("case", _CASES)
 def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) -> None:
+    if case.skip_reason is not None:
+        pytest.skip(case.skip_reason)
     marker: Final = sha256(case.name.encode()).hexdigest()[:12]
     with gateway.scenario() as scenario:
         expected: Final = case.expected

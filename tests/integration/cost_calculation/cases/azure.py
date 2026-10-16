@@ -6251,6 +6251,7 @@ AZURE_GPT_5_6_TERRA_SERVICE_TIER_PRIORITY: Final = AZURE_GPT_6_LUNA_SERVICE_TIER
             prompt_tokens=1840,
             completion_tokens=412,
         ),
+        "skip_reason": "BUG: Azure GPT Terra priority service tier is billed at the base rate",
     }
 )
 AZURE_GPT_5_6_TERRA_MESSAGES_BRIDGED_JSON: Final = AZURE_GPT_6_LUNA_MESSAGES_BRIDGED_JSON.model_copy(
