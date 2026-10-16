@@ -236,6 +236,7 @@ from litellm.router_utils.fallback_event_handlers import (
     committed_retry_budget_for_request,
     fallback_lookup_groups,
     fallbacks_disabled_for_request,
+    fallbacks_override_request_params,
     get_fallback_model_group_for_lookup_groups,
     get_pre_routing_selection,
     has_unattempted_fallback_target,
@@ -3578,10 +3579,7 @@ class Router:
             return False
         if request_kwargs.get("merge_reasoning_content_in_choices") is True:
             return False
-        fallbacks: Final = request_kwargs.get("fallbacks", self.fallbacks)
-        if isinstance(fallbacks, list) and any(
-            isinstance(entry, Mapping) and "model" in entry and len(entry) > 1 for entry in fallbacks
-        ):
+        if fallbacks_override_request_params(request_kwargs.get("fallbacks", self.fallbacks)):
             return False
         return not any(
             isinstance(callback, CustomGuardrail)

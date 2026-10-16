@@ -3716,12 +3716,18 @@ async def test_mid_stream_continuation_declines_while_an_output_guardrail_is_reg
         ({"model": "backup", "stream": False}, False),
         ({"model": "backup", "max_tokens": 300}, False),
         ({"model": "backup"}, True),
+        ({"gpt-4": [{"model": "backup", "stream": False}]}, False),
+        ({"*": [{"model": "backup", "max_tokens": 300}]}, False),
+        ({"gpt-4": [{"model": "backup"}, "backup"]}, True),
     ],
     ids=[
         "entry_with_its_own_messages",
         "entry_turning_off_streaming",
         "entry_with_its_own_max_tokens",
         "entry_with_model_only",
+        "group_target_turning_off_streaming",
+        "generic_group_target_with_its_own_max_tokens",
+        "group_targets_with_model_only",
     ],
 )
 async def test_mid_stream_continuation_declines_a_request_fallback_that_overrides_request_params(

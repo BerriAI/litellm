@@ -1,4 +1,5 @@
 import hashlib
+import itertools
 import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -613,6 +614,22 @@ def get_fallback_model_group(
             fallback_model_group = fallbacks[generic_fallback_idx]["*"]
 
     return fallback_model_group, generic_fallback_idx
+
+
+def _applied_fallback_targets(entry: object) -> tuple[object, ...]:
+    if not isinstance(entry, Mapping) or "model" in entry:
+        return (entry,)
+    group_chains: Final[Mapping[object, object]] = entry
+    chains: Final[tuple[Sequence[object], ...]] = tuple(
+        chain for chain in group_chains.values() if isinstance(chain, list)
+    )
+    return tuple(itertools.chain.from_iterable(chains))
+
+
+def fallbacks_override_request_params(fallbacks: object) -> bool:
+    entries: Final[Sequence[object]] = fallbacks if isinstance(fallbacks, list) else ()
+    targets: Final = itertools.chain.from_iterable(map(_applied_fallback_targets, entries))
+    return any(isinstance(target, Mapping) and "model" in target and len(target) > 1 for target in targets)
 
 
 PROVIDER_SCOPED_RESOURCE_KEYS: Final = ("input_file_id", "training_file", "batch_id", "file_id", "fine_tuning_job_id")
