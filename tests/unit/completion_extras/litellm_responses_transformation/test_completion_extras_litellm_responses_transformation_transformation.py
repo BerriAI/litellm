@@ -71,7 +71,7 @@ def test_streaming_responses_message_phase_is_retained_for_text_deltas():
         streaming_response=None, sync_stream=True
     )
 
-    added = iterator.chunk_parser(
+    added_commentary = iterator.chunk_parser(
         {
             "type": "response.output_item.added",
             "output_index": 2,
@@ -83,17 +83,66 @@ def test_streaming_responses_message_phase_is_retained_for_text_deltas():
             },
         }
     )
-    delta = iterator.chunk_parser(
+    added_final = iterator.chunk_parser(
+        {
+            "type": "response.output_item.added",
+            "output_index": 4,
+            "item": {
+                "type": "message",
+                "role": "assistant",
+                "phase": "final_answer",
+                "content": [],
+            },
+        }
+    )
+    commentary_delta = iterator.chunk_parser(
         {
             "type": "response.output_text.delta",
             "output_index": 2,
             "delta": "Preamble",
         }
     )
+    final_delta = iterator.chunk_parser(
+        {
+            "type": "response.output_text.delta",
+            "output_index": 4,
+            "delta": "Answer",
+        }
+    )
 
-    assert added.choices[0].delta.provider_specific_fields == {"phase": "commentary"}
-    assert delta.choices[0].delta.content == "Preamble"
-    assert delta.choices[0].delta.provider_specific_fields == {"phase": "commentary"}
+    assert added_commentary.choices[0].delta.provider_specific_fields == {"phase": "commentary"}
+    assert added_final.choices[0].delta.provider_specific_fields == {"phase": "final_answer"}
+    assert commentary_delta.choices[0].delta.content == "Preamble"
+    assert commentary_delta.choices[0].delta.provider_specific_fields == {"phase": "commentary"}
+    assert final_delta.choices[0].delta.content == "Answer"
+    assert final_delta.choices[0].delta.provider_specific_fields == {"phase": "final_answer"}
+
+
+def test_responses_message_phase_round_trip_is_stable():
+    handler = LiteLLMResponsesTransformationHandler()
+
+    for phase in ("commentary", "final_answer"):
+        response, _ = handler.convert_chat_completion_messages_to_responses_api(
+            [
+                {
+                    "role": "assistant",
+                    "content": "text",
+                    "provider_specific_fields": {"phase": phase},
+                }
+            ]
+        )
+        choice, _ = handler._handle_raw_dict_response_item(
+            {
+                "type": "message",
+                "role": "assistant",
+                "phase": response[0]["phase"],
+                "content": [{"type": "output_text", "text": "text"}],
+            },
+            0,
+        )
+
+        assert choice is not None
+        assert choice.message.provider_specific_fields == {"phase": phase}
 
 
 def test_convert_chat_completion_messages_to_responses_api_image_input():
