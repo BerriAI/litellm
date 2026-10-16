@@ -309,15 +309,21 @@ def test_get_file_content_forwards_a_raw_cloud_id_from_a_proxy_admin_key(
     import litellm.proxy.proxy_server as ps
 
     _override_auth(monkeypatch, mocker, llm_router, LitellmUserRoles.PROXY_ADMIN)
-    afile_content = mocker.AsyncMock(
-        return_value=HttpxBinaryResponseContent(
+    content: Final = b'{"custom_id": "request-1"}\n'
+
+    async def _stream():
+        yield content
+
+    async def _provider_file_content(**kwargs: object) -> FileContentStreamingResult | HttpxBinaryResponseContent:
+        if kwargs.get("stream"):
+            return FileContentStreamingResult(stream_iterator=_stream(), headers={"content-length": str(len(content))})
+        return HttpxBinaryResponseContent(
             response=httpx.Response(
-                status_code=200,
-                content=b'{"custom_id": "request-1"}\n',
-                headers={"content-type": "application/octet-stream"},
+                status_code=200, content=content, headers={"content-type": "application/octet-stream"}
             )
         )
-    )
+
+    afile_content: Final = mocker.AsyncMock(side_effect=_provider_file_content)
     monkeypatch.setattr(litellm, "afile_content", afile_content)
 
     try:
@@ -329,7 +335,7 @@ def test_get_file_content_forwards_a_raw_cloud_id_from_a_proxy_admin_key(
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
     assert response.status_code == 200, response.text
-    assert response.content == b'{"custom_id": "request-1"}\n'
+    assert response.content == content
     afile_content.assert_called_once()
     assert afile_content.call_args.kwargs["custom_llm_provider"] == provider
     assert afile_content.call_args.kwargs["file_id"] == raw_id
