@@ -163,8 +163,12 @@ LOCAL_OIDC_SECRET_PREFIXES: Final = ("oidc/file/", "oidc/env/")
 
 @dataclass(frozen=True, slots=True)
 class UnresolvableSecretReference:
-    reference: str
+    kind: str
     reason: str
+
+
+def oidc_reference_kind(reference: str) -> str:
+    return "/".join(reference.split("/", 2)[:2])
 
 
 def resolve_local_oidc_reference(value: str) -> str | UnresolvableSecretReference:
@@ -172,15 +176,33 @@ def resolve_local_oidc_reference(value: str) -> str | UnresolvableSecretReferenc
     excluded because it bypasses the ``oidc/file/`` credential-directory allowlist."""
     if not value.startswith(LOCAL_OIDC_SECRET_PREFIXES):
         return value
+    kind: Final = oidc_reference_kind(value)
     try:
         secret: Final = get_secret_str(value)
-    except UnicodeDecodeError:
-        return UnresolvableSecretReference(reference=value, reason="the file is not UTF-8 text")
     except (OSError, ValueError) as exc:
-        return UnresolvableSecretReference(reference=value, reason=str(exc))
+        return _logged_unresolvable(value, kind, _unresolvable_reason(kind, exc))
     if not secret:
-        return UnresolvableSecretReference(reference=value, reason="it resolved to an empty value")
+        return _logged_unresolvable(value, kind, "it resolved to an empty value")
     return secret
+
+
+def _logged_unresolvable(reference: str, kind: str, reason: str) -> UnresolvableSecretReference:
+    verbose_logger.warning("Secret reference %s could not be resolved: %s", reference, reason)
+    return UnresolvableSecretReference(kind=kind, reason=reason)
+
+
+def _unresolvable_reason(kind: str, exc: OSError | ValueError) -> str:
+    match exc:
+        case UnicodeDecodeError():
+            return "the file is not UTF-8 text"
+        case OidcPathNotAllowedError():
+            return str(exc)
+        case OSError(strerror=str() as strerror):
+            return strerror
+        case _ if kind == "oidc/env":
+            return "the environment variable is not set"
+        case _:
+            return "the file could not be read"
 
 
 def normalize_nonempty_secret_str(val: str | None) -> str | None:

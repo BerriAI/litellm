@@ -308,7 +308,7 @@ def test_an_unresolvable_registry_credential_reference_never_reaches_the_provide
 ):
     monkeypatch.delenv("VS_PROJECTED_TOKEN")
 
-    with pytest.raises(litellm.AuthenticationError, match="oidc/env/VS_PROJECTED_TOKEN"):
+    with pytest.raises(litellm.AuthenticationError, match="oidc/env secret reference could not be resolved"):
         _sent_by(call)
 
 

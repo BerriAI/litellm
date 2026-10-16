@@ -6901,15 +6901,17 @@ def test_explicit_api_key_wins_over_a_named_credential_reference(
     [
         (lambda tmp_path: f"oidc/file/{tmp_path / 'absent'}", "No such file or directory"),
         (lambda tmp_path: f"oidc/file/{tmp_path.parent}/outside", "outside the allowed credential directories"),
+        (lambda tmp_path: "oidc/file//run/secrets/lit-absent-token", "outside the allowed credential directories"),
         (lambda tmp_path: "oidc/file/relative/token", "must be absolute"),
-        (lambda tmp_path: "oidc/env/LIT_UNSET_SA_TOKEN", "Environment variable LIT_UNSET_SA_TOKEN not found"),
+        (lambda tmp_path: "oidc/env/LIT_UNSET_SA_TOKEN", "environment variable is not set"),
         (lambda tmp_path: f"oidc/file/{tmp_path / 'empty'}", "empty value"),
         (lambda tmp_path: f"oidc/file/{tmp_path / 'binary'}", "not UTF-8 text"),
     ],
 )
-def test_unresolvable_oidc_api_key_fails_closed_naming_the_reason_without_its_path_or_content(
+def test_unresolvable_oidc_api_key_fails_closed_naming_the_reason_without_its_target_or_content(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
     make_reference: Callable[[Path], str],
     reason: str,
 ) -> None:
@@ -6923,23 +6925,28 @@ def test_unresolvable_oidc_api_key_fails_closed_naming_the_reason_without_its_pa
 
     with respx.mock(assert_all_called=False) as upstream:
         route: Final = upstream.post(_MISTRAL_CHAT_URL).respond(200, json=_MISTRAL_REPLY)
-        with pytest.raises(litellm.AuthenticationError) as excinfo:
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"), pytest.raises(litellm.AuthenticationError) as excinfo:
             _ping_mistral_through("mistral-sa")
 
     assert not route.called
     assert excinfo.value.status_code == 401
     assert reason in excinfo.value.message
-    assert str(tmp_path.parent) not in excinfo.value.message
+    assert reference.split("/", 2)[2] not in excinfo.value.message
+    assert reference in caplog.text
     assert "FILE-CONTENT" not in excinfo.value.message
     assert "0xff" not in excinfo.value.message
 
 
 @pytest.mark.parametrize(
-    "reference",
-    ["oidc/env_path/MISTRAL_SA_TOKEN_PATH", "oidc/google/https://api.mistral.ai", "oidc/github/mistral"],
+    ("reference", "kind"),
+    [
+        ("oidc/env_path/MISTRAL_SA_TOKEN_PATH", "oidc/env_path"),
+        ("oidc/google/https://api.mistral.ai", "oidc/google"),
+        ("oidc/github/mistral", "oidc/github"),
+    ],
 )
 def test_oidc_api_key_of_a_kind_api_key_cannot_resolve_fails_closed_as_an_authentication_error(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reference: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reference: str, kind: str
 ) -> None:
     token: Final = _allowed_token_file(tmp_path, monkeypatch, "must-not-be-sent")
     monkeypatch.setenv("MISTRAL_SA_TOKEN_PATH", str(token))
@@ -6952,7 +6959,8 @@ def test_oidc_api_key_of_a_kind_api_key_cannot_resolve_fails_closed_as_an_authen
 
     assert not route.called
     assert excinfo.value.status_code == 401
-    assert reference in excinfo.value.message
+    assert f"{kind} secret reference" in excinfo.value.message
+    assert reference.split("/", 2)[2] not in excinfo.value.message
 
 
 @pytest.mark.asyncio
@@ -7073,17 +7081,18 @@ async def test_an_inline_oidc_api_key_is_refused_before_its_file_is_read_when_th
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(tmp_path))
-    router: Final = _bedrock_router(f"oidc/file/{tmp_path / 'missing-token'}", deployment_endpoint)
+    router: Final = _bedrock_router("oidc/file//run/secrets/lit-missing-token", deployment_endpoint)
 
     try:
         with respx.mock(assert_all_called=False) as upstream:
             upstream.route().respond(200, json=_BEDROCK_REPLY)
-            with pytest.raises(litellm.AuthenticationError, match=_DEPLOYMENT_HOST_REFERENCE_REFUSAL):
+            with pytest.raises(litellm.AuthenticationError, match=_DEPLOYMENT_HOST_REFERENCE_REFUSAL) as excinfo:
                 await router.acompletion(model="claude", messages=_PING, aws_bedrock_runtime_endpoint=call_endpoint)
     finally:
         router.discard()
 
     assert upstream.calls.call_count == 0
+    assert "/run/secrets" not in excinfo.value.message
 
 
 @pytest.mark.asyncio

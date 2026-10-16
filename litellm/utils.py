@@ -58,7 +58,7 @@ from litellm._lazy_imports import (
     get_messages_reach_token_count,
     get_token_counter_new,
 )
-from litellm._logging import redact_internal_details_from_client_message, redact_secrets
+from litellm._logging import redact_secrets
 from litellm._uuid import uuid
 from litellm.constants import (
     DEFAULT_CHAT_COMPLETION_PARAM_VALUES,
@@ -462,6 +462,7 @@ from litellm.secret_managers.main import (
     LOCAL_OIDC_SECRET_PREFIXES,
     UnresolvableSecretReference,
     get_secret,
+    oidc_reference_kind,
     resolve_local_oidc_reference,
 )
 
@@ -765,15 +766,15 @@ def _secret_behind_api_key_reference(
         raise _secret_reference_error(_unreachable_upstream_message(reference), llm_provider=llm_provider, model=model)
     if not reference.startswith(LOCAL_OIDC_SECRET_PREFIXES):
         raise _secret_reference_error(
-            f"api_key {reference} is an oidc/ secret reference of a kind api_key does not support. "
+            f"api_key is an {oidc_reference_kind(reference)} secret reference, a kind api_key does not support. "
             "Use oidc/file/<absolute path> or oidc/env/<VARIABLE_NAME>.",
             llm_provider=llm_provider,
             model=model,
         )
     match resolve_local_oidc_reference(reference):
-        case UnresolvableSecretReference(reason=reason):
+        case UnresolvableSecretReference(kind=kind, reason=reason):
             raise _secret_reference_error(
-                f"api_key secret reference {reference} could not be resolved: {reason}",
+                f"api_key {kind} secret reference could not be resolved: {reason}",
                 llm_provider=llm_provider,
                 model=model,
             )
@@ -782,20 +783,18 @@ def _secret_behind_api_key_reference(
 
 
 def _secret_reference_error(message: str, llm_provider: object, model: object) -> AuthenticationError:
-    return AuthenticationError(
-        message=redact_internal_details_from_client_message(message), llm_provider=llm_provider, model=model
-    )
+    return AuthenticationError(message=message, llm_provider=llm_provider, model=model)
 
 
 def _unreachable_upstream_message(reference: AdminApiKeySecretReference) -> str:
     if isinstance(reference, CredentialApiKeySecretReference):
         return (
-            f"api_key secret reference {reference} comes from a stored credential, so LiteLLM sends it only to "
+            "The api_key secret reference comes from a stored credential, so LiteLLM sends it only to "
             "that credential's own api_base. Set this api_base on the credential, or give this model its own "
             "credential."
         )
     return (
-        f"api_key secret reference {reference} goes only to the host its deployment configures, and this call "
+        "The api_key secret reference goes only to the host its deployment configures, and this call "
         "points at another one. Send your own api_key with that host."
     )
 

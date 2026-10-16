@@ -48,6 +48,7 @@ _BATCH_DEPLOYMENT: Final = "wif-vllm-batch"
 _BEDROCK_MODEL: Final = "bedrock/converse/us.anthropic.claude-sonnet-5-5"
 _PROVIDER_INPUT_TOKENS: Final = 7919
 _UNSUPPORTED_REFERENCE: Final = "oidc/google/https://example.invalid"
+_RUN_SECRETS_TOKEN: Final = "/run/secrets/wif-absent-token"
 _SOURCES: Final = ("config_credential", "config_inline", "db_credential", "db_inline")
 _UNREADABLE: Final = MappingProxyType(
     {"missing_file": "wif-missing", "outside_allowlist": "wif-outside", "unsupported_kind": "wif-unsupported"}
@@ -210,6 +211,7 @@ def _config(directory: Path, secrets: _Secrets, provider: str) -> Path:
             _deployment("wif-missing", _named(_CHAT_MODEL, "wif-missing")),
             _deployment("wif-outside", _named(_CHAT_MODEL, "wif-outside")),
             _deployment("wif-unsupported", _named(_CHAT_MODEL, "wif-unsupported")),
+            _deployment("wif-run-secrets", _named(_CHAT_MODEL, "wif-run-secrets")),
             _deployment("wif-missing-fallback", _named(_CHAT_MODEL, "wif-missing")),
             _deployment("wif-realtime", _named(_REALTIME_MODEL, "wif-config"), {"mode": "realtime"}),
             _deployment("wif-vllm", {"model": "hosted_vllm/wif-local", **inline}, {"id": _BATCH_DEPLOYMENT}),
@@ -237,6 +239,7 @@ def _config(directory: Path, secrets: _Secrets, provider: str) -> Path:
             _credential("wif-missing", _reference(secrets.missing), provider),
             _credential("wif-outside", _reference(secrets.outside), provider),
             _credential("wif-unsupported", _UNSUPPORTED_REFERENCE, provider),
+            _credential("wif-run-secrets", f"oidc/file/{_RUN_SECRETS_TOKEN}", provider),
         ],
         "vector_store_registry": [
             {
@@ -523,6 +526,14 @@ def test_messages_with_an_unreadable_reference_hides_the_token_path(rig: _Rig) -
     reached: Final = _carrying(rig.provider.requests(), marker)
     assert (response.status_code, reached) == (401, ()), (response.text, _bearers(reached))
     assert str(rig.secrets.allowed) not in response.text, response.text
+
+
+def test_unreadable_reference_under_run_secrets_hides_the_token_path(rig: _Rig) -> None:
+    marker: Final = _marker()
+    response: Final = _chat(rig.owned.gateway, "wif-run-secrets", marker)
+    reached: Final = _carrying(rig.provider.requests(), marker)
+    assert (response.status_code, reached) == (401, ()), (response.text, _bearers(reached))
+    assert _RUN_SECRETS_TOKEN not in response.text, response.text
 
 
 @pytest.mark.parametrize("source", ("config_credential", "config_inline"))
