@@ -29,7 +29,7 @@ export type PlaygroundSettings = Readonly<{
   maxTokens: number | null;
 }>;
 
-export type StoredValue = Readonly<{ key: string; value: string | null; secure: boolean }>;
+export type StoredValue = Readonly<{ key: string; value: string | null }>;
 
 export type SettingsStorage = Readonly<{
   read: (key: string) => string | null;
@@ -122,21 +122,24 @@ export const loadSettings = (storage: SettingsStorage, keysDisabled: boolean): P
   stream: storage.read("streamingEnabled") !== "false",
 });
 
-export const storedValues = (settings: PlaygroundSettings): readonly StoredValue[] => [
-  { key: "apiKeySource", value: JSON.stringify(settings.keySource), secure: true },
-  { key: "apiKey", value: settings.virtualKey, secure: true },
-  { key: "customHeaders", value: JSON.stringify(settings.headerPairs), secure: true },
-  { key: "customProxyBaseUrl", value: settings.proxyBaseUrl || null, secure: false },
-  { key: "endpointType", value: settings.endpoint, secure: false },
-  { key: "selectedModel", value: settings.model, secure: false },
-  { key: "selectedVoice", value: settings.voice, secure: false },
-  { key: "selectedTags", value: JSON.stringify(settings.tags), secure: false },
-  { key: "selectedVectorStores", value: JSON.stringify(settings.vectorStores), secure: false },
-  { key: "selectedGuardrails", value: JSON.stringify(settings.guardrails), secure: false },
-  { key: "selectedPolicies", value: JSON.stringify(settings.policies), secure: false },
-  { key: "selectedMCPServers", value: JSON.stringify(settings.mcpSelection), secure: false },
-  { key: "mcpServerToolRestrictions", value: JSON.stringify(settings.toolLimits), secure: false },
-  { key: "streamingEnabled", value: String(settings.stream), secure: false },
+export const secureValues = (settings: PlaygroundSettings): readonly StoredValue[] => [
+  { key: "apiKeySource", value: JSON.stringify(settings.keySource) },
+  { key: "apiKey", value: settings.virtualKey },
+  { key: "customHeaders", value: JSON.stringify(settings.headerPairs) },
+];
+
+export const plainValues = (settings: PlaygroundSettings): readonly StoredValue[] => [
+  { key: "customProxyBaseUrl", value: settings.proxyBaseUrl || null },
+  { key: "endpointType", value: settings.endpoint },
+  { key: "selectedModel", value: settings.model },
+  { key: "selectedVoice", value: settings.voice },
+  { key: "selectedTags", value: JSON.stringify(settings.tags) },
+  { key: "selectedVectorStores", value: JSON.stringify(settings.vectorStores) },
+  { key: "selectedGuardrails", value: JSON.stringify(settings.guardrails) },
+  { key: "selectedPolicies", value: JSON.stringify(settings.policies) },
+  { key: "selectedMCPServers", value: JSON.stringify(settings.mcpSelection) },
+  { key: "mcpServerToolRestrictions", value: JSON.stringify(settings.toolLimits) },
+  { key: "streamingEnabled", value: String(settings.stream) },
 ];
 
 const singleServer = (selection: readonly string[]): readonly string[] =>

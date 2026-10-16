@@ -6,7 +6,8 @@ import {
   allowedTools,
   defaultSettings,
   loadSettings,
-  storedValues,
+  plainValues,
+  secureValues,
   toggleMcpItem,
   toggleToolLimit,
   withEndpoint,
@@ -29,7 +30,7 @@ const TOOLS = ["search", "fetch", "summarize"] as const;
 const SCOPE = { server: "s", tools: TOOLS };
 
 describe("loadSettings", () => {
-  it("restores every persisted field from what storedValues wrote", () => {
+  it("restores every persisted field from what was written", () => {
     const persisted: Partial<PlaygroundSettings> = {
       keySource: "custom",
       virtualKey: "sk-test",
@@ -48,8 +49,8 @@ describe("loadSettings", () => {
     };
     const original = settingsWith(persisted);
     const written = Object.fromEntries(
-      storedValues(original)
-        .filter((entry): entry is { key: string; value: string; secure: boolean } => entry.value !== null)
+      [...secureValues(original), ...plainValues(original)]
+        .filter((entry): entry is { key: string; value: string } => entry.value !== null)
         .map(({ key, value }) => [key, value]),
     );
 

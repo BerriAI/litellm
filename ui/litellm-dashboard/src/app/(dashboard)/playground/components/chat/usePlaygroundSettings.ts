@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
-import { defaultSettings, loadSettings, storedValues, type PlaygroundSettings } from "./playgroundSettings";
+import {
+  defaultSettings,
+  loadSettings,
+  plainValues,
+  secureValues,
+  type PlaygroundSettings,
+} from "./playgroundSettings";
 
 export type SettingsUpdate = Partial<PlaygroundSettings> | ((current: PlaygroundSettings) => PlaygroundSettings);
 
@@ -10,10 +16,17 @@ const browserStorage = {
 };
 
 const persist = (settings: PlaygroundSettings): void => {
-  storedValues(settings).forEach(({ key, value, secure }) => {
+  secureValues(settings).forEach(({ key, value }) => {
     try {
       if (value === null) window.sessionStorage.removeItem(key);
-      else if (secure) setSecureItem(key, value);
+      else setSecureItem(key, value);
+    } catch {
+      return;
+    }
+  });
+  plainValues(settings).forEach(({ key, value }) => {
+    try {
+      if (value === null) window.sessionStorage.removeItem(key);
       else window.sessionStorage.setItem(key, value);
     } catch {
       return;
