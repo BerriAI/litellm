@@ -2,6 +2,8 @@
 # 1. Generate a Key, and use it to make a call
 
 
+import json
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -14,7 +16,8 @@ load_dotenv()
 # this file is to test litellm/proxy
 
 
-from fastapi import HTTPException, Request
+from fastapi import Request
+from fastapi.responses import JSONResponse
 
 import litellm
 from litellm import Router
@@ -1035,6 +1038,7 @@ async def test_anthropic_endpoint_returns_anthropic_error_format():
 
     # Mock request object
     mock_request = MagicMock(spec=Request)
+    mock_request.headers = {}
     mock_request_data = {
         "model": "claude-bedrock",
         "messages": [{"role": "user", "content": "Hello!"}],
@@ -1062,14 +1066,11 @@ async def test_anthropic_endpoint_returns_anthropic_error_format():
     proxy_server.count_request_tokens = mock_token_counter_error
 
     try:
-        with pytest.raises(HTTPException) as exc_info:
-            await anthropic_count_tokens(mock_request, mock_user_api_key_dict)
+        response: Final[object] = await anthropic_count_tokens(mock_request, mock_user_api_key_dict)
 
-        # Verify HTTP status code is correct
-        assert exc_info.value.status_code == 400
-
-        # Verify error is in Anthropic format
-        detail = exc_info.value.detail
+        assert isinstance(response, JSONResponse)
+        assert response.status_code == 400
+        detail = json.loads(bytes(response.body))
         assert detail["type"] == "error"
         assert detail["error"]["type"] == "invalid_request_error"
         assert detail["error"]["message"] == "Input is too long for requested model."
@@ -1087,6 +1088,7 @@ async def test_anthropic_endpoint_403_permission_error_format():
     import litellm.proxy.proxy_server as proxy_server
 
     mock_request = MagicMock(spec=Request)
+    mock_request.headers = {}
     mock_request_data = {
         "model": "claude-bedrock",
         "messages": [{"role": "user", "content": "Hello!"}],
@@ -1114,12 +1116,11 @@ async def test_anthropic_endpoint_403_permission_error_format():
     proxy_server.count_request_tokens = mock_token_counter_error
 
     try:
-        with pytest.raises(HTTPException) as exc_info:
-            await anthropic_count_tokens(mock_request, mock_user_api_key_dict)
+        response: Final[object] = await anthropic_count_tokens(mock_request, mock_user_api_key_dict)
 
-        assert exc_info.value.status_code == 403
-
-        detail = exc_info.value.detail
+        assert isinstance(response, JSONResponse)
+        assert response.status_code == 403
+        detail = json.loads(bytes(response.body))
         assert detail["type"] == "error"
         assert detail["error"]["type"] == "permission_error"
         assert detail["error"]["message"] == "Bearer Token has expired"
@@ -1137,6 +1138,7 @@ async def test_anthropic_endpoint_429_rate_limit_error_format():
     import litellm.proxy.proxy_server as proxy_server
 
     mock_request = MagicMock(spec=Request)
+    mock_request.headers = {}
     mock_request_data = {
         "model": "claude-bedrock",
         "messages": [{"role": "user", "content": "Hello!"}],
@@ -1164,12 +1166,11 @@ async def test_anthropic_endpoint_429_rate_limit_error_format():
     proxy_server.count_request_tokens = mock_token_counter_error
 
     try:
-        with pytest.raises(HTTPException) as exc_info:
-            await anthropic_count_tokens(mock_request, mock_user_api_key_dict)
+        response: Final[object] = await anthropic_count_tokens(mock_request, mock_user_api_key_dict)
 
-        assert exc_info.value.status_code == 429
-
-        detail = exc_info.value.detail
+        assert isinstance(response, JSONResponse)
+        assert response.status_code == 429
+        detail = json.loads(bytes(response.body))
         assert detail["type"] == "error"
         assert detail["error"]["type"] == "rate_limit_error"
         assert detail["error"]["message"] == "Rate limit exceeded"

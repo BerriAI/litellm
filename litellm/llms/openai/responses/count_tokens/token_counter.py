@@ -10,6 +10,7 @@ from pydantic import JsonValue
 from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
+from litellm.llms.anthropic.pass_through.convertible_blocks import unconvertible_blocks_error
 from litellm.llms.anthropic.pass_through.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
 )
@@ -91,14 +92,15 @@ class OpenAITokenCounter(BaseTokenCounter):
             if messages_format == "anthropic"
             else None
         )
-        if malformed_error is not None:
+        request_error: Final = malformed_error or unconvertible_blocks_error(messages, messages_format)
+        if request_error is not None:
             return TokenCountResponse(
                 total_tokens=0,
                 request_model=request_model,
                 model_used=model_to_use,
                 tokenizer_type="openai_api",
                 error=True,
-                error_message=malformed_error,
+                error_message=request_error,
                 status_code=400,
             )
 
