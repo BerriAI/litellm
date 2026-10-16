@@ -425,7 +425,7 @@ async def add_new_user_to_default_team(
     user_id: str,
     user_email: str | None,
     user_api_key_dict: UserAPIKeyAuth,
-    teams: list[str] | list[NewUserRequestTeam],
+    teams: Sequence[str | NewUserRequestTeam],
     prisma_client: "PrismaClient",
 ):
     tasks: Final[list[Awaitable[object]]] = []
