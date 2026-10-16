@@ -12,7 +12,7 @@ test("project creation and explicit detachment preserve saved scope and restore 
   request,
 }) => {
   const master = masterKey();
-  const headers = { Authorization: `Bearer ${master}`, Connection: "close" };
+  const headers = { Authorization: `Bearer ${master}` };
   const prefix = `integration-browser-${randomUUID()}`;
   // rebind-ok: Register cleanup after each acquisition so partial setup always unwinds in reverse order.
   const resources: Array<() => Promise<void>> = [];

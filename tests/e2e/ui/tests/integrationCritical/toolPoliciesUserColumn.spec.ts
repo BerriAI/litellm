@@ -37,7 +37,7 @@ test("the Tool Policies page names the user behind the key that discovered a too
   const upstream = (
     process.env.INTEGRATION_UPSTREAM_URL ?? "http://127.0.0.1:8190"
   ).replace(/\/+$/, "");
-  const auth = { Authorization: `Bearer ${master}`, Connection: "close" };
+  const auth = { Authorization: `Bearer ${master}` };
   const marker = unhex();
   const alias = `ui-owner-${marker}`;
   const model = `ui-tool-policies-${marker}`;

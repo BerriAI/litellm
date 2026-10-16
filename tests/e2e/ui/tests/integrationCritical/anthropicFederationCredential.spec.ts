@@ -15,7 +15,7 @@ import {
 } from "../../helpers/userOnboarding";
 
 const master = process.env.LITELLM_MASTER_KEY ?? "sk-integration-master";
-const headers = { Authorization: `Bearer ${master}`, Connection: "close" };
+const headers = { Authorization: `Bearer ${master}` };
 
 const ANTHROPIC_LABEL = "Anthropic";
 const OPENAI_LABEL = "OpenAI";

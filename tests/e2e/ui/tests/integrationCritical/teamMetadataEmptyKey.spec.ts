@@ -8,7 +8,7 @@ import { randomUUID } from "node:crypto";
 import { masterKey } from "../../helpers/traffic";
 
 const master = masterKey();
-const headers = { Authorization: `Bearer ${master}`, Connection: "close" };
+const headers = { Authorization: `Bearer ${master}` };
 
 async function createTeamCarryingAnEmptyMetadataKey(
   request: APIRequestContext,
