@@ -1545,31 +1545,41 @@ def completion_cost(
         )
 
         requested_model: Final = model
-        raw_candidate_names: Final = (
-            selected_model,
-            _get_response_model(completion_response),
-            *((model,) if model is not None else ()),
+        request_pricing_provider: Final = custom_llm_provider if isinstance(custom_llm_provider, str) else None
+        raw_candidates: Final = (
+            (
+                selected_model,
+                base_model_provider if base_model_provider is not None else request_pricing_provider,
+            ),
+            (_get_response_model(completion_response), request_pricing_provider),
+            *(((model, request_pricing_provider),) if model is not None else ()),
         )
         candidate_model_info: Final = tuple(
-            _cost_map_model_info(candidate, custom_llm_provider) if candidate is not None else None
-            for candidate in raw_candidate_names
+            _cost_map_model_info(candidate, pricing_provider) if candidate is not None else None
+            for candidate, pricing_provider in raw_candidates
         )
         candidate_is_generalized: Final = tuple(
             info is not None and is_generalized_model_info(info) for info in candidate_model_info
         )
-        exact_model_names: Final = tuple(
+        orderable_candidates: Final = raw_candidates[1:] if explicit_pricing else raw_candidates
+        orderable_is_generalized: Final = candidate_is_generalized[1:] if explicit_pricing else candidate_is_generalized
+        exact_candidates: Final = tuple(
             candidate
-            for candidate, is_generalized in zip(raw_candidate_names, candidate_is_generalized, strict=True)
+            for candidate, is_generalized in zip(orderable_candidates, orderable_is_generalized, strict=True)
             if not is_generalized
         )
-        generalized_model_names: Final = tuple(
+        generalized_candidates: Final = tuple(
             candidate
-            for candidate, is_generalized in zip(raw_candidate_names, candidate_is_generalized, strict=True)
+            for candidate, is_generalized in zip(orderable_candidates, orderable_is_generalized, strict=True)
             if is_generalized
         )
-        potential_model_names: Final = (*exact_model_names, *generalized_model_names)
+        potential_model_names: Final = (
+            (*raw_candidates[:1], *exact_candidates, *generalized_candidates)
+            if explicit_pricing
+            else (*exact_candidates, *generalized_candidates)
+        )
 
-        for idx, model in enumerate(potential_model_names):
+        for idx, (model, pricing_provider) in enumerate(potential_model_names):
             try:
                 if verbose_logger.isEnabledFor(logging.DEBUG):
                     verbose_logger.debug("selected model name for cost calculation: %s", model)
@@ -1914,13 +1924,8 @@ def completion_cost(
                 if litellm_logging_obj is not None:
                     request_model_for_cost = litellm_logging_obj.model
 
-                pricing_provider: str | None = (
-                    base_model_provider
-                    if base_model_provider is not None and idx == 0
-                    else custom_llm_provider
-                    if isinstance(custom_llm_provider, str)
-                    else None
-                )
+                if pricing_provider == request_pricing_provider:
+                    pricing_provider = custom_llm_provider if isinstance(custom_llm_provider, str) else None
                 (
                     prompt_tokens_cost_usd_dollar,
                     completion_tokens_cost_usd_dollar,
