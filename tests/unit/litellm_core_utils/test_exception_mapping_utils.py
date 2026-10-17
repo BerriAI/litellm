@@ -57,6 +57,104 @@ def test_openai_cyber_policy_uses_the_structured_error_code(shape: str, code: st
         assert caught.value.response.headers["x-request-id"] == "cyber-policy-request"
 
 
+
+def _debug_info_for_api_base(configured_api_base: str) -> str:
+    request: Final = httpx.Request("POST", "https://gateway.example/v1/chat/completions")
+    original: Final = OpenAIError(
+        status_code=500, message="upstream failed", request=request, response=httpx.Response(500, request=request)
+    )
+    with pytest.raises(litellm.InternalServerError) as caught:
+        exception_type(
+            model="gpt-5.4-mini",
+            original_exception=original,
+            custom_llm_provider="openai",
+            completion_kwargs={},
+            extra_kwargs={"api_base": configured_api_base},
+        )
+    debug_info: Final = caught.value.litellm_debug_info
+    assert isinstance(debug_info, str)
+    return debug_info
+
+
+@pytest.mark.parametrize(
+    ("configured_api_base", "shown_api_base"),
+    [
+        ("https://qa-user:function-secret@gateway.example/v1?code=function-secret", "https://gateway.example/v1"),
+        ("https://gateway.example/v1#function-secret", "https://gateway.example/v1"),
+        ("qa-user:function-secret@gateway.example:8080/v1", "gateway.example:8080/v1"),
+        ("https://gateway.example?code=function/secret", "https://gateway.example"),
+        ("https://gateway.example?user=alice@example.org&code=function-secret", "https://gateway.example"),
+        ("https://gateway.example?email=ops@other-host.example", "https://gateway.example"),
+        ("qa-user:function-secret@gateway.example/v1?next=https://other.example/y", "gateway.example/v1"),
+        (
+            "https://qa-user:function-secret@gateway.example/models/claude-opus-5-5@default",
+            "https://gateway.example/models/claude-opus-5-5@default",
+        ),
+    ],
+    ids=[
+        "userinfo_and_query",
+        "fragment",
+        "no_scheme",
+        "slash_in_query_without_path",
+        "at_sign_in_query_without_path",
+        "at_sign_names_other_host",
+        "no_scheme_with_url_in_query",
+        "userinfo_and_at_sign_in_path",
+    ],
+)
+def test_api_base_line_keeps_credentials_out(configured_api_base: str, shown_api_base: str) -> None:
+    debug_info: Final = _debug_info_for_api_base(configured_api_base)
+    assert f"API Base: `{shown_api_base}`" in debug_info
+    assert "function-secret" not in debug_info
+    assert "secret" not in debug_info.split("API Base:", 1)[1].split("\n", 1)[0]
+
+
+@pytest.mark.parametrize(
+    "configured_api_base",
+    [
+        "https://qa-user:qa?function-secret@gateway.example/v1",
+        "https://qa-user:qa#function-secret@gateway.example/v1",
+        "https://qa-user:qa/function-secret@gateway.example/v1",
+        "https://qa-user:qa/function?secret@gateway.example/v1",
+        "https://qa.user:qa/function-secret@gateway.example/v1",
+        "https://qa-user:1234/function-secret@gateway.example/v1",
+        "https://function-secret/more@gateway.example/v1",
+        "qa-user:qa://function-secret@gateway.example",
+    ],
+    ids=[
+        "question_mark_in_password",
+        "hash_in_password",
+        "slash_in_password",
+        "slash_and_question_mark_in_password",
+        "dotted_username_and_slash_in_password",
+        "numeric_password_with_slash",
+        "slash_in_username",
+        "no_scheme_with_scheme_separator_in_password",
+    ],
+)
+def test_api_base_line_is_left_out_when_a_password_breaks_the_url(configured_api_base: str) -> None:
+    debug_info: Final = _debug_info_for_api_base(configured_api_base)
+    assert "API Base:" not in debug_info
+    assert not any(part in debug_info for part in ("qa-user", "qa.user", "function", "secret"))
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "https://us-east5-aiplatform.googleapis.com/v1/projects/p/locations/us-east5"
+        "/publishers/anthropic/models/claude-opus-5-5@default:rawPredict",
+        "us-central1-aiplatform.googleapis.com/v1/projects/p/locations/us-central1"
+        "/publishers/mistralai/models/mistral-large@2407:rawPredict",
+        "https://gateway.ai.cloudflare.com/v1/account/gateway/workers-ai/@cf/meta/llama-3.1-8b-instruct",
+        "http://localhost:4000/v1/models/claude@default",
+        "https://[::1]:8080/v1/models/claude@default",
+    ],
+    ids=["vertex_partner_model", "vertex_without_scheme", "workers_ai_path", "localhost", "ipv6"],
+)
+def test_api_base_line_keeps_an_at_sign_in_the_path(api_base: str) -> None:
+    assert f"API Base: `{api_base}`" in _debug_info_for_api_base(api_base)
+
+
 # Test cases for is_error_str_context_window_exceeded
 # Tuple format: (error_message, expected_result)
 context_window_test_cases = [
@@ -2462,7 +2560,6 @@ def test_openai_gateway_timeout_error():
     Test that the OpenAI gateway timeout error is raised
     """
     openai_client = OpenAI()
-    mapped_target = openai_client.chat.completions.with_raw_response  # type: ignore
 
     def _return_exception(*args, **kwargs):
 
@@ -2498,8 +2595,8 @@ def test_openai_gateway_timeout_error():
 
     with pytest.raises(litellm.Timeout) as exc_info:
         with patch.object(
-            mapped_target,
-            "create",
+            openai_client,
+            "post",
             side_effect=_return_exception,
         ):
             litellm.completion(

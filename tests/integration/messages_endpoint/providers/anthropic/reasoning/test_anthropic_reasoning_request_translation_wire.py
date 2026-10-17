@@ -1,5 +1,6 @@
 import uuid
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 
 import pytest
@@ -15,7 +16,15 @@ def _claude_code_turn(sent: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
     return {**without_reasoning, "stream": False, **sent}
 
 
-def _forward(gateway: Gateway, upstream_model: str, sent: Mapping[str, JsonValue]) -> cc.Forwarded:
+def _forward(
+    gateway: Gateway,
+    upstream_model: str,
+    sent: Mapping[str, JsonValue],
+    *,
+    deployment: Mapping[str, JsonValue] = MappingProxyType({}),
+    gateway_only: Mapping[str, JsonValue] = MappingProxyType({}),
+    from_claude_code: bool = True,
+) -> cc.Forwarded:
     client_body: Final = _claude_code_turn(sent)
 
     def respond(request: Request) -> Reply:
@@ -30,13 +39,13 @@ def _forward(gateway: Gateway, upstream_model: str, sent: Mapping[str, JsonValue
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(
-            model=f"anthropic/{upstream_model}", api_base=wire.url, api_key=cc.ANTHROPIC_API_KEY
+            model=f"anthropic/{upstream_model}", api_base=wire.url, api_key=cc.ANTHROPIC_API_KEY, **deployment
         )
         response: Final = gateway.request(
             "POST",
             "/v1/messages",
-            {**client_body, "model": model},
-            headers=cc.cli_headers(gateway.key, cc.FRONTIER_CLI_BETA),
+            {**client_body, **gateway_only, "model": model},
+            headers=cc.cli_headers(gateway.key, cc.FRONTIER_CLI_BETA) if from_claude_code else None,
         )
         assert response.status_code == 200, response.text
         received: Final = wire.drain()
@@ -192,6 +201,51 @@ def test_legacy_thinking_budget_becomes_adaptive_effort_only_on_models_that_reje
     assert forwarded.reasoning == received, forwarded
     assert forwarded.other_changes == {}, forwarded.other_changes
     assert forwarded.reasoning_betas == cc.CLAUDE_CODE_REASONING_BETAS, forwarded.reasoning_betas
+
+
+UNKNOWN_THINKING_KEY: Final = MappingProxyType({"not_a_thinking_key": True})
+BLOCK_BINDING: Final = MappingProxyType({"prefix_mismatch_behavior": "error"})
+
+
+@pytest.mark.parametrize(
+    ("from_claude_code", "deployment", "gateway_only", "carried_unknown_key"),
+    (
+        pytest.param(False, {}, {"drop_params": True}, {}, id="request-drop-params-drops-the-unknown-key"),
+        pytest.param(False, {"drop_params": True}, {}, {}, id="deployment-drop-params-drops-the-unknown-key"),
+        pytest.param(
+            False, {}, {}, dict(UNKNOWN_THINKING_KEY), id="without-drop-params-the-unknown-key-reaches-anthropic"
+        ),
+        pytest.param(True, {}, {}, {}, id="claude-code-gets-drop-params-by-default-and-drops-the-unknown-key"),
+    ),
+)
+def test_rebuilt_legacy_thinking_drops_unknown_keys_only_under_drop_params(
+    gateway: Gateway,
+    from_claude_code: bool,
+    deployment: dict[str, JsonValue],
+    gateway_only: dict[str, JsonValue],
+    carried_unknown_key: dict[str, JsonValue],
+) -> None:
+    sent: Final = {
+        "thinking": {
+            "type": "enabled",
+            "budget_tokens": 2048,
+            "block_binding": dict(BLOCK_BINDING),
+            **UNKNOWN_THINKING_KEY,
+        }
+    }
+    forwarded: Final = _forward(
+        gateway,
+        "claude-opus-4-7",
+        sent,
+        deployment=deployment,
+        gateway_only=gateway_only,
+        from_claude_code=from_claude_code,
+    )
+    assert forwarded.reasoning == {
+        "thinking": {"type": "adaptive", "block_binding": dict(BLOCK_BINDING), **carried_unknown_key},
+        "output_config": {"effort": "medium"},
+    }, forwarded
+    assert forwarded.other_changes == {}, forwarded.other_changes
 
 
 @pytest.mark.parametrize(
