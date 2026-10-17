@@ -1350,11 +1350,17 @@ class AsyncHTTPHandler:
         if socket_factory is not None:
             transport_connector_kwargs["socket_factory"] = socket_factory
 
+        from litellm.llms.custom_httpx.aiohttp_pool_diagnostics import (
+            build_pool_wait_trace_config,
+        )
+
         def session_factory() -> ClientSession:
+            pool_wait_trace_config: Final = build_pool_wait_trace_config()
             return ClientSession(
                 connector=TCPConnector(**transport_connector_kwargs),
                 cookie_jar=DummyCookieJar(),
                 trust_env=trust_env,
+                trace_configs=[pool_wait_trace_config] if pool_wait_trace_config is not None else None,
             )
 
         # Use shared session if provided and valid

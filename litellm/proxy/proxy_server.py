@@ -1332,7 +1332,16 @@ async def initialize_shared_aiohttp_session() -> "ClientSession | None":
             connector_kwargs["socket_factory"] = socket_factory
 
         connector: Final = TCPConnector(**connector_kwargs)
-        session: Final = ClientSession(connector=connector, cookie_jar=DummyCookieJar())
+        from litellm.llms.custom_httpx.aiohttp_pool_diagnostics import (
+            build_pool_wait_trace_config,
+        )
+
+        pool_wait_trace_config: Final = build_pool_wait_trace_config()
+        session: Final = ClientSession(
+            connector=connector,
+            cookie_jar=DummyCookieJar(),
+            trace_configs=[pool_wait_trace_config] if pool_wait_trace_config is not None else None,
+        )
 
         verbose_proxy_logger.info(
             "SESSION REUSE: Created shared aiohttp session for connection pooling (ID: %s, limit=%s, limit_per_host=%s)",

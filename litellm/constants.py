@@ -354,6 +354,9 @@ EVICTED_LLM_CLIENT_CLOSE_MAX_PENDING: Final = 10_000
 # Set to 0 for unlimited (not recommended for production)
 AIOHTTP_CONNECTOR_LIMIT: Final = get_env_int("AIOHTTP_CONNECTOR_LIMIT", 1000)
 AIOHTTP_CONNECTOR_LIMIT_PER_HOST: Final = get_env_int("AIOHTTP_CONNECTOR_LIMIT_PER_HOST", 500)
+# Log a warning when a request waits at least this many seconds for a free aiohttp
+# connection slot (pool saturation). Set to 0 or a negative value to disable.
+AIOHTTP_POOL_WAIT_WARNING_SECONDS: Final = get_env_float("AIOHTTP_POOL_WAIT_WARNING_SECONDS", 1.0)
 AIOHTTP_KEEPALIVE_TIMEOUT: Final = get_env_int("AIOHTTP_KEEPALIVE_TIMEOUT", 15)
 AIOHTTP_TTL_DNS_CACHE: Final = get_env_int("AIOHTTP_TTL_DNS_CACHE", 300)
 # TCP keep-alive (SO_KEEPALIVE) — opt-in. Required when running behind NAT/LBs
