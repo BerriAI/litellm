@@ -18,6 +18,7 @@ Requires a working docker CLI.
 """
 
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -96,6 +97,17 @@ def _probe(network: str, container: str, path: str) -> "subprocess.CompletedProc
     )
 
 
+def _response_headers(network: str, container: str, path: str) -> dict[str, str]:
+    head = _docker(
+        "run", "--rm", "--network", network, CURL_IMAGE,
+        "--silent", "--show-error", "--max-time", "10", "--head",
+        f"http://{container}:{UI_PORT}{path}",
+        check=False,
+    )
+    header_lines = (line for line in head.stdout.splitlines() if ":" in line)
+    return {name.strip().lower(): value.strip() for name, value in (line.split(":", 1) for line in header_lines)}
+
+
 def test_ui_serves_as_arbitrary_uid_read_only(ui_container: tuple[str, str]) -> None:
     """nginx boots and serves as an arbitrary uid with a read-only root fs.
 
@@ -130,3 +142,41 @@ def test_ui_serves_as_arbitrary_uid_read_only(ui_container: tuple[str, str]) -> 
             f"GET {path} returned {page.stdout.strip()!r} as uid {ARBITRARY_UID}.\n"
             f"{_container_logs(container)}"
         )
+
+
+def test_readiness_path_answers_200_like_the_gateway(ui_container: tuple[str, str]) -> None:
+    network, container = ui_container
+
+    readiness = _probe(network, container, "/health/readiness")
+    assert readiness.stdout.strip() == "200", (
+        f"GET /health/readiness returned {readiness.stdout.strip()!r}; an ingress-wide ALB health check on "
+        f"that path marks the UI target unhealthy.\n{_container_logs(container)}"
+    )
+
+
+def test_html_revalidates_while_hashed_bundles_stay_immutable(ui_container: tuple[str, str]) -> None:
+    network, container = ui_container
+
+    for path in ("/ui", "/ui/", "/ui/login", "/"):
+        headers = _response_headers(network, container, path)
+        assert headers.get("cache-control") == "no-cache", (
+            f"GET {path} sent Cache-Control {headers.get('cache-control')!r}; a browser that keeps this HTML "
+            f"requests the previous deploy's chunk hashes after a rollout.\n{_container_logs(container)}"
+        )
+
+    html = _docker(
+        "run", "--rm", "--network", network, CURL_IMAGE,
+        "--silent", "--show-error", "--max-time", "10",
+        f"http://{container}:{UI_PORT}/ui/",
+        check=False,
+    )
+    chunk_paths = tuple(
+        match.group(1) for match in re.finditer(r'src="(/litellm-asset-prefix/_next/static/[^"]+\.js)"', html.stdout)
+    )
+    assert chunk_paths, f"the UI HTML references no /litellm-asset-prefix/_next/static/*.js bundle:\n{html.stdout[:2000]}"
+
+    chunk_headers = _response_headers(network, container, chunk_paths[0])
+    assert "immutable" in chunk_headers.get("cache-control", ""), (
+        f"GET {chunk_paths[0]} sent Cache-Control {chunk_headers.get('cache-control')!r}; hashed bundles must "
+        f"stay cacheable.\n{_container_logs(container)}"
+    )
