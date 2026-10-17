@@ -1,9 +1,11 @@
 import json
 import logging
-from collections.abc import Iterator
+from collections.abc import AsyncGenerator, AsyncIterator, Iterator
 from datetime import datetime
-from unittest.mock import MagicMock
+from typing import Final
+from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 
 import litellm
@@ -18,7 +20,18 @@ from litellm.proxy.pass_through_endpoints.streaming_handler import (
 from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
 )
+from litellm.router_utils.fallback_event_handlers import record_retry_attempt
 from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
+
+
+class _AnthropicTestStream(httpx.AsyncByteStream):
+    def __init__(self, chunks: tuple[bytes, ...]) -> None:
+        self._chunks: Final = chunks
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        for chunk in self._chunks:
+            yield chunk
+
 
 MODEL = "gemini-stream-pricing-probe"
 PROMPT_TOKENS = 1000
@@ -235,3 +248,83 @@ async def test_failed_anthropic_stream_records_partial_usage_off_the_event_loop(
     partial_usage = logging_obj.record_partial_usage_for_failure.call_args.kwargs["usage"]
     assert partial_usage.completion_tokens > 100_000
     assert_loop_stayed_free(took, lags)
+
+
+def _anthropic_stream_attempt(
+    litellm_params: dict[str, object],
+) -> tuple[MagicMock, AsyncMock, AsyncGenerator[bytes, None]]:
+    model: Final = "claude-3-haiku"
+    logging_obj: Final = _logging_obj()
+    logging_obj.litellm_params = litellm_params
+    logging_obj.completion_start_time = None
+    recorder: Final = AsyncMock()
+    gen: Final = PassThroughStreamingHandler.chunk_processor(
+        response=httpx.Response(
+            200,
+            stream=_AnthropicTestStream(tuple(_interrupted_anthropic_stream(model, "hi")[:2])),
+        ),
+        request_body={"model": model, "stream": True},
+        litellm_logging_obj=logging_obj,
+        endpoint_type=EndpointType.ANTHROPIC,
+        start_time=datetime.now(),
+        passthrough_success_handler_obj=PassThroughEndpointLogging(),
+        url_route="/v1/messages",
+        route_streaming_logging=recorder,
+    )
+    return logging_obj, recorder, gen
+
+
+def _stamped_params(attempted_retries: int) -> dict[str, object]:
+    litellm_params: Final[dict[str, object]] = {"metadata": {}}
+    if attempted_retries:
+        record_retry_attempt(litellm_params, attempted_retries, 2)
+    return litellm_params
+
+
+@pytest.mark.asyncio
+async def test_stream_attempt_taken_over_by_a_retry_logs_nothing() -> None:
+    logging_obj, recorder, gen = _anthropic_stream_attempt(_stamped_params(0))
+
+    assert await gen.__anext__()
+    logging_obj.litellm_params = _stamped_params(1)
+    await gen.aclose()
+    await GLOBAL_LOGGING_WORKER.flush()
+
+    recorder.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("opened_on_attempt", [0, 1])
+async def test_stream_attempt_closed_without_a_retry_logs_once(opened_on_attempt: int) -> None:
+    _, recorder, gen = _anthropic_stream_attempt(_stamped_params(opened_on_attempt))
+
+    assert await gen.__anext__()
+    await gen.aclose()
+    await GLOBAL_LOGGING_WORKER.flush()
+
+    recorder.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_stream_whose_shared_metadata_is_bumped_in_place_still_logs_once() -> None:
+    litellm_params: Final = _stamped_params(0)
+    _, recorder, gen = _anthropic_stream_attempt(litellm_params)
+
+    assert await gen.__anext__()
+    record_retry_attempt(litellm_params, 1, 2)
+    await gen.aclose()
+    await GLOBAL_LOGGING_WORKER.flush()
+
+    recorder.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_stream_whose_params_are_rebound_without_a_new_retry_logs_once() -> None:
+    logging_obj, recorder, gen = _anthropic_stream_attempt(_stamped_params(1))
+
+    assert await gen.__anext__()
+    logging_obj.litellm_params = _stamped_params(1)
+    await gen.aclose()
+    await GLOBAL_LOGGING_WORKER.flush()
+
+    recorder.assert_awaited_once()
