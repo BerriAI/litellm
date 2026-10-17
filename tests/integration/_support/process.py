@@ -115,7 +115,7 @@ def _is_serving_worker(process: psutil.Process) -> bool:
 
 def _is_gone(process: psutil.Process) -> bool:
     try:
-        return process.status() == psutil.STATUS_ZOMBIE
+        return process.status() == psutil.STATUS_ZOMBIE and process.num_threads() <= 1
     except psutil.NoSuchProcess:
         return True
 

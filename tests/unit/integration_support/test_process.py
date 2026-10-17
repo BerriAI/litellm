@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import importlib
 import os
+import select
+import socket
 import subprocess
 import sys
 import threading
@@ -26,6 +28,7 @@ from tests.integration._support.process import (
     OwnedProxy,
     WorkerHealthcheck,
     WorkerKill,
+    _is_gone,
     healthcheck_seconds,
     kill_stray_process,
     owned_proxy_process,
@@ -467,6 +470,46 @@ def test_a_frozen_victim_stays_stopped_until_the_kill() -> None:
         assert kill.freeze().status() == psutil.STATUS_STOPPED
         kill()
         assert victim.status() == psutil.STATUS_ZOMBIE
+
+
+_LEADER_EXITS_FIRST: Final = """import ctypes
+import socket
+import threading
+
+listener = socket.create_server(("127.0.0.1", 0))
+
+
+def hold() -> None:
+    connection, _ = listener.accept()
+    connection.recv(1)
+
+
+threading.Thread(target=hold).start()
+print(listener.getsockname()[1], flush=True)
+ctypes.CDLL(None).pthread_exit(None)
+"""
+
+
+def _closed_by_peer(connection: socket.socket) -> bool:
+    return bool(select.select((connection,), (), (), 0)[0])
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="only Linux keeps a zombie thread-group leader's other threads")
+def test_a_process_is_not_gone_while_a_thread_outliving_its_leader_still_holds_its_sockets() -> None:
+    with subprocess.Popen((sys.executable, "-I", "-c", _LEADER_EXITS_FIRST), stdout=subprocess.PIPE) as child:
+        try:
+            assert child.stdout is not None
+            port: Final = int(child.stdout.readline())
+            with socket.create_connection(("127.0.0.1", port), timeout=5) as connection:
+                leader: Final = psutil.Process(child.pid)
+                eventually(leader.status, lambda status: status == psutil.STATUS_ZOMBIE, seconds=10)
+                assert not _closed_by_peer(connection)
+                assert not _is_gone(leader)
+                connection.sendall(b"x")
+                eventually(lambda: _is_gone(leader), bool, seconds=10)
+                assert _closed_by_peer(connection)
+        finally:
+            child.kill()
 
 
 def _kill_after_freezing_the_supervisor(owned: OwnedProxy, worker: int, supervisor: psutil.Process) -> None:
