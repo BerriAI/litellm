@@ -5,6 +5,7 @@ import json
 import time
 import site
 import sys
+from typing import Final
 
 import pytest
 import requests
@@ -305,9 +306,9 @@ def test_completions_stream_raises_on_an_error_frame_after_partial_content(
     error: JsonValue,
     message: str,
 ) -> None:
-    body = b'data: {"choices": [{"delta": {"content": "Hel"}}]}\n\n' + error_frame + b"\n\ndata: [DONE]\n\n"
+    body: Final = b'data: {"choices": [{"delta": {"content": "Hel"}}]}\n\n' + error_frame + b"\n\ndata: [DONE]\n\n"
     responses.add(responses.POST, f"{base_url}/chat/completions", body=body, status=200)
-    stream = client.completions_stream(model="gpt-4", messages=sample_messages)
+    stream: Final = client.completions_stream(model="gpt-4", messages=sample_messages)
 
     assert next(stream) == {"choices": [{"delta": {"content": "Hel"}}]}
     with pytest.raises(StreamError) as raised:
@@ -321,17 +322,17 @@ def test_completions_stream_raises_on_an_error_frame_after_partial_content(
 def test_completions_stream_yields_a_chunk_whose_error_is_empty(
     client: ChatClient, base_url: str, sample_messages: list[dict[str, str]], error: JsonValue
 ) -> None:
-    chunk = {"choices": [{"delta": {"content": "Hel"}}], "error": error}
-    body = b"data: " + json.dumps(chunk).encode() + b"\n\ndata: [DONE]\n\n"
+    chunk: Final = {"choices": [{"delta": {"content": "Hel"}}], "error": error}
+    body: Final = b"data: " + json.dumps(chunk).encode() + b"\n\ndata: [DONE]\n\n"
     responses.add(responses.POST, f"{base_url}/chat/completions", body=body, status=200)
 
     assert list(client.completions_stream(model="gpt-4", messages=sample_messages)) == [chunk]
 
 
 def test_stream_error_redacts_a_key_in_its_message() -> None:
-    key = "sk-" + "a1b2c3d4" * 4
+    key: Final = "sk-" + "a1b2c3d4" * 4
 
-    error = StreamError({"message": f"upstream rejected {key}"})
+    error: Final = StreamError({"message": f"upstream rejected {key}"})
 
     assert key not in str(error)
     assert str(error).startswith("upstream rejected ")
