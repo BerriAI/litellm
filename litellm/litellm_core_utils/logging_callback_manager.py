@@ -175,11 +175,17 @@ class LoggingCallbackManager:
         callback_settings:
             custom_callback_name:
                 callback_type: generic_api
+                turn_off_message_logging: true
                 endpoint: https://webhook-test.com/30343bc33591bc5e6dc44217ceae3e0a
                 headers:
                 Authorization: Bearer $LITELLM_MASTER_KEY
+            ramp:
+                turn_off_message_logging: true
         """
         callback_config: Final = litellm.callback_settings.get(callback)
+        turn_off_message_logging: Final = (
+            isinstance(callback_config, dict) and callback_config.get("turn_off_message_logging") is True
+        )
 
         # Check if callback is in callback_settings with callback_type: generic_api
         if isinstance(callback_config, dict) and callback_config.get("callback_type") == "generic_api":
@@ -212,6 +218,7 @@ class LoggingCallbackManager:
                 and cached_logger.max_retries == max_retries
                 and cached_logger.retry_delay == retry_delay
                 and cached_logger.timeout == timeout
+                and cached_logger.turn_off_message_logging == turn_off_message_logging
             ):
                 return cached_logger
 
@@ -223,6 +230,7 @@ class LoggingCallbackManager:
                 max_retries=max_retries,
                 retry_delay=retry_delay,
                 timeout=timeout,
+                turn_off_message_logging=turn_off_message_logging,
             )
             _generic_api_logger_cache[callback] = new_logger
             return new_logger
@@ -235,12 +243,15 @@ class LoggingCallbackManager:
         if is_callback_compatible(callback):
             # Check if we already have a cached logger for this callback
             cached_logger = _generic_api_logger_cache.get(callback)
-            if isinstance(cached_logger, GenericAPILogger):
+            if (
+                isinstance(cached_logger, GenericAPILogger)
+                and cached_logger.turn_off_message_logging == turn_off_message_logging
+            ):
                 return cached_logger
 
             # Create new GenericAPILogger with callback_name parameter
             # This will load config from generic_api_compatible_callbacks.json
-            new_logger = GenericAPILogger(callback_name=callback)
+            new_logger = GenericAPILogger(callback_name=callback, turn_off_message_logging=turn_off_message_logging)
             _generic_api_logger_cache[callback] = new_logger
             return new_logger
 
