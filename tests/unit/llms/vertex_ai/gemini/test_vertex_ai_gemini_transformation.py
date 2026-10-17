@@ -208,13 +208,24 @@ def test_vertex_ai_includes_labels():
     assert result["labels"] == {"project": "test", "team": "ai"}
 
 
-def test_service_tier_forwarded_to_vertex_ai():
-    """Test that service_tier in optional_params is mapped to serviceTier in request body."""
-    messages = [{"role": "user", "content": "test"}]
-    optional_params = {"service_tier": "flex"}
-    litellm_params = {}
+@pytest.mark.parametrize(
+    ("service_tier", "expected_service_tier"),
+    [
+        ("flex", "SERVICE_TIER_FLEX"),
+        ("FLEX", "SERVICE_TIER_FLEX"),
+        ("priority", "SERVICE_TIER_PRIORITY"),
+        ("default", "SERVICE_TIER_STANDARD"),
+        ("SERVICE_TIER_FLEX", "SERVICE_TIER_FLEX"),
+    ],
+)
+def test_service_tier_forwarded_to_vertex_ai(
+    service_tier: str, expected_service_tier: str
+) -> None:
+    messages: Final = [{"role": "user", "content": "test"}]
+    optional_params: Final = {"service_tier": service_tier}
+    litellm_params: Final = {}
 
-    result = transform_request_body(
+    result: Final = transform_request_body(
         messages=messages,
         model="gemini-2.5-pro",
         optional_params=optional_params,
@@ -223,7 +234,19 @@ def test_service_tier_forwarded_to_vertex_ai():
         cached_content=None,
     )
 
-    assert "serviceTier" in result
+    assert result["serviceTier"] == expected_service_tier
+
+
+def test_service_tier_forwarded_to_gemini() -> None:
+    result: Final = transform_request_body(
+        messages=[{"role": "user", "content": "test"}],
+        model="gemini-2.5-pro",
+        optional_params={"service_tier": "flex"},
+        custom_llm_provider="gemini",
+        litellm_params={},
+        cached_content=None,
+    )
+
     assert result["serviceTier"] == "flex"
 
 
