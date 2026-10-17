@@ -24,19 +24,32 @@ interface AlertingSettingsProps {
 
 const AlertingSettings: React.FC<AlertingSettingsProps> = ({ accessToken, premiumUser }) => {
   const [alertingSettings, setAlertingSettings] = useState<alertingSettingsItem[]>([]);
+  const [resetFields, setResetFields] = useState<Set<string>>(new Set());
 
   useEffect(() => {
-    // get values
     if (!accessToken) {
       return;
     }
+
+    const controller = new AbortController();
     alertingSettingsCall(accessToken).then((data) => {
+      if (controller.signal.aborted) {
+        return;
+      }
+      setResetFields(new Set());
       setAlertingSettings(data);
     });
+
+    return () => {
+      controller.abort();
+    };
   }, [accessToken]);
 
   const handleInputChange = (fieldName: string, newValue: any) => {
-    // Update the value in the state
+    setResetFields((previous) =>
+      previous.has(fieldName) ? new Set([...previous].filter((name) => name !== fieldName)) : previous,
+    );
+
     const updatedSettings = alertingSettings.map((setting) =>
       setting.field_name === fieldName ? { ...setting, field_value: newValue } : setting,
     );
@@ -49,21 +62,32 @@ const AlertingSettings: React.FC<AlertingSettingsProps> = ({ accessToken, premiu
       return;
     }
 
-    let fieldValue = formValues;
+    const fieldValue = formValues;
 
     if (fieldValue == null || fieldValue == undefined) {
       return;
     }
 
-    const initialFormValues: Record<string, any> = {};
+    const configuredAlertingArgs: Record<string, unknown> = Object.fromEntries(
+      alertingSettings
+        .filter(
+          (setting) =>
+            setting.field_name !== "slack_alerting" &&
+            !resetFields.has(setting.field_name) &&
+            setting.field_value != null,
+        )
+        .map((setting) => [setting.field_name, setting.field_value]),
+    );
 
-    alertingSettings.forEach((setting) => {
-      initialFormValues[setting.field_name] = setting.field_value;
-    });
-
-    // Merge initialFormValues with actual formValues
-    const mergedFormValues = { ...formValues, ...initialFormValues };
-    const { slack_alerting, ...alertingArgs } = mergedFormValues;
+    const { slack_alerting, ...updatedAlertingArgs } = formValues;
+    const alertingArgs = {
+      ...configuredAlertingArgs,
+      ...Object.fromEntries(
+        Object.entries(updatedAlertingArgs).filter(
+          ([fieldName, value]) => !resetFields.has(fieldName) && value != null && value !== "",
+        ),
+      ),
+    };
     try {
       await updateConfigFieldSetting(accessToken, "alerting_args", alertingArgs);
       if (typeof slack_alerting === "boolean") {
@@ -86,8 +110,7 @@ const AlertingSettings: React.FC<AlertingSettingsProps> = ({ accessToken, premiu
     }
 
     try {
-      //   deleteConfigFieldSetting(accessToken, fieldName);
-      // update value in state
+      setResetFields((previous) => new Set([...previous, fieldName]));
 
       const updatedSettings = alertingSettings.map((setting) =>
         setting.field_name === fieldName
@@ -106,6 +129,7 @@ const AlertingSettings: React.FC<AlertingSettingsProps> = ({ accessToken, premiu
 
   return (
     <DynamicForm
+      key={accessToken ?? "no-access-token"}
       alertingSettings={alertingSettings}
       handleInputChange={handleInputChange}
       handleResetField={handleResetField}
