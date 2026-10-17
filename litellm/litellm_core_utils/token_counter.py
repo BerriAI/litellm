@@ -1096,10 +1096,13 @@ def _function_definitions_for_tool(tool: Mapping[str, object]) -> Iterable[Mappi
         return
     parameters: Final = tool.get("input_schema") or tool.get("parameters") or {}
     normalized_parameters: Final = parameters if isinstance(parameters, Mapping) else {}
+    description: Final = tool.get("description")
+    strict: Final = tool.get("strict")
     yield {
         "name": tool.get("name"),
-        "description": tool.get("description"),
         "parameters": normalized_parameters,
+        **({"description": description} if description is not None else {}),
+        **({"strict": bool(strict)} if strict is not None else {}),
     }
 
 

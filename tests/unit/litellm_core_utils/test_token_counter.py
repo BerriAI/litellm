@@ -39,6 +39,7 @@ from litellm.litellm_core_utils.token_counter import (
     offload_token_count,
 )
 from litellm.litellm_core_utils.token_counter import token_counter as token_counter_new
+from litellm.llms.anthropic.pass_through.adapters.transformation import LiteLLMAnthropicMessagesAdapter
 from tests.large_text import text
 from tests.unit.litellm_core_utils.event_loop_lag import (
     assert_loop_stayed_free,
@@ -616,6 +617,45 @@ def test_token_counter_tool_choice_adds_nothing_for_deepseek_v4(tool_choice: obj
     assert token_counter_new(
         model="DeepSeek-V4-Flash-0731", messages=list(_USER_MESSAGES), tools=tools, tool_choice=tool_choice
     ) == token_counter_new(model="DeepSeek-V4-Flash-0731", messages=list(_USER_MESSAGES), tools=tools)
+
+
+@pytest.mark.parametrize("model", ["DeepSeek-V4-Flash-0731", "databricks-qwen35-122b-a10b"])
+@pytest.mark.parametrize(
+    "anthropic_tool",
+    [
+        {"name": "get_weather", "input_schema": _WEATHER_FUNCTION["parameters"]},
+        _anthropic_tool(_WEATHER_FUNCTION),
+        {**_anthropic_tool(_WEATHER_FUNCTION), "strict": True},
+    ],
+)
+def test_token_counter_counts_anthropic_tools_as_sent_to_chat_template_families(
+    model: str, anthropic_tool: dict[str, object]
+):
+    sent_tools, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_tools_to_openai([anthropic_tool])  # pyright: ignore[reportArgumentType]  # raw Anthropic tool dict
+
+    assert token_counter_new(model=model, messages=list(_USER_MESSAGES), tools=[anthropic_tool]) == token_counter_new(
+        model=model, messages=list(_USER_MESSAGES), tools=sent_tools
+    )
+
+
+# Qwen3.5's chat_template.jinja opens a system turn for the tool schemas when the request has none, 5 tokens that a
+# request with a system message already pays, while DeepSeek V4's encoding_dsv4.py appends them to the first turn
+# either way (both read on Hugging Face on 2026-10-17)
+@pytest.mark.parametrize(
+    ("model", "implicit_system_turn_tokens"), [("DeepSeek-V4-Flash-0731", 0), ("databricks-qwen35-122b-a10b", 5)]
+)
+def test_token_counter_counts_the_tools_system_turn_only_without_a_system_message(
+    model: str, implicit_system_turn_tokens: int
+):
+    tools: Final = [_openai_tool(_WEATHER_FUNCTION)]
+    system_cost_with_tools: Final = token_counter_new(
+        model=model, messages=list(_SYSTEM_AND_USER_MESSAGES), tools=tools
+    ) - token_counter_new(model=model, messages=list(_USER_MESSAGES), tools=tools)
+    system_cost_without_tools: Final = token_counter_new(
+        model=model, messages=list(_SYSTEM_AND_USER_MESSAGES)
+    ) - token_counter_new(model=model, messages=list(_USER_MESSAGES))
+
+    assert system_cost_with_tools == system_cost_without_tools - implicit_system_turn_tokens
 
 
 class NeedsToleranceUpdateError(Exception):
