@@ -1,6 +1,8 @@
 {{- if .Values.ingress.enabled -}}
 {{- $fullName := include "litellm.fullname" . -}}
 {{- $svcPort := .Values.service.port -}}
+{{- $lensMode := include "litellm.lens.mode" . -}}
+{{- $lensService := .Values.lensWorker.externalServiceName | default (printf "%s-lens-worker" $fullName) -}}
 {{- if and .Values.ingress.className (not (semverCompare ">=1.18-0" .Capabilities.KubeVersion.GitVersion)) }}
   {{- if not (hasKey .Values.ingress.annotations "kubernetes.io/ingress.class") }}
   {{- $_ := set .Values.ingress.annotations "kubernetes.io/ingress.class" .Values.ingress.className}}
@@ -44,6 +46,20 @@ spec:
     - host: {{ .host | quote }}
       http:
         paths:
+          {{- if or (eq $lensMode "bundled") (and (eq $lensMode "external") $.Values.lensWorker.externalServiceName) }}
+          - path: /lens-ingest
+            pathType: Prefix
+            backend:
+              {{- if semverCompare ">=1.19-0" $.Capabilities.KubeVersion.GitVersion }}
+              service:
+                name: {{ if eq $lensMode "external" }}{{ $lensService }}{{ else }}{{ $fullName }}-lens-worker{{ end }}
+                port:
+                  number: {{ $.Values.lensWorker.service.port }}
+              {{- else }}
+              serviceName: {{ if eq $lensMode "external" }}{{ $lensService }}{{ else }}{{ $fullName }}-lens-worker{{ end }}
+              servicePort: {{ $.Values.lensWorker.service.port }}
+              {{- end }}
+          {{- end }}
           {{- range .paths }}
           - path: {{ .path }}
             {{- if and .pathType (semverCompare ">=1.18-0" $.Capabilities.KubeVersion.GitVersion) }}

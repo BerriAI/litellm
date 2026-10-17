@@ -283,8 +283,9 @@ def test_restamp_streaming_chunk_model_overrides_model_on_basemodel():
         "model": new_chunk.model,
         "logged": logged,
         "same_object": new_chunk is chunk,
+        "original_model": chunk.model,
     }
-    assert snapshot == {"model": "gpt-4", "logged": True, "same_object": True}
+    assert snapshot == {"model": "gpt-4", "logged": True, "same_object": False, "original_model": "openai/internal-x"}
 
 
 @pytest.mark.parametrize("return_raw_model_name", [False, True])
@@ -310,8 +311,7 @@ def test_restamp_streaming_chunk_model_overrides_model_on_dict():
         request_data={},
         model_mismatch_logged=True,
     )
-    assert new_chunk["model"] == "gpt-4"
-    assert logged is True
+    assert (new_chunk["model"], chunk["model"], logged) == ("gpt-4", "internal", True)
 
 
 def test_restamp_streaming_chunk_model_uses_fallback_model_from_metadata():
@@ -443,7 +443,7 @@ def test_restamp_streaming_chunk_model_fastest_response_preserves_model():
     assert logged is False
 
 
-def test_restamp_streaming_chunk_model_setattr_exception_logs_and_returns():
+def test_restamp_streaming_chunk_model_restamps_a_frozen_chunk_through_a_copy():
     from pydantic import ConfigDict
 
     class FrozenChunk(_simple_chunk().__class__):
@@ -462,8 +462,30 @@ def test_restamp_streaming_chunk_model_setattr_exception_logs_and_returns():
         request_data={"litellm_call_id": "test-id"},
         model_mismatch_logged=False,
     )
-    assert new_chunk.model == "openai/internal-x"
-    assert logged is True
+    assert (new_chunk.model, chunk.model, logged) == ("gpt-4", "openai/internal-x", True)
+
+
+def test_restamp_streaming_chunk_model_records_the_client_model_on_the_logging_object():
+    import time
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logging_obj = Logging(
+        model="openai/internal-x",
+        messages=[],
+        stream=True,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="test-id",
+        function_id="test-id",
+    )
+    _restamp_streaming_chunk_model(
+        chunk=_simple_chunk(model="openai/internal-x"),
+        requested_model_from_client="gpt-4",
+        request_data={"litellm_call_id": "test-id", "litellm_logging_obj": logging_obj},
+        model_mismatch_logged=False,
+    )
+    assert logging_obj.client_facing_stream_model == "gpt-4"
 
 
 def test_format_fallback_metadata_sse_event():
@@ -656,7 +678,7 @@ def _patch_logging_flags(monkeypatch, needs_wrap=False, needs_per_chunk=False):
     # touching real logging globals.
     monkeypatch.setattr(
         ps.ProxyLogging,
-        "_fire_deferred_stream_logging",
+        "fire_deferred_stream_logging",
         staticmethod(lambda request_data: None),
     )
 
@@ -2068,3 +2090,36 @@ def test_fast_serialize_simple_model_response_stream_keeps_served_service_tier()
 
     assert result is not None
     assert json.loads(result)["service_tier"] == "priority"
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_lets_other_tasks_run_during_a_stream_that_never_waits(monkeypatch):
+    """A stream whose chunks are already buffered never suspends on its own, so
+    the generator has to hand the loop back itself once it has held the loop
+    long enough: another task must get to run before the stream is over, and
+    not before the hold budget is used up."""
+    _patch_logging_flags(monkeypatch)
+    order: list[str] = []  # mutable-ok: records the interleaving of the two tasks
+    clock: list[float] = [0.0]  # mutable-ok: fake monotonic clock, advanced 20 ms per chunk
+    monkeypatch.setattr(ps.time, "monotonic", lambda: clock[0])
+
+    async def chunks():
+        for index in range(6):
+            clock[0] += 0.02
+            order.append(f"chunk{index}")
+            yield _simple_chunk(content=str(index))
+
+    async def other_task():
+        order.append("other")
+
+    other = asyncio.ensure_future(other_task())
+    async for _ in async_data_generator(
+        response=chunks(),
+        user_api_key_dict=_user_auth(),
+        request_data={"model": "gpt-4"},
+    ):
+        pass
+    await other
+
+    assert "other" in order[:-1], order
+    assert order.index("other") >= 3, order

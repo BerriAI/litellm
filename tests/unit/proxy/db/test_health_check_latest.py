@@ -1,3 +1,4 @@
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
@@ -10,11 +11,12 @@ from litellm.proxy.db.health_check_latest import (
     fetch_latest_health_checks_for_models,
     query_latest_health_checks,
 )
+from tests.unit.proxy.db.fake_prisma_engine import engine_call
 
 
 def _prisma(rows):
     prisma = MagicMock()
-    prisma.db.query_raw = AsyncMock(return_value=rows)
+    prisma.db.query_raw = engine_call(rows)
     return prisma
 
 
@@ -119,3 +121,11 @@ async def test_fetch_for_models_degrades_to_no_rows_when_the_query_fails():
     prisma = _prisma([])
     prisma.db.query_raw.side_effect = RuntimeError("db down")
     assert await fetch_latest_health_checks_for_models(prisma, ("gpt-4",)) == ()
+
+
+@pytest.mark.asyncio
+async def test_the_latest_health_check_read_renders_a_postgres_select_span(
+    postgres_span_names: Callable[[], Awaitable[tuple[str, ...]]],
+) -> None:
+    assert await fetch_latest_health_checks(_prisma([])) == ()
+    assert await postgres_span_names() == ("postgres.select LiteLLM_HealthCheckTable",)

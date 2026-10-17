@@ -5,8 +5,9 @@ from typing import Final, Literal
 import pytest
 
 from .checks import COMPLETE, assert_completed, confirmed_history, assert_original_proof, start_replicas
-from .containers import Containers, failed, ready
+from .containers import Containers, failed, ready, seeded
 from .database import Database, Databases
+from e2e_metadata import Domain, Subject, meta
 
 pytestmark: Final = [pytest.mark.e2e, pytest.mark.migration_startup]
 
@@ -42,10 +43,20 @@ def adopt_legacy(containers: Containers, database: Database) -> None:
 
 
 class TestLegacyMigrations:
+    @meta(
+        Subject(
+            domain=Domain.DB,
+        )
+    )
     def test_matching_schema_warns_and_starts(self, containers: Containers, database: Database) -> None:
         adopt_legacy(containers, database)
 
     @pytest.mark.parametrize("fault", ("schema_drift", "custom_migrations", "empty_ledger"))
+    @meta(
+        Subject(
+            domain=Domain.DB,
+        )
+    )
     def test_unrecognized_legacy_state_is_not_baselined(
         self, containers: Containers, database: Database, fault: str
     ) -> None:
@@ -64,12 +75,17 @@ class TestLegacyMigrations:
             ) == ((0,),)
 
     @pytest.mark.parametrize("scenario", ("upgrade", "recovery", "legacy"))
+    @meta(
+        Subject(
+            domain=Domain.DB,
+        )
+    )
     def test_non_default_schema(
         self, containers: Containers, databases: Databases, scenario: Literal["upgrade", "recovery", "legacy"]
     ) -> None:
         with databases.create(schema="migration tenant") as database:
             with containers.start(database) as seed:
-                ready((seed,), database)
+                seeded(seed, database)
             match scenario:
                 case "upgrade":
                     with ExitStack() as stack:

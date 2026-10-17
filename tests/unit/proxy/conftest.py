@@ -6,18 +6,22 @@ import inspect
 import os
 import tempfile
 import warnings
-from collections.abc import Iterator
-from typing import Dict, Optional
+from collections.abc import Awaitable, Callable, Iterator
+from typing import Dict, Final, Optional
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import yaml
 from fastapi.testclient import TestClient
 from prisma.errors import ClientNotConnectedError
 
-
 import litellm
 import litellm.proxy.proxy_server
+from litellm._service_logger import ServiceTypes
+from litellm.integrations.otel.model.payloads import ServiceSpanData
+from litellm.integrations.otel.model.spans import service_span_name
 from tests.unit.litellm_core_utils.fake_secret_vault import FakeSecretVault
+from tests._master_key import MASTER_KEY
 
 
 class StubClientNotConnectedError(ClientNotConnectedError):
@@ -136,6 +140,7 @@ def _flush_caches(targets):
 _LITELLM_STATE = _snapshot_mutable_state(litellm)
 _PROXY_SERVER_STATE = _snapshot_mutable_state(litellm.proxy.proxy_server)
 _FLUSHABLE_CACHES = _collect_flushable_caches()
+_PROXY_APP_LIFESPAN: Final = litellm.proxy.proxy_server.app.router.lifespan_context
 
 
 @pytest.fixture(scope="function", autouse=True)
@@ -291,7 +296,7 @@ def build_minimal_proxy_config(
     Args:
         database_url: Optional database URL (falls back to DATABASE_URL env var)
         **init_options: Additional configuration options:
-            - master_key: API key for authentication (default: "sk-1234")
+            - master_key: API key for authentication (default: MASTER_KEY)
             - enable_cache: Whether to enable Redis cache (default: True)
             - success_callback: Callback function for success events
 
@@ -299,7 +304,7 @@ def build_minimal_proxy_config(
         dict: Configuration dictionary ready to be written as YAML
     """
     config = {
-        "general_settings": {"master_key": init_options.get("master_key", "sk-1234")},
+        "general_settings": {"master_key": init_options.get("master_key", MASTER_KEY)},
         "litellm_settings": {},
     }
 
@@ -364,7 +369,7 @@ def create_proxy_test_client(
         monkeypatch: pytest monkeypatch fixture
         database_url: Optional database URL (falls back to DATABASE_URL env var)
         **init_options: Additional configuration options:
-            - master_key: API key for authentication (default: "sk-1234")
+            - master_key: API key for authentication (default: MASTER_KEY)
             - enable_cache: Whether to enable Redis cache (default: True)
             - success_callback: Callback function for success events
             - debug: Enable debug mode
@@ -379,6 +384,7 @@ def create_proxy_test_client(
     )
 
     cleanup_router_config_variables()
+    monkeypatch.setattr(app.router, "lifespan_context", _PROXY_APP_LIFESPAN)
 
     filepath = os.path.dirname(os.path.abspath(__file__))
     default_config_fp = os.path.join(
@@ -411,6 +417,33 @@ def create_proxy_test_client(
 def fresh_agent_read_through(monkeypatch):
     from litellm.proxy.common_utils import registry_read_through
 
-    read_through = registry_read_through.RegistryReadThrough(resync=registry_read_through._resync_agents)
+    read_through = registry_read_through.RegistryReadThrough(
+        resync=registry_read_through._resync_agents, is_loaded=registry_read_through._agent_is_loaded
+    )
     monkeypatch.setattr(registry_read_through, "agent_registry_read_through", read_through)
     return read_through
+
+
+@pytest.fixture
+def postgres_span_names() -> Iterator[Callable[[], Awaitable[tuple[str, ...]]]]:
+    """The ``postgres.{verb} {table}`` names OTel would render for every DB service event
+    the code under test emits, in emission order, once the hook tasks have run."""
+    success: Final = AsyncMock()
+    service_logging: Final = MagicMock(async_service_success_hook=success, async_service_failure_hook=AsyncMock())
+
+    async def rendered() -> tuple[str, ...]:
+        await asyncio.sleep(0)
+        return tuple(
+            service_span_name(
+                ServiceSpanData(
+                    service_name="postgres",
+                    call_type=call.kwargs["call_type"],
+                    event_metadata=call.kwargs["event_metadata"] or {},
+                )
+            )
+            for call in success.await_args_list
+            if call.kwargs["service"] == ServiceTypes.DB
+        )
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock(service_logging_obj=service_logging)):
+        yield rendered

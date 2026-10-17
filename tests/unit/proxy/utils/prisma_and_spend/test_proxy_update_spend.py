@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Iterator
-from typing import Any, Dict, List
+from collections.abc import Callable, Iterator
+from typing import Any, Dict, Final, List
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -917,3 +917,38 @@ async def test_update_spend_logs_parks_failed_batch_in_redis_with_wire_safe_date
     parked = await buffer.get_spend_logs_from_redis_buffer(limit=10)
     assert mock_prisma_client.spend_log_transactions == []
     assert [(row["request_id"], row["startTime"]) for row in parked] == [("a", started.isoformat())]
+
+
+@pytest.mark.asyncio
+async def test_update_spend_logs_requeues_batch_when_postgres_is_out_of_connections(
+    mock_prisma_client: MagicMock,
+    make_spend_log_row: Callable[..., Dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Postgres refusing the pool a new connection (SQLSTATE 53300, "too many
+    clients already") surfaces as a bare ``DataError``. It is the server being
+    full, not a row being bad: the flush must stop after the one failed insert
+    and put the batch back at the head of the queue for the next interval,
+    rather than bisecting it (hundreds more connection attempts against a full
+    server) and dropping every row as poisoned."""
+    sleep: Final = AsyncMock(return_value=None)
+    monkeypatch.setattr(utils_mod.asyncio, "sleep", sleep)
+    err: Final = _data_error("Error in connector: Error querying the database: FATAL: sorry, too many clients already")
+    mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock(side_effect=err)
+    proxy_logging: Final = MagicMock()
+    proxy_logging.failure_handler = AsyncMock()
+    mock_prisma_client.spend_log_transactions = [make_spend_log_row(request_id="e")]
+    logs: Final = [make_spend_log_row(request_id=f"r{i}") for i in range(4)]
+
+    with pytest.raises(type(err)):
+        await ProxyUpdateSpend.update_spend_logs(
+            n_retry_times=2,
+            prisma_client=mock_prisma_client,
+            db_writer_client=None,
+            proxy_logging_obj=proxy_logging,
+            logs_to_process=logs,
+        )
+
+    assert mock_prisma_client.db.litellm_spendlogs.create_many.await_count == 1
+    sleep.assert_not_awaited()
+    assert [row["request_id"] for row in mock_prisma_client.spend_log_transactions] == ["r0", "r1", "r2", "r3", "e"]

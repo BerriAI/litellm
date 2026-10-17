@@ -1,0 +1,210 @@
+import json
+import re
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterator, Mapping, Sequence
+from dataclasses import dataclass, replace
+from itertools import islice
+from types import MappingProxyType
+from typing import Final
+
+from pydantic import ConfigDict, TypeAdapter, ValidationError
+
+from litellm.proxy.common_request_processing import stream_usage_tracking_updates
+from litellm.proxy.common_utils.sse_keepalive import split_complete_sse_frames
+from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.utils import CallTypes
+
+_USAGE_FRAME_ENDPOINTS: Final = ("chat/completions", "completions")
+_CALLER_ONLY_STREAM_OPTIONS: Final = frozenset({"continuous_usage_stats"})
+_SSE_FRAME_END: Final = re.compile(rb"\r\n\r\n|\n\n|\r\r")
+_SSE_FRAME_END_LOOKBACK: Final = 3
+_USAGE_OR_FINISH: Final = re.compile(rb'"usage"\s*:\s*\{|"finish_reason"\s*:\s*"')
+_SSE_DATA_FIELD: Final = b"data:"
+_JSON_OBJECT_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_INJECTION_OFF: Final[Mapping[str, object]] = MappingProxyType({"always_include_stream_usage": False})
+_DEFAULT_INJECTION: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+class _RelayedChoice(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    finish_reason: str | None = None
+
+
+class _RelayedChunk(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    choices: Sequence[_RelayedChoice]
+    usage: Mapping[str, object] | None = None
+    system_fingerprint: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class StreamUsageRelay:
+    body: Mapping[str, object]
+    strips_usage: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _Stacked:
+    item: bytes
+    below: "_Stacked | None"
+
+
+@dataclass(frozen=True, slots=True)
+class _RelayState:
+    newest_held: _Stacked | None = None
+    passes_usage_through: bool = False
+
+
+def _newest_first(top: _Stacked | None) -> Iterator[bytes]:
+    while top is not None:
+        yield top.item
+        top = top.below  # rebind-ok: walks the stack back from the newest item
+
+
+def _oldest_first(top: _Stacked | None) -> tuple[bytes, ...]:
+    return tuple(reversed(tuple(_newest_first(top))))
+
+
+def _held_frames(state: _RelayState) -> tuple[bytes, ...]:
+    return _oldest_first(state.newest_held)
+
+
+def _ends_a_frame(unterminated: _Stacked | None, piece: bytes) -> bool:
+    lookback: Final = b"".join(reversed(tuple(islice(_newest_first(unterminated), _SSE_FRAME_END_LOOKBACK))))
+    return _SSE_FRAME_END.search(lookback[-_SSE_FRAME_END_LOOKBACK:] + piece) is not None
+
+
+def _relays_usage_frames(endpoint: str) -> bool:
+    path: Final = endpoint.strip("/")
+    return any(path == suffix or path.endswith(f"/{suffix}") for suffix in _USAGE_FRAME_ENDPOINTS)
+
+
+def _forwarded_stream_options(stream_options: object, strips_usage: bool) -> object:
+    if not strips_usage or not isinstance(stream_options, Mapping):
+        return stream_options
+    caller_options: Final = _JSON_OBJECT_ADAPTER.validate_python(stream_options)
+    return {key: value for key, value in caller_options.items() if key not in _CALLER_ONLY_STREAM_OPTIONS}
+
+
+def _relay_settings(general_settings: Mapping[str, object]) -> Mapping[str, object]:
+    return _INJECTION_OFF if general_settings.get("always_include_stream_usage") is False else _DEFAULT_INJECTION
+
+
+def _forwards_stream_options_as_sent(request_body: Mapping[str, object]) -> bool:
+    stream_options: Final = request_body.get("stream_options")
+    if stream_options is None:
+        return False
+    if not isinstance(stream_options, Mapping):
+        return True
+    include_usage: Final = _JSON_OBJECT_ADAPTER.validate_python(stream_options).get("include_usage", False)
+    return not isinstance(include_usage, bool)
+
+
+def stream_usage_relay(
+    endpoint: str,
+    request_body: Mapping[str, object],
+    general_settings: Mapping[str, object],
+    supports_stream_options: Callable[[], bool],
+) -> StreamUsageRelay:
+    if not _relays_usage_frames(endpoint) or _forwards_stream_options_as_sent(request_body):
+        return StreamUsageRelay(body=request_body, strips_usage=False)
+    updates: Final = stream_usage_tracking_updates(
+        data=request_body,
+        general_settings=_relay_settings(general_settings),
+        route_type=CallTypes.acompletion.value,
+        supports_stream_options=supports_stream_options,
+    )
+    strips_usage: Final = updates.get("_litellm_strip_stream_usage") is True
+    stream_options: Final = updates.get("stream_options")
+    return StreamUsageRelay(
+        body=(
+            request_body
+            if stream_options is None
+            else {**request_body, "stream_options": _forwarded_stream_options(stream_options, strips_usage)}
+        ),
+        strips_usage=strips_usage,
+    )
+
+
+def _frame_payload(frame: bytes) -> bytes:
+    return b"\n".join(
+        line[len(_SSE_DATA_FIELD) :].strip() for line in frame.splitlines() if line.startswith(_SSE_DATA_FIELD)
+    )
+
+
+def _relayed_chunk(frame: bytes) -> _RelayedChunk | None:
+    if _USAGE_OR_FINISH.search(frame) is None:
+        return None
+    try:
+        return _RelayedChunk.model_validate_json(_frame_payload(frame))
+    except ValidationError:
+        return None
+
+
+def _with_fingerprint(frame: bytes, fingerprint: str | None) -> bytes:
+    if fingerprint is None:
+        return frame
+    payload: Final = _JSON_OBJECT_ADAPTER.validate_json(_frame_payload(frame))
+    terminator: Final = frame[len(frame.rstrip(b"\r\n")) :]
+    restamped: Final = json.dumps(
+        {**payload, "system_fingerprint": fingerprint}, separators=(",", ":"), ensure_ascii=False
+    )
+    return _SSE_DATA_FIELD + b" " + restamped.encode() + terminator
+
+
+def _awaits_fingerprint(chunk: _RelayedChunk | None) -> bool:
+    return (
+        chunk is not None
+        and chunk.usage is None
+        and chunk.system_fingerprint is None
+        and any(choice.finish_reason is not None for choice in chunk.choices)
+    )
+
+
+def _is_usage_only(chunk: _RelayedChunk) -> bool:
+    return chunk.usage is not None and not chunk.choices
+
+
+def _relayed_frame(frame: bytes, state: _RelayState) -> tuple[bytes, _RelayState]:
+    if state.passes_usage_through:
+        return frame, state
+    chunk: Final = _relayed_chunk(frame)
+    if chunk is not None and _is_usage_only(chunk):
+        return (
+            b"".join(_with_fingerprint(held, chunk.system_fingerprint) for held in _held_frames(state)),
+            _RelayState(),
+        )
+    if _awaits_fingerprint(chunk):
+        return b"", replace(state, newest_held=_Stacked(frame, state.newest_held))
+    return (
+        b"".join((*_held_frames(state), frame)),
+        _RelayState(passes_usage_through=chunk is not None and chunk.usage is not None),
+    )
+
+
+def _sse_frames(complete: bytes) -> tuple[bytes, ...]:
+    ends: Final = tuple(match.end() for match in _SSE_FRAME_END.finditer(complete))
+    return tuple(complete[start:end] for start, end in zip((0, *ends[:-1]), ends))
+
+
+async def without_injected_usage_frames(stream: AsyncGenerator[bytes, None]) -> AsyncIterator[bytes]:
+    unterminated: _Stacked | None = None  # rebind-ok: stacks reads until one ends a frame, joined once
+    state = _RelayState()  # rebind-ok: finish frames wait for the fingerprint vLLM moves onto the usage frame
+    try:
+        async for piece in stream:
+            if not piece:
+                continue
+            if not _ends_a_frame(unterminated, piece):
+                unterminated = _Stacked(piece, unterminated)
+                continue
+            complete, rest = split_complete_sse_frames(b"".join((*_oldest_first(unterminated), piece)))
+            unterminated = _Stacked(rest, None) if rest else None
+            for frame in _sse_frames(complete):
+                outgoing, state = _relayed_frame(frame, state)
+                if outgoing:
+                    yield outgoing
+        if state.newest_held is not None or unterminated is not None:
+            yield b"".join((*_held_frames(state), *_oldest_first(unterminated)))
+    finally:
+        await stream.aclose()

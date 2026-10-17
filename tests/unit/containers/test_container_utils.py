@@ -226,7 +226,7 @@ class TestContainerRequestUtils:
     def test_decode_managed_container_id_returns_provider_container_id(self):
         """Managed IDs must decode to the short ID sent on upstream requests."""
         inner = "cntr_69d4ff00deadbeef"
-        managed = ResponsesAPIRequestUtils._build_container_id(
+        managed = ResponsesAPIRequestUtils.build_container_id(
             custom_llm_provider="openai",
             model_id=None,
             container_id=inner,

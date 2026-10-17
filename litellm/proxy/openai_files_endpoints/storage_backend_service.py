@@ -12,6 +12,7 @@ from typing import Any, Final, cast
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid as uuid_module
+from litellm.litellm_core_utils.hidden_params import get_or_create_hidden_params
 from litellm.llms.base_llm.files.storage_backend import BaseFileStorageBackend
 from litellm.llms.base_llm.files.storage_backend_factory import get_storage_backend
 from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
@@ -170,9 +171,8 @@ class StorageBackendFileService:
         )
 
         # Store storage metadata in hidden params
-        if not hasattr(file_object, "_hidden_params") or file_object._hidden_params is None:
-            file_object._hidden_params = {}
-        file_object._hidden_params.update(
+        file_object_hidden_params: Final = get_or_create_hidden_params(file_object)
+        file_object_hidden_params.update(
             {
                 "storage_backend": target_storage,
                 "storage_url": storage_url,

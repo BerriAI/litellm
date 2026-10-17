@@ -91,7 +91,7 @@ def _sse_events(body: str) -> tuple[dict[str, JsonValue], ...]:
 def _spend_request_id(response_id: str, *, responses_api: bool = False) -> str:
     if not responses_api:
         return response_id
-    decoded: Final = ResponsesAPIRequestUtils._decode_responses_api_response_id(response_id)
+    decoded: Final = ResponsesAPIRequestUtils.decode_responses_api_response_id(response_id)
     request_id: Final = decoded.get("response_id")
     return string_value(request_id) if isinstance(request_id, str) else response_id
 
@@ -325,7 +325,7 @@ def test_stored_chat_response_keeps_logprob_tokens(gateway: Gateway, tmp_path: P
 
     with (
         wire_server(_answering_model_listing(respond)) as wire,
-        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path), workers=2) as isolated,
+        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path)) as isolated,
         isolated.scenario() as scenario,
     ):
         model: Final = scenario.model(
@@ -418,7 +418,7 @@ def test_stored_messages_keep_tool_use_input(gateway: Gateway, tmp_path: Path) -
 
     with (
         wire_server(_answering_model_listing(respond)) as wire,
-        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path), workers=2) as isolated,
+        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path)) as isolated,
         isolated.scenario() as scenario,
     ):
         model: Final = scenario.model(
@@ -650,7 +650,7 @@ def test_chat_sdk_keeps_logprob_tokens(gateway: Gateway, tmp_path: Path, client_
 
     with (
         wire_server(_answering_model_listing(respond)) as wire,
-        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path), workers=2) as isolated,
+        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path)) as isolated,
         isolated.scenario() as scenario,
     ):
         model: Final = scenario.model(
@@ -702,7 +702,7 @@ def test_chat_sdk_stream_include_usage_masks_request_fields(gateway: Gateway, tm
 
     with (
         wire_server(_answering_model_listing(respond)) as wire,
-        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path), workers=2) as isolated,
+        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path)) as isolated,
         isolated.scenario() as scenario,
     ):
         model: Final = scenario.model(
@@ -747,7 +747,7 @@ def test_chat_history_keeps_string_tool_arguments_and_tool_content(gateway: Gate
 
     with (
         wire_server(_answering_model_listing(respond)) as wire,
-        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path), workers=2) as isolated,
+        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path)) as isolated,
         isolated.scenario() as scenario,
     ):
         model: Final = scenario.model(model="openai/gpt-4o-mini", api_base=wire.url, api_key="synthetic-openai-key")
@@ -833,7 +833,7 @@ def test_messages_sdk_keeps_tool_use_input(gateway: Gateway, tmp_path: Path, cli
 
     with (
         wire_server(_answering_model_listing(respond)) as wire,
-        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path), workers=2) as isolated,
+        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path)) as isolated,
         isolated.scenario() as scenario,
     ):
         model: Final = scenario.model(model=ANTHROPIC_MODEL, api_base=wire.url, api_key="synthetic-anthropic-key")
@@ -879,7 +879,7 @@ def test_messages_stream_keeps_tool_use_input(gateway: Gateway, tmp_path: Path) 
 
     with (
         wire_server(_answering_model_listing(respond)) as wire,
-        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path), workers=2) as isolated,
+        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path)) as isolated,
         isolated.scenario() as scenario,
     ):
         model: Final = scenario.model(model=ANTHROPIC_MODEL, api_base=wire.url, api_key="synthetic-anthropic-key")
@@ -925,7 +925,7 @@ def test_responses_stream_keeps_function_call_arguments(gateway: Gateway, tmp_pa
 
     with (
         wire_server(_answering_model_listing(respond)) as wire,
-        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path), workers=2) as isolated,
+        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path)) as isolated,
         isolated.scenario() as scenario,
     ):
         model: Final = scenario.model(model=ANTHROPIC_MODEL, api_base=wire.url, api_key="synthetic-anthropic-key")
@@ -1006,7 +1006,7 @@ def test_native_responses_keeps_logprob_tokens(gateway: Gateway, tmp_path: Path)
 
     with (
         wire_server(_answering_model_listing(respond)) as wire,
-        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path), workers=2) as isolated,
+        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path)) as isolated,
         isolated.scenario() as scenario,
     ):
         model: Final = scenario.model(model="openai/gpt-4o-mini", api_base=wire.url, api_key="synthetic-openai-key")
@@ -1052,7 +1052,7 @@ def test_malformed_tool_blocks_keep_only_recognized_content(gateway: Gateway, tm
 
     with (
         wire_server(_answering_model_listing(respond)) as wire,
-        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path), workers=2) as isolated,
+        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path)) as isolated,
         isolated.scenario() as scenario,
     ):
         model: Final = scenario.model(model="openai/gpt-4o-mini", api_base=wire.url, api_key="synthetic-openai-key")
@@ -1097,7 +1097,7 @@ def test_messages_tool_input_handles_mixed_values_and_truncation(gateway: Gatewa
 
     with (
         wire_server(_answering_model_listing(respond)) as wire,
-        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path), workers=2) as isolated,
+        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path)) as isolated,
         isolated.scenario() as scenario,
     ):
         model: Final = scenario.model(model=ANTHROPIC_MODEL, api_base=wire.url, api_key="synthetic-anthropic-key")
@@ -1143,7 +1143,7 @@ def test_messages_without_auth_create_no_spend_row(gateway: Gateway, tmp_path: P
 
     with (
         wire_server(respond) as wire,
-        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path), workers=2) as isolated,
+        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path)) as isolated,
     ):
         response: Final = isolated.client.post(
             "/v1/messages",
@@ -1182,7 +1182,7 @@ def test_messages_upstream_error_keeps_tool_input(gateway: Gateway, tmp_path: Pa
 
     with (
         wire_server(_answering_model_listing(respond)) as wire,
-        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path), workers=2) as isolated,
+        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path)) as isolated,
         isolated.scenario() as scenario,
     ):
         model: Final = scenario.model(model=ANTHROPIC_MODEL, api_base=wire.url, api_key="synthetic-anthropic-key")
@@ -1235,7 +1235,6 @@ def test_store_prompts_off_keeps_chat_and_messages_representation_equal(gateway:
             tmp_path,
             {},
             config=_prompt_storage_config(tmp_path, store_prompts=False),
-            workers=2,
         ) as isolated,
         isolated.scenario() as scenario,
     ):
@@ -1283,7 +1282,7 @@ def test_identical_messages_requests_have_distinct_spend_rows(gateway: Gateway, 
 
     with (
         wire_server(_answering_model_listing(respond)) as wire,
-        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path), workers=2) as isolated,
+        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path)) as isolated,
         isolated.scenario() as scenario,
     ):
         model: Final = scenario.model(model=ANTHROPIC_MODEL, api_base=wire.url, api_key="synthetic-anthropic-key")
