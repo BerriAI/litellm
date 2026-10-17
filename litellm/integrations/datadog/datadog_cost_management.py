@@ -3,7 +3,7 @@ import os
 import time
 from collections.abc import Mapping
 from datetime import datetime
-from typing import Any, Final, cast
+from typing import Final
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
@@ -43,6 +43,10 @@ _RESERVED_TAG_KEYS: Final[frozenset] = frozenset(
         "model_group",
     }
 )
+
+
+def _as_mapping(metadata: Mapping[str, object]) -> Mapping[str, object]:
+    return metadata
 
 
 class DatadogCostManagementLogger(CustomBatchLogger):
@@ -180,9 +184,7 @@ class DatadogCostManagementLogger(CustomBatchLogger):
         self._add_tag(tags, "model", log.get("model"))
         self._add_tag(tags, "model_id", log.get("model_id"))
 
-        # cast because StandardLoggingMetadata is a TypedDict; we iterate it
-        # as a generic mapping below.
-        metadata: Final[Mapping[str, object]] = cast(dict[str, Any], log.get("metadata") or {})
+        metadata: Final = _as_mapping(log.get("metadata") or {})
 
         # Backwards-compat: team/user/model_group preserved regardless of allowlist.
         if metadata.get("user_api_key_alias"):
