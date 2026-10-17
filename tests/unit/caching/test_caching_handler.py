@@ -66,37 +66,44 @@ def setup_cache():
     return cache
 
 
-def test_sync_cache_hit_reaches_sync_custom_logger(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    ("call", "request_kwargs"),
+    [
+        (
+            completion,
+            {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}], "mock_response": "x"},
+        ),
+        (embedding, {"model": "text-embedding-3-small", "input": ["hi"], "mock_response": [0.1, 0.2]}),
+        (litellm.text_completion, {"model": "gpt-3.5-turbo-instruct", "prompt": "hi", "mock_response": "x"}),
+    ],
+)
+def test_sync_cache_hits_reach_sync_custom_logger(
+    monkeypatch: pytest.MonkeyPatch, call: Callable[..., object], request_kwargs: dict[str, object]
+) -> None:
     from litellm.integrations.custom_logger import CustomLogger
 
     logged_cache_hits: Final[list[object]] = []
-    cache_hit_logged: Final = threading.Event()
+    all_logged: Final = threading.Event()
 
     class SyncRecorder(CustomLogger):
         def log_success_event(
             self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
         ) -> None:
             logged_cache_hits.append(kwargs.get("cache_hit"))
-            if kwargs.get("cache_hit") is True:
-                cache_hit_logged.set()
+            if len(logged_cache_hits) == 3:
+                all_logged.set()
 
     monkeypatch.setattr(litellm, "success_callback", [])
     monkeypatch.setattr(litellm, "_async_success_callback", [])
     monkeypatch.setattr(litellm, "input_callback", [])
     monkeypatch.setattr(litellm, "callbacks", [SyncRecorder()])
     monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
-    request: Final = {
-        "model": "gpt-4o-mini",
-        "messages": [{"role": "user", "content": f"sync cache hit {uuid.uuid4()}"}],
-        "mock_response": "cached answer",
-        "caching": True,
-    }
 
-    completion(**request)
-    completion(**request)
+    for _ in range(3):
+        call(**request_kwargs)
 
-    assert cache_hit_logged.wait(timeout=10)
-    assert True in logged_cache_hits
+    assert all_logged.wait(timeout=10)
+    assert logged_cache_hits == [None, True, True]
 
 
 @pytest.fixture
