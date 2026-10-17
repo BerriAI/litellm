@@ -138,7 +138,7 @@ describe("RegenerateKeyModal submit payload", () => {
     expect(submittedPayload()[key]).toBe(12.7);
   });
 
-  it("sends null for cleared numbers and an empty string for a cleared duration", async () => {
+  it("sends null for cleared numbers and omits a cleared duration", async () => {
     const user = userEvent.setup();
     renderModal();
 
@@ -155,7 +155,6 @@ describe("RegenerateKeyModal submit payload", () => {
       max_budget: null,
       tpm_limit: null,
       rpm_limit: null,
-      duration: "",
       grace_period: "",
     });
   });
@@ -180,10 +179,9 @@ describe("RegenerateKeyModal submit payload", () => {
       max_budget: undefined,
       tpm_limit: undefined,
       rpm_limit: undefined,
-      duration: "",
       grace_period: "",
     });
-    expect(JSON.stringify(submittedPayload())).toBe('{"duration":"","grace_period":""}');
+    expect(JSON.stringify(submittedPayload())).toBe('{"grace_period":""}');
   });
 
   it("regenerates a key whose fields the API returned as null", async () => {
@@ -206,7 +204,6 @@ describe("RegenerateKeyModal submit payload", () => {
       max_budget: null,
       tpm_limit: null,
       rpm_limit: null,
-      duration: "",
       grace_period: "",
     });
   });
