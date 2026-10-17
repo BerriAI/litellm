@@ -2306,9 +2306,11 @@ class ResponsesWebSocketStreaming:
             await self._send_error_event("invalid_request_error", str(e))
             return None
 
-    async def _forward_guarded_frame(self, message: str) -> None:
+    async def _forward_guarded_frame(
+        self, message: str, turn_admission: Callable[[], Awaitable[None]] | None = None
+    ) -> None:
         guarded: Final = await self._guard_frame(message)
-        if guarded is None:
+        if guarded is None or not await self._admit_or_reject_turn(message, turn_admission):
             return
         if guarded.pii_tokens:
             self._remember_pii_tokens(guarded.pii_tokens)
@@ -2690,10 +2692,8 @@ class ResponsesWebSocketStreaming:
 
         return json.dumps(evt_obj) if modified else response_str
 
-    async def _enforce_or_reject_frame(
-        self, message: str, turn_admission: Callable[[], Awaitable[None]] | None = None
-    ) -> bool:
-        """Run the per-frame project quota check, then the deployment's own admission for a turn after the first.
+    async def _enforce_or_reject_frame(self, message: str) -> bool:
+        """Run the per-frame project quota check.
 
         On rejection, sends an ``error`` event to the client and reports that
         the frame must be dropped instead of forwarded, so the connection
@@ -2706,6 +2706,9 @@ class ResponsesWebSocketStreaming:
         except RateLimitError as e:
             await self._send_turn_refusal(e)
             return False
+        return True
+
+    async def _admit_or_reject_turn(self, message: str, turn_admission: Callable[[], Awaitable[None]] | None) -> bool:
         rejection: Final = await _admit_frame_turn(turn_admission, message)
         if rejection is None:
             return True
@@ -2736,9 +2739,9 @@ class ResponsesWebSocketStreaming:
 
             while True:
                 message = await self.websocket.receive_text()
-                if not await self._enforce_or_reject_frame(message, self.turn_admission):
+                if not await self._enforce_or_reject_frame(message):
                     continue
-                await self._forward_guarded_frame(message)
+                await self._forward_guarded_frame(message, self.turn_admission)
 
         except Exception as e:
             verbose_logger.debug("Responses WS client_to_backend ended: %s", e)
@@ -3280,15 +3283,14 @@ class ManagedResponsesWebSocketHandler:
         except RateLimitError as e:
             await self._send_frame(_turn_refusal_frame(e))
             return
+        guarded: Final = await self._guard_frame(raw_message)
+        if guarded is None:
+            return
         rejection: Final = await _admit_frame_turn(turn_admission, raw_message)
         if rejection is not None:
             if self._failure is None:
                 self._failure = rejection
             await _answer_rejected_turn(self.websocket, rejection)
-            return
-
-        guarded: Final = await self._guard_frame(raw_message)
-        if guarded is None:
             return
         if guarded.pii_tokens:
             self._pii_tokens = {**self._pii_tokens, **guarded.pii_tokens}

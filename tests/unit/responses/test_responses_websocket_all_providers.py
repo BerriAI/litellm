@@ -1621,6 +1621,17 @@ def _admission_crashing_the_next_turn():
     return AsyncMock(side_effect=[ValueError("custom check failed"), None])
 
 
+def _guard_blocking(word: str):
+    from litellm.responses.streaming_iterator import GuardedResponsesWsFrame
+
+    async def guard(frame: str) -> GuardedResponsesWsFrame:
+        if word in json.loads(frame)["input"]:
+            raise ValueError("blocked by guardrail")
+        return GuardedResponsesWsFrame(frame=frame)
+
+    return guard
+
+
 def _errors(websocket: _ClientSocket) -> list[tuple[object, object]]:
     return [(frame.get("status"), frame["error"]) for frame in websocket.sent if frame.get("type") == "error"]
 
@@ -1743,6 +1754,83 @@ class TestWebSocketTurnAdmission:
             if json.loads(call.args[0]).get("type") == "error"
         ]
         assert [(refusal["status"], refusal["error"]["type"]) for refusal in refusals] == [(429, "rate_limit_exceeded")]
+
+
+    @pytest.mark.asyncio
+    async def test_native_relay_runs_the_guardrail_before_the_deployment_counts_a_turn(self):
+        from unittest.mock import AsyncMock
+
+        first, second, third = _turn_frames()
+        turn_admission: Final = _admission_refusing_the_next_turn()
+        backend_ws: Final = MagicMock()
+        backend_ws.send = AsyncMock()
+        websocket: Final = _ClientSocket(second, third)
+        handler: Final = _make_streaming(
+            websocket=websocket,
+            backend_ws=backend_ws,
+            request_data={},
+            first_message=first,
+            frame_guard=_guard_blocking("two"),
+            turn_admission=turn_admission,
+        )
+
+        await handler.client_to_backend()
+
+        assert [json.loads(call.args[0]) for call in backend_ws.send.await_args_list] == [json.loads(first)]
+        assert turn_admission.await_count == 1
+        assert [(status, error["type"]) for status, error in _errors(websocket)] == [
+            (None, "invalid_request_error"),
+            (429, "rate_limit_exceeded"),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_managed_relay_runs_the_guardrail_before_the_deployment_counts_a_turn(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        import litellm
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.responses.streaming_iterator import ManagedResponsesWebSocketHandler
+
+        answered: Final[list[object]] = []
+
+        async def fake_aresponses(*args: object, **kwargs: object):
+            answered.append(kwargs.get("input"))
+
+            async def _empty():
+                return
+                yield
+
+            return _empty()
+
+        monkeypatch.setattr(litellm, "aresponses", fake_aresponses)
+        first, second, third = _turn_frames()
+        turn_admission: Final = _admission_refusing_the_next_turn()
+        websocket: Final = _ClientSocket(second, third)
+        handler: Final = ManagedResponsesWebSocketHandler(
+            websocket=websocket,
+            model="test-model",
+            logging_obj=Logging(
+                model="test-model",
+                messages=[],
+                stream=True,
+                call_type="aresponses",
+                start_time=0,
+                litellm_call_id="test-id",
+                function_id="test-func",
+            ),
+            first_message=first,
+            frame_guard=_guard_blocking("two"),
+            turn_admission=turn_admission,
+        )
+
+        await handler.run()
+
+        assert answered == ["one"]
+        assert turn_admission.await_count == 1
+        assert [(status, error["type"]) for status, error in _errors(websocket)] == [
+            (None, "invalid_request_error"),
+            (429, "rate_limit_exceeded"),
+        ]
 
 
     @pytest.mark.asyncio
