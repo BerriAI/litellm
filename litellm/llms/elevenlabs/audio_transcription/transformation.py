@@ -158,6 +158,15 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
                             }
                         )
 
+            # use_multi_channel=true answers with one transcript per channel instead of
+            # a flat text; stereo callers attribute words to a speaker by channel_index
+            transcripts: Final = response_object.get("transcripts")
+            if isinstance(transcripts, list):
+                response["transcripts"] = transcripts
+            duration: Final = response_object.get("audio_duration_secs")
+            if duration is not None:
+                response["audio_duration_secs"] = duration
+
             # Store full response in hidden params
             response.hidden_params = response_json
 
