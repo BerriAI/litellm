@@ -90,7 +90,7 @@ def test_gemini_skips_deprecation_warning_when_unsupported() -> None:
     assert "temperature" not in out
 
 
-def test_gemini_request_body_drops_top_k_when_flag_is_false() -> None:
+def test_gemini_request_body_drops_top_k_when_drop_params_true() -> None:
     litellm.model_cost[f"vertex_ai/{MODEL}"] = {
         **litellm.model_cost.get(f"vertex_ai/{MODEL}", {}),
         "supports_sampling_params": False,
@@ -100,7 +100,23 @@ def test_gemini_request_body_drops_top_k_when_flag_is_false() -> None:
         model=MODEL,
         optional_params={"top_k": 20},
         custom_llm_provider="vertex_ai",
-        litellm_params={},
+        litellm_params={"drop_params": True},
         cached_content=None,
     )
     assert "top_k" not in (body.get("generationConfig") or {})
+
+
+def test_gemini_request_body_raises_when_drop_params_false() -> None:
+    litellm.model_cost[f"vertex_ai/{MODEL}"] = {
+        **litellm.model_cost.get(f"vertex_ai/{MODEL}", {}),
+        "supports_sampling_params": False,
+    }
+    with pytest.raises(litellm.utils.UnsupportedParamsError):
+        _transform_request_body(
+            messages=[{"role": "user", "content": "hi"}],
+            model=MODEL,
+            optional_params={"top_k": 20},
+            custom_llm_provider="vertex_ai",
+            litellm_params={"drop_params": False},
+            cached_content=None,
+        )
