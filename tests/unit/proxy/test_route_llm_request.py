@@ -1,4 +1,7 @@
+import httpx
+import litellm
 import pytest
+import respx
 
 
 from types import SimpleNamespace
@@ -1897,3 +1900,92 @@ async def test_null_user_config_is_treated_as_absent() -> None:
     )
 
     assert response.choices[0].message.content == "from the main router"
+
+
+def _registered_bedrock_kb_search(team_id: str) -> dict[str, object]:
+    """The request a team key's /v1/vector_stores/{id}/search carries once the registry row is merged in."""
+    return {
+        "model": None,
+        "vector_store_id": "KB12345678",
+        "query": "litellm proxy",
+        "custom_llm_provider": "bedrock",
+        "aws_region_name": "us-east-1",
+        "aws_access_key_id": "AKIAREGISTRYKEY00000",
+        "aws_secret_access_key": "registry-secret",
+        "metadata": {"user_api_key_team_id": team_id},
+    }
+
+
+def _team_a_router(*team_models: tuple[str, dict[str, object]]) -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": f"internal-team-a-{public_name}",
+                "litellm_params": litellm_params,
+                "model_info": {
+                    "id": f"team-a-{public_name}",
+                    "team_id": "team-a",
+                    "team_public_model_name": public_name,
+                },
+            }
+            for public_name, litellm_params in team_models
+        ]
+    )
+
+
+_LANGGRAPH_AGENT_PARAMS: Final[dict[str, object]] = {
+    "model": "langgraph/repro-agent",
+    "api_base": "http://127.0.0.1:2024",
+}
+_BEDROCK_CLAUDE_PARAMS: Final[dict[str, object]] = {
+    "model": "bedrock/anthropic.claude-sonnet-4-6",
+    "aws_region_name": "us-east-1",
+}
+
+
+@pytest.mark.parametrize(
+    "team_models",
+    [
+        pytest.param(
+            [("a-langgraph-agent", _LANGGRAPH_AGENT_PARAMS), ("a-bedrock-claude", _BEDROCK_CLAUDE_PARAMS)],
+            id="langgraph-first",
+        ),
+        pytest.param(
+            [("a-bedrock-claude", _BEDROCK_CLAUDE_PARAMS), ("a-langgraph-agent", _LANGGRAPH_AGENT_PARAMS)],
+            id="bedrock-first",
+        ),
+        pytest.param([("a-langgraph-agent", _LANGGRAPH_AGENT_PARAMS)], id="no-bedrock-team-model"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_team_key_search_of_registered_bedrock_store_reaches_bedrock_with_registry_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+    team_models: list[tuple[str, dict[str, object]]],
+) -> None:
+    """A team key's model-less search of a registered Bedrock store was routed through the team's first
+    deployment, so a langgraph team model turned it into "Vector store search is not supported for langgraph"."""
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        route: Final = respx_mock.post(
+            "https://bedrock-agent-runtime.us-east-1.amazonaws.com/knowledgebases/KB12345678/retrieve"
+        ).mock(return_value=httpx.Response(200, json={"retrievalResults": []}))
+        response: Final = await (
+            await route_request(
+                _registered_bedrock_kb_search("team-a"),
+                _team_a_router(*team_models),
+                None,
+                "avector_store_search",
+            )
+        )
+
+    request: Final = route.calls.last.request
+    posted_url: Final = str(request.url)
+    signed_auth: Final = request.headers["Authorization"]
+    assert response["object"] == "vector_store.search_results.page", response
+    assert route.call_count == 1
+    assert posted_url == "https://bedrock-agent-runtime.us-east-1.amazonaws.com/knowledgebases/KB12345678/retrieve", (
+        posted_url
+    )
+    assert "Credential=AKIAREGISTRYKEY00000/" in signed_auth, signed_auth

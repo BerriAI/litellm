@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import json
+import uuid
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
@@ -28,10 +29,11 @@ from pydantic import ConfigDict, TypeAdapter, ValidationError
 from starlette.websockets import WebSocket, WebSocketDisconnect
 from typing_extensions import ReadOnly, TypedDict
 
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import EMPTY_MAPPING, MANAGED_BACKGROUND_RESPONSE_METADATA_KEY, TERMINAL_RESPONSE_STATUSES
 from litellm.integrations.custom_guardrail import ModifyResponseException
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, get_metadata_variable_name_from_kwargs
 from litellm.litellm_core_utils.internal_call_metadata import is_background_response, requests_background
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.litellm_core_utils.tool_fields import first_validation_error
@@ -58,11 +60,17 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
     read_request_body,
     safe_set_request_parsed_body,
 )
+from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
 from litellm.proxy.hooks.responses_id_security import ResponsesIDSecurity, decrypted_response_id
+from litellm.proxy.litellm_pre_call_utils import (
+    _CLIENT_PRICING_METADATA_FIELDS,  # pyright: ignore[reportPrivateUsage]  # the HTTP path's own strip list
+    _UNTRUSTED_METADATA_CONTROL_FIELDS,  # pyright: ignore[reportPrivateUsage]  # the HTTP path's own strip list
+)
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import (
     request_tags_from_request_data,
 )
 from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
+from litellm.responses.streaming_iterator import GuardedResponsesWsFrame, ResponsesWsFrameGuard
 from litellm.router import Router
 from litellm.router_utils.endpoint_eligibility import UnsupportedEndpointError
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -1818,6 +1826,143 @@ async def _enforce_responses_ws_first_frame_model_auth(
     )
 
 
+_WS_FRAME: Final = TypeAdapter(dict[str, object])
+_GUARDRAIL_INFORMATION: Final = TypeAdapter(list[dict[str, object]])
+_PII_TOKENS: Final = TypeAdapter(dict[str, str])
+_GUARDRAIL_INFORMATION_KEY: Final = "standard_logging_guardrail_information"
+_GUARDED_FRAME_FIELDS: Final = ("input", "instructions", "tools")
+_CLIENT_METADATA_KEYS: Final = ("metadata", "litellm_metadata")
+# the guardrail list is merged from key, team and the admission frame; a later frame cannot shrink it
+_CLIENT_GUARDRAIL_SELECTORS: Final = ("guardrails", "guardrail_config", "policies")
+
+
+class _PreCallGuardrailWalk(Protocol):
+    async def pre_call_hook(
+        self,
+        *,
+        user_api_key_dict: UserAPIKeyAuth,
+        data: dict[str, object],  # mutable-ok: ProxyLogging.pre_call_hook hands the guardrails a dict they edit
+        call_type: Literal["aresponses"],
+        guardrails_only: bool,
+    ) -> dict[str, object]: ...  # mutable-ok: ProxyLogging.pre_call_hook returns the guardrails' own dict
+
+
+def _responses_ws_frame_guard(
+    admitted: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth, proxy_logging_obj: _PreCallGuardrailWalk
+) -> ResponsesWsFrameGuard:
+    """Socket admission skips guardrails (the first frame's ``input`` is not part of the admitted request), so every
+    ``response.create`` frame gets the pre_call guardrail walk the HTTP ``/v1/responses`` path runs on its body."""
+    metadata_key: Final = get_metadata_variable_name_from_kwargs(admitted)
+    admitted_bucket: Final = admitted.get(metadata_key)
+    bucket: Final = {
+        key: value
+        for key, value in (
+            _WS_FRAME.validate_python(admitted_bucket) if isinstance(admitted_bucket, dict) else {}
+        ).items()
+        if key != _GUARDRAIL_INFORMATION_KEY
+    }
+    model: Final = admitted.get("model")
+
+    # a blocked frame is billed as its own failed request; only the first turn settles the admission reservation
+    rejected_frame_auth: Final = user_api_key_dict.model_copy(update={"budget_reservation": None})
+
+    async def guard(frame: str) -> GuardedResponsesWsFrame:
+        frame_obj: Final = _WS_FRAME.validate_json(frame)
+        nested: Final = frame_obj.get("response")
+        if isinstance(nested, dict) and any(key in frame_obj for key in _GUARDED_FRAME_FIELDS):
+            raise ValueError(
+                "response.create carries input, instructions or tools both at the top level and under response"
+            )
+        body: Final = _WS_FRAME.validate_python(nested) if isinstance(nested, dict) else frame_obj
+        frame_data: Final = {
+            **{
+                key: _without_untrusted_metadata(key, value)
+                for key, value in body.items()
+                if key != "type" and key not in _CLIENT_GUARDRAIL_SELECTORS
+            },
+            "model": model,
+            "litellm_call_id": str(uuid.uuid4()),
+            # shallow: the bucket carries proxy-owned objects (the OTEL parent span) that cannot be deep-copied
+            metadata_key: {**bucket},
+        }
+        try:
+            guarded_data: Final = await proxy_logging_obj.pre_call_hook(
+                user_api_key_dict=user_api_key_dict, data=frame_data, call_type="aresponses", guardrails_only=True
+            )
+        except Exception as e:
+            await _bill_rejected_frame(rejected_frame_auth, e, frame_data)
+            raise
+        if guarded_data.get("model") != model:
+            rerouted: Final = ValueError(
+                f"a guardrail rerouted this turn to {guarded_data.get('model')!r}; an open Responses WebSocket"
+                f" is bound to {model!r}, send this turn over HTTP /v1/responses"
+            )
+            await _bill_rejected_frame(rejected_frame_auth, rerouted, frame_data)
+            raise rerouted
+        # a guardrail may delete a field (the Responses translation pops ``instructions``), so start without them
+        guarded_fields: Final = {key: guarded_data[key] for key in _GUARDED_FRAME_FIELDS if key in guarded_data}
+        kept: Final = {key: value for key, value in body.items() if key not in _GUARDED_FRAME_FIELDS}
+        rewritten: Final = (
+            {**frame_obj, "response": {**kept, **guarded_fields}}
+            if isinstance(nested, dict)
+            else {**kept, **guarded_fields}
+        )
+        return GuardedResponsesWsFrame(
+            frame=json.dumps(rewritten),
+            guardrail_information=_recorded_guardrail_information(guarded_data.get(metadata_key)),
+            pii_tokens=_recorded_pii_tokens(guarded_data.get("metadata")),
+        )
+
+    return guard
+
+
+def _without_untrusted_metadata(key: str, value: object) -> object:
+    """Like the HTTP path, drop the proxy-owned ``user_api_key_*`` and guardrail control keys a client may forge."""
+    if key not in _CLIENT_METADATA_KEYS or not isinstance(value, dict):
+        return value
+    return {
+        name: item
+        for name, item in _WS_FRAME.validate_python(value).items()
+        if not name.startswith("user_api_key_")
+        and name not in _UNTRUSTED_METADATA_CONTROL_FIELDS
+        and name not in _CLIENT_PRICING_METADATA_FIELDS
+        and name not in ("headers", "pii_tokens", *_CLIENT_GUARDRAIL_SELECTORS)
+    }
+
+
+async def _bill_rejected_frame(
+    user_api_key_dict: UserAPIKeyAuth,
+    exception: Exception,
+    frame_data: dict[str, object],  # mutable-ok: the spend logger stamps the failure row on the request dict
+) -> None:
+    """Only the spend logger sees a rejected frame; the other failure hooks (the rate limiter's slot release,
+    alerting) belong to the live connection, which stays open. Billing never replaces the guardrail's own error."""
+    for callback in litellm.callbacks:
+        if isinstance(callback, ProxyDBLogger):
+            try:
+                await callback.async_post_call_failure_hook(  # pyright: ignore[reportUnknownMemberType]  # bare dict
+                    request_data=frame_data, original_exception=exception, user_api_key_dict=user_api_key_dict
+                )
+            except Exception:  # noqa: BLE001  # billing never replaces the guardrail's own error
+                verbose_proxy_logger.exception("[Non-Blocking] Responses WebSocket: billing a rejected frame failed")
+
+
+def _recorded_pii_tokens(metadata: object) -> Mapping[str, str]:
+    """Presidio stores the tokens it masked a frame with in ``metadata.pii_tokens``; the socket unmasks with them."""
+    recorded: Final = _WS_FRAME.validate_python(metadata).get("pii_tokens") if isinstance(metadata, dict) else None
+    return MappingProxyType(_PII_TOKENS.validate_python(recorded)) if isinstance(recorded, dict) else _NO_PII_TOKENS
+
+
+_NO_PII_TOKENS: Final[Mapping[str, str]] = MappingProxyType({})
+
+
+def _recorded_guardrail_information(bucket: object) -> tuple[Mapping[str, object], ...]:
+    recorded: Final = (
+        _WS_FRAME.validate_python(bucket).get(_GUARDRAIL_INFORMATION_KEY) if isinstance(bucket, dict) else None
+    )
+    return tuple(_GUARDRAIL_INFORMATION.validate_python(recorded)) if recorded else ()
+
+
 async def _responses_websocket_session(
     websocket: WebSocket,
     model: str | None,
@@ -1894,6 +2039,7 @@ async def _responses_websocket_session(
             model=resolved_model,
             route_type="_aresponses_websocket",
             llm_router=llm_router,
+            skip_guardrails=True,
         )
     except Exception as e:
         verbose_proxy_logger.exception("Responses WebSocket pre-call error")
@@ -1915,7 +2061,10 @@ async def _responses_websocket_session(
         return
 
     routed_data: Final = dict(
-        data, user_api_key_dict=user_api_key_dict, **_routing_hints_from_first_ws_frame(first_message)
+        data,
+        user_api_key_dict=user_api_key_dict,
+        responses_ws_frame_guard=_responses_ws_frame_guard(data, user_api_key_dict, proxy_logging_obj),
+        **_routing_hints_from_first_ws_frame(first_message),
     )
     # Phase 2: route to upstream provider
     try:
