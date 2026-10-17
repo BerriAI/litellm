@@ -14,8 +14,12 @@ locals {
       { name = "DATABASE_PORT", value = "5432" },
       { name = "DATABASE_USER", value = var.db_username },
       { name = "DATABASE_NAME", value = var.db_name },
-      { name = "DATABASE_HOST_READ_REPLICA", value = google_sql_database_instance.reader.private_ip_address },
+    ],
+    var.create_read_replica ? [
+      { name = "DATABASE_HOST_READ_REPLICA", value = google_sql_database_instance.reader[0].private_ip_address },
       { name = "DATABASE_PORT_READ_REPLICA", value = "5432" },
+    ] : [],
+    [
       { name = "REDIS_HOST", value = google_redis_instance.this.host },
       { name = "REDIS_PORT", value = tostring(google_redis_instance.this.port) },
     ],
@@ -133,10 +137,14 @@ locals {
     "python -c \"import os, base64, pathlib; pathlib.Path(os.environ['REDIS_SSL_CA_CERTS']).write_bytes(base64.b64decode(os.environ['REDIS_CA_PEM_B64']))\""
   ] : []
 
-  database_url_fragment = [
-    "export DATABASE_URL=\"postgresql://$${DATABASE_USER}:$${DATABASE_PASSWORD}@$${DATABASE_HOST}:$${DATABASE_PORT}/$${DATABASE_NAME}\"",
-    "export DATABASE_URL_READ_REPLICA=\"postgresql://$${DATABASE_USER}:$${DATABASE_PASSWORD}@$${DATABASE_HOST_READ_REPLICA}:$${DATABASE_PORT_READ_REPLICA}/$${DATABASE_NAME}\"",
-  ]
+  database_url_fragment = concat(
+    [
+      "export DATABASE_URL=\"postgresql://$${DATABASE_USER}:$${DATABASE_PASSWORD}@$${DATABASE_HOST}:$${DATABASE_PORT}/$${DATABASE_NAME}\"",
+    ],
+    var.create_read_replica ? [
+      "export DATABASE_URL_READ_REPLICA=\"postgresql://$${DATABASE_USER}:$${DATABASE_PASSWORD}@$${DATABASE_HOST_READ_REPLICA}:$${DATABASE_PORT_READ_REPLICA}/$${DATABASE_NAME}\"",
+    ] : [],
+  )
 
   gateway_pool_env = var.gateway_connection_pool_enabled ? [
     { name = "LITELLM_PGBOUNCER_ENABLED", value = "true" },

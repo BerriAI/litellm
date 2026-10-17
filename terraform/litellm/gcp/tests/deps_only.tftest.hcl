@@ -37,6 +37,7 @@ run "default_creates_everything" {
       length(google_cloud_run_v2_job.migrations) == 1,
       length(google_compute_global_address.lb) == 1,
       length(terraform_data.migration) == 1,
+      length(google_sql_database_instance.reader) == 1,
     ])
     error_message = "The default mode must create networking, runtime services, the load balancer, and migrations."
   }
@@ -96,7 +97,7 @@ run "deps_only_creates_no_runtime" {
   assert {
     condition = alltrue([
       google_sql_database_instance.writer.name == "tenant-litellm-test",
-      google_sql_database_instance.reader.name == "tenant-litellm-test-reader",
+      google_sql_database_instance.reader[0].name == "tenant-litellm-test-reader",
       google_redis_instance.this.name == "tenant-litellm-test",
       google_storage_bucket.this.force_destroy == false,
       google_secret_manager_secret.master_key.secret_id == "tenant-litellm-test-master-key",
@@ -171,5 +172,38 @@ run "redis_plaintext_drops_tls_env" {
   assert {
     condition     = length(local.redis_ca_fragment) == 0
     error_message = "Plaintext Redis mode must not decode a Redis CA at startup."
+  }
+}
+
+run "skip_read_replica" {
+  command = plan
+
+  variables {
+    create_read_replica = false
+  }
+
+  assert {
+    condition     = length(google_sql_database_instance.reader) == 0
+    error_message = "create_read_replica = false must omit the replica instance."
+  }
+
+  assert {
+    condition     = output.cloudsql_reader_ip == null
+    error_message = "cloudsql_reader_ip must be null without a replica."
+  }
+
+  assert {
+    condition     = length([for env in local.shared_env_kv : env if endswith(env.name, "_READ_REPLICA")]) == 0
+    error_message = "Writer-only mode must omit both DATABASE_*_READ_REPLICA entries."
+  }
+
+  assert {
+    condition     = length([for line in local.database_url_fragment : line if strcontains(line, "DATABASE_URL_READ_REPLICA")]) == 0
+    error_message = "Writer-only mode must not export DATABASE_URL_READ_REPLICA."
+  }
+
+  assert {
+    condition     = anytrue([for line in local.database_url_fragment : startswith(line, "export DATABASE_URL=")])
+    error_message = "Writer-only mode must still export DATABASE_URL."
   }
 }
