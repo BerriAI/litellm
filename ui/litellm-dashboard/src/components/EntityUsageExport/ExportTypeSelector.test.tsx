@@ -14,6 +14,7 @@ describe("ExportTypeSelector", () => {
     expect(screen.getByText(/Day-by-day breakdown by team$/)).toBeInTheDocument();
     expect(screen.getByText(/Day-by-day breakdown by team and key/)).toBeInTheDocument();
     expect(screen.getByText(/Day-by-day by team and model/)).toBeInTheDocument();
+    expect(screen.getByText(/Day-by-day by team, key and model/)).toBeInTheDocument();
   });
 
   it("should display the correct entity type for different entities", () => {
@@ -27,6 +28,18 @@ describe("ExportTypeSelector", () => {
     renderWithProviders(<ExportTypeSelector value="daily" onChange={onChange} entityType="team" />);
     await user.click(screen.getByRole("radio", { name: /Day-by-day breakdown by team and key/i }));
     expect(onChange).toHaveBeenCalledWith("daily_with_keys");
+  });
+
+  it("should render and select the combined key and model option for users", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    renderWithProviders(<ExportTypeSelector value="daily" onChange={onChange} entityType="user" />);
+
+    const option = screen.getByRole("radio", { name: /Day-by-day by user, key and model/i });
+    expect(screen.getByText("Daily metrics for each user, split by API key and model")).toBeInTheDocument();
+    await user.click(option);
+
+    expect(onChange).toHaveBeenCalledWith("daily_with_keys_and_models");
   });
 
   it("should have the correct radio checked", () => {
@@ -55,6 +68,7 @@ describe("ExportTypeSelector", () => {
     ).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: /Day-by-day breakdown by user and key/i })).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: /Day-by-day by user and model/i })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /Day-by-day by user, key and model/i })).toBeInTheDocument();
   });
 
   it("should offer the per-user scope for tags", () => {

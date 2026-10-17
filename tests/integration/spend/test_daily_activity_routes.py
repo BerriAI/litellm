@@ -210,6 +210,20 @@ def _assert_entity_activity_routes(
     export_rows: Final = tuple(csv.reader(io.StringIO(exported.text)))
     assert len(export_rows) == len(persisted_rows) + 1, exported.text
 
+    key_model_export: Final = gateway.request(
+        "GET",
+        f"{prefix}/daily/activity/export",
+        params={**params, "export_type": "daily_with_keys_and_models"},
+    )
+    assert key_model_export.status_code == 200, key_model_export.text
+    key_model_rows: Final = tuple(csv.reader(io.StringIO(key_model_export.text)))
+    api_key_index: Final = key_model_rows[0].index("api_key")
+    model_index: Final = key_model_rows[0].index("model")
+    key_model_pairs: Final = tuple((row[api_key_index], row[model_index]) for row in key_model_rows[1:])
+    assert key_model_pairs
+    assert all(api_key and model_name for api_key, model_name in key_model_pairs), key_model_export.text
+    assert len(key_model_pairs) == len(frozenset(key_model_pairs)), key_model_export.text
+
 
 @pytest.mark.timeout(90)
 def test_daily_activity_routes_cover_all_entities_and_bounded_key_search(gateway: Gateway, tmp_path: Path) -> None:
