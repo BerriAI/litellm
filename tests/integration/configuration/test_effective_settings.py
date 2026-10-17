@@ -1387,6 +1387,135 @@ def test_a_read_replica_back_on_an_older_row_does_not_bring_back_a_removed_db_en
             )
 
 
+_CAPPED_WRITER_ROLE_PASSWORD: Final = "integration-capped-writer-password"
+
+
+@contextmanager
+def _database_owned_by_a_login_role() -> Iterator[tuple[str, str, str]]:
+    role: Final = f"integration_capped_writer_{uuid.uuid4().hex}"
+    with psycopg.connect(os.environ["DATABASE_URL"], autocommit=True) as admin:
+        admin.execute(
+            sql.SQL("CREATE ROLE {} LOGIN PASSWORD {} NOSUPERUSER NOINHERIT").format(
+                sql.Identifier(role), sql.Literal(_CAPPED_WRITER_ROLE_PASSWORD)
+            )
+        )
+        try:
+            with scratch_database() as admin_url:
+                parsed: Final = urlsplit(admin_url)
+                admin.execute(
+                    sql.SQL("ALTER DATABASE {} OWNER TO {}").format(
+                        sql.Identifier(parsed.path.lstrip("/")), sql.Identifier(role)
+                    )
+                )
+                host: Final = parsed.netloc.rpartition("@")[2]
+                yield (
+                    role,
+                    admin_url,
+                    urlunsplit(parsed._replace(netloc=f"{role}:{_CAPPED_WRITER_ROLE_PASSWORD}@{host}")),
+                )
+        finally:
+            admin.execute(sql.SQL("DROP ROLE {}").format(sql.Identifier(role)))
+
+
+def _set_connection_limit(admin_url: str, role: str, limit: int) -> None:
+    with psycopg.connect(admin_url, autocommit=True) as admin:
+        admin.execute(sql.SQL("ALTER ROLE {} CONNECTION LIMIT {}").format(sql.Identifier(role), sql.Literal(limit)))
+
+
+def _open_connections(database_url: str, role: str) -> JsonValue:
+    return read_rows(
+        "SELECT count(*) AS connections FROM pg_stat_activity WHERE usename = %s",
+        (role,),
+        database_url=database_url,
+    )[0]["connections"]
+
+
+def test_a_writer_database_out_of_connections_keeps_the_applied_db_environment_variables(
+    gateway: Gateway, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    alias: Final = "environment-variables-capped-writer-" + marker
+    process_key: Final = "process-key-" + marker
+    database_key: Final = "database-key-" + marker
+
+    with (
+        _database_owned_by_a_login_role() as (role, writer_admin_url, writer_url),
+        scratch_database() as replica_url,
+        wire_server(_provider_echoing_its_key("config-file")) as config_file_provider,
+        wire_server(_provider_echoing_its_key("database")) as database_provider,
+        wire_server(_provider_echoing_its_key("writer")) as writer_provider,
+    ):
+        monkeypatch.setenv("DATABASE_URL", replica_url)
+        _push_schema()
+        monkeypatch.setenv("DATABASE_URL", writer_url)
+        _push_schema_with_environment_variables_revision_trigger()
+        config: Final = _environment_variables_proxy_config(tmp_path, gateway, alias, config_file_provider)
+        parsed_writer_url: Final = urlsplit(writer_url)
+        writer_url_dropping_idle_connections: Final = urlunsplit(
+            parsed_writer_url._replace(
+                query="&".join(part for part in (parsed_writer_url.query, "max_idle_connection_lifetime=1") if part)
+            )
+        )
+        environment: Final = {
+            **_environment_variables_proxy_environment(writer_url_dropping_idle_connections, process_key),
+            "DATABASE_URL_READ_REPLICA": replica_url,
+        }
+        from_process_and_config_file: Final = f"config-file Bearer {process_key}"
+        with owned_proxy(
+            gateway,
+            tmp_path / "capped-writer",
+            environment,
+            config=config,
+            database_setup=(),
+            remove_environment=("OPENAI_API_BASE", "OPENAI_BASE_URL"),
+        ) as proxy:
+            stored: Final = proxy.request(
+                "POST",
+                "/config/update",
+                {
+                    "environment_variables": {
+                        "OPENAI_API_KEY": database_key,
+                        "OPENAI_BASE_URL": database_provider.url + "/v1",
+                    }
+                },
+            )
+            assert stored.status_code == 200, stored.text
+            row_holding_the_key: Final = _environment_variables_row(writer_admin_url)
+            _load_environment_variables_row(replica_url, row_holding_the_key)
+            eventually(
+                lambda: _chat_answer(proxy, alias),
+                lambda value: value == f"database Bearer {database_key}",
+                seconds=30,
+            )
+
+            unset: Final = proxy.request(
+                "POST", "/config/update", {"environment_variables": {"OPENAI_API_KEY": None, "OPENAI_BASE_URL": None}}
+            )
+            assert unset.status_code == 200, unset.text
+            _load_environment_variables_row(replica_url, _environment_variables_row(writer_admin_url))
+            eventually(
+                lambda: _chat_answer(proxy, alias), lambda value: value == from_process_and_config_file, seconds=30
+            )
+
+            _load_environment_variables_row(replica_url, row_holding_the_key)
+            _set_connection_limit(writer_admin_url, role, 0)
+            with pytest.raises(psycopg.OperationalError):
+                psycopg.connect(writer_url).close()
+            eventually(lambda: _open_connections(writer_admin_url, role), lambda count: count == 0, seconds=30)
+
+            config_read: Final = proxy.request("GET", "/get/config/callbacks")
+            assert config_read.status_code == 200, config_read.text
+            assert _chat_answer(proxy, alias) == from_process_and_config_file
+
+            _set_connection_limit(writer_admin_url, role, -1)
+            _save_environment_variables_as(writer_admin_url, {"OPENAI_BASE_URL": writer_provider.url + "/v1"})
+            eventually(
+                lambda: _chat_answer(proxy, alias),
+                lambda value: value == f"writer Bearer {process_key}",
+                seconds=30,
+            )
+
+
 def _sign_in_client_id(proxy: Gateway) -> str | None:
     response: Final = httpx.get(
         str(proxy.client.base_url).rstrip("/") + "/sso/key/generate",
