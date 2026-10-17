@@ -195,6 +195,39 @@ describe("useAuthorized", () => {
     expect(clearTokenCookiesMock).not.toHaveBeenCalled();
   });
 
+  it("sends the first lookup on the auth header named in the session cookie", async () => {
+    const uiConfig = {
+      server_root_path: "/",
+      proxy_base_url: null,
+      auto_redirect_to_sso: false,
+      admin_ui_disabled: false,
+      sso_configured: false,
+    };
+    getUiConfigMock.mockResolvedValue(uiConfig);
+
+    const decodedPayload = {
+      key: "api-key-custom-header",
+      user_id: "user-3",
+      user_role: "internal_user",
+      auth_header_name: "X-Litellm-Key",
+    };
+
+    decodeTokenMock.mockReturnValue(decodedPayload);
+    checkTokenValidityMock.mockReturnValue(true);
+    serveCurrentUser({ user_id: "user-3", user_email: null, user_role: "internal_user" });
+    document.cookie = `token=${createJwt(decodedPayload)}; path=/;`;
+
+    const { result } = renderHook(() => useAuthorized(), { wrapper });
+
+    await waitFor(() => {
+      expect(result.current.userId).toBe("user-3");
+    });
+
+    expect(currentUserRequests().map((request) => request.headers.get("X-Litellm-Key"))).toEqual([
+      "Bearer api-key-custom-header",
+    ]);
+  });
+
   it("should present proxy_admin_viewer as Admin while flagging it view-only", async () => {
     getUiConfigMock.mockResolvedValue({
       server_root_path: "/",

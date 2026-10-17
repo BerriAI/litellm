@@ -242,6 +242,7 @@ describe("(dashboard) Layout", () => {
 
     afterEach(() => {
       document.cookie = "token=; Max-Age=0; Path=/";
+      document.cookie = "litellm_return_url=; Max-Age=0; Path=/";
     });
 
     it("routes a session flagged password_reset_required to the change-password page", async () => {
@@ -340,9 +341,42 @@ describe("(dashboard) Layout", () => {
           timeout: 4000,
         });
         expect(document.cookie).not.toContain("token=");
+        expect(document.cookie).toContain("litellm_return_url=");
         expect(screen.queryByTestId("sidebar")).not.toBeInTheDocument();
         expect(screen.queryByTestId("page-content")).not.toBeInTheDocument();
         expect(currentUserRequests()).toHaveLength(2);
+      } finally {
+        Object.defineProperty(window, "location", { value: originalLocation, writable: true });
+      }
+    });
+
+    it("keeps the session of an invitation link whose current user cannot be loaded", async () => {
+      const originalLocation = window.location;
+      const locationReplace = vi.fn();
+      Object.defineProperty(window, "location", {
+        value: { ...originalLocation, replace: locationReplace },
+        writable: true,
+      });
+      searchParamsValue = new URLSearchParams("invitation_id=abc123");
+      currentUserReply = async () => Response.json({ detail: "rejected" }, { status: 401 });
+      document.cookie = `token=${sessionCookie({ user_id: "invited-user", key: "sk-invited-session" })}; Path=/`;
+
+      try {
+        render(
+          <AuthProvider>
+            <Layout>
+              <div data-testid="page-content" />
+            </Layout>
+          </AuthProvider>,
+        );
+        pendingUiConfig.resolve();
+
+        await waitFor(() => expect(currentUserRequests()).toHaveLength(2), { timeout: 4000 });
+        await waitFor(() =>
+          expect(replaceMock).toHaveBeenCalledWith(expect.stringContaining("/onboarding?invitation_id=abc123")),
+        );
+        expect(locationReplace).not.toHaveBeenCalled();
+        expect(document.cookie).toContain("token=");
       } finally {
         Object.defineProperty(window, "location", { value: originalLocation, writable: true });
       }

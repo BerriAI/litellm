@@ -223,7 +223,11 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
   const searchParams = useSearchParams();
   const pathname = usePathname();
   const { accessToken, token, authLoading, passwordResetRequired } = useAuth();
-  const { isLoading: currentUserLoading, isError: currentUserFailed } = useCurrentUser(decodeToken(token)?.key ?? null);
+  const session = decodeToken(token);
+  const { isLoading: currentUserLoading, isError: currentUserFailed } = useCurrentUser(
+    session?.key ?? null,
+    session?.auth_header_name,
+  );
   const isInvitationFlow = Boolean(searchParams.get("invitation_id"));
   const identityPending = currentUserLoading || currentUserFailed;
 

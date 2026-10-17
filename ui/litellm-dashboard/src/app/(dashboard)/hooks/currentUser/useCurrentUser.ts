@@ -8,18 +8,18 @@ export type CurrentUser = components["schemas"]["CurrentUserResponse"];
 
 const currentUserKeys = createQueryKeys("currentUser");
 
-const getCurrentUser = async (accessToken: string): Promise<CurrentUser> => {
+const getCurrentUser = async (accessToken: string, authHeaderName: string): Promise<CurrentUser> => {
   const { data } = await fetchClient.GET("/management/v1/users/me", {
-    headers: { [getAuthHeaderName()]: `Bearer ${accessToken}` },
+    headers: { [authHeaderName]: `Bearer ${accessToken}` },
   });
   if (!data) throw new Error("Current user response is empty");
   return data;
 };
 
-export const useCurrentUser = (accessToken: string | null) => {
+export const useCurrentUser = (accessToken: string | null, authHeaderName?: string) => {
   const options: UseQueryOptions<CurrentUser> = {
     queryKey: currentUserKeys.detail(accessToken ?? ""),
-    queryFn: accessToken ? () => getCurrentUser(accessToken) : skipToken,
+    queryFn: accessToken ? () => getCurrentUser(accessToken, authHeaderName ?? getAuthHeaderName()) : skipToken,
     staleTime: Infinity,
     retry: 1,
   };
