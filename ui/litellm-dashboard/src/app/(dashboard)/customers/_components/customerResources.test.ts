@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { EndUser } from "@/app/(dashboard)/hooks/customers/useCustomers";
 import { ALL_PROXY_MCP_SERVERS_SENTINEL, NO_MCP_SERVERS_SENTINEL } from "@/components/mcp_tools/constants";
 
-import { customerHasMcpAccess, getCustomerResourceCounts, type CustomerResourceCounts } from "./customerResources";
+import { customerMcpScope, getCustomerResourceCounts, type CustomerResourceCounts } from "./customerResources";
 
 const emptyPermission: NonNullable<EndUser["object_permission"]> = {
   object_permission_id: "permission-id",
@@ -55,7 +55,7 @@ describe("getCustomerResourceCounts", () => {
       },
     };
     expect(getCustomerResourceCounts(configured).servers).toBe(2);
-    expect(customerHasMcpAccess(configured)).toBe(true);
+    expect(customerMcpScope(configured.object_permission)).toBe("limited");
   });
 
   it("excludes the unsupported all-MCP sentinel from customer server counts", () => {
@@ -64,7 +64,7 @@ describe("getCustomerResourceCounts", () => {
       object_permission: { ...emptyPermission, mcp_servers: [ALL_PROXY_MCP_SERVERS_SENTINEL, "server-a"] },
     };
     expect(getCustomerResourceCounts(configured).servers).toBe(1);
-    expect(customerHasMcpAccess(configured)).toBe(true);
+    expect(customerMcpScope(configured.object_permission)).toBe("limited");
   });
 
   it("does not claim MCP access from unsupported all-MCP sentinel-only grants", () => {
@@ -77,7 +77,7 @@ describe("getCustomerResourceCounts", () => {
       },
     };
     expect(getCustomerResourceCounts(configured).servers).toBe(0);
-    expect(customerHasMcpAccess(configured)).toBe(false);
+    expect(customerMcpScope(configured.object_permission)).toBe("denied");
   });
 
   it("zeroes every MCP grant when no-MCP overrides other grants", () => {
@@ -92,7 +92,7 @@ describe("getCustomerResourceCounts", () => {
       },
     };
     expect(getCustomerResourceCounts(configured)).toEqual(noMcpCounts);
-    expect(customerHasMcpAccess(configured)).toBe(false);
+    expect(customerMcpScope(configured.object_permission)).toBe("denied");
   });
 
   it("excludes permission-table models and resources not enforced for customers", () => {
@@ -110,19 +110,19 @@ describe("getCustomerResourceCounts", () => {
       },
     };
     expect(getCustomerResourceCounts(configured)).toEqual({ ...noMcpCounts, models: 1 });
-    expect(customerHasMcpAccess(configured)).toBe(false);
+    expect(customerMcpScope(configured.object_permission)).toBe("unrestricted");
   });
 });
 
-describe("customerHasMcpAccess", () => {
+describe("customerMcpScope", () => {
   it.each([
     undefined,
     null,
     emptyPermission,
     { ...emptyPermission, mcp_servers: null, mcp_access_groups: null, mcp_toolsets: null },
-  ])("treats an empty customer-level grant as not configured (%j)", (object_permission) => {
+  ])("treats an empty customer-level grant as unrestricted (%j)", (object_permission) => {
     const unconfigured = { ...customer, object_permission };
-    expect(customerHasMcpAccess(unconfigured)).toBe(false);
+    expect(customerMcpScope(object_permission)).toBe("unrestricted");
     expect(getCustomerResourceCounts(unconfigured)).toEqual(noMcpCounts);
   });
 
@@ -132,6 +132,6 @@ describe("customerHasMcpAccess", () => {
     { mcp_toolsets: ["toolset-id"] },
     { mcp_tool_permissions: { "server-id": ["read"] } },
   ])("recognizes a grant from each MCP source (%j)", (grant) => {
-    expect(customerHasMcpAccess({ ...customer, object_permission: { ...emptyPermission, ...grant } })).toBe(true);
+    expect(customerMcpScope({ ...emptyPermission, ...grant })).toBe("limited");
   });
 });

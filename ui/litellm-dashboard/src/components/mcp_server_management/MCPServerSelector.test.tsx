@@ -258,3 +258,42 @@ describe("MCPServerSelector scoping", () => {
     expect(optionByLabel("Wiki A")).toBeDefined();
   });
 });
+
+describe("MCPServerSelector name collisions", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUseMCPServers.mockReturnValue({
+      data: [
+        { server_id: "shared", server_name: "Shared" },
+        { server_id: "srv-x", server_name: "Other" },
+      ],
+      isLoading: false,
+    } as any);
+    mockUseMCPAccessGroups.mockReturnValue({ data: ["shared", "alias-a"], isLoading: false } as any);
+    mockUseMCPToolsets.mockReturnValue({ data: [], isLoading: false } as any);
+  });
+
+  it.each(["shared", "alias-a"])(
+    "keeps the stored server %s a server when it matches an access group name",
+    async (server) => {
+      const user = userEvent.setup();
+      const onChange = vi.fn();
+      renderWithProviders(
+        <MCPServerSelector accessToken="tok" onChange={onChange} value={{ servers: [server], accessGroups: [] }} />,
+      );
+
+      await openSelector(user);
+      await user.click(optionByLabel("Other")!);
+
+      expect(onChange).toHaveBeenCalledWith({ servers: [server, "srv-x"], accessGroups: [], toolsets: [] });
+    },
+  );
+
+  it("shows a stored server alias by its name", () => {
+    renderWithProviders(
+      <MCPServerSelector accessToken="tok" onChange={vi.fn()} value={{ servers: ["alias-a"], accessGroups: [] }} />,
+    );
+
+    expect(screen.getByLabelText("alias-a")).toBeInTheDocument();
+  });
+});

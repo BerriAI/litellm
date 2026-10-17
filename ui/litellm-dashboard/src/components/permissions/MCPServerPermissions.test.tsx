@@ -157,6 +157,24 @@ describe("MCPServerPermissions", () => {
     expect(screen.queryByText(/tool/)).not.toBeInTheDocument();
   });
 
+  it("labels an empty tool allowlist as allowing no tools", async () => {
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([
+      { server_id: mockServerId1, server_name: mockServerName1, alias: mockServerName1 },
+    ]);
+
+    render(
+      <MCPServerPermissions
+        mcpServers={[]}
+        mcpToolPermissions={{ [mockServerId1]: [] }}
+        entityType="customer"
+        accessToken={mockAccessToken}
+      />,
+    );
+
+    expect(await screen.findByText(/DW_MCP/)).toBeInTheDocument();
+    expect(screen.getByText("No tools allowed")).toBeInTheDocument();
+  });
+
   it("should display access groups correctly", async () => {
     /**
      * Tests that access groups are displayed with the correct styling

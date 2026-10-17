@@ -20,6 +20,11 @@ const permission: NonNullable<EndUser["object_permission"]> = {
   vector_stores: [],
 };
 
+const MCP_SCOPES = ["limited", "denied", "unrestricted"] as const;
+
+const scopesMatching = (row: EndUser): string[] =>
+  MCP_SCOPES.filter((scope) => customerMatchesFilter(row, "mcp_access", scope));
+
 describe("customer filters", () => {
   it("searches ID and alias case-insensitively and trims the search", () => {
     expect(customerMatchesSearch(customer, " CUSTOMER-1 ")).toBe(true);
@@ -52,34 +57,34 @@ describe("customer filters", () => {
     { mcp_tool_permissions: { "server-1": ["read"] } },
   ])("detects configured MCP grants %j", (grant) => {
     const row = { ...customer, object_permission: { ...permission, ...grant } };
-    expect(customerMatchesFilter(row, "mcp_access", "yes")).toBe(true);
-    expect(customerMatchesFilter(row, "mcp_access", "no")).toBe(false);
+    expect(scopesMatching(row)).toEqual(["limited"]);
   });
 
-  it("does not mistake absent, empty, or explicitly denied MCP grants for access", () => {
-    const denied = { ...permission, mcp_servers: [NO_MCP_SERVERS_SENTINEL], mcp_access_groups: ["group-1"] };
-    for (const object_permission of [
-      undefined,
-      null,
-      permission,
-      denied,
-      { ...permission, mcp_servers: [ALL_PROXY_MCP_SERVERS_SENTINEL] },
-    ]) {
-      expect(customerMatchesFilter({ ...customer, object_permission }, "mcp_access", "yes")).toBe(false);
-      expect(customerMatchesFilter({ ...customer, object_permission }, "mcp_access", "no")).toBe(true);
-    }
+  it.each([
+    { mcp_servers: [NO_MCP_SERVERS_SENTINEL], mcp_access_groups: ["group-1"] },
+    { mcp_servers: [ALL_PROXY_MCP_SERVERS_SENTINEL] },
+  ])("matches denied MCP grants only as No MCP access %j", (grant) => {
+    expect(scopesMatching({ ...customer, object_permission: { ...permission, ...grant } })).toEqual(["denied"]);
   });
+
+  it.each([undefined, null, permission])(
+    "matches customers without a grant only as No MCP restriction (%j)",
+    (object_permission) => {
+      expect(scopesMatching({ ...customer, object_permission })).toEqual(["unrestricted"]);
+    },
+  );
 
   it("ignores invalid URL filter values and unrelated columns", () => {
     expect(customerMatchesFilter(customer, "blocked", "unexpected")).toBe(true);
     expect(customerMatchesFilter(customer, "max_budget", false)).toBe(true);
     expect(customerMatchesFilter(customer, "mcp_access", "unexpected")).toBe(true);
+    expect(customerMatchesFilter(customer, "mcp_access", "yes")).toBe(true);
     expect(customerMatchesFilter(customer, "unrelated", "yes")).toBe(true);
   });
 
   it("formats filter chips with the labels shown in the drawer", () => {
     expect(formatCustomerFilterValue("blocked", "active")).toBe("Active");
     expect(formatCustomerFilterValue("max_budget", "yes")).toBe("Has budget");
-    expect(formatCustomerFilterValue("mcp_access", "no")).toBe("No MCP access");
+    expect(formatCustomerFilterValue("mcp_access", "unrestricted")).toBe("No MCP restriction");
   });
 });
