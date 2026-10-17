@@ -778,10 +778,6 @@ async def test_test_model_connection_sends_the_token_behind_an_admin_oidc_api_ke
             patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
             patch("litellm.proxy.proxy_server.llm_router", router),
             patch("litellm.proxy.proxy_server.premium_user", False),
-            patch(
-                "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
-                AsyncMock(),
-            ),
             respx.mock(assert_all_called=True) as upstream,
         ):
             upstream.post("https://api.mistral.ai/v1/chat/completions").respond(
