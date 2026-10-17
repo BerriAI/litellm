@@ -55,6 +55,21 @@ class CallerCache(BaseCache):
         self.storage.set_cache(key, value, **kwargs)
 
 
+class HeldWriteCache(InMemoryCache):
+    def __init__(self) -> None:
+        super().__init__()
+        self.release: Final = asyncio.Event()
+
+    async def async_set_cache(self, key: str, value: object, **kwargs: object) -> None:
+        await self.release.wait()
+        await super().async_set_cache(key, value, **kwargs)
+
+
+class FailingLookupCache(Cache):
+    def should_use_cache(self, **kwargs: object) -> bool:
+        raise RuntimeError("cache lookup failed")
+
+
 def use_cache(monkeypatch: pytest.MonkeyPatch, cache: Cache) -> Cache:
     monkeypatch.setattr(litellm, "cache", cache)
     return cache

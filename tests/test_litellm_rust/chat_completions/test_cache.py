@@ -13,7 +13,11 @@ from tests.test_litellm_rust.messages.data import MESSAGES_RESPONSE, MESSAGES_TE
 from tests.test_litellm_rust.support.caching import (
     Call,
     CallerCache,
+    FailingLookupCache,
+    FakeRedis,
+    HeldWriteCache,
     assert_cache_hit_keeps_budget_spend_and_counts_usage,
+    settle_cache_writes,
     use_cache,
 )
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging, request_body
@@ -247,3 +251,63 @@ async def test_a_stored_response_without_output_is_a_miss(
     assert len(server.requests) == 2
     assert content(response) == MESSAGES_TEXT
     assert_served_natively(server, count=2)
+
+
+async def test_a_failing_cache_lookup_runs_the_call_uncached(
+    call: Call, server: RecordingServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    use_cache(monkeypatch, FailingLookupCache())
+    server.expect(2)
+
+    first: Final = await call()
+    await call()
+
+    assert content(first) == MESSAGES_TEXT
+    assert len(server.requests) == 2
+    assert_served_natively(server, count=2)
+
+
+async def test_the_response_returns_before_the_cache_write_lands(
+    call: Call, native_call: Call, server: RecordingServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    backend: Final = HeldWriteCache()
+    use_cache(monkeypatch, Cache(_backend=backend))
+
+    first: Final = await asyncio.wait_for(native_call(), timeout=5)
+    backend.release.set()
+    await settle_cache_writes()
+    hit: Final = await call()
+
+    assert content(first) == MESSAGES_TEXT
+    assert len(server.requests) == 1
+    assert content(hit) == MESSAGES_TEXT
+    assert_served_natively(server, count=1)
+
+
+async def test_a_redis_hit_fills_the_worker_memory_tier(
+    call: Call, server: RecordingServer, monkeypatch: pytest.MonkeyPatch, fake_redis: FakeRedis
+) -> None:
+    use_cache(monkeypatch, fake_redis.cache())
+
+    await call()
+    await call()
+    fake_redis.client.flushall()
+    hit: Final = await call()
+
+    assert len(server.requests) == 1
+    assert content(hit) == MESSAGES_TEXT
+    assert_served_natively(server, count=1)
+
+
+async def test_a_stored_response_lands_in_the_worker_memory_tier(
+    call: Call, server: RecordingServer, monkeypatch: pytest.MonkeyPatch, fake_redis: FakeRedis
+) -> None:
+    use_cache(monkeypatch, fake_redis.cache())
+
+    first: Final = await call()
+    fake_redis.client.flushall()
+    hit: Final = await call()
+
+    assert len(server.requests) == 1
+    assert content(hit) == content(first)
+    assert_served_natively(server, count=1)

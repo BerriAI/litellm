@@ -6,17 +6,22 @@ import pytest
 from pydantic import TypeAdapter
 
 from litellm.caching.caching import Cache, CacheMode
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.types.caching import CachingSupportedCallTypes
 from litellm.types.llms.openai import ResponsesAPIResponse
 from tests.test_litellm_rust.responses.data import RESPONSES_RESPONSE, RESPONSES_TEXT
 from tests.test_litellm_rust.support.caching import (
     Call,
     CallerCache,
+    FailingLookupCache,
+    FakeRedis,
+    HeldWriteCache,
     assert_cache_hit_keeps_budget_spend_and_counts_usage,
+    settle_cache_writes,
     use_cache,
 )
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging, request_body
-from tests.test_litellm_rust.support.recording_server import RecordingServer
+from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
 from tests.test_litellm_rust.support.results import cache_key
 from tests.test_litellm_rust.support.routing import assert_served_natively
 
@@ -228,4 +233,93 @@ async def test_a_cache_hit_keeps_budget_spend_and_counts_usage(call: Call, serve
     usage: Final = TypeAdapter(dict[str, int]).validate_python(RESPONSES_RESPONSE["usage"])
 
     await assert_cache_hit_keeps_budget_spend_and_counts_usage(call, server, usage["total_tokens"])
+    assert_served_natively(server, count=1)
+
+
+@pytest.mark.usefixtures("cache")
+async def test_a_response_without_output_is_not_stored(call: Call, server: RecordingServer) -> None:
+    server.serve(ResponseSpec(body=EMPTY))
+    server.expect(2)
+
+    await call()
+    await call()
+
+    assert len(server.requests) == 2
+    assert_served_natively(server, count=2)
+
+
+async def test_a_stored_response_without_output_is_a_miss(
+    call: Call, server: RecordingServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    backend: Final = InMemoryCache()
+    cache: Final = use_cache(monkeypatch, Cache(_backend=backend))
+    await call()
+    (key,) = backend.cache_dict
+    cache.add_cache(EMPTY, cache_key=key)
+    server.expect(2)
+
+    response: Final = await call()
+
+    assert len(server.requests) == 2
+    assert output_text(response) == RESPONSES_TEXT
+    assert_served_natively(server, count=2)
+
+
+async def test_a_failing_cache_lookup_runs_the_call_uncached(
+    call: Call, server: RecordingServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    use_cache(monkeypatch, FailingLookupCache())
+    server.expect(2)
+
+    first: Final = await call()
+    await call()
+
+    assert output_text(first) == RESPONSES_TEXT
+    assert len(server.requests) == 2
+    assert_served_natively(server, count=2)
+
+
+async def test_the_response_returns_before_the_cache_write_lands(
+    call: Call, native_call: Call, server: RecordingServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    backend: Final = HeldWriteCache()
+    use_cache(monkeypatch, Cache(_backend=backend))
+
+    first: Final = await asyncio.wait_for(native_call(), timeout=5)
+    backend.release.set()
+    await settle_cache_writes()
+    hit: Final = await call()
+
+    assert output_text(first) == RESPONSES_TEXT
+    assert len(server.requests) == 1
+    assert output_text(hit) == RESPONSES_TEXT
+    assert_served_natively(server, count=1)
+
+
+async def test_a_redis_hit_fills_the_worker_memory_tier(
+    call: Call, server: RecordingServer, monkeypatch: pytest.MonkeyPatch, fake_redis: FakeRedis
+) -> None:
+    use_cache(monkeypatch, fake_redis.cache())
+
+    await call()
+    await call()
+    fake_redis.client.flushall()
+    hit: Final = await call()
+
+    assert len(server.requests) == 1
+    assert output_text(hit) == RESPONSES_TEXT
+    assert_served_natively(server, count=1)
+
+
+async def test_a_stored_response_lands_in_the_worker_memory_tier(
+    call: Call, server: RecordingServer, monkeypatch: pytest.MonkeyPatch, fake_redis: FakeRedis
+) -> None:
+    use_cache(monkeypatch, fake_redis.cache())
+
+    first: Final = await call()
+    fake_redis.client.flushall()
+    hit: Final = await call()
+
+    assert len(server.requests) == 1
+    assert output_text(hit) == output_text(first)
     assert_served_natively(server, count=1)
