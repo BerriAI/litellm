@@ -1,5 +1,5 @@
 from collections.abc import AsyncIterator, Mapping, Sequence
-from typing import ClassVar, Final, cast
+from typing import ClassVar, Final, cast  # noqa: TID251  # cast narrows untyped optional_params.get()
 
 import httpx
 
