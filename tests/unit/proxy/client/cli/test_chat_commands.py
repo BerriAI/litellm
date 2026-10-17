@@ -23,8 +23,9 @@ PARTIAL_THEN_ERROR: Final = (
     [
         (200, PARTIAL_THEN_ERROR, None),
         (400, None, {"error": {"message": MESSAGE}}),
+        (400, MESSAGE.encode(), None),
     ],
-    ids=["error frame mid-stream", "json error before the stream"],
+    ids=["error frame mid-stream", "json error before the stream", "text error before the stream"],
 )
 @responses.activate
 def test_stream_response_prints_the_error_message_as_plain_text(
