@@ -1009,7 +1009,7 @@ def _billed_across_attempts(
     )
 
 
-def _failure_usage_to_lift(
+def _current_failure_usage_to_lift(
     model_call_details: Mapping[str, object],
     request_body: Mapping[str, object],
     dispatched: bool,
@@ -1023,9 +1023,6 @@ def _failure_usage_to_lift(
     chat-completions provider) without filling optional_params. Returns the
     (combined_usage_object, response_cost) pair to lift, or None."""
     recovered_usage: Final = model_call_details.get("combined_usage_object")
-    failed_attempts: Final = _FAILED_ATTEMPTS_USAGE.validate_python(model_call_details.get("failed_attempts_usage", ()))
-    if failed_attempts:
-        return _billed_across_attempts(failed_attempts, recovered_usage, model_call_details.get("response_cost"))
     if recovered_usage is not None:
         return recovered_usage, model_call_details.get("response_cost")
     if not dispatched or model_call_details.get(LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL):
@@ -1047,6 +1044,19 @@ def _failure_usage_to_lift(
     if estimated_usage is None:
         return None
     return estimated_usage, 0.0
+
+
+def _failure_usage_to_lift(
+    model_call_details: Mapping[str, object],
+    request_body: Mapping[str, object],
+    dispatched: bool,
+) -> tuple[object, object] | None:
+    current_attempt: Final = _current_failure_usage_to_lift(model_call_details, request_body, dispatched)
+    failed_attempts: Final = _FAILED_ATTEMPTS_USAGE.validate_python(model_call_details.get("failed_attempts_usage", ()))
+    if not failed_attempts:
+        return current_attempt
+    current_usage, current_cost = current_attempt if current_attempt is not None else (None, None)
+    return _billed_across_attempts(failed_attempts, current_usage, current_cost)
 
 
 _EMPTY_LIFT: Final = MappingProxyType({})

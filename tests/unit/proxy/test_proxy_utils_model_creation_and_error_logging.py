@@ -1921,6 +1921,34 @@ def test_a_request_that_reached_a_provider_bills_its_input_at_no_cost():
     assert response_cost == 0.0
 
 
+def test_a_retry_failure_bills_its_input_after_prior_stream_usage() -> None:
+    from litellm.proxy.utils import _estimate_dispatched_failure_usage, _failure_usage_to_lift
+    from litellm.types.utils import Usage
+
+    prior_usage: Final = Usage(prompt_tokens=4, completion_tokens=2, total_tokens=6)
+    estimated_retry_usage: Final = _estimate_dispatched_failure_usage(FAILURE_USAGE_MODEL, ONE_USER_MESSAGE, None)
+    assert estimated_retry_usage is not None
+
+    lifted: Final = _failure_usage_to_lift(
+        model_call_details={
+            "failed_attempts_usage": ((prior_usage, 0.25),),
+            "call_type": "acompletion",
+            "model": FAILURE_USAGE_MODEL,
+            "messages": ONE_USER_MESSAGE,
+        },
+        request_body={},
+        dispatched=True,
+    )
+
+    assert lifted is not None
+    usage, response_cost = lifted
+    assert isinstance(usage, Usage)
+    assert usage.prompt_tokens == prior_usage.prompt_tokens + estimated_retry_usage.prompt_tokens
+    assert usage.completion_tokens == prior_usage.completion_tokens
+    assert usage.total_tokens == prior_usage.total_tokens + estimated_retry_usage.total_tokens
+    assert response_cost == 0.25
+
+
 @pytest.mark.parametrize(
     "model_call_details, dispatched",
     [
