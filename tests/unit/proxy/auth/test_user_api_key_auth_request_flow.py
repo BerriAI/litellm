@@ -667,6 +667,39 @@ async def test_user_custom_auth_skips_post_custom_auth_checks_by_default():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("enterprise", [False, True])
+async def test_user_custom_auth_transport_error_does_not_use_db_fallback(
+    monkeypatch: pytest.MonkeyPatch, enterprise: bool
+) -> None:
+    from fastapi import Request
+    import httpx
+    import litellm.proxy.proxy_server as proxy_server
+    import litellm.proxy.auth.user_api_key_auth as auth_module
+
+    custom_auth: Final = AsyncMock(side_effect=httpx.ConnectError("auth service unavailable"))
+    for name, value in _proxy_server_attrs_for_custom_auth(user_custom_auth=None if enterprise else custom_auth).items():
+        monkeypatch.setattr(proxy_server, name, value)
+    monkeypatch.setattr(proxy_server, "general_settings", {"allow_requests_on_db_unavailable": True})
+    monkeypatch.setattr(auth_module, "enterprise_custom_auth", custom_auth if enterprise else None)
+    request: Final = Request(scope={"type": "http", "path": "/chat/completions", "headers": []})
+
+    with pytest.raises(ProxyException) as exc_info:
+        await user_api_key_auth_builder(
+            request=request,
+            api_key="Bearer sk-custom-auth-unavailable",
+            azure_api_key_header="",
+            anthropic_api_key_header=None,
+            google_ai_studio_api_key_header=None,
+            azure_apim_header=None,
+            request_data={},
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.no_db_connection
+    assert int(exc_info.value.code) == status.HTTP_503_SERVICE_UNAVAILABLE
+    custom_auth.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_user_custom_auth_runs_post_custom_auth_checks_when_opt_in():
     """
     Opt-in half of the outer-gate regression test: when
