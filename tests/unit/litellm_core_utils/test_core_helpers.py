@@ -1,5 +1,6 @@
 """Tests for litellm_core_utils.core_helpers module."""
 
+import json
 import logging
 import threading
 from collections.abc import Iterator, Mapping
@@ -7,6 +8,7 @@ from typing import Final
 
 import httpx
 import pytest
+from openai.types.chat import ChatCompletionChunk
 
 from litellm.litellm_core_utils.core_helpers import (
     _FINISH_REASON_MAP,
@@ -72,6 +74,30 @@ def test_preserve_upstream_non_openai_attributes_keeps_scalar_and_structured_val
 
     assert model_response.scalar_attribute == "scalar"
     assert model_response.structured_attribute == {"items": ["value"]}
+
+
+@pytest.mark.parametrize("last_extra_value", [9, {"nested": 9}], ids=["all_scalar", "one_structured"])
+def test_preserve_upstream_non_openai_attributes_keeps_upstream_key_order(last_extra_value: object) -> None:
+    extra_names: Final = ("zeta", "alpha", "mid", "beta", "omega", "delta", "kappa", "gamma", "theta", "iota")
+    extras: Final = {
+        **{f"extra_{name}": index for index, name in enumerate(extra_names[:-1])},
+        f"extra_{extra_names[-1]}": last_extra_value,
+    }
+    original_chunk: Final = ChatCompletionChunk(
+        id="chatcmpl-1",
+        created=0,
+        model="gpt-x",
+        object="chat.completion.chunk",
+        choices=[],
+        service_tier="default",
+        **extras,
+    )
+    model_response: Final = ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(content="hello"))])
+
+    preserve_upstream_non_openai_attributes(model_response, original_chunk)
+
+    serialized_keys: Final = tuple(json.loads(model_response.model_dump_json(exclude_none=True, exclude_unset=True)))
+    assert serialized_keys[-len(extras) - 1 :] == ("service_tier", *extras)
 
 
 class TestBudgetReservationBinding:
