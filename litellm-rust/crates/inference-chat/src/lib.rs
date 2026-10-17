@@ -1,5 +1,8 @@
 use litellm_host::observation::ObservationSender;
+mod azure;
 pub mod route;
+#[cfg(test)]
+mod test_support;
 pub mod types;
 pub use litellm_inference::RouteError as Error;
 mod common_utils;
