@@ -1008,6 +1008,7 @@ openai_compatible_endpoints: Final[list[str]] = [
     "https://api.stima.tech/v1",
     "https://nano-gpt.com/api/v1",
     "https://api.poe.com/v1",
+    "https://api.llm-broker.net/api/v1",
     "https://llm.chutes.ai/v1/",
     "https://api.v0.dev/v1",
     "https://api.morphllm.com/v1",
@@ -1072,6 +1073,7 @@ openai_compatible_providers: Final[list] = [
     "apertis",  # Apertis - JSON-configured provider
     "nano-gpt",  # Nano-GPT - JSON-configured provider
     "poe",  # Poe - JSON-configured provider
+    "llm_broker",
     "chutes",  # Chutes - JSON-configured provider
     "parasail",  # Parasail - JSON-configured provider
     "libertai",  # LibertAI - JSON-configured provider
@@ -1130,6 +1132,7 @@ openai_text_completion_compatible_providers: Final[list] = [  # providers that s
     "apertis",
     "nano-gpt",
     "poe",
+    "llm_broker",
     "chutes",
     "v0",
     "lambda_ai",
