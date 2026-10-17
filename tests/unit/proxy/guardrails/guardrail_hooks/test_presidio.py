@@ -3992,6 +3992,21 @@ def test_numbered_tokens_collapse_overlapping_detections_into_one_token_per_run(
             {"<PERSON_1>": "John Smith", "<PERSON_2>": "Bob Ray", "<PERSON_3>": "Ann Lee"},
             id="bump-skips-every-claimed-number",
         ),
+        pytest.param(
+            (
+                (
+                    "Ann Lee and Bob Ray.",
+                    [
+                        {"entity_type": "PERSON", "start": 0, "end": 7, "score": 0.85},
+                        {"entity_type": "PERSON", "start": 12, "end": 19, "score": 0.85},
+                    ],
+                ),
+                ("Call John Smith.", [{"entity_type": "PERSON", "start": 5, "end": 15, "score": 0.85}]),
+            ),
+            ("<PERSON_1> and <PERSON_2>.", "Call <PERSON_3>."),
+            {"<PERSON_1>": "Ann Lee", "<PERSON_2>": "Bob Ray", "<PERSON_3>": "John Smith"},
+            id="spare-number-starts-above-every-earlier-part",
+        ),
     ],
 )
 def test_numbered_tokens_stay_unique_across_parts_of_one_request(
