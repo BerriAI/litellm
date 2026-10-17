@@ -440,6 +440,26 @@ describe("useAuthorized", () => {
       expect(replaceMock).not.toHaveBeenCalled();
     });
 
+    it("waits for backend discovery before looking up the current user", async () => {
+      let finishDiscovery!: (config: typeof uiConfig) => void;
+      getUiConfigMock.mockReturnValue(new Promise((resolve) => (finishDiscovery = resolve)));
+      setSessionCookie({ key: "discovery-key", user_id: "u-9", user_role: "internal_user" });
+      serveCurrentUser({ user_id: "u-9", user_email: null, user_role: "internal_user" });
+
+      const { result } = renderHook(() => useAuthorized(), { wrapper });
+
+      await waitFor(() => expect(getUiConfigMock).toHaveBeenCalled());
+      await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+      expect(currentUserRequests()).toHaveLength(0);
+      expect(result.current.isLoading).toBe(true);
+
+      await act(async () => finishDiscovery(uiConfig));
+
+      await waitFor(() => expect(result.current.userId).toBe("u-9"));
+      expect(currentUserRequests()).toHaveLength(1);
+      expect(replaceMock).not.toHaveBeenCalled();
+    });
+
     it("clears the cookie and redirects to login when the current user cannot be loaded", async () => {
       getUiConfigMock.mockResolvedValue(uiConfig);
       setSessionCookie({ key: "orphan-key", user_id: "u-1", user_role: "internal_user" });
