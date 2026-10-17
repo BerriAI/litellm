@@ -6,6 +6,7 @@ import time
 from collections.abc import Callable, Generator, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
+from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from queue import SimpleQueue
 from types import MappingProxyType
@@ -60,6 +61,7 @@ class Reply:
     abort_after: int | None = None
     gate_after_first: threading.Event | None = None
     pause_between_chunks: float = 0
+    heartbeat: bytes | None = None
     headers: Mapping[str, str] = MappingProxyType({})
     drop_connection: bool = False
 
@@ -82,10 +84,14 @@ class Wire:
         return self.connected.qsize() - self.closed.qsize()
 
 
-def _await_release(gate: threading.Event, closing: threading.Event) -> bool:
+def _await_release(
+    gate: threading.Event, closing: threading.Event, beat: Callable[[], None] | None = None, every: float = 0.05
+) -> bool:
     while not closing.is_set():
-        if gate.wait(timeout=0.05):
+        if gate.wait(timeout=every):
             return True
+        if beat is not None:
+            beat()
     return gate.is_set()
 
 
@@ -116,6 +122,10 @@ def wire_server(
         def finish(self) -> None:
             super().finish()
             closed.put(f"{self.client_address[0]}:{self.client_address[1]}")
+
+        def write_chunk(self, chunk: bytes) -> None:
+            self.wfile.write(b"%x\r\n%s\r\n" % (len(chunk), chunk))
+            self.wfile.flush()
 
         def respond(self) -> None:
             headers: Final = {name.lower(): value for name, value in self.headers.items()}
@@ -156,12 +166,20 @@ def wire_server(
                     for index, chunk in enumerate(reply.chunks):
                         if reply.abort_after == index:
                             break
-                        self.wfile.write(b"%x\r\n%s\r\n" % (len(chunk), chunk))
-                        self.wfile.flush()
+                        self.write_chunk(chunk)
                         if (
                             index == 0
                             and reply.gate_after_first is not None
-                            and not _await_release(reply.gate_after_first, closing)
+                            and not (
+                                _await_release(reply.gate_after_first, closing)
+                                if reply.heartbeat is None
+                                else _await_release(
+                                    reply.gate_after_first,
+                                    closing,
+                                    partial(self.write_chunk, reply.heartbeat),
+                                    reply.pause_between_chunks,
+                                )
+                            )
                         ):
                             break
                         if reply.pause_between_chunks and index + 1 < len(reply.chunks):
