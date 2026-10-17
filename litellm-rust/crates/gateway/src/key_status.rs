@@ -1,20 +1,21 @@
-use litellm_db::{Restrictions, VerificationToken};
+use litellm_db::{RateLimits, Restrictions, VerificationToken};
 use std::sync::Arc;
 
 use litellm_gateway_auth::keys::{
-    AllowedRoutes, KeyBudgets, KeyModels, KeyProfile, KeyStatus, MemberSpend, ModelAccess, Owner,
-    Refusal, Restriction, Spend,
+    AllowedRoutes, KeyBudgets, KeyLimits, KeyModels, KeyProfile, KeyStatus, Limits, MemberSpend,
+    ModelAccess, Owner, Refusal, Restriction, Spend,
 };
 use serde_json::Value;
 
 /// Key and team `metadata` fields the proxy enforces and this gateway does not.
-const METADATA_RESTRICTIONS: [(&str, Restriction); 11] = [
+const METADATA_RESTRICTIONS: [(&str, Restriction); 12] = [
     ("guardrails", Restriction::Guardrails),
     ("policies", Restriction::Guardrails),
     ("tags", Restriction::Tags),
     ("model_rpm_limit", Restriction::RateLimits),
     ("model_tpm_limit", Restriction::RateLimits),
     ("tag_rpm_limit", Restriction::RateLimits),
+    ("throttle_on_budget_exceeded", Restriction::RateLimits),
     ("allowed_tools", Restriction::ToolAllowlists),
     ("enforced_params", Restriction::EnforcedParams),
     ("priority", Restriction::Priority),
@@ -39,6 +40,7 @@ pub(crate) fn status(row: VerificationToken, personal_keys_use_teams: bool) -> K
         _ => Arc::default(),
     };
     let budgets = budgets(&row);
+    let limits = limits(&row);
     let (team_models, team_alias, team_metadata) = match row.team {
         Some(team) => (
             Some(ModelAccess::new(team.models)),
@@ -62,6 +64,7 @@ pub(crate) fn status(row: VerificationToken, personal_keys_use_teams: bool) -> K
             metadata: object(row.metadata),
             team_metadata,
             budgets,
+            limits,
         }),
     }
 }
@@ -93,6 +96,29 @@ fn budgets(row: &VerificationToken) -> KeyBudgets {
             .get("end_user_budget_id")
             .and_then(Value::as_str)
             .map(str::to_owned),
+    }
+}
+
+/// The rate limits the rate limits hook enforces for this key.
+fn limits(row: &VerificationToken) -> KeyLimits {
+    let limits = |limits: RateLimits| Limits {
+        rpm: limits.rpm,
+        tpm: limits.tpm,
+    };
+    KeyLimits {
+        key: limits(row.limits),
+        max_parallel_requests: row.max_parallel_requests,
+        user: row
+            .user
+            .as_ref()
+            .map(|user| limits(user.limits))
+            .unwrap_or_default(),
+        team: row
+            .team
+            .as_ref()
+            .map(|team| limits(team.limits))
+            .unwrap_or_default(),
+        team_member: limits(row.team_membership.limits),
     }
 }
 
@@ -145,7 +171,7 @@ fn unsupported(
         })
 }
 
-/// What the membership's budget table sets: rate limits, or an `allowed_models` list the proxy's
+/// What the membership's budget table sets: per-model rate limits, or an `allowed_models` list the proxy's
 /// `check_team_member_model_access` can deny with (it skips an empty list, and `*` and
 /// `all-proxy-models` grant every model).
 fn membership(row: &VerificationToken) -> Option<Restriction> {
@@ -195,6 +221,14 @@ fn metadata_restriction(metadata: &Value) -> Option<Restriction> {
         .iter()
         .find(|(field, _)| metadata.get(field).is_some_and(is_set))
         .map(|(_, restriction)| *restriction)
+        .or_else(|| {
+            // Dynamic limits apply only while a deployment is failing, which the gateway does
+            // not track.
+            ["rpm_limit_type", "tpm_limit_type"]
+                .iter()
+                .any(|field| metadata.get(field).and_then(Value::as_str) == Some("dynamic"))
+                .then_some(Restriction::RateLimits)
+        })
 }
 
 fn is_set(value: &Value) -> bool {
@@ -236,6 +270,8 @@ mod tests {
             key_alias: None,
             key_name: None,
             metadata: json!({}),
+            limits: RateLimits::default(),
+            max_parallel_requests: None,
             restrictions: Restrictions::default(),
             team_id: None,
             team: None,
@@ -253,6 +289,7 @@ mod tests {
             spend,
             max_budget,
             metadata: json!({}),
+            limits: RateLimits::default(),
             restrictions: Restrictions::default(),
         })
     }
@@ -295,6 +332,46 @@ mod tests {
             ..row
         };
         assert_eq!(status(row, false), active(true));
+    }
+
+    #[rstest]
+    fn carries_the_key_and_owner_rate_limits(row: VerificationToken) {
+        let limits = |rpm, tpm| RateLimits { rpm, tpm };
+        let row = VerificationToken {
+            limits: limits(Some(10), None),
+            max_parallel_requests: Some(2),
+            team_id: Some("team-1".into()),
+            team: team(false, None, 0.0).map(|team| Team {
+                limits: limits(None, Some(1_000)),
+                ..team
+            }),
+            team_membership: TeamMembership {
+                limits: limits(Some(3), Some(30)),
+                ..TeamMembership::default()
+            },
+            ..on_user(Some("team-1"), &[], NONE, row)
+        };
+        let row = VerificationToken {
+            user: row.user.clone().map(|user| User {
+                limits: limits(Some(5), None),
+                ..user
+            }),
+            ..row
+        };
+        let KeyStatus::Active { profile, .. } = status(row, false) else {
+            panic!("expected an active key");
+        };
+        let limits = |rpm, tpm| Limits { rpm, tpm };
+        assert_eq!(
+            profile.limits,
+            KeyLimits {
+                key: limits(Some(10), None),
+                max_parallel_requests: Some(2),
+                user: limits(Some(5), None),
+                team: limits(None, Some(1_000)),
+                team_member: limits(Some(3), Some(30)),
+            }
+        );
     }
 
     #[rstest]
@@ -376,6 +453,7 @@ mod tests {
                 spend: 0.0,
                 max_budget: None,
                 models: strings(models),
+                limits: RateLimits::default(),
                 restrictions,
             }),
             ..row
@@ -471,6 +549,18 @@ mod tests {
     )]
     #[case::metadata_tag_rpm(
         |row| key_metadata(json!({"tag_rpm_limit": {"a": 1}}), row),
+        Some((Restriction::RateLimits, Owner::Key))
+    )]
+    #[case::metadata_dynamic_rpm(
+        |row| key_metadata(json!({"rpm_limit_type": "dynamic"}), row),
+        Some((Restriction::RateLimits, Owner::Key))
+    )]
+    #[case::metadata_guaranteed_tpm(
+        |row| key_metadata(json!({"tpm_limit_type": "guaranteed_throughput"}), row),
+        None
+    )]
+    #[case::metadata_budget_throttle(
+        |row| key_metadata(json!({"throttle_on_budget_exceeded": true}), row),
         Some((Restriction::RateLimits, Owner::Key))
     )]
     #[case::metadata_allowed_tools(

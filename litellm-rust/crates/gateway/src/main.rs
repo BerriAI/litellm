@@ -120,6 +120,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
             coordination.clone(),
             database.clone(),
         )));
+        hooks.push(Arc::new(
+            litellm_gateway::rate_limits::RateLimiter::for_gateway(
+                &config,
+                coordination.clone(),
+                database.clone(),
+            ),
+        ));
     }
     let mut observers: Vec<Arc<dyn litellm_gateway_hooks::Observer>> = Vec::new();
     let spend = database.zip(litellm_gateway::spend::SpendSettings::from_config(&config));
