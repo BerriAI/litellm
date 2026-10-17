@@ -1267,7 +1267,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         optional_params: dict,
         model: str,
         param: str,
-        value: Any,
+        value: object,
         drop_params: bool,
     ) -> None:
         if VertexGeminiConfig._supports_sampling_params(model):
