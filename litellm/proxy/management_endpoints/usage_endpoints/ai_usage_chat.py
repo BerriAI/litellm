@@ -6,7 +6,7 @@ usage/spend data by querying the aggregated daily activity endpoints.
 import json
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from datetime import date
-from typing import Final, Literal, NamedTuple, Protocol, cast, overload
+from typing import TYPE_CHECKING, Final, Literal, NamedTuple, Protocol, cast, overload
 
 from fastapi import HTTPException
 from typing_extensions import ReadOnly, TypedDict
@@ -19,6 +19,11 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
 )
 from litellm.types.utils import ChatCompletionMessageToolCall
+from litellm.utils import CustomStreamWrapper, ModelResponse
+
+if TYPE_CHECKING:
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.router import Router
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -457,6 +462,89 @@ def _sse(event: SSEEvent) -> str:
     return f"data: {json.dumps(event)}\n\n"
 
 
+def _resolve_model(model: str | None) -> str:
+    return (model or "").strip() or DEFAULT_COMPETITOR_DISCOVERY_MODEL
+
+
+def _router_knows_model(router: "Router", model: str) -> bool:
+    if router.is_recognized_model(model):
+        return True
+    if router.router_general_settings.pass_through_all_models:
+        return False
+    return router.default_deployment is not None or router.pattern_router.route(model) is not None  # pyright: ignore[reportUnknownMemberType]  # PatternMatchDeployments.route returns untyped dicts
+
+
+async def _acompletion(
+    model: str,
+    messages: list[Mapping[str, object]],  # mutable-ok: callers pass the request message list unchanged
+    tools: list[_ToolDef] | None = None,  # mutable-ok: forwarded verbatim to acompletion
+    stream: bool = False,
+) -> ModelResponse | CustomStreamWrapper:
+    from litellm.proxy.proxy_server import llm_router
+    from litellm.types.llms.openai import AllMessageValues
+
+    completion_messages: Final = cast(  # cast-ok: acompletion accepts the same Mapping messages it already receives
+        list[AllMessageValues], messages
+    )
+    if llm_router is not None and _router_knows_model(llm_router, model):
+        if stream:
+            return await llm_router.acompletion(  # pyright: ignore[reportUnknownMemberType]  # Router.acompletion overloads carry untyped **kwargs
+                model=model,
+                messages=completion_messages,
+                tools=tools,
+                stream=True,
+                temperature=USAGE_AI_TEMPERATURE,
+                drop_params=True,
+            )
+        return await llm_router.acompletion(  # pyright: ignore[reportUnknownMemberType]  # Router.acompletion overloads carry untyped **kwargs
+            model=model,
+            messages=completion_messages,
+            tools=tools,
+            temperature=USAGE_AI_TEMPERATURE,
+            drop_params=True,
+        )
+    return await litellm.acompletion(
+        model=model,
+        messages=completion_messages,
+        tools=tools,
+        stream=stream,
+        temperature=USAGE_AI_TEMPERATURE,
+        drop_params=True,
+    )
+
+
+async def check_usage_ai_chat_model_access(user_api_key_dict: "UserAPIKeyAuth", model: str | None) -> None:
+    from litellm.proxy.auth.auth_checks import (
+        can_key_call_model,
+        can_object_call_model,
+        key_model_aliases_for_auth_check,
+    )
+    from litellm.proxy.proxy_server import (
+        llm_model_list,  # pyright: ignore[reportUnknownVariableType]  # proxy_server.llm_model_list is an untyped module global
+        llm_router,
+        prisma_client,
+    )
+
+    resolved_model: Final = _resolve_model(model)
+    await can_key_call_model(
+        model=resolved_model,
+        llm_model_list=llm_model_list,  # pyright: ignore[reportUnknownArgumentType]  # proxy_server.llm_model_list is an untyped module global
+        valid_token=user_api_key_dict,
+        llm_router=llm_router,
+        prisma_client=prisma_client,
+    )
+    if user_api_key_dict.team_models:
+        can_object_call_model(
+            model=resolved_model,
+            llm_router=llm_router,
+            models=user_api_key_dict.team_models,
+            team_model_aliases=user_api_key_dict.team_model_aliases,
+            team_id=user_api_key_dict.team_id,
+            key_model_aliases=key_model_aliases_for_auth_check(user_api_key_dict),
+            object_type="team",
+        )
+
+
 def _resolve_fetch_kwargs(
     fn_name: str,
     fn_args: Mapping[str, str],
@@ -566,11 +654,10 @@ async def _stream_final_response(model: str, chat_messages: list[Mapping[str, ob
     """Stream the final LLM response after tool results are appended."""
     yield _sse({"type": "status", "message": "Analyzing results..."})
 
-    response: Final = await litellm.acompletion(
+    response: Final = await _acompletion(
         model=model,
         messages=chat_messages,
         stream=True,
-        temperature=USAGE_AI_TEMPERATURE,
     )
     async for chunk in response:
         delta = chunk.choices[0].delta.content
@@ -585,7 +672,7 @@ async def stream_usage_ai_chat(
     is_admin: bool = False,
 ) -> AsyncGenerator[str, None]:
     """Stream SSE events: status → tool_call → chunk → done."""
-    resolved_model: Final = (model or "").strip() or DEFAULT_COMPETITOR_DISCOVERY_MODEL
+    resolved_model: Final = _resolve_model(model)
     truncated: Final = messages[-MAX_CHAT_MESSAGES:] if len(messages) > MAX_CHAT_MESSAGES else messages
     chat_messages: Final[list[Mapping[str, object]]] = [
         {"role": "system", "content": _build_system_prompt(is_admin)},
@@ -595,11 +682,10 @@ async def stream_usage_ai_chat(
     try:
         yield _sse({"type": "status", "message": "Thinking..."})
         tools: Final = get_tools_for_role(is_admin)
-        response: Final = await litellm.acompletion(
+        response: Final = await _acompletion(
             model=resolved_model,
             messages=chat_messages,
             tools=tools,
-            temperature=USAGE_AI_TEMPERATURE,
         )
         choice: Final = response.choices[0]
 
