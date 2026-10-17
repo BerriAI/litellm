@@ -77,7 +77,7 @@ from litellm.litellm_core_utils.audio_utils.utils import (
 from litellm.litellm_core_utils.chat_completion_agentic_loop import (
     maybe_run_chat_completion_agentic_loop,
 )
-from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
+from litellm.litellm_core_utils.completion_timeout import CompletionTimeout, StreamKind
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_litellm_params import (
     AWS_CREDENTIAL_KWARGS_KEYS,
@@ -536,7 +536,14 @@ async def acompletion(
     mock_timeout = kwargs.get("mock_timeout", None)
 
     if mock_timeout is True:
-        await _handle_mock_timeout_async(mock_timeout, timeout, model)
+        stream_timeout: Final = kwargs.get("stream_timeout")
+        await _handle_mock_timeout_async(
+            mock_timeout,
+            stream_timeout
+            if stream is True and isinstance(stream_timeout, int | float | str | httpx.Timeout)
+            else timeout,
+            model,
+        )
 
     loop: Final = asyncio.get_event_loop()
     custom_llm_provider = kwargs.get("custom_llm_provider", None)
@@ -1084,6 +1091,11 @@ def mock_completion(
 from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the old definition site
     _resolve_openai_api_base as _resolve_openai_api_base,  # pyright: ignore[reportPrivateUsage]  # noqa: PLC0414  # re-export of moved helper
 )
+from litellm.responses.bridge_check import (
+    bridge_reasoning_effort,
+    keep_registered_mode,
+    str_keyed_mapping,
+)
 from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the old definition site
     responses_api_bridge_check as responses_api_bridge_check,  # pyright: ignore[reportUnknownVariableType]  # noqa: PLC0414  # re-export of moved function
 )
@@ -1134,6 +1146,52 @@ def _drop_anthropic_only_tool_keys(tools: list[dict[str, object]] | None) -> lis
     if tools is None:
         return None
     return [_without_anthropic_only_tool_keys(tool) if isinstance(tool, dict) else tool for tool in tools]
+
+
+def _azure_completion_fakes_stream(model: str, base_model: str | None) -> bool:
+    if not litellm.AzureOpenAIO1Config().is_o_series_model(model=base_model or model):
+        return False
+    o_series_handler_config: Final = ProviderConfigManager.get_provider_chat_config(
+        model=model, provider=LlmProviders.AZURE
+    )
+    return o_series_handler_config is not None and o_series_handler_config.should_fake_stream(
+        model=model, stream=True, custom_llm_provider=LlmProviders.AZURE.value
+    )
+
+
+def _completion_fakes_stream(
+    model: str,
+    custom_llm_provider: str | None,
+    provider_config: BaseConfig | None,
+    optional_params: Mapping[str, object],
+    *,
+    base_model: str | None,
+    bridges_to_responses_api: bool,
+) -> bool:
+    if optional_params.get("fake_stream") is True:
+        return True
+    if custom_llm_provider is None:
+        return False
+    if bridges_to_responses_api:
+        responses_config: Final = ProviderConfigManager.get_provider_responses_api_config(
+            provider=custom_llm_provider, model=model
+        )
+        return responses_config is not None and responses_config.should_fake_stream(
+            model=model, stream=True, custom_llm_provider=custom_llm_provider
+        )
+    if (
+        custom_llm_provider == LlmProviders.VERTEX_AI.value
+        and get_vertex_ai_model_route(model=model, litellm_params={"base_model": base_model})
+        == VertexAIModelRoute.GEMMA
+    ):
+        return True
+    if isinstance(provider_config, litellm.AmazonAI21Config):
+        return True
+    if custom_llm_provider == LlmProviders.AZURE.value:
+        return _azure_completion_fakes_stream(model, base_model)
+    return provider_config is not None and provider_config.should_fake_stream(
+        model=model, stream=True, custom_llm_provider=custom_llm_provider
+    )
 
 
 class _ProxyAuthHeadersProvider(Protocol):
@@ -1207,6 +1265,8 @@ def _register_custom_pricing_for_request(
     pricing overrides (e.g. a zero-cost wildcard) from clobbering built-in
     pricing used by sibling deployments of the same backend model. Direct SDK
     calls keep the legacy behavior of registering the shared key with pricing.
+    Either way the shared key's ``mode`` follows ``keep_registered_mode``, as on
+    deployment registration, since a call routes by its own ``model_info``.
     """
     entry: Final = _build_custom_pricing_entry(
         custom_llm_provider=custom_llm_provider,
@@ -1216,8 +1276,11 @@ def _register_custom_pricing_for_request(
     shared_key: Final = f"{custom_llm_provider}/{model}"
     deployment_id: Final = _get_router_deployment_id(kwargs)
     if deployment_id is None:
-        litellm.register_model({shared_key: entry}, persist_across_reloads=False)
+        litellm.register_model({shared_key: keep_registered_mode(shared_key, entry)}, persist_across_reloads=False)
         return
+    shared_entry: Final = keep_registered_mode(
+        shared_key, CustomPricingLiteLLMParams.strip_custom_pricing_fields(entry)
+    )
     litellm.register_model(
         {deployment_id: entry},
         persist_across_reloads=False,
@@ -1226,7 +1289,7 @@ def _register_custom_pricing_for_request(
         add_to_provider_model_sets=False,
     )
     litellm.register_model(
-        {shared_key: CustomPricingLiteLLMParams.strip_custom_pricing_fields(entry)},
+        {shared_key: shared_entry},
         persist_across_reloads=False,
         warning_display_name=shared_key,
         custom_llm_provider=custom_llm_provider,
@@ -5610,6 +5673,9 @@ def completion(
             custom_llm_provider=custom_llm_provider,
             web_search_options=web_search_options,
             api_base=api_base,
+            deployment_model_info=str_keyed_mapping(
+                cast(object, model_info)  # cast-ok: model_info is the untyped dict kwarg
+            ),
         )
 
         if not _is_claude_tool_target(custom_llm_provider=custom_llm_provider, model=model):
@@ -5631,15 +5697,6 @@ def completion(
             model_response_hidden_params["region_name"] = kwargs.get(
                 "aws_region_name", None
             )  # support region-based pricing for bedrock
-
-        ### TIMEOUT LOGIC ###
-        timeout = CompletionTimeout.resolve(
-            timeout,
-            kwargs,
-            custom_llm_provider,
-            global_timeout=get_configured_request_timeout(),
-            supports_httpx_timeout=supports_httpx_timeout,
-        )
 
         ### REGISTER CUSTOM MODEL PRICING -- IF GIVEN ###
         if (
@@ -5776,6 +5833,33 @@ def completion(
         optional_params = optional_params_for_model_info(
             _MODEL_INFO_ADAPTER.validate_python(model_info) if isinstance(model_info, dict) else None
         )
+        stream_kind: Final = (
+            (
+                StreamKind.FAKED
+                if _completion_fakes_stream(
+                    model,
+                    custom_llm_provider,
+                    provider_config,
+                    optional_params,
+                    base_model=base_model if isinstance(base_model, str) else None,
+                    bridges_to_responses_api=bridges_to_responses_api is True,
+                )
+                else StreamKind.LIVE
+            )
+            if stream is True
+            else StreamKind.NOT_STREAMED
+        )
+
+        ### TIMEOUT LOGIC ###
+        timeout = CompletionTimeout.resolve(
+            timeout,
+            kwargs,
+            custom_llm_provider,
+            global_timeout=get_configured_request_timeout(),
+            supports_httpx_timeout=supports_httpx_timeout,
+            stream_kind=stream_kind,
+        )
+        logging.record_applied_timeout(timeout)
         processed_non_default_params: Final = pre_process_non_default_params(
             model=model,
             passed_params=optional_param_args,
@@ -5934,9 +6018,12 @@ def completion(
                 custom_llm_provider=custom_llm_provider,
                 web_search_options=web_search_options,
                 tools=tools,
-                reasoning_effort=reasoning_effort,
+                reasoning_effort=bridge_reasoning_effort(reasoning_effort, optional_params.get("extra_body")),
                 reasoning_summary=_reasoning_summary_for_bridge,
                 api_base=api_base,
+                deployment_model_info=str_keyed_mapping(
+                    cast(object, model_info)  # cast-ok: model_info is the untyped dict kwarg
+                ),
             )
 
         # Use base_model (the true underlying model) for Azure model-type
