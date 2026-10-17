@@ -15,7 +15,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.types.utils import EmbeddingResponse
 
-from ..common_utils import OpenAILikeBase, OpenAILikeError
+from ..common_utils import OPENAI_LIKE_HEADERS_ADAPTER, OpenAILikeBase, OpenAILikeError
 
 
 class OpenAILikeEmbeddingHandler(OpenAILikeBase):
@@ -95,15 +95,21 @@ class OpenAILikeEmbeddingHandler(OpenAILikeBase):
         custom_endpoint: bool | None = None,
         headers: dict | None = None,
     ) -> EmbeddingResponse:
-        api_base, headers = self._validate_environment(
+        extra_headers: Final = optional_params.get("extra_headers")
+        request_headers: Final = (
+            {**(headers or {}), **extra_headers} if isinstance(extra_headers, dict) and extra_headers else headers
+        )
+        api_base, validated_headers = self._validate_environment(
             api_base=api_base,
             api_key=api_key,
             endpoint_type="embeddings",
-            headers=headers,
+            headers=OPENAI_LIKE_HEADERS_ADAPTER.validate_python(request_headers),
             custom_endpoint=custom_endpoint,
         )
         model = model
-        filtered_optional_params: Final = {k: v for k, v in optional_params.items() if v not in (None, "")}
+        filtered_optional_params: Final = {
+            k: v for k, v in optional_params.items() if k != "extra_headers" and v not in (None, "")
+        }
         data: Final = {"model": model, "input": input, **filtered_optional_params}
 
         ## LOGGING
@@ -123,7 +129,7 @@ class OpenAILikeEmbeddingHandler(OpenAILikeBase):
                 api_key=api_key,
                 timeout=timeout,
                 client=client,
-                headers=headers,
+                headers=validated_headers,
             )
         if client is None or isinstance(client, AsyncHTTPHandler):
             self.client = HTTPHandler(timeout=timeout)
@@ -134,7 +140,7 @@ class OpenAILikeEmbeddingHandler(OpenAILikeBase):
         try:
             response: Final = self.client.post(
                 api_base,
-                headers=headers,
+                headers=validated_headers,
                 data=json.dumps(data),
             )
 
