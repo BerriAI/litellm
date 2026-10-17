@@ -35,7 +35,6 @@ class WaveSpeedError(BaseLLMException):
 DEFAULT_API_BASE: Final = "https://api.wavespeed.ai"
 CHAT_API_BASE: Final = "https://llm.wavespeed.ai/v1"
 DEFAULT_POLLING_INTERVAL: Final = 1.0
-DEFAULT_MAX_POLLING_TIME: Final = 600
 # Poll GETs are read-only, so a flaky result endpoint is ridden out: 10 consecutive failures with a
 # linear backoff (1s, 2s, ... 9s between tries) is ~45s of tolerated outage before giving up.
 MAX_CONSECUTIVE_POLL_FAILURES: Final = 10

@@ -2,7 +2,8 @@
 WaveSpeed AI image generation handler.
 
 WaveSpeed predictions are asynchronous: one submit POST returns a prediction id, then the
-result endpoint is polled until the prediction reaches a terminal status.
+result endpoint is polled until the prediction reaches a terminal status. There is no overall
+polling cap: tasks can legitimately run for hours. ``timeout`` bounds each HTTP request only.
 
 The submit POST is issued exactly once and is never retried, because every submission is a
 billable task and a retry would create a duplicate one. Poll GETs are read-only, so a run of
@@ -32,7 +33,6 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ImageResponse
 
 from ..common_utils import (
-    DEFAULT_MAX_POLLING_TIME,
     DEFAULT_POLLING_INTERVAL,
     MAX_CONSECUTIVE_POLL_FAILURES,
     POST_SUBMIT_ERROR_STATUS_CODE,
@@ -105,11 +105,10 @@ class WaveSpeedImageGeneration:
         except Exception as e:  # noqa: BLE001  # re-raised unchanged unless the submit outcome is unknown
             raise classify_submit_failure(e) or e
         result_url: Final = build_result_url(resolved.api_base, prediction_id)
-        deadline: Final = time.time() + DEFAULT_MAX_POLLING_TIME
         poll_headers: Final = to_request_payload(prepared.headers)
 
         consecutive_failures = 0  # rebind-ok: counts consecutive poll transport failures
-        while time.time() < deadline:
+        while True:  # no overall cap: tasks can run for hours; only a terminal status or a bounded failure ends it
             try:
                 poll_response = sync_client.get(url=result_url, headers=poll_headers, timeout=timeout)
             except Exception as e:  # noqa: BLE001  # any transport failure is retried, never the billable submit
@@ -133,8 +132,6 @@ class WaveSpeedImageGeneration:
                 )
 
             time.sleep(DEFAULT_POLLING_INTERVAL)
-
-        raise _timeout_error(prediction_id)
 
     async def async_image_generation(
         self,
@@ -164,11 +161,10 @@ class WaveSpeedImageGeneration:
         except Exception as e:  # noqa: BLE001  # re-raised unchanged unless the submit outcome is unknown
             raise classify_submit_failure(e) or e
         result_url: Final = build_result_url(resolved.api_base, prediction_id)
-        deadline: Final = time.time() + DEFAULT_MAX_POLLING_TIME
         poll_headers: Final = to_request_payload(prepared.headers)
 
         consecutive_failures = 0  # rebind-ok: counts consecutive poll transport failures
-        while time.time() < deadline:
+        while True:  # no overall cap: tasks can run for hours; only a terminal status or a bounded failure ends it
             try:
                 poll_response = await async_client.get(url=result_url, headers=poll_headers, timeout=timeout)
             except Exception as e:  # noqa: BLE001  # any transport failure is retried, never the billable submit
@@ -192,8 +188,6 @@ class WaveSpeedImageGeneration:
                 )
 
             await asyncio.sleep(DEFAULT_POLLING_INTERVAL)
-
-        raise _timeout_error(prediction_id)
 
     def _prepare(
         self,
@@ -300,13 +294,6 @@ def _record_poll_failure(consecutive_failures: int, prediction_id: str, error: E
         )
     verbose_logger.debug("WaveSpeed poll attempt failed (%s/%s): %s", next_count, MAX_CONSECUTIVE_POLL_FAILURES, error)
     return next_count
-
-
-def _timeout_error(prediction_id: str) -> WaveSpeedError:
-    return WaveSpeedError(
-        status_code=POST_SUBMIT_ERROR_STATUS_CODE,
-        message=f"WaveSpeed prediction {prediction_id} did not finish within {DEFAULT_MAX_POLLING_TIME} seconds",
-    )
 
 
 wavespeed_image_generation: Final = WaveSpeedImageGeneration()

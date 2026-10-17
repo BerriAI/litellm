@@ -211,43 +211,79 @@ class TestWaveSpeedImageGenerationConfig:
             )
 
 
+HOURS_OF_PROCESSING = 700  # one poll per virtual second: well past the old 600s cap
+
+
 @pytest.fixture
-def zero_poll_budget(monkeypatch):
-    """Make the polling deadline expire immediately so the timeout path is reachable."""
-    monkeypatch.setattr("litellm.llms.wavespeed.image_generation.handler.DEFAULT_MAX_POLLING_TIME", 0)
+def virtual_clock(monkeypatch):
+    """Sleeping advances a fake wall clock, so 'ten minutes later' costs no real time."""
+    import time as real_time
+
+    start = real_time.time()
+    elapsed = [0.0]
+
+    def fake_sleep(seconds):
+        elapsed[0] += seconds
+
+    async def fake_async_sleep(seconds):
+        elapsed[0] += seconds
+
+    monkeypatch.setattr("litellm.llms.wavespeed.image_generation.handler.DEFAULT_POLLING_INTERVAL", 1.0)
+    monkeypatch.setattr("litellm.llms.wavespeed.image_generation.handler.time.sleep", fake_sleep)
+    monkeypatch.setattr("litellm.llms.wavespeed.image_generation.handler.asyncio.sleep", fake_async_sleep)
+    monkeypatch.setattr("litellm.llms.wavespeed.image_generation.handler.time.time", lambda: start + elapsed[0])
+    return elapsed
+
+
+def _long_running_polls():
+    return [httpx.Response(200, json=prediction("processing"))] * HOURS_OF_PROCESSING + [
+        httpx.Response(200, json=prediction("completed", outputs=[OUTPUT_URL]))
+    ]
 
 
 @respx.mock
-def test_sync_poll_timeout(generate, zero_poll_budget):
+def test_sync_prediction_processing_past_ten_minutes_still_completes(generate, virtual_clock):
+    """There is no default overall polling cap: only a terminal status ends the wait."""
     submit = respx.post(SUBMIT_URL).mock(return_value=httpx.Response(200, json=prediction("created")))
-    poll = respx.get(RESULT_URL).mock(return_value=httpx.Response(200, json=prediction("processing")))
+    poll = respx.get(RESULT_URL).mock(side_effect=_long_running_polls())
 
-    with pytest.raises(WaveSpeedError) as exc_info:
-        generate()
+    response = generate()
 
-    assert exc_info.value.status_code == POST_SUBMIT_ERROR_STATUS_CODE
-    assert "did not finish within" in str(exc_info.value)
+    assert [image.url for image in response.data] == [OUTPUT_URL]
+    assert virtual_clock[0] > 600
     assert submit.call_count == 1
-    assert poll.call_count == 0
+    assert poll.call_count == HOURS_OF_PROCESSING + 1
 
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_async_poll_timeout(zero_poll_budget):
+async def test_async_prediction_processing_past_ten_minutes_still_completes(virtual_clock):
+    submit = respx.post(SUBMIT_URL).mock(return_value=httpx.Response(200, json=prediction("created")))
+    poll = respx.get(RESULT_URL).mock(side_effect=_long_running_polls())
+
+    response = await run_async()
+
+    assert [image.url for image in response.data] == [OUTPUT_URL]
+    assert virtual_clock[0] > 600
+    assert submit.call_count == 1
+    assert poll.call_count == HOURS_OF_PROCESSING + 1
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_caller_cancellation_still_bounds_a_long_wait():
+    """An unset cap must not make the call unstoppable: the caller can bound it with its own deadline."""
+    import asyncio
+
     respx.post(SUBMIT_URL).mock(return_value=httpx.Response(200, json=prediction("created")))
+    respx.get(RESULT_URL).mock(return_value=httpx.Response(200, json=prediction("processing")))
 
-    with pytest.raises(WaveSpeedError) as exc_info:
-        await WaveSpeedImageGeneration().async_image_generation(
-            model=MODEL,
-            prompt="a red panda",
-            model_response=ImageResponse(),
-            optional_params={},
-            litellm_params={"api_key": "sk-test", "api_base": None},
-            logging_obj=MagicMock(),
-            timeout=None,
-        )
+    async def never_ending_wait():
+        await asyncio.sleep(0)  # let the loop breathe under the zero poll interval
+        return await run_async()
 
-    assert exc_info.value.status_code == POST_SUBMIT_ERROR_STATUS_CODE
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(never_ending_wait(), timeout=0.3)
 
 
 @pytest.mark.asyncio
