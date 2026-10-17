@@ -502,7 +502,7 @@ def test_llama_count_still_reaches_the_meta_count_route(gateway: Gateway) -> Non
     with wire_server(_peer()) as wire, gateway.scenario() as scenario:
         model: Final = _deployment(gateway, scenario, wire.url, model=f"vertex_ai/{_LLAMA_BACKEND}")
         response: Final = _count(gateway, _bare(model))
-        assert _payload(response) == {"input_tokens": _PEER_COUNT}, response.text
+        assert _payload(response) == {"input_tokens": _PEER_COUNT, "litellm_count_source": "provider"}, response.text
         (sent,) = _count_bodies(wire.drain(), _LLAMA_COUNT_TARGET)
         assert sent["messages"] == _MESSAGES, sent
 

@@ -15034,6 +15034,15 @@ def _non_empty_str(value: object) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
+def _deployment_aws_region(deployment: _TokenCountDeployment) -> str:
+    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+    params: Final = deployment.get("litellm_params", {})
+    return BaseAWSLLM().get_aws_region_name(
+        {"aws_region_name": params.get("aws_region_name")}, model=_non_empty_str(params.get("model"))
+    )
+
+
 def _token_count_settings_model(deployment: _TokenCountDeployment, request_model: str) -> tuple[str, str | None]:
     model_info: Final = deployment.get("model_info", {})
     params: Final = deployment.get("litellm_params", {})
@@ -15173,6 +15182,7 @@ async def count_request_tokens(
     settings: Final = resolve_token_count_settings(
         configured=deployment_view.get("model_info", {}),
         default=await asyncify(cost_map_entry)(*_token_count_settings_model(deployment_view, request.model)),
+        deployment_region=partial(_deployment_aws_region, deployment_view),
     )
 
     # Try provider-specific token counting first - only for non-direct requests (from provider endpoints)

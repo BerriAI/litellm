@@ -2434,6 +2434,41 @@ async def test_configured_token_count_model_overrides_the_shipped_one_and_an_emp
     assert len(counter.calls) == 1
 
 
+@pytest.mark.parametrize(
+    ("aws_region_name", "counted_in"),
+    [("eu-central-1", "eu-central-1"), ("us-west-2", "us-east-1")],
+)
+@pytest.mark.asyncio
+async def test_shipped_token_count_model_keeps_the_prompt_in_the_deployment_geography(
+    monkeypatch: pytest.MonkeyPatch, aws_region_name: str, counted_in: str
+):
+    counter: Final = _ScriptedCounter({"anthropic.claude-opus-5-5": _provider_reply("opus", total_tokens=447)})
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "sonnet",
+                    "litellm_params": {
+                        "model": "bedrock/anthropic.claude-sonnet-5-5",
+                        "aws_region_name": aws_region_name,
+                    },
+                }
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server, "_get_provider_token_counter", lambda deployment, model: (counter, model, "bedrock")
+    )
+
+    await token_counter(
+        request=TokenCountRequest(model="sonnet", messages=[{"role": "user", "content": "hi"}]), call_endpoint=True
+    )
+
+    assert (counter.calls[0][0], counter.regions[0]) == ("anthropic.claude-opus-5-5", counted_in)
+
+
 @pytest.mark.asyncio
 async def test_framing_still_applies_while_the_deployment_is_cooling_down(monkeypatch: pytest.MonkeyPatch):
     router: Final = Router(

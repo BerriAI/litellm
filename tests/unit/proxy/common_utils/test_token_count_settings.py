@@ -21,6 +21,10 @@ _DEFAULT: Final = {
 _COST_MAP: Final = Path(__file__).parents[4] / "model_prices_and_context_window.json"
 
 
+def _in_us_west_2() -> str:
+    return "us-west-2"
+
+
 @pytest.mark.parametrize(
     ("configured", "expected"),
     [
@@ -61,11 +65,57 @@ _COST_MAP: Final = Path(__file__).parents[4] / "model_prices_and_context_window.
 def test_config_overrides_the_cost_map_default_key_by_key(
     configured: dict[str, object], expected: TokenCountSettings
 ) -> None:
-    assert resolve_token_count_settings(configured=configured, default=_DEFAULT) == expected
+    assert (
+        resolve_token_count_settings(configured=configured, default=_DEFAULT, deployment_region=_in_us_west_2)
+        == expected
+    )
+
+
+@pytest.mark.parametrize(
+    ("deployment_region", "configured", "expected_region"),
+    [
+        ("us-west-2", {}, "us-east-1"),
+        ("eu-central-1", {}, None),
+        ("ca-central-1", {}, None),
+        ("us-gov-west-1", {}, None),
+        (
+            "eu-central-1",
+            {"token_count_model": {"model": "anthropic.claude-opus-5-5", "region": "us-east-1"}},
+            "us-east-1",
+        ),
+    ],
+)
+def test_shipped_count_region_never_takes_the_prompt_out_of_the_deployment_geography(
+    deployment_region: str, configured: dict[str, object], expected_region: str | None
+) -> None:
+    settings: Final = resolve_token_count_settings(
+        configured=configured, default=_DEFAULT, deployment_region=lambda: deployment_region
+    )
+    assert settings.count_model == TokenCountModel(model="anthropic.claude-opus-5-5", region=expected_region)
+
+
+def test_shipped_global_count_model_keeps_its_region_for_a_deployment_in_any_geography() -> None:
+    settings: Final = resolve_token_count_settings(
+        configured={},
+        default={"token_count_model": {"model": "global.anthropic.claude-opus-5-5", "region": "us-east-1"}},
+        deployment_region=lambda: "eu-west-1",
+    )
+    assert settings.count_model == TokenCountModel(model="global.anthropic.claude-opus-5-5", region="us-east-1")
+
+
+def test_shipped_australian_count_region_stays_with_an_australian_deployment() -> None:
+    settings: Final = resolve_token_count_settings(
+        configured={},
+        default={"token_count_model": {"model": "au.anthropic.claude-opus-5-5", "region": "ap-southeast-4"}},
+        deployment_region=lambda: "ap-southeast-2",
+    )
+    assert settings.count_model == TokenCountModel(model="au.anthropic.claude-opus-5-5", region="ap-southeast-4")
 
 
 def test_no_setting_anywhere_means_the_model_counts_itself_without_framing() -> None:
-    assert resolve_token_count_settings(configured={}, default={}) == TokenCountSettings(framing=None, count_model=None)
+    assert resolve_token_count_settings(
+        configured={}, default={}, deployment_region=_in_us_west_2
+    ) == TokenCountSettings(framing=None, count_model=None)
 
 
 @pytest.mark.parametrize(
@@ -73,7 +123,10 @@ def test_no_setting_anywhere_means_the_model_counts_itself_without_framing() -> 
     [("kimi_k3", "kimi_k3"), ("cl100k_base", None), (None, None), (True, None)],
 )
 def test_only_a_tokenizer_litellm_ships_is_taken_from_the_cost_map(value: object, expected: str | None) -> None:
-    assert resolve_token_count_settings(configured={}, default={"token_count_tokenizer": value}).tokenizer == expected
+    settings: Final = resolve_token_count_settings(
+        configured={}, default={"token_count_tokenizer": value}, deployment_region=_in_us_west_2
+    )
+    assert settings.tokenizer == expected
 
 
 def _counted(source: str | None, model_used: str = "us.anthropic.claude-opus-5-5") -> TokenCountResponse:
