@@ -5938,7 +5938,7 @@ async def test_get_tools_from_mcp_servers_takes_list_tools_tags_from_x_litellm_t
             side_effect=_capture_function_setup,
         ),
     ):
-        mock_manager._get_tools_from_server = AsyncMock(return_value=[tool_1])
+        mock_manager.get_tools_from_server = AsyncMock(return_value=[tool_1])
 
         listing = await _get_tools_from_mcp_servers(
             user_api_key_auth=user_auth,
@@ -6013,7 +6013,7 @@ async def test_get_tools_from_mcp_servers_prefers_explicit_request_tags_over_the
             side_effect=_capture_function_setup,
         ),
     ):
-        mock_manager._get_tools_from_server = AsyncMock(return_value=[tool_1])
+        mock_manager.get_tools_from_server = AsyncMock(return_value=[tool_1])
 
         await _get_tools_from_mcp_servers(
             user_api_key_auth=user_auth,

@@ -268,7 +268,7 @@ def _request_tags_from_raw_headers(
     header_value: Final = _request_tags_header(raw_headers)
     if header_value is None:
         return None
-    return LiteLLMProxyRequestSetup.add_request_tag_to_metadata(
+    return LiteLLMProxyRequestSetup.add_request_tag_to_metadata(  # pyright: ignore[reportUnknownMemberType]  # helper declares bare dict params
         llm_router=None,
         headers={"x-litellm-tags": header_value},
         data={},
