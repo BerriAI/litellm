@@ -5404,35 +5404,36 @@ async def can_key_call_model(
         - Exception: If token not allowed to call model
     """
     key_models: Final = _resolve_key_models_for_auth_check(valid_token=valid_token)
-    try:
-        return can_object_call_model(
-            model=model,
-            llm_router=llm_router,
-            models=key_models,
-            team_model_aliases=valid_token.team_model_aliases,
-            team_id=valid_token.team_id,
-            key_model_aliases=key_model_aliases_for_auth_check(valid_token),
-            object_type="key",
+    key_access_group_ids: Final = valid_token.access_group_ids or []
+    if key_access_group_ids:
+        models_from_groups: Final = await get_models_from_access_groups(
+            access_group_ids=key_access_group_ids,
+            prisma_client=prisma_client,
         )
-    except ProxyException:
-        # Fallback: check key's access_group_ids
-        key_access_group_ids: Final = valid_token.access_group_ids or []
-        if key_access_group_ids:
-            models_from_groups: Final = await get_models_from_access_groups(
-                access_group_ids=key_access_group_ids,
-                prisma_client=prisma_client,
+        if models_from_groups is not None:
+            allowed_models = (
+                [m for m in key_models if m in models_from_groups]
+                if key_models
+                else models_from_groups
             )
-            if models_from_groups:
-                return can_object_call_model(
-                    model=model,
-                    llm_router=llm_router,
-                    models=models_from_groups,
-                    team_model_aliases=valid_token.team_model_aliases,
-                    team_id=valid_token.team_id,
-                    key_model_aliases=key_model_aliases_for_auth_check(valid_token),
-                    object_type="key",
-                )
-        raise
+            return can_object_call_model(
+                model=model,
+                llm_router=llm_router,
+                models=allowed_models,
+                team_model_aliases=valid_token.team_model_aliases,
+                team_id=valid_token.team_id,
+                key_model_aliases=key_model_aliases_for_auth_check(valid_token),
+                object_type="key",
+            )
+    return can_object_call_model(
+        model=model,
+        llm_router=llm_router,
+        models=key_models,
+        team_model_aliases=valid_token.team_model_aliases,
+        team_id=valid_token.team_id,
+        key_model_aliases=key_model_aliases_for_auth_check(valid_token),
+        object_type="key",
+    )
 
 
 async def _personal_key_owner(
@@ -5623,35 +5624,37 @@ async def can_team_access_model(
     1. First checks native team-level model permissions (current implementation)
     2. If not allowed natively, falls back to access_group_ids on the team
     """
-    try:
-        return can_object_call_model(
-            model=model,
-            llm_router=llm_router,
-            models=team_object.models if team_object else [],
-            team_model_aliases=team_model_aliases,
-            team_id=team_object.team_id if team_object else None,
-            key_model_aliases=key_model_aliases,
-            object_type="team",
+    team_models: Final = team_object.models if team_object else []
+    team_access_group_ids: Final = (team_object.access_group_ids or []) if team_object else []
+    if team_access_group_ids:
+        models_from_groups: Final = await get_models_from_access_groups(
+            access_group_ids=team_access_group_ids,
+            prisma_client=prisma_client,
         )
-    except ProxyException:
-        # Fallback: check team's access_group_ids
-        team_access_group_ids: Final = (team_object.access_group_ids or []) if team_object else []
-        if team_access_group_ids:
-            models_from_groups: Final = await get_models_from_access_groups(
-                access_group_ids=team_access_group_ids,
-                prisma_client=prisma_client,
+        if models_from_groups is not None:
+            allowed_models = (
+                [m for m in team_models if m in models_from_groups]
+                if team_models
+                else models_from_groups
             )
-            if models_from_groups:
-                return can_object_call_model(
-                    model=model,
-                    llm_router=llm_router,
-                    models=list(dict.fromkeys([*(team_object.models if team_object else []), *models_from_groups])),
-                    team_model_aliases=team_model_aliases,
-                    team_id=team_object.team_id if team_object else None,
-                    key_model_aliases=key_model_aliases,
-                    object_type="team",
-                )
-        raise
+            return can_object_call_model(
+                model=model,
+                llm_router=llm_router,
+                models=allowed_models,
+                team_model_aliases=team_model_aliases,
+                team_id=team_object.team_id if team_object else None,
+                key_model_aliases=key_model_aliases,
+                object_type="team",
+            )
+    return can_object_call_model(
+        model=model,
+        llm_router=llm_router,
+        models=team_models,
+        team_model_aliases=team_model_aliases,
+        team_id=team_object.team_id if team_object else None,
+        key_model_aliases=key_model_aliases,
+        object_type="team",
+    )
 
 
 async def get_authorized_resources_from_key_access_groups(
