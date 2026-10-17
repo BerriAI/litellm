@@ -186,6 +186,7 @@ class ProviderField(TypedDict):
 
 
 class ProviderSpecificModelInfo(TypedDict, total=False):
+    supports_sampling_params: ReadOnly[bool | None]
     supports_system_messages: bool | None
     supports_response_schema: bool | None
     supports_vision: bool | None

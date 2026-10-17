@@ -1191,6 +1191,29 @@ def transform_request_body(
 
         filtered_params = {k: v for k, v in optional_params.items() if _get_equivalent_key(k, set(config_fields))}
 
+        # Defense-in-depth: enforce drop/raise contract if unsupported sampling params reach request body
+        from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+
+        if not VertexGeminiConfig.supports_sampling_params(model):
+            unsupported_sampling: Final[list[str]] = [
+                k for k in ("temperature", "top_p", "top_k") if k in filtered_params
+            ]
+            if unsupported_sampling:
+                drop_override: object = litellm_params.get("drop_params") if isinstance(litellm_params, dict) else None
+                should_drop: Final[bool] = (
+                    bool(drop_override) if drop_override is not None else bool(litellm.drop_params)
+                )
+                if not should_drop:
+                    raise litellm.utils.UnsupportedParamsError(
+                        message=(
+                            f"{model} does not support {unsupported_sampling[0]}. "
+                            "To drop unsupported params, set `litellm.drop_params = True`."
+                        ),
+                        status_code=400,
+                    )
+                for k in unsupported_sampling:
+                    filtered_params.pop(k, None)
+
         generation_config: Final[GenerationConfig | None] = GenerationConfig(**filtered_params)
 
         # For Gemini 2.x models, also add media_resolution to generation_config (global)

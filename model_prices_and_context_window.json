@@ -28864,6 +28864,7 @@
         "input_cost_per_audio_token_batches": 2.5e-07
     },
     "gemini-3.5-flash-lite": {
+        "supports_sampling_params": false,
         "deprecation_date": "2027-07-21",
         "cache_read_input_token_cost": 3e-08,
         "cache_read_input_token_cost_batches": 1.5e-08,
@@ -29518,6 +29519,7 @@
         "web_search_billing_unit": "per_query"
     },
     "vertex_ai/gemini-3.5-flash": {
+        "supports_sampling_params": false,
         "prompt_cache_min_tokens": 4096,
         "deprecation_date": "2027-05-19",
         "cache_read_input_token_cost": 1.5e-07,
@@ -29579,6 +29581,7 @@
         "cache_read_input_token_cost_flex": 7.5e-08
     },
     "vertex_ai/gemini-3.6-flash": {
+        "supports_sampling_params": false,
         "prompt_cache_min_tokens": 4096,
         "cache_read_input_token_cost": 7.5e-08,
         "cache_read_input_token_cost_batches": 3.75e-08,
@@ -29638,6 +29641,7 @@
         "google_maps_grounding_cost_per_query": 0.014
     },
     "vertex_ai/gemini-3.7-flash": {
+        "supports_sampling_params": false,
         "prompt_cache_min_tokens": 4096,
         "cache_read_input_token_cost": 7.5e-08,
         "cache_read_input_token_cost_batches": 3.75e-08,
@@ -29698,6 +29702,7 @@
         "google_maps_grounding_cost_per_query": 0.014
     },
     "vertex_ai/gemini-3.8-flash": {
+        "supports_sampling_params": false,
         "prompt_cache_min_tokens": 4096,
         "cache_read_input_token_cost": 7.5e-08,
         "cache_read_input_token_cost_batches": 3.75e-08,
@@ -29757,6 +29762,7 @@
         "google_maps_grounding_cost_per_query": 0.014
     },
     "vertex_ai/gemini-3.8-flash-cyber": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 1.5e-07,
         "cache_read_input_token_cost_batches": 7.5e-08,
         "cache_read_input_token_cost_flex": 7.5e-08,
@@ -31170,6 +31176,7 @@
         "input_cost_per_audio_token_priority": 9e-07
     },
     "gemini/gemini-3.5-flash-lite": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 3e-08,
         "cache_read_input_token_cost_batches": 2e-08,
         "cache_read_input_token_cost_flex": 2e-08,
@@ -31291,6 +31298,7 @@
         "supports_audio_input": true
     },
     "gemini/gemini-3.5-flash": {
+        "supports_sampling_params": false,
         "prompt_cache_min_tokens": 4096,
         "cache_read_input_token_cost": 1.5e-07,
         "cache_read_input_token_cost_batches": 7.5e-08,
@@ -31353,6 +31361,7 @@
         "cache_read_input_token_cost_flex": 8e-08
     },
     "gemini/gemini-3.6-flash": {
+        "supports_sampling_params": false,
         "prompt_cache_min_tokens": 4096,
         "cache_read_input_token_cost": 7.5e-08,
         "cache_read_input_token_cost_batches": 3.75e-08,
@@ -31413,6 +31422,7 @@
         "google_maps_grounding_cost_per_query": 0.014
     },
     "gemini/gemini-3.7-flash": {
+        "supports_sampling_params": false,
         "prompt_cache_min_tokens": 4096,
         "cache_read_input_token_cost": 7.5e-08,
         "cache_read_input_token_cost_batches": 3.75e-08,
@@ -31474,6 +31484,7 @@
         "google_maps_grounding_cost_per_query": 0.014
     },
     "gemini/gemini-3.8-flash": {
+        "supports_sampling_params": false,
         "prompt_cache_min_tokens": 4096,
         "cache_read_input_token_cost": 7.5e-08,
         "cache_read_input_token_cost_batches": 3.75e-08,
@@ -31779,6 +31790,7 @@
         "supports_vision": true
     },
     "gemini-3.5-flash": {
+        "supports_sampling_params": false,
         "prompt_cache_min_tokens": 4096,
         "deprecation_date": "2027-05-19",
         "cache_read_input_token_cost": 1.5e-07,
@@ -31840,6 +31852,7 @@
         "cache_read_input_token_cost_flex": 7.5e-08
     },
     "gemini-3.6-flash": {
+        "supports_sampling_params": false,
         "prompt_cache_min_tokens": 4096,
         "cache_read_input_token_cost": 7.5e-08,
         "cache_read_input_token_cost_batches": 3.75e-08,
@@ -31899,6 +31912,7 @@
         "google_maps_grounding_cost_per_query": 0.014
     },
     "gemini-3.7-flash": {
+        "supports_sampling_params": false,
         "prompt_cache_min_tokens": 4096,
         "cache_read_input_token_cost": 7.5e-08,
         "cache_read_input_token_cost_batches": 3.75e-08,
@@ -31959,6 +31973,7 @@
         "google_maps_grounding_cost_per_query": 0.014
     },
     "gemini-3.8-flash": {
+        "supports_sampling_params": false,
         "prompt_cache_min_tokens": 4096,
         "cache_read_input_token_cost": 7.5e-08,
         "cache_read_input_token_cost_batches": 3.75e-08,
@@ -32018,6 +32033,7 @@
         "google_maps_grounding_cost_per_query": 0.014
     },
     "gemini-3.8-flash-cyber": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 1.5e-07,
         "cache_read_input_token_cost_batches": 7.5e-08,
         "cache_read_input_token_cost_flex": 7.5e-08,
@@ -51865,6 +51881,7 @@
         "input_cost_per_audio_token_batches": 2.5e-07
     },
     "vertex_ai/gemini-3.5-flash-lite": {
+        "supports_sampling_params": false,
         "deprecation_date": "2027-07-21",
         "cache_read_input_token_cost": 3e-08,
         "cache_read_input_token_cost_batches": 1.5e-08,
