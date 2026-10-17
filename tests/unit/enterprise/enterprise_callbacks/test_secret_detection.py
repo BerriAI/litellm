@@ -160,6 +160,40 @@ def test_clean_scan_reuse_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
     assert scanned == ["first", "second", "third", "second", "first"]
 
 
+def test_interleaved_agent_sessions_reuse_their_clean_scans(monkeypatch: pytest.MonkeyPatch) -> None:
+    scanned: Final[list[str]] = []
+
+    def clean_scan(lines: Sequence[str]) -> frozenset[tuple[str, str]]:
+        scanned.append(lines[0])
+        return frozenset()
+
+    monkeypatch.setattr(secret_detection, "_scan_lines", clean_scan)
+    guardrail: Final = _guardrail()
+    sessions: Final = [[f"session {session} turn {turn}" for turn in range(201)] for session in range(25)]
+    for history in sessions:
+        for text in history:
+            guardrail.redact_text(text)
+    scanned.clear()
+    for history in sessions:
+        for text in history:
+            guardrail.redact_text(text)
+    assert scanned == []
+
+
+def test_overlapping_secrets_are_replaced_longest_first(monkeypatch: pytest.MonkeyPatch) -> None:
+    guardrail: Final = _guardrail()
+    detected: Final = [
+        {"type": "Secret Keyword", "value": "\\u0041\\u0042"},
+        {"type": "Secret Keyword", "value": "ABCD"},
+    ]
+
+    def overlapping_scan(text: str) -> list[dict[str, str]]:
+        return detected
+
+    monkeypatch.setattr(guardrail, "scan_message_for_secrets", overlapping_scan)
+    assert guardrail.redact_tool_payload({"token": "ABCDxyz"}) == {"token": "[REDACTED]xyz"}
+
+
 @pytest.mark.asyncio
 async def test_pre_call_hook_records_secrets_found_only_in_tool_payloads():
     data = {
@@ -202,12 +236,29 @@ def test_list_items_are_scanned_beside_their_parent_key_or_quoted(payload, expec
     (("k" * 10_000, 1000), ("\u0000" * 64, 3000), ("tok " * 250_000, 2000)),
     ids=("long", "control-characters", "long-over-many-items"),
 )
-def test_keys_over_a_list_are_scanned_in_bounded_time(key, items):
-    payload = {key: ["v"] * items + [f"AWS_ACCESS_KEY_ID={AWS_KEY}"]}
-    started = time.perf_counter()
-    result = _guardrail().redact_tool_payload(payload)
-    assert time.perf_counter() - started < 3.0
+def test_keys_over_a_list_build_one_bounded_context(monkeypatch: pytest.MonkeyPatch, key: str, items: int) -> None:
+    contexts: Final[list[str]] = []
+    scans: Final[list[str]] = []
+    key_context: Final = secret_detection._key_context
+    guardrail: Final = _guardrail()
+    scan: Final = guardrail.scan_message_for_secrets
+
+    def recorded_context(value: str) -> str:
+        contexts.append(value)
+        return key_context(value)
+
+    def recorded_scan(text: str) -> list[dict[str, str]]:
+        scans.append(text)
+        return scan(text)
+
+    monkeypatch.setattr(secret_detection, "_key_context", recorded_context)
+    monkeypatch.setattr(guardrail, "scan_message_for_secrets", recorded_scan)
+    secret_line: Final = f"AWS_ACCESS_KEY_ID={AWS_KEY}"
+    result: Final = guardrail.redact_tool_payload({key: ["v"] * items + [secret_line]})
     assert result == {key: ["v"] * items + ["AWS_ACCESS_KEY_ID=[REDACTED]"]}
+    assert contexts == [key]
+    longest: Final = secret_detection._KEY_CONTEXT + len('"": ') + len(json.dumps(secret_line))
+    assert max(len(line) for line in scans[0].splitlines()) == longest
 
 
 def _recorded(request_data: dict) -> dict:

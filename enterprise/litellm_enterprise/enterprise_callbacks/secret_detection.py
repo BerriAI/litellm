@@ -468,8 +468,9 @@ _SHELL_TRAILER: Final = re.compile(r"\\|#.*|-*\w[\w.-]*=\S*")
 
 _SCAN_SUFFIX: Final = ".py"
 
-# Digests of scan inputs that held no secret, so the history an agent resends every turn is scanned once.
-_CLEAN_SCAN_CACHE_SIZE: Final = 4096
+# Digests of scan inputs that held no secret, so the history an agent resends every turn is scanned once. 65536
+# digests take about 10 MB and hold a few hundred interleaved agent sessions per worker.
+_CLEAN_SCAN_CACHE_SIZE: Final = 65536
 
 
 @contextlib.contextmanager
@@ -644,7 +645,8 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
             "Detected and redacted secrets in tool payload: %s",
             sorted(dict.fromkeys(secret["type"] for secret in detected)),
         )
-        pattern: Final = re.compile("|".join(re.escape(secret["value"]) for secret in detected))
+        values: Final = sorted({secret["value"] for secret in detected}, key=len, reverse=True)  # longest match wins
+        pattern: Final = re.compile("|".join(re.escape(value) for value in values))
         return map_tool_json_text(payload, lambda text: pattern.sub("[REDACTED]", text))
 
     async def should_run_check(self, user_api_key_dict: UserAPIKeyAuth) -> bool:
