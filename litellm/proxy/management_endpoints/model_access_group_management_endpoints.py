@@ -627,11 +627,8 @@ async def create_model_group(
             detail={"error": "Either model_names or model_ids must be provided and non-empty"},
         )
 
-    # If model_ids is provided, use it (more precise targeting)
-    use_model_ids: Final = has_model_ids
-
-    # Validate model_names exist in router (only if using model_names path)
-    if not use_model_ids and has_model_names:
+    # Validate model_names exist in router whenever model_names is provided
+    if has_model_names:
         assert data.model_names is not None
         missing_models: Final = await _missing_models_after_read_through(
             model_names=data.model_names,
@@ -663,21 +660,27 @@ async def create_model_group(
                 },
             )
 
-        # Update deployments using the appropriate method
-        if use_model_ids:
+        # Update deployments using provided model_ids and/or model_names
+        updated_dict: dict[str, str] = {}
+        if has_model_ids:
             assert data.model_ids is not None
-            updated_pairs = await update_specific_deployments_with_access_group(
+            for pair in await update_specific_deployments_with_access_group(
                 model_ids=data.model_ids,
                 access_group=data.access_group,
                 prisma_client=prisma_client,
-            )
-        else:
+            ):
+                updated_dict[pair[0]] = pair[1]
+
+        if has_model_names:
             assert data.model_names is not None
-            updated_pairs = await update_deployments_with_access_group(
+            for pair in await update_deployments_with_access_group(
                 model_names=data.model_names,
                 access_group=data.access_group,
                 prisma_client=prisma_client,
-            )
+            ):
+                updated_dict[pair[0]] = pair[1]
+
+        updated_pairs = list(updated_dict.items())
         models_updated: Final = len(updated_pairs)
 
         live_before_reload: Final = live_model_ids_snapshot()
@@ -879,26 +882,8 @@ async def update_access_group(
             detail={"error": "Either model_names or model_ids must be provided and non-empty"},
         )
 
-    use_model_ids: Final = has_model_ids
-
-    # Validation: Check if access group exists
-    try:
-        access_groups_map: Final = await get_all_access_groups_from_db(prisma_client=prisma_client)
-        if access_group not in access_groups_map:
-            raise HTTPException(
-                status_code=404,
-                detail={"error": f"Access group '{access_group}' not found"},
-            )
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail={"error": f"Failed to check access group existence: {e}"},
-        )
-
-    # Validation: Check if all new models exist (only if using model_names path)
-    if not use_model_ids and has_model_names:
+    # Validation: Check if all new models exist whenever model_names is provided
+    if has_model_names:
         assert data.model_names is not None
         missing_models: Final = await _missing_models_after_read_through(
             model_names=data.model_names,
@@ -926,21 +911,27 @@ async def update_access_group(
         ]
         stripped_pairs: Final = tuple(pair for pair in stripped if pair is not None)
 
-        # Step 2: Add access group using the appropriate method
-        if use_model_ids:
+        # Step 2: Add access group using provided model_ids and/or model_names
+        updated_dict: dict[str, str] = {}
+        if has_model_ids:
             assert data.model_ids is not None
-            updated_pairs = await update_specific_deployments_with_access_group(
+            for pair in await update_specific_deployments_with_access_group(
                 model_ids=data.model_ids,
                 access_group=access_group,
                 prisma_client=prisma_client,
-            )
-        else:
+            ):
+                updated_dict[pair[0]] = pair[1]
+
+        if has_model_names:
             assert data.model_names is not None
-            updated_pairs = await update_deployments_with_access_group(
+            for pair in await update_deployments_with_access_group(
                 model_names=data.model_names,
                 access_group=access_group,
                 prisma_client=prisma_client,
-            )
+            ):
+                updated_dict[pair[0]] = pair[1]
+
+        updated_pairs = list(updated_dict.items())
         models_updated: Final = len(updated_pairs)
 
         # Clear cache and reload models to pick up the access group changes
