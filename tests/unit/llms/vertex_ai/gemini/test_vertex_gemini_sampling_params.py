@@ -120,3 +120,11 @@ def test_gemini_request_body_raises_when_drop_params_false() -> None:
             litellm_params={"drop_params": False},
             cached_content=None,
         )
+
+
+def test_bundled_cost_map_gemini_flash_supports_sampling_params_is_false() -> None:
+    """Verify bundled catalog entries for Gemini 3.x Flash have supports_sampling_params=False."""
+    assert VertexGeminiConfig._supports_sampling_params("gemini-3.8-flash") is False
+    assert VertexGeminiConfig._supports_sampling_params("vertex_ai/gemini-3.8-flash") is False
+    assert VertexGeminiConfig._supports_sampling_params("vertex_ai/gemini-3.6-flash") is False
+    assert VertexGeminiConfig._supports_sampling_params("gemini-3.5-flash-lite") is False

@@ -1241,7 +1241,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     def _supports_sampling_params(model: str) -> bool:
         from litellm.utils import get_bundled_model_cost_map
 
-        candidates: Final = (
+        candidates: Final[tuple[str, ...]] = (
             model,
             f"vertex_ai/{model}",
             f"gemini/{model}",
@@ -1249,11 +1249,17 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         )
         for cost_map in (litellm.model_cost, get_bundled_model_cost_map()):
             for cand in candidates:
-                model_entry = cost_map.get(cand)
+                model_entry: object = cost_map.get(cand)
                 if isinstance(model_entry, dict):
-                    val = model_entry.get("supports_sampling_params")
+                    val: object = model_entry.get("supports_sampling_params")
                     if isinstance(val, bool):
                         return val
+
+        # Fallback for Gemini 3.x Flash models if not explicitly set in catalog
+        normalized_name: Final[str] = model.lower().replace("vertex_ai/", "").replace("gemini/", "")
+        if "gemini-3." in normalized_name and "flash" in normalized_name:
+            return False
+
         return True
 
     @classmethod

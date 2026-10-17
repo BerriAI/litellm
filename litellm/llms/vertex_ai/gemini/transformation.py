@@ -1195,12 +1195,13 @@ def transform_request_body(
         from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
 
         if not VertexGeminiConfig.supports_sampling_params(model):
-            unsupported_sampling: Final = [k for k in ("temperature", "top_p", "top_k") if k in filtered_params]
+            unsupported_sampling: Final[list[str]] = [
+                k for k in ("temperature", "top_p", "top_k") if k in filtered_params
+            ]
             if unsupported_sampling:
-                should_drop: Final = (
-                    bool(litellm_params["drop_params"])
-                    if litellm_params and "drop_params" in litellm_params
-                    else bool(litellm.drop_params)
+                drop_override: object = litellm_params.get("drop_params") if isinstance(litellm_params, dict) else None
+                should_drop: Final[bool] = (
+                    bool(drop_override) if drop_override is not None else bool(litellm.drop_params)
                 )
                 if not should_drop:
                     raise litellm.utils.UnsupportedParamsError(
