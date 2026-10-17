@@ -358,6 +358,14 @@ func resourceKeyRead(ctx context.Context, d *schema.ResourceData, m interface{})
 		return nil
 	}
 
+	// The gateway archives deleted keys and still serves them from /key/info
+	// with status "deleted", so only that flag separates them from live keys.
+	if key.Status == "deleted" {
+		log.Printf("[WARN] Key %s is deleted on the gateway, removing from state", d.Id())
+		d.SetId("")
+		return nil
+	}
+
 	d.Set("server_metadata", serverKeyMetadata(key.Metadata))
 	key.Metadata = declaredKeyMetadata(key.Metadata, d.Get("metadata").(map[string]interface{}))
 	mapKeyToResourceData(d, key)
@@ -531,6 +539,11 @@ func resourceKeyDelete(ctx context.Context, d *schema.ResourceData, m interface{
 	c := m.(*Client)
 
 	err := c.DeleteKey(d.Id())
+	if isNotFound(err) {
+		log.Printf("[WARN] Key %s already deleted on the gateway", d.Id())
+		d.SetId("")
+		return nil
+	}
 	if err != nil {
 		return diag.FromErr(fmt.Errorf("error deleting key: %s", err))
 	}
