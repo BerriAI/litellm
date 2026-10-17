@@ -499,6 +499,29 @@ def get_external[R: BaseModel](
     return classify(resp, response_type)
 
 
+def get_text_external(
+    url: str,
+    *,
+    headers: BaseModel | None = None,
+    timeout: float = 30.0,
+    ca_bundle: str | None = None,
+) -> str | NetworkError:
+    """GET an absolute URL outside the proxy whose body is plain text (e.g. a pod log), not JSON.
+    A non-2xx status is reported as a NetworkError so the caller can fail loudly."""
+    try:
+        resp = requests.get(
+            url,
+            headers={"Accept": "text/plain", **(_headers(headers) if headers is not None else {})},
+            timeout=timeout,
+            verify=ca_bundle if ca_bundle is not None else True,
+        )
+    except requests.RequestException as exc:
+        return NetworkError(message=str(exc))
+    if not (200 <= resp.status_code < 300):
+        return NetworkError(message=f"{resp.status_code} from {url}: {resp.text[:300]}")
+    return resp.text
+
+
 def post_external[R: BaseModel](
     url: str,
     *,
