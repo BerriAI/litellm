@@ -17,6 +17,7 @@ from litellm.constants import (
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock.realtime.handler import BedrockRealtime
 from litellm.llms.bedrock.realtime.transformation import BedrockRealtimeConfig
+from litellm.realtime_api import main as realtime_main
 
 
 @pytest.fixture(autouse=True)
@@ -107,6 +108,14 @@ class UnavailableBedrockStream:
 
     async def await_output(self):
         raise ServiceUnavailableException("fault injected: Bedrock realtime unavailable")
+
+
+class RecordingRealtimeHandler:
+    def __init__(self):
+        self.calls = 0
+
+    async def async_realtime(self, **kwargs):
+        self.calls += 1
 
 
 class FakeLogging:
@@ -678,18 +687,23 @@ class TestBedrockRealtimeSessionLifecycle:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "drop_params,expected_errors",
-        [(False, [("invalid_type", "session.temperature")]), (True, [])],
+        "session,drop_params,expected_errors",
+        [
+            ({"temperature": "0.2", "modalities": ["text"]}, False, [("invalid_type", "session.temperature")]),
+            ({"temperature": "0.2", "modalities": ["text"]}, True, []),
+            ({"modalities": "text"}, False, [("invalid_type", "session.modalities")]),
+            ({"modalities": "text"}, True, []),
+        ],
     )
-    async def test_malformed_number_setting_is_rejected_or_dropped_and_the_session_still_answers(
-        self, stub_aws_sdk_client, drop_params, expected_errors
+    async def test_malformed_setting_is_rejected_or_dropped_and_the_session_still_answers(
+        self, stub_aws_sdk_client, session, drop_params, expected_errors
     ):
         stream: Final = ScriptedBedrockStream([])
         stub_aws_sdk_client["streams"] = [stream]
         user_text: Final = {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}
         websocket: Final = ConnectedClientWS(
             [
-                json.dumps({"type": "session.update", "session": {"temperature": "0.2", "modalities": ["text"]}}),
+                json.dumps({"type": "session.update", "session": session}),
                 json.dumps({"type": "conversation.item.create", "item": user_text}),
             ]
         )
@@ -777,12 +791,26 @@ class TestBedrockRealtimeProviderFailurePropagation:
         dispatched["logging_obj"] = RecordingLogging()
         return dispatched
 
+    USER_TEXT: Final = json.dumps(
+        {
+            "type": "conversation.item.create",
+            "item": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+        }
+    )
+    REJECTED_SESSION_UPDATE: Final = json.dumps({"type": "session.update", "session": {"temperature": "0.2"}})
+    USER_AUDIO: Final = json.dumps({"type": "input_audio_buffer.append", "audio": "AAAA"})
+
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "client_messages",
+        [[SESSION_UPDATE], [USER_TEXT], [USER_AUDIO], [REJECTED_SESSION_UPDATE, USER_TEXT]],
+        ids=["session-update-first", "text-first", "audio-first", "input-after-rejected-update"],
+    )
     async def test_mid_stream_failure_escapes_keeps_partial_spend_and_blocks_replay(
-        self, stub_aws_sdk_client, spend_dispatch
+        self, stub_aws_sdk_client, spend_dispatch, monkeypatch, client_messages: list[str]
     ):
         handler = BedrockRealtime()
-        websocket = ConnectedClientWS([self.SESSION_UPDATE])
+        websocket = ConnectedClientWS(client_messages)
         stream = ScriptedBedrockStream(self.TEXT_TURN, receiver_type=BreakingBedrockReceiver)
         stub_aws_sdk_client["streams"] = [stream]
 
@@ -813,6 +841,37 @@ class TestBedrockRealtimeProviderFailurePropagation:
         assert replay.value.status_code == 400, "a committed session must not be silently restarted on a fallback"
         assert not litellm.should_retry(replay.value.status_code), "the router must not retry the replay refusal"
         assert "Nova Sonic stream broke" in replay.value.message, "the router surfaces the last attempt's error"
+
+        other_provider: Final = RecordingRealtimeHandler()
+        monkeypatch.setattr(realtime_main, "openai_realtime", other_provider)
+        with pytest.raises(BedrockError) as fallback:
+            await realtime_main._arealtime.__wrapped__(
+                model="openai/gpt-realtime", websocket=websocket, litellm_logging_obj=FakeLogging()
+            )
+
+        assert fallback.value.status_code == 400, "a fallback to another provider must not start a second session"
+        assert other_provider.calls == 0
+
+    @pytest.mark.asyncio
+    async def test_readiness_failure_on_an_input_first_start_replays_the_input(self, stub_aws_sdk_client):
+        handler = BedrockRealtime()
+        websocket = ConnectedClientWS([self.USER_TEXT])
+        healthy_stream = ScriptedBedrockStream([])
+        stub_aws_sdk_client["streams"] = [UnavailableBedrockStream(), healthy_stream]
+
+        with pytest.raises(BedrockError) as failure:
+            await handler.async_realtime(
+                model="amazon.nova-sonic-v1:0", websocket=websocket, logging_obj=FakeLogging(), **self.AWS_PARAMS
+            )
+        assert failure.value.status_code == 503
+
+        await handler.async_realtime(
+            model="amazon.nova-sonic-v1:0", websocket=websocket, logging_obj=FakeLogging(), **self.AWS_PARAMS
+        )
+
+        assert [json.loads(m)["type"] for m in websocket.sent_to_client] == ["session.created"]
+        replayed = [json.loads(chunk.value.bytes_.decode("utf-8")) for chunk in healthy_stream.input_stream.sent]
+        assert any(event["event"].get("textInput", {}).get("content") == "hi" for event in replayed)
 
     @pytest.mark.asyncio
     async def test_input_side_failure_keeps_spend_for_responses_already_delivered(
