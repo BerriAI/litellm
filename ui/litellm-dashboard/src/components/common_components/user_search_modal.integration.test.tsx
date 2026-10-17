@@ -205,6 +205,70 @@ describe("UserSearchModal submit payload", () => {
   });
 });
 
+describe("UserSearchModal users sharing an email", () => {
+  beforeEach(() => {
+    vi.mocked(userFilterUICall).mockReset();
+    vi.mocked(userFilterUICall).mockResolvedValue([
+      { user_id: "u-first", user_email: "shared@example.com" },
+      { user_id: "u-second", user_email: "shared@example.com" },
+    ] as never);
+  });
+
+  it("lists the shared email once and submits the user ID picked from its owners", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    render(<UserSearchModal isVisible onCancel={vi.fn()} onSubmit={onSubmit} accessToken="sk-test" />);
+    const save = screen.getByRole("button", { name: /add member/i });
+
+    const emailInput = getEmailSearchInput();
+    await user.click(emailInput);
+    await user.type(emailInput, "shared");
+    await waitFor(() => expect(userFilterUICall).toHaveBeenCalled(), { timeout: 3000 });
+    const emailOptions = await screen.findAllByRole("option");
+    expect(emailOptions.map((option) => option.textContent)).toEqual(["shared@example.com"]);
+    await user.click(emailOptions[0]);
+
+    expect(screen.getByLabelText("User ID")).toHaveValue("");
+    expect(screen.getByText(/multiple users share this email/i)).toBeInTheDocument();
+    expect(save).toBeDisabled();
+
+    await user.click(screen.getByLabelText("User ID"));
+    const idOptions = await screen.findAllByRole("option");
+    expect(idOptions.map((option) => option.textContent)).toEqual(["u-first", "u-second"]);
+    await user.click(screen.getByRole("option", { name: "u-second" }));
+    await user.click(save);
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0][0]).toStrictEqual({
+      user_email: "shared@example.com",
+      user_id: "u-second",
+      role: "user",
+    });
+    expect(userFilterUICall).toHaveBeenCalledTimes(1);
+  });
+
+  it("lists the shared email's user IDs again when the ID dropdown reopens after a search", async () => {
+    const user = userEvent.setup();
+    render(<UserSearchModal isVisible onCancel={vi.fn()} onSubmit={vi.fn()} accessToken="sk-test" />);
+
+    const emailInput = getEmailSearchInput();
+    await user.click(emailInput);
+    await user.type(emailInput, "shared");
+    await user.click((await screen.findAllByRole("option"))[0]);
+
+    vi.mocked(userFilterUICall).mockResolvedValue([] as never);
+    const idInput = screen.getByLabelText("User ID");
+    await user.click(idInput);
+    await user.type(idInput, "zzz");
+    await waitFor(() => expect(userFilterUICall).toHaveBeenCalledTimes(2), { timeout: 3000 });
+    await user.keyboard("{Escape}");
+    await user.click(idInput);
+
+    const idOptions = await screen.findAllByRole("option", {}, { timeout: 3000 });
+    expect(idOptions.map((option) => option.textContent)).toEqual(["u-first", "u-second"]);
+  });
+});
+
 describe("UserSearchModal search lifecycle", () => {
   const directory = [
     { user_id: "u-jones", user_email: "alice.jones@example.com" },
