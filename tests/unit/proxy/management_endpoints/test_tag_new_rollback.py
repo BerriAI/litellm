@@ -70,9 +70,10 @@ async def test_new_tag_rolls_back_row_and_deployments_when_tagging_fails():
     every deployment it reached, and the fresh row is deleted so a retry works."""
     table = _make_table()
     deployments = [_deployment("model-1"), _deployment("model-2")]
-    with _patched(
-        table, deployments, [None, HTTPException(status_code=500, detail="db write failed")]
-    ) as (add_tag, remove_tag):
+    with _patched(table, deployments, [None, HTTPException(status_code=500, detail="db write failed")]) as (
+        add_tag,
+        remove_tag,
+    ):
         with pytest.raises(HTTPException) as exc_info:
             await endpoints.new_tag(
                 tag=TagNewRequest(name=TAG_NAME, models=["model-a"]),
@@ -80,6 +81,8 @@ async def test_new_tag_rolls_back_row_and_deployments_when_tagging_fails():
             )
 
     assert exc_info.value.status_code == 500
+    # the outer handler must not re-wrap the re-raise into a generic 500
+    assert exc_info.value.detail == "db write failed"
     # every deployment write was attempted (return_exceptions gather)
     assert add_tag.await_count == 2
     # rollback: untag everywhere the new tag could have landed...
@@ -141,3 +144,82 @@ async def test_remove_tag_from_deployment_noops_when_tag_absent():  # test-quali
         await endpoints._remove_tag_from_deployment(deployment=_deployment("model-1"), tag=TAG_NAME)
 
     table.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_new_tag_non_http_tagging_failure_keeps_original_detail():
+    """A plain exception from a deployment write becomes a 500 whose detail is
+    the original error text, not "500: ..." from a second wrap."""
+    table = _make_table()
+    deployments = [_deployment("model-1")]
+    with _patched(table, deployments, [ValueError("deployment write kaboom")]):
+        with pytest.raises(HTTPException) as exc_info:
+            await endpoints.new_tag(
+                tag=TagNewRequest(name=TAG_NAME, models=["model-a"]),
+                user_api_key_dict=UserAPIKeyAuth(user_id="admin"),
+            )
+
+    assert exc_info.value.status_code == 500
+    assert exc_info.value.detail == "deployment write kaboom"
+    table.delete.assert_awaited_once_with(where={"tag_name": TAG_NAME})
+
+
+@pytest.mark.asyncio
+async def test_new_tag_existing_tag_stays_a_400():
+    """The pre-existing "already exists" raise must keep its 400 instead of
+    being turned into a 500 by the outer handler."""
+    table = _make_table()
+    table.find_unique = AsyncMock(return_value=SimpleNamespace(tag_name=TAG_NAME))
+    with _patched(table, [], []):
+        with pytest.raises(HTTPException) as exc_info:
+            await endpoints.new_tag(
+                tag=TagNewRequest(name=TAG_NAME, models=["model-a"]),
+                user_api_key_dict=UserAPIKeyAuth(user_id="admin"),
+            )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == f"Tag {TAG_NAME} already exists"
+
+
+@pytest.mark.asyncio
+async def test_new_tag_rollback_deletes_budget_minted_by_the_create():
+    """When the create minted a budget row (budget fields given, no budget_id),
+    the rollback deletes it so a retry does not leak stray budget rows."""
+    table = _make_table()
+    deployments = [_deployment("model-1")]
+    budget_table = SimpleNamespace(delete=AsyncMock())
+    with (
+        _patched(table, deployments, [ValueError("boom")]),
+        patch.object(endpoints, "handle_budget_for_entity", AsyncMock(return_value="budget-minted-1")),
+        patch.object(endpoints, "BudgetRepository", return_value=SimpleNamespace(table=budget_table)),
+    ):
+        with pytest.raises(HTTPException):
+            await endpoints.new_tag(
+                tag=TagNewRequest(name=TAG_NAME, models=["model-a"], max_budget=10.0),
+                user_api_key_dict=UserAPIKeyAuth(user_id="admin"),
+            )
+
+    table.delete.assert_awaited_once_with(where={"tag_name": TAG_NAME})
+    budget_table.delete.assert_awaited_once_with(where={"budget_id": "budget-minted-1"})
+
+
+@pytest.mark.asyncio
+async def test_new_tag_rollback_keeps_caller_supplied_budget():
+    """A budget_id supplied in the request names a pre-existing row; the
+    rollback must not delete it."""
+    table = _make_table()
+    deployments = [_deployment("model-1")]
+    budget_table = SimpleNamespace(delete=AsyncMock())
+    with (
+        _patched(table, deployments, [ValueError("boom")]),
+        patch.object(endpoints, "handle_budget_for_entity", AsyncMock(return_value="budget-preexisting-1")),
+        patch.object(endpoints, "BudgetRepository", return_value=SimpleNamespace(table=budget_table)),
+    ):
+        with pytest.raises(HTTPException):
+            await endpoints.new_tag(
+                tag=TagNewRequest(name=TAG_NAME, models=["model-a"], budget_id="budget-preexisting-1"),
+                user_api_key_dict=UserAPIKeyAuth(user_id="admin"),
+            )
+
+    table.delete.assert_awaited_once_with(where={"tag_name": TAG_NAME})
+    budget_table.delete.assert_not_awaited()
