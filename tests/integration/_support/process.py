@@ -628,8 +628,11 @@ def worker_configuration(config: Path, directory: Path, inherited: Mapping[str, 
         return f"http://127.0.0.1:{inherited['INTEGRATION_PROVIDER_PORT']}"
 
     contents: Final = re.sub(r"http://127[.]0[.]0[.]1:(8190|8191)(?![0-9])", endpoint, config.read_text())
-    directory.mkdir(parents=True, exist_ok=True)
-    destination: Final = directory / f"worker-config-{uuid.uuid4().hex}.yaml"
+    checkouts: Final = (_harness_root(), _proxy_root().resolve())
+    inside_checkout: Final = any(config.resolve().is_relative_to(checkout) for checkout in checkouts)
+    target: Final = directory if inside_checkout else config.parent
+    target.mkdir(parents=True, exist_ok=True)
+    destination: Final = target / f"worker-config-{uuid.uuid4().hex}.yaml"
     loaded: Final[object] = yaml.safe_load(contents)
     if not isinstance(loaded, dict):
         destination.write_text(contents)
