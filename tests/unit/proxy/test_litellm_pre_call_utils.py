@@ -10319,7 +10319,6 @@ async def test_raw_body_inference_keeps_authenticated_baggage_tags_for_spend(rou
         {"request_tag_mappings": [{"key": "entrypoint", "tag_prefix": "usecase:"}]},
         None,
         MagicMock(),
-        MagicMock(),
     )
     reparsed = json.loads(await request.body())
     enriched = await add_litellm_data_to_request(

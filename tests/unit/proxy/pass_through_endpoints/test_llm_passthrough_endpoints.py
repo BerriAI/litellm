@@ -289,7 +289,6 @@ async def test_router_passthrough_keeps_mapped_baggage_tags_outside_upstream_bod
         {"request_tag_mappings": [{"key": "entrypoint", "tag_prefix": "usecase:"}]},
         None,
         UserApiKeyCache(),
-        ProxyLogging(UserApiKeyCache()),
     )
     metadata = get_passthrough_router_request_metadata(UserAPIKeyAuth(api_key="qa-key"), request)
     assert metadata["tags"] == ["usecase:a"]

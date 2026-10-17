@@ -209,8 +209,19 @@ def _drop_client_caller_session(request_body: Mapping[str, object]) -> None:
             metadata.pop(CALLER_SESSION_ID_METADATA_KEY, None)
 
 
+_PROXY_SET_METADATA_KEYS: Final = frozenset({CALLER_SESSION_ID_METADATA_KEY, BAGGAGE_MAPPED_TAGS_METADATA_KEY})
+_METADATA_TAGS_ADAPTER: Final = TypeAdapter(tuple[object, ...])
+
+
 def _requester_metadata_snapshot(metadata: Mapping[str, object]) -> Mapping[str, object]:
-    return copy.deepcopy({key: value for key, value in metadata.items() if key != CALLER_SESSION_ID_METADATA_KEY})
+    requester: Final = {key: value for key, value in metadata.items() if key not in _PROXY_SET_METADATA_KEYS}
+    stamp: Final = metadata.get(BAGGAGE_MAPPED_TAGS_METADATA_KEY)
+    tags: Final = requester.get("tags")
+    if not isinstance(stamp, BaggageMappedTagsStamp) or not isinstance(tags, list):
+        return copy.deepcopy(requester)
+    sent_tags: Final = [tag for tag in _METADATA_TAGS_ADAPTER.validate_python(tags) if tag not in stamp.tags]
+    without_tags: Final = {key: value for key, value in requester.items() if key != "tags"}
+    return copy.deepcopy({**without_tags, "tags": sent_tags} if sent_tags else without_tags)
 
 
 def _stampable_key_hash(user_api_key_dict: UserAPIKeyAuth) -> str | None:
@@ -288,7 +299,7 @@ if TYPE_CHECKING:
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy.policy_engine.attachment_registry import AttachmentRegistry
     from litellm.proxy.proxy_server import ProxyConfig as _ProxyConfig
-    from litellm.proxy.utils import PrismaClient, ProxyLogging
+    from litellm.proxy.utils import PrismaClient
     from litellm.types.proxy.policy_engine import Policy, PolicyMatchContext
 
     ProxyConfig = _ProxyConfig
@@ -2074,10 +2085,9 @@ class LiteLLMProxyRequestSetup:
         general_settings: Mapping[str, object],
         prisma_client: "PrismaClient | None",
         user_api_key_cache: "UserApiKeyCache",
-        proxy_logging_obj: "ProxyLogging",
     ) -> None:
         """Resolve configured baggage tags before the existing tag-budget gate."""
-        from litellm.proxy.auth.auth_checks import get_tag_objects_batch
+        from litellm.proxy.auth.auth_checks import read_tag_objects_batch
         from litellm.proxy.common_utils.request_tag_mappings import (
             REQUEST_TAG_MAPPINGS_ADAPTER,
             mapping_rejection,
@@ -2118,12 +2128,18 @@ class LiteLLMProxyRequestSetup:
                     param=None,
                     code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 )
-            tag_objects: Final = await get_tag_objects_batch(
+            tag_objects: Final = await read_tag_objects_batch(
                 tag_names=budgeted_tags,
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
-                proxy_logging_obj=proxy_logging_obj,
             )
+            if isinstance(tag_objects, Exception):
+                raise ProxyException(
+                    message="Baggage tag mappings could not read tag budgets from the database",
+                    type=ProxyErrorTypes.no_db_connection,
+                    param=None,
+                    code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                )
             unbudgeted_tag: Final = next(
                 (tag for tag in budgeted_tags if not _has_tag_budget(tag_objects.get(tag))), None
             )

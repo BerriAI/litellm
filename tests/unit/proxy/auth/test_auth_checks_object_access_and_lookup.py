@@ -11328,7 +11328,6 @@ async def test_baggage_mapping_rejects_exactly_the_client_tags_rejected_without_
         {"request_tag_mappings": [{"key": "entrypoint", "tag_prefix": "usecase:"}]},
         None,
         MagicMock(),
-        MagicMock(),
     )
     LiteLLMProxyRequestSetup.apply_client_tag_policy_pre_auth(mapped_request, mapped, UserAPIKeyAuth(api_key="qa-key"))
 
@@ -11350,7 +11349,6 @@ async def test_baggage_mapping_still_rejects_client_metadata_tags():
         data,
         {"request_tag_mappings": [{"key": "entrypoint", "tag_prefix": "usecase:"}]},
         None,
-        MagicMock(),
         MagicMock(),
     )
     assert _client_tag_rejection("/v1/chat/completions", data, request) == "400"

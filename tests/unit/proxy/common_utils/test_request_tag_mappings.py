@@ -1,13 +1,14 @@
 import json
 from types import SimpleNamespace
 from typing import cast
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import Request
 from pydantic import ValidationError
 
 from litellm.models.budget import LiteLLM_BudgetTable
+from litellm.constants import BAGGAGE_MAPPED_TAGS_METADATA_KEY
 from litellm.models.tag import LiteLLM_TagTable
 from litellm.proxy._types import ConfigGeneralSettings, ProxyException
 from litellm.proxy.common_utils.http_parsing_utils import read_request_body
@@ -38,7 +39,6 @@ async def test_mapping_rejection_keeps_string_metadata_safe_for_auth_failure_log
             data,
             {"request_tag_mappings": [{"key": "entrypoint", "tag_prefix": "usecase:", "required": True}]},
             None,
-            MagicMock(),
             MagicMock(),
         )
     assert error.value.code == "400"
@@ -71,7 +71,6 @@ async def test_invalid_mapper_metadata_rejects_without_breaking_failure_logging_
             data,
             {"request_tag_mappings": [{"key": "entrypoint", "tag_prefix": "usecase:"}]},
             None,
-            MagicMock(),
             MagicMock(),
         )
     assert error.value.code == "400"
@@ -161,7 +160,6 @@ async def test_mapped_tag_merges_with_existing_tags_in_the_budget_metadata_slot(
         {"request_tag_mappings": [{"key": "entrypoint", "tag_prefix": "usecase:"}]},
         None,
         MagicMock(),
-        MagicMock(),
     )
     assert data[slot]["tags"] == ["existing", "usecase:a"]
 
@@ -172,7 +170,20 @@ async def test_budgeted_mapper_requires_a_database():
     config = {"request_tag_mappings": [{"key": "entrypoint", "tag_prefix": "usecase:", "require_budgeted_tag": True}]}
     with pytest.raises(ProxyException) as error:
         await LiteLLMProxyRequestSetup.apply_baggage_tag_mappings_pre_auth(
-            request, {}, config, None, MagicMock(), MagicMock()
+            request, {}, config, None, MagicMock()
+        )
+    assert error.value.code == "503"
+
+
+@pytest.mark.asyncio
+async def test_budgeted_mapper_answers_503_when_the_tag_budget_lookup_fails():
+    request = Request({"type": "http", "headers": [(b"baggage", b"entrypoint=a")]})
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_tagtable.find_many = AsyncMock(side_effect=Exception("database unreachable"))
+    config = {"request_tag_mappings": [{"key": "entrypoint", "tag_prefix": "usecase:", "require_budgeted_tag": True}]}
+    with pytest.raises(ProxyException, match="could not read tag budgets") as error:
+        await LiteLLMProxyRequestSetup.apply_baggage_tag_mappings_pre_auth(
+            request, {"metadata": {}}, config, prisma_client, UserApiKeyCache()
         )
     assert error.value.code == "503"
 
@@ -195,7 +206,7 @@ async def test_budgeted_mapper_rejects_a_tag_without_a_max_budget(budget_table):
     config = {"request_tag_mappings": [{"key": "entrypoint", "tag_prefix": "usecase:", "require_budgeted_tag": True}]}
     with pytest.raises(ProxyException, match="usecase:a requires an existing tag budget") as error:
         await LiteLLMProxyRequestSetup.apply_baggage_tag_mappings_pre_auth(
-            request, data, config, MagicMock(), cache, MagicMock()
+            request, data, config, MagicMock(), cache
         )
     assert error.value.code == "400"
     assert data == {"metadata": {}}
@@ -217,7 +228,7 @@ async def test_budgeted_mapper_admits_a_tag_with_a_max_budget_and_unbudgeted_rul
         ]
     }
     await LiteLLMProxyRequestSetup.apply_baggage_tag_mappings_pre_auth(
-        request, data, config, MagicMock(), cache, MagicMock()
+        request, data, config, MagicMock(), cache
     )
     assert data["metadata"]["tags"] == ["usecase:a", "region:sg"]
 
@@ -243,6 +254,15 @@ def test_inference_routes_take_baggage_mappings(route):
 )
 def test_unbilled_and_mcp_routes_skip_baggage_mappings(route):
     assert not is_baggage_mapped_route(route)
+
+
+@pytest.mark.parametrize("registered", [True, False])
+def test_custom_pass_through_routes_take_baggage_mappings_once_registered(registered):
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import _registered_pass_through_routes
+
+    endpoints = {"qa-endpoint:exact:/billing-api": {"target": "http://example.com", "headers": {}}}
+    with patch.dict(_registered_pass_through_routes, endpoints if registered else {}, clear=True):
+        assert is_baggage_mapped_route("/billing-api") is registered
 
 
 @pytest.mark.asyncio
@@ -286,7 +306,6 @@ async def test_mapping_survives_cached_body_read_without_leaking_auth_query_fiel
         {"request_tag_mappings": [{"key": "entrypoint", "tag_prefix": "usecase:"}]},
         None,
         MagicMock(),
-        MagicMock(),
     )
     downstream = await read_request_body(request)
     assert downstream == body
@@ -302,3 +321,49 @@ async def test_mapping_survives_cached_body_read_without_leaking_auth_query_fiel
     assert "api-version" not in enriched
     assert "key" not in enriched["proxy_server_request"]["body"]
     assert "api-version" not in enriched["proxy_server_request"]["body"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "client_metadata",
+    [{"trace_name": "qa"}, {"trace_name": "qa", "tags": ["client:x"]}, {"trace_name": "qa", "tags": ["usecase:a"]}],
+)
+async def test_mapped_tags_stay_out_of_requester_metadata(client_metadata):
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import _read_request_body_deferring_parse_failure
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    body = {"model": "qa-model", "metadata": client_metadata}
+
+    async def receive():
+        return {"type": "http.request", "body": json.dumps(body).encode()}
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/chat/completions",
+            "scheme": "http",
+            "server": ("localhost", 4000),
+            "query_string": b"",
+            "headers": [(b"content-type", b"application/json"), (b"baggage", b"entrypoint=a")],
+        },
+        receive,
+    )
+    data, parse_error = await _read_request_body_deferring_parse_failure(request)
+    assert parse_error is None
+    await LiteLLMProxyRequestSetup.apply_baggage_tag_mappings_pre_auth(
+        request, data, {"request_tag_mappings": [{"key": "entrypoint", "tag_prefix": "usecase:"}]}, None, MagicMock()
+    )
+    enriched = await add_litellm_data_to_request(
+        data=await read_request_body(request),
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="qa-key"),
+        proxy_config=ProxyConfig(),
+        general_settings={},
+    )
+    requester_metadata = enriched["metadata"]["requester_metadata"]
+    assert "usecase:a" in enriched["metadata"]["tags"]
+    assert requester_metadata["trace_name"] == "qa"
+    assert requester_metadata.get("tags") == client_metadata.get("tags")
+    assert BAGGAGE_MAPPED_TAGS_METADATA_KEY not in requester_metadata

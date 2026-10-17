@@ -2131,14 +2131,20 @@ async def test_websocket_inference_is_denied_when_a_required_baggage_mapping_is_
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_websocket_for_model
 
     messages = []
-    with patch.dict(
-        litellm.proxy.proxy_server.general_settings,
-        {
-            "request_tag_mappings": [
-                {"key": "region", "tag_prefix": "region:"},
-                {"key": "entrypoint", "tag_prefix": "usecase:", "required": True},
-            ]
-        },
+    with (
+        patch.dict(
+            litellm.proxy.proxy_server.general_settings,
+            {
+                "request_tag_mappings": [
+                    {"key": "region", "tag_prefix": "region:"},
+                    {"key": "entrypoint", "tag_prefix": "usecase:", "required": True},
+                ]
+            },
+        ),
+        patch(
+            "litellm.proxy.auth.user_api_key_auth.user_api_key_auth",
+            new=AsyncMock(return_value=UserAPIKeyAuth(api_key="qa-key")),
+        ),
     ):
         with pytest.raises(HTTPException, match="WebSocket inference is disabled") as error:
             await user_api_key_auth_websocket_for_model(
@@ -2146,6 +2152,25 @@ async def test_websocket_inference_is_denied_when_a_required_baggage_mapping_is_
             )
     assert error.value.status_code == 403
     assert messages == ([{"type": "websocket.close", "code": 1008, "reason": ""}] if close_on_auth_error else [])
+
+
+@pytest.mark.asyncio
+async def test_websocket_invalid_key_is_rejected_before_the_required_baggage_mapping_denial():
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_websocket_for_model
+
+    with (
+        patch.dict(
+            litellm.proxy.proxy_server.general_settings,
+            {"request_tag_mappings": [{"key": "entrypoint", "tag_prefix": "usecase:", "required": True}]},
+        ),
+        patch(
+            "litellm.proxy.auth.user_api_key_auth.user_api_key_auth",
+            new=AsyncMock(side_effect=HTTPException(status_code=401, detail="Invalid proxy server token passed")),
+        ),
+    ):
+        with pytest.raises(HTTPException) as error:
+            await user_api_key_auth_websocket_for_model(_qa_websocket([]), "qa-model", close_on_auth_error=False)
+    assert error.value.status_code == 401
 
 
 @pytest.mark.asyncio

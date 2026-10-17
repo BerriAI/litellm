@@ -1187,6 +1187,18 @@ async def user_api_key_auth_live_websocket(websocket: WebSocket) -> UserAPIKeyAu
     return await user_api_key_auth_websocket_for_model(websocket, model=None)
 
 
+def _has_required_baggage_tag_mapping() -> bool:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.common_utils.request_tag_mappings import REQUEST_TAG_MAPPINGS_ADAPTER
+
+    raw_mappings: Final = _GENERAL_SETTINGS_ADAPTER.validate_python(proxy_server.general_settings).get(
+        "request_tag_mappings"
+    )
+    return bool(raw_mappings) and any(
+        rule.required for rule in REQUEST_TAG_MAPPINGS_ADAPTER.validate_python(raw_mappings)
+    )
+
+
 async def user_api_key_auth_websocket_for_model(
     websocket: WebSocket, model: str | None, *, close_on_auth_error: bool = True
 ) -> UserAPIKeyAuth:
@@ -1242,19 +1254,11 @@ async def user_api_key_auth_websocket_for_model(
     # Call user_api_key_auth with the extracted API key
     # Note: You'll need to modify this to work with WebSocket context if needed
     try:
-        from litellm.proxy import proxy_server
-
-        raw_mappings: Final = _GENERAL_SETTINGS_ADAPTER.validate_python(proxy_server.general_settings).get(
-            "request_tag_mappings"
-        )
-        if raw_mappings:
-            from litellm.proxy.common_utils.request_tag_mappings import REQUEST_TAG_MAPPINGS_ADAPTER
-
-            if any(rule.required for rule in REQUEST_TAG_MAPPINGS_ADAPTER.validate_python(raw_mappings)):
-                raise HTTPException(
-                    403, "Required baggage tag mappings need HTTP inference, WebSocket inference is disabled"
-                )
-        return await user_api_key_auth(request=request, api_key=f"Bearer {api_key}")
+        authorized: Final = await user_api_key_auth(request=request, api_key=f"Bearer {api_key}")
+        if _has_required_baggage_tag_mapping():
+            raise HTTPException(
+                403, "Required baggage tag mappings need HTTP inference, WebSocket inference is disabled"
+            )
     except Exception as e:
         if not close_on_auth_error:
             raise
@@ -1263,6 +1267,8 @@ async def user_api_key_auth_websocket_for_model(
         log_model_access_denial(e)
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         raise HTTPException(status_code=403, detail=str(e))
+    else:
+        return authorized
 
 
 async def user_api_key_auth_accepted_websocket_for_model(websocket: WebSocket, model: str) -> UserAPIKeyAuth:
@@ -4087,7 +4093,6 @@ async def _authorize_authenticated_request(
                     general_settings=_GENERAL_SETTINGS_ADAPTER.validate_python(general_settings),
                     prisma_client=prisma_client,
                     user_api_key_cache=user_api_key_cache,
-                    proxy_logging_obj=proxy_logging_obj,
                 )
         await run_centralized_common_checks(
             user_api_key_auth_obj=user_api_key_auth_obj,

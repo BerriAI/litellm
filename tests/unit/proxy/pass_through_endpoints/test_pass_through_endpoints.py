@@ -10300,7 +10300,6 @@ async def test_direct_passthrough_keeps_mapped_baggage_tags_outside_upstream_bod
         {"request_tag_mappings": [{"key": "entrypoint", "tag_prefix": "usecase:"}]},
         None,
         UserApiKeyCache(),
-        ProxyLogging(UserApiKeyCache()),
     )
     metadata = _update_metadata_with_tags_in_header(request, {})
     assert metadata["tags"] == ["existing", "usecase:a"]

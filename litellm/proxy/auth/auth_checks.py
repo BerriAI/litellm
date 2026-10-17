@@ -2465,7 +2465,7 @@ async def _fetch_uncached_tags(
     uncached_tags: Sequence[str],
     prisma_client: PrismaClient,
     user_api_key_cache: UserApiKeyCache,
-) -> tuple[tuple[str, LiteLLM_TagTable], ...]:
+) -> tuple[tuple[str, LiteLLM_TagTable], ...] | Exception:
     """Rows for the tags a cache probe missed; names absent from the registry never reach the DB."""
     if not uncached_tags:
         return ()
@@ -2493,11 +2493,44 @@ async def _fetch_uncached_tags(
                 model_type=LiteLLM_TagTable,
                 ttl=get_management_object_ttl(user_api_key_cache),
             )
-    except Exception as e:  # noqa: BLE001  # fail-safe: a tag fetch error must yield "no budget objects", never break auth
-        verbose_proxy_logger.debug("Error batch fetching tags from database: %s", e)
-        return ()
+    except Exception as e:  # noqa: BLE001  # returned as a value: budget checks fail open, the baggage mapper fails closed
+        return e
     else:
         return fetched
+
+
+async def _probe_and_fetch_tags(
+    tag_names: Sequence[str],
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+) -> tuple[Mapping[str, LiteLLM_TagTable], Exception | None]:
+    probed: Final = [
+        (
+            tag_name,
+            await user_api_key_cache.async_get_cache(key=tag_cache_key(tag_name), model_type=LiteLLM_TagTable),
+        )
+        for tag_name in tag_names
+    ]
+    fetched: Final = await _fetch_uncached_tags(
+        uncached_tags=tuple(tag_name for tag_name, tag_obj in probed if tag_obj is None),
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+    )
+    rows: Final = () if isinstance(fetched, Exception) else fetched
+    found: Final = {tag_name: tag_obj for tag_name, tag_obj in (*probed, *rows) if tag_obj is not None}
+    return found, fetched if isinstance(fetched, Exception) else None
+
+
+@log_db_metrics
+@with_service_target(AUTH_OBJECTS_TARGET)
+async def read_tag_objects_batch(
+    tag_names: Sequence[str],
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+) -> Mapping[str, LiteLLM_TagTable] | Exception:
+    """Like ``get_tag_objects_batch``, but a failed DB read comes back as the error instead of missing tags."""
+    found, error = await _probe_and_fetch_tags(tag_names, prisma_client, user_api_key_cache)
+    return found if error is None else error
 
 
 @log_db_metrics
@@ -2530,19 +2563,10 @@ async def get_tag_objects_batch(
     if prisma_client is None or not tag_names:
         return {}
 
-    probed: Final = [
-        (
-            tag_name,
-            await user_api_key_cache.async_get_cache(key=tag_cache_key(tag_name), model_type=LiteLLM_TagTable),
-        )
-        for tag_name in tag_names
-    ]
-    fetched: Final = await _fetch_uncached_tags(
-        uncached_tags=tuple(tag_name for tag_name, tag_obj in probed if tag_obj is None),
-        prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
-    )
-    return {tag_name: tag_obj for tag_name, tag_obj in (*probed, *fetched) if tag_obj is not None}
+    found, error = await _probe_and_fetch_tags(tag_names, prisma_client, user_api_key_cache)
+    if error is not None:
+        verbose_proxy_logger.debug("Error batch fetching tags from database: %s", error)
+    return dict(found)
 
 
 @log_db_metrics
