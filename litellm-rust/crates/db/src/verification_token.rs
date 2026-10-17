@@ -41,9 +41,15 @@ pub struct Team {
     pub restrictions: Restrictions,
 }
 
-/// What a team membership's budget table sets beyond its dollar budget.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+/// The key's team membership: its spend and budget, and what its budget table sets beyond them.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct TeamMembership {
+    /// The membership row's spend, when the key's user has a row for its team.
+    pub spend: Option<f64>,
+    /// The membership's own budget, with any temporary increase still in effect.
+    pub max_budget: Option<f64>,
+    /// The team's default member budget, `metadata.team_member_budget_id`.
+    pub default_max_budget: Option<f64>,
     /// `rpm_limit`, `tpm_limit`, `tpd_limit` or `max_parallel_requests`.
     pub rate_limits: bool,
     /// The member's own model scope; empty inherits the team's.
@@ -52,6 +58,8 @@ pub struct TeamMembership {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct User {
+    pub spend: f64,
+    pub max_budget: Option<f64>,
     pub models: Vec<String>,
     pub restrictions: Restrictions,
 }
@@ -85,7 +93,7 @@ pub async fn find_verification_token(
                   v.blocked,
                   v.models,
                   v.spend,
-                  v.max_budget,
+                  COALESCE(v.max_budget, kb.max_budget) AS max_budget,
                   v.allowed_routes,
                   v.key_alias,
                   v.key_name,
@@ -131,9 +139,16 @@ pub async fn find_verification_token(
                           '$.* ? (@.rpm_limit != null || @.tpm_limit != null)'), false))
                     AS "member_rate_limits!",
                   mb.allowed_models AS "member_allowed_models?",
+                  tm.spend AS "member_spend?",
+                  mb.max_budget AS "member_max_budget?",
+                  CASE WHEN mb.temp_budget_expiry > (now() AT TIME ZONE 'UTC')
+                       THEN mb.temp_budget_increase END AS "member_budget_increase?",
+                  tdb.max_budget AS "member_default_budget?",
                   v.user_id,
                   u.user_id AS "user_row_id?",
                   u.models AS "user_models?",
+                  u.spend AS "user_spend?",
+                  u.max_budget AS "user_max_budget?",
                   (u.rpm_limit IS NOT NULL OR u.tpm_limit IS NOT NULL
                      OR u.max_parallel_requests IS NOT NULL
                      OR COALESCE(jsonb_path_exists(u.model_max_budget,
@@ -147,6 +162,8 @@ pub async fn find_verification_token(
            LEFT JOIN "LiteLLM_TeamMembership" AS tm
              ON v.team_id = tm.team_id AND v.user_id = tm.user_id
            LEFT JOIN "LiteLLM_BudgetTable" AS mb ON tm.budget_id = mb.budget_id
+           LEFT JOIN "LiteLLM_BudgetTable" AS tdb
+             ON tdb.budget_id = t.metadata ->> 'team_member_budget_id'
            LEFT JOIN "LiteLLM_UserTable" AS u ON v.user_id = u.user_id
            WHERE v.token = $1"#,
         token
@@ -192,11 +209,18 @@ pub async fn find_verification_token(
             },
         }),
         team_membership: TeamMembership {
+            spend: row.member_spend,
+            max_budget: row
+                .member_max_budget
+                .map(|budget| budget + row.member_budget_increase.unwrap_or(0.0)),
+            default_max_budget: row.member_default_budget,
             rate_limits: row.member_rate_limits,
             allowed_models: row.member_allowed_models.unwrap_or_default(),
         },
         user_id: row.user_id,
         user: row.user_row_id.map(|_| User {
+            spend: row.user_spend.unwrap_or(0.0),
+            max_budget: row.user_max_budget,
             models: row.user_models.unwrap_or_default(),
             restrictions: Restrictions {
                 rate_limits: row.user_rate_limits,

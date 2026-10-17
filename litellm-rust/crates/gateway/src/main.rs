@@ -112,13 +112,22 @@ async fn main() -> Result<(), Box<dyn Error>> {
         coordination.start(inference.clone(), keys.clone(), shutdown.clone());
     }
     // Built-in hooks and observers are added here as the gateway gains them.
+    let mut hooks: Vec<Arc<dyn litellm_gateway_hooks::Hook>> = Vec::new();
+    if database.is_some() {
+        hooks.push(Arc::new(litellm_gateway::budgets::Budgets::for_gateway(
+            &config,
+            &inference,
+            coordination.clone(),
+            database.clone(),
+        )));
+    }
     let mut observers: Vec<Arc<dyn litellm_gateway_hooks::Observer>> = Vec::new();
     let spend = database.zip(litellm_gateway::spend::SpendSettings::from_config(&config));
     let spend_tracking = spend.is_some();
     if let Some((pool, settings)) = spend {
         observers.push(litellm_gateway::spend::SpendWriter::start(pool, settings));
     }
-    litellm_gateway::hooks::install(&inference, &config, Vec::new(), observers).await?;
+    litellm_gateway::hooks::install(&inference, &config, hooks, observers).await?;
     let listener = tokio::net::TcpListener::bind((settings.host.as_str(), settings.port)).await?;
     let address = listener.local_addr()?;
     // Without TCP_NODELAY, Nagle holds small SSE chunks until the client's delayed ACK (~40 ms per stream).
