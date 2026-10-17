@@ -4,7 +4,7 @@ from typing import ClassVar, Final
 import httpx
 
 from litellm._logging import verbose_logger
-from litellm.anthropic_beta_headers_manager import is_beta_header_supported
+from litellm.anthropic_beta_headers_manager import is_beta_header_supported_by_bundled_config
 from litellm.exceptions import AuthenticationError
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.anthropic_messages.transformation import (
@@ -778,7 +778,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         if optional_params.get("speed") == "fast":
             beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.FAST_MODE_2026_02_01.value)
 
-        if optional_params.get("safeguards") is not None and is_beta_header_supported(
+        if optional_params.get("safeguards") is not None and is_beta_header_supported_by_bundled_config(
             ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value,
             beta_map_provider or custom_llm_provider,
         ):

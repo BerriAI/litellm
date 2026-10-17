@@ -31,6 +31,7 @@ from integration.messages_endpoint.providers.anthropic.test_anthropic_safeguards
 from pydantic import JsonValue, TypeAdapter
 
 _CONFIG_MODEL: Final = "anthropic-safeguards-chaos"
+_FOUNDRY_CONFIG_MODEL: Final = "azure-ai-safeguards-chaos"
 _YAML_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _MARKER: Final = re.compile(r"marker-([0-9a-f]{32})")
 _STARTED_WORKER: Final = re.compile(r"Started server process \[(\d+)\]")
@@ -164,13 +165,27 @@ async def test_slow_streams_complete_with_the_beta_on_every_request(gateway: Gat
         _spend_success_ids(model, frozenset(f"msg_{call.marker}" for call in calls))
 
 
-def _chaos_config(wire: Wire, tmp_path: Path) -> Path:
-    base: Final = _YAML_OBJECT.validate_python(yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text()))
-    deployment: Final[dict[str, JsonValue]] = {
+def _anthropic_deployment(wire: Wire) -> dict[str, JsonValue]:
+    return {
         "model_name": _CONFIG_MODEL,
         "litellm_params": {"model": f"anthropic/{ANTHROPIC_MODEL}", "api_base": wire.url, "api_key": ANTHROPIC_KEY},
     }
-    config: Final = {**base, "model_list": [deployment]}
+
+
+def _foundry_deployment(wire: Wire) -> dict[str, JsonValue]:
+    return {
+        "model_name": _FOUNDRY_CONFIG_MODEL,
+        "litellm_params": {
+            "model": "azure_ai/claude-sonnet-4-6",
+            "api_base": wire.url,
+            "api_key": "synthetic-foundry-key",
+        },
+    }
+
+
+def _chaos_config(tmp_path: Path, *deployments: dict[str, JsonValue]) -> Path:
+    base: Final = _YAML_OBJECT.validate_python(yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text()))
+    config: Final = {**base, "model_list": list(deployments)}
     path: Final = tmp_path / "anthropic-safeguards-chaos.yaml"
     path.write_text(yaml.safe_dump(config))
     return path
@@ -199,7 +214,7 @@ async def test_worker_sigkill_mid_burst_leaves_the_sibling_sending_the_beta(gate
         return anthropic_peer(request)
 
     with wire_server(held) as wire:
-        path: Final = _chaos_config(wire, tmp_path)
+        path: Final = _chaos_config(tmp_path, _anthropic_deployment(wire))
         with owned_proxy_process(gateway, tmp_path, {}, config=path, workers=2) as owned:
             candidate: Final = owned.gateway
             workers: Final = eventually(
@@ -241,15 +256,40 @@ def _beta_map_gets(received: tuple[Request, ...]) -> int:
     return sum(1 for request in received if (request.method, request.target) == ("GET", "/beta.json"))
 
 
-@pytest.mark.timeout(180)
-async def test_cold_workers_fetch_the_beta_map_only_for_safeguards_once_per_worker_off_the_event_loop(
+async def _chat(base_url: str, key: str, marker: str) -> httpx.Response:
+    async with httpx.AsyncClient(base_url=base_url, timeout=60, trust_env=False) as client:
+        return await client.post(
+            "/v1/chat/completions",
+            json={
+                "model": _CONFIG_MODEL,
+                "max_tokens": 16,
+                "messages": [{"role": "user", "content": f"Question marker-{marker}"}],
+            },
+            headers={"Authorization": f"Bearer {key}"},
+        )
+
+
+async def _answered_while_the_beta_map_is_held(
+    base_url: str, key: str, guarded: tuple[_Call, ...], chat_markers: tuple[str, ...]
+) -> None:
+    served: Final = await _burst(base_url, key, _CONFIG_MODEL, guarded)
+    chats: Final = await asyncio.gather(*(_chat(base_url, key, marker) for marker in chat_markers))
+    for item in served:
+        _assert_answered_with_its_own_marker(item)
+    for marker, chat in zip(chat_markers, chats, strict=True):
+        assert chat.status_code == 200, chat.text
+        assert f"marker-{marker}" in chat.text, chat.text
+
+
+@pytest.mark.timeout(240)
+async def test_cold_workers_fetch_the_beta_map_only_for_filtered_safeguards_requests_off_the_shared_threads(
     gateway: Gateway, tmp_path: Path
 ) -> None:
     beta_map: Final = Path("litellm/anthropic_beta_headers_config.json").read_bytes()
     release: Final = threading.Event()
 
     def held_beta_map(_: Request) -> Reply:
-        assert release.wait(timeout=120), "The beta map was never released"
+        assert release.wait(timeout=180), "The beta map was never released"
         return Reply(body=beta_map)
 
     def upstream(request: Request) -> Reply:
@@ -258,10 +298,13 @@ async def test_cold_workers_fetch_the_beta_map_only_for_safeguards_once_per_work
         return anthropic_peer(request)
 
     plain: Final = _calls(8, stream=False, safeguards=False)
-    guarded: Final = _calls(16, stream=False)
-    plain_while_held: Final = _calls(4, stream=False, safeguards=False)
+    plain_foundry: Final = _calls(8, stream=False, safeguards=False)
+    direct: Final = _calls(8, stream=False)
+    foundry: Final = _calls(80, stream=False)
+    direct_while_held: Final = _calls(8, stream=False)
+    chat_markers: Final = tuple(uuid.uuid4().hex for _ in range(4))
     with wire_server(held_beta_map) as beta_map_wire, wire_server(upstream) as wire:
-        path: Final = _chaos_config(wire, tmp_path)
+        path: Final = _chaos_config(tmp_path, _anthropic_deployment(wire), _foundry_deployment(wire))
         with owned_proxy_process(
             gateway,
             tmp_path,
@@ -271,24 +314,35 @@ async def test_cold_workers_fetch_the_beta_map_only_for_safeguards_once_per_work
             workers=2,
         ) as owned:
             base_url: Final = str(owned.gateway.client.base_url)
-            for served_plain in await _burst(base_url, owned.gateway.key, _CONFIG_MODEL, plain):
-                _assert_answered_with_its_own_marker(served_plain)
-            assert beta_map_wire.received.qsize() == 0, "a request without safeguards fetched the beta map"
+            key: Final = owned.gateway.key
+            cold: Final = (
+                *await _burst(base_url, key, _CONFIG_MODEL, plain),
+                *await _burst(base_url, key, _FOUNDRY_CONFIG_MODEL, plain_foundry),
+                *await _burst(base_url, key, _CONFIG_MODEL, direct),
+            )
+            for served_cold in cold:
+                _assert_answered_with_its_own_marker(served_cold)
+            assert beta_map_wire.received.qsize() == 0, "a request that never filters betas fetched the beta map"
 
-            burst: Final = asyncio.create_task(_burst(base_url, owned.gateway.key, _CONFIG_MODEL, guarded))
-            await asyncio.to_thread(eventually, beta_map_wire.received.qsize, lambda size: size >= 1, 60)
-            for served_while_held in await _burst(base_url, owned.gateway.key, _CONFIG_MODEL, plain_while_held):
-                _assert_answered_with_its_own_marker(served_while_held)
-            assert not burst.done(), "safeguards requests were answered before the beta map loaded"
-            release.set()
-            for served_guarded in await burst:
-                _assert_answered_with_its_own_marker(served_guarded)
+            held: Final = asyncio.create_task(_burst(base_url, key, _FOUNDRY_CONFIG_MODEL, foundry))
+            try:
+                await asyncio.to_thread(eventually, beta_map_wire.received.qsize, lambda size: size >= 1, 60)
+                await asyncio.wait_for(
+                    _answered_while_the_beta_map_is_held(base_url, key, direct_while_held, chat_markers), timeout=45
+                )
+                assert not held.done(), "Foundry safeguards requests were answered before the beta map loaded"
+            finally:
+                release.set()
+            for served_foundry in await held:
+                _assert_answered_with_its_own_marker(served_foundry)
 
         received: Final = tuple(request for request in wire.drain() if request.method == "POST")
         beta_by_marker: Final = MappingProxyType(
             {marker_of(request): request.headers.get("anthropic-beta") for request in received}
         )
-        assert {beta_by_marker[call.marker] for call in guarded} == {BETA}, beta_by_marker
-        assert {beta_by_marker[call.marker] for call in (*plain, *plain_while_held)} == {None}, beta_by_marker
+        assert {beta_by_marker[call.marker] for call in (*direct, *direct_while_held, *foundry)} == {BETA}, (
+            beta_by_marker
+        )
+        assert {beta_by_marker[call.marker] for call in (*plain, *plain_foundry)} == {None}, beta_by_marker
         fetches: Final = _beta_map_gets(beta_map_wire.drain())
         assert 1 <= fetches <= 2, fetches
