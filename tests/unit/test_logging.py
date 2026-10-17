@@ -1896,6 +1896,49 @@ def test_print_startup_message_emits_json_after_an_operator_log_config_removed_t
     assert record["component"] == "LiteLLM Proxy"
 
 
+def test_print_startup_message_keeps_a_listing_longer_than_the_stdout_cap_whole(monkeypatch, capfd):
+    """The required migration SQL and the policy list run past MAX_STRING_LENGTH_STDOUT_LOG on a drifted
+    deployment. The prints they replace showed them whole, and that cap exists for echoed request payloads,
+    so the JSON record carries the whole listing too."""
+    monkeypatch.setenv("MAX_STRING_LENGTH_STDOUT_LOG", "500")
+    monkeypatch.setattr(litellm, "json_logs", True)
+    monkeypatch.setattr(sys, "excepthook", sys.excepthook)  # turn_on_json swaps it; put it back at teardown
+    turn_on_json()
+    commands: Final = tuple(f'ALTER TABLE "LiteLLM_Table{n}" ADD COLUMN "column_{n}" TEXT;' for n in range(40))
+    listing: Final = "\n".join(("Changes to DB Schema detected", "Required SQL commands:", *commands))
+    assert len(listing) > 500
+
+    print_startup_message(listing)
+
+    out, err = capfd.readouterr()
+    assert err == ""
+    lines: Final = [raw for raw in out.splitlines() if raw.strip()]
+    assert len(lines) == 1, lines
+    record: Final = json.loads(lines[0])
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD not in record["message"]
+    assert record["message"] == listing
+
+
+def test_print_startup_message_still_redacts_a_secret_in_the_uncapped_record(monkeypatch, capfd):
+    """Skipping the stdout cap must not skip secret redaction: a startup message that echoes a credential,
+    such as a failed migration diff quoting the database error, goes out scrubbed."""
+    monkeypatch.setattr(litellm, "json_logs", True)
+    monkeypatch.setattr(sys, "excepthook", sys.excepthook)  # turn_on_json swaps it; put it back at teardown
+    turn_on_json()
+
+    print_startup_message(
+        'Failed to generate migration diff. Error: {"api_key": "sk-abcdefghijklmnopqrstuvwxyz0123456789"}'
+    )
+
+    out, err = capfd.readouterr()
+    assert err == ""
+    lines: Final = [raw for raw in out.splitlines() if raw.strip()]
+    assert len(lines) == 1, lines
+    record: Final = json.loads(lines[0])
+    assert "sk-abcdefghijklmnopqrstuvwxyz0123456789" not in lines[0]
+    assert record["message"] == 'Failed to generate migration diff. Error: {"REDACTED"}'
+
+
 def test_print_startup_message_blank_spacer_emits_no_json_record(monkeypatch, capfd):
     """A spacer that only pads the terminal has nothing to say to a log pipeline."""
     monkeypatch.setattr(litellm, "json_logs", True)

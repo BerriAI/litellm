@@ -6,7 +6,8 @@ serves a chat request on every configured model plus one rejected request, stops
 rejects any line of its output that is not one JSON record, while checking that the
 startup information those lines used to carry is still present as JSON records. JSON mode is switched
 on through the environment and through the config, at one and two uvicorn workers, at the INFO, the
-default and the WARNING log level, and under a concurrent burst that lands on both workers.
+default and the WARNING log level, under a concurrent burst that lands on both workers, under an operator
+--log_config that names the proxy logger, and with a policy list longer than the stdout cap.
 """
 
 from __future__ import annotations
@@ -44,6 +45,12 @@ WORKER_COUNTS: Final = (1, 2)
 UNKNOWN_MODEL_STATUS: Final = 400
 BURST_SIZE: Final = 16
 CACHE_SETTINGS: Final[Mapping[str, JsonValue]] = {"cache": True, "cache_params": {"type": "redis"}}
+# the policy list and the required migration SQL are the startup listings that outgrow the stdout cap
+# (MAX_STRING_LENGTH_STDOUT_LOG, 4096 by default) that bounds echoed request payloads
+STDOUT_CAP: Final = 4096
+POLICY_COUNT: Final = 60
+POLICY_LIST_HEADER: Final = "LiteLLM Policy Engine: Loaded"
+TRUNCATION_MARKER: Final = "litellm_truncated"
 # an operator logging config of the usual shape: it sets the proxy logger's level and gives it no handler
 # of its own, and formats everything else, uvicorn included, as JSON through the root handler
 OPERATOR_LOG_CONFIG: Final[Mapping[str, JsonValue]] = {
@@ -61,8 +68,22 @@ def _models() -> tuple[str, str]:
     return (f"json-logs-first-{stamp}", f"json-logs-second-{stamp}")
 
 
+def _policies() -> dict[str, JsonValue]:
+    stamp: Final = uuid.uuid4().hex
+    return {
+        f"startup-listing-policy-{n:02d}-{stamp}": {
+            "description": f"policy {n:02d} of a listing that runs past the stdout cap meant for request payloads"
+        }
+        for n in range(POLICY_COUNT)
+    }
+
+
 def _write_config(
-    directory: Path, upstream_url: str, models: tuple[str, ...], litellm_settings: Mapping[str, JsonValue]
+    directory: Path,
+    upstream_url: str,
+    models: tuple[str, ...],
+    litellm_settings: Mapping[str, JsonValue],
+    extra_sections: Mapping[str, JsonValue] | None = None,
 ) -> Path:
     config: Final = directory / f"json_logs_{uuid.uuid4().hex}.yaml"
     config.write_text(
@@ -85,6 +106,7 @@ def _write_config(
                     "database_url": "os.environ/DATABASE_URL",
                     "disable_prisma_schema_update": True,
                 },
+                **(extra_sections or {}),
             },
             sort_keys=False,
         )
@@ -208,6 +230,28 @@ def test_json_logs_with_operator_log_config_keeps_every_line_json(
         gateway, tmp_path, config, {"LITELLM_LOG": "INFO"}, workers, models, ("--log_config", str(log_config))
     )
     _assert_every_line_is_json(log, workers, models, redis_auth_cache_line=False)
+
+
+def test_json_logs_keeps_a_startup_listing_longer_than_the_stdout_cap_whole(gateway: Gateway, tmp_path: Path) -> None:
+    """A startup listing longer than MAX_STRING_LENGTH_STDOUT_LOG reaches the pipeline whole. The policy list
+    stands in for every such listing (the required migration SQL on a drifted database is the other one):
+    the print it replaces showed it whole, and the stdout cap exists for echoed request payloads, so the JSON
+    record must not be middle-truncated."""
+    models: Final = _models()
+    policies: Final = _policies()
+    config: Final = _write_config(
+        tmp_path, gateway.upstream_url, models, {**CACHE_SETTINGS, "json_logs": True}, {"policies": policies}
+    )
+
+    log: Final = _boot_serve_and_stop(gateway, tmp_path, config, {"LITELLM_LOG": "INFO"}, 1, models)
+
+    _assert_every_line_is_json(log, 1, models)
+    listings: Final = tuple(message for message in _messages(log) if POLICY_LIST_HEADER in message)
+    assert len(listings) == 1, listings
+    assert len(listings[0]) > STDOUT_CAP, len(listings[0])
+    assert TRUNCATION_MARKER not in listings[0], listings[0]
+    for policy in policies:
+        assert policy in listings[0], (policy, listings[0])
 
 
 def test_json_logs_default_level_keeps_every_line_json(gateway: Gateway, tmp_path: Path) -> None:

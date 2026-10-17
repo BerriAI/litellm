@@ -929,8 +929,16 @@ def print_startup_message(message: str) -> None:
     )
     # The print this replaces shows at any log level, so the record skips the level checks of the
     # proxy logger (at the root's WARNING in the CLI process until initialize() runs) and of its JSON
-    # handler (LITELLM_LOG), and still runs the logger's and the handler's filters and the formatter.
-    if not verbose_proxy_logger.filter(record):
+    # handler (LITELLM_LOG). It also skips the logger's stdout cap: that cap bounds echoed request
+    # payloads, while a startup message is operator text the print showed whole (the required migration
+    # SQL, the policy list), so it gets the uncapped processing of a DEBUG line, secret redaction and
+    # base64 collapse included, before the handler's filters and the formatter.
+    if not _process_record(
+        record,
+        base64_limit=_get_max_base64_length_stdout_log(),
+        text_limit=0,
+        redact=_ENABLE_SECRET_REDACTION,
+    ):
         return
     # uvicorn applies an operator --log_config after proxy_cli's turn_on_json() and before initialize()
     # re-installs the JSON handler through load_config(); a config that names "LiteLLM Proxy" leaves the
