@@ -12502,10 +12502,11 @@ async def test_lens_oauth2_validates_identity_without_inference_user_field(
     [("/lens", False, True), ("/lens/traces", True, False), ("/lens-other", True, True)],
 )
 async def test_lens_oauth2_dispatch_preserves_opt_in_premium_and_route_boundary(
-    route: str, enabled: bool, premium: bool
+    route: str, enabled: bool, premium: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from starlette.requests import Request
 
+    monkeypatch.delenv("DATABASE_URL", raising=False)
     request: Final = Request({"type": "http", "method": "GET", "path": route, "headers": [], "query_string": b""})
     with (
         patch("litellm.proxy.proxy_server.general_settings", {"enable_oauth2_auth": enabled}),
@@ -12522,8 +12523,8 @@ async def test_lens_oauth2_dispatch_preserves_opt_in_premium_and_route_boundary(
         assert error.value.code == "403"
         assert "premium" in error.value.message.lower()
     else:
-        assert error.value.code == "400"
-        assert "No connected db" in error.value.message
+        assert error.value.code == "401"
+        assert "no database is configured" in error.value.message
 
 
 @pytest.mark.asyncio

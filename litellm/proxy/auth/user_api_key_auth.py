@@ -184,7 +184,7 @@ from litellm.router_utils.fallback_event_handlers import (
     fallbacks_disabled_for_request,
     get_fallback_model_group_for_lookup_groups,
 )
-from litellm.secret_managers.main import get_secret_bool
+from litellm.secret_managers.main import get_secret_bool, get_secret_str
 from litellm.types.services import ServiceTypes
 
 try:
@@ -2737,6 +2737,18 @@ async def user_api_key_auth_builder(
         if (
             prisma_client is None
         ):  # if both master key + user key submitted, and user key != master key, and no db connected, raise an error
+            if get_secret_str("DATABASE_URL") is None:
+                # No DB configured: an auth error, so allow_requests_on_db_unavailable can't fail open
+                raise ProxyException(
+                    message=(
+                        "Authentication Error, Invalid proxy server token passed. Token does not match "
+                        "the configured master key, and no database is configured to look up virtual keys. "
+                        "Set DATABASE_URL to enable virtual keys."
+                    ),
+                    type=ProxyErrorTypes.auth_error,
+                    code=status.HTTP_401_UNAUTHORIZED,
+                    param=None,
+                )
             raise ProxyException(
                 message="No connected db.",
                 type=ProxyErrorTypes.no_db_connection,
