@@ -97,7 +97,7 @@ def _header_value_allowed(
 
 
 def _sanitize_inbound_headers(
-    headers: object,
+    headers: Mapping[object, object] | None,
     extra_allowlist: set[str] | None = None,
 ) -> dict[str, str] | None:
     """
