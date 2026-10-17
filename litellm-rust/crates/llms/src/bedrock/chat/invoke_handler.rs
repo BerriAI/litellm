@@ -23,9 +23,13 @@ use crate::{
     anthropic::chat::handler::ModelResponseIterator,
     base_llm::{
         base_model_iterator::StreamTransformer,
-        chat::streaming::{ChatStream, StreamShape},
+        chat::{
+            params::RESPONSE_FORMAT_TOOL_NAME,
+            streaming::{ChatStream, StreamShape},
+        },
         messages::streaming::{ByteStream, EventStream},
     },
+    bedrock::chat::converse_transformation::unwrap_bedrock_properties,
 };
 
 #[derive(Deserialize)]
@@ -200,7 +204,13 @@ pub fn converse_event_stream(bytes: ByteStream) -> BoxStream<'static, Result<Val
 /// ConverseStream events to Chat Completions chunks, as Python's `AWSEventStreamDecoder`
 /// `converse_chunk_parser` builds them.
 ///
-/// DIVERGENCE: `json_mode` tool conversion is not done (the route never asks for it),
+/// With `json_mode` the `json_tool_call` tool a `response_format` became is streamed back as
+/// text: its argument fragments are held and the whole answer (with a lone `properties`
+/// envelope unwrapped) goes out as content when the block stops, and a `tool_use` stop with
+/// no other tool call finishes as `stop`.
+///
+/// DIVERGENCE: Python fake-streams a json_mode Converse call (one non-streaming request
+/// replayed as chunks), so its chunk boundaries differ; the content and finish reason match.
 /// `redactedContent` is passed through without unwrapping, and the reasoning token estimate
 /// Python makes from streamed thinking text is not made.
 pub struct ConverseStreamIterator {
@@ -211,6 +221,10 @@ pub struct ConverseStreamIterator {
     thinking_ran: bool,
     thinking_block_index: i64,
     thinking_content_block_index: Option<u64>,
+    /// The block in progress is the `json_tool_call` tool a `response_format` became.
+    in_response_format_tool: bool,
+    /// Some `json_tool_call` block has been streamed back as text.
+    converted_response_format_tool: bool,
 }
 
 #[derive(Default)]
@@ -233,6 +247,8 @@ impl ConverseStreamIterator {
             thinking_ran: false,
             thinking_block_index: -1,
             thinking_content_block_index: None,
+            in_response_format_tool: false,
+            converted_response_format_tool: false,
         }
     }
 
@@ -295,7 +311,15 @@ impl ConverseStreamIterator {
     fn start(&mut self, start: &Value, index: u64) -> ConverseParsed {
         let mut parsed = ConverseParsed::default();
         self.content_blocks.clear();
+        self.in_response_format_tool = false;
         if let Some(tool) = start.get("toolUse").filter(|tool| !tool.is_null()) {
+            if self.shape.json_mode
+                && tool.get("name").and_then(Value::as_str) == Some(RESPONSE_FORMAT_TOOL_NAME)
+            {
+                self.in_response_format_tool = true;
+                self.converted_response_format_tool = true;
+                return parsed;
+            }
             self.tool_calls_index = Some(self.tool_calls_index.map_or(0, |index| index + 1));
             let name = tool.get("name").and_then(Value::as_str).map(|name| {
                 self.shape
@@ -329,6 +353,9 @@ impl ConverseStreamIterator {
                 .unwrap_or_default()
                 .to_owned();
             self.content_blocks.push(input.clone());
+            if self.in_response_format_tool {
+                return parsed;
+            }
             parsed.tool_use = Some(self.tool_call(None, None, input, index));
         } else if let Some(reasoning) = delta.get("reasoningContent") {
             parsed
@@ -359,6 +386,13 @@ impl ConverseStreamIterator {
             self.start(start, index)
         } else if let Some(delta) = data.get("delta") {
             self.delta(delta, index)
+        } else if data.get("contentBlockIndex").is_some() && self.in_response_format_tool {
+            self.in_response_format_tool = false;
+            let answer = std::mem::take(&mut self.content_blocks).concat();
+            ConverseParsed {
+                text: unwrap_bedrock_properties(if answer.is_empty() { "{}" } else { &answer }),
+                ..ConverseParsed::default()
+            }
         } else if data.get("contentBlockIndex").is_some() {
             // A block's stop: a tool that streamed only empty fragments closes with `{}`.
             let empty =
@@ -368,10 +402,15 @@ impl ConverseStreamIterator {
                 ..ConverseParsed::default()
             }
         } else if let Some(reason) = data.get("stopReason") {
+            let mut finish = finish_reason_for(reason.as_str().unwrap_or("stop"));
+            if finish == "tool_calls"
+                && self.converted_response_format_tool
+                && self.tool_calls_index.is_none()
+            {
+                finish = "stop";
+            }
             ConverseParsed {
-                finish_reason: Some(
-                    finish_reason_for(reason.as_str().unwrap_or("stop")).to_owned(),
-                ),
+                finish_reason: Some(finish.to_owned()),
                 ..ConverseParsed::default()
             }
         } else if let Some(usage) = data.get("usage") {
@@ -733,6 +772,39 @@ mod tests {
             serde_json::json!([{"type": "function", "function": {"arguments": "{}"}, "index": 1}])
         );
         assert_eq!(chunks[7]["choices"][0]["finish_reason"], "tool_calls");
+    }
+
+    #[test]
+    fn a_response_format_tool_streams_back_as_text() {
+        let mut iterator = ConverseStreamIterator::new(StreamShape {
+            json_mode: true,
+            ..StreamShape::default()
+        });
+        let chunks: Vec<serde_json::Value> = serde_json::json!([
+            {"contentBlockIndex": 0, "start": {"toolUse": {"toolUseId": "t1", "name": "json_tool_call"}}},
+            {"contentBlockIndex": 0, "delta": {"toolUse": {"input": "{\"properties\": {\"a\""}}},
+            {"contentBlockIndex": 0, "delta": {"toolUse": {"input": ": 1}}"}}},
+            {"contentBlockIndex": 0},
+            {"stopReason": "tool_use"}
+        ])
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|event| iterator.transform(event.clone()).unwrap())
+        .map(|chunk| serde_json::to_value(chunk).unwrap())
+        .collect();
+        for chunk in &chunks {
+            assert_eq!(
+                chunk["choices"][0]["delta"]["tool_calls"],
+                serde_json::Value::Null
+            );
+        }
+        let content: String = chunks
+            .iter()
+            .filter_map(|chunk| chunk["choices"][0]["delta"]["content"].as_str())
+            .collect();
+        assert_eq!(content, "{\"a\": 1}");
+        assert_eq!(chunks[4]["choices"][0]["finish_reason"], "stop");
     }
 
     #[test]

@@ -146,6 +146,8 @@ async fn handle(
                         custom_llm_provider: deployment.custom_llm_provider.clone(),
                         extra_headers: extra_headers.clone(),
                         timeout: deployment.timeout,
+                        drop_params: Some(drop_params(gateway, deployment)),
+                        model_info: gateway.model_info(),
                     };
                     if stream {
                         return translated_stream(route, call, name).await;
@@ -197,6 +199,17 @@ fn provider_params(deployment: &Deployment) -> Map<String, Value> {
     provider_params
 }
 
+/// `litellm.drop_params` or the deployment's own: either one set drops what the provider
+/// cannot take, as Python's `get_optional_params` reads them.
+fn drop_params(gateway: &Gateway, deployment: &Deployment) -> bool {
+    gateway.drop_params()
+        || deployment
+            .litellm_params
+            .drop_params
+            .as_ref()
+            .is_some_and(|flag| flag.is_set())
+}
+
 async fn openai(
     gateway: &Gateway,
     deployment: &Deployment,
@@ -213,12 +226,7 @@ async fn openai(
             extra_headers,
             timeout: deployment.timeout,
             litellm_params: provider_params(deployment),
-            drop_params: gateway.drop_params()
-                || deployment
-                    .litellm_params
-                    .drop_params
-                    .as_ref()
-                    .is_some_and(|flag| flag.is_set()),
+            drop_params: drop_params(gateway, deployment),
             model_info: gateway.model_info(),
         },
         None,

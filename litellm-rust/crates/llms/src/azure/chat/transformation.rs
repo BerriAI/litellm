@@ -8,55 +8,14 @@ use serde_json::{Map, Value};
 
 use crate::{
     Error, ErrorDetail,
-    base_llm::model_info::{self, ModelInfo},
+    base_llm::{
+        chat::params::{
+            OPENAI_PARAMS, UNVALIDATED_PARAMS, ordered, request_drop_params, string_list, truthy,
+        },
+        model_info::{self, ModelInfo},
+    },
     openai::chat::transformation::{is_litellm_owned, take_extra_body},
 };
-
-/// The keys of `DEFAULT_CHAT_COMPLETION_PARAM_VALUES` a request carries as OpenAI params, in
-/// that table's order. Every other key goes to Azure through `extra_body`.
-const OPENAI_PARAMS: &[&str] = &[
-    "functions",
-    "function_call",
-    "temperature",
-    "top_p",
-    "n",
-    "stream",
-    "stream_options",
-    "stop",
-    "max_tokens",
-    "max_completion_tokens",
-    "modalities",
-    "prediction",
-    "audio",
-    "presence_penalty",
-    "frequency_penalty",
-    "logit_bias",
-    "user",
-    "response_format",
-    "seed",
-    "tools",
-    "tool_choice",
-    "max_retries",
-    "logprobs",
-    "top_logprobs",
-    "extra_headers",
-    "parallel_tool_calls",
-    "reasoning_effort",
-    "verbosity",
-    "thinking",
-    "web_search_options",
-    "include_server_side_tool_invocations",
-    "service_tier",
-    "safety_identifier",
-    "prompt_cache_key",
-    "prompt_cache_retention",
-    "store",
-    "metadata",
-    "context_management",
-];
-
-/// `PROVIDER_UNVALIDATED_PARAMS`: never refused, only left out when unsupported.
-const UNVALIDATED_PARAMS: &[&str] = &["user", "stream_options", "stream", "max_retries"];
 
 /// `AzureOpenAIConfig.get_supported_openai_params`.
 const AZURE_GPT_PARAMS: &[&str] = &[
@@ -410,6 +369,7 @@ impl AzureChatRequest<'_> {
         let model = self.deployment;
         if model.starts_with(RESPONSES_ROUTE)
             || model_info::field(self.info(), &format!("azure/{model}"), "mode")
+                .as_ref()
                 .and_then(Value::as_str)
                 == Some("responses")
         {
@@ -830,7 +790,9 @@ fn openai_gpt_params(model: &str, info: Option<&dyn ModelInfo>) -> Vec<&'static 
         .split_once(RESPONSES_ROUTE)
         .map_or(model, |(_, rest)| rest);
     if matches!(
-        model_info::field(info, catalog_name, "litellm_provider").and_then(Value::as_str),
+        model_info::field(info, catalog_name, "litellm_provider")
+            .as_ref()
+            .and_then(Value::as_str),
         Some("openai" | "text-completion-openai")
     ) {
         params.push("user");
@@ -913,14 +875,6 @@ fn azure_messages(messages: Value) -> Value {
     Value::Array(messages)
 }
 
-/// The request's OpenAI params in `DEFAULT_CHAT_COMPLETION_PARAM_VALUES` order, the order
-/// Python maps them in.
-fn ordered(params: &Map<String, Value>) -> impl Iterator<Item = (&'static str, &Value)> {
-    OPENAI_PARAMS
-        .iter()
-        .filter_map(|name| params.get(*name).map(|value| (*name, value)))
-}
-
 /// `_map_openai_params`: every supported param still unmapped goes as sent.
 fn copy_supported(
     non_default: &mut Map<String, Value>,
@@ -933,40 +887,6 @@ fn copy_supported(
         {
             optional.insert((*name).into(), value.clone());
         }
-    }
-}
-
-/// Python's truthiness for a JSON value.
-fn truthy(value: &Value) -> bool {
-    match value {
-        Value::Null => false,
-        Value::Bool(flag) => *flag,
-        Value::Number(number) => number.as_f64() != Some(0.0),
-        Value::String(text) => !text.is_empty(),
-        Value::Array(items) => !items.is_empty(),
-        Value::Object(object) => !object.is_empty(),
-    }
-}
-
-/// `normalize_drop_params`: a boolean, or a config's `"true"`.
-fn request_drop_params(value: Option<Value>) -> bool {
-    match value {
-        Some(Value::Bool(flag)) => flag,
-        Some(Value::String(text)) => text.trim().eq_ignore_ascii_case("true"),
-        _ => false,
-    }
-}
-
-fn string_list(value: Option<Value>) -> Vec<String> {
-    match value {
-        Some(Value::Array(items)) => items
-            .into_iter()
-            .filter_map(|item| match item {
-                Value::String(text) => Some(text),
-                _ => None,
-            })
-            .collect(),
-        _ => Vec::new(),
     }
 }
 
@@ -997,8 +917,8 @@ mod tests {
     }
 
     impl ModelInfo for Entries {
-        fn entry(&self, model: &str) -> Option<&Map<String, Value>> {
-            self.0.get(model)
+        fn entry(&self, model: &str) -> Option<std::borrow::Cow<'_, Map<String, Value>>> {
+            self.0.get(model).map(std::borrow::Cow::Borrowed)
         }
 
         fn declares(&self, key: &str) -> bool {

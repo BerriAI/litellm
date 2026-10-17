@@ -5,7 +5,10 @@ use serde_json::{Map, Value};
 
 use crate::{
     Error,
-    base_llm::chat::streaming::{ChatStream, StreamShape},
+    base_llm::chat::{
+        params::ChatRequestContext,
+        streaming::{ChatStream, StreamShape},
+    },
 };
 
 /// The provider-shaped request body a config produces. Named rather than a bare
@@ -14,6 +17,8 @@ use crate::{
 pub struct ProviderChatRequestData {
     pub body: Value,
     pub stream_shape: StreamShape,
+    /// Headers the request needs beyond the config's defaults, such as `anthropic-beta`.
+    pub headers: Vec<(String, String)>,
 }
 
 /// The raw provider response body handed back to a config for normalization.
@@ -42,8 +47,11 @@ pub struct Unsupported(pub &'static str);
 pub trait BaseConfig: Sync {
     fn secret_names(&self) -> Vec<&'static str>;
 
-    /// Supported OpenAI parameter names paired with their provider names.
-    fn supported_openai_param_mappings(&self) -> &'static [(&'static str, &'static str)];
+    /// Supported OpenAI parameter names paired with their provider names, for a config
+    /// whose requests the host checks against an allowlist.
+    fn supported_openai_param_mappings(&self) -> &'static [(&'static str, &'static str)] {
+        &[]
+    }
 
     fn get_complete_url(
         &self,
@@ -58,13 +66,22 @@ pub trait BaseConfig: Sync {
         model: &str,
         messages: Vec<ChatMessage>,
         optional_params: Map<String, Value>,
+        context: &ChatRequestContext<'_>,
     ) -> Result<ProviderChatRequestData, Error>;
 
+    /// `shape` is what the request decided about its answer, the same one a stream reads.
     fn transform_response(
         &self,
         model: &str,
         response: ProviderChatResponseData,
+        shape: &StreamShape,
     ) -> Result<ChatCompletionsResponse, Error>;
+
+    /// The media URLs the messages point at that Python downloads while building this
+    /// provider's request. The host fetches them and inlines each as a data URL first.
+    fn remote_media(&self, _messages: &[ChatMessage]) -> Vec<String> {
+        Vec::new()
+    }
 
     /// `None` means this config has no streaming path yet, so the host keeps the request.
     fn model_response_iterator(&self, _shape: StreamShape) -> Option<ChatStream> {
