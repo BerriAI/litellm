@@ -46,6 +46,7 @@ async def usage_ai_chat(
     AI chat about usage data. Streams SSE events with the AI response.
     The AI agent has access to tools that query aggregated daily activity data.
     """
+    from litellm.proxy.auth.auth_checks import key_model_aliases_for_auth_check
     from litellm.proxy.management_endpoints.common_utils import (
         require_caller_user_id_for_non_admin,
         user_api_key_has_admin_view,
@@ -71,6 +72,8 @@ async def usage_ai_chat(
                 model=data.model,
                 user_id=user_id,
                 is_admin=is_admin,
+                team_id=user_api_key_dict.team_id,
+                model_aliases=key_model_aliases_for_auth_check(user_api_key_dict),
             ),
             ping_interval_seconds=litellm.sse_keepalive_ping_interval_seconds,
             ping_chunk=SSE_COMMENT_PING,

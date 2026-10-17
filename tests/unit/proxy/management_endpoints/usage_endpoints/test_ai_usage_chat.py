@@ -859,24 +859,29 @@ class TestUsageAiChatCompletionRouting:
 class TestReasoningModelTemperature:
     @pytest.mark.asyncio
     async def test_reasoning_model_temperature_is_dropped(self):
-        import litellm
-
-        response = await litellm.acompletion(
-            model="gpt-5.6-terra",
-            messages=[{"role": "user", "content": "hi"}],
-            temperature=0.2,
-            drop_params=True,
-            mock_response="ok",
+        from litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat import (
+            _acompletion,
         )
-        assert response is not None
 
-        with pytest.raises(litellm.UnsupportedParamsError):
-            await litellm.acompletion(
+        expected_response: Final = MagicMock()
+        mock_acompletion = AsyncMock(return_value=expected_response)
+        with (
+            patch(  # test-quality-ok: _acompletion reads the proxy_server.llm_router module global; no injection seam
+                "litellm.proxy.proxy_server.llm_router", None
+            ),
+            patch(  # test-quality-ok: _acompletion calls the module-level litellm.acompletion directly; no injection seam
+                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm.acompletion",
+                new=mock_acompletion,
+            ),
+        ):
+            result: Final = await _acompletion(
                 model="gpt-5.6-terra",
                 messages=[{"role": "user", "content": "hi"}],
-                temperature=0.2,
-                mock_response="ok",
             )
+
+        assert result is expected_response
+        mock_acompletion.assert_awaited_once()
+        assert mock_acompletion.await_args.kwargs["drop_params"] is True
 
 
 class TestUsageAiChatKeepalive:
@@ -1145,3 +1150,191 @@ class TestUsageAiChatModelAccess:
                 )
 
         assert exc_info.value.code == "403"
+
+
+class TestUsageAiChatTeamModelRouting:
+    @pytest.mark.asyncio
+    async def test_team_public_model_name_routes_through_router(self):
+        from litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat import (
+            _acompletion,
+        )
+        from litellm.router import Router
+
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "team-a-internal",
+                    "litellm_params": {"model": "gpt-4o", "api_key": "sk-dummy"},
+                    "model_info": {
+                        "team_id": "team-a",
+                        "team_public_model_name": "my-team-model",
+                    },
+                }
+            ]
+        )
+        expected_response: Final = MagicMock()
+        router.acompletion = AsyncMock(return_value=expected_response)
+        mock_litellm_acompletion = AsyncMock(return_value=MagicMock())
+
+        with (
+            patch(  # test-quality-ok: _acompletion reads the proxy_server.llm_router module global; no injection seam
+                "litellm.proxy.proxy_server.llm_router", router
+            ),
+            patch(  # test-quality-ok: _acompletion calls the module-level litellm.acompletion directly; no injection seam
+                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm.acompletion",
+                new=mock_litellm_acompletion,
+            ),
+        ):
+            result: Final = await _acompletion(
+                model="my-team-model",
+                messages=[{"role": "user", "content": "hi"}],
+                team_id="team-a",
+            )
+
+        assert result is expected_response
+        router.acompletion.assert_awaited_once()
+        assert router.acompletion.await_args.kwargs["model"] == "my-team-model"
+        assert router.acompletion.await_args.kwargs["metadata"]["user_api_key_team_id"] == "team-a"
+        assert router.acompletion.await_args.kwargs["drop_params"] is True
+        mock_litellm_acompletion.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_team_public_model_name_without_team_id_uses_litellm(self):
+        from litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat import (
+            _acompletion,
+        )
+        from litellm.router import Router
+
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "team-a-internal",
+                    "litellm_params": {"model": "gpt-4o", "api_key": "sk-dummy"},
+                    "model_info": {
+                        "team_id": "team-a",
+                        "team_public_model_name": "my-team-model",
+                    },
+                }
+            ]
+        )
+        expected_response: Final = MagicMock()
+        router.acompletion = AsyncMock(return_value=MagicMock())
+        mock_litellm_acompletion = AsyncMock(return_value=expected_response)
+
+        with (
+            patch(  # test-quality-ok: _acompletion reads the proxy_server.llm_router module global; no injection seam
+                "litellm.proxy.proxy_server.llm_router", router
+            ),
+            patch(  # test-quality-ok: _acompletion calls the module-level litellm.acompletion directly; no injection seam
+                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm.acompletion",
+                new=mock_litellm_acompletion,
+            ),
+        ):
+            result: Final = await _acompletion(
+                model="my-team-model",
+                messages=[{"role": "user", "content": "hi"}],
+            )
+
+        assert result is expected_response
+        mock_litellm_acompletion.assert_awaited_once()
+        router.acompletion.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_key_alias_resolves_to_router_model(self):
+        from litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat import (
+            _acompletion,
+        )
+        from litellm.router import Router
+
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "gpt-4o-mini",
+                    "litellm_params": {"model": "gpt-4o-mini", "api_key": "sk-dummy"},
+                }
+            ]
+        )
+        expected_response: Final = MagicMock()
+        router.acompletion = AsyncMock(return_value=expected_response)
+        mock_litellm_acompletion = AsyncMock(return_value=MagicMock())
+
+        with (
+            patch(  # test-quality-ok: _acompletion reads the proxy_server.llm_router module global; no injection seam
+                "litellm.proxy.proxy_server.llm_router", router
+            ),
+            patch(  # test-quality-ok: _acompletion calls the module-level litellm.acompletion directly; no injection seam
+                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm.acompletion",
+                new=mock_litellm_acompletion,
+            ),
+        ):
+            result: Final = await _acompletion(
+                model="my-alias",
+                messages=[{"role": "user", "content": "hi"}],
+                model_aliases={"my-alias": "gpt-4o-mini"},
+            )
+
+        assert result is expected_response
+        router.acompletion.assert_awaited_once()
+        assert router.acompletion.await_args.kwargs["model"] == "gpt-4o-mini"
+        mock_litellm_acompletion.assert_not_called()
+
+
+class TestUsageAiChatEndpointAccessCheck:
+    @pytest.mark.asyncio
+    async def test_endpoint_denies_key_without_model_access(self):
+        from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
+        from litellm.proxy.management_endpoints.usage_endpoints.endpoints import (
+            ChatMessage,
+            UsageAIChatRequest,
+            usage_ai_chat,
+        )
+        from litellm.router import Router
+
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "team-a-secret",
+                    "litellm_params": {"model": "gpt-4o", "api_key": "sk-dummy"},
+                },
+                {
+                    "model_name": "shared-model",
+                    "litellm_params": {"model": "gpt-4o-mini", "api_key": "sk-dummy"},
+                },
+            ]
+        )
+        mock_stream = MagicMock()
+        restricted_key: Final = UserAPIKeyAuth(
+            user_id="user-1",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            models=["shared-model"],
+            api_key="sk-test",
+        )
+        body: Final = UsageAIChatRequest(
+            messages=[ChatMessage(role="user", content="hi")],
+            model="team-a-secret",
+        )
+
+        with (
+            patch(  # test-quality-ok: the check reads the proxy_server.llm_router module global; no injection seam
+                "litellm.proxy.proxy_server.llm_router", router
+            ),
+            patch(  # test-quality-ok: the check reads the proxy_server.llm_model_list module global; no injection seam
+                "litellm.proxy.proxy_server.llm_model_list", None
+            ),
+            patch(  # test-quality-ok: the check reads the proxy_server.prisma_client module global; no injection seam
+                "litellm.proxy.proxy_server.prisma_client", None
+            ),
+            patch(  # test-quality-ok: endpoint lazy-imports stream_usage_ai_chat from the module; no injection seam
+                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.stream_usage_ai_chat",
+                new=mock_stream,
+            ),
+            pytest.raises(ProxyException) as exc_info,
+        ):
+            await usage_ai_chat(
+                data=body,
+                request=MagicMock(),
+                user_api_key_dict=restricted_key,
+            )
+
+        assert exc_info.value.code == "403"
+        mock_stream.assert_not_called()
