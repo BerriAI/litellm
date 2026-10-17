@@ -4201,6 +4201,19 @@ class TestOpenAIResponsesHandlerStreamingScanKey:
         tool_calls = guardrail.seen_inputs[0].get("tool_calls") or []
         assert [call["function"]["arguments"] for call in tool_calls] == ['{"city": "Paris"}'], tool_calls
 
+    @pytest.mark.asyncio
+    async def test_a_tool_call_finished_mid_stream_reaches_the_guardrail_without_texts(self):
+        guardrail: Final = MockRecordingGuardrail(guardrail_name="test")
+        await OpenAIResponsesHandler().process_output_streaming_response(
+            responses_so_far=[self._finished_function_call(1, "fc_1", "Paris")[-1]],
+            guardrail_to_apply=guardrail,
+            request_data={},
+        )
+        assert [
+            (sorted(inputs), [call["function"]["arguments"] for call in inputs.get("tool_calls") or []])
+            for inputs in guardrail.seen_inputs
+        ] == [(["tool_calls"], ['{"city": "Paris"}'])]
+
 
 class TestCompactionOutputSummaryReachesOutputGuardrails:
     SUMMARY: Final = "The user lives at 1 Secret Lane."

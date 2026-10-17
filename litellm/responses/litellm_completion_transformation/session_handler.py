@@ -269,6 +269,7 @@ class ResponsesSessionHandler:
                     responses_api_request={},
                     replay_reasoning=True,
                     item_cache_control=item_cache_control,
+                    only_since_compaction=True,
                 )
             )
         elif isinstance(_response_output, dict) and _response_output and _response_output != {}:

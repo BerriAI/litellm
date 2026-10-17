@@ -21,8 +21,6 @@ _INSTRUCTION_ROLES: Final = frozenset(("system", "developer"))
 
 
 def _json_object(value: object) -> Mapping[str, object] | None:
-    if not isinstance(value, Mapping):
-        return None
     try:
         return _JSON_OBJECT.validate_python(value)
     except ValidationError:
@@ -70,8 +68,12 @@ def _choice_provider_specific_fields(choice: object) -> object:
 
 def response_holds_compaction_block(response: object) -> bool:
     fields: Final = _json_object(response)
+    if fields is None:
+        return False
+    if fields.get("object") == "response":
+        return holds_compaction_summary(fields.get("output"))
     try:
-        choices: Final = _OBJECT_LIST.validate_python(None if fields is None else fields.get("choices"))
+        choices: Final = _OBJECT_LIST.validate_python(fields.get("choices"))
     except ValidationError:
         return False
     return any(provider_compaction_summary(_choice_provider_specific_fields(choice)) is not None for choice in choices)

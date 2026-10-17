@@ -6,6 +6,7 @@ in expected_responses_api_request/.
 
 import copy
 import json
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from importlib import import_module
 from typing import Final
@@ -1053,6 +1054,13 @@ _NEXT_TURN: Final = {"role": "user", "content": "What is my cat's name?"}
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("call", "upstream_url"),
+    [
+        pytest.param(litellm.aresponses, "https://api.openai.com/v1/responses", id="create"),
+        pytest.param(litellm.acompact_responses, "https://api.openai.com/v1/responses/compact", id="compact"),
+    ],
+)
+@pytest.mark.parametrize(
     ("compaction_item", "sent_input"),
     [
         (
@@ -1069,17 +1077,17 @@ _NEXT_TURN: Final = {"role": "user", "content": "What is my cat's name?"}
 async def test_aresponses_sends_a_claude_compaction_item_to_openai_as_its_summary(
     monkeypatch: pytest.MonkeyPatch,
     respx_mock: respx.MockRouter,
+    call: Callable[..., Awaitable[object]],
+    upstream_url: str,
     compaction_item: dict[str, str],
     sent_input: list[dict[str, str]],
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
-    upstream: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
+    upstream: Final = respx_mock.post(upstream_url).mock(
         return_value=httpx.Response(200, json=_minimal_responses_api_payload("resp_compacted", "gpt-5.6"))
     )
 
-    await litellm.aresponses(
-        model="openai/gpt-5.6", api_key="fake-api-key", input=[*_HISTORY, compaction_item, _NEXT_TURN]
-    )
+    await call(model="openai/gpt-5.6", api_key="fake-api-key", input=[*_HISTORY, compaction_item, _NEXT_TURN])
 
     assert json.loads(upstream.calls[0].request.read())["input"] == sent_input

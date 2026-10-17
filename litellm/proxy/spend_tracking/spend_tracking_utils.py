@@ -1789,13 +1789,9 @@ def _stored_request_without_requester_ip_address(request_body: Mapping[object, o
 
 def _with_whole_compaction_summary(item: object, stored_item: object) -> object:
     summary_only: Final = summary_only_compaction_item(item)
-    if summary_only is None:
+    if summary_only is None or not isinstance(stored_item, Mapping):
         return stored_item
-    try:
-        stored_fields: Final = _OBJECT_MAPPING.validate_python(stored_item)
-    except ValidationError:
-        return stored_item
-    return {**stored_fields, "encrypted_content": summary_only}
+    return {**_OBJECT_MAPPING.validate_python(stored_item), "encrypted_content": summary_only}
 
 
 def _sanitize_proxy_server_request_body(request_body: Mapping[str, object]) -> Mapping[object, object]:

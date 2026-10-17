@@ -1,15 +1,17 @@
 import json
 from collections.abc import Mapping, Sequence
 from itertools import chain
-from typing import Final
+from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 import respx
+from openai.types.responses.response_compaction_item import ResponseCompactionItem
 from pydantic import BaseModel
 
 import litellm
+from litellm import CustomLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.responses.litellm_completion_transformation.handler import (
     LiteLLMCompletionTransformationHandler,
@@ -900,15 +902,24 @@ class _RecordingRawAnthropicMessages:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("context_management", [None, list(_COMPACT_AT_50K)], ids=["summary_text", "native_block"])
+@pytest.mark.parametrize(
+    "compaction_item",
+    [
+        pytest.param(
+            {"type": "compaction", "id": "cmp_caller", "encrypted_content": json.dumps(_COMPACTION_BLOCK)},
+            id="param_dict",
+        ),
+        pytest.param(
+            ResponseCompactionItem(type="compaction", id="cmp_caller", encrypted_content=json.dumps(_COMPACTION_BLOCK)),
+            id="sdk_output_item",
+        ),
+    ],
+)
 async def test_previous_response_id_with_a_compaction_item_in_input_replays_only_the_stored_instructions(
     context_management: list[Mapping[str, object]] | None,
+    compaction_item: Mapping[str, object] | ResponseCompactionItem,
 ) -> None:
     anthropic: Final = _RecordingRawAnthropicMessages()
-    compaction_item: Final = {
-        "type": "compaction",
-        "id": "cmp_caller",
-        "encrypted_content": json.dumps(_COMPACTION_BLOCK),
-    }
 
     with patch("litellm.proxy.proxy_server.prisma_client", _FakePrismaClient([_TURN_BEFORE_COMPACTION])):
         await litellm.aresponses(
@@ -925,6 +936,46 @@ async def test_previous_response_id_with_a_compaction_item_in_input_replays_only
     assert "Use metric units." in anthropic.body
     assert _COMPACTION_BLOCK["content"] in anthropic.body
     assert _NEXT_INPUT[0]["content"] in anthropic.body
+
+
+class _RecordingCustomLLM(CustomLLM):
+    def __init__(self) -> None:
+        super().__init__()
+        self.sent_messages: list[object] = []
+
+    def completion(self, *args: object, **kwargs: object) -> ModelResponse:
+        self.sent_messages.extend(cast(list[object], kwargs["messages"]))
+        return litellm.completion(
+            model="gpt-5.6", messages=[{"role": "user", "content": "Hi."}], mock_response="dog."
+        )
+
+
+def test_responses_over_a_custom_provider_send_a_compaction_item_as_summary_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    custom_llm: Final = _RecordingCustomLLM()
+    monkeypatch.setattr(litellm, "provider_list", list(litellm.provider_list))
+    monkeypatch.setattr(litellm, "_custom_providers", list(litellm._custom_providers))
+    monkeypatch.setattr(
+        litellm, "custom_provider_map", [{"provider": "compaction-test-llm", "custom_handler": custom_llm}]
+    )
+    compaction_item: Final = {
+        "type": "compaction",
+        "id": "cmp_earlier",
+        "encrypted_content": json.dumps(_COMPACTION_BLOCK),
+    }
+
+    litellm.responses(
+        model="compaction-test-llm/my-model",
+        input=[*_FIRST_INPUT, {"role": "assistant", "content": "The."}, compaction_item, *_NEXT_INPUT],
+        context_management=list(_COMPACT_AT_50K),
+        drop_params=True,
+    )
+
+    assert custom_llm.sent_messages == [
+        {"role": "user", "content": _COMPACTION_BLOCK["content"]},
+        *_NEXT_INPUT,
+    ]
 
 
 def test_responses_over_anthropic_send_a_compaction_item_as_summary_text_when_the_request_does_not_compact(

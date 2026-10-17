@@ -6578,7 +6578,9 @@ def _replayed_compacted_answer(model: str, context_management: object) -> list[t
                     role="assistant",
                     content="Day one, Asakusa.",
                     provider_specific_fields={"compaction_blocks": [_COMPACTION_BLOCK]},
-                )
+                ),
+                {"role": "user", "content": "Day two?"},
+                Message(role="assistant", content="Ueno."),
             ],
             litellm_session_id=None,
         )
@@ -6605,10 +6607,15 @@ def _replayed_compacted_answer(model: str, context_management: object) -> list[t
     ]
 
 
+_TURNS_AFTER_THE_COMPACTED_ANSWER: Final = [
+    ("user", "Day two?", None),
+    ("assistant", "Ueno.", None),
+    ("user", "And Osaka?", None),
+]
 _ANSWER_AFTER_SUMMARY: Final = [
     ("user", _COMPACTION_BLOCK["content"], None),
     ("assistant", "Day one, Asakusa.", None),
-    ("user", "And Osaka?", None),
+    *_TURNS_AFTER_THE_COMPACTED_ANSWER,
 ]
 
 
@@ -6618,7 +6625,7 @@ _ANSWER_AFTER_SUMMARY: Final = [
         (
             "anthropic/claude-sonnet-5-5",
             _COMPACTION_REQUESTED["context_management"],
-            [("assistant", "Day one, Asakusa.", [_COMPACTION_BLOCK]), ("user", "And Osaka?", None)],
+            [("assistant", "Day one, Asakusa.", [_COMPACTION_BLOCK]), *_TURNS_AFTER_THE_COMPACTED_ANSWER],
         ),
         ("anthropic/claude-sonnet-5-5", None, _ANSWER_AFTER_SUMMARY),
         (

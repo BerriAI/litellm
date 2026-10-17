@@ -859,7 +859,7 @@ async def test_message_history_replays_real_key_named_tool_payloads() -> None:
 
 
 def _turn_spend_log(
-    turn_input: list[dict[str, str]], answer: str, compaction_blocks: list[dict[str, str]] | None = None
+    turn_input: str | list[dict[str, str]], answer: str, compaction_blocks: list[dict[str, str]] | None = None
 ) -> dict[str, object]:
     compaction_fields: Final = (
         {"provider_specific_fields": {"compaction_blocks": compaction_blocks}} if compaction_blocks else {}
@@ -919,11 +919,17 @@ async def test_previous_response_history_starts_at_the_newest_turn_that_sent_a_c
     ]
 
 
+@pytest.mark.parametrize(
+    "first_turn_input",
+    [pytest.param([{"role": "user", "content": "Hi."}], id="item_list"), pytest.param("Hi.", id="plain_string")],
+)
 @pytest.mark.asyncio
-async def test_previous_response_history_starts_at_the_newest_answer_that_compacted():
+async def test_previous_response_history_starts_at_the_newest_answer_that_compacted(
+    first_turn_input: str | list[dict[str, str]],
+):
     compaction_blocks: Final = [{"type": "compaction", "content": "Turn one planned Tokyo."}]
     spend_logs: Final = (
-        _turn_spend_log([{"role": "user", "content": "Hi."}], "Hello."),
+        _turn_spend_log(first_turn_input, "Hello."),
         _turn_spend_log(
             [{"role": "developer", "content": "Answer briefly."}, {"role": "user", "content": "Plan a Tokyo trip."}],
             "Day one, Asakusa.",
@@ -1011,6 +1017,41 @@ async def test_previous_response_history_drops_a_tool_output_carrying_a_system_r
     assert not any("4242" in content for content in contents)
     assert contents[-2:] == ["And Osaka?", "Dotonbori."]
 
+
+
+def _output_message(text: str) -> dict[str, object]:
+    return {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": text}]}
+
+
+@pytest.mark.asyncio
+async def test_previous_response_history_starts_at_a_compaction_item_in_a_stored_responses_output():
+    responses_shaped_turn: Final = {
+        "request_id": "resp_mcp",
+        "session_id": "session-compacted",
+        "proxy_server_request": json.dumps({"input": [{"role": "user", "content": "Plan a Tokyo trip."}]}),
+        "response": {
+            "id": "resp_mcp",
+            "object": "response",
+            "output": [_output_message("Checking the map."), _COMPACTION_ITEM_SENT, _output_message("Day one.")],
+        },
+    }
+    spend_logs: Final = (
+        _turn_spend_log([{"role": "user", "content": "Hi."}], "Hello."),
+        responses_shaped_turn,
+        _turn_spend_log([{"role": "user", "content": "And Osaka?"}], "Dotonbori."),
+    )
+
+    session: Final = await _history_from_stored_turns(spend_logs, "resp_1")
+
+    replayed: Final = json.dumps([_role_and_content(message) for message in session["messages"]], default=str)
+    assert "Hello." not in replayed
+    assert "Plan a Tokyo trip." not in replayed
+    assert "Checking the map." not in replayed
+    assert "Turn one planned Tokyo." in replayed
+    assert [str(_role_and_content(message)[1]) for message in session["messages"]][-2:] == [
+        "And Osaka?",
+        "Dotonbori.",
+    ]
 
 class _SqliteBackedPrismaDB:
     def __init__(self, rows: list[tuple[str, str, str, str, str | None, str | None]]) -> None:
