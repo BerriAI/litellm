@@ -44,9 +44,11 @@ _VERTEX_PROJECT: Final = "scripted-project"
 _VERTEX_LOCATION: Final = "us-east5"
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 # Claude's 400s on api.anthropic.com, Bedrock Invoke, Bedrock Mantle, Claude Platform and Bedrock Converse, observed
-# live 2026-10-15 for PR 46391 (two marks on one tool result, and a 1h cachePoint read after a 5m one on Converse)
+# live 2026-10-15 for PR 46391 (two marks on one tool result, and a 1h cachePoint read after a 5m one on Converse),
+# and Converse's 400 for two adjacent tool cachePoints that both set a ttl, observed live 2026-10-17 for PR 46391
 _TOOL_RESULT_MARKED_TWICE: Final = "cache_control may not be specified within `tool_result.content`"
 _TTL_ORDER: Final = "a ttl='1h' cache_control block must not come after a ttl='5m' cache_control block"
+_ADJACENT_TTLS: Final = "The additional field ttl conflicts with the existing field ttl. Remove ttl and try again."
 
 
 def _ttl_out_of_order(marks: tuple[Mark, ...]) -> bool:
@@ -71,17 +73,37 @@ def _tool_results(request: Request) -> Iterator[dict[str, JsonValue]]:
                 yield block
 
 
+def _sets_a_ttl(block: JsonValue) -> bool:
+    return isinstance(block, dict) and _ttl(block.get("cachePoint")) is not None
+
+
+def _adjacent_tool_cache_points_set_a_ttl(request: Request) -> bool:
+    tool_config: Final = _JSON_OBJECT.validate_json(request.body).get("toolConfig")
+    tools: Final = tool_config.get("tools") if isinstance(tool_config, dict) else None
+    listed: Final = tools if isinstance(tools, list) else []
+    return any(_sets_a_ttl(first) and _sets_a_ttl(second) for first, second in zip(listed, listed[1:]))
+
+
+def _converse_rejection(request: Request) -> str | None:
+    if _ttl_out_of_order(sent_marks("bedrock_converse", request)):
+        return _TTL_ORDER
+    if _adjacent_tool_cache_points_set_a_ttl(request):
+        return _ADJACENT_TTLS
+    return None
+
+
 def respond(provider: Provider, request: Request) -> Reply:
     """The scripted peers, holding a request to the tool result and ttl order rules Claude enforces"""
     if provider == "bedrock_converse":
+        rejection: Final = _converse_rejection(request)
         return (
-            Reply(
+            bedrock_peer(request)
+            if rejection is None
+            else Reply(
                 status=400,
                 headers={"x-amzn-errortype": "ValidationException"},
-                body=json.dumps({"message": _TTL_ORDER}).encode(),
+                body=json.dumps({"message": rejection}).encode(),
             )
-            if _ttl_out_of_order(sent_marks(provider, request))
-            else bedrock_peer(request)
         )
     if any(map(_marked_more_than_once, _tool_results(request))):
         return Reply(

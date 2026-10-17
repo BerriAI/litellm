@@ -1547,6 +1547,11 @@ class AmazonConverseConfig(BaseConfig):
         return cache_point
 
     @staticmethod
+    def _repeats_the_last_tool_ttl(cache_point: CachePointBlock, bedrock_tools: Sequence[ToolBlock]) -> bool:
+        """Bedrock rejects two adjacent cachePoints that both set a ttl, and both would cache the same tools."""
+        return "ttl" in cache_point and message_field(bedrock_tools[-1].get("cachePoint"), "ttl") is not None
+
+    @staticmethod
     def _assistant_has_tool_calls(message: object) -> bool:
         return message_field(message, "role") == "assistant" and bool(message_field(message, "tool_calls"))
 
@@ -2121,22 +2126,21 @@ class AmazonConverseConfig(BaseConfig):
             object, additional_request_params.pop("cache_control_injection_points", None)
         )
         tool_config_control: Final = self.tool_config_cache_control(injection_points)
-        if (
-            tool_config_control is not None
+        tool_config_cache_point: Final = (
+            self._build_cache_point_block(
+                self._tool_config_cache_point_control(tool_config_control, system_content_blocks, messages or ()),
+                model,
+                deployment_model,
+            )
+            if tool_config_control is not None
             and len(bedrock_tools) > 0
             and bedrock_model_accepts_cache_points(model, deployment_model)
+            else None
+        )
+        if tool_config_cache_point is not None and not self._repeats_the_last_tool_ttl(
+            tool_config_cache_point, bedrock_tools
         ):
-            bedrock_tools.append(
-                ToolBlock(
-                    cachePoint=self._build_cache_point_block(
-                        self._tool_config_cache_point_control(
-                            tool_config_control, system_content_blocks, messages or ()
-                        ),
-                        model,
-                        deployment_model,
-                    )
-                )
-            )
+            bedrock_tools.append(ToolBlock(cachePoint=tool_config_cache_point))
             # Spend attribution credits the gateway only for breakpoints it placed, and
             # this is the one place a tool_config point becomes one. The hook that reads
             # the configuration cannot record it: whether a cachePoint lands depends on

@@ -6438,6 +6438,50 @@ def test_a_tool_config_cache_point_without_a_ttl_takes_one_hour_when_a_later_cac
     assert result["toolConfig"]["tools"][-1] == {"cachePoint": sent_cache_point}
 
 
+@pytest.mark.parametrize(
+    ("tool_cache_control", "sent_cache_points", "credited"),
+    (
+        pytest.param(
+            {"type": "ephemeral", "ttl": "1h"},
+            [{"type": "default", "ttl": "1h"}],
+            None,
+            id="both-set-a-ttl-so-only-the-tool-mark-is-sent",
+        ),
+        pytest.param(
+            {"type": "ephemeral"},
+            [{"type": "default"}, {"type": "default", "ttl": "5m"}],
+            "dep-bedrock",
+            id="the-tool-mark-sets-no-ttl-so-both-are-sent",
+        ),
+    ),
+)
+def test_a_tool_config_cache_point_with_a_ttl_is_not_sent_after_a_last_tool_mark_with_a_ttl(
+    tool_cache_control: dict[str, str], sent_cache_points: list[dict[str, str]], credited: str | None
+):
+    bucket: Final[dict[str, str]] = {}
+    result: Final = AmazonConverseConfig()._transform_request_helper(
+        model="us.anthropic.claude-opus-5-5",
+        system_content_blocks=[],
+        optional_params={
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {"name": "get_weather", "parameters": {"type": "object"}},
+                    "cache_control": tool_cache_control,
+                }
+            ],
+            "cache_control_injection_points": [
+                {"location": "tool_config", "control": {"type": "ephemeral", "ttl": "5m"}}
+            ],
+        },
+        messages=[{"role": "user", "content": "What is the weather?"}],
+        litellm_params={"metadata": bucket, "litellm_metadata": None, "model_info": {"id": "dep-bedrock"}},
+    )
+
+    assert [tool["cachePoint"] for tool in result["toolConfig"]["tools"] if "cachePoint" in tool] == sent_cache_points
+    assert bucket.get("litellm_gateway_injected_cache") == credited
+
+
 def test_cache_control_injection_tool_config_honors_ttl_for_supported_model(monkeypatch):
     """
     Regression test: cache_control_injection_points with location=tool_config

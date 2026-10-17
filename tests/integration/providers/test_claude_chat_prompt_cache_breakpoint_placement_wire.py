@@ -737,6 +737,24 @@ def test_a_five_minute_tool_config_cache_point_loosens_a_later_one_hour_breakpoi
     assert marks == (Mark(_TOOL_LABEL, "5m"), Mark(_label(SYSTEM), None))
 
 
+@pytest.mark.parametrize("ttl", ("1h", "5m"))
+def test_a_five_minute_tool_config_cache_point_is_not_sent_after_a_breakpoint_with_a_ttl_on_the_last_tool(
+    gateway: Gateway, ttl: str
+) -> None:
+    marker: Final = new_marker()
+    marks: Final = _marks_sent(
+        gateway,
+        "bedrock_converse",
+        lambda model: chat_body(
+            model,
+            [_final(marker)],
+            tools=[{**TOOL, "prompt_cache_breakpoint": {"mode": "explicit", "ttl": ttl}}],
+        ),
+        cache_control_injection_points=[{"location": "tool_config", "control": {"type": "ephemeral", "ttl": "5m"}}],
+    )
+    assert marks == (Mark(_TOOL_LABEL, ttl),)
+
+
 @pytest.mark.parametrize(
     ("deployment_drops", "expected"),
     (
