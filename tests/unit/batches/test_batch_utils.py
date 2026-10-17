@@ -694,7 +694,7 @@ async def test_calculate_vertex_disable_transform_path(monkeypatch):
     monkeypatch.setattr(
         bu,
         "calculate_vertex_ai_batch_cost_and_usage",
-        lambda content, model, model_info=None: bu.BatchCostUsageResult(
+        lambda content, model, model_info=None, vertex_location=None: bu.BatchCostUsageResult(
             cost=9.9,
             usage=Usage(prompt_tokens=1, completion_tokens=2, total_tokens=3),
             models=["gemini-2.0-flash-001"],
@@ -725,7 +725,7 @@ async def test_calculate_vertex_disable_transform_needs_model_name(monkeypatch):
     monkeypatch.setattr(
         bu,
         "calculate_vertex_ai_batch_cost_and_usage",
-        lambda content, model, model_info=None: pytest.fail("raw vertex path should not run"),
+        lambda content, model, model_info=None, vertex_location=None: pytest.fail("raw vertex path should not run"),
     )
 
     result = await bu.calculate_batch_cost_and_usage(file_content_dictionary=[], custom_llm_provider="vertex_ai")
@@ -1159,7 +1159,9 @@ async def test_handle_completed_vertex_batch_computes_cost_usage_and_models(monk
     assert batch_input < pricing["input_cost_per_token"]
     assert batch_output < pricing["output_cost_per_token"]
     assert result.cost > 0
-    assert result.cost == pytest.approx(30 * batch_input + 15 * batch_output)
+    # the batch ran on us-central1, so the regional-endpoint uplift applies
+    uplift = pricing["regional_endpoint_uplift_multiplier"]
+    assert result.cost == pytest.approx(uplift * (30 * batch_input + 15 * batch_output))
     assert (result.usage.prompt_tokens, result.usage.completion_tokens, result.usage.total_tokens) == (30, 15, 45)
     assert result.models == ["gemini-3.6-flash", "gemini-3.6-flash"]
     assert result.successful_requests == 2
@@ -1395,7 +1397,7 @@ async def test_handle_completed_batch_vertex_disable_transform_path(monkeypatch)
     monkeypatch.setattr(litellm, "disable_vertex_batch_output_transformation", True, raising=False)
     seen: dict = {}
 
-    def fake_vertex_calc(content, model, model_info=None):
+    def fake_vertex_calc(content, model, model_info=None, vertex_location=None):
         seen["content"] = content
         seen["model"] = model
         return bu.BatchCostUsageResult(
@@ -2732,6 +2734,66 @@ def test_batch_cost_calculator_applies_data_residency_uplift(data_residency, mon
         assert regional_completion == pytest.approx(base_completion * 1.10, rel=1e-9)
     finally:
         litellm.model_cost = prev_model_cost
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.parametrize("vertex_location", ["us-central1", "us", "europe-west4"])
+def test_batch_cost_calculator_applies_vertex_regional_uplift(vertex_location):
+    """batch_cost_calculator should apply the Vertex non-global regional-endpoint
+    uplift when vertex_location is set and the model carries the multiplier
+    (issue #46880)."""
+    usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+    model_info = {
+        "input_cost_per_token": 0.000001,
+        "output_cost_per_token": 0.000002,
+        "regional_endpoint_uplift_multiplier": 1.10,
+    }
+
+    base_prompt, base_completion = batch_cost_calculator(
+        usage=usage,
+        model="gemini-3.5-flash",
+        custom_llm_provider="vertex_ai",
+        model_info=model_info,
+    )
+    regional_prompt, regional_completion = batch_cost_calculator(
+        usage=usage,
+        model="gemini-3.5-flash",
+        custom_llm_provider="vertex_ai",
+        model_info=model_info,
+        vertex_location=vertex_location,
+    )
+
+    assert base_prompt > 0 and base_completion > 0
+    assert regional_prompt == pytest.approx(base_prompt * 1.10, rel=1e-9)
+    assert regional_completion == pytest.approx(base_completion * 1.10, rel=1e-9)
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+def test_batch_cost_calculator_skips_vertex_uplift_for_global_location():
+    """vertex_location=None or "global" must leave batch costs untouched."""
+    usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+    model_info = {
+        "input_cost_per_token": 0.000001,
+        "output_cost_per_token": 0.000002,
+        "regional_endpoint_uplift_multiplier": 1.10,
+    }
+
+    base_prompt, base_completion = batch_cost_calculator(
+        usage=usage,
+        model="gemini-3.5-flash",
+        custom_llm_provider="vertex_ai",
+        model_info=model_info,
+    )
+    for location in (None, "global"):
+        prompt, completion = batch_cost_calculator(
+            usage=usage,
+            model="gemini-3.5-flash",
+            custom_llm_provider="vertex_ai",
+            model_info=model_info,
+            vertex_location=location,
+        )
+        assert prompt == pytest.approx(base_prompt, rel=1e-9)
+        assert completion == pytest.approx(base_completion, rel=1e-9)
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.asyncio

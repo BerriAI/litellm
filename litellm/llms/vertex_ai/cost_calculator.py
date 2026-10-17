@@ -39,6 +39,18 @@ def cost_router(
     Returns
         - str, the specific google cost calc function it should route to.
     """
+    if custom_llm_provider == "vertex_ai" and (call_type == "embedding" or call_type == "aembedding"):
+        # Google bills some Vertex embedding models (text-embedding-005,
+        # text-multilingual-embedding-002) per character and others
+        # (gemini-embedding-*) per token; the model's pricing entry decides.
+        # Unresolvable entries keep the historical per-token behavior.
+        try:
+            embedding_model_info: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+            if embedding_model_info.get("input_cost_per_character") is not None:
+                return "cost_per_character"
+        except Exception:  # noqa: S110, BLE001  # unknown model entries keep the historical per-token path
+            pass
+        return "cost_per_token"
     if (
         custom_llm_provider == "vertex_ai"
         and (
@@ -49,8 +61,6 @@ def cost_router(
             or "codestral" in model
             or "gemma" in model
         )
-        or custom_llm_provider == "vertex_ai"
-        and (call_type == "embedding" or call_type == "aembedding")
         or custom_llm_provider == "vertex_ai"
         and ("gemini-2" in model)
     ):
