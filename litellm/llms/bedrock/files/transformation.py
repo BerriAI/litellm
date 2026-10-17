@@ -4,7 +4,7 @@ import os
 import posixpath
 import time
 import xml.etree.ElementTree as ET
-from collections.abc import Iterable, Mapping, MutableMapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, MutableMapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime
@@ -322,7 +322,10 @@ _REJECTED_FILE_ID_REQUEST_URL: Final = "https://litellm.ai"
 
 
 def _rejected_file_id(reason: ValueError) -> BedrockError:
-    message: Final = str(reason)
+    return _client_error(str(reason))
+
+
+def _client_error(message: str) -> BedrockError:
     return BedrockError(
         status_code=400,
         message=message,
@@ -332,6 +335,23 @@ def _rejected_file_id(reason: ValueError) -> BedrockError:
             request=httpx.Request(method="GET", url=_REJECTED_FILE_ID_REQUEST_URL),
         ),
     )
+
+
+def _parse_batch_jsonl(file_content: str) -> tuple[Any, ...]:
+    """Parse a batch input file one line at a time. A malformed line is the client's mistake, so it comes back as a
+    400 naming the line instead of a JSONDecodeError the proxy would report as a 500."""
+    return tuple(_iter_batch_jsonl(file_content))
+
+
+def _iter_batch_jsonl(file_content: str) -> Iterator[Any]:
+    for line_number, line in enumerate(file_content.splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError as e:
+            raise _client_error(f"Invalid JSON on line {line_number} of the batch input file: {e.msg}") from e
+        yield record
 
 
 def _resolve_managed_s3_object(file_id: str, litellm_params: Mapping[str, object]) -> tuple[str, str]:
@@ -580,10 +600,12 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             ## 1. If jsonl, check if there's a model name
             file_content: Final = self._get_content_from_openai_file(extracted_file_data_content)
 
-            # Split into lines and parse each line as JSON
-            openai_jsonl_content: Final = [json.loads(line) for line in file_content.splitlines() if line.strip()]
-            if len(openai_jsonl_content) > 0:
-                return self._get_s3_object_name_from_batch_jsonl(openai_jsonl_content)
+            # Split into lines and parse each line as JSON. A file that is not JSONL gets the generic name below; the
+            # upload's own conversion is what rejects a malformed batch file.
+            with suppress(json.JSONDecodeError):
+                openai_jsonl_content: Final = [json.loads(line) for line in file_content.splitlines() if line.strip()]
+                if len(openai_jsonl_content) > 0:
+                    return self._get_s3_object_name_from_batch_jsonl(openai_jsonl_content)
 
         ## 2. If not jsonl, store under a server-generated managed object name
         filename: Final = extracted_file_data.get("filename")
@@ -1147,7 +1169,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         ):
             ## Transform JSONL content to Bedrock format
             original_file_content: Final = self._get_content_from_openai_file(extracted_file_data_content)
-            openai_jsonl_content = [json.loads(line) for line in original_file_content.splitlines() if line.strip()]
+            openai_jsonl_content = _parse_batch_jsonl(original_file_content)
             litellm_params_model: Final = litellm_params.get("model")
             target_model: Final = model or (litellm_params_model if isinstance(litellm_params_model, str) else "")
             bedrock_jsonl_content = self._transform_openai_jsonl_content_to_bedrock_jsonl_content(
@@ -1659,7 +1681,7 @@ class BedrockJsonlFilesTransformation:
         file_content: Final = self._get_content_from_openai_file(openai_file_content)
 
         # Split into lines and parse each line as JSON
-        openai_jsonl_content: Final = [json.loads(line) for line in file_content.splitlines() if line.strip()]
+        openai_jsonl_content: Final = _parse_batch_jsonl(file_content)
         bedrock_jsonl_content = self._transform_openai_jsonl_content_to_bedrock_jsonl_content(openai_jsonl_content)
         bedrock_jsonl_string: Final = "\n".join(json.dumps(item) for item in bedrock_jsonl_content)
         object_name: Final = self._get_s3_object_name(openai_jsonl_content=openai_jsonl_content)
