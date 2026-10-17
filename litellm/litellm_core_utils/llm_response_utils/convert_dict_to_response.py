@@ -251,14 +251,7 @@ async def convert_to_streaming_response_async(
         setattr(
             model_response_object,
             "usage",
-            Usage(
-                completion_tokens=response_object["usage"].get("completion_tokens", 0),
-                prompt_tokens=response_object["usage"].get("prompt_tokens", 0),
-                total_tokens=response_object["usage"].get("total_tokens", 0),
-                completion_tokens_details=_cached_completion_tokens_details(
-                    _CACHED_USAGE_DETAILS.validate_python(response_object["usage"])
-                ),
-            ),
+            _replayed_usage(_CACHED_USAGE_DETAILS.validate_python(response_object["usage"])),
         )
 
     if "id" in response_object:
@@ -345,12 +338,10 @@ def convert_to_streaming_response(
     model_response_object.choices = choice_list
 
     if "usage" in response_object and response_object["usage"] is not None:
-        setattr(model_response_object, "usage", Usage())
-        model_response_object.usage.completion_tokens = response_object["usage"].get("completion_tokens", 0)
-        model_response_object.usage.prompt_tokens = response_object["usage"].get("prompt_tokens", 0)
-        model_response_object.usage.total_tokens = response_object["usage"].get("total_tokens", 0)
-        model_response_object.usage.completion_tokens_details = _cached_completion_tokens_details(
-            _CACHED_USAGE_DETAILS.validate_python(response_object["usage"])
+        setattr(
+            model_response_object,
+            "usage",
+            _replayed_usage(_CACHED_USAGE_DETAILS.validate_python(response_object["usage"])),
         )
 
     if "id" in response_object:
@@ -414,13 +405,27 @@ class _CachedMessageProviderFields(TypedDict, total=False):
 
 
 class _CachedUsageDetails(TypedDict, total=False):
+    completion_tokens: ReadOnly[object]
+    prompt_tokens: ReadOnly[object]
+    total_tokens: ReadOnly[object]
     completion_tokens_details: ReadOnly[object]
+    prompt_tokens_details: ReadOnly[object]
+    cache_read_input_tokens: ReadOnly[object]
+    cache_creation_input_tokens: ReadOnly[object]
+
+
+class _PromptCacheTokenCounts(TypedDict, total=False):
+    cache_read_input_tokens: ReadOnly[int]
+    cache_creation_input_tokens: ReadOnly[int]
 
 
 _CACHED_MESSAGE_PROVIDER_FIELDS: Final = TypeAdapter(_CachedMessageProviderFields)
 _CACHED_USAGE_DETAILS: Final = TypeAdapter(_CachedUsageDetails)
 _FIELD_MAP: Final = TypeAdapter(dict[str, object])
 _COMPLETION_TOKENS_DETAILS: Final = TypeAdapter(CompletionTokensDetailsWrapper)
+_PROMPT_TOKENS_DETAILS: Final = TypeAdapter(PromptTokensDetailsWrapper)
+_PROMPT_CACHE_TOKEN_COUNTS: Final = TypeAdapter(_PromptCacheTokenCounts)
+_PROMPT_CACHE_TOKEN_FIELDS: Final = ("cache_read_input_tokens", "cache_creation_input_tokens")
 
 
 def _cached_provider_specific_fields(message: _CachedMessageProviderFields) -> Mapping[str, object] | None:
@@ -436,6 +441,37 @@ def _cached_completion_tokens_details(usage: _CachedUsageDetails) -> CompletionT
         return _COMPLETION_TOKENS_DETAILS.validate_python(details)
     except ValidationError:
         return None
+
+
+def _cached_prompt_tokens_details(usage: _CachedUsageDetails) -> PromptTokensDetailsWrapper | None:
+    details: Final = usage.get("prompt_tokens_details")
+    if not isinstance(details, dict):
+        return None
+    try:
+        return _PROMPT_TOKENS_DETAILS.validate_python(details)
+    except ValidationError:
+        return None
+
+
+def _cached_prompt_cache_token_counts(usage: _CachedUsageDetails) -> _PromptCacheTokenCounts:
+    return _PROMPT_CACHE_TOKEN_COUNTS.validate_python(
+        {field: count for field in _PROMPT_CACHE_TOKEN_FIELDS if type(count := usage.get(field)) is int}
+    )
+
+
+def _cached_token_count(count: object) -> int:
+    return count if type(count) is int else 0
+
+
+def _replayed_usage(usage: _CachedUsageDetails) -> Usage:
+    return Usage(
+        completion_tokens=_cached_token_count(usage.get("completion_tokens")),
+        prompt_tokens=_cached_token_count(usage.get("prompt_tokens")),
+        total_tokens=_cached_token_count(usage.get("total_tokens")),
+        completion_tokens_details=_cached_completion_tokens_details(usage),
+        prompt_tokens_details=_cached_prompt_tokens_details(usage),
+        **_cached_prompt_cache_token_counts(usage),
+    )
 
 
 def handle_invalid_parallel_tool_calls(

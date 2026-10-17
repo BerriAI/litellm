@@ -155,6 +155,71 @@ async def test_a_replayed_stream_skips_cached_completion_tokens_details_that_do_
     assert rebuilt.usage.completion_tokens == 7
 
 
+def _prompt_cached_payload(content: str, cache_read: int, cache_write: int) -> dict:
+    cached = _async_payload(content=content)
+    cached["usage"] = litellm.Usage(
+        prompt_tokens=42145,
+        completion_tokens=6,
+        total_tokens=42151,
+        cache_read_input_tokens=cache_read,
+        cache_creation_input_tokens=cache_write,
+    ).model_dump()
+    return cached
+
+
+@pytest.mark.parametrize("content", ["", "Hello world! How are you?"], ids=["single_frame", "sliced"])
+@pytest.mark.parametrize("cache_read, cache_write", [(42139, 0), (0, 42139)], ids=["read", "write"])
+@pytest.mark.parametrize("replay", ["async", "sync"])
+@pytest.mark.asyncio
+async def test_a_replayed_stream_keeps_the_cached_prompt_cache_tokens(replay, cache_read, cache_write, content):
+    cached = _prompt_cached_payload(content, cache_read, cache_write)
+
+    chunks = await _collect_async(cached) if replay == "async" else list(convert_to_streaming_response(cached))
+    usage: Final = next(c.usage for c in chunks if getattr(c, "usage", None) is not None)
+
+    assert usage.prompt_tokens == 42145
+    assert usage.prompt_tokens_details.cached_tokens == cache_read
+    assert usage.prompt_tokens_details.cache_write_tokens == cache_write
+    assert usage.cache_read_input_tokens == cache_read
+    assert usage.cache_creation_input_tokens == cache_write
+
+
+@pytest.mark.parametrize("replay", ["async", "sync"])
+@pytest.mark.asyncio
+async def test_a_replayed_stream_keeps_cached_tokens_reported_only_in_the_prompt_tokens_details(replay):
+    cached = _async_payload()
+    cached["usage"]["prompt_tokens_details"] = {"cached_tokens": 4, "audio_tokens": 1}
+
+    chunks = await _collect_async(cached) if replay == "async" else list(convert_to_streaming_response(cached))
+    rebuilt = litellm.stream_chunk_builder(chunks=chunks)
+
+    assert rebuilt.usage.prompt_tokens_details.cached_tokens == 4
+    assert rebuilt.usage.prompt_tokens_details.audio_tokens == 1
+
+
+@pytest.mark.parametrize(
+    "field, value",
+    [
+        ("prompt_tokens_details", {"cached_tokens": "abc"}),
+        ("prompt_tokens_details", [1, 2]),
+        ("cache_read_input_tokens", "abc"),
+        ("cache_creation_input_tokens", 1.5),
+    ],
+    ids=["details_text", "details_list", "read_text", "write_fraction"],
+)
+@pytest.mark.parametrize("replay", ["async", "sync"])
+@pytest.mark.asyncio
+async def test_a_replayed_stream_skips_cached_prompt_cache_usage_that_does_not_validate(replay, field, value):
+    cached = _async_payload()
+    cached["usage"][field] = value
+
+    chunks = await _collect_async(cached) if replay == "async" else list(convert_to_streaming_response(cached))
+    rebuilt = litellm.stream_chunk_builder(chunks=chunks)
+
+    assert rebuilt.choices[0].message.content == "Hello world! How are you?"
+    assert rebuilt.usage.prompt_tokens == 5
+
+
 @pytest.mark.asyncio
 async def test_async_finish_reason_only_on_last_chunk():
     chunks = await _collect_async(_async_payload())
