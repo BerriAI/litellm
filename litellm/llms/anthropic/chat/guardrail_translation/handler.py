@@ -18,7 +18,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from itertools import chain, repeat
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Protocol, cast, overload, runtime_checkable
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast, overload, runtime_checkable
 
 from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict, assert_never
@@ -34,7 +34,7 @@ from litellm.llms.anthropic.pass_through.stream_assembly import (
     build_complete_streaming_response,
     build_usage_only_response_from_chunks,
 )
-from litellm.llms.anthropic.pass_through.utils import object_items, search_result_inner_texts
+from litellm.llms.anthropic.pass_through.utils import object_items, search_result_fields, search_result_inner_texts
 from litellm.llms.base_llm.guardrail_translation.base_translation import (
     BaseTranslation,
     StreamingScanKey,
@@ -120,6 +120,16 @@ class ToolResultSearchResultTextTarget:
 
 
 @dataclass(frozen=True, slots=True)
+class ToolResultSearchResultFieldTarget:
+    """The title or source string of a search_result block inside a tool_result."""
+
+    msg_idx: int
+    content_idx: int
+    block_idx: int
+    field: Literal["title", "source"]
+
+
+@dataclass(frozen=True, slots=True)
 class SystemStringTarget:
     pass
 
@@ -141,6 +151,7 @@ MessageTextTarget = (
     | ToolResultStringTarget
     | ToolResultBlockTextTarget
     | ToolResultSearchResultTextTarget
+    | ToolResultSearchResultFieldTarget
 )
 InputWriteBackTarget = SystemStringTarget | SystemBlockTextTarget | MessageTextTarget
 
@@ -242,6 +253,9 @@ def _write_back_message_text(message: _WritableMessage, target: MessageTextTarge
         case ToolResultSearchResultTextTarget(content_idx=content_idx, block_idx=block_idx, inner_idx=inner_idx):
             if isinstance(content, list):
                 content[content_idx]["content"][block_idx]["content"][inner_idx]["text"] = response
+        case ToolResultSearchResultFieldTarget(content_idx=content_idx, block_idx=block_idx, field=field):
+            if isinstance(content, list):
+                content[content_idx]["content"][block_idx][field] = response
         case _:
             assert_never(target)
 
@@ -1077,10 +1091,17 @@ class AnthropicMessagesHandler(BaseTranslation):
 
     @staticmethod
     def _search_result_texts(block: object, msg_idx: int, content_idx: int, block_idx: int) -> tuple[ScannedText, ...]:
-        """The text blocks a search_result carries, each written back to its own place."""
-        return tuple(
-            ScannedText(text, ToolResultSearchResultTextTarget(msg_idx, content_idx, block_idx, inner_idx))
-            for inner_idx, text in search_result_inner_texts(block)
+        """The title, source and text blocks a search_result carries, each written back to its own place."""
+        fields: Final = search_result_fields(block)
+        return (
+            *(
+                ScannedText(value, ToolResultSearchResultFieldTarget(msg_idx, content_idx, block_idx, field))
+                for field, value in fields
+            ),
+            *(
+                ScannedText(text, ToolResultSearchResultTextTarget(msg_idx, content_idx, block_idx, inner_idx))
+                for inner_idx, text in search_result_inner_texts(block)
+            ),
         )
 
     @staticmethod
@@ -1131,7 +1152,8 @@ class AnthropicMessagesHandler(BaseTranslation):
                     | ContentBlockTextTarget()
                     | ToolResultStringTarget()
                     | ToolResultBlockTextTarget()
-                    | ToolResultSearchResultTextTarget() as message_target
+                    | ToolResultSearchResultTextTarget()
+                    | ToolResultSearchResultFieldTarget() as message_target
                 ):
                     _write_back_message_text(messages[message_target.msg_idx], message_target, guardrail_response)
                 case _:

@@ -1888,8 +1888,8 @@ class TestAnthropicMessagesToolResultScanning:
                         "content": [
                             {
                                 "type": "search_result",
-                                "source": "https://example.com",
-                                "title": "Docs",
+                                "source": "https://example.com/POISON",
+                                "title": "Docs about POISON",
                                 "content": [
                                     {"type": "text", "text": "first POISON snippet"},
                                     {"type": "text", "text": "second POISON snippet"},
@@ -1907,6 +1907,8 @@ class TestAnthropicMessagesToolResultScanning:
         assert "first POISON snippet" in guardrail.seen_texts
         assert "second POISON snippet" in guardrail.seen_texts
         blocks = messages[1]["content"][0]["content"]
+        assert blocks[0]["title"] == "Docs about [BLOCKED]"
+        assert blocks[0]["source"] == "https://example.com/[BLOCKED]"
         assert [inner["text"] for inner in blocks[0]["content"]] == [
             "first [BLOCKED] snippet",
             "second [BLOCKED] snippet",

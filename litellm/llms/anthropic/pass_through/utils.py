@@ -2,7 +2,7 @@ import json
 import os
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, TypeVar
+from typing import TYPE_CHECKING, Final, Literal, TypeVar
 
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly
@@ -252,13 +252,24 @@ def search_result_inner_texts(block: object) -> tuple[tuple[int, str], ...]:
     )
 
 
+def search_result_fields(block: object) -> tuple[tuple[Literal["title", "source"], str], ...]:
+    """The non-empty title and source strings of a search_result block."""
+    fields: Final = _object_fields(block)
+    if fields.get("type") != "search_result":
+        return ()
+    title: Final = fields.get("title")
+    source: Final = fields.get("source")
+    return (
+        *((("title", title),) if isinstance(title, str) and title else ()),
+        *((("source", source),) if isinstance(source, str) and source else ()),
+    )
+
+
 def search_result_text(block: Mapping[str, object]) -> str:
     """A search_result block as plain text: its title and source lines, then its text blocks."""
-    title: Final = block.get("title")
-    source: Final = block.get("source")
+    labels: Final = {"title": "Title", "source": "Source"}
     lines: Final = (
-        *((f"Title: {title}",) if isinstance(title, str) and title else ()),
-        *((f"Source: {source}",) if isinstance(source, str) and source else ()),
+        *(f"{labels[field]}: {value}" for field, value in search_result_fields(block)),
         *(text for _, text in search_result_inner_texts(block)),
     )
     return "\n".join(lines)
