@@ -39,8 +39,18 @@ ENDPOINT_GROUPS: Final = tuple(
     f"{path.rsplit('/', 1)[-1]}-{'stream' if stream else 'json'}" for path, stream in ENDPOINT_CELLS
 )
 SDK_CELLS: Final = ("openai-sync", "openai-async-stream", "anthropic-sync")
-GROUPS: Final = (*ENDPOINT_GROUPS, *SDK_CELLS, "neighbour", "scoped", "burst")
+TAGGED: Final = "tagged"
+REGIONAL: Final = "regional"
+GROUPS: Final = (*ENDPOINT_GROUPS, *SDK_CELLS, "neighbour", "scoped", "burst", TAGGED, REGIONAL)
 LANES: Final = ("a", "b")
+LANE_PARAMS: Final[Mapping[tuple[str, str], Mapping[str, JsonValue]]] = {
+    (TAGGED, "a"): {"tags": ["tenant-a"]},
+    (TAGGED, "b"): {"tags": ["default"]},
+    (REGIONAL, "a"): {"region_name": "eu"},
+    (REGIONAL, "b"): {"region_name": "us"},
+}
+TENANT_A: Final[Mapping[str, JsonValue]] = {"metadata": {"tags": ["tenant-a"]}}
+UNTAGGED: Final[Mapping[str, JsonValue]] = {}
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,8 +95,12 @@ def cooldown_config(directory: Path, cache: OwnedRedis, prefix: str, wire: Wire)
                 "model": "openai/gpt-5.4",
                 "api_base": f"{wire.url}/{prefix}-{name}/{lane}/v1",
                 "api_key": "synthetic-openai-key",
+                **LANE_PARAMS.get((name, lane), {}),
             },
-            "model_info": {"id": f"{prefix}-{name}-{lane}"},
+            "model_info": {
+                "id": f"{prefix}-{name}-{lane}",
+                **({"enable_tag_filtering": True} if name == TAGGED else {}),
+            },
         }
         for name, lane in product(GROUPS, LANES)
     ]
@@ -97,6 +111,7 @@ def cooldown_config(directory: Path, cache: OwnedRedis, prefix: str, wire: Wire)
             "num_retries": 0,
             "allowed_fails": 0,
             "cooldown_time": COOLDOWN_SECONDS,
+            "enable_pre_call_checks": True,
             "redis_host": cache.host,
             "redis_port": cache.port,
         },
@@ -142,6 +157,12 @@ def request_body(path: str, group: str, stream: bool) -> dict[str, JsonValue]:
 
 def send(gateway: Gateway, path: str, group: str, stream: bool = False) -> Outcome:
     response: Final = gateway.request("POST", path, request_body(path, group, stream), headers={"Connection": "close"})
+    return Outcome(response.status_code, response.text, response.headers["x-litellm-call-id"])
+
+
+def send_chat(rig: Rig, name: str, extra: Mapping[str, JsonValue]) -> Outcome:
+    body: Final = {**request_body(CHAT, rig.group(name), False), **extra}
+    response: Final = rig.gateway.request("POST", CHAT, body, headers={"Connection": "close"})
     return Outcome(response.status_code, response.text, response.headers["x-litellm-call-id"])
 
 
@@ -303,3 +324,35 @@ def test_a_concurrent_burst_on_a_cooled_group_writes_one_complete_row_per_refusa
         identity, api_base, code, cooldown = provider_row(outcome.call_id)
         assert api_base.startswith(rig.deployments("burst")[identity]), (identity, api_base)
         assert (code, cooldown) == ("429", None), outcome
+
+
+def cool_lane(rig: Rig, name: str, lane: str, extra: Mapping[str, JsonValue]) -> None:
+    identity: Final = f"{rig.group(name)}-{lane}"
+    outcomes: Final = eventually(lambda: send_chat(rig, name, extra), lambda _: cooled(rig.cache, identity))
+    assert NO_DEPLOYMENTS not in outcomes.detail, outcomes.detail[:300]
+
+
+def router_refusal(rig: Rig, name: str, extra: Mapping[str, JsonValue]) -> Outcome:
+    refusal: Final = eventually(lambda: send_chat(rig, name, extra), lambda outcome: NO_DEPLOYMENTS in outcome.detail)
+    assert refusal.status == 429, (refusal.status, refusal.detail[:300])
+    return refusal
+
+
+def test_a_tag_routed_refusal_row_names_only_the_cooled_deployments_its_tags_reach(rig: Rig) -> None:
+    deployments: Final = rig.deployments(TAGGED)
+    tenant: Final = f"{rig.group(TAGGED)}-a"
+    cool_lane(rig, TAGGED, "a", TENANT_A)
+    cool_lane(rig, TAGGED, "b", UNTAGGED)
+    assert_refusal_row(router_refusal(rig, TAGGED, TENANT_A).call_id, {tenant: deployments[tenant]})
+    assert_refusal_row(router_refusal(rig, TAGGED, UNTAGGED).call_id, deployments)
+
+
+def test_a_region_restricted_refusal_row_names_only_the_cooled_deployments_in_its_region(rig: Rig) -> None:
+    deployments: Final = rig.deployments(REGIONAL)
+    european: Final = f"{rig.group(REGIONAL)}-a"
+    customer: Final = f"{rig.prefix}-eu-customer"
+    with ExitStack() as cleanups:
+        rig.gateway.post("/customer/new", {"user_id": customer, "allowed_model_region": "eu"})
+        cleanups.callback(rig.gateway.post, "/customer/delete", {"user_ids": [customer]})
+        cool_group(rig, REGIONAL)
+        assert_refusal_row(router_refusal(rig, REGIONAL, {"user": customer}).call_id, {european: deployments[european]})

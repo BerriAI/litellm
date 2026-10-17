@@ -1,5 +1,7 @@
 import asyncio
+import copy
 import importlib
+import itertools
 import random
 import time
 from collections.abc import Mapping
@@ -3111,6 +3113,10 @@ def _select(router: Router, entrypoint: str, model: str, request_kwargs: dict[st
             )
         case "pass-through":
             return router.get_available_deployment_for_pass_through(model=model, request_kwargs=request_kwargs)
+        case "pass-through-chat":
+            return router.get_available_deployment_for_pass_through(
+                model=model, messages=REFUSAL_MESSAGES, request_kwargs=request_kwargs
+            )
         case _:
             return router.get_available_deployment(
                 model=model, messages=REFUSAL_MESSAGES, request_kwargs=request_kwargs
@@ -3181,3 +3187,152 @@ def test_no_deployment_error_names_only_the_cooled_part_of_a_route_emptied_by_ot
         _select(router, entrypoint, "refused", request_kwargs)
     assert refusal.value.cooldown_deployments == (FIRST_REFUSED,), refusal.value.cooldown_list
     assert "sk-scripted-secret" not in repr(refusal.value.cooldown_deployments)
+
+
+TENANT_A: Final = CooldownDeploymentInfo(model_id="tenant-a-1", api_base="https://tenant-a.example/v1")
+TENANT_B: Final = CooldownDeploymentInfo(model_id="tenant-b-1", api_base="https://tenant-b.example/v1")
+SHARED: Final = CooldownDeploymentInfo(model_id="shared-1", api_base="https://shared.example/v1")
+EVERY_TENANT: Final = (TENANT_A, TENANT_B, SHARED)
+TENANT_ROUTES: Final = ((TENANT_A, "tenant-a", "eu"), (TENANT_B, "tenant-b", "us"), (SHARED, "default", "eu"))
+
+
+def _tenant_router(cooled: tuple[CooldownDeploymentInfo, ...], **router_settings: bool) -> Router:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "tenants",
+                "litellm_params": {
+                    "model": "openai/gpt-5.4",
+                    "api_base": deployment["api_base"],
+                    "tags": [tag],
+                    "region_name": region,
+                    "use_in_pass_through": True,
+                },
+                "model_info": {"id": deployment["model_id"]},
+            }
+            for deployment, tag, region in TENANT_ROUTES
+        ],
+        **router_settings,
+    )
+    for deployment in cooled:
+        router.cooldown_cache.add_deployment_to_cooldown(
+            model_id=deployment["model_id"],
+            original_exception=litellm.RateLimitError("scripted 429", "openai", "gpt-5.4"),
+            exception_status=429,
+            cooldown_time=60,
+        )
+    return router
+
+
+TAGS_ON: Final = {"enable_tag_filtering": True}
+REGION_CHECKS_ON: Final = {"enable_pre_call_checks": True}
+BOTH_ON: Final = {**TAGS_ON, **REGION_CHECKS_ON}
+
+
+@pytest.mark.parametrize(
+    ("router_settings", "entrypoint", "request_kwargs", "expected"),
+    (
+        (TAGS_ON, "async", {"metadata": {"tags": ["tenant-a"]}}, (TENANT_A,)),
+        (TAGS_ON, "async", {"metadata": {"tags": ["tenant-b"]}}, (TENANT_B,)),
+        (TAGS_ON, "async", {"metadata": {}}, EVERY_TENANT),
+        (TAGS_ON, "async", {}, EVERY_TENANT),
+        (TAGS_ON, "async", {"metadata": "unparsed"}, ()),
+        (TAGS_ON, "async", {"litellm_metadata": {"tags": ["tenant-a"]}}, (TENANT_A,)),
+        (TAGS_ON, "async", {"metadata": {"tags": ["!tenant-a", "&tenant-b"]}}, (TENANT_B,)),
+        (TAGS_ON, "async", {"metadata": {"tags": ["!tenant-a"]}}, (TENANT_B, SHARED)),
+        (TAGS_ON, "async", {"metadata": {"tags": ["tenant-z"]}}, (SHARED,)),
+        (TAGS_ON, "async-pass-through", {"metadata": {"tags": ["tenant-a"]}}, (TENANT_A,)),
+        ({}, "async", {"metadata": {"tags": ["tenant-a"]}, "enable_tag_filtering": True}, (TENANT_A,)),
+        ({}, "async", {"metadata": {"tags": ["tenant-a"]}}, EVERY_TENANT),
+        (REGION_CHECKS_ON, "async", {"metadata": {}, "allowed_model_region": "eu"}, (TENANT_A, SHARED)),
+        (REGION_CHECKS_ON, "sync", {"metadata": {}, "allowed_model_region": "eu"}, (TENANT_A, SHARED)),
+        (REGION_CHECKS_ON, "pass-through-chat", {"metadata": {}, "allowed_model_region": "eu"}, (TENANT_A, SHARED)),
+        (REGION_CHECKS_ON, "pass-through", {"metadata": {}, "allowed_model_region": "eu"}, EVERY_TENANT),
+        ({}, "sync", {"metadata": {}, "allowed_model_region": "eu"}, EVERY_TENANT),
+        (REGION_CHECKS_ON, "sync", {"metadata": {}, "allowed_model_region": 1}, ()),
+        (
+            {**TAGS_ON, **REGION_CHECKS_ON},
+            "async",
+            {"metadata": {"tags": ["tenant-a"]}, "allowed_model_region": "us"},
+            (),
+        ),
+    ),
+    ids=(
+        "tag-a",
+        "tag-b",
+        "untagged-falls-back-past-the-default",
+        "no-metadata",
+        "metadata-not-a-mapping",
+        "tag-litellm-metadata",
+        "tag-constraints",
+        "tag-exclusion-falls-back-in-tiers",
+        "unknown-tag-gets-default",
+        "tag-async-pass-through",
+        "tag-request-level-switch",
+        "tags-off",
+        "region-async",
+        "region-sync",
+        "region-pass-through",
+        "region-pass-through-without-input",
+        "region-without-pre-call-checks",
+        "region-not-a-string",
+        "region-and-tag-allow-none",
+    ),
+)
+def test_no_deployment_error_names_only_the_cooled_deployments_tag_and_region_routing_allow(
+    router_settings: dict[str, bool],
+    entrypoint: str,
+    request_kwargs: dict[str, object],
+    expected: tuple[CooldownDeploymentInfo, ...],
+) -> None:
+    router: Final = _tenant_router(EVERY_TENANT, **router_settings)
+    with pytest.raises(RouterRateLimitError) as refusal:
+        _select(router, entrypoint, "tenants", request_kwargs)
+    assert refusal.value.cooldown_deployments == expected, refusal.value.cooldown_list
+
+
+def test_naming_tag_routed_deployments_leaves_the_request_metadata_untouched() -> None:
+    metadata: Final[dict[str, object]] = {"tags": ["tenant-a"]}
+    with pytest.raises(RouterRateLimitError) as refusal:
+        _select(_tenant_router(EVERY_TENANT, **TAGS_ON), "async", "tenants", {"metadata": metadata})
+    assert refusal.value.cooldown_deployments == (TENANT_A,)
+    assert metadata == {"tags": ["tenant-a"]}
+
+
+REACHABILITY_REQUESTS: Final = (
+    {"metadata": {"tags": ["tenant-a"]}},
+    {"metadata": {}},
+    {"metadata": {"tags": ["!tenant-a"]}},
+    {"metadata": {"tags": ["tenant-z"]}},
+    {"metadata": {"tags": ["!tenant-a", "&tenant-b"]}},
+    {"metadata": {}, "allowed_model_region": "eu"},
+    {"metadata": {"tags": ["tenant-a"]}, "allowed_model_region": "us"},
+)
+HEALTH_STATES: Final = tuple(
+    itertools.chain.from_iterable(
+        itertools.combinations(EVERY_TENANT, size) for size in range(1, len(EVERY_TENANT) + 1)
+    )
+)
+
+
+def _routable_while_up(up: tuple[CooldownDeploymentInfo, ...], request_kwargs: dict[str, object]) -> set[str]:
+    router: Final = _tenant_router(tuple(deployment for deployment in EVERY_TENANT if deployment not in up), **BOTH_ON)
+    try:
+        pool: Final = asyncio.run(
+            router.async_get_healthy_deployments(
+                model="tenants", request_kwargs=copy.deepcopy(request_kwargs), messages=REFUSAL_MESSAGES
+            )
+        )
+    except ValueError:
+        return set()
+    return {str(deployment["model_info"]["id"]) for deployment in pool}
+
+
+@pytest.mark.parametrize("request_kwargs", REACHABILITY_REQUESTS)
+def test_the_refusal_names_each_cooled_deployment_some_cooldown_state_routes_the_request_to(
+    request_kwargs: dict[str, object],
+) -> None:
+    reachable: Final = set().union(*(_routable_while_up(up, request_kwargs) for up in HEALTH_STATES))
+    with pytest.raises(RouterRateLimitError) as refusal:
+        _select(_tenant_router(EVERY_TENANT, **BOTH_ON), "async", "tenants", copy.deepcopy(request_kwargs))
+    assert {deployment["model_id"] for deployment in refusal.value.cooldown_deployments or ()} == reachable
