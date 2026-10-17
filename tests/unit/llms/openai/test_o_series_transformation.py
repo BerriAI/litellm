@@ -1,5 +1,4 @@
-from typing import Final
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -70,7 +69,7 @@ async def test_o1_handle_system_role(model):
     client = AsyncOpenAI(api_key="fake-api-key")
 
     with patch.object(
-        client.chat.completions.with_raw_response, "create"
+        client, "post"
     ) as mock_client:
         try:
             await litellm.acompletion(
@@ -83,7 +82,7 @@ async def test_o1_handle_system_role(model):
             print(f"Error: {e}")
 
         mock_client.assert_called_once()
-        request_body = mock_client.call_args.kwargs
+        request_body = mock_client.call_args.kwargs["body"]
 
         print("request_body: ", request_body)
 
@@ -141,7 +140,7 @@ async def test_o1_max_completion_tokens(model: str):
     client = AsyncOpenAI(api_key="fake-api-key")
 
     with patch.object(
-        client.chat.completions.with_raw_response, "create"
+        client, "post"
     ) as mock_client:
         try:
             await litellm.acompletion(
@@ -154,7 +153,7 @@ async def test_o1_max_completion_tokens(model: str):
             print(f"Error: {e}")
 
         mock_client.assert_called_once()
-        request_body = mock_client.call_args.kwargs
+        request_body = mock_client.call_args.kwargs["body"]
 
         print("request_body: ", request_body)
 
