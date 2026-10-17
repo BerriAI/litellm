@@ -758,6 +758,7 @@ class Logging(LiteLLMLoggingBaseClass):
         # Initialize cost breakdown field
         self.cost_breakdown: CostBreakdown | None = None
         self.billed_token_rates: BilledTokenRates | None = None
+        self.billed_model_map_information: StandardLoggingModelInformation | None = None
         self._provider_reported_cost: float | None = None
 
         # Init Caching related details
@@ -1836,6 +1837,7 @@ class Logging(LiteLLMLoggingBaseClass):
         data_residency: str | None = None,
         vertex_location: str | None = None,
         billed_token_rates: "BilledTokenRates | None" = None,
+        model_map_information: StandardLoggingModelInformation | None = None,
     ) -> None:
         """
         Helper method to store cost breakdown in the logging object.
@@ -1856,9 +1858,11 @@ class Logging(LiteLLMLoggingBaseClass):
             data_residency: Region uplift the costs above were priced on, already resolved
             vertex_location: Vertex AI location the costs above were priced on, already resolved
             billed_token_rates: Per-token rates the costs above were billed at, already resolved
+            model_map_information: Cost-map entry the costs above were billed from, already resolved
         """
 
         self.billed_token_rates = billed_token_rates
+        self.billed_model_map_information = model_map_information
         self.cost_breakdown = CostBreakdown(
             input_cost=input_cost,
             output_cost=output_cost,
@@ -2068,6 +2072,7 @@ class Logging(LiteLLMLoggingBaseClass):
     def uncached_price(self, result: object) -> UncachedPrice:
         previous_cost_breakdown: Final = self.cost_breakdown
         previous_billed_token_rates: Final = self.billed_token_rates
+        previous_billed_model_map_information: Final = self.billed_model_map_information
         debug_key: Final = "response_cost_failure_debug_information"
         had_failure_debug_info: Final = debug_key in self.model_call_details
         try:
@@ -2076,6 +2081,7 @@ class Logging(LiteLLMLoggingBaseClass):
         finally:
             self.cost_breakdown = previous_cost_breakdown
             self.billed_token_rates = previous_billed_token_rates
+            self.billed_model_map_information = previous_billed_model_map_information
             if not had_failure_debug_info:
                 self.model_call_details.pop(debug_key, None)
 
@@ -7078,12 +7084,17 @@ def get_standard_logging_object_payload(
             timing_metrics: Final = getattr(logging_obj, "response_timing_metrics", None) or {}
             clean_hidden_params["litellm_overhead_time_ms"] = timing_metrics.get("litellm_overhead_time_ms")
 
-        model_cost_information: Final = StandardLoggingPayloadSetup.get_model_cost_information(
-            base_model=base_model,
-            custom_pricing=custom_pricing,
-            custom_llm_provider=kwargs.get("custom_llm_provider"),
-            init_response_obj=init_response_obj,
-            api_base=litellm_params.get("api_base"),
+        billed_model_map_information: Final = logging_obj.billed_model_map_information
+        model_cost_information: Final = (
+            billed_model_map_information
+            if billed_model_map_information is not None
+            else StandardLoggingPayloadSetup.get_model_cost_information(
+                base_model=base_model,
+                custom_pricing=custom_pricing,
+                custom_llm_provider=kwargs.get("custom_llm_provider"),
+                init_response_obj=init_response_obj,
+                api_base=litellm_params.get("api_base"),
+            )
         )
 
         error_information, error_str = StandardLoggingPayloadSetup.get_error_information_for_logging_payload(
