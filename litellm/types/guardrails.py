@@ -1016,11 +1016,13 @@ GuardrailNumRetries: TypeAlias = Annotated[
     int | None,
     Field(
         ge=0,
+        le=5,
         description=(
             "How many more times to send a guardrail check whose connection timed out waiting for the answer "
             "or was dropped after the request went out. Each retry opens a fresh connection and gets the full "
             "timeout. Connect failures, HTTP error statuses and BLOCKED verdicts are not retried. Unset or 0 "
-            "sends each check once. Implemented by guardrail='generic_guardrail_api', other guardrails ignore it."
+            "sends each check once, and the most allowed is 5. Implemented by guardrail='generic_guardrail_api', "
+            "other guardrails ignore it."
         ),
     ),
 ]

@@ -2100,7 +2100,46 @@ async def _attempts_until_it_raises(outcome: Outcome, num_retries: int | None) -
     return sent.qsize()
 
 
+class _OpenCloseLoggingHandler(AsyncHTTPHandler):
+    def __init__(self, transport: httpx.MockTransport, events: SimpleQueue[str]) -> None:
+        super().__init__(transport=transport)
+        self._events: Final = events
+        events.put("open")
+
+    async def close(self) -> None:
+        self._events.put("close")
+        await super().close()
+
+
 class TestNumRetries:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("outcomes", "fresh_connections"),
+        [
+            ((httpx.ReadTimeout("no answer before the read timeout"),), 3),
+            ((httpx.ReadTimeout("no answer"), httpx.ReadTimeout("no answer"), REWRITTEN), 2),
+        ],
+        ids=["every_retry_fails", "second_retry_succeeds"],
+    )
+    async def test_each_retry_connection_closes_before_the_next_attempt(
+        self, outcomes: tuple[Outcome, ...], fresh_connections: int
+    ) -> None:
+        transport, _ = _scripted(*outcomes)
+        events: Final[SimpleQueue[str]] = SimpleQueue()
+        guardrail: Final = GenericGuardrailAPI(
+            api_base="https://api.test.guardrail.com",
+            guardrail_name="retrying-guardrail",
+            fail_on_error=False,
+            num_retries=3,
+            timeout=5,
+            async_handler=AsyncHTTPHandler(transport=transport),
+            fresh_handler_factory=lambda: _OpenCloseLoggingHandler(transport, events),
+        )
+
+        await _check(guardrail)
+
+        assert [events.get_nowait() for _ in range(events.qsize())] == ["open", "close"] * fresh_connections
+
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "failure",

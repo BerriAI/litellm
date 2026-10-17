@@ -417,11 +417,12 @@ class GenericGuardrailAPI(CustomGuardrail):
 
     async def _post_check(
         self,
-        handler: AsyncHTTPHandler,
         payload: Mapping[str, object],
         headers: Mapping[str, str],
         retries_left: int,
+        fresh: bool = False,
     ) -> httpx.Response:
+        handler: Final = self.fresh_handler_factory() if fresh else self.async_handler
         try:
             return await handler.post(
                 url=self.api_base, json=dict(payload), headers=dict(headers), timeout=self.timeout
@@ -438,11 +439,10 @@ class GenericGuardrailAPI(CustomGuardrail):
                 type(failure).__name__,
                 retries_left - 1,
             )
-        fresh: Final = self.fresh_handler_factory()
-        try:
-            return await self._post_check(fresh, payload, headers, retries_left - 1)
         finally:
-            await fresh.close()
+            if fresh:
+                await handler.close()
+        return await self._post_check(payload, headers, retries_left - 1, fresh=True)
 
     @log_guardrail_information
     async def apply_guardrail(
@@ -524,7 +524,6 @@ class GenericGuardrailAPI(CustomGuardrail):
             # Make the API request
             # Use mode="json" to ensure all iterables are converted to lists
             response: Final = await self._post_check(
-                self.async_handler,
                 guardrail_request.model_dump(mode="json"),
                 headers,
                 self.num_retries,

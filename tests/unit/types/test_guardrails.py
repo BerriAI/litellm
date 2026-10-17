@@ -181,14 +181,14 @@ def test_litellm_params_treats_blank_values_as_unset(blank: str) -> None:
     assert BaseLitellmParams(fail_on_error=blank).model_dump() == BaseLitellmParams().model_dump()
 
 
-@pytest.mark.parametrize(("configured", "loaded"), [("2", 2), (2, 2), ("0", 0), ("", None)])
+@pytest.mark.parametrize(("configured", "loaded"), [("2", 2), (2, 2), ("0", 0), (5, 5), ("", None)])
 def test_num_retries_loads_the_dashboard_string_and_blank_means_unset(configured: object, loaded: int | None) -> None:
     assert (
         LitellmParams(guardrail="generic_guardrail_api", mode="pre_call", num_retries=configured).num_retries == loaded
     )
 
 
-@pytest.mark.parametrize("configured", [-1, "1.5", "twice"])
+@pytest.mark.parametrize("configured", [-1, 6, "1.5", "twice"])
 def test_num_retries_rejects_values_that_are_not_a_retry_count(configured: object) -> None:
     with pytest.raises(ValidationError, match="num_retries"):
         LitellmParams(guardrail="generic_guardrail_api", mode="pre_call", num_retries=configured)
