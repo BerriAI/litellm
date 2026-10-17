@@ -694,7 +694,7 @@ class TestDeploymentClientConstruction:
             )
         )
 
-        assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices) == "ok"
+        assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == "ok"
         assert stream_route.calls.last.request.headers["Authorization"] == "Bearer stream-bearer"
 
     @respx.mock
@@ -710,7 +710,7 @@ class TestDeploymentClientConstruction:
         )
         chunks: Final = tuple([chunk async for chunk in stream])
 
-        assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices) == "ok"
+        assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == "ok"
         assert stream_route.calls.last.request.headers["Authorization"] == "Bearer async-stream-bearer"
 
     @respx.mock

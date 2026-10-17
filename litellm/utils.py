@@ -7522,7 +7522,6 @@ class TextCompletionStreamWrapper:
                 text_choices["finish_reason"] = chunk["choices"][0]["finish_reason"]
                 response["choices"] = [text_choices]
             else:
-                # the include_usage chunk carries usage only, with an empty choices array
                 response["choices"] = []
 
             # only pass usage when stream_options["include_usage"] is True

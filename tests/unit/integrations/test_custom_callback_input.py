@@ -446,7 +446,7 @@ async def test_async_chat_openai_stream(
     response: Final = await litellm.acompletion(model="gpt-4o-mini", messages=messages, stream=True)
     chunks: Final = tuple([chunk async for chunk in response])
     await _assert_success_payload(callback_capture, "gpt-4o-mini", messages)
-    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices) == "Hello"
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == "Hello"
 
 
 @pytest.mark.asyncio
@@ -528,7 +528,7 @@ def test_chat_openai_stream(provider_router: respx.MockRouter, callback_capture:
     messages: Final = [{"role": "user", "content": "sync stream marker"}]
     response: Final = litellm.completion(model="gpt-4o-mini", messages=messages, stream=True)
     chunks: Final = tuple(response)
-    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices) == "Hello"
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == "Hello"
     assert callback_capture.sync_logged.acquire(timeout=5)
     event: Final = callback_capture.sync_success.call_args.kwargs["kwargs"]
     assert event["model"] == "gpt-4o-mini"
@@ -649,8 +649,8 @@ async def test_logging_async_cache_hit_sync_call(
     )
     second_chunks: Final = tuple([chunk async for chunk in second])
     await _drain_logging_worker()
-    assert "".join(chunk.choices[0].delta.content or "" for chunk in first_chunks if chunk.choices) == "Hello"
-    assert "".join(chunk.choices[0].delta.content or "" for chunk in second_chunks if chunk.choices) == "Hello"
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in first_chunks) == "Hello"
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in second_chunks) == "Hello"
     assert provider_router.calls.call_count == 1
     await _assert_success_payload(callback_capture, "gpt-4o-mini", None, call_id=callback_capture.call_id)
     call: Final = callback_capture.async_success.call_args or callback_capture.sync_success.call_args
@@ -682,8 +682,8 @@ def test_logging_cache_hit_sync_stream_call(
         litellm.completion(model="gpt-4o-mini", messages=messages, caching=True, stream=True)
     )
     assert callback_capture.sync_logged.acquire(timeout=5)
-    assert "".join(chunk.choices[0].delta.content or "" for chunk in first_chunks if chunk.choices) == "Hello"
-    assert "".join(chunk.choices[0].delta.content or "" for chunk in second_chunks if chunk.choices) == "Hello"
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in first_chunks) == "Hello"
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in second_chunks) == "Hello"
     assert provider_router.calls.call_count == 1
     standard: Final = callback_capture.sync_success.call_args.kwargs["kwargs"]["standard_logging_object"]
     assert standard["cache_hit"] is True

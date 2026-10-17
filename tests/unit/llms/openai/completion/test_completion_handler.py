@@ -335,7 +335,7 @@ async def test_async_text_completion_chat_model_stream_builds_chat_chunks(monkey
     assert tuple(
         chunk.choices[0].finish_reason
         for chunk in chunks
-        if chunk.choices and chunk.choices[0].finish_reason is not None
+        if chunk.choices[0].finish_reason is not None
     ) == ("stop",)
     assert len(route.calls) == 1
 

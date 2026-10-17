@@ -27278,7 +27278,7 @@ def test_router_reads_api_key_from_model_list(
         stream=True,
     )
     streamed_content: Final = "".join(
-        chunk.choices[0].delta.content or "" for chunk in stream if chunk.choices
+        chunk.choices[0].delta.content or "" for chunk in stream
     )
 
     assert response.choices[0].message.content == "scripted reply"
@@ -27513,7 +27513,7 @@ async def test_router_openai_completion_supports_sync_async_and_streaming(
     )
     async_stream_chunks: Final = tuple([chunk async for chunk in async_stream])
     async_stream_content: Final = "".join(
-        chunk.choices[0].delta.content or "" for chunk in async_stream_chunks if chunk.choices
+        chunk.choices[0].delta.content or "" for chunk in async_stream_chunks
     )
     sync_stream: Final = router.completion(
         model="openai-model",
@@ -27521,7 +27521,7 @@ async def test_router_openai_completion_supports_sync_async_and_streaming(
         stream=True,
     )
     sync_stream_content: Final = "".join(
-        chunk.choices[0].delta.content or "" for chunk in sync_stream if chunk.choices
+        chunk.choices[0].delta.content or "" for chunk in sync_stream
     )
 
     assert async_response.choices[0].message.content == "async reply"

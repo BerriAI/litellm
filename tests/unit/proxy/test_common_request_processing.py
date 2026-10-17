@@ -9035,6 +9035,33 @@ class TestApplyStreamUsageTracking:
         assert data["stream_options"] == {"include_usage": True}
         assert "_litellm_strip_stream_usage" not in data
 
+    @pytest.mark.parametrize("client_stream_options", [None, {"include_obfuscation": True}])
+    def test_flag_true_marks_usage_injected_for_clients_that_did_not_ask(
+        self, client_stream_options: dict[str, bool] | None
+    ):
+        data = {"stream": True, **({} if client_stream_options is None else {"stream_options": client_stream_options})}
+
+        _apply_stream_usage_tracking(
+            data=data,
+            general_settings={"always_include_stream_usage": True},
+            route_type="acompletion",
+        )
+
+        assert data["stream_options"]["include_usage"] is True
+        assert data["_litellm_stream_usage_injected"] is True
+
+    def test_flag_true_leaves_usage_unmarked_when_client_asked_and_neutralizes_client_marker(self):
+        data = {"stream": True, "stream_options": {"include_usage": True}, "_litellm_stream_usage_injected": True}
+
+        _apply_stream_usage_tracking(
+            data=data,
+            general_settings={"always_include_stream_usage": True},
+            route_type="acompletion",
+        )
+
+        assert data["stream_options"] == {"include_usage": True}
+        assert data["_litellm_stream_usage_injected"] is False
+
     def test_flag_true_respects_client_explicit_include_usage_false(self):
         data = {"stream": True, "stream_options": {"include_usage": False}}
 

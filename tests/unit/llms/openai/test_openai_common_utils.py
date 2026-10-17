@@ -351,8 +351,8 @@ def test_sync_streaming_output_limit_400_maps_to_length_truncated_stream(provide
     )
     chunks = list(stream)
 
-    assert [c.choices[0].finish_reason for c in chunks if c.choices].count("length") == 1
-    assert all(not c.choices[0].delta.content for c in chunks if c.choices)
+    assert [c.choices[0].finish_reason for c in chunks].count("length") == 1
+    assert all(not c.choices[0].delta.content for c in chunks)
 
 
 @pytest.mark.parametrize("provider", ["openai", "azure"])
@@ -363,8 +363,8 @@ async def test_async_streaming_output_limit_400_maps_to_length_truncated_stream(
     )
     chunks = [chunk async for chunk in stream]
 
-    assert [c.choices[0].finish_reason for c in chunks if c.choices].count("length") == 1
-    assert all(not c.choices[0].delta.content for c in chunks if c.choices)
+    assert [c.choices[0].finish_reason for c in chunks].count("length") == 1
+    assert all(not c.choices[0].delta.content for c in chunks)
 
 
 @pytest.mark.parametrize("provider", ["openai", "azure"])

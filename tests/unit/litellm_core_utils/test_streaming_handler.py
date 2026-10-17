@@ -594,11 +594,44 @@ async def test_streaming_handler_with_usage(
     assert chunk_has_usage
 
 
+def _usage_test_logging(
+    caller_stream_options: dict[str, bool] | None, stream_usage_injected: bool = False
+) -> Logging:
+    logging_obj: Final = Logging(
+        model="hosted_vllm/m",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="completion",
+        start_time=time.time(),
+        litellm_call_id="12345",
+        function_id="1245",
+        kwargs={"_litellm_stream_usage_injected": True} if stream_usage_injected else {},
+    )
+    logging_obj.update_environment_variables(
+        litellm_params={}, optional_params={}, model="hosted_vllm/m", stream_options=caller_stream_options
+    )
+    return logging_obj
+
+
+@pytest.mark.parametrize(
+    ("caller_stream_options", "stream_usage_injected", "usage_chunk_choice_count"),
+    [
+        ({"include_usage": True}, False, 0),
+        (None, False, 1),
+        ({"include_usage": True}, True, 1),
+    ],
+    ids=["caller-asked", "provider-handler-injected", "proxy-injected"],
+)
 @pytest.mark.parametrize("plain_iterator", [False, True])
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
-async def test_include_usage_chunk_has_empty_choices(sync_mode: bool, plain_iterator: bool):
-    """OpenAI streams the include_usage chunk with choices: [] after every choice has finished."""
+async def test_usage_chunk_has_empty_choices_only_for_callers_that_asked(
+    sync_mode: bool,
+    plain_iterator: bool,
+    caller_stream_options: dict[str, bool] | None,
+    stream_usage_injected: bool,
+    usage_chunk_choice_count: int,
+):
     usage: Final = Usage(prompt_tokens=5, completion_tokens=1, total_tokens=6)
     provider_chunks: Final = [
         ModelResponseStream(id="c1", choices=[StreamingChoices(index=0, delta=Delta(role="assistant", content="ok"))]),
@@ -612,23 +645,37 @@ async def test_include_usage_chunk_has_empty_choices(sync_mode: bool, plain_iter
         ),
         model="hosted_vllm/m",
         custom_llm_provider="hosted_vllm",
-        logging_obj=Logging(
-            model="hosted_vllm/m",
-            messages=[{"role": "user", "content": "hi"}],
-            stream=True,
-            call_type="completion",
-            start_time=time.time(),
-            litellm_call_id="12345",
-            function_id="1245",
-        ),
+        logging_obj=_usage_test_logging(caller_stream_options, stream_usage_injected),
         stream_options={"include_usage": True},
     )
 
     chunks: Final = list(wrapper) if sync_mode else [chunk async for chunk in wrapper]
 
-    assert [len(chunk.choices) for chunk in chunks] == [1, 1, 0, 0]
+    assert [len(chunk.choices) for chunk in chunks] == [1, 1, 0, usage_chunk_choice_count]
     assert chunks[2].provider_specific_fields == {"citations": ["a"]}
     assert [getattr(chunk, "usage", None) is not None for chunk in chunks] == [False, False, False, True]
+    assert chunks[-1].usage.total_tokens == 6
+
+
+@pytest.mark.asyncio
+async def test_plain_iterator_stream_keeps_usage_on_its_chunk_when_usage_was_not_requested():
+    usage: Final = Usage(prompt_tokens=5, completion_tokens=1, total_tokens=6)
+    provider_chunks: Final = [
+        ModelResponseStream(id="c1", choices=[StreamingChoices(index=0, delta=Delta(role="assistant", content="ok"))]),
+        ModelResponseStream(
+            id="c1", choices=[StreamingChoices(index=0, delta=Delta(), finish_reason="stop")], usage=usage
+        ),
+    ]
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iter(provider_chunks),
+        model="hosted_vllm/m",
+        custom_llm_provider="hosted_vllm",
+        logging_obj=_usage_test_logging(None),
+    )
+
+    chunks: Final = [chunk async for chunk in wrapper]
+
+    assert [chunk.choices[0].finish_reason for chunk in chunks] == [None, "stop"]
     assert chunks[-1].usage.total_tokens == 6
 
 
@@ -6514,7 +6561,7 @@ async def test_async_stream_without_usage_counts_tokens_off_the_event_loop():
 
     chunks, took, lags = await timed_with_loop_lags(consume)
 
-    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices) == text * 100
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == text * 100
     assert chunks[-1].usage.prompt_tokens > 100_000
     assert chunks[-1].usage.completion_tokens > 100_000
     assert_loop_stayed_free(took, lags)

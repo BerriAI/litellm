@@ -297,6 +297,10 @@ class CustomStreamWrapper:
         self.messages = getattr(logging_obj, "messages", None)
         self.sent_stream_usage = False
         self.send_stream_usage = True if self.check_send_stream_usage(self.stream_options) else False
+        self.caller_requested_stream_usage: Final = (
+            self.check_send_stream_usage(getattr(logging_obj, "stream_options", None))
+            and getattr(logging_obj, "stream_usage_injected", False) is not True
+        )
         self.tool_call = False
         self.chunks: list = []  # keep track of the returned chunks - used for calculating the input/output tokens for stream options
         self._repeated_messages_count = 1
@@ -1932,8 +1936,7 @@ class CustomStreamWrapper:
                     except Exception:
                         complete_streaming_response = None
 
-                response = self.model_response_creator()
-                response.choices = []
+                response = self._new_usage_chunk()
                 if complete_streaming_response is not None:
                     self._propagate_usage_cost_to_hidden_params(complete_streaming_response, self.custom_llm_provider)
 
@@ -2130,7 +2133,7 @@ class CustomStreamWrapper:
                             if isinstance(choice, StreamingChoices):
                                 self._accumulate_streamed_delta(choice.delta)
                         self.rules.post_call_rules(input=self.response_uptil_now, model=self.model)
-                        if getattr(processed_chunk, "usage", None) is None:
+                        if not self.send_stream_usage or getattr(processed_chunk, "usage", None) is None:
                             self.chunks.append(processed_chunk)
                             return processed_chunk
                         usage_free_chunk = self._record_and_strip_usage_chunk(processed_chunk)
@@ -2185,8 +2188,7 @@ class CustomStreamWrapper:
                 except Exception:
                     complete_streaming_response = None
 
-            response: Final = self.model_response_creator()
-            response.choices = []
+            response: Final = self._new_usage_chunk()
             if complete_streaming_response is not None:
                 self._propagate_usage_cost_to_hidden_params(complete_streaming_response, self.custom_llm_provider)
 
@@ -2346,6 +2348,12 @@ class CustomStreamWrapper:
         if not callable(get):
             return False
         return any(get(field) for field in cls._CONTINUATION_DISQUALIFYING_DELTA_FIELDS)
+
+    def _new_usage_chunk(self) -> ModelResponseStream:
+        usage_chunk: Final = self.model_response_creator()
+        if self.caller_requested_stream_usage:
+            usage_chunk.choices = []
+        return usage_chunk
 
     def _record_and_strip_usage_chunk(self, chunk: ModelResponseStream) -> ModelResponseStream | None:
         self.chunks.append(chunk.model_copy())

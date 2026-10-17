@@ -215,7 +215,7 @@ def test_stream_timeout_uses_the_configured_fallback(
     )
     chunks: Final = tuple(response)
 
-    assert tuple(chunk.choices[0].delta.content for chunk in chunks if chunk.choices and chunk.choices[0].delta.content) == (
+    assert tuple(chunk.choices[0].delta.content for chunk in chunks if chunk.choices[0].delta.content) == (
         "fallback",
     )
     request_bodies: Final = tuple(json.loads(call.request.content) for call in route.calls)

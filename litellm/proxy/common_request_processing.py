@@ -259,6 +259,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     sanitize_for_log,
 )
 from litellm.proxy.policy_engine.response_retrieval import attach_post_call_pipelines_to_retrieval
+from litellm.types.litellm_params import STREAM_USAGE_INJECTED_FIELD
 from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
@@ -534,22 +535,29 @@ def model_deployments_support_stream_options(
     return all(_litellm_model_supports_stream_options(m) for m in candidate_models)
 
 
+_STREAM_USAGE_FLAGS: Final = ("_litellm_strip_stream_usage", STREAM_USAGE_INJECTED_FIELD)
+
+
 def stream_usage_tracking_updates(
     data: Mapping[str, object],
     general_settings: Mapping[str, object],
     route_type: str,
     supports_stream_options: Callable[[], bool],
 ) -> Mapping[str, object]:
-    scrub: Final = {"_litellm_strip_stream_usage": False} if "_litellm_strip_stream_usage" in data else {}
+    scrub: Final = {flag: False for flag in _STREAM_USAGE_FLAGS if flag in data}
     if data.get("stream", False) is not True:
         return scrub
     always_include: Final = general_settings.get("always_include_stream_usage")
     stream_options: Final = data.get("stream_options")
     if always_include is True:
         if "stream_options" not in data:
-            return {**scrub, "stream_options": {"include_usage": True}}
+            return {**scrub, "stream_options": {"include_usage": True}, STREAM_USAGE_INJECTED_FIELD: True}
         if isinstance(stream_options, dict) and "include_usage" not in stream_options:
-            return {**scrub, "stream_options": {**stream_options, "include_usage": True}}
+            return {
+                **scrub,
+                "stream_options": {**stream_options, "include_usage": True},
+                STREAM_USAGE_INJECTED_FIELD: True,
+            }
         return scrub
     if always_include is False and route_type == "agenerate_content_stream" and "stream_options" not in data:
         return {**scrub, "stream_options": {"include_usage": False}}

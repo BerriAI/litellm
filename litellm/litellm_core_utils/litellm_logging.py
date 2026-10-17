@@ -132,6 +132,7 @@ from litellm.types.interactions import (
     InteractionsAPIResponse,
     InteractionsAPIStreamingResponse,
 )
+from litellm.types.litellm_params import STREAM_USAGE_INJECTED_FIELD
 from litellm.types.llms.openai import (
     AllMessageValues,
     Batch,
@@ -681,6 +682,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self._pre_call_session_id: str = session_id_var.get()
         _sid: Final = kwargs.get("litellm_session_id") if kwargs else None
         self.litellm_session_id: str = str(_sid) if _sid else ""
+        self.stream_usage_injected: Final = kwargs is not None and kwargs.get(STREAM_USAGE_INJECTED_FIELD) is True
         # supports_correlation_logging is False for calls originating from the
         # sync client entry point (wrapper() in utils.py): a plain OS thread
         # has no per-call context isolation the way an asyncio Task does, and
