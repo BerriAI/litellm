@@ -2660,7 +2660,7 @@ class Logging(LiteLLMLoggingBaseClass):
         response: ModelResponse | TextCompletionResponse | ResponsesAPIResponse | InteractionsAPIResponse,
     ) -> ModelResponse | TextCompletionResponse | ResponsesAPIResponse | InteractionsAPIResponse:
         response_id: Final = self.model_call_details.get("continued_response_id")
-        if not isinstance(response_id, str) or getattr(response, "id", None) == response_id:
+        if not isinstance(response_id, str) or response.id == response_id:
             return response
         return response.model_copy(update={"id": response_id})
 
@@ -5534,7 +5534,7 @@ def _init_custom_logger_compatible_class(
     logging_integration: str,
     internal_usage_cache: DualCache | None,
     llm_router: object,
-    custom_logger_init_args: dict[str, object] | None = {},
+    custom_logger_init_args: dict[str, object] | None = None,
     raise_import_errors: bool = False,
 ) -> CustomLogger | None:
     """

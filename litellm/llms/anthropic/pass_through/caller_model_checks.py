@@ -243,8 +243,7 @@ async def caller_within_model_budget(
         return "allowed"
 
     model_max_budget: Final = getattr(user_api_key_auth, "model_max_budget", None)
-    token: Final = getattr(user_api_key_auth, "token", None)
-    if isinstance(model_max_budget, dict) and model_max_budget and token is not None:
+    if isinstance(model_max_budget, dict) and model_max_budget and user_api_key_auth.token is not None:
         try:
             await model_max_budget_limiter.is_key_within_model_budget(
                 user_api_key_dict=user_api_key_auth,
@@ -299,10 +298,8 @@ async def caller_within_model_budget(
             )
             return "denied_for_now"
 
-    end_user_model_max_budget: Final[dict[str, object] | None] = getattr(
-        user_api_key_auth, "end_user_model_max_budget", None
-    )
-    end_user_id: Final[str | None] = getattr(user_api_key_auth, "end_user_id", None)
+    end_user_model_max_budget: Final[dict[str, object] | None] = user_api_key_auth.end_user_model_max_budget
+    end_user_id: Final[str | None] = user_api_key_auth.end_user_id
     if isinstance(end_user_model_max_budget, dict) and end_user_model_max_budget and end_user_id is not None:
         try:
             await model_max_budget_limiter.is_end_user_within_model_budget(

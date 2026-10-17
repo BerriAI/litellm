@@ -318,9 +318,7 @@ def _classify_fetch_content(content: bytes, url: str, etag: str | None) -> _Fetc
         return ModelCostMapReloadUnavailable(reason=f"invalid JSON from {url}: {e}")
     if not isinstance(parsed, dict):
         return ModelCostMapReloadUnavailable(reason=f"expected a JSON object from {url}, got {type(parsed).__name__}")
-    model_cost_map: Final = cast(  # cast-ok: JSON object keys are strings by definition
-        dict[str, object], parsed
-    )
+    model_cost_map: Final = _BUNDLED_CATALOG_ADAPTER.validate_python(parsed)
     return ModelCostMapReloaded(model_cost_map=model_cost_map, revision=git_blob_id(content), etag=etag)
 
 

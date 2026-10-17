@@ -2362,8 +2362,6 @@ class CustomStreamWrapper:
         return any(get(field) for field in cls._CONTINUATION_DISQUALIFYING_DELTA_FIELDS)
 
     def _accumulate_streamed_delta(self, delta: object) -> None:
-        # Shared by the sync, async, and non-aiohttp iteration sites so answer
-        # text and the disqualifying-content latch stay in step across all three.
         get: Final = getattr(delta, "get", None)
         content: Final = get("content") if callable(get) else None
         self.response_uptil_now += content if isinstance(content, str) else ""
