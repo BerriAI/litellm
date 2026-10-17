@@ -5,8 +5,19 @@ Verifies that reasoning_effort=None returns None for all models,
 including Claude Opus 4.6.
 """
 
+from unittest.mock import patch
+
 import pytest
 
+import litellm.exceptions
+from litellm.constants import (
+    DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_MAX_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
+)
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 
 
@@ -74,3 +85,241 @@ class TestMapReasoningEffort:
             reasoning_effort="none", model="claude-4-sonnet-20250514", custom_llm_provider="anthropic"
         )
         assert result is None
+
+
+def _mock_model_info(**flags):
+    return flags
+
+
+class TestMapReasoningEffortDegradation:
+    def test_max_stays_max_when_supported(self):
+        with patch(  # test-quality-ok: capability flags live on get_model_info; HTTP cannot isolate the degrade chain
+            "litellm.utils.get_model_info",
+            return_value=_mock_model_info(
+                supports_reasoning=True,
+                supports_max_reasoning_effort=True,
+                supports_xhigh_reasoning_effort=True,
+            ),
+        ):
+            result = AnthropicConfig._map_reasoning_effort(
+                reasoning_effort="max",
+                model="test-model",
+                custom_llm_provider="anthropic",
+            )
+            assert result["type"] == "enabled"
+            assert result["budget_tokens"] == DEFAULT_REASONING_EFFORT_MAX_THINKING_BUDGET
+
+    def test_max_degrades_to_xhigh_when_only_xhigh_supported(self):
+        with patch(  # test-quality-ok: capability flags live on get_model_info; HTTP cannot isolate the degrade chain
+            "litellm.utils.get_model_info",
+            return_value=_mock_model_info(
+                supports_reasoning=True,
+                supports_max_reasoning_effort=False,
+                supports_xhigh_reasoning_effort=True,
+            ),
+        ):
+            result = AnthropicConfig._map_reasoning_effort(
+                reasoning_effort="max",
+                model="test-model",
+                custom_llm_provider="anthropic",
+            )
+            assert result["budget_tokens"] == DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET
+
+    def test_max_degrades_to_high_when_neither_max_nor_xhigh_supported(self):
+        with patch(  # test-quality-ok: capability flags live on get_model_info; HTTP cannot isolate the degrade chain
+            "litellm.utils.get_model_info",
+            return_value=_mock_model_info(
+                supports_reasoning=True,
+                supports_max_reasoning_effort=False,
+                supports_xhigh_reasoning_effort=False,
+            ),
+        ):
+            result = AnthropicConfig._map_reasoning_effort(
+                reasoning_effort="max",
+                model="test-model",
+                custom_llm_provider="anthropic",
+            )
+            assert result["budget_tokens"] == DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET
+
+    def test_max_passthrough_for_unknown_model(self):
+        with patch(  # test-quality-ok: capability flags live on get_model_info; HTTP cannot isolate the degrade chain
+            "litellm.utils.get_model_info",
+            side_effect=Exception("model not found"),
+        ):
+            result = AnthropicConfig._map_reasoning_effort(
+                reasoning_effort="max",
+                model="unknown-glm-4.6",
+                custom_llm_provider="anthropic",
+            )
+            assert result["budget_tokens"] == DEFAULT_REASONING_EFFORT_MAX_THINKING_BUDGET
+
+    def test_xhigh_stays_xhigh_when_supported(self):
+        with patch(  # test-quality-ok: capability flags live on get_model_info; HTTP cannot isolate the degrade chain
+            "litellm.utils.get_model_info",
+            return_value=_mock_model_info(
+                supports_reasoning=True,
+                supports_xhigh_reasoning_effort=True,
+            ),
+        ):
+            result = AnthropicConfig._map_reasoning_effort(
+                reasoning_effort="xhigh",
+                model="test-model",
+                custom_llm_provider="anthropic",
+            )
+            assert result["budget_tokens"] == DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET
+
+    def test_xhigh_degrades_to_high_when_unsupported(self):
+        with patch(  # test-quality-ok: capability flags live on get_model_info; HTTP cannot isolate the degrade chain
+            "litellm.utils.get_model_info",
+            return_value=_mock_model_info(
+                supports_reasoning=True,
+                supports_xhigh_reasoning_effort=False,
+            ),
+        ):
+            result = AnthropicConfig._map_reasoning_effort(
+                reasoning_effort="xhigh",
+                model="test-model",
+                custom_llm_provider="anthropic",
+            )
+            assert result["budget_tokens"] == DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET
+
+    def test_xhigh_passthrough_for_unknown_model(self):
+        with patch(  # test-quality-ok: capability flags live on get_model_info; HTTP cannot isolate the degrade chain
+            "litellm.utils.get_model_info",
+            side_effect=Exception("model not found"),
+        ):
+            result = AnthropicConfig._map_reasoning_effort(
+                reasoning_effort="xhigh",
+                model="unknown-deepseek",
+                custom_llm_provider="anthropic",
+            )
+            assert result["budget_tokens"] == DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET
+
+    def test_minimal_stays_minimal_when_supported(self):
+        with patch(  # test-quality-ok: capability flags live on get_model_info; HTTP cannot isolate the degrade chain
+            "litellm.utils.get_model_info",
+            return_value=_mock_model_info(
+                supports_reasoning=True,
+                supports_minimal_reasoning_effort=True,
+            ),
+        ):
+            result = AnthropicConfig._map_reasoning_effort(
+                reasoning_effort="minimal",
+                model="test-model",
+                custom_llm_provider="anthropic",
+            )
+            assert result["budget_tokens"] == max(DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET, 1024)
+
+    def test_minimal_degrades_to_low_when_unsupported(self):
+        with patch(  # test-quality-ok: capability flags live on get_model_info; HTTP cannot isolate the degrade chain
+            "litellm.utils.get_model_info",
+            return_value=_mock_model_info(
+                supports_reasoning=True,
+                supports_minimal_reasoning_effort=False,
+            ),
+        ):
+            result = AnthropicConfig._map_reasoning_effort(
+                reasoning_effort="minimal",
+                model="test-model",
+                custom_llm_provider="anthropic",
+            )
+            assert result["budget_tokens"] == DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET
+
+    def test_high_unchanged(self):
+        with patch(  # test-quality-ok: capability flags live on get_model_info; HTTP cannot isolate the degrade chain
+            "litellm.utils.get_model_info",
+            side_effect=Exception("model not found"),
+        ):
+            result = AnthropicConfig._map_reasoning_effort(
+                reasoning_effort="high",
+                model="unknown-model",
+                custom_llm_provider="anthropic",
+            )
+            assert result["budget_tokens"] == DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET
+
+    def test_medium_unchanged(self):
+        with patch(  # test-quality-ok: capability flags live on get_model_info; HTTP cannot isolate the degrade chain
+            "litellm.utils.get_model_info",
+            side_effect=Exception("model not found"),
+        ):
+            result = AnthropicConfig._map_reasoning_effort(
+                reasoning_effort="medium",
+                model="unknown-model",
+                custom_llm_provider="anthropic",
+            )
+            assert result["budget_tokens"] == DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET
+
+    def test_low_unchanged(self):
+        with patch(  # test-quality-ok: capability flags live on get_model_info; HTTP cannot isolate the degrade chain
+            "litellm.utils.get_model_info",
+            side_effect=Exception("model not found"),
+        ):
+            result = AnthropicConfig._map_reasoning_effort(
+                reasoning_effort="low",
+                model="unknown-model",
+                custom_llm_provider="anthropic",
+            )
+            assert result["budget_tokens"] == DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET
+
+    def test_none_returns_none(self):
+        result = AnthropicConfig._map_reasoning_effort(
+            reasoning_effort="none",
+            model="any-model",
+            custom_llm_provider="anthropic",
+        )
+        assert result is None
+
+    def test_none_value_returns_none(self):
+        result = AnthropicConfig._map_reasoning_effort(
+            reasoning_effort=None,
+            model="any-model",
+            custom_llm_provider="anthropic",
+        )
+        assert result is None
+
+    def test_adaptive_model_short_circuits_before_degradation(self):
+        with patch(  # test-quality-ok: capability flags live on get_model_info; HTTP cannot isolate the degrade chain
+            "litellm.llms.anthropic.chat.transformation.AnthropicConfig._is_adaptive_thinking_model",
+            return_value=True,
+        ):
+            result = AnthropicConfig._map_reasoning_effort(
+                reasoning_effort="max",
+                model="claude-opus-4-6",
+                custom_llm_provider="anthropic",
+            )
+            assert result["type"] == "adaptive"
+
+
+class TestReasoningEffortAliasOutputConfig:
+    @staticmethod
+    def _transform_alias(reasoning_effort: str) -> dict:
+        config = AnthropicConfig()
+        optional_params = config.map_openai_params(
+            non_default_params={"reasoning_effort": reasoning_effort},
+            optional_params={},
+            model="claude-sonnet-4-6",
+            drop_params=False,
+        )
+        return config.transform_request(
+            model="claude-sonnet-4-6",
+            messages=[{"role": "user", "content": "Hello"}],
+            optional_params={**optional_params, "max_tokens": 1024},
+            litellm_params={},
+            headers={},
+        )
+
+    def test_unsupported_alias_tier_degrades_to_an_accepted_one(self, local_model_cost_map):
+        assert self._transform_alias("xhigh")["output_config"] == {"effort": "high"}
+
+    def test_supported_alias_tier_is_kept(self, local_model_cost_map):
+        assert self._transform_alias("max")["output_config"] == {"effort": "max"}
+
+    def test_explicit_unsupported_output_config_effort_is_rejected_not_rewritten(self, local_model_cost_map):
+        with pytest.raises(litellm.exceptions.BadRequestError, match="xhigh"):
+            AnthropicConfig().transform_request(
+                model="claude-sonnet-4-6",
+                messages=[{"role": "user", "content": "Hello"}],
+                optional_params={"max_tokens": 1024, "output_config": {"effort": "xhigh"}},
+                litellm_params={},
+                headers={},
+            )
