@@ -2233,6 +2233,7 @@ class BaseLLMHTTPHandler:
         provider_specific_headers: Final = ProviderSpecificHeaderUtils.get_provider_specific_headers(
             provider_specific_header=provider_specific_header,
             custom_llm_provider=custom_llm_provider,
+            native_anthropic_messages=True,
         )
         forwarded_headers: Final = kwargs.get("headers", None)
         # Also check for extra_headers in kwargs (from config or direct calls)

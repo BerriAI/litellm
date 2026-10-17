@@ -187,9 +187,11 @@ class DatabricksBase:
         return model.removeprefix("databricks/").count(".") >= 2
 
     @staticmethod
-    def recognizes_workspace_route(api_base: str) -> bool:
+    def recognizes_workspace_route(api_base: str, model: str) -> bool:
         route: Final = urlsplit(api_base).path.rstrip("/")
-        return route == "" or route.endswith(DATABRICKS_WORKSPACE_ROUTE_PREFIXES)
+        return route.endswith(DATABRICKS_WORKSPACE_ROUTE_PREFIXES) or (
+            route == "" and DatabricksBase.uses_ai_gateway(model)
+        )
 
     @staticmethod
     def workspace_root(api_base: str) -> str:

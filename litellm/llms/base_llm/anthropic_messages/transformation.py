@@ -141,7 +141,7 @@ class BaseAnthropicMessagesConfig(ABC):
     def supports_safeguards(self) -> bool:
         return True
 
-    def serves_api_base(self, api_base: str | None) -> bool:
+    def serves_api_base(self, model: str, api_base: str | None) -> bool:
         return True
 
     def handles_web_search_natively(self) -> bool:

@@ -16,6 +16,7 @@ from litellm.llms.databricks.common_utils import (
     DATABRICKS_SERVING_ENDPOINTS_MESSAGES_PATH,
     DatabricksBase,
 )
+from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS
 from litellm.types.router import GenericLiteLLMParams
 
 DATABRICKS_UNSUPPORTED_SERVER_TOOL_PREFIXES: Final = ("web_search_", "web_fetch_", "code_execution_")
@@ -92,9 +93,9 @@ class DatabricksAnthropicMessagesConfig(DatabricksBase, AnthropicMessagesConfig)
     def handles_web_search_natively(self) -> bool:
         return False
 
-    def serves_api_base(self, api_base: str | None) -> bool:
+    def serves_api_base(self, model: str, api_base: str | None) -> bool:
         resolved_api_base: Final = self.resolve_api_base(api_base)
-        return resolved_api_base is None or self.recognizes_workspace_route(resolved_api_base)
+        return resolved_api_base is None or self.recognizes_workspace_route(resolved_api_base, model)
 
     def get_async_streaming_response_iterator(
         self,
@@ -122,17 +123,21 @@ class DatabricksAnthropicMessagesConfig(DatabricksBase, AnthropicMessagesConfig)
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> tuple[dict[str, str], str | None]:  # mutable-ok: mirrors the base signature
+        client_anthropic_headers: Final = {
+            key: value for key, value in headers.items() if key.lower() in ANTHROPIC_API_HEADERS
+        }
         messages_api_base, auth_headers = self.databricks_validate_environment(  # pyright: ignore[reportUnknownMemberType]  # the shared helper takes a bare dict
             api_key=self.resolve_api_key(api_key),
             api_base=self.resolve_api_base(api_base),
             endpoint_type="anthropic_messages",
             custom_endpoint=False,
-            headers=headers,
+            headers={key: value for key, value in headers.items() if key not in client_anthropic_headers},
             custom_user_agent=self.configured_user_agent(litellm_params),
         )
         workspace_api_base: Final = messages_api_base.removesuffix(DATABRICKS_ANTHROPIC_MESSAGES_PATH)
         normalized_headers: Final = {
-            ("content-type" if key.lower() == "content-type" else key): value for key, value in auth_headers.items()
+            ("content-type" if key.lower() == "content-type" else key): value
+            for key, value in {**auth_headers, **client_anthropic_headers}.items()
         }
         finalized_headers: Final[dict[str, str]] = self._finalize_messages_headers(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the shared helper returns a bare dict  # mutable-ok: becomes the outbound headers
             headers=normalized_headers,

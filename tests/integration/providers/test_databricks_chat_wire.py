@@ -12,7 +12,6 @@ import pytest
 from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy_process
-from integration._support.safeguards_rig import native_backend, native_message, text_block
 from integration._support.wire import Reply, Request, wire_server
 from integration.translation.chat_completions.cross_model.contracts import assert_completion
 from integration.translation.response_contracts import responses_structure
@@ -669,26 +668,38 @@ def test_databricks_messages_json_schema_refs_are_preserved_for_qwen(gateway: Ga
         assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/chat/completions")]
 
 
-@pytest.mark.parametrize("stream", (False, True), ids=("non_stream", "stream"))
-def test_databricks_messages_claude_output_format_reaches_the_native_route_unchanged(
-    gateway: Gateway, stream: bool
-) -> None:
-    message: Final = native_message(
-        f"databricks-json-schema-{uuid.uuid4().hex}",
-        content=(text_block(_JSON_CONTENT),),
-        stop_reason="end_turn",
-        model=_CLAUDE_BACKEND,
-    )
-    with wire_server(native_backend(message, stream=stream)) as wire, gateway.scenario() as scenario:
+def test_databricks_messages_claude_json_schema_refs_are_preserved_in_tool_parameters(gateway: Gateway) -> None:
+    def respond(request: Request) -> Reply:
+        assert request.method == "POST"
+        assert request.target == "/chat/completions"
+        body: Final = _JSON_OBJECT.validate_json(request.body)
+        assert body["model"] == _CLAUDE_BACKEND
+        assert "response_format" not in body
+        assert body["tools"] == [
+            {
+                "type": "function",
+                "function": {"name": "json_tool_call", "parameters": _MESSAGES_PERSON_SCHEMA},
+            }
+        ]
+        assert body["tool_choice"] == {"type": "function", "function": {"name": "json_tool_call"}}
+        return Reply(body=_chat_completion_response(_CLAUDE_BACKEND, _JSON_TOOL_CALL_MESSAGE, "tool_calls"))
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=f"databricks/{_CLAUDE_BACKEND}", api_base=wire.url, api_key=_API_KEY)
-        body: Final = _client_body("messages", model, stream)
-        status, text = _call(gateway, "messages", body)
-        received: Final = wire.drain()
-    assert [(request.method, request.target) for request in received] == [
-        ("POST", "/serving-endpoints/anthropic/v1/messages")
-    ], received
-    assert _JSON_OBJECT.validate_json(received[0].body)["output_format"] == body["output_format"], received[0].body
-    assert _outcome(status, text) == (200, _EXPECTED_JSON), text
+        response: Final = gateway.request(
+            "POST",
+            "/v1/messages",
+            {
+                "model": model,
+                "max_tokens": 64,
+                "messages": [{"role": "user", "content": _JSON_SCHEMA_PROMPT}],
+                "output_format": {"type": "json_schema", "schema": _PERSON_SCHEMA},
+            },
+        )
+        assert response.status_code == 200, response.text
+        body: Final = _JSON_OBJECT.validate_json(response.content)
+        assert body["content"] == [{"type": "text", "text": _JSON_CONTENT}]
+        assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/chat/completions")]
 
 
 _Endpoint: TypeAlias = Literal["chat", "responses", "messages"]
@@ -983,6 +994,7 @@ def _call(gateway: Gateway, endpoint: _Endpoint, body: Mapping[str, JsonValue]) 
         pytest.param("responses", _JSON_SCHEMA_BACKEND, True, id="responses-stream-qwen"),
         pytest.param("responses", _CLAUDE_BACKEND, True, id="responses-stream-claude"),
         pytest.param("messages", _JSON_SCHEMA_BACKEND, True, id="messages-stream-qwen"),
+        pytest.param("messages", _CLAUDE_BACKEND, True, id="messages-stream-claude"),
     ],
 )
 def test_databricks_json_schema_refs_are_preserved_on_every_endpoint(

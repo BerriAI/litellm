@@ -1,5 +1,7 @@
 import json
+import sys
 from collections.abc import AsyncIterator
+from types import ModuleType, SimpleNamespace
 from typing import Final
 
 import httpx
@@ -578,7 +580,9 @@ MESSAGE: Final = {
             "http://gateway.internal/dbx-anthropic/v1/messages",
         ),
         (CLAUDE_MODEL, ANTHROPIC_ROUTE_API_BASE, {"model_info": OPTED_IN_MODEL_INFO}, MESSAGES_URL),
+        (CLAUDE_MODEL, "http://gateway.internal", {}, "http://gateway.internal/chat/completions"),
         (UNITY_CATALOG_CLAUDE_MODEL, WORKSPACE_URL, {}, AI_GATEWAY_MESSAGES_URL),
+        (UNITY_CATALOG_CLAUDE_MODEL, f"{WORKSPACE_URL}/", {}, AI_GATEWAY_MESSAGES_URL),
     ],
 )
 async def test_each_api_base_reaches_a_route_the_workspace_serves(
@@ -605,6 +609,52 @@ async def test_each_api_base_reaches_a_route_the_workspace_serves(
         await upstream.close()
 
     assert [str(request.url) for request in received] == [expected_url]
+
+
+SDK_TOKEN: Final = "sdk-test-token"
+
+
+@pytest.mark.asyncio
+async def test_client_anthropic_headers_keep_the_sdk_credentials_on_the_native_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for name in ("DATABRICKS_API_BASE", "DATABRICKS_API_KEY", "DATABRICKS_CLIENT_ID", "DATABRICKS_CLIENT_SECRET"):
+        monkeypatch.delenv(name, raising=False)
+    sdk_config: Final = SimpleNamespace(host=WORKSPACE_URL, authenticate=lambda: {"Authorization": f"Bearer {SDK_TOKEN}"})
+    sdk_module: Final = ModuleType("databricks.sdk")
+    setattr(sdk_module, "WorkspaceClient", lambda: SimpleNamespace(config=sdk_config))
+    setattr(sdk_module, "useragent", SimpleNamespace(with_partner=lambda _: None))
+    package_module: Final = ModuleType("databricks")
+    package_module.__path__ = []
+    setattr(package_module, "sdk", sdk_module)
+    monkeypatch.setitem(sys.modules, "databricks", package_module)
+    monkeypatch.setitem(sys.modules, "databricks.sdk", sdk_module)
+    received: Final[list[httpx.Request]] = []  # mutable-ok: the fake workspace records what litellm sent
+
+    def workspace_answers(request: httpx.Request) -> httpx.Response:
+        received.append(request)
+        return _reply(request, MESSAGE)
+
+    upstream: Final = AsyncHTTPHandler(transport=httpx.MockTransport(workspace_answers))
+    try:
+        await litellm.anthropic.messages.acreate(
+            max_tokens=64,
+            messages=USER_TURN,
+            model=f"databricks/{CLAUDE_MODEL}",
+            api_base=DATABRICKS_API_BASE,
+            client=upstream,
+            provider_specific_header={
+                "custom_llm_provider": "databricks",
+                "extra_headers": {"anthropic-beta": "context-1m-2025-08-07", "anthropic-version": "2023-06-01"},
+                "native_anthropic_messages_only": True,
+            },
+        )
+    finally:
+        await upstream.close()
+
+    assert [str(request.url) for request in received] == [MESSAGES_URL]
+    assert received[0].headers["Authorization"] == f"Bearer {SDK_TOKEN}"
+    assert received[0].headers["anthropic-beta"] == "context-1m-2025-08-07"
 
 
 class _ChunkedStream(httpx.AsyncByteStream):
