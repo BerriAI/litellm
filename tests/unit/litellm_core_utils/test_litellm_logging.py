@@ -7400,6 +7400,26 @@ def test_payload_guardrail_cost_merges_into_existing_cost_breakdown(logging_obj)
     assert logging_obj.cost_breakdown["total_cost"] == pytest.approx(0.0000429)
 
 
+def test_cache_hit_payload_keeps_zero_components_beside_guardrail_cost(logging_obj):
+    logging_obj.set_cost_breakdown(
+        input_cost=0.00003,
+        output_cost=0.0000129,
+        total_cost=0.0000429,
+        cost_for_built_in_tools_cost_usd_dollar=0.0,
+    )
+    payload = _build_success_payload(logging_obj, {**_guardrail_kwargs(response_cost=0.0), "cache_hit": True})
+
+    assert payload is not None
+    assert payload["response_cost"] == pytest.approx(0.0003)
+    assert payload["cost_breakdown"] == {
+        "input_cost": 0.0,
+        "output_cost": 0.0,
+        "tool_usage_cost": 0.0,
+        "guardrail_cost": pytest.approx(0.0003),
+        "total_cost": pytest.approx(0.0003),
+    }
+
+
 def test_payload_without_guardrail_cost_is_unchanged(logging_obj):
     kwargs = {
         "litellm_call_id": "no-guardrail-call",
@@ -10086,9 +10106,10 @@ def test_payload_saved_cache_cost_keeps_uncached_price_when_result_stamped_zero(
         litellm.model_cost.pop(deployment_id, None)
 
 
-def test_cache_hit_payload_drops_the_breakdown_of_pricing_the_response_as_a_fresh_call():
+def test_cache_hit_payload_reports_zero_cost_though_the_call_priced_the_response_as_fresh():
     """The proxy prices a /v1/messages body for its cost header before the success callback learns it was a cache
-    hit, so the call already holds a full-price breakdown that the hit's payload must not export."""
+    hit, and a replayed stream's assembled response carries its original price, so the call holds full-price numbers
+    that the hit's payload must not export."""
     deployment_id: Final = "lit8679-stale-breakdown-deployment"
     litellm.register_model(
         model_cost={
@@ -10109,6 +10130,7 @@ def test_cache_hit_payload_drops_the_breakdown_of_pricing_the_response_as_a_fres
             usage=litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30),
         )
         header_price: Final = logging_obj.response_cost_calculator(result=response)
+        response._hidden_params["response_cost"] = header_price
         logging_obj.model_call_details["cache_hit"] = True
         now: Final = datetime.datetime.now()
         payload: Final = get_standard_logging_object_payload(
@@ -10116,6 +10138,7 @@ def test_cache_hit_payload_drops_the_breakdown_of_pricing_the_response_as_a_fres
                 "model": "gpt-5.4-nano",
                 "messages": [],
                 "cache_hit": True,
+                "response_cost": 0.0,
                 "litellm_params": logging_obj.litellm_params,
             },
             init_response_obj=response,
@@ -10129,7 +10152,8 @@ def test_cache_hit_payload_drops_the_breakdown_of_pricing_the_response_as_a_fres
         assert logging_obj.cost_breakdown is not None
         assert payload is not None
         assert payload["response_cost"] == 0.0
-        assert payload["cost_breakdown"] is None
+        assert payload["hidden_params"]["response_cost"] == 0.0
+        assert payload["cost_breakdown"] == {"input_cost": 0.0, "output_cost": 0.0, "total_cost": 0.0, "tool_usage_cost": 0.0}
         assert payload["saved_cache_cost"] == header_price
     finally:
         litellm.model_cost.pop(deployment_id, None)

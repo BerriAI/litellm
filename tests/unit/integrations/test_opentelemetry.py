@@ -497,6 +497,7 @@ class TestOpenTelemetryCostBreakdown(unittest.TestCase):
                 "metadata": {},
                 "cache_hit": True,
                 "saved_cache_cost": 0.003,
+                "cost_breakdown": {"input_cost": 0.0, "output_cost": 0.0, "total_cost": 0.0, "tool_usage_cost": 0.0},
             },
         }
 
@@ -515,7 +516,7 @@ class TestOpenTelemetryCostBreakdown(unittest.TestCase):
         mock_span.set_attribute.assert_any_call("gen_ai.cost.input_cost", 0.0)
         mock_span.set_attribute.assert_any_call("gen_ai.cost.output_cost", 0.0)
 
-    def test_non_cache_hit_span_has_no_cache_indicator(self):
+    def test_non_cache_hit_span_reports_cache_hit_false(self):
         otel = OpenTelemetry()
         mock_span = MagicMock()
 
@@ -542,7 +543,7 @@ class TestOpenTelemetryCostBreakdown(unittest.TestCase):
         otel.set_attributes(span=mock_span, kwargs=kwargs, response_obj=response_obj)
 
         call_args_list = [call[0] for call in mock_span.set_attribute.call_args_list]
-        assert all(key != "litellm.cache_hit" for key, _value in call_args_list)
+        assert ("litellm.cache_hit", False) in call_args_list
         assert all(key != "litellm.saved_cache_cost" for key, _value in call_args_list)
         assert all(not key.startswith("gen_ai.cost.") for key, _value in call_args_list)
 

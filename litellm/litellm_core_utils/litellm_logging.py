@@ -810,6 +810,10 @@ class Logging(LiteLLMLoggingBaseClass):
         new_call.sync_streaming_chunks = []
         return new_call
 
+    def reset_caching_details(self) -> None:
+        """Forget an earlier cache lookup's result, so a call that looks up again reports only its latest."""
+        self.caching_details = None
+
     def set_response_timing_metrics(self, timing_metrics: Mapping[str, float]) -> None:
         """Keep ``_response_ms`` / ``litellm_overhead_time_ms`` for a result that has no ``_hidden_params``."""
         self.response_timing_metrics = dict(timing_metrics)
@@ -6913,7 +6917,7 @@ def get_standard_logging_object_payload(
 
         # clean up litellm hidden params
         clean_hidden_params: Final = StandardLoggingPayloadSetup.get_hidden_params(hidden_params)
-        if clean_hidden_params["response_cost"] is None and raw_response_cost is not None:
+        if cache_hit is True or (clean_hidden_params["response_cost"] is None and raw_response_cost is not None):
             clean_hidden_params["response_cost"] = llm_response_cost
         if clean_hidden_params["litellm_overhead_time_ms"] is None and status == "success":
             # /v1/messages dict results and the bridge stream wrappers keep it on the logging object;
@@ -6976,7 +6980,12 @@ def get_standard_logging_object_payload(
             model_name = response_model_name
 
         request_cost_breakdown: Final = cost_breakdown_with_guardrail(
-            None if cache_hit is True else logging_obj.cost_breakdown, guardrail_cost
+            (
+                CostBreakdown(input_cost=0.0, output_cost=0.0, total_cost=0.0, tool_usage_cost=0.0)
+                if cache_hit is True
+                else logging_obj.cost_breakdown
+            ),
+            guardrail_cost,
         )
         captured_baseline: Final = logging_obj.baseline_observation
         autorouter_savings: Final = (

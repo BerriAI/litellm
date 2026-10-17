@@ -115,10 +115,6 @@ class _CacheHitView(TypedDict, total=False):
 
 _CACHE_HIT_VIEW: Final = TypeAdapter(_CacheHitView)
 
-_CACHE_HIT_COST_BREAKDOWN: Final = MappingProxyType(
-    {"input_cost": 0.0, "output_cost": 0.0, "total_cost": 0.0, "tool_usage_cost": 0.0}
-)
-
 # Dedicated so a slow exporter shutdown cannot starve the shared logging executor.
 _PROVIDER_SHUTDOWN_EXECUTOR: Final = ThreadPoolExecutor(max_workers=4, thread_name_prefix="OtelProviderShutdown")
 
@@ -2458,11 +2454,8 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                             key=f"gen_ai.cost.{key}",
                             value=value,
                         )
-            elif cache_hit:
-                for zero_cost_key, zero_cost in _CACHE_HIT_COST_BREAKDOWN.items():
-                    self.safe_set_attribute(span=span, key=f"gen_ai.cost.{zero_cost_key}", value=zero_cost)
+            self.safe_set_attribute(span=span, key=LiteLLM.CACHE_HIT, value=cache_hit)
             if cache_hit:
-                self.safe_set_attribute(span=span, key=LiteLLM.CACHE_HIT, value=True)
                 saved_cache_cost: Final = cache_view.get("saved_cache_cost")
                 if isinstance(saved_cache_cost, (int, float)):
                     self.safe_set_attribute(span=span, key=LiteLLM.SAVED_CACHE_COST, value=saved_cache_cost)

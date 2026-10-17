@@ -642,25 +642,71 @@ def test_preset_message_key_the_fit_sheds_still_never_overflows_the_span():
     assert len(finished.attributes) <= SpanLimits().max_span_attributes
 
 
-def test_attribute_budget_counts_only_keys_the_fit_does_not_overwrite():
+def test_preset_keys_the_mappers_overwrite_shed_no_message_attribute(monkeypatch):
     """Pre-set attributes the mapped set overwrites consume no slot against the span limit.
 
     A boundary-opened LLM-call span already carries a few stamped attributes,
-    most of which the mappers re-emit under the same keys. Charging those
-    against the budget reserves slots the fit can never spend and sheds
-    indexed message attributes for nothing.
+    most of which the mappers re-emit under the same keys, so a span sized to
+    exactly its mapped attributes keeps every indexed message.
     """
+    monkeypatch.setenv("OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT", "1000")
+    full = _conversation_span(["genai", "openinference"], _conversation_payload(6)).attributes
+    monkeypatch.setenv("OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT", str(len(full)))
+    cfg = OpenTelemetryV2Config(
+        exporter="in_memory",
+        legacy_compat=False,
+        mapper_names=["genai", "openinference"],
+        capture_message_content="span_only",
+    )
+    provider, exporter = providers.in_memory_provider(cfg)
+    engine = SpanEmitter(providers.get_tracer(provider, "litellm-test"), cfg)
+    span = engine.start_span(SpanRole.LLM_CALL, "chat gpt-4o")
+    span.set_attribute("gen_ai.request.model", "gpt-4o")
+    span.set_attribute("llm.input_messages.1.message.role", "stale-role")
+    engine.finish_span(
+        SpanRole.LLM_CALL,
+        span,
+        LLMCallSpanData.from_standard_logging_payload(_conversation_payload(6), capture_content=True),
+    )
+    (finished,) = exporter.get_finished_spans()
+    assert finished.dropped_attributes == 0
+    assert dict(finished.attributes) == dict(full)
+
+
+def test_a_preset_message_key_the_fit_sheds_never_overflows_an_exact_limit(monkeypatch):
+    monkeypatch.setenv("OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT", "1000")
+    full = _conversation_span(["genai", "openinference"], _conversation_payload(6)).attributes
+    limit = len(full) - 2
+    monkeypatch.setenv("OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT", str(limit))
+    cfg = OpenTelemetryV2Config(
+        exporter="in_memory",
+        legacy_compat=False,
+        mapper_names=["genai", "openinference"],
+        capture_message_content="span_only",
+    )
+    provider, exporter = providers.in_memory_provider(cfg)
+    engine = SpanEmitter(providers.get_tracer(provider, "litellm-test"), cfg)
+    span = engine.start_span(SpanRole.LLM_CALL, "chat gpt-4o")
+    span.set_attribute("llm.input_messages.1.message.role", "stale-role")
+    engine.finish_span(
+        SpanRole.LLM_CALL,
+        span,
+        LLMCallSpanData.from_standard_logging_payload(_conversation_payload(6), capture_content=True),
+    )
+    (finished,) = exporter.get_finished_spans()
+    assert finished.dropped_attributes == 0
+    assert len(finished.attributes) <= limit
+    assert finished.attributes.get("llm.input_messages.1.message.role") != "stale-role"
+
+
+def test_attribute_budget_charges_every_key_the_span_already_carries():
     cfg = OpenTelemetryV2Config(exporter="in_memory")
     provider, _exporter = providers.in_memory_provider(cfg)
     span = providers.get_tracer(provider, "litellm-test").start_span("s")
     span.set_attribute("gen_ai.request.model", "gpt-4o")
     span.set_attribute("litellm.metadata.user_api_key_alias", "edge-key")
     try:
-        assert attribute_budget(span, 0) == SpanLimits().max_span_attributes - 2
-        assert (
-            attribute_budget(span, 0, frozenset({"gen_ai.request.model"}))
-            == SpanLimits().max_span_attributes - 1
-        )
+        assert attribute_budget(span, 1) == SpanLimits().max_span_attributes - 3
     finally:
         span.end()
 

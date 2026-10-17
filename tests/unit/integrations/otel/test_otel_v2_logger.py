@@ -500,7 +500,12 @@ def test_cache_hit_without_pre_call_emits_zero_cost_span():
     but the completed call's payload still warrants a span, carrying the cache
     attributes rather than being dropped like a gate rejection."""
     logger, exporter = _logger()
-    payload = _payload(cache_hit=True, response_cost=0.0, saved_cache_cost=0.002, cost_breakdown=None)
+    payload = _payload(
+        cache_hit=True,
+        response_cost=0.0,
+        saved_cache_cost=0.002,
+        cost_breakdown={"input_cost": 0.0, "output_cost": 0.0, "total_cost": 0.0, "tool_usage_cost": 0.0},
+    )
     asyncio.run(
         logger.async_log_success_event(_kwargs(payload=payload), None, None, None)
     )
@@ -510,13 +515,14 @@ def test_cache_hit_without_pre_call_emits_zero_cost_span():
     assert {
         name: span.attributes[f"{LiteLLM.COST_PREFIX}{name}"] for name in ("total", "input", "output", "tool_usage")
     } == {"total": 0.0, "input": 0.0, "output": 0.0, "tool_usage": 0.0}
+    assert "server.address" not in span.attributes
 
 
-def test_cache_miss_span_carries_no_cache_attributes():
+def test_cache_miss_span_reports_cache_hit_false():
     logger, exporter = _logger()
     _emit_llm(logger, _kwargs(payload=_payload(cache_hit=False, saved_cache_cost=0.0)))
     (span,) = exporter.get_finished_spans()
-    assert LiteLLM.CACHE_HIT not in span.attributes
+    assert span.attributes[LiteLLM.CACHE_HIT] is False
     assert LiteLLM.SAVED_CACHE_COST not in span.attributes
 
 

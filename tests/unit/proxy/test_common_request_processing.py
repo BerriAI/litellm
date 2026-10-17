@@ -11018,3 +11018,47 @@ class TestResponseCostFromLoggingObjForBridgedMessages:
         assert logging_obj.cost_breakdown is not None
         assert logging_obj.cost_breakdown["output_cost"] == pytest.approx(expected_output)
         assert logging_obj.cost_breakdown["reasoning_cost"] == pytest.approx(expected_reasoning)
+
+
+class TestResponseCostFromLoggingObjForCacheHits:
+    BODY: Final = MappingProxyType(
+        {
+            "id": "msg_cached",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-haiku-5-5",
+            "content": [{"type": "text", "text": "cached answer"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1200, "output_tokens": 400},
+        }
+    )
+
+    @staticmethod
+    def _logging_obj():
+        from litellm.litellm_core_utils.litellm_logging import Logging
+
+        logging_obj = Logging(
+            model="claude-haiku-5-5",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="anthropic_messages",
+            start_time=datetime.datetime.now(),
+            litellm_call_id=str(uuid.uuid4()),
+            function_id="cache-hit-header",
+        )
+        logging_obj.optional_params = {}
+        return logging_obj
+
+    def test_a_v1_messages_cache_hit_costs_nothing_though_its_usage_prices_as_a_fresh_call(self):
+        fresh_cost = ProxyBaseLLMRequestProcessing._response_cost_from_logging_obj(
+            response=dict(self.BODY), logging_obj=self._logging_obj()
+        )
+        hit = self._logging_obj()
+        hit.caching_details = {"cache_hit": True, "cache_duration_ms": 2.0}
+
+        hit_cost = ProxyBaseLLMRequestProcessing._response_cost_from_logging_obj(
+            response=dict(self.BODY), logging_obj=hit
+        )
+
+        assert fresh_cost is not None and fresh_cost > 0
+        assert hit_cost == 0.0

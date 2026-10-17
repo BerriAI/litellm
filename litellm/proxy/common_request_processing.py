@@ -2653,8 +2653,12 @@ class ProxyBaseLLMRequestProcessing:
         hold the attribute at all, and Google :generateContent carries
         ``_hidden_params`` but no synchronously-populated ``response_cost``. In both
         cases the cost is read back from the logging object instead, recomputing from
-        the same calculator only when it has not been stored yet.
+        the same calculator only when it has not been stored yet. A response served
+        from the cache costs nothing, and the calculator cannot tell it from a fresh one.
         """
+        caching_details: Final = logging_obj.caching_details
+        if caching_details is not None and caching_details.get("cache_hit") is True:
+            return 0.0
         stored_cost: Final = logging_obj.model_call_details.get("response_cost")
         if isinstance(stored_cost, (int, float)):
             return float(stored_cost)

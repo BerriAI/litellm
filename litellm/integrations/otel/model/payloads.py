@@ -218,9 +218,6 @@ class LLMCost:
         )
 
 
-_CACHE_HIT_COST: Final = LLMCost(input=0.0, output=0.0, tool_usage=0.0)
-
-
 @dataclass(frozen=True)
 class SpanError:
     error_type: str | None = None
@@ -462,7 +459,6 @@ class LLMCallSpanData:
     ) -> LLMCallSpanData:
         params: Final = cast(Mapping[str, object], payload.get("model_parameters") or {})
         cache_hit: Final = as_bool(payload.get("cache_hit")) is True  # pyright: ignore[reportUnknownMemberType]  # TypedDict .get on a str key is partially unknown
-        cost_breakdown: Final = cast("Mapping[str, object] | None", payload.get("cost_breakdown"))
         # The single parse of the request's metadata — the request-vs-provider
         # model split, the response model, api base, and identity all come from
         # here rather than being re-derived from the raw payload dicts.
@@ -496,8 +492,8 @@ class LLMCallSpanData:
             finish_reasons=finish_reasons,
             error=_parse_error(payload),
             response_cost=as_float(payload.get("response_cost")),
-            cost=LLMCost.from_breakdown(cost_breakdown) if cost_breakdown or not cache_hit else _CACHE_HIT_COST,
-            server=ServerInfo.from_api_base(context.api_base),
+            cost=LLMCost.from_breakdown(cast("Mapping[str, object] | None", payload.get("cost_breakdown"))),
+            server=None if cache_hit else ServerInfo.from_api_base(context.api_base),
             identity=context.identity,
             promoted_metadata=allowlisted_metadata(context.identity.metadata, metadata_keys),
             is_streaming=as_bool(payload.get("stream")),
@@ -514,7 +510,7 @@ class LLMCallSpanData:
             session_id=session_id or None,
             embedding_output=embedding_output if capture_content else None,
             routing_attributes=routing_decision_attributes(decision),
-            cache_hit=True if cache_hit else None,
+            cache_hit=cache_hit,
             saved_cache_cost=as_float(payload.get("saved_cache_cost")) if cache_hit else None,  # pyright: ignore[reportUnknownMemberType]  # TypedDict .get on a str key is partially unknown
         )
 
