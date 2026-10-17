@@ -5034,7 +5034,7 @@ class _ProfiledCall:
 
 def _chunk_creator_calls(
     wrapper: CustomStreamWrapper,
-    chunks: Sequence[ChatCompletionChunk],
+    chunks: Sequence[ChatCompletionChunk | ModelResponseStream],
     codes: frozenset[CodeType],
 ) -> tuple[tuple[ModelResponseStream | None, ...], tuple[_ProfiledCall, ...]]:
     calls: Final[list[_ProfiledCall]] = []
@@ -5114,6 +5114,7 @@ def test_openai_chunk_creator_skips_full_chunk_dump_and_delta_rebuild(
     assert emitted_chunks[1].choices[0].delta.role is None
     assert getattr(emitted_chunks[1], "citations") == ["https://a"]
     assert getattr(emitted_chunks[1], "custom_chunk_attribute") == "custom value"
+
     assert getattr(emitted_chunks[1], "service_tier") == "default"
     chunk2_delta: Final = emitted_chunks[1].model_dump()["choices"][0]["delta"]
     assert "provider_specific_fields" in chunk2_delta
@@ -5132,6 +5133,47 @@ def test_openai_chunk_creator_skips_full_chunk_dump_and_delta_rebuild(
     assert finish_output is not None
     assert finish_output.choices[0].finish_reason == "stop"
     assert finish_output.choices[0].delta.content is None
+
+
+def test_chunk_creator_skips_full_dump_of_model_response_stream_chunks(
+    logging_obj: Logging,
+) -> None:
+    chunks: Final = (
+        ModelResponseStream(
+            id="chunk-1",
+            created=1,
+            model="claude-model",
+            choices=[StreamingChoices(index=0, delta=Delta(role="assistant", content="hello"))],
+        ),
+        ModelResponseStream(
+            id="chunk-2",
+            created=1,
+            model="claude-model",
+            choices=[StreamingChoices(index=0, delta=Delta(content=" world"))],
+            custom_chunk_attribute="custom value",
+        ),
+    )
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iter(()),
+        model="claude-model",
+        custom_llm_provider="anthropic",
+        logging_obj=logging_obj,
+    )
+    model_dump: Final = BaseModel.model_dump.__code__
+
+    outputs, calls = _chunk_creator_calls(wrapper, chunks, frozenset({model_dump}))
+    emitted_chunks: Final = tuple(output for output in outputs if output is not None)
+    full_upstream_dumps: Final = tuple(
+        call
+        for call in calls
+        if any(call.arguments["self"] is chunk for chunk in chunks) and call.arguments["include"] is None
+    )
+
+    assert full_upstream_dumps == ()
+    assert [chunk.choices[0].delta.content for chunk in emitted_chunks] == ["hello", " world"]
+    assert emitted_chunks[1].choices[0].delta.role is None
+    assert getattr(emitted_chunks[1], "custom_chunk_attribute") == "custom value"
+
 
 
 def test_openai_chunk_creator_keeps_multiple_choice_logprobs_and_extras(

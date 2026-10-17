@@ -96,7 +96,7 @@ def _prepend_upstream_choice_extras(
     if not extra_keys:
         return
     upstream_extras: Final[Mapping[str, object]] = upstream_choice.model_dump(include=set(extra_keys))
-    choice.__pydantic_extra__ = {**upstream_extras, **(choice.__pydantic_extra__ or {})}
+    choice.__pydantic_extra__ = {**upstream_extras, **(choice.__pydantic_extra__ or {})}  # rebind-ok: reuse choice
     choice.__pydantic_fields_set__.update(upstream_extras)
 
 
