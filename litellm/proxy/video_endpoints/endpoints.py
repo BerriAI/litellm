@@ -19,10 +19,16 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
     get_custom_llm_provider_from_request_query,
 )
 from litellm.proxy.image_endpoints.endpoints import batch_to_bytesio
+from litellm.proxy.video_endpoints.ownership import (
+    assert_user_can_access_video,
+    filter_video_list_for_caller,
+    record_video_owner,
+)
 from litellm.proxy.video_endpoints.utils import (
     encode_character_id_in_response,
     extract_model_from_target_model_names,
     get_custom_provider_from_data,
+    resolve_video_request_model,
     video_reference_to_id,
 )
 from litellm.types.videos.utils import (
@@ -118,6 +124,7 @@ async def video_generation(
             version=version,
         )
     else:
+        await record_video_owner(generated, user_api_key_dict)
         return generated
 
 
@@ -205,7 +212,7 @@ async def video_list(
             version=version,
         )
     else:
-        return listed
+        return await filter_video_list_for_caller(listed, user_api_key_dict)
 
 
 @router.get(
@@ -252,6 +259,8 @@ async def video_status(
         version,
     )
 
+    await assert_user_can_access_video(video_id, user_api_key_dict)
+
     # Create data with video_id
     data: Final[dict[str, object]] = {"video_id": video_id}
 
@@ -259,22 +268,25 @@ async def video_status(
     provider_from_id: Final = decoded.get("custom_llm_provider")
     model_id_from_decoded: Final = decoded.get("model_id")
 
-    custom_llm_provider: Final = (
+    explicit_provider: Final = (
         get_custom_llm_provider_from_request_headers(request=request)
         or get_custom_llm_provider_from_request_query(request=request)
         or await get_custom_llm_provider_from_request_body(request=request)
         or provider_from_id
-        or "openai"
     )
+
+    resolved_model: Final = resolve_video_request_model(
+        model_id_from_decoded=model_id_from_decoded,
+        provider_from_id=provider_from_id,
+        query_model=request.query_params.get("model"),
+        llm_router=llm_router,
+    )
+    if resolved_model:
+        data["model"] = resolved_model
+
+    custom_llm_provider: Final = explicit_provider or (None if resolved_model else "openai")
     if custom_llm_provider:
         data["custom_llm_provider"] = custom_llm_provider
-
-    # Resolve model_name from model_id if available
-    # This allows the router to automatically inject litellm_params from the model config
-    if model_id_from_decoded and llm_router:
-        resolved_model: Final = llm_router.resolve_model_name_from_model_id(model_id_from_decoded, provider_from_id)
-        if resolved_model:
-            data["model"] = resolved_model
 
     # Process request using ProxyBaseLLMRequestProcessing
     processor: Final = ProxyBaseLLMRequestProcessing(data=data, served_model=decoded.get("served_model"))
@@ -353,6 +365,8 @@ async def video_content(
         version,
     )
 
+    await assert_user_can_access_video(video_id, user_api_key_dict)
+
     # Create data with video_id
     data: Final[dict[str, object]] = {"video_id": video_id}
 
@@ -369,12 +383,14 @@ async def video_content(
     if custom_llm_provider:
         data["custom_llm_provider"] = custom_llm_provider
 
-    # Resolve model_name from model_id if available
-    # This allows the router to automatically inject litellm_params from the model config
-    if model_id_from_decoded and llm_router:
-        resolved_model: Final = llm_router.resolve_model_name_from_model_id(model_id_from_decoded, provider_from_id)
-        if resolved_model:
-            data["model"] = resolved_model
+    resolved_content_model: Final = resolve_video_request_model(
+        model_id_from_decoded=model_id_from_decoded,
+        provider_from_id=provider_from_id,
+        query_model=request.query_params.get("model"),
+        llm_router=llm_router,
+    )
+    if resolved_content_model:
+        data["model"] = resolved_content_model
     # Process request using ProxyBaseLLMRequestProcessing
     processor: Final = ProxyBaseLLMRequestProcessing(data=data, served_model=decoded.get("served_model"))
     try:
@@ -461,6 +477,8 @@ async def video_remix(
         version,
     )
 
+    await assert_user_can_access_video(video_id, user_api_key_dict)
+
     data: Final = await read_request_body(request=request)
     data["video_id"] = video_id
 
@@ -513,6 +531,7 @@ async def video_remix(
             version=version,
         )
     else:
+        await record_video_owner(remixed, user_api_key_dict)
         return remixed
 
 
@@ -779,6 +798,7 @@ async def video_edit(
         data["video_id"] = ""
     else:
         data["video_id"] = video_reference_to_id(uploaded_video)
+    await assert_user_can_access_video(data["video_id"], user_api_key_dict)
 
     decoded: Final = decode_video_id_with_provider(data["video_id"])
     provider_from_id: Final = decoded.get("custom_llm_provider")
@@ -826,6 +846,7 @@ async def video_edit(
             version=version,
         )
     else:
+        await record_video_owner(edited, user_api_key_dict)
         return edited
 
 
@@ -876,6 +897,7 @@ async def video_extension(
 
     data: Final = await read_request_body(request=request)
     data["video_id"] = video_reference_to_id(data.pop("video", None))
+    await assert_user_can_access_video(data["video_id"], user_api_key_dict)
 
     decoded: Final = decode_video_id_with_provider(data["video_id"])
     provider_from_id: Final = decoded.get("custom_llm_provider")
@@ -923,4 +945,5 @@ async def video_extension(
             version=version,
         )
     else:
+        await record_video_owner(extended, user_api_key_dict)
         return extended
