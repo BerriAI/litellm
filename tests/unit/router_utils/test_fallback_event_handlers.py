@@ -753,6 +753,104 @@ def test_can_satisfy_confirmed_routing_tags_true_when_deployment_matches():
     )
 
 
+_VERTEX_ONLY = {
+    "chain/2-vertex": [
+        {
+            "model_name": "chain/2-vertex",
+            "litellm_params": {"tags": ["inference:vertex", "default"]},
+        }
+    ],
+}
+_VERTEX_REGEX = {
+    "chain/2-vertex": [
+        {
+            "model_name": "chain/2-vertex",
+            "litellm_params": {"tags": ["inference:vertex"], "tag_regex": ["^inference:"]},
+        }
+    ],
+}
+
+
+@pytest.mark.parametrize(
+    ("deployments", "router_filtering", "model", "request_kwargs", "expected"),
+    [
+        pytest.param(_VERTEX_ONLY, True, "chain/2-vertex", None, True, id="no-request-kwargs"),
+        pytest.param(
+            _VERTEX_ONLY, True, "chain/2-vertex", {"metadata": {"tags": ["inference:bedrock"]}}, True, id="unconfirmed"
+        ),
+        pytest.param(
+            _VERTEX_ONLY,
+            True,
+            "chain/unknown",
+            {"metadata": {"tags": ["route:inference:bedrock"]}},
+            True,
+            id="no-group",
+        ),
+        pytest.param(
+            _VERTEX_ONLY,
+            False,
+            "chain/2-vertex",
+            {"metadata": {"tags": ["route:inference:bedrock"]}},
+            True,
+            id="filtering-off",
+        ),
+        pytest.param(
+            _VERTEX_ONLY,
+            False,
+            "chain/2-vertex",
+            {"metadata": {"tags": ["route:inference:bedrock"]}, "enable_tag_filtering": True},
+            False,
+            id="request-enables-filtering",
+        ),
+        pytest.param(
+            _VERTEX_ONLY,
+            True,
+            "chain/2-vertex",
+            {"metadata": {"tags": ["route:&inference:bedrock"]}},
+            False,
+            id="confirmed-required-missing",
+        ),
+        pytest.param(
+            _VERTEX_ONLY,
+            True,
+            "chain/2-vertex",
+            {"metadata": {"tags": ["route:!inference:vertex"]}},
+            False,
+            id="confirmed-excluded-all",
+        ),
+        pytest.param(
+            _VERTEX_ONLY,
+            True,
+            "chain/2-vertex",
+            {"metadata": {"tags": ["route:&inference:vertex"]}},
+            True,
+            id="confirmed-required-present",
+        ),
+        pytest.param(
+            _VERTEX_REGEX,
+            True,
+            "chain/2-vertex",
+            {"metadata": {"tags": ["route:inference:bedrock"]}},
+            True,
+            id="tag-regex-deployment",
+        ),
+    ],
+)
+def test_can_satisfy_confirmed_routing_tags_branches(deployments, router_filtering, model, request_kwargs, expected):
+    from litellm.router_strategy.tag_based_routing import can_satisfy_confirmed_routing_tags
+
+    router = TagRoutingFallbackRouter(deployments)
+    router.enable_tag_filtering = router_filtering
+    assert can_satisfy_confirmed_routing_tags(router, model, request_kwargs) is expected
+
+
+def test_is_fallback_target_tag_satisfiable_allows_entry_without_model():
+    from litellm.router_utils.fallback_event_handlers import _is_fallback_target_tag_satisfiable
+
+    router = TagRoutingFallbackRouter(_VERTEX_ONLY)
+    assert _is_fallback_target_tag_satisfiable(router, {"messages": []}, {"metadata": {"tags": ["route:x"]}}) is True
+
+
 class RecordingFailRouter:
     fallback_access_check = None
     fallback_budget_check = None
