@@ -3,19 +3,22 @@ Unit tests for DashScope rerank transformation.
 """
 
 import json
+from typing import Final
 from unittest.mock import MagicMock
 
 import httpx
 import pytest
 from pydantic import ValidationError
 
-
+from litellm import LlmProviders
 from litellm.llms.dashscope.common_utils import DashScopeError
 from litellm.llms.dashscope.rerank.transformation import (
     DEFAULT_RERANK_URL,
     DashScopeRerankConfig,
 )
+from litellm.rerank_api.rerank_utils import get_optional_rerank_params
 from litellm.types.rerank import RerankResponse
+from litellm.utils import ProviderConfigManager
 
 
 class TestDashScopeRerankURL:
@@ -112,7 +115,42 @@ class TestDashScopeRerankRequest:
             "documents",
             "top_n",
             "return_documents",
+            "instruction",
         ]
+
+    @pytest.mark.parametrize(
+        "provider",
+        [LlmProviders.DASHSCOPE, LlmProviders.QWENCLOUD, LlmProviders.QWEN_AI_PLATFORM],
+    )
+    @pytest.mark.parametrize("instruction", [None, "", "Retrieve semantically similar text."])
+    def test_instruction_reaches_provider_request(
+        self, provider: LlmProviders, instruction: str | None
+    ) -> None:
+        config: Final = ProviderConfigManager.get_provider_rerank_config(
+            model="qwen3-rerank", provider=provider, api_base=None, present_version_params=[]
+        )
+        assert config is not None
+        params: Final = get_optional_rerank_params(
+            rerank_provider_config=config,
+            model="qwen3-rerank",
+            drop_params=False,
+            query="How do I reset my password?",
+            documents=["How can I change my password?", "Open settings and choose Reset password."],
+            top_n=1,
+            return_documents=False,
+            instruction=instruction,
+        )
+        body: Final = config.transform_rerank_request(
+            model="qwen3-rerank", optional_rerank_params=params, headers={}
+        )
+        assert body == {
+            "model": "qwen3-rerank",
+            "query": "How do I reset my password?",
+            "documents": ["How can I change my password?", "Open settings and choose Reset password."],
+            "top_n": 1,
+            "return_documents": False,
+            **({"instruct": instruction} if instruction is not None else {}),
+        }
 
     def test_map_params_drops_unsupported(self):
         # qwen3-rerank accepts query/documents/top_n/return_documents.
