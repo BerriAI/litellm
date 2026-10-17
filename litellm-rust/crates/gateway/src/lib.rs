@@ -13,6 +13,7 @@ pub mod model_capacity;
 pub mod prometheus;
 pub mod rate_limits;
 pub mod request_hooks;
+pub mod s3_log;
 mod secrets;
 pub mod spend;
 pub use error::Error;
