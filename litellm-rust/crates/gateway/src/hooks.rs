@@ -30,19 +30,19 @@ pub async fn install(
     hooks: Vec<Arc<dyn Hook>>,
     observers: Vec<Arc<dyn Observer>>,
 ) -> Result<(), Error> {
-    let serves_azure = config.model_list.iter().any(is_azure);
-    if hooks.is_empty() && observers.is_empty() && !serves_azure {
+    let reads_model_info = config.model_list.iter().any(reads_model_info);
+    if hooks.is_empty() && observers.is_empty() && !reads_model_info {
         return Ok(());
     }
     let needs_cost = observers
         .iter()
         .any(|observer| observer.reads().contains(Facts::COST))
         || hooks.iter().any(|hook| hook.reads().contains(Facts::COST));
-    let catalog = match needs_cost || serves_azure {
+    let catalog = match needs_cost || reads_model_info {
         true => load_catalog(inference).await.map(Arc::new),
         false => None,
     };
-    if let Some(catalog) = catalog.as_ref().filter(|_| serves_azure) {
+    if let Some(catalog) = catalog.as_ref().filter(|_| reads_model_info) {
         inference.install_model_info(Arc::new(CostMap::new(catalog.clone())));
     }
     if hooks.is_empty() && observers.is_empty() {
@@ -204,7 +204,19 @@ fn is_azure(model: &Model) -> bool {
     }
 }
 
-/// The model cost map as the capabilities Azure's param rules read.
+/// Whether the deployment's chat param rules read model capabilities from the cost map:
+/// Azure, and the Anthropic and Bedrock chat translations.
+fn reads_model_info(model: &Model) -> bool {
+    is_azure(model)
+        || litellm_inference::provider::resolve_llm_provider(
+            &model.litellm_params.model,
+            model.litellm_params.custom_llm_provider.as_deref(),
+            "chat completions",
+        )
+        .is_ok_and(|resolved| matches!(<&str>::from(resolved.provider), "anthropic" | "bedrock"))
+}
+
+/// The model cost map as the capabilities the chat param rules read.
 struct CostMap {
     catalog: Arc<Catalog>,
     keys: HashSet<String>,

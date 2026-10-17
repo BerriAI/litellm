@@ -26,6 +26,10 @@ pub(super) fn project(
         custom_llm_provider: call.options.custom_llm_provider,
         extra_headers: call.options.extra_headers,
         timeout: call.options.timeout,
+        // Python's own settings decide what a drop would do, so a param that needs one, or a
+        // capability read from the cost map, goes back to Python.
+        drop_params: None,
+        model_info: None,
     })
 }
 

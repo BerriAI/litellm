@@ -8,6 +8,7 @@ pub use litellm_inference::RouteError as Error;
 mod common_utils;
 pub mod constants;
 pub(crate) mod handler;
+mod media;
 pub mod openai;
 mod prepare;
 pub mod stream;
@@ -25,6 +26,7 @@ pub struct ChatCompletionsRoute {
     auth: Arc<AuthServices>,
     secrets: Arc<dyn SecretSource>,
     cache: Option<litellm_cache_response::ScopedCache>,
+    media: Option<litellm_http::media::MediaFetcher>,
 }
 
 impl ChatCompletionsRoute {
@@ -38,6 +40,16 @@ impl ChatCompletionsRoute {
             auth,
             secrets,
             cache: None,
+            media: None,
+        }
+    }
+
+    /// Downloads the media URLs a provider cannot take by reference. Without one such a
+    /// request is refused as unsupported.
+    pub fn with_media(self, media: litellm_http::media::MediaFetcher) -> Self {
+        Self {
+            media: Some(media),
+            ..self
         }
     }
 
@@ -77,7 +89,8 @@ impl ChatCompletionsRoute {
         interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
         observers: Option<&ObservationSender>,
     ) -> Result<ChatCompletionsResponse, Error> {
-        let resolved = resolve_request(request)?;
+        let mut resolved = resolve_request(request)?;
+        self.inline_remote_media(&mut resolved).await?;
         let snapshot = self
             .secrets
             .resolve(&resolved.config.secret_names())

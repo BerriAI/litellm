@@ -1,7 +1,10 @@
 use litellm_auth::SecretValue;
 use litellm_core_utils::settings::Lookup;
 use litellm_http::request::with_default_headers;
-use litellm_llms::base_llm::{auth::ValidatedEnvironment, chat::transformation::BaseConfig};
+use litellm_llms::base_llm::{
+    auth::{Headers, ValidatedEnvironment},
+    chat::{params::ChatRequestContext, transformation::BaseConfig},
+};
 use litellm_llms_types::formats::chat_completions::ChatMessage;
 use litellm_secrets::source::Secrets;
 use serde_json::Value;
@@ -72,7 +75,36 @@ pub(super) fn resolve_request(
         api_base: request.api_base,
         extra_headers: request.extra_headers,
         timeout: request.timeout,
+        drop_params: request.drop_params,
+        model_info: request.model_info,
     })
+}
+
+/// The headers a transformation asked for, added to the ones already going out. A header
+/// already there (a forwarded `anthropic-beta`, say) keeps its values and gains the new ones,
+/// comma separated, the way Python unions beta headers.
+fn merge_headers(headers: &mut Headers, added: Headers) {
+    for (name, value) in added {
+        match headers
+            .iter_mut()
+            .find(|(existing, _)| existing.eq_ignore_ascii_case(&name))
+        {
+            Some((_, existing)) => {
+                let mut values: Vec<&str> = existing
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .collect();
+                for value in value.split(',').map(str::trim) {
+                    if !value.is_empty() && !values.contains(&value) {
+                        values.push(value);
+                    }
+                }
+                *existing = values.join(", ");
+            }
+            None => headers.push((name, value)),
+        }
+    }
 }
 
 fn validate_environment(
@@ -101,7 +133,7 @@ pub(super) fn prepare_provider_request(
     request: ResolvedChatCompletionsRequest<'_>,
     secrets: Secrets,
 ) -> Result<ProviderChatCompletionsRequest, Error> {
-    let environment =
+    let mut environment =
         validate_environment(&request, &request.model, request.config, secrets.as_ref())?;
     let model = request.model;
     let config = request.config;
@@ -112,8 +144,17 @@ pub(super) fn prepare_provider_request(
         &request.optional_params,
         &env_lookup,
     )?;
-    let transformed =
-        config.transform_request(&model, request.messages, request.optional_params.clone())?;
+    let context = ChatRequestContext {
+        drop_params: request.drop_params,
+        model_info: request.model_info.as_deref(),
+    };
+    let transformed = config.transform_request(
+        &model,
+        request.messages,
+        request.optional_params.clone(),
+        &context,
+    )?;
+    merge_headers(&mut environment.headers, transformed.headers);
 
     Ok(ProviderChatCompletionsRequest {
         model,
@@ -136,7 +177,7 @@ mod tests {
     use litellm_llms::base_llm::auth::{AuthScheme, resolve_auth};
     use serde_json::{Map, Value, json};
 
-    use super::{prepare_provider_request, resolve_request};
+    use super::{merge_headers, prepare_provider_request, resolve_request};
     use crate::{
         Error,
         types::{ChatCompletionsRequest, ProviderChatCompletionsRequest},
@@ -183,6 +224,8 @@ mod tests {
             custom_llm_provider: provider,
             extra_headers: None,
             timeout: None,
+            drop_params: Some(false),
+            model_info: None,
         }
     }
 
@@ -634,6 +677,29 @@ mod tests {
                 .any(|(name, value)| name.eq_ignore_ascii_case("authorization")
                     && value == "Bearer sk-test"),
             "prepare did not carry the bearer token"
+        );
+    }
+
+    #[test]
+    fn transformation_headers_union_with_the_forwarded_ones() {
+        let mut headers = vec![
+            ("Anthropic-Beta".to_owned(), "a,b".to_owned()),
+            ("x-other".to_owned(), "1".to_owned()),
+        ];
+        merge_headers(
+            &mut headers,
+            vec![
+                ("anthropic-beta".to_owned(), "b, c".to_owned()),
+                ("x-new".to_owned(), "2".to_owned()),
+            ],
+        );
+        assert_eq!(
+            headers,
+            [
+                ("Anthropic-Beta".to_owned(), "a, b, c".to_owned()),
+                ("x-other".to_owned(), "1".to_owned()),
+                ("x-new".to_owned(), "2".to_owned()),
+            ]
         );
     }
 }

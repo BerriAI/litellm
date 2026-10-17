@@ -87,6 +87,7 @@ pub struct ChatCompletionsUsage {
 }
 
 #[macro_rules_attribute::apply(crate::wire_type)]
+#[derive(Default)]
 pub struct ChatCompletionsChoiceMessage {
     pub role: String,
     // Whether an empty turn is `None` or `""` is the provider's choice, not a
@@ -94,6 +95,14 @@ pub struct ChatCompletionsChoiceMessage {
     // while Converse assigns the joined string unconditionally. Each config
     // mirrors its own, so keep this optional and serialize it even when None.
     pub content: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ChatCompletionToolCallChunk>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_blocks: Option<Vec<ChatCompletionThinkingBlock>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_specific_fields: Option<Map<String, Value>>,
 }
 
 #[macro_rules_attribute::apply(crate::wire_type)]

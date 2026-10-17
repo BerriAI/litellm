@@ -140,7 +140,7 @@ impl ChatCompletionsRoute {
             let timeout = call
                 .timeout
                 .unwrap_or(Duration::from_secs(CHAT_COMPLETIONS_TIMEOUT_SECS));
-            let resolved = resolve_request(ChatCompletionsRequest {
+            let mut resolved = resolve_request(ChatCompletionsRequest {
                 model: &call.model,
                 messages: call.messages,
                 optional_params,
@@ -149,7 +149,10 @@ impl ChatCompletionsRoute {
                 custom_llm_provider: call.custom_llm_provider.as_deref(),
                 extra_headers: call.extra_headers,
                 timeout: call.timeout,
+                drop_params: call.drop_params,
+                model_info: call.model_info,
             })?;
+            self.inline_remote_media(&mut resolved).await?;
             let snapshot = self
                 .secrets
                 .resolve(&resolved.config.secret_names())
@@ -1019,6 +1022,8 @@ mod tests {
                     custom_llm_provider: None,
                     extra_headers: None,
                     timeout: Some(Duration::from_secs(5)),
+                    drop_params: Some(false),
+                    model_info: None,
                 },
                 response_model: "public/model".into(),
                 usage: ReportedUsage::default(),
