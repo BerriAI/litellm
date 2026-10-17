@@ -385,7 +385,7 @@ async fn safeguards_add_the_dangerous_tool_use_beta_only_where_the_beta_map_has_
 #[tokio::test]
 async fn null_safeguards_are_dropped_instead_of_sent_without_their_beta(
     call: MessagesCall,
-    #[values("anthropic", "azure_ai", "deepseek", "minimax")] provider: &str,
+    #[values("anthropic", "azure_ai", "bedrock_mantle", "deepseek", "minimax")] provider: &str,
 ) {
     let upstream = upstream([message_response()]).await;
 

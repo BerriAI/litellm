@@ -44,7 +44,7 @@ DEEPSEEK_TARGET: Final = "/anthropic/v1/messages"
 SCRIPTED_TARGETS: Final = frozenset({ANTHROPIC_TARGET, DEEPSEEK_TARGET, VERTEX_TARGET, VERTEX_STREAM_TARGET})
 REPLY_TEXT: Final = "safeguards beta control"
 EXTRA_INPUTS_MESSAGE: Final = "safeguards: Extra inputs are not permitted"
-NOT_A_LIST_MESSAGE: Final = "safeguards: Input should be a valid list"
+NOT_A_LIST_MESSAGE: Final = "safeguards: Input should be a valid array"
 OVERLOADED_MESSAGE: Final = "Overloaded"
 SAFEGUARDS: Final[tuple[JsonValue, ...]] = (
     {
