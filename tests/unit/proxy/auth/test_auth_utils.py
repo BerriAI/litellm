@@ -33,6 +33,7 @@ from litellm.proxy.auth.auth_utils import (
     get_project_model_tpm_limit,
     get_request_route_template,
     is_request_body_safe,
+    pre_db_read_auth_checks,
 )
 from litellm.router import Router
 from litellm.types.utils import oauth_token_exchange_litellm_params, server_owned_wif_litellm_params
@@ -4377,10 +4378,8 @@ class TestIsRequestBodySafeBlocksVertexTargetOverrides:
         [
             lambda param: {param: "us-central1"},
             lambda param: {"extra_body": {param: "us-central1"}},
-            lambda param: {"metadata": {param: "us-central1"}},
-            lambda param: {"litellm_metadata": {param: "us-central1"}},
         ],
-        ids=["root", "extra_body", "metadata", "litellm_metadata"],
+        ids=["root", "extra_body"],
     )
     def test_vertex_target_is_rejected_without_admin_opt_in(
         self, param: str, placement: Callable[[str], dict[str, object]]
@@ -4393,6 +4392,31 @@ class TestIsRequestBodySafeBlocksVertexTargetOverrides:
                 model="gemini-2.5-flash",
                 route="/v1/chat/completions",
             )
+
+    @pytest.mark.parametrize("param", _VERTEX_TARGET_PARAMS)
+    @pytest.mark.parametrize(
+        "placement",
+        [
+            lambda param: {"metadata": {param: "us-central1"}},
+            lambda param: {"litellm_metadata": {param: "us-central1"}},
+            lambda param: {f"metadata[{param}]": "us-central1"},
+            lambda param: {"litellm_params": {"metadata": {param: "us-central1"}}},
+        ],
+        ids=["metadata", "litellm_metadata", "form_metadata", "litellm_params_metadata"],
+    )
+    def test_vertex_target_in_metadata_never_reaches_the_provider_and_is_allowed(
+        self, param: str, placement: Callable[[str], dict[str, object]]
+    ) -> None:
+        assert (
+            is_request_body_safe(
+                request_body={"model": "gemini-2.5-flash", **placement(param)},
+                general_settings={},
+                llm_router=_vertex_pinned_router([]),
+                model="gemini-2.5-flash",
+                route="/v1/chat/completions",
+            )
+            is True
+        )
 
     def test_vertex_target_is_allowed_under_proxy_wide_opt_in(self) -> None:
         assert (
@@ -4431,11 +4455,92 @@ class TestIsRequestBodySafeBlocksVertexTargetOverrides:
                 route="/v1/chat/completions",
             )
 
-    @pytest.mark.parametrize("route", ["/vertex_ai/live", "/rag/ingest", "/v1/rag/ingest"])
-    def test_routes_that_name_their_vertex_target_keep_project_and_location(self, route: str) -> None:
+    @pytest.mark.parametrize("opted_in_first", [True, False])
+    def test_group_opt_in_does_not_count_while_any_deployment_lacks_it(self, opted_in_first: bool) -> None:
+        opted_in: Final = {
+            "model_name": "gemini-group",
+            "litellm_params": {
+                "model": "vertex_ai/gemini-2.5-flash",
+                "vertex_location": "us-central1",
+                "configurable_clientside_auth_params": ["vertex_location"],
+            },
+        }
+        pinned: Final = {
+            "model_name": "gemini-group",
+            "litellm_params": {"model": "vertex_ai/gemini-2.5-flash", "vertex_location": "europe-west4"},
+        }
+        router: Final = Router(model_list=[opted_in, pinned] if opted_in_first else [pinned, opted_in])
+        with pytest.raises(ValueError, match="vertex_location"):
+            is_request_body_safe(
+                request_body={"model": "gemini-group", "vertex_location": "us-central1"},
+                general_settings={},
+                llm_router=router,
+                model="gemini-group",
+                route="/v1/chat/completions",
+            )
+
+    def test_model_with_no_deployment_has_no_opt_in(self) -> None:
+        with pytest.raises(ValueError, match="vertex_location"):
+            is_request_body_safe(
+                request_body={"model": "not-configured", "vertex_location": "us-central1"},
+                general_settings={},
+                llm_router=_vertex_pinned_router(["vertex_location"]),
+                model="not-configured",
+                route="/v1/chat/completions",
+            )
+
+    def test_group_opt_in_counts_when_every_deployment_carries_it(self) -> None:
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "gemini-group",
+                    "litellm_params": {
+                        "model": "vertex_ai/gemini-2.5-flash",
+                        "vertex_location": location,
+                        "configurable_clientside_auth_params": ["vertex_location"],
+                    },
+                }
+                for location in ("us-central1", "europe-west4")
+            ]
+        )
         assert (
             is_request_body_safe(
-                request_body={"vertex_project": "caller-project", "vertex_location": "us-central1"},
+                request_body={"model": "gemini-group", "vertex_location": "us-central1"},
+                general_settings={},
+                llm_router=router,
+                model="gemini-group",
+                route="/v1/chat/completions",
+            )
+            is True
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("opted_in", [True, False])
+    async def test_opt_in_of_the_model_named_in_a_google_route_decides(self, monkeypatch, opted_in: bool) -> None:
+        route: Final = "/v1beta/models/gemini-2.5-flash:generateContent"
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.llm_router", _vertex_pinned_router(["vertex_location"] if opted_in else [])
+        )
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+        request: Final = Request({"type": "http", "method": "POST", "path": route, "headers": [], "query_string": b""})
+        if opted_in:
+            await pre_db_read_auth_checks(request=request, request_data={"vertex_location": "us-central1"}, route=route)
+            return
+        with pytest.raises(ValueError, match="vertex_location"):
+            await pre_db_read_auth_checks(request=request, request_data={"vertex_location": "us-central1"}, route=route)
+
+    @pytest.mark.parametrize(
+        "route, kept_params",
+        [
+            ("/vertex_ai/live", _VERTEX_TARGET_PARAMS),
+            ("/rag/ingest", ("vertex_project", "vertex_location")),
+            ("/v1/rag/ingest", ("vertex_project", "vertex_location")),
+        ],
+    )
+    def test_routes_that_name_their_vertex_target_keep_it(self, route: str, kept_params: tuple[str, ...]) -> None:
+        assert (
+            is_request_body_safe(
+                request_body={param: "caller-chosen" for param in kept_params},
                 general_settings={},
                 llm_router=None,
                 model="",
@@ -4444,8 +4549,15 @@ class TestIsRequestBodySafeBlocksVertexTargetOverrides:
             is True
         )
 
-    @pytest.mark.parametrize("route", ["/vertex_ai/live", "/rag/ingest"])
-    @pytest.mark.parametrize("param", ["api_base", "vertex_ai_project", "vertex_ai_location"])
+    @pytest.mark.parametrize(
+        "route, param",
+        [
+            ("/vertex_ai/live", "api_base"),
+            ("/rag/ingest", "api_base"),
+            ("/rag/ingest", "vertex_ai_project"),
+            ("/rag/ingest", "vertex_ai_location"),
+        ],
+    )
     def test_routes_that_name_their_vertex_target_reject_every_other_banned_param(self, route: str, param: str) -> None:
         with pytest.raises(ValueError, match=param):
             is_request_body_safe(

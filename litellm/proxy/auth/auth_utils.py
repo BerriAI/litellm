@@ -36,7 +36,12 @@ from litellm.proxy.common_utils.http_parsing_utils import extract_nested_form_me
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
 )
-from litellm.types.router import CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS, Deployment, server_owned_wif_fields_present
+from litellm.types.router import (
+    CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS,
+    Deployment,
+    LiteLLMParamsTypedDict,
+    server_owned_wif_fields_present,
+)
 from litellm.types.router import reject_server_owned_wif_params as _reject_server_owned_wif_params
 from litellm.types.utils import CustomPricingLiteLLMParams, oauth_token_exchange_litellm_params
 
@@ -201,34 +206,34 @@ def _is_param_allowed(
     return False
 
 
+def deployment_clientside_auth_params(litellm_params: LiteLLMParamsTypedDict) -> CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS:
+    if "configurable_clientside_auth_params" not in litellm_params:
+        return None
+    return litellm_params["configurable_clientside_auth_params"]
+
+
 def _allow_model_level_clientside_configurable_parameters(
     model: str, param: str, request_body_value: object, llm_router: Router | None
 ) -> bool:
     """
-    Check if model is allowed to use configurable client-side params
-    - get matching model
-    - check if 'clientside_configurable_parameters' is set for model
-    -
+    The router, not the caller, picks which deployment serves the request, so an
+    opt-in counts only when every deployment the model can route to carries it
     """
     if llm_router is None:
         return False
-    # check if model is set
-    model_info = llm_router.get_model_group_info(model_group=model)
-    if model_info is None:
-        # check if wildcard model is set
-        if model.split("/", 1)[0] in provider_list:
-            model_info = llm_router.get_model_group_info(model_group=model.split("/", 1)[0])
-
-    if model_info is None:
-        return False
-
-    if model_info is None or model_info.configurable_clientside_auth_params is None:
-        return False
-
-    return _is_param_allowed(
-        param=param,
-        request_body_value=request_body_value,
-        configurable_clientside_auth_params=model_info.configurable_clientside_auth_params,
+    provider_group: Final = model.split("/", 1)[0]
+    deployments: Final = (
+        llm_router.get_model_list(model_name=model)
+        or (llm_router.get_model_list(model_name=provider_group) if provider_group in provider_list else None)
+        or ()
+    )
+    return bool(deployments) and all(
+        _is_param_allowed(
+            param=param,
+            request_body_value=request_body_value,
+            configurable_clientside_auth_params=deployment_clientside_auth_params(deployment["litellm_params"]),
+        )
+        for deployment in deployments
     )
 
 
@@ -304,16 +309,24 @@ def route_manages_mcp_servers(route: str | None) -> bool:
     return route is not None and _MCP_SERVER_MANAGEMENT_ROUTE.fullmatch(route) is not None
 
 
-_VERTEX_TARGET_NAMING_ROUTES: Final[frozenset[str]] = frozenset(("/vertex_ai/live", "/rag/ingest", "/v1/rag/ingest"))
-_CALLER_NAMED_VERTEX_TARGET_PARAMS: Final[frozenset[str]] = frozenset(("vertex_project", "vertex_location"))
+VERTEX_TARGET_PARAMS: Final[frozenset[str]] = frozenset(
+    ("vertex_project", "vertex_location", "vertex_ai_project", "vertex_ai_location")
+)
+_RAG_INGEST_VERTEX_TARGET_PARAMS: Final[frozenset[str]] = frozenset(("vertex_project", "vertex_location"))
+_ROUTE_NAMED_VERTEX_TARGET_PARAMS: Final[Mapping[str, frozenset[str]]] = MappingProxyType(
+    {
+        "/vertex_ai/live": VERTEX_TARGET_PARAMS,
+        "/rag/ingest": _RAG_INGEST_VERTEX_TARGET_PARAMS,
+        "/v1/rag/ingest": _RAG_INGEST_VERTEX_TARGET_PARAMS,
+    }
+)
 
 
-def _without_caller_named_vertex_target(request_body: Mapping[str, object], route: str | None) -> Mapping[str, object]:
-    if route not in _VERTEX_TARGET_NAMING_ROUTES:
+def _without_route_named_vertex_target(request_body: Mapping[str, object], route: str | None) -> Mapping[str, object]:
+    route_named: Final = _ROUTE_NAMED_VERTEX_TARGET_PARAMS.get(route) if route is not None else None
+    if route_named is None:
         return request_body
-    return MappingProxyType(
-        {key: value for key, value in request_body.items() if key not in _CALLER_NAMED_VERTEX_TARGET_PARAMS}
-    )
+    return MappingProxyType({key: value for key, value in request_body.items() if key not in route_named})
 
 
 _NESTED_CONFIG_KEYS: Final[tuple[str, ...]] = ("litellm_embedding_config", "extra_body")
@@ -477,6 +490,10 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     *sorted(CustomPricingLiteLLMParams.model_fields.keys()),
 )
 
+_BANNED_METADATA_PARAMS: Final[tuple[str, ...]] = tuple(
+    param for param in _BANNED_REQUEST_BODY_PARAMS if param not in VERTEX_TARGET_PARAMS
+)
+
 
 def _check_banned_params(
     body: Mapping[str, object],
@@ -486,6 +503,7 @@ def _check_banned_params(
     *,
     manages_deployments: bool = False,
     mcp_server_fields_allowed: bool = False,
+    banned_params: tuple[str, ...] = _BANNED_REQUEST_BODY_PARAMS,
 ) -> None:
     """Raise ``ValueError`` if ``body`` carries a banned param without admin opt-in.
 
@@ -500,7 +518,7 @@ def _check_banned_params(
     reject_server_owned_wif_params(wif_body)
     if not manages_deployments:
         reject_federated_credential_reference(body)
-    for param in _BANNED_REQUEST_BODY_PARAMS:
+    for param in banned_params:
         if param not in body:
             continue
         if general_settings.get("allow_client_side_credentials") is True:
@@ -666,7 +684,7 @@ def is_request_body_safe(
         raise ValueError("Rejected Request: model_list is not allowed in the request body.")
     manages_deployments: Final = route_manages_deployments(route)
     _check_banned_params(
-        _without_caller_named_vertex_target(request_body, route),
+        _without_route_named_vertex_target(request_body, route),
         general_settings,
         llm_router,
         model,
@@ -680,7 +698,14 @@ def is_request_body_safe(
     for metadata_key in _NESTED_METADATA_KEYS:
         metadata = _coerce_metadata_to_dict(request_body.get(metadata_key))
         if metadata is not None:
-            _check_banned_params(metadata, general_settings, llm_router, model, manages_deployments=manages_deployments)
+            _check_banned_params(
+                metadata,
+                general_settings,
+                llm_router,
+                model,
+                manages_deployments=manages_deployments,
+                banned_params=_BANNED_METADATA_PARAMS,
+            )
         if any(isinstance(key, str) and key.startswith(f"{metadata_key}[") for key in request_body):
             _check_banned_params(
                 extract_nested_form_metadata(form_data=request_body, prefix=f"{metadata_key}["),
@@ -688,6 +713,7 @@ def is_request_body_safe(
                 llm_router,
                 model,
                 manages_deployments=manages_deployments,
+                banned_params=_BANNED_METADATA_PARAMS,
             )
     for target in iter_request_fallback_targets(request_body):
         if isinstance(target, dict):
@@ -710,6 +736,7 @@ def is_request_body_safe(
                 llm_router,
                 model,
                 manages_deployments=manages_deployments,
+                banned_params=_BANNED_METADATA_PARAMS,
             )
     return True
 
@@ -770,7 +797,7 @@ async def pre_db_read_auth_checks(
         request_body=request_data,
         general_settings=general_settings,
         llm_router=llm_router,
-        model=request_data.get("model", ""),  # [TODO] use model passed in url as well (azure openai routes)
+        model=request_data.get("model") or _model_from_route_path(route) or "",
         route=route,
     )
 
@@ -2215,37 +2242,8 @@ def get_model_from_request(
         team_id=team_id,
     )
     model = _format_model_candidates(candidates)
-
-    # If no explicit model was found, try to extract from route
     if model is None:
-        # Parse model from route that follows the pattern /openai/deployments/{model}/*
-        match: Final = re.match(r"/openai/deployments/([^/]+)", route)
-        if match:
-            model = match.group(1)
-
-    # If still not found, extract model from Google generateContent-style routes.
-    # These routes put the model in the path and allow "/" inside the model id.
-    # Examples:
-    # - /v1beta/models/gemini-2.0-flash:generateContent
-    # - /v1beta/models/bedrock/claude-sonnet-3.7:generateContent
-    # - /models/custom/ns/model:streamGenerateContent
-    if model is None and not route.lower().startswith("/vertex"):
-        google_match = re.search(r"/(?:v1beta|beta)/models/([^:]+):", route)
-        if google_match:
-            model = google_match.group(1)
-
-    if model is None and not route.lower().startswith("/vertex"):
-        google_match = re.search(r"^/models/([^:]+):", route)
-        if google_match:
-            model = google_match.group(1)
-
-    # If still not found, extract from Vertex AI passthrough route
-    # Pattern: /vertex_ai/.../models/{model_id}:*
-    # Example: /vertex_ai/v1/.../models/gemini-1.5-pro:generateContent
-    if model is None and route.lower().startswith("/vertex"):
-        vertex_match: Final = re.search(r"/models/([^:]+)", route)
-        if vertex_match:
-            model = vertex_match.group(1)
+        model = _model_from_route_path(route)
 
     if route.lower().startswith("/bedrock"):
         bedrock_model: Final = _model_from_bedrock_route(route)
@@ -2262,6 +2260,23 @@ def get_model_from_request(
         return model if nvidia_nim_model is None else nvidia_nim_model
 
     return model
+
+
+def _model_from_route_path(route: str) -> str | None:
+    """
+    Google generateContent-style routes allow "/" inside the model id, e.g.
+    /v1beta/models/bedrock/claude-sonnet-3.7:generateContent
+    """
+    azure_deployment: Final = re.match(r"/openai/deployments/([^/]+)", route)
+    if azure_deployment:
+        return azure_deployment.group(1)
+    if route.lower().startswith("/vertex"):
+        vertex_model: Final = re.search(r"/models/([^:]+)", route)
+        return vertex_model.group(1) if vertex_model else None
+    google_model: Final = re.search(r"/(?:v1beta|beta)/models/([^:]+):", route) or re.search(
+        r"^/models/([^:]+):", route
+    )
+    return google_model.group(1) if google_model else None
 
 
 def _router_model_from_azure_route(route: str, llm_router: Router | None) -> str | None:
