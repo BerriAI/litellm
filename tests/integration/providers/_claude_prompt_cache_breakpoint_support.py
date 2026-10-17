@@ -1,5 +1,6 @@
 import json
 from collections.abc import Iterator
+from itertools import groupby
 from typing import Final, Literal
 
 from integration._support.client import Gateway, Scenario
@@ -45,15 +46,16 @@ _VERTEX_LOCATION: Final = "us-east5"
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 # Claude's 400s on api.anthropic.com, Bedrock Invoke, Bedrock Mantle, Claude Platform and Bedrock Converse, observed
 # live 2026-10-15 for PR 46391 (two marks on one tool result, and a 1h cachePoint read after a 5m one on Converse),
-# and Converse's 400 for two adjacent tool cachePoints that both set a ttl, observed live 2026-10-17 for PR 46391
+# and Converse merging a run of adjacent tool cachePoints into one point that keeps the ttl one of them sets, with a
+# 400 when more than one sets a ttl, observed live 2026-10-17 for PR 46391
 _TOOL_RESULT_MARKED_TWICE: Final = "cache_control may not be specified within `tool_result.content`"
 _TTL_ORDER: Final = "a ttl='1h' cache_control block must not come after a ttl='5m' cache_control block"
 _ADJACENT_TTLS: Final = "The additional field ttl conflicts with the existing field ttl. Remove ttl and try again."
 
 
-def _ttl_out_of_order(marks: tuple[Mark, ...]) -> bool:
-    first_short: Final = next((index for index, mark in enumerate(marks) if mark.ttl != "1h"), len(marks))
-    return any(mark.ttl == "1h" for mark in marks[first_short:])
+def _ttl_out_of_order(ttls: tuple[str | None, ...]) -> bool:
+    first_short: Final = next((index for index, ttl in enumerate(ttls) if ttl != "1h"), len(ttls))
+    return "1h" in ttls[first_short:]
 
 
 def _marked(block: JsonValue) -> bool:
@@ -73,22 +75,28 @@ def _tool_results(request: Request) -> Iterator[dict[str, JsonValue]]:
                 yield block
 
 
-def _sets_a_ttl(block: JsonValue) -> bool:
-    return isinstance(block, dict) and _ttl(block.get("cachePoint")) is not None
+def _point_ttl(block: JsonValue) -> str | None:
+    return _ttl(block.get("cachePoint")) if isinstance(block, dict) else None
 
 
-def _adjacent_tool_cache_points_set_a_ttl(request: Request) -> bool:
-    tool_config: Final = _JSON_OBJECT.validate_json(request.body).get("toolConfig")
-    tools: Final = tool_config.get("tools") if isinstance(tool_config, dict) else None
-    listed: Final = tools if isinstance(tools, list) else []
-    return any(_sets_a_ttl(first) and _sets_a_ttl(second) for first, second in zip(listed, listed[1:]))
+def _cache_point(block: JsonValue) -> bool:
+    return isinstance(block, dict) and "cachePoint" in block
+
+
+def _tool_point_runs(tools: list[JsonValue]) -> Iterator[tuple[str, ...]]:
+    for is_point, run in groupby(tools, key=_cache_point):
+        if is_point:
+            yield tuple(filter(None, map(_point_ttl, run)))
 
 
 def _converse_rejection(request: Request) -> str | None:
-    if _ttl_out_of_order(sent_marks("bedrock_converse", request)):
-        return _TTL_ORDER
-    if _adjacent_tool_cache_points_set_a_ttl(request):
+    body: Final = _JSON_OBJECT.validate_json(request.body)
+    runs: Final = tuple(_tool_point_runs(_listed_tools(body)))
+    if any(len(ttls) > 1 for ttls in runs):
         return _ADJACENT_TTLS
+    merged: Final = tuple(ttls[0] if ttls else None for ttls in runs)
+    if _ttl_out_of_order((*merged, *(mark.ttl for mark in _converse_marks_after_tools(body)))):
+        return _TTL_ORDER
     return None
 
 
@@ -232,15 +240,30 @@ def _messages(body: dict[str, JsonValue]) -> list[JsonValue]:
     return messages if isinstance(messages, list) else []
 
 
+def _listed_tools(body: dict[str, JsonValue]) -> list[JsonValue]:
+    tool_config: Final = body.get("toolConfig")
+    tools: Final = tool_config.get("tools") if isinstance(tool_config, dict) else None
+    return tools if isinstance(tools, list) else []
+
+
+def _contents(body: dict[str, JsonValue]) -> list[JsonValue]:
+    return [message.get("content") for message in _messages(body) if isinstance(message, dict)]
+
+
+def _converse_marks_after_tools(body: dict[str, JsonValue]) -> tuple[Mark, ...]:
+    return (
+        *_converse_marks(body.get("system")),
+        *(mark for content in _contents(body) for mark in _converse_marks(content)),
+    )
+
+
 def sent_marks(provider: Provider, request: Request) -> tuple[Mark, ...]:
     """Every cache mark the provider received in wire order, nested tool result content included"""
     body: Final = _JSON_OBJECT.validate_json(request.body)
-    contents: Final = [message.get("content") for message in _messages(body) if isinstance(message, dict)]
     if provider == "bedrock_converse":
-        tool_config: Final = body.get("toolConfig")
-        return (
-            *_converse_marks(tool_config.get("tools") if isinstance(tool_config, dict) else None),
-            *_converse_marks(body.get("system")),
-            *(mark for content in contents for mark in _converse_marks(content)),
-        )
-    return (*_anthropic_marks(body.get("tools")), *_anthropic_marks(body.get("system")), *_anthropic_marks(contents))
+        return (*_converse_marks(_listed_tools(body)), *_converse_marks_after_tools(body))
+    return (
+        *_anthropic_marks(body.get("tools")),
+        *_anthropic_marks(body.get("system")),
+        *_anthropic_marks(_contents(body)),
+    )
