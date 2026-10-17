@@ -5757,6 +5757,7 @@ def completion(
             litellm_trace_id=kwargs.get("litellm_trace_id"),
             litellm_session_id=kwargs.get("litellm_session_id"),
             hf_model_name=hf_model_name,
+            served_model_name=kwargs.get("served_model_name"),
             custom_prompt_dict=custom_prompt_dict,
             litellm_metadata=kwargs.get("litellm_metadata"),
             disable_add_transform_inline_image_block=disable_add_transform_inline_image_block,
