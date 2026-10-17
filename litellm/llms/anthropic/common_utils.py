@@ -108,6 +108,7 @@ def anthropic_error_frame_exception(error_type: str, message: str, status_code: 
 _BEDROCK_VERSION_SUFFIX_RE: Final = re.compile(r"-v\d+(?::\d+)?$")
 _INFERENCE_PROFILE_MINOR_RE: Final = re.compile(r":\d+$")
 _DATED_RELEASE_SUFFIX_RE: Final = re.compile(r"-\d{8}$")
+_EFFORT_ALIAS_SUFFIX_RE: Final = re.compile(r"-(?:minimal|low|medium|high|xhigh|max)$")
 _DOTTED_VERSION_RE: Final = re.compile(r"(\d)\.(\d)")
 _CLAUDE_CODE_BILLING_HEADER_PREFIX: Final = "x-anthropic-billing-header:"
 OBJECT_MAPPING_ADAPTER: Final = TypeAdapter(dict[object, object])
@@ -743,7 +744,9 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         (``4.6`` -> ``4-6``). Lets any reasonable alias (e.g.
         ``bedrock/invoke/global.anthropic.claude-opus-4-7-v1:0``,
         ``claude-sonnet-4-6-20260219`` or ``claude-sonnet-4.6``) resolve to its base
-        cost-map entry so the capability flag on that entry stays authoritative."""
+        cost-map entry so the capability flag on that entry stays authoritative.
+        A trailing effort alias (``-high``, ``-xhigh``) is tried the same way, so
+        ``claude-sonnet-5-5-high`` keeps the xhigh flag from ``claude-sonnet-5-5``."""
         prefixes: Final = (
             "bedrock/converse/",
             "bedrock/invoke/",
@@ -766,6 +769,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
                 _BEDROCK_VERSION_SUFFIX_RE.sub("", cand),
                 _INFERENCE_PROFILE_MINOR_RE.sub("", cand),
                 _DATED_RELEASE_SUFFIX_RE.sub("", cand),
+                _EFFORT_ALIAS_SUFFIX_RE.sub("", cand),
                 _DOTTED_VERSION_RE.sub(r"\1-\2", cand),
                 _strip_bedrock_id_suffixes(cand),
                 AnthropicModelInfo._strip_version_suffix(cand),

@@ -2640,6 +2640,12 @@ def test_supports_effort_level_handles_provider_prefixes(model, level, expected)
     assert AnthropicConfig._supports_effort_level(model, level, "anthropic") is expected
 
 
+def test_effort_alias_suffix_inherits_base_model_xhigh():
+    """``claude-sonnet-5-5-high`` is the same model as ``claude-sonnet-5-5``."""
+    assert AnthropicConfig._supports_effort_level("claude-sonnet-5-5-high", "xhigh", "anthropic") is True
+    assert AnthropicConfig.validate_effort_for_model("claude-sonnet-5-5-high", "xhigh", "anthropic") is None
+
+
 @pytest.mark.parametrize(
     "model,effort,expect_error",
     [
