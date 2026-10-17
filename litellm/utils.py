@@ -7357,13 +7357,14 @@ def _get_retry_after_from_exception_header(
             return -1.0
 
         retry_ms_header: Final = response_headers.get("retry-after-ms")
-        try:
-            retry_after_ms: Final = float(retry_ms_header) / 1000
-        except (TypeError, ValueError):
-            pass
-        else:
-            if math.isfinite(retry_after_ms):
-                return retry_after_ms
+        if retry_ms_header is not None:
+            try:
+                retry_after_ms: Final = float(retry_ms_header) / 1000
+            except (TypeError, ValueError):
+                pass
+            else:
+                if math.isfinite(retry_after_ms):
+                    return retry_after_ms
 
         retry_header: Final[str | None] = response_headers.get("retry-after")
         if retry_header is None:
