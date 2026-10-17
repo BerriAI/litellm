@@ -1858,6 +1858,10 @@ def _responses_ws_frame_guard(
     async def guard(frame: str) -> GuardedResponsesWsFrame:
         frame_obj: Final = _WS_FRAME.validate_json(frame)
         nested: Final = frame_obj.get("response")
+        if isinstance(nested, dict) and any(key in frame_obj for key in _GUARDED_FRAME_FIELDS):
+            raise ValueError(
+                "response.create carries input, instructions or tools both at the top level and under response"
+            )
         body: Final = _WS_FRAME.validate_python(nested) if isinstance(nested, dict) else frame_obj
         frame_data: Final = {
             **{key: _without_untrusted_metadata(key, value) for key, value in body.items() if key != "type"},
@@ -1903,12 +1907,15 @@ async def _bill_rejected_frame(
     frame_data: dict[str, object],  # mutable-ok: the spend logger stamps the failure row on the request dict
 ) -> None:
     """Only the spend logger sees a rejected frame; the other failure hooks (the rate limiter's slot release,
-    alerting) belong to the live connection, which stays open."""
+    alerting) belong to the live connection, which stays open. Billing never replaces the guardrail's own error."""
     for callback in litellm.callbacks:
         if isinstance(callback, ProxyDBLogger):
-            await callback.async_post_call_failure_hook(  # pyright: ignore[reportUnknownMemberType]  # takes a bare dict
-                request_data=frame_data, original_exception=exception, user_api_key_dict=user_api_key_dict
-            )
+            try:
+                await callback.async_post_call_failure_hook(  # pyright: ignore[reportUnknownMemberType]  # bare dict
+                    request_data=frame_data, original_exception=exception, user_api_key_dict=user_api_key_dict
+                )
+            except Exception:
+                verbose_proxy_logger.exception("[Non-Blocking] Responses WebSocket: billing a rejected frame failed")
 
 
 def _recorded_guardrail_information(bucket: object) -> tuple[Mapping[str, object], ...]:

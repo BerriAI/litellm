@@ -2092,6 +2092,40 @@ class TestResponsesWSFirstFrameModelAuth:
         assert proxy_logging_obj.pre_call_hook.await_args.kwargs["data"]["metadata"] == {"tag": "kept"}
 
     @pytest.mark.asyncio
+    async def test_frame_guard_rejects_a_frame_that_carries_input_at_both_levels(self):
+        from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
+
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=lambda **kwargs: kwargs["data"])
+        guard = _responses_ws_frame_guard(
+            {"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock(), proxy_logging_obj
+        )
+
+        with patch.object(litellm, "callbacks", []), pytest.raises(ValueError, match="both at the top level"):
+            await guard(json.dumps({"type": "response.create", "input": "forbidden", "response": {}}))
+
+        proxy_logging_obj.pre_call_hook.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_frame_guard_keeps_the_guardrail_error_when_billing_the_rejected_frame_fails(self):
+        import litellm
+        from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
+        from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
+
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=ValueError("blocked"))
+        spend_logger = MagicMock(spec=ProxyDBLogger)
+        spend_logger.async_post_call_failure_hook = AsyncMock(side_effect=RuntimeError("db down"))
+        guard = _responses_ws_frame_guard(
+            {"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock(), proxy_logging_obj
+        )
+
+        with patch.object(litellm, "callbacks", [spend_logger]), pytest.raises(ValueError, match="blocked"):
+            await guard(json.dumps({"type": "response.create", "input": "hi"}))
+
+        spend_logger.async_post_call_failure_hook.assert_awaited_once()
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("provider_rejected", [True, False])
     async def test_endpoint_books_a_provider_rejected_connection_as_a_failed_request(self, provider_rejected: bool):
         from litellm.proxy.response_api_endpoints.endpoints import (
