@@ -308,6 +308,39 @@ class TestFilterWebSearchDeployments:
         result_ids = [d["model_info"]["id"] for d in result]
         assert "deployment-3" not in result_ids
 
+    @pytest.mark.parametrize(
+        "tool",
+        [
+            {"type": "web_search_20250305", "name": "web_search"},
+            {"type": "web_search_20260209", "name": "web_search"},
+            {"type": "web_search_preview_2025_03_11"},
+            {"googleSearch": {}},
+            {"google_search": {}},
+            {"googleSearchRetrieval": {}},
+            {"enterpriseWebSearch": {}},
+        ],
+    )
+    def test_native_web_search_tools_filter_unsupported(
+        self, sample_deployments: list[dict[str, object]], tool: dict[str, object]
+    ) -> None:
+        result: Final = filter_web_search_deployments(sample_deployments, {"tools": [tool]})
+        assert result == sample_deployments[:2]
+
+    @pytest.mark.parametrize(
+        "tool",
+        [
+            {"type": "web_fetch_20250910", "name": "web_fetch"},
+            {"type": "function", "function": {"name": "web_search"}},
+            {"type": "function", "name": "googleSearch"},
+            {"urlContext": {}},
+        ],
+    )
+    def test_non_web_search_tools_preserve_deployments(
+        self, sample_deployments: list[dict[str, object]], tool: dict[str, object]
+    ) -> None:
+        result: Final = filter_web_search_deployments(sample_deployments, {"tools": [tool]})
+        assert result == sample_deployments
+
     def test_web_search_with_other_tools(self, sample_deployments):
         """Web search filtering works when mixed with other tools"""
         request_kwargs = {
