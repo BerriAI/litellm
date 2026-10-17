@@ -33,6 +33,8 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
     Reference: https://learn.microsoft.com/en-us/azure/ai-services/speech-service/rest-text-to-speech
     """
 
+    supports_streaming = True
+
     # Azure endpoint domains
     DEFAULT_VOICE = "en-US-AriaNeural"
     COGNITIVE_SERVICES_DOMAIN = "api.cognitive.microsoft.com"
@@ -73,6 +75,7 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
         aspeech: bool,
         api_base: str | None,
         api_key: str | None,
+        stream: bool = False,
         **kwargs: object,
     ) -> Union[
         "HttpxBinaryResponseContent",
@@ -129,6 +132,7 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
             extra_headers=extra_headers,
             client=None,
             _is_async=aspeech,
+            stream=stream,
         )
 
         return response

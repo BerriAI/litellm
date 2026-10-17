@@ -12249,6 +12249,7 @@ class BaseLLMHTTPHandler:
         extra_headers: dict[str, object] | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
+        stream: bool = False,
     ) -> Union[
         "HttpxBinaryResponseContent",
         Coroutine[object, object, "HttpxBinaryResponseContent"],
@@ -12270,6 +12271,7 @@ class BaseLLMHTTPHandler:
                 extra_headers=extra_headers,
                 timeout=timeout,
                 client=client if isinstance(client, AsyncHTTPHandler) else None,
+                stream=stream,
             )
 
         if client is None or not isinstance(client, HTTPHandler):
@@ -12317,6 +12319,8 @@ class BaseLLMHTTPHandler:
             },
         )
 
+        should_stream: Final = stream and text_to_speech_provider_config.supports_streaming
+
         try:
             # Determine request body type and send appropriately
             if "dict_body" in request_data:
@@ -12325,6 +12329,7 @@ class BaseLLMHTTPHandler:
                     headers=headers,
                     json=request_data["dict_body"],
                     timeout=timeout,
+                    stream=should_stream,
                 )
             elif "ssml_body" in request_data:
                 response = sync_httpx_client.post(
@@ -12332,6 +12337,7 @@ class BaseLLMHTTPHandler:
                     headers=headers,
                     data=request_data["ssml_body"],
                     timeout=timeout,
+                    stream=should_stream,
                 )
             else:
                 raise ValueError(
@@ -12365,6 +12371,7 @@ class BaseLLMHTTPHandler:
         timeout: float | httpx.Timeout,
         extra_headers: dict[str, object] | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
+        stream: bool = False,
     ) -> "HttpxBinaryResponseContent":
         """
         Async version of the text-to-speech handler.
@@ -12418,6 +12425,8 @@ class BaseLLMHTTPHandler:
             },
         )
 
+        should_stream: Final = stream and text_to_speech_provider_config.supports_streaming
+
         try:
             # Determine request body type and send appropriately
             if "dict_body" in request_data:
@@ -12426,6 +12435,7 @@ class BaseLLMHTTPHandler:
                     headers=headers,
                     json=request_data["dict_body"],
                     timeout=timeout,
+                    stream=should_stream,
                 )
             elif "ssml_body" in request_data:
                 response = await async_httpx_client.post(
@@ -12433,6 +12443,7 @@ class BaseLLMHTTPHandler:
                     headers=headers,
                     data=request_data["ssml_body"],
                     timeout=timeout,
+                    stream=should_stream,
                 )
             else:
                 raise ValueError(

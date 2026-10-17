@@ -792,6 +792,7 @@ except ImportError:
     build_billing_metrics_recorder = None
     shutdown_billing_metrics_recorder = None
 from fastapi.exception_handlers import http_exception_handler
+from starlette.background import BackgroundTask
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.websockets import WebSocketState
 
@@ -13133,16 +13134,54 @@ async def moderations(
             )
 
 
+class AudioSpeechStreamCutOff(Exception):
+    status_code: Final = status.HTTP_502_BAD_GATEWAY
+
+
+async def _audio_chunks_or_error(chunks: AsyncIterator[bytes]) -> AsyncGenerator[bytes | Exception, None]:
+    try:
+        async for chunk in chunks:
+            yield chunk
+    except Exception as error:  # noqa: BLE001  # handed to the caller, which logs it and cuts the response off
+        yield error
+
+
 async def _audio_speech_chunk_generator(
     _response: HttpxBinaryResponseContent,
+    on_upstream_error: Callable[[Exception], Awaitable[None]],
 ) -> AsyncGenerator[bytes, None]:
-    # chunk_size has a big impact on latency, it can't be too small or too large
-    # too small: latency is high
-    # too large: latency is low, but memory usage is high
-    # 8192 is a good compromise
-    _generator: Final = await _response.aiter_bytes(chunk_size=AUDIO_SPEECH_CHUNK_SIZE)
-    async for chunk in _generator:
-        yield chunk
+    upstream_still_streaming: Final = not _response.response.is_stream_consumed
+    _generator: Final = await _response.aiter_bytes(
+        chunk_size=None if upstream_still_streaming else AUDIO_SPEECH_CHUNK_SIZE
+    )
+    try:
+        async with contextlib.aclosing(_audio_chunks_or_error(_generator)) as chunks:
+            async for chunk in chunks:
+                if isinstance(chunk, Exception):
+                    await on_upstream_error(chunk)
+                    raise AudioSpeechStreamCutOff(f"The provider stopped sending audio mid-clip: {chunk}")
+                yield chunk
+    finally:
+        await _close_audio_speech_response(_response)
+
+
+async def _log_audio_speech_stream_failure(
+    error: Exception,
+    request_data: Mapping[str, object],
+    user_api_key_dict: UserAPIKeyAuth,
+    response_cost: float,
+) -> None:
+    await proxy_logging_obj.post_call_failure_hook(
+        user_api_key_dict=user_api_key_dict,
+        original_exception=error,
+        request_data={**request_data, "combined_usage_object": litellm.Usage(), "response_cost": response_cost},
+    )
+
+
+async def _close_audio_speech_response(_response: HttpxBinaryResponseContent) -> None:
+    """Release the upstream connection holding this response's audio."""
+    with contextlib.suppress(Exception):
+        await _response.aclose()
 
 
 @router.post(
@@ -13167,7 +13206,7 @@ async def audio_speech(
     """
     global proxy_logging_obj
     litellm_call_id: Final = resolve_litellm_call_id(request.headers.get("x-litellm-call-id"))
-    data: dict = {"litellm_call_id": litellm_call_id}
+    data: dict[str, object] = {"litellm_call_id": litellm_call_id}
     try:
         # Use orjson to parse JSON data, orjson speeds up requests significantly
         body: Final = await request.body()
@@ -13247,10 +13286,22 @@ async def audio_speech(
             response_format=requested_format if isinstance(requested_format, str) else None,
         )
 
+        audio: Final = cast(  # cast-ok: the speech routes return this, and resolve_speech_media_type above already reads it as such
+            HttpxBinaryResponseContent, response
+        )
         return StreamingResponse(
-            _audio_speech_chunk_generator(response),
+            _audio_speech_chunk_generator(
+                audio,
+                on_upstream_error=partial(
+                    _log_audio_speech_stream_failure,
+                    request_data=data,
+                    user_api_key_dict=user_api_key_dict,
+                    response_cost=float(hidden_params.get("response_cost") or 0.0),
+                ),
+            ),
             media_type=media_type,
             headers=custom_headers,
+            background=BackgroundTask(_close_audio_speech_response, audio),
         )
 
     except Exception as e:
