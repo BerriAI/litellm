@@ -11,12 +11,6 @@ LITELLM_BANNER: Final = """   ██╗     ██╗████████╗
 
 def show_banner():
     """Display the LiteLLM CLI banner."""
-    import litellm
-    from litellm._logging import print_startup_message
-
-    if litellm.json_logs:
-        print_startup_message(LITELLM_BANNER)
-        return
     try:
         import click
 

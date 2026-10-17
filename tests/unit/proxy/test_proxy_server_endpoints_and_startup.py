@@ -48,6 +48,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.hooks.parallel_request_limiter_v3 import RequestRateLimiterStash
 from litellm.proxy.proxy_server import app, aws_error_type_exception_handler, initialize, openai_exception_handler
 from litellm.utils import _invalidate_model_cost_lowercase_map
+from litellm.proxy.common_utils.banner import LITELLM_BANNER
 from tests._master_key import MASTER_KEY
 
 PUBLICLY_KNOWN_KEY: Final = "sk-" + "1234"
@@ -15725,3 +15726,36 @@ def test_feedback_box_is_one_json_record_in_json_mode(monkeypatch, capfd):
     assert "Give Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new" in record["message"]
     assert "Thank you for using LiteLLM! - Krrish & Ishaan" in record["message"]
     assert "\x1b[" not in record["message"]
+
+
+@pytest.mark.asyncio
+async def test_initialize_prints_the_banner_between_blank_lines_in_plain_mode(monkeypatch, capfd):
+    """Operators without JSON logs see the banner exactly as before, through show_banner()'s flushing
+    click.echo."""
+    monkeypatch.setattr(litellm, "json_logs", False)
+    monkeypatch.setenv("LITELLM_DONT_SHOW_FEEDBACK_BOX", "true")
+
+    await proxy_server_module.initialize()
+
+    out, err = capfd.readouterr()
+    assert err == ""
+    assert out.startswith(f"\n{LITELLM_BANNER}\n\n"), out
+
+
+@pytest.mark.asyncio
+async def test_initialize_prints_the_banner_as_one_json_record_in_json_mode(monkeypatch, capfd):
+    """With JSON logs on, the six banner rows are one INFO record with their indentation kept, so the
+    first line a worker writes parses like every other."""
+    monkeypatch.setattr(litellm, "json_logs", True)
+    monkeypatch.setattr(sys, "excepthook", sys.excepthook)  # turn_on_json swaps it; put it back at teardown
+    monkeypatch.setenv("LITELLM_DONT_SHOW_FEEDBACK_BOX", "true")
+    turn_on_json()
+
+    await proxy_server_module.initialize()
+
+    out, err = capfd.readouterr()
+    assert err == ""
+    records: Final = [json.loads(raw) for raw in out.splitlines() if raw.strip()]
+    banner_records: Final = [record for record in records if record["message"] == LITELLM_BANNER]
+    assert len(banner_records) == 1, records
+    assert banner_records[0]["level"] == "INFO"

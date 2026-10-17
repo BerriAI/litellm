@@ -9550,9 +9550,14 @@ async def initialize(
         master_key, \
         user_custom_auth, \
         prisma_client
-    from litellm.proxy.common_utils.banner import show_banner
+    from litellm.proxy.common_utils.banner import LITELLM_BANNER, show_banner
 
-    show_banner()
+    # show_banner() also serves the `lite` shell, which runs against an uninitialized SDK (#46803), so
+    # the JSON-mode choice stays out of it.
+    if litellm.json_logs:
+        print_startup_message(LITELLM_BANNER)
+    else:
+        show_banner()
     if os.getenv("LITELLM_DONT_SHOW_FEEDBACK_BOX", "").lower() != "true":
         generate_feedback_box()
     user_model = model
