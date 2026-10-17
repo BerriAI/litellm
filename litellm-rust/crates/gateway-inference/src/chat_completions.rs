@@ -5,7 +5,7 @@ use axum::{
     Json,
     body::Bytes,
     extract::{Path, State},
-    http::header::CONTENT_TYPE,
+    http::{HeaderMap, header::CONTENT_TYPE},
     response::{IntoResponse, Response},
 };
 use litellm_host_http::Sse;
@@ -16,23 +16,27 @@ use litellm_inference_chat::{
 };
 use serde_json::{Map, Value};
 
+use litellm_gateway_hooks::Route;
+
 use crate::{Deployment, Error, Gateway, JsonBody, request};
 
 pub(crate) async fn create(
     State(gateway): State<Arc<Gateway>>,
     identity: AuthenticatedRequest,
+    headers: HeaderMap,
     body: JsonBody,
 ) -> Result<impl IntoResponse, Error> {
-    handle(&gateway, &identity, body, None).await
+    handle(&gateway, &identity, &headers, body, None).await
 }
 
 pub(crate) async fn create_from_model_path(
     State(gateway): State<Arc<Gateway>>,
     identity: AuthenticatedRequest,
     Path(model): Path<String>,
+    headers: HeaderMap,
     body: JsonBody,
 ) -> Result<impl IntoResponse, Error> {
-    handle(&gateway, &identity, body, Some(&model)).await
+    handle(&gateway, &identity, &headers, body, Some(&model)).await
 }
 
 /// The body, naming the model from the request path when it names none itself.
@@ -49,6 +53,7 @@ fn with_model(body: Map<String, Value>, model: Option<&str>) -> Map<String, Valu
 async fn handle(
     gateway: &Gateway,
     identity: &AuthenticatedRequest,
+    headers: &HeaderMap,
     JsonBody { object, raw }: JsonBody,
     model: Option<&str>,
 ) -> Result<Response, Error> {
@@ -56,10 +61,28 @@ async fn handle(
     gateway.check_body(&body)?;
     let group = request::resolve_group(gateway, &body)?;
     let name = request::model_name(&body)?.to_owned();
-    let (body, cache_options) = crate::caching::prepare(identity, body)?;
+    let tracking = crate::hooks::admit(
+        gateway,
+        identity,
+        Route::ChatCompletions,
+        headers,
+        &raw,
+        &body,
+        &name,
+    )
+    .await?;
+    let (mut body, cache_options) = crate::caching::prepare(identity, body)?;
+    let edit = |body: &mut Map<String, Value>| {
+        if let Some(tracking) = &tracking {
+            tracking.edit_body(body);
+        }
+    };
+    edit(&mut body);
     let reparse = || -> Result<Map<String, Value>, Error> {
         let body = with_model(request::object(&raw)?, model);
-        Ok(crate::caching::prepare(identity, body)?.0)
+        let mut body = crate::caching::prepare(identity, body)?.0;
+        edit(&mut body);
+        Ok(body)
     };
     let route = gateway.chat_completions.clone();
     let route = match &gateway.cache {
@@ -85,6 +108,9 @@ async fn handle(
                 let route = route.clone();
                 let cache_headers = cache_headers.clone();
                 let name = name.as_str();
+                if let Some(tracking) = &tracking {
+                    tracking.attempt(name, &attempt);
+                }
                 async move {
                     let deployment = attempt.deployment;
                     crate::observe::record(name, deployment);
@@ -120,8 +146,13 @@ async fn handle(
             Error::failure,
         )
         .await
-        .ok_or_else(|| Error::UnknownModel(name.clone()))??;
-    Ok(cache_headers.apply(request::hold(routed)))
+        .ok_or_else(|| Error::UnknownModel(name.clone()))
+        .and_then(|routed| routed)
+        .map(|routed| cache_headers.apply(request::hold(routed)));
+    match tracking {
+        Some(tracking) => tracking.finish(routed).await,
+        None => routed,
+    }
 }
 
 /// The `messages` array and the remaining optional params of a chat request.

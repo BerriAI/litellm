@@ -8,11 +8,11 @@ use rstest::rstest;
 use serde_json::json;
 
 const FIXTURES: &str = r#"
-INSERT INTO "LiteLLM_TeamTable" (team_id, blocked, models, spend, max_budget, metadata, tpm_limit,
-                                 model_id, created_at, updated_at)
-  VALUES ('team-1', true, ARRAY['gpt-a'], 2.5, 10.0, '{"require_trace_id": true}', 100, NULL,
-          now(), now()),
-         ('team-2', false, ARRAY[]::text[], 0, NULL, '{}', NULL, NULL, now(), now());
+INSERT INTO "LiteLLM_TeamTable" (team_id, team_alias, blocked, models, spend, max_budget, metadata,
+                                 tpm_limit, model_id, created_at, updated_at)
+  VALUES ('team-1', 'research', true, ARRAY['gpt-a'], 2.5, 10.0, '{"require_trace_id": true}', 100,
+          NULL, now(), now()),
+         ('team-2', NULL, false, ARRAY[]::text[], 0, NULL, '{}', NULL, NULL, now(), now());
 INSERT INTO "LiteLLM_UserTable" (user_id, models, rpm_limit, max_budget, policies)
   VALUES ('user-1', ARRAY['gpt-b'], 5, 1.0, ARRAY['p']),
          ('user-2', ARRAY[]::text[], NULL, 2.0, ARRAY[]::text[]);
@@ -113,6 +113,7 @@ async fn reads_the_gating_columns_of_a_verification_token_and_its_owners() {
             restrictions: Restrictions::default(),
             team_id: Some("team-1".into()),
             team: Some(Team {
+                alias: Some("research".into()),
                 blocked: true,
                 models: vec!["gpt-a".into()],
                 spend: 2.5,

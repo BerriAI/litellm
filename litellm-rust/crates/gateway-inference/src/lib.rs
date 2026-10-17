@@ -8,13 +8,14 @@ mod caching;
 mod chat_completions;
 mod client_side;
 mod error;
+mod hooks;
 pub mod messages;
 pub mod observe;
 mod ocr;
 mod request;
 mod responses;
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use axum::{Router, routing::post};
 use litellm_http::{ClientVariant, HttpClientConfig, media::UrlPolicy};
@@ -28,11 +29,13 @@ use litellm_llms::base_llm::ocr::{handler::OcrClient, settings::OcrSettings};
 use litellm_secrets::source::SecretSource;
 
 pub use error::Error;
+pub use hooks::Hooks;
 pub use litellm_router::{Deployment, Error as RoutingError, Router as ModelRouter};
 pub use request::{JsonBody, JsonObject, RequestId};
 
 pub struct Gateway {
     cache: Option<Arc<dyn litellm_cache_response::ResponseCacheService>>,
+    hooks: OnceLock<Hooks>,
     allow_client_side_credentials: bool,
     pub audio_transcription: AudioTranscriptionRoute,
     pub chat_completions: ChatCompletionsRoute,
@@ -51,6 +54,17 @@ impl Gateway {
             cache: Some(cache),
             ..self
         }
+    }
+
+    /// Runs `/v1/messages` and chat completions requests through `hooks`. Only the first call
+    /// takes effect.
+    pub fn install_hooks(&self, hooks: Hooks) {
+        let _ = self.hooks.set(hooks);
+    }
+
+    /// The hooks requests run through, once installed.
+    pub fn hooks(&self) -> Option<&Hooks> {
+        self.hooks.get()
     }
 
     /// `general_settings.allow_client_side_credentials`: lets a request body name the
@@ -83,6 +97,7 @@ impl Gateway {
         let auth = resources.auth.clone();
         Ok(Self {
             cache: None,
+            hooks: OnceLock::new(),
             allow_client_side_credentials: false,
             audio_transcription: AudioTranscriptionRoute::new(
                 provider.clone(),

@@ -288,6 +288,7 @@ impl Authenticator for VirtualKeyAuthenticator {
                     models: key.models,
                     routes: key.allowed_routes,
                     team_id: key.team_id,
+                    profile: key.profile,
                 }),
             })
         })
@@ -415,6 +416,7 @@ mod tests {
                 },
                 allowed_routes: AllowedRoutes::default(),
                 team_id: Some("team-1".into()),
+                profile: Default::default(),
             },
         );
         store.put(
@@ -424,6 +426,7 @@ mod tests {
                 models: KeyModels::default(),
                 allowed_routes: AllowedRoutes::new(strings(&["anthropic_routes"])),
                 team_id: None,
+                profile: Default::default(),
             },
         );
         store.put(

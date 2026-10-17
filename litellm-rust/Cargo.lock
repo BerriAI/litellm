@@ -3757,12 +3757,14 @@ dependencies = [
  "litellm-config",
  "litellm-db",
  "litellm-gateway-auth",
+ "litellm-gateway-hooks",
  "litellm-gateway-inference",
  "litellm-gateway-mcp",
  "litellm-gateway-ui",
  "litellm-http",
  "litellm-inference",
  "litellm-llms",
+ "litellm-model-catalog",
  "litellm-router",
  "litellm-secrets",
  "litellm-tracing",
@@ -3807,6 +3809,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-gateway-hooks"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "futures-util",
+ "http 1.4.2",
+ "litellm-cost",
+ "litellm-model-catalog",
+ "memchr",
+ "rstest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "litellm-gateway-inference"
 version = "0.1.0"
 dependencies = [
@@ -3818,6 +3837,7 @@ dependencies = [
  "litellm-cache-memory",
  "litellm-cache-response",
  "litellm-gateway-auth",
+ "litellm-gateway-hooks",
  "litellm-host",
  "litellm-host-http",
  "litellm-http",
@@ -3831,12 +3851,14 @@ dependencies = [
  "litellm-llms-types",
  "litellm-router",
  "litellm-secrets",
+ "memchr",
  "rstest",
  "serde",
  "serde_json",
  "thiserror 2.0.19",
  "tokio",
  "tower",
+ "uuid",
  "wiremock",
 ]
 

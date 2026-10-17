@@ -108,6 +108,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             )));
         coordination.start(inference.clone(), keys.clone(), shutdown.clone());
     }
+    // Built-in hooks and observers are added here as the gateway gains them.
+    litellm_gateway::hooks::install(&inference, &config, Vec::new(), Vec::new()).await?;
     let listener = tokio::net::TcpListener::bind((settings.host.as_str(), settings.port)).await?;
     let address = listener.local_addr()?;
     // Without TCP_NODELAY, Nagle holds small SSE chunks until the client's delayed ACK (~40 ms per stream).
@@ -124,7 +126,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let metrics = litellm_gateway::metrics::Metrics::new(&config, draining.flag());
     let metrics_auth = litellm_gateway::metrics_auth(&config, inference.secrets.clone());
     let app = litellm_gateway::with_ops(
-        litellm_gateway::router_with_key_cache(inference, &config, ui, mcp_router, keys),
+        litellm_gateway::router_with_key_cache(inference.clone(), &config, ui, mcp_router, keys),
         metrics,
         draining.clone(),
         metrics_auth,
@@ -139,6 +141,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     )
     .await;
     shutdown.cancel();
+    litellm_gateway::hooks::close(&inference).await;
     if let Some(mcp) = mcp {
         mcp.close().await;
     }

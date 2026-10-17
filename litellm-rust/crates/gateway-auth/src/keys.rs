@@ -1,6 +1,7 @@
 use std::{future::Future, pin::Pin, sync::Arc, time::SystemTime};
 
 use litellm_auth_types::SecretValue;
+use serde_json::{Map, Value};
 
 use crate::{KeyError, hash_token};
 
@@ -288,6 +289,16 @@ pub enum Owner {
     Proxy,
 }
 
+/// Who a key belongs to beyond what gates it, for hooks and spend records.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct KeyProfile {
+    pub alias: Option<String>,
+    pub user_id: Option<String>,
+    pub team_alias: Option<String>,
+    pub metadata: Arc<Map<String, Value>>,
+    pub team_metadata: Arc<Map<String, Value>>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum KeyStatus {
     Active {
@@ -296,6 +307,7 @@ pub enum KeyStatus {
         allowed_routes: AllowedRoutes,
         /// The key's team, whose team-scoped deployments the key may use.
         team_id: Option<String>,
+        profile: Arc<KeyProfile>,
     },
     Blocked,
     Revoked,
@@ -313,6 +325,7 @@ impl KeyStatus {
             models: models.into(),
             allowed_routes: AllowedRoutes::default(),
             team_id: None,
+            profile: Arc::default(),
         }
     }
 }
@@ -325,6 +338,7 @@ pub struct VerifiedKey {
     pub models: KeyModels,
     pub allowed_routes: AllowedRoutes,
     pub team_id: Option<String>,
+    pub profile: Arc<KeyProfile>,
 }
 
 pub type LookupFuture<'a> =
@@ -382,6 +396,7 @@ pub async fn verify_key(
             models,
             allowed_routes,
             team_id,
+            profile,
         }) => {
             if expired(expires_at) {
                 return Err(KeyError::Expired);
@@ -392,6 +407,7 @@ pub async fn verify_key(
                 models,
                 allowed_routes,
                 team_id,
+                profile,
             })
         }
         Some(KeyStatus::Refused {

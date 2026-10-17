@@ -59,6 +59,7 @@ pub struct KeyGrant {
     /// The key's team. A deployment owned by a team serves only that team's keys, as the
     /// proxy's `filter_team_based_models` does; a teamless key gets shared deployments only.
     pub team_id: Option<String>,
+    pub profile: Arc<crate::keys::KeyProfile>,
 }
 
 impl KeyGrant {
