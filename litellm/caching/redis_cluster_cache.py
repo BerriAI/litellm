@@ -139,6 +139,13 @@ class RedisClusterCache(RedisCache):
         async_redis_cluster_client: Final = self.init_async_client()
         return await async_redis_cluster_client.mget_nonatomic(keys=keys)
 
+    async def disconnect(self) -> None:
+        try:
+            if self.redis_async_client is not None:
+                await self.redis_async_client.aclose()
+        finally:
+            await super().disconnect()
+
     async def test_connection(self) -> dict:
         """
         Test the Redis Cluster connection.

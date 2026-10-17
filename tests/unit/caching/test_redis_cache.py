@@ -425,6 +425,23 @@ def test_delete_cache_namespaces_key(namespace, expected, monkeypatch, redis_no_
     mock_client.delete.assert_called_once_with(expected)
 
 
+@pytest.mark.asyncio
+async def test_disconnect_with_no_connection_pool_does_not_raise():
+    """RedisCache.disconnect() must not blow up when async_redis_conn_pool is None,
+    which is the case in cluster mode (get_redis_connection_pool returns None for
+    startup_nodes configs). Regression test for
+    https://github.com/BerriAI/litellm/issues/37137."""
+    redis_cache = RedisCache.__new__(RedisCache)
+    redis_cache.async_redis_conn_pool = None
+    redis_cache.redis_kwargs = {}
+    mock_redis_client = MagicMock()
+    redis_cache.redis_client = mock_redis_client
+
+    await redis_cache.disconnect()
+
+    mock_redis_client.close.assert_called_once()
+
+
 def _closed_port() -> int:
     """A port with nothing listening, so Redis calls fail fast and deterministically."""
     import socket
