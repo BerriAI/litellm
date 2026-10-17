@@ -2462,7 +2462,6 @@ def test_openai_gateway_timeout_error():
     Test that the OpenAI gateway timeout error is raised
     """
     openai_client = OpenAI()
-    mapped_target = openai_client.chat.completions.with_raw_response  # type: ignore
 
     def _return_exception(*args, **kwargs):
 
@@ -2498,8 +2497,8 @@ def test_openai_gateway_timeout_error():
 
     with pytest.raises(litellm.Timeout) as exc_info:
         with patch.object(
-            mapped_target,
-            "create",
+            openai_client,
+            "post",
             side_effect=_return_exception,
         ):
             litellm.completion(
