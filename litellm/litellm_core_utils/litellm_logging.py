@@ -2871,11 +2871,14 @@ class Logging(LiteLLMLoggingBaseClass):
         if complete_streaming_response is not None:
             self.success_handler(result=complete_streaming_response)
 
-    async def async_flush_passthrough_collected_chunks(self, collector: "PassthroughStreamCollector"):
+    async def async_flush_passthrough_collected_chunks(self, collector: "PassthroughStreamCollector") -> bool:
+        """Log the response the collector built from the stream, and say whether there was one to log."""
         complete_streaming_response: Final = collector.build_logged_response(litellm_logging_obj=self)
 
-        if complete_streaming_response is not None:
-            await self.async_success_handler(result=complete_streaming_response)
+        if complete_streaming_response is None:
+            return False
+        await self.async_success_handler(result=complete_streaming_response)
+        return True
 
     def _restore_correlation_context(self) -> None:
         """Restore trace_id/session_id contextvars to their pre-call value.

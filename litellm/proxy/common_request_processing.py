@@ -3650,8 +3650,8 @@ class ProxyBaseLLMRequestProcessing:
         except _ClientDisconnectedBeforeFirstChunk:
             with anyio.CancelScope(shield=True):
                 if not await _close_upstream_and_log_its_spend(generator):
-                    # No spend row settles a stream that returned nothing, so release what the request holds, as
-                    # chat completions does.
+                    # No spend row settles a stream that returned nothing it could log, so release what the request
+                    # holds, as chat completions does.
                     from litellm.proxy.spend_tracking.budget_reservation import (
                         release_budget_reservation_on_cancel,  # pyright: ignore[reportUnknownVariableType]  # takes the untyped reservation dict
                     )

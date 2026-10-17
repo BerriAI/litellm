@@ -786,6 +786,32 @@ async def test_bedrock_stream_passthrough_logs_cost_and_standard_metadata(endpoi
     assert standard_logging_object["model"] == f"bedrock/{CONVERSE_MODEL}"
 
 
+@pytest.mark.asyncio
+async def test_bedrock_stream_flush_says_whether_it_logged_the_stream() -> None:
+    stream: Final = _converse_text_stream(["Converse response"])
+    part_of_the_first_frame: Final = _stream_collector(CONVERSE_STREAM_ENDPOINT)
+    _feed(part_of_the_first_frame, stream[:12])
+    whole_stream: Final = _stream_collector(CONVERSE_STREAM_ENDPOINT)
+    _feed(whole_stream, stream)
+    nothing_logged: Final = _CaptureAsyncSuccessCallback()
+    logged: Final = _CaptureAsyncSuccessCallback()
+
+    assert (
+        await _stream_logging_obj(CONVERSE_STREAM_ENDPOINT, [nothing_logged]).async_flush_passthrough_collected_chunks(
+            collector=part_of_the_first_frame
+        )
+        is False
+    )
+    assert nothing_logged.kwargs is None
+    assert (
+        await _stream_logging_obj(CONVERSE_STREAM_ENDPOINT, [logged]).async_flush_passthrough_collected_chunks(
+            collector=whole_stream
+        )
+        is True
+    )
+    assert logged.kwargs is not None
+
+
 def test_converse_stream_collector_keeps_tool_calls_between_text_runs():
     stream = (
         _event_frame("messageStart", {"role": "assistant"})

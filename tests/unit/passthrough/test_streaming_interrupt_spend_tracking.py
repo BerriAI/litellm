@@ -139,10 +139,11 @@ async def test_asyncpassthroughstreamingresponse_wait_for_spend_flush_returns_on
 
     flushed: List[bytes] = []
 
-    async def flush(collector: _RecordingCollector) -> None:
+    async def flush(collector: _RecordingCollector) -> bool:
         await asyncio.sleep(0)
         await asyncio.sleep(0)
         flushed.append(collector.build_logged_response(litellm_logging_obj=MagicMock()))
+        return True
 
     mock_logging_obj = MagicMock()
     mock_logging_obj.async_flush_passthrough_collected_chunks = flush
@@ -157,6 +158,28 @@ async def test_asyncpassthroughstreamingresponse_wait_for_spend_flush_returns_on
 
     assert await gen.wait_for_spend_flush() is True
     assert flushed == [b"chunk-1"]
+
+
+@pytest.mark.asyncio
+async def test_asyncpassthroughstreamingresponse_says_it_logged_no_spend_when_the_flush_had_nothing_to_log():
+    from litellm.passthrough.main import AsyncPassthroughStreamingResponse
+
+    async def response_coro():
+        return _make_streaming_response([b"part-of-a-frame", b"rest-of-the-frame"])
+
+    mock_logging_obj = MagicMock()
+    mock_logging_obj.async_flush_passthrough_collected_chunks = AsyncMock(return_value=False)
+    gen = AsyncPassthroughStreamingResponse(
+        response=response_coro(),
+        litellm_logging_obj=mock_logging_obj,
+        provider_config=_provider_config(_RecordingCollector()),
+    )
+
+    await gen.__anext__()
+    await gen.aclose()
+
+    assert await gen.wait_for_spend_flush() is False
+    mock_logging_obj.async_flush_passthrough_collected_chunks.assert_awaited_once()
 
 
 @pytest.mark.asyncio

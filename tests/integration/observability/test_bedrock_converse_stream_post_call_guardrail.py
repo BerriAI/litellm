@@ -841,12 +841,9 @@ def test_client_leaving_a_held_stream_before_its_first_frame_stops_the_proxy_rea
     assert isinstance(rows[0]["prompt_tokens"], int) and rows[0]["prompt_tokens"] > 0, rows
 
 
-def test_client_leaving_a_held_stream_before_bedrock_sends_a_byte_frees_its_parallel_request_slot(rig: Rig) -> None:
-    marker: Final = f"relay-{uuid.uuid4().hex}"
-    first_byte: Final = threading.Event()
-    rig.scripts[marker] = Reply(
-        content_type=EVENT_STREAM, chunks=converse_frames((f"Held {marker} ", " done")), gate_before_first=first_byte
-    )
+def _follow_up_status_after_leaving_a_held_stream(rig: Rig, marker: str) -> int:
+    """Leave a held stream of ``marker`` before its first frame on a key with one parallel slot, then report the status
+    of the next request on that key once the slot is free, or the last status seen when it never frees."""
     key: Final = rig.scenario.key(guardrails=[HELD_END_ONLY], max_parallel_requests=1)
     follow_up: Final = f"relay-{uuid.uuid4().hex}"
     rig.scripts[follow_up] = Reply(content_type=EVENT_STREAM, chunks=converse_frames((f"Next {follow_up} ", " done")))
@@ -859,20 +856,43 @@ def test_client_leaving_a_held_stream_before_bedrock_sends_a_byte_frees_its_para
             timeout=case_timeout_seconds(),
         ).status_code
 
-    try:
-        with pytest.raises(httpx.ReadTimeout):
-            rig.gateway.client.post(
-                _stream_path(),
-                json=_stream_body(marker),
-                headers={"Authorization": f"Bearer {key}"},
-                timeout=httpx.Timeout(case_timeout_seconds(), read=1.5),
-            )
-        status: Final = eventually(
-            follow_up_status, lambda status: status == 200, seconds=5, return_last_on_timeout=True
+    with pytest.raises(httpx.ReadTimeout):
+        rig.gateway.client.post(
+            _stream_path(),
+            json=_stream_body(marker),
+            headers={"Authorization": f"Bearer {key}"},
+            timeout=httpx.Timeout(case_timeout_seconds(), read=1.5),
         )
+    return eventually(follow_up_status, lambda status: status == 200, seconds=5, return_last_on_timeout=True)
+
+
+def test_client_leaving_a_held_stream_before_bedrock_sends_a_byte_frees_its_parallel_request_slot(rig: Rig) -> None:
+    marker: Final = f"relay-{uuid.uuid4().hex}"
+    first_byte: Final = threading.Event()
+    rig.scripts[marker] = Reply(
+        content_type=EVENT_STREAM, chunks=converse_frames((f"Held {marker} ", " done")), gate_before_first=first_byte
+    )
+    try:
+        status: Final = _follow_up_status_after_leaving_a_held_stream(rig, marker)
     finally:
         first_byte.set()
     assert status == 200, "the request that left before Bedrock answered still holds the key's only parallel slot"
+
+
+def test_client_leaving_a_held_stream_after_part_of_the_first_frame_frees_its_parallel_request_slot(rig: Rig) -> None:
+    marker: Final = f"relay-{uuid.uuid4().hex}"
+    frames: Final = converse_frames((f"Held {marker} ", " done"))
+    rest_of_stream: Final = threading.Event()
+    rig.scripts[marker] = Reply(
+        content_type=EVENT_STREAM,
+        chunks=(frames[0][:12], frames[0][12:], *frames[1:]),
+        gate_after_first=rest_of_stream,
+    )
+    try:
+        status: Final = _follow_up_status_after_leaving_a_held_stream(rig, marker)
+    finally:
+        rest_of_stream.set()
+    assert status == 200, "the request that left with part of Bedrock's first frame still holds the key's only slot"
 
 
 @pytest.mark.parametrize(
