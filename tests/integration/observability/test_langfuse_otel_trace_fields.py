@@ -2,7 +2,7 @@ import json
 import threading
 import uuid
 from itertools import product
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
@@ -28,6 +28,8 @@ SURFACE_CALL_TYPES: Final = {
     "responses_stream": "aresponses",
 }
 ANTHROPIC_MODEL: Final = "anthropic/claude-sonnet-4-5-20250929"
+JUDGE_MODEL: Final = "lit8281-judge-model"
+JUDGE_GUARDRAIL: Final = "lit8281-judge"
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,6 +125,32 @@ class LangfuseSink:
         return eventually(roots, lambda found: len(found) == 1, seconds=70)[0]
 
 
+class OtlpSink:
+    """A generic OTLP endpoint: keeps every span it receives."""
+
+    def __init__(self) -> None:
+        self.lock: Final = threading.Lock()
+        self.spans: Final[list[SpanRecord]] = []  # mutable-ok: spans accumulate as the exporter delivers them
+
+    def respond(self, request: Request) -> Reply:
+        if request.target.endswith("/v1/traces"):
+            records: Final = _span_records(request.body)
+            with self.lock:
+                self.spans.extend(records)
+        return Reply(body=b"")
+
+    def root_of_request(self, marker: str) -> SpanRecord:
+        """The root span of the one trace whose spans carry the marker."""
+
+        def roots() -> tuple[SpanRecord, ...]:
+            with self.lock:
+                snapshot: Final = tuple(self.spans)
+            traces: Final = {record.trace_id for record in snapshot if marker in str(tuple(record.attributes.values()))}
+            return tuple(record for record in snapshot if record.trace_id in traces and not record.parent_span_id)
+
+        return eventually(roots, lambda found: len(found) == 1, seconds=70)[0]
+
+
 def _chat_completion(marker: str, text: str = "langfuse-otel scripted reply") -> bytes:
     return json.dumps(
         {
@@ -152,6 +180,8 @@ def _provider(request: Request) -> Reply:
                 }
             ).encode()
         )
+    if body.get("response_format") == {"type": "json_object"}:
+        return Reply(body=_chat_completion("lit8281-judge-verdict", json.dumps({"overall_score": 100})))
     messages: Final = body.get("messages")
     first: Final = messages[0]["content"] if isinstance(messages, list) and messages else None
     if isinstance(first, str) and first.startswith("fail-"):
@@ -159,10 +189,33 @@ def _provider(request: Request) -> Reply:
     return surface_reply(request)
 
 
-def _langfuse_config(directory: Path, name: str, settings: Mapping[str, object]) -> Path:
+def _langfuse_config(directory: Path, name: str, settings: Mapping[str, object], provider_url: str) -> Path:
+    """The integration config with `langfuse_otel`, plus an opt-in post_call `llm_as_a_judge` guardrail whose judge
+    model is served by the scripted provider."""
     base: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    judge: Final = {
+        "model_name": JUDGE_MODEL,
+        "litellm_params": {
+            "model": "openai/gpt-4o-mini",
+            "api_base": provider_url + "/v1",
+            "api_key": "synthetic-provider-key",
+        },
+    }
     config: Final = {
         **base,
+        "model_list": [*base["model_list"], judge],
+        "guardrails": [
+            {
+                "guardrail_name": JUDGE_GUARDRAIL,
+                "litellm_params": {
+                    "guardrail": "llm_as_a_judge",
+                    "mode": "post_call",
+                    "judge_model": JUDGE_MODEL,
+                    "on_failure": "log",
+                    "criteria": [{"name": "helpful", "description": "The reply answers the user", "weight": 100}],
+                },
+            }
+        ],
         "litellm_settings": {**base["litellm_settings"], "callbacks": ["langfuse_otel"], **settings},
     }
     path: Final = directory / f"{name}.yaml"
@@ -198,7 +251,7 @@ def _rig(
                 "LANGFUSE_HOST": destination.url,
                 **environment,
             },
-            config=_langfuse_config(directory, name, settings),
+            config=_langfuse_config(directory, name, settings, provider.url),
             workers=2,
         ) as proxy,
         proxy.scenario() as scenario,
@@ -237,8 +290,35 @@ def v2_llm_only(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class SharedRig:
+    rig: Rig
+    otel: OtlpSink
+
+
+@pytest.fixture(scope="module")
+def v2_after_otel(tmp_path_factory: pytest.TempPathFactory) -> Iterator[SharedRig]:
+    """OTel v2 with the generic `otel` callback listed before `langfuse_otel`, so the request root belongs to the
+    generic exporter."""
+    otel: Final = OtlpSink()
+    with wire_server(otel.respond) as destination:
+        environment: Final = {
+            **V2_ENVIRONMENT,
+            "OTEL_EXPORTER": "otlp_http",
+            "OTEL_ENDPOINT": destination.url + "/v1/traces",
+        }
+        for rig in _rig(
+            tmp_path_factory, "langfuse-v2-after-otel", environment, {"callbacks": ["otel", "langfuse_otel"]}
+        ):
+            yield SharedRig(rig, otel)
+
+
 def _chat(
-    rig: Rig, content: str, metadata: Mapping[str, object] | None = None, headers: Mapping[str, str] | None = None
+    rig: Rig,
+    content: str,
+    metadata: Mapping[str, object] | None = None,
+    headers: Mapping[str, str] | None = None,
+    guardrails: Sequence[str] = (),
 ) -> str:
     response: Final = rig.proxy.request(
         "POST",
@@ -247,6 +327,7 @@ def _chat(
             "model": rig.openai_model,
             "messages": [{"role": "user", "content": content}],
             **({"metadata": dict(metadata)} if metadata is not None else {}),
+            **({"guardrails": list(guardrails)} if guardrails else {}),
         },
         key=rig.key,
         headers=headers,
@@ -476,6 +557,33 @@ def test_otel_v2_inbound_traceparent_leaves_the_trace_name_to_the_caller(v2: Rig
         seconds=70,
     )
     assert not set(_trace_fields(spans)), spans
+
+
+@pytest.mark.parametrize(
+    ("metadata", "headers"),
+    [({"trace_name": "caller-trace"}, None), (None, {"langfuse_trace_name": "caller-trace"})],
+    ids=["body", "header"],
+)
+def test_otel_v2_post_call_judge_keeps_the_caller_trace_name_on_the_root(
+    v2: Rig, metadata: Mapping[str, object] | None, headers: Mapping[str, str] | None
+) -> None:
+    marker: Final = "lit8281-v2-judge-" + uuid.uuid4().hex
+    _chat(v2, marker, metadata=metadata, headers=headers, guardrails=[JUDGE_GUARDRAIL])
+    generations: Final = eventually(lambda: v2.sink.matching(marker), lambda found: len(found) == 2, seconds=70)
+    assert len({generation.trace_id for generation in generations}) == 1, generations
+    root: Final = v2.sink.root_of(generations[0])
+    assert root.attributes.get("langfuse.trace.name") == "caller-trace", root.attributes
+
+
+def test_otel_v2_generic_otel_root_gets_no_derived_langfuse_trace_name(v2_after_otel: SharedRig) -> None:
+    derived: Final = "lit8281-v2-after-otel-" + uuid.uuid4().hex
+    caller: Final = "lit8281-v2-after-otel-caller-" + uuid.uuid4().hex
+    _chat(v2_after_otel.rig, derived)
+    _chat(v2_after_otel.rig, caller, metadata={"trace_name": "caller-trace"})
+    root: Final = v2_after_otel.otel.root_of_request(derived)
+    assert "langfuse.trace.name" not in root.attributes, root.attributes
+    caller_root: Final = v2_after_otel.otel.root_of_request(caller)
+    assert caller_root.attributes.get("langfuse.trace.name") == "caller-trace", caller_root.attributes
 
 
 def test_otel_v2_llm_only_root_generation_keeps_its_span_name_as_the_trace_name(v2_llm_only: Rig) -> None:

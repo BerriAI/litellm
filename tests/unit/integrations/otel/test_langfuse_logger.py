@@ -437,6 +437,78 @@ def test_named_request_under_an_inbound_traceparent_keeps_the_caller_trace_name(
     assert generation_attrs[TRACE_NAME_ATTR] == "from-body"
 
 
+UNNAMED: Final = {"proxy_server_request": {"headers": {}}}
+JUDGE_PARAMS: Final = {"metadata": {"internal_call_origin": "llm_as_a_judge_guardrail"}}
+CALLER_NAMES: Final = (
+    {"metadata": {"trace_name": "from-caller"}, "proxy_server_request": {"headers": {}}},
+    {"proxy_server_request": {"headers": {"langfuse_trace_name": "from-caller"}}},
+)
+
+
+def _root_trace_name_after(
+    logger: OpenTelemetryV2,
+    calls: Sequence[tuple[str, Mapping[str, object]]],
+    root_logger: OpenTelemetryV2 | None = None,
+) -> object:
+    root: Final = _start_root(root_logger or logger)
+    for index, (call_type, litellm_params) in enumerate(calls):
+        logger.log_pre_api_call(
+            model="gpt-5.4-mini",
+            messages=[],
+            kwargs={"litellm_call_id": f"call_{index}", "litellm_params": litellm_params, "call_type": call_type},
+        )
+    root.end()
+    return dict(root.attributes or {}).get(TRACE_NAME_ATTR)
+
+
+@pytest.mark.parametrize("later", [JUDGE_PARAMS, UNNAMED], ids=["litellm-sub-call", "untagged-call"])
+@pytest.mark.parametrize("caller", CALLER_NAMES, ids=["body", "header"])
+def test_a_later_call_in_the_request_keeps_the_caller_trace_name_on_the_root(caller, later):
+    logger, _ = _logger()
+
+    assert _root_trace_name_after(logger, (("acompletion", caller), ("acompletion", later))) == "from-caller"
+
+
+@pytest.mark.parametrize("caller", CALLER_NAMES, ids=["body", "header"])
+def test_a_caller_trace_name_replaces_the_name_an_earlier_call_derived(caller):
+    logger, _ = _logger()
+
+    assert _root_trace_name_after(logger, (("acompletion", JUDGE_PARAMS), ("acompletion", caller))) == "from-caller"
+
+
+def test_a_later_call_keeps_the_trace_name_the_first_call_derived():
+    logger, _ = _logger()
+
+    assert (
+        _root_trace_name_after(logger, (("anthropic_messages", UNNAMED), ("acompletion", UNNAMED)))
+        == "litellm-anthropic_messages"
+    )
+
+
+def test_a_litellm_sub_call_before_the_request_call_leaves_the_trace_name_to_the_request_call():
+    logger, _ = _logger()
+
+    assert (
+        _root_trace_name_after(logger, (("acompletion", JUDGE_PARAMS), ("anthropic_messages", UNNAMED)))
+        == "litellm-anthropic_messages"
+    )
+
+
+def test_a_root_another_vendor_started_gets_no_derived_trace_name():
+    logger, _ = _logger()
+    other_vendor, _ = _logger(mappers=("genai",))
+
+    assert _root_trace_name_after(logger, (("acompletion", UNNAMED),), root_logger=other_vendor) is None
+
+
+@pytest.mark.parametrize("caller", CALLER_NAMES, ids=["body", "header"])
+def test_a_root_another_vendor_started_still_gets_the_caller_trace_name(caller):
+    logger, _ = _logger()
+    other_vendor, _ = _logger(mappers=("genai",))
+
+    assert _root_trace_name_after(logger, (("acompletion", caller),), root_logger=other_vendor) == "from-caller"
+
+
 @pytest.mark.parametrize("capture", ["span_only", "no_content"])
 def test_body_metadata_user_session_and_tags_land_on_the_root_and_the_generation(capture):
     logger, exporter = _logger(capture=capture)
