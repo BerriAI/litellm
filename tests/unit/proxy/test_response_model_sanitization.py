@@ -732,3 +732,43 @@ def test_restamp_streaming_chunk_leaves_generic_event_without_nested_response_un
     )
 
     assert "response" not in result.model_dump()
+
+
+@pytest.mark.parametrize("stream_started", [False, True])
+def test_restamp_streaming_chunk_rewrites_nested_model_in_guardrail_block_frames(stream_started):
+    from litellm.exceptions import ModifyResponseException
+    from litellm.llms.openai.responses.guardrail_translation.handler import OpenAIResponsesHandler
+    from litellm.proxy.proxy_server import _restamp_streaming_chunk_model
+
+    sent_before_block = (
+        [{"type": "response.created", "response": {"id": "resp_live", "model": "gpt-backend-2026-01-01"}}]
+        if stream_started
+        else []
+    )
+    block = ModifyResponseException(
+        message="Blocked by policy.",
+        model="gpt-backend-2026-01-01",
+        request_data={},
+        original_response=sent_before_block,
+    )
+    frames = OpenAIResponsesHandler().build_block_sse_chunks(
+        block, stream_started=stream_started, responses_so_far=sent_before_block
+    )
+    client_frames = [
+        _restamp_streaming_chunk_model(
+            chunk=frame,
+            requested_model_from_client="client-model",
+            request_data={"litellm_call_id": "test-call-id"},
+            model_mismatch_logged=False,
+        )[0]
+        for frame in frames
+    ]
+    events = [json.loads(frame.decode().removeprefix("data: ")) for frame in client_frames]
+
+    assert all(frame.endswith(b"\n\n") for frame in client_frames)
+    assert events[-1]["type"] == "response.completed"
+    assert events[-1]["response"]["output"][0]["content"][0]["text"] == "Blocked by policy."
+    assert {event["response"]["model"] for event in events if "response" in event} == {"client-model"}
+    assert [frame for frame, event in zip(client_frames, events) if "response" not in event] == [
+        frame for frame in frames if b'"response"' not in frame
+    ]

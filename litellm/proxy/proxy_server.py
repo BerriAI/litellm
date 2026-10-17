@@ -9813,7 +9813,7 @@ def _restamp_streaming_chunk_model(
     # Note: This warning is intentionally verbose. A mismatch is a useful signal that an
     # internal provider/deployment identifier is leaking into the public API, and helps
     # maintainers/operators catch regressions while preserving OpenAI-compatible output.
-    if not target_model or not isinstance(chunk, (BaseModel, dict)):
+    if not target_model or not isinstance(chunk, (BaseModel, dict, bytes)):
         return chunk, model_mismatch_logged
 
     # For Azure Model Router, preserve the actual model used in each chunk
@@ -9824,6 +9824,11 @@ def _restamp_streaming_chunk_model(
     # instead of stamping the comma-separated list the client sent.
     if not fallback_was_attempted and request_data.get("fastest_response", False):
         return chunk, model_mismatch_logged
+
+    if isinstance(chunk, bytes):
+        if request_data.get("_litellm_raw_sse_stream"):
+            return chunk, model_mismatch_logged
+        return _restamp_nested_response_model_in_sse_frame(chunk, target_model), model_mismatch_logged
 
     typed_chunk: Final[BaseModel | Mapping[str, object]] = chunk
     restamped_chunk: Final = _restamp_nested_response_model(typed_chunk, target_model)
@@ -9902,6 +9907,25 @@ def _restamp_nested_response_model(
     if untyped_response is None or untyped_response.get("model") in (None, target_model):
         return chunk
     return chunk.model_copy(update={"response": {**untyped_response, "model": target_model}})
+
+
+_SSE_DATA_FIELD_PREFIX: Final = b"data: "
+_SSE_EVENT_OBJECT: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+
+
+def _restamp_nested_response_model_in_sse_frame(frame: bytes, target_model: str) -> bytes:
+    if not frame.startswith(_SSE_DATA_FIELD_PREFIX):
+        return frame
+    try:
+        event: Final = _SSE_EVENT_OBJECT.validate_json(frame.removeprefix(_SSE_DATA_FIELD_PREFIX))
+    except ValidationError:
+        return frame
+    nested_response: Final = as_str_mapping(event.get("response"))
+    if nested_response is None or nested_response.get("model") in (None, target_model):
+        return frame
+    restamped_event: Final = {**event, "response": {**nested_response, "model": target_model}}
+    serialized_event: Final = json.dumps(restamped_event, separators=(",", ":"), ensure_ascii=False)
+    return _SSE_DATA_FIELD_PREFIX + serialized_event.encode() + b"\n\n"
 
 
 def _fast_serialize_simple_model_response_stream(
