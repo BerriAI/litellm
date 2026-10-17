@@ -224,6 +224,56 @@ async def test_aresponses_drops_stream_options():
 
 
 @pytest.mark.asyncio
+async def test_aresponses_forwards_moderation():
+    """OpenAI's top-level `moderation` param must reach the wire instead of being silently dropped."""
+    moderation: Final = {
+        "model": "omni-moderation-latest",
+        "policy": {"input": {"mode": "score"}, "output": {"mode": "block"}},
+    }
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+    ) as mock_post:
+        mock_post.return_value = MockResponse(_minimal_responses_api_payload("resp_moderation_test", "gpt-5.4"), 200)
+
+        await litellm.aresponses(
+            model="openai/gpt-5.4",
+            api_key="fake-api-key",
+            input="hi",
+            moderation=moderation,
+        )
+
+        mock_post.assert_called_once()
+        post_kwargs = mock_post.call_args.kwargs
+        request_body = post_kwargs["json"] if "json" in post_kwargs else json.loads(post_kwargs["data"])
+        assert request_body["moderation"] == moderation
+
+
+@pytest.mark.asyncio
+async def test_aresponses_omits_moderation_when_none():
+    """An explicit moderation=None is a default value and must not be sent to the provider."""
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+    ) as mock_post:
+        mock_post.return_value = MockResponse(
+            _minimal_responses_api_payload("resp_moderation_none_test", "gpt-5.4"), 200
+        )
+
+        await litellm.aresponses(
+            model="openai/gpt-5.4",
+            api_key="fake-api-key",
+            input="hi",
+            moderation=None,
+        )
+
+        mock_post.assert_called_once()
+        post_kwargs = mock_post.call_args.kwargs
+        request_body = post_kwargs["json"] if "json" in post_kwargs else json.loads(post_kwargs["data"])
+        assert "moderation" not in request_body
+
+
+@pytest.mark.asyncio
 async def test_aresponses_forwards_non_enum_reasoning_effort(
     monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
 ):
