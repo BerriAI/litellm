@@ -548,7 +548,7 @@ _UPSTREAM_ERROR_BODY: Final = '{"message":"The request is invalid."}'
         (503, litellm.ServiceUnavailableError, 503),
     ],
 )
-def test_sync_converse_streaming_upstream_error_keeps_the_merge_base_bytes_message(
+def test_sync_converse_streaming_upstream_error_carries_the_upstream_body_as_text(
     model: str,
     upstream_status: int,
     error_class: type[litellm.BadRequestError | litellm.RateLimitError | litellm.ServiceUnavailableError],
@@ -575,4 +575,4 @@ def test_sync_converse_streaming_upstream_error_keeps_the_merge_base_bytes_messa
         )
 
     assert raised.value.status_code == status_code
-    assert raised.value.message == f"litellm.{error_class.__name__}: BedrockException - b'{_UPSTREAM_ERROR_BODY}'"
+    assert raised.value.message == f"litellm.{error_class.__name__}: BedrockException - {_UPSTREAM_ERROR_BODY}"

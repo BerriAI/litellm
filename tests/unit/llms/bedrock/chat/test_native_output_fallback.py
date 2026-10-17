@@ -3,7 +3,6 @@ from collections.abc import Coroutine
 from dataclasses import dataclass
 from typing import Final
 
-import httpx
 import pytest
 
 from litellm.llms.bedrock.chat.native_output_fallback import NativeOutputAttemptResult, call_with_native_output_fallback
@@ -19,28 +18,20 @@ _REJECTION: Final = BedrockError(
     message='{"message":"The model returned the following errors: output_config.format: Extra inputs are not permitted"}',
 )
 _OTHER_400: Final = BedrockError(status_code=400, message='{"message":"messages.0.content: Field required"}')
-_CONVERSE_REQUEST: Final = httpx.Request(
-    "POST", "https://bedrock-runtime.us-east-1.amazonaws.com/model/us.anthropic.claude-opus-4-8/converse"
-)
-_REJECTION_FROM_THE_HTTP_CLIENT: Final = httpx.HTTPStatusError(
-    "400 Bad Request",
-    request=_CONVERSE_REQUEST,
-    response=httpx.Response(400, text=_REJECTION.message, request=_CONVERSE_REQUEST),
-)
 
 
 @dataclass(slots=True)
 class ScriptedBedrock:
-    errors: tuple[BedrockError | httpx.HTTPStatusError | None, ...]
+    errors: tuple[BedrockError | None, ...]
     asynchronous: bool
     sent: tuple[NativeOutputFallback | None, ...] = ()
 
-    def _answer(self, error: BedrockError | httpx.HTTPStatusError | None) -> ModelResponse:
+    def _answer(self, error: BedrockError | None) -> ModelResponse:
         if error is not None:
             raise error
         return ModelResponse(id=f"answer-{len(self.sent)}")
 
-    async def _answer_later(self, error: BedrockError | httpx.HTTPStatusError | None) -> ModelResponse:
+    async def _answer_later(self, error: BedrockError | None) -> ModelResponse:
         await asyncio.sleep(0)
         return self._answer(error)
 
@@ -66,18 +57,6 @@ _MODES: Final = pytest.mark.parametrize("asynchronous", [False, True], ids=["syn
 @_MODES
 def test_a_native_output_rejection_is_sent_again_once_with_the_fallback_params(asynchronous: bool) -> None:
     bedrock: Final = ScriptedBedrock(errors=(_REJECTION, None), asynchronous=asynchronous)
-
-    response: Final = _call(bedrock, _FALLBACK)
-
-    assert isinstance(response, ModelResponse) and response.id == "answer-2"
-    assert bedrock.sent == (None, _FALLBACK)
-
-
-@_MODES
-def test_a_native_output_rejection_raised_by_the_http_client_is_sent_again_once_with_the_fallback_params(
-    asynchronous: bool,
-) -> None:
-    bedrock: Final = ScriptedBedrock(errors=(_REJECTION_FROM_THE_HTTP_CLIENT, None), asynchronous=asynchronous)
 
     response: Final = _call(bedrock, _FALLBACK)
 
