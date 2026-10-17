@@ -3171,3 +3171,56 @@ async def test_chat_request_carrying_litellm_metadata_still_routes_on_proxy_merg
     )
 
     assert deployment["model_info"]["id"] == "team-a-deployment"
+
+
+def _baggage_mapped_metadata(client_tags: list[str], inherited_tags: list[str]) -> dict:
+    from types import SimpleNamespace
+    from typing import cast
+
+    from fastapi import Request
+
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+    request = cast(Request, SimpleNamespace(state=SimpleNamespace(litellm_baggage_mapped_tags=("usecase:a",))))
+    data = {"metadata": {"tags": client_tags, "inherited_tags": inherited_tags}}
+    LiteLLMProxyRequestSetup.apply_authenticated_baggage_tags(request, data)
+    return data["metadata"]
+
+
+@pytest.mark.asyncio()
+@pytest.mark.parametrize(
+    "client_tags,inherited_tags,expected_model_id",
+    [
+        ([], [], "default-deployment"),
+        (["usecase:a"], [], "usecase-deployment"),
+        ([], ["usecase:a"], "usecase-deployment"),
+    ],
+)
+async def test_baggage_mapped_tags_classify_spend_without_selecting_deployments(
+    client_tags, inherited_tags, expected_model_id
+):
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4o", "tags": ["usecase:a"]},
+                "model_info": {"id": "usecase-deployment"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4o-mini", "tags": ["default"]},
+                "model_info": {"id": "default-deployment"},
+            },
+        ],
+        enable_tag_filtering=True,
+    )
+    metadata = _baggage_mapped_metadata(client_tags, inherited_tags)
+    assert "usecase:a" in metadata["tags"]
+    for _ in range(5):
+        response = await router.acompletion(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata=dict(metadata),
+            mock_response="hi",
+        )
+        assert response._hidden_params["model_id"] == expected_model_id

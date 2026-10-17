@@ -17,7 +17,7 @@ from typing import (
     cast,  # noqa: TID251  # narrows untyped deployment and credential payloads
 )
 
-from fastapi import HTTPException, Request
+from fastapi import HTTPException, Request, status
 from pydantic import TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 from starlette.datastructures import Headers
@@ -27,6 +27,7 @@ from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
 from litellm._uuid import uuid
 from litellm.constants import (
+    BAGGAGE_MAPPED_TAGS_METADATA_KEY,
     CALLER_SESSION_ID_METADATA_KEY,
     CLIENT_OUTPUT_CEILING_METADATA_KEY,
     CONSUMED_REQUEST_TAGS_METADATA_KEY,
@@ -208,8 +209,19 @@ def _drop_client_caller_session(request_body: Mapping[str, object]) -> None:
             metadata.pop(CALLER_SESSION_ID_METADATA_KEY, None)
 
 
+_PROXY_SET_METADATA_KEYS: Final = frozenset({CALLER_SESSION_ID_METADATA_KEY, BAGGAGE_MAPPED_TAGS_METADATA_KEY})
+_METADATA_TAGS_ADAPTER: Final = TypeAdapter(tuple[object, ...])
+
+
 def _requester_metadata_snapshot(metadata: Mapping[str, object]) -> Mapping[str, object]:
-    return copy.deepcopy({key: value for key, value in metadata.items() if key != CALLER_SESSION_ID_METADATA_KEY})
+    requester: Final = {key: value for key, value in metadata.items() if key not in _PROXY_SET_METADATA_KEYS}
+    stamp: Final = metadata.get(BAGGAGE_MAPPED_TAGS_METADATA_KEY)
+    tags: Final = requester.get("tags")
+    if not isinstance(stamp, BaggageMappedTagsStamp) or not isinstance(tags, list):
+        return copy.deepcopy(requester)
+    sent_tags: Final = [tag for tag in _METADATA_TAGS_ADAPTER.validate_python(tags) if tag not in stamp.tags]
+    without_tags: Final = {key: value for key, value in requester.items() if key != "tags"}
+    return copy.deepcopy({**without_tags, "tags": sent_tags} if sent_tags else without_tags)
 
 
 def _stampable_key_hash(user_api_key_dict: UserAPIKeyAuth) -> str | None:
@@ -253,6 +265,7 @@ from litellm.router import Router
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.litellm_params import AGENTIC_LOOP_KWARG_NAMES
 from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS
+from litellm.types.router import BaggageMappedTagsStamp
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
     CAPTURE_MESSAGE_CONTENT_VAR,
@@ -282,8 +295,11 @@ if TYPE_CHECKING:
     from opentelemetry.trace import Span as OtelSpan
 
     from litellm.integrations.otel.model.destination import OtelDestination
+    from litellm.models.tag import LiteLLM_TagTable
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy.policy_engine.attachment_registry import AttachmentRegistry
     from litellm.proxy.proxy_server import ProxyConfig as _ProxyConfig
+    from litellm.proxy.utils import PrismaClient
     from litellm.types.proxy.policy_engine import Policy, PolicyMatchContext
 
     ProxyConfig = _ProxyConfig
@@ -532,6 +548,12 @@ def _normalized_metadata_object(field: str, value: object) -> Mapping[str, objec
     if isinstance(value, str) and isinstance((parsed := _DECODED_JSON.validate_python(safe_json_loads(value))), dict):
         return parsed
     raise _invalid_metadata_type_error(field=field, value=value)
+
+
+def _has_tag_budget(tag: "LiteLLM_TagTable | None") -> bool:
+    if tag is None or tag.litellm_budget_table is None:
+        return False
+    return tag.litellm_budget_table.max_budget is not None
 
 
 def _normalized_metadata_slot(
@@ -1129,6 +1151,7 @@ _get_dynamic_logging_metadata: Final = get_dynamic_logging_metadata
 
 
 _TENANT_OTEL_PARAMS: Final = TypeAdapter(StandardCallbackDynamicParams)
+_STRING_TAGS_ADAPTER: Final = TypeAdapter(tuple[str, ...])
 
 
 def _tenant_otel_params(callback_vars: Mapping[str, str]) -> StandardCallbackDynamicParams:
@@ -2036,7 +2059,7 @@ class LiteLLMProxyRequestSetup:
 
     @staticmethod
     def pre_seed_litellm_metadata_for_route(
-        request_data: dict,
+        request_data: MutableMapping[str, object],  # mutable-ok: seed shared request metadata before admission
         route: str,
     ) -> None:
         """Pre-seed ``litellm_metadata`` for routes that track tags there.
@@ -2054,6 +2077,103 @@ class LiteLLMProxyRequestSetup:
         """
         if any(metadata_route in route for metadata_route in LITELLM_METADATA_ROUTES):
             request_data.setdefault("litellm_metadata", {})
+
+    @staticmethod
+    async def apply_baggage_tag_mappings_pre_auth(
+        request: Request,
+        request_data: MutableMapping[str, object],  # mutable-ok: enrich the shared request before budget admission
+        general_settings: Mapping[str, object],
+        prisma_client: "PrismaClient | None",
+        user_api_key_cache: "UserApiKeyCache",
+    ) -> None:
+        """Resolve configured baggage tags before the existing tag-budget gate."""
+        from litellm.proxy.auth.auth_checks import read_tag_objects_batch
+        from litellm.proxy.common_utils.request_tag_mappings import (
+            REQUEST_TAG_MAPPINGS_ADAPTER,
+            mapping_rejection,
+            resolve_baggage_tag_mappings,
+        )
+
+        raw_rules: Final = general_settings.get("request_tag_mappings")
+        if not isinstance(raw_rules, list) or not raw_rules:
+            return
+        has_client_metadata: Final = "metadata" in request_data
+        has_alternate_metadata: Final = "litellm_metadata" in request_data
+        client_metadata: Final[object] = request_data.pop("metadata", None)
+        alternate_client_metadata: Final[object] = request_data.pop("litellm_metadata", None)
+        normalized_client_metadata: Final[Mapping[str, object]] = (
+            _normalized_metadata_object("metadata", client_metadata)
+            if client_metadata is not None
+            else MappingProxyType({})
+        )
+        normalized_alternate_metadata: Final[Mapping[str, object]] = (
+            _normalized_metadata_object("litellm_metadata", alternate_client_metadata)
+            if alternate_client_metadata is not None
+            else MappingProxyType({})
+        )
+        if has_client_metadata:
+            # Keep rejection logging safe without changing the cached client body.
+            request_data["metadata"] = dict(normalized_client_metadata)  # rebind-ok: normalize working auth metadata
+        if has_alternate_metadata:
+            request_data["litellm_metadata"] = dict(normalized_alternate_metadata)  # rebind-ok: normalize auth copy
+        rules: Final = REQUEST_TAG_MAPPINGS_ADAPTER.validate_python(raw_rules)
+        header: Final = ",".join(request.headers.getlist("baggage"))
+        mapped: Final = resolve_baggage_tag_mappings(header, rules)
+        budgeted_tags: Final = tuple(tag for tag, require_budget in mapped if require_budget)
+        if budgeted_tags:
+            if prisma_client is None:
+                raise ProxyException(
+                    message="Baggage tag mappings require a database to check budgeted tags",
+                    type=ProxyErrorTypes.no_db_connection,
+                    param=None,
+                    code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                )
+            tag_objects: Final = await read_tag_objects_batch(
+                tag_names=budgeted_tags,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+            )
+            if isinstance(tag_objects, Exception):
+                raise ProxyException(
+                    message="Baggage tag mappings could not read tag budgets from the database",
+                    type=ProxyErrorTypes.no_db_connection,
+                    param=None,
+                    code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                )
+            unbudgeted_tag: Final = next(
+                (tag for tag in budgeted_tags if not _has_tag_budget(tag_objects.get(tag))), None
+            )
+            if unbudgeted_tag is not None:
+                raise mapping_rejection(f"Mapped tag {unbudgeted_tag} requires an existing tag budget")
+        if mapped:
+            client_has_tags: Final = (isinstance(client_metadata, dict) and "tags" in client_metadata) or (
+                get_metadata_variable_name_from_kwargs(request_data) == "metadata"
+                and any(member.strip() for member in request.headers.get("x-litellm-tags", "").split(","))
+            )
+            mapped_tags: Final = tuple(tag for tag, _ in mapped)
+            request.state.litellm_baggage_client_metadata_tags = client_has_tags  # rebind-ok: request input flag
+            request.state.litellm_baggage_mapped_tags = mapped_tags  # rebind-ok: per-request immutable mapped tags
+            LiteLLMProxyRequestSetup.apply_authenticated_baggage_tags(request, request_data)
+
+    @staticmethod
+    def apply_authenticated_baggage_tags(
+        request: Request,
+        request_data: MutableMapping[str, object],  # mutable-ok: restore authenticated tags in downstream metadata
+        metadata_key: str | None = None,
+    ) -> None:
+        request_state: Final[object] = getattr(request, "state", None)
+        raw_tags: Final[object] = getattr(request_state, "litellm_baggage_mapped_tags", None)
+        if not isinstance(raw_tags, tuple) or not raw_tags:
+            return
+        tags: Final = _STRING_TAGS_ADAPTER.validate_python(raw_tags)
+        slot: Final = metadata_key if metadata_key is not None else get_metadata_variable_name_from_kwargs(request_data)
+        metadata: Final = _normalized_metadata_slot(request_data, slot)
+        existing: Final = metadata.get("tags")
+        existing_tags: Final = _STRING_TAGS_ADAPTER.validate_python(existing) if isinstance(existing, list) else ()
+        metadata["tags"] = list(dict.fromkeys((*existing_tags, *tags)))
+        metadata[BAGGAGE_MAPPED_TAGS_METADATA_KEY] = BaggageMappedTagsStamp(
+            tags=tuple(tag for tag in tags if tag not in existing_tags)
+        )
 
     @staticmethod
     def apply_key_tags_pre_auth(
@@ -2312,6 +2432,9 @@ async def add_litellm_data_to_request(
         )
     )
 
+    LiteLLMProxyRequestSetup.apply_authenticated_baggage_tags(
+        request=request, request_data=data, metadata_key=_metadata_variable_name
+    )
     LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
         headers=_headers,
         data=data,
