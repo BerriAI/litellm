@@ -111,7 +111,7 @@ def _convert_image_url_to_anthropic(block: Mapping[str, object]) -> object:
     pdf/text data URIs become document blocks rather than malformed image blocks.
     """
     image_url: Final = block.get("image_url")
-    url: Final = image_url if isinstance(image_url, str) else _image_url_field(image_url, "url")
+    url: Final = image_url if isinstance(image_url, str) else _str_field(image_url, "url")
     if not url:
         return block
 
@@ -120,18 +120,31 @@ def _convert_image_url_to_anthropic(block: Mapping[str, object]) -> object:
         if select_anthropic_content_block_type_for_file(_data_uri_media_type(url)) == "document"
         else create_anthropic_image_param(
             image_url if isinstance(image_url, dict) else url,
-            format=_image_url_field(image_url, "format"),
+            format=_str_field(image_url, "format"),
             is_bedrock_invoke=True,
         )
     )
+    return _with_cache_control(converted, block)
+
+
+def _convert_file_to_anthropic(block: Mapping[str, object]) -> object:
+    file_data: Final = _str_field(block.get("file"), "file_data")
+    if not file_data:
+        return block
+    return _with_cache_control(
+        anthropic_process_openai_file_message({"type": "file", "file": {"file_data": file_data}}), block
+    )
+
+
+def _with_cache_control(converted: Mapping[str, object], block: Mapping[str, object]) -> Mapping[str, object]:
     cache_control: Final = block.get("cache_control")
     if cache_control is None:
         return converted
     return {**converted, "cache_control": cache_control}
 
 
-def _image_url_field(image_url: object, key: str) -> str | None:
-    value: Final = image_url.get(key) if isinstance(image_url, dict) else None
+def _str_field(container: object, key: str) -> str | None:
+    value: Final = container.get(key) if isinstance(container, dict) else None
     return value if isinstance(value, str) else None
 
 
@@ -140,15 +153,23 @@ def _data_uri_media_type(url: str) -> str:
     return match.group(1) if match else ""
 
 
-def _convert_image_url_blocks_to_anthropic(content: object) -> object:
+def _convert_media_block_to_anthropic(block: object) -> object:
+    mapping: Final = as_str_mapping(block)
+    if mapping is None:
+        return block
+    match mapping.get("type"):
+        case "image_url":
+            return _convert_image_url_to_anthropic(mapping)
+        case "file":
+            return _convert_file_to_anthropic(mapping)
+        case _:
+            return block
+
+
+def _convert_media_blocks_to_anthropic(content: object) -> object:
     if not isinstance(content, list):
         return content
-    return [
-        _convert_image_url_to_anthropic(block)
-        if isinstance(block, Mapping) and block.get("type") == "image_url"
-        else block
-        for block in content
-    ]
+    return [_convert_media_block_to_anthropic(block) for block in content]
 
 
 def _convert_tool_result_to_anthropic(
@@ -390,7 +411,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
                 conversation.append(
                     {
                         "role": role,
-                        "content": _convert_image_url_blocks_to_anthropic(content),
+                        "content": _convert_media_blocks_to_anthropic(content),
                     }
                 )
 
