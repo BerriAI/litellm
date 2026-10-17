@@ -8,17 +8,19 @@ import { cn } from "@/lib/cva.config";
 
 import { toggleVariants } from "@/components/ui/toggle";
 
-const ToggleGroupContext = React.createContext<
-  VariantProps<typeof toggleVariants> & {
-    spacing?: number;
-    orientation?: "horizontal" | "vertical";
-  }
->({
+type ToggleGroupContextValue = VariantProps<typeof toggleVariants> & {
+  spacing?: number;
+  orientation?: "horizontal" | "vertical";
+};
+
+const defaultToggleGroupContextValue: ToggleGroupContextValue = {
   size: "default",
   variant: "default",
   spacing: 2,
   orientation: "horizontal",
-});
+};
+
+const ToggleGroupContext = React.createContext<ToggleGroupContextValue>(defaultToggleGroupContextValue);
 
 function ToggleGroup({
   className,

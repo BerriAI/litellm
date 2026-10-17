@@ -23,6 +23,7 @@ vi.mock("@/components/networking", () => ({
   getConfigFieldSetting: vi.fn(),
   getGlobalLitellmHeaderName: vi.fn(() => "X-Litellm-Key"),
   getProxyBaseUrl: vi.fn(() => "http://localhost:4000"),
+  getUiPageUrl: vi.fn((url: string) => url),
   getAgentsList: vi.fn(),
   fetchMCPServers: vi.fn(),
   userListCall: vi.fn(),
