@@ -342,3 +342,44 @@ def test_duplicate_multiple_loggers_test():
 
     assert langfuse_count == 1, "Should have exactly one LangfusePromptManagement instance"
     assert otel_count == 1, "Should have exactly one OpenTelemetry instance"
+
+
+def test_add_custom_logger_default_mode_dedupes_same_class_instances():
+    """
+    Default mode keeps one instance per CustomLogger class: the class-level
+    key treats a second instance of the same class as a duplicate.
+    """
+    manager = LoggingCallbackManager()
+
+    class TestLogger(CustomLogger):
+        pass
+
+    first, second = TestLogger(), TestLogger()
+
+    manager.add_litellm_callback(first)
+    manager.add_litellm_callback(second)
+
+    assert sum(1 for c in litellm.callbacks if c is first) == 1
+    assert all(c is not second for c in litellm.callbacks)
+
+
+def test_add_custom_logger_dedupe_by_identity_allows_two_instances():
+    """
+    `dedupe_by_identity=True` is required for per-instance stateful loggers
+    (router strategy selectors): two live instances of the same class must
+    coexist, while re-adding the same instance stays a no-op.
+    """
+    manager = LoggingCallbackManager()
+
+    class TestLogger(CustomLogger):
+        pass
+
+    first, second = TestLogger(), TestLogger()
+
+    manager.add_litellm_callback(first, dedupe_by_identity=True)
+    manager.add_litellm_callback(second, dedupe_by_identity=True)
+    assert sum(1 for c in litellm.callbacks if c is first) == 1
+    assert sum(1 for c in litellm.callbacks if c is second) == 1
+
+    manager.add_litellm_callback(first, dedupe_by_identity=True)
+    assert sum(1 for c in litellm.callbacks if c is first) == 1
