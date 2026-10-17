@@ -29878,7 +29878,7 @@ export interface components {
             enforce_fallback_model_access?: boolean | null;
             /**
              * Fail Closed Rate Limit Enforcement
-             * @description reject requests with a 503 while the rate limit counters in Redis are unreachable, instead of enforcing tpm/rpm/max_parallel_requests limits per pod from memory (which admits up to N times the limit across N pods)
+             * @description reject requests with a 503 while the rate limit counters in Redis are unreachable, instead of enforcing tpm/rpm/max_parallel_requests limits per pod from memory (which admits up to N times the limit across N pods). Defaults to True (fail-closed) when unset; explicitly set to False to restore the prior fail-open behaviour
              */
             fail_closed_rate_limit_enforcement?: boolean | null;
             /**

@@ -2491,7 +2491,8 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         description=(
             "reject requests with a 503 while the rate limit counters in Redis are unreachable, instead of "
             "enforcing tpm/rpm/max_parallel_requests limits per pod from memory (which admits up to N times "
-            "the limit across N pods)"
+            "the limit across N pods). Defaults to True (fail-closed) when unset; explicitly set to False "
+            "to restore the prior fail-open behaviour"
         ),
     )
     control_plane_url: str | None = Field(

@@ -422,34 +422,50 @@ def io_token_pre_call_check(
     itpm_reserved = 0
     otpm_reserved = 0
 
-    if itpm_limit is not None:
-        itpm_reserved = _reservation_value(estimated_input, itpm_limit)
-        _sync_increment_with_rollback(
-            dual_cache,
-            itpm_key,
-            itpm_reserved,
-            itpm_limit,
-            limit_label="ITPM",
-        )
-
-    if otpm_limit is not None:
-        otpm_reserved = 0 if max_tokens == 0 else _reservation_value(max_tokens, otpm_limit)
-        try:
+    try:
+        if itpm_limit is not None:
+            itpm_reserved = _reservation_value(estimated_input, itpm_limit)
             _sync_increment_with_rollback(
                 dual_cache,
-                otpm_key,
-                otpm_reserved,
-                otpm_limit,
-                limit_label="OTPM",
+                itpm_key,
+                itpm_reserved,
+                itpm_limit,
+                limit_label="ITPM",
             )
-        except Exception:
-            if itpm_reserved > 0:
-                dual_cache.increment_cache(
-                    key=itpm_key,
-                    value=-itpm_reserved,
-                    ttl=RoutingArgsTTL,
+
+        if otpm_limit is not None:
+            otpm_reserved = 0 if max_tokens == 0 else _reservation_value(max_tokens, otpm_limit)
+            try:
+                _sync_increment_with_rollback(
+                    dual_cache,
+                    otpm_key,
+                    otpm_reserved,
+                    otpm_limit,
+                    limit_label="OTPM",
                 )
-            raise
+            except Exception:
+                if itpm_reserved > 0:
+                    dual_cache.increment_cache(
+                        key=itpm_key,
+                        value=-itpm_reserved,
+                        ttl=RoutingArgsTTL,
+                    )
+                raise
+    except litellm.RateLimitError:
+        raise
+    except Exception as e:
+        from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+            RateLimitUnverifiableError,
+            fail_closed_rate_limit_enforcement_from_general_settings,
+        )
+
+        if fail_closed_rate_limit_enforcement_from_general_settings():
+            verbose_router_logger.warning(
+                "io_token_pre_call_check: Redis failure, fail-closed enabled — rejecting. err=%s", e
+            )
+            raise RateLimitUnverifiableError() from e
+        verbose_router_logger.debug("io_token_pre_call_check: Redis failure, fail-open — allowing request. err=%s", e)
+        return deployment  # pyright: ignore[reportUnknownVariableType]  # fail-open path: dict from deployment.get()
 
     _stash_reservation_in_metadata(
         request_kwargs,
@@ -486,40 +502,55 @@ async def async_io_token_pre_call_check(
     itpm_reserved = 0
     otpm_reserved = 0
 
-    if itpm_limit is not None:
-        itpm_reserved = _reservation_value(estimated_input, itpm_limit)
-        await _increment_with_rollback(
-            dual_cache,
-            itpm_key,
-            itpm_reserved,
-            itpm_limit,
-            parent_otel_span=parent_otel_span,
-            limit_label="ITPM",
-        )
-
-    if otpm_limit is not None:
-        otpm_reserved = 0 if max_tokens == 0 else _reservation_value(max_tokens, otpm_limit)
-        try:
+    try:
+        if itpm_limit is not None:
+            itpm_reserved = _reservation_value(estimated_input, itpm_limit)
             await _increment_with_rollback(
                 dual_cache,
-                otpm_key,
-                otpm_reserved,
-                otpm_limit,
+                itpm_key,
+                itpm_reserved,
+                itpm_limit,
                 parent_otel_span=parent_otel_span,
-                limit_label="OTPM",
+                limit_label="ITPM",
             )
-        except Exception:
-            # Any failure reserving OTPM (a 429 or a transient cache error) must
-            # release the ITPM reservation already made, or it stays inflated
-            # until the TTL expires.
-            if itpm_reserved > 0:
-                await dual_cache.async_increment_cache(
-                    key=itpm_key,
-                    value=-itpm_reserved,
-                    ttl=RoutingArgsTTL,
+
+        if otpm_limit is not None:
+            otpm_reserved = 0 if max_tokens == 0 else _reservation_value(max_tokens, otpm_limit)
+            try:
+                await _increment_with_rollback(
+                    dual_cache,
+                    otpm_key,
+                    otpm_reserved,
+                    otpm_limit,
                     parent_otel_span=parent_otel_span,
+                    limit_label="OTPM",
                 )
-            raise
+            except Exception:
+                if itpm_reserved > 0:
+                    await dual_cache.async_increment_cache(
+                        key=itpm_key,
+                        value=-itpm_reserved,
+                        ttl=RoutingArgsTTL,
+                        parent_otel_span=parent_otel_span,
+                    )
+                raise
+    except litellm.RateLimitError:
+        raise
+    except Exception as e:
+        from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+            RateLimitUnverifiableError,
+            fail_closed_rate_limit_enforcement_from_general_settings,
+        )
+
+        if fail_closed_rate_limit_enforcement_from_general_settings():
+            verbose_router_logger.warning(
+                "async_io_token_pre_call_check: Redis failure, fail-closed enabled — rejecting. err=%s", e
+            )
+            raise RateLimitUnverifiableError() from e
+        verbose_router_logger.debug(
+            "async_io_token_pre_call_check: Redis failure, fail-open — allowing request. err=%s", e
+        )
+        return deployment  # pyright: ignore[reportUnknownVariableType]  # fail-open path: dict from deployment.get()
 
     _stash_reservation_in_metadata(
         request_kwargs,
