@@ -20,6 +20,7 @@ import pytest
 import yaml
 from pydantic import TypeAdapter
 
+from litellm.proxy.types_utils.utils import get_instance_fn
 from tests.integration._support.client import Gateway, eventually
 from tests.integration._support.process import (
     OwnedProxy,
@@ -34,6 +35,32 @@ from tests.integration._support.process import (
 )
 
 TESTS_DIR: Final = Path(__file__).resolve().parents[2]
+
+
+@pytest.mark.parametrize("config_contents", ("[]\n", "general_settings: []\n", "general_settings: {}\n"))
+def test_worker_configuration_preserves_sibling_auth_modules(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    config_contents: str,
+) -> None:
+    monkeypatch.setenv("INTEGRATION_WORKER_ISOLATION", "1")
+    monkeypatch.setenv("INTEGRATION_PROVIDER_PORT", "8203")
+    monkeypatch.setenv("INTEGRATION_UPSTREAM_URL", "http://127.0.0.1:8202")
+    source: Final = tmp_path / "source.yaml"
+    source.write_text(config_contents)
+    auth_state: Final = tmp_path / "sibling_auth.json"
+    auth_state.write_text("authenticated")
+    (tmp_path / "sibling_auth.py").write_text(
+        "from pathlib import Path\n"
+        "def authenticate():\n"
+        "    return Path(__file__).with_suffix('.json').read_text()\n"
+    )
+
+    configured: Final = worker_configuration(source, tmp_path / "worker")
+
+    assert get_instance_fn("sibling_auth.authenticate", config_file_path=str(configured))() == "authenticated"
+    auth_state.write_text("updated")
+    assert get_instance_fn("sibling_auth.authenticate", config_file_path=str(configured))() == "updated"
 
 
 def test_worker_configuration_routes_stock_edges_to_its_own_servers_and_preserves_other_targets(
@@ -91,6 +118,42 @@ def test_worker_configuration_budgets_implicit_pools_without_changing_connection
         }
     }
     assert yaml.safe_load(source.read_text()) == original
+
+
+def test_worker_configuration_keeps_modules_beside_a_test_config_importable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("INTEGRATION_WORKER_ISOLATION", "1")
+    source: Final = tmp_path / "proxy.yaml"
+    source.write_text(yaml.safe_dump({"general_settings": {"custom_auth": "sibling_auth.authenticate"}}))
+    (tmp_path / "sibling_auth.py").write_text("def authenticate() -> str:\n    return 'sibling'\n")
+    configured: Final = worker_configuration(source, tmp_path / "gateway")
+    assert configured != source
+    assert get_instance_fn("sibling_auth.authenticate", config_file_path=str(configured))() == "sibling"
+
+
+def test_worker_configuration_writes_the_repository_config_copy_into_the_worker_directory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("INTEGRATION_WORKER_ISOLATION", "1")
+    monkeypatch.setenv("INTEGRATION_PROVIDER_PORT", "8203")
+    monkeypatch.setenv("INTEGRATION_UPSTREAM_URL", "http://127.0.0.1:8202")
+    monkeypatch.setenv("INTEGRATION_PROXY_ROOT", str(tmp_path / "product"))
+    configured: Final = worker_configuration(TESTS_DIR / "integration/proxy_config.yaml", tmp_path / "worker")
+    assert configured.parent == tmp_path / "worker"
+
+
+def test_worker_configuration_writes_the_proxy_checkout_config_copy_into_the_worker_directory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("INTEGRATION_WORKER_ISOLATION", "1")
+    checkout: Final = tmp_path / "checkout"
+    monkeypatch.setenv("INTEGRATION_PROXY_ROOT", str(checkout))
+    source: Final = checkout / "tests/integration/proxy_config.yaml"
+    source.parent.mkdir(parents=True)
+    source.write_text("model_list: []\n")
+    configured: Final = worker_configuration(source, tmp_path / "worker")
+    assert configured.parent == tmp_path / "worker"
 
 
 def test_serial_proxy_keeps_the_requested_configuration(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -379,48 +442,47 @@ def test_a_replacing_block_that_never_kills_its_worker_fails_and_leaves_it_servi
         assert owned.worker_pids() == frozenset((worker,))
 
 
-def _kill_of(owned: OwnedProxy, worker: int) -> WorkerKill:
-    return WorkerKill(psutil.Process(worker), psutil.Process(owned.process.pid), 5, threading.Event())
+@contextmanager
+def _unreaped_child() -> Iterator[psutil.Process]:
+    with subprocess.Popen((sys.executable, "-I", "-c", "import time; time.sleep(60)")) as child:
+        try:
+            yield psutil.Process(child.pid)
+        finally:
+            child.kill()
 
 
-def test_a_worker_kill_returns_once_the_supervisor_reaped_the_victim_and_cannot_fire_twice(tmp_path: Path) -> None:
-    with _supervised(tmp_path, WorkerHealthcheck.STRICT) as (owned, worker):
-        kill: Final = _kill_of(owned, worker)
+def test_a_worker_kill_returns_once_the_victim_is_dead_before_anything_reaps_it_and_cannot_fire_twice() -> None:
+    with _unreaped_child() as victim:
+        kill: Final = WorkerKill(victim, threading.Event())
         kill()
-        assert not psutil.pid_exists(worker)
+        assert victim.status() == psutil.STATUS_ZOMBIE
         assert kill.fired.is_set()
         with pytest.raises(AssertionError, match="already killed"):
             kill()
 
 
-def test_a_frozen_victim_stays_stopped_until_the_kill(tmp_path: Path) -> None:
-    with _supervised(tmp_path, WorkerHealthcheck.STRICT) as (owned, worker):
-        kill: Final = _kill_of(owned, worker)
+def test_a_frozen_victim_stays_stopped_until_the_kill() -> None:
+    with _unreaped_child() as victim:
+        kill: Final = WorkerKill(victim, threading.Event())
         assert kill.freeze().status() == psutil.STATUS_STOPPED
         kill()
-        assert not psutil.pid_exists(worker)
+        assert victim.status() == psutil.STATUS_ZOMBIE
 
 
-def test_a_kill_under_a_suspended_supervisor_returns_with_the_victim_left_unreaped(tmp_path: Path) -> None:
-    with _supervised(tmp_path, WorkerHealthcheck.LENIENT) as (owned, worker):
-        kill: Final = _kill_of(owned, worker)
-        with owned.suspended(owned.process.pid):
-            kill()
-            assert psutil.Process(worker).status() == psutil.STATUS_ZOMBIE
-        eventually(lambda: psutil.pid_exists(worker), lambda exists: not exists, seconds=5)
+def _kill_after_freezing_the_supervisor(owned: OwnedProxy, worker: int, supervisor: psutil.Process) -> None:
+    with owned.replacing_worker(worker) as kill:
+        supervisor.suspend()
+        kill()
 
 
-def test_a_kill_fails_when_the_supervisor_never_reaps_the_victim(tmp_path: Path) -> None:
+def test_a_replacing_block_fails_when_the_supervisor_never_reaps_the_killed_worker(tmp_path: Path) -> None:
     with _supervised(tmp_path, WorkerHealthcheck.STRICT) as (owned, worker):
         unreaping: Final = psutil.Process(owned.process.pid)
-        kill: Final = WorkerKill(psutil.Process(worker), psutil.Process(os.getpid()), 0.5, threading.Event())
-        unreaping.suspend()
         try:
             with pytest.raises(AssertionError, match="did not reap"):
-                kill()
+                _kill_after_freezing_the_supervisor(owned, worker, unreaping)
         finally:
             unreaping.resume()
-        assert not kill.fired.is_set()
 
 
 def test_a_strict_healthcheck_proxy_refuses_suspension_before_stopping_anything(tmp_path: Path) -> None:

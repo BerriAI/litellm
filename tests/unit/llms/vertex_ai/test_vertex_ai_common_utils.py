@@ -1,3 +1,4 @@
+import copy
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -14,6 +15,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.gemini.count_tokens import handler as gemini_count_tokens_handler
 from litellm.llms.vertex_ai.common_utils import (
     VertexAITokenCounter,
+    build_vertex_schema,
     convert_anyof_null_to_nullable,
     convert_vertex_datetime_to_openai_datetime,
     get_vertex_location_from_url,
@@ -26,7 +28,7 @@ from litellm.llms.vertex_ai.common_utils import (
     vertex_request_labels_from_litellm_params,
 )
 from litellm.llms.vertex_ai.count_tokens import handler as vertex_count_tokens_handler
-from litellm.types.utils import TokenCountMessagesFormat
+from litellm.types.utils import CountContextManagement, TokenCountMessagesFormat
 
 
 @pytest.mark.asyncio
@@ -60,7 +62,9 @@ class _VertexCountTokensPeer:
             return httpx.Response(200, json={"totalTokens": 37}, request=request)
         return httpx.Response(
             self.status_code,
-            json={"error": {"code": self.status_code, "message": "Invalid function name", "status": "INVALID_ARGUMENT"}},
+            json={
+                "error": {"code": self.status_code, "message": "Invalid function name", "status": "INVALID_ARGUMENT"}
+            },
             request=request,
         )
 
@@ -129,6 +133,60 @@ async def test_vertex_gemini_count_rejects_an_image_url_it_refuses_to_fetch_with
     assert result.status_code == 400
     assert "http://127.0.0.1:9/image.png" in (result.error_message or "")
     assert peer.requests == ()
+
+
+_TOOL_OUTPUT: Final = "line of a long file that the agent read earlier. " * 180
+
+
+def _tool_round(index: int) -> tuple[dict[str, object], ...]:
+    return (
+        {"role": "user", "content": f"Read file {index}."},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "tool_use", "id": f"toolu_{index}", "name": "read_file", "input": {"path": f"{index}"}}
+            ],
+        },
+        {
+            "role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": f"toolu_{index}", "content": _TOOL_OUTPUT}],
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_vertex_gemini_count_applies_the_context_edits_inference_applies() -> None:
+    with _vertex_count_tokens_peer(200) as peer:
+        result: Final = await VertexAITokenCounter().count_tokens(
+            model_to_use="gemini-2.5-flash",
+            messages=[*_tool_round(0), *_tool_round(1), *_tool_round(2), {"role": "user", "content": "Summarize."}],
+            contents=None,
+            deployment={
+                "litellm_params": {**_VERTEX_DEPLOYMENT["litellm_params"], "model": "vertex_ai/gemini-2.5-flash"}
+            },
+            request_model="vertex_ai/gemini-2.5-flash",
+            tools=[
+                {"name": "read_file", "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}}}
+            ],
+            messages_format="anthropic",
+            context_management=CountContextManagement(
+                spec={
+                    "edits": [
+                        {
+                            "type": "clear_tool_uses_20250919",
+                            "trigger": {"type": "input_tokens", "value": 500},
+                            "keep": {"type": "tool_uses", "value": 1},
+                        }
+                    ]
+                },
+                drop_invalid_edits=False,
+            ),
+        )
+
+    assert result is not None
+    assert result.total_tokens == 37
+    assert len(peer.requests) == 1
+    assert peer.requests[0].content.decode().count(_TOOL_OUTPUT) == 1
 
 
 @pytest.mark.parametrize("location", ["us", "eu", "us-central1", "europe-west1", "global"])
@@ -233,6 +291,147 @@ def test_nested_anyof_conversion():
     }
     assert schema == expected
 
+
+def test_anyof_conversion_with_multiple_null_branches():
+    """Adjacent null branches must all be removed."""
+    schema: Final = {
+        "type": "object",
+        "properties": {
+            "example": {
+                "anyOf": [
+                    {"type": "null"},
+                    {"type": "null"},
+                    {"type": "string"},
+                ]
+            }
+        },
+    }
+
+    convert_anyof_null_to_nullable(schema)
+
+    expected: Final = {
+        "type": "object",
+        "properties": {"example": {"anyOf": [{"type": "string", "nullable": True}]}},
+    }
+    assert schema == expected
+
+
+def test_anyof_conversion_with_null_before_empty_object():
+    """An empty-object branch following a null branch still gets a type."""
+    schema: Final = {
+        "type": "object",
+        "properties": {"example": {"anyOf": [{"type": "null"}, {}]}},
+    }
+
+    convert_anyof_null_to_nullable(schema)
+
+    expected: Final = {
+        "type": "object",
+        "properties": {"example": {"anyOf": [{"type": "object", "nullable": True}]}},
+    }
+    assert schema == expected
+
+
+@pytest.mark.parametrize("null_count", [1, 2, 4])
+def test_anyof_conversion_with_only_null_branches_keeps_one_nullable_null(null_count: int):
+    """Vertex accepts a NULL type, so a null-only union is forwarded as one nullable null branch."""
+    schema: Final = {
+        "type": "object",
+        "properties": {"example": {"anyOf": [{"type": "null"} for _ in range(null_count)]}},
+    }
+
+    convert_anyof_null_to_nullable(schema)
+
+    expected: Final = {
+        "type": "object",
+        "properties": {"example": {"anyOf": [{"type": "null", "nullable": True}]}},
+    }
+    assert schema == expected
+
+
+def test_anyof_conversion_leaves_empty_anyof_for_the_provider_to_judge():
+    """An empty union has no null branch to strip, so it is forwarded unchanged."""
+    schema: Final = {"type": "object", "properties": {"example": {"anyOf": []}}}
+
+    convert_anyof_null_to_nullable(schema)
+
+    assert schema == {"type": "object", "properties": {"example": {"anyOf": []}}}
+
+
+@pytest.mark.parametrize("malformed", ["string", {"type": "string"}], ids=["string", "object"])
+def test_anyof_conversion_forwards_a_non_list_anyof_unchanged(malformed: JsonValue):
+    """A malformed union is the provider's to judge, as it was before null branches were stripped in one pass."""
+    schema: Final = {"type": "object", "properties": {"example": {"anyOf": copy.deepcopy(malformed)}}}
+
+    convert_anyof_null_to_nullable(schema)
+
+    assert schema == {"type": "object", "properties": {"example": {"anyOf": malformed}}}
+
+
+@pytest.mark.parametrize(
+    ("branches", "expected"),
+    [
+        ([{"type": "null"}, 5], [5]),
+        ([True, {"type": "null"}], [True]),
+        ([{"type": "null"}, 5, {"type": "string"}], [5, {"type": "string", "nullable": True}]),
+    ],
+    ids=["null-int", "true-null", "null-int-string"],
+)
+def test_anyof_conversion_forwards_a_non_object_branch_for_the_provider_to_judge(
+    branches: list[JsonValue], expected: list[JsonValue]
+):
+    schema: Final = {"type": "object", "properties": {"example": {"anyOf": branches}}}
+
+    convert_anyof_null_to_nullable(schema)
+
+    assert schema == {"type": "object", "properties": {"example": {"anyOf": expected}}}
+
+
+
+@pytest.mark.parametrize(
+    ("field", "expected"),
+    [
+        ({"type": ["integer", "null"]}, {"anyOf": [{"type": "integer", "nullable": True}]}),
+        (
+            {
+                "anyOf": [
+                    {"type": "object", "properties": {"x": {"anyOf": [{"type": "integer"}, {"type": "null"}]}}},
+                    {"type": "null"},
+                ]
+            },
+            {
+                "anyOf": [
+                    {
+                        "type": "object",
+                        "properties": {"x": {"anyOf": [{"type": "integer", "nullable": True}]}},
+                        "nullable": True,
+                    }
+                ]
+            },
+        ),
+        (
+            {"type": ["object", "null"], "properties": {"x": {"type": ["string", "null"]}}},
+            {
+                "anyOf": [
+                    {
+                        "type": "object",
+                        "properties": {"x": {"anyOf": [{"type": "string", "nullable": True}]}},
+                        "nullable": True,
+                    }
+                ]
+            },
+        ),
+        (
+            {"type": "array", "items": {"type": ["number", "null"]}},
+            {"type": "array", "items": {"anyOf": [{"type": "number", "nullable": True}]}},
+        ),
+    ],
+    ids=["type-array", "null-inside-a-union-branch", "nullable-object-with-nullable-property", "nullable-items"],
+)
+def test_vertex_schema_folds_every_null_branch_into_nullable(field: JsonValue, expected: JsonValue):
+    schema: Final = build_vertex_schema({"type": "object", "properties": {"value": field}})
+
+    assert schema["properties"]["value"] == expected
 
 def test_anyof_with_excessive_nesting():
     """Test conversion with excessive nesting > max levels +1 deep."""
