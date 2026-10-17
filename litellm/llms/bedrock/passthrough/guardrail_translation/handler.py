@@ -832,8 +832,12 @@ async def _guardrail_buffered_invoke_stream(
         return body_bytes
     split: Final = _split_group_texts(groups, rewritten_texts)
     for frame_idx, (frame, text) in enumerate(zip(frames, texts)):
-        new_text = split.get((frame_idx, 0))
-        if text is not None and frame.event is not None and new_text is not None and new_text != text.text:
+        if (
+            text is not None
+            and frame.event is not None
+            and (new_text := split.get((frame_idx, 0))) is not None
+            and new_text != text.text
+        ):
             frame.guardrailed_event = {**frame.event, "delta": {**text.delta, text.field: new_text}}
     return b"".join(frame.encode() for frame in frames)
 
