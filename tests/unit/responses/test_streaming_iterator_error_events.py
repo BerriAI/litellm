@@ -679,6 +679,7 @@ _AZURE_RESPONSES_FAILED_EVENT: Final = {
         "error": {"code": "server_error", "message": "upstream failed mid-stream"},
     },
 }
+_AZURE_RESPONSES_WS_URL: Final = "wss://responses-mid-stream.openai.azure.com/openai/v1/responses?api-version=preview"
 
 
 def _azure_responses_logging_obj(logged_api_base: str, routed_api_base: str | None) -> LiteLLMLoggingObj:
@@ -773,8 +774,8 @@ class _ScriptedAzureSocket:
 
 @pytest.mark.asyncio
 async def test_responses_websocket_turn_failure_reports_the_deployment_it_was_sent_to():
-    connection_logging_obj: Final = _azure_responses_logging_obj(_AZURE_RESPONSES_API_BASE, None)
-    connection_logging_obj.pre_call(input=None, api_key="", additional_args={"api_base": _AZURE_RESPONSES_API_BASE})
+    connection_logging_obj: Final = _azure_responses_logging_obj(_AZURE_RESPONSES_WS_URL, _AZURE_RESPONSES_API_BASE)
+    connection_logging_obj.pre_call(input=None, api_key="", additional_args={"api_base": _AZURE_RESPONSES_WS_URL})
     socket: Final = _ScriptedAzureSocket((json.dumps(_AZURE_RESPONSES_FAILED_EVENT),))
     streaming: Final = ResponsesWebSocketStreaming(
         websocket=socket,

@@ -1494,6 +1494,27 @@ async def test_mid_stream_error_leaves_out_an_api_base_it_cannot_resolve():
     assert "API Base:" not in debug_info
 
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "routed_api_base",
+    [
+        f"{_AZURE_DEPLOYMENT_API_BASE}?subscription-key=deployment-secret-value",
+        f"{_AZURE_DEPLOYMENT_API_BASE}?code=deployment-secret-value",
+        _AZURE_DEPLOYMENT_API_BASE.replace("https://", "https://qa-user:deployment-secret-value@"),
+    ],
+    ids=["subscription_key", "function_code", "userinfo"],
+)
+async def test_mid_stream_error_keeps_credentials_in_the_api_base_out(routed_api_base: str):
+    debug_info: Final = await _mid_stream_debug_info(
+        _AZURE_DEPLOYMENT_REQUEST_URL, routed_api_base, "transport_error", sync_mode=False
+    )
+
+    assert f"API Base: `{_AZURE_DEPLOYMENT_API_BASE}`" in debug_info
+    assert "deployment-secret" not in debug_info
+
+
+
 def test_streaming_handler_with_created_time_propagation(
     initialized_custom_stream_wrapper: CustomStreamWrapper, logging_obj: Logging
 ):

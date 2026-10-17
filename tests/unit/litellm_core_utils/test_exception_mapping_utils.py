@@ -57,6 +57,25 @@ def test_openai_cyber_policy_uses_the_structured_error_code(shape: str, code: st
         assert caught.value.response.headers["x-request-id"] == "cyber-policy-request"
 
 
+
+def test_api_base_line_keeps_credentials_out() -> None:
+    request: Final = httpx.Request("POST", "https://gateway.example/v1/chat/completions")
+    original: Final = OpenAIError(
+        status_code=500, message="upstream failed", request=request, response=httpx.Response(500, request=request)
+    )
+    with pytest.raises(litellm.InternalServerError) as caught:
+        exception_type(
+            model="gpt-5.4-mini",
+            original_exception=original,
+            custom_llm_provider="openai",
+            completion_kwargs={},
+            extra_kwargs={"api_base": "https://qa-user:function-secret@gateway.example/v1?code=function-secret"},
+        )
+    debug_info: Final = caught.value.litellm_debug_info
+    assert isinstance(debug_info, str)
+    assert "API Base: `https://gateway.example/v1`" in debug_info
+    assert "function-secret" not in debug_info
+
 # Test cases for is_error_str_context_window_exceeded
 # Tuple format: (error_message, expected_result)
 context_window_test_cases = [

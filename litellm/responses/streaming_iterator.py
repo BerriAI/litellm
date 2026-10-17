@@ -2117,11 +2117,7 @@ class ResponsesWebSocketStreaming:
         )
         self._detach_budget_reservation()
         turn_logging_obj.model_call_details["messages"] = list(_logged_user_messages(client_frame))
-        connection_params: Final = _json_object_or_none(
-            _typed_gets_litellm_params(turn_logging_obj.model_call_details.get)("litellm_params", {})
-        )
-        connection_api_base: Final = None if connection_params is None else connection_params.get("api_base")
-        turn_logging_obj.pre_call(input=client_frame, api_key="", additional_args={"api_base": connection_api_base})
+        turn_logging_obj.pre_call(input=client_frame, api_key="")
         self._open_turns = (*self._open_turns, _ResponsesWsTurn(logging_obj=turn_logging_obj))
 
     def _detach_budget_reservation(self) -> None:

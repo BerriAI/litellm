@@ -5,6 +5,7 @@ import traceback
 from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final, Protocol, cast
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
@@ -2425,6 +2426,14 @@ def with_deployment_api_base(litellm_params: object) -> Mapping[str, object]:
     return MappingProxyType({**params, "api_base": deployment_api_base})
 
 
+def _api_base_without_credentials(api_base: str) -> str:
+    try:
+        parts: Final = urlsplit(api_base)
+    except ValueError:
+        return ""
+    return urlunsplit((parts.scheme, parts.netloc.rpartition("@")[2], parts.path, "", ""))
+
+
 def _is_guardrail_block(original_exception: Exception) -> bool:
     from litellm.integrations.custom_guardrail import is_guardrail_intervention
 
@@ -2495,8 +2504,9 @@ def exception_type(
                 if isinstance(custom_llm_provider, str) and len(custom_llm_provider) > 0:
                     exception_provider = custom_llm_provider[0].upper() + custom_llm_provider[1:] + "Exception"
 
-                if _api_base:
-                    extra_information += f"\nAPI Base: `{_api_base}`"
+                shown_api_base: Final = _api_base_without_credentials(_api_base) if _api_base else ""
+                if shown_api_base:
+                    extra_information += f"\nAPI Base: `{shown_api_base}`"
                 if messages and len(messages) > 0 and litellm.redact_messages_in_exceptions is False:
                     extra_information += f"\nMessages: `{messages}`"
 
