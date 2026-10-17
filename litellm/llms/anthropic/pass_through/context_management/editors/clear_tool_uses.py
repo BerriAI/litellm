@@ -1,5 +1,6 @@
 """``clear_tool_uses_20250919`` polyfill (v0: ``trigger`` and ``keep`` only)."""
 
+from collections.abc import Mapping
 from typing import Any, Final, cast
 
 from typing_extensions import ReadOnly, TypedDict
@@ -60,7 +61,7 @@ def _collect_tool_use_ids_in_order(messages: list[dict[str, object]]) -> list[st
 
 
 def _trigger_met(
-    trigger: dict[str, object],
+    trigger: Mapping[str, object],
     model: str,
     messages: list[dict[str, object]],
     tools: list[dict[str, object]] | None,

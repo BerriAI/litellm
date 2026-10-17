@@ -4,6 +4,8 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.llms.base_llm.vector_store.transformation import (
     BaseQueryEmbeddingVectorStoreConfig,
@@ -28,6 +30,18 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _MilvusSearchResponse(TypedDict):
+    data: ReadOnly[NotRequired[Sequence[Mapping[str, object]]]]
+
+
+_MILVUS_SEARCH_RESPONSE: Final = TypeAdapter(_MilvusSearchResponse)
+_MILVUS_SEARCH_TEXT: Final[TypeAdapter[str | None]] = TypeAdapter(str | None, config=ConfigDict(strict=True))
+_MILVUS_SEARCH_SCORE: Final[TypeAdapter[int | float | None]] = TypeAdapter(
+    int | float | None, config=ConfigDict(strict=True)
+)
 
 MILVUS_OPTIONAL_PARAMS: Final = {
     "annsField",
@@ -211,7 +225,7 @@ class MilvusVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig):
         }
         """
         try:
-            response_json: Final = response.json()
+            response_json: Final = _MILVUS_SEARCH_RESPONSE.validate_python(response.json())
 
             # Extract results from Azure AI Search API response
             results: Final = response_json.get("data", [])
@@ -231,7 +245,7 @@ class MilvusVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig):
             search_results: Final[list[VectorStoreSearchResult]] = []
             for result in results:
                 # Extract text content
-                text_content = result.get(text_field, "")
+                text_content = _MILVUS_SEARCH_TEXT.validate_python(result.get(text_field, ""))
 
                 content = [
                     VectorStoreResultContent(
@@ -241,14 +255,13 @@ class MilvusVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig):
                 ]
 
                 # Get the search score (distance from the query vector)
-                score = result.get("distance", 0.0)
+                score = _MILVUS_SEARCH_SCORE.validate_python(result.get("distance", 0.0))
 
                 # Build attributes with all available metadata
                 # Exclude system fields and already-processed fields
-                attributes = {}
-                for key, value in result.items():
-                    if key not in ["id", "content", "distance", text_field]:
-                        attributes[key] = value
+                attributes = {
+                    key: value for key, value in result.items() if key not in ["id", "content", "distance", text_field]
+                }
 
                 result_obj = VectorStoreSearchResult(
                     score=score,

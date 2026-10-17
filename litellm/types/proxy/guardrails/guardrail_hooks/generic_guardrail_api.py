@@ -47,7 +47,7 @@ class GenericGuardrailAPIMetadata(TypedDict, total=False):
 class GenericGuardrailAPIOptionalParams(LiteLLMBaseModel):
     """Optional parameters for the Generic Guardrail API"""
 
-    additional_provider_specific_params: dict[str, Any] | None = Field(
+    additional_provider_specific_params: dict[str, object] | None = Field(
         default=None,
         description="Additional provider-specific parameters to send with the guardrail request",
     )
@@ -158,7 +158,7 @@ class GenericGuardrailAPIRequest(LiteLLMBaseModel):
         default=None,
         description="LiteLLM library version running this proxy.",
     )
-    additional_provider_specific_params: dict[str, Any] | None = None
+    additional_provider_specific_params: dict[str, object] | None = None
     tool_calls: list[ChatCompletionToolCallChunk] | list[ChatCompletionMessageToolCall] | None = None
     model: str | None = None  # the model being used for the LLM call
 

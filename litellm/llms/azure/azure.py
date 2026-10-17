@@ -13,7 +13,8 @@ from openai import (
     BadRequestError,
     OpenAI,
 )
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, TypeAdapter, with_config
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.constants import AZURE_OPERATION_POLLING_TIMEOUT, DEFAULT_MAX_RETRIES
@@ -58,6 +59,14 @@ from .image_generation import (
     get_azure_image_generation_config,
 )
 from .image_generation.http_utils import azure_deployment_image_generation_json_body
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _AzureImageGenerationSuccessResponse(TypedDict):
+    result: ReadOnly[object]
+
+
+_AZURE_IMAGE_GENERATION_SUCCESS_RESPONSE: Final = TypeAdapter(_AzureImageGenerationSuccessResponse)
 
 
 class AzureOpenAIAssistantsAPIConfig:
@@ -961,7 +970,8 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                     body=error_data,
                 )
 
-            result: Final = response.json()["result"]
+            success_response: Final = _AZURE_IMAGE_GENERATION_SUCCESS_RESPONSE.validate_python(response.json())
+            result: Final = success_response["result"]
             return httpx.Response(
                 status_code=200,
                 headers=response.headers,
@@ -1078,7 +1088,8 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                     body=error_data,
                 )
 
-            result: Final = response.json()["result"]
+            success_response: Final = _AZURE_IMAGE_GENERATION_SUCCESS_RESPONSE.validate_python(response.json())
+            result: Final = success_response["result"]
             return httpx.Response(
                 status_code=200,
                 headers=response.headers,

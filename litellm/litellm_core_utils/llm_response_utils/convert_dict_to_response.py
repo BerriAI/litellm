@@ -618,12 +618,12 @@ class LiteLLMResponseObjectHandler:
         choices_list: Final[list[TextChoices]] = []
 
         # Convert each choice to TextChoices
-        for choice in response["choices"]:
+        for choice in response.choices:
             text_choices = TextChoices()
-            text_choices["text"] = choice["message"]["content"]
-            text_choices["index"] = choice["index"]
+            text_choices["text"] = choice.message.content
+            text_choices["index"] = choice.index
             text_choices["logprobs"] = transformed_logprobs
-            text_choices["finish_reason"] = choice["finish_reason"]
+            text_choices["finish_reason"] = choice.finish_reason
             choices_list.append(text_choices)
 
         text_completion_response["choices"] = choices_list

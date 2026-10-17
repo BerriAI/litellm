@@ -1,9 +1,11 @@
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Final, cast
 from urllib.parse import urlparse
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
@@ -11,8 +13,6 @@ from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreCon
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.types.integrations.rag.bedrock_knowledgebase import (
-    BedrockKBContent,
-    BedrockKBResponse,
     BedrockKBRetrievalConfiguration,
     BedrockKBRetrievalQuery,
     BedrockKBUserContext,
@@ -32,6 +32,26 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _KBContent(TypedDict):
+    text: ReadOnly[NotRequired[str | None]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _KBRetrievalResult(TypedDict):
+    content: ReadOnly[NotRequired[_KBContent | None]]
+    score: ReadOnly[NotRequired[int | float | None]]
+    metadata: ReadOnly[NotRequired[Mapping[str, object] | None]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _KBResponse(TypedDict):
+    retrievalResults: ReadOnly[NotRequired[Sequence[_KBRetrievalResult] | None]]
+
+
+_KB_RESPONSE: Final = TypeAdapter(_KBResponse)
 
 
 class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
@@ -284,7 +304,7 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
             api_key=api_key,
         )
 
-    def _get_file_id_from_metadata(self, metadata: dict[str, Any]) -> str:
+    def _get_file_id_from_metadata(self, metadata: Mapping[str, Any]) -> str:
         """
         Extract file_id from Bedrock KB metadata.
         Uses source URI if available, otherwise generates a fallback ID.
@@ -296,7 +316,7 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         chunk_id: Final = metadata.get("x-amz-bedrock-kb-chunk-id", "unknown") if metadata else "unknown"
         return f"bedrock-kb-{chunk_id}"
 
-    def _get_filename_from_metadata(self, metadata: dict[str, Any]) -> str:
+    def _get_filename_from_metadata(self, metadata: Mapping[str, Any]) -> str:
         """
         Extract filename from Bedrock KB metadata.
         Tries to extract filename from source URI, falls back to domain name or data source ID.
@@ -318,7 +338,7 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         data_source_id: Final = metadata.get("x-amz-bedrock-kb-data-source-id", "unknown") if metadata else "unknown"
         return f"bedrock-kb-document-{data_source_id}"
 
-    def _get_attributes_from_metadata(self, metadata: dict[str, object]) -> dict[str, object]:
+    def _get_attributes_from_metadata(self, metadata: Mapping[str, object]) -> dict[str, object]:
         """
         Extract all attributes from Bedrock KB metadata.
         Returns a copy of the metadata dictionary.
@@ -331,10 +351,10 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         self, response: httpx.Response, litellm_logging_obj: LiteLLMLoggingObj
     ) -> VectorStoreSearchResponse:
         try:
-            response_data: Final = BedrockKBResponse(**response.json())
+            response_data: Final = _KB_RESPONSE.validate_python(response.json())
             results: Final[list[VectorStoreSearchResult]] = []
             for item in response_data.get("retrievalResults", []) or []:
-                content: BedrockKBContent | None = item.get("content")
+                content: _KBContent | None = item.get("content")
                 text = content.get("text") if content else None
                 if text is None:
                     continue

@@ -4,6 +4,8 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.base_llm.vector_store.transformation import (
@@ -28,6 +30,26 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+_AzureSearchHit = with_config(ConfigDict(extra="allow", strict=True))(
+    TypedDict(
+        "_AzureSearchHit",
+        {
+            "id": NotRequired[ReadOnly[str | None]],
+            "content": NotRequired[ReadOnly[str | None]],
+            "@search.score": NotRequired[ReadOnly[int | float | None]],
+        },
+    )
+)
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _AzureSearchResponse(TypedDict):
+    value: NotRequired[ReadOnly[Sequence[_AzureSearchHit]]]
+
+
+_AZURE_SEARCH_RESPONSE: Final = TypeAdapter(_AzureSearchResponse)
 
 
 class AzureAIVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, BaseAzureLLM):
@@ -198,7 +220,7 @@ class AzureAIVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, BaseAzureLLM
         }
         """
         try:
-            response_json: Final = response.json()
+            response_json: Final = _AZURE_SEARCH_RESPONSE.validate_python(response.json())
 
             # Extract results from Azure AI Search API response
             results: Final = response_json.get("value", [])

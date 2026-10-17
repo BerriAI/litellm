@@ -1510,7 +1510,7 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
 
     @field_validator("reasoning", mode="before")
     @classmethod
-    def validate_reasoning_to_dict(cls, value: Any) -> dict[str, Any] | None:
+    def validate_reasoning_to_dict(cls, value: Any) -> builtins.object:
         """Accept API reasoning dict (including effort 'none'/'xhigh'); always store as dict."""
         if value is None:
             return None

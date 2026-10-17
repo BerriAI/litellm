@@ -13,6 +13,8 @@ from collections.abc import Set as AbstractSet
 from typing import Any, Final, Literal, Protocol, overload
 from urllib.parse import quote
 
+from pydantic import TypeAdapter
+
 from litellm._logging import verbose_logger
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
@@ -243,7 +245,7 @@ def _parse_mcp_info_dict(mcp_info: object) -> Mapping[str, object] | None:
         return mcp_info
     if isinstance(mcp_info, str):
         try:
-            parsed: Final[object] = json.loads(mcp_info)
+            parsed: Final = _JSON_VALUE.validate_python(json.loads(mcp_info))
         except (ValueError, TypeError):
             return None
         return parsed if isinstance(parsed, dict) else None
@@ -688,6 +690,8 @@ class MCPMissingUserEnvVarsError(Exception):
 # Pattern for ``${NAME}`` substitution. Matches the standard env-var
 # identifier rules — letters, digits, underscores, can't start with a digit.
 _ENV_VAR_PATTERN: Final = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+_JSON_VALUE: Final = TypeAdapter(object)
 
 
 def parse_admin_env_vars(

@@ -6,10 +6,15 @@ based on user-provided attack examples and descriptions.
 import json
 from typing import Final
 
+from pydantic import ConfigDict, TypeAdapter
+
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_COMPETITOR_DISCOVERY_MODEL
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
+
+_TOOL_ARGUMENTS: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
+_SELECTED_TEMPLATES: Final = TypeAdapter(list[dict[str, object]], config=ConfigDict(strict=True))
 
 SUGGEST_TOOL: Final = {
     "type": "function",
@@ -97,11 +102,13 @@ class AiPolicySuggester:
                     "explanation": "No templates could be matched to your requirements.",
                 }
 
-            result: Final = json.loads(tool_calls[0].function.arguments)
+            result: Final = _TOOL_ARGUMENTS.validate_python(json.loads(tool_calls[0].function.arguments))
 
             valid_ids: Final = {t["id"] for t in templates}
             result["selected_templates"] = [
-                s for s in result.get("selected_templates", []) if s.get("template_id") in valid_ids
+                s
+                for s in _SELECTED_TEMPLATES.validate_python(result.get("selected_templates", []))
+                if s.get("template_id") in valid_ids
             ]
 
             return result

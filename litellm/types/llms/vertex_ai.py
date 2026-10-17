@@ -1,6 +1,6 @@
 from collections.abc import Sequence
 from enum import Enum
-from typing import Any, Final, Literal, Protocol
+from typing import Final, Literal, Protocol
 
 from typing_extensions import (
     ReadOnly,
@@ -139,7 +139,7 @@ class Schema(TypedDict, total=False):
     title: str
     description: str
     nullable: bool
-    default: Any
+    default: object
     items: "Schema"
     minItems: str
     maxItems: str
@@ -154,7 +154,7 @@ class Schema(TypedDict, total=False):
     minLength: str
     maxLength: str
     pattern: str
-    example: Any
+    example: object
     anyOf: list["Schema"]
 
 
@@ -782,9 +782,9 @@ class VertexVideoGenerationResponse(TypedDict, total=False):
 
     name: str
     done: bool
-    response: dict[str, Any]
-    metadata: dict[str, Any]
-    error: dict[str, Any]
+    response: dict[str, object]
+    metadata: dict[str, object]
+    error: dict[str, object]
 
 
 VERTEX_CREDENTIALS_TYPES = str | dict[str, str]

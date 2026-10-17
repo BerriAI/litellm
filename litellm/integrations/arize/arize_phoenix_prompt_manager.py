@@ -4,10 +4,11 @@ Fetches prompt versions from Arize Phoenix and provides workspace-based access c
 """
 
 from collections.abc import Mapping, Sequence
-from typing import Any, Final, cast
+from typing import Final, cast
 
 from jinja2 import DictLoader, select_autoescape
 from jinja2.sandbox import ImmutableSandboxedEnvironment
+from pydantic import ConfigDict, TypeAdapter, with_config
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
@@ -22,18 +23,56 @@ from litellm.types.utils import StandardCallbackDynamicParams
 from .arize_phoenix_client import ArizePhoenixClient
 
 
+@with_config(ConfigDict(strict=True, extra="allow"))
 class ArizePhoenixContentPart(TypedDict, total=False):
     type: ReadOnly[str]
     text: ReadOnly[str]
 
 
+@with_config(ConfigDict(strict=True, extra="allow"))
 class ArizePhoenixTemplateMessage(TypedDict, total=False):
     role: ReadOnly[str]
     content: ReadOnly[Sequence[ArizePhoenixContentPart]]
 
 
+@with_config(ConfigDict(strict=True, extra="allow"))
 class ArizePhoenixTemplateBody(TypedDict, total=False):
     messages: ReadOnly[Sequence[ArizePhoenixTemplateMessage]]
+
+
+@with_config(ConfigDict(strict=True, extra="allow"))
+class _ArizePhoenixProviderParams(TypedDict, total=False):
+    temperature: ReadOnly[int | float | None]
+    max_tokens: ReadOnly[int | None]
+
+
+@with_config(ConfigDict(strict=True, extra="allow"))
+class _ArizePhoenixPromptData(TypedDict, total=False):
+    template: ReadOnly[ArizePhoenixTemplateBody]
+    invocation_parameters: ReadOnly[Mapping[str, object]]
+    model_name: ReadOnly[str | None]
+    model_provider: ReadOnly[str | None]
+    description: ReadOnly[str]
+    template_type: ReadOnly[str | None]
+    template_format: ReadOnly[str]
+
+
+_ARIZE_PHOENIX_PROMPT_DATA: Final = TypeAdapter(_ArizePhoenixPromptData)
+_ARIZE_PHOENIX_PROVIDER_PARAMS: Final = TypeAdapter(_ArizePhoenixProviderParams)
+_ARIZE_PHOENIX_PROVIDER_MAPPING: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(strict=True))
+_EMPTY_PROVIDER_PARAMS: Final[Mapping[str, object]] = {}
+
+
+def _is_dict(value: object) -> bool:
+    return isinstance(value, dict)
+
+
+def _preferred_provider_params(invocation_params: Mapping[str, object]) -> object:
+    if "openai" in invocation_params:
+        return invocation_params["openai"]
+    if "anthropic" in invocation_params:
+        return invocation_params["anthropic"]
+    return _EMPTY_PROVIDER_PARAMS
 
 
 class ArizePhoenixPromptMetadata(TypedDict):
@@ -42,7 +81,7 @@ class ArizePhoenixPromptMetadata(TypedDict):
     description: ReadOnly[str]
     template_type: ReadOnly[str | None]
     template_format: ReadOnly[str]
-    invocation_parameters: ReadOnly[Mapping[str, Mapping[str, object]]]
+    invocation_parameters: ReadOnly[Mapping[str, object]]
     temperature: ReadOnly[float | None]
     max_tokens: ReadOnly[int | None]
 
@@ -136,37 +175,39 @@ class ArizePhoenixTemplateManager:
 
     _load_prompt_from_arize = load_prompt_from_arize
 
-    def _parse_prompt_data(self, data: dict[str, Any], prompt_version_id: str) -> ArizePhoenixPromptTemplate:
+    def _parse_prompt_data(self, data: object, prompt_version_id: str) -> ArizePhoenixPromptTemplate:
         """Parse Arize Phoenix prompt data and extract messages and metadata."""
-        template_data: Final[ArizePhoenixTemplateBody] = data.get("template", {})
+        prompt_data: Final = _ARIZE_PHOENIX_PROMPT_DATA.validate_python(data)
+        template_data: Final = prompt_data.get("template", {})
         messages: Final = template_data.get("messages", [])
 
         # Extract invocation parameters
-        invocation_params: Final = data.get("invocation_parameters", {})
-        provider_params = {}
+        invocation_params: Final = prompt_data.get("invocation_parameters", {})
 
         # Extract provider-specific parameters
-        if "openai" in invocation_params:
-            provider_params = invocation_params["openai"]
-        elif "anthropic" in invocation_params:
-            provider_params = invocation_params["anthropic"]
-        else:
-            # Try to find any nested provider params
-            for key, value in invocation_params.items():
-                if isinstance(value, dict):
-                    provider_params = value
-                    break
+        provider_params: Final[object] = (
+            invocation_params["openai"]
+            if "openai" in invocation_params
+            else invocation_params["anthropic"]
+            if "anthropic" in invocation_params
+            else next(
+                # Try to find any nested provider params
+                (value for value in invocation_params.values() if _is_dict(value)),
+                _EMPTY_PROVIDER_PARAMS,
+            )
+        )
+        provider_params_typed: Final = _ARIZE_PHOENIX_PROVIDER_PARAMS.validate_python(provider_params)
 
         # Build metadata dictionary
         metadata: Final[ArizePhoenixPromptMetadata] = {
-            "model_name": data.get("model_name"),
-            "model_provider": data.get("model_provider"),
-            "description": data.get("description", ""),
-            "template_type": data.get("template_type"),
-            "template_format": data.get("template_format", "MUSTACHE"),
+            "model_name": prompt_data.get("model_name"),
+            "model_provider": prompt_data.get("model_provider"),
+            "description": prompt_data.get("description", ""),
+            "template_type": prompt_data.get("template_type"),
+            "template_format": prompt_data.get("template_format", "MUSTACHE"),
             "invocation_parameters": invocation_params,
-            "temperature": provider_params.get("temperature"),
-            "max_tokens": provider_params.get("max_tokens"),
+            "temperature": provider_params_typed.get("temperature"),
+            "max_tokens": provider_params_typed.get("max_tokens"),
         }
 
         return ArizePhoenixPromptTemplate(
@@ -304,15 +345,11 @@ class ArizePhoenixPromptManager(CustomPromptManagement):
 
         # Add additional invocation parameters
         invocation_params: Final = template.invocation_parameters
-        provider_params: Mapping[str, object] = {}
-
-        if "openai" in invocation_params:
-            provider_params = invocation_params["openai"]
-        elif "anthropic" in invocation_params:
-            provider_params = invocation_params["anthropic"]
+        provider_params: Final[object] = _preferred_provider_params(invocation_params)
+        provider_params_typed: Final = _ARIZE_PHOENIX_PROVIDER_MAPPING.validate_python(provider_params)
 
         # Add any additional parameters
-        for key, value in provider_params.items():
+        for key, value in provider_params_typed.items():
             if key not in metadata:
                 metadata[key] = value
 

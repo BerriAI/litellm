@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Final, Literal, TypeAlias
+from typing import Final, Literal, TypeAlias
 
 from pydantic import ConfigDict, model_validator
 from typing_extensions import ReadOnly, TypedDict
@@ -50,14 +50,14 @@ class SuccessfulKeyUpdate(LiteLLMBaseModel):
     """Successfully updated key with its updated information"""
 
     key: str
-    key_info: dict[str, Any]
+    key_info: dict[str, object]
 
 
 class FailedKeyUpdate(LiteLLMBaseModel):
     """Failed key update with reason"""
 
     key: str
-    key_info: dict[str, Any] | None = None
+    key_info: dict[str, object] | None = None
     failed_reason: str
 
 
@@ -78,14 +78,14 @@ class KeyUpdateFields(LiteLLMBaseModel):
     max_budget: float | None = None
     budget_id: str | None = None
     budget_duration: str | None = None
-    budget_limits: list[Any] | None = None
-    model_max_budget: dict[str, Any] | None = None
+    budget_limits: list[object] | None = None
+    model_max_budget: dict[str, object] | None = None
 
     # Rate limits
     tpm_limit: int | None = None
     rpm_limit: int | None = None
-    model_tpm_limit: dict[str, Any] | None = None
-    model_rpm_limit: dict[str, Any] | None = None
+    model_tpm_limit: dict[str, object] | None = None
+    model_rpm_limit: dict[str, object] | None = None
     max_parallel_requests: int | None = None
     rpm_limit_type: Literal["guaranteed_throughput", "best_effort_throughput", "dynamic"] | None = None
     tpm_limit_type: Literal["guaranteed_throughput", "best_effort_throughput", "dynamic"] | None = None
@@ -99,7 +99,7 @@ class KeyUpdateFields(LiteLLMBaseModel):
 
     # Operational metadata
     tags: list[str] | None = None
-    metadata: dict[str, Any] | None = None
+    metadata: dict[str, object] | None = None
 
     @model_validator(mode="after")
     def validate_temp_budget(self) -> "KeyUpdateFields":

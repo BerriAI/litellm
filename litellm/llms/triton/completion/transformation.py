@@ -3,10 +3,12 @@ Translates from OpenAI's `/v1/chat/completions` endpoint to Triton's `/generate`
 """
 
 import json
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Sequence
 from typing import TYPE_CHECKING, Final, Literal
 
 from httpx import Headers, Response
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.constants import DEFAULT_MAX_TOKENS_FOR_TRITON
 from litellm.litellm_core_utils.prompt_templates.factory import prompt_factory
@@ -30,6 +32,26 @@ from ..common_utils import TritonError
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+
+
+@with_config(ConfigDict(strict=True, extra="allow", hide_input_in_errors=True))
+class _TritonGenerateResponse(TypedDict):
+    text_output: ReadOnly[str | None]
+
+
+@with_config(ConfigDict(strict=True, extra="allow", hide_input_in_errors=True))
+class _TritonInferOutput(TypedDict):
+    data: ReadOnly[str | Sequence[str] | None]
+
+
+@with_config(ConfigDict(strict=True, extra="allow", hide_input_in_errors=True))
+class _TritonInferResponse(TypedDict):
+    outputs: ReadOnly[Sequence[object]]
+
+
+_TRITON_GENERATE_RESPONSE: Final[TypeAdapter[_TritonGenerateResponse]] = TypeAdapter(_TritonGenerateResponse)
+_TRITON_INFER_OUTPUT: Final[TypeAdapter[_TritonInferOutput]] = TypeAdapter(_TritonInferOutput)
+_TRITON_INFER_RESPONSE: Final[TypeAdapter[_TritonInferResponse]] = TypeAdapter(_TritonInferResponse)
 
 
 class TritonConfig(BaseConfig):
@@ -220,7 +242,7 @@ class TritonGenerateConfig(TritonConfig):
         json_mode: bool | None = None,
     ) -> ModelResponse:
         try:
-            raw_response_json: Final = raw_response.json()
+            raw_response_json: Final = _TRITON_GENERATE_RESPONSE.validate_python(raw_response.json())
         except Exception:
             raise TritonError(message=raw_response.text, status_code=raw_response.status_code)
         model_response.choices = [Choices(index=0, message=Message(content=raw_response_json["text_output"]))]
@@ -285,16 +307,16 @@ class TritonInferConfig(TritonConfig):
         json_mode: bool | None = None,
     ) -> ModelResponse:
         try:
-            raw_response_json: Final = raw_response.json()
+            raw_response_json: Final = _TRITON_INFER_RESPONSE.validate_python(raw_response.json())
         except Exception:
             raise TritonError(message=raw_response.text, status_code=raw_response.status_code)
 
-        _triton_response_data: Final = raw_response_json["outputs"][0]["data"]
-        triton_response_data: str | None = None
-        if isinstance(_triton_response_data, list):
-            triton_response_data = "".join(_triton_response_data)
-        else:
-            triton_response_data = _triton_response_data
+        _triton_response_data: Final = _TRITON_INFER_OUTPUT.validate_python(raw_response_json["outputs"][0])["data"]
+        triton_response_data: Final[str | None] = (
+            _triton_response_data
+            if isinstance(_triton_response_data, str) or _triton_response_data is None
+            else "".join(_triton_response_data)
+        )
 
         model_response.choices = [
             Choices(
