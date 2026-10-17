@@ -80,6 +80,7 @@ OPTIONAL_KWARGS_KEYS: Final = (
             "fireworks_forward_user_id",
             "responses_api_version",
             PROVIDER_AFFINITY_HEADER_KWARG_KEY,
+            "xai_oauth_token_file",
         }
     )
     | AWS_CREDENTIAL_KWARGS_KEYS

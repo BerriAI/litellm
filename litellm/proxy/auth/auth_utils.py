@@ -453,6 +453,8 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     "github_copilot_auth_type",
     "user_provider_credentials",
     "github_copilot_user_session",
+    # Picks which xAI OAuth account stored on the proxy host signs the call.
+    "xai_oauth_token_file",
     # Observability credentials, hosts, and project identifiers: derived
     # from the canonical ``_supported_callback_params`` allowlist so new
     # integrations are covered automatically. Sorted for stable iteration

@@ -1,4 +1,5 @@
 from collections.abc import Iterable, Mapping
+from http import HTTPStatus
 from typing import Final
 
 import httpx
@@ -14,6 +15,14 @@ USD_TICKS_PER_DOLLAR: Final = 10_000_000_000
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _JSON_VALUES: Final = TypeAdapter(Iterable[object], config=ConfigDict(hide_input_in_errors=True))
 _MODEL_ID: Final = TypeAdapter(str, config=ConfigDict(strict=True, hide_input_in_errors=True))
+XAI_SPENDING_LIMIT_ERROR_MARKER: Final = "spending-limit"
+
+
+def xai_error_status_code(status_code: int, error_message: str) -> int:
+    """xAI rejects requests past an account's spending limit with a 403; report it as a 429 so routers fail over"""
+    if status_code == HTTPStatus.FORBIDDEN and XAI_SPENDING_LIMIT_ERROR_MARKER in error_message:
+        return HTTPStatus.TOO_MANY_REQUESTS.value
+    return status_code
 
 
 def xai_reported_cost_in_usd(cost_in_usd_ticks: object) -> float | None:

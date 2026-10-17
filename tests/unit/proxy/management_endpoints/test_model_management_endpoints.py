@@ -8655,14 +8655,21 @@ class TestNonAdminCannotPersistWifFieldsOnModel:
             mock_prisma.db.litellm_proxymodeltable.update.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_patch_model_non_admin_cannot_set_openai_wif_field(self):
+    @pytest.mark.parametrize(
+        ("model", "field", "value"),
+        [
+            ("openai/gpt-4o-mini", "openai_identity_token_file", "/var/run/secrets/tokens/attacker"),
+            ("xai/grok-4", "xai_oauth_token_file", "auth-other-account.json"),
+        ],
+    )
+    async def test_patch_model_non_admin_cannot_set_server_owned_token_file(self, model: str, field: str, value: str):
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             patch_model,
         )
 
         non_admin = UserAPIKeyAuth(user_id="team_admin", user_role=LitellmUserRoles.INTERNAL_USER)
         existing_row = MagicMock()
-        existing_row.litellm_params = {"model": "openai/gpt-4o-mini"}
+        existing_row.litellm_params = {"model": model}
         existing_row.model_dump.return_value = {
             "model_name": "gpt",
             "litellm_params": existing_row.litellm_params,
@@ -8699,14 +8706,10 @@ class TestNonAdminCannotPersistWifFieldsOnModel:
             ) as exc_info:
                 await patch_model(
                     model_id="m1",
-                    patch_data=updateDeployment(
-                        litellm_params=updateLiteLLMParams(
-                            openai_identity_token_file="/var/run/secrets/tokens/attacker",
-                        )
-                    ),
+                    patch_data=updateDeployment(litellm_params=updateLiteLLMParams.model_validate({field: value})),
                     user_api_key_dict=non_admin,
                 )
-            assert getattr(exc_info.value, "param", "") == "openai_identity_token_file"
+            assert getattr(exc_info.value, "param", "") == field
             mock_prisma.db.litellm_proxymodeltable.update.assert_not_called()
 
     @pytest.mark.asyncio

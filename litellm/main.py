@@ -5792,6 +5792,7 @@ def completion(
                     PROVIDER_AFFINITY_HEADER_KWARG_KEY,
                     "fireworks_forward_user_id",
                     "responses_api_version",
+                    "xai_oauth_token_file",
                 )
                 if key in kwargs
             },
