@@ -2063,6 +2063,11 @@ def test_bedrock_capability_model_reads_base_model_only_for_application_profile_
 
 _FORMAT_REJECTION: Final = "The model returned the following errors: output_config.format: Extra inputs are not permitted"
 _COMPILE_REJECTION: Final = "The model returned the following errors: compilation exceeded limits: Schema is too complex."
+_SCHEMA_PATTERN_REJECTION: Final = (
+    "The model returned the following errors: output_config.format.schema: Unsupported regex feature in pattern "
+    "field: pattern is too complex for structured output: reduce the {n,m} upper bound, narrow the character class "
+    "range, or avoid nesting quantified groups"
+)
 
 
 @pytest.mark.parametrize(
@@ -2070,12 +2075,21 @@ _COMPILE_REJECTION: Final = "The model returned the following errors: compilatio
     [
         (400, f'{{"message":"{_FORMAT_REJECTION}"}}', True),
         (400, f'{{"message":"{_COMPILE_REJECTION}"}}', True),
+        (400, f'{{"message":"{_SCHEMA_PATTERN_REJECTION}"}}', True),
         (400, "Malformed input request: #: extraneous key [output_config] is not permitted", False),
         (400, "The model returned the following errors: messages.0.content: Field required", False),
         (500, _FORMAT_REJECTION, False),
         (429, _COMPILE_REJECTION, False),
     ],
-    ids=["format_not_permitted", "schema_too_complex", "other_key_not_permitted", "other_400", "500", "429"],
+    ids=[
+        "format_not_permitted",
+        "schema_too_complex",
+        "schema_pattern_too_complex",
+        "other_key_not_permitted",
+        "other_400",
+        "500",
+        "429",
+    ],
 )
 def test_is_bedrock_native_output_rejection_matches_only_the_400s_that_reject_native_output(
     status_code, error_text, expected

@@ -311,6 +311,7 @@ def without_bedrock_native_output_opt_in(litellm_params: Mapping[str, object]) -
 _BEDROCK_NATIVE_OUTPUT_REJECTIONS: Final = (
     "output_config.format: Extra inputs are not permitted",
     "compilation exceeded limits: Schema is too complex",
+    "output_config.format.schema:",
 )
 
 

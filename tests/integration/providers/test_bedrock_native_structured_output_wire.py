@@ -40,6 +40,11 @@ _FABLE_REJECTION: Final = (
     "The model returned the following errors: output_config.format: Extra inputs are not permitted"
 )
 _SCHEMA_TOO_COMPLEX: Final = "The model returned the following errors: compilation exceeded limits: Schema is too complex."
+_PATTERN_TOO_COMPLEX: Final = (
+    "The model returned the following errors: output_config.format.schema: Unsupported regex feature in pattern "
+    "field: pattern is too complex for structured output: reduce the {n,m} upper bound, narrow the character class "
+    "range, or avoid nesting quantified groups"
+)
 _MAX_TOKENS_400: Final = "The model returned the following errors: max_tokens: 2048 > 1024, the maximum for this request"
 _UNSUPPORTED_KEYWORDS: Final = (
     "minimum",
@@ -849,6 +854,7 @@ def _fallback_answer(gateway: Gateway, entry: str, model: str, marker: str) -> J
     ("entry", "rejection"),
     [
         ("converse_chat", _FABLE_REJECTION),
+        ("converse_chat", _PATTERN_TOO_COMPLEX),
         ("converse_chat_stream", _SCHEMA_TOO_COMPLEX),
         ("converse_responses", _FABLE_REJECTION),
         ("converse_messages", _FABLE_REJECTION),
