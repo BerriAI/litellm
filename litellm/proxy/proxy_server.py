@@ -14918,7 +14918,7 @@ def _drops_params(deployment: Mapping[str, object] | None) -> bool:
 
 def _text_only_contents(contents: Sequence[Mapping[str, object]]) -> bool:
     parts: Final = chain.from_iterable(iter_items(content.get("parts") or ()) for content in contents)
-    return all(isinstance(part, Mapping) and part.keys() == {"text"} for part in parts)
+    return all(set(as_str_mapping(part) or ()) == {"text"} for part in parts)
 
 
 def _router_default_litellm_params(router: Router) -> Mapping[str, object]:
