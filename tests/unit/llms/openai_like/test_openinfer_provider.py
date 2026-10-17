@@ -113,6 +113,32 @@ def test_tools_reach_openinfer_for_a_model_without_a_cost_map_row():
     assert body["tools"] == [_WEATHER_TOOL]
 
 
+def _register_openinfer_row(model: str, **capabilities: bool) -> None:
+    litellm.register_model(
+        {f"openinfer/{model}": {"litellm_provider": "openinfer", "mode": "chat", **capabilities}},
+        persist_across_reloads=False,
+        add_to_provider_model_sets=False,
+    )
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_model_info_keeps_a_row_that_turns_tools_off():
+    model: Final = "@oi/row-without-tools"
+    _register_openinfer_row(model, supports_function_calling=False)
+
+    assert litellm.get_model_info(model, custom_llm_provider="openinfer")["supports_function_calling"] is False
+    assert litellm.supports_function_calling(model, custom_llm_provider="openinfer") is False
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_model_info_fills_tool_support_from_the_openinfer_default():
+    model: Final = "@oi/row-silent-on-tools"
+    _register_openinfer_row(model)
+
+    assert litellm.get_model_info(model, custom_llm_provider="openinfer")["supports_function_calling"] is True
+    assert litellm.supports_function_calling(model, custom_llm_provider="openinfer") is True
+
+
 def test_max_tokens_and_max_completion_tokens_both_reach_openinfer():
     _, _, body = _sent_chat_request("@oi/Qwen3.5-27B", max_tokens=64, max_completion_tokens=128)
 
