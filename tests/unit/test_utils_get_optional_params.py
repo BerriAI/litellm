@@ -2097,3 +2097,136 @@ def test_supports_system_message_merges_system_prompt_into_user_message() -> Non
     ]
 
     assert map_system_message_pt(messages=messages) == [{"role": "user", "content": "Listen here! Hello there!"}]
+
+
+def _drop_warnings(mock_warning):
+    """The formatted drop warnings only.
+
+    `verbose_logger.warning` is shared, so asserting on a raw call count would
+    make these tests fail the day something unrelated in `get_optional_params`
+    logs a warning. Filter to this message and format it, since the assertions
+    are about what the message tells the caller.
+    """
+    messages = []
+    for call in mock_warning.call_args_list:
+        template = call.args[0]
+        if "is not sending" not in template:
+            continue
+        messages.append(template % call.args[1:])
+    return messages
+
+
+@pytest.fixture
+def reset_unvalidated_param_warnings():
+    """The drop warning is deduped for the life of the process.
+
+    A test that asserts it fires has to start from an empty set, and must not
+    leave its own entries behind for the next one.
+    """
+    from litellm.utils import _unvalidated_param_warned
+
+    _unvalidated_param_warned.clear()
+    yield
+    _unvalidated_param_warned.clear()
+
+
+def test_user_param_dropped_warns_for_non_catalog_model(reset_unvalidated_param_warnings):
+    """A param that is exempt from the unsupported-param error is still dropped.
+
+    `user` is only a supported param for models in OpenAI's catalog, and it is in
+    PROVIDER_UNVALIDATED_PARAMS, so for any other model it is neither sent nor
+    refused. Reported as #45015, where per-customer spend attribution recorded
+    nothing and the caller had no way to see why.
+    """
+    with patch("litellm.utils.verbose_logger.warning") as mock_warning:
+        optional_params = get_optional_params(
+            model="Qwen3.6-35B-A3B",
+            custom_llm_provider="openai",
+            user="customer-1",
+        )
+
+    assert "user" not in optional_params
+
+    messages = _drop_warnings(mock_warning)
+    assert len(messages) == 1
+    assert "`user`" in messages[0]
+    assert "Qwen3.6-35B-A3B" in messages[0]
+    # The workaround is the point of the message; without it the warning only
+    # tells the caller that something was lost, not what to do instead.
+    assert "x-litellm-end-user-id" in messages[0]
+
+
+def test_user_param_drop_warning_is_deduped(reset_unvalidated_param_warnings):
+    """Once per (param, provider, model), not once per request."""
+    with patch("litellm.utils.verbose_logger.warning") as mock_warning:
+        for _ in range(3):
+            get_optional_params(
+                model="Qwen3.6-35B-A3B",
+                custom_llm_provider="openai",
+                user="customer-1",
+            )
+
+    assert len(_drop_warnings(mock_warning)) == 1
+
+
+def test_user_param_not_warned_when_the_model_supports_it(reset_unvalidated_param_warnings):
+    """A catalog model sends `user`, so there is nothing to warn about."""
+    with patch("litellm.utils.verbose_logger.warning") as mock_warning:
+        optional_params = get_optional_params(
+            model="gpt-4o",
+            custom_llm_provider="openai",
+            user="customer-1",
+        )
+
+    assert optional_params["user"] == "customer-1"
+    assert _drop_warnings(mock_warning) == []
+
+
+def test_warn_helper_stays_silent_for_an_exempt_param_with_no_hint(
+    reset_unvalidated_param_warnings,
+):
+    """The exempt transport params must stay silent.
+
+    `stream`, `stream_options` and `max_retries` are exempt from the same
+    unsupported-param check but are transport controls rather than things a
+    caller tracks the effect of, so they are deliberately absent from
+    UNVALIDATED_PARAM_DROP_HINTS. Without this the warning could be widened to
+    every exempt param and nothing would fail.
+
+    The helper is called directly on purpose. For provider=openai all three are
+    *supported* params, so they never reach it through get_optional_params --
+    asserting on that route passes without the guard ever running, which is
+    what the first version of this test did.
+    """
+    from litellm.utils import _unvalidated_param_warned, warn_unvalidated_param_dropped
+
+    with patch("litellm.utils.verbose_logger.warning") as mock_warning:
+        for param in ("stream", "stream_options", "max_retries"):
+            warn_unvalidated_param_dropped(param, "openai", "Qwen3.6-35B-A3B")
+
+    assert _drop_warnings(mock_warning) == []
+    # Nor may a param with no hint consume a slot against the cap.
+    assert _unvalidated_param_warned == set()
+
+
+def test_warning_stops_once_the_cap_is_reached(reset_unvalidated_param_warnings):
+    """Past the cap the warning stops rather than growing the dedup set.
+
+    A proxy serving a large model fleet would otherwise add a triple per
+    (param, provider, model) for the life of the process.
+    """
+    from litellm.utils import (
+        _UNVALIDATED_PARAM_WARN_CAP,
+        _unvalidated_param_warned,
+        warn_unvalidated_param_dropped,
+    )
+
+    for i in range(_UNVALIDATED_PARAM_WARN_CAP):
+        _unvalidated_param_warned.add(("user", "openai", f"filler-model-{i}"))
+
+    with patch("litellm.utils.verbose_logger.warning") as mock_warning:
+        warn_unvalidated_param_dropped("user", "openai", "model-past-the-cap")
+
+    assert _drop_warnings(mock_warning) == []
+    assert ("user", "openai", "model-past-the-cap") not in _unvalidated_param_warned
+    assert len(_unvalidated_param_warned) == _UNVALIDATED_PARAM_WARN_CAP
