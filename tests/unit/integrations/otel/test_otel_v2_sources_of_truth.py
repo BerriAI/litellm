@@ -1692,6 +1692,19 @@ def test_capture_message_content_normalizer_only_touches_strings():
         OpenTelemetryV2Config(capture_message_content=123)
 
 
+def test_unknown_capture_message_content_env_is_kept_as_a_plain_string_that_captures_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "Invalid-Mode")
+
+    config: Final = OpenTelemetryV2Config()
+
+    assert type(config.capture_message_content) is str
+    assert config.capture_message_content == "invalid-mode"
+    assert config.capture_span_content is False
+    assert config.model_dump()["capture_message_content"] == "invalid-mode"
+
+
 def test_v2_flag_is_off_by_default(monkeypatch):
     monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
     is_otel_v2_enabled.cache_clear()

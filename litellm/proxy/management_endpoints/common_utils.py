@@ -1,3 +1,4 @@
+import json
 import math
 from collections.abc import Mapping
 from types import MappingProxyType
@@ -270,6 +271,29 @@ def check_disable_global_guardrails_caller_permission(
 
 
 _check_disable_global_guardrails_caller_permission: Final = check_disable_global_guardrails_caller_permission
+
+
+def check_require_trace_id_caller_permission(
+    require_trace_id: bool | None,
+    metadata: Mapping[str, object] | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    *,
+    metadata_sent: bool,
+    existing_metadata: Mapping[str, object] | None = None,
+) -> None:
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+    stored: Final = existing_metadata is not None and existing_metadata.get("require_trace_id") is True
+    metadata_value: Final = metadata is not None and metadata.get("require_trace_id") is True
+    requested: Final = (
+        require_trace_id if require_trace_id is not None else (metadata_value if metadata_sent else stored)
+    )
+    if requested is stored:
+        return
+    raise HTTPException(
+        status_code=403,
+        detail={"error": "Only proxy admins can set `require_trace_id` on a team."},
+    )
 
 
 def team_member_has_permission(
@@ -557,12 +581,22 @@ MEMBER_BUDGET_PATCH_FIELDS: Final = MappingProxyType(
         "allowed_models": "allowed_models",
         "temp_budget_increase": "temp_budget_increase",
         "temp_budget_expiry": "temp_budget_expiry",
+        "model_max_budget": "model_max_budget",
     }
 )
 
 
-def _prisma_value(value: object) -> object:
+_JSON_BUDGET_COLUMNS: Final = frozenset({"model_max_budget"})
+
+
+def _prisma_value(column: str, value: object) -> object:
+    if column in _JSON_BUDGET_COLUMNS:
+        return json.dumps(value if value is not None else {})
     return list(value) if isinstance(value, tuple) else value
+
+
+def _prisma_payload(data: Mapping[str, object]) -> dict[str, object]:
+    return {column: _prisma_value(column, value) for column, value in data.items()}
 
 
 def member_budget_patch(source: BaseModel) -> Mapping[str, object]:
@@ -571,7 +605,7 @@ def member_budget_patch(source: BaseModel) -> Mapping[str, object]:
     field is left untouched)."""
     provided: Final = source.model_dump(exclude_unset=True)
     return {
-        column: _prisma_value(provided[request_field])
+        column: provided[request_field]
         for request_field, column in MEMBER_BUDGET_PATCH_FIELDS.items()
         if request_field in provided
     }
@@ -580,7 +614,7 @@ def member_budget_patch(source: BaseModel) -> Mapping[str, object]:
 def _is_set_budget_value(value: object) -> bool:
     if value is None:
         return False
-    if isinstance(value, list) and len(value) == 0:
+    if isinstance(value, (list, dict)) and len(value) == 0:
         return False
     return True
 
@@ -622,10 +656,26 @@ async def upsert_budget_and_membership(
     A patch that only touches the temporary budget pair never copies permanent
     limits into a new row, so the member keeps inheriting the live team default.
     """
-    if not budget_patch:
+    ignore_default_model_budget_clear: Final = (
+        existing_budget_id is not None
+        and existing_budget_id == team_default_budget_id
+        and "model_max_budget" in budget_patch
+        and (
+            budget_patch["model_max_budget"] is None
+            or (isinstance(budget_patch["model_max_budget"], Mapping) and not budget_patch["model_max_budget"])
+        )
+    )
+    effective_patch: Final = MappingProxyType(
+        {
+            field: value
+            for field, value in budget_patch.items()
+            if not (ignore_default_model_budget_clear and field == "model_max_budget")
+        }
+    )
+    if not effective_patch:
         return
 
-    write_data: Final = dict(budget_patch)
+    write_data: Final = dict(effective_patch)
     if "budget_duration" in write_data:
         duration: Final = write_data["budget_duration"]
         write_data["budget_reset_at"] = (
@@ -652,7 +702,7 @@ async def upsert_budget_and_membership(
             return
         await tx.litellm_budgettable.update(
             where={"budget_id": existing_budget_id},
-            data={"updated_by": user_api_key_dict.user_id or "", **write_data},
+            data={"updated_by": user_api_key_dict.user_id or "", **_prisma_payload(write_data)},
         )
         return
 
@@ -666,14 +716,24 @@ async def upsert_budget_and_membership(
     create_data: Final[dict[str, object]] = {  # mutable-ok: Prisma create payloads are dict-shaped
         "created_by": user_api_key_dict.user_id or "",
         "updated_by": user_api_key_dict.user_id or "",
+        "model_max_budget": {},
         **MappingProxyType(
-            {f: source[f] for f in _TEAM_MEMBER_BUDGET_LIMIT_FIELDS if _is_set_budget_value(source.get(f))}
+            {
+                f: source[f]
+                for f in _TEAM_MEMBER_BUDGET_LIMIT_FIELDS
+                if (
+                    f != "model_max_budget"
+                    or team_default_budget_id is None
+                    or source.get("budget_id") != team_default_budget_id
+                )
+                and _is_set_budget_value(source.get(f))
+            }
         ),
         **write_data,
     }
 
     # Restarting an inherited window on an unrelated edit hands the member a free period.
-    carried: Final = source.get("budget_reset_at") if "budget_duration" not in budget_patch else None
+    carried: Final = source.get("budget_reset_at") if "budget_duration" not in effective_patch else None
     if carried is not None:
         create_data["budget_reset_at"] = carried
     if create_data.get("budget_reset_at") is None:
@@ -685,7 +745,7 @@ async def upsert_budget_and_membership(
         return
 
     new_budget: Final = await tx.litellm_budgettable.create(
-        data=create_data,
+        data=_prisma_payload(create_data),
         include={"team_membership": True},
     )
     await tx.litellm_teammembership.upsert(

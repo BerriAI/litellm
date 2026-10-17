@@ -16,7 +16,7 @@ use crate::{
 };
 use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrDocument, OcrResponseFormat};
 
-const DEFAULT_LOCATION: &str = "us-central1";
+use litellm_llms_types::providers::vertex_ai::DEFAULT_LOCATION;
 
 #[derive(Clone, Debug, Default)]
 pub struct VertexAiOcrConfig;

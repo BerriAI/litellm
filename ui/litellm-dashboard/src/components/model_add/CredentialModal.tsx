@@ -18,7 +18,13 @@ import {
 import { CredentialItem } from "../networking";
 import { Providers } from "../provider_info_helpers";
 import { Logo } from "@/components/molecules/logo/Logo";
-import { resetCredentialFormOnProviderChange, withoutRestrictedFields } from "./credential_form_helpers";
+import {
+  displayNameChange,
+  initialFormValues,
+  resetCredentialFormOnProviderChange,
+  withoutRestrictedFields,
+  type CredentialSubmission,
+} from "./credential_form_helpers";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import FederationFields from "./FederationFields";
 import InternalIssuerJwks from "./InternalIssuerJwks";
@@ -55,7 +61,7 @@ const authMethodItems: { value: AuthMethod; label: string }[] = [
 interface CredentialModalProps {
   open: boolean;
   onCancel: () => void;
-  onSubmit: (values: Record<string, unknown>, valuesToDelete: readonly string[]) => void;
+  onSubmit: (submission: CredentialSubmission, valuesToDelete: readonly string[]) => void;
   mode: "add" | "edit";
   existingCredential?: CredentialItem | null;
   initialProvider?: string | null;
@@ -66,39 +72,6 @@ interface CredentialModalProps {
 
 const sameProvider = (left: string | null | undefined, right: string | null | undefined): boolean =>
   (left ?? "").toLowerCase() === (right ?? "").toLowerCase();
-
-const DISPLAY_NAME_MAX_LENGTH = 255;
-
-const displayNameChange = (
-  value: unknown,
-  existingCredential: CredentialItem | null | undefined,
-): { display_name?: string | null } => {
-  const trimmed = typeof value === "string" ? value.trim() : "";
-  if (!existingCredential) {
-    return trimmed ? { display_name: trimmed } : {};
-  }
-  if (trimmed === (existingCredential.display_name ?? "")) {
-    return {};
-  }
-  return { display_name: trimmed || null };
-};
-
-const initialFormValues = (
-  existingCredential: CredentialItem | null | undefined,
-  initialProvider: string | null | undefined,
-): MountedFormValues | undefined => {
-  if (existingCredential) {
-    return {
-      credential_name: existingCredential.credential_name,
-      display_name: existingCredential.display_name ?? "",
-      custom_llm_provider: existingCredential.credential_info.custom_llm_provider,
-      ...Object.fromEntries(
-        Object.entries(existingCredential.credential_values || {}).map(([key, value]) => [key, value ?? null]),
-      ),
-    };
-  }
-  return initialProvider ? { custom_llm_provider: initialProvider } : undefined;
-};
 
 export default function CredentialModal({
   open,
@@ -158,12 +131,15 @@ export default function CredentialModal({
     }
     const values = projectMountedValues(registry, form.getValues);
     const meta = {
-      credential_name: values.credential_name,
-      custom_llm_provider: values.custom_llm_provider,
+      credential_name: String(values.credential_name),
+      custom_llm_provider: String(values.custom_llm_provider),
       ...displayNameChange(values.display_name, existingCredential),
     };
     if (!isEdit) {
-      onSubmit({ ...meta, ...buildCreateCredentialValues(withoutRestrictedFields(values), selection) }, []);
+      onSubmit(
+        { ...meta, credential_values: buildCreateCredentialValues(withoutRestrictedFields(values), selection) },
+        [],
+      );
       return;
     }
     const sameStoredProvider = sameProvider(selectedProvider, storedProvider);
@@ -175,7 +151,7 @@ export default function CredentialModal({
       ? authTypeFieldKeys(selectedProvider).filter((key) => key in storedValues && !(key in projectedValues))
       : [];
     const valuesToDelete = Array.from(new Set([...patch.credential_values_to_delete, ...authTypeValuesToDelete]));
-    onSubmit({ ...meta, ...patch.credential_values }, valuesToDelete);
+    onSubmit({ ...meta, credential_values: patch.credential_values }, valuesToDelete);
   };
 
   const closeAndReset = () => {
@@ -216,19 +192,7 @@ export default function CredentialModal({
                 )}
               </MountedFormField>
 
-              <MountedFormField
-                label="Display Name:"
-                name="display_name"
-                rules={{
-                  validate: {
-                    maxLength: (value: unknown) =>
-                      typeof value !== "string" ||
-                      value.trim().length <= DISPLAY_NAME_MAX_LENGTH ||
-                      `Display name must be at most ${DISPLAY_NAME_MAX_LENGTH} characters`,
-                  },
-                }}
-                className="mb-4"
-              >
+              <MountedFormField label="Display Name:" name="display_name" className="mb-4">
                 {(control) => (
                   <Input
                     id={control.id}

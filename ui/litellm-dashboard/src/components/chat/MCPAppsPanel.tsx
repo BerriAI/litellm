@@ -31,6 +31,8 @@ interface OAuth2ConnectButtonProps {
   onConnect: (serverId: string) => void;
   variant?: "badge" | "button";
   autoStartKey?: string | null;
+  scopes?: string[];
+  buttonLabel?: string;
 }
 
 export const OAuth2ConnectButton: React.FC<OAuth2ConnectButtonProps> = ({
@@ -39,14 +41,18 @@ export const OAuth2ConnectButton: React.FC<OAuth2ConnectButtonProps> = ({
   onConnect,
   variant = "badge",
   autoStartKey = null,
+  scopes,
+  buttonLabel = "Connect",
 }) => {
   const name = server.server_name ?? server.alias ?? server.server_id;
-  const { startOAuthFlow, status } = useUserMcpOAuthFlow({
+  const flowOptions = {
     accessToken,
     serverId: server.server_id,
     serverAlias: name,
+    scopes,
     onSuccess: useCallback(() => onConnect(server.server_id), [onConnect, server.server_id]),
-  });
+  };
+  const { startOAuthFlow, status } = useUserMcpOAuthFlow(flowOptions);
 
   useEffect(() => {
     if (autoStartKey === null || status !== "idle" || getSecureItem(autoStartKey) !== null) return;
@@ -60,7 +66,7 @@ export const OAuth2ConnectButton: React.FC<OAuth2ConnectButtonProps> = ({
     return (
       <Button onClick={startOAuthFlow} disabled={loading} className="font-semibold h-[38px] min-w-[110px]">
         {loading && <Loader2 className="h-4 w-4 animate-spin mr-1.5" />}
-        {loading ? "Connecting\u2026" : "Connect"}
+        {loading ? "Connecting\u2026" : buttonLabel}
       </Button>
     );
   }
