@@ -6899,6 +6899,35 @@ CLAUDE_OPUS_5_5_RESPONSES_BRIDGED_JSON: Final = CLAUDE_OPUS_5_5_MESSAGES_INPUT_T
     }
 )
 
+def _responses_bridged_stream_case(
+    sibling: CostTrackingTestCase, stream_sibling: CostTrackingTestCase, name: str
+) -> CostTrackingTestCase:
+    return sibling.model_copy(
+        update={
+            "name": name,
+            "request": {**sibling.request, "stream": True},
+            "response": stream_sibling.response,
+        }
+    )
+
+
+CLAUDE_FABLE_5_1_RESPONSES_BRIDGED_STREAM: Final = _responses_bridged_stream_case(
+    CLAUDE_FABLE_5_1_RESPONSES_BRIDGED_JSON, CLAUDE_FABLE_5_1_MESSAGES_STREAM,
+    "claude-fable-5-1-responses_bridged_stream",
+)
+CLAUDE_HAIKU_5_5_RESPONSES_BRIDGED_STREAM: Final = _responses_bridged_stream_case(
+    CLAUDE_HAIKU_5_5_RESPONSES_BRIDGED_JSON, CLAUDE_HAIKU_5_5_MESSAGES_STREAM,
+    "claude-haiku-5-5-responses_bridged_stream",
+)
+CLAUDE_OPUS_5_5_RESPONSES_BRIDGED_STREAM: Final = _responses_bridged_stream_case(
+    CLAUDE_OPUS_5_5_RESPONSES_BRIDGED_JSON, CLAUDE_OPUS_5_5_MESSAGES_STREAM,
+    "claude-opus-5-5-responses_bridged_stream",
+)
+CLAUDE_SONNET_5_5_RESPONSES_BRIDGED_STREAM: Final = _responses_bridged_stream_case(
+    CLAUDE_SONNET_5_5_RESPONSES_BRIDGED_JSON, CLAUDE_SONNET_5_5_MESSAGES_STREAM,
+    "claude-sonnet-5-5-responses_bridged_stream",
+)
+
 CLAUDE_HAIKU_5_5_TIERED_INPUT_ABOVE_100K: Final = with_usage(
     CLAUDE_HAIKU_5_5_INPUT_TEXT,
     "claude-haiku-5-5-tiered_input_above_100k",
@@ -6994,6 +7023,10 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     CLAUDE_SONNET_5_RESPONSES_BRIDGED_JSON,
     CLAUDE_SONNET_5_5_RESPONSES_BRIDGED_JSON,
     CLAUDE_HAIKU_5_5_RESPONSES_BRIDGED_JSON,
+    CLAUDE_FABLE_5_1_RESPONSES_BRIDGED_STREAM,
+    CLAUDE_HAIKU_5_5_RESPONSES_BRIDGED_STREAM,
+    CLAUDE_OPUS_5_5_RESPONSES_BRIDGED_STREAM,
+    CLAUDE_SONNET_5_5_RESPONSES_BRIDGED_STREAM,
     CLAUDE_FABLE_5_RESPONSES_BRIDGED_JSON,
     CLAUDE_FABLE_5_1_RESPONSES_BRIDGED_JSON,
     CLAUDE_OPUS_5_5_RESPONSES_BRIDGED_JSON,
@@ -7119,6 +7152,18 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
 )
 
 PARITY: Final[tuple[StreamParityTestCase, ...]] = (
+    StreamParityTestCase(
+        plain=CLAUDE_FABLE_5_1_RESPONSES_BRIDGED_JSON, streamed=CLAUDE_FABLE_5_1_RESPONSES_BRIDGED_STREAM
+    ),
+    StreamParityTestCase(
+        plain=CLAUDE_HAIKU_5_5_RESPONSES_BRIDGED_JSON, streamed=CLAUDE_HAIKU_5_5_RESPONSES_BRIDGED_STREAM
+    ),
+    StreamParityTestCase(
+        plain=CLAUDE_OPUS_5_5_RESPONSES_BRIDGED_JSON, streamed=CLAUDE_OPUS_5_5_RESPONSES_BRIDGED_STREAM
+    ),
+    StreamParityTestCase(
+        plain=CLAUDE_SONNET_5_5_RESPONSES_BRIDGED_JSON, streamed=CLAUDE_SONNET_5_5_RESPONSES_BRIDGED_STREAM
+    ),
     StreamParityTestCase(plain=CLAUDE_HAIKU_4_5_INPUT_TEXT, streamed=CLAUDE_HAIKU_4_5_STREAM),
     StreamParityTestCase(
         plain=CLAUDE_HAIKU_4_5_RESPONSE_MODEL_OVERRIDE, streamed=CLAUDE_HAIKU_4_5_STREAM_RESPONSE_MODEL_OVERRIDE

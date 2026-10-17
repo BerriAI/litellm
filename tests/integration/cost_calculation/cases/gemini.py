@@ -2,8 +2,10 @@
 
 PARITY pairs the streamed case with its plain twin where both bill the same row."""
 
+import json
 from typing import Final, cast
 
+from pydantic import JsonValue
 from integration.cost_calculation.bridge_cost_parity.case import BridgeCostParityTestCase, bridge_pairs
 from integration.cost_calculation.cost_tracking_case import (
     CostTrackingTestCase,
@@ -17,26 +19,74 @@ from integration.cost_calculation.cost_tracking_case import (
 from integration.cost_calculation.stream_parity.case import StreamParityTestCase, sse_frames
 
 
-def _gemini_case_response(response: JsonResponse | SseResponse, model_version: str) -> JsonResponse | SseResponse:
+def _gemini_case_response(
+    response: JsonResponse | SseResponse,
+    model_version: str,
+    usage_fields: dict[str, JsonValue] | None = None,
+) -> JsonResponse | SseResponse:
     match response:
         case JsonResponse():
-            return response.model_copy(update={"body": {**response.body, "modelVersion": model_version}})
+            usage: Final = response.body.get("usageMetadata")
+            body: Final = {**response.body, "modelVersion": model_version}
+            return response.model_copy(
+                update={
+                    "body": {
+                        **body,
+                        **(
+                            {
+                                "usageMetadata": {
+                                    **cast(dict[str, JsonValue], usage),
+                                    **usage_fields,
+                                }
+                            }
+                            if usage_fields is not None and isinstance(usage, dict)
+                            else {}
+                        ),
+                    }
+                }
+            )
         case SseResponse():
             return response.model_copy(
                 update={
-                    "frames": tuple(frame.replace("gemini-3.8-flash", model_version) for frame in response.frames)
+                    "frames": tuple(
+                        _gemini_case_frame(frame, model_version, usage_fields) for frame in response.frames
+                    )
                 }
             )
 
 
+def _gemini_case_frame(
+    frame: str, model_version: str, usage_fields: dict[str, JsonValue] | None
+) -> str:
+    replaced: Final = frame.replace("gemini-3.8-flash", model_version)
+    if usage_fields is None:
+        return replaced
+    prefix, separator, payload = replaced.partition("data: ")
+    if not separator or payload == "[DONE]":
+        return replaced
+    event: Final = cast(dict[str, JsonValue], json.loads(payload))
+    usage: Final = event.get("usageMetadata")
+    if not isinstance(usage, dict):
+        return replaced
+    return f"{prefix}data: {json.dumps({**event, 'usageMetadata': {**usage, **usage_fields}})}"
+
+
 def _gemini_case(
-    sibling: CostTrackingTestCase, name: str, model: str, model_version: str, expected: ExactExpected
+    sibling: CostTrackingTestCase,
+    name: str,
+    model: str,
+    model_version: str,
+    expected: ExactExpected,
+    *,
+    usage_fields: dict[str, JsonValue] | None = None,
 ) -> CostTrackingTestCase:
     return sibling.model_copy(
         update={
             "name": name,
             "model": model,
-            "response": _gemini_case_response(cast(JsonResponse | SseResponse, sibling.response), model_version),
+            "response": _gemini_case_response(
+                cast(JsonResponse | SseResponse, sibling.response), model_version, usage_fields
+            ),
             "expected": expected,
         }
     )
@@ -1540,6 +1590,7 @@ GEMINI_GEMINI_3_8_FLASH_INPUT_TEXT: Final = CostTrackingTestCase(
                 "candidatesTokenCount": 412,
                 "totalTokenCount": 2252,
                 "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 1840}],
+                "serviceTier": "standard",
             },
             "modelVersion": "gemini-3.8-flash",
         },
@@ -1594,6 +1645,7 @@ GEMINI_GEMINI_3_8_FLASH_CACHE_READ: Final = CostTrackingTestCase(
                 "totalTokenCount": 13308,
                 "cachedContentTokenCount": 12288,
                 "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 12928}],
+                "serviceTier": "standard",
             },
             "modelVersion": "gemini-3.8-flash",
         },
@@ -1653,6 +1705,7 @@ GEMINI_GEMINI_3_8_FLASH_REASONING: Final = CostTrackingTestCase(
                 "thoughtsTokenCount": 3480,
                 "totalTokenCount": 5280,
                 "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 1240}],
+                "serviceTier": "standard",
             },
             "modelVersion": "gemini-3.8-flash",
         },
@@ -1934,6 +1987,7 @@ GEMINI_GEMINI_3_8_FLASH_STREAM: Final = CostTrackingTestCase(
                     "candidatesTokenCount": 412,
                     "totalTokenCount": 2252,
                     "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 1840}],
+                    "serviceTier": "standard",
                 },
                 "modelVersion": "gemini-3.8-flash",
             },
@@ -3275,19 +3329,46 @@ GEMINI_GEMINI_3_1_PRO_CACHE_CREATION: Final = CostTrackingTestCase(
 
 GEMINI_GEMINI_4_ARGON_INPUT_TEXT: Final = _gemini_case(
     GEMINI_GEMINI_3_8_FLASH_INPUT_TEXT, "gemini-gemini-4-argon-input_text", "gemini/gemini-4-argon",
-    "gemini-4-argon", ExactExpected(spend=0.00858, input_cost=0.004048, output_cost=0.004532, prompt_tokens=1840, completion_tokens=412)
+    "gemini-4-argon", ExactExpected(spend=0.00858, input_cost=0.004048, output_cost=0.004532, prompt_tokens=1840, completion_tokens=412),
+    usage_fields={"candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 412}]},
 )
 GEMINI_GEMINI_4_ARGON_STREAM: Final = _gemini_case(
     GEMINI_GEMINI_3_8_FLASH_STREAM, "gemini-gemini-4-argon-stream", "gemini/gemini-4-argon",
-    "gemini-4-argon", ExactExpected(spend=0.00858, input_cost=0.004048, output_cost=0.004532, prompt_tokens=1840, completion_tokens=412)
+    "gemini-4-argon", ExactExpected(spend=0.00858, input_cost=0.004048, output_cost=0.004532, prompt_tokens=1840, completion_tokens=412),
+    usage_fields={"candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 412}]},
 )
 GEMINI_GEMINI_4_ARGON_CACHE_READ: Final = _gemini_case(
     GEMINI_GEMINI_3_8_FLASH_CACHE_READ, "gemini-gemini-4-argon-cache_read", "gemini/gemini-4-argon",
-    "gemini-4-argon", ExactExpected(spend=0.00693968, input_cost=0.00275968, output_cost=0.00418, prompt_tokens=12928, completion_tokens=380)
+    "gemini-4-argon", ExactExpected(spend=0.00693968, input_cost=0.00275968, output_cost=0.00418, prompt_tokens=12928, completion_tokens=380),
+    usage_fields={"candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 380}]},
 )
 GEMINI_GEMINI_4_ARGON_REASONING: Final = _gemini_case(
     GEMINI_GEMINI_3_8_FLASH_REASONING, "gemini-gemini-4-argon-reasoning", "gemini/gemini-4-argon",
-    "gemini-4-argon", ExactExpected(spend=0.047168, input_cost=0.002728, output_cost=0.04444, prompt_tokens=1240, completion_tokens=4040)
+    "gemini-4-argon", ExactExpected(spend=0.047168, input_cost=0.002728, output_cost=0.04444, prompt_tokens=1240, completion_tokens=4040),
+    usage_fields={"candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 560}]},
+)
+GEMINI_GEMINI_4_ARGON_SERVICE_TIER_FLEX: Final = _gemini_case(
+    GEMINI_GEMINI_3_8_FLASH_SERVICE_TIER_FLEX,
+    "gemini-gemini-4-argon-service_tier_flex",
+    "gemini/gemini-4-argon",
+    "gemini-4-argon",
+    ExactExpected(spend=0.00429, input_cost=0.002024, output_cost=0.002266, prompt_tokens=1840, completion_tokens=412),
+)
+GEMINI_GEMINI_4_ARGON_SERVICE_TIER_PRIORITY: Final = _gemini_case(
+    GEMINI_GEMINI_3_8_FLASH_SERVICE_TIER_PRIORITY,
+    "gemini-gemini-4-argon-service_tier_priority",
+    "gemini/gemini-4-argon",
+    "gemini-4-argon",
+    ExactExpected(spend=0.015444, input_cost=0.0072864, output_cost=0.0081576, prompt_tokens=1840, completion_tokens=412),
+)
+GEMINI_GEMINI_3_1_PRO_PREVIEW_SERVICE_TIER_PRIORITY: Final = _gemini_case(
+    GEMINI_GEMINI_3_8_FLASH_SERVICE_TIER_PRIORITY,
+    "gemini-gemini-3.1-pro-preview-service_tier_priority",
+    "gemini/gemini-3.1-pro-preview",
+    "gemini-3.1-pro-preview",
+    ExactExpected(
+        spend=0.02018016, input_cost=0.0086112, output_cost=0.01156896, prompt_tokens=1840, completion_tokens=412
+    ),
 )
 GEMINI_GEMINI_4_ARGON_TOOL_CALL: Final = _gemini_case(
     GEMINI_GEMINI_3_8_FLASH_TOOL_CALL, "gemini-gemini-4-argon-tool_call", "gemini/gemini-4-argon",
@@ -3296,27 +3377,59 @@ GEMINI_GEMINI_4_ARGON_TOOL_CALL: Final = _gemini_case(
 GEMINI_GEMINI_3_1_PRO_PREVIEW_INPUT_TEXT: Final = _gemini_case(
     GEMINI_GEMINI_3_8_FLASH_INPUT_TEXT, "gemini-gemini-3.1-pro-preview-input_text",
     "gemini/gemini-3.1-pro-preview", "gemini-3.1-pro-preview",
-    ExactExpected(spend=0.0112112, input_cost=0.004784, output_cost=0.0064272, prompt_tokens=1840, completion_tokens=412)
+    ExactExpected(spend=0.0112112, input_cost=0.004784, output_cost=0.0064272, prompt_tokens=1840, completion_tokens=412),
+    usage_fields={"serviceTier": "standard"},
 )
 GEMINI_GEMINI_3_1_PRO_PREVIEW_STREAM: Final = _gemini_case(
     GEMINI_GEMINI_3_8_FLASH_STREAM, "gemini-gemini-3.1-pro-preview-stream",
     "gemini/gemini-3.1-pro-preview", "gemini-3.1-pro-preview",
-    ExactExpected(spend=0.0112112, input_cost=0.004784, output_cost=0.0064272, prompt_tokens=1840, completion_tokens=412)
+    ExactExpected(spend=0.0112112, input_cost=0.004784, output_cost=0.0064272, prompt_tokens=1840, completion_tokens=412),
+    usage_fields={"serviceTier": "standard"},
 )
 GEMINI_GEMINI_3_1_PRO_PREVIEW_CACHE_READ: Final = _gemini_case(
     GEMINI_GEMINI_3_8_FLASH_CACHE_READ, "gemini-gemini-3.1-pro-preview-cache_read",
     "gemini/gemini-3.1-pro-preview", "gemini-3.1-pro-preview",
-    ExactExpected(spend=0.01078688, input_cost=0.00485888, output_cost=0.005928, prompt_tokens=12928, completion_tokens=380)
+    ExactExpected(spend=0.01078688, input_cost=0.00485888, output_cost=0.005928, prompt_tokens=12928, completion_tokens=380),
+    usage_fields={"serviceTier": "standard"},
 )
 GEMINI_GEMINI_3_1_PRO_PREVIEW_REASONING: Final = _gemini_case(
     GEMINI_GEMINI_3_8_FLASH_REASONING, "gemini-gemini-3.1-pro-preview-reasoning",
     "gemini/gemini-3.1-pro-preview", "gemini-3.1-pro-preview",
-    ExactExpected(spend=0.066248, input_cost=0.003224, output_cost=0.063024, prompt_tokens=1240, completion_tokens=4040)
+    ExactExpected(spend=0.066248, input_cost=0.003224, output_cost=0.063024, prompt_tokens=1240, completion_tokens=4040),
+    usage_fields={"serviceTier": "standard"},
 )
 GEMINI_GEMINI_3_1_PRO_PREVIEW_TOOL_CALL: Final = _gemini_case(
     GEMINI_GEMINI_3_8_FLASH_TOOL_CALL, "gemini-gemini-3.1-pro-preview-tool_call",
     "gemini/gemini-3.1-pro-preview", "gemini-3.1-pro-preview",
     ExactExpected(spend=0.0112112, input_cost=0.004784, output_cost=0.0064272, prompt_tokens=1840, completion_tokens=412)
+)
+GEMINI_GEMINI_3_1_PRO_PREVIEW_TIERED_INPUT_ABOVE_200K: Final = _gemini_case(
+    GEMINI_GEMINI_3_1_PRO_TIERED_INPUT_ABOVE_200K,
+    "gemini-gemini-3.1-pro-preview-tiered_input_above_200k",
+    "gemini/gemini-3.1-pro-preview",
+    "gemini-3.1-pro-preview",
+    ExactExpected(
+        spend=1.079468, input_cost=1.06496, output_cost=0.014508, prompt_tokens=204800, completion_tokens=620
+    ),
+    usage_fields={"serviceTier": "standard"},
+)
+GEMINI_GEMINI_3_1_PRO_PREVIEW_TIERED_CACHE_READ_ABOVE_200K: Final = _gemini_case(
+    GEMINI_GEMINI_3_1_PRO_TIERED_CACHE_READ_ABOVE_200K,
+    "gemini-gemini-3.1-pro-preview-tiered_cache_read_above_200k",
+    "gemini/gemini-3.1-pro-preview",
+    "gemini-3.1-pro-preview",
+    ExactExpected(
+        spend=0.13742976, input_cost=0.12619776, output_cost=0.011232, prompt_tokens=205824, completion_tokens=480
+    ),
+    usage_fields={"serviceTier": "standard"},
+)
+GEMINI_GEMINI_4_ARGON_ROUTE_BRIDGES: Final = bridge_pairs(
+    (GEMINI_GEMINI_4_ARGON_INPUT_TEXT, GEMINI_GEMINI_4_ARGON_STREAM),
+    ("/v1/responses", "/v1/messages"),
+)
+GEMINI_GEMINI_3_1_PRO_PREVIEW_ROUTE_BRIDGES: Final = bridge_pairs(
+    (GEMINI_GEMINI_3_1_PRO_PREVIEW_INPUT_TEXT, GEMINI_GEMINI_3_1_PRO_PREVIEW_STREAM),
+    ("/v1/responses", "/v1/messages"),
 )
 
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
@@ -3379,12 +3492,19 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GEMINI_GEMINI_4_ARGON_STREAM,
     GEMINI_GEMINI_4_ARGON_CACHE_READ,
     GEMINI_GEMINI_4_ARGON_REASONING,
+    GEMINI_GEMINI_4_ARGON_SERVICE_TIER_FLEX,
+    GEMINI_GEMINI_4_ARGON_SERVICE_TIER_PRIORITY,
     GEMINI_GEMINI_4_ARGON_TOOL_CALL,
     GEMINI_GEMINI_3_1_PRO_PREVIEW_INPUT_TEXT,
     GEMINI_GEMINI_3_1_PRO_PREVIEW_STREAM,
     GEMINI_GEMINI_3_1_PRO_PREVIEW_CACHE_READ,
+    GEMINI_GEMINI_3_1_PRO_PREVIEW_TIERED_INPUT_ABOVE_200K,
+    GEMINI_GEMINI_3_1_PRO_PREVIEW_TIERED_CACHE_READ_ABOVE_200K,
     GEMINI_GEMINI_3_1_PRO_PREVIEW_REASONING,
     GEMINI_GEMINI_3_1_PRO_PREVIEW_TOOL_CALL,
+    GEMINI_GEMINI_3_1_PRO_PREVIEW_SERVICE_TIER_PRIORITY,
+    *(pair.bridged for pair in GEMINI_GEMINI_4_ARGON_ROUTE_BRIDGES),
+    *(pair.bridged for pair in GEMINI_GEMINI_3_1_PRO_PREVIEW_ROUTE_BRIDGES),
 )
 
 PARITY: Final[tuple[StreamParityTestCase, ...]] = (
@@ -3410,6 +3530,22 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
     StreamParityTestCase(
         plain=GEMINI_GEMINI_3_1_PRO_PREVIEW_INPUT_TEXT, streamed=GEMINI_GEMINI_3_1_PRO_PREVIEW_STREAM
     ),
+    StreamParityTestCase(
+        plain=GEMINI_GEMINI_4_ARGON_ROUTE_BRIDGES[0].bridged,
+        streamed=GEMINI_GEMINI_4_ARGON_ROUTE_BRIDGES[2].bridged,
+    ),
+    StreamParityTestCase(
+        plain=GEMINI_GEMINI_4_ARGON_ROUTE_BRIDGES[1].bridged,
+        streamed=GEMINI_GEMINI_4_ARGON_ROUTE_BRIDGES[3].bridged,
+    ),
+    StreamParityTestCase(
+        plain=GEMINI_GEMINI_3_1_PRO_PREVIEW_ROUTE_BRIDGES[0].bridged,
+        streamed=GEMINI_GEMINI_3_1_PRO_PREVIEW_ROUTE_BRIDGES[2].bridged,
+    ),
+    StreamParityTestCase(
+        plain=GEMINI_GEMINI_3_1_PRO_PREVIEW_ROUTE_BRIDGES[1].bridged,
+        streamed=GEMINI_GEMINI_3_1_PRO_PREVIEW_ROUTE_BRIDGES[3].bridged,
+    ),
 )
 
 BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
@@ -3422,6 +3558,6 @@ BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
         ),
         ("/v1/responses", "/v1/messages"),
     ),
-    *bridge_pairs((GEMINI_GEMINI_4_ARGON_INPUT_TEXT,), ("/v1/responses",)),
-    *bridge_pairs((GEMINI_GEMINI_3_1_PRO_PREVIEW_INPUT_TEXT,), ("/v1/responses",)),
+    *GEMINI_GEMINI_4_ARGON_ROUTE_BRIDGES,
+    *GEMINI_GEMINI_3_1_PRO_PREVIEW_ROUTE_BRIDGES,
 )

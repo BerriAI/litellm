@@ -34,6 +34,256 @@ def _stream_for_model(response: SseResponse, model: str) -> SseResponse:
     return response.model_copy(update={"frames": tuple(frame.replace("gpt-6-luna", model) for frame in response.frames)})
 
 
+def _responses_json_body(
+    model: str,
+    *,
+    include_content_filters: bool = False,
+    content_filters: JsonValue = None,
+    include_reasoning: bool = True,
+) -> dict[str, JsonValue]:
+    reasoning_item: Final[dict[str, JsonValue]] = {
+        "content": [],
+        "encrypted_content": "$ENCRYPTED_CONTENT",
+        "id": "rs_$REQUEST_ID",
+        "summary": [],
+        "type": "reasoning",
+    }
+    message_item: Final[dict[str, JsonValue]] = {
+        "content": [
+            {
+                "annotations": [],
+                "logprobs": [],
+                "text": "scripted response",
+                "type": "output_text",
+            }
+        ],
+        "id": "msg_$REQUEST_ID",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message",
+    }
+    output: Final = [reasoning_item, message_item] if include_reasoning else [message_item]
+    body: Final[dict[str, JsonValue]] = {
+        "access_programs": [],
+        "background": False,
+        "completed_at": 1791855453,
+        "created_at": 1791855452,
+        "error": None,
+        "frequency_penalty": None,
+        "id": "resp_$REQUEST_ID",
+        "incomplete_details": None,
+        "instructions": None,
+        "max_output_tokens": None,
+        "max_tool_calls": None,
+        "metadata": {},
+        "moderation": None,
+        "model": model,
+        "object": "response",
+        "output": output,
+        "parallel_tool_calls": True,
+        "presence_penalty": None,
+        "previous_response_id": None,
+        "prompt_cache_key": None,
+        "prompt_cache_retention": None,
+        "reasoning": {"effort": "medium"},
+        "safety_identifier": None,
+        "service_tier": "default",
+        "status": "completed",
+        "store": True,
+        "temperature": 1.0,
+        "text": None,
+        "tool_choice": "auto",
+        "tool_usage": None,
+        "tools": [],
+        "top_logprobs": None,
+        "top_p": 1.0,
+        "truncation": "disabled",
+        "usage": {
+            "input_tokens": 1840,
+            "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
+            "output_tokens": 412,
+            "output_tokens_details": {"reasoning_tokens": 0},
+            "total_tokens": 2252,
+        },
+        "user": None,
+    }
+    return {**body, "content_filters": content_filters} if include_content_filters else body
+
+
+def _responses_stream_response(
+    model: str,
+    delta_count: int,
+    *,
+    include_content_filters: bool = False,
+    content_filters: JsonValue = None,
+    include_reasoning: bool = True,
+) -> SseResponse:
+    response_body: Final = _responses_json_body(
+        model,
+        include_content_filters=include_content_filters,
+        content_filters=content_filters,
+        include_reasoning=include_reasoning,
+    )
+    in_progress_body: Final = {
+        **response_body,
+        "output": [],
+        "status": "in_progress",
+        "usage": None,
+    }
+    reasoning_item: Final = {
+        "content": [],
+        "encrypted_content": "$ENCRYPTED_CONTENT",
+        "id": "rs_$REQUEST_ID",
+        "summary": [],
+        "type": "reasoning",
+    }
+    message_item: Final = {
+        "content": [],
+        "id": "msg_$REQUEST_ID",
+        "role": "assistant",
+        "status": "in_progress",
+        "type": "message",
+    }
+    delta_events: Final = tuple(
+        {
+            "content_index": 0,
+            "delta": "scripted response" if index == 0 else "",
+            "item_id": "msg_$REQUEST_ID",
+            "logprobs": [],
+            "obfuscation": None,
+            "output_index": 1 if include_reasoning else 0,
+            "sequence_number": (6 if include_reasoning else 4) + index,
+            "type": "response.output_text.delta",
+        }
+        for index in range(delta_count)
+    )
+    delta_start: Final = 6 if include_reasoning else 4
+    message_output_index: Final = 1 if include_reasoning else 0
+    reasoning_events: Final = (
+        (
+            {
+                "item": reasoning_item,
+                "output_index": 0,
+                "sequence_number": 2,
+                "type": "response.output_item.added",
+            },
+            {
+                "item": reasoning_item,
+                "output_index": 0,
+                "sequence_number": 3,
+                "type": "response.output_item.done",
+            },
+        )
+        if include_reasoning
+        else ()
+    )
+    completed_message_item: Final = {
+        "content": [
+            {
+                "annotations": [],
+                "logprobs": [],
+                "text": "scripted response",
+                "type": "output_text",
+            }
+        ],
+        "id": "msg_$REQUEST_ID",
+        "phase": "final_answer",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message",
+    }
+    return SseResponse(
+        content_type="text/event-stream",
+        frames=sse_frames(
+            {
+                "response": in_progress_body,
+                "sequence_number": 0,
+                "type": "response.created",
+            },
+            {
+                "response": in_progress_body,
+                "sequence_number": 1,
+                "type": "response.in_progress",
+            },
+            *reasoning_events,
+            {
+                "item": message_item,
+                "output_index": message_output_index,
+                "sequence_number": 4 if include_reasoning else 2,
+                "type": "response.output_item.added",
+            },
+            {
+                "content_index": 0,
+                "item_id": "msg_$REQUEST_ID",
+                "output_index": message_output_index,
+                "part": {"annotations": [], "logprobs": [], "text": "", "type": "output_text"},
+                "sequence_number": 5 if include_reasoning else 3,
+                "type": "response.content_part.added",
+            },
+            *delta_events,
+            {
+                "content_index": 0,
+                "item_id": "msg_$REQUEST_ID",
+                "logprobs": [],
+                "output_index": message_output_index,
+                "sequence_number": delta_start + delta_count,
+                "text": "scripted response",
+                "type": "response.output_text.done",
+            },
+            {
+                "content_index": 0,
+                "item_id": "msg_$REQUEST_ID",
+                "output_index": message_output_index,
+                "part": {
+                    "annotations": [],
+                    "logprobs": [],
+                    "text": "scripted response",
+                    "type": "output_text",
+                },
+                "sequence_number": delta_start + delta_count + 1,
+                "type": "response.content_part.done",
+            },
+            {
+                "item": completed_message_item,
+                "output_index": message_output_index,
+                "sequence_number": delta_start + delta_count + 2,
+                "type": "response.output_item.done",
+            },
+            {
+                "response": response_body,
+                "sequence_number": delta_start + delta_count + 3,
+                "type": "response.completed",
+            },
+        ),
+    )
+
+
+def _responses_stream_case(
+    base: CostTrackingTestCase,
+    name: str,
+    response_model: str,
+    delta_count: int,
+    *,
+    include_content_filters: bool = False,
+    content_filters: JsonValue = None,
+    include_reasoning: bool = True,
+) -> CostTrackingTestCase:
+    return base.model_copy(
+        update={
+            "name": name,
+            "request": {**base.request, "stream": True},
+            "response": _responses_stream_response(
+                response_model,
+                delta_count,
+                include_content_filters=include_content_filters,
+                content_filters=content_filters,
+                include_reasoning=include_reasoning,
+            ),
+        }
+    )
+
+
 # gpt-5.3-codex
 GPT_5_3_CODEX_INPUT_TEXT: Final = CostTrackingTestCase(
     name="gpt-5.3-codex-input_text",
@@ -11356,6 +11606,31 @@ GPT_5_6_TERRA_TOOL_CALL: Final = GPT_6_LUNA_TOOL_CALL.model_copy(
     }
 )
 
+GPT_5_6_TERRA_TIERED_INPUT_ABOVE_272K: Final = with_usage(
+    GPT_5_6_TERRA_INPUT_TEXT,
+    "gpt-5.6-terra-tiered_input_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(
+        spend=1.5696408, input_cost=1.56, output_cost=0.0096408, prompt_tokens=300000, completion_tokens=412
+    ),
+)
+GPT_5_6_TERRA_TIERED_CACHE_READ_ABOVE_272K: Final = with_usage(
+    GPT_5_6_TERRA_INPUT_TEXT,
+    "gpt-5.6-terra-tiered_cache_read_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 200000},
+    },
+    ExactExpected(
+        spend=0.6336408, input_cost=0.624, output_cost=0.0096408, prompt_tokens=300000, completion_tokens=412
+    ),
+)
+
 
 GPT_5_6_SLASH_ALIAS: Final = GPT_5_6_INPUT_TEXT.model_copy(
     update={"name": "gpt-5.6-slash_alias", "alias": "openai/custom/gpt-5.6-$MARKER"}
@@ -11444,6 +11719,63 @@ GPT_5_6_RESPONSES_IMAGE_GENERATION_TOOL_TOKENS: Final = CostTrackingTestCase(
         completion_tokens=412,
         tool_usage_cost=0.00105432,
     ),
+)
+
+GPT_6_1_SOL_RESPONSES_NATIVE_STREAM: Final = _responses_stream_case(
+    GPT_6_1_SOL_RESPONSES_NATIVE_JSON,
+    "gpt-6.1-sol-responses_native_stream",
+    "gpt-6.1-sol",
+    1,
+    include_reasoning=False,
+)
+GPT_6_LUNA_RESPONSES_NATIVE_STREAM: Final = _responses_stream_case(
+    GPT_6_LUNA_RESPONSES_NATIVE_JSON,
+    "gpt-6-luna-responses_native_stream",
+    "gpt-6-luna",
+    45,
+)
+GPT_6_ASTRA_RESPONSES_NATIVE_STREAM: Final = _responses_stream_case(
+    GPT_6_ASTRA_RESPONSES_NATIVE_JSON,
+    "gpt-6-astra-responses_native_stream",
+    "gpt-6-astra",
+    36,
+)
+GPT_5_6_TERRA_RESPONSES_NATIVE_STREAM: Final = _responses_stream_case(
+    GPT_5_6_TERRA_RESPONSES_NATIVE_JSON,
+    "gpt-5.6-terra-responses_native_stream",
+    "gpt-5.6-terra",
+    95,
+)
+GPT_5_6_TERRA_MESSAGES_BRIDGED_JSON: Final = bridge_pairs(
+    (GPT_5_6_TERRA_RESPONSES_NATIVE_JSON,), ("/v1/messages",)
+)[0].bridged.model_copy(update={"name": "gpt-5.6-terra-messages_bridged_json"})
+GPT_6_1_SOL_MESSAGES_BRIDGED_STREAM: Final = GPT_6_1_SOL_MESSAGES_BRIDGED_JSON.model_copy(
+    update={
+        "name": "gpt-6.1-sol-messages_bridged_stream",
+        "request": {**GPT_6_1_SOL_MESSAGES_BRIDGED_JSON.request, "stream": True},
+        "response": GPT_6_1_SOL_RESPONSES_NATIVE_STREAM.response,
+    }
+)
+GPT_6_LUNA_MESSAGES_BRIDGED_STREAM: Final = GPT_6_LUNA_MESSAGES_BRIDGED_JSON.model_copy(
+    update={
+        "name": "gpt-6-luna-messages_bridged_stream",
+        "request": {**GPT_6_LUNA_MESSAGES_BRIDGED_JSON.request, "stream": True},
+        "response": GPT_6_LUNA_RESPONSES_NATIVE_STREAM.response,
+    }
+)
+GPT_6_ASTRA_MESSAGES_BRIDGED_STREAM: Final = GPT_6_ASTRA_MESSAGES_BRIDGED_JSON.model_copy(
+    update={
+        "name": "gpt-6-astra-messages_bridged_stream",
+        "request": {**GPT_6_ASTRA_MESSAGES_BRIDGED_JSON.request, "stream": True},
+        "response": GPT_6_ASTRA_RESPONSES_NATIVE_STREAM.response,
+    }
+)
+GPT_5_6_TERRA_MESSAGES_BRIDGED_STREAM: Final = GPT_5_6_TERRA_MESSAGES_BRIDGED_JSON.model_copy(
+    update={
+        "name": "gpt-5.6-terra-messages_bridged_stream",
+        "request": {**GPT_5_6_TERRA_MESSAGES_BRIDGED_JSON.request, "stream": True},
+        "response": GPT_5_6_TERRA_RESPONSES_NATIVE_STREAM.response,
+    }
 )
 
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
@@ -11659,6 +11991,8 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GPT_6_LUNA_CACHE_WRITE_5M,
     GPT_6_ASTRA_CACHE_WRITE_5M,
     GPT_5_6_TERRA_INPUT_TEXT,
+    GPT_5_6_TERRA_TIERED_INPUT_ABOVE_272K,
+    GPT_5_6_TERRA_TIERED_CACHE_READ_ABOVE_272K,
     GPT_5_6_TERRA_STREAM,
     GPT_5_6_TERRA_RESPONSES_NATIVE_JSON,
     GPT_5_6_TERRA_RESPONSES_DEPLOYMENT_JSON,
@@ -11669,6 +12003,15 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GPT_5_6_TERRA_SERVICE_TIER_FLEX,
     GPT_5_6_TERRA_SERVICE_TIER_PRIORITY,
     GPT_5_6_TERRA_TOOL_CALL,
+    GPT_6_1_SOL_RESPONSES_NATIVE_STREAM,
+    GPT_6_LUNA_RESPONSES_NATIVE_STREAM,
+    GPT_6_ASTRA_RESPONSES_NATIVE_STREAM,
+    GPT_5_6_TERRA_RESPONSES_NATIVE_STREAM,
+    GPT_5_6_TERRA_MESSAGES_BRIDGED_JSON,
+    GPT_6_1_SOL_MESSAGES_BRIDGED_STREAM,
+    GPT_6_LUNA_MESSAGES_BRIDGED_STREAM,
+    GPT_6_ASTRA_MESSAGES_BRIDGED_STREAM,
+    GPT_5_6_TERRA_MESSAGES_BRIDGED_STREAM,
 )
 
 PARITY: Final[tuple[StreamParityTestCase, ...]] = (
@@ -11698,6 +12041,16 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
     StreamParityTestCase(plain=GPT_6_ASTRA_INPUT_TEXT, streamed=GPT_6_ASTRA_STREAM),
     StreamParityTestCase(plain=GPT_6_1_SOL_INPUT_TEXT, streamed=GPT_6_1_SOL_STREAM),
     StreamParityTestCase(plain=GPT_5_6_TERRA_INPUT_TEXT, streamed=GPT_5_6_TERRA_STREAM),
+    StreamParityTestCase(plain=GPT_6_1_SOL_RESPONSES_NATIVE_JSON, streamed=GPT_6_1_SOL_RESPONSES_NATIVE_STREAM),
+    StreamParityTestCase(plain=GPT_6_LUNA_RESPONSES_NATIVE_JSON, streamed=GPT_6_LUNA_RESPONSES_NATIVE_STREAM),
+    StreamParityTestCase(plain=GPT_6_ASTRA_RESPONSES_NATIVE_JSON, streamed=GPT_6_ASTRA_RESPONSES_NATIVE_STREAM),
+    StreamParityTestCase(plain=GPT_5_6_TERRA_RESPONSES_NATIVE_JSON, streamed=GPT_5_6_TERRA_RESPONSES_NATIVE_STREAM),
+    StreamParityTestCase(plain=GPT_6_1_SOL_MESSAGES_BRIDGED_JSON, streamed=GPT_6_1_SOL_MESSAGES_BRIDGED_STREAM),
+    StreamParityTestCase(plain=GPT_6_LUNA_MESSAGES_BRIDGED_JSON, streamed=GPT_6_LUNA_MESSAGES_BRIDGED_STREAM),
+    StreamParityTestCase(plain=GPT_6_ASTRA_MESSAGES_BRIDGED_JSON, streamed=GPT_6_ASTRA_MESSAGES_BRIDGED_STREAM),
+    StreamParityTestCase(
+        plain=GPT_5_6_TERRA_MESSAGES_BRIDGED_JSON, streamed=GPT_5_6_TERRA_MESSAGES_BRIDGED_STREAM
+    ),
 )
 
 BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
@@ -11726,6 +12079,13 @@ BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
     BridgeCostParityTestCase(native=GPT_6_LUNA_RESPONSES_NATIVE_JSON, bridged=GPT_6_LUNA_MESSAGES_BRIDGED_JSON),
     BridgeCostParityTestCase(native=GPT_6_ASTRA_RESPONSES_NATIVE_JSON, bridged=GPT_6_ASTRA_MESSAGES_BRIDGED_JSON),
     BridgeCostParityTestCase(native=GPT_6_1_SOL_RESPONSES_NATIVE_JSON, bridged=GPT_6_1_SOL_MESSAGES_BRIDGED_JSON),
+    BridgeCostParityTestCase(native=GPT_5_6_TERRA_RESPONSES_NATIVE_JSON, bridged=GPT_5_6_TERRA_MESSAGES_BRIDGED_JSON),
+    BridgeCostParityTestCase(native=GPT_6_1_SOL_RESPONSES_NATIVE_STREAM, bridged=GPT_6_1_SOL_MESSAGES_BRIDGED_STREAM),
+    BridgeCostParityTestCase(native=GPT_6_LUNA_RESPONSES_NATIVE_STREAM, bridged=GPT_6_LUNA_MESSAGES_BRIDGED_STREAM),
+    BridgeCostParityTestCase(native=GPT_6_ASTRA_RESPONSES_NATIVE_STREAM, bridged=GPT_6_ASTRA_MESSAGES_BRIDGED_STREAM),
+    BridgeCostParityTestCase(
+        native=GPT_5_6_TERRA_RESPONSES_NATIVE_STREAM, bridged=GPT_5_6_TERRA_MESSAGES_BRIDGED_STREAM
+    ),
     BridgeCostParityTestCase(native=GPT_6_SOL_RESPONSES_DEPLOYMENT_JSON, bridged=GPT_6_SOL_CHAT_BRIDGED_JSON),
     BridgeCostParityTestCase(native=GPT_6_LUNA_RESPONSES_DEPLOYMENT_JSON, bridged=GPT_6_LUNA_CHAT_BRIDGED_JSON),
     BridgeCostParityTestCase(native=GPT_6_ASTRA_RESPONSES_DEPLOYMENT_JSON, bridged=GPT_6_ASTRA_CHAT_BRIDGED_JSON),

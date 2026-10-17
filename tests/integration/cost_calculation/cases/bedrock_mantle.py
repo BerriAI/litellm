@@ -18,7 +18,7 @@ from integration.cost_calculation.cases.anthropic import (
     CLAUDE_OPUS_5_5_THINKING,
     CLAUDE_OPUS_5_5_TOOL_CALL,
 )
-from integration.cost_calculation.bridge_cost_parity.case import BridgeCostParityTestCase
+from integration.cost_calculation.bridge_cost_parity.case import BridgeCostParityTestCase, bridge_pairs
 from integration.cost_calculation.cost_tracking_case import (
     CostTrackingTestCase,
     Deployment,
@@ -535,14 +535,40 @@ _MANTLE_GPT_CHAT_REQUEST: Final = {
     "messages": [{"role": "user", "content": "cost tracking fixture"}],
     "max_completion_tokens": 64,
 }
+_MANTLE_GPT_TOOL_REQUEST: Final = {
+    **_MANTLE_GPT_RESPONSES_REQUEST,
+    "tools": [
+        {
+            "type": "function",
+            "name": "get_weather",
+            "description": "Get the weather for a city",
+            "parameters": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+                "required": ["city"],
+            },
+        }
+    ],
+    "tool_choice": "required",
+}
+_MANTLE_GPT_CACHE_WRITE_REQUEST: Final = {
+    **_MANTLE_GPT_RESPONSES_REQUEST,
+    "input": "cacheable pricing-harness prefix " * 1000,
+    "prompt_cache_key": "cost-cases-20261017",
+    "max_output_tokens": 64,
+}
 
 
 def _mantle_gpt_usage(
-    input_tokens: int, output_tokens: int, reasoning_tokens: int, cached_tokens: int = 0
+    input_tokens: int,
+    output_tokens: int,
+    reasoning_tokens: int,
+    cached_tokens: int = 0,
+    cache_write_tokens: int = 0,
 ) -> dict[str, JsonValue]:
     return {
         "input_tokens": input_tokens,
-        "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": cached_tokens},
+        "input_tokens_details": {"cache_write_tokens": cache_write_tokens, "cached_tokens": cached_tokens},
         "output_tokens": output_tokens,
         "output_tokens_details": {"reasoning_tokens": reasoning_tokens},
         "total_tokens": input_tokens + output_tokens,
@@ -628,6 +654,20 @@ def _mantle_gpt_cases(
         response_expected,
         _MANTLE_GPT_CHAT_REQUEST,
     )
+    chat_stream_case: Final = chat_case.model_copy(
+        update={
+            "name": f"bedrock_mantle-{provider_model}-chat_stream",
+            "request": {**chat_case.request, "stream": True},
+            "response": stream_case.response,
+        }
+    )
+    messages_pairs: Final = bridge_pairs((response_case, stream_case), ("/v1/messages",))
+    messages_json: Final = messages_pairs[0].bridged.model_copy(
+        update={"name": f"bedrock_mantle-{provider_model}-messages_bridged_json"}
+    )
+    messages_stream: Final = messages_pairs[1].bridged.model_copy(
+        update={"name": f"bedrock_mantle-{provider_model}-messages_bridged_stream"}
+    )
     cache_case: Final = _mantle_gpt_json_case(
         BEDROCK_MANTLE_OPENAI_GPT_6_SOL_RESPONSES_JSON,
         provider_model,
@@ -660,7 +700,73 @@ def _mantle_gpt_cases(
         tiered_boundary_expected,
         {**_MANTLE_GPT_RESPONSES_REQUEST, "max_output_tokens": 412},
     )
-    return (response_case, stream_case, reasoning_case, chat_case, cache_case, tiered_input, tiered_cache, tiered_boundary)
+    return (
+        response_case,
+        stream_case,
+        reasoning_case,
+        chat_case,
+        cache_case,
+        tiered_input,
+        tiered_cache,
+        tiered_boundary,
+        chat_stream_case,
+        messages_json,
+        messages_stream,
+    )
+
+
+def _mantle_gpt_audit3_cases(
+    provider_model: str,
+    tool_input_tokens: int,
+    tool_output_tokens: int,
+    tool_reasoning_tokens: int,
+    tool_expected: ExactExpected,
+    cache_output_tokens: int,
+    cache_reasoning_tokens: int,
+    cache_expected: ExactExpected,
+) -> tuple[CostTrackingTestCase, ...]:
+    tool_case: Final = _mantle_gpt_json_case(
+        BEDROCK_MANTLE_OPENAI_GPT_6_SOL_RESPONSES_JSON,
+        provider_model,
+        "tool_call",
+        _mantle_gpt_usage(tool_input_tokens, tool_output_tokens, tool_reasoning_tokens),
+        tool_expected,
+        _MANTLE_GPT_TOOL_REQUEST,
+    )
+    if not isinstance(tool_case.response, JsonResponse):
+        raise TypeError(f"{tool_case.name}: expected a JSON response fixture")
+    tool_response: Final = tool_case.response.model_copy(
+        update={
+            "body": {
+                **tool_case.response.body,
+                "output": [
+                    {
+                        "arguments": '{"city":"Paris"}',
+                        "call_id": "call_$REQUEST_ID",
+                        "id": "fc_$REQUEST_ID",
+                        "name": "get_weather",
+                        "status": "completed",
+                        "type": "function_call",
+                    }
+                ],
+            }
+        }
+    )
+    tool_case_with_response: Final = tool_case.model_copy(update={"response": tool_response})
+    cache_case: Final = _mantle_gpt_json_case(
+        BEDROCK_MANTLE_OPENAI_GPT_6_SOL_RESPONSES_JSON,
+        provider_model,
+        "cache_write_5m",
+        _mantle_gpt_usage(
+            1667,
+            cache_output_tokens,
+            cache_reasoning_tokens,
+            cache_write_tokens=1665,
+        ),
+        cache_expected,
+        _MANTLE_GPT_CACHE_WRITE_REQUEST,
+    )
+    return (tool_case_with_response, cache_case)
 
 
 def _mantle_gpt_bridge(case: CostTrackingTestCase) -> BridgeCostParityTestCase:
@@ -723,6 +829,83 @@ _MANTLE_GPT_56_TERRA_CASES: Final = _mantle_gpt_cases(
     ExactExpected(spend=0.84537376, input_cost=0.83776, output_cost=0.00761376, prompt_tokens=272000, completion_tokens=412),
 )
 
+_MANTLE_GPT_AUDIT3_CASES: Final = (
+    *_mantle_gpt_audit3_cases(
+        "openai.gpt-6.1-sol",
+        50,
+        20,
+        0,
+        ExactExpected(spend=0.000363, input_cost=0.000121, output_cost=0.000242, prompt_tokens=50, completion_tokens=20),
+        28,
+        0,
+        ExactExpected(
+            spend=0.005381765,
+            input_cost=0.005042965,
+            output_cost=0.0003388,
+            prompt_tokens=1667,
+            completion_tokens=28,
+            cache_creation_cost=0.005038125,
+        ),
+    ),
+    *_mantle_gpt_audit3_cases(
+        "openai.gpt-6-luna",
+        51,
+        18,
+        0,
+        ExactExpected(
+            spend=0.000018612, input_cost=0.000006732, output_cost=0.00001188, prompt_tokens=51, completion_tokens=18
+        ),
+        64,
+        40,
+        ExactExpected(
+            spend=0.000317229,
+            input_cost=0.000274989,
+            output_cost=0.00004224,
+            prompt_tokens=1667,
+            completion_tokens=64,
+            cache_creation_cost=0.000274725,
+        ),
+    ),
+    *_mantle_gpt_audit3_cases(
+        "openai.gpt-6-astra",
+        51,
+        18,
+        0,
+        ExactExpected(
+            spend=0.0020163, input_cost=0.0007293, output_cost=0.001287, prompt_tokens=51, completion_tokens=18
+        ),
+        27,
+        0,
+        ExactExpected(
+            spend=0.031720975,
+            input_cost=0.029790475,
+            output_cost=0.0019305,
+            prompt_tokens=1667,
+            completion_tokens=27,
+            cache_creation_cost=0.029761875,
+        ),
+    ),
+    *_mantle_gpt_audit3_cases(
+        "openai.gpt-5.6-terra",
+        51,
+        28,
+        8,
+        ExactExpected(
+            spend=0.00067452, input_cost=0.00015708, output_cost=0.00051744, prompt_tokens=51, completion_tokens=28
+        ),
+        28,
+        0,
+        ExactExpected(
+            spend=0.00693385,
+            input_cost=0.00641641,
+            output_cost=0.00051744,
+            prompt_tokens=1667,
+            completion_tokens=28,
+            cache_creation_cost=0.00641025,
+        ),
+    ),
+)
+
 _MANTLE_CLAUDE_OPUS_MODEL: Final = "bedrock_mantle/anthropic.claude-opus-5-5"
 _ADAPTIVE_USAGE: Final = {
     "input_tokens": 24,
@@ -737,7 +920,25 @@ _ADAPTIVE_EXPECTED: Final = ExactExpected(
     spend=0.0007524, input_cost=0.0001584, output_cost=0.000594, prompt_tokens=24, completion_tokens=18
 )
 
-BEDROCK_MANTLE_CLAUDE_OPUS_5_5_INPUT_TEXT: Final = with_usage(
+
+def _mantle_without_usage_fields(case: CostTrackingTestCase) -> CostTrackingTestCase:
+    if not isinstance(case.response, JsonResponse):
+        raise TypeError(f"{case.name}: expected a JSON response fixture")
+    usage: Final = case.response.body.get("usage")
+    if not isinstance(usage, dict):
+        raise TypeError(f"{case.name}: expected a usage object")
+    response: Final = case.response.model_copy(
+        update={
+            "body": {
+                **case.response.body,
+                "usage": {key: value for key, value in usage.items() if key not in {"inference_geo", "speed"}},
+            }
+        }
+    )
+    return case.model_copy(update={"response": response})
+
+
+BEDROCK_MANTLE_CLAUDE_OPUS_5_5_INPUT_TEXT: Final = _mantle_without_usage_fields(with_usage(
     CLAUDE_OPUS_5_5_INPUT_TEXT,
     "bedrock_mantle-anthropic.claude-opus-5-5-input_text",
     _ADAPTIVE_USAGE,
@@ -751,7 +952,7 @@ BEDROCK_MANTLE_CLAUDE_OPUS_5_5_INPUT_TEXT: Final = with_usage(
             "allowed_openai_params": ["reasoning_effort"],
         },
     }
-)
+))
 
 _MANTLE_CLAUDE_STREAM_RESPONSE: Final = SseResponse(
     content_type="text/event-stream",
@@ -841,7 +1042,7 @@ BEDROCK_MANTLE_CLAUDE_OPUS_5_5_MESSAGES_STREAM: Final = CLAUDE_OPUS_5_5_MESSAGES
     }
 )
 
-BEDROCK_MANTLE_CLAUDE_OPUS_5_5_CACHE_READ: Final = with_usage(
+BEDROCK_MANTLE_CLAUDE_OPUS_5_5_CACHE_READ: Final = _mantle_without_usage_fields(with_usage(
     CLAUDE_OPUS_5_5_CACHE_READ,
     "bedrock_mantle-anthropic.claude-opus-5-5-cache_read",
     {
@@ -856,7 +1057,7 @@ BEDROCK_MANTLE_CLAUDE_OPUS_5_5_CACHE_READ: Final = with_usage(
     ExactExpected(
         spend=0.00308319, input_cost=0.00153219, output_cost=0.001551, prompt_tokens=4225, completion_tokens=47
     ),
-).model_copy(update={"model": _MANTLE_CLAUDE_OPUS_MODEL})
+).model_copy(update={"model": _MANTLE_CLAUDE_OPUS_MODEL}))
 
 BEDROCK_MANTLE_CLAUDE_OPUS_5_5_CACHE_WRITE_5M: Final = with_usage(
     CLAUDE_OPUS_5_5_CACHE_WRITE_5M,
@@ -892,12 +1093,12 @@ BEDROCK_MANTLE_CLAUDE_OPUS_5_5_CACHE_WRITE_1H: Final = with_usage(
     ),
 ).model_copy(update={"model": _MANTLE_CLAUDE_OPUS_MODEL})
 
-BEDROCK_MANTLE_CLAUDE_OPUS_5_5_THINKING: Final = with_usage(
+BEDROCK_MANTLE_CLAUDE_OPUS_5_5_THINKING: Final = _mantle_without_usage_fields(with_usage(
     CLAUDE_OPUS_5_5_THINKING,
     "bedrock_mantle-anthropic.claude-opus-5-5-thinking",
     _ADAPTIVE_USAGE,
     _ADAPTIVE_EXPECTED,
-).model_copy(update={"model": _MANTLE_CLAUDE_OPUS_MODEL})
+).model_copy(update={"model": _MANTLE_CLAUDE_OPUS_MODEL}))
 
 BEDROCK_MANTLE_CLAUDE_OPUS_5_5_TOOL_CALL: Final = with_usage(
     CLAUDE_OPUS_5_5_TOOL_CALL,
@@ -921,6 +1122,21 @@ BEDROCK_MANTLE_CLAUDE_OPUS_5_5_CHAT_BRIDGED_JSON: Final = BEDROCK_MANTLE_CLAUDE_
     }
 )
 
+BEDROCK_MANTLE_CLAUDE_OPUS_5_5_RESPONSES_JSON: Final = BEDROCK_MANTLE_CLAUDE_OPUS_5_5_INPUT_TEXT.model_copy(
+    update={
+        "name": "bedrock_mantle-anthropic.claude-opus-5-5-responses_json",
+        "endpoint": "/v1/responses",
+        "request": {"model": "$MODEL", "input": "summarize the attached material in one line"},
+    }
+)
+BEDROCK_MANTLE_CLAUDE_OPUS_5_5_RESPONSES_STREAM: Final = BEDROCK_MANTLE_CLAUDE_OPUS_5_5_STREAM.model_copy(
+    update={
+        "name": "bedrock_mantle-anthropic.claude-opus-5-5-responses_stream",
+        "endpoint": "/v1/responses",
+        "request": {"model": "$MODEL", "input": "summarize the attached material in one line", "stream": True},
+    }
+)
+
 BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
     _mantle_gpt_bridge(_MANTLE_GPT_61_SOL_CASES[0]),
     _mantle_gpt_bridge(_MANTLE_GPT_6_LUNA_CASES[0]),
@@ -929,6 +1145,14 @@ BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
     BridgeCostParityTestCase(
         native=BEDROCK_MANTLE_CLAUDE_OPUS_5_5_MESSAGES_INPUT_TEXT,
         bridged=BEDROCK_MANTLE_CLAUDE_OPUS_5_5_CHAT_BRIDGED_JSON,
+    ),
+    *tuple(
+        BridgeCostParityTestCase(native=cases[0], bridged=cases[9])
+        for cases in (_MANTLE_GPT_61_SOL_CASES, _MANTLE_GPT_6_LUNA_CASES, _MANTLE_GPT_6_ASTRA_CASES, _MANTLE_GPT_56_TERRA_CASES)
+    ),
+    *tuple(
+        BridgeCostParityTestCase(native=cases[1], bridged=cases[10])
+        for cases in (_MANTLE_GPT_61_SOL_CASES, _MANTLE_GPT_6_LUNA_CASES, _MANTLE_GPT_6_ASTRA_CASES, _MANTLE_GPT_56_TERRA_CASES)
     ),
 )
 
@@ -945,11 +1169,14 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     *_MANTLE_GPT_6_LUNA_CASES,
     *_MANTLE_GPT_6_ASTRA_CASES,
     *_MANTLE_GPT_56_TERRA_CASES,
+    *_MANTLE_GPT_AUDIT3_CASES,
     BEDROCK_MANTLE_CLAUDE_OPUS_5_5_INPUT_TEXT,
     BEDROCK_MANTLE_CLAUDE_OPUS_5_5_STREAM,
     BEDROCK_MANTLE_CLAUDE_OPUS_5_5_MESSAGES_INPUT_TEXT,
     BEDROCK_MANTLE_CLAUDE_OPUS_5_5_MESSAGES_STREAM,
     BEDROCK_MANTLE_CLAUDE_OPUS_5_5_CHAT_BRIDGED_JSON,
+    BEDROCK_MANTLE_CLAUDE_OPUS_5_5_RESPONSES_JSON,
+    BEDROCK_MANTLE_CLAUDE_OPUS_5_5_RESPONSES_STREAM,
     BEDROCK_MANTLE_CLAUDE_OPUS_5_5_CACHE_READ,
     BEDROCK_MANTLE_CLAUDE_OPUS_5_5_CACHE_WRITE_5M,
     BEDROCK_MANTLE_CLAUDE_OPUS_5_5_CACHE_WRITE_1H,
@@ -971,5 +1198,17 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
     StreamParityTestCase(
         plain=BEDROCK_MANTLE_CLAUDE_OPUS_5_5_MESSAGES_INPUT_TEXT,
         streamed=BEDROCK_MANTLE_CLAUDE_OPUS_5_5_MESSAGES_STREAM,
+    ),
+    StreamParityTestCase(
+        plain=BEDROCK_MANTLE_CLAUDE_OPUS_5_5_RESPONSES_JSON,
+        streamed=BEDROCK_MANTLE_CLAUDE_OPUS_5_5_RESPONSES_STREAM,
+    ),
+    *tuple(
+        StreamParityTestCase(plain=cases[3], streamed=cases[8])
+        for cases in (_MANTLE_GPT_61_SOL_CASES, _MANTLE_GPT_6_LUNA_CASES, _MANTLE_GPT_6_ASTRA_CASES, _MANTLE_GPT_56_TERRA_CASES)
+    ),
+    *tuple(
+        StreamParityTestCase(plain=cases[9], streamed=cases[10])
+        for cases in (_MANTLE_GPT_61_SOL_CASES, _MANTLE_GPT_6_LUNA_CASES, _MANTLE_GPT_6_ASTRA_CASES, _MANTLE_GPT_56_TERRA_CASES)
     ),
 )
