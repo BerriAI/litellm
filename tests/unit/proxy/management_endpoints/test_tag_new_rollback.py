@@ -129,7 +129,7 @@ async def test_remove_tag_from_deployment_removes_only_that_tag():
 
 
 @pytest.mark.asyncio
-async def test_remove_tag_from_deployment_noops_when_tag_absent():
+async def test_remove_tag_from_deployment_noops_when_tag_absent():  # test-quality-ok: the no-op contract is the absence of a DB write, so assert_not_awaited on table.update is the caller-observable assertion
     table = SimpleNamespace(
         find_unique=AsyncMock(return_value=SimpleNamespace(litellm_params=json.dumps({"tags": ["other-tag"]}))),
         update=AsyncMock(),

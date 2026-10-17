@@ -459,7 +459,7 @@ async def _rollback_new_tag(prisma_client: "PrismaClient", llm_router: "Router",
             )
         await _table(TagRepository(prisma_client)).delete(where={"tag_name": tag.name})
         await _evict_tag_cache_keys((tag_cache_key(tag.name), tag_registry_cache_key()))
-    except Exception:
+    except Exception:  # noqa: BLE001 - rollback is best-effort; the caller keeps the original tagging error
         verbose_proxy_logger.exception("Rollback of failed tag create %s itself failed", tag.name)
 
 
