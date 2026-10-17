@@ -312,7 +312,13 @@ def get_known_models_from_wildcard(wildcard_model: str, litellm_params: LiteLLM_
             for wc_model in wildcard_models
             if wc_model.removeprefix(provider_id_prefix).startswith(model_prefix)
         ]
-        if deployment_repeats_prefix or filtered_wildcard_models:
+        # Filter semantics (list matching catalog ids) only apply when the public name is the
+        # deployment's own pattern. For an alias over a broader deployment (e.g. public
+        # "cloudflare/@cf/*" over "cloudflare/*"), routing substitutes the captured suffix into
+        # the deployment pattern, so catalog ids must be listed with the alias prefix prepended
+        # to their provider-stripped form; listing the raw catalog id would advertise models
+        # whose routed target does not exist.
+        if deployment_repeats_prefix or (litellm_params is None and filtered_wildcard_models):
             wildcard_models = filtered_wildcard_models
         else:
             # add model prefix to wildcard models

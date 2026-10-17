@@ -1272,3 +1272,35 @@ def test_alias_wildcard_prepends_its_prefix_to_catalog_ids_without_their_provide
         litellm.model_cost.pop(catalog_id, None)
         litellm.models_by_provider["cloudflare"].discard(catalog_id)
         litellm.add_known_models(model_cost_map={})
+
+
+def test_alias_wildcard_matching_catalog_subprefix_lists_routable_ids() -> None:
+    """GH#46384: an alias whose suffix collides with a catalog sub-prefix (public
+    "cloudflare/@cf/*" over deployment "cloudflare/*") is an alias, not a filter.
+    Routing substitutes the captured suffix into the deployment pattern, so the
+    listing must prepend the alias prefix to provider-stripped catalog ids; the
+    raw catalog id would route to a target that does not exist."""
+    import litellm
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    catalog_id: Final = "cloudflare/@cf/partial-alias-org/model-b"
+    try:
+        litellm.register_model(
+            {catalog_id: {"litellm_provider": "cloudflare", "mode": "chat"}}, persist_across_reloads=False
+        )
+
+        listed: Final = get_known_models_from_wildcard("cloudflare/@cf/*", LiteLLM_Params(model="cloudflare/*"))
+
+        # routing captures the segment after "cloudflare/@cf/" and substitutes it into
+        # "cloudflare/*"; every listed id must therefore map back to a catalog id
+        alias_prefix: Final = "cloudflare/@cf/"
+        routed: Final = [
+            f"cloudflare/{model.removeprefix(alias_prefix)}" for model in listed if model.startswith(alias_prefix)
+        ]
+        assert catalog_id in routed
+        assert catalog_id not in listed
+    finally:
+        litellm.model_cost.pop(catalog_id, None)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # test cleanup
+        litellm.models_by_provider["cloudflare"].discard(catalog_id)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # test cleanup
+        litellm.add_known_models(model_cost_map={})  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # test cleanup
