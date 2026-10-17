@@ -3,6 +3,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -67,6 +68,9 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+_MODEL_INFO: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 
 
 class AmazonAnthropicClaudeMessagesConfig(
@@ -751,6 +755,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         apply_bedrock_invoke_structured_output(
             model=model,
             request_body=anthropic_messages_request,
+            model_info=_MODEL_INFO.validate_python(getattr(litellm_params, "model_info", None)),
         )
         normalize_bedrock_opus_output_config_effort(
             model=model,

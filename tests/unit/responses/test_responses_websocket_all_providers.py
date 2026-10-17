@@ -286,6 +286,151 @@ class TestManagedWebSocketHandlerIntegration:
 
         assert captured["model"] == "bedrock_mantle/openai.gpt-5.5"
 
+    @pytest.mark.asyncio
+    async def test_managed_socket_runs_the_frame_guard_on_every_turn(self, monkeypatch):
+        import json
+        from unittest.mock import AsyncMock, MagicMock
+
+        import litellm
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.responses.streaming_iterator import GuardedResponsesWsFrame, ManagedResponsesWebSocketHandler
+
+        async def guard(frame: str) -> GuardedResponsesWsFrame:
+            body = json.loads(frame)
+            if "forbidden" in body["input"]:
+                raise ValueError("blocked by guardrail")
+            return GuardedResponsesWsFrame(
+                frame=json.dumps({**body, "input": body["input"].upper()}),
+                guardrail_information=({"guardrail_name": "g", "guardrail_cost": 0.5},),
+            )
+
+        async def empty_stream():
+            return
+            yield {}
+
+        aresponses: Final = AsyncMock(side_effect=lambda **kwargs: empty_stream())
+        monkeypatch.setattr(litellm, "aresponses", aresponses)
+        websocket: Final = MagicMock()
+        websocket.send_text = AsyncMock()
+        handler: Final = ManagedResponsesWebSocketHandler(
+            websocket=websocket,
+            model="anthropic/claude-sonnet-4-5",
+            logging_obj=Logging(
+                model="anthropic/claude-sonnet-4-5",
+                messages=[],
+                stream=True,
+                call_type="aresponses",
+                start_time=0,
+                litellm_call_id="test-id",
+                function_id="test-func",
+            ),
+            litellm_metadata={"user_api_key_hash": "k1"},
+            frame_guard=guard,
+        )
+
+        await handler._process_response_create(json.dumps({"type": "response.create", "input": "say forbidden"}))
+        await handler._process_response_create(json.dumps({"type": "response.create", "input": "hello"}))
+
+        aresponses.assert_awaited_once()
+        error_event: Final = json.loads(websocket.send_text.await_args_list[0].args[0])
+        assert error_event["error"] == {"type": "invalid_request_error", "message": "blocked by guardrail"}
+        sent: Final = aresponses.await_args.kwargs
+        assert sent["input"] == "HELLO"
+        assert sent["litellm_metadata"]["user_api_key_hash"] == "k1"
+        assert sent["litellm_metadata"]["standard_logging_guardrail_information"] == [
+            {"guardrail_name": "g", "guardrail_cost": 0.5}
+        ]
+
+    @pytest.mark.asyncio
+    async def test_managed_socket_unmasks_the_reply_with_the_frame_guard_s_pii_tokens(self, monkeypatch):
+        import json
+        from unittest.mock import AsyncMock, MagicMock
+
+        import litellm
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.responses.streaming_iterator import GuardedResponsesWsFrame, ManagedResponsesWebSocketHandler
+
+        presidio = _FakeWSGuardrail()
+
+        async def guard(frame: str) -> GuardedResponsesWsFrame:
+            body = json.loads(frame)
+            masked = await presidio.check_pii(body["input"], True, None, walk := {})
+            return GuardedResponsesWsFrame(
+                frame=json.dumps({**body, "input": masked}), pii_tokens=walk["metadata"]["pii_tokens"]
+            )
+
+        provider_saw: dict = {}
+
+        async def fake_aresponses(**kwargs):
+            provider_saw.update(kwargs)
+
+            async def stream():
+                yield {"type": "response.output_text.delta", "delta": "Sent to <EMAIL_ADDRESS_1>"}
+                yield {
+                    "type": "response.completed",
+                    "response": {
+                        "id": "resp_1",
+                        "output": [
+                            {"type": "message", "content": [{"type": "output_text", "text": "Sent to <EMAIL_ADDRESS_1>"}]}
+                        ],
+                    },
+                }
+
+            return stream()
+
+        monkeypatch.setattr(litellm, "aresponses", fake_aresponses)
+        websocket: Final = MagicMock()
+        websocket.send_text = AsyncMock()
+        handler: Final = ManagedResponsesWebSocketHandler(
+            websocket=websocket,
+            model="anthropic/claude-sonnet-4-5",
+            logging_obj=Logging(
+                model="anthropic/claude-sonnet-4-5",
+                messages=[],
+                stream=True,
+                call_type="aresponses",
+                start_time=0,
+                litellm_call_id="test-id",
+                function_id="test-func",
+            ),
+            frame_guard=guard,
+            guardrail_callbacks=[presidio],
+        )
+
+        await handler._process_response_create(
+            json.dumps({"type": "response.create", "input": "email alice@example.com please"})
+        )
+
+        assert provider_saw["input"] == "email <EMAIL_ADDRESS_1> please"
+        sent: Final = [json.loads(call.args[0]) for call in websocket.send_text.await_args_list]
+        assert sent[0]["delta"] == "Sent to alice@example.com"
+        assert sent[1]["response"]["output"][0]["content"][0]["text"] == "Sent to alice@example.com"
+
+    @pytest.mark.asyncio
+    async def test_http_handler_hands_the_frame_guard_to_a_managed_socket(self):
+        import json
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+
+        guard: Final = AsyncMock(side_effect=ValueError("blocked by guardrail"))
+        websocket: Final = MagicMock()
+        websocket.send_text = AsyncMock()
+        websocket.receive_text = AsyncMock(side_effect=ConnectionError("client left"))
+
+        await BaseLLMHTTPHandler().async_responses_websocket(
+            model="anthropic/claude-sonnet-4-5",
+            websocket=websocket,
+            logging_obj=MagicMock(),
+            responses_api_provider_config=None,
+            first_message=json.dumps({"type": "response.create", "input": "say forbidden"}),
+            frame_guard=guard,
+        )
+
+        guard.assert_awaited_once()
+        error_event: Final = json.loads(websocket.send_text.await_args.args[0])
+        assert error_event["error"]["message"] == "blocked by guardrail"
+
     @pytest.mark.parametrize("terminal_type", ["response.completed", "response.incomplete"])
     @pytest.mark.asyncio
     async def test_truncated_turn_is_kept_as_history_for_the_next_turn(self, monkeypatch, terminal_type: str):
@@ -1322,6 +1467,97 @@ class TestWebSocketProjectQuotaEnforcement:
         assert (error_event["status"], error_event["error"]["type"]) == (429, "rate_limit_exceeded")
 
     @pytest.mark.asyncio
+    async def test_native_handler_runs_the_frame_guard_on_every_turn_and_bills_each_turn_its_own_guardrail_records(
+        self,
+    ):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.responses.streaming_iterator import GuardedResponsesWsFrame, ResponsesWebSocketStreaming
+
+        def connection_logging():
+            logging_obj = MagicMock()
+            logging_obj.litellm_params = {
+                "metadata": {
+                    "standard_logging_guardrail_information": [{"guardrail_name": "admission", "guardrail_cost": 9.0}]
+                }
+            }
+            logging_obj.model_call_details = {}
+            logging_obj.copy_for_new_call.side_effect = lambda **_: connection_logging()
+            return logging_obj
+
+        async def guard(frame: str) -> GuardedResponsesWsFrame:
+            body = json.loads(frame)
+            return GuardedResponsesWsFrame(
+                frame=json.dumps({**body, "input": body["input"] + " [guarded]"}),
+                guardrail_information=({"guardrail_name": "turn", "guardrail_cost": 0.1 * len(body["input"])},),
+            )
+
+        frames = [json.dumps({"type": "response.create", "input": text}) for text in ("hi", "hello")]
+        mock_backend_ws = MagicMock()
+        mock_backend_ws.send = AsyncMock()
+        mock_websocket = MagicMock()
+        mock_websocket.send_text = AsyncMock()
+        mock_websocket.receive_text = AsyncMock(side_effect=[frames[1], RuntimeError("client closed")])
+
+        handler = ResponsesWebSocketStreaming(
+            websocket=mock_websocket,
+            backend_ws=mock_backend_ws,
+            logging_obj=connection_logging(),
+            first_message=frames[0],
+            frame_guard=guard,
+        )
+        await handler.client_to_backend()
+
+        sent = [json.loads(call.args[0]) for call in mock_backend_ws.send.call_args_list]
+        assert [frame["input"] for frame in sent] == ["hi [guarded]", "hello [guarded]"]
+        assert [
+            turn.logging_obj.litellm_params["metadata"]["standard_logging_guardrail_information"]
+            for turn in handler._open_turns
+        ] == [
+            [{"guardrail_name": "turn", "guardrail_cost": pytest.approx(0.2)}],
+            [{"guardrail_name": "turn", "guardrail_cost": pytest.approx(0.5)}],
+        ]
+
+    @pytest.mark.asyncio
+    async def test_native_handler_drops_a_frame_the_guard_rejects_and_keeps_the_socket_open(self):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.responses.streaming_iterator import GuardedResponsesWsFrame, ResponsesWebSocketStreaming
+
+        async def guard(frame: str) -> GuardedResponsesWsFrame:
+            if "forbidden" in frame:
+                raise ValueError("turn guardrail blocked the request")
+            return GuardedResponsesWsFrame(frame=frame)
+
+        blocked = json.dumps({"type": "response.create", "input": "forbidden"})
+        allowed = json.dumps({"type": "response.create", "input": "fine"})
+        mock_backend_ws = MagicMock()
+        mock_backend_ws.send = AsyncMock()
+        mock_websocket = MagicMock()
+        mock_websocket.send_text = AsyncMock()
+        mock_websocket.receive_text = AsyncMock(side_effect=[allowed, RuntimeError("client closed")])
+        logging_obj = MagicMock()
+        logging_obj.copy_for_new_call.return_value = logging_obj
+
+        handler = ResponsesWebSocketStreaming(
+            websocket=mock_websocket,
+            backend_ws=mock_backend_ws,
+            logging_obj=logging_obj,
+            first_message=blocked,
+            frame_guard=guard,
+        )
+        await handler.client_to_backend()
+
+        error_event = json.loads(mock_websocket.send_text.call_args[0][0])
+        assert error_event["type"] == "error"
+        assert error_event["error"] == {
+            "type": "invalid_request_error",
+            "message": "turn guardrail blocked the request",
+        }
+        assert [json.loads(call.args[0])["input"] for call in mock_backend_ws.send.call_args_list] == ["fine"]
+        assert len(handler._open_turns) == 1
+
+    @pytest.mark.asyncio
     async def test_native_handler_forwards_frame_allowed_by_quota_callback(self):
         from unittest.mock import AsyncMock, MagicMock
 
@@ -2142,6 +2378,34 @@ def _make_streaming(**kwargs):
 
 class TestNativeWebSocketGuardrailMasking:
     """Exercises the input/output PII masking hooks on ResponsesWebSocketStreaming."""
+
+    @pytest.mark.asyncio
+    async def test_a_reply_to_a_frame_the_guard_masked_is_unmasked_with_the_guard_s_tokens(self):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.responses.streaming_iterator import GuardedResponsesWsFrame
+
+        guardrail = _FakeWSGuardrail()
+
+        async def guard(frame: str) -> GuardedResponsesWsFrame:
+            masked = await guardrail.check_pii(json.loads(frame)["input"], True, None, walk := {})
+            return GuardedResponsesWsFrame(
+                frame=json.dumps({"type": "response.create", "input": masked}),
+                pii_tokens=walk["metadata"]["pii_tokens"],
+            )
+
+        backend_ws = MagicMock()
+        backend_ws.send = AsyncMock()
+        handler = _make_streaming(
+            backend_ws=backend_ws, request_data={}, guardrail_callbacks=[guardrail], frame_guard=guard
+        )
+        handler.logging_obj.copy_for_new_call.return_value = handler.logging_obj
+
+        await handler._forward_guarded_frame(json.dumps({"type": "response.create", "input": "email alice@example.com"}))
+
+        assert json.loads(backend_ws.send.await_args.args[0])["input"] == "email <EMAIL_ADDRESS_1>"
+        reply = json.dumps({"type": "response.output_text.delta", "delta": "Sent to <EMAIL_ADDRESS_1>"})
+        assert json.loads(handler._unmask_response_event(reply))["delta"] == "Sent to alice@example.com"
 
     @pytest.mark.asyncio
     async def test_mask_response_create_flat_string_input(self):
