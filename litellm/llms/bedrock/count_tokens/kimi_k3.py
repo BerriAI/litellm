@@ -27,6 +27,7 @@ from typing_extensions import Self
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.prompt_templates.factory import chat_completion_tools_for
 from litellm.llms.anthropic.pass_through.adapters.transformation import LiteLLMAnthropicMessagesAdapter
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 
@@ -117,6 +118,7 @@ def _started_load(source: KimiK3TokenizerSource) -> "Future[tiktoken.Encoding | 
 class _EncodingLoad:
     encoding: "Future[tiktoken.Encoding | None]"
     started_at: float
+    is_retry: bool
 
     def retry_due(self, now: float, retry_after_seconds: float) -> bool:
         return self.encoding.done() and self.encoding.result() is None and now - self.started_at >= retry_after_seconds
@@ -134,18 +136,27 @@ class KimiK3Encodings:
         current: Final = self.current
         if current is not None and not current.retry_due(now, self.retry_after_seconds):
             return current
-        load: Final = _EncodingLoad(encoding=_started_load(self.source), started_at=now)
+        load: Final = _EncodingLoad(encoding=_started_load(self.source), started_at=now, is_retry=current is not None)
         self.current = load
         return load
 
     async def encoding(self, wait_seconds: float) -> tiktoken.Encoding | None:
         load: Final = self._load()
-        if not load.encoding.done():
-            await asyncio.wait(
-                (asyncio.wrap_future(load.encoding),),
-                timeout=max(load.started_at + wait_seconds - self.clock(), 0),
-            )
-        return load.encoding.result() if load.encoding.done() else None
+        remaining: Final = 0 if load.is_retry else load.started_at + wait_seconds - self.clock()
+        if load.encoding.done() or remaining <= 0:
+            return load.encoding.result() if load.encoding.done() else None
+        await asyncio.wait((asyncio.wrap_future(load.encoding),), timeout=remaining)
+        if load.encoding.done():
+            return load.encoding.result()
+        verbose_logger.warning(
+            "Kimi K3 tokenizer still loading after %s s, so Kimi K3 token counts are estimated until it loads. "
+            "Check that %s can be downloaded from Hugging Face repo %s at revision %s, or put it in the Hugging Face cache",
+            wait_seconds,
+            KIMI_K3_RANKS_FILE,
+            KIMI_K3_REPO,
+            KIMI_K3_REVISION,
+        )
+        return None
 
 
 class _Converse(BaseModel):
@@ -251,6 +262,10 @@ class _ConverseRequest(BaseModel):
     messages: tuple[_Message, ...]
     system: tuple[_Text | _CachePoint, ...] = ()
     tool_config: _ToolConfig | None = Field(default=None, alias="toolConfig")
+
+    def tool_specs(self) -> int:
+        blocks: Final = () if self.tool_config is None else self.tool_config.tools
+        return sum(isinstance(block, _ToolSpecBlock) for block in blocks)
 
     @model_validator(mode="after")
     def _results_answer_the_previous_calls(self) -> Self:
@@ -434,17 +449,21 @@ def _converse_request(
     if not all(_text_only(message) for message in messages):
         return None
     try:
-        return _ConverseRequest.model_validate(
+        chat_tools: Final = tuple(
+            chat_tool for tool in tools or () for chat_tool in chat_completion_tools_for(tool)
+        )  # comprehension-ok: flattens each tool's translation
+        request: Final = _ConverseRequest.model_validate(
             litellm.AmazonConverseConfig().transform_request(
                 model=model,
                 messages=copy.deepcopy(list(messages)),
-                optional_params={"tools": copy.deepcopy(list(tools))} if tools else {},
+                optional_params={"tools": copy.deepcopy(list(chat_tools))} if chat_tools else {},
                 litellm_params={},
                 headers={},
             )
         )
     except Exception:  # noqa: BLE001  # a body litellm cannot send to Bedrock, or cannot render, falls back to the estimate
         return None
+    return request if request.tool_specs() == len(chat_tools) else None
 
 
 def kimi_k3_tokens(

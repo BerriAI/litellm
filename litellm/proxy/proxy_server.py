@@ -14953,9 +14953,12 @@ def _drops_params(deployment: Mapping[str, object] | None) -> bool:
     return litellm.drop_params is True or (litellm_params is not None and litellm_params.get("drop_params") is True)
 
 
-def _text_only_contents(contents: Sequence[Mapping[str, object]]) -> bool:
+_ESTIMABLE_GOOGLE_PART_KEYS: Final = frozenset({"text", "functionCall", "functionResponse", "thoughtSignature"})
+
+
+def _estimable_contents(contents: Sequence[Mapping[str, object]]) -> bool:
     parts: Final = chain.from_iterable(iter_items(content.get("parts") or ()) for content in contents)
-    return all(set(as_str_mapping(part) or ()) == {"text"} for part in parts)
+    return all(set(as_str_mapping(part) or ()) <= _ESTIMABLE_GOOGLE_PART_KEYS for part in parts)
 
 
 def _router_default_litellm_params(router: Router) -> Mapping[str, object]:
@@ -15087,7 +15090,7 @@ async def count_request_tokens(
             code=400,
         )
     prompt_only: Final = bool(prompt) and conversation_empty
-    contents_estimable: Final = not contents or (bool(messages) and _text_only_contents(contents))
+    contents_estimable: Final = not contents or (bool(messages) and _estimable_contents(contents))
     prompt_as_message: Final = prompt_only and custom_llm_provider in _PROVIDERS_COUNTING_WITHOUT_MESSAGES
     ladder: Final = (
         None

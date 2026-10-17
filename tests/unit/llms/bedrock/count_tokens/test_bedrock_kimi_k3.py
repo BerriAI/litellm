@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import hashlib
 import json
@@ -265,12 +266,50 @@ def test_long_text_counts_what_the_tokenizer_counts_for_the_whole_text(pair_enco
             [_WEATHER],
             id="tool_result_without_its_call",
         ),
+        pytest.param(
+            [{"role": "user", "content": "What is new?"}],
+            [{"type": "web_search_20250305", "name": "web_search"}],
+            id="tool_the_converse_body_cannot_carry",
+        ),
     ],
 )
 def test_request_the_template_cannot_render_is_not_counted(
     pair_encoding: tiktoken.Encoding, messages: list[dict[str, object]], tools: list[dict[str, object]] | None
 ):
     assert kimi_k3_tokens(pair_encoding, MODEL, messages, tools) is None
+
+
+@pytest.mark.parametrize(
+    "tool",
+    [
+        pytest.param(
+            {
+                "type": "function",
+                "name": "get_weather",
+                "description": "Get the weather in °C",
+                "parameters": _WEATHER["function"]["parameters"],
+            },
+            id="responses_api",
+        ),
+        pytest.param(
+            {
+                "name": "get_weather",
+                "description": "Get the weather in °C",
+                "input_schema": _WEATHER["function"]["parameters"],
+            },
+            id="anthropic_messages",
+        ),
+    ],
+)
+def test_tool_in_another_api_shape_counts_like_the_same_chat_completions_tool(
+    pair_encoding: tiktoken.Encoding, tool: dict[str, object]
+):
+    messages: Final = [{"role": "user", "content": "Weather in Paris?"}]
+
+    counted: Final = kimi_k3_tokens(pair_encoding, MODEL, messages, [tool])
+
+    assert counted is not None
+    assert counted == kimi_k3_tokens(pair_encoding, MODEL, messages, [_WEATHER])
 
 
 def test_counting_a_request_with_an_image_url_never_downloads_the_image(
@@ -382,24 +421,65 @@ class _Clock:
         return self.now
 
 
+async def _loaded_eventually(encodings: KimiK3Encodings) -> tiktoken.Encoding | None:
+    for _ in range(500):
+        if (loaded := await encodings.encoding(wait_seconds=0)) is not None:
+            return loaded
+        await asyncio.sleep(0.01)
+    return None
+
+
 @pytest.mark.asyncio
-async def test_failed_tokenizer_load_is_retried_only_after_the_retry_window(
+async def test_failed_tokenizer_load_is_retried_in_the_background_only_after_the_retry_window(
     byte_source: KimiK3TokenizerSource, tmp_path: Path
 ):
-    available: Final = threading.Event()
     clock: Final = _Clock()
+    reads: Final[list[float]] = []
+    released: Final = threading.Event()
+
+    def ranks_path() -> str:
+        reads.append(clock.now)
+        if len(reads) == 1:
+            return str(tmp_path / "missing")
+        released.wait(10)
+        return byte_source.ranks_path()
+
     encodings: Final = KimiK3Encodings(
-        source=KimiK3TokenizerSource(
-            ranks_path=lambda: byte_source.ranks_path() if available.is_set() else str(tmp_path / "missing"),
-            sha256=byte_source.sha256,
-        ),
+        source=KimiK3TokenizerSource(ranks_path=ranks_path, sha256=byte_source.sha256),
         retry_after_seconds=60,
         clock=clock,
     )
 
     assert await encodings.encoding(wait_seconds=5) is None
-    available.set()
     clock.now = 59.0
     assert await encodings.encoding(wait_seconds=5) is None
     clock.now = 60.0
-    assert await encodings.encoding(wait_seconds=5) is not None
+    assert await asyncio.wait_for(encodings.encoding(wait_seconds=5), timeout=1) is None
+    released.set()
+    assert await _loaded_eventually(encodings) is not None
+    assert reads == [0.0, 60.0]
+
+
+@pytest.mark.asyncio
+async def test_tokenizer_load_still_running_after_the_wait_is_logged(
+    byte_source: KimiK3TokenizerSource, caplog: pytest.LogCaptureFixture
+):
+    released: Final = threading.Event()
+
+    def hung_ranks_path() -> str:
+        released.wait(10)
+        return byte_source.ranks_path()
+
+    encodings: Final = KimiK3Encodings(
+        source=KimiK3TokenizerSource(ranks_path=hung_ranks_path, sha256=byte_source.sha256), retry_after_seconds=60
+    )
+    verbose_logger.addHandler(caplog.handler)
+    try:
+        with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+            loaded: Final = await encodings.encoding(wait_seconds=0.05)
+    finally:
+        verbose_logger.removeHandler(caplog.handler)
+        released.set()
+
+    assert loaded is None
+    assert any("Kimi K3 tokenizer still loading" in record.getMessage() for record in caplog.records)

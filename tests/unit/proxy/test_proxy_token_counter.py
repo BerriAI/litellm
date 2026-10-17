@@ -1585,6 +1585,19 @@ async def test_framing_keeps_the_400_for_blocks_the_provider_counter_cannot_conv
             },
             id="google_contents_with_media_the_translation_dropped",
         ),
+        pytest.param(
+            {
+                "messages": [
+                    {"role": "user", "content": "What is new?"},
+                    {"role": "assistant", "content": "Weighing the release notes"},
+                ],
+                "contents": [
+                    {"role": "user", "parts": [{"text": "What is new?"}]},
+                    {"role": "model", "parts": [{"text": "Weighing the release notes", "thought": True}]},
+                ],
+            },
+            id="google_contents_with_a_thought_the_translation_counts_as_text",
+        ),
     ],
 )
 async def test_framed_estimate_that_cannot_read_the_body_answers_the_provider_error(
@@ -1612,13 +1625,42 @@ async def test_framed_estimate_that_cannot_read_the_body_answers_the_provider_er
 
 
 @pytest.mark.asyncio
-async def test_framed_estimate_counts_google_contents_like_the_same_text_sent_as_messages(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    "contents",
+    [
+        pytest.param([{"role": "user", "parts": [{"text": "What is new in the release notes?"}]}], id="text"),
+        pytest.param(
+            [
+                {"role": "user", "parts": [{"text": "Weather in Paris?"}]},
+                {
+                    "role": "model",
+                    "parts": [
+                        {"functionCall": {"name": "get_weather", "args": {"city": "Paris"}}, "thoughtSignature": "c2ln"}
+                    ],
+                },
+                {
+                    "role": "user",
+                    "parts": [{"functionResponse": {"name": "get_weather", "response": {"forecast": "Sun"}}}],
+                },
+            ],
+            id="sdk_agent_loop",
+        ),
+        pytest.param(
+            [
+                {"role": "user", "parts": [{"text": "Hi"}]},
+                {"role": "model", "parts": [{"text": "Hello!", "thoughtSignature": "c2ln"}]},
+                {"role": "user", "parts": [{"text": "What is new?"}]},
+            ],
+            id="sdk_chat_with_a_thought_signature",
+        ),
+        pytest.param([], id="empty"),
+    ],
+)
+async def test_framed_estimate_counts_google_contents_like_the_same_conversation_sent_as_messages(
+    monkeypatch: pytest.MonkeyPatch, contents: list[dict[str, object]]
 ):
     _framed_kimi(monkeypatch)
-    google_request: Final = _google_count_tokens_request(
-        "kimi", {"contents": [{"role": "user", "parts": [{"text": "What is new in the release notes?"}]}]}
-    )
+    google_request: Final = _google_count_tokens_request("kimi", {"contents": contents})
 
     from_google: Final = await token_counter(request=google_request, call_endpoint=True)
     from_messages: Final = await token_counter(
@@ -2243,9 +2285,9 @@ async def test_bedrock_kimi_k3_deployment_with_a_custom_tokenizer_keeps_counting
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("messages", "tools"),
+    ("messages", "tools", "template_tokens"),
     [
-        pytest.param([{"role": "user", "content": "What is new?"}], None, id="one_message"),
+        pytest.param([{"role": "user", "content": "What is new?"}], None, 14, id="one_message"),
         pytest.param(
             [
                 {"role": "system", "content": "Be terse."},
@@ -2254,12 +2296,16 @@ async def test_bedrock_kimi_k3_deployment_with_a_custom_tokenizer_keeps_counting
                 {"role": "user", "content": "And Oslo?"},
             ],
             [_KIMI_WEATHER],
+            14 + 3 * 13 + 40,
             id="turns_and_tools",
         ),
     ],
 )
 async def test_bedrock_kimi_k3_without_its_tokenizer_adds_the_template_offsets_to_the_local_estimate(
-    monkeypatch: pytest.MonkeyPatch, messages: list[dict[str, object]], tools: list[dict[str, object]] | None
+    monkeypatch: pytest.MonkeyPatch,
+    messages: list[dict[str, object]],
+    tools: list[dict[str, object]] | None,
+    template_tokens: int,
 ):
     _framed_kimi(monkeypatch)
 
@@ -2273,9 +2319,7 @@ async def test_bedrock_kimi_k3_without_its_tokenizer_adds_the_template_offsets_t
         custom_tokenizer=litellm.utils.select_tokenizer(model=counted.model_used),
     )
 
-    assert counted.total_tokens == (
-        estimate + kimi_k3_template_tokens(len(messages), tools is not None) + _shipped_kimi_k3_framing()
-    )
+    assert counted.total_tokens == estimate + template_tokens + _shipped_kimi_k3_framing()
 
 
 @pytest.mark.asyncio
