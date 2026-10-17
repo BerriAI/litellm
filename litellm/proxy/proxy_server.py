@@ -6535,10 +6535,13 @@ class ProxyConfig:
         environment_variables: Final = config.get("environment_variables", None)
         if environment_variables:
             for key, value in environment_variables.items():
+                if not isinstance(key, str):
+                    verbose_proxy_logger.warning("Skipping an environment_variables key that is not a string")
+                    continue
                 if key in self._BLOCKED_ENV_KEYS:
                     verbose_proxy_logger.warning("Skipping blocked environment variable key: %s", key)
                     continue
-                if isinstance(key, str) and is_mcp_stdio_flag_key(key):
+                if is_mcp_stdio_flag_key(key):
                     verbose_proxy_logger.warning(
                         "Ignoring %s set in the config file. Set it in the proxy's environment instead",
                         MCP_STDIO_ENABLED_ENV_VAR,
@@ -6554,7 +6557,7 @@ class ProxyConfig:
                 if isinstance(value, str) and value.startswith("os.environ/"):
                     resolved_secret_string: str | None = get_secret_str(secret_name=value)
                     if resolved_secret_string is not None:
-                        os.environ[key] = resolved_secret_string
+                        self._set_config_environment_variable(key=key, value=resolved_secret_string)
                 else:
                     #########################################################
                     # handles this scenario:
@@ -6563,12 +6566,20 @@ class ProxyConfig:
                     #     ARIZE_ENDPOINT: https://otlp.arize.com/v1
                     # ```
                     #########################################################
-                    os.environ[key] = str(value)
+                    self._set_config_environment_variable(key=key, value=str(value))
 
             # check if litellm_license in general_settings
             if "LITELLM_LICENSE" in environment_variables:
                 _license_check.license_str = os.getenv("LITELLM_LICENSE", None)
                 premium_user = _license_check.is_premium()
+
+    def _set_config_environment_variable(self, key: str, value: str) -> None:
+        if key in os.environ and os.environ[key] != value:
+            verbose_proxy_logger.warning(
+                "environment_variables.%s from the config file replaces the value already set in the process environment",
+                key,
+            )
+        os.environ[key] = value
 
     def _warn_on_misplaced_jwt_keys(self, config: dict) -> tuple[str, ...]:
         misplaced_jwt_keys = tuple(key for key in ("enable_jwt_auth", "litellm_jwtauth") if key in config)
