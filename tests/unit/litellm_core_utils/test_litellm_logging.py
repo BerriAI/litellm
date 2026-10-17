@@ -2265,6 +2265,8 @@ def test_success_handler_skips_sync_callbacks_for_async_requests(
     dummy_logger.log_success_event = MagicMock()
     dummy_logger.log_stream_event = MagicMock()
 
+    logging_obj.dynamic_async_success_callbacks = [dummy_logger]
+
     model_response = ModelResponse(
         id="resp-123",
         model="gpt-4o-mini",
