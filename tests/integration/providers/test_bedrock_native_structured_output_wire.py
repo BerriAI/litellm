@@ -573,6 +573,54 @@ def test_thinking_request_follows_the_bedrock_native_key_the_model_resolves_to(
         assert (_JSON_TOOL in _tools(body, False)) is not native, body
 
 
+def _opt_in_answer(gateway: Gateway, entry: str, model: str, marker: str) -> JsonValue:
+    output_format: Final[dict[str, JsonValue]] = {"type": "json_schema", "schema": _SCHEMA}
+    match entry:
+        case "converse_chat" | "invoke_chat":
+            chat: Final = _chat_body(model, marker, thinking=_ADAPTIVE, response_format=_response_format(_SCHEMA))
+            return _content_json(_chat_message(gateway.request("POST", "/v1/chat/completions", chat)))
+        case "converse_responses":
+            responses: Final[dict[str, JsonValue]] = {
+                "model": model,
+                "input": marker,
+                "max_output_tokens": 2048,
+                "reasoning": {"effort": "low"},
+                "text": {"format": {**output_format, "name": "risk"}},
+                **_NO_CACHE,
+            }
+            return _responses_text(_responses_items(gateway.request("POST", "/v1/responses", responses)))
+        case "converse_messages":
+            adapted: Final = _messages_body(model, marker, thinking=_ADAPTIVE, output_format=output_format)
+            return _messages_text(_messages_blocks(gateway.request("POST", "/v1/messages", adapted)))
+        case _:
+            invoked: Final = _messages_body(model, marker, output_config={"format": output_format})
+            return _messages_text(_messages_blocks(gateway.request("POST", "/v1/messages", invoked)))
+
+
+def _sent_native_schema(gateway: Gateway, wire: Wire, entry: str, model: str) -> dict[str, JsonValue] | None:
+    marker, marker_hex = _marker()
+    assert _opt_in_answer(gateway, entry, model, marker) == _payload(marker_hex)
+    _, body = _one_call(wire, marker_hex)
+    invoke: Final = entry.startswith("invoke")
+    native: Final = _native_schema(body, invoke)
+    assert native is None or _JSON_TOOL not in _tools(body, invoke), body
+    return native
+
+
+@pytest.mark.parametrize(
+    "entry", ["converse_chat", "converse_responses", "converse_messages", "invoke_chat", "invoke_messages"]
+)
+def test_a_deployment_native_output_opt_in_stays_on_the_deployment_that_sets_it(gateway: Gateway, entry: str) -> None:
+    route: Final = entry.split("_", 1)[0]
+    with wire_server(_bedrock) as wire, gateway.scenario() as scenario:
+        opted_in: Final = _deployment(
+            scenario, wire, route, _OPT_IN, {"supports_bedrock_native_structured_output": True}
+        )
+        sibling: Final = _deployment(scenario, wire, route, _OPT_IN)
+        assert _sent_native_schema(gateway, wire, entry, sibling) is None
+        assert _sent_native_schema(gateway, wire, entry, opted_in) == _SCHEMA
+
+
 def test_fable_5_json_schema_takes_the_json_tool_instead_of_the_native_output_bedrock_rejects(
     gateway: Gateway,
 ) -> None:

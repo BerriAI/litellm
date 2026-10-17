@@ -1471,8 +1471,17 @@ def test_native_model_json_schema_with_an_open_object_takes_the_json_tool_and_ke
         ("vertex_ai", _NATIVE_MODEL, {}),
         ("anthropic", _FORCED_TOOL_NATIVE_MODEL, {"thinking": {"type": "adaptive"}}),
         ("anthropic", _FORCED_TOOL_NATIVE_MODEL, {"tools": [_USER_TOOL_SPEC]}),
+        ("anthropic", _FORCED_TOOL_NATIVE_MODEL, {"reasoning_effort": "none"}),
+        ("azure_ai", _FORCED_TOOL_NATIVE_MODEL, {"reasoning_effort": "none"}),
     ],
-    ids=["forced_tool_refused-anthropic", "forced_tool_refused-vertex_ai", "thinking", "caller_tools"],
+    ids=[
+        "forced_tool_refused-anthropic",
+        "forced_tool_refused-vertex_ai",
+        "thinking",
+        "caller_tools",
+        "effort_none-anthropic",
+        "effort_none-azure_ai",
+    ],
 )
 def test_open_object_schema_keeps_native_output_when_the_json_tool_cannot_be_forced(
     gateway: Gateway, provider: str, backend: str, extra: dict[str, JsonValue]
