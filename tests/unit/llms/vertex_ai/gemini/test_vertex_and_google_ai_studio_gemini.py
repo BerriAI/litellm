@@ -9464,7 +9464,7 @@ def test_missing_api_key_and_credentials_raises_default_credentials_error(monkey
     monkeypatch.setattr(VertexBase, "_credentials_from_default_auth", _mock_default_auth)
 
     vertex_llm: Final = VertexLLM()
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception) as exc_info:  # noqa: PT011
         vertex_llm.completion(
             model="gemini-2.5-flash",
             messages=[{"role": "user", "content": "hi"}],
