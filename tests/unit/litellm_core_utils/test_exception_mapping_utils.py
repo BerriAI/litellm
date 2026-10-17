@@ -129,6 +129,14 @@ context_window_test_cases = [
         "Invalid 'metadata': maximum input length is 512 characters.",
         False,
     ),
+    (
+        '{"error":{"message":"Input too long: 150055 input tokens, limit is 131072 for this model","code":"upstream_rejected"}}',
+        True,
+    ),
+    (
+        "Input should be 'error' or 'truncate', field: 'context_length_exceeded_behavior', value: 'foo'",
+        False,
+    ),
     # Negative cases (should return False)
     ("A generic API error occurred.", False),
     ("Invalid API Key provided.", False),
@@ -830,6 +838,10 @@ DEVIATIONS_FROM_THE_OPENAI_SHAPE = {
         422: (litellm.APIError, 422),
         500: (litellm.APIError, 500),
     },
+    "inferenceapis": {
+        403: PERMISSION_DENIED,
+        422: (litellm.BadRequestError, 400),
+    },
     "mistral": {402: (litellm.APIError, 402)},
     "nlp_cloud": {
         402: (litellm.RateLimitError, 429),
@@ -876,6 +888,7 @@ PROVIDERS_WITH_A_HANDLER = (
     "gemini",
     "groq",
     "huggingface",
+    "inferenceapis",
     "mistral",
     "nlp_cloud",
     "ollama",
@@ -1119,6 +1132,7 @@ PROVIDERS_THAT_RECOGNISE_A_FULL_CONTEXT_WINDOW = (
     "fireworks_ai",
     "gemini",
     "groq",
+    "inferenceapis",
     "mistral",
     "openai",
     "perplexity",
@@ -1245,6 +1259,139 @@ def test_bedrock_mantle_context_overflow_maps_to_context_window_exceeded():
 
     assert excinfo.value.status_code == 400
     assert "prompt is too long: 1055489 tokens > 1050000 maximum" in excinfo.value.message
+
+
+def test_bedrock_mantle_openai_envelope_context_overflow_maps_to_context_window_exceeded():
+    from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+    original_exception = BaseLLMException(
+        status_code=400,
+        message=(
+            '{"error":{"code":"context_length_exceeded",'
+            '"message":"Your input exceeds the context window of this model. '
+            'Please adjust your input and try again.",'
+            '"param":"input","type":"invalid_request_error"}}'
+        ),
+    )
+
+    with pytest.raises(litellm.ContextWindowExceededError) as excinfo:
+        exception_type(
+            model="openai.gpt-5.6-sol",
+            original_exception=original_exception,
+            custom_llm_provider="bedrock_mantle",
+        )
+
+    assert excinfo.value.status_code == 400
+    assert "prompt is too long" in excinfo.value.message
+
+
+def test_bedrock_mantle_streamed_context_overflow_event_maps_to_context_window_exceeded():
+    from litellm.responses.streaming_iterator import _map_stream_error_to_exception
+
+    mapped_exception = _map_stream_error_to_exception(
+        {
+            "code": "context_length_exceeded",
+            "message": "Your input exceeds the context window of this model. Please adjust your input and try again.",
+        },
+        model="openai.gpt-5.6-luna",
+        custom_llm_provider="bedrock_mantle",
+    )
+
+    assert isinstance(mapped_exception, litellm.ContextWindowExceededError)
+    assert mapped_exception.status_code == 400
+    assert "prompt is too long" in mapped_exception.message
+
+
+@pytest.mark.parametrize("original_status_code", [500, 503])
+def test_bedrock_mantle_in_stream_context_overflow_answers_400_whatever_the_event_status_was(original_status_code):
+    original_exception = OpenAIError(
+        status_code=original_status_code,
+        message="prompt tokens (229378) exceed model maximum (131072) for google.gemma-4-e2b",
+    )
+
+    with pytest.raises(litellm.ContextWindowExceededError) as excinfo:
+        exception_type(
+            model="google.gemma-4-e2b",
+            original_exception=original_exception,
+            custom_llm_provider="bedrock_mantle",
+        )
+
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.response.status_code == 400
+
+
+def test_bedrock_mantle_context_overflow_keeps_the_provider_400_response_body():
+    from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+    body = {
+        "error": {
+            "code": "context_length_exceeded",
+            "message": "Your input exceeds the context window of this model.",
+            "param": "input",
+            "type": "invalid_request_error",
+        }
+    }
+    provider_response = httpx.Response(
+        status_code=400,
+        json=body,
+        request=httpx.Request("POST", "https://bedrock-mantle.us-east-1.amazonaws.com/v1/chat/completions"),
+    )
+    original_exception = BaseLLMException(status_code=400, message=json.dumps(body), response=provider_response)
+
+    with pytest.raises(litellm.ContextWindowExceededError) as excinfo:
+        exception_type(
+            model="openai.gpt-5.6-sol",
+            original_exception=original_exception,
+            custom_llm_provider="bedrock_mantle",
+        )
+
+    assert excinfo.value.response is provider_response
+    assert excinfo.value.response.json() == body
+    assert excinfo.value.status_code == 400
+
+
+@pytest.mark.parametrize(
+    "error_str",
+    [
+        '{"error":{"code":"context_length_exceeded","message":"Your input exceeds the context window."}}',
+        "Error code: 400 - {'error': {'message': 'Your input exceeds the context window.', 'type': None, "
+        "'code': 'context_length_exceeded'}}",
+        '{"message":"BedrockException - {\\"error\\":{\\"code\\":\\"context_length_exceeded\\"}}"}',
+    ],
+)
+def test_bedrock_mantle_overflow_code_maps_in_every_serialization_of_the_envelope(error_str):
+    from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+    with pytest.raises(litellm.ContextWindowExceededError):
+        exception_type(
+            model="openai.gpt-5.6-sol",
+            original_exception=BaseLLMException(status_code=400, message=error_str),
+            custom_llm_provider="bedrock_mantle",
+        )
+
+
+def test_bedrock_mantle_error_merely_quoting_the_overflow_code_stays_a_plain_400():
+    from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+    original_exception = BaseLLMException(
+        status_code=400,
+        message=(
+            '{"error":{"code":"invalid_request_error",'
+            '"message":"Invalid input value context_length_exceeded",'
+            '"param":"input","type":"invalid_request_error"}}'
+        ),
+    )
+
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        exception_type(
+            model="openai.gpt-5.6-sol",
+            original_exception=original_exception,
+            custom_llm_provider="bedrock_mantle",
+        )
+
+    assert not isinstance(excinfo.value, litellm.ContextWindowExceededError)
+    assert excinfo.value.status_code == 400
+    assert "Invalid input value context_length_exceeded" in excinfo.value.message
 
 
 def test_branchless_provider_transport_error_maps_to_api_connection_error():

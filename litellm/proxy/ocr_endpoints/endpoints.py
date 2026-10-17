@@ -17,6 +17,7 @@ from litellm.llms.base_llm.ocr.transformation import (
     parse_ocr_request_format,
 )
 from litellm.proxy._types import *
+from litellm.proxy._types import ProxyException
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
@@ -30,6 +31,15 @@ class _NamedUpload(io.BytesIO):
     def __init__(self, content: bytes, name: str | None) -> None:
         super().__init__(content)
         self.name = name
+
+
+class OCRRequestError(ProxyException):
+    """A malformed OCR request, answered with a 400 before any provider call."""
+
+    def __init__(self, message: str, param: str | None = None) -> None:
+        super().__init__(  # pyright: ignore[reportUnknownMemberType]  # ProxyException.__init__ takes an untyped provider_specific_fields dict
+            message=message, type="invalid_request_error", param=param, code=400
+        )
 
 
 def _build_document_from_upload(
@@ -99,7 +109,7 @@ async def _parse_multipart_form(request: Request) -> dict[str, object]:
     try:
         form: Final = await request.form()
     except Exception as e:
-        raise ValueError(
+        raise OCRRequestError(
             f"Failed to parse multipart form data: {e}. "
             "When using curl with --form/-F, do NOT set the Content-Type header "
             "manually — curl will set it automatically with the required boundary."
@@ -110,7 +120,7 @@ async def _parse_multipart_form(request: Request) -> dict[str, object]:
     # depending on middleware; check both via isinstance (FastAPI's UploadFile
     # is a subclass of Starlette's) and fall back to duck-type check.
     if uploaded_file is None or (not isinstance(uploaded_file, UploadFile) and not hasattr(uploaded_file, "read")):
-        raise ValueError("Multipart OCR request must include a 'file' field with the document to process")
+        raise OCRRequestError("Multipart OCR request must include a 'file' field with the document to process", "file")
 
     uploaded_file = cast(UploadFile, uploaded_file)
 
@@ -118,9 +128,9 @@ async def _parse_multipart_form(request: Request) -> dict[str, object]:
     await uploaded_file.seek(0)
     file_content: Final = await uploaded_file.read(_MAX_FILE_BYTES + 1)
     if not file_content:
-        raise ValueError("Uploaded file is empty")
+        raise OCRRequestError("Uploaded file is empty", "file")
     if len(file_content) > _MAX_FILE_BYTES:
-        raise ValueError("OCR file exceeds the size limit")
+        raise OCRRequestError("OCR file exceeds the size limit", "file")
 
     document: Final = _build_document_from_upload(
         file_content=file_content,
@@ -197,7 +207,7 @@ async def _parse_ocr_request_body(request: Request) -> dict[str, object]:
             )
             return await _parse_multipart_form(request)
 
-        raise ValueError(
+        raise OCRRequestError(
             "Empty request body. For file uploads, use multipart/form-data content type "
             "with a file field. When using curl with --form/-F, do NOT set the Content-Type "
             "header manually."
@@ -206,7 +216,7 @@ async def _parse_ocr_request_body(request: Request) -> dict[str, object]:
     try:
         data: Final = orjson.loads(body)
     except orjson.JSONDecodeError as e:
-        raise ValueError(
+        raise OCRRequestError(
             f"Invalid JSON in request body: {e}. "
             "Ensure the request body is valid JSON with Content-Type: application/json, "
             "or use multipart/form-data for file uploads."
@@ -220,7 +230,7 @@ async def _parse_ocr_request_body(request: Request) -> dict[str, object]:
     # File uploads must go through multipart/form-data instead.
     doc: Final = data.get("document") if isinstance(data, dict) else None
     if isinstance(doc, dict) and doc.get("type") == "file":
-        raise ValueError(
+        raise OCRRequestError(
             "document type 'file' is not supported through the JSON API. "
             "To upload a local file, use multipart/form-data with a 'file' field. "
             "For JSON requests, use 'document_url' or 'image_url' document types."
@@ -237,7 +247,7 @@ async def _parse_ocr_request_body(request: Request) -> dict[str, object]:
         for url_field in ("document_url", "image_url"):
             url_value = doc.get(url_field)
             if isinstance(url_value, str) and url_value.startswith("reducto://"):
-                raise ValueError(
+                raise OCRRequestError(
                     "reducto:// file IDs are not accepted through the proxy "
                     "OCR API; upload the file in the same request via "
                     "multipart/form-data with a 'file' field, or pass an "

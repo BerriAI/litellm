@@ -14,14 +14,25 @@ export function ValidationStatus({ validation }: { validation: PayloadValidation
   return <Badge variant="secondary">Valid payload</Badge>;
 }
 
+export function ValidationSummary({ validation }: { validation: PayloadValidation<unknown> }) {
+  const errorCount = countErrors(validation);
+  return (
+    <p role="status" aria-live="polite" className="flex min-w-0 items-center gap-2 text-sm">
+      {errorCount === 0 ? (
+        <CircleCheck className="size-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+      ) : (
+        <CircleAlert className="size-4 shrink-0 text-destructive" />
+      )}
+      <span className={errorCount === 0 ? "text-muted-foreground" : "text-destructive"}>
+        {errorCount === 0 ? "Ready to send" : `${errorCount} ${errorCount === 1 ? "issue" : "issues"} to fix`}
+      </span>
+    </p>
+  );
+}
+
 export function IssueList({ id, validation }: { id: string; validation: PayloadValidation<unknown> }) {
   if (validation.issues.length === 0) {
-    return (
-      <p id={id} role="status" className="flex items-center gap-1.5 border-t px-3 py-2 text-xs text-muted-foreground">
-        <CircleCheck className="size-3.5 text-emerald-600 dark:text-emerald-400" />
-        Ready to send
-      </p>
-    );
+    return null;
   }
   return (
     <ul id={id} aria-label="Payload validation issues" className="grid max-h-36 gap-1 overflow-auto border-t px-3 py-2">
@@ -32,7 +43,7 @@ export function IssueList({ id, validation }: { id: string; validation: PayloadV
           ) : (
             <TriangleAlert className="mt-0.5 size-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
           )}
-          <code className="shrink-0 rounded bg-muted px-1 font-mono">{issue.path}</code>
+          <span className="shrink-0 font-medium">{issue.label}</span>
           <span>{issue.message}</span>
         </li>
       ))}
