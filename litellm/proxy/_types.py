@@ -2798,6 +2798,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="If True, new spend log rows store requester_ip_address as null in the column, the metadata and the stored request. The stored request also drops client-IP forwarding headers such as x-forwarded-for, and IP addresses in its other header values and in stored error messages are masked. Guardrails, metrics and callbacks that read the standard logging payload still receive the IP. Default is False.",
     )
+    store_user_email_in_spend_logs: bool | None = Field(
+        None,
+        description="If True, spend log metadata stores the email of the user who owns the key as user_api_key_user_email, so the Admin UI request logs can show it. Default is False, which stores it as null.",
+    )
     spend_logs_metadata_fields: SpendLogsMetadataFields | None = Field(
         None,
         description="Which keys of LiteLLM_SpendLogs.metadata are written to the database. Set exactly one of 'include' (write only these keys) or 'exclude' (drop these keys). 'status' and 'cold_storage_object_key' are always written. Daily spend tables, budgets and logging callbacks still see every key. Unset writes every key",

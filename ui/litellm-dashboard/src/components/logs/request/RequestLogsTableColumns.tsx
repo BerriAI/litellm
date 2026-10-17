@@ -366,8 +366,8 @@ export const getRequestLogsTableColumns = ({
       <UserCell
         userId={row.original.user}
         email={
-          readMetaString(row.original.metadata, "user_api_key_user_email") ??
-          (row.original.user ? resolveUserEmail(row.original.user) : undefined)
+          (row.original.user ? resolveUserEmail(row.original.user) : undefined) ??
+          readMetaString(row.original.metadata, "user_api_key_user_email")
         }
       />
     ),

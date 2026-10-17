@@ -5248,25 +5248,34 @@ def test_get_spend_logs_metadata_sibling_fields_preserved():
     assert meta["user_api_key_team_id"] == "team-123"
 
 
-def test_get_logging_payload_preserves_user_email_in_spend_log_metadata():
-    payload = get_logging_payload(
-        kwargs={
-            "model": "gpt-4o-mini",
-            "litellm_params": {
-                "metadata": {
-                    "user_api_key_user_email": "sso-user@example.com",
-                    "user_api_key_user_id": "okta|abc123",
-                }
+@pytest.mark.parametrize(
+    ("configured", "stored_email"),
+    [(None, None), (False, None), ("false", None), (True, "sso-user@example.com"), ("true", "sso-user@example.com")],
+)
+def test_get_logging_payload_stores_user_email_only_when_store_user_email_in_spend_logs_is_on(
+    configured: object, stored_email: str | None
+) -> None:
+    with patch(  # test-quality-ok: general_settings is proxy config, loaded from yaml, not an HTTP boundary
+        "litellm.proxy.proxy_server.general_settings", {"store_user_email_in_spend_logs": configured}
+    ):
+        payload: Final = get_logging_payload(
+            kwargs={
+                "model": "gpt-4o-mini",
+                "litellm_params": {
+                    "metadata": {
+                        "user_api_key_user_email": "sso-user@example.com",
+                        "user_api_key_user_id": "okta|abc123",
+                    }
+                },
             },
-        },
-        response_obj=litellm.ModelResponse(id="chatcmpl-user-email", choices=[], usage=litellm.Usage()),
-        start_time=datetime.datetime.now(timezone.utc),
-        end_time=datetime.datetime.now(timezone.utc),
-    )
+            response_obj=litellm.ModelResponse(id="chatcmpl-user-email", choices=[], usage=litellm.Usage()),
+            start_time=datetime.datetime.now(timezone.utc),
+            end_time=datetime.datetime.now(timezone.utc),
+        )
 
-    metadata = json.loads(payload["metadata"])
+    metadata: Final = json.loads(payload["metadata"])
 
-    assert metadata["user_api_key_user_email"] == "sso-user@example.com"
+    assert metadata["user_api_key_user_email"] == stored_email
     assert metadata["user_api_key_user_id"] == "okta|abc123"
 
 

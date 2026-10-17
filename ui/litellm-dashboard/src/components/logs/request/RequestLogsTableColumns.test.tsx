@@ -166,6 +166,22 @@ describe("Internal User column", () => {
     expect(await screen.findByText("sso-user@example.com (okta|abc123)")).toBeInTheDocument();
   });
 
+  it("prefers the user list email over the one stored in the log metadata", () => {
+    renderRows(
+      [
+        logEntry({
+          request_id: "req-renamed-user",
+          user: "106514937785257944828",
+          metadata: { user_api_key_user_email: "old@example.com" },
+        }),
+      ],
+      deps,
+    );
+
+    expect(screen.getByText("alice@example.com")).toBeInTheDocument();
+    expect(screen.queryByText("old@example.com")).not.toBeInTheDocument();
+  });
+
   it("falls back to the raw id when no email is known for the user", () => {
     renderRows([logEntry({ request_id: "req-unknown-user", user: "unknown-user-id" })], deps);
 
