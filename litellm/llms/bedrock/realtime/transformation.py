@@ -123,26 +123,81 @@ def _integer_setting(value: JsonValue) -> int | None:
     return None if number is None else int(number)
 
 
-def _malformed_number_settings(session_config: Mapping[str, JsonValue]) -> tuple[str, ...]:
+def requested_modalities(session_config: Mapping[str, JsonValue]) -> tuple[str, ...] | None:
+    modalities: Final = session_config.get("modalities")
+    if not isinstance(modalities, list):
+        return None
+    names: Final = tuple(modality for modality in modalities if isinstance(modality, str))
+    return names if len(names) == len(modalities) else None
+
+
+_OPENAI_VOICES: Final = frozenset(
+    ("alloy", "ash", "ballad", "coral", "echo", "sage", "shimmer", "verse", "marin", "cedar")
+)
+
+
+def _unplayable_voice(session_config: Mapping[str, JsonValue]) -> str | None:
+    voice: Final = session_config.get("voice")
+    if not isinstance(voice, str):
+        return None
+    return voice if not voice.strip() or voice.lower() in _OPENAI_VOICES else None
+
+
+def _malformed_settings(session_config: Mapping[str, JsonValue]) -> tuple[tuple[str, str], ...]:
+    instructions: Final = session_config.get("instructions")
+    voice: Final = session_config.get("voice")
+    input_audio_format: Final = session_config.get("input_audio_format")
+    output_audio_format: Final = session_config.get("output_audio_format")
+    modalities: Final = session_config.get("modalities")
     temperature: Final = session_config.get("temperature")
     max_output_tokens: Final = session_config.get("max_response_output_tokens")
+    input_rate_hertz: Final = session_config.get("input_sample_rate_hertz")
     output_rate_hertz: Final = session_config.get("output_sample_rate_hertz")
+    tools: Final = session_config.get("tools")
     malformed: Final = (
-        ("temperature", temperature is not None and _number_setting(temperature) is None),
+        ("instructions", "a string", instructions is not None and not isinstance(instructions, str)),
+        ("voice", "a string", voice is not None and not isinstance(voice, str)),
+        ("tools", "a list", tools is not None and not isinstance(tools, list)),
+        (
+            "input_audio_format",
+            "a string",
+            input_audio_format is not None and not isinstance(input_audio_format, str),
+        ),
+        (
+            "output_audio_format",
+            "a string",
+            output_audio_format is not None and not isinstance(output_audio_format, str),
+        ),
+        (
+            "modalities",
+            "a list of strings",
+            modalities is not None and requested_modalities(session_config) is None,
+        ),
+        ("temperature", "a number", temperature is not None and _number_setting(temperature) is None),
         (
             "max_response_output_tokens",
+            "a number or 'inf'",
             max_output_tokens is not None
             and max_output_tokens != "inf"
             and _integer_setting(max_output_tokens) is None,
         ),
-        ("output_sample_rate_hertz", output_rate_hertz is not None and _integer_setting(output_rate_hertz) is None),
+        (
+            "input_sample_rate_hertz",
+            "a number",
+            input_rate_hertz is not None and _integer_setting(input_rate_hertz) is None,
+        ),
+        (
+            "output_sample_rate_hertz",
+            "a number",
+            output_rate_hertz is not None and _integer_setting(output_rate_hertz) is None,
+        ),
     )
-    return tuple(name for name, is_malformed in malformed if is_malformed)
+    return tuple((name, expected) for name, expected, is_malformed in malformed if is_malformed)
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class BedrockSessionUpdateRejection:
-    code: Literal["invalid_type", "session_update_not_applied"]
+    code: Literal["invalid_type", "invalid_value", "session_update_not_applied"]
     message: str
     param: str
 
@@ -312,7 +367,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             return 8000  # G.711 typically uses 8kHz
         return 24000 if is_output else 16000
 
-    def transform_session_update_event(self, json_message: dict) -> list[str]:
+    def transform_session_update_event(self, json_message: Mapping[str, JsonValue]) -> list[str]:
         """
         Transform session.update event to Bedrock session configuration.
 
@@ -325,7 +380,10 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         verbose_logger.debug("Handling session.update")
         messages: Final[list[str]] = []
 
-        session_config: Final = json_message.get("session", {})
+        requested_session: Final = json_message.get("session")
+        session_config: Final[Mapping[str, JsonValue]] = (
+            requested_session if isinstance(requested_session, dict) else {}
+        )
         locked_settings: Final = self._apply_locked_settings(session_config, self._started_settings)
 
         # Settings Bedrock locks at prompt start may only change before it
@@ -336,13 +394,14 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             self.output_sample_rate_hertz = locked_settings.output_sample_rate_hertz
 
         # Update audio input configuration from session if provided
-        if "input_audio_format" in session_config:
-            input_format: Final = session_config["input_audio_format"]
+        input_format: Final = session_config.get("input_audio_format")
+        if isinstance(input_format, str):
             self.input_sample_rate_hertz = self._map_audio_format_to_sample_rate(input_format, is_output=False)
 
         # Allow direct override of the input sample rate if provided (custom extension)
-        if "input_sample_rate_hertz" in session_config:
-            self.input_sample_rate_hertz = session_config["input_sample_rate_hertz"]
+        requested_input_rate: Final = _integer_setting(session_config.get("input_sample_rate_hertz"))
+        if requested_input_rate is not None:
+            self.input_sample_rate_hertz = requested_input_rate
 
         if self.prompt_started:
             return messages
@@ -352,7 +411,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         messages.append(json.dumps(session_start))
 
         # Send prompt start
-        tools: Final[Sequence[JsonValue] | None] = session_config.get("tools")
+        tools: Final = session_config.get("tools")
         prompt_start_config: Final[Mapping[str, object]] = {
             "promptName": self.prompt_name,
             "textOutputConfiguration": {"mediaType": self.text_media_type},
@@ -370,7 +429,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
                     "toolUseOutputConfiguration": {"mediaType": "application/json"},
                     "toolConfiguration": {"tools": self._transform_tools_to_bedrock_format(tools)},
                 }
-                if tools
+                if isinstance(tools, list) and tools
                 else {}
             ),
         }
@@ -445,12 +504,14 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             if isinstance(requested_tools, list)
             else base.tools_json
         )
-        system_prompt: Final = base.system_prompt if instructions is None else str(instructions)
-        voice_id: Final = base.voice_id if voice is None else str(voice)
+        system_prompt: Final = instructions if isinstance(instructions, str) else base.system_prompt
+        voice_id: Final = (
+            voice if isinstance(voice, str) and _unplayable_voice(session_config) is None else base.voice_id
+        )
         format_sample_rate: Final = (
-            base.output_sample_rate_hertz
-            if output_audio_format is None
-            else self._map_audio_format_to_sample_rate(str(output_audio_format), is_output=True)
+            self._map_audio_format_to_sample_rate(output_audio_format, is_output=True)
+            if isinstance(output_audio_format, str)
+            else base.output_sample_rate_hertz
         )
         requested_output_rate: Final = _integer_setting(session_config.get("output_sample_rate_hertz"))
         output_sample_rate_hertz: Final = (
@@ -476,16 +537,26 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         session_config: Final = json_message.get("session")
         if not isinstance(session_config, Mapping):
             return None
-        malformed: Final = () if self.drop_params else _malformed_number_settings(session_config)
+        malformed: Final = () if self.drop_params else _malformed_settings(session_config)
         if malformed:
+            name, expected = malformed[0]
             return BedrockSessionUpdateRejection(
                 code="invalid_type",
                 message=(
-                    f"Invalid type for 'session.{malformed[0]}': Bedrock Nova Sonic needs a number for temperature "
-                    "and output_sample_rate_hertz, and a number or 'inf' for max_response_output_tokens. "
+                    f"Invalid type for 'session.{name}': Bedrock Nova Sonic needs {expected} there. "
                     "Set drop_params to drop it instead"
                 ),
-                param=f"session.{malformed[0]}",
+                param=f"session.{name}",
+            )
+        unplayable_voice: Final = None if self.drop_params else _unplayable_voice(session_config)
+        if unplayable_voice is not None:
+            return BedrockSessionUpdateRejection(
+                code="invalid_value",
+                message=(
+                    f"Invalid value for 'session.voice': '{unplayable_voice}' is not a Bedrock Nova Sonic voice. "
+                    "Set drop_params to drop it instead"
+                ),
+                param="session.voice",
             )
         if not self.prompt_started:
             return None
@@ -785,7 +856,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             List of Bedrock format messages (JSON strings)
         """
         try:
-            json_message: Final[dict[str, object]] = json.loads(message)
+            json_message: Final[dict[str, JsonValue]] = json.loads(message)
         except json.JSONDecodeError:
             verbose_logger.warning("Invalid JSON message: %s", message[:200])
             return []
@@ -816,11 +887,11 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         self,
         model: str,
         logging_obj: LiteLLMLoggingObj,
-        modalities: list[str] | None = None,
+        modalities: Sequence[str] | None = None,
     ) -> OpenAIRealtimeStreamSession:
         session: Final = OpenAIRealtimeStreamSession(
             id=logging_obj.litellm_trace_id,
-            modalities=modalities if modalities is not None else ["text", "audio"],
+            modalities=list(modalities) if modalities is not None else ["text", "audio"],
         )
         if model is not None and isinstance(model, str):
             session["model"] = model
@@ -842,7 +913,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         self,
         model: str,
         logging_obj: LiteLLMLoggingObj,
-        modalities: list[str] | None = None,
+        modalities: Sequence[str] | None = None,
     ) -> OpenAIRealtimeStreamSessionEvents:
         """Build the OpenAI session.updated ack reflecting the client's requested modalities."""
         return OpenAIRealtimeStreamSessionEvents(

@@ -5,6 +5,8 @@ This test file tests the Generic Guardrail API implementation,
 specifically focusing on metadata extraction and passing.
 """
 
+import json
+import logging
 import os
 from collections.abc import Callable
 from functools import partial
@@ -19,7 +21,7 @@ import litellm
 from litellm import ModelResponse
 from litellm._version import version as litellm_version
 from litellm.exceptions import GuardrailRaisedException, Timeout
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, MaskedHTTPStatusError
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
     GenericGuardrailAPI,
@@ -40,6 +42,38 @@ def generic_guardrail():
         event_hook="pre_call",
         default_on=True,
     )
+
+
+@pytest.fixture
+def raw_rows_guardrail():
+    return GenericGuardrailAPI(
+        api_base="https://api.test.guardrail.com",
+        headers={"Authorization": "Bearer test-key"},
+        guardrail_name="test-generic-guardrail-raw-rows",
+        event_hook="pre_call",
+        default_on=True,
+        forward_messages_as_sent=True,
+    )
+
+
+async def _structured_messages_sent(guardrail: GenericGuardrailAPI, rows: list[dict]) -> list:
+    sent_bodies: Final[list[bytes]] = []  # mutable-ok: records every body the guardrail endpoint received
+
+    async def answer(request: httpx.Request) -> httpx.Response:
+        sent_bodies.append(request.content)
+        return httpx.Response(200, json={"action": "NONE"}, request=request)
+
+    endpoint: Final = AsyncHTTPHandler(transport=httpx.MockTransport(answer))
+    try:
+        with patch.object(guardrail, "async_handler", endpoint):
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["Look up 123-45-6789 for me."], "structured_messages": rows},
+                request_data={},
+                input_type="request",
+            )
+    finally:
+        await endpoint.close()
+    return [json.loads(body)["structured_messages"] for body in sent_bodies]
 
 
 @pytest.fixture
@@ -643,6 +677,157 @@ class TestStructuredMessagesInResponse:
         assert returned_rows[2] == {"role": "tool", "tool_call_id": "call_1", "content": '{"ssn": "[REDACTED]"}'}
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("row", "openai_row"),
+        [
+            (
+                {"role": "user", "content": "Look up 123-45-6789 for me.", "name": "pat"},
+                {"role": "user", "content": "Look up 123-45-6789 for me."},
+            ),
+            (
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "lookup", "arguments": "{}"},
+                            "index": 0,
+                        }
+                    ],
+                },
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}
+                    ],
+                },
+            ),
+            (
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "AAA="}}
+                    ],
+                },
+                {"role": "user", "content": []},
+            ),
+        ],
+        ids=["extra_key", "tool_call_index", "image_block"],
+    )
+    async def test_rows_reach_the_guardrail_as_openai_chat_rows_by_default(
+        self, generic_guardrail: GenericGuardrailAPI, row, openai_row
+    ):
+        assert await _structured_messages_sent(generic_guardrail, [row]) == [[openai_row]]
+
+    @pytest.mark.asyncio
+    async def test_a_returned_row_that_differs_from_the_shown_row_is_written_back_by_default(
+        self, generic_guardrail, mock_request_data_input
+    ):
+        sent_row = {"role": "user", "content": "my ssn is 123-45-6789", "name": "pat"}
+
+        def answer_with_the_row_as_the_client_sent_it(url, json, headers, **_kwargs):
+            answer = MagicMock()
+            answer.json.return_value = {
+                "action": "GUARDRAIL_INTERVENED",
+                "texts": ["my ssn is [SSN]"],
+                "structured_messages": [sent_row],
+            }
+            answer.raise_for_status = MagicMock()
+            return answer
+
+        with patch.object(
+            generic_guardrail.async_handler, "post", side_effect=answer_with_the_row_as_the_client_sent_it
+        ):
+            guardrailed_inputs = await generic_guardrail.apply_guardrail(
+                inputs={"texts": ["my ssn is 123-45-6789"], "structured_messages": [sent_row]},
+                request_data=mock_request_data_input,
+                input_type="request",
+            )
+
+        assert guardrailed_inputs["structured_messages"] == [sent_row]
+
+    @pytest.mark.asyncio
+    async def test_rows_echoed_back_with_one_rewrite_write_back_the_rewrite_only(
+        self, raw_rows_guardrail, mock_request_data_input
+    ):
+        tool_call_row = {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}, "index": 0}
+            ],
+        }
+        original_rows = [
+            {"role": "user", "content": "Look up 123-45-6789 for me.", "name": "pat"},
+            tool_call_row,
+            {"role": "tool", "tool_call_id": "call_1", "content": '{"ssn": "123-45-6789"}'},
+        ]
+
+        def echo_with_tool_output_redacted(url, json, headers, **_kwargs):
+            shown_rows = json["structured_messages"]
+            answer = MagicMock()
+            answer.json.return_value = {
+                "action": "GUARDRAIL_INTERVENED",
+                "texts": ["Look up 123-45-6789 for me."],
+                "structured_messages": [
+                    shown_rows[0],
+                    shown_rows[1],
+                    {**shown_rows[2], "content": '{"ssn": "[REDACTED]"}'},
+                ],
+            }
+            answer.raise_for_status = MagicMock()
+            return answer
+
+        with patch.object(raw_rows_guardrail.async_handler, "post", side_effect=echo_with_tool_output_redacted):
+            guardrailed_inputs = await raw_rows_guardrail.apply_guardrail(
+                inputs={"texts": ["Look up 123-45-6789 for me."], "structured_messages": original_rows},
+                request_data=mock_request_data_input,
+                input_type="request",
+            )
+
+        returned_rows = guardrailed_inputs["structured_messages"]
+        assert returned_rows[0] == original_rows[0]
+        assert returned_rows[1] == tool_call_row
+        assert returned_rows[2] == {"role": "tool", "tool_call_id": "call_1", "content": '{"ssn": "[REDACTED]"}'}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "row",
+        [
+            {"role": "user", "content": "Look up 123-45-6789 for me.", "name": "pat"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}, "index": 0}
+                ],
+            },
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_1", "content": "123-45-6789"}]},
+            {"role": "assistant", "content": [{"type": "tool_use", "id": "call_1", "name": "lookup", "input": {}}]},
+            {
+                "role": "user",
+                "content": [{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "AAA="}}],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "document", "source": {"type": "text", "media_type": "text/plain", "data": "ssn"}}
+                ],
+            },
+        ],
+        ids=["extra_key", "tool_call_index", "tool_result_block", "tool_use_block", "image_block", "document_block"],
+    )
+    async def test_rows_reach_the_guardrail_verbatim_when_forwarded_as_sent(
+        self, raw_rows_guardrail: GenericGuardrailAPI, row
+    ):
+        """Rows are the provider's own shape, so the guardrail must see every key and
+        content block as sent, not a copy filtered through the chat completion types."""
+        assert await _structured_messages_sent(raw_rows_guardrail, [row]) == [[row]]
+
+    @pytest.mark.asyncio
     async def test_rows_all_echoed_back_as_shown_leave_the_rewrite_to_texts(
         self, generic_guardrail, mock_request_data_input
     ):
@@ -675,6 +860,126 @@ class TestStructuredMessagesInResponse:
 
         assert "structured_messages" not in guardrailed_inputs
         assert guardrailed_inputs["texts"] == ["Never repeat an SSN.", "Look up [REDACTED] for me."]
+
+    @pytest.mark.asyncio
+    async def test_rows_echoed_without_the_keys_the_server_does_not_know_leave_the_rewrite_to_texts(
+        self, raw_rows_guardrail, mock_request_data_input
+    ):
+        """A server that parses rows with its own message types echoes them back without
+        the keys those types lack, and its texts redaction must still reach the LLM."""
+        original_rows = [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}, "index": 0}
+                ],
+                "refusal": None,
+                "annotations": [],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "found"},
+            {"role": "user", "content": "my ssn is 123-45-6789"},
+        ]
+
+        def echo_known_keys_and_redact_texts(url, json, headers, **_kwargs):
+            rows = json["structured_messages"]
+            answer = MagicMock()
+            answer.json.return_value = {
+                "action": "GUARDRAIL_INTERVENED",
+                "texts": [text.replace("123-45-6789", "[SSN]") for text in json["texts"]],
+                "structured_messages": [
+                    {
+                        "role": "assistant",
+                        "content": None,
+                        "refusal": None,
+                        "tool_calls": [
+                            {key: value for key, value in rows[0]["tool_calls"][0].items() if key != "index"}
+                        ],
+                    },
+                    rows[1],
+                    rows[2],
+                ],
+            }
+            answer.raise_for_status = MagicMock()
+            return answer
+
+        with patch.object(raw_rows_guardrail.async_handler, "post", side_effect=echo_known_keys_and_redact_texts):
+            guardrailed_inputs = await raw_rows_guardrail.apply_guardrail(
+                inputs={"texts": ["found", "my ssn is 123-45-6789"], "structured_messages": original_rows},
+                request_data=mock_request_data_input,
+                input_type="request",
+            )
+
+        assert "structured_messages" not in guardrailed_inputs
+        assert guardrailed_inputs["texts"] == ["found", "my ssn is [SSN]"]
+
+    @pytest.mark.asyncio
+    async def test_a_row_rewrite_echoes_the_other_rows_back_as_their_original_rows(
+        self, raw_rows_guardrail, mock_request_data_input
+    ):
+        assistant_row = {
+            "role": "assistant",
+            "content": "Looking it up.",
+            "annotations": [{"type": "url_citation", "url_citation": {"url": "https://example.com"}}],
+        }
+        original_rows = [assistant_row, {"role": "user", "content": "my ssn is 123-45-6789"}]
+        redacted_row = {"role": "user", "content": "my ssn is [SSN]"}
+
+        def redact_one_row(url, json, headers, **_kwargs):
+            answer = MagicMock()
+            answer.json.return_value = {
+                "action": "GUARDRAIL_INTERVENED",
+                "structured_messages": [{"role": "assistant", "content": "Looking it up."}, redacted_row],
+            }
+            answer.raise_for_status = MagicMock()
+            return answer
+
+        with patch.object(raw_rows_guardrail.async_handler, "post", side_effect=redact_one_row):
+            guardrailed_inputs = await raw_rows_guardrail.apply_guardrail(
+                inputs={"texts": ["my ssn is 123-45-6789"], "structured_messages": original_rows},
+                request_data=mock_request_data_input,
+                input_type="request",
+            )
+
+        assert guardrailed_inputs["structured_messages"] == [assistant_row, redacted_row]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "returned_row",
+        [
+            {"role": "assistant", "content": None},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}],
+                "annotations": [],
+                "refusal": "blocked",
+            },
+        ],
+        ids=["drops_a_declared_key", "changes_a_value"],
+    )
+    async def test_a_row_that_loses_a_declared_key_or_changes_a_value_is_a_rewrite(
+        self, raw_rows_guardrail, mock_request_data_input, returned_row
+    ):
+        original_row = {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}],
+            "annotations": [],
+            "refusal": None,
+        }
+        answer = MagicMock()
+        answer.json.return_value = {"action": "GUARDRAIL_INTERVENED", "structured_messages": [returned_row]}
+        answer.raise_for_status = MagicMock()
+
+        with patch.object(raw_rows_guardrail.async_handler, "post", return_value=answer):
+            guardrailed_inputs = await raw_rows_guardrail.apply_guardrail(
+                inputs={"texts": [], "structured_messages": [original_row]},
+                request_data=mock_request_data_input,
+                input_type="request",
+            )
+
+        assert guardrailed_inputs["structured_messages"] == [returned_row]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -1256,6 +1561,40 @@ class TestGenericGuardrailAPIStreamingConfig:
             streaming_transform_mode="incremental_diff",
         )
         assert guardrail.streaming_transform_mode == "incremental_diff"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("configured", "forwards_as_sent"),
+        [
+            pytest.param({}, False, id="unset"),
+            pytest.param({"forward_messages_as_sent": ""}, False, id="blank"),
+            pytest.param({"forward_messages_as_sent": False}, False, id="false"),
+            pytest.param({"forward_messages_as_sent": "true"}, True, id="string-true"),
+            pytest.param({"forward_messages_as_sent": True}, True, id="true"),
+        ],
+    )
+    async def test_forward_messages_as_sent_config_decides_which_rows_reach_the_guardrail(
+        self, configured, forwards_as_sent
+    ):
+        from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
+            initialize_guardrail,
+        )
+        from litellm.types.guardrails import LitellmParams
+
+        litellm_params = LitellmParams.model_validate(
+            {
+                "guardrail": "generic_guardrail_api",
+                "mode": "pre_call",
+                "api_base": "https://api.test.guardrail.com",
+                **configured,
+            }
+        )
+        with patch("litellm.logging_callback_manager.add_litellm_callback"):
+            guardrail = initialize_guardrail(litellm_params, {"guardrail_name": "test-forward-as-sent"})
+
+        row = {"role": "user", "content": "hi", "name": "pat"}
+        expected_row = row if forwards_as_sent else {"role": "user", "content": "hi"}
+        assert await _structured_messages_sent(guardrail, [row]) == [[expected_row]]
 
     def test_initialize_guardrail_forwards_streaming_flags(self):
         from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
@@ -1949,6 +2288,34 @@ class TestToolSupport:
 
         assert forwarded_tools == tools
 
+    @pytest.mark.asyncio
+    async def test_provider_native_tools_without_a_type_reach_the_guardrail_and_come_back_unchanged(
+        self, generic_guardrail
+    ):
+        """Gemini tools are declared as function_declarations, googleSearch and the
+        like with no type key, so they must be scanned, and a server that echoes
+        them back must not write a type key into the request to the provider."""
+        tools = [
+            {"function_declarations": [{"name": "get_weather", "parameters": {"type": "object", "properties": {}}}]},
+            {"googleSearch": {}},
+        ]
+
+        def echo_tools(url, json, headers, **_kwargs):
+            answer = MagicMock()
+            answer.json.return_value = {"action": "NONE", "texts": ["hi"], "tools": json["tools"]}
+            answer.raise_for_status = MagicMock()
+            return answer
+
+        with patch.object(generic_guardrail.async_handler, "post", side_effect=echo_tools) as mock_post:
+            guardrailed_inputs = await generic_guardrail.apply_guardrail(
+                inputs={"texts": ["hi"], "tools": tools},
+                request_data={},
+                input_type="request",
+            )
+
+        assert mock_post.call_args.kwargs["json"]["tools"] == tools
+        assert guardrailed_inputs["tools"] == tools
+
 
 class TestFailOnError:
     """Test fail_on_error: complete fail-open on any guardrail error"""
@@ -2035,6 +2402,59 @@ class TestFailOnError:
             )
 
         assert result == {"texts": ["model output"]}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("error", "error_type", "pre_pr_text"),
+        [
+            (
+                Timeout(message="guardrail took too long", model="gpt-5", llm_provider="openai"),
+                "Timeout",
+                "Proceeding without guardrail. guardrail_name=",
+            ),
+            (
+                httpx.ConnectError("connection refused", request=MagicMock()),
+                "ConnectError",
+                "Proceeding without guardrail. guardrail_name=",
+            ),
+            (
+                MaskedHTTPStatusError(
+                    httpx.HTTPStatusError(
+                        "bad gateway",
+                        request=httpx.Request("POST", "http://guardrail.invalid/scan"),
+                        response=httpx.Response(502, request=httpx.Request("POST", "http://guardrail.invalid/scan")),
+                    )
+                ),
+                "HTTPStatusError",
+                "Proceeding without guardrail. http_status_code=502 guardrail_name=",
+            ),
+        ],
+        ids=["timeout", "connect_error", "http_status"],
+    )
+    async def test_fail_open_log_line_names_the_error_type(
+        self, fail_open_guardrail, caplog: pytest.LogCaptureFixture, error, error_type, pre_pr_text
+    ):
+        """An operator grepping the fail-open line must be able to tell a timeout
+        from a refused connection from an upstream status without the traceback."""
+        from litellm._logging import verbose_proxy_logger
+
+        verbose_proxy_logger.addHandler(caplog.handler)
+        try:
+            with patch.object(fail_open_guardrail.async_handler, "post", side_effect=error):
+                await fail_open_guardrail.apply_guardrail(
+                    inputs={"texts": ["hi"]},
+                    request_data={},
+                    input_type="request",
+                )
+        finally:
+            verbose_proxy_logger.removeHandler(caplog.handler)
+
+        fail_open_lines: Final = [
+            record.getMessage() for record in caplog.records if record.levelno == logging.CRITICAL
+        ]
+        assert fail_open_lines
+        assert all(f"error_type={error_type}" in line.split() for line in fail_open_lines)
+        assert all(pre_pr_text in line for line in fail_open_lines)
 
     @pytest.mark.asyncio
     async def test_response_path_valid_block_still_blocks(self, fail_open_guardrail):
