@@ -449,17 +449,37 @@ def test_provider_family_pin_lifetime_agrees_with_the_ttl_the_wire_carries(rig: 
     spend_row_lands(response_id)
 
 
-def test_messages_through_bedrock_invoke_pins_an_hour_and_sends_the_hour(rig: _Rig) -> None:
+@pytest.mark.parametrize("group", ["pin-bedrock-invoke-1h", "pin-bedrock-arn-base"])
+def test_messages_through_bedrock_pins_an_hour_and_sends_the_hour(rig: _Rig, group: str) -> None:
     before: Final = _before(rig)
     marker: Final = new_marker()
     response: Final = rig.owned.gateway.request(
-        "POST", "/v1/messages", {**_messages_body(new_marker(), marker), "model": "pin-bedrock-invoke-1h"}
+        "POST", "/v1/messages", {**_messages_body(new_marker(), marker), "model": group}
     )
     assert response.status_code == 200, response.text
     _, pin = one_new_pin(rig.redis, before)
-    assert pin.model_id == "pin-bedrock-invoke-1h", pin
+    assert pin.model_id == group, pin
     assert lives_one_hour(pin), pin
     assert [wire_carries_one_hour(request) for request in sent_with((rig.bedrock,), marker)] == [True]
+
+
+def test_response_cache_hit_on_an_application_profile_rewrites_the_pin_for_its_base_model_hour(rig: _Rig) -> None:
+    before: Final = _before(rig)
+    marker: Final = new_marker()
+    body: Final = chat_body("pin-bedrock-arn-base", _first_turn(new_marker(), marker, ONE_HOUR_MARK))
+    first, served = post_chat(rig.owned.gateway, body)
+    key, pin = one_new_pin(rig.redis, before)
+    assert served == pin.model_id == "pin-bedrock-arn-base", (served, pin)
+    assert lives_one_hour(pin), pin
+    assert [wire_carries_one_hour(request) for request in sent_with(rig.wires(), marker)] == [True]
+    spend_row_lands(first)
+    rig.redis.delete(key)
+    second, _ = post_chat(rig.owned.gateway, body)
+    assert sent_with(rig.wires(), marker) == ()
+    assert second == first
+    rewritten: Final = eventually(lambda: pin_at(rig.redis, key), lambda found: found is not None, seconds=30)
+    assert rewritten is not None and rewritten.model_id == "pin-bedrock-arn-base", rewritten
+    assert lives_one_hour(rewritten), rewritten
 
 
 @pytest.mark.parametrize("ttl", _MALFORMED_TTLS, ids=["int", "2h", "upper-1H", "empty", "null", "list", "5kb"])
