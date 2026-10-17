@@ -2,7 +2,7 @@ import asyncio
 import copy
 import datetime
 import json
-from collections.abc import Mapping
+from collections.abc import AsyncIterable, Mapping
 from types import MappingProxyType, SimpleNamespace
 from typing import AsyncGenerator, Callable, Final, Iterator, Literal, Optional, Sequence
 from urllib.parse import unquote_plus
@@ -6347,7 +6347,12 @@ class TestAllmPassthroughStreamingProviderGate:
         ids=["converse-stream", "claude-invoke-stream", "claude-invoke-stream-behind-an-application-inference-profile"],
     )
     async def test_bedrock_stream_is_buffered_for_a_guardrail_that_needs_the_whole_response(
-        self, monkeypatch, guardrail_factory, endpoint, model, request_body
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        guardrail_factory: str,
+        endpoint: str,
+        model: str,
+        request_body: Mapping[str, object] | None,
     ):
         guardrail = (
             self._apply_guardrail(mask_response_content=True)
@@ -6687,14 +6692,20 @@ class TestAllmPassthroughStreamingProviderGate:
         ids=["claude-model-id", "application-inference-profile-with-a-claude-body"],
     )
     async def test_bedrock_invoke_stream_of_a_claude_model_is_relayed_and_scanned_for_its_text(
-        self, monkeypatch, model, request_body
+        self, monkeypatch: pytest.MonkeyPatch, model: str, request_body: Mapping[str, object] | None
     ):
+        from litellm.integrations.custom_guardrail import CustomGuardrail
         from litellm.llms.pass_through.guardrail_translation.handler import LlmPassthroughRouteHandler
 
         guardrail = self._apply_guardrail()
-        scanned: dict = {}
+        scanned: dict[str, object] = {}
 
-        async def scan_relayed(response, user_api_key_dict, request_data, guardrails):
+        async def scan_relayed(
+            response: AsyncIterable[object],
+            user_api_key_dict: ProxyUserAPIKeyAuth,
+            request_data: dict[str, object],
+            guardrails: Sequence[tuple[CustomGuardrail, bool]],
+        ) -> AsyncGenerator[object, None]:
             items = [item async for item in response]
             scanned["guardrails"] = list(guardrails)
             scanned["texts"] = LlmPassthroughRouteHandler().get_streaming_scan_key(items).texts
@@ -6720,7 +6731,7 @@ class TestAllmPassthroughStreamingProviderGate:
 
     @pytest.mark.asyncio
     async def test_bedrock_invoke_stream_of_a_claude_model_without_a_post_call_guardrail_streams_as_received(
-        self, monkeypatch
+        self, monkeypatch: pytest.MonkeyPatch
     ):
         result, body, mock_handler, recorded = await self._run_converse_stream(
             monkeypatch,
@@ -6746,7 +6757,7 @@ class TestAllmPassthroughStreamingProviderGate:
         ids=["guardrail-the-relay-scans", "guardrail-that-needs-the-whole-response"],
     )
     async def test_bedrock_invoke_stream_of_a_model_without_a_stream_translation_streams_as_received(
-        self, monkeypatch, model, guardrail_factory
+        self, monkeypatch: pytest.MonkeyPatch, model: str, guardrail_factory: str
     ):
         result, body, mock_handler, recorded = await self._run_converse_stream(
             monkeypatch,

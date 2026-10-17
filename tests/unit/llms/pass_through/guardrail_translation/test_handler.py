@@ -1,7 +1,8 @@
 import json
-from typing import Final
+from typing import Final, Literal
 
 import pytest
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.constants import SERVER_STREAMING_CLASSIFICATION_KEY, SERVER_STREAMING_CLASSIFICATION_MARKER
 from litellm.llms.pass_through.guardrail_translation.handler import PassThroughEndpointHandler
@@ -121,7 +122,18 @@ def test_passthrough_route_block_before_any_frame_uses_the_request_provider(prov
 _INVOKE_STREAM: Final = "model/anthropic.claude-sonnet-5-v1:0/invoke-with-response-stream"
 
 
-def _invoke_frame(event: dict) -> bytes:
+class _TextDelta(TypedDict):
+    type: ReadOnly[Literal["text_delta"]]
+    text: ReadOnly[str]
+
+
+class _TextDeltaEvent(TypedDict):
+    type: ReadOnly[Literal["content_block_delta"]]
+    index: ReadOnly[int]
+    delta: ReadOnly[_TextDelta]
+
+
+def _invoke_frame(event: _TextDeltaEvent) -> bytes:
     import base64
 
     return _converse_frame("chunk", {"bytes": base64.b64encode(json.dumps(event).encode()).decode()})

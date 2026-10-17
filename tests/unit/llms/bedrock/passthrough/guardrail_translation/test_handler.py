@@ -2197,7 +2197,7 @@ class _RequestDataRecordingGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
         logging_obj: LiteLLMLoggingObj | None = None,
     ) -> GenericGuardrailAPIInputs:
@@ -2220,7 +2220,7 @@ class _ToolInputRecordingGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
         logging_obj: LiteLLMLoggingObj | None = None,
     ) -> GenericGuardrailAPIInputs:
@@ -2234,7 +2234,9 @@ def _invoke_delta_frame(index: int, delta: _InvokeDelta) -> bytes:
 
 class TestBufferedInvokeStream:
     @pytest.mark.asyncio
-    async def test_masks_are_written_back_into_the_chunk_frames_that_carried_the_text(self, monkeypatch):
+    async def test_masks_are_written_back_into_the_chunk_frames_that_carried_the_text(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
         guardrail = _CardMaskingGuardrail()
         stream = b"".join(_invoke_card_stream())
 
@@ -2247,7 +2249,7 @@ class TestBufferedInvokeStream:
         ]
 
     @pytest.mark.asyncio
-    async def test_each_content_block_is_scanned_and_masked_on_its_own(self, monkeypatch):
+    async def test_each_content_block_is_scanned_and_masked_on_its_own(self, monkeypatch: pytest.MonkeyPatch):
         guardrail = _CardMaskingGuardrail()
         stream = b"".join(
             (
@@ -2269,7 +2271,7 @@ class TestBufferedInvokeStream:
         assert events[4]["delta"] == {"type": "input_json_delta", "partial_json": '{"card": "****"}'}
 
     @pytest.mark.asyncio
-    async def test_two_text_blocks_reach_the_guardrail_as_two_texts(self, monkeypatch):
+    async def test_two_text_blocks_reach_the_guardrail_as_two_texts(self, monkeypatch: pytest.MonkeyPatch):
         guardrail = _CardMaskingGuardrail()
         stream = b"".join(
             (
@@ -2286,7 +2288,7 @@ class TestBufferedInvokeStream:
         assert [_delta_text(event) for event in events[:2]] == ["First ****", "Second ****"]
 
     @pytest.mark.asyncio
-    async def test_a_delta_whose_text_is_not_a_string_is_left_as_received(self, monkeypatch):
+    async def test_a_delta_whose_text_is_not_a_string_is_left_as_received(self, monkeypatch: pytest.MonkeyPatch):
         guardrail = _CardMaskingGuardrail()
         odd = _invoke_raw_chunk_frame(
             b'{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":4111}}'
@@ -2327,7 +2329,7 @@ class TestBufferedInvokeStream:
         assert result == stream
 
     @pytest.mark.asyncio
-    async def test_a_stream_the_guardrail_leaves_alone_is_returned_byte_for_byte(self, monkeypatch):
+    async def test_a_stream_the_guardrail_leaves_alone_is_returned_byte_for_byte(self, monkeypatch: pytest.MonkeyPatch):
         guardrail = _RecordingGuardrail()
         stream = b"".join(_invoke_stream("Hello ", "there")) + b"trailing"
 
@@ -2337,7 +2339,7 @@ class TestBufferedInvokeStream:
         assert result == stream
 
     @pytest.mark.asyncio
-    async def test_a_block_raises_before_any_frame_is_returned(self, monkeypatch):
+    async def test_a_block_raises_before_any_frame_is_returned(self, monkeypatch: pytest.MonkeyPatch):
         guardrail = _RaisingGuardrail(GuardrailBlocked("Blocked"), "Card")
 
         with pytest.raises(GuardrailBlocked):
@@ -2393,7 +2395,7 @@ class TestInvokeStreamGuardrailRelay:
         assert BedrockPassthroughGuardrailHandler.encode_event_stream_item(frames[0]) == frame
 
     @pytest.mark.asyncio
-    async def test_sampled_stream_relays_frames_as_received_and_scans_the_text(self, monkeypatch):
+    async def test_sampled_stream_relays_frames_as_received_and_scans_the_text(self, monkeypatch: pytest.MonkeyPatch):
         guardrail = _CardMaskingGuardrail()
 
         relayed = await _relay_through_post_call_guardrail(
@@ -2404,7 +2406,9 @@ class TestInvokeStreamGuardrailRelay:
         assert guardrail.received_texts == [[f"Card: {_TEST_CARD}. Thanks!"]]
 
     @pytest.mark.asyncio
-    async def test_stream_held_until_moderated_writes_the_masks_back_into_the_chunk_frames(self, monkeypatch):
+    async def test_stream_held_until_moderated_writes_the_masks_back_into_the_chunk_frames(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
         stream = _invoke_card_stream()
 
         relayed = await _relay_through_post_call_guardrail(
@@ -2429,7 +2433,9 @@ class TestInvokeStreamGuardrailRelay:
         ],
     )
     @pytest.mark.asyncio
-    async def test_held_stream_that_ends_without_a_stop_reason_still_applies_masks(self, monkeypatch, ending: bytes):
+    async def test_held_stream_that_ends_without_a_stop_reason_still_applies_masks(
+        self, monkeypatch: pytest.MonkeyPatch, ending: bytes
+    ):
         stream = (*_invoke_card_stream()[:4], ending)
 
         relayed = await _relay_through_post_call_guardrail(
@@ -2440,7 +2446,7 @@ class TestInvokeStreamGuardrailRelay:
         assert relayed.endswith(ending)
 
     @pytest.mark.asyncio
-    async def test_a_later_guardrail_scans_the_masks_a_held_guardrail_wrote_back(self, monkeypatch):
+    async def test_a_later_guardrail_scans_the_masks_a_held_guardrail_wrote_back(self, monkeypatch: pytest.MonkeyPatch):
         held = _RecordingGuardrail()
 
         relayed = await _relay_through_post_call_guardrail(
@@ -2456,7 +2462,9 @@ class TestInvokeStreamGuardrailRelay:
         assert held.received_texts == [["Card: ****. Thanks!"]]
 
     @pytest.mark.asyncio
-    async def test_end_of_stream_only_block_withholds_the_frames_after_the_stop_reason(self, monkeypatch):
+    async def test_end_of_stream_only_block_withholds_the_frames_after_the_stop_reason(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
         from fastapi import HTTPException
 
         guardrail = _RaisingGuardrail(HTTPException(status_code=400, detail="Violated guardrail policy"), "Thanks")
@@ -2471,7 +2479,9 @@ class TestInvokeStreamGuardrailRelay:
         assert relayed == list(_invoke_card_stream()[:-2])
 
     @pytest.mark.asyncio
-    async def test_block_after_frames_were_relayed_raises_for_the_relay_to_report(self, monkeypatch):
+    async def test_block_after_frames_were_relayed_raises_for_the_relay_to_report(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
         from fastapi import HTTPException
 
         block = HTTPException(status_code=400, detail="Violated guardrail policy")
@@ -2490,7 +2500,9 @@ class TestInvokeStreamGuardrailRelay:
         assert relayed == list(_invoke_card_stream()[:4])
 
     @pytest.mark.asyncio
-    async def test_guardrail_message_ends_the_message_after_closing_the_open_block(self, monkeypatch):
+    async def test_guardrail_message_ends_the_message_after_closing_the_open_block(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
         from litellm.exceptions import ModifyResponseException
 
         guardrail = _RaisingGuardrail(
@@ -2520,7 +2532,7 @@ class TestInvokeStreamGuardrailRelay:
         ]
 
     @pytest.mark.asyncio
-    async def test_guardrail_message_on_a_held_stream_is_a_whole_message(self, monkeypatch):
+    async def test_guardrail_message_on_a_held_stream_is_a_whole_message(self, monkeypatch: pytest.MonkeyPatch):
         from litellm.exceptions import ModifyResponseException
 
         guardrail = _RaisingGuardrail(
@@ -2572,7 +2584,9 @@ class TestInvokeStreamGuardrailRelay:
         )
 
     @pytest.mark.asyncio
-    async def test_each_sampled_scan_sees_a_streaming_request_and_every_event_relayed_so_far(self, monkeypatch):
+    async def test_each_sampled_scan_sees_a_streaming_request_and_every_event_relayed_so_far(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
         guardrail = _RequestDataRecordingGuardrail()
         guardrail.streaming_sampling_rate = 2
 
@@ -2587,7 +2601,7 @@ class TestInvokeStreamGuardrailRelay:
         assert [finish_reason for _, _, finish_reason in guardrail.scans[:-1]] == [None] * (len(guardrail.scans) - 1)
 
     @pytest.mark.asyncio
-    async def test_the_held_scan_sees_the_whole_stream_and_its_finish_reason(self, monkeypatch):
+    async def test_the_held_scan_sees_the_whole_stream_and_its_finish_reason(self, monkeypatch: pytest.MonkeyPatch):
         guardrail = _RequestDataRecordingGuardrail()
         stream = (
             _invoke_chunk_frame(
@@ -2616,7 +2630,7 @@ class TestInvokeStreamGuardrailRelay:
     @pytest.mark.parametrize("holds_until_moderated", [True, False], ids=["held", "sampled"])
     @pytest.mark.asyncio
     async def test_a_stream_the_upstream_breaks_off_still_gets_its_tool_input_scanned(
-        self, monkeypatch, holds_until_moderated: bool
+        self, monkeypatch: pytest.MonkeyPatch, holds_until_moderated: bool
     ):
         guardrail = _ToolInputRecordingGuardrail()
         stream = (
