@@ -952,6 +952,90 @@ async def test_generate_key_helper_fn_with_access_group_ids(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_generate_key_helper_fn_get_spend_routes_non_premium_returns_403(
+    monkeypatch,
+):
+    """Without Enterprise, requesting get_spend_routes must be a 403 that
+    names the licence — not a bare 500 Internal Server Error. (#47011)"""
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.jsonify_object = lambda data: data  # type: ignore
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_objectpermissiontable = MagicMock()
+    mock_prisma_client.db.litellm_objectpermissiontable.create = AsyncMock(
+        return_value=MagicMock(object_permission_id=None)
+    )
+    mock_prisma_client.db.query_raw = AsyncMock(return_value=[])
+    mock_prisma_client.insert_data = AsyncMock(
+        return_value=MagicMock(
+            token="hashed_token_spend",
+            litellm_budget_table=None,
+            object_permission=None,
+            created_at=None,
+            updated_at=None,
+        )
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
+
+    from fastapi import HTTPException
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        generate_key_helper_fn,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await generate_key_helper_fn(
+            request_type="key",
+            table_name="key",
+            user_id="test-user",
+            permissions={"get_spend_routes": True},
+        )
+    assert exc_info.value.status_code == 403
+    detail = str(exc_info.value.detail)
+    assert "get_spend_routes" in detail
+    assert "Enterprise" in detail
+
+
+@pytest.mark.asyncio
+async def test_generate_key_helper_fn_get_spend_routes_false_allowed_non_premium(
+    monkeypatch,
+):
+    """Explicit get_spend_routes=false must not be refused on OSS. (#47011)"""
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.jsonify_object = lambda data: data  # type: ignore
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_objectpermissiontable = MagicMock()
+    mock_prisma_client.db.litellm_objectpermissiontable.create = AsyncMock(
+        return_value=MagicMock(object_permission_id=None)
+    )
+    mock_prisma_client.db.query_raw = AsyncMock(return_value=[])
+    mock_prisma_client.insert_data = AsyncMock(
+        return_value=MagicMock(
+            token="hashed_token_spend_false",
+            litellm_budget_table=None,
+            object_permission=None,
+            created_at=None,
+            updated_at=None,
+        )
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        generate_key_helper_fn,
+    )
+
+    result = await generate_key_helper_fn(
+        request_type="key",
+        table_name="key",
+        user_id="test-user",
+        permissions={"get_spend_routes": False},
+    )
+    assert result is not None
+    assert result.get("token") or result.get("key") or result.get("token_id")
+
+
+@pytest.mark.asyncio
 async def test_generate_key_helper_fn_with_budget_fallbacks(monkeypatch):
     """Regression: /key/generate must accept `budget_fallbacks` end-to-end.
 
