@@ -48,6 +48,7 @@ from litellm.proxy.anthropic_endpoints.endpoints import (
     count_tokens as anthropic_count_tokens,
 )
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
+from litellm.proxy.google_endpoints.endpoints import _google_count_tokens_request
 from litellm.proxy.common_utils.token_count_settings import (
     ProviderCountFailure,
     TokenCountModel,
@@ -1566,6 +1567,23 @@ async def test_framed_estimate_that_cannot_read_the_body_answers_the_provider_er
     assert (raised.value.code, raised.value.message) == ("400", "scripted 400 for kimi")
     assert readable.count_source == "local_estimate"
 
+
+@pytest.mark.asyncio
+async def test_framed_estimate_counts_google_contents_like_the_same_text_sent_as_messages(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _framed_kimi(monkeypatch)
+    google_request: Final = _google_count_tokens_request(
+        "kimi", {"contents": [{"role": "user", "parts": [{"text": "What is new in the release notes?"}]}]}
+    )
+
+    from_google: Final = await token_counter(request=google_request, call_endpoint=True)
+    from_messages: Final = await token_counter(
+        request=TokenCountRequest(model="kimi", messages=google_request.messages), call_endpoint=True
+    )
+
+    assert from_google.count_source == "local_estimate"
+    assert from_google.total_tokens == from_messages.total_tokens
 
 @pytest.mark.asyncio
 async def test_framed_deployment_whose_custom_tokenizer_cannot_load_answers_the_provider_error(

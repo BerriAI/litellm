@@ -15065,7 +15065,7 @@ async def count_request_tokens(
             ),
             model_to_use=model_to_use,
             settings=settings,
-            local_estimate_allowed=litellm.disable_token_counter is not True and not contents,
+            local_estimate_allowed=litellm.disable_token_counter is not True and (bool(messages) or not contents),
         )
     )
     if isinstance(ladder, TokenCountResponse):
