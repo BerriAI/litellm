@@ -7,10 +7,12 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
+import litellm
 from litellm.llms.a2a.chat.streaming_iterator import A2AModelResponseIterator
 from litellm.llms.a2a.chat.transformation import A2AConfig
 from litellm.llms.a2a.common_utils import A2AError
 from litellm.types.utils import ModelResponse
+from litellm.utils import get_optional_params
 
 
 def _raw_response(text: str) -> MagicMock:
@@ -226,3 +228,28 @@ def test_transform_response_reports_an_undecodable_body_as_an_agent_error():
 
     assert exc_info.value.status_code == 502
     assert exc_info.value.message.startswith("Failed to parse A2A response: ")
+
+
+def test_a2a_only_claims_stream():
+    """A2A has no sampling params, so it must not advertise any.
+
+    Claiming one suppresses the UnsupportedParamsError and the value is
+    dropped without telling the caller.
+    """
+    supported = A2AConfig().get_supported_openai_params("test-agent")
+    assert "stream" in supported
+    for param in ("temperature", "max_tokens", "top_p"):
+        assert param not in supported
+
+
+@pytest.mark.parametrize("param,value", [("temperature", 0.5), ("max_tokens", 100), ("top_p", 0.9)])
+def test_a2a_sampling_params_raise(param, value):
+    """Sampling params should surface an error rather than vanish."""
+    with pytest.raises(litellm.UnsupportedParamsError):
+        get_optional_params(model="test-agent", custom_llm_provider="a2a", **{param: value})
+
+
+def test_a2a_stream_still_maps():
+    """stream is the one real param, it must survive."""
+    params = get_optional_params(model="test-agent", custom_llm_provider="a2a", stream=True)
+    assert params["stream"] is True
