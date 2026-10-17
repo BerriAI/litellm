@@ -13,6 +13,7 @@ from websockets.frames import Close
 
 import litellm
 from litellm.constants import (
+    BEDROCK_REALTIME_PENDING_OPENING_MESSAGE_SCOPE_KEY,
     REALTIME_METERED_USAGE_KEY,
     REALTIME_SESSION_FAILURE_LOGGED_KEY,
     REALTIME_SESSION_SUCCESS_LOGGED_KEY,
@@ -541,6 +542,32 @@ async def test_backend_to_client_stores_normalized_events_for_logging():
     sent = json.loads(client_ws.send_text.call_args_list[0].args[0])
     assert sent["response"]["usage"]["total_tokens"] == 0
     assert streaming.messages[0]["response"]["usage"]["total_tokens"] == 0
+
+
+@pytest.mark.asyncio
+async def test_client_ack_messages_replays_the_opening_message_a_refused_bedrock_stream_left():
+    opening_message: Final = json.dumps(
+        {
+            "type": "conversation.item.create",
+            "item": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "What is 17 * 3?"}]},
+        }
+    )
+    next_message: Final = json.dumps({"type": "response.create"})
+    client_ws = MagicMock()
+    client_ws.scope = {"headers": [], BEDROCK_REALTIME_PENDING_OPENING_MESSAGE_SCOPE_KEY: opening_message}
+    client_ws.receive_text = AsyncMock(side_effect=[next_message, Exception("connection closed")])
+    backend_ws = MagicMock()
+    backend_ws.send = AsyncMock()
+    logging_obj: Final = _mock_logging()
+    logging_obj.pre_call = MagicMock()
+    streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
+
+    await streaming.client_ack_messages()
+
+    sent_types: Final = [json.loads(call.args[0])["type"] for call in backend_ws.send.call_args_list]
+    assert sent_types == ["conversation.item.create", "response.create"]
+    assert json.loads(backend_ws.send.call_args_list[0].args[0])["item"]["content"][0]["text"] == "What is 17 * 3?"
+    assert BEDROCK_REALTIME_PENDING_OPENING_MESSAGE_SCOPE_KEY not in client_ws.scope
 
 
 @pytest.mark.asyncio
