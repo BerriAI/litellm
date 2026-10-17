@@ -213,7 +213,7 @@ class TestBedrockClaudeCountsWithCostMapCountModel:
             domain=Domain.LLM_TRANSLATION,
             route=Route.COUNT_TOKENS,
             providers=(Provider.BEDROCK,),
-            models=(BEDROCK_SONNET, COST_MAP_FALLBACK),
+            models=(BEDROCK_SONNET, COST_MAP_COUNT_MODEL),
             capabilities=(Capability.FUNCTION_CALLING, Capability.PDF_INPUT),
             mode=Mode.NONSTREAM,
         )
@@ -229,7 +229,7 @@ class TestBedrockClaudeCountsWithCostMapCountModel:
             domain=Domain.LLM_TRANSLATION,
             route=Route.COUNT_TOKENS,
             providers=(Provider.BEDROCK,),
-            models=(BEDROCK_HAIKU, COST_MAP_FALLBACK),
+            models=(BEDROCK_HAIKU, COST_MAP_COUNT_MODEL),
             capabilities=(Capability.FUNCTION_CALLING, Capability.PDF_INPUT),
             mode=Mode.NONSTREAM,
         )
