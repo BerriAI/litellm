@@ -5,9 +5,16 @@ import type { MCPServer, MCPToolset } from "@/components/mcp_tools/types";
 import { toCustomerFormValues } from "./customerPayload";
 import { useSaveCustomer } from "./useSaveCustomer";
 
-const mocks = vi.hoisted(() => ({ servers: vi.fn(), toolsets: vi.fn(), create: vi.fn(), update: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  servers: vi.fn(),
+  toolsets: vi.fn(),
+  accessGroups: vi.fn(),
+  create: vi.fn(),
+  update: vi.fn(),
+}));
 vi.mock("@/app/(dashboard)/hooks/mcpServers/useMCPServers", () => ({ useMCPServers: mocks.servers }));
 vi.mock("@/app/(dashboard)/hooks/mcpServers/useMCPToolsets", () => ({ useMCPToolsets: mocks.toolsets }));
+vi.mock("@/app/(dashboard)/hooks/mcpServers/useMCPAccessGroups", () => ({ useMCPAccessGroups: mocks.accessGroups }));
 vi.mock("@/app/(dashboard)/hooks/customers/useCustomerMutations", () => ({
   useCreateCustomer: () => ({ mutateAsync: mocks.create, isPending: false }),
   useUpdateCustomer: () => ({ mutateAsync: mocks.update, isPending: false }),
@@ -51,6 +58,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.servers.mockReturnValue({ data: undefined, isSuccess: false });
   mocks.toolsets.mockReturnValue({ data: undefined, isSuccess: false });
+  mocks.accessGroups.mockReturnValue({ data: undefined, isSuccess: false });
   mocks.create.mockResolvedValue(customer);
   mocks.update.mockResolvedValue(customer);
 });
@@ -156,5 +164,80 @@ describe("useSaveCustomer", () => {
       models: [],
       object_permission: clearedGrant,
     });
+  });
+
+  it("refuses a new direct server until it has an allowlist, then saves the allowlist", async () => {
+    const added: MCPServer = { ...server, server_id: "added-server" };
+    mocks.servers.mockReturnValue({ data: [server, added], isSuccess: true });
+    const { result } = renderHook(() => useSaveCustomer(customer));
+    const values = {
+      ...toCustomerFormValues(customer),
+      mcp_servers_and_groups: { servers: [server.server_id, added.server_id], accessGroups: [], toolsets: [] },
+    };
+
+    await expect(result.current.saveCustomer(values)).rejects.toThrow("Wait for each new MCP server's tools to load");
+    expect(mocks.update).not.toHaveBeenCalled();
+
+    await result.current.saveCustomer({
+      ...values,
+      mcp_tool_permissions: { ...values.mcp_tool_permissions, [added.server_id]: ["read"] },
+    });
+
+    expect(mocks.update).toHaveBeenCalledExactlyOnceWith({
+      user_id: customer.user_id,
+      models: [],
+      object_permission: {
+        mcp_servers: [server.server_id, added.server_id],
+        mcp_access_groups: [],
+        mcp_toolsets: [],
+        mcp_tool_permissions: { [server.server_id]: ["read"], [added.server_id]: ["read"] },
+      },
+    });
+  });
+
+  it("refuses a permission edit while a stored access group's catalog has failed, then saves after it loads", async () => {
+    const added: MCPServer = { ...server, server_id: "added-server" };
+    const stored: EndUser = { ...customer, object_permission: { ...permission, mcp_access_groups: ["group-a"] } };
+    mocks.servers.mockReturnValue({ data: [server, added], isSuccess: true });
+    mocks.accessGroups.mockReturnValue({ data: undefined, isSuccess: false });
+    const { result, rerender } = renderHook(() => useSaveCustomer(stored));
+    const values = {
+      ...toCustomerFormValues(stored),
+      mcp_servers_and_groups: { servers: [server.server_id, added.server_id], accessGroups: ["group-a"], toolsets: [] },
+      mcp_tool_permissions: { [server.server_id]: ["read"], [added.server_id]: ["read"] },
+    };
+
+    await expect(result.current.saveCustomer(values)).rejects.toThrow("MCP catalogs must finish loading");
+    expect(mocks.update).not.toHaveBeenCalled();
+    mocks.accessGroups.mockReturnValue({ data: ["group-a"], isSuccess: true });
+    rerender();
+
+    await result.current.saveCustomer(values);
+
+    expect(mocks.update).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { case: "an unrestricted stored server", stored: ["added-server"], toolsetServer: "server-id" },
+    { case: "a server its selected toolset covers", stored: [], toolsetServer: "added-server" },
+  ])("saves $case without an allowlist", async ({ stored, toolsetServer }) => {
+    const added: MCPServer = { ...server, server_id: "added-server" };
+    const addedToolset: MCPToolset = { ...toolset, tools: [{ server_id: toolsetServer, tool_name: "read" }] };
+    const existing: EndUser = {
+      ...customer,
+      object_permission: { ...permission, mcp_servers: stored, mcp_tool_permissions: {} },
+    };
+    mocks.servers.mockReturnValue({ data: [server, added], isSuccess: true });
+    mocks.toolsets.mockReturnValue({ data: [addedToolset], isSuccess: true });
+    const { result } = renderHook(() => useSaveCustomer(existing));
+
+    await result.current.saveCustomer({
+      ...toCustomerFormValues(existing),
+      mcp_servers_and_groups: { servers: [added.server_id], accessGroups: [], toolsets: [toolset.toolset_id] },
+    });
+
+    expect(mocks.update).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ object_permission: expect.objectContaining({ mcp_toolsets: [toolset.toolset_id] }) }),
+    );
   });
 });
