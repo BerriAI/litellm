@@ -18,7 +18,7 @@ from functools import lru_cache
 from types import MappingProxyType, TracebackType
 from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, cast
 
-from httpx import Response
+from httpx import Response, Timeout
 from pydantic import BaseModel, JsonValue, TypeAdapter
 
 import litellm
@@ -664,6 +664,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.message_copy_duration_ms: float = (time.time() - _copy_start) * 1000
         self.callback_duration_ms: float = 0.0
         self.stream = stream
+        self.applied_timeout: float | Timeout | None = None
         self.start_time = start_time  # log the call start time
         self.call_type = call_type
         self.relays_llm_passthrough: Final = call_type in (
@@ -1044,6 +1045,11 @@ class Logging(LiteLLMLoggingBaseClass):
 
         if "custom_llm_provider" in self.model_call_details:
             self.custom_llm_provider = self.model_call_details["custom_llm_provider"]
+
+    def record_applied_timeout(self, timeout: float | Timeout) -> None:
+        self.applied_timeout = timeout
+        self.litellm_params["timeout"] = timeout
+        self.model_call_details["litellm_params"] = self.litellm_params
 
     def update_from_kwargs(
         self,
