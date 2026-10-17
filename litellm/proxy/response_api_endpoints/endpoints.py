@@ -1423,16 +1423,21 @@ _OPENAI_ERROR_BODY: Final = TypeAdapter(_ResponsesApiErrorBody)
 _NESTED_PROVIDER_ERROR: Final = TypeAdapter(_NestedProviderError)
 
 
+def _provider_error_json(raw_message: str) -> str:
+    start: Final = raw_message.find("{")
+    return raw_message if start == -1 else raw_message[start:]
+
+
 def _provider_error_message(raw_message: str) -> str:
     try:
-        return _NESTED_PROVIDER_ERROR.validate_json(raw_message)["error"]["message"]
+        return _NESTED_PROVIDER_ERROR.validate_json(_provider_error_json(raw_message))["error"]["message"]
     except ValidationError:
         return AnthropicExceptionMapping.extract_error_message(raw_message)
 
 
 def _provider_count_error_body(raw_message: str, status_code: int) -> _ResponsesApiErrorBody:
     try:
-        return _OPENAI_ERROR_BODY.validate_json(raw_message)
+        return _OPENAI_ERROR_BODY.validate_json(_provider_error_json(raw_message))
     except ValidationError:
         return {
             "error": {

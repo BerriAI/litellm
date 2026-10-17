@@ -3700,6 +3700,41 @@ class TestResponsesInputTokens:
                 id="google_error_message_unwrapped",
             ),
             pytest.param(
+                "litellm.APIError: Google Gen AI Studio API error: 404 - "
+                + json.dumps(
+                    {"error": {"code": 404, "message": "models/gemini-typo is not found.", "status": "NOT_FOUND"}}
+                ),
+                404,
+                {
+                    "message": "models/gemini-typo is not found.",
+                    "type": "invalid_request_error",
+                    "param": None,
+                    "code": None,
+                },
+                id="prefixed_gemini_error_message_unwrapped",
+            ),
+            pytest.param(
+                "litellm.BadRequestError: AzureException - "
+                + json.dumps(
+                    {
+                        "error": {
+                            "message": "Unrecognized request argument supplied: foo",
+                            "type": "invalid_request_error",
+                            "param": "foo",
+                            "code": "unknown_parameter",
+                        }
+                    }
+                ),
+                400,
+                {
+                    "message": "Unrecognized request argument supplied: foo",
+                    "type": "invalid_request_error",
+                    "param": "foo",
+                    "code": "unknown_parameter",
+                },
+                id="prefixed_openai_error_passes_through",
+            ),
+            pytest.param(
                 {"message": "The provided model doesn't support counting tokens."},
                 400,
                 {
