@@ -62,6 +62,7 @@ from litellm.llms.bedrock.common_utils import (
     bedrock_model_supports_regex_lookaround,
     bedrock_native_output_format,
     bedrock_supports_tool_search,
+    deployment_model_info,
 )
 from litellm.llms.bedrock.request_metadata import (
     bedrock_request_metadata_headers,
@@ -947,17 +948,20 @@ class AmazonConverseConfig(BaseConfig):
 
     @staticmethod
     def _supports_native_structured_outputs(
-        model: str, custom_llm_provider: str | None, thinking_requested: bool
+        model: str,
+        custom_llm_provider: str | None,
+        thinking_requested: bool,
+        model_info: Mapping[str, object] | None,
     ) -> bool:
         """Check if the Bedrock model takes native structured outputs (outputConfig.textFormat) for this request.
 
         ``supports_native_structured_output`` in ``litellm.model_cost`` turns it on for every request, and
-        ``supports_bedrock_native_structured_output`` only when the request asks for thinking, which the
-        json tool path would drop.
+        ``supports_bedrock_native_structured_output`` (the deployment's ``model_info`` first) only when the
+        request asks for thinking, which the json tool path would drop.
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/structured-output.html
         """
         return bedrock_chat_uses_native_structured_output(
-            model, thinking_requested, custom_llm_provider or "bedrock_converse"
+            model, thinking_requested, custom_llm_provider or "bedrock_converse", model_info
         )
 
     @staticmethod
@@ -997,19 +1001,25 @@ class AmazonConverseConfig(BaseConfig):
         return result
 
     def _native_output_schema(
-        self, model: str, json_schema: Mapping[str, object], thinking_requested: bool
+        self,
+        model: str,
+        json_schema: Mapping[str, object],
+        thinking_requested: bool,
+        model_info: Mapping[str, object] | None,
     ) -> Mapping[str, object] | None:
-        if not self._supports_native_structured_outputs(model, self.custom_llm_provider, thinking_requested):
+        if not self._supports_native_structured_outputs(
+            model, self.custom_llm_provider, thinking_requested, model_info
+        ):
             return None
         if BedrockModelInfo.get_base_model(model).startswith("anthropic"):
             return bedrock_cleaned_output_schema(model, json_schema, self.custom_llm_provider or "bedrock_converse")
         return json_schema
 
     def _output_config_for_anthropic_format(
-        self, model: str, output_config_format: Mapping[str, object]
+        self, model: str, output_config_format: Mapping[str, object], model_info: Mapping[str, object] | None
     ) -> OutputConfigBlock | None:
         native_format: Final = bedrock_native_output_format(
-            model, output_config_format, self.custom_llm_provider or "bedrock_converse"
+            model, output_config_format, self.custom_llm_provider or "bedrock_converse", model_info
         )
         if native_format is None:
             return None
@@ -1079,6 +1089,7 @@ class AmazonConverseConfig(BaseConfig):
         optional_params: dict,
         model: str,
         drop_params: bool,
+        model_info: Mapping[str, object] | None = None,
     ) -> dict:
         is_thinking_enabled: Final = self.is_thinking_enabled(non_default_params)
         base_model: Final = BedrockModelInfo.get_base_model(model)
@@ -1095,6 +1106,7 @@ class AmazonConverseConfig(BaseConfig):
                     optional_params=optional_params,
                     non_default_params=non_default_params,
                     is_thinking_enabled=is_thinking_enabled,
+                    model_info=model_info,
                 )
             if param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["maxTokens"] = (
@@ -1306,6 +1318,7 @@ class AmazonConverseConfig(BaseConfig):
         optional_params: dict,
         non_default_params: dict,
         is_thinking_enabled: bool,
+        model_info: Mapping[str, object] | None = None,
     ) -> dict:
         """
         Handles translation of response_format parameter to Bedrock format.
@@ -1331,7 +1344,10 @@ class AmazonConverseConfig(BaseConfig):
 
         native_schema: Final = (
             self._native_output_schema(
-                model, json_schema, self.is_thinking_requested(REQUEST_PARAMS.validate_python(non_default_params))
+                model,
+                json_schema,
+                self.is_thinking_requested(REQUEST_PARAMS.validate_python(non_default_params)),
+                model_info,
             )
             if json_schema is not None
             else None
@@ -1684,7 +1700,11 @@ class AmazonConverseConfig(BaseConfig):
             tool_choice.pop("type", None)
 
     def _prepare_request_params(
-        self, optional_params: dict, model: str, drop_params: bool = False
+        self,
+        optional_params: dict,
+        model: str,
+        drop_params: bool = False,
+        model_info: Mapping[str, object] | None = None,
     ) -> tuple[dict, dict, dict, OutputConfigBlock | None]:
         """Prepare and separate request parameters."""
         # Consume the internal ``_output_config_normalized`` marker set by
@@ -1728,7 +1748,7 @@ class AmazonConverseConfig(BaseConfig):
             and output_config_format.get("type") == "json_schema"
             and base_model.startswith("anthropic")
         ):
-            output_config = self._output_config_for_anthropic_format(model, output_config_format)
+            output_config = self._output_config_for_anthropic_format(model, output_config_format, model_info)
         if output_config is None and output_config_format is not None:
             litellm.verbose_logger.warning(
                 "Bedrock Converse: dropping `output_config.format` for model=%s — "
@@ -2022,7 +2042,7 @@ class AmazonConverseConfig(BaseConfig):
             additional_request_params,
             request_metadata,
             output_config,
-        ) = self._prepare_request_params(optional_params, model, drop_params)
+        ) = self._prepare_request_params(optional_params, model, drop_params, deployment_model_info(litellm_params))
 
         original_tools: Final = inference_params.pop("tools", [])
 

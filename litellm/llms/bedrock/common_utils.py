@@ -256,18 +256,39 @@ def _bedrock_model_supports(model: str, key: str, custom_llm_provider: str = "be
     return supports_factory(model=model, custom_llm_provider=custom_llm_provider, key=key)
 
 
-def bedrock_supports_native_structured_output(model: str, custom_llm_provider: str = "bedrock") -> bool:
+_DEPLOYMENT_MODEL_INFO: Final = TypeAdapter(dict[str, object])
+
+
+def deployment_model_info(litellm_params: Mapping[str, object] | None) -> Mapping[str, object]:
+    model_info: Final = (litellm_params or {}).get("model_info")
+    return _DEPLOYMENT_MODEL_INFO.validate_python(model_info) if isinstance(model_info, Mapping) else {}
+
+
+def _bedrock_native_output_opt_in(
+    model: str, custom_llm_provider: str, model_info: Mapping[str, object] | None
+) -> bool:
+    deployment_flag: Final = (model_info or {}).get("supports_bedrock_native_structured_output")
+    if isinstance(deployment_flag, bool):
+        return deployment_flag
+    return _bedrock_model_supports(model, "supports_bedrock_native_structured_output", custom_llm_provider)
+
+
+def bedrock_supports_native_structured_output(
+    model: str, custom_llm_provider: str = "bedrock", model_info: Mapping[str, object] | None = None
+) -> bool:
     return _bedrock_model_supports(
         model, "supports_native_structured_output", custom_llm_provider
-    ) or _bedrock_model_supports(model, "supports_bedrock_native_structured_output", custom_llm_provider)
+    ) or _bedrock_native_output_opt_in(model, custom_llm_provider, model_info)
 
 
 def bedrock_chat_uses_native_structured_output(
-    model: str, thinking_requested: bool, custom_llm_provider: str = "bedrock"
+    model: str,
+    thinking_requested: bool,
+    custom_llm_provider: str = "bedrock",
+    model_info: Mapping[str, object] | None = None,
 ) -> bool:
     return _bedrock_model_supports(model, "supports_native_structured_output", custom_llm_provider) or (
-        thinking_requested
-        and _bedrock_model_supports(model, "supports_bedrock_native_structured_output", custom_llm_provider)
+        thinking_requested and _bedrock_native_output_opt_in(model, custom_llm_provider, model_info)
     )
 
 
@@ -288,23 +309,31 @@ def bedrock_cleaned_output_schema(
 
 
 def bedrock_native_output_schema(
-    model: str, schema: Mapping[str, object], custom_llm_provider: str = "bedrock"
+    model: str,
+    schema: Mapping[str, object],
+    custom_llm_provider: str = "bedrock",
+    model_info: Mapping[str, object] | None = None,
 ) -> Mapping[str, object] | None:
     native_schema: Final = bedrock_cleaned_output_schema(model, schema, custom_llm_provider)
     if _bedrock_model_supports(model, "supports_native_structured_output", custom_llm_provider):
         return schema if native_schema is None else native_schema
-    if _bedrock_model_supports(model, "supports_bedrock_native_structured_output", custom_llm_provider):
+    if _bedrock_native_output_opt_in(model, custom_llm_provider, model_info):
         return native_schema
     return None
 
 
 def bedrock_native_output_format(
-    model: str, output_format: Mapping[str, object], custom_llm_provider: str = "bedrock"
+    model: str,
+    output_format: Mapping[str, object],
+    custom_llm_provider: str = "bedrock",
+    model_info: Mapping[str, object] | None = None,
 ) -> Mapping[str, object] | None:
     schema: Final = output_format.get("schema")
     if not isinstance(schema, Mapping):
-        return output_format if bedrock_supports_native_structured_output(model, custom_llm_provider) else None
-    native_schema: Final = bedrock_native_output_schema(model, schema, custom_llm_provider)
+        return (
+            output_format if bedrock_supports_native_structured_output(model, custom_llm_provider, model_info) else None
+        )
+    native_schema: Final = bedrock_native_output_schema(model, schema, custom_llm_provider, model_info)
     if native_schema is None:
         return None
     return {**output_format, "schema": native_schema}
@@ -313,6 +342,7 @@ def bedrock_native_output_format(
 def apply_bedrock_invoke_structured_output(
     model: str,
     request_body: dict[str, object],  # mutable-ok: edited in place like siblings
+    model_info: Mapping[str, object] | None = None,
 ) -> None:
     """
     Route Anthropic structured-output params to what the Bedrock model supports.
@@ -332,7 +362,7 @@ def apply_bedrock_invoke_structured_output(
     if schema_format is None:
         return
 
-    native_format: Final = bedrock_native_output_format(model, schema_format)
+    native_format: Final = bedrock_native_output_format(model, schema_format, model_info=model_info)
     if native_format is not None:
         existing_output_config: Final = request_body.get("output_config")
         if isinstance(existing_output_config, dict):
@@ -1352,7 +1382,6 @@ def is_claude_4_5_on_bedrock(model: str) -> bool:
 
 
 _BEDROCK_MODEL_VERSION_SUFFIX_RE: Final = re.compile(r"-v\d+(?::\d+)?$")
-_DEPLOYMENT_MODEL_INFO: Final = TypeAdapter(dict[str, object])
 
 
 def bedrock_converse_supports_strict_tools(model: str) -> bool:
@@ -1383,8 +1412,7 @@ def bedrock_model_supports_regex_lookaround(model: str, litellm_params: Mapping[
     entry of ``model`` itself. A model nobody flagged keeps its schema as sent.
     """
     params: Final = litellm_params or {}
-    model_info: Final = _DEPLOYMENT_MODEL_INFO.validate_python(params.get("model_info") or {})
-    deployment_flag: Final = model_info.get("supports_regex_lookaround")
+    deployment_flag: Final = deployment_model_info(params).get("supports_regex_lookaround")
     if isinstance(deployment_flag, bool):
         return deployment_flag
     base_model: Final = params.get("base_model")

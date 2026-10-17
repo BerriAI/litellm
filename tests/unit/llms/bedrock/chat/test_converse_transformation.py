@@ -12,7 +12,7 @@ import pytest
 import respx
 
 import litellm
-from litellm import ModelResponse, completion
+from litellm import ModelResponse, Router, completion
 from litellm.litellm_core_utils.prompt_templates.factory import (
     _bedrock_converse_messages_pt,
     _bedrock_tools_pt,
@@ -4965,6 +4965,65 @@ def test_adaptive_thinking_is_kept_next_to_json_schema_on_a_native_output_profil
     assert "toolConfig" not in request
 
 
+_OPUS_4_8_INVOKE_RESPONSE: Final = {
+    "id": "msg_1",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-opus-4-8",
+    "content": [{"type": "text", "text": '{"city": "Paris", "country": "France"}'}],
+    "stop_reason": "end_turn",
+    "usage": {"input_tokens": 10, "output_tokens": 5},
+}
+
+
+def _routed_request_body(router: Router, model_name: str, route: str) -> Mapping[str, object]:
+    response: Final = _mock_converse_response()
+    if route == "invoke":
+        response.json.return_value = _OPUS_4_8_INVOKE_RESPONSE
+        response.text = json.dumps(_OPUS_4_8_INVOKE_RESPONSE)
+    client: Final = HTTPHandler()
+    with patch.object(client, "post", return_value=response) as mock_post:
+        router.completion(
+            model=model_name,
+            messages=[{"role": "user", "content": "Name the capital of France."}],
+            response_format=CAPITAL_RESPONSE_FORMAT,
+            thinking=ADAPTIVE_THINKING,
+            client=client,
+        )
+    return json.loads(mock_post.call_args.kwargs["data"])
+
+
+def _sends_native_output(body: Mapping[str, object], route: str) -> bool:
+    if route == "converse":
+        return "outputConfig" in body and "toolConfig" not in body
+    output_config: Final = body.get("output_config")
+    return isinstance(output_config, dict) and "format" in output_config and "tools" not in body
+
+
+@pytest.mark.parametrize("route", ["converse", "invoke"])
+def test_a_deployment_native_output_opt_in_stays_on_that_deployment(set_native_structured_output, route):
+    set_native_structured_output("us.anthropic.claude-opus-4-8", None)
+    litellm_params: Final = {
+        "model": f"bedrock/{route}/us.anthropic.claude-opus-4-8",
+        "aws_access_key_id": "fake-access-key",
+        "aws_secret_access_key": "fake-secret-key",
+        "aws_region_name": "us-east-1",
+    }
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "opted-in",
+                "litellm_params": litellm_params,
+                "model_info": {"supports_bedrock_native_structured_output": True},
+            },
+            {"model_name": "sibling", "litellm_params": litellm_params},
+        ]
+    )
+
+    assert _sends_native_output(_routed_request_body(router, "opted-in", route), route)
+    assert not _sends_native_output(_routed_request_body(router, "sibling", route), route)
+
+
 NATIVE_OUTPUT_REJECTED_KEYWORDS: Final = frozenset({"minimum", "maximum", "uniqueItems", "oneOf"})
 CONSTRAINED_PERSON_SCHEMA: Final = {
     "type": "object",
@@ -5265,6 +5324,7 @@ def test_recursive_output_config_format_follows_the_profile_native_key(
     )
 
     assert ("outputConfig" in request) is forwarded
+
 
 
 def test_sonnet_4_6_json_schema_still_uses_native_output_config(monkeypatch):

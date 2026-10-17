@@ -1381,13 +1381,14 @@ def test_dict_fields_take_the_json_tool_on_a_native_structured_output_model(fiel
     [
         ("claude-opus-4-8", {"thinking": {"type": "adaptive"}}),
         ("claude-opus-4-8", {"reasoning_effort": "low"}),
+        ("claude-opus-4-8", {"reasoning_effort": "none"}),
         ("claude-sonnet-5-5", {}),
         (
             "claude-opus-4-8",
             {"tools": [{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}]},
         ),
     ],
-    ids=["adaptive-thinking", "reasoning-effort", "model-without-forced-tools", "caller-tools"],
+    ids=["adaptive-thinking", "reasoning-effort", "reasoning-effort-none", "model-without-forced-tools", "caller-tools"],
 )
 def test_dict_fields_keep_native_output_when_the_json_tool_would_not_be_forced(model, thinking_params):
     optional_params: Final = AnthropicConfig().map_openai_params(
