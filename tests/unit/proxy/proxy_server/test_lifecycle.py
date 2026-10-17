@@ -18,6 +18,7 @@ Pins covered:
 from __future__ import annotations
 
 import asyncio
+import gc
 import inspect
 import json
 import logging
@@ -33,9 +34,10 @@ from pydantic import BaseModel
 from typing_extensions import TypedDict
 
 import litellm.proxy.proxy_server as ps
+from litellm.proxy.common_utils import debug_utils
+from litellm.proxy.management_helpers.audit_logs import track_audit_task
 from litellm.proxy.proxy_server import (
     ProxyStartupEvent,
-    initialize_shared_aiohttp_session,
     _resolve_pydantic_type,
     _resolve_typed_dict_type,
     cleanup_router_config_variables,
@@ -43,14 +45,13 @@ from litellm.proxy.proxy_server import (
     get_litellm_model_info,
     initialize,
     initialize_from_worker_config,
+    initialize_shared_aiohttp_session,
     load_from_azure_key_vault,
     proxy_shutdown_event,
     proxy_startup_event,
     run_ollama_serve,
     save_worker_config,
 )
-
-from litellm.proxy.management_helpers.audit_logs import track_audit_task
 
 from .conftest import normalize
 
@@ -970,6 +971,31 @@ async def test_proxy_startup_event_honors_disable_model_info_refresh(
     assert (job is not None) is job_scheduled, (
         f"disable_model_info_refresh={disable_model_info_refresh} but refresh_model_info job is {job}"
     )
+
+
+@pytest.mark.asyncio
+async def test_proxy_startup_event_freezes_gc_before_serving() -> None:
+    """With LITELLM_GC_FREEZE_AFTER_STARTUP (#46517) the startup heap is already frozen
+    when the proxy starts serving."""
+    scheduler = AsyncIOScheduler()
+    clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")} | {
+        "LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY": "true"
+    }
+    gc.unfreeze()
+    with (
+        patch.dict(os.environ, clean_env, clear=True),
+        patch.object(ps, "scheduler", scheduler),
+        patch.object(debug_utils, "LITELLM_GC_FREEZE_AFTER_STARTUP", True),
+    ):
+        try:
+            async with proxy_startup_event(app=None):
+                frozen_while_serving = gc.get_freeze_count()
+        finally:
+            gc.unfreeze()
+            if scheduler.running:
+                scheduler.shutdown(wait=False)
+
+    assert frozen_while_serving > 0
 
 
 def test_otel_global_provider_published_after_callback_init():
