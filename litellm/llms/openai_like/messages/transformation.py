@@ -33,6 +33,9 @@ class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
         super().__init__()
         self._cache_control_ttl: Final = cache_control_ttl
 
+    def is_native_messages_route(self) -> bool:
+        return False
+
     def validate_anthropic_messages_environment(
         self,
         headers: dict[str, str],

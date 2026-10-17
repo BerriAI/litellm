@@ -144,6 +144,9 @@ class BaseAnthropicMessagesConfig(ABC):
     def serves_api_base(self, model: str, api_base: str | None) -> bool:
         return True
 
+    def is_native_messages_route(self) -> bool:
+        return True
+
     def handles_web_search_natively(self) -> bool:
         """
         Whether the upstream this config routes to executes ``web_search`` tools

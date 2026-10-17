@@ -657,6 +657,38 @@ async def test_client_anthropic_headers_keep_the_sdk_credentials_on_the_native_r
     assert received[0].headers["anthropic-beta"] == "context-1m-2025-08-07"
 
 
+@pytest.mark.asyncio
+async def test_client_anthropic_headers_skip_an_opted_in_passthrough_api_base() -> None:
+    received: Final[list[httpx.Request]] = []  # mutable-ok: the fake upstream records what litellm sent
+
+    def upstream_answers(request: httpx.Request) -> httpx.Response:
+        received.append(request)
+        return _reply(request, MESSAGE)
+
+    upstream: Final = AsyncHTTPHandler(transport=httpx.MockTransport(upstream_answers))
+    try:
+        await litellm.anthropic.messages.acreate(
+            max_tokens=64,
+            messages=USER_TURN,
+            model=f"databricks/{CLAUDE_MODEL}",
+            api_key=DATABRICKS_API_KEY,
+            api_base="http://gateway.internal/dbx-anthropic",
+            client=upstream,
+            model_info=OPTED_IN_MODEL_INFO,
+            provider_specific_header={
+                "custom_llm_provider": "databricks",
+                "extra_headers": {"anthropic-beta": "prompt-caching-scope-2026-01-05", "anthropic-version": "2023-01-01"},
+                "native_anthropic_messages_only": True,
+            },
+        )
+    finally:
+        await upstream.close()
+
+    assert [str(request.url) for request in received] == ["http://gateway.internal/dbx-anthropic/v1/messages"]
+    assert "anthropic-beta" not in received[0].headers
+    assert received[0].headers["anthropic-version"] != "2023-01-01"
+
+
 class _ChunkedStream(httpx.AsyncByteStream):
     def __init__(self, body: bytes, chunk_size: int) -> None:
         self._chunks: Final = tuple(body[start : start + chunk_size] for start in range(0, len(body), chunk_size))
