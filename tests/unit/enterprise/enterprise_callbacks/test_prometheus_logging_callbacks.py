@@ -298,8 +298,8 @@ async def test_increment_remaining_budget_metrics(prometheus_logger):
     prometheus_logger.litellm_api_key_budget_remaining_hours_metric = MagicMock()
 
     # Create a future budget reset time for testing
-    future_reset_time_team = datetime.now() + timedelta(hours=10)
-    future_reset_time_key = datetime.now() + timedelta(hours=12)
+    future_reset_time_team = datetime.now(timezone.utc) + timedelta(hours=10)
+    future_reset_time_key = datetime.now(timezone.utc) + timedelta(hours=12)
     # Mock the get_team_object and get_key_object functions to return objects with budget reset times
     with (
         patch("litellm.proxy.auth.auth_checks.get_team_object") as mock_get_team,
@@ -1614,7 +1614,7 @@ async def test_initialize_remaining_budget_metrics(prometheus_logger):
         ) as mock_get_teams,
     ):
         # Create mock team data with proper datetime objects for budget_reset_at
-        future_reset = datetime.now() + timedelta(hours=24)  # Reset 24 hours from now
+        future_reset = datetime.now(timezone.utc) + timedelta(hours=24)  # Reset 24 hours from now
         mock_teams = [
             MagicMock(
                 team_id="team1",
@@ -1790,7 +1790,7 @@ async def test_initialize_api_key_budget_metrics(prometheus_logger):
         ) as mock_list_keys,
     ):
         # Create mock key data with proper datetime objects for budget_reset_at
-        future_reset = datetime.now() + timedelta(hours=24)  # Reset 24 hours from now
+        future_reset = datetime.now(timezone.utc) + timedelta(hours=24)  # Reset 24 hours from now
         key1 = UserAPIKeyAuth(
             api_key="key1_hash",
             key_alias="alias1",
