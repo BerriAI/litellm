@@ -628,7 +628,7 @@
     {
       "name": "uk_nino",
       "display_name": "National Insurance Number (UK)",
-      "pattern": "\\b(?!BG|GB|KN|NK|NT|TN|ZZ)[A-CEGHJ-PR-TW-Z]{2}\\s?\\d{2}(?:\\s?\\d{2}){2}\\s?[A-D]\\b",
+      "pattern": "\\b(?!BG|GB|KN|NK|NT|TN|ZZ)[ABCEGHJKLMNOPRSTWXYZ][ABCEGHJKLMNPRSTWXYZ]\\s?\\d{2}(?:\\s?\\d{2}){2}\\s?[A-D]\\b",
       "category": "UK PII Patterns",
       "description": "Detects UK National Insurance numbers with valid prefixes and suffixes",
       "keyword_pattern": "\\b(?:national\\s*insurance\\s*number|national\\s*insurance|NI\\s*number|NI\\s*no\\.?|NINO)\\b",

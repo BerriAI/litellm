@@ -107,6 +107,37 @@ async def test_invalid_uk_pii_format_passes_unchanged(
     assert valid_value not in output
 
 
+@pytest.mark.parametrize(
+    "invalid_prefix",
+    (
+        "DA",
+        "FA",
+        "IA",
+        "QA",
+        "UA",
+        "VA",
+        "AD",
+        "AF",
+        "AI",
+        "AO",
+        "AQ",
+        "AU",
+        "AV",
+    ),
+)
+@pytest.mark.asyncio
+async def test_uk_nino_rejects_disallowed_prefix_letters(invalid_prefix: str) -> None:
+    guardrail: Final = _guardrail_for("uk_nino")
+    text: Final = f"national insurance number: {invalid_prefix}123456A"
+    result: Final = await guardrail.apply_guardrail(
+        inputs={"texts": [text]},
+        request_data={},
+        input_type="request",
+    )
+
+    assert result["texts"][0] == text
+
+
 def test_uk_policy_templates_reference_available_prebuilt_patterns() -> None:
     patterns_file: Final = REPO_ROOT / "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/patterns.json"
     pattern_names: Final = {
