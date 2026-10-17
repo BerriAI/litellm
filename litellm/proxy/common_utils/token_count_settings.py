@@ -29,12 +29,16 @@ class _UpstreamErrorEnvelope(BaseModel):
     error: _UpstreamErrorDetail
 
 
+def _joined(message: str, hint: str) -> str:
+    return f"{message.rstrip().rstrip('.')}. {hint}"
+
+
 def _with_hint(message: str, hint: str) -> str:
     try:
         envelope: Final = _UpstreamErrorEnvelope.model_validate_json(message)
     except ValidationError:
-        return f"{AnthropicExceptionMapping.extract_error_message(message)}. {hint}"
-    detail: Final = envelope.error.model_copy(update={"message": f"{envelope.error.message}. {hint}"})
+        return _joined(AnthropicExceptionMapping.extract_error_message(message), hint)
+    detail: Final = envelope.error.model_copy(update={"message": _joined(envelope.error.message, hint)})
     return envelope.model_copy(update={"error": detail}).model_dump_json()
 
 

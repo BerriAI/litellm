@@ -51,6 +51,7 @@ _COST_MAP: Final = Path(__file__).parents[4] / "model_prices_and_context_window.
         ({"token_count_framing": -1}, TokenCountSettings(framing=97, count_model=_OPUS_US_EAST_1)),
         ({"token_count_framing": "78"}, TokenCountSettings(framing=97, count_model=_OPUS_US_EAST_1)),
         ({"token_count_model": {}}, TokenCountSettings(framing=97, count_model=None)),
+        ({"token_count_model": ""}, TokenCountSettings(framing=97, count_model=_OPUS_US_EAST_1)),
         (
             {"token_count_model": {"model": "  ", "region": "us-east-1"}},
             TokenCountSettings(framing=97, count_model=None),
@@ -142,6 +143,10 @@ _UPSTREAM_404: Final = {
         ),
         (json.dumps({"message": "Too many tokens"}), "Too many tokens. Enable eu-west-1"),
         ("scripted 404", "scripted 404. Enable eu-west-1"),
+        (
+            "Credential should be scoped to a valid region. ",
+            "Credential should be scoped to a valid region. Enable eu-west-1",
+        ),
     ],
 )
 def test_hint_lands_in_the_upstream_error_message_and_keeps_its_envelope(message: str, expected: object) -> None:
