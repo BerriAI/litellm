@@ -6,7 +6,7 @@ import math
 import struct
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from itertools import accumulate
-from typing import TYPE_CHECKING, Final, Literal, cast
+from typing import TYPE_CHECKING, Final, Literal, Protocol, cast
 
 import anyio
 import anyio.lowlevel
@@ -344,6 +344,7 @@ Type for a function that counts tokens in a string.
 """
 
 EXTRAPOLATION_SAMPLES: Final = 16
+PDF_PAGE_MAX_EXACT_CONTENT_BYTES: Final = 64 * 1024
 T_ParamSpec: Final = ParamSpec("T_ParamSpec")
 T_Retval = TypeVar("T_Retval")
 _COUNT_OFFLOAD_LIMITER: Final = anyio.lowlevel.RunVar[anyio.CapacityLimiter]("litellm_count_offload_limiter")
@@ -818,6 +819,54 @@ def _anthropic_rendered_page_image_tokens(width: float, height: float) -> int:
     return math.ceil(min(float(ANTHROPIC_IMAGE_MAX_PIXELS), area_at_max_edge) / ANTHROPIC_IMAGE_PIXELS_PER_TOKEN)
 
 
+class _PdfContentStream(Protocol):
+    def get_data(self) -> bytes: ...
+
+
+class _PdfMediaBox(Protocol):
+    @property
+    def width(self) -> float: ...
+
+    @property
+    def height(self) -> float: ...
+
+
+class _PdfPage(Protocol):
+    @property
+    def mediabox(self) -> _PdfMediaBox: ...
+
+    def get_contents(self) -> _PdfContentStream | None: ...
+
+    def extract_text(self) -> str: ...
+
+
+def _evenly_spaced_page_indices(page_count: int) -> tuple[int, ...]:
+    if page_count <= EXTRAPOLATION_SAMPLES:
+        return tuple(range(page_count))
+    return tuple((page_count - 1) * index // (EXTRAPOLATION_SAMPLES - 1) for index in range(EXTRAPOLATION_SAMPLES))
+
+
+def _pdf_page_text_tokens(page: _PdfPage, count_function: TokenCounterFunction) -> int:
+    """A page whose content stream is too large to extract cheaply is priced at one token per content byte,
+    which no byte-level tokenizer undercuts."""
+    contents: Final = page.get_contents()
+    content_bytes: Final = len(contents.get_data()) if contents is not None else 0
+    if content_bytes > PDF_PAGE_MAX_EXACT_CONTENT_BYTES:
+        return content_bytes
+    return count_function(page.extract_text() or "")
+
+
+def _price_pdf_pages(pages: Sequence[_PdfPage], count_function: TokenCounterFunction) -> int:
+    rendering_tokens: Final = sum(
+        _anthropic_rendered_page_image_tokens(page.mediabox.width, page.mediabox.height) for page in pages
+    )
+    sampled_pages: Final = tuple(pages[index] for index in _evenly_spaced_page_indices(len(pages)))
+    if not sampled_pages:
+        return rendering_tokens
+    sampled_text_tokens: Final = sum(_pdf_page_text_tokens(page, count_function) for page in sampled_pages)
+    return rendering_tokens + round(sampled_text_tokens * len(pages) / len(sampled_pages))
+
+
 def _count_inline_pdf_tokens(data_url: str, count_function: TokenCounterFunction) -> int | None:
     if not data_url.startswith(PDF_DATA_URL_PREFIX):
         return None
@@ -827,12 +876,10 @@ def _count_inline_pdf_tokens(data_url: str, count_function: TokenCounterFunction
         verbose_logger.debug("pypdf is not installed, so the PDF document is priced like one image")
         return None
     try:
-        reader: Final = PdfReader(io.BytesIO(base64.b64decode(data_url[len(PDF_DATA_URL_PREFIX) :])))
-        return sum(
-            count_function(page.extract_text() or "")
-            + _anthropic_rendered_page_image_tokens(float(page.mediabox.width), float(page.mediabox.height))
-            for page in reader.pages
+        pages: Final = cast(  # cast-ok: pypdf is an optional extra the type-check env does not install
+            Sequence[_PdfPage], PdfReader(io.BytesIO(base64.b64decode(data_url[len(PDF_DATA_URL_PREFIX) :]))).pages
         )
+        return _price_pdf_pages(pages, count_function)
     except Exception as e:
         verbose_logger.debug("Could not read the PDF document's pages (%s), so it is priced like one image", e)
         return None

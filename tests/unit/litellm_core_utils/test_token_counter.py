@@ -13,6 +13,7 @@ from collections.abc import Mapping
 from concurrent.futures import Future, wait
 from itertools import accumulate, chain
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Final
 from unittest.mock import MagicMock
 
@@ -27,10 +28,14 @@ import litellm
 from litellm import decode, encode, get_modified_max_tokens
 from litellm import token_counter as token_counter_old
 import litellm.constants
-from litellm.constants import TOKEN_COUNTER_MAX_CONCURRENT_COUNTS
+from litellm.constants import PDF_DATA_URL_PREFIX, TOKEN_COUNTER_MAX_CONCURRENT_COUNTS
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.token_counter import (
+    EXTRAPOLATION_SAMPLES,
+    PDF_PAGE_MAX_EXACT_CONTENT_BYTES,
+    _count_inline_pdf_tokens,
     _encoding_count,
+    _price_pdf_pages,
     _get_exact_count_function,
     _get_extrapolating_count_function,
     _get_tiktoken_count_function,
@@ -1606,6 +1611,57 @@ def test_pdf_page_rendering_cost_follows_anthropic_image_scaling(fields: dict[st
 
     assert letter == poster == 1534
     assert strip == 328
+
+
+def _fake_pdf_page(content_bytes: int) -> SimpleNamespace:
+    return SimpleNamespace(
+        mediabox=SimpleNamespace(width=612.0, height=792.0),
+        get_contents=lambda: SimpleNamespace(get_data=lambda: b"x" * content_bytes),
+        extract_text=MagicMock(return_value="Revenue grew eleven percent while churn fell to two percent."),
+    )
+
+
+def test_long_pdf_reads_text_from_a_bounded_number_of_pages():
+    pages: Final = tuple(_fake_pdf_page(content_bytes=1_000) for _ in range(40))
+
+    _price_pdf_pages(pages, len)
+
+    assert sum(page.extract_text.call_count for page in pages) <= EXTRAPOLATION_SAMPLES
+
+
+def test_dense_pdf_page_is_priced_from_its_size_without_extracting_its_text():
+    page: Final = _fake_pdf_page(content_bytes=2 * PDF_PAGE_MAX_EXACT_CONTENT_BYTES)
+
+    priced: Final = _price_pdf_pages((page,), len)
+
+    page.extract_text.assert_not_called()
+    assert priced >= 2 * PDF_PAGE_MAX_EXACT_CONTENT_BYTES
+
+
+def test_dense_pdf_page_is_priced_without_extracting_its_full_text():
+    count_function: Final = MagicMock(side_effect=len)
+    sentence: Final = "Revenue grew eleven percent while churn fell to two percent. "
+    page_text: Final = sentence * (2 * PDF_PAGE_MAX_EXACT_CONTENT_BYTES // len(sentence))
+
+    priced: Final = _count_inline_pdf_tokens(PDF_DATA_URL_PREFIX + _pdf_base64((page_text,)), count_function)
+
+    assert priced is not None and priced >= len(page_text)
+    assert max((len(call.args[0]) for call in count_function.call_args_list), default=0) <= (
+        PDF_PAGE_MAX_EXACT_CONTENT_BYTES
+    )
+
+
+def test_long_pdf_of_identical_pages_prices_each_page_like_a_one_page_pdf():
+    prompt: Final = {"type": "text", "text": "Summarize this file."}
+    page_text: Final = "Revenue grew eleven percent while churn fell to two percent."
+    page_count: Final = 3 * EXTRAPOLATION_SAMPLES + 1
+    base: Final = _count_user_content([prompt])
+
+    def pdf_cost(pages: int) -> int:
+        document: Final = {"type": "document", "source": _pdf_source(_pdf_base64((page_text,) * pages))}
+        return _count_user_content([prompt, document]) - base
+
+    assert pdf_cost(page_count) == page_count * pdf_cost(1)
 
 
 def test_pdf_document_without_pypdf_is_priced_like_an_image(monkeypatch: pytest.MonkeyPatch):
