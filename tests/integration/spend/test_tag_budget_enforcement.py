@@ -492,8 +492,6 @@ def test_tag_delete_evicts_blocked_limit(
 
 
 def test_tag_info_returns_404_for_deleted_tag(gateway: Gateway) -> None:
-    pytest.skip("BUG: POST /tag/info for a deleted tag returns 500 with detail '404: Tags not found' instead of 404")
-
     tag: Final = f"tag-info-deleted-{uuid.uuid4().hex}"
     with gateway.scenario() as scenario:
 
@@ -511,8 +509,6 @@ def test_tag_info_returns_404_for_deleted_tag(gateway: Gateway) -> None:
 
 
 def test_tag_partial_update_keeps_description_and_models(gateway: Gateway) -> None:
-    pytest.skip("BUG: /tag/update without description/models wipes the stored description and models")
-
     tag: Final = f"tag-partial-update-{uuid.uuid4().hex}"
     with gateway.scenario() as scenario:
         model: Final = scenario.model()
