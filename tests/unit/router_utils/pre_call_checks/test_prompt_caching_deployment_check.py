@@ -143,6 +143,23 @@ def test_bedrock_application_profile_uses_its_base_model_for_one_hour_ttl() -> N
     ) is True
 
 
+def test_bedrock_application_profile_cache_hit_reads_base_model_from_metadata_model_info() -> None:
+    standard_logging_object: Final = cast(
+        StandardLoggingPayload,
+        {
+            "custom_llm_provider": "bedrock",
+            "model": "bedrock/converse/arn:aws:bedrock:us-east-1:000000000000:application-inference-profile/pinprofile",
+        },
+    )
+    assert (
+        _honors_one_hour_cache_ttl(
+            standard_logging_object,
+            {"metadata": {"model_info": {"base_model": "bedrock/us.anthropic.claude-sonnet-5-5"}}},
+        )
+        is True
+    )
+
+
 @pytest.mark.asyncio
 async def test_async_filter_deployments_does_not_narrow_prompt_below_model_minimum():
     """
