@@ -2761,7 +2761,7 @@
         "default_value": null
       }
     ],
-    "default_model_placeholder": "openinfer/@oi/Llama-3.2-1B-Instruct"
+    "default_model_placeholder": "openinfer/@oi/Qwen3.5-27B"
   },
   {
     "provider": "OPENAI_LIKE",
