@@ -1,7 +1,7 @@
 import pytest
 
 from litellm.llms.openai_like import dynamic_config
-from litellm.llms.openai_like.dynamic_config import create_responses_config_class
+from litellm.llms.openai_like.dynamic_config import create_config_class, create_responses_config_class
 from litellm.llms.openai_like.json_loader import SimpleProviderConfig
 from litellm.types.router import GenericLiteLLMParams
 
@@ -76,6 +76,84 @@ class TestValidateEnvironment:
             litellm_params=GenericLiteLLMParams(api_key="sk-1"),
         )
         assert headers["X-Trace"] == "abc"
+
+
+class TestServerKeyTrustedBase:
+    """A provider with restrict_env_key_to_trusted_base keeps its server key off caller-chosen hosts."""
+
+    @pytest.fixture(autouse=True)
+    def _server_key(self, monkeypatch):
+        monkeypatch.setenv("TRUSTED_KEY", "sk-server")
+        monkeypatch.delenv("TRUSTED_BASE", raising=False)
+
+    @staticmethod
+    def _restricted(slug):
+        return _provider(
+            slug, api_key_env="TRUSTED_KEY", api_base_env="TRUSTED_BASE", restrict_env_key_to_trusted_base=True
+        )
+
+    @staticmethod
+    def _chat_key(provider, api_base, api_key=None):
+        return create_config_class(provider)()._get_openai_compatible_provider_info(api_base, api_key)[1]
+
+    def test_default_base_gets_the_server_key(self):
+        assert self._chat_key(self._restricted("tb_default"), None) == "sk-server"
+
+    def test_default_host_given_explicitly_gets_the_server_key(self):
+        assert self._chat_key(self._restricted("tb_explicit_default"), "https://api.example.com/v1/") == "sk-server"
+
+    @pytest.mark.parametrize(
+        "caller_base", ["https://API.example.com/v1", "https://api.example.com:443/v1", " https://api.example.com/v1 "]
+    )
+    def test_equivalent_spellings_of_the_default_origin_get_the_server_key(self, caller_base):
+        assert self._chat_key(self._restricted("tb_equivalent"), caller_base) == "sk-server"
+
+    @pytest.mark.parametrize(
+        "caller_base",
+        [
+            "https://attacker.example/v1",
+            "http://api.example.com/v1",
+            "https://api.example.com:8443/v1",
+            "https://api.example.com.attacker.example/v1",
+            "not a url",
+        ],
+    )
+    def test_any_other_origin_is_refused_on_chat(self, caller_base):
+        with pytest.raises(ValueError, match="TRUSTED_KEY"):
+            self._chat_key(self._restricted("tb_chat_refused"), caller_base)
+
+    def test_any_other_origin_is_refused_on_responses(self):
+        config = create_responses_config_class(self._restricted("tb_responses_refused"))()
+        with pytest.raises(ValueError, match="TRUSTED_KEY"):
+            config.validate_environment(
+                headers={}, model="m", litellm_params=GenericLiteLLMParams(api_base="https://attacker.example/v1")
+            )
+
+    def test_responses_on_the_default_base_get_the_server_key(self):
+        config = create_responses_config_class(self._restricted("tb_responses_default"))()
+        headers = config.validate_environment(headers={}, model="m", litellm_params=None)
+        assert headers["Authorization"] == "Bearer sk-server"
+
+    def test_the_operator_base_override_is_trusted(self, monkeypatch):
+        monkeypatch.setenv("TRUSTED_BASE", "https://gateway.internal.example/v1")
+        assert self._chat_key(self._restricted("tb_operator"), "https://gateway.internal.example/v1") == "sk-server"
+
+    def test_the_operator_base_override_does_not_trust_other_hosts(self, monkeypatch):
+        monkeypatch.setenv("TRUSTED_BASE", "https://gateway.internal.example/v1")
+        with pytest.raises(ValueError, match="TRUSTED_KEY"):
+            self._chat_key(self._restricted("tb_operator_other"), "https://attacker.example/v1")
+
+    def test_an_explicit_key_may_go_anywhere(self):
+        provider = self._restricted("tb_explicit_key")
+        assert self._chat_key(provider, "https://attacker.example/v1", "sk-caller") == "sk-caller"
+
+    def test_without_a_server_key_nothing_is_refused(self, monkeypatch):
+        monkeypatch.delenv("TRUSTED_KEY")
+        assert self._chat_key(self._restricted("tb_keyless"), "https://attacker.example/v1") is None
+
+    def test_providers_without_the_flag_keep_the_previous_behaviour(self):
+        provider = _provider("tb_unrestricted", api_key_env="TRUSTED_KEY")
+        assert self._chat_key(provider, "https://attacker.example/v1") == "sk-server"
 
 
 class TestGetCompleteUrl:
