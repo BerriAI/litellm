@@ -296,6 +296,7 @@ if TYPE_CHECKING:
     from litellm.proxy.db.baseline_accounting import BaselineAccountingRecord
     from litellm.proxy.db.model_usage_rollup import ModelUsageTransaction
     from litellm.proxy.db.spend_log_tool_index import ToolUsageTransaction
+    from litellm.proxy.spend_tracking.charge_receipt_capture import ChargeReceiptRuntime
     from litellm.repositories.prisma_protocols import TableActions
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
     from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline, PipelineStep
@@ -320,6 +321,8 @@ _VIEW_SETUP_POLL_INTERVAL_SECONDS: Final = 5.0
 _VIEW_SETUP_DEADLINE_SECONDS: Final = 15 * 60.0
 _VIEW_SETUP_GATE_TABLE: Final = '"LiteLLM_SpendLogs"'
 _VIEW_SETUP_GATE_PROBE_ROWS: Final = TypeAdapter(tuple[Mapping[str, bool], ...])
+_CHARGE_LOGGING_VALUE: Final = TypeAdapter(object)
+_STREAM_LOGGING_DATA: Final = TypeAdapter(Mapping[str, object])
 
 _ViewSetupOutcome: TypeAlias = Literal["ready", "timed_out"]
 _ViewSetupAttempt: TypeAlias = Literal["ready", "table_missing"] | Exception
@@ -1311,6 +1314,7 @@ class ProxyLogging:
         self.premium_user = premium_user
         self.service_logging_obj = ServiceLogging()
         self.db_spend_update_writer = DBSpendUpdateWriter()
+        self.charge_receipts: ChargeReceiptRuntime | None = None
         self.proxy_hook_mapping: dict[str, CustomLogger] = {}
 
         # Guard flags to prevent duplicate background tasks
@@ -3402,6 +3406,10 @@ class ProxyLogging:
 
         request_data.update(await offload_token_count(_failure_fields_to_lift)(request_data))
 
+        from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
+        from litellm.proxy.spend_tracking.charge_receipt_request import logging_charge_capture
+
+        required_failure_capture: Final = logging_charge_capture(_CHARGE_LOGGING_VALUE.validate_python(logging_obj))
         # Remove before callbacks iterate — not serialisable
         request_data.pop("litellm_logging_obj", None)
 
@@ -3422,7 +3430,11 @@ class ProxyLogging:
                 if _callback is not None and isinstance(_callback, CustomLogger):
                     try:
                         hook_result = await _callback.async_post_call_failure_hook(
-                            request_data=request_data,
+                            request_data=(
+                                {**request_data, "litellm_logging_obj": logging_obj}
+                                if required_failure_capture is not None and isinstance(_callback, ProxyDBLogger)
+                                else request_data
+                            ),
                             user_api_key_dict=user_api_key_dict,
                             original_exception=original_exception,
                             traceback_str=redacted_traceback_str,
@@ -4370,7 +4382,7 @@ class ProxyLogging:
         record_served_output_texts(logging_obj.model_call_details, texts)
 
     @staticmethod
-    def fire_deferred_stream_logging(request_data: dict) -> None:
+    def fire_deferred_stream_logging(request_data: object) -> None:
         """
         Fire the deferred streaming logging callback after the full streaming
         pipeline (including guardrail end-of-stream blocks) has completed.
@@ -4379,16 +4391,16 @@ class ProxyLogging:
         scheduling via create_task (which would race with unified_guardrail's
         end-of-stream block).  This method retrieves and fires them.
         """
-        logging_obj: Final = request_data.get("litellm_logging_obj")
-        if logging_obj is None:
+        logging_obj: Final = _STREAM_LOGGING_DATA.validate_python(request_data).get("litellm_logging_obj")
+        if not isinstance(logging_obj, Logging):
             return
         _deferred_cb: Final[Callable[..., Coroutine[object, object, object]] | None] = getattr(
             logging_obj, "_on_deferred_stream_complete", None
         )
         _args: Final[tuple[object, ...] | None] = getattr(logging_obj, "_deferred_stream_complete_args", None)
         if _deferred_cb is not None and _args is not None:
-            logging_obj._on_deferred_stream_complete = None
-            logging_obj._deferred_stream_complete_args = None
+            setattr(logging_obj, "_on_deferred_stream_complete", None)  # noqa: B010  # adapters install this field dynamically
+            setattr(logging_obj, "_deferred_stream_complete_args", None)  # noqa: B010  # adapters install this field dynamically
             asyncio.create_task(_deferred_cb(*_args))
 
     _fire_deferred_stream_logging = fire_deferred_stream_logging

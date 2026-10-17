@@ -513,6 +513,7 @@ class DBSpendUpdateWriter:
         end_time: datetime,
         response_cost: float | None,
         project_id: str | None = None,
+        key_spend_committed: bool = False,
     ) -> bool:
         """Record the request's spend, answering whether its cost still needs charging.
 
@@ -604,6 +605,7 @@ class DBSpendUpdateWriter:
                     litellm_proxy_budget_name=litellm_proxy_budget_name,
                     payload=payload,
                     request_model_access_groups=get_request_model_access_groups(kwargs),
+                    key_spend_committed=key_spend_committed,
                 )
             )
 
@@ -1023,6 +1025,7 @@ class DBSpendUpdateWriter:
         payload: SpendLogsPayload,
         request_model_access_groups: Sequence[str] = (),
         project_id: str | None = None,
+        key_spend_committed: bool = False,
     ):
         """
         Runs all 13 spend-update helpers sequentially inside a single asyncio task.
@@ -1051,7 +1054,7 @@ class DBSpendUpdateWriter:
         try:
             await self._update_key_db(
                 response_cost=response_cost,
-                hashed_token=hashed_token,
+                hashed_token=None if key_spend_committed else hashed_token,
                 prisma_client=prisma_client,
             )
         except Exception:
@@ -1215,6 +1218,13 @@ class DBSpendUpdateWriter:
     ):
         try:
             if hashed_token is None or prisma_client is None:
+                return
+            from litellm.proxy.proxy_server import proxy_logging_obj
+            from litellm.proxy.spend_tracking.charge_receipt_request import receipt_runtime
+
+            receipts: Final = receipt_runtime(proxy_logging_obj)
+            if receipts is not None and hashed_token in receipts.settings.key_hashes:
+                verbose_proxy_logger.error("Refusing an unreceipted legacy spend increment for a required-receipt key")
                 return
 
             await self.spend_update_queue.add_update(

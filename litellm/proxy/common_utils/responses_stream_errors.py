@@ -114,6 +114,13 @@ class ResponsesStreamErrorState:
     def observe_chunk(self, chunk: object) -> None:
         self._pending_event = _StreamEvent.model_validate(chunk) if isinstance(chunk, (BaseModel, Mapping)) else None
 
+    @property
+    def pending_completion(self) -> bool:
+        return self._pending_event is not None and self._pending_event.type in (
+            "response.completed",
+            "response.incomplete",
+        )
+
     def mark_emitted(self, frame: str | bytes) -> str | bytes:
         event: Final = self._pending_event
         if event is None:

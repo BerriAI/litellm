@@ -1953,6 +1953,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/billing/receipts/capabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Charge Receipt Capabilities */
+        get: operations["charge_receipt_capabilities_billing_receipts_capabilities_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/budget/delete": {
         parameters: {
             query?: never;
@@ -28558,6 +28575,19 @@ export interface components {
             /** User Id */
             user_id: string;
         };
+        /** ChargeReceiptCapabilities */
+        ChargeReceiptCapabilities: {
+            /** Gateway Scope */
+            gateway_scope: string | null;
+            /** Required */
+            required: boolean;
+            /**
+             * Version
+             * @default 1
+             * @constant
+             */
+            version: 1;
+        };
         /** ChatCompletionAnnotation */
         ChatCompletionAnnotation: {
             /**
@@ -53658,6 +53688,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    charge_receipt_capabilities_billing_receipts_capabilities_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChargeReceiptCapabilities"];
                 };
             };
         };
