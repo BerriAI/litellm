@@ -4,13 +4,14 @@ from typing import Final, cast  # noqa: TID251  # narrows legacy callable signat
 import pytest
 
 import litellm
+from litellm.caching.caching import Cache
 from litellm.chat_completions import dispatch
 from litellm.chat_completions.dispatch import (
     _ADISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch
     _DISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch
 )
 from litellm.rust_bridge.bindings import NativeBinding
-from litellm.rust_bridge.catalog import Route, RouteRule, Rules
+from litellm.rust_bridge.catalog import Feature, Route, RouteRule, Rules
 from litellm.rust_bridge.chat_completions.entrypoints import (
     NATIVE_ACOMPLETION,
     NativeAcompletion,
@@ -225,3 +226,44 @@ async def test_acompletion_marker_binds_positionals_by_the_sync_signature() -> N
     finally:
         NATIVE_ACOMPLETION.reset()
     assert [(request.resolved["timeout"], request.resolved["functions"]) for request in captured] == [(30.0, None)]
+
+
+@pytest.mark.parametrize(
+    ("feature", "kwargs", "settings"),
+    (
+        (Feature.MOCK_RESPONSE, {"mock_response": "hi"}, {}),
+        (Feature.CALLER_CLIENT, {"client": object()}, {}),
+        (Feature.TIMEOUT_VARIANTS, {"request_timeout": 5}, {}),
+        (Feature.TLS_POLICY, {}, {"ssl_security_level": "DEFAULT@SECLEVEL=1"}),
+        (Feature.RESPONSE_CACHE, {}, {"cache": Cache()}),
+    ),
+)
+def test_each_detected_feature_reaches_its_rule(
+    monkeypatch: pytest.MonkeyPatch, feature: Feature, kwargs: Mapping[str, object], settings: Mapping[str, object]
+) -> None:
+    rules: Final = (
+        RouteRule(Route.CHAT_COMPLETIONS, Rollout.PYTHON_ONLY, features=frozenset({feature})),
+        RouteRule(Route.CHAT_COMPLETIONS, Rollout.RUST_REQUIRED),
+    )
+    python_result: Final = ModelResponse()
+    native_result: Final = ModelResponse()
+
+    def served(call_kwargs: Mapping[str, object]) -> object:
+        return _DISPATCH.run(
+            (),
+            {"model": "anthropic/claude-sonnet-4-5", "messages": MESSAGES, **call_kwargs},
+            python=lambda *call_args, **python_kwargs: python_result,
+            binding=completion_binding(lambda request: native_result),
+            native=native_call_hook,
+            rules=rules,
+        )
+
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "ssl_security_level", None)
+    monkeypatch.setattr(litellm, "cache", None)
+    for name in ("SSL_SECURITY_LEVEL", "SSL_ECDH_CURVE"):
+        monkeypatch.delenv(name, raising=False)
+    assert served({}) is native_result
+    for name, value in settings.items():
+        monkeypatch.setattr(litellm, name, value)
+    assert served(kwargs) is python_result
