@@ -74,8 +74,8 @@ proxy = [
     "boto3>=1.43.1,<2.0",
     "azure-identity>=1.25.2,<2.0",
     "azure-storage-blob>=12.28.0,<13.0",
-    "mcp>=2.2.0,<3",
-    "httpx2>=2.5.0,<3",
+    "mcp>=2.3.0,<3",
+    "httpx2>=2.10.0,<3",
     "pydantic>=2.12.0,<3",
     "litellm-proxy-extras==0.4.109",
     "litellm-enterprise==0.1.77",
@@ -123,7 +123,7 @@ utils = [
     "numpydoc>=1.8.0,<2.0",
 ]
 caching = ["diskcache>=5.6.3,<6.0"]
-mcp = ["mcp>=2.2.0,<3", "httpx2>=2.5.0,<3", "pydantic>=2.12.0,<3"]
+mcp = ["mcp>=2.3.0,<3", "httpx2>=2.10.0,<3", "pydantic>=2.12.0,<3"]
 # Driver for the MongoDB Atlas vector store; Atlas Vector Search has no HTTP query API.
 # The floor is 4.9 because that is the release AsyncMongoClient landed in.
 # SAML SSO for the admin UI. python3-saml pulls in xmlsec/lxml, whose wheels
@@ -241,7 +241,7 @@ e2e-dev = [
     "locust==2.45.0",
     "anthropic==0.84.0",
     "psutil==7.2.2",
-    "mcp>=2.2.0,<3",
+    "mcp>=2.3.0,<3",
 ]
 admin-mcp = [
     "litellm-admin-mcp @ https://github.com/BerriAI/liteadmin-mcp/archive/d35ec9c19c117d4c50cc1eccf6ce1296aac25a1a.tar.gz#sha256=86b930f6706fb2da10d53d1798ee7fd14e44fb0afdef0da122cf0e6bb88fa2c3 ; python_version >= '3.12'",
@@ -300,7 +300,7 @@ healthcheck = [
 benchmarks = [
     "pytest==9.0.3",
     "pytest-codspeed==4.3.0",
-    "mcp>=2.2.0,<3",
+    "mcp>=2.3.0,<3",
     "a2a-sdk==1.1.0",
 ]
 
@@ -360,6 +360,8 @@ override-dependencies = [
     # a2a-sdk 1.x requires packaging>=24.0; lunary 1.4.x still caps at <24.0.
     "packaging>=24.0",
     "cryptography>=50.0.0,<51.0",
+    # litellm-admin-mcp pins mcp==2.2.0, which lacks max_sse_event_size
+    "mcp>=2.3.0,<3",
 ]
 default-groups = ["dev"]
 required-version = ">=0.10.9"
