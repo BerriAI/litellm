@@ -147,6 +147,18 @@ async def test_pre_call_hook_records_secrets_found_only_in_tool_payloads():
     assert recorded["masked_entity_count"] == {"AWS Access Key": 1}
 
 
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    (
+        ({"password": ["hunter2brahms9x", "safe"]}, {"password": ["[REDACTED]", "safe"]}),
+        (["a8f5f167f44f4964e6c998dee827110c", "safe"], ["[REDACTED]", "safe"]),
+    ),
+    ids=("credential-key-over-list", "unkeyed-high-entropy"),
+)
+def test_list_items_are_scanned_beside_their_parent_key_or_quoted(payload, expected):
+    assert _guardrail().redact_tool_payload(payload) == expected
+
+
 def test_long_key_over_a_list_is_scanned_in_bounded_time():
     payload = {"k" * 10_000: ["v"] * 1000 + [f"AWS_ACCESS_KEY_ID={AWS_KEY}"]}
     started = time.perf_counter()

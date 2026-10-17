@@ -214,6 +214,8 @@ def test_read_only_vendors_receive_tool_and_system_text(
 
 
 def test_moderation_flag_in_tool_result_blocks(rig: Rig) -> None:
+    rig.wire.drain()
     response: Final = rig.proxy.request("POST", "/v1/messages", _messages(FLAGGED))
     assert response.status_code == 403, response.text
     assert "Violated content safety policy" in response.text
+    assert _provider_calls(rig.wire.drain()) == ()

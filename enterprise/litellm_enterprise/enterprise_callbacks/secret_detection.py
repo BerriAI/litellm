@@ -454,6 +454,8 @@ _CONFIG_SECTION: Final = "litellm-prompt"
 
 _JSON_STRING: Final = TypeAdapter(str)
 
+_KEY_CONTEXT: Final = 64
+
 _ASSIGNMENT_LINE: Final = re.compile(r"[^\s\[#;:=][^:=]*[:=]")
 
 _SHELL_ASSIGNMENT: Final = re.compile(r"(?P<key>[^\s\[#;:=](?:[^:=]*[^\s:=])?)=(?P<value>\S+)")
@@ -546,7 +548,7 @@ def _json_unescaped(value: str) -> str:
 
 def _json_line(key: str | None, text: str) -> str:
     value: Final = json.dumps(text, ensure_ascii=False)
-    return value if key is None else f"{json.dumps(key, ensure_ascii=False)}: {value}"
+    return value if key is None else f"{json.dumps(key[-_KEY_CONTEXT:], ensure_ascii=False)}: {value}"
 
 
 def _value_in_texts(value: str, texts: Sequence[str]) -> str | None:

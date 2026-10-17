@@ -98,12 +98,12 @@ def _tool_arguments(arguments: str) -> JsonValue:
             parse_constant=_finite_number,
         )
     )
-    json.dumps(parsed, ensure_ascii=False).encode("utf-8")
+    json.dumps(parsed, ensure_ascii=False).encode("utf-8")  # raises for lone surrogates, which stay raw text
     return parsed
 
 
 def iter_tool_json_fields(value: object) -> Iterator[tuple[str | None, str]]:
-    """Yield ``(key, text)`` for every non-empty string leaf; the key is None for list items and a bare root."""
+    """Yield ``(nearest key, text)`` for every non-empty string leaf; list items take their parent's key."""
     pending: Final[list[tuple[object, str | None]]] = [(value, None)]  # mutable-ok: owned DFS stack avoids recursion
     while pending:
         current, key = pending.pop()
@@ -120,7 +120,7 @@ def iter_tool_json_fields(value: object) -> Iterator[tuple[str | None, str]]:
         items = _object_list(current)
         if items is None:
             raise ValueError("Invalid tool JSON payload")
-        pending.extend((child, None) for child in reversed(items))
+        pending.extend((child, key) for child in reversed(items))
 
 
 def iter_tool_json_text(value: object) -> Iterator[str]:
