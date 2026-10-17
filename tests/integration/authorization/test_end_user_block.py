@@ -133,12 +133,13 @@ def test_block_route_marks_the_customer_blocked_and_update_unblocks(gateway: Gat
         )
 
 
-def _assert_unseen_customer_is_blocked(gateway: Gateway, block_route: str) -> None:
-    with gateway.scenario() as scenario:
+def _assert_unseen_customer_is_blocked(gateway: Gateway, tmp_path: Path, block_route: str) -> None:
+    with ExitStack() as stack:
+        proxy: Final = _one_callback_proxy(gateway, tmp_path, stack)
         end_user: Final = f"integration-end-user-{uuid.uuid4().hex}"
-        scenario.cleanups.callback(gateway.request, "POST", "/customer/delete", {"user_ids": [end_user]})
+        stack.callback(proxy.request, "POST", "/customer/delete", {"user_ids": [end_user]})
 
-        blocked: Final = gateway.request("POST", block_route, {"user_ids": [end_user]})
+        blocked: Final = proxy.request("POST", block_route, {"user_ids": [end_user]})
         assert blocked.status_code == 200, blocked.text
         blocked_response: Final = _BlockUsersResponse.model_validate_json(blocked.content)
         assert blocked_response == _BlockUsersResponse(
@@ -147,26 +148,26 @@ def _assert_unseen_customer_is_blocked(gateway: Gateway, block_route: str) -> No
         assert eventually(lambda: _blocked_row(end_user), lambda value: value == [{"blocked": True}], seconds=15) == [
             {"blocked": True}
         ]
-        info: Final = gateway.request("GET", "/customer/info", params={"end_user_id": end_user})
+        info: Final = proxy.request("GET", "/customer/info", params={"end_user_id": end_user})
         assert info.status_code == 200, info.text
         assert _BlockedCustomerInfo.model_validate(info.json()).blocked is True
 
-        updated: Final = gateway.request("POST", "/customer/update", {"user_id": end_user, "blocked": False})
+        updated: Final = proxy.request("POST", "/customer/update", {"user_id": end_user, "blocked": False})
         assert updated.status_code == 200, updated.text
         assert eventually(lambda: _blocked_row(end_user), lambda value: value == [{"blocked": False}], seconds=15) == [
             {"blocked": False}
         ]
-        info_after_update: Final = gateway.request("GET", "/customer/info", params={"end_user_id": end_user})
+        info_after_update: Final = proxy.request("GET", "/customer/info", params={"end_user_id": end_user})
         assert info_after_update.status_code == 200, info_after_update.text
         assert _BlockedCustomerInfo.model_validate(info_after_update.json()).blocked is False
 
 
-def test_end_user_block_route_creates_and_blocks_an_unseen_customer(gateway: Gateway) -> None:
-    _assert_unseen_customer_is_blocked(gateway, "/end_user/block")
+def test_end_user_block_route_creates_and_blocks_an_unseen_customer(gateway: Gateway, tmp_path: Path) -> None:
+    _assert_unseen_customer_is_blocked(gateway, tmp_path, "/end_user/block")
 
 
-def test_customer_block_route_creates_and_blocks_an_unseen_customer(gateway: Gateway) -> None:
-    _assert_unseen_customer_is_blocked(gateway, "/customer/block")
+def test_customer_block_route_creates_and_blocks_an_unseen_customer(gateway: Gateway, tmp_path: Path) -> None:
+    _assert_unseen_customer_is_blocked(gateway, tmp_path, "/customer/block")
 
 
 def test_listed_end_user_is_refused_and_unblock_restores_serving(gateway: Gateway, tmp_path: Path) -> None:
@@ -206,7 +207,7 @@ def test_listed_end_user_is_refused_and_unblock_restores_serving(gateway: Gatewa
 def test_blocked_end_user_is_refused_on_every_proxy_and_unblock_restores(
     gateway: Gateway, tmp_path: Path, block_route: str
 ) -> None:
-    pytest.skip("BUG: blocked end-user chat requests return HTTP 200 instead of HTTP 400")
+    pytest.skip("BUG: another proxy keeps a customer's previous block state for up to 60 seconds after unblock")
     with (
         ExitStack() as stack,
         httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
@@ -286,7 +287,7 @@ def test_blocked_end_user_is_refused_on_every_proxy_and_unblock_restores(
             assert _observed(upstream) == expected_observations
 
 
-def test_unblock_route_requires_the_blocked_user_check_callback(gateway: Gateway, tmp_path: Path) -> None:
+def test_block_and_unblock_require_the_blocked_user_check_callback(gateway: Gateway, tmp_path: Path) -> None:
     with ExitStack() as stack:
         callback_proxy: Final = _one_callback_proxy(gateway, tmp_path, stack)
         end_user: Final = f"integration-end-user-{uuid.uuid4().hex}"
@@ -304,21 +305,26 @@ def test_unblock_route_requires_the_blocked_user_check_callback(gateway: Gateway
         )
         assert _blocked_row(end_user) == [{"blocked": True}]
 
+        unseen_user: Final = f"integration-end-user-{uuid.uuid4().hex}"
+        shared_block: Final = gateway.request("POST", "/customer/block", {"user_ids": [unseen_user]})
+        assert shared_block.status_code == 400, shared_block.text
+        assert shared_block.json() == shared.json(), shared_block.text
+        assert _blocked_row(unseen_user) == []
+
         callback_response: Final = callback_proxy.request("POST", "/customer/unblock", {"user_ids": [end_user]})
-        assert callback_response.status_code == 400, callback_response.text
-        assert callback_response.json() == {
-            "detail": {"error": "Blocked user check was never set. This call has no effect."}
-        }, callback_response.text
-        assert _blocked_row(end_user) == [{"blocked": True}]
+        assert callback_response.status_code == 200, callback_response.text
+        assert callback_response.json() == {"blocked_users": []}, callback_response.text
+        assert _blocked_row(end_user) == [{"blocked": False}]
 
 
-def test_block_route_returns_the_blocked_records(gateway: Gateway) -> None:
+def test_block_route_returns_the_blocked_records(gateway: Gateway, tmp_path: Path) -> None:
     end_user: Final = f"integration-end-user-{uuid.uuid4().hex}"
-    with gateway.scenario() as scenario:
-        created: Final = gateway.request("POST", "/customer/new", {"user_id": end_user})
+    with ExitStack() as stack:
+        proxy: Final = _one_callback_proxy(gateway, tmp_path, stack)
+        created: Final = proxy.request("POST", "/customer/new", {"user_id": end_user})
         assert created.status_code == 200, created.text
-        scenario.cleanups.callback(gateway.request, "POST", "/customer/delete", {"user_ids": [end_user]})
-        blocked: Final = gateway.request("POST", "/customer/block", {"user_ids": [end_user]})
+        stack.callback(proxy.request, "POST", "/customer/delete", {"user_ids": [end_user]})
+        blocked: Final = proxy.request("POST", "/customer/block", {"user_ids": [end_user]})
         assert blocked.status_code == 200, blocked.text
         payload: Final = object_value(blocked.json())
         blocked_users: Final = payload["blocked_users"]
