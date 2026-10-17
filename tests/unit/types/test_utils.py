@@ -1,7 +1,17 @@
+from typing import Final
+
 import pytest
 
+import litellm
+from litellm import utils
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import validate_excluded_services_value
-from litellm.types.utils import CAPTURE_MESSAGE_CONTENT_VALUES, CaptureMessageContent, captures_span_content
+from litellm.types.utils import (
+    CAPTURE_MESSAGE_CONTENT_VALUES,
+    CallTypes,
+    CaptureMessageContent,
+    captures_span_content,
+)
 
 
 @pytest.mark.parametrize("value", ["", "  ", "auth", "none,redis", "redis,", ",postgres"])
@@ -45,3 +55,37 @@ def test_capture_message_content_constructor_accepts_any_string() -> None:
 )
 def test_captures_span_content(mode: str | None, captures: bool) -> None:
     assert captures_span_content(mode) is captures
+
+
+@pytest.mark.parametrize(
+    "call_type",
+    [
+        "get_responses",
+        "aget_responses",
+        "delete_responses",
+        "adelete_responses",
+        "cancel_responses",
+        "acancel_responses",
+        "compact_responses",
+        "acompact_responses",
+    ],
+)
+@pytest.mark.asyncio
+async def test_async_pre_call_deployment_hook_passes_responses_call_type(
+    call_type: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class RecordingLogger(CustomLogger):
+        received_call_type: CallTypes | None = None
+
+        async def async_pre_call_deployment_hook(
+            self, kwargs: dict[str, object], call_type: CallTypes | None
+        ) -> dict[str, object] | None:
+            self.received_call_type = call_type
+            return None
+
+    callback: Final = RecordingLogger()
+    monkeypatch.setattr(litellm, "callbacks", [callback])
+
+    await utils.async_pre_call_deployment_hook({}, call_type)
+
+    assert callback.received_call_type == call_type
