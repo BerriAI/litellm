@@ -886,9 +886,12 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
         for seq, run in reversed(tuple(enumerate(runs, start=1))):
             original = text[run.start : run.end]
-            replacement = f"<{run.entity_type}_{seq}>"
-            if pii_tokens.get(replacement, original) != original:
-                replacement = f"<{run.entity_type}_{next(spare_numbers)}>"
+            numbered = f"<{run.entity_type}_{seq}>"
+            replacement = (
+                numbered
+                if pii_tokens.get(numbered, original) == original
+                else f"<{run.entity_type}_{next(spare_numbers)}>"
+            )
             pii_tokens[replacement] = original
             new_text = new_text[: run.start] + replacement + new_text[run.end :]
             masked_entity_count[run.entity_type] = masked_entity_count.get(run.entity_type, 0) + 1

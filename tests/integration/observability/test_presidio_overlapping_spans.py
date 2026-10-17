@@ -56,18 +56,30 @@ def _detections(text: str, value: str) -> Iterator[dict[str, str | int | float]]
             yield {"entity_type": entity, "start": match.start() + start, "end": match.start() + end, "score": score}
 
 
+def _findings(text: str) -> list[dict[str, str | int | float]]:
+    findings: Final = chain.from_iterable(_detections(text, value) for value in DETECTIONS)
+    return sorted(findings, key=lambda item: -item["score"])
+
+
+def _spans(results: list[dict[str, str | int | float]]) -> list[tuple[str | int | float, ...]]:
+    return sorted(tuple(result[key] for key in ("entity_type", "start", "end", "score")) for result in results)
+
+
 def _analyze(request: Request) -> Reply:
     assert request.target == "/analyze", request.target
-    text: Final = json.loads(request.body)["text"]
-    findings: Final = chain.from_iterable(_detections(text, value) for value in DETECTIONS)
-    return Reply(body=json.dumps(sorted(findings, key=lambda item: -item["score"])).encode())
+    return Reply(body=json.dumps(_findings(json.loads(request.body)["text"])).encode())
 
 
 def _anonymize(request: Request) -> Reply:
     assert request.target == "/anonymize", request.target
-    text: Final = json.loads(request.body)["text"]
+    body: Final = json.loads(request.body)
+    text: Final = body["text"]
     if text not in ANONYMIZED:
         return Reply(status=500, body=json.dumps({"error": f"no recorded anonymization for {text!r}"}).encode())
+    if _spans(body["analyzer_results"]) != _spans(_findings(text)):
+        return Reply(
+            status=500, body=json.dumps({"error": f"analyzer_results differ from the detections for {text!r}"}).encode()
+        )
     return Reply(body=json.dumps({"text": ANONYMIZED[text], "items": []}).encode())
 
 
