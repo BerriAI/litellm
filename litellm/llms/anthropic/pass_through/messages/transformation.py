@@ -4,6 +4,7 @@ from typing import ClassVar, Final
 import httpx
 
 from litellm._logging import verbose_logger
+from litellm.anthropic_beta_headers_manager import get_unsupported_headers, is_beta_header_supported
 from litellm.exceptions import AuthenticationError
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.anthropic_messages.transformation import (
@@ -109,6 +110,18 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
     def should_filter_anthropic_beta_headers(self) -> bool:
         return self._resolved_provider != "anthropic"
 
+    def supports_safeguards(self) -> bool:
+        """
+        The ``safeguards`` body field and the dangerous-tool-use beta travel together: a
+        platform whose beta header map column marks the beta unsupported gets neither, so the
+        turn stays a 200 without a verdict instead of a 400 on an unknown field. A platform the
+        map does not list keeps the body field, and the beta goes with it only where that
+        platform's config forwards betas unfiltered.
+        """
+        return ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value not in get_unsupported_headers(
+            self._resolved_provider
+        )
+
     def _remove_scope_from_cache_control(self, anthropic_messages_request: dict) -> None:
         """
         Remove `scope` field from cache_control blocks.
@@ -207,7 +220,8 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         ids were found without tool_result blocks immediately after") while
         consecutive user turns merge upstream.
         Billing-header system blocks are stripped from the top-level ``system``
-        field regardless of whether anything was hoisted.
+        field when ``should_strip_billing_metadata`` says so, regardless of
+        whether anything was hoisted.
 
         Subclasses whose upstream rejects the role opt in by calling this from
         their ``transform_anthropic_messages_request``; the first-party Anthropic
@@ -241,7 +255,11 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             )
             for block in as_system_content_blocks(source)
         ]
-        filtered_system: Final = self._filter_billing_headers_from_system(system_content)
+        filtered_system: Final = (
+            self._filter_billing_headers_from_system(system_content)
+            if self.should_strip_billing_metadata()
+            else system_content
+        )
         if filtered_system:
             anthropic_messages_request["system"] = filtered_system
         else:
@@ -591,6 +609,9 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                 status_code=400,
             )
 
+        if "safeguards" in anthropic_messages_optional_request_params and not self.supports_safeguards():
+            anthropic_messages_optional_request_params.pop("safeguards")  # pyright: ignore[reportUnknownMemberType]  # the request params arrive as a bare dict
+
         self._translate_reasoning_effort_to_anthropic(
             model=model,
             optional_params=anthropic_messages_optional_request_params,
@@ -685,7 +706,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         httpx_response: httpx.Response,
         request_body: dict,
         litellm_logging_obj: LiteLLMLoggingObj,
-    ) -> AsyncIterator:
+    ) -> AsyncIterator[bytes]:
         """Helper function to handle Anthropic streaming responses using the existing logging handlers"""
         from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
             BaseAnthropicMessagesStreamingIterator,
@@ -702,12 +723,13 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             litellm_logging_obj=litellm_logging_obj,
         )
 
-    @staticmethod
     def _update_headers_with_anthropic_beta(
+        self,
         headers: dict,
         optional_params: dict,
         custom_llm_provider: str = "anthropic",
         messages: Sequence[object] = (),
+        beta_map_provider: str | None = None,
     ) -> dict:
         """
         Auto-inject anthropic-beta headers based on features used.
@@ -724,8 +746,9 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             optional_params: Optional parameters including tools, context_management, output_format, speed
             custom_llm_provider: Provider name for looking up correct tool search header
             messages: Request messages, scanned for per-message output_config
+            beta_map_provider: Provider whose beta map column gates safeguards, defaults to custom_llm_provider
         """
-        beta_values: Final[set] = set()
+        beta_values: Final[set[str]] = set()
 
         existing_beta: Final = tuple(
             piece.strip()
@@ -775,6 +798,12 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         if optional_params.get("speed") == "fast":
             beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.FAST_MODE_2026_02_01.value)
 
+        if optional_params.get("safeguards") is not None and is_beta_header_supported(
+            ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value,
+            beta_map_provider or custom_llm_provider,
+        ):
+            beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value)
+
         if messages_carry_output_config(messages):
             beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.PER_TURN_CONTROL_2026_07_01.value)
 
@@ -796,9 +825,16 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             else ()
         )
         all_beta_values: Final = beta_values.union(thinking_display_betas, tool_change_betas)
+        dangerous_tool_use: Final = ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value
+        forwarded_beta_values: Final = (  # pyright: ignore[reportUnknownVariableType]  # derived from the bare beta set
+            all_beta_values - {dangerous_tool_use}
+            if dangerous_tool_use in all_beta_values and not self.supports_safeguards()
+            else all_beta_values
+        )
 
         if not all_beta_values:
             return headers
         merged: Final = {key: value for key, value in headers.items() if key.lower() != "anthropic-beta"}
-        merged["anthropic-beta"] = ",".join(sorted(all_beta_values))
+        if forwarded_beta_values:
+            merged["anthropic-beta"] = ",".join(sorted(forwarded_beta_values))
         return merged

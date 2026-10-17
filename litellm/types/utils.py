@@ -4528,6 +4528,7 @@ class HttpHandlerRequestFields(TypedDict, total=False):
 class ProviderSpecificHeader(TypedDict):
     custom_llm_provider: str
     extra_headers: dict
+    native_anthropic_messages_only: NotRequired[ReadOnly[bool]]
 
 
 class SelectTokenizerResponse(TypedDict):

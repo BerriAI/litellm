@@ -9185,6 +9185,15 @@ class ProviderConfigManager:
                 )
 
                 return AzureAnthropicMessagesConfig()
+        elif litellm.LlmProviders.DATABRICKS == provider:
+            from litellm.llms.databricks.common_utils import DatabricksBase
+
+            if DatabricksBase.serves_native_anthropic_messages(model):
+                from litellm.llms.databricks.messages.transformation import (
+                    DatabricksAnthropicMessagesConfig,
+                )
+
+                return DatabricksAnthropicMessagesConfig()
         elif litellm.LlmProviders.MINIMAX == provider:
             from litellm.llms.minimax.messages.transformation import (
                 MinimaxMessagesConfig,

@@ -132,7 +132,7 @@ def _deployment_supports_cache_control_ttl(model_info: object) -> bool:
 
 
 def _native_messages_config(
-    model: str, custom_llm_provider: str | None, model_info: object
+    model: str, custom_llm_provider: str | None, model_info: object, api_base: str | None
 ) -> BaseAnthropicMessagesConfig | None:
     provider_config: Final = (
         ProviderConfigManager.get_provider_anthropic_messages_config(
@@ -142,8 +142,11 @@ def _native_messages_config(
         if custom_llm_provider is not None and custom_llm_provider in [provider.value for provider in LlmProviders]
         else None
     )
-    if provider_config is not None or not _deployment_passes_through_anthropic_messages(model_info):
-        return provider_config
+    native_config: Final = (
+        provider_config if provider_config is not None and provider_config.serves_api_base(model, api_base) else None
+    )
+    if native_config is not None or not _deployment_passes_through_anthropic_messages(model_info):
+        return native_config
     from litellm.llms.openai_like.messages.transformation import (
         OpenAILikeAnthropicMessagesConfig,
     )
@@ -151,12 +154,22 @@ def _native_messages_config(
     return OpenAILikeAnthropicMessagesConfig(cache_control_ttl=_deployment_supports_cache_control_ttl(model_info))
 
 
-def proxy_classifies_tool_uses(model: str, custom_llm_provider: str | None, kwargs: Mapping[str, object]) -> bool:
-    """Whether this proxy, rather than the upstream, answers ``safeguards`` for a request routed this way."""
-    safeguards: Final = kwargs.get("safeguards")
-    if _native_messages_config(model, custom_llm_provider, kwargs.get("model_info")) is not None:
+def _proxy_classifies(model: str, safeguards: object, native_config: BaseAnthropicMessagesConfig | None) -> bool:
+    if native_config is not None and native_config.supports_safeguards():
         return native_route_classifies(model, safeguards)
     return requested_dangerous_tool_use(safeguards) is not None and read_classifier_model_setting() is not None
+
+
+def proxy_classifies_tool_uses(model: str, custom_llm_provider: str | None, kwargs: Mapping[str, object]) -> bool:
+    """Whether this proxy, rather than the upstream, answers ``safeguards`` for a request routed this way."""
+    api_base: Final = kwargs.get("api_base")
+    return _proxy_classifies(
+        model,
+        kwargs.get("safeguards"),
+        _native_messages_config(
+            model, custom_llm_provider, kwargs.get("model_info"), api_base if isinstance(api_base, str) else None
+        ),
+    )
 
 
 ####### ENVIRONMENT VARIABLES ###################
@@ -601,7 +614,7 @@ def anthropic_messages_handler(
             )
 
     anthropic_messages_provider_config: Final = _native_messages_config(
-        model, custom_llm_provider, kwargs.get("model_info")
+        model, custom_llm_provider, kwargs.get("model_info"), api_base
     )
     if anthropic_messages_provider_config is None:
         # Route to Responses API for OpenAI / Azure, chat/completions for everything else.
@@ -686,7 +699,8 @@ def anthropic_messages_handler(
     )
     safeguards_evaluator: Final = (
         request_safeguards_evaluator(safeguard_kwargs, _SAFEGUARD_MESSAGES.validate_python(messages))
-        if safeguard_kwargs is not None and native_route_classifies(model, safeguard_kwargs.get("safeguards"))
+        if safeguard_kwargs is not None
+        and _proxy_classifies(model, safeguard_kwargs.get("safeguards"), anthropic_messages_provider_config)
         else None
     )
     native_response: Final = base_llm_http_handler.anthropic_messages_handler(
