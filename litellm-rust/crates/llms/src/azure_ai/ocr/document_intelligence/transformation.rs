@@ -4,6 +4,7 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use litellm_auth::{InputSource, Sourced};
 use litellm_auth_azure::{AzureAuthInputs, SECRET_NAMES as AZURE_AUTH_SECRET_NAMES};
 use litellm_core_utils::{call_arguments::CallArguments, url_utils::ApiUrl};
+use litellm_host::interceptors::RawResponse;
 use litellm_llms_types::serde_compat::{FiniteF64, LaxI64};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
@@ -443,13 +444,16 @@ async fn read_operation_response(
     native: bool,
     hooks: &dyn CallHooks<Error>,
 ) -> Result<DecodedOcrResponse<AzureDocumentIntelligenceOperation>, Error> {
+    let response_headers = litellm_http::request::response_headers(response.headers());
     if response.status() != reqwest::StatusCode::ACCEPTED {
         let bytes = crate::base_llm::ocr::handler::read_response_bytes(
             response,
             connection.max_response_bytes,
         )
         .await?;
-        hooks.response_received(&bytes).await?;
+        hooks
+            .response_received(RawResponse::from_bytes(response_headers, &bytes))
+            .await?;
         return decode_response(&bytes, native);
     }
     let location = response
@@ -469,7 +473,9 @@ async fn read_operation_response(
     let bytes =
         crate::base_llm::ocr::handler::read_response_bytes(response, connection.max_response_bytes)
             .await?;
-    hooks.response_received(&bytes).await?;
+    hooks
+        .response_received(RawResponse::from_bytes(response_headers, &bytes))
+        .await?;
     poll_operation(http_client, operation, headers, connection, native, hooks).await
 }
 
@@ -513,6 +519,7 @@ async fn poll_operation(
             .and_then(|value| value.parse::<u64>().ok())
             .unwrap_or(OCR_POLL_RETRY_SECS)
             .max(1);
+        let poll_headers = litellm_http::request::response_headers(response.headers());
         let decoded = tokio::time::timeout_at(
             deadline,
             read_json_response::<AzureDocumentIntelligenceOperation>(
@@ -525,7 +532,12 @@ async fn poll_operation(
         .map_err(|_| Error::PollTimeout)??;
         match &decoded.data.status {
             Some(OperationStatus::Succeeded) => {
-                hooks.response_received(decoded.text.as_bytes()).await?;
+                hooks
+                    .response_received(RawResponse::from_bytes(
+                        poll_headers,
+                        decoded.text.as_bytes(),
+                    ))
+                    .await?;
                 return Ok(decoded);
             }
             Some(OperationStatus::Running | OperationStatus::NotStarted) => {

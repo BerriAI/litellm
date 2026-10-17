@@ -36,6 +36,7 @@ pub trait LegacyCallbacks {
         &self,
         py: Python<'_>,
         original_response: &str,
+        response_headers: &[(String, String)],
         api_key: Option<&str>,
         body: Option<&Py<PyDict>>,
         headers: Option<&Py<PyDict>>,
@@ -149,6 +150,7 @@ impl LegacyCallbacks for PythonLogger {
         &self,
         py: Python<'_>,
         original_response: &str,
+        response_headers: &[(String, String)],
         api_key: Option<&str>,
         body: Option<&Py<PyDict>>,
         headers: Option<&Py<PyDict>>,
@@ -158,7 +160,13 @@ impl LegacyCallbacks for PythonLogger {
         additional.set_item("headers", headers)?;
         Logging::PostCall.call(
             py,
-            (self.object(py), original_response, api_key, &additional),
+            (
+                self.object(py),
+                original_response,
+                response_headers.to_vec(),
+                api_key,
+                &additional,
+            ),
         )?;
         Ok(())
     }

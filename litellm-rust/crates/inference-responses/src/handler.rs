@@ -1,9 +1,10 @@
-use litellm_host::lifecycle::ExecutionEvent;
 use litellm_host::observation::ObservationSender;
 use std::time::Duration;
 
 use futures_util::StreamExt;
-use litellm_host::interceptors::{Interceptors, RawResponse, WireRequest};
+use litellm_host::interceptors::{
+    Interceptors, RawResponse, WireRequest, report_provider_response,
+};
 use litellm_llms::base_llm::auth::{Authenticated, resolve_auth};
 
 use super::{
@@ -74,13 +75,7 @@ pub(super) async fn execute(
                 .into());
             }
             if stream {
-                let headers = response
-                    .headers()
-                    .iter()
-                    .filter_map(|(name, value)| {
-                        Some((name.to_string(), value.to_str().ok()?.to_owned()))
-                    })
-                    .collect();
+                let headers = litellm_http::request::response_headers(response.headers());
                 let chunks = response
                     .bytes_stream()
                     .map(|chunk| chunk.map_err(network))
@@ -90,15 +85,13 @@ pub(super) async fn execute(
                     chunks,
                 });
             }
+            let headers = litellm_http::request::response_headers(response.headers());
             let body = response.text().await.map_err(network)?;
-            let raw = RawResponse { body: body.clone() };
-            if let Some(observers) = observers {
-                observers.emit(litellm_host::lifecycle::CallEvent::Execution(
-                    ExecutionEvent::ProviderResponseReceived { raw: raw.clone() },
-                ));
-            }
-            interceptors
-                .after_provider_response(raw)
+            let raw = RawResponse {
+                headers,
+                body: body.clone(),
+            };
+            report_provider_response(observers, &interceptors, raw)
                 .await
                 .map_err(Error::post_call)?;
             let value = serde_json::from_str(&body)

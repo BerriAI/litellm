@@ -1,6 +1,6 @@
 use litellm_cache_response::CachePolicy;
 use litellm_host::{
-    interceptors::{ExecutionFacts, Interceptors, RawResponse},
+    interceptors::{ExecutionFacts, Interceptors, RawResponse, report_provider_response},
     lifecycle::{CallEvent, ExecutionEvent},
     observation::ObservationSender,
 };
@@ -31,17 +31,8 @@ impl<'a, I: Interceptors<RouteError>> CallContext<'a, I> {
         self.interceptors.result_ready(facts).await
     }
 
-    pub async fn response_received(&self, body: &str) -> Result<(), RouteError> {
-        let raw = RawResponse {
-            body: body.to_owned(),
-        };
-        if let Some(observers) = &self.observers {
-            observers.emit(CallEvent::Execution(
-                ExecutionEvent::ProviderResponseReceived { raw: raw.clone() },
-            ));
-        }
-        self.interceptors
-            .after_provider_response(raw)
+    pub async fn response_received(&self, raw: RawResponse) -> Result<(), RouteError> {
+        report_provider_response(self.observers.as_ref(), &self.interceptors, raw)
             .await
             .map_err(RouteError::post_call)
     }

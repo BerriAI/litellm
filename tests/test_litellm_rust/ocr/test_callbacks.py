@@ -4,6 +4,7 @@ import gc
 import queue
 import threading
 from collections.abc import Mapping
+from dataclasses import replace
 from types import MappingProxyType
 from typing import Final
 
@@ -594,3 +595,14 @@ async def test_native_azure_ocr_releases_token_provider_after_cancellation(
     await asyncio.sleep(0)
     gc.collect()
     assert reference() is None
+
+
+@pytest.mark.asyncio
+async def test_provider_response_headers_reach_logging(server: RecordingServer) -> None:
+    server.default_response = replace(server.default_response, headers={"request-id": "req_native"})
+    recorder: Final = RecordingLogger()
+
+    await call(server, True, callbacks=[recorder])
+
+    success: Final = await recorder.wait_for_async("async_log_success_event")
+    assert success[0].kwargs["response_headers"]["request-id"] == "req_native"

@@ -465,7 +465,10 @@ pub fn success_machine() -> MachineFactory {
                     .before_provider_request(wire(), context())
                     .await?;
                 host.interceptors
-                    .after_provider_response(RawResponse { body: "raw".into() })
+                    .after_provider_response(RawResponse {
+                        headers: Vec::new(),
+                        body: "raw".into(),
+                    })
                     .await?;
                 Ok(format!("{projected}|{signed}|{}", wire.url))
             })

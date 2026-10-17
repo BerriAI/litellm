@@ -2,7 +2,9 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use futures_util::{StreamExt, TryStreamExt, stream::BoxStream};
-use litellm_host::interceptors::{Interceptors, ProviderIdentity, RequestContext, WireRequest};
+use litellm_host::interceptors::{
+    Interceptors, ProviderIdentity, RawResponse, RequestContext, WireRequest,
+};
 use litellm_http::transport::Error as TransportError;
 use litellm_llms::base_llm::{
     auth::{Authenticated, resolve_auth},
@@ -137,9 +139,15 @@ impl MessagesRoute {
                 provider_name,
             ));
         }
+        let headers = litellm_http::request::response_headers(response.headers());
         let text = response.text().await.map_err(network)?;
         log_response_body(&text);
-        context.response_received(&text).await?;
+        context
+            .response_received(RawResponse {
+                headers,
+                body: text.clone(),
+            })
+            .await?;
         decode_response(config, &identity.model, &text)
             .map(|message| MessagesCallResponse::Complete(Box::new(message)))
     }
@@ -209,11 +217,7 @@ fn streaming_response(
     decoder: Option<StreamDecoder>,
     provider: &'static str,
 ) -> MessagesCallResponse {
-    let headers = response
-        .headers()
-        .iter()
-        .filter_map(|(name, value)| Some((name.to_string(), value.to_str().ok()?.to_string())))
-        .collect();
+    let headers = litellm_http::request::response_headers(response.headers());
     let chunks = match decoder {
         None => futures_util::stream::try_unfold(response, move |mut response| async move {
             let chunk = response.chunk().await.map_err(network)?;

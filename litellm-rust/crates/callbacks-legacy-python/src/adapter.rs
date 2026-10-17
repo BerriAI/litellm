@@ -490,6 +490,7 @@ impl LegacyLogging {
         self.logger()?.post_call(
             py,
             &raw.body,
+            &raw.headers,
             api_key,
             self.request.as_ref().map(|request| &request.body),
             self.request.as_ref().map(|request| &request.headers),
@@ -953,9 +954,10 @@ class PayloadLogger(StubLogger):
         self.pre_api_key = api_key
         on_pre_call(additional_args)
 
-    def post_call(self, original_response, api_key, additional_args):
+    def post_call(self, original_response, api_key, additional_args, response_headers):
         self.record('post_call', None)
         self.post = (original_response, api_key, additional_args)
+        self.response_headers = response_headers
 
 bound = {}
 kwargs = {}
@@ -1117,6 +1119,7 @@ assert logger.update['custom_llm_provider'] == 'edenai', logger.update
             .before_provider_request(py, Box::new(wire), context)
             .unwrap();
         let raw = RawResponse {
+            headers: vec![("request-id".into(), "req_native".into())],
             body: "raw response".into(),
         };
         assert!(matches!(
@@ -1524,6 +1527,7 @@ def check():
     }, additional_args
     assert additional_args['complete_input_dict'] is logger.pre['complete_input_dict']
     assert additional_args['headers'] is logger.pre['headers']
+    assert logger.response_headers == [('request-id', 'req_native')], logger.response_headers
 ",
             json!({"document": document(DOCUMENT)}),
         );
