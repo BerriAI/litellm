@@ -269,7 +269,7 @@ mod tests {
             restriction: Restriction::RateLimits,
             owner: Owner::TeamMembership,
         }),
-        "Authentication Error, keys with rate limits set on its team membership are not supported by this gateway yet."
+        "Authentication Error, keys with per-model, per-tag or dynamic rate limits set on its team membership are not supported by this gateway yet."
     )]
     #[case::banned_param(
         Error::BannedParam("aws_bedrock_runtime_endpoint"),
