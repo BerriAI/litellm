@@ -22,6 +22,7 @@ from litellm.integrations.otel.plumbing import context as ctx_mod  # noqa: E402
 from litellm.integrations.otel.plumbing import providers  # noqa: E402
 from litellm.integrations.otel.emitter import SpanEmitter, attribute_budget, span_attribute_limit  # noqa: E402
 from litellm.integrations.otel.emitter import stamp_error  # noqa: E402
+from litellm.integrations.otel.mappers import LangfuseMapper  # noqa: E402
 from litellm.integrations.otel.mappers.utils import MAX_TOOL_DEFINITION_ATTRS_PER_SPAN  # noqa: E402
 from litellm.integrations.otel.model.payloads import (  # noqa: E402
     GuardrailSpanData,
@@ -88,6 +89,59 @@ def test_llm_call_span_cost_breakdown():
     assert a[f"{LiteLLM.COST_PREFIX}cache_read"] == 0.001
     # Unreported components are omitted, not zero-filled.
     assert f"{LiteLLM.COST_PREFIX}margin_total_amount" not in a
+
+
+_PRICE_LOOKUP_FAILED = {"error_str": "This model isn't mapped yet. model=openai/unpriced-model", "traceback_str": ""}
+
+
+@pytest.mark.parametrize(
+    ("cost_fields", "expected_cost"),
+    [
+        pytest.param({"response_cost": 0.0}, 0.0, id="free-model"),
+        pytest.param(
+            {"response_cost": 0.0, "response_cost_failure_debug_info": _PRICE_LOOKUP_FAILED},
+            None,
+            id="unpriced",
+        ),
+        pytest.param(
+            {"response_cost": 0.0, "response_cost_failure_debug_info": _PRICE_LOOKUP_FAILED, "cache_hit": True},
+            0.0,
+            id="unpriced-cache-hit",
+        ),
+    ],
+)
+def test_llm_call_span_tells_unpriced_call_from_free_call(cost_fields, expected_cost):
+    engine, exporter = _engine()
+    data = LLMCallSpanData.from_standard_logging_payload(_payload(**cost_fields))
+
+    engine.emit(SpanRole.LLM_CALL, data)
+
+    (span,) = exporter.get_finished_spans()
+    assert span.attributes.get(f"{LiteLLM.COST_PREFIX}total") == expected_cost
+    langfuse_cost_details = LangfuseMapper().map(data).get("langfuse.observation.cost_details")
+    langfuse_cost = json.loads(langfuse_cost_details)["total"] if langfuse_cost_details is not None else None
+    assert langfuse_cost == expected_cost
+
+
+def test_unpriced_call_keeps_the_guardrail_charge_on_the_guardrail_span():
+    engine, exporter = _engine()
+    payload = _payload(
+        response_cost=0.002,
+        response_cost_failure_debug_info=_PRICE_LOOKUP_FAILED,
+        cost_breakdown={"guardrail_cost": 0.002, "total_cost": 0.002},
+    )
+
+    engine.emit(SpanRole.LLM_CALL, LLMCallSpanData.from_standard_logging_payload(payload))
+    engine.emit(
+        SpanRole.GUARDRAIL,
+        GuardrailSpanData.from_logging_entry(
+            {"guardrail_name": "bedrock", "guardrail_status": "success", "guardrail_cost": 0.002}
+        ),
+    )
+
+    llm_span, guardrail_span = exporter.get_finished_spans()
+    assert f"{LiteLLM.COST_PREFIX}total" not in llm_span.attributes
+    assert guardrail_span.attributes[LiteLLM.GUARDRAIL_COST] == 0.002
 
 
 def test_tracer_scope_carries_litellm_version():
