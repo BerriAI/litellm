@@ -640,3 +640,40 @@ async def test_proxy_responses_stream_reports_requested_model_in_nested_response
     created = next(p for p in payloads if p.get("type") == "response.created")
     assert created["response"]["model"] == client_model
     assert not created["response"]["model"].startswith("hosted_vllm/")
+
+
+def test_restamp_streaming_chunk_rewrites_nested_model_on_queued_event():
+    from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+    from litellm.proxy.proxy_server import _restamp_streaming_chunk_model
+
+    queued_payload = {
+        "type": "response.queued",
+        "sequence_number": 0,
+        "response": {"id": "resp_test", "object": "response", "status": "queued", "model": "gpt-backend-2026-01-01"},
+    }
+    chunk = OpenAIResponsesAPIConfig.get_event_model_class("response.queued").model_validate(queued_payload)
+    result, _ = _restamp_streaming_chunk_model(
+        chunk=chunk,
+        requested_model_from_client="client-model",
+        request_data={"litellm_call_id": "test-call-id"},
+        model_mismatch_logged=False,
+    )
+
+    assert result.model_dump()["response"] == {**queued_payload["response"], "model": "client-model"}
+    assert chunk.model_dump()["response"]["model"] == "gpt-backend-2026-01-01", "the priced original must not change"
+
+
+def test_restamp_streaming_chunk_leaves_generic_event_without_nested_response_untouched():
+    from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+    from litellm.proxy.proxy_server import _restamp_streaming_chunk_model
+
+    shell_payload = {"type": "response.shell_call.in_progress", "sequence_number": 3, "item_id": "sh_1"}
+    chunk = OpenAIResponsesAPIConfig.get_event_model_class(shell_payload["type"]).model_validate(shell_payload)
+    result, _ = _restamp_streaming_chunk_model(
+        chunk=chunk,
+        requested_model_from_client="client-model",
+        request_data={"litellm_call_id": "test-call-id"},
+        model_mismatch_logged=False,
+    )
+
+    assert "response" not in result.model_dump()

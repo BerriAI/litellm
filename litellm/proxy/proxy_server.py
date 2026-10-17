@@ -949,6 +949,7 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionSystemMessage,
     ChatCompletionToolParam,
+    GenericEvent,
     HttpxBinaryResponseContent,
     ResponseCompletedEvent,
     ResponseCreatedEvent,
@@ -9823,7 +9824,6 @@ def _restamp_streaming_chunk_model(
     if not fallback_was_attempted and request_data.get("fastest_response", False):
         return chunk, model_mismatch_logged
 
-    # Responses lifecycle events carry the model one level down, in response.model
     typed_chunk: Final[BaseModel | Mapping[str, object]] = chunk
     restamped_chunk: Final = _restamp_nested_response_model(typed_chunk, target_model)
 
@@ -9872,15 +9872,6 @@ def _restamp_streaming_chunk_model(
 def _restamp_nested_response_model(
     chunk: BaseModel | Mapping[str, object], target_model: str
 ) -> BaseModel | Mapping[str, object]:
-    """
-    Return chunk with a Responses lifecycle event's response.model set to target model.
-
-    response.created, response.in_progress, response.completed and the other lifecycle
-    events carry the whole Response object, whose model a top-level restamp never reaches.
-
-    Returns a copy, so the provider's model stays on the chunk the streaming wrapper prices.
-    Any chunk that is not a Responses lifecycle event is returned unchanged.
-    """
     if isinstance(
         chunk,
         (
@@ -9894,8 +9885,15 @@ def _restamp_nested_response_model(
         nested_response: Final = chunk.response
         if nested_response.model not in (None, target_model):
             return chunk.model_copy(update={"response": nested_response.model_copy(update={"model": target_model})})
+        return chunk
 
-    return chunk
+    if not isinstance(chunk, GenericEvent):
+        return chunk
+    extra_fields: Final[Mapping[str, object]] = chunk.model_extra or {}
+    untyped_response: Final = as_str_mapping(extra_fields.get("response"))
+    if untyped_response is None or untyped_response.get("model") in (None, target_model):
+        return chunk
+    return chunk.model_copy(update={"response": {**untyped_response, "model": target_model}})
 
 
 def _fast_serialize_simple_model_response_stream(
