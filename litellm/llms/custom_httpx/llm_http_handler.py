@@ -6840,6 +6840,7 @@ class BaseLLMHTTPHandler:
                 custom_llm_provider=custom_llm_provider,
                 first_message=first_message,
                 quota_callbacks=_ws_quota_callbacks,
+                frame_guard=frame_guard,
                 **kwargs,
             )
             await handler.run()

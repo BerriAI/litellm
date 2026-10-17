@@ -2739,10 +2739,12 @@ class ManagedResponsesWebSocketHandler:
         custom_llm_provider: str | None = None,
         first_message: str | None = None,
         quota_callbacks: Sequence[ProjectQuotaCallback] | None = None,
+        frame_guard: ResponsesWsFrameGuard | None = None,
         **kwargs: object,
     ) -> None:
         self.websocket = websocket
         self.model = model
+        self.frame_guard = frame_guard
         self.logging_obj = logging_obj
         self.user_api_key_dict = user_api_key_dict
         self.litellm_metadata: Mapping[str, object] = litellm_metadata or {}
@@ -3050,6 +3052,27 @@ class ManagedResponsesWebSocketHandler:
         if self.litellm_metadata:
             call_kwargs["litellm_metadata"] = dict(self.litellm_metadata)
 
+    async def _guard_frame(self, raw_message: str) -> GuardedResponsesWsFrame | None:
+        """Same per-frame pre_call guardrail walk as the native socket: a rejected frame errors and is not sent."""
+        if self.frame_guard is None:
+            return GuardedResponsesWsFrame(frame=raw_message)
+        try:
+            return await self.frame_guard(raw_message)
+        except Exception as e:  # noqa: BLE001  # any guardrail rejection maps to one client-facing error event
+            verbose_logger.info("ManagedResponsesWS: pre_call guardrail rejected a response.create frame: %s", e)
+            await self._send_error(str(e), error_type="invalid_request_error")
+            return None
+
+    @staticmethod
+    def _metadata_with_turn_guardrails(
+        existing: object, guardrail_information: tuple[Mapping[str, object], ...]
+    ) -> Mapping[str, object]:
+        """Each turn is its own ``litellm.aresponses`` call, so its guardrail records ride on that call's metadata."""
+        return {
+            **(existing if _is_json_object(existing) else {}),
+            _GUARDRAIL_INFORMATION_KEY: [dict(record) for record in guardrail_information],
+        }
+
     @staticmethod
     def _update_proxy_request(call_kwargs: dict[str, Any], model: str) -> None:
         """Update proxy_server_request body so spend logs record the full request."""
@@ -3168,7 +3191,11 @@ class ManagedResponsesWebSocketHandler:
             await self._send_error(str(e), error_type="rate_limit_exceeded")
             return
 
-        call_kwargs: Final = self._build_base_call_kwargs(msg_obj)
+        guarded: Final = await self._guard_frame(raw_message)
+        if guarded is None:
+            return
+
+        call_kwargs: Final = self._build_base_call_kwargs(_load_json_object(guarded.frame))
         call_kwargs["stream"] = True
 
         # A frame that repeats the connection's public alias (model_group) must
@@ -3188,6 +3215,10 @@ class ManagedResponsesWebSocketHandler:
 
         self._apply_history(call_kwargs, previous_response_id, current_messages, prior_history)
         self._inject_credentials(call_kwargs, model=model)
+        if guarded.guardrail_information:
+            call_kwargs["litellm_metadata"] = self._metadata_with_turn_guardrails(
+                call_kwargs.get("litellm_metadata"), guarded.guardrail_information
+            )
         self._update_proxy_request(call_kwargs, requested_model or self.model_group or model)
         call_kwargs.update(self.extra_kwargs)
 

@@ -285,6 +285,86 @@ class TestManagedWebSocketHandlerIntegration:
 
         assert captured["model"] == "bedrock_mantle/openai.gpt-5.5"
 
+    @pytest.mark.asyncio
+    async def test_managed_socket_runs_the_frame_guard_on_every_turn(self, monkeypatch):
+        import json
+        from unittest.mock import AsyncMock, MagicMock
+
+        import litellm
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.responses.streaming_iterator import GuardedResponsesWsFrame, ManagedResponsesWebSocketHandler
+
+        async def guard(frame: str) -> GuardedResponsesWsFrame:
+            body = json.loads(frame)
+            if "forbidden" in body["input"]:
+                raise ValueError("blocked by guardrail")
+            return GuardedResponsesWsFrame(
+                frame=json.dumps({**body, "input": body["input"].upper()}),
+                guardrail_information=({"guardrail_name": "g", "guardrail_cost": 0.5},),
+            )
+
+        async def empty_stream():
+            return
+            yield {}
+
+        aresponses: Final = AsyncMock(side_effect=lambda **kwargs: empty_stream())
+        monkeypatch.setattr(litellm, "aresponses", aresponses)
+        websocket: Final = MagicMock()
+        websocket.send_text = AsyncMock()
+        handler: Final = ManagedResponsesWebSocketHandler(
+            websocket=websocket,
+            model="anthropic/claude-sonnet-4-5",
+            logging_obj=Logging(
+                model="anthropic/claude-sonnet-4-5",
+                messages=[],
+                stream=True,
+                call_type="aresponses",
+                start_time=0,
+                litellm_call_id="test-id",
+                function_id="test-func",
+            ),
+            litellm_metadata={"user_api_key_hash": "k1"},
+            frame_guard=guard,
+        )
+
+        await handler._process_response_create(json.dumps({"type": "response.create", "input": "say forbidden"}))
+        await handler._process_response_create(json.dumps({"type": "response.create", "input": "hello"}))
+
+        aresponses.assert_awaited_once()
+        error_event: Final = json.loads(websocket.send_text.await_args_list[0].args[0])
+        assert error_event["error"] == {"type": "invalid_request_error", "message": "blocked by guardrail"}
+        sent: Final = aresponses.await_args.kwargs
+        assert sent["input"] == "HELLO"
+        assert sent["litellm_metadata"]["user_api_key_hash"] == "k1"
+        assert sent["litellm_metadata"]["standard_logging_guardrail_information"] == [
+            {"guardrail_name": "g", "guardrail_cost": 0.5}
+        ]
+
+    @pytest.mark.asyncio
+    async def test_http_handler_hands_the_frame_guard_to_a_managed_socket(self):
+        import json
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+
+        guard: Final = AsyncMock(side_effect=ValueError("blocked by guardrail"))
+        websocket: Final = MagicMock()
+        websocket.send_text = AsyncMock()
+        websocket.receive_text = AsyncMock(side_effect=ConnectionError("client left"))
+
+        await BaseLLMHTTPHandler().async_responses_websocket(
+            model="anthropic/claude-sonnet-4-5",
+            websocket=websocket,
+            logging_obj=MagicMock(),
+            responses_api_provider_config=None,
+            first_message=json.dumps({"type": "response.create", "input": "say forbidden"}),
+            frame_guard=guard,
+        )
+
+        guard.assert_awaited_once()
+        error_event: Final = json.loads(websocket.send_text.await_args.args[0])
+        assert error_event["error"]["message"] == "blocked by guardrail"
+
     @pytest.mark.parametrize("terminal_type", ["response.completed", "response.incomplete"])
     @pytest.mark.asyncio
     async def test_truncated_turn_is_kept_as_history_for_the_next_turn(self, monkeypatch, terminal_type: str):
