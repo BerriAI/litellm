@@ -782,6 +782,31 @@ BEDROCK_INVOKE_HAIKU_STREAM: Final = CostTrackingTestCase(
     ),
 )
 
+BEDROCK_INVOKE_HAIKU_CHAT_STREAM: Final = CostTrackingTestCase(
+    name="bedrock-invoke-haiku-chat-stream",
+    covers="quota_management.spend_tracking.scripted_wire.logs_cost",
+    model="bedrock/invoke/anthropic.claude-haiku-4-5-20251001-v1:0",
+    request={
+        "model": "$MODEL",
+        "messages": [{"role": "user", "content": "bedrock-invoke-haiku-chat-stream"}],
+        "stream": True,
+        "stream_options": {"include_usage": True},
+        "max_tokens": 412,
+    },
+    response=BEDROCK_INVOKE_HAIKU_STREAM.response,
+    expected=BEDROCK_INVOKE_HAIKU_STREAM.expected,
+)
+
+BEDROCK_INVOKE_HAIKU_RESPONSES: Final = CostTrackingTestCase(
+    name="bedrock-invoke-haiku-responses",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="bedrock/invoke/anthropic.claude-haiku-4-5-20251001-v1:0",
+    endpoint="/v1/responses",
+    request={"model": "$MODEL", "input": "bedrock-invoke-haiku-responses", "max_output_tokens": 412},
+    response=BEDROCK_INVOKE_HAIKU_JSON.response,
+    expected=BEDROCK_INVOKE_HAIKU_JSON.expected,
+)
+
 
 # azure_ai/gpt-5.4-mini-2026-03-17
 AZURE_AI_GPT_5_4_MINI_LATEST: Final = CostTrackingTestCase(
@@ -2031,6 +2056,8 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     XAI_GROK_5_PROVIDER_REPORTED_COST,
     BEDROCK_INVOKE_HAIKU_JSON,
     BEDROCK_INVOKE_HAIKU_STREAM,
+    BEDROCK_INVOKE_HAIKU_CHAT_STREAM,
+    BEDROCK_INVOKE_HAIKU_RESPONSES,
     AZURE_AI_GPT_5_4_MINI_LATEST,
     AZURE_AI_GPT_5_4_MINI_LATEST_STREAM,
     AZURE_AI_GROK_4_6_REASONING_FOLDED_INTO_COMPLETION,

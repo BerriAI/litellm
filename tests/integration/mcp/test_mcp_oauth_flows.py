@@ -860,6 +860,7 @@ def test_spec_client_discovers_the_aggregate_authorization_server_and_signs_in_t
             "client_origin": "http://127.0.0.1:9",
             "server_id": None,
             "server_name": None,
+            "servers": None,
             "connected": None,
         }, described.text
         completed: Final = gateway.client.post("/authorize/complete", data={"flow": connect_flow}, cookies=flow_cookies)
@@ -969,6 +970,7 @@ def test_per_server_resource_scopes_the_session_bearer_to_the_named_server(gatew
             "client_origin": "http://127.0.0.1:9",
             "server_id": server_a,
             "server_name": alias_a,
+            "servers": None,
             "connected": True,
         }, described.text
         completed: Final = gateway.client.post("/authorize/complete", data={"flow": connect_flow}, cookies=flow_cookies)

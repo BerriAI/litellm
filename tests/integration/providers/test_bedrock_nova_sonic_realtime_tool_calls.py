@@ -313,6 +313,8 @@ def test_nested_tool_call_before_assistant_block(candidate: Gateway, cert: tuple
             "response.output_item.done",
             "response.done",
         ), events
+        (delta,) = tuple(event for event in events if event.get("type") == "response.function_call_arguments.delta")
+        assert string_value(delta["delta"]) == '{"location":"New York"}'
         (call,) = _function_calls(events)
         assert string_value(call["call_id"]) == "tooluse_A"
         assert string_value(call["name"]) == "get_weather"
