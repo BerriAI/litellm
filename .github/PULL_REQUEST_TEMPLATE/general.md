@@ -4,6 +4,13 @@
      Drop every section you have nothing to put in, heading included: a bare "## Relevant issues" or
      "## Affected release" with nothing under it must not appear in the final description -->
 
+## Merge blockers and dependencies
+
+<!-- Follow .github/pr-caveats.md for classification and dependency verification
+     List unresolved prerequisites here before the TLDR: exact PR links/actions, what breaks,
+     merge or rollout order, owner, and verified status. Identify canonical/replacement PRs when
+     duplicates exist. Do not merge until satisfied; drop this section only when none remain -->
+
 ## TLDR
 
 <!-- Fill in the bullets below and keep each one short and concrete: one line per bullet, roughly 10 words max
@@ -18,6 +25,13 @@ How it solves it:
 
 - <blah>
 - ...
+
+## Caveats (if any)
+
+<!-- Classify caveats using .github/pr-caveats.md, by impact rather than fix size
+     Use only nonempty ### Severe, ### High, ### Medium, and ### Low tiers, in that order
+     Keep bullets short, with consequences and mitigations. Put unresolved prerequisites
+     in Merge blockers and dependencies above, never only under Low. Drop this section if empty -->
 
 ## User Flow
 
@@ -120,26 +134,6 @@ If you're seeing a delay in your PR being merged, ping the LiteLLM Team on [Slac
 📖 Documentation
 🚄 Infrastructure
 ✅ Test
-
-## Caveats (if any)
-
-<!-- Group caveats under severity subheadings (### Severe, ### High, ### Medium, ### Low), with
-     short bullet points inside each, just like the TLDR: one line per bullet, roughly 10 words max
-     Call out known limitations, follow-up work, or anything a reviewer should watch out for
-     Include only the tiers that have caveats; drop the empty ones
-     - Severe: inherent to what the PR deliberately ships, there even when the code works as intended:
-       it can degrade or take down a running deployment (e.g. a slow or table-locking boot migration),
-       rewrite data by design, break an existing workflow on purpose, or change auth behavior. An
-       operator must plan around it before rollout
-     - High: an unintended hole: a correctness, security, data-loss, or backward-compatibility bug,
-       unsafe to ship as is
-     - Medium: a real gap someone can hit, but with a workaround or a narrow blast radius
-     - Low: anything else worth noting: naming, cleanup, an edge case nobody hits
-     Nest bullets as deep as helps: hierarchy beats one long line when it makes things clearer to a
-     human reader
-     If you assumed something instead of testing it, e.g. "only reproduces with X on" or "no
-     user-observable behavior difference", list it here too with what breaks if it is wrong
-     Drop this section if there are none -->
 
 ## QA runbook
 
