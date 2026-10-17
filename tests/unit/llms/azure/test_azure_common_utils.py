@@ -1150,6 +1150,22 @@ def test_with_existing_azure_ad_token_from_env(setup_mocks):
         mock_get_secret_str.assert_called_with("AZURE_AD_TOKEN")
 
 
+def test_get_azure_ad_token_reuses_cached_token_refresh_provider(setup_mocks):
+    """Regression test for https://github.com/BerriAI/litellm/issues/46419.
+
+    The per-request auth path must reuse the lru_cache'd token refresh
+    provider (like the SDK-client path) instead of building a fresh provider -
+    a fresh DefaultAzureCredential with an empty token cache - on every call.
+    """
+    setup_mocks["litellm"].enable_azure_ad_token_refresh = True
+
+    first = get_azure_ad_token(GenericLiteLLMParams())
+    second = get_azure_ad_token(GenericLiteLLMParams())
+
+    assert first == second == "mock-default-token"
+    setup_mocks["token_provider"].assert_called_once_with(azure_scope="https://cognitiveservices.azure.com/.default")
+
+
 def test_get_azure_ad_token_with_client_id_and_client_secret(setup_mocks):
     """Test get_azure_ad_token with tenant_id, client_id, and client_secret."""
     # Reset mocks to ensure clean state
