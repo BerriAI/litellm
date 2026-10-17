@@ -478,16 +478,25 @@ def _request_tags_after_router_consumption(metadata: object, model: str) -> Sequ
     return tuple(dict.fromkeys((*leftover, *(tag for tag in typed_inherited_tags if isinstance(tag, str)))))
 
 
-def _without_baggage_mapped_tags(request_tags: Sequence[str] | None, metadata: object) -> Sequence[str] | None:
+def without_baggage_mapped_tags(request_tags: Sequence[str] | None, metadata: object) -> Sequence[str] | None:
+    """Drop baggage-mapped tags that neither key, team or project policy nor the caller itself asked for."""
     if request_tags is None or not isinstance(metadata, Mapping):
         return request_tags
     typed_metadata: Final[Mapping[str, object]] = metadata
     stamp: Final = typed_metadata.get(BAGGAGE_MAPPED_TAGS_METADATA_KEY)
     if not isinstance(stamp, BaggageMappedTagsStamp):
         return request_tags
-    inherited_tags: Final = typed_metadata.get("inherited_tags")
-    policy_tags: Final[Sequence[object]] = inherited_tags if isinstance(inherited_tags, (list, tuple)) else ()
-    return tuple(tag for tag in request_tags if tag not in stamp.tags or tag in policy_tags) or None
+    asked_for_tags: Final = (
+        *_metadata_tags(typed_metadata, "inherited_tags"),
+        *_metadata_tags(typed_metadata, "caller_tags"),
+    )
+    return tuple(tag for tag in request_tags if tag not in stamp.tags or tag in asked_for_tags) or None
+
+
+def _metadata_tags(metadata: Mapping[str, object], key: str) -> Sequence[object]:
+    tags: Final = metadata.get(key)
+    typed_tags: Final[Sequence[object]] = tags if isinstance(tags, (list, tuple)) else ()
+    return typed_tags
 
 
 async def get_deployments_for_tag(
@@ -530,7 +539,7 @@ async def get_deployments_for_tag(
     verbose_logger.debug("request metadata: %s", request_kwargs.get(metadata_variable_name))
     if metadata_variable_name in request_kwargs:
         metadata: Final = request_kwargs[metadata_variable_name]
-        request_tags: Final = _without_baggage_mapped_tags(
+        request_tags: Final = without_baggage_mapped_tags(
             _request_tags_after_router_consumption(metadata, model), metadata
         )
         match_any: Final = llm_router_instance.tag_filtering_match_any

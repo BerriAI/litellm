@@ -550,6 +550,33 @@ def _normalized_metadata_object(field: str, value: object) -> Mapping[str, objec
     raise _invalid_metadata_type_error(field=field, value=value)
 
 
+def _serves_through_db_outage() -> bool:
+    from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
+
+    return PrismaDBExceptionHandler.should_allow_request_on_db_unavailable()
+
+
+def _tag_budgets_unavailable(message: str) -> ProxyException:
+    return ProxyException(
+        message=message, type=ProxyErrorTypes.no_db_connection, param=None, code=status.HTTP_503_SERVICE_UNAVAILABLE
+    )
+
+
+async def _unbudgeted_mapped_tag(
+    budgeted_tags: tuple[str, ...], prisma_client: "PrismaClient | None", user_api_key_cache: "UserApiKeyCache"
+) -> str | ProxyException | None:
+    from litellm.proxy.auth.auth_checks import read_tag_objects_batch
+
+    if prisma_client is None:
+        return _tag_budgets_unavailable("Baggage tag mappings require a database to check budgeted tags")
+    tag_objects: Final = await read_tag_objects_batch(
+        tag_names=budgeted_tags, prisma_client=prisma_client, user_api_key_cache=user_api_key_cache
+    )
+    if isinstance(tag_objects, Exception):
+        return _tag_budgets_unavailable("Baggage tag mappings could not read tag budgets from the database")
+    return next((tag for tag in budgeted_tags if not _has_tag_budget(tag_objects.get(tag))), None)
+
+
 def _has_tag_budget(tag: "LiteLLM_TagTable | None") -> bool:
     if tag is None or tag.litellm_budget_table is None:
         return False
@@ -2087,7 +2114,6 @@ class LiteLLMProxyRequestSetup:
         user_api_key_cache: "UserApiKeyCache",
     ) -> None:
         """Resolve configured baggage tags before the existing tag-budget gate."""
-        from litellm.proxy.auth.auth_checks import read_tag_objects_batch
         from litellm.proxy.common_utils.request_tag_mappings import (
             REQUEST_TAG_MAPPINGS_ADAPTER,
             mapping_rejection,
@@ -2120,31 +2146,13 @@ class LiteLLMProxyRequestSetup:
         header: Final = ",".join(request.headers.getlist("baggage"))
         mapped: Final = resolve_baggage_tag_mappings(header, rules)
         budgeted_tags: Final = tuple(tag for tag, require_budget in mapped if require_budget)
-        if budgeted_tags:
-            if prisma_client is None:
-                raise ProxyException(
-                    message="Baggage tag mappings require a database to check budgeted tags",
-                    type=ProxyErrorTypes.no_db_connection,
-                    param=None,
-                    code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                )
-            tag_objects: Final = await read_tag_objects_batch(
-                tag_names=budgeted_tags,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-            )
-            if isinstance(tag_objects, Exception):
-                raise ProxyException(
-                    message="Baggage tag mappings could not read tag budgets from the database",
-                    type=ProxyErrorTypes.no_db_connection,
-                    param=None,
-                    code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                )
-            unbudgeted_tag: Final = next(
-                (tag for tag in budgeted_tags if not _has_tag_budget(tag_objects.get(tag))), None
-            )
-            if unbudgeted_tag is not None:
-                raise mapping_rejection(f"Mapped tag {unbudgeted_tag} requires an existing tag budget")
+        unbudgeted_tag: Final = (
+            await _unbudgeted_mapped_tag(budgeted_tags, prisma_client, user_api_key_cache) if budgeted_tags else None
+        )
+        if isinstance(unbudgeted_tag, ProxyException) and not _serves_through_db_outage():
+            raise unbudgeted_tag
+        if isinstance(unbudgeted_tag, str):
+            raise mapping_rejection(f"Mapped tag {unbudgeted_tag} requires an existing tag budget")
         if mapped:
             client_has_tags: Final = (isinstance(client_metadata, dict) and "tags" in client_metadata) or (
                 get_metadata_variable_name_from_kwargs(request_data) == "metadata"
@@ -4072,6 +4080,16 @@ def _apply_resolved_guardrails_to_metadata(
     verbose_proxy_logger.debug("Policy engine: added guardrails to request metadata: %s", combined)
 
 
+def _policy_match_tags(request_data: Mapping[str, object], metadata_variable_name: str) -> list[str] | None:
+    from litellm.proxy.common_utils.http_parsing_utils import get_tags_from_request_body
+    from litellm.router_strategy.tag_based_routing import without_baggage_mapped_tags
+
+    tags: Final = without_baggage_mapped_tags(
+        get_tags_from_request_body(request_data), request_data.get(metadata_variable_name)
+    )
+    return list(tags) if tags else None
+
+
 async def add_guardrails_from_policy_engine(
     data: dict,
     metadata_variable_name: str,
@@ -4096,7 +4114,6 @@ async def add_guardrails_from_policy_engine(
         user_api_key_dict: The user's API key authentication info
     """
     from litellm._logging import verbose_proxy_logger
-    from litellm.proxy.common_utils.http_parsing_utils import get_tags_from_request_body
     from litellm.proxy.policy_engine.policy_registry import get_policy_registry
     from litellm.types.proxy.policy_engine import PolicyMatchContext
 
@@ -4114,7 +4131,7 @@ async def add_guardrails_from_policy_engine(
         return
 
     # Extract tags and build context
-    all_tags: Final = get_tags_from_request_body(data) or None
+    all_tags: Final = _policy_match_tags(data, metadata_variable_name)
     _team_alias: Final = user_api_key_dict.team_alias
     _key_alias: Final = user_api_key_dict.key_alias
     context: Final = PolicyMatchContext(

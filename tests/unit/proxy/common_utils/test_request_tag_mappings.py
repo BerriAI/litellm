@@ -105,13 +105,21 @@ def test_exact_rules_override_variable_fallback_independent_of_order(header, exp
     assert resolve_baggage_tag_mappings(header, list(reversed(rules))) == ((expected, False),)
 
 
+@pytest.mark.parametrize("header", ["entrypoint=%00", "entrypoint=a%0Ab", "entrypoint=b,entry%70oint=a"])
+def test_variable_mapper_skips_control_characters_and_percent_encoded_duplicate_keys(header):
+    rule = RequestTagMapping(key="entrypoint", tag_prefix="usecase:")
+    assert resolve_baggage_tag_mappings(header, [rule]) == ()
+
+
 def test_exact_rules_work_without_a_variable_rule():
     rule = RequestTagMapping(key="entrypoint", value="a", tag="usecase:manual")
     assert resolve_baggage_tag_mappings("entrypoint=a", [rule]) == (("usecase:manual", False),)
     assert resolve_baggage_tag_mappings("entrypoint=x", [rule]) == ()
 
 
-@pytest.mark.parametrize("header", ["", "region=sg", "entrypoint=", "entrypoint=a,entrypoint=b", "entrypoint=x"])
+@pytest.mark.parametrize(
+    "header", ["", "region=sg", "entrypoint=", "entrypoint=a,entrypoint=b", "entrypoint=b,entry%70oint=a", "entrypoint=x"]
+)
 def test_required_mapping_rejects_missing_ambiguous_or_unmapped_values(header):
     rule = RequestTagMapping(key="entrypoint", value="a", tag="usecase:a", required=True)
     with pytest.raises(ProxyException) as error:
@@ -186,6 +194,20 @@ async def test_budgeted_mapper_answers_503_when_the_tag_budget_lookup_fails():
             request, {"metadata": {}}, config, prisma_client, UserApiKeyCache()
         )
     assert error.value.code == "503"
+
+
+@pytest.mark.asyncio
+async def test_budgeted_mapper_serves_through_a_db_outage_when_requests_are_allowed_on_db_unavailable():
+    request = Request({"type": "http", "headers": [(b"baggage", b"entrypoint=a")]})
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_tagtable.find_many = AsyncMock(side_effect=Exception("database unreachable"))
+    data = {"metadata": {}}
+    config = {"request_tag_mappings": [{"key": "entrypoint", "tag_prefix": "usecase:", "require_budgeted_tag": True}]}
+    with patch.dict("litellm.proxy.proxy_server.general_settings", {"allow_requests_on_db_unavailable": True}):
+        await LiteLLMProxyRequestSetup.apply_baggage_tag_mappings_pre_auth(
+            request, data, config, prisma_client, UserApiKeyCache()
+        )
+    assert data["metadata"]["tags"] == ["usecase:a"]
 
 
 async def _cache_with_tag(tag: LiteLLM_TagTable) -> UserApiKeyCache:
@@ -367,3 +389,69 @@ async def test_mapped_tags_stay_out_of_requester_metadata(client_metadata):
     assert requester_metadata["trace_name"] == "qa"
     assert requester_metadata.get("tags") == client_metadata.get("tags")
     assert BAGGAGE_MAPPED_TAGS_METADATA_KEY not in requester_metadata
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "headers,body_tags",
+    [([(b"x-litellm-tags", b"usecase:a")], None), ([], ["usecase:a"])],
+    ids=["header", "body"],
+)
+async def test_client_sent_tag_still_routes_when_baggage_maps_to_it(headers, body_tags):
+    import litellm
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import _read_request_body_deferring_parse_failure
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    body = {"model": "gpt-4"} if body_tags is None else {"model": "gpt-4", "tags": body_tags}
+
+    async def receive():
+        return {"type": "http.request", "body": json.dumps(body).encode()}
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/chat/completions",
+            "scheme": "http",
+            "server": ("localhost", 4000),
+            "query_string": b"",
+            "headers": [(b"content-type", b"application/json"), (b"baggage", b"entrypoint=a"), *headers],
+        },
+        receive,
+    )
+    data, parse_error = await _read_request_body_deferring_parse_failure(request)
+    assert parse_error is None
+    await LiteLLMProxyRequestSetup.apply_baggage_tag_mappings_pre_auth(
+        request, data, {"request_tag_mappings": [{"key": "entrypoint", "tag_prefix": "usecase:"}]}, None, MagicMock()
+    )
+    enriched = await add_litellm_data_to_request(
+        data=await read_request_body(request),
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="qa-key"),
+        proxy_config=ProxyConfig(),
+        general_settings={},
+    )
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4o", "tags": ["usecase:a"]},
+                "model_info": {"id": "usecase-deployment"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4o-mini", "tags": ["default"]},
+                "model_info": {"id": "default-deployment"},
+            },
+        ],
+        enable_tag_filtering=True,
+    )
+    for _ in range(5):
+        response = await router.acompletion(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata=dict(enriched["metadata"]),
+            mock_response="hi",
+        )
+        assert response._hidden_params["model_id"] == "usecase-deployment"

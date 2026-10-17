@@ -4757,6 +4757,43 @@ async def test_add_guardrails_from_policy_engine():
     attachment_registry._initialized = False
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "caller_tags,inherited_tags,expected_guardrails",
+    [((), (), []), (("usecase:a",), (), ["usecase_guard"]), ((), ("usecase:a",), ["usecase_guard"])],
+)
+async def test_baggage_mapped_tags_match_tag_policies_only_when_the_caller_or_key_asked_for_them(
+    caller_tags, inherited_tags, expected_guardrails
+):
+    from typing import cast
+
+    from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
+    from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+    from litellm.types.proxy.policy_engine import Policy, PolicyAttachment, PolicyGuardrails
+
+    request = cast(Request, SimpleNamespace(state=SimpleNamespace(litellm_baggage_mapped_tags=("usecase:a",))))
+    data = {"model": "gpt-4", "metadata": {"tags": [], "inherited_tags": inherited_tags}}
+    LiteLLMProxyRequestSetup.apply_authenticated_baggage_tags(request, data)
+    data["metadata"]["caller_tags"] = caller_tags
+    policy_registry = get_policy_registry()
+    attachment_registry = get_attachment_registry()
+    policy_registry._policies = {"usecase": Policy(guardrails=PolicyGuardrails(add=["usecase_guard"]))}
+    policy_registry._initialized = True
+    attachment_registry._attachments = [PolicyAttachment(policy="usecase", tags=["usecase:a"])]
+    attachment_registry._initialized = True
+    try:
+        await add_guardrails_from_policy_engine(
+            data=data, metadata_variable_name="metadata", user_api_key_dict=UserAPIKeyAuth(api_key="test-key")
+        )
+    finally:
+        policy_registry._policies = {}
+        policy_registry._initialized = False
+        attachment_registry._attachments = []
+        attachment_registry._initialized = False
+    assert "usecase:a" in data["metadata"]["tags"]
+    assert data["metadata"].get("guardrails", []) == expected_guardrails
+
+
 def test_match_and_track_policies_preserves_attachment_and_request_body_order():
     from litellm.proxy.policy_engine.attachment_registry import AttachmentRegistry
     from litellm.types.proxy.policy_engine import Policy, PolicyMatchContext

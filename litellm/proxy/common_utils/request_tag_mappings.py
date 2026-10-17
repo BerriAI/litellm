@@ -1,5 +1,6 @@
 from collections.abc import Mapping, Sequence
 from typing import Final
+from urllib.parse import unquote_plus
 
 from fastapi import status
 from opentelemetry import baggage
@@ -35,7 +36,7 @@ def resolve_baggage_tag_mappings(header: str, rules: Sequence[RequestTagMapping]
     members: Final = tuple(_member_without_properties(member) for member in header.split(","))
     context: Final = W3CBaggagePropagator().extract({"baggage": ",".join(members)}, context=Context())
     values: Final = baggage.get_all(context)
-    member_keys: Final = tuple(member.partition("=")[0] for member in members)
+    member_keys: Final = tuple(unquote_plus(member.partition("=")[0]).strip() for member in members)
     resolved: Final = (
         _resolve_key(key, values, member_keys, rules) for key in dict.fromkeys(rule.key for rule in rules)
     )
@@ -55,7 +56,7 @@ def _resolve_key(
     selected: Final = next(
         (rule for rule in key_rules if rule.value == value and rule.value is not None), None
     ) or next((rule for rule in key_rules if rule.value is None), None)
-    usable: Final = isinstance(value, str) and bool(value) and member_keys.count(key) == 1
+    usable: Final = isinstance(value, str) and value.isprintable() and bool(value) and member_keys.count(key) == 1
     if not usable or selected is None:
         if any(rule.required for rule in key_rules):
             raise mapping_rejection(f"Missing, invalid or unmapped baggage value for {key}")
