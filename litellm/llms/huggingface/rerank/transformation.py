@@ -158,7 +158,6 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
         # HuggingFace API expects return_text parameter, corresponding to our return_documents parameter
         request_body: Final = {
             "raw_scores": False,
-            "truncate": False,
             "truncation_direction": "Right",
         }
 

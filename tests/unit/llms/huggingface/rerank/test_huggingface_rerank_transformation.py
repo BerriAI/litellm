@@ -5,6 +5,7 @@ Based on the test patterns from other rerank providers and the current HuggingFa
 
 import asyncio
 import json
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -275,8 +276,27 @@ def test_request_transformation():
     assert request_body["top_n"] == 2
     assert request_body["return_text"] is True
     assert request_body["raw_scores"] is False
-    assert request_body["truncate"] is False
+    assert "truncate" not in request_body
     assert request_body["truncation_direction"] == "Right"
+
+
+@pytest.mark.parametrize("truncate", [True, False, None])
+def test_request_transformation_preserves_explicit_truncation(truncate: bool | None) -> None:
+    from litellm.llms.huggingface.rerank.transformation import HuggingFaceRerankConfig
+
+    request_body: Final = HuggingFaceRerankConfig().transform_rerank_request(
+        model="test",
+        optional_rerank_params={"query": "hello", "texts": ["world"], "truncate": truncate},
+        headers={},
+    )
+
+    assert request_body == {
+        "query": "hello",
+        "texts": ["world"],
+        "raw_scores": False,
+        "truncate": truncate,
+        "truncation_direction": "Right",
+    }
 
 
 def test_response_transformation():
@@ -385,13 +405,11 @@ def test_huggingface_rerank_request_payload(mock_post):
         "texts": ["hello", "world"],
         "raw_scores": False,
         "return_text": True,
-        "truncate": False,
         "truncation_direction": "Right",
         "top_n": 2,
     }
 
-    for key, value in expected_request.items():
-        assert request_data[key] == value
+    assert request_data == expected_request
 
     assert response.results is not None
     assert len(response.results) == 2
