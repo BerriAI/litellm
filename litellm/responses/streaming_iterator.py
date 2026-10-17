@@ -1770,6 +1770,7 @@ def build_synthetic_response_events(
                         item_id=item_id,
                         output_index=output_index,
                         summary_index=summary_index,
+                        sequence_number=sequence_number,
                         part={**summary_payload, "text": ""},
                     )
                 )
