@@ -8,18 +8,21 @@ from urllib.parse import quote
 import httpx
 import openai
 import pytest
-from integration._support.bedrock_runtime_peer import answer, respond, target_of
-from integration._support.client import Gateway, Scenario, eventually
+from integration._support import responses_vendor as rv
+from integration._support.bedrock_runtime_peer import NATIVE_RESPONSES, answer, respond, target_of
+from integration._support.client import Gateway, Scenario, eventually, list_value, object_value
 from integration._support.database import read_rows
 from integration._support.sigv4 import signature
 from integration._support.wire import Request, Wire, wire_server
-from openai.types.chat import ChatCompletionChunk, ChatCompletionMessageParam
+from openai.types.chat import ChatCompletionChunk, ChatCompletionFunctionToolParam, ChatCompletionMessageParam
 from openai.types.chat.chat_completion_chunk import ChoiceDelta
 from pydantic import JsonValue, TypeAdapter
 
 GPT: Final = "us.openai.gpt-5.6-sol"
 GLOBAL_GPT: Final = "global.openai.gpt-5.6-sol"
 GPT_OSS: Final = "openai.gpt-oss-120b-1:0"
+OTHER_GPT: Final = "global.openai.gpt-6.1-sol"
+OPENAI_CODEX: Final = "gpt-5.3-codex"
 TOKEN: Final = "synthetic-bedrock-bearer"
 ACCESS_KEY: Final = "AKIASYNTHETICKEY0001"
 SECRET_KEY: Final = "synthetic-secret-key-for-testing"
@@ -45,6 +48,15 @@ TOOL: Final[Mapping[str, JsonValue]] = MappingProxyType(
         },
     }
 )
+SDK_TOOL: Final[ChatCompletionFunctionToolParam] = {
+    "type": "function",
+    "function": {
+        "name": "lookup_invoice",
+        "description": "Look up an invoice",
+        "parameters": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]},
+    },
+}
+ENCRYPTED_REASONING: Final = "reasoning.encrypted_content"
 CONVERSE_TOOL: Final[Mapping[str, JsonValue]] = MappingProxyType(
     {
         "toolSpec": {
@@ -159,8 +171,25 @@ def _spend_row(identity: str) -> dict[str, JsonValue]:
     return rows[0]
 
 
+def _only_spend_row_of(model: str) -> dict[str, JsonValue]:
+    rows: Final = eventually(
+        lambda: read_rows(
+            'SELECT model_group, status, prompt_tokens, completion_tokens, api_base FROM "LiteLLM_SpendLogs"'
+            " WHERE model_group=%s",
+            (model,),
+        ),
+        lambda found: len(found) == 1,
+        seconds=70,
+    )
+    return rows[0]
+
+
 def _success_row(model: str, api_base: str) -> dict[str, JsonValue]:
     return {"model_group": model, "status": "success", "prompt_tokens": 9, "completion_tokens": 5, "api_base": api_base}
+
+
+def _bridged_success_row(model: str, wire_url: str) -> dict[str, JsonValue]:
+    return {**_success_row(model, f"{wire_url}{NATIVE_RESPONSES}"), "prompt_tokens": 30}
 
 
 def _delta_text(delta: ChoiceDelta, field: str) -> str:
@@ -387,17 +416,234 @@ def test_json_schema_response_format_is_forwarded_natively(gateway: Gateway) -> 
         assert _spend_row(f"chatcmpl-{marker}") == _success_row(model, f"{wire.url}{NATIVE_TARGET}")
 
 
-def test_tools_while_reasoning_keep_converse(gateway: Gateway) -> None:
+def test_tools_while_reasoning_are_bridged_to_native_responses(gateway: Gateway) -> None:
     marker: Final = uuid.uuid4().hex
     with wire_server(respond) as wire, gateway.scenario() as scenario:
         model: Final = _deployment(scenario, wire)
         response: Final = _chat(gateway, model, marker, tools=[dict(TOOL)], reasoning_effort="high")
         payload: Final = _payload(response)
+        assert payload["id"] == f"resp_upstream_{marker}", response.text
+        choices: Final = payload["choices"]
+        assert isinstance(choices, list) and len(choices) == 1, response.text
+        assert choices[0]["finish_reason"] == "stop", response.text
+        assert choices[0]["message"]["content"] == answer(marker), response.text
+        body: Final = _body(_converse_request(wire, NATIVE_RESPONSES))
+        assert body["model"] == GPT, body
+        assert body["reasoning"] == {"effort": "high"}, body
+        assert (body["store"], body["include"]) == (False, [ENCRYPTED_REASONING]), body
+        assert [(tool["type"], tool["name"], tool["parameters"]) for tool in body["tools"]] == [
+            ("function", "lookup_invoice", dict(TOOL_PARAMETERS))
+        ], body
+        assert _upstream_requests_mentioning(gateway, marker) == [], response.text
+        assert _only_spend_row_of(model) == _bridged_success_row(model, wire.url)
+
+
+def test_streamed_tools_while_reasoning_are_bridged_to_native_responses(gateway: Gateway) -> None:
+    marker: Final = uuid.uuid4().hex
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire)
+        stream: Final = _openai_client(gateway).chat.completions.create(
+            model=model,
+            messages=_sdk_messages(marker),
+            tools=[SDK_TOOL],
+            reasoning_effort="high",
+            stream=True,
+            stream_options={"include_usage": True},
+            extra_body={"cache": {"no-cache": True}},
+        )
+        chunks: Final = list(stream)
+        assert _joined(chunks, "content") == answer(marker), chunks
+        usage: Final = chunks[-1].usage
+        assert usage is not None and (usage.prompt_tokens, usage.completion_tokens) == (30, 5), chunks[-1]
+        body: Final = _body(_converse_request(wire, NATIVE_RESPONSES))
+        assert (body["model"], body["stream"], body["reasoning"]) == (GPT, True, {"effort": "high"}), body
+        assert (body["store"], body["include"]) == (False, [ENCRYPTED_REASONING]), body
+        assert [tool["name"] for tool in body["tools"]] == ["lookup_invoice"], body
+        assert _only_spend_row_of(model) == _bridged_success_row(model, wire.url)
+
+
+def _reasoning_deployment(scenario: Scenario, wire: Wire, target: str) -> str:
+    if target == OPENAI_CODEX:
+        return scenario.model(model=f"openai/{OPENAI_CODEX}", api_base=wire.url, api_key="synthetic-openai-key")
+    return _deployment(scenario, wire, model=f"bedrock/{target}")
+
+
+def _message(payload: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+    return object_value(object_value(list_value(payload["choices"])[0])["message"])
+
+
+def _reasoning_turn(gateway: Gateway, model: str, marker: str) -> list[dict[str, JsonValue]]:
+    response: Final = _chat(gateway, model, marker, tools=[dict(TOOL)], reasoning_effort="high")
+    return rv.ITEMS.validate_python(_message(_payload(response))["reasoning_items"])
+
+
+def _replay(
+    gateway: Gateway, model: str, marker: str, reasoning_items: Sequence[Mapping[str, JsonValue]]
+) -> dict[str, JsonValue]:
+    history: Final[list[JsonValue]] = [
+        {"role": "user", "content": "Pick an invoice."},
+        {"role": "assistant", "content": "Invoice 7", "reasoning_items": [dict(item) for item in reasoning_items]},
+        {"role": "user", "content": _prompt(marker)},
+    ]
+    return _payload(
+        gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {
+                "model": model,
+                "messages": history,
+                "tools": [dict(TOOL)],
+                "reasoning_effort": "high",
+                "cache": {"no-cache": True},
+            },
+        )
+    )
+
+
+def _vendor_reasoning_item(item_id: str) -> dict[str, JsonValue]:
+    return {
+        "type": "reasoning",
+        "id": item_id,
+        "summary": [],
+        "encrypted_content": f"gAAAAA-vendor-{item_id.removeprefix('rs_')}",
+    }
+
+
+@pytest.mark.parametrize("replay_to", [GLOBAL_GPT, GPT], ids=["to-another-inference-profile", "to-the-same-profile"])
+def test_bridged_reasoning_replays_unchanged_to_the_bedrock_model_that_minted_it(
+    gateway: Gateway, replay_to: str
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    follow_up: Final = uuid.uuid4().hex
+    vendor: Final = rv.ResponsesVendor()
+    with wire_server(vendor.respond) as wire, gateway.scenario() as scenario:
+        minter: Final = _deployment(scenario, wire)
+        replayer: Final = minter if replay_to == GPT else _reasoning_deployment(scenario, wire, replay_to)
+        (item,) = _reasoning_turn(gateway, minter, marker)
+        (minted,) = vendor.minted
+        assert item["id"] == minted, item
+        assert target_of(_only_request(wire)) == NATIVE_RESPONSES
+        message: Final = _message(_replay(gateway, replayer, follow_up, [item]))
+        assert message["content"] == rv.answer(follow_up), message
+        body: Final = _body(_converse_request(wire, NATIVE_RESPONSES))
+        assert body["model"] == replay_to, body
+        assert rv.reasoning_items(body) == [_vendor_reasoning_item(minted)], body["input"]
+
+
+@pytest.mark.parametrize(
+    ("minted_on", "replayed_to"),
+    [(GPT, OTHER_GPT), (GPT, OPENAI_CODEX), (OPENAI_CODEX, GPT)],
+    ids=["bedrock-to-another-bedrock-model", "bedrock-to-openai", "openai-to-bedrock"],
+)
+def test_reasoning_is_not_replayed_to_a_model_that_did_not_mint_it(
+    gateway: Gateway, minted_on: str, replayed_to: str
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    follow_up: Final = uuid.uuid4().hex
+    vendor: Final = rv.ResponsesVendor()
+    with wire_server(vendor.respond) as wire, gateway.scenario() as scenario:
+        minter: Final = _reasoning_deployment(scenario, wire, minted_on)
+        replayer: Final = _reasoning_deployment(scenario, wire, replayed_to)
+        (item,) = _reasoning_turn(gateway, minter, marker)
+        assert item["id"] == vendor.minted[0], item
+        wire.drain()
+        message: Final = _message(_replay(gateway, replayer, follow_up, [item]))
+        assert message["content"] == rv.answer(follow_up), message
+        body: Final = _body(_only_request(wire))
+        assert body["model"] == replayed_to, body
+        assert rv.reasoning_items(body) == [], body["input"]
+        assert [entry.get("role") for entry in rv.ITEMS.validate_python(body["input"])] == [
+            "user",
+            "assistant",
+            "user",
+        ], body["input"]
+
+
+def test_tools_while_reasoning_with_a_provider_specific_field_keep_converse_and_reach_the_model(
+    gateway: Gateway,
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire)
+        response: Final = _chat(gateway, model, marker, tools=[dict(TOOL)], reasoning_effort="high", foo_bar=1)
+        assert _message(_payload(response))["content"] == answer(marker), response.text
+        body: Final = _body(_converse_request(wire))
+        assert object_value(body["additionalModelRequestFields"])["foo_bar"] == 1, body
+        assert body["toolConfig"] == {"tools": [dict(CONVERSE_TOOL)]}, body
+
+
+def test_tools_while_reasoning_with_a_non_boolean_store_are_refused_like_converse(gateway: Gateway) -> None:
+    marker: Final = uuid.uuid4().hex
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire)
+        response: Final = _chat(gateway, model, marker, tools=[dict(TOOL)], reasoning_effort="high", store="false")
+        assert response.status_code == 400, response.text
+        assert "store" in response.text, response.text
+        assert wire.drain() == (), response.text
+
+
+def test_tools_while_reasoning_on_a_sigv4_deployment_are_bridged_signed_with_its_keys(gateway: Gateway) -> None:
+    marker: Final = uuid.uuid4().hex
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model=f"bedrock/{GPT}",
+            api_key=None,
+            aws_access_key_id=ACCESS_KEY,
+            aws_secret_access_key=SECRET_KEY,
+            aws_region_name="us-east-1",
+            aws_bedrock_runtime_endpoint=wire.url,
+        )
+        response: Final = _chat(gateway, model, marker, tools=[dict(TOOL)], reasoning_effort="high")
+        assert _payload(response)["id"] == f"resp_upstream_{marker}", response.text
+        request: Final = _only_request(wire)
+        assert (request.method, target_of(request)) == ("POST", NATIVE_RESPONSES), request.target
+        _assert_sigv4_signed(request, NATIVE_RESPONSES)
+        assert _body(request)["reasoning"] == {"effort": "high"}, request.body
+        assert _only_spend_row_of(model) == _bridged_success_row(model, wire.url)
+
+
+@pytest.mark.parametrize("suffix", ["", "/openai/v1"])
+def test_tools_while_reasoning_are_bridged_to_the_api_base_without_a_runtime_endpoint(
+    gateway: Gateway, suffix: str
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(model_info=None, **{**GPT_DEPLOYMENT, "api_base": f"{wire.url}{suffix}"})
+        response: Final = _chat(gateway, model, marker, tools=[dict(TOOL)], reasoning_effort="high")
+        request: Final = _only_request(wire)
+        assert (request.method, request.target) == ("POST", NATIVE_RESPONSES), response.text
+        assert _payload(response)["id"] == f"resp_upstream_{marker}", response.text
+        assert _body(request)["reasoning"] == {"effort": "high"}, request.body
+        assert _only_spend_row_of(model) == _bridged_success_row(model, wire.url)
+
+
+def test_tools_while_reasoning_effort_is_an_object_keep_converse(gateway: Gateway) -> None:
+    marker: Final = uuid.uuid4().hex
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire)
+        response: Final = _chat(
+            gateway, model, marker, tools=[dict(TOOL)], reasoning_effort={"effort": "high", "summary": "auto"}
+        )
+        payload: Final = _payload(response)
+        assert payload["choices"][0]["message"]["content"] == answer(marker), response.text
+        assert _body(_converse_request(wire))["toolConfig"] == {"tools": [dict(CONVERSE_TOOL)]}
+        assert _spend_row(str(payload["id"])) == _success_row(model, f"{wire.url}{CONVERSE_TARGET}")
+
+
+def test_tools_while_reasoning_with_a_name_openai_rejects_keep_converse(gateway: Gateway) -> None:
+    marker: Final = uuid.uuid4().hex
+    tool: Final = {**TOOL, "function": {**TOOL["function"], "name": "lookup invoice!"}}
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire)
+        response: Final = _chat(gateway, model, marker, tools=[tool], reasoning_effort="high")
+        payload: Final = _payload(response)
         assert payload["choices"] == [
             {"finish_reason": "stop", "index": 0, "message": {"content": answer(marker), "role": "assistant"}}
         ], response.text
         body: Final = _body(_converse_request(wire))
-        assert body["toolConfig"] == {"tools": [CONVERSE_TOOL]}, body
+        assert body["toolConfig"] == {
+            "tools": [{"toolSpec": {**CONVERSE_TOOL["toolSpec"], "name": "lookup_invoice_"}}]
+        }, body
         assert body["additionalModelRequestFields"] == {"reasoning": {"effort": "high"}}, body
         assert _spend_row(str(payload["id"])) == _success_row(model, f"{wire.url}{CONVERSE_TARGET}")
 

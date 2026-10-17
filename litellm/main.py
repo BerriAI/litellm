@@ -119,6 +119,8 @@ from litellm.llms.base_llm.base_model_iterator import (
 from litellm.llms.base_llm.chat.transformation import with_attribution_headers
 from litellm.llms.bedrock.common_utils import (
     BedrockModelInfo,
+    bedrock_responses_bridge_api_base,
+    bedrock_responses_bridge_optional_params,
     bedrock_route_for_request,
     without_bedrock_route_prefix,
 )
@@ -5689,6 +5691,7 @@ def completion(
             "allowed_openai_params": allowed_openai_params,
             "base_model": base_model,
         }
+        bedrock_responses_bridge_allowed: Final = acompletion is True and not skip_responses_api_bridge
         provider_reasoning_effort: Final = reasoning_effort_with_summary_alias(
             reasoning_effort,
             non_default_params,
@@ -5699,6 +5702,7 @@ def completion(
             **{**optional_param_args, "reasoning_effort": provider_reasoning_effort},
             model_info=_MODEL_INFO_ADAPTER.validate_python(model_info) if isinstance(model_info, dict) else None,
             **non_default_params,
+            _litellm_responses_api_bridge_allowed=bedrock_responses_bridge_allowed,
         )
         processed_non_default_params: Final = pre_process_non_default_params(
             model=model,
@@ -5863,14 +5867,39 @@ def completion(
                 api_base=api_base,
             )
 
+        request_params: Final = MappingProxyType(
+            _OPTIONAL_PARAMS_ADAPTER.validate_python(
+                {
+                    **optional_param_args,
+                    **non_default_params,
+                    "_litellm_responses_api_bridge_allowed": bedrock_responses_bridge_allowed,
+                }
+            )
+        )
+        bedrock_bridges_to_responses: Final = (
+            custom_llm_provider == "bedrock"
+            and bedrock_route_for_request(
+                model,
+                request_params,
+                _ADDITIONAL_DROP_PARAMS_ADAPTER.validate_python(kwargs.get("additional_drop_params") or ()),
+            )
+            == "responses"
+        )
+
         # Use base_model (the true underlying model) for Azure model-type
         # detection when the deployment name differs from the model name.
         _azure_detection_model: Final = base_model or model
 
-        if responses_api_model_info.get("mode") == "responses" and not skip_responses_api_bridge:
+        if (
+            responses_api_model_info.get("mode") == "responses" or bedrock_bridges_to_responses
+        ) and not skip_responses_api_bridge:
             from litellm.completion_extras import responses_api_bridge
 
-            optional_params, rs_val = strip_reasoning_summary_aliases_from_optional_params(optional_params)
+            optional_params, rs_val = strip_reasoning_summary_aliases_from_optional_params(
+                {**bedrock_responses_bridge_optional_params(optional_params)}
+                if bedrock_bridges_to_responses
+                else optional_params
+            )
 
             if isinstance(reasoning_effort, dict) and "summary" in reasoning_effort:
                 optional_params["reasoning_effort"] = reasoning_effort
@@ -5896,7 +5925,16 @@ def completion(
                 acompletion=acompletion,
                 logging_obj=logging,
                 optional_params=optional_params,
-                litellm_params=litellm_params,
+                litellm_params=(
+                    {
+                        **litellm_params,
+                        "api_base": bedrock_responses_bridge_api_base(
+                            api_base, litellm_params.get("aws_bedrock_runtime_endpoint")
+                        ),
+                    }
+                    if bedrock_bridges_to_responses
+                    else litellm_params
+                ),
                 timeout=timeout,
                 client=client,  # pass AsyncOpenAI, OpenAI client
                 custom_llm_provider=custom_llm_provider,
@@ -5935,9 +5973,7 @@ def completion(
             optional_params=optional_params,
             organization=organization,
             provider_config=provider_config,
-            request_params=MappingProxyType(
-                _OPTIONAL_PARAMS_ADAPTER.validate_python({**optional_param_args, **non_default_params})
-            ),
+            request_params=request_params,
             shared_session=shared_session,
             stream=stream,
             temperature=temperature,

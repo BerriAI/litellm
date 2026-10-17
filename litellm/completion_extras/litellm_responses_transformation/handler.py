@@ -11,7 +11,7 @@ from typing import (
     cast,  # noqa: TID251  # optional_params reaches the bridge as an untyped dict
 )
 
-from typing_extensions import TypedDict
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.types.llms.openai import ResponsesAPIResponse
 
@@ -29,6 +29,7 @@ class ResponsesToCompletionBridgeHandlerInputKwargs(TypedDict):
     logging_obj: "LiteLLMLoggingObj"
     custom_llm_provider: str
     encoding: object
+    client: ReadOnly[object]
 
 
 def _restore_routing_prefix(model: str, custom_llm_provider: str) -> str:
@@ -158,6 +159,7 @@ class ResponsesToCompletionBridgeHandler:
             logging_obj=logging_obj,
             custom_llm_provider=custom_llm_provider,
             encoding=typed_kwargs.get("encoding"),
+            client=typed_kwargs.get("client"),
         )
 
     def completion(
@@ -192,7 +194,7 @@ class ResponsesToCompletionBridgeHandler:
             litellm_params=litellm_params,
             headers=headers,
             litellm_logging_obj=logging_obj,
-            client=kwargs.get("client"),
+            client=validated_kwargs["client"],
         )
 
         # Set on request_data rather than passed as explicit kwargs: the spread of
@@ -251,7 +253,7 @@ class ResponsesToCompletionBridgeHandler:
         else:
             if self._is_preformatted_cached_chat_stream(result):
                 return self._apply_post_stream_processing(result, model, custom_llm_provider)
-            from .transformation import is_structured_output_request
+            from .transformation import is_structured_output_request, reasoning_origin_for
 
             completion_stream: Final = self.transformation_handler.get_model_response_iterator(
                 streaming_response=result,
@@ -260,6 +262,7 @@ class ResponsesToCompletionBridgeHandler:
                 structured_output=is_structured_output_request(
                     cast("Mapping[str, object]", optional_params)  # cast-ok: optional_params is an untyped dict
                 ),
+                reasoning_origin=reasoning_origin_for(custom_llm_provider, model),
             )
             streamwrapper: Final = CustomStreamWrapper(
                 completion_stream=completion_stream,
@@ -293,6 +296,7 @@ class ResponsesToCompletionBridgeHandler:
                 litellm_params=litellm_params,
                 headers=headers,
                 litellm_logging_obj=logging_obj,
+                client=validated_kwargs["client"],
             )
         except Exception as e:
             raise e
@@ -354,7 +358,7 @@ class ResponsesToCompletionBridgeHandler:
         else:
             if self._is_preformatted_cached_chat_stream(result):
                 return self._apply_post_stream_processing(result, model, custom_llm_provider)
-            from .transformation import is_structured_output_request
+            from .transformation import is_structured_output_request, reasoning_origin_for
 
             completion_stream: Final = self.transformation_handler.get_model_response_iterator(
                 streaming_response=result,
@@ -363,6 +367,7 @@ class ResponsesToCompletionBridgeHandler:
                 structured_output=is_structured_output_request(
                     cast("Mapping[str, object]", optional_params)  # cast-ok: optional_params is an untyped dict
                 ),
+                reasoning_origin=reasoning_origin_for(custom_llm_provider, model),
             )
             streamwrapper: Final = CustomStreamWrapper(
                 completion_stream=completion_stream,
