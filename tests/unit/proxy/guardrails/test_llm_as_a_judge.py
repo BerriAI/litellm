@@ -95,7 +95,17 @@ def test_build_judge_prompt_missing_name_and_weight():
 
 def _make_litellm_params(**overrides):
     params = MagicMock()
-    for attr in ("guardrail_name", "judge_model", "criteria", "on_failure", "overall_threshold", "mode", "default_on"):
+    for attr in (
+        "guardrail_name",
+        "judge_model",
+        "criteria",
+        "on_failure",
+        "overall_threshold",
+        "mode",
+        "default_on",
+        "sample_rate",
+        "max_input_chars",
+    ):
         setattr(params, attr, None)
     for k, v in overrides.items():
         setattr(params, k, v)
@@ -115,6 +125,14 @@ def test_initialize_guardrail_ok(mock_mgr):
     instance = initialize_guardrail(lp, g)
     assert isinstance(instance, LLMAsAJudgeGuardrail)
     mock_mgr.add_litellm_callback.assert_called_once_with(instance)
+
+
+@patch("litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge.litellm.logging_callback_manager")
+def test_initialize_guardrail_empty_sample_rate_means_unset(mock_mgr):
+    lp = _make_litellm_params()
+    g = _make_guardrail_dict(sample_rate="")
+    instance = initialize_guardrail(lp, g)
+    assert instance.sample_rate == 1.0
 
 
 def test_initialize_guardrail_missing_judge_model():
@@ -783,3 +801,275 @@ async def test_apply_guardrail_clamps_score(mock_completion):
     result = await guardrail.apply_guardrail(inputs, request_data, "response")
     assert result is inputs
     assert request_data["metadata"]["eval_information"]["overall_score"] == 100.0
+
+
+# ---------------------------------------------------------------------------
+# sample_rate: deterministic draw, not_run telemetry, no judge call
+# ---------------------------------------------------------------------------
+
+
+def _apply_request(guardrail: LLMAsAJudgeGuardrail, request_data: dict):
+    return guardrail.apply_guardrail({"texts": ["judge this"]}, request_data, "request")
+
+
+def _sampled_status(request_data: dict) -> str:
+    entries = request_data.get("metadata", {}).get("standard_logging_guardrail_information") or []
+    return entries[-1]["guardrail_status"] if entries else ""
+
+
+@pytest.mark.asyncio
+async def test_sample_rate_draw_is_stable_per_call_id():
+    from litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge import _call_id_sample_draw
+
+    first: Final = _call_id_sample_draw("call-123")
+    second: Final = _call_id_sample_draw("call-123")
+    assert first == second
+    assert 0 <= first < 1
+    assert _call_id_sample_draw("call-124") != first or _call_id_sample_draw("call-125") != first
+
+
+@pytest.mark.asyncio
+async def test_sampling_decision_depends_only_on_call_id():
+    draws: Final[list[str]] = []
+    guardrail: Final = _make_guardrail(
+        event_hook=GuardrailEventHooks.pre_call,
+        sample_rate=0.5,
+        sampling_draw=lambda cid: draws.append(cid) or _real_draw(cid),
+        router_provider=lambda: _judge_router(95.0),
+    )
+    call_id: Final = "stable-call-id"
+    first_data: Final[dict[str, object]] = {
+        "messages": [{"role": "user", "content": "judge this"}],
+        "metadata": {"user_api_key": "key-a"},
+        "litellm_call_id": call_id,
+    }
+    second_data: Final[dict[str, object]] = {
+        "messages": [{"role": "user", "content": "judge this"}],
+        "metadata": {"user_api_key": "key-b", "user_api_key_user_id": "someone-else"},
+        "litellm_call_id": call_id,
+        "model": "other-model",
+    }
+
+    await _apply_request(guardrail, first_data)
+    await _apply_request(guardrail, second_data)
+
+    assert draws == [call_id, call_id]
+    assert _sampled_status(first_data) == _sampled_status(second_data)
+
+
+def _real_draw(call_id: str) -> float:
+    from litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge import _call_id_sample_draw
+
+    return _call_id_sample_draw(call_id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "draw,rate,expected_sampled",
+    [(0.4, 0.5, True), (0.5, 0.5, False), (0.999, 1.0, True), (0.0, 0.0, False)],
+    ids=["below-rate", "draw-equals-rate-not-sampled", "rate-one-always", "rate-zero-never"],
+)
+async def test_sample_rate_boundary(draw: float, rate: float, expected_sampled: bool):
+    router: Final = _judge_router(95.0)
+    guardrail: Final = _make_guardrail(
+        event_hook=GuardrailEventHooks.pre_call,
+        sample_rate=rate,
+        sampling_draw=lambda cid: draw,
+        router_provider=lambda: router,
+    )
+    request_data: Final[dict[str, object]] = {
+        "messages": [{"role": "user", "content": "judge this"}],
+        "metadata": {},
+        "litellm_call_id": "call-x",
+    }
+
+    await _apply_request(guardrail, request_data)
+
+    assert (router.acompletion.call_count == 1) is expected_sampled
+
+
+@pytest.mark.asyncio
+async def test_injected_sampling_draw_receives_call_id():
+    draws: Final[list[str]] = []
+    guardrail: Final = _make_guardrail(
+        event_hook=GuardrailEventHooks.pre_call,
+        sample_rate=0.5,
+        sampling_draw=lambda cid: draws.append(cid) or 0.9,
+    )
+    request_data: Final[dict[str, object]] = {
+        "messages": [{"role": "user", "content": "judge this"}],
+        "metadata": {},
+        "litellm_call_id": "injected-call",
+    }
+
+    await _apply_request(guardrail, request_data)
+
+    assert draws == ["injected-call"]
+    assert _sampled_status(request_data) == "not_run"
+
+
+@pytest.mark.asyncio
+async def test_not_sampled_records_not_run_without_eval_or_judge_call():
+    router: Final = _judge_router(95.0)
+    guardrail: Final = _make_guardrail(
+        event_hook=GuardrailEventHooks.pre_call,
+        sample_rate=0.0,
+        router_provider=lambda: router,
+    )
+    request_data: Final[dict[str, object]] = {
+        "messages": [{"role": "user", "content": "judge this"}],
+        "metadata": {},
+        "litellm_call_id": "skipped-call",
+    }
+    inputs: Final = {"texts": ["judge this"]}
+
+    result: Final = await guardrail.apply_guardrail(inputs, request_data, "request")
+
+    assert result is inputs
+    assert router.acompletion.call_count == 0
+    assert "eval_information" not in request_data["metadata"]
+    entry: Final = request_data["metadata"]["standard_logging_guardrail_information"][-1]
+    assert entry["guardrail_status"] == "not_run"
+    assert entry["guardrail_response"] == {"sampled": False, "sample_rate": 0.0}
+
+
+@pytest.mark.asyncio
+async def test_sample_rate_one_does_not_hash_call_id():
+    router: Final = _judge_router(95.0)
+    draws: Final[list[str]] = []
+    guardrail: Final = _make_guardrail(
+        event_hook=GuardrailEventHooks.pre_call,
+        sample_rate=1.0,
+        sampling_draw=lambda cid: draws.append(cid) or 0.0,
+        router_provider=lambda: router,
+    )
+    request_data: Final[dict[str, object]] = {
+        "messages": [{"role": "user", "content": "judge this"}],
+        "metadata": {},
+    }
+
+    await _apply_request(guardrail, request_data)
+
+    assert draws == []
+    assert router.acompletion.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# max_input_chars: judged-context truncation
+# ---------------------------------------------------------------------------
+
+
+def test_cap_judged_context_keeps_text_head_and_conversation_tail():
+    from litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge import _cap_judged_context
+
+    conversation, text = _cap_judged_context("9" * 100 + "\n" + "8" * 100, "7" * 50, 60)
+    assert text == "7" * 50
+    assert conversation == "8" * 10
+
+
+def test_cap_judged_context_gives_conversation_nothing_when_text_fills_budget():
+    from litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge import _cap_judged_context
+
+    conversation, text = _cap_judged_context("8" * 100, "7" * 50, 30)
+    assert text == "7" * 30
+    assert conversation == ""
+
+
+def test_cap_judged_context_text_keeps_its_head_not_its_tail():
+    from litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge import _cap_judged_context
+
+    _, text = _cap_judged_context("", "HEAD" + "x" * 100, 10)
+    assert text == "HEADxxxxxx"
+
+
+def test_build_judge_prompt_criteria_and_labels_do_not_eat_the_cap():
+    cap: Final = 50
+    prompt: Final = _build_judge_prompt(
+        [{"name": "work", "weight": 100, "description": "x" * 500}],
+        [{"role": "user", "content": "8" * 200}],
+        "7" * 30,
+        "request",
+        max_input_chars=cap,
+    )
+    assert "x" * 500 in prompt
+    assert "7" * 30 in prompt
+    assert "8" * 20 in prompt
+    assert "8" * 21 not in prompt
+
+
+def test_build_judge_prompt_unset_cap_is_byte_identical():
+    criteria: Final = [{"name": "work", "weight": 100, "description": "work?"}]
+    messages: Final = [{"role": "user", "content": "u" * 100}]
+    assert _build_judge_prompt(criteria, messages, "d" * 50, "request", None) == _build_judge_prompt(
+        criteria, messages, "d" * 50, "request"
+    )
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_caps_judged_request_context_without_mutating_messages():
+    cap: Final = 400
+    router: Final = _judge_router(95.0)
+    guardrail: Final = _make_guardrail(
+        event_hook=GuardrailEventHooks.pre_call,
+        max_input_chars=cap,
+        router_provider=lambda: router,
+    )
+    sent: Final[list[dict[str, object]]] = [
+        {"role": "system", "content": "s" * 300},
+        {"role": "user", "content": "u" * 300},
+        {"role": "assistant", "content": "a" * 100},
+        {"role": "user", "content": "d" * 50},
+    ]
+    request_data: Final[dict[str, object]] = {"messages": [dict(m) for m in sent], "metadata": {}}
+    inputs: Final = {"texts": ["d" * 50], "structured_messages": sent}
+
+    await guardrail.apply_guardrail(inputs, request_data, "request")
+
+    content: Final = router.acompletion.call_args.kwargs["messages"][1]["content"]
+    assert "d" * 50 in content
+    assert "SYSTEM:" not in content
+    assert "s" * 100 not in content
+    assert sent[1]["content"] == "u" * 300
+    assert sent[3]["content"] == "d" * 50
+    assert request_data["messages"][1]["content"] == "u" * 300
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_caps_judged_response_context():
+    cap: Final = 400
+    router: Final = _judge_router(95.0)
+    guardrail: Final = _make_guardrail(
+        event_hook=GuardrailEventHooks.post_call,
+        max_input_chars=cap,
+        router_provider=lambda: router,
+    )
+    request_data: Final[dict[str, object]] = {
+        "messages": [{"role": "user", "content": "u" * 100}],
+        "metadata": {},
+    }
+    inputs: Final = {"texts": ["e" * 500]}
+
+    await guardrail.apply_guardrail(inputs, request_data, "response")
+
+    content: Final = router.acompletion.call_args.kwargs["messages"][1]["content"]
+    assert "e" * 400 in content
+    assert "e" * 401 not in content
+    assert "u" * 100 not in content
+
+
+@patch("litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge.litellm.logging_callback_manager")
+def test_initialize_guardrail_reads_sample_rate_and_max_input_chars(mock_mgr):
+    lp = _make_litellm_params()
+    g = _make_guardrail_dict(sample_rate=0.25, max_input_chars=500)
+    instance = initialize_guardrail(lp, g)
+    assert instance.sample_rate == 0.25
+    assert instance.max_input_chars == 500
+
+
+@patch("litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge.litellm.logging_callback_manager")
+def test_initialize_guardrail_defaults_sample_rate_to_full(mock_mgr):
+    lp = _make_litellm_params()
+    g = _make_guardrail_dict()
+    instance = initialize_guardrail(lp, g)
+    assert instance.sample_rate == 1.0
+    assert instance.max_input_chars is None

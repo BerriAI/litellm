@@ -1051,8 +1051,34 @@ class CustomGuardrail(CustomLogger):
             await self._scan_logged_call(kwargs, response, translation, output_translation, scratch_metadata)
         except Exception as e:
             verbose_logger.warning("Guardrail %s: logging_only scan raised: %s", self.guardrail_name, e)
-        recorded: Final = scratch_metadata.get("standard_logging_guardrail_information")
+        eval_information: Final = scratch_metadata.get("eval_information")
         standard_logging_object: Final = kwargs.get("standard_logging_object")
+        if eval_information is not None:
+            # scratch_metadata started from litellm_params["metadata"], so its
+            # eval_information already carries verdicts recorded by earlier judges
+            _set_eval_information(
+                cast(dict[str, object], litellm_params),  # cast-ok: kwargs litellm_params is a heterogeneous dict
+                eval_information,
+            )
+            kwargs_view: Final = cast(  # cast-ok: the CustomLogger kwargs dict is heterogeneous
+                Mapping[str, object], kwargs
+            )
+            mcd: Final = cast(  # cast-ok: kwargs carries model_call_details as a heterogeneous dict
+                dict[str, object] | None, kwargs_view.get("model_call_details")
+            )
+            if isinstance(mcd, dict):
+                mcd_litellm_params: Final = mcd.get("litellm_params")
+                if isinstance(mcd_litellm_params, dict):
+                    _set_eval_information(
+                        cast(dict[str, object], mcd_litellm_params),  # cast-ok: narrowed to dict by isinstance
+                        eval_information,
+                    )
+            if isinstance(standard_logging_object, dict):
+                _set_eval_information(
+                    cast(dict[str, object], standard_logging_object),  # cast-ok: narrowed to dict by isinstance
+                    eval_information,
+                )
+        recorded: Final = scratch_metadata.get("standard_logging_guardrail_information")
         if not recorded or not isinstance(standard_logging_object, dict):
             return kwargs, result
         entries: Final = recorded if isinstance(recorded, list) else [recorded]
@@ -1649,6 +1675,18 @@ def _append_slg_to_litellm_params(lp: object, entries: list) -> None:
             existing.append(entry)
 
 
+def _set_eval_information(
+    lp: dict[str, object],  # mutable-ok: merges eval info into the caller's shared metadata dict
+    eval_info: object,
+) -> None:
+    if not isinstance(lp.get("metadata"), dict):
+        lp["metadata"] = {}  # rebind-ok: callers share this dict, so the bucket must be created in place
+    metadata_bucket: Final = cast(  # cast-ok: litellm_params["metadata"] is a heterogeneous dict
+        dict[str, object], lp["metadata"]
+    )
+    metadata_bucket["eval_information"] = eval_info
+
+
 def _sync_guardrail_info_to_logging_obj(request_data: dict, logging_obj: object) -> None:
     """Copy standard_logging_guardrail_information from request_data into logging_obj.
 
@@ -1670,6 +1708,18 @@ def _sync_guardrail_info_to_logging_obj(request_data: dict, logging_obj: object)
     mcd: Final = getattr(logging_obj, "model_call_details", None) or {}
     _append_slg_to_litellm_params(getattr(logging_obj, "litellm_params", None), entries)
     _append_slg_to_litellm_params(mcd.get("litellm_params"), entries)
+
+    eval_info: Final = cast(  # cast-ok: the request metadata bucket is a heterogeneous dict
+        dict[str, object], meta_src
+    ).get("eval_information")
+    if eval_info is None:
+        return
+    for lp in (getattr(logging_obj, "litellm_params", None), mcd.get("litellm_params")):
+        if isinstance(lp, dict):
+            _set_eval_information(
+                cast(dict[str, object], lp),  # cast-ok: narrowed to dict by isinstance
+                eval_info,
+            )
 
 
 _PRE_CALL_CONTENT_KEYS: Final = frozenset(

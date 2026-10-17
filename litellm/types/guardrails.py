@@ -1186,7 +1186,7 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
     max_input_chars: int | None = Field(
         default=None,
         gt=0,
-        description="Character budget for each text sent to the guardrail's model. Implemented by guardrail='decision_model'.",
+        description="Character budget for each text sent to the guardrail's model. Implemented by guardrail='decision_model' and 'llm_as_a_judge'.",
     )
 
     max_concurrent_decision_calls: int | None = Field(
@@ -1398,6 +1398,46 @@ class LitellmParams(  # pyright: ignore[reportIncompatibleVariableOverride]  # o
     mode: str | list[str] | Mode = Field(
         description="When to apply the guardrail (pre_call, post_call, during_call, logging_only)"
     )
+
+    @model_validator(mode="before")  # pyright: ignore[reportUntypedFunctionDecorator]  # pydantic decorators are untyped
+    @classmethod
+    def reject_invalid_llm_judge_sampling_params(cls, data: object) -> object:
+        if not isinstance(data, Mapping):
+            return data
+        fields: Final = cast(Mapping[str, object], data)  # cast-ok: pydantic hands a before-validator the raw mapping
+        if fields.get("guardrail") != SupportedGuardrailIntegrations.LLM_AS_A_JUDGE.value:
+            return fields
+        sample_rate: Final = fields.get("sample_rate")
+        if (
+            sample_rate is not None
+            and sample_rate != ""
+            and (
+                isinstance(sample_rate, bool) or not isinstance(sample_rate, (int, float)) or not 0 <= sample_rate <= 1
+            )
+        ):
+            raise ValueError(f"sample_rate must be a number between 0 and 1, got {sample_rate!r}")
+        max_input_chars: Final = fields.get("max_input_chars")
+        if isinstance(max_input_chars, bool):
+            raise ValueError(f"max_input_chars must be a positive integer, got {max_input_chars!r}")  # noqa: TRY004  # pydantic surfaces ValueError as 422, TypeError escapes as 500
+        mode: Final = fields.get("mode")
+        mode_items: Final = cast(list[object], mode) if isinstance(mode, list) else None  # cast-ok: hook names
+        judge_cannot_block: Final = fields.get("on_failure") == "log" or bool(
+            mode == GuardrailEventHooks.logging_only.value
+            if mode_items is None
+            else len(mode_items) == 1 and mode_items[0] == GuardrailEventHooks.logging_only.value
+        )
+        rate: Final = float(sample_rate) if isinstance(sample_rate, (int, float)) else 1.0
+        is_sampled: Final = sample_rate not in (None, "") and rate < 1
+        if not judge_cannot_block:
+            if is_sampled:
+                raise ValueError(
+                    "sample_rate below 1 requires on_failure: log, a blocking judge must evaluate every request"
+                )
+            if max_input_chars is not None and max_input_chars != "":
+                raise ValueError(
+                    "max_input_chars requires on_failure: log, a blocking judge must evaluate the full input"
+                )
+        return fields
 
     @field_validator("timeout", mode="before", check_fields=False)
     @classmethod

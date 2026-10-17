@@ -160,6 +160,62 @@ const LLMJudgeFields: React.FC<LLMJudgeFieldsProps> = ({ availableModels, contro
         )}
       </GuardrailField>
 
+      <GuardrailField
+        control={control}
+        name="sample_rate"
+        label={labelWithHint(
+          "Sample rate",
+          "0–1. Fraction of requests the judge evaluates, decided per request call id. Optional; default 1 judges every request.",
+        )}
+      >
+        {({ id, name, value, onChange, onBlur, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
+          <>
+            <Input
+              id={id}
+              name={name}
+              type="number"
+              min={0}
+              max={1}
+              step={0.01}
+              placeholder="1"
+              aria-invalid={ariaInvalid}
+              aria-describedby={ariaDescribedBy}
+              value={asText(value)}
+              onChange={(event) => onChange(event.target.value === "" ? null : event.target.value)}
+              onBlur={onBlur}
+            />
+            <p className="text-xs text-muted-foreground">Only allowed when On failure is log</p>
+          </>
+        )}
+      </GuardrailField>
+
+      <GuardrailField
+        control={control}
+        name="max_input_chars"
+        label={labelWithHint(
+          "Max input chars",
+          "Optional positive integer. Caps the request or response text sent to the judge; unset sends it all.",
+        )}
+      >
+        {({ id, name, value, onChange, onBlur, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
+          <>
+            <Input
+              id={id}
+              name={name}
+              type="number"
+              min={1}
+              step={1}
+              aria-invalid={ariaInvalid}
+              aria-describedby={ariaDescribedBy}
+              value={asText(value)}
+              onChange={(event) => onChange(event.target.value === "" ? null : event.target.value)}
+              onBlur={onBlur}
+            />
+            <p className="text-xs text-muted-foreground">Only allowed when On failure is log</p>
+          </>
+        )}
+      </GuardrailField>
+
       <Field>
         <FieldLabel>
           {labelWithHint(

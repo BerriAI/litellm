@@ -1,5 +1,5 @@
 import React from "react";
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { chooseSelectOption, renderWithProviders } from "@/../tests/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -324,6 +324,70 @@ describe("AddGuardrailForm create payload characterization", () => {
       },
       guardrail_info: {},
     });
+  });
+
+  it("sends sample_rate and max_input_chars only when the user sets them", async () => {
+    const user = userEvent.setup({ delay: null });
+    renderForm();
+
+    await user.type(await screen.findByLabelText("Guardrail Name"), "judge-sampled");
+    await pickProvider(user, "LiteLLM LLM as a Judge");
+    await user.click(screen.getByRole("button", { name: "Next" }));
+
+    await user.type(await screen.findByPlaceholderText("Criterion name (e.g. Policy accuracy)"), "Accuracy");
+    await user.type(screen.getByPlaceholderText("What should the judge check for this criterion?"), "Is it right");
+    await user.click(screen.getByLabelText("Judge Model"));
+    await user.click(await screen.findByTitle("gpt-5"));
+    fireEvent.change(screen.getByLabelText(/Sample rate/), { target: { value: "0.25" } });
+    fireEvent.change(screen.getByLabelText(/Max input chars/), { target: { value: "500" } });
+    await user.click(screen.getByRole("button", { name: "Create Guardrail" }));
+
+    await waitFor(() => expect(networking.createGuardrailCall).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(networking.createGuardrailCall).mock.calls.at(-1)?.[1].litellm_params).toMatchObject({
+      sample_rate: 0.25,
+      max_input_chars: 500,
+    });
+  });
+
+  it("keeps the raw text while typing a decimal into Sample rate and submits it as a number", async () => {
+    const user = userEvent.setup({ delay: null });
+    renderForm();
+
+    await user.type(await screen.findByLabelText("Guardrail Name"), "judge-decimal");
+    await pickProvider(user, "LiteLLM LLM as a Judge");
+    await user.click(screen.getByRole("button", { name: "Next" }));
+
+    await user.type(await screen.findByPlaceholderText("Criterion name (e.g. Policy accuracy)"), "Accuracy");
+    await user.type(screen.getByPlaceholderText("What should the judge check for this criterion?"), "Is it right");
+    await user.click(screen.getByLabelText("Judge Model"));
+    await user.click(await screen.findByTitle("gpt-5"));
+    const sampleRate = screen.getByLabelText(/Sample rate/);
+    await user.type(sampleRate, "0.05");
+    expect(sampleRate).toHaveDisplayValue("0.05");
+    await user.click(screen.getByRole("button", { name: "Create Guardrail" }));
+
+    await waitFor(() => expect(networking.createGuardrailCall).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(networking.createGuardrailCall).mock.calls.at(-1)?.[1].litellm_params.sample_rate).toBe(0.05);
+  });
+
+  it("omits sample_rate and max_input_chars when left blank", async () => {
+    const user = userEvent.setup({ delay: null });
+    renderForm();
+
+    await user.type(await screen.findByLabelText("Guardrail Name"), "judge-full");
+    await pickProvider(user, "LiteLLM LLM as a Judge");
+    await user.click(screen.getByRole("button", { name: "Next" }));
+
+    await user.type(await screen.findByPlaceholderText("Criterion name (e.g. Policy accuracy)"), "Accuracy");
+    await user.type(screen.getByPlaceholderText("What should the judge check for this criterion?"), "Is it right");
+    await user.click(screen.getByLabelText("Judge Model"));
+    await user.click(await screen.findByTitle("gpt-5"));
+    await user.click(screen.getByRole("button", { name: "Create Guardrail" }));
+
+    await waitFor(() => expect(networking.createGuardrailCall).toHaveBeenCalledTimes(1));
+    const params = vi.mocked(networking.createGuardrailCall).mock.calls.at(-1)?.[1].litellm_params;
+    expect(params).not.toHaveProperty("sample_rate");
+    expect(params).not.toHaveProperty("max_input_chars");
   });
 
   it("refuses to create an llm judge guardrail whose criterion weights do not total 100", async () => {
