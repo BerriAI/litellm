@@ -2154,8 +2154,7 @@ if MCP_AVAILABLE:
     async def _check_passthrough_upstream_auth(
         scope: Scope,
         user_api_key_auth: UserAPIKeyAuth | None,
-        mcp_servers: list[str] | None,
-        client_ip: str | None,
+        allowed_servers: Sequence[MCPServer],
         *,
         oauth2_headers: Mapping[str, str] | None,
         mcp_server_auth_headers: dict[str, dict[str, str]] | None,
@@ -2163,9 +2162,8 @@ if MCP_AVAILABLE:
     ) -> None:
         """Probe pass-through upstream servers in parallel before the MCP session starts.
 
-        Only servers the caller's key is already authorized to reach are probed —
-        the list is derived from _get_allowed_mcp_servers so that a user cannot
-        trigger an upstream probe against a server their key is not permitted for.
+        The caller passes the already-resolved allowed-server set so a user cannot
+        trigger a probe against a server their key is not permitted for.
 
         The MCP SDK commits HTTP 200 headers before invoking handlers, so a 401
         can only be returned before that point. This function raises HTTPException(401)
@@ -2177,13 +2175,6 @@ if MCP_AVAILABLE:
         if not oauth2_headers and not mcp_server_auth_headers:
             return
 
-        # Use the authorized server set, not the raw user-supplied names, so that
-        # a caller cannot force a probe to a server their key is not allowed to use.
-        allowed_servers: Final = await operations._get_allowed_mcp_servers(
-            user_api_key_auth=user_api_key_auth,
-            mcp_servers=mcp_servers,
-            client_ip=client_ip,
-        )
         prepared_headers: Final = tuple(
             (
                 srv,
@@ -2302,8 +2293,7 @@ if MCP_AVAILABLE:
         await _check_passthrough_upstream_auth(
             scope,
             context.user_api_key_auth,
-            authorized_names,
-            context.client_ip,
+            allowed,
             oauth2_headers=context.oauth2_headers,
             mcp_server_auth_headers={key: dict(value) for key, value in context.mcp_server_auth_headers.items()}
             if context.mcp_server_auth_headers is not None
@@ -2350,8 +2340,7 @@ if MCP_AVAILABLE:
             await _check_passthrough_upstream_auth(
                 scope,
                 user_api_key_auth,
-                list(mcp_servers) if mcp_servers is not None else None,
-                client_ip,
+                allowed_servers,
                 oauth2_headers=oauth2_headers,
                 mcp_server_auth_headers=(
                     {name: dict(headers) for name, headers in mcp_server_auth_headers.items()}
@@ -2859,8 +2848,7 @@ if MCP_AVAILABLE:
             await _check_passthrough_upstream_auth(
                 scope,
                 user_api_key_auth,
-                mcp_servers,
-                _sse_client_ip,
+                allowed_servers,
                 oauth2_headers=oauth2_headers,
                 mcp_server_auth_headers=mcp_server_auth_headers,
                 raw_headers=raw_headers,
