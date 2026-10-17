@@ -138,6 +138,29 @@ def test_no_error_label_series_is_a_valid_zero() -> None:
     )
 
 
+@pytest.mark.parametrize("service", [None, "postgres", "batch_write_to_db"])
+def test_multiprocess_metrics_omit_failure_families_until_a_failure(service: str | None) -> None:
+    total: Final = """# TYPE litellm_postgres_total_requests_total counter
+litellm_postgres_total_requests_total{postgres="postgres"} 1
+"""
+    failure: Final = (
+        f"# TYPE litellm_{service}_failed_requests_total counter\n"
+        f'litellm_{service}_failed_requests_total{{function_name="query",error_class="Timeout"}} 1\n'
+        if service is not None
+        else ""
+    )
+    assert postgres_failures(total + failure) == (1 if service is not None else 0)
+
+
+@pytest.mark.parametrize("total", ["0", "-1", "NaN", "+Inf"])
+def test_missing_failure_families_require_observed_database_activity(total: str) -> None:
+    with pytest.raises(AssertionError):
+        _ = postgres_failures(
+            "# TYPE litellm_postgres_total_requests_total counter\n"
+            f'litellm_postgres_total_requests_total{{postgres="postgres"}} {total}\n'
+        )
+
+
 @pytest.mark.parametrize("body", ["", "# TYPE unrelated counter\n", metrics(failure="NaN"), metrics(batch="-1")])
 def test_missing_or_invalid_counters_do_not_pass_as_zero(body: str) -> None:
     with pytest.raises(AssertionError):

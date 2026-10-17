@@ -52,8 +52,12 @@ def postgres_failures(text: str) -> float:
     families: Final = tuple(text_string_to_metric_families(text))
     names: Final = frozenset(family.name for family in families)
     required: Final = frozenset(f"litellm_{service}_failed_requests" for service in _SERVICES)
-    assert required <= names, f"Missing database service counters: {required - names}"
     samples: Final = tuple(sample for family in families for sample in family.samples)
+    has_database_activity: Final = any(
+        sample.name == "litellm_postgres_total_requests_total" and math.isfinite(sample.value) and sample.value > 0
+        for sample in samples
+    )
+    assert required <= names or has_database_activity, f"Missing database service counters: {required - names}"
     failures: Final = tuple(sample.value for sample in samples if sample.name in {f"{name}_total" for name in required})
     assert all(math.isfinite(value) and value >= 0 for value in failures), "Invalid database failure counter"
     return sum(failures)
