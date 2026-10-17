@@ -1536,16 +1536,19 @@ def test_bypass_header_case_insensitive():
 
     for header_value in ("true", "True", "TRUE"):
         data = {"proxy_server_request": {"headers": {"x-headroom-bypass": header_value}}}
-        assert guardrail._should_bypass(data) is True
+        assert guardrail._request_header_enabled(data, "x-headroom-bypass") is True
 
     data = {"proxy_server_request": {"headers": {"x-headroom-bypass": "false"}}}
-    assert guardrail._should_bypass(data) is False
+    assert guardrail._request_header_enabled(data, "x-headroom-bypass") is False
 
     data = {"proxy_server_request": {"headers": {}}}
-    assert guardrail._should_bypass(data) is False
+    assert guardrail._request_header_enabled(data, "x-headroom-bypass") is False
 
     data = {}
-    assert guardrail._should_bypass(data) is False
+    assert guardrail._request_header_enabled(data, "x-headroom-bypass") is False
+
+    invalid_headers: Final = {"proxy_server_request": {"headers": None}}
+    assert guardrail._request_header_enabled(invalid_headers, "x-headroom-bypass") is False
 
 
 @pytest.mark.asyncio
@@ -3075,3 +3078,102 @@ def test_unusable_timeout_falls_back_to_the_default(configured: float):
 
     assert guardrail.timeout.read == 60.0
     assert guardrail.timeout.connect == 5.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("opt_in", ["true", "TRUE", "false", None])
+async def test_compressed_prompt_response_header_requires_request_opt_in(
+    respx_mock: respx.MockRouter, opt_in: str | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import base64
+
+    from litellm.proxy.common_utils.callback_utils import get_logging_caching_headers
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    guardrail: Final = HeadroomGuardrail(api_base=FAKE_API_BASE, guardrail_name="headroom")
+    compressed: Final = [{"role": "user", "content": "Résumé 日本語\nsummary"}]
+    route: Final = respx_mock.post(f"{FAKE_API_BASE}/v1/compress").respond(
+        200, json={"messages": compressed, "tokens_before": 1000, "tokens_after": 10}
+    )
+    request_data: Final = {
+        "proxy_server_request": {
+            "headers": {} if opt_in is None else {"x-litellm-return-compressed-prompt": opt_in}
+        }
+    }
+    result: Final = await guardrail.apply_guardrail(
+        inputs=GenericGuardrailAPIInputs(texts=[], structured_messages=ORIGINAL_MESSAGES),
+        request_data=request_data,
+        input_type="request",
+    )
+    headers: Final = get_logging_caching_headers(request_data) or {}
+    assert route.call_count == 1
+    assert result["structured_messages"] == [ORIGINAL_MESSAGES[0], compressed[0], *ORIGINAL_MESSAGES[2:]]
+    if opt_in is not None and opt_in.lower() == "true":
+        assert json.loads(base64.b64decode(headers["x-litellm-compressed-prompt"])) == result["structured_messages"]
+    else:
+        assert "x-litellm-compressed-prompt" not in headers
+    assert "x-litellm-compressed-prompt-omitted" not in headers
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("json_bytes", [12285, 12288, 12289])
+async def test_compressed_prompt_header_byte_limit_never_truncates(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, json_bytes: int
+) -> None:
+    import base64
+
+    from litellm.proxy.common_utils.callback_utils import get_logging_caching_headers
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    guardrail: Final = HeadroomGuardrail(api_base=FAKE_API_BASE, guardrail_name="headroom")
+    empty: Final = [ORIGINAL_MESSAGES[0], {"role": "user", "content": ""}, *ORIGINAL_MESSAGES[2:]]
+    overhead: Final = len(json.dumps(empty, ensure_ascii=False, separators=(",", ":")).encode())
+    compressed: Final = [{"role": "user", "content": "a" * (json_bytes - overhead)}]
+    respx_mock.post(f"{FAKE_API_BASE}/v1/compress").respond(200, json={"messages": compressed})
+    data: Final = {"proxy_server_request": {"headers": {"x-litellm-return-compressed-prompt": "true"}}}
+    result: Final = await guardrail.apply_guardrail(
+        inputs=GenericGuardrailAPIInputs(texts=[], structured_messages=ORIGINAL_MESSAGES),
+        request_data=data,
+        input_type="request",
+    )
+    headers: Final = get_logging_caching_headers(data) or {}
+    if json_bytes <= 12288:
+        value: Final = headers["x-litellm-compressed-prompt"]
+        assert len(value) == 4 * ((json_bytes + 2) // 3)
+        assert json.loads(base64.b64decode(value)) == result["structured_messages"]
+        assert "x-litellm-compressed-prompt-omitted" not in headers
+    else:
+        assert headers["x-litellm-compressed-prompt-omitted"] == "too_large"
+        assert "x-litellm-compressed-prompt" not in headers
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scenario", ["bypass", "skip", "fail_open", "no_opt_in"])
+async def test_compressed_prompt_header_does_not_survive_an_uncompressed_attempt(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, scenario: str
+) -> None:
+    from litellm.proxy.common_utils.callback_utils import get_logging_caching_headers
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    guardrail: Final = HeadroomGuardrail(
+        api_base=FAKE_API_BASE, guardrail_name="headroom", unreachable_fallback="fail_open"
+    )
+    route: Final = respx_mock.post(f"{FAKE_API_BASE}/v1/compress").respond(503)
+    inputs: Final = GenericGuardrailAPIInputs(
+        texts=[], structured_messages=ORIGINAL_MESSAGES[-1:] if scenario == "skip" else ORIGINAL_MESSAGES
+    )
+    data: Final = {
+        "metadata": {"_headroom_compressed_prompt": "c3RhbGU="},
+        "proxy_server_request": {
+            "headers": {
+                "x-litellm-return-compressed-prompt": "false" if scenario == "no_opt_in" else "true",
+                "x-headroom-bypass": "true" if scenario == "bypass" else "false",
+            }
+        },
+    }
+    result: Final = await guardrail.apply_guardrail(inputs=inputs, request_data=data, input_type="request")
+    headers: Final = get_logging_caching_headers(data) or {}
+    assert result is inputs
+    assert route.call_count == (1 if scenario in ("fail_open", "no_opt_in") else 0)
+    assert "x-litellm-compressed-prompt" not in headers
+    assert "x-litellm-compressed-prompt-omitted" not in headers

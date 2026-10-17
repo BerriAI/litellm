@@ -56,6 +56,8 @@ reset_color_code: Final = "\033[0m"
 
 TRUSTED_PILLAR_RESPONSE_HEADERS_METADATA_KEY: Final = "_pillar_response_headers_trusted"
 
+HEADROOM_COMPRESSED_PROMPT_METADATA_KEY: Final = "_headroom_compressed_prompt"
+
 GUARDRAIL_SCAN_IDS_METADATA_KEY: Final = "guardrail_scan_ids"
 GUARDRAIL_SCAN_METADATA_METADATA_KEY: Final = "guardrail_scan_metadata"
 
@@ -488,6 +490,13 @@ def get_logging_caching_headers(request_data: dict) -> dict | None:
     if "applied_guardrails" in _metadata:
         headers["x-litellm-applied-guardrails"] = ",".join(_metadata["applied_guardrails"])
 
+    compressed_prompt: Final = _metadata.get(HEADROOM_COMPRESSED_PROMPT_METADATA_KEY)
+    if isinstance(compressed_prompt, str) and compressed_prompt:
+        if compressed_prompt == "too_large":
+            headers["x-litellm-compressed-prompt-omitted"] = "too_large"
+        else:
+            headers["x-litellm-compressed-prompt"] = compressed_prompt
+
     scan_ids: Final = _metadata.get(GUARDRAIL_SCAN_IDS_METADATA_KEY)
     if scan_ids:
         headers["x-litellm-guardrail-scan-id"] = ",".join(scan_ids)
@@ -533,6 +542,7 @@ LITELLM_PROXY_INTERNAL_METADATA_KEYS: Final = frozenset(
     {
         "applied_policies",
         "applied_guardrails",
+        HEADROOM_COMPRESSED_PROMPT_METADATA_KEY,
         GUARDRAIL_SCAN_IDS_METADATA_KEY,
         GUARDRAIL_SCAN_METADATA_METADATA_KEY,
         "policy_sources",

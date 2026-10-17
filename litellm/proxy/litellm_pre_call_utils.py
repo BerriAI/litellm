@@ -390,6 +390,7 @@ _UNTRUSTED_METADATA_CONTROL_FIELDS: Final = (
     "opted_out_global_guardrails",
     "pillar_response_headers",
     "_pillar_response_headers_trusted",
+    "_headroom_compressed_prompt",
     "pillar_flagged",
     "pillar_scanners",
     "pillar_evidence",
