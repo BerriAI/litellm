@@ -1,7 +1,7 @@
 import os
 import threading
 from collections import OrderedDict
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -2767,7 +2767,9 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         primitive_value: Final = self._cast_as_primitive_value_type(value)
         span.set_attribute(key, primitive_value)
 
-    def _transform_messages_to_otel_semantic_conventions(self, messages: list[dict] | str) -> list[dict]:
+    def _transform_messages_to_otel_semantic_conventions(
+        self, messages: Sequence[dict[str, object]] | str
+    ) -> list[dict[str, object]]:  # mutable-ok: match mixin base return
         """
         Transforms LiteLLM/OpenAI style messages into OTEL GenAI 1.38 compliant format.
         OTEL expects a 'parts' array instead of a single 'content' string.
@@ -2783,25 +2785,61 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
         transformed: Final = []
         for msg in messages:
+            # Normalize pydantic / LiteLLM wrapper objects (e.g. a ModelResponse
+            # Message) to something we can read with .get(); "tool_calls" in msg
+            # is False for those objects, which silently dropped tool calls.
+            normalized = self._to_dict(msg)
+            if normalized is None:
+                continue
+            msg = cast(dict[str, object], normalized)  # cast-ok: _to_dict guarantees a dict-like payload
+
             role = msg.get("role", "user")
             content = msg.get("content", "")
-            parts = []
+            parts: list[dict[str, object]] = []  # mutable-ok: local accumulator returned read-only
 
             if isinstance(content, str):
                 parts.append({"type": "text", "content": content})
             elif isinstance(content, list):
                 # Handle multi-modal content if necessary
-                for part in content:
+                for part in cast(list[object], content):  # cast-ok: content already narrowed to list
                     if isinstance(part, dict):
                         parts.append(part)
                     else:
                         parts.append({"type": "text", "content": str(part)})
 
-            transformed_msg = {"role": role, "parts": parts}
+            # Record tool calls as GenAI tool_call parts (OpenLLMetry-compatible)
+            # so id / name / arguments are not dropped from the trace.
+            raw_tool_calls = msg.get("tool_calls")
+            tool_calls: Sequence[object] = raw_tool_calls if isinstance(raw_tool_calls, list) else ()
+            for tc in tool_calls:
+                if isinstance(tc, dict):
+                    tc_dict = cast(dict[str, object], tc)  # cast-ok: tc narrowed to dict
+                    tc_id = tc_dict.get("id")
+                    fn = tc_dict.get("function")
+                    if isinstance(fn, dict):
+                        fn_dict = cast(dict[str, object], fn)  # cast-ok: fn narrowed to dict
+                        fn_name = fn_dict.get("name")
+                        fn_arguments = fn_dict.get("arguments")
+                    else:
+                        fn_name = None
+                        fn_arguments = None
+                else:
+                    # pydantic tool-call objects (e.g. ChatCompletionMessageToolCall):
+                    # read fields via literal getattr; arbitrary objects degrade to
+                    # None exactly like the old .get()/getattr pair.
+                    tc_id = cast(object, getattr(tc, "id", None))  # cast-ok: getattr returns object
+                    fn = cast(object, getattr(tc, "function", None))  # cast-ok: getattr returns object
+                    if fn is None:
+                        fn_name = None
+                        fn_arguments = None
+                    else:
+                        fn_name = cast(object, getattr(fn, "name", None))  # cast-ok: getattr returns object
+                        fn_arguments = cast(object, getattr(fn, "arguments", None))  # cast-ok: getattr returns object
+                parts.append({"type": "tool_call", "id": tc_id, "name": fn_name, "arguments": fn_arguments})
+
+            transformed_msg: dict[str, object] = {"role": role, "parts": parts}  # mutable-ok: key-assigned below
             if "id" in msg:
                 transformed_msg["id"] = msg["id"]
-            if "tool_calls" in msg:
-                transformed_msg["tool_calls"] = msg["tool_calls"]
             if "tool_call_id" in msg:
                 transformed_msg["tool_call_id"] = msg["tool_call_id"]
             transformed.append(transformed_msg)
@@ -2871,13 +2909,19 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             item = self._to_dict(raw_item)
             if item is None:
                 continue
+            item = cast(dict[str, object], item)  # cast-ok: _to_dict guarantees a dict-like payload
             if item.get("type") == "message":
                 role = item.get("role", "assistant")
-                parts = []
-                for raw_content in item.get("content", []):
+                parts: list[dict[str, object]] = []  # mutable-ok: local accumulator returned read-only
+                raw_content_list = item.get("content", [])
+                content_items = cast(  # cast-ok: narrowed to list above
+                    Sequence[object], raw_content_list if isinstance(raw_content_list, list) else ()
+                )
+                for raw_content in content_items:
                     content = self._to_dict(raw_content)
                     if content is None:
                         continue
+                    content = cast(dict[str, object], content)  # cast-ok: _to_dict guarantees a dict-like payload
                     if content.get("type") == "output_text":
                         text = content.get("text", "")
                         if text:
@@ -2886,7 +2930,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                     transformed.append({"role": role, "parts": parts})
             elif item.get("type") == "function_call":
                 # Surface tool calls from Responses API output
-                part: dict = {
+                part: dict[str, object] = {  # mutable-ok: assembled then key-assigned before append
                     "type": "tool_call",
                     "name": item.get("name", ""),
                     "arguments": item.get("arguments", ""),

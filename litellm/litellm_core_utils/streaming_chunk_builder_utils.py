@@ -370,6 +370,33 @@ class ChunkProcessor:
         return ChunkProcessor._role_of_choice(next((c["choices"][0] for c in chunks if c.get("choices")), None))
 
     @staticmethod
+    def _read_delta(choice: StreamingChoices | Mapping[str, object]) -> object:
+        """Return a streaming choice's delta payload.
+
+        ``StreamingChoices`` (an ``openai`` ``BaseModel`` subclass) declares
+        ``delta``; raw dict chunks carry the same data under a ``delta`` key.
+        """
+        return choice.get("delta") if isinstance(choice, Mapping) else choice.delta
+
+    @staticmethod
+    def _read_message(choice: StreamingChoices | Mapping[str, object]) -> object:
+        """Return a streaming choice's message payload.
+
+        Only dict chunks carry ``message``: ``StreamingChoices.__init__`` pops
+        it (Perplexity compat), so non-dict choices always read as ``None``.
+        """
+        return choice.get("message") if isinstance(choice, Mapping) else None
+
+    @staticmethod
+    def _read_tool_calls(payload: object) -> object:
+        """Return a delta/message payload's ``tool_calls``, dict or object form."""
+        if isinstance(payload, dict):
+            return cast(dict[str, object], payload).get("tool_calls")  # cast-ok: payload narrowed to dict
+        if isinstance(payload, Delta):
+            return payload.tool_calls
+        return None
+
+    @staticmethod
     def _role_of_choice(choice: object) -> str:
         match choice:
             case StreamingChoices(delta=Delta(role=str() as role)) | {"delta": {"role": str() as role}} if role:
@@ -414,15 +441,35 @@ class ChunkProcessor:
 
         role: Final = ChunkProcessor._get_role_from_chunks(chunks)
         finish_reason = "stop"
+        saw_tool_call = False  # rebind-ok: flipped to True inside the loop when a tool-call delta or message is seen
         for chunk in chunks:
             if "choices" in chunk and len(chunk["choices"]) > 0:
+                choice = chunk["choices"][0]
+                delta = ChunkProcessor._read_delta(choice)
+                if delta is not None:
+                    delta_tool_calls = ChunkProcessor._read_tool_calls(delta)
+                    if delta_tool_calls:
+                        saw_tool_call = True
+                message = ChunkProcessor._read_message(choice)
+                if message is not None:
+                    msg_tool_calls = ChunkProcessor._read_tool_calls(message)
+                    if msg_tool_calls:
+                        saw_tool_call = True
                 chunk_finish_reason = None
-                if hasattr(chunk["choices"][0], "finish_reason"):
-                    chunk_finish_reason = chunk["choices"][0].finish_reason
-                elif "finish_reason" in chunk["choices"][0]:
-                    chunk_finish_reason = chunk["choices"][0]["finish_reason"]
+                if hasattr(choice, "finish_reason"):
+                    # StreamingChoices is a dynamic OpenAIObject: the attribute may
+                    # or may not exist at runtime, so read via literal getattr.
+                    chunk_finish_reason = cast(str, getattr(choice, "finish_reason", None))  # cast-ok: dynamic attr
+                elif "finish_reason" in choice:
+                    chunk_finish_reason = cast(str, choice["finish_reason"])  # cast-ok: key checked
                 if chunk_finish_reason is not None:
                     finish_reason = chunk_finish_reason
+        if finish_reason == "stop" and saw_tool_call:
+            # A tool-calling stream whose chunks never surfaced an explicit
+            # finish_reason must aggregate to "tool_calls" (OpenAI spec),
+            # not the default "stop" - otherwise callbacks (e.g. OpenTelemetry)
+            # record a wrong finish reason for single-chunk streams. (litellm#45796)
+            finish_reason = "tool_calls"  # rebind-ok: aggregated finish reason for tool-calling streams (litellm#45796)
 
         # Initialize the response dictionary
         response = ModelResponse(
