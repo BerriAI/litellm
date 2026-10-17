@@ -177,6 +177,21 @@ MID: Final[tuple[AgentCases, ...]] = (
         openai.GPT_6_1_SOL_AGENT_FOLLOWUP_TEST_CASE,
         openai.GPT_6_1_SOL_AGENT_STREAMING_TEST_CASE,
     ),
+    (
+        vertex_ai.CLAUDE_SONNET_5_5_AGENT_TEST_CASE,
+        vertex_ai.CLAUDE_SONNET_5_5_AGENT_FOLLOWUP_TEST_CASE,
+        vertex_ai.CLAUDE_SONNET_5_5_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        vertex_ai.GEMINI_3_8_FLASH_AGENT_TEST_CASE,
+        vertex_ai.GEMINI_3_8_FLASH_AGENT_FOLLOWUP_TEST_CASE,
+        vertex_ai.GEMINI_3_8_FLASH_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
+        vertex_ai.GEMINI_3_1_PRO_PREVIEW_AGENT_TEST_CASE,
+        vertex_ai.GEMINI_3_1_PRO_PREVIEW_AGENT_FOLLOWUP_TEST_CASE,
+        vertex_ai.GEMINI_3_1_PRO_PREVIEW_AGENT_STREAMING_TEST_CASE,
+    ),
 )
 
 HIGH: Final[tuple[AgentCases, ...]] = (
