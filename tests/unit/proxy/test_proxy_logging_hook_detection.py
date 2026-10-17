@@ -605,6 +605,73 @@ async def test_post_call_stream_presidio_output_masking_masks_anthropic_messages
     assert wire.count("event: message_stop") == 1, wire
 
 
+@pytest.mark.asyncio
+async def test_post_call_stream_presidio_output_parse_pii_restores_anthropic_messages_stream(monkeypatch):
+    """Regression (issue #46087): the presidio output_parse_pii restore callback was rerouted
+    onto the unified scan-only path on /v1/messages, so the client saw the raw <PERSON_1> token
+    instead of the original value, including when the token was split across two deltas."""
+    import json
+
+    from litellm.caching.caching import DualCache
+    from litellm.proxy.guardrails.guardrail_registry import InMemoryGuardrailHandler
+    from litellm.types.guardrails import SupportedGuardrailIntegrations
+
+    handler = InMemoryGuardrailHandler()
+    result = handler.initialize_guardrail(
+        guardrail={
+            "guardrail_name": "presidio-pii-restore",
+            "litellm_params": {
+                "guardrail": SupportedGuardrailIntegrations.PRESIDIO.value,
+                "mode": ["pre_call", "post_call"],
+                "default_on": True,
+                "output_parse_pii": True,
+                "presidio_filter_scope": "input",
+                "presidio_analyzer_api_base": "https://fakelink.com/v1/presidio/analyze",
+                "presidio_anonymizer_api_base": "https://fakelink.com/v1/presidio/anonymize",
+                "pii_entities_config": {"PERSON": "MASK"},
+                "mock_redacted_text": {"text": "<PERSON_1>", "items": []},
+            },
+        }
+    )
+    guardrail_id = result["guardrail_id"]
+    callbacks = [
+        handler.guardrail_id_to_custom_guardrail[guardrail_id],
+        *handler.guardrail_id_to_sibling_callbacks[guardrail_id],
+    ]
+    monkeypatch.setattr(litellm, "callbacks", callbacks)
+
+    # The pre_call scan step would have stored this mapping; set it directly
+    # so the test exercises only the restore step the issue is about.
+    pii_tokens = {"<PERSON_1>": "Jane Smith"}
+    chunks = _anthropic_stream_chunks(["Signature: <PERS", "ON_1>, thanks"])
+
+    async def fake_stream():
+        for chunk in chunks:
+            yield chunk
+
+    delivered = []
+    async for chunk in ProxyLogging(user_api_key_cache=DualCache()).async_post_call_streaming_iterator_hook(
+        response=fake_stream(),
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876", request_route="/v1/messages"),
+        request_data={
+            "model": "claude-sonnet-5",
+            "litellm_logging_obj": _streaming_logging_obj(),
+            "metadata": {"pii_tokens": pii_tokens},
+        },
+    ):
+        delivered.append(chunk)
+
+    wire = b"".join(delivered).decode()
+    text_deltas = [
+        json.loads(line[6:])["delta"]["text"]
+        for line in wire.split("\n")
+        if line.startswith("data: ") and json.loads(line[6:]).get("delta", {}).get("type") == "text_delta"
+    ]
+    assert "<PERSON_1>" not in wire, wire
+    assert "".join(text_deltas) == "Signature: Jane Smith, thanks", wire
+    assert wire.count("event: message_stop") == 1, wire
+
+
 class _AppliesGuardrail(CustomGuardrail):
     """Implements the unified interface only, so the proxy routes it to unified_guardrail."""
 
