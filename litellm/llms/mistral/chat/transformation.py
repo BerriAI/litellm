@@ -54,6 +54,9 @@ def _accepted_reasoning_effort(model: str, requested: str, custom_llm_provider: 
     return accepted
 
 
+_NO_TOOL_CALL_TURN: Final[tuple[int, frozenset[str]]] = (-1, frozenset())
+
+
 class MistralConfig(OpenAIGPTConfig):
     """
     Reference: https://docs.mistral.ai/api/
@@ -274,14 +277,19 @@ class MistralConfig(OpenAIGPTConfig):
         messages = handle_messages_with_content_list_to_str_conversion(messages)
 
         ## 3. Handle name in message
-        open_tool_call_ids_before: Final = accumulate(
-            messages, MistralConfig._open_tool_call_ids, initial=frozenset[str]()
+        tool_call_turns: Final = accumulate(
+            enumerate(messages), MistralConfig._tool_call_turn, initial=_NO_TOOL_CALL_TURN
         )
+        tool_reply_keys: Final = tuple(map(MistralConfig._tool_reply_key, messages, tool_call_turns))
+        first_reply_positions: Final = {
+            key: position for position, key in reversed(tuple(enumerate(tool_reply_keys))) if key is not None
+        }
+        answering_positions: Final = frozenset(first_reply_positions.values())
         new_messages: Final[list[AllMessageValues]] = []
-        for m, open_tool_call_ids in zip(messages, open_tool_call_ids_before, strict=False):
+        for position, m in enumerate(messages):
             m = MistralConfig._handle_name_in_message(m)
             m = MistralConfig._handle_tool_call_message(m)
-            if MistralConfig._is_empty_assistant_message(m) and not MistralConfig._answers(m, open_tool_call_ids):
+            if MistralConfig._is_empty_assistant_message(m) and position not in answering_positions:
                 continue
             m = strip_none_values_from_message(MistralConfig._with_tool_reply_content(m))
             new_messages.append(m)
@@ -482,24 +490,26 @@ class MistralConfig(OpenAIGPTConfig):
                 return None
 
     @staticmethod
-    def _open_tool_call_ids(open_tool_call_ids: frozenset[str], message: AllMessageValues) -> frozenset[str]:
-        match message:
-            case {"role": "assistant", "tool_calls": list(tool_calls)}:
-                return frozenset(filter(None, map(MistralConfig._tool_call_id, tool_calls)))
-            case {"role": "tool", "tool_call_id": str(tool_call_id)}:
-                return open_tool_call_ids - {tool_call_id}
-            case {"role": "tool"}:
-                return open_tool_call_ids
+    def _tool_call_turn(
+        turn: tuple[int, frozenset[str]], positioned_message: tuple[int, AllMessageValues]
+    ) -> tuple[int, frozenset[str]]:
+        match positioned_message:
+            case (position, {"role": "assistant", "tool_calls": list(tool_calls)}):
+                return position, frozenset(filter(None, map(MistralConfig._tool_call_id, tool_calls)))
+            case (_, {"role": "tool"}):
+                return turn
             case _:
-                return frozenset()
+                return _NO_TOOL_CALL_TURN
 
     @staticmethod
-    def _answers(message: AllMessageValues, open_tool_call_ids: frozenset[str]) -> bool:
-        match message:
-            case {"role": "tool", "tool_call_id": str(tool_call_id)}:
-                return tool_call_id in open_tool_call_ids
+    def _tool_reply_key(message: AllMessageValues, turn: tuple[int, frozenset[str]]) -> tuple[int, str] | None:
+        match message, turn:
+            case {"role": "tool", "tool_call_id": str(tool_call_id)}, (position, tool_call_ids) if (
+                tool_call_id in tool_call_ids
+            ):
+                return position, tool_call_id
             case _:
-                return False
+                return None
 
     @staticmethod
     def _with_tool_reply_content(message: AllMessageValues) -> AllMessageValues:
