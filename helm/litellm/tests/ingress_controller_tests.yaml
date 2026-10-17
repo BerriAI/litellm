@@ -213,3 +213,16 @@ tests:
                 name: RELEASE-NAME-litellm-ui
                 port:
                   number: 3000
+
+  - it: includes common labels in the ingress metadata
+    set:
+      commonLabels:
+        team: platform
+        foo: bar
+      ingress.enabled: true
+    asserts:
+      - isSubset:
+          path: metadata.labels
+          content:
+            team: platform
+            foo: bar
