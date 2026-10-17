@@ -2,7 +2,10 @@ use litellm_secrets::source::Secrets;
 use std::time::Duration;
 
 use litellm_auth::SecretValue;
-use litellm_llms::base_llm::{auth::ValidatedEnvironment, chat::transformation::BaseConfig};
+use litellm_llms::base_llm::{
+    auth::ValidatedEnvironment,
+    chat::{streaming::StreamShape, transformation::BaseConfig},
+};
 use litellm_llms_types::formats::chat_completions::ChatMessage;
 use serde_json::{Map, Value};
 
@@ -67,6 +70,8 @@ pub struct ProviderChatCompletionsRequest {
     pub config: &'static dyn BaseConfig,
     pub url: String,
     pub body: Value,
+    /// How the config's stream parser reads a streamed answer to this request.
+    pub stream_shape: StreamShape,
     /// The route's parameters before the provider transformation, reported to the host
     /// beside the wire request.
     pub optional_params: Map<String, Value>,

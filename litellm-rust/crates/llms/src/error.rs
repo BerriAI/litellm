@@ -15,6 +15,10 @@ pub enum Error {
     Unsupported(&'static str),
     #[error(transparent)]
     Auth(#[from] litellm_auth::Error),
+    /// An error the provider reported inside a response it had already started, such as an
+    /// `error` event on a stream, with the HTTP status the provider gives that error.
+    #[error("provider error {status}: {body}")]
+    Provider { status: u16, body: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
