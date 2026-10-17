@@ -9,28 +9,10 @@ from typing import Final, Literal, TextIO
 import httpx
 from pydantic import BaseModel, ConfigDict, JsonValue, ValidationError
 
+from litellm.vector_stores.utils import is_litellm_written_metadata_key
+
 DEFAULT_API_BASE: Final = "https://api.openai.com/v1"
 LIST_PAGE_SIZE: Final = "100"
-USER_API_KEY_FIELD: Final = "user_api_key"
-USER_API_KEY_PREFIX: Final = "user_api_key_"
-PROXY_WRITTEN_KEYS: Final = frozenset(
-    {
-        "requester_ip_address",
-        "user_agent",
-        "endpoint",
-        "litellm_api_version",
-        "deployment",
-        "deployment_model_name",
-        "api_base",
-        "agent_id",
-        "actor_agent_id",
-        "target_agent_id",
-        "billing_agent_id",
-        "agent_execution_mode",
-        "verified_human_user_id",
-        "litellm_caller_session_id",
-    }
-)
 
 
 class VectorStore(BaseModel):
@@ -77,12 +59,7 @@ class StoreResult:
 
 
 def is_proxy_written_key(key: str, extra_keys: frozenset[str]) -> bool:
-    return (
-        key == USER_API_KEY_FIELD
-        or key.startswith(USER_API_KEY_PREFIX)
-        or key in PROXY_WRITTEN_KEYS
-        or key in extra_keys
-    )
+    return is_litellm_written_metadata_key(key) or key in extra_keys
 
 
 def matching_keys(store: VectorStore, extra_keys: frozenset[str]) -> tuple[str, ...]:

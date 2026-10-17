@@ -2655,58 +2655,6 @@ async def test_agent_rate_limit_from_metadata_agent_id():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("litellm_metadata", "metadata"),
-    [
-        ({"agent_id": "agent_from_header"}, {}),
-        ({"agent_id": "agent_from_header"}, {"agent_id": "provider-value"}),
-        ({"agent_id": 123}, {"agent_id": "agent_from_header"}),
-        ({"agent_id": ""}, {"agent_id": "agent_from_header"}),
-    ],
-)
-async def test_agent_rate_limit_uses_proxy_agent_id_from_litellm_metadata(litellm_metadata, metadata):
-    from litellm.types.agents import AgentResponse
-
-    _agent_id: Final = "agent_from_header"
-    agents: Final = {
-        _agent_id: AgentResponse(
-            agent_id=_agent_id,
-            agent_name="header-agent",
-            agent_card_params={"name": "Header Agent"},
-            rpm_limit=25,
-        ),
-        "123": AgentResponse(
-            agent_id="123",
-            agent_name="numeric-agent",
-            agent_card_params={"name": "Numeric Agent"},
-            rpm_limit=25,
-        ),
-    }
-    local_cache: Final = DualCache()
-    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
-    captured: Final[list] = []
-
-    async def capture_descriptors(descriptors, **kwargs):
-        captured.extend(descriptors)
-        return {"overall_code": "OK", "statuses": []}
-
-    handler.should_rate_limit = capture_descriptors
-
-    with patch(
-        "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry.get_agent_by_id",
-        side_effect=lambda agent_id: agents.get(str(agent_id)),
-    ):
-        await handler.async_pre_call_hook(
-            user_api_key_dict=UserAPIKeyAuth(api_key=hash_token("sk-98765")),
-            cache=local_cache,
-            data={"model": "gpt-4", "metadata": metadata, "litellm_metadata": litellm_metadata},
-            call_type="",
-        )
-
-    assert [d["value"] for d in captured if d["key"] == "agent"] == [_agent_id]
-
-
-@pytest.mark.asyncio
 async def test_agent_both_agent_and_session_rate_limits():
     """
     Test that both agent-level and session-level descriptors are created

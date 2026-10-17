@@ -128,32 +128,6 @@ class TestGetMetadataVariableName:
         request = self._make_request("/bedrock/model/us.anthropic.claude-sonnet-4-6/converse")
         assert get_metadata_variable_name(request) == "litellm_metadata"
 
-    @pytest.mark.parametrize(
-        "path",
-        [
-            "/v1/vector_stores",
-            "/vector_stores",
-            "/v1/vector_stores/vs_123",
-            "/v1/vector_stores/vs_123/search",
-        ],
-    )
-    def test_returns_litellm_metadata_for_vector_store_routes(self, path):
-        assert get_metadata_variable_name(self._make_request(path)) == "litellm_metadata"
-
-    @pytest.mark.parametrize(
-        "path",
-        [
-            "/vector_store/new",
-            "/vector_store/list",
-            "/v1/vector_store/list",
-            "/vector_store/info",
-            "/vector_store/update",
-            "/vector_store/delete",
-        ],
-    )
-    def test_returns_metadata_for_vector_store_management_routes(self, path):
-        assert get_metadata_variable_name(self._make_request(path)) == "metadata"
-
 
 def test_get_enforced_params_for_service_account_settings():
     """
@@ -593,76 +567,6 @@ async def test_add_litellm_data_to_request_strips_all_user_api_key_prefix_keys()
     other = updated.get("litellm_metadata") or {}
     attacker_leaks = [k for k in other if k.startswith("user_api_key_")]
     assert attacker_leaks == [], f"Unexpected leaked keys: {attacker_leaks}"
-
-
-@pytest.mark.asyncio
-async def test_add_litellm_data_to_request_keeps_vector_store_metadata_to_the_callers_keys():
-    request = Request(
-        {
-            "type": "http",
-            "method": "POST",
-            "scheme": "http",
-            "server": ("localhost", 4000),
-            "path": "/v1/vector_stores",
-            "root_path": "",
-            "query_string": b"",
-            "headers": [(b"content-type", b"application/json"), (b"user-agent", b"curl/8.7.1")],
-            "client": ("127.0.0.1", 1234),
-        }
-    )
-    data: Final = {
-        "name": "x",
-        "model": "gpt-5",
-        "metadata": {"user_api_key_team_id": "forged", "x": "1"},
-    }
-
-    updated: Final = await add_litellm_data_to_request(
-        data=data,
-        request=request,
-        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key", user_id="real-user", team_id="real-team"),
-        proxy_config=MagicMock(),
-        general_settings={},
-        version="test-version",
-    )
-
-    assert updated["metadata"] == {"x": "1"}
-    assert updated["litellm_metadata"]["user_api_key_team_id"] == "real-team"
-    assert updated["litellm_metadata"]["user_api_key_user_id"] == "real-user"
-
-
-@pytest.mark.asyncio
-async def test_vector_store_request_tags_keep_key_tags_when_caller_sends_metadata_tags():
-    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
-
-    request = Request(
-        {
-            "type": "http",
-            "method": "POST",
-            "scheme": "http",
-            "server": ("localhost", 4000),
-            "path": "/v1/vector_stores/vs_1/search",
-            "root_path": "",
-            "query_string": b"",
-            "headers": [(b"content-type", b"application/json")],
-            "client": ("127.0.0.1", 1234),
-        }
-    )
-
-    updated: Final = await add_litellm_data_to_request(
-        data={"query": "test", "metadata": {"tags": ["caller-tag"]}},
-        request=request,
-        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key", team_id="real-team", metadata={"tags": ["key-tag"]}),
-        proxy_config=MagicMock(),
-        general_settings={},
-        version="test-version",
-    )
-    request_tags: Final = StandardLoggingPayloadSetup.get_request_tags(
-        litellm_params={"metadata": updated["metadata"], "litellm_metadata": updated["litellm_metadata"]},
-        proxy_server_request={},
-    )
-
-    assert updated["metadata"] == {"tags": ["caller-tag"]}
-    assert sorted(request_tags) == ["caller-tag", "key-tag"]
 
 
 @pytest.mark.asyncio

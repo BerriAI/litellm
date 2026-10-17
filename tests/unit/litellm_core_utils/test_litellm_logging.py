@@ -3057,7 +3057,7 @@ def test_get_request_tags_from_metadata_and_litellm_metadata():
     Scenarios tested:
     1. Tags in metadata only
     2. Tags in litellm_metadata only
-    3. Tags in both (litellm_metadata, which the proxy builds from both, takes priority)
+    3. Tags in both (metadata should take priority)
     4. No tags in either
     5. None values for metadata/litellm_metadata
     """
@@ -3081,15 +3081,17 @@ def test_get_request_tags_from_metadata_and_litellm_metadata():
     assert "litellm-metadata-tag-2" in tags
     assert len([t for t in tags if not t.startswith("User-Agent:")]) == 2
 
-    # Test case 3: Tags in both - litellm_metadata takes priority
+    # Test case 3: Tags in both - metadata should take priority
     tags = StandardLoggingPayloadSetup.get_request_tags(
         litellm_params={
-            "metadata": {"tags": ["caller-tag"]},
-            "litellm_metadata": {"tags": ["key-tag", "caller-tag"]},
+            "metadata": {"tags": ["metadata-tag"]},
+            "litellm_metadata": {"tags": ["litellm-metadata-tag"]},
         },
         proxy_server_request={},
     )
-    assert tags == ["key-tag", "caller-tag"]
+    assert "metadata-tag" in tags
+    assert "litellm-metadata-tag" not in tags
+    assert len([t for t in tags if not t.startswith("User-Agent:")]) == 1
 
     # Test case 4: No tags in either
     tags = StandardLoggingPayloadSetup.get_request_tags(
@@ -3126,17 +3128,6 @@ def test_get_request_tags_from_metadata_and_litellm_metadata():
     assert "custom-tag" in tags
     assert "User-Agent: litellm" in tags
     assert "User-Agent: litellm/1.0.0" in tags
-
-
-def test_get_request_tags_keeps_proxy_tags_when_provider_metadata_has_a_tags_string():
-    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
-
-    tags = StandardLoggingPayloadSetup.get_request_tags(
-        litellm_params={"metadata": {"tags": "provider-value"}, "litellm_metadata": {"tags": ["admin-tag"]}},
-        proxy_server_request={},
-    )
-
-    assert tags == ["admin-tag"]
 
 
 def test_get_request_tags_does_not_mutate_original_tags():
@@ -11293,31 +11284,6 @@ def test_merge_litellm_metadata_precedence():
 
     # litellm_metadata values should only be included if not in metadata
     assert result["model_group"] == "gpt-4-group"
-
-
-def test_merge_litellm_metadata_keeps_proxy_tags_and_spend_logs_metadata_over_provider_strings():
-    result = StandardLoggingPayloadSetup.merge_litellm_metadata(
-        {
-            "metadata": {"tags": "provider-value", "spend_logs_metadata": "provider-value", "team": "llmproxy"},
-            "litellm_metadata": {
-                "tags": ["admin-tag"],
-                "spend_logs_metadata": {"cost_center": "admin"},
-            },
-        }
-    )
-
-    assert result["tags"] == ["admin-tag"]
-    assert result["spend_logs_metadata"] == {"cost_center": "admin"}
-    assert result["team"] == "llmproxy"
-
-
-def test_merge_litellm_metadata_keeps_a_provider_string_when_the_proxy_has_no_value():
-    result = StandardLoggingPayloadSetup.merge_litellm_metadata(
-        {"metadata": {"tags": "team-a,nightly"}, "litellm_metadata": {"model_group": "g"}}
-    )
-
-    assert result["tags"] == "team-a,nightly"
-    assert result["model_group"] == "g"
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
 def test_merge_litellm_metadata_skip_non_serializable():

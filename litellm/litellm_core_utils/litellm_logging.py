@@ -330,24 +330,6 @@ def _get_provider_request_id(original_exception: Exception) -> str | None:
 # Cache custom pricing keys as frozenset for O(1) lookups instead of looping through 49 keys
 _CUSTOM_PRICING_KEYS: Final[frozenset[str]] = frozenset(CustomPricingLiteLLMParams.model_fields.keys())
 _MODEL_INFO_CUSTOM_PRICING_KEYS: Final[frozenset[str]] = _CUSTOM_PRICING_KEYS | DEPLOYMENT_SCOPED_PRICING_FIELDS
-_PROXY_METADATA_FIELD_TYPES: Final = MappingProxyType({"tags": list, "spend_logs_metadata": dict})
-
-
-def _metadata_field(metadata: object, key: str) -> object:
-    if not isinstance(metadata, Mapping):
-        return None
-    return cast(Mapping[str, object], metadata).get(key)  # cast-ok: request metadata is a JSON object
-
-
-def _proxy_fields_replacing_mistyped_ones(metadata: object, litellm_metadata: object) -> Mapping[str, object]:
-    return {
-        key: _metadata_field(litellm_metadata, key)
-        for key, expected in _PROXY_METADATA_FIELD_TYPES.items()
-        if isinstance(_metadata_field(litellm_metadata, key), expected)
-        and not isinstance(_metadata_field(metadata, key), expected)
-    }
-
-
 _UNSERIALIZABLE_METADATA_KEYS: Final[frozenset[str]] = frozenset(
     ("user_api_key_auth", "user_api_key_budget_reservation")
 )
@@ -6031,7 +6013,6 @@ class StandardLoggingPayloadSetup:
         """
         metadata: Final = litellm_params.get("metadata")
         litellm_metadata: Final = litellm_params.get("litellm_metadata")
-        proxy_fields: Final = _proxy_fields_replacing_mistyped_ones(metadata, litellm_metadata)
         user_metadata: Final = MappingProxyType(
             {
                 key: value
@@ -6046,7 +6027,7 @@ class StandardLoggingPayloadSetup:
                 if key not in user_metadata
             }
         )
-        return {**user_metadata, **model_metadata, **proxy_fields}
+        return {**user_metadata, **model_metadata}
 
     @staticmethod
     def get_standard_logging_metadata(
@@ -6652,11 +6633,10 @@ class StandardLoggingPayloadSetup:
         litellm_metadata: Final = cast(  # cast-ok: request metadata is caller-provided
             Mapping[str, object], litellm_params.get("litellm_metadata") or {}
         )
-        proxy_tags: Final = litellm_metadata.get("tags")
-        if isinstance(proxy_tags, list) and proxy_tags:
-            request_tags = cast(list[str], proxy_tags).copy()  # cast-ok: tags are caller-provided
-        elif metadata.get("tags", []):
+        if metadata.get("tags", []):
             request_tags = cast(list[str], metadata.get("tags", [])).copy()  # cast-ok: tags are caller-provided
+        elif litellm_metadata.get("tags", []):
+            request_tags = cast(list[str], litellm_metadata.get("tags", [])).copy()  # cast-ok: tags are caller-provided
         else:
             request_tags = []
         user_agent_tags: Final = StandardLoggingPayloadSetup._get_user_agent_tags(proxy_server_request)

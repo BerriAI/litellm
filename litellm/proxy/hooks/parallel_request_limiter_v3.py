@@ -27,7 +27,7 @@ from typing import (
 )
 
 from fastapi import HTTPException
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import TypeAdapter, ValidationError
 from starlette.status import HTTP_400_BAD_REQUEST, HTTP_503_SERVICE_UNAVAILABLE
 from typing_extensions import NotRequired, ReadOnly
 
@@ -128,27 +128,6 @@ class RateLimitedModel:
             return None
         requested_limit: Final = limits.get(self.requested)
         return requested_limit if requested_limit is not None else limits.get(self.group)
-
-
-class _MetadataAgentId(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="ignore")
-
-    agent_id: object = None
-
-
-class _AgentIdSources(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="ignore")
-
-    litellm_metadata: object = None
-    metadata: object = None
-
-
-def _metadata_agent_id(metadata: object) -> str | None:
-    try:
-        agent_id: Final = _MetadataAgentId.model_validate(metadata).agent_id
-    except ValidationError:
-        return None
-    return agent_id if isinstance(agent_id, str) else None
 
 
 def _resolve_model_group_alias_via_proxy_router(model: str) -> str | None:
@@ -3213,8 +3192,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         key_agent_id: Final[str | None] = getattr(user_api_key_dict, "agent_id", None)
         if key_agent_id:
             return key_agent_id
-        sources: Final = _AgentIdSources.model_validate(data)
-        return _metadata_agent_id(sources.litellm_metadata) or _metadata_agent_id(sources.metadata)
+        metadata: Final = data.get("metadata") or {}
+        return metadata.get("agent_id")
 
     def _get_session_id_from_data(self, data: dict) -> str | None:
         """Extract session_id from request metadata or litellm_session_id."""

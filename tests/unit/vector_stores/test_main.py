@@ -8,16 +8,18 @@ model_dump() it (the #19550 serialization trap).
 """
 
 import json
+from typing import Final
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
 import litellm.vector_stores.main as vector_stores_main
 from litellm.llms.base_llm.vector_store.transformation import (
     RouterVectorStoreEmbeddingExecutor,
 )
-from litellm.llms.custom_httpx.http_handler import HTTPHandler
-from litellm.vector_stores.main import search
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.vector_stores.main import acreate, aupdate, search
 
 MOCK_SEARCH_RESPONSE = {
     "object": "vector_store.search_results.page",
@@ -114,3 +116,50 @@ def test_search_forwards_top_level_user_context_to_bedrock_retrieve():
     posted = json.loads(client.post.call_args.kwargs["data"])
     assert posted["userContext"] == {"userId": "alice@example.com"}
     assert posted["retrievalQuery"] == {"text": "q"}
+
+
+PROXY_STAMPED_METADATA: Final = {
+    "team": "llmproxy",
+    "user_api_key": "hashed-key",
+    "user_api_key_hash": "hashed-key",
+    "user_api_key_team_id": "team-1",
+    "requester_ip_address": "127.0.0.1",
+    "user_agent": "curl/8.7.1",
+    "endpoint": "http://localhost:4000/v1/vector_stores",
+    "litellm_api_version": "1.0.0",
+    "deployment": "openai/gpt-5",
+    "deployment_model_name": "gpt-5",
+    "api_base": "https://api.openai.com/v1",
+    "agent_id": "agent-1",
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["create", "update"])
+async def test_vector_store_writes_send_only_the_callers_metadata_to_the_provider(operation: str):
+    sent_metadata: Final[list[object]] = []
+
+    def echo_vector_store(request: httpx.Request) -> httpx.Response:
+        body: Final = json.loads(request.content)
+        sent_metadata.append(body.get("metadata"))
+        return httpx.Response(
+            200,
+            json={
+                "id": "vs_1",
+                "object": "vector_store",
+                "created_at": 0,
+                "name": "x",
+                "usage_bytes": 0,
+                "file_counts": {"in_progress": 0, "completed": 0, "failed": 0, "cancelled": 0, "total": 0},
+                "status": "completed",
+                "metadata": body.get("metadata"),
+            },
+        )
+
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(echo_vector_store))
+    if operation == "create":
+        await acreate(name="x", metadata=dict(PROXY_STAMPED_METADATA), api_key="sk-test", client=client)
+    else:
+        await aupdate(vector_store_id="vs_1", metadata=dict(PROXY_STAMPED_METADATA), api_key="sk-test", client=client)
+
+    assert sent_metadata == [{"team": "llmproxy"}]
