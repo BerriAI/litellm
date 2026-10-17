@@ -63,6 +63,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
 from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
 from litellm.proxy.hooks.responses_id_security import ResponsesIDSecurity, decrypted_response_id
 from litellm.proxy.litellm_pre_call_utils import (
+    _CLIENT_PRICING_METADATA_FIELDS,  # pyright: ignore[reportPrivateUsage]  # the HTTP path's own strip list
     _UNTRUSTED_METADATA_CONTROL_FIELDS,  # pyright: ignore[reportPrivateUsage]  # the HTTP path's own strip list
 )
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import (
@@ -1914,6 +1915,7 @@ def _without_untrusted_metadata(key: str, value: object) -> object:
         for name, item in _WS_FRAME.validate_python(value).items()
         if not name.startswith("user_api_key_")
         and name not in _UNTRUSTED_METADATA_CONTROL_FIELDS
+        and name not in _CLIENT_PRICING_METADATA_FIELDS
         and name not in ("headers", "pii_tokens", *_CLIENT_GUARDRAIL_SELECTORS)
     }
 

@@ -2172,6 +2172,39 @@ class TestResponsesWSFirstFrameModelAuth:
         ]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("nested", [False, True])
+    async def test_frame_guard_drops_a_client_s_guardrail_cost_records_so_a_blocked_frame_bills_the_real_scan(
+        self, nested: bool
+    ):
+        import litellm
+        from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
+        from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
+
+        async def pre_call_hook(user_api_key_dict, data, call_type, guardrails_only):
+            data["litellm_metadata"]["standard_logging_guardrail_information"] = [{"guardrail_cost": 0.5}]
+            raise ValueError("blocked")
+
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=pre_call_hook)
+        spend_logger = MagicMock(spec=ProxyDBLogger)
+        spend_logger.async_post_call_failure_hook = AsyncMock()
+        guard = _responses_ws_frame_guard(
+            {"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock(), proxy_logging_obj
+        )
+        body = {
+            "input": "forbidden",
+            "metadata": {"trace": "t1", "standard_logging_guardrail_information": [], "model_info": {"x": 1}},
+        }
+        frame = {"type": "response.create", "response": body} if nested else {"type": "response.create", **body}
+
+        with patch.object(litellm, "callbacks", [spend_logger]), pytest.raises(ValueError, match="blocked"):
+            await guard(json.dumps(frame))
+
+        billed = spend_logger.async_post_call_failure_hook.await_args.kwargs["request_data"]
+        assert billed["metadata"] == {"trace": "t1"}
+        assert billed["litellm_metadata"]["standard_logging_guardrail_information"] == [{"guardrail_cost": 0.5}]
+
+    @pytest.mark.asyncio
     async def test_frame_guard_hands_back_the_pii_tokens_presidio_masked_with_and_drops_forged_ones(self):
         from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
 
