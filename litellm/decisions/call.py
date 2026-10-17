@@ -1,4 +1,3 @@
-import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from functools import partial
@@ -418,9 +417,8 @@ def _outbound_headers(
 
 
 def _logged_request_messages(request: DecisionsRequestFormat) -> list[AllMessageValues]:
-    dumped: Final[dict[str, object]] = request.model_dump(mode="json", exclude_none=True)
-    sent_fields: Final = {name: value for name, value in dumped.items() if value not in ((), [], {})}
-    return [ChatCompletionUserMessage(role="user", content=json.dumps(sent_fields, default=str))]
+    sent_fields: Final = request.model_dump_json(exclude_none=True, exclude_defaults=True)
+    return [ChatCompletionUserMessage(role="user", content=sent_fields)]
 
 
 def prepare_call(
