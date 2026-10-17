@@ -3359,12 +3359,37 @@ def _without_overridden_price_variants(
 
 @dataclass(frozen=True, slots=True)
 class _BuiltinCostMatch:
+    key: str
     entry: Mapping[str, object]
     names_the_row: bool
 
 
-def _inherited_builtin_entry(match: _BuiltinCostMatch, value: Mapping[str, object]) -> Mapping[str, object]:
-    return match.entry if match.names_the_row else _without_overridden_price_variants(match.entry, value)
+@dataclass(frozen=True, slots=True)
+class _LookupMiss:
+    tripped: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _FallbackRegistration:
+    key: str
+    entry: Mapping[str, object]
+    matched_builtin: bool
+
+
+def _fallback_registration(
+    key: str, provider: str, value: Mapping[str, object], lookup: _LookupMiss
+) -> _FallbackRegistration:
+    """A tripped lookup of a key that names a catalog row writes into that row, as the untripped lookup does, so a
+    transient failure never leaves a shadow key behind. Otherwise the key keeps its own entry, seeded from the
+    capability rules an unregistered lookup resolves it to, with the matched built-in entry on top."""
+    match: Final = _resolve_builtin_model_cost_entry(key=key, provider=provider)
+    if match is not None and match.names_the_row and lookup.tripped:
+        return _FallbackRegistration(key=match.key, entry=match.entry, matched_builtin=True)
+    generalized: Final[Mapping[str, object]] = match_capability_generalizations(key) or {}
+    if match is None:
+        return _FallbackRegistration(key=key, entry=generalized, matched_builtin=False)
+    inherited: Final = match.entry if match.names_the_row else _without_overridden_price_variants(match.entry, value)
+    return _FallbackRegistration(key=key, entry={**generalized, **inherited}, matched_builtin=True)
 
 
 def _resolve_builtin_model_cost_entry(key: str, provider: str) -> _BuiltinCostMatch | None:
@@ -3410,7 +3435,7 @@ def _resolve_builtin_model_cost_entry(key: str, provider: str) -> _BuiltinCostMa
             and entry.get("litellm_provider") is not None
             and _check_provider_match(entry, match_provider)
         ):
-            return _BuiltinCostMatch(entry=dict(entry), names_the_row=candidate in row_names)
+            return _BuiltinCostMatch(key=candidate, entry=dict(entry), names_the_row=candidate in row_names)
     return None
 
 
@@ -3428,19 +3453,21 @@ def is_generalized_model_info(model_info: ModelInfo) -> bool:
     return key not in litellm.model_cost and match_capability_generalizations(key) is not None
 
 
-def _get_builtin_model_info_for_registration(model: str, custom_llm_provider: str | None) -> ModelInfo | None:
+def _get_builtin_model_info_for_registration(model: str, custom_llm_provider: str | None) -> ModelInfo | _LookupMiss:
     """Resolve ``model`` to its built-in cost-map entry for registration merging.
 
-    Returns ``None`` when the lookup raises or when it resolved via a
-    fallback-generalization capability rule. A rule-derived entry carries no
-    pricing, so treating it as a hit would skip the built-in cache-pricing
-    inheritance for prefix-mangled keys.
+    Misses when the lookup cannot map the model or resolved it via a
+    fallback-generalization capability rule, since a rule-derived entry carries no
+    pricing, and marks the miss tripped when the lookup raised anything else, such
+    as a concurrent registration changing the map mid-walk.
     """
     try:
         info: Final = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    except ModelNotMappedError:
+        return _LookupMiss(tripped=False)
     except Exception:
-        return None
-    return None if is_generalized_model_info(info) else info
+        return _LookupMiss(tripped=True)
+    return _LookupMiss(tripped=False) if is_generalized_model_info(info) else info
 
 
 _runtime_registered_model_cost: Final[dict[str, dict[str, object]]] = {}  # mutable-ok: replayed on reload
@@ -3570,21 +3597,19 @@ def register_model(
             builtin_model_info = _get_builtin_model_info_for_registration(
                 model=_key_str, custom_llm_provider=custom_llm_provider
             )
-            if builtin_model_info is not None:
+            if not isinstance(builtin_model_info, _LookupMiss):
                 existing_model = dict(_without_synthesized_costs(builtin_model_info, key=_key_str, value=value))
                 model_cost_key = builtin_model_info["key"]
             else:
                 # An exact entry ends the lookup ladder before the capability rules are
                 # consulted, so seed from them: otherwise registering an unmapped model
                 # shadows the very defaults it would have resolved to unregistered.
-                model_cost_key = key
-                builtin_match = _resolve_builtin_model_cost_entry(key=_key_str, provider=provider)
-                existing_model = (
-                    dict(_inherited_builtin_entry(builtin_match, value))
-                    if builtin_match is not None
-                    else dict(match_capability_generalizations(_key_str) or {})
+                fallback = _fallback_registration(
+                    key=_key_str, provider=provider, value=value, lookup=builtin_model_info
                 )
-                if builtin_match is None and (
+                model_cost_key = fallback.key
+                existing_model = dict(fallback.entry)
+                if not fallback.matched_builtin and (
                     value.get("cache_creation_input_token_cost") is None
                     and value.get("cache_read_input_token_cost") is None
                     and value.get("tiered_pricing") is None

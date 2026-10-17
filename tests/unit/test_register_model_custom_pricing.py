@@ -882,6 +882,42 @@ def test_register_model_keeps_a_catalog_rows_own_prices_when_the_lookup_fails(mo
         _invalidate_model_cost_lowercase_map()
 
 
+@pytest.mark.parametrize("route", ["", "converse/", "invoke/"])
+def test_register_model_leaves_no_shadow_key_when_the_lookup_fails(monkeypatch: pytest.MonkeyPatch, route: str) -> None:
+    catalog_key: Final = "au.anthropic.lit-5853-geo-model"
+    alias: Final = f"bedrock/{route}{catalog_key}"
+    repriced_input_cost: Final = 9e-06
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.get_model_cost_map(url=""),
+            catalog_key: {
+                "litellm_provider": "bedrock_converse",
+                "mode": "chat",
+                "input_cost_per_token": 3.3e-06,
+                "output_cost_per_token": 1.65e-05,
+            },
+        },
+    )
+    _invalidate_model_cost_lowercase_map()
+
+    def lookup_tripped_by_a_concurrent_registration(model: str, custom_llm_provider: str | None = None) -> NoReturn:
+        raise RuntimeError("dictionary changed size during iteration")
+
+    with pytest.MonkeyPatch.context() as lookup_patch:
+        lookup_patch.setattr(litellm.utils, "get_model_info", lookup_tripped_by_a_concurrent_registration)
+        litellm.register_model({alias: {"litellm_provider": "bedrock", "mode": "chat"}}, persist_across_reloads=False)
+    litellm.register_model({catalog_key: {"input_cost_per_token": repriced_input_cost}}, persist_across_reloads=False)
+
+    try:
+        assert litellm.get_model_info(alias)["key"] == catalog_key
+        assert litellm.get_model_info(alias)["input_cost_per_token"] == repriced_input_cost
+    finally:
+        _invalidate_model_cost_lowercase_map()
+
+
 @pytest.mark.parametrize("key_prefix", ["", "bedrock/", "bedrock/converse/"])
 def test_register_model_bills_a_catalog_rows_tier_rates_the_same_when_the_lookup_fails(
     monkeypatch: pytest.MonkeyPatch, key_prefix: str
@@ -1059,6 +1095,54 @@ def test_register_model_inherits_builtin_token_pricing_for_unmapped_key(monkeypa
         assert info["output_cost_per_token"] == builtin["output_cost_per_token"] > 0
         assert info["cache_read_input_token_cost"] == builtin["cache_read_input_token_cost"]
     finally:
+        _invalidate_model_cost_lowercase_map()
+
+
+def test_register_model_keeps_the_capabilities_an_unregistered_region_alias_resolves_to(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.litellm_core_utils.fallback_generalizations import (
+        get_fallback_generalization_rules,
+        set_fallback_generalizations,
+    )
+
+    sibling_key: Final = "anthropic.lit-5853-flagless-model"
+    region_alias: Final = f"bedrock/ap-northeast-1.{sibling_key}"
+    sibling_row: Final = {
+        "litellm_provider": "bedrock_converse",
+        "mode": "chat",
+        "input_cost_per_token": 3e-06,
+        "output_cost_per_token": 1.5e-05,
+    }
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", {**litellm.get_model_cost_map(url=""), sibling_key: sibling_row})
+    _invalidate_model_cost_lowercase_map()
+    previous_rules: Final = list(get_fallback_generalization_rules())
+    set_fallback_generalizations(
+        [
+            {
+                "name": "lit-5853-flagless",
+                "pattern": "lit-5853-flagless",
+                "model_info": {"supports_system_messages": True, "supports_parallel_function_calling": True},
+            }
+        ]
+    )
+
+    try:
+        unregistered: Final = litellm.get_model_info(region_alias)
+        litellm.register_model(
+            {region_alias: {"litellm_provider": "bedrock", "mode": "chat"}}, persist_across_reloads=False
+        )
+        registered: Final = litellm.get_model_info(region_alias)
+        assert registered["supports_system_messages"] is unregistered["supports_system_messages"] is True
+        assert (
+            registered["supports_parallel_function_calling"]
+            is unregistered["supports_parallel_function_calling"]
+            is True
+        )
+        assert registered["input_cost_per_token"] == sibling_row["input_cost_per_token"]
+    finally:
+        set_fallback_generalizations(previous_rules)
         _invalidate_model_cost_lowercase_map()
 
 

@@ -14,7 +14,7 @@ from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePath
-from typing import Final, cast
+from typing import Final, SupportsIndex, cast
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -4846,6 +4846,59 @@ def test_case_insensitive_model_cost_lookup_survives_an_invalidation_mid_lookup(
     _invalidate_model_cost_lowercase_map()
     try:
         assert _get_model_cost_key(_KeyWhoseLoweringLosesTheRace("GPT-4O")) == "gpt-4o"
+    finally:
+        _invalidate_model_cost_lowercase_map()
+
+
+def _register_a_model_mid_walk() -> None:
+    litellm.model_cost.setdefault("lit-5853-registered-mid-walk", {"mode": "chat"})
+
+
+class _KeyReadDuringARegistration(str):
+    def startswith(
+        self,
+        prefix: str | tuple[str, ...],
+        start: SupportsIndex | None = None,
+        end: SupportsIndex | None = None,
+    ) -> bool:
+        _register_a_model_mid_walk()
+        return super().startswith(prefix, start, end)
+
+    def lower(self) -> str:
+        _register_a_model_mid_walk()
+        return super().lower()
+
+
+class _EntryReadDuringARegistration(dict[str, object]):
+    def __contains__(self, key: object) -> bool:
+        _register_a_model_mid_walk()
+        return super().__contains__(key)
+
+
+@pytest.mark.parametrize("walk", ["fal_ai", "fireworks_ai", "ollama", "gpt-5", "case-insensitive scan"])
+def test_request_path_cost_map_walks_survive_a_registration_mid_walk(monkeypatch: pytest.MonkeyPatch, walk: str) -> None:
+    from litellm.llms.fal_ai.cost_calculator import _keyed_rows
+    from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
+    from litellm.llms.ollama.common_utils import OllamaModelInfo
+    from litellm.llms.openai.chat.gpt_5_transformation import _catalogue_declares_default_effort
+    from litellm.utils import _handle_new_key_with_scan, _invalidate_model_cost_lowercase_map
+
+    walks: Final[Mapping[str, Callable[[], object]]] = {
+        "fal_ai": lambda: _keyed_rows("lit-5853-model", "standard"),
+        "fireworks_ai": FireworksAIConfig._get_fireworks_index,
+        "ollama": lambda: OllamaModelInfo._is_static_ollama_model("ollama/lit-5853-model"),
+        "gpt-5": _catalogue_declares_default_effort,
+        "case-insensitive scan": lambda: _handle_new_key_with_scan("lit-5853-model"),
+    }
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {_KeyReadDuringARegistration("lit-5853-catalog-model"): _EntryReadDuringARegistration(mode="chat")},
+    )
+
+    try:
+        walks[walk]()
+        assert "lit-5853-registered-mid-walk" in litellm.model_cost
     finally:
         _invalidate_model_cost_lowercase_map()
 
