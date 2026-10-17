@@ -21,6 +21,16 @@ fn checked_in_registry_passes_strict_validation(repo_root: PathBuf, #[case] file
     validate_registry(&catalog).unwrap();
 }
 
+/// The gateway prices requests from this map, so it must at least parse, whatever the strict
+/// validation above says about individual entries.
+#[rstest]
+#[case("model_prices_and_context_window.json")]
+#[case("litellm/model_prices_and_context_window_backup.json")]
+fn checked_in_registry_parses(repo_root: PathBuf, #[case] filename: &str) {
+    let body = std::fs::read(repo_root.join(filename)).unwrap();
+    Catalog::parse(&body, Provenance::default()).unwrap();
+}
+
 #[rstest]
 #[ignore]
 fn fallback_generalizations_are_typed(repo_root: PathBuf) {
