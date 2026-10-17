@@ -10,8 +10,34 @@ from openai import Timeout as SDKTimeout
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../..")))
 
-from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
+from litellm.litellm_core_utils.completion_timeout import CompletionTimeout, get_service_tier_timeout
 from litellm.utils import supports_httpx_timeout
+
+
+@pytest.mark.parametrize(
+    "request_params,deployment,defaults,expected",
+    (
+        ({"service_tier": "flex"}, {"timeout_by_service_tier": {"flex": 4}}, {}, 4),
+        ({"service_tier": "auto"}, {"timeout_by_service_tier": {"flex": 4}}, {}, None),
+        ({}, {"timeout_by_service_tier": {"flex": 4}}, {}, None),
+        ({}, {"service_tier": "flex", "timeout_by_service_tier": {"flex": 4}}, {}, 4),
+        ({}, {"timeout_by_service_tier": {"flex": 4}}, {"service_tier": "flex"}, 4),
+        ({"service_tier": "auto"}, {"service_tier": "flex", "timeout_by_service_tier": {"flex": 4}}, {}, None),
+        ({"service_tier": None}, {"service_tier": "flex", "timeout_by_service_tier": {"flex": 4}}, {}, None),
+        (
+            {"service_tier": "flex", "stream": True},
+            {"timeout_by_service_tier": {"flex": 4}, "stream_timeout_by_service_tier": {"flex": 6}},
+            {},
+            6,
+        ),
+        ({"service_tier": "flex", "stream": True}, {"timeout_by_service_tier": {"flex": 4}}, {}, 4),
+        ({"service_tier": "flex"}, {"stream_timeout_by_service_tier": {"flex": 6}}, {}, None),
+    ),
+)
+def test_service_tier_timeout_uses_the_effective_request_tier(
+    request_params: dict[str, object], deployment: dict[str, object], defaults: dict[str, object], expected: float | None
+) -> None:
+    assert get_service_tier_timeout(request_params, deployment, defaults) == expected
 
 
 def test_explicit_timeout_wins():

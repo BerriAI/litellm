@@ -13,8 +13,59 @@ import respx
 
 import litellm
 from litellm import Router
+from litellm.litellm_core_utils.completion_timeout import get_service_tier_timeout
+from litellm.passthrough.timeout_utils import resolve_llm_passthrough_timeout
+from litellm.types.router import LiteLLM_Params
+from pydantic import ValidationError
 import time
 from unittest.mock import patch, MagicMock
+
+
+@pytest.mark.parametrize(
+    "request_params,expected",
+    (
+        ({"service_tier": "flex"}, 4),
+        ({"service_tier": "flex", "stream": True}, 6),
+        ({"service_tier": "flex", "timeout": 0.3}, 0.3),
+        ({"service_tier": "flex", "request_timeout": 0.4}, 0.4),
+        ({"service_tier": "flex", "stream": True, "timeout": 0.3}, 0.3),
+        ({"service_tier": "flex", "stream": True, "stream_timeout": 0.2, "timeout": 0.3}, 0.2),
+        ({"service_tier": "auto"}, 1),
+        ({}, 1),
+    ),
+)
+def test_service_tier_timeout_preserves_caller_overrides_on_both_router_paths(
+    request_params: dict[str, object], expected: float
+) -> None:
+    router: Final = Router(model_list=[])
+    deployment: Final = {
+        "timeout": 1,
+        "stream_timeout": 1,
+        "timeout_by_service_tier": {"flex": 4},
+        "stream_timeout_by_service_tier": {"flex": 6},
+    }
+    assert router._get_timeout(kwargs=request_params, data=deployment) == expected
+    assert resolve_llm_passthrough_timeout(
+        kwargs=request_params,
+        litellm_params=deployment,
+        service_tier_timeout=get_service_tier_timeout(request_params, deployment, {}),
+    ) == expected
+
+
+@pytest.mark.parametrize("value", (0, -1, float("nan"), float("inf"), "invalid"))
+@pytest.mark.parametrize("field", ("timeout_by_service_tier", "stream_timeout_by_service_tier"))
+def test_service_tier_timeout_rejects_invalid_deployment_durations(field: str, value: object) -> None:
+    with pytest.raises(ValidationError, match=field):
+        LiteLLM_Params.model_validate({"model": "openai/audit-model", field: {"flex": value}})
+
+
+def test_service_tier_timeout_preserves_an_explicit_httpx_timeout() -> None:
+    router: Final = Router(model_list=[])
+    timeout: Final = httpx.Timeout(0.3, connect=0.2)
+    assert router._get_timeout(
+        kwargs={"service_tier": "flex", "timeout": timeout},
+        data={"timeout_by_service_tier": {"flex": 4}},
+    ) is timeout
 
 
 @pytest.fixture

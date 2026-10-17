@@ -42,6 +42,7 @@ if TYPE_CHECKING:
 
 RetryStrategy: TypeAlias = Literal["constant_retry", "exponential_backoff_retry"]
 AgenticSurface: TypeAlias = Literal["chat_completions", "responses"]
+ServiceTierTimeout: TypeAlias = Annotated[float, Field(gt=0, allow_inf_nan=False)]
 RoutingStrategyName: TypeAlias = Literal[
     "simple-shuffle",
     "least-busy",
@@ -77,6 +78,8 @@ class ProviderConnection:
     request_timeout: float | None = None
     force_timeout: float | None = None
     stream_timeout: float | str | None = None
+    timeout_by_service_tier: Mapping[str, ServiceTierTimeout] | None = None
+    stream_timeout_by_service_tier: Mapping[str, ServiceTierTimeout] | None = None
     max_retries: int | None = None
     tenant_id: str | None = None
     client_id: str | None = None
