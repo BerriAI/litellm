@@ -52,7 +52,7 @@ from litellm.constants import (
 from litellm.integrations.otel.model.semconv import resolve_operation
 from litellm.integrations.otel.model.trace_controls import TraceControls, caller_trace_controls
 from litellm.integrations.otel.model.utils import as_str, as_str_mapping, to_seconds
-from litellm.types.utils import InternalCallOrigin
+from litellm.types.utils import PROMPT_QUOTING_ROUTING_DECISION_FIELDS, InternalCallOrigin
 
 if TYPE_CHECKING:
     from litellm.types.utils import StandardLoggingPayload
@@ -472,7 +472,8 @@ def _model_info_id(model_info: object) -> str | None:
 def exported_request_metadata(payload: Mapping[str, object]) -> Mapping[str, object]:
     """The request metadata as the logging callbacks export it: ``user_api_key_*``
     dropped when ``litellm.redact_user_api_key_info`` is on, header keys nested
-    under ``requester_metadata``, ``None`` values dropped."""
+    under a mapping ``requester_metadata`` (any other value is exported as sent),
+    ``None`` values dropped."""
     from litellm.integrations.langfuse.langfuse import log_requester_metadata
     from litellm.litellm_core_utils.redact_messages import (  # pyright: ignore[reportUnknownVariableType]  # helper uses bare dict
         redact_user_api_key_info as _redact_user_api_key_info,
@@ -487,7 +488,12 @@ def exported_request_metadata(payload: Mapping[str, object]) -> Mapping[str, obj
         _redact_user_api_key_info,
     )
     redacted: Final = _REQUEST_METADATA_MAPPING_ADAPTER.validate_python(redact_metadata(dict(metadata)))
-    exported: Final = _REQUEST_METADATA_MAPPING_ADAPTER.validate_python(log_requester_metadata(redacted))
+    requester_metadata: Final = redacted.get(REQUESTER_METADATA_KEY)
+    exported: Final = (
+        _REQUEST_METADATA_MAPPING_ADAPTER.validate_python(log_requester_metadata(redacted))
+        if requester_metadata is None or isinstance(requester_metadata, Mapping)
+        else redacted
+    )
     null_filtered: Final = MappingProxyType({key: value for key, value in exported.items() if value is not None})
     return _without_request_metadata_content(null_filtered)
 
@@ -513,6 +519,8 @@ def _request_metadata_value_without_content(key: str, value: object) -> object:
             return _without_mapping_content_fields(value, _MCP_TOOL_CALL_CONTENT_FIELDS)
         case "vector_store_request_metadata":
             return _without_vector_store_content_fields(value)
+        case "routing_decision":
+            return _without_mapping_content_fields(value, PROMPT_QUOTING_ROUTING_DECISION_FIELDS)
         case _:
             return value
 

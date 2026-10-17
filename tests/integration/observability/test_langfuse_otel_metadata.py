@@ -3,7 +3,7 @@ import binascii
 import json
 import threading
 import uuid
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, wait
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Final
 
 import httpx
+import pytest
 import yaml
 from anthropic import Anthropic, AsyncAnthropic
 from integration._support.client import Gateway, Scenario, eventually
@@ -206,6 +207,7 @@ def _langfuse_rig(
     *,
     sink_reply: Callable[[Request], Reply] | None = None,
     overrides: Mapping[str, str] | None = None,
+    model_list: Callable[[str], Sequence[Mapping[str, object]]] | None = None,
 ) -> Iterator[_Rig]:
     def upstream(request: Request) -> Reply:
         if request.method == "GET":
@@ -240,6 +242,7 @@ def _langfuse_rig(
         raw_config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
         config: Final = {
             **raw_config,
+            "model_list": [*raw_config.get("model_list", []), *(model_list(provider.url) if model_list else ())],
             "litellm_settings": {**raw_config["litellm_settings"], "callbacks": ["langfuse_otel"], **settings},
         }
         path: Final = tmp_path / "langfuse_otel.yaml"
@@ -290,6 +293,16 @@ def _watched_spans(collector: Wire) -> Callable[[], tuple[dict[str, object], ...
         return tuple(drained)
 
     return snapshot
+
+
+def _v2_llm_span(collector: Wire, response_id: str) -> dict[str, object]:
+    def matches(span: Mapping[str, object]) -> bool:
+        return _response_id(span.get("gen_ai.response.id")) == _response_id(response_id)
+
+    observed: Final = eventually(
+        _watched_spans(collector), lambda spans: sum(matches(span) for span in spans) == 1, seconds=25
+    )
+    return next(span for span in observed if matches(span))
 
 
 def _observation_span(collector: Wire, response_id: str) -> dict[str, object]:
@@ -1122,3 +1135,205 @@ def test_langfuse_otel_v2_mapper_teamless_key_emits_no_team_identity(gateway: Ga
             for attribute in (f"langfuse.trace.metadata.{field}" for field in _IDENTITIES)
             if attribute in attrs
         } == {"langfuse.trace.metadata.user_api_key_alias": identity["key_alias"]}, attrs
+
+
+def _scalar_requester_metadata_request(route: str, model: str, marker: str) -> dict[str, object]:
+    caller: Final = {"litellm_metadata": {"requester_metadata": 1}}
+    if route == "/v1/messages":
+        return {"model": model, "max_tokens": 16, "messages": [{"role": "user", "content": marker}], **caller}
+    return {"model": model, "input": marker, **caller}
+
+
+@pytest.mark.parametrize(
+    ("callback", "route"),
+    [
+        ("otel", "/v1/messages"),
+        ("otel", "/v1/responses"),
+        ("langfuse_otel", "/v1/messages"),
+        ("langfuse_otel", "/v1/responses"),
+    ],
+)
+def test_otel_v2_scalar_requester_metadata_keeps_the_llm_span(
+    callback: str, route: str, gateway: Gateway, tmp_path: Path
+) -> None:
+    marker: Final = "lf-v2-scalar-" + uuid.uuid4().hex
+    with (
+        _langfuse_rig(
+            gateway,
+            tmp_path,
+            {"callbacks": [callback]},
+            marker,
+            overrides={
+                "LITELLM_OTEL_V2": "1",
+                **({"OTEL_EXPORTER": "otlp_http", "OTEL_ENDPOINT": "__collector__"} if callback == "otel" else {}),
+            },
+        ) as rig,
+        rig.candidate.scenario() as scenario,
+    ):
+        key, identity = _scenario_identity(scenario, rig.provider)
+        model: Final = (
+            scenario.model(model="anthropic/claude-sonnet-4-6", api_base=rig.provider.url)
+            if route == "/v1/messages"
+            else identity["model"]
+        )
+        response: Final = rig.candidate.request(
+            "POST", route, _scalar_requester_metadata_request(route, str(model), marker), key=key
+        )
+        assert response.status_code == 200, response.text
+
+        attrs: Final = _v2_llm_span(rig.collector, response.json()["id"])
+        assert attrs.get("gen_ai.usage.input_tokens") == 3, attrs
+        if callback == "langfuse_otel":
+            observation: Final = json.loads(str(attrs["langfuse.observation.metadata"]))
+            assert observation["requester_metadata"] == 1, observation
+            assert observation["user_api_key_alias"] == identity["key_alias"], observation
+
+
+def test_langfuse_otel_scalar_requester_metadata_keeps_the_observation_input(gateway: Gateway, tmp_path: Path) -> None:
+    marker: Final = "lf-scalar-" + uuid.uuid4().hex
+    with (
+        _langfuse_rig(gateway, tmp_path, {}, marker) as rig,
+        rig.candidate.scenario() as scenario,
+    ):
+        key, identity = _scenario_identity(scenario, rig.provider)
+        model: Final = scenario.model(model="anthropic/claude-sonnet-4-6", api_base=rig.provider.url)
+        response: Final = rig.candidate.request(
+            "POST", "/v1/messages", _scalar_requester_metadata_request("/v1/messages", model, marker), key=key
+        )
+        assert response.status_code == 200, response.text
+
+        attrs: Final = _observation_span(rig.collector, response.json()["id"])
+        assert marker in str(attrs.get("langfuse.observation.input")), sorted(attrs)
+        observation: Final = json.loads(str(attrs["langfuse.observation.metadata"]))
+        assert observation["requester_metadata"] == 1, observation
+        assert observation["user_api_key_alias"] == identity["key_alias"], observation
+
+
+@pytest.mark.parametrize(
+    "callbacks",
+    [["langfuse_otel", "otel"], ["langfuse_otel"]],
+    ids=["langfuse-listed-before-otel", "langfuse-with-otel-env"],
+)
+def test_otel_v2_collector_beside_langfuse_gets_no_langfuse_request_metadata(
+    callbacks: list[str], gateway: Gateway, tmp_path: Path
+) -> None:
+    marker: Final = "lf-v2-generic-" + uuid.uuid4().hex
+    probe: Final = "lf-probe-" + uuid.uuid4().hex
+    with (
+        wire_server(lambda _request: Reply()) as generic,
+        _langfuse_rig(
+            gateway,
+            tmp_path,
+            {"callbacks": callbacks},
+            marker,
+            overrides={"LITELLM_OTEL_V2": "1", "OTEL_EXPORTER": "otlp_http", "OTEL_ENDPOINT": generic.url},
+        ) as rig,
+        rig.candidate.scenario() as scenario,
+    ):
+        key, identity = _scenario_identity(scenario, rig.provider)
+        response: Final = rig.candidate.request(
+            "POST",
+            "/v1/chat/completions",
+            {
+                "model": identity["model"],
+                "messages": [{"role": "user", "content": marker}],
+                "metadata": {"caller_note": probe},
+                "cache": {"no-cache": True},
+            },
+            key=key,
+            headers={"x-lit8283-probe": probe},
+        )
+        assert response.status_code == 200, response.text
+
+        langfuse: Final = _v2_llm_span(rig.collector, response.json()["id"])
+        observation: Final = json.loads(str(langfuse["langfuse.observation.metadata"]))
+        assert observation["user_api_key_alias"] == identity["key_alias"], observation
+        assert langfuse["langfuse.trace.metadata.user_api_key_alias"] == identity["key_alias"], langfuse
+
+        collector: Final = _v2_llm_span(generic, response.json()["id"])
+        assert "langfuse.observation.metadata" not in collector, sorted(collector)
+        assert not [name for name in collector if name.startswith("langfuse.trace.metadata.user_api_key_")], sorted(
+            collector
+        )
+        assert probe not in json.dumps(collector, default=str), collector
+        assert collector["langfuse.trace.metadata.team_id"] == identity["team_id"], collector
+        assert collector.get("gen_ai.usage.input_tokens") == 3, collector
+
+
+_PROMPT_QUOTING_ROUTING_FIELDS: Final = ("signals", "matched_keyword", "escalation_keyword", "classifier_crux")
+
+
+def _keyword_router(router: str, keyword: str) -> Callable[[str], Sequence[Mapping[str, object]]]:
+    def models(provider_url: str) -> Sequence[Mapping[str, object]]:
+        tier: Final = f"{router}-tier"
+        return (
+            {
+                "model_name": tier,
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "integration-provider-key",
+                    "api_base": provider_url + "/v1",
+                },
+            },
+            {
+                "model_name": router,
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": {
+                        "classifier_type": "heuristic",
+                        "keyword_tier_rules": [{"keywords": [keyword], "tier": "REASONING"}],
+                        "tiers": {"SIMPLE": tier, "MEDIUM": tier, "COMPLEX": tier, "REASONING": tier},
+                    },
+                },
+            },
+        )
+
+    return models
+
+
+@pytest.mark.parametrize("otel_v2", [False, True], ids=["v1", "v2"])
+def test_langfuse_otel_metadata_omits_prompt_quoting_routing_fields(
+    otel_v2: bool, gateway: Gateway, tmp_path: Path
+) -> None:
+    marker: Final = "lf-route-" + uuid.uuid4().hex
+    router: Final = "lf-router-" + uuid.uuid4().hex[:8]
+    keyword: Final = "acquire-globex-" + uuid.uuid4().hex[:8]
+    with (
+        _langfuse_rig(
+            gateway,
+            tmp_path,
+            {},
+            marker,
+            overrides=(
+                {"LITELLM_OTEL_V2": "1", "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "no_content"}
+                if otel_v2
+                else None
+            ),
+            model_list=_keyword_router(router, keyword),
+        ) as rig,
+        rig.candidate.scenario() as scenario,
+    ):
+        key: Final = scenario.key(key_alias="lf-route-" + uuid.uuid4().hex)
+        response: Final = rig.candidate.request(
+            "POST",
+            "/v1/chat/completions",
+            {
+                "model": router,
+                "messages": [{"role": "user", "content": f"{marker} please {keyword} now"}],
+                "cache": {"no-cache": True},
+            },
+            key=key,
+        )
+        assert response.status_code == 200, response.text
+
+        attrs: Final = (
+            _v2_llm_span(rig.collector, response.json()["id"])
+            if otel_v2
+            else _observation_span(rig.collector, response.json()["id"])
+        )
+        routing: Final = json.loads(str(attrs["langfuse.observation.metadata"]))["routing_decision"]
+        assert routing["tier"] == "REASONING", routing
+        assert routing["router_model_name"] == router, routing
+        assert not [field for field in _PROMPT_QUOTING_ROUTING_FIELDS if field in routing], routing
+        if otel_v2:
+            assert keyword not in json.dumps(attrs, default=str), attrs

@@ -927,6 +927,9 @@ def test_langfuse_mapper_omits_observation_metadata_without_payload_metadata():
         {"prompt_management_metadata": {1: "one", "prompt_id": "prompt-1"}},
         {"mcp_tool_call_metadata": {1: "one", "name": "lookup_weather"}},
         {"vector_store_request_metadata": [{1: "one", "vector_store_id": "vs-1"}]},
+        {"requester_metadata": 1},
+        {"requester_metadata": True},
+        {"requester_metadata": 1.5},
     ],
 )
 def test_span_data_builds_from_request_metadata_of_unexpected_shape(unexpected_shape: dict[str, object]) -> None:
@@ -940,3 +943,33 @@ def test_span_data_builds_from_request_metadata_of_unexpected_shape(unexpected_s
     attrs: Final = LangfuseMapper().map(LLMCallSpanData.from_standard_logging_payload(payload))
 
     assert json.loads(attrs["langfuse.observation.metadata"])["spend_logs_metadata"] == {"ticket": "LIT-8283"}
+
+
+def test_langfuse_mapper_omits_prompt_quoting_routing_fields():
+    payload: Final[dict[str, object]] = {
+        "call_type": "acompletion",
+        "custom_llm_provider": "openai",
+        "model": "gpt-4o",
+        "metadata": {
+            "routing_decision": {
+                "router_model_name": "smart-router",
+                "router_type": "complexity",
+                "cause": "literal_keyword_match",
+                "tier": "REASONING",
+                "signals": ["keyword (routing-prompt-secret)"],
+                "matched_keyword": "routing-prompt-secret",
+                "escalation_keyword": "routing-prompt-secret",
+                "classifier_crux": "routing-prompt-secret",
+            }
+        },
+        "response": {},
+    }
+    attrs: Final = LangfuseMapper().map(LLMCallSpanData.from_standard_logging_payload(payload))
+
+    assert "routing-prompt-secret" not in json.dumps(attrs)
+    assert json.loads(attrs["langfuse.observation.metadata"])["routing_decision"] == {
+        "router_model_name": "smart-router",
+        "router_type": "complexity",
+        "cause": "literal_keyword_match",
+        "tier": "REASONING",
+    }

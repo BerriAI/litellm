@@ -43,6 +43,7 @@ from litellm._version import version as litellm_version
 from litellm.integrations.otel.mappers.langfuse import (
     LANGFUSE_OBSERVATION_INPUT,
     LANGFUSE_OBSERVATION_OUTPUT,
+    LANGFUSE_REQUEST_METADATA_ATTRIBUTES,
     LANGFUSE_TRACE_NAME,
 )
 from litellm.integrations.otel.model.config import (
@@ -459,6 +460,17 @@ def without_message_content(span: ReadableSpan) -> ReadableSpan:
     return _SpanView(span, span.resource, kept, span.events, span.status, parent=span.parent)
 
 
+def without_langfuse_request_metadata(span: ReadableSpan) -> ReadableSpan:
+    """``span`` without the request metadata the Langfuse mapper writes for a Langfuse destination."""
+    attributes: Final = span.attributes or _NO_ATTRIBUTES
+    if not any(key in LANGFUSE_REQUEST_METADATA_ATTRIBUTES for key in attributes):
+        return span
+    kept: Final = MappingProxyType(
+        {key: value for key, value in attributes.items() if key not in LANGFUSE_REQUEST_METADATA_ATTRIBUTES}
+    )
+    return _SpanView(span, span.resource, kept, span.events, span.status, parent=span.parent)
+
+
 def _is_database_span(attributes: Mapping[str, AttributeValue]) -> bool:
     return any(key in attributes for key in _DB_SYSTEM_KEYS)
 
@@ -614,8 +626,9 @@ def _for_destination(
     captures on the server span, whose request side holds the caller's bearer token,
     and the query string of the request URL, which can hold the same key. A
     destination whose effective setting disables span content loses the prompt and
-    response content too. The span itself stays, so the tenant still gets the whole
-    trace tree.
+    response content too, and a destination for any backend but Langfuse loses the
+    request metadata the Langfuse mapper writes. The span itself stays, so the tenant
+    still gets the whole trace tree.
     """
     extra: Final = destination.resource_attributes
     defaults: Final = destination.resource_defaults
@@ -624,11 +637,14 @@ def _for_destination(
     owned: Final = _is_tenant_owned_span(attributes)
     unreachable: Final = _guardrail_unreachable(attributes)
     redacted: Final = not destination.captures_content(default_capture)
+    langfuse: Final = destination.callback_name == ExporterOwner.LANGFUSE_OTEL
     kept: Final = MappingProxyType(
         {
             key: _without_query(key, value)
             for key, value in attributes.items()
-            if _tenant_visible(key, database, owned, unreachable) and not (redacted and _is_message_content(key))
+            if _tenant_visible(key, database, owned, unreachable)
+            and not (redacted and _is_message_content(key))
+            and (langfuse or key not in LANGFUSE_REQUEST_METADATA_ATTRIBUTES)
         }
     )
     recorded: Final = span.events
@@ -1106,6 +1122,25 @@ class _OverriddenBackendFilter(SpanProcessor):
         return self._inner.force_flush(timeout_millis)
 
 
+class _LangfuseRequestMetadataFilter(SpanProcessor):
+    """Strip the Langfuse request metadata from every span before ``inner`` exports it."""
+
+    def __init__(self, inner: SpanProcessor) -> None:
+        self._inner: Final = inner
+
+    def on_start(self, span: SDKSpan, parent_context: Context | None = None) -> None:
+        self._inner.on_start(span, parent_context)
+
+    def on_end(self, span: ReadableSpan) -> None:
+        self._inner.on_end(without_langfuse_request_metadata(span))
+
+    def shutdown(self) -> None:
+        self._inner.shutdown()
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        return self._inner.force_flush(timeout_millis)
+
+
 class _MessageContentFilter(SpanProcessor):
     """Strip prompt and response content from every span before ``inner`` exports it."""
 
@@ -1377,13 +1412,17 @@ def build_resource(config: OpenTelemetryV2Config) -> Resource:
 
 
 def _spec_processor(
-    spec: ExporterSpec, use_simple_processor: bool | None, strip_message_content: bool
+    spec: ExporterSpec,
+    use_simple_processor: bool | None,
+    strip_message_content: bool,
+    strip_langfuse_request_metadata: bool,
 ) -> SpanProcessor:
     exporting: Final = _processor_for(
         _exporter_from_spec(spec),
         (spec.use_simple_processor if spec.use_simple_processor is not None else use_simple_processor),
     )
-    return _MessageContentFilter(exporting) if strip_message_content else exporting
+    scoped: Final = _LangfuseRequestMetadataFilter(exporting) if strip_langfuse_request_metadata else exporting
+    return _MessageContentFilter(scoped) if strip_message_content else scoped
 
 
 def build_tracer_provider(
@@ -1411,6 +1450,8 @@ def build_tracer_provider(
 
     ``config.langfuse_span_scope`` narrows the exporter owned by ``langfuse_otel``
     alone; a collector or any other backend in the same config keeps the full tree.
+    In a config with a ``langfuse_otel`` exporter, every other exporter goes without
+    the request metadata the Langfuse mapper writes.
     ``strip_message_content`` removes prompt and response content before every
     exporter, for a routed provider whose spans can carry content another
     destination asked for.
@@ -1426,10 +1467,16 @@ def build_tracer_provider(
 
     # ``config._normalize`` guarantees at least one spec (it folds the top-level
     # ``exporter``/``endpoint``/``headers`` fields in when ``exporters`` is empty).
+    langfuse_owned: Final = any(spec.owner is ExporterOwner.LANGFUSE_OTEL for spec in config.exporters)
     for spec in config.exporters:
         if spec.requires_headers and not spec.headers:
             continue
-        processor = _spec_processor(spec, use_simple_processor, strip_message_content)
+        processor = _spec_processor(
+            spec,
+            use_simple_processor,
+            strip_message_content,
+            strip_langfuse_request_metadata=langfuse_owned and spec.owner is not ExporterOwner.LANGFUSE_OTEL,
+        )
         owner = spec.owner.value if tenant_overrides and spec.owner is not None else None
         scope = _operator_scope(config, spec)
         sink = _sink_key(spec.endpoint, parse_headers(spec.headers)) if _exports_to_the_wire(spec) else None

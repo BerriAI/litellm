@@ -650,6 +650,9 @@ class TestLangfuseOtelIntegration:
             {"prompt_management_metadata": {1: "one", "prompt_id": "prompt-1"}},
             {"mcp_tool_call_metadata": {1: "one", "name": "lookup_weather"}},
             {"vector_store_request_metadata": [{1: "one", "vector_store_id": "vs-1"}]},
+            {"requester_metadata": 1},
+            {"requester_metadata": True},
+            {"requester_metadata": 1.5},
         ],
     )
     def test_request_metadata_of_unexpected_shape_keeps_the_observation_output(
@@ -668,6 +671,33 @@ class TestLangfuseOtelIntegration:
 
             assert json.loads(actual["langfuse.observation.metadata"])["spend_logs_metadata"] == {"env": "prod"}
             assert json.loads(actual["langfuse.observation.output"]) == {"role": "assistant", "content": "hello"}
+
+    def test_observation_metadata_omits_prompt_quoting_routing_fields(self) -> None:
+        kwargs: Final[dict[str, object]] = {
+            "litellm_params": {"metadata": {}},
+            "standard_logging_object": {
+                "metadata": {
+                    "routing_decision": {
+                        "router_type": "complexity",
+                        "tier": "REASONING",
+                        "signals": ["keyword (routing-prompt-secret)"],
+                        "matched_keyword": "routing-prompt-secret",
+                        "escalation_keyword": "routing-prompt-secret",
+                        "classifier_crux": "routing-prompt-secret",
+                    }
+                }
+            },
+        }
+
+        with patch("litellm.integrations.arize._utils.safe_set_attribute") as mock_safe_set_attribute:
+            LangfuseOtelLogger._set_langfuse_specific_attributes(MagicMock(), kwargs, None)
+
+            actual: Final = {call.args[1]: call.args[2] for call in mock_safe_set_attribute.call_args_list}
+
+            assert json.loads(actual["langfuse.observation.metadata"])["routing_decision"] == {
+                "router_type": "complexity",
+                "tier": "REASONING",
+            }
 
 
 class TestLangfuseOtelKeyDynamicConfig:

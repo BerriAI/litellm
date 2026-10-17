@@ -50,6 +50,10 @@ TRACE_IDENTITY_FIELDS: Final = (
     "user_api_key_team_id",
     "user_api_key_team_alias",
 )
+# The request metadata attributes only a Langfuse destination receives.
+LANGFUSE_REQUEST_METADATA_ATTRIBUTES: Final[frozenset[str]] = frozenset(
+    {LANGFUSE_OBSERVATION_METADATA, *(f"{LANGFUSE_TRACE_METADATA_PREFIX}{name}" for name in TRACE_IDENTITY_FIELDS)}
+)
 
 
 def _identity_field(name: str) -> Callable[[LLMCallSpanData], AttrValue | None]:
