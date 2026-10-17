@@ -74,6 +74,7 @@ _SpendTransactionField: TypeAlias = Literal[
     "end_user_list_transactions",
     "key_list_transactions",
     "team_list_transactions",
+    "team_token_list_transactions",
     "team_member_list_transactions",
     "org_list_transactions",
     "org_member_list_transactions",
@@ -88,6 +89,7 @@ _SPEND_TRANSACTION_FIELDS: Final[tuple[_SpendTransactionField, ...]] = (
     "end_user_list_transactions",
     "key_list_transactions",
     "team_list_transactions",
+    "team_token_list_transactions",
     "team_member_list_transactions",
     "org_list_transactions",
     "org_member_list_transactions",
@@ -957,6 +959,9 @@ class RedisUpdateBuffer:
             end_user_list_transactions=_merged_entity_transactions(list_of_transactions, "end_user_list_transactions"),
             key_list_transactions=_merged_entity_transactions(list_of_transactions, "key_list_transactions"),
             team_list_transactions=_merged_entity_transactions(list_of_transactions, "team_list_transactions"),
+            team_token_list_transactions=_merged_entity_transactions(
+                list_of_transactions, "team_token_list_transactions"
+            ),
             team_member_list_transactions=_merged_entity_transactions(
                 list_of_transactions, "team_member_list_transactions"
             ),
