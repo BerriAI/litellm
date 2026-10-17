@@ -8,6 +8,9 @@ import { DataTable } from "@/components/shared/DataTable";
 import { modelHubCall, PromptSpec } from "@/components/networking";
 
 import { getPromptTableColumns } from "./PromptTableColumns";
+import { useUserDisplayNames } from "@/app/(dashboard)/hooks/users/useUsers";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { canListUsers } from "@/utils/roles";
 import { ModelGroupInfo } from "./prompt_utils";
 
 interface PromptTableProps {
@@ -41,6 +44,7 @@ const PromptTable: React.FC<PromptTableProps> = ({
   accessToken,
   isAdmin,
 }) => {
+  const { userRole } = useAuthorized();
   const [sorting, setSorting] = useState<SortingState>(DEFAULT_SORTING);
   const [modelHubData, setModelHubData] = useState<Map<string, ModelGroupInfo>>(new Map());
 
@@ -65,9 +69,20 @@ const PromptTable: React.FC<PromptTableProps> = ({
     fetchModelHubData();
   }, [accessToken]);
 
+  const { data: displayNames } = useUserDisplayNames(
+    useMemo(() => promptsList.map((prompt) => prompt.created_by ?? ""), [promptsList]),
+  );
   const columns = useMemo(
-    () => getPromptTableColumns({ modelHubData, isAdmin, onPromptClick, onDeleteClick }),
-    [modelHubData, isAdmin, onPromptClick, onDeleteClick],
+    () =>
+      getPromptTableColumns({
+        modelHubData,
+        isAdmin,
+        onPromptClick,
+        onDeleteClick,
+        resolveUserName: (userId) => displayNames?.[userId],
+        linkToUserPage: canListUsers(userRole),
+      }),
+    [modelHubData, isAdmin, onPromptClick, onDeleteClick, displayNames, userRole],
   );
 
   return (

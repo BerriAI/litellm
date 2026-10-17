@@ -5,6 +5,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PromptSpec } from "@/components/networking";
 
 import PromptTable from "./PromptTable";
+vi.mock("@/app/(dashboard)/hooks/users/useUsers", async () => ({
+  ...(await vi.importActual("@/app/(dashboard)/hooks/users/useUsers")),
+  useUserDisplayNames: () => ({ data: undefined }),
+}));
 
 vi.mock("@/components/networking", () => ({
   modelHubCall: vi.fn().mockResolvedValue({ data: [] }),
@@ -60,7 +64,7 @@ describe("PromptTable", () => {
     render(<PromptTable {...defaultProps} promptsList={prompts} />);
 
     expect(screen.getByRole("link", { name: "user-1" })).toHaveAttribute("href", "/ui/users?user=user-1");
-    expect(screen.getByText("default_user_id")).toBeInTheDocument();
+    expect(screen.getByText("Default Proxy Admin")).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "default_user_id" })).not.toBeInTheDocument();
   });
 

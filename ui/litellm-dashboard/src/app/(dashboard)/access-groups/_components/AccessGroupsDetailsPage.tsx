@@ -1,4 +1,5 @@
 import { useAccessGroupDetails } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroupDetails";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import {
   ArrowLeftIcon,
   BotIcon,
@@ -10,8 +11,8 @@ import {
   UsersIcon,
 } from "lucide-react";
 import { useState } from "react";
-import DefaultProxyAdminTag from "@/components/common_components/DefaultProxyAdminTag";
 import { BadgeLink } from "@/components/shared/BadgeLink";
+import { UserReference } from "@/components/shared/EntityReference";
 import CopyButton from "@/components/shared/CopyButton";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -21,6 +22,7 @@ import { SimpleTooltip } from "@/components/ui/tooltip";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import type { components } from "@/lib/http/schema";
 import { keyDetailHref, teamDetailHref } from "@/utils/entityLinks";
+import { canListUsers } from "@/utils/roles";
 import { AccessGroupEditModal } from "./AccessGroupsModal/AccessGroupEditModal";
 
 type AccessGroupResource = components["schemas"]["AccessGroupResource"];
@@ -106,7 +108,9 @@ function ResourceBadge({
 }
 
 export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailProps) {
+  const { userRole } = useAuthorized();
   const { data: accessGroup, isLoading } = useAccessGroupDetails(accessGroupId);
+  const linkToUserPage = canListUsers(userRole);
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
   const [showAllKeys, setShowAllKeys] = useState(false);
   const [showAllTeams, setShowAllTeams] = useState(false);
@@ -168,27 +172,35 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
           <CardTitle>Group Details</CardTitle>
         </CardHeader>
         <CardContent>
-          <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-2 text-sm">
+          <dl className="grid w-1/2 grid-cols-[max-content_minmax(0,1fr)] gap-x-4 gap-y-2 text-sm">
             <dt className="text-muted-foreground">Description</dt>
             <dd className="text-foreground">{accessGroup.description || "—"}</dd>
             <dt className="text-muted-foreground">Created</dt>
-            <dd className="flex items-center gap-1 text-foreground">
-              {new Date(accessGroup.created_at).toLocaleString()}
+            <dd className="flex min-w-0 flex-wrap items-center gap-x-1 text-foreground">
+              <span className="shrink-0 whitespace-nowrap">{new Date(accessGroup.created_at).toLocaleString()}</span>
               {accessGroup.created_by && (
-                <>
-                  <span>by</span>
-                  <DefaultProxyAdminTag userId={accessGroup.created_by} />
-                </>
+                <span className="flex min-w-0 grow basis-24 items-center gap-1">
+                  <span className="shrink-0">by</span>
+                  <UserReference
+                    userId={accessGroup.created_by}
+                    displayName={accessGroup.created_by_user?.name}
+                    linkToUserPage={linkToUserPage}
+                  />
+                </span>
               )}
             </dd>
             <dt className="text-muted-foreground">Last Updated</dt>
-            <dd className="flex items-center gap-1 text-foreground">
-              {new Date(accessGroup.updated_at).toLocaleString()}
+            <dd className="flex min-w-0 flex-wrap items-center gap-x-1 text-foreground">
+              <span className="shrink-0 whitespace-nowrap">{new Date(accessGroup.updated_at).toLocaleString()}</span>
               {accessGroup.updated_by && (
-                <>
-                  <span>by</span>
-                  <DefaultProxyAdminTag userId={accessGroup.updated_by} />
-                </>
+                <span className="flex min-w-0 grow basis-24 items-center gap-1">
+                  <span className="shrink-0">by</span>
+                  <UserReference
+                    userId={accessGroup.updated_by}
+                    displayName={accessGroup.updated_by_user?.name}
+                    linkToUserPage={linkToUserPage}
+                  />
+                </span>
               )}
             </dd>
           </dl>

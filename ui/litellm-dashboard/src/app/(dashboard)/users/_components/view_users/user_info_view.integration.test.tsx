@@ -5,6 +5,7 @@ import {
   screen,
   testQueryClient,
   waitFor,
+  within,
 } from "../../../../../../tests/test-utils";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
@@ -217,9 +218,10 @@ describe("UserInfoView add-to-team form", () => {
 
     await user.click(teamField());
 
-    expect(await screen.findByTitle("Gamma Team")).toBeInTheDocument();
-    expect(screen.queryByTitle("Alpha Team")).not.toBeInTheDocument();
-    expect(screen.queryByTitle("Beta Team")).not.toBeInTheDocument();
+    const listbox = await screen.findByRole("listbox");
+    expect(within(listbox).getByTitle("Gamma Team")).toBeInTheDocument();
+    expect(within(listbox).queryByTitle("Alpha Team")).not.toBeInTheDocument();
+    expect(within(listbox).queryByTitle("Beta Team")).not.toBeInTheDocument();
   });
 
   it("shows the default role name on the trigger rather than a blank or raw value", async () => {

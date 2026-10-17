@@ -4,6 +4,8 @@ import { describe, expect, it, vi } from "vitest";
 import { DataTable } from "@/components/shared/DataTable";
 import { getMCPHubTableColumns, MCPServerData } from "./MCPHubTableColumns";
 
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+
 const SERVER_URL = "https://mcp.exa.ai/mcp";
 
 const mockServer: MCPServerData = {
@@ -32,7 +34,7 @@ function renderTable(onServerClick = vi.fn(), servers = [mockServer]) {
   render(
     <DataTable
       data={servers}
-      columns={getMCPHubTableColumns({ onServerClick })}
+      columns={getMCPHubTableColumns({ onServerClick, linkToUserPage: true })}
       getRowId={(server) => server.server_id}
       sortingMode="client"
       size="compact"
@@ -83,7 +85,7 @@ describe("getMCPHubTableColumns", () => {
   it("does not expose a URL column", () => {
     renderTable();
     expect(screen.queryByText("URL")).not.toBeInTheDocument();
-    const columns = getMCPHubTableColumns({ onServerClick: vi.fn() });
+    const columns = getMCPHubTableColumns({ onServerClick: vi.fn(), linkToUserPage: true });
     expect(columns.some((c) => c.header === "URL" || c.meta?.title === "URL")).toBe(false);
   });
 

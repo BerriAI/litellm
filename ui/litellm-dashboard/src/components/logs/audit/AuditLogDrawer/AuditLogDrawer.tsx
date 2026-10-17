@@ -2,7 +2,9 @@ import { Check, Copy } from "lucide-react";
 import { useState, useCallback } from "react";
 import moment from "moment";
 import { AuditLogEntry, AUDIT_TABLE_NAME_DISPLAY } from "../AuditLogsTableColumns";
-import DefaultProxyAdminTag from "../../../common_components/DefaultProxyAdminTag";
+import { UserReference } from "@/components/shared/EntityReference";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { canListUsers } from "@/utils/roles";
 import CopyButton from "@/components/shared/CopyButton";
 import { StatusBadge, type StatusTone } from "@/components/shared/table_cells/status_badge";
 import { Button } from "@/components/ui/button";
@@ -13,6 +15,7 @@ interface AuditLogDrawerProps {
   open: boolean;
   onClose: () => void;
   log: AuditLogEntry | null;
+  userDisplayName?: string | null;
 }
 
 const ACTION_TONE: Record<string, StatusTone> = {
@@ -68,7 +71,7 @@ function MetadataRow({ label, value }: { label: string; value: React.ReactNode }
   return (
     <div className="flex items-start gap-2 py-1.5">
       <span className="w-36 shrink-0 text-xs text-muted-foreground">{label}</span>
-      <span className="text-xs break-all text-foreground">{value}</span>
+      <span className="min-w-0 flex-1 text-xs break-all text-foreground">{value}</span>
     </div>
   );
 }
@@ -170,7 +173,8 @@ function DiffSection({ log }: { log: AuditLogEntry }) {
   );
 }
 
-export function AuditLogDrawer({ open, onClose, log }: AuditLogDrawerProps) {
+export function AuditLogDrawer({ open, onClose, log, userDisplayName }: AuditLogDrawerProps) {
+  const { userRole } = useAuthorized();
   if (!log) return null;
 
   const tableDisplay = AUDIT_TABLE_NAME_DISPLAY[log.table_name] ?? log.table_name;
@@ -200,7 +204,16 @@ export function AuditLogDrawer({ open, onClose, log }: AuditLogDrawerProps) {
                 </span>
               }
             />
-            <MetadataRow label="Changed By" value={<DefaultProxyAdminTag userId={log.changed_by} />} />
+            <MetadataRow
+              label="Changed By"
+              value={
+                <UserReference
+                  userId={log.changed_by}
+                  displayName={userDisplayName}
+                  linkToUserPage={canListUsers(userRole)}
+                />
+              }
+            />
             <MetadataRow
               label="API Key (Hash)"
               value={

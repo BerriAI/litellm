@@ -6,6 +6,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import ModelInfoView from "./model_info_view";
 import { toast } from "@/lib/toast";
 import * as networking from "./networking";
+
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 vi.mock(
   "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults",
   async () => await import("../../tests/mocks/complexityScorerDefaults"),
@@ -1479,6 +1481,10 @@ describe("ModelInfoView", () => {
   // EditAutoRouterModal only speaks complexity and semantic. Offering it for an adaptive or
   // quality router lets a save write auto_router_config onto a row that stores its settings
   // elsewhere. These rows stay reachable from Health Status and direct ?model= links even
+  vi.mock("@/app/(dashboard)/hooks/users/useUsers", async () => ({
+    ...(await vi.importActual("@/app/(dashboard)/hooks/users/useUsers")),
+    useUserDisplayNames: () => ({ data: undefined }),
+  }));
   // though the Models table now excludes auto-routers, so the button itself has to be gated.
   describe("Edit Auto Router affordance", () => {
     const withRouter = (litellmParams: Record<string, unknown>) => {

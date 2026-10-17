@@ -28,6 +28,8 @@ interface AuditLogsTableProps {
   onSearchChange?: (value: string) => void;
   onRefresh: () => void;
   onViewLog: (log: AuditLogEntry) => void;
+  resolveUserName?: (userId: string) => string | undefined;
+  linkToUserPage: boolean;
 }
 
 const ALL_VALUE = "all";
@@ -110,9 +112,14 @@ export function AuditLogsTable({
   onSearchChange,
   onRefresh,
   onViewLog,
+  resolveUserName,
+  linkToUserPage,
 }: AuditLogsTableProps) {
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const columns = useMemo(() => getAuditLogsTableColumns({ onViewLog }), [onViewLog]);
+  const columns = useMemo(
+    () => getAuditLogsTableColumns({ onViewLog, resolveUserName, linkToUserPage }),
+    [onViewLog, resolveUserName, linkToUserPage],
+  );
   const hasActiveSearch = Boolean(searchValue?.trim());
 
   return (

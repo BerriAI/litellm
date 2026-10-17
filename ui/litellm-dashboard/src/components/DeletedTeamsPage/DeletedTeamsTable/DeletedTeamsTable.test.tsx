@@ -98,6 +98,6 @@ it("leaves the default_user_id placeholder unlinked in the deleted by cell", () 
   const team = makeDeletedTeam({ deleted_by: "default_user_id", organization_id: null });
   renderWithProviders(<DeletedTeamsTable teams={[team]} isLoading={false} rowCount={1} {...paginationProps} />);
 
-  expect(screen.getByText("default_user_id")).toBeInTheDocument();
+  expect(screen.getByText("Default Proxy Admin")).toBeInTheDocument();
   expect(screen.queryByRole("link", { name: "default_user_id" })).not.toBeInTheDocument();
 });

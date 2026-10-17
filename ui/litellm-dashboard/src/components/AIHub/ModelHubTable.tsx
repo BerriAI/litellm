@@ -3,6 +3,8 @@ import MakeAgentPublicForm from "@/components/AIHub/forms/MakeAgentPublicForm";
 import MakeMCPPublicForm from "@/components/AIHub/forms/MakeMCPPublicForm";
 import MakeModelPublicForm from "@/components/AIHub/forms/MakeModelPublicForm";
 import { getMCPHubTableColumns, MCPServerData } from "@/components/AIHub/MCPHubTableColumns";
+import { UserReference } from "@/components/shared/EntityReference";
+import { useUserDisplayNamesWithCredentials } from "@/app/(dashboard)/hooks/users/useUsers";
 import { getModelHubTableColumns, ModelHubData } from "@/components/AIHub/ModelHubTableColumns";
 import { modelUsageExample } from "@/components/AIHub/modelUsageExample";
 import UsefulLinksManagement from "@/components/AIHub/UsefulLinksManagement";
@@ -26,7 +28,7 @@ import {
 } from "@/components/networking";
 import PublicModelHub from "@/components/public_model_hub";
 import { copyToClipboard } from "@/utils/dataUtils";
-import { isAdminRole, isProxyAdminRole } from "@/utils/roles";
+import { canListUsers, isAdminRole, isProxyAdminRole } from "@/utils/roles";
 import { filterBySearchTerm } from "@/utils/searchUtils";
 import { SortingState } from "@tanstack/react-table";
 import { Badge } from "@/components/ui/badge";
@@ -431,7 +433,21 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
     () => filterBySearchTerm(agentHubData ?? [], agentSearchTerm, (agent) => [agent.name, agent.description]),
     [agentHubData, agentSearchTerm],
   );
-  const mcpColumns = useMemo(() => getMCPHubTableColumns({ onServerClick: showMcpModal }), [showMcpModal]);
+  const { data: displayNames } = useUserDisplayNamesWithCredentials(
+    useMemo(
+      () => (mcpHubData ?? []).flatMap((server) => [server.created_by ?? "", server.updated_by ?? ""]),
+      [mcpHubData],
+    ),
+    publicPage ? null : accessToken,
+    userRole,
+  );
+  const resolveUserName = useCallback((userId: string) => displayNames?.[userId], [displayNames]);
+
+  const linkToUserPage = !publicPage && canListUsers(userRole);
+  const mcpColumns = useMemo(
+    () => getMCPHubTableColumns({ onServerClick: showMcpModal, resolveUserName, linkToUserPage }),
+    [showMcpModal, resolveUserName, linkToUserPage],
+  );
 
   // If this is a public page, use the dedicated PublicModelHub component
   if (publicPage && publicPageAllowed) {
@@ -1105,11 +1121,23 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <p className="font-medium">Created By:</p>
-                    <p>{selectedMcpServer.created_by}</p>
+                    <p>
+                      <UserReference
+                        userId={selectedMcpServer.created_by}
+                        displayName={resolveUserName(selectedMcpServer.created_by)}
+                        linkToUserPage={linkToUserPage}
+                      />
+                    </p>
                   </div>
                   <div>
                     <p className="font-medium">Updated By:</p>
-                    <p>{selectedMcpServer.updated_by}</p>
+                    <p>
+                      <UserReference
+                        userId={selectedMcpServer.updated_by}
+                        displayName={resolveUserName(selectedMcpServer.updated_by)}
+                        linkToUserPage={linkToUserPage}
+                      />
+                    </p>
                   </div>
                   <div>
                     <p className="font-medium">Created At:</p>

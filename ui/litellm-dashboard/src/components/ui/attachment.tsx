@@ -143,8 +143,8 @@ function AttachmentAction({ className, variant, size = "icon-xs", ...props }: Re
 }
 
 function AttachmentTrigger({ className, render, type, ...props }: useRender.ComponentProps<"button">) {
-  return useRender({
-    defaultTagName: "button",
+  const renderOptions = {
+    defaultTagName: "button" as const,
     props: mergeProps<"button">(
       {
         type: render ? type : type ?? "button",
@@ -154,9 +154,11 @@ function AttachmentTrigger({ className, render, type, ...props }: useRender.Comp
     ),
     render,
     state: {
-      slot: "attachment-trigger",
+      slot: "attachment-trigger" as const,
     },
-  });
+  };
+
+  return useRender(renderOptions);
 }
 
 function AttachmentGroup({ className, ...props }: React.ComponentProps<"div">) {

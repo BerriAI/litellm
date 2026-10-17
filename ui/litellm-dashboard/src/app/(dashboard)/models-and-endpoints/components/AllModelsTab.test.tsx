@@ -8,6 +8,8 @@ import { renderWithProviders } from "../../../../../tests/test-utils";
 import AllModelsTab from "./AllModelsTab";
 import { STATUS_COLUMN_ID, toServerSortField } from "./ModelsTableColumns";
 
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+
 const mockModelDeleteCall = vi.fn().mockResolvedValue({});
 const mockModelPatchUpdateCall = vi.fn().mockResolvedValue({});
 vi.mock("@/components/networking", () => ({
@@ -568,6 +570,10 @@ describe("AllModelsTab", () => {
   });
 
   it("opens the team detail view from the team ID cell", async () => {
+    vi.mock("@/app/(dashboard)/hooks/users/useUsers", async () => ({
+      ...(await vi.importActual("@/app/(dashboard)/hooks/users/useUsers")),
+      useUserDisplayNames: () => ({ data: undefined }),
+    }));
     const user = userEvent.setup();
     renderWithProviders(<AllModelsTab {...defaultProps} />);
 

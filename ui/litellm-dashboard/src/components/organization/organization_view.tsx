@@ -5,11 +5,15 @@ import { useUrlTab } from "@/hooks/useUrlTab";
 import { useVisitedTabs } from "@/hooks/useVisitedTabs";
 import { MoneyCell } from "@/components/shared/table_cells";
 import CopyButton from "@/components/shared/CopyButton";
+import { UserReference } from "@/components/shared/EntityReference";
+import { useUserDisplayNames } from "@/app/(dashboard)/hooks/users/useUsers";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { teamDetailHref } from "@/utils/entityLinks";
+import { canListUsers } from "@/utils/roles";
 import { createTeamAliasMap } from "@/utils/teamUtils";
 import { BadgeLink } from "@/components/shared/BadgeLink";
 import { ArrowLeft } from "lucide-react";
@@ -57,6 +61,8 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
   const { onTabChange, hasVisited } = useVisitedTabs(tab);
 
   const teamAliasMap = useMemo(() => createTeamAliasMap(teams), [teams]);
+  const { userRole } = useAuthorized();
+  const { data: displayNames } = useUserDisplayNames(useMemo(() => [orgData?.created_by ?? ""], [orgData?.created_by]));
 
   const handleTabChange = (value: OrganizationTab) => {
     setTab(value);
@@ -128,6 +134,11 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
   }
 
   const orgMemberById = new Map((orgData.members || []).map((m) => [m.user_id, m]));
+  const createdByMember = orgData.created_by ? orgMemberById.get(orgData.created_by) : undefined;
+  const createdByName =
+    createdByMember?.user?.user_alias ||
+    createdByMember?.user?.user_email ||
+    (orgData.created_by ? displayNames?.[orgData.created_by] : undefined);
   const orgMemberFor = (record: Member) => (record.user_id != null ? orgMemberById.get(record.user_id) : undefined);
 
   const orgExtraColumns: MemberTableColumn[] = [
@@ -152,12 +163,17 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
   return (
     <div className="h-screen w-full bg-background p-4">
       <div className="mb-6 flex items-center justify-between">
-        <div>
+        <div className="min-w-0">
           <Button variant="ghost" onClick={onClose} className="mb-4">
             <ArrowLeft className="size-4" />
             Back to Organizations
           </Button>
-          <h1 className="text-xl font-semibold tracking-tight text-foreground">{orgData.organization_alias}</h1>
+          <h1
+            className="truncate text-xl font-semibold tracking-tight text-foreground"
+            title={orgData.organization_alias}
+          >
+            {orgData.organization_alias}
+          </h1>
           <div className="flex items-center gap-1">
             <span className="font-mono text-sm text-muted-foreground">{orgData.organization_id}</span>
             <CopyButton value={orgData.organization_id} label="Copy organization ID" iconClassName="size-3" />
@@ -186,7 +202,18 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                 <div className="mt-2 text-sm text-foreground">
                   <p>Created: {new Date(orgData.created_at).toLocaleDateString()}</p>
                   <p>Updated: {new Date(orgData.updated_at).toLocaleDateString()}</p>
-                  <p>Created By: {orgData.created_by}</p>
+                  <p>
+                    Created By:{" "}
+                    {orgData.created_by ? (
+                      <UserReference
+                        userId={orgData.created_by}
+                        displayName={createdByName}
+                        linkToUserPage={canListUsers(userRole)}
+                      />
+                    ) : (
+                      "-"
+                    )}
+                  </p>
                 </div>
               </CardContent>
             </Card>
@@ -240,8 +267,10 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                 <p className="text-sm text-muted-foreground">Teams</p>
                 <div className="mt-2 flex flex-wrap gap-2">
                   {orgData.teams?.map((team, index) => (
-                    <BadgeLink key={index} href={teamDetailHref(team.team_id)}>
-                      {teamAliasMap[team.team_id] || team.team_id}
+                    <BadgeLink key={index} href={teamDetailHref(team.team_id)} className="max-w-64">
+                      <span className="min-w-0 truncate" title={teamAliasMap[team.team_id] || team.team_id}>
+                        {teamAliasMap[team.team_id] || team.team_id}
+                      </span>
                     </BadgeLink>
                   ))}
                 </div>
@@ -300,7 +329,9 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                 <div className="space-y-4 text-sm">
                   <div>
                     <p className="font-medium text-foreground">Organization Name</p>
-                    <div>{orgData.organization_alias}</div>
+                    <div className="truncate" title={orgData.organization_alias}>
+                      {orgData.organization_alias}
+                    </div>
                   </div>
                   <div>
                     <p className="font-medium text-foreground">Organization ID</p>

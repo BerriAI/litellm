@@ -540,8 +540,10 @@ export default function UserInfoView({
                         {teamDetails.slice(0, isTeamsExpanded ? teamDetails.length : 20).map((team) => (
                           <TableRow key={team.team_id}>
                             <TableCell>
-                              <BadgeLink href={teamDetailHref(team.team_id)}>
-                                {team.team_alias || team.team_id}
+                              <BadgeLink href={teamDetailHref(team.team_id)} className="max-w-[16rem]">
+                                <span className="min-w-0 truncate" title={team.team_alias || team.team_id}>
+                                  {team.team_alias || team.team_id}
+                                </span>
                               </BadgeLink>
                             </TableCell>
                             {isProxyAdmin && (

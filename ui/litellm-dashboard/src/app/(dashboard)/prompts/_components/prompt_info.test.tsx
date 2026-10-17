@@ -4,6 +4,12 @@ import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import PromptInfoView from "./prompt_info";
 import * as networking from "@/components/networking";
+vi.mock("@/app/(dashboard)/hooks/users/useUsers", async () => ({
+  ...(await vi.importActual("@/app/(dashboard)/hooks/users/useUsers")),
+  useUserDisplayNames: () => ({ data: undefined }),
+}));
+
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 
 vi.mock("@/components/networking", () => ({
   getPromptInfo: vi.fn(),

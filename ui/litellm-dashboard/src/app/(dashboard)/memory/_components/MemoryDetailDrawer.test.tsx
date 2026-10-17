@@ -6,6 +6,12 @@ import { describe, expect, it, vi } from "vitest";
 import { MemoryRow } from "@/components/networking";
 
 import { MemoryDetailDrawer } from "./MemoryDetailDrawer";
+vi.mock("@/app/(dashboard)/hooks/users/useUsers", async () => ({
+  ...(await vi.importActual("@/app/(dashboard)/hooks/users/useUsers")),
+  useUserDisplayNames: () => ({ data: undefined }),
+}));
+
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 
 const makeMemory = (overrides: Partial<MemoryRow> = {}): MemoryRow => ({
   memory_id: "mem-1",
@@ -66,8 +72,10 @@ describe("MemoryDetailDrawer", () => {
   it("attributes the created and updated timestamps to their actors", () => {
     render(<MemoryDetailDrawer row={makeMemory()} onClose={vi.fn()} />);
 
-    expect(screen.getByText(/^Created .* by alice$/)).toBeInTheDocument();
-    expect(screen.getByText(/^Updated .* by bob$/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "alice" })).toHaveAttribute("href", expect.stringContaining("alice"));
+    expect(screen.getByText(/^Created /)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "bob" })).toBeInTheDocument();
+    expect(screen.getByText(/^Updated /)).toBeInTheDocument();
   });
 
   it("renders an em dash for a timestamp the backend did not send", () => {

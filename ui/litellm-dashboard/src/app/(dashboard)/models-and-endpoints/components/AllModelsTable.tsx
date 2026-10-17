@@ -14,6 +14,8 @@ import {
   DataTableToolbar,
 } from "@/components/shared/DataTable";
 import { SearchSelect } from "@/components/shared/SearchSelect";
+import { useUserDisplayNames } from "@/app/(dashboard)/hooks/users/useUsers";
+import { canListUsers } from "@/utils/roles";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
 import { ToolbarSeparator } from "@/components/shared/ToolbarSeparator";
@@ -141,6 +143,9 @@ export function AllModelsTable({
   credentialLabels,
 }: AllModelsTableProps) {
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const { data: displayNames } = useUserDisplayNames(
+    useMemo(() => data.map((model) => model.model_info.created_by ?? ""), [data]),
+  );
 
   const columns = useMemo(() => {
     const columnDeps = {
@@ -153,6 +158,8 @@ export function AllModelsTable({
       onTogglePauseClick,
       pausingModelId,
       credentialLabels,
+      resolveUserName: (userId: string) => displayNames?.[userId],
+      linkToUserPage: canListUsers(userRole),
     };
     return getModelsTableColumns(columnDeps);
   }, [
@@ -165,6 +172,7 @@ export function AllModelsTable({
     onTogglePauseClick,
     pausingModelId,
     credentialLabels,
+    displayNames,
   ]);
 
   const modelGroupOptions = useMemo(

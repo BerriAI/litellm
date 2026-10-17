@@ -4,7 +4,9 @@ import type { ColumnDef } from "@tanstack/react-table";
 import { Copy } from "lucide-react";
 
 import { DataTableSortHeader } from "@/components/shared/DataTable";
+import { EntityReference } from "@/components/shared/EntityReference";
 import { CellTooltip, DateCell, IdCell, MoneyCell, StatusBadge } from "@/components/shared/table_cells";
+import { teamDetailHref } from "@/utils/entityLinks";
 import { copyToClipboard, getSpendString } from "@/utils/dataUtils";
 
 import { getProviderLogoAndName } from "../../provider_info_helpers";
@@ -275,7 +277,13 @@ export const getRequestLogsTableColumns = ({
     header: "Team Name",
     size: 150,
     enableSorting: false,
-    cell: ({ row }) => <TruncatedText value={readMetaString(row.original.metadata, "user_api_key_team_alias")} />,
+    cell: ({ row }) => {
+      const teamId = row.original.team_id;
+      const alias = readMetaString(row.original.metadata, "user_api_key_team_alias");
+      if (!teamId && !alias) return <TruncatedText value={undefined} />;
+      if (!teamId) return <TruncatedText value={alias} />;
+      return <EntityReference id={teamId} name={alias} href={teamDetailHref(teamId)} />;
+    },
   },
   {
     id: "key_hash",

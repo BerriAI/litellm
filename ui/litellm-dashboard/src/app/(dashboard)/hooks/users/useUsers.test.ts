@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import React, { ReactNode } from "react";
-import { useInfiniteUsers, useUserEmailLookup, useUserLookup } from "./useUsers";
+import { useInfiniteUsers, useUserDisplayNames, useUserEmailLookup, useUserLookup } from "./useUsers";
 import { userListCall } from "@/components/networking";
 import type { UserListResponse } from "@/components/networking";
 
@@ -402,5 +402,124 @@ describe("useUserEmailLookup", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(result.current.fetchStatus).toBe("idle");
     expect(userListCall).not.toHaveBeenCalled();
+  });
+});
+
+describe("useUserDisplayNames", () => {
+  let queryClient: QueryClient;
+
+  beforeEach(() => {
+    queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    vi.clearAllMocks();
+    mockUseAuthorized.mockReturnValue(DEFAULT_AUTH);
+  });
+
+  const wrapper = ({ children }: { children: ReactNode }) =>
+    React.createElement(QueryClientProvider, { client: queryClient }, children);
+
+  it("prefers the alias, falls back to the email, and omits users with neither", async () => {
+    const response = buildUserListResponse(1, 1, 2);
+    vi.mocked(userListCall).mockResolvedValue({
+      ...response,
+      users: [
+        { ...response.users[0], user_alias: "Ada Reviewer" },
+        { ...response.users[1], user_alias: null },
+      ],
+    });
+
+    const { result } = renderHook(() => useUserDisplayNames(["user-1-0", "user-1-1"]), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toEqual({
+      "user-1-0": "Ada Reviewer",
+      "user-1-1": "user-1-1@example.com",
+    });
+  });
+
+  it("omits users that have neither alias nor email so callers fall back to the id", async () => {
+    const response = buildUserListResponse(1, 1, 2);
+    vi.mocked(userListCall).mockResolvedValue({
+      ...response,
+      users: [{ ...response.users[0], user_email: null, user_alias: null }, response.users[1]],
+    });
+
+    const { result } = renderHook(() => useUserDisplayNames(["user-1-0", "user-1-1"]), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toEqual({ "user-1-1": "user-1-1@example.com" });
+  });
+
+  it("does not query with no ids", async () => {
+    const { result } = renderHook(() => useUserDisplayNames([]), { wrapper });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(result.current.fetchStatus).toBe("idle");
+    expect(userListCall).not.toHaveBeenCalled();
+  });
+
+  it("pages through ids in chunks of the max page size and merges the names", async () => {
+    const ids = Array.from({ length: 101 }, (_, i) => `u${String(i).padStart(3, "0")}`);
+    const response = buildUserListResponse(1, 1, 0);
+    vi.mocked(userListCall).mockImplementation(async (_token, userIDs) => ({
+      ...response,
+      users: [
+        {
+          ...response.users[0],
+          user_id: userIDs![0],
+          user_alias: `Alias ${userIDs![0]}`,
+        } as UserListResponse["users"][number],
+      ],
+    }));
+
+    const { result } = renderHook(() => useUserDisplayNames(ids), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(userListCall).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(userListCall).mock.calls[0][1]).toHaveLength(100);
+    expect(vi.mocked(userListCall).mock.calls[1][1]).toEqual(["u100", "u100"]);
+    expect(result.current.data).toEqual({ u000: "Alias u000", u100: "Alias u100" });
+  });
+
+  it("requests the max page size and keeps only exact id matches", async () => {
+    const response = buildUserListResponse(1, 1, 0);
+    vi.mocked(userListCall).mockResolvedValue({
+      ...response,
+      users: [
+        { ...response.users[0], user_id: "ada-reviewer", user_alias: "Wrong" },
+        { ...response.users[0], user_id: "ada", user_alias: "Ada" },
+      ],
+    });
+
+    const { result } = renderHook(() => useUserDisplayNames(["ada"]), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(userListCall).toHaveBeenCalledWith("test-access-token", ["ada", "ada"], 1, 100);
+    expect(result.current.data).toEqual({ ada: "Ada" });
+  });
+
+  it("resolves a single id even when substring matches would fill the page", async () => {
+    const allUsers = [
+      ...Array.from({ length: 100 }, (_, i) => ({
+        user_id: `ada-${i + 1}`,
+        user_alias: `Ada ${i + 1}`,
+        user_email: null,
+      })),
+      { user_id: "ada", user_alias: "Ada Exact", user_email: null },
+    ];
+    const response = buildUserListResponse(1, 1, 0);
+    vi.mocked(userListCall).mockImplementation(async (_token, userIDs, _page, pageSize) => ({
+      ...response,
+      users:
+        userIDs!.length === 1
+          ? (allUsers
+              .filter((user) => user.user_id.includes(userIDs![0]))
+              .slice(0, pageSize) as UserListResponse["users"])
+          : (allUsers.filter((user) => userIDs!.includes(user.user_id)) as UserListResponse["users"]),
+    }));
+
+    const { result } = renderHook(() => useUserDisplayNames(["ada"]), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toEqual({ ada: "Ada Exact" });
   });
 });

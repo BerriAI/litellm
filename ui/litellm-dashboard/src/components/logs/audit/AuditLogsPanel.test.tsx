@@ -18,6 +18,8 @@ vi.mock("@tanstack/react-pacer/debouncer", () => ({
 
 import { uiAuditLogsCall } from "../../networking";
 
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+
 type AuditLogsParams = NonNullable<Parameters<typeof uiAuditLogsCall>[0]["params"]>;
 
 const PAGE_SIZE = 50;

@@ -3,6 +3,12 @@ import userEvent from "@testing-library/user-event";
 import { renderWithProviders, screen } from "../../../../../tests/test-utils";
 import { ProjectDetail } from "./ProjectDetailsPage";
 import { ProjectResponse } from "@/app/(dashboard)/hooks/projects/useProjects";
+vi.mock("@/app/(dashboard)/hooks/users/useUsers", async () => ({
+  ...(await vi.importActual("@/app/(dashboard)/hooks/users/useUsers")),
+  useUserDisplayNames: () => ({ data: undefined }),
+}));
+
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 
 const mockUseProjectDetails = vi.fn();
 vi.mock("@/app/(dashboard)/hooks/projects/useProjectDetails", () => ({
@@ -121,6 +127,21 @@ describe("ProjectDetail", () => {
     it("should render the project keys section for the project", () => {
       renderWithProviders(<ProjectDetail projectId="proj-1" onBack={onBack} />);
       expect(screen.getByTestId("project-keys-section")).toHaveTextContent("proj-1");
+    });
+
+    it("should not link the creator when the viewer cannot list users", () => {
+      mockUseAuthorized.mockReturnValue({ userId: "caller", userRole: "Internal User", isViewOnly: false });
+      renderWithProviders(<ProjectDetail projectId="proj-1" onBack={onBack} />);
+      expect(screen.getByText("user-1")).toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: "user-1" })).not.toBeInTheDocument();
+    });
+
+    it("should link the creator to the users page for an admin", () => {
+      renderWithProviders(<ProjectDetail projectId="proj-1" onBack={onBack} />);
+      expect(screen.getByRole("link", { name: "user-1" })).toHaveAttribute(
+        "href",
+        expect.stringContaining("users?user=user-1"),
+      );
     });
 
     it("should display 'Active' for a non-blocked project", () => {

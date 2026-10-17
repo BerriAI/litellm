@@ -14,8 +14,8 @@ import { Card } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { EntityLink } from "@/components/shared/EntityLink";
-import { modelOrAccessGroupHref, teamDetailHref } from "@/utils/entityLinks";
+import { EntityReference } from "@/components/shared/EntityReference";
+import { modelOrAccessGroupHref, orgDetailHref, teamDetailHref } from "@/utils/entityLinks";
 import { BadgeLink } from "@/components/shared/BadgeLink";
 import { KeyInfoHeader } from "./KeyInfoHeader";
 import KeySavingsTab from "./KeySavingsTab";
@@ -547,6 +547,7 @@ export default function KeyInfoView({
   const parentTeam = currentKeyData.team_id ? teamsData?.find((team) => team.team_id === currentKeyData.team_id) : null;
   const orgId = currentKeyData.organization_id || currentKeyData.org_id || parentTeam?.organization_id || "";
   const parentOrg = orgId ? organizations?.find((org) => org.organization_id === orgId) : null;
+  const keyOrgId = currentKeyData.organization_id ?? currentKeyData.org_id;
 
   const hasOwnBudget = currentKeyData.max_budget !== null;
   const ownerUser = keyOwnerBudgetSource(currentKeyData, applyUserBudgetToTeamKeys);
@@ -943,9 +944,11 @@ export default function KeyInfoView({
                     <p className="text-sm font-medium">Team ID</p>
                     <p className="text-sm">
                       {currentKeyData.team_id ? (
-                        <EntityLink href={teamDetailHref(currentKeyData.team_id)} className="font-normal">
-                          {currentKeyData.team_id}
-                        </EntityLink>
+                        <EntityReference
+                          id={currentKeyData.team_id}
+                          name={parentTeam?.team_alias}
+                          href={teamDetailHref(currentKeyData.team_id)}
+                        />
                       ) : (
                         "Not Set"
                       )}
@@ -970,7 +973,17 @@ export default function KeyInfoView({
 
                   <div>
                     <p className="text-sm font-medium">Organization</p>
-                    <p className="text-sm">{(currentKeyData.organization_id ?? currentKeyData.org_id) || "Not Set"}</p>
+                    <p className="text-sm">
+                      {keyOrgId ? (
+                        <EntityReference
+                          id={keyOrgId}
+                          name={parentOrg?.organization_id === keyOrgId ? parentOrg.organization_alias : undefined}
+                          href={orgDetailHref(keyOrgId)}
+                        />
+                      ) : (
+                        "Not Set"
+                      )}
+                    </p>
                   </div>
 
                   <div>

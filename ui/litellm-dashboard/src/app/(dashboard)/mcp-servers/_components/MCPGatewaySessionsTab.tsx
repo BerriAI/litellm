@@ -16,6 +16,8 @@ import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { fetchMCPGatewaySessions, terminateMCPGatewaySessions } from "@/components/networking";
+import { EntityReference, UserReference } from "@/components/shared/EntityReference";
+import { teamDetailHref } from "@/utils/entityLinks";
 import type {
   MCPGatewaySessionGroupCount,
   MCPGatewaySessionSelector,
@@ -23,6 +25,8 @@ import type {
   MCPGatewaySessionsTerminateResponse,
 } from "@/components/mcp_tools/types";
 import { createQueryKeys } from "@/app/(dashboard)/hooks/common/queryKeysFactory";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { canListUsers } from "@/utils/roles";
 
 const mcpGatewaySessionKeys = createQueryKeys("mcpGatewaySessions");
 const REFETCH_INTERVAL_MS = 15000;
@@ -132,6 +136,7 @@ function SessionsBody({
   isLoading: boolean;
   onDisconnect: ((selector: MCPGatewaySessionSelector) => void) | null;
 }) {
+  const { userRole } = useAuthorized();
   if (isLoading) {
     return (
       <div
@@ -216,16 +221,25 @@ function SessionsBody({
                   {session.user_id === null ? (
                     <span className="text-muted-foreground">{UNKNOWN_LABEL}</span>
                   ) : (
-                    <>
-                      <span className="font-mono text-xs">{session.user_id}</span>
-                      {session.user_email ? (
-                        <span className="ml-1 text-xs text-muted-foreground">{session.user_email}</span>
-                      ) : null}
-                    </>
+                    <UserReference
+                      userId={session.user_id}
+                      displayName={session.user_email}
+                      linkToUserPage={canListUsers(userRole)}
+                    />
                   )}
                 </TableCell>
                 <TableCell className="text-xs">{session.key_alias ?? "-"}</TableCell>
-                <TableCell className="text-xs">{session.team_alias ?? session.team_id ?? "-"}</TableCell>
+                <TableCell className="text-xs">
+                  {session.team_id ? (
+                    <EntityReference
+                      id={session.team_id}
+                      name={session.team_alias}
+                      href={teamDetailHref(session.team_id)}
+                    />
+                  ) : (
+                    session.team_alias ?? "-"
+                  )}
+                </TableCell>
                 <TableCell className="font-mono text-xs">{session.client_ip || "-"}</TableCell>
                 <TableCell className="text-right text-xs">{formatIdleSeconds(session.idle_seconds)}</TableCell>
                 <TableCell className="text-right text-xs">{session.in_flight_requests}</TableCell>
