@@ -3060,6 +3060,20 @@ def supports_prompt_cache_breakpoint(model: str, custom_llm_provider: str | None
     )
 
 
+def supports_assistant_prefill(model: str, custom_llm_provider: str | None = None) -> bool:
+    """
+    Whether the model can continue a prefilled assistant message (Anthropic's
+    ``prefix: True`` trick and equivalents). Missing metadata reads as False,
+    so a mid-stream fallback continuation is only routed to a model known to
+    support it.
+    """
+    return _supports_factory(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        key="supports_assistant_prefill",
+    )
+
+
 def supports_thinking_cache_preservation(model: str, custom_llm_provider: str | None = None) -> bool:
     return supports_factory(
         model=model,
@@ -9933,6 +9947,10 @@ class ProviderConfigManager:
             return MinimaxVideoConfig()
         elif LlmProviders.EDENAI == provider:
             return litellm.EdenAIVideoConfig()
+        elif LlmProviders.VOLCENGINE == provider:
+            from litellm.llms.volcengine.videos.transformation import VolcEngineVideoConfig
+
+            return VolcEngineVideoConfig()
         return None
 
     @staticmethod
