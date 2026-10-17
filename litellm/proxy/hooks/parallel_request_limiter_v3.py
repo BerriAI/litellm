@@ -24,11 +24,10 @@ from typing import (
     Protocol,
     TypeAlias,
     TypedDict,
-    cast,
 )
 
 from fastapi import HTTPException
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from starlette.status import HTTP_400_BAD_REQUEST, HTTP_503_SERVICE_UNAVAILABLE
 from typing_extensions import NotRequired, ReadOnly
 
@@ -131,11 +130,25 @@ class RateLimitedModel:
         return requested_limit if requested_limit is not None else limits.get(self.group)
 
 
+class _MetadataAgentId(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    agent_id: object = None
+
+
+class _AgentIdSources(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    litellm_metadata: object = None
+    metadata: object = None
+
+
 def _metadata_agent_id(metadata: object) -> str | None:
-    if not isinstance(metadata, Mapping):
+    try:
+        agent_id: Final = _MetadataAgentId.model_validate(metadata).agent_id
+    except ValidationError:
         return None
-    agent_id: Final = cast(Mapping[str, object], metadata).get("agent_id")  # cast-ok: request metadata is a JSON object
-    return agent_id if isinstance(agent_id, str) and agent_id else None
+    return agent_id if isinstance(agent_id, str) else None
 
 
 def _resolve_model_group_alias_via_proxy_router(model: str) -> str | None:
@@ -3200,8 +3213,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         key_agent_id: Final[str | None] = getattr(user_api_key_dict, "agent_id", None)
         if key_agent_id:
             return key_agent_id
-        request: Final = cast(Mapping[str, object], data)  # cast-ok: request body is a JSON object
-        return _metadata_agent_id(request.get("litellm_metadata")) or _metadata_agent_id(request.get("metadata"))
+        sources: Final = _AgentIdSources.model_validate(data)
+        return _metadata_agent_id(sources.litellm_metadata) or _metadata_agent_id(sources.metadata)
 
     def _get_session_id_from_data(self, data: dict) -> str | None:
         """Extract session_id from request metadata or litellm_session_id."""

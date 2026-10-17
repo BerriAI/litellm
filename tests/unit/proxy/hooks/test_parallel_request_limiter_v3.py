@@ -2655,8 +2655,16 @@ async def test_agent_rate_limit_from_metadata_agent_id():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("provider_metadata", [{}, {"agent_id": "provider-value"}])
-async def test_agent_rate_limit_uses_proxy_agent_id_from_litellm_metadata(provider_metadata):
+@pytest.mark.parametrize(
+    ("litellm_metadata", "metadata"),
+    [
+        ({"agent_id": "agent_from_header"}, {}),
+        ({"agent_id": "agent_from_header"}, {"agent_id": "provider-value"}),
+        ({"agent_id": 123}, {"agent_id": "agent_from_header"}),
+        ({"agent_id": ""}, {"agent_id": "agent_from_header"}),
+    ],
+)
+async def test_agent_rate_limit_uses_proxy_agent_id_from_litellm_metadata(litellm_metadata, metadata):
     from litellm.types.agents import AgentResponse
 
     _agent_id: Final = "agent_from_header"
@@ -2666,7 +2674,13 @@ async def test_agent_rate_limit_uses_proxy_agent_id_from_litellm_metadata(provid
             agent_name="header-agent",
             agent_card_params={"name": "Header Agent"},
             rpm_limit=25,
-        )
+        ),
+        "123": AgentResponse(
+            agent_id="123",
+            agent_name="numeric-agent",
+            agent_card_params={"name": "Numeric Agent"},
+            rpm_limit=25,
+        ),
     }
     local_cache: Final = DualCache()
     handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
@@ -2680,12 +2694,12 @@ async def test_agent_rate_limit_uses_proxy_agent_id_from_litellm_metadata(provid
 
     with patch(
         "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry.get_agent_by_id",
-        side_effect=lambda agent_id: agents.get(agent_id),
+        side_effect=lambda agent_id: agents.get(str(agent_id)),
     ):
         await handler.async_pre_call_hook(
             user_api_key_dict=UserAPIKeyAuth(api_key=hash_token("sk-98765")),
             cache=local_cache,
-            data={"model": "gpt-4", "metadata": provider_metadata, "litellm_metadata": {"agent_id": _agent_id}},
+            data={"model": "gpt-4", "metadata": metadata, "litellm_metadata": litellm_metadata},
             call_type="",
         )
 
