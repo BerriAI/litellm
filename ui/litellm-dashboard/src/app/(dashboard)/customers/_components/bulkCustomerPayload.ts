@@ -1,0 +1,127 @@
+import type { BulkUpdateCustomersRequest, UpdateCustomerRequest } from "@/app/(dashboard)/hooks/customers/customerApi";
+import type { EndUser } from "@/app/(dashboard)/hooks/customers/useCustomers";
+
+import type { MCPServer, MCPToolset } from "@/components/mcp_tools/types";
+import { extractMcpEntitlement } from "@/components/mcp_server_management/mcpEntitlement";
+
+import { extractEditedMcpGrant, hasSharedCustomerBudget, storedMcpGrant } from "./customerPayload";
+
+export const MAX_BULK_CUSTOMERS = 500;
+
+type OptIn<Value> = { enabled: boolean; value: Value };
+
+export type BulkCustomerEdits = {
+  budget: { enabled: boolean; mode: "link" | "max"; budgetId: string; maxBudget: string };
+  models: OptIn<string[]>;
+  region: OptIn<"" | "eu" | "us">;
+  defaultModel: OptIn<string>;
+  mcpServers: OptIn<string[]>;
+  mcpAccessGroups: OptIn<string[]>;
+  mcpToolsets: OptIn<string[]>;
+};
+
+export const emptyBulkCustomerEdits = (): BulkCustomerEdits => ({
+  budget: { enabled: false, mode: "link", budgetId: "", maxBudget: "" },
+  models: { enabled: false, value: [] },
+  region: { enabled: false, value: "" },
+  defaultModel: { enabled: false, value: "" },
+  mcpServers: { enabled: false, value: [] },
+  mcpAccessGroups: { enabled: false, value: [] },
+  mcpToolsets: { enabled: false, value: [] },
+});
+
+type BulkCustomerPayloadResult = { ok: true; payload: BulkUpdateCustomersRequest } | { ok: false; error: string };
+
+const validateBulkCustomerEdits = (
+  customers: EndUser[],
+  edits: BulkCustomerEdits,
+  budgetCounts: ReadonlyMap<string, number>,
+): string | null => {
+  if (customers.length === 0) return "Select at least one customer";
+  if (customers.length > MAX_BULK_CUSTOMERS) {
+    return `Select at most ${MAX_BULK_CUSTOMERS} customers`;
+  }
+  if (!Object.values(edits).some((field) => field.enabled)) {
+    return "Choose at least one field to update";
+  }
+  if (edits.budget.enabled && edits.budget.mode === "link" && !edits.budget.budgetId.trim()) {
+    return "Select an existing budget";
+  }
+  if (edits.budget.enabled && edits.budget.mode === "max") {
+    if (customers.some((customer) => hasSharedCustomerBudget(customer, budgetCounts))) {
+      return "Max Budget cannot be changed for customers with shared budgets. Select an existing budget instead";
+    }
+    if (!Number.isFinite(Number(edits.budget.maxBudget)) || Number(edits.budget.maxBudget) <= 0) {
+      return "Enter a maximum budget greater than zero";
+    }
+  }
+  if (edits.region.enabled && !["eu", "us"].includes(edits.region.value)) {
+    return "Choose EU or US for the allowed region";
+  }
+  if (edits.defaultModel.enabled && !edits.defaultModel.value.trim()) {
+    return "Select a default model";
+  }
+
+  return null;
+};
+
+const retainedToolPermissions = (
+  customer: EndUser,
+  edits: BulkCustomerEdits,
+  servers: MCPServer[],
+  toolsets: MCPToolset[],
+): Record<string, string[]> => {
+  const stored = storedMcpGrant(customer);
+  const values = {
+    mcp_servers_and_groups: {
+      servers: edits.mcpServers.enabled ? edits.mcpServers.value : stored.mcp_servers,
+      accessGroups: edits.mcpAccessGroups.enabled ? edits.mcpAccessGroups.value : stored.mcp_access_groups,
+      toolsets: edits.mcpToolsets.enabled ? edits.mcpToolsets.value : stored.mcp_toolsets,
+    },
+    mcp_tool_permissions: stored.mcp_tool_permissions,
+  };
+  const grant = edits.mcpServers.enabled
+    ? extractMcpEntitlement(values, servers, toolsets)
+    : extractEditedMcpGrant(values, stored, servers, toolsets);
+  return grant?.mcp_tool_permissions ?? {};
+};
+
+export const buildBulkCustomerPayload = (
+  customers: EndUser[],
+  edits: BulkCustomerEdits,
+  catalogs: { servers: MCPServer[]; toolsets: MCPToolset[] },
+  budgetCounts: ReadonlyMap<string, number>,
+): BulkCustomerPayloadResult => {
+  const error = validateBulkCustomerEdits(customers, edits, budgetCounts);
+  if (error) return { ok: false, error };
+
+  const objectPermission = {
+    ...(edits.mcpServers.enabled ? { mcp_servers: edits.mcpServers.value } : {}),
+    ...(edits.mcpAccessGroups.enabled ? { mcp_access_groups: edits.mcpAccessGroups.value } : {}),
+    ...(edits.mcpToolsets.enabled ? { mcp_toolsets: edits.mcpToolsets.value } : {}),
+  };
+  const updates: Omit<UpdateCustomerRequest, "user_id"> = {
+    ...(edits.budget.enabled && edits.budget.mode === "link" ? { budget_id: edits.budget.budgetId.trim() } : {}),
+    ...(edits.budget.enabled && edits.budget.mode === "max" ? { max_budget: Number(edits.budget.maxBudget) } : {}),
+    ...(edits.models.enabled ? { models: edits.models.value } : {}),
+    ...(edits.region.enabled && edits.region.value ? { allowed_model_region: edits.region.value } : {}),
+    ...(edits.defaultModel.enabled ? { default_model: edits.defaultModel.value.trim() } : {}),
+  };
+  return {
+    ok: true,
+    payload: {
+      customers: customers.map((customer) => ({
+        user_id: customer.user_id,
+        ...updates,
+        ...(Object.keys(objectPermission).length > 0
+          ? {
+              object_permission: {
+                ...objectPermission,
+                mcp_tool_permissions: retainedToolPermissions(customer, edits, catalogs.servers, catalogs.toolsets),
+              },
+            }
+          : {}),
+      })),
+    },
+  };
+};
