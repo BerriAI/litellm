@@ -4891,6 +4891,14 @@ LLMS_FORWARDER_CASES: Final = (
         False,
     ),
     (
+        "litellm.llms.openai.common_utils",
+        "BaseOpenAILLM",
+        "_get_sync_http_client",
+        "get_sync_http_client",
+        "staticmethod",
+        False,
+    ),
+    (
         "litellm.llms.openai.openai",
         "OpenAIChatCompletion",
         "_get_openai_client",

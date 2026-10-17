@@ -27,6 +27,7 @@ from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
 from litellm._uuid import uuid
 from litellm.constants import (
+    CALLER_SESSION_ID_METADATA_KEY,
     CLIENT_OUTPUT_CEILING_METADATA_KEY,
     CONSUMED_REQUEST_TAGS_METADATA_KEY,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
@@ -185,6 +186,30 @@ def _caller_trace_field(data: Mapping[str, object], metadata_variable_name: str,
     requester_map: Final = cast(Mapping[str, object], requester)  # cast-ok: isinstance above, free-form JSON values
     requester_value: Final = requester_map.get(field)
     return requester_value if isinstance(requester_value, str) and requester_value else None
+
+
+def _caller_body_session_id(data: Mapping[str, object], metadata_variable_name: str) -> str | None:
+    top_level: Final = data.get("litellm_session_id")
+    if isinstance(top_level, str) and top_level:
+        return top_level
+    return _caller_trace_field(data, metadata_variable_name, "session_id")
+
+
+def _caller_session_beside_trace_header(
+    normalized_headers: Mapping[str, str], data: Mapping[str, object], metadata_variable_name: str
+) -> str | None:
+    session_headers: Final = {key: value for key, value in normalized_headers.items() if key != "x-litellm-trace-id"}
+    return get_chain_id_from_headers(session_headers) or _caller_body_session_id(data, metadata_variable_name)
+
+
+def _drop_client_caller_session(request_body: Mapping[str, object]) -> None:
+    for metadata_key in ("metadata", "litellm_metadata"):
+        if isinstance(metadata := request_body.get(metadata_key), dict):
+            metadata.pop(CALLER_SESSION_ID_METADATA_KEY, None)
+
+
+def _requester_metadata_snapshot(metadata: Mapping[str, object]) -> Mapping[str, object]:
+    return copy.deepcopy({key: value for key, value in metadata.items() if key != CALLER_SESSION_ID_METADATA_KEY})
 
 
 def _stampable_key_hash(user_api_key_dict: UserAPIKeyAuth) -> str | None:
@@ -920,7 +945,9 @@ def apply_missing_session_id_policy(
             )
 
 
-def should_auto_drop_params_for_agentic_cli(user_agent: str, data: dict, proxy_config: ProxyConfig) -> bool:
+def should_auto_drop_params_for_agentic_cli(
+    user_agent: str, caller_set_drop_params: bool, proxy_config: ProxyConfig
+) -> bool:
     """drop_params defaults to on for agentic CLIs so their client-specific
     params (e.g. Claude Code's thinking, Codex's service_tier) don't fail
     requests routed to providers that reject them. An explicit drop_params
@@ -930,7 +957,7 @@ def should_auto_drop_params_for_agentic_cli(user_agent: str, data: dict, proxy_c
 
     if not (is_claude_code_user_agent(user_agent) or is_codex_user_agent(user_agent)):
         return False
-    if "drop_params" in data:
+    if caller_set_drop_params:
         return False
     config: Final = getattr(proxy_config, "config", None)
     litellm_settings: Final = config.get("litellm_settings") if isinstance(config, dict) else None
@@ -1623,6 +1650,8 @@ class LiteLLMProxyRequestSetup:
         from litellm.proxy._types import LitellmMetadataFromRequestHeaders
 
         metadata_from_headers: Final = LitellmMetadataFromRequestHeaders()
+        request_body: Final = cast(Mapping[str, object], data)  # cast-ok: request body is a str-keyed JSON object
+        _drop_client_caller_session(request_body)
         spend_logs_metadata: Final = LiteLLMProxyRequestSetup._get_spend_logs_metadata_from_request_headers(headers)
         if spend_logs_metadata is not None:
             metadata_from_headers["spend_logs_metadata"] = spend_logs_metadata
@@ -1631,6 +1660,9 @@ class LiteLLMProxyRequestSetup:
         # Finally update the requests metadata with the `metadata_from_headers`
         #########################################################################################
 
+        normalized_headers: Final = MappingProxyType(
+            {k.lower(): v for k, v in headers.items() if isinstance(k, str) and isinstance(v, str)}
+        )
         agent_id_from_header: Final = headers.get("x-litellm-agent-id")
         # Explicit litellm headers take precedence; fall back to any x-*-session-id header.
         chain_id: Final = get_chain_id_from_headers(dict(headers))
@@ -1639,6 +1671,13 @@ class LiteLLMProxyRequestSetup:
             metadata_from_headers["agent_id"] = agent_id_from_header
             verbose_proxy_logger.debug("Extracted agent_id from header: %s", agent_id_from_header)
 
+        spend_log_session_id: Final = (
+            _caller_session_beside_trace_header(normalized_headers, request_body, _metadata_variable_name)
+            if litellm.request_correlation_in_logs
+            and chain_id is not None
+            and chain_id == normalized_headers.get("x-litellm-trace-id")
+            else None
+        )
         if chain_id:
             metadata_from_headers["trace_id"] = chain_id
             metadata_from_headers["session_id"] = chain_id
@@ -1663,7 +1702,6 @@ class LiteLLMProxyRequestSetup:
         # - but lets a caller's existing traceparent/baggage headers (from
         # real OTel instrumentation) correlate with litellm's own logs instead
         # of generating an unrelated trace_id.
-        normalized_headers: Final = MappingProxyType({k.lower(): v for k, v in headers.items() if isinstance(k, str)})
         if "litellm_trace_id" not in data:
             traceparent: Final = normalized_headers.get("traceparent")
             if isinstance(traceparent, str):
@@ -1689,11 +1727,7 @@ class LiteLLMProxyRequestSetup:
             baggage: Final = normalized_headers.get("baggage")
             if isinstance(baggage, str):
                 session_id_from_baggage: Final = _session_id_from_baggage(baggage)
-                caller_session_id: Final = _caller_trace_field(
-                    cast(Mapping[str, object], data),  # cast-ok: request body is a str-keyed JSON object
-                    _metadata_variable_name,
-                    "session_id",
-                )
+                caller_session_id: Final = _caller_trace_field(request_body, _metadata_variable_name, "session_id")
                 if session_id_from_baggage and (
                     caller_session_id is None or caller_session_id == session_id_from_baggage
                 ):
@@ -1702,7 +1736,11 @@ class LiteLLMProxyRequestSetup:
                     verbose_proxy_logger.debug("Extracted session_id from W3C baggage header")
 
         if isinstance(data[_metadata_variable_name], dict):
-            data[_metadata_variable_name].update(metadata_from_headers)
+            data[_metadata_variable_name].update(
+                {**metadata_from_headers, CALLER_SESSION_ID_METADATA_KEY: spend_log_session_id}
+                if spend_log_session_id
+                else metadata_from_headers
+            )
         return data
 
     @staticmethod
@@ -2417,7 +2455,7 @@ async def add_litellm_data_to_request(
     # them — from leaking into requester_metadata where guardrails and audit
     # paths may read from it.
     if "metadata" in data and isinstance(data["metadata"], dict):
-        data[_metadata_variable_name]["requester_metadata"] = copy.deepcopy(data["metadata"])
+        data[_metadata_variable_name]["requester_metadata"] = _requester_metadata_snapshot(data["metadata"])
         if _metadata_variable_name == "litellm_metadata":
             data[_metadata_variable_name].update(
                 _promoted_trace_control_fields(
@@ -2581,7 +2619,7 @@ async def add_litellm_data_to_request(
         user_agent = request.headers["user-agent"]
     data[_metadata_variable_name]["user_agent"] = user_agent
 
-    if should_auto_drop_params_for_agentic_cli(user_agent, data, proxy_config):
+    if should_auto_drop_params_for_agentic_cli(user_agent, "drop_params" in data, proxy_config):
         data["drop_params"] = True
 
     # Merge caller-supplied tags (x-litellm-tags header, data["tags"] root-level)
