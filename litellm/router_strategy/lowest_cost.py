@@ -1,5 +1,6 @@
 #### What this does ####
 #   picks based on response time (for streaming, this is time to first token)
+from collections.abc import Callable
 from datetime import datetime
 from typing import Final
 
@@ -12,13 +13,24 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.router_utils.batch_utils import is_batch_retrieve_call_type
 
 
+def _precise_minute(now: datetime) -> str:
+    return now.strftime("%Y-%m-%d-%H-%M")
+
+
 class LowestCostLoggingHandler(CustomLogger):
     test_flag: bool = False
     logged_success: int = 0
     logged_failure: int = 0
 
-    def __init__(self, router_cache: DualCache, routing_args: dict = {}):
+    def __init__(
+        self,
+        router_cache: DualCache,
+        routing_args: dict = {},
+        *,
+        clock: Callable[[], datetime] = datetime.now,
+    ):
         self.router_cache = router_cache
+        self._clock: Final = clock
 
     @with_service_target("router_usage")
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -51,10 +63,7 @@ class LowestCostLoggingHandler(CustomLogger):
                     }
                 }
                 """
-                current_date: Final = datetime.now().strftime("%Y-%m-%d")
-                current_hour: Final = datetime.now().strftime("%H")
-                current_minute: Final = datetime.now().strftime("%M")
-                precise_minute: Final = f"{current_date}-{current_hour}-{current_minute}"
+                precise_minute: Final = _precise_minute(self._clock())
                 cost_key: Final = f"cost_map:{model_group}"
 
                 total_tokens = 0
@@ -129,10 +138,7 @@ class LowestCostLoggingHandler(CustomLogger):
                 """
                 cost_key: Final = f"cost_map:{model_group}"
 
-                current_date: Final = datetime.now().strftime("%Y-%m-%d")
-                current_hour: Final = datetime.now().strftime("%H")
-                current_minute: Final = datetime.now().strftime("%M")
-                precise_minute: Final = f"{current_date}-{current_hour}-{current_minute}"
+                precise_minute: Final = _precise_minute(self._clock())
 
                 total_tokens = 0
 
@@ -193,10 +199,7 @@ class LowestCostLoggingHandler(CustomLogger):
         # ----------------------
         float("inf")
 
-        current_date: Final = datetime.now().strftime("%Y-%m-%d")
-        current_hour: Final = datetime.now().strftime("%H")
-        current_minute: Final = datetime.now().strftime("%M")
-        precise_minute: Final = f"{current_date}-{current_hour}-{current_minute}"
+        precise_minute: Final = _precise_minute(self._clock())
 
         if request_count_dict is None:  # base case
             return

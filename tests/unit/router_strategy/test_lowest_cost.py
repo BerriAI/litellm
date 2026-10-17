@@ -1,5 +1,7 @@
-import asyncio, copy, importlib, os, time
+import asyncio, copy, importlib, itertools, os
+from collections.abc import Callable, Iterator
 from datetime import datetime
+from typing import Final
 
 import pytest
 
@@ -11,6 +13,9 @@ from litellm.utils import _invalidate_model_cost_lowercase_map
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 DEPLOYMENT_ID = "9876"
+FROZEN_INSTANT: Final = datetime(2026, 1, 31, 23, 59, 30)
+LAST_MICROSECOND_OF_JANUARY: Final = datetime(2026, 1, 31, 23, 59, 59, 999999)
+FIRST_MICROSECOND_OF_FEBRUARY: Final = datetime(2026, 2, 1, 0, 0, 0, 1)
 COST_KEY = "cost_map:gpt-5.5-pool"
 LATENCY_KEYS = ("gpt-5.5-pool_map", "gpt-5.5-pool_cost_map")
 KWARGS = {
@@ -26,6 +31,20 @@ def _chat_response_with_no_completion_tokens() -> litellm.ModelResponse:
         model="gpt-5.5",
         choices=[{"index": 0, "message": {"role": "assistant", "content": ""}, "finish_reason": "length"}],
         usage=litellm.Usage(prompt_tokens=12, completion_tokens=0, total_tokens=12),
+    )
+
+
+def _frozen_clock() -> datetime:
+    return FROZEN_INSTANT
+
+
+def _clock_reading(instants: Iterator[datetime]) -> Callable[[], datetime]:
+    return lambda: next(instants)
+
+
+def _clock_rolling_over_after_first_read() -> Callable[[], datetime]:
+    return _clock_reading(
+        itertools.chain([LAST_MICROSECOND_OF_JANUARY], itertools.repeat(FIRST_MICROSECOND_OF_FEBRUARY))
     )
 
 
@@ -76,19 +95,117 @@ async def test_log_success_event_keeps_cost_bookkeeping_out_of_the_latency_routi
 
 @pytest.mark.asyncio
 async def test_async_get_available_deployments_applies_rpm_limit_from_the_cost_entry():
-    cache = DualCache()
-    handler = LowestCostLoggingHandler(router_cache=cache)
-    precise_minute = datetime.now().strftime("%Y-%m-%d-%H-%M")
+    cache: Final = DualCache()
+    handler: Final = LowestCostLoggingHandler(router_cache=cache, clock=_frozen_clock)
+    precise_minute: Final = FROZEN_INSTANT.strftime("%Y-%m-%d-%H-%M")
     cache.set_cache(key=COST_KEY, value={DEPLOYMENT_ID: {precise_minute: {"tpm": 12, "rpm": 1}}})
-    healthy_deployments = [{"model_info": {"id": DEPLOYMENT_ID}, "litellm_params": {"model": "gpt-5.5", "rpm": 1}}]
+    healthy_deployments: Final = [
+        {"model_info": {"id": DEPLOYMENT_ID}, "litellm_params": {"model": "gpt-5.5", "rpm": 1}}
+    ]
 
-    picked = await handler.async_get_available_deployments(
+    picked: Final = await handler.async_get_available_deployments(
         model_group="gpt-5.5-pool",
         healthy_deployments=healthy_deployments,
         messages=[{"role": "user", "content": "hi"}],
     )
 
     assert picked is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+async def test_a_success_event_across_a_day_boundary_lands_in_the_bucket_of_its_first_clock_read(use_async: bool):
+    cache: Final = DualCache()
+    handler: Final = LowestCostLoggingHandler(router_cache=cache, clock=_clock_rolling_over_after_first_read())
+    call_args: Final = {
+        "kwargs": KWARGS,
+        "response_obj": _chat_response_with_no_completion_tokens(),
+        "start_time": datetime(2026, 1, 31, 23, 59, 58),
+        "end_time": datetime(2026, 1, 31, 23, 59, 59),
+    }
+
+    if use_async:
+        await handler.async_log_success_event(**call_args)
+    else:
+        handler.log_success_event(**call_args)
+
+    assert cache.get_cache(key=COST_KEY) == {DEPLOYMENT_ID: {"2026-01-31-23-59": {"tpm": 12, "rpm": 1}}}
+
+
+@pytest.mark.asyncio
+async def test_a_read_across_a_day_boundary_uses_the_bucket_of_its_first_clock_read():
+    cache: Final = DualCache()
+    handler: Final = LowestCostLoggingHandler(router_cache=cache, clock=_clock_rolling_over_after_first_read())
+    cache.set_cache(key=COST_KEY, value={DEPLOYMENT_ID: {"2026-01-31-23-59": {"tpm": 12, "rpm": 1}}})
+    healthy_deployments: Final = [
+        {"model_info": {"id": DEPLOYMENT_ID}, "litellm_params": {"model": "gpt-5.5", "rpm": 1}}
+    ]
+
+    picked: Final = await handler.async_get_available_deployments(
+        model_group="gpt-5.5-pool",
+        healthy_deployments=healthy_deployments,
+        messages=[{"role": "user", "content": "hi"}],
+    )
+
+    assert picked is None
+
+
+@pytest.mark.asyncio
+async def test_a_write_in_one_minute_is_not_counted_by_a_read_in_the_next_minute():
+    cache: Final = DualCache()
+    handler: Final = LowestCostLoggingHandler(
+        router_cache=cache,
+        clock=_clock_reading(
+            iter([datetime(2026, 1, 31, 12, 0, 0), datetime(2026, 1, 31, 12, 0, 59), datetime(2026, 1, 31, 12, 1, 0)])
+        ),
+    )
+    healthy_deployments: Final = [
+        {
+            "model_info": {"id": DEPLOYMENT_ID},
+            "litellm_params": {"model": "gpt-5.5", "rpm": 1, "input_cost_per_token": 1, "output_cost_per_token": 1},
+        },
+        {
+            "model_info": {"id": "pricier"},
+            "litellm_params": {"model": "gpt-5.5", "input_cost_per_token": 2, "output_cost_per_token": 2},
+        },
+    ]
+    await handler.async_log_success_event(
+        kwargs=KWARGS,
+        response_obj=_chat_response_with_no_completion_tokens(),
+        start_time=datetime(2026, 1, 31, 11, 59, 59),
+        end_time=datetime(2026, 1, 31, 12, 0, 0),
+    )
+
+    picked_in_the_same_minute: Final = await handler.async_get_available_deployments(
+        model_group="gpt-5.5-pool", healthy_deployments=healthy_deployments
+    )
+    picked_in_the_next_minute: Final = await handler.async_get_available_deployments(
+        model_group="gpt-5.5-pool", healthy_deployments=healthy_deployments
+    )
+
+    assert [picked_in_the_same_minute["model_info"]["id"], picked_in_the_next_minute["model_info"]["id"]] == [
+        "pricier",
+        DEPLOYMENT_ID,
+    ]
+
+
+@pytest.mark.parametrize(
+    "instant",
+    [datetime(2026, 1, 2, 3, 4, 5), datetime(2026, 12, 31, 23, 59, 59, 999999), datetime(2027, 1, 1, 0, 0, 0)],
+    ids=["single-digit-fields", "last-microsecond-of-a-year", "first-instant-of-a-year"],
+)
+def test_bucket_keys_use_the_minute_format_of_the_clock_reading(instant: datetime):
+    cache: Final = DualCache()
+    handler: Final = LowestCostLoggingHandler(router_cache=cache, clock=lambda: instant)
+
+    handler.log_success_event(
+        kwargs=KWARGS,
+        response_obj=_chat_response_with_no_completion_tokens(),
+        start_time=instant,
+        end_time=instant,
+    )
+
+    assert list(cache.get_cache(key=COST_KEY)[DEPLOYMENT_ID]) == [instant.strftime("%Y-%m-%d-%H-%M")]
 
 
 @pytest.mark.asyncio
@@ -286,7 +403,7 @@ async def test_get_available_deployments_custom_price():
 
     assert selected_model["model_info"]["id"] == "chatgpt-v-1"
 
-async def _deploy(lowest_cost_logger, deployment_id, tokens_used, duration):
+async def _deploy(lowest_cost_logger, deployment_id, tokens_used):
     kwargs = {
         "litellm_params": {
             "metadata": {
@@ -296,15 +413,12 @@ async def _deploy(lowest_cost_logger, deployment_id, tokens_used, duration):
             "model_info": {"id": deployment_id},
         }
     }
-    start_time = time.time()
     response_obj = {"usage": {"total_tokens": tokens_used}}
-    time.sleep(duration)
-    end_time = time.time()
     await lowest_cost_logger.async_log_success_event(
         response_obj=response_obj,
         kwargs=kwargs,
-        start_time=start_time,
-        end_time=end_time,
+        start_time=FROZEN_INSTANT,
+        end_time=FROZEN_INSTANT,
     )
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
@@ -341,14 +455,12 @@ async def test_get_available_endpoints_tpm_rpm_check_async(ans_rpm):
             "model_info": {"id": "5678", "rpm": non_ans_rpm},
         },
     ]
-    lowest_cost_logger = LowestCostLoggingHandler(router_cache=test_cache)
+    lowest_cost_logger = LowestCostLoggingHandler(router_cache=test_cache, clock=_frozen_clock)
     model_group = "gpt-3.5-turbo"
-    d1 = [(lowest_cost_logger, "1234", 50, 0.01)] * non_ans_rpm
-    d2 = [(lowest_cost_logger, "5678", 50, 0.01)] * non_ans_rpm
+    d1 = [(lowest_cost_logger, "1234", 50)] * non_ans_rpm
+    d2 = [(lowest_cost_logger, "5678", 50)] * non_ans_rpm
 
     await asyncio.gather(*[_deploy(*t) for t in [*d1, *d2]])
-
-    asyncio.sleep(3)
 
     ## CHECK WHAT'S SELECTED ##
     d_ans = await lowest_cost_logger.async_get_available_deployments(
