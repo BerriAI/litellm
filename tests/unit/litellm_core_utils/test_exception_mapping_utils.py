@@ -2781,3 +2781,23 @@ def test_missing_aws_dependency_is_not_mapped_to_provider_failure(provider, depe
 def test_non_aws_import_failure_keeps_provider_mapping(failure):
     with pytest.raises(litellm.APIConnectionError):
         exception_type(model="test-model", original_exception=failure, custom_llm_provider="openai")
+
+
+@pytest.mark.parametrize(
+    "transport_timeout,reason",
+    [
+        (httpx.ReadTimeout(""), "ReadTimeout"),
+        (httpx.ReadTimeout("Timeout on reading data from socket"), "Timeout on reading data from socket"),
+        (httpx.TimeoutException(""), "TimeoutException"),
+    ],
+    ids=["httpx_read_timeout", "aiohttp_read_timeout", "aiohttp_socket_timeout"],
+)
+@pytest.mark.parametrize("provider", ["hosted_vllm", "openai", "anthropic"])
+def test_transport_timeout_maps_to_timeout(
+    transport_timeout: httpx.TimeoutException, reason: str, provider: str
+) -> None:
+    with pytest.raises(litellm.Timeout) as exc_info:
+        exception_type(model="glm", original_exception=transport_timeout, custom_llm_provider=provider)
+
+    assert exc_info.value.status_code == 408
+    assert f"Request timed out. Error_str: {reason}" in str(exc_info.value)

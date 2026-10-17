@@ -2384,6 +2384,7 @@ class CustomStreamWrapper:
 
         429 (rate-limit) is explicitly exempted from the 4xx filter because
         it is transient and the Router should switch to another model group.
+        So is a transport read timeout, which maps to a 408 Timeout.
 
         An error an inner stream already wrapped (the chat-to-Responses bridge
         consumes a Responses stream) is rebuilt around the provider exception
@@ -2448,7 +2449,12 @@ class CustomStreamWrapper:
         # Raise non-retriable client errors directly (skip fallback).
         # Exception: 429 (rate-limit) IS retriable/transient — allow it
         # through so the Router can switch to a different model group.
-        if mapped_status_code is not None and 400 <= mapped_status_code < 500 and mapped_status_code != 429:
+        if (
+            not isinstance(e, httpx.TimeoutException)
+            and mapped_status_code is not None
+            and 400 <= mapped_status_code < 500
+            and mapped_status_code != 429
+        ):
             raise mapped_exception
         if original_status_code is not None and 400 <= original_status_code < 500 and original_status_code != 429:
             raise mapped_exception
