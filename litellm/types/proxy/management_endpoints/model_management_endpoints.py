@@ -5,7 +5,8 @@ from pydantic import ConfigDict, Field
 
 from litellm.types.llms.base import LiteLLMBaseModel
 
-from ...router import ModelGroupInfo
+from ...router import ModelGroupInfo, ModelInfo
+from .management_v1 import ResourceResponse
 
 
 class ModelGroupInfoProxy(ModelGroupInfo):
@@ -13,6 +14,61 @@ class ModelGroupInfoProxy(ModelGroupInfo):
     health_status: str | None = Field(default=None)
     health_response_time: float | None = Field(default=None)
     health_checked_at: str | None = Field(default=None)
+
+
+class ModelGroupInfoResponse(ResourceResponse[tuple[ModelGroupInfoProxy, ...]]):
+    """`{data: [...]}` of `GET /model_group/info`: one `ModelGroupInfoProxy` per model group the caller may see."""
+
+    model_config = ConfigDict(frozen=True)
+
+
+class ModelInfoV1LiteLLMParams(LiteLLMBaseModel):
+    """A deployment's litellm_params as `GET /model/info` serves them.
+
+    Every configured key passes through except credentials: api_key, client_secret, vertex credentials and AWS
+    access keys are removed and every other secret-shaped value is masked, except litellm_credential_name. With the
+    proxy started from the CLI with `--model`, every unset parameter arrives as the string "None", or as an empty
+    string when its name is secret-shaped.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="allow")
+
+    model: str
+
+
+class ModelInfoV1Deployment(LiteLLMBaseModel):
+    """One deployment as `GET /model/info` and `GET /v1/model/info` report it.
+
+    Any further deployment-level key passes through from the router row unchanged.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="allow")
+
+    model_name: str = Field(
+        description=(
+            "The name requests use for this deployment. A team deployment stored under the proxy's internal "
+            "`model_name_<team_id>_<uuid>` name reports its team_public_model_name instead."
+        )
+    )
+    litellm_params: ModelInfoV1LiteLLMParams
+    model_info: ModelInfo = Field(
+        description=(
+            "The configured model_info merged with the cost map entry for the model (pricing, token limits, "
+            "mode, supports_* capabilities, supported_openai_params, litellm_provider, key), the proxy's "
+            "discovered model info and pricing_overrides. With the proxy database connected, direct_access is "
+            "added, and access_via_team_ids for an admin or for a key that belongs to a user."
+        )
+    )
+
+
+class ModelInfoV1Response(ResourceResponse[tuple[ModelInfoV1Deployment, ...] | ModelInfoV1Deployment]):
+    """`{data: ...}` of `GET /model/info` and `GET /v1/model/info`.
+
+    `data` is one `ModelInfoV1Deployment` per deployment the caller may see. With the proxy started from the CLI
+    with `--model` and no config, `data` is that single deployment as one object instead of a list.
+    """
+
+    model_config = ConfigDict(frozen=True)
 
 
 class UpdateUsefulLinksRequest(LiteLLMBaseModel):

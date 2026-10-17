@@ -958,6 +958,8 @@ from litellm.types.llms.openai import (
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     ModelGroupInfoProxy,
+    ModelGroupInfoResponse,
+    ModelInfoV1Response,
 )
 from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
@@ -16889,11 +16891,13 @@ def _model_info_json_response(data: Sequence[Mapping[str, object]] | Mapping[str
     "/model/info",
     tags=["model management"],
     dependencies=[Depends(user_api_key_auth)],
+    response_model=ModelInfoV1Response,
 )
 @router.get(
     "/v1/model/info",
     tags=["model management"],
     dependencies=[Depends(user_api_key_auth)],
+    response_model=ModelInfoV1Response,
 )
 async def model_info_v1(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -17199,11 +17203,12 @@ _get_model_group_info: Final = get_model_group_info
     "/model_group/info",
     tags=["model management"],
     dependencies=[Depends(user_api_key_auth)],
+    response_model=ModelGroupInfoResponse,
 )
 async def model_group_info(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     model_group: str | None = None,
-):
+) -> ModelGroupInfoResponse:
     """
     Get information about all the deployments on litellm proxy, including config.yaml descriptions (except api key and api base)
 
@@ -17358,7 +17363,7 @@ async def model_group_info(
 
     # Return empty data array when no models are configured (graceful handling for fresh installs)
     if llm_model_list is None or llm_router is None or not llm_model_list:
-        return {"data": []}
+        return ModelGroupInfoResponse(data=())
 
     from litellm.proxy.utils import get_available_models_for_user
 
@@ -17416,13 +17421,13 @@ async def model_group_info(
         user_api_key_dict, tuple(dict.fromkeys(public_group_names))
     )
 
-    return {
-        "data": [
+    return ModelGroupInfoResponse(
+        data=tuple(
             group
             for group, public_name in zip(model_groups, public_group_names, strict=True)
             if public_name not in callback_hidden_names
-        ]
-    }
+        )
+    )
 
 
 @router.get(
