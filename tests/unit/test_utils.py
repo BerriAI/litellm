@@ -9958,3 +9958,32 @@ def test_vertex_llama3_model_info_resolves_without_the_meta_prefix():
         prefixed_info = litellm.get_model_info(model=model, custom_llm_provider="vertex_ai")
         assert litellm.get_model_info(model=short_name, custom_llm_provider="vertex_ai") == prefixed_info, model
         assert prefixed_info["key"] == f"vertex_ai/{model}", model
+
+
+@pytest.mark.parametrize(
+    ("headers", "provider_wait"),
+    [
+        pytest.param({"retry-after": "30", "retry-after-ms": "1500"}, 1.5, id="milliseconds-first"),
+        pytest.param({"retry-after": "3", "retry-after-ms": "invalid"}, 3.0, id="invalid-milliseconds"),
+        pytest.param({"retry-after": "3", "retry-after-ms": ""}, 3.0, id="empty-milliseconds"),
+        pytest.param({"retry-after-ms": "2500"}, 2.5, id="milliseconds-only"),
+        pytest.param({"retry-after": "invalid", "retry-after-ms": "invalid"}, None, id="invalid-headers"),
+        pytest.param(
+            {"retry-after": "Thu, 01 Jan 999999999999999999999999 00:00:00 GMT"}, None, id="overflowing-date"
+        ),
+        pytest.param({}, None, id="missing-headers"),
+    ],
+)
+def test_calculate_retry_after_preserves_provider_hint_and_jitter(
+    headers: dict[str, str], provider_wait: float | None
+) -> None:
+    wait: Final = litellm.utils.calculate_retry_after(
+        remaining_retries=1, max_retries=3, response_headers=httpx.Headers(headers)
+    )
+    expected_wait: Final = (
+        provider_wait
+        if provider_wait is not None
+        else min(litellm.utils.INITIAL_RETRY_DELAY * 2**2, litellm.utils.MAX_RETRY_DELAY)
+    )
+
+    assert expected_wait <= wait <= expected_wait + litellm.utils.JITTER

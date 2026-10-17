@@ -7355,36 +7355,40 @@ _should_retry = should_retry
 
 def _get_retry_after_from_exception_header(
     response_headers: Mapping[str, str] | None = None,
-):
+) -> float | int:
     """
     Reimplementation of openai's calculate retry after, since that one can't be imported.
     https://github.com/openai/openai-python/blob/af67cfab4210d8e497c05390ce14f39105c77519/src/openai/_base_client.py#L631
     """
+    if response_headers is None:
+        return -1
+
     try:
-        import email  # openai import
+        import email.utils
 
-        # About the Retry-After header: https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Retry-After
-        #
-        # <http-date>". See https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Retry-After#syntax for
-        # details.
-        if response_headers is not None:
-            retry_header: Final = response_headers.get("retry-after", "")
+        retry_after_ms_header: Final = response_headers.get("retry-after-ms")
+        if retry_after_ms_header is not None:
             try:
-                retry_after = int(retry_header)
-            except Exception:
-                retry_date_tuple: Final = email.utils.parsedate_tz(retry_header)
-                if retry_date_tuple is None:
-                    retry_after = -1
-                else:
-                    retry_date: Final = email.utils.mktime_tz(retry_date_tuple)
-                    retry_after = int(retry_date - time.time())
-        else:
-            retry_after = -1
+                return float(retry_after_ms_header) / 1000
+            except ValueError:
+                pass
 
-        return retry_after
+        retry_header: Final = response_headers.get("retry-after")
+        if retry_header is None:
+            return -1
 
+        try:
+            return int(retry_header)
+        except ValueError:
+            pass
+
+        retry_date_tuple: Final = email.utils.parsedate_tz(retry_header)
+        if retry_date_tuple is None:
+            return -1
+
+        return int(email.utils.mktime_tz(retry_date_tuple) - time.time())
     except Exception:
-        retry_after = -1
+        return -1
 
 
 def calculate_retry_after(
@@ -7399,7 +7403,7 @@ def calculate_retry_after(
     jitter: Final = JITTER * random.random()
 
     # If the API asks us to wait a certain amount of time (and it's a reasonable amount), just do what it says.
-    if retry_after is not None and 0 < retry_after <= 60:
+    if 0 < retry_after <= 60:
         return retry_after + jitter
 
     # Calculate exponential backoff
