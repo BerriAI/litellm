@@ -10584,6 +10584,53 @@ async def test_access_group_model_fallback_uses_the_injected_database(channel: s
     reader.assert_awaited_once_with(where={"access_group_id": "group-a"})
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("channel", ["key", "team"])
+async def test_empty_native_models_with_access_groups_restricts_to_group(channel: str) -> None:
+    """Empty models + access_group_ids must not mean unrestricted (GH#46951)."""
+    from litellm.models.access_group import LiteLLM_AccessGroupTable
+    from litellm.proxy.auth.auth_checks import can_key_call_model, can_team_access_model
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    group = LiteLLM_AccessGroupTable(
+        access_group_id="restricted-group",
+        access_group_name="restricted-group",
+        access_model_names=["gpt-4o-mini", "claude-3-haiku"],
+    )
+    reader = AsyncMock(return_value=group)
+    client = MagicMock(db=MagicMock(litellm_accessgrouptable=MagicMock(find_unique=reader)))
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache()),
+    ):
+        if channel == "team":
+            team = LiteLLM_TeamTable(team_id="team-a", models=[], access_group_ids=["restricted-group"])
+            assert await can_team_access_model(
+                model="gpt-4o-mini", team_object=team, llm_router=None, prisma_client=client
+            ) is True
+            with pytest.raises(ProxyException):
+                await can_team_access_model(
+                    model="gpt-4o", team_object=team, llm_router=None, prisma_client=client
+                )
+        else:
+            token = UserAPIKeyAuth(models=[], access_group_ids=["restricted-group"])
+            assert await can_key_call_model(
+                model="gpt-4o-mini",
+                llm_model_list=None,
+                valid_token=token,
+                llm_router=None,
+                prisma_client=client,
+            ) is True
+            with pytest.raises(ProxyException):
+                await can_key_call_model(
+                    model="gpt-4o",
+                    llm_model_list=None,
+                    valid_token=token,
+                    llm_router=None,
+                    prisma_client=client,
+                )
+
+
 def test_jwt_team_role_reaches_the_gateway_token_endpoint_by_default():
     """The RFC 8693 token exchange authorizes the IdP JWT against ``POST /token`` itself, and JWT
     auth only binds a team from a multi-team claim when that team may call the route, so the
