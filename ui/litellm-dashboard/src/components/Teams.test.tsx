@@ -768,13 +768,13 @@ describe("Teams - Reset Budget in team create", () => {
     });
   });
 
-  it("should fall back to the n/a placeholder when the default settings fetch fails", async () => {
+  it("should fall back to the Not set placeholder when the default settings fetch fails", async () => {
     vi.mocked(getDefaultTeamSettings).mockRejectedValue(new Error("Unauthorized"));
 
     await openCreateModal();
 
     await waitFor(() => {
-      expect(screen.getByText("n/a")).toBeInTheDocument();
+      expect(screen.getByText("Not set")).toBeInTheDocument();
     });
   });
 });

@@ -159,7 +159,7 @@ const EditBudgetModal: React.FC<EditBudgetModalProps> = ({ isModalVisible, setIs
                   {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
                     <Select items={BUDGET_DURATION_OPTIONS} value={value ?? null} onValueChange={onChange}>
                       <SelectTrigger id={id} aria-invalid={ariaInvalid} aria-describedby={ariaDescribedBy}>
-                        <SelectValue placeholder="n/a" />
+                        <SelectValue placeholder="Never resets" />
                       </SelectTrigger>
                       <SelectContent>
                         {BUDGET_DURATION_OPTIONS.map((option) => (
