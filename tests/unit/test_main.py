@@ -3761,6 +3761,9 @@ def test_stream_chunk_builder_text_completion_combines_text_and_usage():
             model="gpt-3.5-turbo-instruct",
             choices=[{"text": " world", "index": 0, "logprobs": None, "finish_reason": "stop"}],
         ),
+        TextCompletionResponse(
+            id="cmpl-1", object="text_completion", created=1, model="gpt-3.5-turbo-instruct", choices=[]
+        ),
     ]
 
     response = stream_chunk_builder_text_completion(chunks=chunks, messages=[{"role": "user", "content": "say hello"}])
@@ -5960,7 +5963,7 @@ async def test_async_completion_openai_response_headers(monkeypatch: pytest.Monk
         messages=[{"role": "user", "content": "hello"}],
         stream=True,
     )
-    stream_text: Final = "".join([chunk.choices[0].delta.content or "" async for chunk in stream])
+    stream_text: Final = "".join([chunk.choices[0].delta.content or "" async for chunk in stream if chunk.choices])
     embedding: Final = await litellm.aembedding(model="text-embedding-3-small", input="hello")
 
     assert len(route.calls) == 2
@@ -8576,7 +8579,8 @@ async def test_text_completion_stream_include_usage_returns_usage_on_final_chunk
         "stream": True,
         "stream_options": {"include_usage": True},
     }
-    assert "".join(chunk.choices[0].text or "" for chunk in chunks) == "reply"
+    assert "".join(chunk.choices[0].text or "" for chunk in chunks if chunk.choices) == "reply"
+    assert chunks[-1].choices == []
     final_usage: Final = chunks[-1].usage
     assert (final_usage.prompt_tokens, final_usage.completion_tokens, final_usage.total_tokens) == (3, 2, 5)
 

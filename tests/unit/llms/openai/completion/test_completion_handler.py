@@ -335,7 +335,7 @@ async def test_async_text_completion_chat_model_stream_builds_chat_chunks(monkey
     assert tuple(
         chunk.choices[0].finish_reason
         for chunk in chunks
-        if chunk.choices[0].finish_reason is not None
+        if chunk.choices and chunk.choices[0].finish_reason is not None
     ) == ("stop",)
     assert len(route.calls) == 1
 
@@ -364,7 +364,8 @@ def test_text_completion_stream_forwards_stream_options_and_usage(monkeypatch):
         )
     )
 
-    assert tuple(chunk.choices[0].text for chunk in chunks) == ("hello", None, None)
+    assert tuple(chunk.choices[0].text for chunk in chunks[:-1]) == ("hello", None)
+    assert chunks[-1].choices == []
     assert tuple(chunk.usage for chunk in chunks[:-1]) == (None, None)
     assert (chunks[-1].usage.prompt_tokens, chunks[-1].usage.completion_tokens, chunks[-1].usage.total_tokens) == (
         2,
