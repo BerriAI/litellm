@@ -5,7 +5,7 @@ import json
 import ssl
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Coroutine, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager
-from functools import lru_cache, partial
+from functools import lru_cache, partial, reduce
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
@@ -36,7 +36,7 @@ import litellm.litellm_core_utils
 import litellm.types
 import litellm.types.utils
 from litellm._logging import redact_string, verbose_logger
-from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
+from litellm.anthropic_beta_headers_manager import aload_beta_headers_config, update_headers_with_filtered_beta
 from litellm.constants import MAX_FILE_LIST_LIMIT, REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.files.types import FileContentStreamingResult
 from litellm.litellm_core_utils.agentic_followup_kwargs import build_agentic_followup_kwargs
@@ -50,6 +50,7 @@ from litellm.litellm_core_utils.audio_utils.subtitle_utils import (
     synthesize_subtitle_document,
 )
 from litellm.litellm_core_utils.core_helpers import set_provider_response_headers_in_hidden_params
+from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value
 from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
 from litellm.litellm_core_utils.llm_request_utils import serialize_multipart_form_fields
 from litellm.litellm_core_utils.realtime_errors import (
@@ -216,6 +217,7 @@ if TYPE_CHECKING:
         FakeAnthropicMessagesStreamIterator,
     )
     from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
+    from litellm.responses.streaming_iterator import ResponsesWsFrameGuard
     from litellm.types.google_genai.main import GenerateContentResponse
     from litellm.types.llms.openai_evals import (
         CancelEvalResponse,
@@ -1518,8 +1520,65 @@ class BaseLLMHTTPHandler:
         api_base: str,
         api_key: str | None,
         headers: Mapping[str, str],
-    ) -> tuple[str, dict[str, str], dict[str, object]]:
-        outbound_headers: Final = provider_config.validate_environment(headers=headers, model=model, api_key=api_key)
+        litellm_params: Mapping[str, object],
+    ) -> tuple[str, Mapping[str, str], Mapping[str, object]]:
+        outbound_headers: Final = provider_config.validate_environment(
+            headers=headers,
+            model=model,
+            api_key=api_key,
+            litellm_params=litellm_params,
+        )
+        return self._prepare_decisions_request_with_headers(
+            model=model,
+            logging_obj=logging_obj,
+            provider_config=provider_config,
+            body=body,
+            logged_body=logged_body,
+            api_base=api_base,
+            api_key=api_key,
+            outbound_headers=outbound_headers,
+        )
+
+    async def _aprepare_decisions_request(
+        self,
+        model: str,
+        logging_obj: LiteLLMLoggingObj | None,
+        provider_config: BaseDecisionsConfig,
+        body: Mapping[str, object],
+        logged_body: Mapping[str, object],
+        api_base: str,
+        api_key: str | None,
+        headers: Mapping[str, str],
+        litellm_params: Mapping[str, object],
+    ) -> tuple[str, Mapping[str, str], Mapping[str, object]]:
+        outbound_headers: Final = await provider_config.avalidate_environment(
+            headers=headers,
+            model=model,
+            api_key=api_key,
+            litellm_params=litellm_params,
+        )
+        return self._prepare_decisions_request_with_headers(
+            model=model,
+            logging_obj=logging_obj,
+            provider_config=provider_config,
+            body=body,
+            logged_body=logged_body,
+            api_base=api_base,
+            api_key=api_key,
+            outbound_headers=outbound_headers,
+        )
+
+    def _prepare_decisions_request_with_headers(
+        self,
+        model: str,
+        logging_obj: LiteLLMLoggingObj | None,
+        provider_config: BaseDecisionsConfig,
+        body: Mapping[str, object],
+        logged_body: Mapping[str, object],
+        api_base: str,
+        api_key: str | None,
+        outbound_headers: Mapping[str, str],
+    ) -> tuple[str, Mapping[str, str], Mapping[str, object]]:
         url: Final = provider_config.get_complete_url(api_base=api_base, model=model)
         data: Final = dict(body)
         if logging_obj is not None:
@@ -1556,6 +1615,7 @@ class BaseLLMHTTPHandler:
             api_base=api_base,
             api_key=api_key,
             headers=headers,
+            litellm_params=litellm_params,
         )
         signed_headers, signed_body = provider_config.sign_request(
             headers=outbound_headers,
@@ -1570,7 +1630,7 @@ class BaseLLMHTTPHandler:
             response: Final = sync_httpx_client.post(
                 url,
                 content=signed_body,
-                json=data if signed_body is None else None,
+                json=dict(data) if signed_body is None else None,
                 headers=dict(signed_headers),
                 timeout=timeout,
                 logging_obj=logging_obj,
@@ -1597,7 +1657,7 @@ class BaseLLMHTTPHandler:
         litellm_params: Mapping[str, object],
         client: AsyncHTTPHandler | None = None,
     ) -> DecisionsIRResponse:
-        url, outbound_headers, data = self._prepare_decisions_request(
+        url, outbound_headers, data = await self._aprepare_decisions_request(
             model=model,
             logging_obj=logging_obj,
             provider_config=provider_config,
@@ -1606,6 +1666,7 @@ class BaseLLMHTTPHandler:
             api_base=api_base,
             api_key=api_key,
             headers=headers,
+            litellm_params=litellm_params,
         )
         sign: Final = partial(
             provider_config.sign_request,
@@ -1628,7 +1689,7 @@ class BaseLLMHTTPHandler:
             response: Final = await async_httpx_client.post(
                 url,
                 content=signed_body,
-                json=data if signed_body is None else None,
+                json=dict(data) if signed_body is None else None,
                 headers=dict(signed_headers),
                 timeout=timeout,
                 logging_obj=logging_obj,
@@ -2264,6 +2325,16 @@ class BaseLLMHTTPHandler:
             merged_headers.update(extra_headers_from_kwargs)
         if provider_specific_headers:
             merged_headers.update(provider_specific_headers)
+        request_params: Final = reduce(
+            delete_nested_value,
+            litellm_params.get("additional_drop_params") or (),
+            anthropic_messages_optional_request_params,
+        )
+        if (
+            request_params.get("safeguards") is not None
+            and anthropic_messages_provider_config.should_filter_anthropic_beta_headers()
+        ):
+            await aload_beta_headers_config()
         (
             headers,
             api_base,
@@ -2271,7 +2342,7 @@ class BaseLLMHTTPHandler:
             headers=merged_headers or {},
             model=model,
             messages=messages,
-            optional_params=anthropic_messages_optional_request_params,
+            optional_params=request_params,
             litellm_params=dict(litellm_params),
             api_key=api_key,
             api_base=api_base,
@@ -2302,20 +2373,9 @@ class BaseLLMHTTPHandler:
             custom_llm_provider=custom_llm_provider,
         )
 
-        additional_drop_params: Final[list[str]] = litellm_params.get("additional_drop_params") or []
-        if additional_drop_params:
-            from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value
-
-            for path in additional_drop_params:
-                anthropic_messages_optional_request_params = delete_nested_value(
-                    anthropic_messages_optional_request_params, path
-                )
-
         native_output_fallback_params: Final = anthropic_messages_provider_config.native_output_fallback_litellm_params(
             model=model,
-            anthropic_messages_optional_request_params=_OPTIONAL_PARAMS.validate_python(
-                anthropic_messages_optional_request_params
-            ),
+            anthropic_messages_optional_request_params=_OPTIONAL_PARAMS.validate_python(request_params),
             litellm_params=litellm_params,
         )
         rebuild_without_native_output: Final = (
@@ -2325,9 +2385,7 @@ class BaseLLMHTTPHandler:
                 anthropic_messages_provider_config.transform_anthropic_messages_request,
                 model=model,
                 messages=copy.deepcopy(_JSON_OBJECTS.validate_python(messages)),
-                anthropic_messages_optional_request_params=copy.deepcopy(
-                    _JSON_OBJECT.validate_python(anthropic_messages_optional_request_params)
-                ),
+                anthropic_messages_optional_request_params=copy.deepcopy(_JSON_OBJECT.validate_python(request_params)),
                 litellm_params=native_output_fallback_params,
                 headers=_JSON_OBJECT.validate_python(headers),
             )
@@ -2337,7 +2395,7 @@ class BaseLLMHTTPHandler:
         request_body: Final = anthropic_messages_provider_config.transform_anthropic_messages_request(
             model=model,
             messages=messages,
-            anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+            anthropic_messages_optional_request_params=request_params,
             litellm_params=litellm_params,
             headers=headers,
         )
@@ -2445,7 +2503,7 @@ class BaseLLMHTTPHandler:
 
             held_back_tool_names: Final = self._server_fulfilled_tools_in_request(
                 logging_obj=logging_obj,
-                tools=anthropic_messages_optional_request_params.get("tools"),
+                tools=request_params.get("tools"),
             )
             initial_response = AgenticAnthropicStreamingIterator(
                 completion_stream=completion_stream,
@@ -2453,7 +2511,7 @@ class BaseLLMHTTPHandler:
                 model=model,
                 messages=messages,
                 anthropic_messages_provider_config=anthropic_messages_provider_config,
-                anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+                anthropic_messages_optional_request_params=request_params,
                 logging_obj=logging_obj,
                 custom_llm_provider=custom_llm_provider,
                 kwargs=kwargs_for_agentic,
@@ -2476,7 +2534,7 @@ class BaseLLMHTTPHandler:
             model=model,
             messages=messages,
             anthropic_messages_provider_config=anthropic_messages_provider_config,
-            anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+            anthropic_messages_optional_request_params=request_params,
             logging_obj=logging_obj,
             custom_llm_provider=custom_llm_provider,
             kwargs=kwargs_for_agentic,
@@ -6848,6 +6906,7 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str | None = None,
         first_message: str | None = None,
         request_defaults: ResponsesWebSocketRequestDefaults | None = None,
+        frame_guard: "ResponsesWsFrameGuard | None" = None,
         **kwargs: object,
     ) -> Exception | None:
         """
@@ -6862,6 +6921,35 @@ class BaseLLMHTTPHandler:
         - Forwards events over the websocket connection
         """
         _ws_quota_callbacks: Final = _collect_ws_project_quota_callbacks()
+
+        _ws_guardrail_callbacks: list = []
+        _ws_output_guardrail_callbacks: list = []
+        try:
+            import litellm as _litellm
+
+            # Use duck-typing so any guardrail that exposes the PII
+            # masking interface works, not just _OPTIONAL_PresidioPIIMasking.
+            # This avoids a layering violation (SDK importing from proxy).
+            _ws_guardrail_callbacks = [
+                cb
+                for cb in _litellm.callbacks
+                if callable(getattr(cb, "check_pii", None))
+                and callable(getattr(cb, "get_presidio_settings_from_request_data", None))
+                and callable(getattr(cb, "_unmask_pii_text", None))
+                and getattr(cb, "output_parse_pii", False)
+            ]
+            _ws_output_guardrail_callbacks = [
+                cb
+                for cb in _litellm.callbacks
+                if callable(getattr(cb, "check_pii", None))
+                and callable(getattr(cb, "get_presidio_settings_from_request_data", None))
+                and getattr(cb, "apply_to_output", False)
+            ]
+        except Exception as _guardrail_exc:
+            verbose_logger.warning(
+                "Responses WebSocket: failed to collect guardrail callbacks — PII masking will be skipped. Error: %s",
+                _guardrail_exc,
+            )
 
         if responses_api_provider_config is None or not responses_api_provider_config.supports_native_websocket():
             from litellm.responses.streaming_iterator import (
@@ -6880,6 +6968,8 @@ class BaseLLMHTTPHandler:
                 custom_llm_provider=custom_llm_provider,
                 first_message=first_message,
                 quota_callbacks=_ws_quota_callbacks,
+                guardrail_callbacks=_ws_guardrail_callbacks,  # pyright: ignore[reportUnknownArgumentType]  # duck-typed callbacks from litellm.callbacks
+                frame_guard=frame_guard,
                 **kwargs,
             )
             await handler.run()
@@ -6961,36 +7051,6 @@ class BaseLLMHTTPHandler:
                 if litellm_metadata:
                     _request_data["litellm_metadata"] = litellm_metadata
 
-                _ws_guardrail_callbacks: list = []
-                _ws_output_guardrail_callbacks: list = []
-                try:
-                    import litellm as _litellm
-
-                    # Use duck-typing so any guardrail that exposes the PII
-                    # masking interface works, not just _OPTIONAL_PresidioPIIMasking.
-                    # This avoids a layering violation (SDK importing from proxy).
-                    _ws_guardrail_callbacks = [
-                        cb
-                        for cb in _litellm.callbacks
-                        if callable(getattr(cb, "check_pii", None))
-                        and callable(getattr(cb, "get_presidio_settings_from_request_data", None))
-                        and callable(getattr(cb, "_unmask_pii_text", None))
-                        and getattr(cb, "output_parse_pii", False)
-                    ]
-                    _ws_output_guardrail_callbacks = [
-                        cb
-                        for cb in _litellm.callbacks
-                        if callable(getattr(cb, "check_pii", None))
-                        and callable(getattr(cb, "get_presidio_settings_from_request_data", None))
-                        and getattr(cb, "apply_to_output", False)
-                    ]
-                except Exception as _guardrail_exc:
-                    verbose_logger.warning(
-                        "Responses WebSocket: failed to collect guardrail "
-                        "callbacks — PII masking will be skipped. Error: %s",
-                        _guardrail_exc,
-                    )
-
                 streaming: Final = ResponsesWebSocketStreaming(
                     websocket=websocket,
                     backend_ws=cast(ClientConnection, backend_ws),
@@ -7004,6 +7064,7 @@ class BaseLLMHTTPHandler:
                     authorized_model=model,
                     custom_llm_provider=custom_llm_provider,
                     request_defaults=request_defaults,
+                    frame_guard=frame_guard,
                 )
                 return await streaming.bidirectional_forward()
 
