@@ -473,3 +473,13 @@ def test_version_command_without_a_context_object_fails_reading_it(cli_runner):
     assert result.exit_code == 1
     assert type(result.exception) is AttributeError
     assert result.output == ""
+
+
+def test_every_listed_command_runs_the_command_of_that_name():
+    from litellm.proxy.client.cli.commands.agents import agent_commands
+
+    commands: Final = {name: cli.commands[name] for name in cli.commands}
+
+    assert {name: command.name for name, command in commands.items()} == {name: name for name in commands}
+    assert {command.name for command in agent_commands()} <= commands.keys()
+    assert all(cli.commands[name] is command for name, command in commands.items())
