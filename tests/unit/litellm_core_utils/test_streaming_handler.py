@@ -5069,6 +5069,7 @@ def test_openai_chunk_creator_skips_full_chunk_dump_and_delta_rebuild(
             model="gpt-4o",
             object="chat.completion.chunk",
             choices=[{"index": 0, "delta": {"content": " world"}, "finish_reason": None}],
+            service_tier="default",
             citations=["https://a"],
             custom_chunk_attribute="custom value",
         ),
@@ -5107,6 +5108,7 @@ def test_openai_chunk_creator_skips_full_chunk_dump_and_delta_rebuild(
     assert emitted_chunks[1].choices[0].delta.role is None
     assert getattr(emitted_chunks[1], "citations") == ["https://a"]
     assert getattr(emitted_chunks[1], "custom_chunk_attribute") == "custom value"
+    assert getattr(emitted_chunks[1], "service_tier") == "default"
     chunk2_delta: Final = emitted_chunks[1].model_dump()["choices"][0]["delta"]
     assert "provider_specific_fields" in chunk2_delta
     assert chunk2_delta["provider_specific_fields"] is None
