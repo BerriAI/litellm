@@ -16,6 +16,8 @@ from integration._support.process import graceful_stop_seconds, owned_proxy
 from integration._support.prometheus_series import Sample, scrape, series_cap_config
 from integration._support.vertex import service_account_json
 from integration._support.wire import Reply, Request, Wire, wire_server
+from integration._support.worker_readiness import wait_for_worker_readiness
+from litellm.constants import PROXY_CONFIG_RELOAD_INTERVAL_SECONDS
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 Endpoint: TypeAlias = Literal["chat", "responses", "messages"]
@@ -34,6 +36,7 @@ _PATHS: Final[Mapping[Endpoint, str]] = MappingProxyType(
 _RATE_LIMIT_HEADERS: Final[Mapping[str, str]] = MappingProxyType(
     {"x-ratelimit-remaining-requests": "0", "x-ratelimit-remaining-tokens": "856, abc"}
 )
+_METERED_WORKERS: Final = 2
 _METERED_CALLS: Final[tuple[tuple[str, bool], ...]] = (
     ("groq", False),
     ("groq", True),
@@ -399,7 +402,7 @@ def test_provider_header_outside_latin1_does_not_fail_the_call(gateway: Gateway,
         assert len(wire.drain()) == len(_LATIN1_CALLS)
 
 
-@pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
+@pytest.mark.timeout(2 * graceful_stop_seconds() + 2 * PROXY_CONFIG_RELOAD_INTERVAL_SECONDS + 120)
 def test_an_unparseable_rate_limit_header_keeps_the_deployment_metrics(gateway: Gateway, tmp_path: Path) -> None:
     multiproc_dir: Final = tmp_path / "prometheus"
     multiproc_dir.mkdir()
@@ -410,7 +413,7 @@ def test_an_unparseable_rate_limit_header_keeps_the_deployment_metrics(gateway: 
             tmp_path,
             {"PROMETHEUS_MULTIPROC_DIR": str(multiproc_dir)},
             config=series_cap_config(tmp_path, {}),
-            workers=2,
+            workers=_METERED_WORKERS,
         ) as metered,
         metered.scenario() as scenario,
     ):
@@ -419,6 +422,8 @@ def test_an_unparseable_rate_limit_header_keeps_the_deployment_metrics(gateway: 
             for member, stream in _METERED_CALLS
         }
         models: Final = {call: model for call, (model, _) in calls.items()}
+        for model in models.values():
+            wait_for_worker_readiness(metered, model, 1, _METERED_WORKERS)
         key: Final = scenario.key(models=list(models.values()))
         statuses: Final = {
             call: _send(metered, "chat", model, key, stream=stream).status_code
