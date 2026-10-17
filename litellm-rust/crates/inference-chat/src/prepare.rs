@@ -29,7 +29,7 @@ pub(super) fn resolve_provider_config<'a>(
     custom_llm_provider: Option<&'a str>,
 ) -> Result<ResolvedProvider, Error> {
     let provider_info = resolve_llm_provider(model, custom_llm_provider, "chat completions")?;
-    let config = chat_completions_provider(provider_info.provider)
+    let config = chat_completions_provider(provider_info.provider, provider_info.model)
         .ok_or_else(|| Error::InvalidProvider(<&str>::from(provider_info.provider).to_string()))?
         .config();
     Ok(ResolvedProvider {

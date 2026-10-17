@@ -21,6 +21,28 @@ const FINISH_REASONS: &[(&str, &str)] = &[
     ("content_filter", "content_filter"),
     ("stop", "stop"),
     ("length", "length"),
+    ("STOP", "stop"),
+    ("MAX_TOKENS", "length"),
+    ("CONTINUATION", "length"),
+    ("SAFETY", "content_filter"),
+    ("RECITATION", "content_filter"),
+    ("FINISH_REASON_UNSPECIFIED", "stop"),
+    ("MALFORMED_FUNCTION_CALL", "stop"),
+    ("LANGUAGE", "content_filter"),
+    ("OTHER", "content_filter"),
+    ("BLOCKLIST", "content_filter"),
+    ("PROHIBITED_CONTENT", "content_filter"),
+    ("SPII", "content_filter"),
+    ("IMAGE_SAFETY", "content_filter"),
+    ("IMAGE_PROHIBITED_CONTENT", "content_filter"),
+    ("TOO_MANY_TOOL_CALLS", "stop"),
+    ("MALFORMED_RESPONSE", "stop"),
+    ("NO_IMAGE", "content_filter"),
+    ("IMAGE_RECITATION", "content_filter"),
+    ("IMAGE_OTHER", "content_filter"),
+    ("ESCALATION", "content_filter"),
+    ("UNEXPECTED_TOOL_CALL", "stop"),
+    ("MISSING_THOUGHT_SIGNATURE", "stop"),
 ];
 
 pub fn finish_reason_for(provider_reason: &str) -> &'static str {
@@ -84,6 +106,11 @@ mod tests {
     #[case::guardrail_intervened("guardrail_intervened", "content_filter")]
     #[case::content_filtered("content_filtered", "content_filter")]
     #[case::content_filter("content_filter", "content_filter")]
+    #[case::gemini_stop("STOP", "stop")]
+    #[case::gemini_max_tokens("MAX_TOKENS", "length")]
+    #[case::gemini_safety("SAFETY", "content_filter")]
+    #[case::gemini_malformed_call("MALFORMED_FUNCTION_CALL", "stop")]
+    #[case::gemini_other("OTHER", "content_filter")]
     fn maps_every_reason_the_route_can_observe(#[case] reason: &str, #[case] expected: &str) {
         assert_eq!(finish_reason_for(reason), expected);
     }

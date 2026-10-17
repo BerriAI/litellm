@@ -21,6 +21,8 @@ use litellm_gateway_hooks::Route;
 
 use crate::{Deployment, Error, Gateway, JsonBody, request};
 
+const ENV_REFERENCE: &str = "os.environ/";
+
 pub(crate) async fn create(
     State(gateway): State<Arc<Gateway>>,
     identity: AuthenticatedRequest,
@@ -135,14 +137,16 @@ async fn handle(
                     ) {
                         return openai(gateway, deployment, body, extra_headers.clone()).await;
                     }
-                    let (messages, optional_params) = split(body);
+                    let (messages, mut optional_params) = split(body);
                     let stream = ChatCompletionsRoute::is_stream(&optional_params);
+                    let (api_key, api_base) =
+                        connection(gateway, deployment, &mut optional_params).await?;
                     let call = ChatCompletionsCall {
                         model: deployment.model.clone(),
                         messages,
                         optional_params,
-                        api_key: deployment.api_key.clone(),
-                        api_base: deployment.api_base.clone(),
+                        api_key,
+                        api_base,
                         custom_llm_provider: deployment.custom_llm_provider.clone(),
                         extra_headers: extra_headers.clone(),
                         timeout: deployment.timeout,
@@ -179,6 +183,60 @@ fn split(mut body: Map<String, Value>) -> (Value, Map<String, Value>) {
     let messages = body.remove("messages").unwrap_or_default();
     body.remove("model");
     (messages, body)
+}
+
+/// A deployment's connection for a provider chat translates. Python's router reads each
+/// `os.environ/` setting from the environment when it loads the deployment, and `completion`
+/// hands the Vertex AI settings to the call, where a request body cannot name them.
+async fn connection(
+    gateway: &Gateway,
+    deployment: &Deployment,
+    optional_params: &mut Map<String, Value>,
+) -> Result<(Option<String>, Option<String>), Error> {
+    let vertex = match serde_json::to_value(&deployment.litellm_params.vertex) {
+        Ok(Value::Object(fields)) => fields,
+        _ => Map::new(),
+    };
+    let references: Vec<&str> = [
+        deployment.api_key.as_deref(),
+        deployment.api_base.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .chain(vertex.values().filter_map(Value::as_str))
+    .filter_map(|value| value.strip_prefix(ENV_REFERENCE))
+    .collect();
+    let secrets = match references.is_empty() {
+        true => None,
+        false => Some(
+            gateway
+                .secrets
+                .resolve(&references)
+                .await
+                .map_err(|error| Error::Internal(error.to_string()))?,
+        ),
+    };
+    // A reference to an unset variable counts as unset.
+    let resolve = |value: &str| match value.strip_prefix(ENV_REFERENCE) {
+        Some(name) => secrets.as_ref().and_then(|secrets| secrets.get(name)),
+        None => Some(value.to_owned()),
+    };
+    for (name, value) in vertex {
+        let value = match value {
+            Value::String(text) => resolve(&text).map(Value::String),
+            Value::Null => None,
+            other => Some(other),
+        };
+        if let Some(value) = value
+            && !optional_params.contains_key(&name)
+        {
+            optional_params.insert(name, value);
+        }
+    }
+    Ok((
+        deployment.api_key.as_deref().and_then(resolve),
+        deployment.api_base.as_deref().and_then(resolve),
+    ))
 }
 
 /// The deployment's `litellm_params` a provider reads beyond its connection: its

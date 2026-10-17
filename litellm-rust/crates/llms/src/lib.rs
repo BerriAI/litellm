@@ -9,6 +9,7 @@ pub mod cohere;
 pub mod deepseek;
 pub mod edenai;
 mod error;
+pub mod gemini;
 pub mod minimax;
 pub mod mistral;
 pub mod openai;
