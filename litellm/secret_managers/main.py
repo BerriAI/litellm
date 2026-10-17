@@ -83,7 +83,7 @@ def _resolve_oidc_file_path(requested_path: str) -> str:
     if not os.path.isabs(requested_path):
         raise OidcPathNotAllowedError(
             "oidc/file path must be absolute. Use the format "
-            "'oidc/file//var/run/secrets/<name>' (note the leading slash "
+            "'oidc/file//<absolute path>' (note the leading slash "
             "after 'oidc/file/')."
         )
     resolved: Final = os.path.realpath(requested_path)
@@ -167,8 +167,12 @@ class UnresolvableSecretReference:
     reason: str
 
 
+_OIDC_PROVIDERS: Final = frozenset({"google", "circleci", "circleci_v2", "github", "azure", "file", "env", "env_path"})
+
+
 def oidc_reference_kind(reference: str) -> str:
-    return "/".join(reference.split("/", 2)[:2])
+    provider: Final = reference.removeprefix("oidc/").split("/", 1)[0]
+    return f"oidc/{provider}" if provider in _OIDC_PROVIDERS else "oidc/<unknown kind>"
 
 
 def resolve_local_oidc_reference(value: str) -> str | UnresolvableSecretReference:

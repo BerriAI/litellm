@@ -6943,6 +6943,8 @@ def test_unresolvable_oidc_api_key_fails_closed_naming_the_reason_without_its_ta
         ("oidc/env_path/MISTRAL_SA_TOKEN_PATH", "oidc/env_path"),
         ("oidc/google/https://api.mistral.ai", "oidc/google"),
         ("oidc/github/mistral", "oidc/github"),
+        ("oidc/env_MISTRAL_SA_TOKEN_PATH", "oidc/<unknown kind>"),
+        ("oidc/LIT-UNKNOWN-KIND/MISTRAL_SA_TOKEN_PATH", "oidc/<unknown kind>"),
     ],
 )
 def test_oidc_api_key_of_a_kind_api_key_cannot_resolve_fails_closed_as_an_authentication_error(
@@ -6960,7 +6962,8 @@ def test_oidc_api_key_of_a_kind_api_key_cannot_resolve_fails_closed_as_an_authen
     assert not route.called
     assert excinfo.value.status_code == 401
     assert f"{kind} secret reference" in excinfo.value.message
-    assert reference.split("/", 2)[2] not in excinfo.value.message
+    assert reference.removeprefix(kind).lstrip("/") not in excinfo.value.message
+    assert "MISTRAL_SA_TOKEN_PATH" not in excinfo.value.message
 
 
 @pytest.mark.asyncio

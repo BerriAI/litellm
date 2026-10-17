@@ -9,6 +9,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 import litellm
+from litellm._logging import redact_internal_details_from_client_message
 from litellm.integrations.custom_secret_manager import CustomSecretManager
 from litellm.secret_managers.main import (
     get_secret,
@@ -344,10 +345,12 @@ def test_oidc_file_rejects_path_outside_allowlist(tmp_path, monkeypatch):
         get_secret(f"oidc/file/{outside_file}")
 
 
-def test_oidc_file_rejects_relative_path(tmp_path, monkeypatch):
+def test_oidc_file_rejects_relative_path_with_a_hint_client_redaction_leaves_whole(tmp_path, monkeypatch):
     monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(tmp_path))
-    with pytest.raises(ValueError, match="must be absolute"):
+    with pytest.raises(ValueError, match="must be absolute") as excinfo:
         get_secret("oidc/file/relative/path/token")
+    hint: Final = str(excinfo.value)
+    assert redact_internal_details_from_client_message(hint) == hint
 
 
 def test_oidc_env_success(mock_env):
