@@ -3142,3 +3142,21 @@ async def test_a_cache_hit_inside_an_internal_sub_call_is_free_and_fires_no_call
     assert async_logging.async_success_handler.called is not internal
     assert async_logging.handle_sync_success_callbacks_for_async_calls.called is not internal
     assert sync_logging.handle_sync_cache_hit_success_callbacks.called is not internal
+
+def test_should_defer_streaming_cache_hit_callbacks_without_proxy_extras(monkeypatch):
+    """Base SDK installs lack the proxy-only extras (fastapi); the defer check must not require them."""
+    import sys
+
+    for mod in list(sys.modules):
+        if mod.startswith(("fastapi", "litellm.llms.anthropic.pass_through", "litellm.proxy")):
+            monkeypatch.delitem(sys.modules, mod, raising=False)
+    monkeypatch.setitem(sys.modules, "fastapi", None)
+
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {}
+    stream_replay = CustomStreamWrapper(
+        completion_stream=iter(()), model="gpt-4o", logging_obj=logging_obj
+    )
+    assert _should_defer_streaming_cache_hit_callbacks(cached_result=stream_replay) is True
+    assert _should_defer_streaming_cache_hit_callbacks(cached_result=ModelResponse()) is False
+    assert _should_defer_streaming_cache_hit_callbacks(cached_result={"id": "msg_1"}) is False
