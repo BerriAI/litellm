@@ -67,7 +67,12 @@ from litellm.litellm_core_utils.get_supported_openai_params import (
     get_supported_openai_params,
 )
 from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call_from_params
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.litellm_logging import (
+    Logging as LiteLLMLoggingObj,
+)
+from litellm.litellm_core_utils.litellm_logging import (
+    normalize_input_messages_for_logging,
+)
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_information_cost
 from litellm.litellm_core_utils.llm_response_utils.get_headers import (
     get_response_headers,
@@ -260,6 +265,7 @@ from litellm.proxy.litellm_pre_call_utils import (
 )
 from litellm.proxy.policy_engine.response_retrieval import attach_post_call_pipelines_to_retrieval
 from litellm.types.utils import (
+    AllMessageValues,
     ModelResponse,
     ModelResponseStream,
     StandardLoggingPayloadErrorInformation,
@@ -421,6 +427,27 @@ def _assembled_model_is_the_name_the_client_asked_for(
         client_requested_model if isinstance(client_requested_model, str) else request_data.get("model")
     )
     return isinstance(stamped_model, str) and assembled_model == stamped_model
+
+
+def refresh_responses_input_logging_snapshot(
+    logging_obj: LiteLLMLoggingObj,
+    input_value: str | Sequence[object],
+) -> None:
+    """Restamp the logging snapshot from the post-guardrail /v1/responses input.
+
+    ``function_setup`` snapshots the raw input before pre-call guardrails run, so a
+    guardrail that rewrote the input leaves the logging object pointing at the
+    pre-rewrite objects. Mirrors the ``update_messages`` refresh the messages-shaped
+    endpoints get: the value is restamped in the request's own Responses shape (no
+    chat-completions conversion), wrapped by the same normalization the initial
+    snapshot uses so guarded and unguarded calls log the same schema.
+    """
+    logging_obj.update_messages(
+        cast(  # cast-ok: normalized snapshot messages
+            "list[AllMessageValues]",
+            normalize_input_messages_for_logging(input_value),
+        )
+    )
 
 
 async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, response: object) -> bool:
@@ -2455,7 +2482,22 @@ class ProxyBaseLLMRequestProcessing:
         refresh_proxy_server_request_body_snapshot(self.data, guardrails_applied=True)
         verbose_proxy_logger.debug("receiving data: %s", self.data)
 
-        if "messages" in self.data and self.data["messages"]:
+        # Input wins over messages for the Responses API: input is what
+        # function_setup snapshotted, what the guardrail rewrote, and what the
+        # provider receives, so a stray messages key must not outrank it in the
+        # logs. Chat-compat bodies carry messages and no input and still take the
+        # messages branch.
+        responses_input: Final[object] = self.data.get("input") if route_type == "aresponses" else None  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # request bag
+        if responses_input is not None:
+            # Guardrails may have rewritten the input (in place or by rebinding a
+            # new list), while the snapshot taken in function_setup still points
+            # at the pre-guardrail objects. Restamp it in the request's own
+            # Responses shape so guarded and unguarded calls log the same schema.
+            refresh_responses_input_logging_snapshot(
+                logging_obj,
+                responses_input,  # pyright: ignore[reportUnknownArgumentType, reportArgumentType]  # bag value
+            )
+        elif "messages" in self.data and self.data["messages"]:
             logging_obj.update_messages(self.data["messages"])
 
         if (
