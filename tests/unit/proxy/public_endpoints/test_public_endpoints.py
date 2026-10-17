@@ -437,15 +437,16 @@ def _decisions_provider_entry(provider: str) -> ProviderCreateInfo:
     return entry
 
 
-def test_typesafe_provider_fields():
-    typesafe: Final = _decisions_provider_entry("TypeSafe")
+@pytest.mark.parametrize("display_name,provider", (("TypeSafe", LlmProviders.TYPESAFE), ("Nace", LlmProviders.NACE)))
+def test_decisions_provider_fields(display_name: str, provider: LlmProviders) -> None:
+    entry: Final = _decisions_provider_entry(display_name)
 
-    assert typesafe.provider_display_name == "TypeSafe"
-    assert typesafe.litellm_provider == LlmProviders.TYPESAFE.value
-    assert typesafe.default_model_placeholder is not None
-    assert typesafe.default_model_placeholder.startswith("typesafe/")
+    assert entry.provider_display_name == display_name
+    assert entry.litellm_provider == provider.value
+    assert entry.default_model_placeholder is not None
+    assert entry.default_model_placeholder.startswith(f"{provider.value}/")
 
-    fields_by_key: Final = {f.key: f for f in typesafe.credential_fields}
+    fields_by_key: Final = {f.key: f for f in entry.credential_fields}
 
     assert fields_by_key["api_key"].required is True
     assert fields_by_key["api_key"].field_type == "password"
