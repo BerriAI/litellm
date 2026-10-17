@@ -41,6 +41,7 @@ from litellm.types.utils import (
     PromptTokensDetailsWrapper,
     ServerToolUse,
     StreamingChoices,
+    TextChoices,
     TextCompletionResponse,
     Usage,
 )
@@ -1216,16 +1217,21 @@ def concatenate_base64_list(base64_strings: list[str]) -> str:
     return base64.b64encode(combined_bytes).decode("utf-8")
 
 
-def stream_chunk_builder_text_completion(chunks: list, messages: Sequence | None = None) -> TextCompletionResponse:
+def _last_text_choice(chunks: Sequence[TextCompletionResponse]) -> TextChoices | None:
+    return next((chunk.choices[0] for chunk in reversed(chunks) if chunk.choices), None)
+
+
+def stream_chunk_builder_text_completion(
+    chunks: Sequence[TextCompletionResponse], messages: Sequence | None = None
+) -> TextCompletionResponse:
     id: Final = chunks[0]["id"]
     object: Final = chunks[0]["object"]
     created: Final = chunks[0]["created"]
     model: Final = chunks[0]["model"]
     system_fingerprint: Final = chunks[0].get("system_fingerprint", None)
-    # the include_usage chunk comes last and has no choices; read the finish from the chunk before it
-    last_choice: Final = next((chunk["choices"][0] for chunk in reversed(chunks) if chunk["choices"]), {})
-    finish_reason: Final = last_choice.get("finish_reason")
-    logprobs: Final = last_choice.get("logprobs")
+    last_choice: Final = _last_text_choice(chunks)
+    finish_reason: Final = last_choice.finish_reason if last_choice is not None else None
+    logprobs: Final = last_choice.logprobs if last_choice is not None else None
 
     content_list: Final = []
     for chunk in chunks:
