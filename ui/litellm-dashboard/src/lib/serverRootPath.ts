@@ -5,7 +5,10 @@
  * networking module. `networking` re-exports `serverRootPath` and updates it via
  * `setServerRootPath` from its UI-config bootstrap.
  */
-export let serverRootPath = "/";
+export let serverRootPath =
+  typeof document === "undefined"
+    ? "/"
+    : document.querySelector<HTMLMetaElement>('meta[name="litellm-server-root-path"]')?.content || "/";
 
 export const setServerRootPath = (rootPath: string): void => {
   serverRootPath = rootPath;
