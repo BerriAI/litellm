@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   Combobox,
   ComboboxChip,
@@ -14,6 +14,8 @@ import {
   ComboboxValue,
   useComboboxAnchor,
 } from "@/components/ui/combobox";
+
+export const MAX_VISIBLE_OPTIONS = 100;
 
 export interface MultiSelectOption {
   label: string;
@@ -32,6 +34,7 @@ interface MultiSelectProps {
   disabled?: boolean;
   loading?: boolean;
   allowCustomValues?: boolean;
+  searchDescriptions?: boolean;
   className?: string;
 }
 
@@ -41,14 +44,13 @@ const splitOnCommas = (raw: string): string[] =>
     .map((part) => part.trim())
     .filter((part) => part.length > 0);
 
-const matchesQuery = (option: MultiSelectOption, query: string): boolean => {
+const matchesQuery = (option: MultiSelectOption, query: string, searchDescriptions: boolean): boolean => {
   const normalizedQuery = query.trim().toLowerCase();
-  return (
-    !normalizedQuery ||
-    option.label.toLowerCase().includes(normalizedQuery) ||
-    option.value.toLowerCase().includes(normalizedQuery) ||
-    (option.description?.toLowerCase().includes(normalizedQuery) ?? false)
-  );
+  const matchesLabelOrValue =
+    option.label.toLowerCase().includes(normalizedQuery) || option.value.toLowerCase().includes(normalizedQuery);
+  const matchesDescription =
+    searchDescriptions && (option.description?.toLowerCase().includes(normalizedQuery) ?? false);
+  return !normalizedQuery || matchesLabelOrValue || matchesDescription;
 };
 
 export function MultiSelect({
@@ -61,14 +63,24 @@ export function MultiSelect({
   disabled = false,
   loading = false,
   allowCustomValues = false,
+  searchDescriptions = true,
   className,
 }: MultiSelectProps) {
   const anchor = useComboboxAnchor();
   const [query, setQuery] = useState("");
-  const safeOptions = options.filter(
-    (option): option is MultiSelectOption =>
-      option != null && typeof option.value === "string" && option.value.length > 0,
+  const safeOptions = useMemo(
+    () =>
+      options.filter(
+        (option): option is MultiSelectOption =>
+          option != null && typeof option.value === "string" && option.value.length > 0,
+      ),
+    [options],
   );
+  const matchingOptions = useMemo(
+    () => safeOptions.filter((option) => matchesQuery(option, query, searchDescriptions)),
+    [safeOptions, query, searchDescriptions],
+  );
+  const visibleOptions = matchingOptions.slice(0, MAX_VISIBLE_OPTIONS);
   const selectedOptions = value
     .filter((selectedValue): selectedValue is string => typeof selectedValue === "string" && selectedValue.length > 0)
     .map(
@@ -82,8 +94,8 @@ export function MultiSelect({
   const customOptionExists = safeOptions.some((option) => option.value.toLowerCase() === customOption.toLowerCase());
   const items =
     allowCustomValues && customOption && !customOptionExists
-      ? [...safeOptions, { label: `Create "${customOption}"`, value: customOption }]
-      : safeOptions;
+      ? [{ label: `Create "${customOption}"`, value: customOption }, ...visibleOptions]
+      : visibleOptions;
 
   const canClear = (selected: MultiSelectOption[]) => selected.length > 0 && !disabled && !loading;
 
@@ -99,13 +111,13 @@ export function MultiSelect({
     <Combobox
       multiple
       items={items}
+      filter={null}
       value={selectedOptions}
       onValueChange={handleValueChange}
       inputValue={query}
       onInputValueChange={setQuery}
       isItemEqualToValue={(option: MultiSelectOption, selected: MultiSelectOption) => option.value === selected.value}
       itemToStringLabel={(option: MultiSelectOption) => option.label}
-      filter={matchesQuery}
       disabled={disabled || loading}
     >
       <ComboboxChips render={<div ref={anchor} />} className={`min-h-8 py-1 text-sm ${className ?? ""}`}>
@@ -142,6 +154,11 @@ export function MultiSelect({
             </ComboboxItem>
           )}
         </ComboboxList>
+        {matchingOptions.length > MAX_VISIBLE_OPTIONS && (
+          <div className="px-2 py-1.5 text-xs text-muted-foreground">
+            Showing first {MAX_VISIBLE_OPTIONS} of {matchingOptions.length} matches. Type to narrow results.
+          </div>
+        )}
       </ComboboxContent>
     </Combobox>
   );
