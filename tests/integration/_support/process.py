@@ -2,7 +2,6 @@ import json
 import threading
 import os
 import re
-import shutil
 import signal
 import subprocess
 import sys
@@ -629,19 +628,11 @@ def worker_configuration(config: Path, directory: Path, inherited: Mapping[str, 
         return f"http://127.0.0.1:{inherited['INTEGRATION_PROVIDER_PORT']}"
 
     contents: Final = re.sub(r"http://127[.]0[.]0[.]1:(8190|8191)(?![0-9])", endpoint, config.read_text())
-    worker_directory: Final = directory / f"worker-config-{uuid.uuid4().hex}"
-    worker_directory.mkdir(parents=True, exist_ok=False)
-    tuple(
-        shutil.copy2(module, worker_directory)
-        for module in config.parent.iterdir()
-        if module.is_file() and module.suffix == ".py"
-    )
-    tuple(
-        (worker_directory / module.with_suffix(".json").name).symlink_to(module.with_suffix(".json").resolve())
-        for module in config.parent.glob("*.py")
-        if module.is_file() and module.with_suffix(".json").is_file()
-    )
-    destination: Final = worker_directory / config.name
+    checkouts: Final = (_harness_root(), _proxy_root().resolve())
+    inside_checkout: Final = any(config.resolve().is_relative_to(checkout) for checkout in checkouts)
+    target: Final = directory if inside_checkout else config.parent
+    target.mkdir(parents=True, exist_ok=True)
+    destination: Final = target / f"worker-config-{uuid.uuid4().hex}.yaml"
     loaded: Final[object] = yaml.safe_load(contents)
     if not isinstance(loaded, dict):
         destination.write_text(contents)

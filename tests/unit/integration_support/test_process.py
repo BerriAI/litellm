@@ -120,6 +120,42 @@ def test_worker_configuration_budgets_implicit_pools_without_changing_connection
     assert yaml.safe_load(source.read_text()) == original
 
 
+def test_worker_configuration_keeps_modules_beside_a_test_config_importable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("INTEGRATION_WORKER_ISOLATION", "1")
+    source: Final = tmp_path / "proxy.yaml"
+    source.write_text(yaml.safe_dump({"general_settings": {"custom_auth": "sibling_auth.authenticate"}}))
+    (tmp_path / "sibling_auth.py").write_text("def authenticate() -> str:\n    return 'sibling'\n")
+    configured: Final = worker_configuration(source, tmp_path / "gateway")
+    assert configured != source
+    assert get_instance_fn("sibling_auth.authenticate", config_file_path=str(configured))() == "sibling"
+
+
+def test_worker_configuration_writes_the_repository_config_copy_into_the_worker_directory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("INTEGRATION_WORKER_ISOLATION", "1")
+    monkeypatch.setenv("INTEGRATION_PROVIDER_PORT", "8203")
+    monkeypatch.setenv("INTEGRATION_UPSTREAM_URL", "http://127.0.0.1:8202")
+    monkeypatch.setenv("INTEGRATION_PROXY_ROOT", str(tmp_path / "product"))
+    configured: Final = worker_configuration(TESTS_DIR / "integration/proxy_config.yaml", tmp_path / "worker")
+    assert configured.parent == tmp_path / "worker"
+
+
+def test_worker_configuration_writes_the_proxy_checkout_config_copy_into_the_worker_directory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("INTEGRATION_WORKER_ISOLATION", "1")
+    checkout: Final = tmp_path / "checkout"
+    monkeypatch.setenv("INTEGRATION_PROXY_ROOT", str(checkout))
+    source: Final = checkout / "tests/integration/proxy_config.yaml"
+    source.parent.mkdir(parents=True)
+    source.write_text("model_list: []\n")
+    configured: Final = worker_configuration(source, tmp_path / "worker")
+    assert configured.parent == tmp_path / "worker"
+
+
 def test_serial_proxy_keeps_the_requested_configuration(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.delenv("INTEGRATION_WORKER_ISOLATION", raising=False)
     source: Final = tmp_path / "source.yaml"
