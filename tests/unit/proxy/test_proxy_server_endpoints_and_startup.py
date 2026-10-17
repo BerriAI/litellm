@@ -6691,10 +6691,9 @@ def test_settings_store_uppercases_db_env_vars(monkeypatch):
         monkeypatch.delenv(key, raising=False)
 
     proxy_config = ProxyConfig()
-    db_values = proxy_config._prepared_db_settings_values(
-        "environment_variables", {"dd_api_key": "test-api-key", "dd_site": "us5.datadoghq.com"}
+    proxy_config._apply_db_environment_variables(
+        {"dd_api_key": "test-api-key", "dd_site": "us5.datadoghq.com"}, revision=None, environment_before_db={}, read=1
     )
-    proxy_config.environment_variables.apply_db_row("environment_variables", db_values)
 
     env_vars = proxy_config.environment_variables.resolved()
     assert env_vars["DD_API_KEY"] == "test-api-key"
@@ -9924,10 +9923,22 @@ class _FakeLitellmConfig:
         self.upsert_calls.append((name, value))
 
 
+class _LaggingReplicaLitellmConfig(_FakeLitellmConfig):
+    def __init__(self, replica_rows, writer):
+        super().__init__(initial_rows=replica_rows)
+        self.upsert = writer.upsert
+
+
 class _FakePrismaClient:
-    def __init__(self, initial_rows=None):
+    def __init__(self, initial_rows=None, replica_rows=None):
+        self.writer_db = mock.MagicMock()
+        self.writer_db.litellm_config = _FakeLitellmConfig(initial_rows=initial_rows)
         self.db = mock.MagicMock()
-        self.db.litellm_config = _FakeLitellmConfig(initial_rows=initial_rows)
+        self.db.litellm_config = (
+            self.writer_db.litellm_config
+            if replica_rows is None
+            else _LaggingReplicaLitellmConfig(replica_rows, writer=self.writer_db.litellm_config)
+        )
         self.jsonify_object = lambda obj: obj
 
 
@@ -9937,8 +9948,8 @@ def _update_config_setup(monkeypatch):
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth as auth_dep
 
-    def _install(initial_rows=None, store_model_in_db=True):
-        prisma = _FakePrismaClient(initial_rows=initial_rows)
+    def _install(initial_rows=None, store_model_in_db=True, replica_rows=None):
+        prisma = _FakePrismaClient(initial_rows=initial_rows, replica_rows=replica_rows)
         monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
         monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", store_model_in_db)
         monkeypatch.setattr(
@@ -9988,6 +9999,22 @@ def test_update_config_writes_only_sent_section(_update_config_setup):
         assert written == {"general_settings"}
         assert prisma.db.litellm_config.rows["litellm_settings"] == {"drop_params": True}
         assert prisma.db.litellm_config.rows["environment_variables"] == {"FOO": "enc:bar"}
+    finally:
+        restore()
+
+
+def test_update_config_keeps_an_environment_variable_the_read_replica_has_not_caught_up_on(_update_config_setup):
+    client, prisma, restore = _update_config_setup(
+        initial_rows={"environment_variables": {"SAVED_A_MOMENT_AGO": "enc:new"}},
+        replica_rows={"environment_variables": {}},
+    )
+    try:
+        resp = client.post("/config/update", json={"environment_variables": {"ANOTHER_KEY": "value"}})
+        assert resp.status_code == 200
+        assert prisma.writer_db.litellm_config.rows["environment_variables"] == {
+            "SAVED_A_MOMENT_AGO": "enc:new",
+            "ANOTHER_KEY": "enc:value",
+        }
     finally:
         restore()
 

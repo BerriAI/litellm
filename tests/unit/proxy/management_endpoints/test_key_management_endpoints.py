@@ -9584,6 +9584,97 @@ async def test_rotate_master_key_reencrypts_model_params_in_place(
     ), "api_key must be stored re-encrypted under the new master key, not in plaintext"
 
 
+@pytest.mark.asyncio
+async def test_rotate_master_key_keeps_environment_variables_it_cannot_decrypt(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with, encrypt_value_helper
+    from litellm.proxy.management_endpoints.key_management_endpoints import rotate_master_key
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-old-master-key")
+    under_another_key = encrypt_value_helper("stored-under-another-key", new_encryption_key="sk-another-master-key")
+    for key in ("ROTATION_TEST_ENCRYPTED", "ROTATION_TEST_PLAINTEXT", "ROTATION_TEST_UNDER_ANOTHER_KEY"):
+        monkeypatch.setenv(key, "restored-by-monkeypatch")
+        monkeypatch.delenv(key)
+    prisma_client = AsyncMock()
+    prisma_client.db = MagicMock()
+    prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+    prisma_client.db.litellm_credentialstable.find_many = AsyncMock(return_value=[])
+    prisma_client.db.litellm_config.update = AsyncMock()
+    prisma_client.writer_db.litellm_config.find_many = AsyncMock(
+        return_value=[
+            SimpleNamespace(
+                param_name="environment_variables",
+                param_value={
+                    "ROTATION_TEST_ENCRYPTED": encrypt_value_helper("stored-encrypted"),
+                    "ROTATION_TEST_PLAINTEXT": "stored-plaintext",
+                    "ROTATION_TEST_UNDER_ANOTHER_KEY": under_another_key,
+                },
+            )
+        ]
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", ProxyConfig())
+
+    await rotate_master_key(
+        prisma_client=prisma_client,
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-9876"),
+        current_master_key="sk-old-master-key",
+        new_master_key="sk-new-master-key",
+    )
+
+    stored = prisma_client.db.litellm_config.update.call_args.kwargs["data"]["param_value"].data
+    rotated = decrypt_if_encrypted_with(stored["ROTATION_TEST_ENCRYPTED"], "sk-new-master-key")
+    assert {**stored, "ROTATION_TEST_ENCRYPTED": rotated} == {
+        "ROTATION_TEST_ENCRYPTED": "stored-encrypted",
+        "ROTATION_TEST_PLAINTEXT": "stored-plaintext",
+        "ROTATION_TEST_UNDER_ANOTHER_KEY": under_another_key,
+    }
+
+
+@pytest.mark.asyncio
+async def test_rotate_master_key_keeps_an_environment_variable_the_read_replica_has_not_caught_up_on(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with, encrypt_value_helper
+    from litellm.proxy.management_endpoints.key_management_endpoints import rotate_master_key
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-old-master-key")
+    monkeypatch.setenv("ROTATION_TEST_SAVED_A_MOMENT_AGO", "restored-by-monkeypatch")
+    monkeypatch.delenv("ROTATION_TEST_SAVED_A_MOMENT_AGO")
+
+    def rows(values: dict[str, str]) -> list[SimpleNamespace]:
+        return [SimpleNamespace(param_name="environment_variables", param_value=values)]
+
+    prisma_client = AsyncMock()
+    prisma_client.db = MagicMock()
+    prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+    prisma_client.db.litellm_credentialstable.find_many = AsyncMock(return_value=[])
+    prisma_client.db.litellm_config.update = AsyncMock()
+    prisma_client.db.litellm_config.find_many = AsyncMock(return_value=rows({}))
+    prisma_client.writer_db.litellm_config.find_many = AsyncMock(
+        return_value=rows({"ROTATION_TEST_SAVED_A_MOMENT_AGO": encrypt_value_helper("saved-a-moment-ago")})
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", ProxyConfig())
+
+    await rotate_master_key(
+        prisma_client=prisma_client,
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-9876"),
+        current_master_key="sk-old-master-key",
+        new_master_key="sk-new-master-key",
+    )
+
+    stored = prisma_client.db.litellm_config.update.call_args.kwargs["data"]["param_value"].data
+    assert {key: decrypt_if_encrypted_with(value, "sk-new-master-key") for key, value in stored.items()} == {
+        "ROTATION_TEST_SAVED_A_MOMENT_AGO": "saved-a-moment-ago"
+    }
+
+
 async def test_default_key_generate_params_duration(monkeypatch):
     """
     Test that default_key_generate_params with 'duration' is applied
