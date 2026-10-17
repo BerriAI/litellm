@@ -3388,6 +3388,23 @@ GEMINI_3_1_PRO_PREVIEW_REASONING: Final = _gemini_case(
         "trafficType": "ON_DEMAND",
     },
 )
+GEMINI_3_8_FLASH_REASONING: Final = _gemini_case(
+    GEMINI_3_1_PRO_REASONING,
+    "vertex_ai/gemini-3.8-flash-reasoning",
+    "vertex_ai/gemini-3.8-flash",
+    ExactExpected(
+        spend=0.01144,
+        input_cost=0.0006448,
+        output_cost=0.0107952,
+        prompt_tokens=1240,
+        completion_tokens=4040,
+    ),
+    usage_fields={
+        "candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 560}],
+        "trafficType": "ON_DEMAND",
+    },
+    model_version="gemini-3.8-flash",
+)
 GEMINI_3_1_PRO_PREVIEW_TOOL_CALL: Final = _gemini_case(
     GEMINI_3_8_FLASH_TOOL_CALL, "vertex_ai/gemini-3.1-pro-preview-tool_call", "vertex_ai/gemini-3.1-pro-preview",
     ExactExpected(spend=0.0094864, input_cost=0.004048, output_cost=0.0054384, prompt_tokens=1840, completion_tokens=412)
@@ -3610,6 +3627,7 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GEMINI_3_1_PRO_STREAM_TOOL_CALL,
     GEMINI_3_1_PRO_STREAM_FULL_USAGE,
     GEMINI_3_8_FLASH_INPUT_TEXT,
+    GEMINI_3_8_FLASH_REASONING,
     GEMINI_3_8_FLASH_CACHE_READ,
     GEMINI_3_8_FLASH_SERVICE_TIER_FLEX,
     GEMINI_3_8_FLASH_SERVICE_TIER_PRIORITY,

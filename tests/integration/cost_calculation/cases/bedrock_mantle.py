@@ -18,7 +18,7 @@ from integration.cost_calculation.cases.anthropic import (
     CLAUDE_OPUS_5_5_THINKING,
     CLAUDE_OPUS_5_5_TOOL_CALL,
 )
-from integration.cost_calculation.bridge_cost_parity.case import BridgeCostParityTestCase
+from integration.cost_calculation.bridge_cost_parity.case import BridgeCostParityTestCase, bridge_pairs
 from integration.cost_calculation.cost_tracking_case import (
     CostTrackingTestCase,
     Deployment,
@@ -654,6 +654,20 @@ def _mantle_gpt_cases(
         response_expected,
         _MANTLE_GPT_CHAT_REQUEST,
     )
+    chat_stream_case: Final = chat_case.model_copy(
+        update={
+            "name": f"bedrock_mantle-{provider_model}-chat_stream",
+            "request": {**chat_case.request, "stream": True},
+            "response": stream_case.response,
+        }
+    )
+    messages_pairs: Final = bridge_pairs((response_case, stream_case), ("/v1/messages",))
+    messages_json: Final = messages_pairs[0].bridged.model_copy(
+        update={"name": f"bedrock_mantle-{provider_model}-messages_bridged_json"}
+    )
+    messages_stream: Final = messages_pairs[1].bridged.model_copy(
+        update={"name": f"bedrock_mantle-{provider_model}-messages_bridged_stream"}
+    )
     cache_case: Final = _mantle_gpt_json_case(
         BEDROCK_MANTLE_OPENAI_GPT_6_SOL_RESPONSES_JSON,
         provider_model,
@@ -686,7 +700,19 @@ def _mantle_gpt_cases(
         tiered_boundary_expected,
         {**_MANTLE_GPT_RESPONSES_REQUEST, "max_output_tokens": 412},
     )
-    return (response_case, stream_case, reasoning_case, chat_case, cache_case, tiered_input, tiered_cache, tiered_boundary)
+    return (
+        response_case,
+        stream_case,
+        reasoning_case,
+        chat_case,
+        cache_case,
+        tiered_input,
+        tiered_cache,
+        tiered_boundary,
+        chat_stream_case,
+        messages_json,
+        messages_stream,
+    )
 
 
 def _mantle_gpt_audit3_cases(
@@ -1096,6 +1122,21 @@ BEDROCK_MANTLE_CLAUDE_OPUS_5_5_CHAT_BRIDGED_JSON: Final = BEDROCK_MANTLE_CLAUDE_
     }
 )
 
+BEDROCK_MANTLE_CLAUDE_OPUS_5_5_RESPONSES_JSON: Final = BEDROCK_MANTLE_CLAUDE_OPUS_5_5_INPUT_TEXT.model_copy(
+    update={
+        "name": "bedrock_mantle-anthropic.claude-opus-5-5-responses_json",
+        "endpoint": "/v1/responses",
+        "request": {"model": "$MODEL", "input": "summarize the attached material in one line"},
+    }
+)
+BEDROCK_MANTLE_CLAUDE_OPUS_5_5_RESPONSES_STREAM: Final = BEDROCK_MANTLE_CLAUDE_OPUS_5_5_STREAM.model_copy(
+    update={
+        "name": "bedrock_mantle-anthropic.claude-opus-5-5-responses_stream",
+        "endpoint": "/v1/responses",
+        "request": {"model": "$MODEL", "input": "summarize the attached material in one line", "stream": True},
+    }
+)
+
 BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
     _mantle_gpt_bridge(_MANTLE_GPT_61_SOL_CASES[0]),
     _mantle_gpt_bridge(_MANTLE_GPT_6_LUNA_CASES[0]),
@@ -1104,6 +1145,14 @@ BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
     BridgeCostParityTestCase(
         native=BEDROCK_MANTLE_CLAUDE_OPUS_5_5_MESSAGES_INPUT_TEXT,
         bridged=BEDROCK_MANTLE_CLAUDE_OPUS_5_5_CHAT_BRIDGED_JSON,
+    ),
+    *tuple(
+        BridgeCostParityTestCase(native=cases[0], bridged=cases[9])
+        for cases in (_MANTLE_GPT_61_SOL_CASES, _MANTLE_GPT_6_LUNA_CASES, _MANTLE_GPT_6_ASTRA_CASES, _MANTLE_GPT_56_TERRA_CASES)
+    ),
+    *tuple(
+        BridgeCostParityTestCase(native=cases[1], bridged=cases[10])
+        for cases in (_MANTLE_GPT_61_SOL_CASES, _MANTLE_GPT_6_LUNA_CASES, _MANTLE_GPT_6_ASTRA_CASES, _MANTLE_GPT_56_TERRA_CASES)
     ),
 )
 
@@ -1126,6 +1175,8 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     BEDROCK_MANTLE_CLAUDE_OPUS_5_5_MESSAGES_INPUT_TEXT,
     BEDROCK_MANTLE_CLAUDE_OPUS_5_5_MESSAGES_STREAM,
     BEDROCK_MANTLE_CLAUDE_OPUS_5_5_CHAT_BRIDGED_JSON,
+    BEDROCK_MANTLE_CLAUDE_OPUS_5_5_RESPONSES_JSON,
+    BEDROCK_MANTLE_CLAUDE_OPUS_5_5_RESPONSES_STREAM,
     BEDROCK_MANTLE_CLAUDE_OPUS_5_5_CACHE_READ,
     BEDROCK_MANTLE_CLAUDE_OPUS_5_5_CACHE_WRITE_5M,
     BEDROCK_MANTLE_CLAUDE_OPUS_5_5_CACHE_WRITE_1H,
@@ -1147,5 +1198,17 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
     StreamParityTestCase(
         plain=BEDROCK_MANTLE_CLAUDE_OPUS_5_5_MESSAGES_INPUT_TEXT,
         streamed=BEDROCK_MANTLE_CLAUDE_OPUS_5_5_MESSAGES_STREAM,
+    ),
+    StreamParityTestCase(
+        plain=BEDROCK_MANTLE_CLAUDE_OPUS_5_5_RESPONSES_JSON,
+        streamed=BEDROCK_MANTLE_CLAUDE_OPUS_5_5_RESPONSES_STREAM,
+    ),
+    *tuple(
+        StreamParityTestCase(plain=cases[3], streamed=cases[8])
+        for cases in (_MANTLE_GPT_61_SOL_CASES, _MANTLE_GPT_6_LUNA_CASES, _MANTLE_GPT_6_ASTRA_CASES, _MANTLE_GPT_56_TERRA_CASES)
+    ),
+    *tuple(
+        StreamParityTestCase(plain=cases[9], streamed=cases[10])
+        for cases in (_MANTLE_GPT_61_SOL_CASES, _MANTLE_GPT_6_LUNA_CASES, _MANTLE_GPT_6_ASTRA_CASES, _MANTLE_GPT_56_TERRA_CASES)
     ),
 )
