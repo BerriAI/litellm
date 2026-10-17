@@ -1,3 +1,4 @@
+import itertools
 import uuid
 from pathlib import Path
 from typing import Final
@@ -230,9 +231,8 @@ def test_langfuse_otel_openai_sdk_streaming_end_user(gateway: Gateway, tmp_path:
             with stream:
                 chunks: Final = tuple(stream)
             assert {chunk.id for chunk in chunks} == {marker}
-            assert f"reply {marker}" in "".join(
-                choice.delta.content or "" for chunk in chunks for choice in chunk.choices
-            )
+            choices: Final = tuple(itertools.chain.from_iterable(chunk.choices for chunk in chunks))
+            assert f"reply {marker}" in "".join(choice.delta.content or "" for choice in choices)
         batches: Final[list[bytes]] = []
         attributes: Final = _await_generation(collector, batches, marker)
         assert _identity(attributes) == {"user.id": f"end-user-{marker}", "session.id": None}, attributes

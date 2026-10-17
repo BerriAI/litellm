@@ -1,5 +1,6 @@
+import itertools
 import json
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Final
@@ -10,6 +11,7 @@ from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, Wire, wire_server
 from opentelemetry.proto.collector.trace.v1 import trace_service_pb2
 from opentelemetry.proto.common.v1.common_pb2 import AnyValue
+from opentelemetry.proto.trace.v1.trace_pb2 import Span
 
 MARKER_JSON_KEYS: Final = ("llm.response.id", "gen_ai.response.id")
 
@@ -19,18 +21,20 @@ def _attribute_value(value: AnyValue) -> object:
     return getattr(value, kind) if kind is not None else None
 
 
-def _spans(body: bytes) -> tuple[tuple[str, dict[str, object]], ...]:
+def _span_messages(body: bytes) -> Iterator[Span]:
     export: Final = trace_service_pb2.ExportTraceServiceRequest()
     export.ParseFromString(body)
-    return tuple(
-        (
-            span.trace_id.hex(),
-            {attribute.key: _attribute_value(attribute.value) for attribute in span.attributes},
-        )
-        for resource in export.resource_spans
-        for scope in resource.scope_spans
-        for span in scope.spans
-    )
+    for resource in export.resource_spans:
+        for scope in resource.scope_spans:
+            yield from scope.spans
+
+
+def _batch_span_messages(batches: Iterable[bytes]) -> Iterator[Span]:
+    return itertools.chain.from_iterable(_span_messages(body) for body in batches)
+
+
+def _attributes(span: Span) -> dict[str, object]:
+    return {attribute.key: _attribute_value(attribute.value) for attribute in span.attributes}
 
 
 def _sse_frame(value: Mapping[str, object]) -> bytes:
@@ -184,7 +188,13 @@ def _sink(_request: Request) -> Reply:
 
 def _drained_spans(sink: Wire, batches: list[bytes]) -> tuple[tuple[str, dict[str, object]], ...]:
     batches.extend(request.body for request in sink.drain())
-    return tuple(span for body in batches for span in _spans(body))
+    return tuple((span.trace_id.hex(), _attributes(span)) for span in _batch_span_messages(batches))
+
+
+def _drained_unique_spans(sink: Wire, batches: list[bytes]) -> tuple[tuple[str, dict[str, object]], ...]:
+    batches.extend(request.body for request in sink.drain())
+    by_span_id: Final = {span.span_id: span for span in _batch_span_messages(batches)}
+    return tuple((span.trace_id.hex(), _attributes(span)) for span in by_span_id.values())
 
 
 def _generation_span_attributes(sink: Wire, batches: list[bytes], marker: str) -> tuple[dict[str, object], ...]:
@@ -210,17 +220,6 @@ def _generation_marker_span_attributes(sink: Wire, batches: list[bytes], marker:
         if attributes.get("langfuse.observation.type") == "generation"
         and any(isinstance(value, str) and marker in value for value in attributes.values())
     )
-
-
-def _dedupe_spans(spans: tuple[tuple[str, dict[str, object]], ...]) -> tuple[tuple[str, dict[str, object]], ...]:
-    seen: Final = set()
-    unique: Final = []
-    for trace_id, attributes in spans:
-        fingerprint: Final = (trace_id, frozenset(attributes.items()))
-        if fingerprint not in seen:
-            seen.add(fingerprint)
-            unique.append((trace_id, attributes))
-    return tuple(unique)
 
 
 def _span_containing_marker(
@@ -274,11 +273,7 @@ def _marker_trace_span_attributes(sink: Wire, batches: list[bytes], marker: str)
 def _marker_trace_root_attributes(sink: Wire, batches: list[bytes], marker: str) -> tuple[dict[str, object], ...]:
     batches.extend(request.body for request in sink.drain())
     spans: Final = tuple(
-        (span.trace_id.hex(), bool(span.parent_span_id), {a.key: _attribute_value(a.value) for a in span.attributes})
-        for body in batches
-        for resource in _export(body).resource_spans
-        for scope in resource.scope_spans
-        for span in scope.spans
+        (span.trace_id.hex(), bool(span.parent_span_id), _attributes(span)) for span in _batch_span_messages(batches)
     )
     marker_trace: Final = next(
         (
@@ -291,12 +286,6 @@ def _marker_trace_root_attributes(sink: Wire, batches: list[bytes], marker: str)
     return tuple(
         attributes for trace_id, has_parent, attributes in spans if trace_id == marker_trace and not has_parent
     )
-
-
-def _export(body: bytes) -> trace_service_pb2.ExportTraceServiceRequest:
-    export: Final = trace_service_pb2.ExportTraceServiceRequest()
-    export.ParseFromString(body)
-    return export
 
 
 def _user_id_session_id(attributes: Mapping[str, object]) -> dict[str, object]:

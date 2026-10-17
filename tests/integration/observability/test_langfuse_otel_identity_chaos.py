@@ -7,8 +7,7 @@ from typing import Final
 
 import httpx
 from _langfuse_otel import (
-    _dedupe_spans,
-    _drained_spans,
+    _drained_unique_spans,
     _langfuse_proxy,
     _marker_from_body,
     _proxy_config,
@@ -98,7 +97,7 @@ def _send_to_live_gateway(holder: dict[str, Gateway], model: str, endpoint: str,
 
 
 def _landed_counts(sink: Wire, batches: list[bytes], markers: tuple[str, ...]) -> dict[str, int]:
-    spans: Final = _dedupe_spans(_drained_spans(sink, batches))
+    spans: Final = _drained_unique_spans(sink, batches)
     generations: Final = tuple(span for span in spans if span[1].get("langfuse.observation.type") == "generation")
     return {marker: len(_span_containing_marker(generations, marker)) for marker in markers}
 
