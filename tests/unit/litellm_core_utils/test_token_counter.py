@@ -9,7 +9,7 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future, wait
 from itertools import accumulate, chain
 from pathlib import Path
@@ -31,6 +31,7 @@ from litellm.constants import TOKEN_COUNTER_MAX_CONCURRENT_COUNTS
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.token_counter import (
     _encoding_count,
+    _format_type,
     _get_exact_count_function,
     _get_extrapolating_count_function,
     _get_tiktoken_count_function,
@@ -513,6 +514,71 @@ def test_token_counter_skips_non_mapping_tools():
     )
 
     assert mixed_tokens == valid_tokens
+
+
+def _openai_tool_with_properties(properties: Mapping[str, object]) -> Sequence[Mapping[str, object]]:
+    return (
+        {
+            "type": "function",
+            "function": {
+                "name": "list_things",
+                "description": "List the things",
+                "parameters": {"type": "object", "properties": properties},
+            },
+        },
+    )
+
+
+def _anthropic_tool_with_properties(properties: Mapping[str, object]) -> Sequence[Mapping[str, object]]:
+    return (
+        {
+            "name": "list_things",
+            "description": "List the things",
+            "input_schema": {"type": "object", "properties": properties},
+        },
+    )
+
+
+def _object_nested_tool_with_properties(properties: Mapping[str, object]) -> Sequence[Mapping[str, object]]:
+    return _openai_tool_with_properties({"group": {"type": "object", "properties": properties}})
+
+
+@pytest.mark.parametrize(
+    "tool_shape",
+    [
+        pytest.param(_openai_tool_with_properties, id="openai_function_parameters"),
+        pytest.param(_anthropic_tool_with_properties, id="anthropic_input_schema"),
+        pytest.param(_object_nested_tool_with_properties, id="array_nested_in_object_property"),
+    ],
+)
+def test_token_counter_counts_array_parameter_without_items_schema(
+    tool_shape: Callable[[Mapping[str, object]], Sequence[Mapping[str, object]]],
+):
+    messages: Final = [{"role": "user", "content": "What's on the list?"}]
+    omitted_items: Final = tool_shape({"things": {"type": "array", "description": "The things on the list"}})
+    empty_items: Final = tool_shape(
+        {"things": {"type": "array", "description": "The things on the list", "items": {}}}
+    )
+
+    assert token_counter_new(
+        model="gpt-4o", messages=messages, tools=omitted_items
+    ) == token_counter_new(model="gpt-4o", messages=messages, tools=empty_items)
+
+
+def test_format_type_renders_array_without_items_like_empty_items():
+    assert _format_type({"type": "array"}, 0) == _format_type({"type": "array", "items": {}}, 0) == "any[]"
+
+
+@pytest.mark.parametrize(
+    "items",
+    [
+        pytest.param([{"type": "string"}], id="draft4_tuple_validation"),
+        pytest.param(True, id="draft6_boolean_true_schema"),
+        pytest.param(False, id="draft6_boolean_false_schema"),
+    ],
+)
+def test_format_type_renders_non_object_array_items_as_any_array(items: object):
+    assert _format_type({"type": "array", "items": items}, 0) == "any[]"
 
 
 class NeedsToleranceUpdateError(Exception):
