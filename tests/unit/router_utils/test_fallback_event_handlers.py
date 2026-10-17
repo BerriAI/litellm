@@ -1224,9 +1224,9 @@ class TestRunAsyncFallbackTriggersCooldown:
         async def async_function_with_fallbacks(self, *args, **kwargs):
             raise RuntimeError("fallback model also failed")
 
-    def _logging_obj(self, has_logged_async_failure: bool) -> MagicMock:
-        logging_obj = MagicMock()
-        logging_obj.model_call_details = {"has_logged_async_failure": has_logged_async_failure}
+    def _logging_obj(self, has_logged_async_failure: bool) -> Logging:
+        logging_obj: Final = _request_logging_obj()
+        logging_obj.model_call_details["has_logged_async_failure"] = has_logged_async_failure
         return logging_obj
 
     @pytest.mark.asyncio
