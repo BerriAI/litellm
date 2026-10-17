@@ -28,6 +28,7 @@ from litellm.proxy.client.cli.commands.agents import (
     run_agent,
     verify_proxy_key,
 )
+from litellm.proxy.client.cli.main import cli as lite
 
 AGENTS_MODULE = "litellm.proxy.client.cli.commands.agents"
 CLAUDE_SETTINGS_MODULE = "litellm.proxy.client.cli.commands.claude_settings"
@@ -1489,6 +1490,13 @@ class TestAgentCommands:
 
     def test_one_command_per_known_agent(self):
         assert {c.name for c in agent_commands()} == {"claude", "codex", "opencode", "pi"}
+
+    @pytest.mark.parametrize("agent", [c.name for c in agent_commands()])
+    def test_lite_runs_every_known_agent_command(self, agent):
+        result = self.runner.invoke(lite, [agent, "--help"], prog_name="lite")
+
+        assert result.exit_code == 0, result.output
+        assert result.output.splitlines()[0].startswith(f"Usage: lite {agent} ")
 
     def test_pi_is_hidden_from_help_but_still_registered(self):
         hidden_by_name = {c.name: c.hidden for c in agent_commands()}

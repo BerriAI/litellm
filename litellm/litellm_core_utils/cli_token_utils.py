@@ -44,7 +44,7 @@ from litellm.litellm_core_utils.private_json import (
     stage_private_json,
     write_private_json,
 )
-from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 
 @dataclass(frozen=True, slots=True)
