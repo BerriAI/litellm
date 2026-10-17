@@ -199,6 +199,65 @@ async def test_load_team_member_default_budget_zero_treated_as_no_cap():
 
 
 @pytest.mark.asyncio
+async def test_e2e_auth_zero_cost_primary_populates_member_budget_and_refuses_paid_fallback(monkeypatch):
+    """
+    End-to-end auth -> fallback test (#46874):
+    Run the auth path (run_centralized_common_checks) with a zero-cost primary model
+    (so skip_budget_checks=True), verify team member budget and spend are populated onto the token,
+    and assert is_token_within_budget_for_model refuses the paid fallback target when spend >= budget.
+    """
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from fastapi import Request
+    from starlette.datastructures import URL
+    from litellm.proxy.auth.user_api_key_auth import run_centralized_common_checks
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    router = _router()
+    token = _token(user_id="u1", team_id="t1")
+    assert token.max_budget_in_team is None
+    assert token.team_member_spend is None
+
+    mock_membership = MagicMock()
+    mock_membership.spend = 50.0
+    mock_budget_row = MagicMock()
+    mock_budget_row.effective_max_budget.return_value = 50.0
+    mock_budget_row.model_max_budget = None
+    mock_membership.litellm_budget_table = mock_budget_row
+    mock_membership.budget_id = None
+
+    key_cache = UserApiKeyCache()
+    monkeypatch.setattr(_proxy_server_mod, "llm_router", router, raising=False)
+    monkeypatch.setattr(_proxy_server_mod, "general_settings", {}, raising=False)
+    monkeypatch.setattr(_proxy_server_mod, "prisma_client", MagicMock(), raising=False)
+    monkeypatch.setattr(_proxy_server_mod, "user_api_key_cache", key_cache, raising=False)
+    monkeypatch.setattr(_proxy_server_mod, "proxy_logging_obj", None, raising=False)
+    monkeypatch.setattr(_proxy_server_mod, "master_key", "sk-master", raising=False)
+
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+
+    with (
+        patch("litellm.proxy.auth.user_api_key_auth.get_team_membership", new=AsyncMock(return_value=mock_membership)),
+        patch("litellm.proxy.auth.user_api_key_auth.get_team_object", new=AsyncMock(return_value=None)),
+        patch("litellm.proxy.auth.user_api_key_auth.get_user_object", new=AsyncMock(return_value=None)),
+        patch("litellm.proxy.auth.user_api_key_auth.common_checks", new=AsyncMock(return_value=True)),
+    ):
+        await run_centralized_common_checks(
+            user_api_key_auth_obj=token,
+            request=request,
+            request_data={"model": "free-model", "messages": [{"role": "user", "content": "hi"}]},
+            route="/chat/completions",
+        )
+
+    # 1. Token has team member budget and spend stamped despite zero-cost skip
+    assert token.max_budget_in_team == 50.0
+    assert token.team_member_spend == 50.0
+
+    # 2. Fallback evaluator refuses the paid fallback target because spend >= budget
+    assert await is_token_within_budget_for_model(model="paid-model", valid_token=token, llm_router=router) is False
+
+
+@pytest.mark.asyncio
 async def test_team_member_budget_refuses_an_exhausted_paid_target() -> None:
     member_caps: Final = {"paid-model": {"max_budget": 5.0, "budget_duration": "1d"}}
     token: Final = _token(
