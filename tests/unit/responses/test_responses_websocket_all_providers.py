@@ -7,6 +7,7 @@ Tests that:
 3. Providers without native websocket support use ManagedResponsesWebSocketHandler
 """
 
+import asyncio
 import json
 from collections.abc import Mapping
 from typing import Final
@@ -1186,7 +1187,7 @@ class TestWebSocketProjectQuotaEnforcement:
     callback, not just the first one."""
 
     @pytest.mark.asyncio
-    async def test_managed_handler_blocks_frame_rejected_by_quota_callback(self, monkeypatch):
+    async def test_managed_handler_blocks_frame_rejected_by_quota_callback(self, monkeypatch: pytest.MonkeyPatch):
         from unittest.mock import AsyncMock, MagicMock
 
         import litellm
@@ -1232,11 +1233,11 @@ class TestWebSocketProjectQuotaEnforcement:
         quota_callback.enforce_project_io_token_quota_for_frame.assert_awaited_once()
         assert aresponses_called is False
         mock_websocket.send_text.assert_called_once()
-        error_event = mock_websocket.send_text.call_args[0][0]
-        assert "rate_limit_exceeded" in error_event
+        error_event = json.loads(mock_websocket.send_text.call_args[0][0])
+        assert (error_event["status"], error_event["error"]["type"]) == (429, "rate_limit_exceeded")
 
     @pytest.mark.asyncio
-    async def test_managed_handler_forwards_frame_allowed_by_quota_callback(self, monkeypatch):
+    async def test_managed_handler_forwards_frame_allowed_by_quota_callback(self, monkeypatch: pytest.MonkeyPatch):
         from unittest.mock import AsyncMock, MagicMock
 
         import litellm
@@ -1317,7 +1318,8 @@ class TestWebSocketProjectQuotaEnforcement:
         assert allowed is False
         mock_backend_ws.send.assert_not_called()
         mock_websocket.send_text.assert_called_once()
-        assert "rate_limit_exceeded" in mock_websocket.send_text.call_args[0][0]
+        error_event = json.loads(mock_websocket.send_text.call_args[0][0])
+        assert (error_event["status"], error_event["error"]["type"]) == (429, "rate_limit_exceeded")
 
     @pytest.mark.asyncio
     async def test_native_handler_forwards_frame_allowed_by_quota_callback(self):
@@ -1343,6 +1345,242 @@ class TestWebSocketProjectQuotaEnforcement:
         assert allowed is True
         quota_callback.enforce_project_io_token_quota_for_frame.assert_awaited_once()
 
+
+def _turn_frames() -> tuple[str, str, str]:
+    return tuple(json.dumps({"type": "response.create", "input": word}) for word in ("one", "two", "three"))
+
+
+def _admission_refusing_the_next_turn():
+    from unittest.mock import AsyncMock
+
+    from litellm.exceptions import RateLimitError
+
+    return AsyncMock(side_effect=[RateLimitError(message="crossed budget", llm_provider="", model=""), None])
+
+
+class _ClientSocket:
+    """A client socket that, like Starlette's, stops receiving once the server closes it."""
+
+    def __init__(self, *frames: str) -> None:
+        self._frames: Final = iter(frames)
+        self.sent: Final[list[dict[str, object]]] = []
+        self.close_code: int | None = None
+
+    async def send_text(self, data: str) -> None:
+        self.sent.append(json.loads(data))
+
+    async def receive_text(self) -> str:
+        frame: Final = next(self._frames, None)
+        if self.close_code is not None or frame is None:
+            raise RuntimeError("WebSocket is not connected")
+        return frame
+
+    async def close(self, code: int = 1000, reason: str | None = None) -> None:
+        self.close_code = code
+
+
+def _admission_crashing_the_next_turn():
+    from unittest.mock import AsyncMock
+
+    return AsyncMock(side_effect=[ValueError("custom check failed"), None])
+
+
+def _errors(websocket: _ClientSocket) -> list[tuple[object, object]]:
+    return [(frame.get("status"), frame["error"]) for frame in websocket.sent if frame.get("type") == "error"]
+
+
+class TestWebSocketTurnAdmission:
+    """A turn after the connection's first is admitted by the deployment again before it reaches the provider."""
+
+    @pytest.mark.asyncio
+    async def test_native_relay_drops_a_later_turn_the_deployment_refuses(self):
+        from unittest.mock import AsyncMock
+
+        first, second, third = _turn_frames()
+        cancel: Final = json.dumps({"type": "response.cancel"})
+        turn_admission: Final = _admission_refusing_the_next_turn()
+        backend_ws: Final = MagicMock()
+        backend_ws.send = AsyncMock()
+        websocket: Final = MagicMock()
+        websocket.send_text = AsyncMock()
+        websocket.receive_text = AsyncMock(side_effect=[second, cancel, third, Exception("stop")])
+        handler: Final = _make_streaming(
+            websocket=websocket,
+            backend_ws=backend_ws,
+            request_data={},
+            first_message=first,
+            turn_admission=turn_admission,
+        )
+
+        await handler.client_to_backend()
+
+        assert [json.loads(call.args[0]) for call in backend_ws.send.await_args_list] == [
+            json.loads(first),
+            json.loads(cancel),
+            json.loads(third),
+        ]
+        assert turn_admission.await_count == 2
+        refusal: Final = json.loads(websocket.send_text.await_args.args[0])
+        assert refusal["status"] == 429
+        assert refusal["error"]["type"] == "rate_limit_exceeded"
+        assert "crossed budget" in refusal["error"]["message"]
+
+    @pytest.mark.asyncio
+    async def test_native_relay_reports_a_refused_turn_as_the_socket_failure(self):
+        from unittest.mock import AsyncMock
+
+        from litellm.exceptions import RateLimitError
+
+        first, second, _ = _turn_frames()
+        backend_ws: Final = MagicMock()
+        backend_ws.send = AsyncMock()
+        backend_ws.close = AsyncMock()
+        backend_ws.recv = AsyncMock(side_effect=Exception("stop"))
+        websocket: Final = MagicMock()
+        websocket.send_text = AsyncMock()
+        websocket.receive_text = AsyncMock(side_effect=[second, Exception("client gone")])
+        handler: Final = _make_streaming(
+            websocket=websocket,
+            backend_ws=backend_ws,
+            request_data={},
+            first_message=first,
+            turn_admission=_admission_refusing_the_next_turn(),
+        )
+
+        failure: Final = await handler.bidirectional_forward()
+
+        assert isinstance(failure, RateLimitError)
+        assert "crossed budget" in str(failure)
+
+    @pytest.mark.asyncio
+    async def test_managed_relay_skips_a_later_turn_the_deployment_refuses(self, monkeypatch: pytest.MonkeyPatch):
+        from unittest.mock import AsyncMock
+
+        import litellm
+        from litellm.exceptions import RateLimitError
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.responses.streaming_iterator import ManagedResponsesWebSocketHandler
+
+        answered: Final[list[object]] = []
+
+        async def fake_aresponses(*args: object, **kwargs: object):
+            answered.append(kwargs.get("input"))
+
+            async def _empty():
+                return
+                yield
+
+            return _empty()
+
+        monkeypatch.setattr(litellm, "aresponses", fake_aresponses)
+        first, second, third = _turn_frames()
+        turn_admission: Final = _admission_refusing_the_next_turn()
+        websocket: Final = MagicMock()
+        websocket.send_text = AsyncMock()
+        websocket.receive_text = AsyncMock(side_effect=[second, third, Exception("stop")])
+        handler: Final = ManagedResponsesWebSocketHandler(
+            websocket=websocket,
+            model="test-model",
+            logging_obj=Logging(
+                model="test-model",
+                messages=[],
+                stream=True,
+                call_type="aresponses",
+                start_time=0,
+                litellm_call_id="test-id",
+                function_id="test-func",
+            ),
+            first_message=first,
+            turn_admission=turn_admission,
+        )
+
+        failure: Final = await handler.run()
+
+        assert len(answered) == 2
+        assert "two" not in json.dumps(answered)
+        assert turn_admission.await_count == 2
+        assert isinstance(failure, RateLimitError)
+        assert "crossed budget" in str(failure)
+        refusals: Final = [
+            json.loads(call.args[0])
+            for call in websocket.send_text.await_args_list
+            if json.loads(call.args[0]).get("type") == "error"
+        ]
+        assert [(refusal["status"], refusal["error"]["type"]) for refusal in refusals] == [(429, "rate_limit_exceeded")]
+
+
+    @pytest.mark.asyncio
+    async def test_native_relay_answers_a_crashed_turn_check_with_a_500_and_keeps_serving(self):
+        from unittest.mock import AsyncMock
+
+        first, second, third = _turn_frames()
+        backend_ws: Final = MagicMock()
+        backend_ws.send = AsyncMock()
+        backend_ws.close = AsyncMock()
+        backend_ws.recv = AsyncMock(side_effect=asyncio.Event().wait)
+        websocket: Final = _ClientSocket(second, third)
+        handler: Final = _make_streaming(
+            websocket=websocket,
+            backend_ws=backend_ws,
+            request_data={},
+            first_message=first,
+            turn_admission=_admission_crashing_the_next_turn(),
+        )
+
+        failure: Final = await handler.bidirectional_forward()
+
+        assert isinstance(failure, ValueError)
+        assert [json.loads(call.args[0]) for call in backend_ws.send.await_args_list] == [
+            json.loads(first),
+            json.loads(third),
+        ]
+        assert _errors(websocket) == [(500, {"type": "server_error", "message": "custom check failed"})]
+        assert websocket.close_code is None
+
+    @pytest.mark.asyncio
+    async def test_managed_relay_answers_a_crashed_turn_check_with_a_500_and_keeps_serving(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        import litellm
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.responses.streaming_iterator import ManagedResponsesWebSocketHandler
+
+        answered: Final[list[object]] = []
+
+        async def fake_aresponses(*args: object, **kwargs: object):
+            answered.append(kwargs.get("input"))
+
+            async def _empty():
+                return
+                yield
+
+            return _empty()
+
+        monkeypatch.setattr(litellm, "aresponses", fake_aresponses)
+        first, second, third = _turn_frames()
+        websocket: Final = _ClientSocket(second, third)
+        handler: Final = ManagedResponsesWebSocketHandler(
+            websocket=websocket,
+            model="test-model",
+            logging_obj=Logging(
+                model="test-model",
+                messages=[],
+                stream=True,
+                call_type="aresponses",
+                start_time=0,
+                litellm_call_id="test-id",
+                function_id="test-func",
+            ),
+            first_message=first,
+            turn_admission=_admission_crashing_the_next_turn(),
+        )
+
+        failure: Final = await handler.run()
+
+        assert isinstance(failure, ValueError)
+        assert answered == ["one", "three"]
+        assert _errors(websocket) == [(500, {"type": "server_error", "message": "custom check failed"})]
+        assert websocket.close_code is None
 
 def _deployment_defaults():
     from types import MappingProxyType

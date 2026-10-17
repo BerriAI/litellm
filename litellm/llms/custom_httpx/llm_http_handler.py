@@ -2,7 +2,7 @@ import asyncio
 import inspect
 import json
 import ssl
-from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Coroutine, Iterator, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Coroutine, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from functools import lru_cache, partial
 from types import MappingProxyType
@@ -6865,6 +6865,7 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str | None = None,
         first_message: str | None = None,
         request_defaults: ResponsesWebSocketRequestDefaults | None = None,
+        turn_admission: Callable[[], Awaitable[None]] | None = None,
         **kwargs: object,
     ) -> Exception | None:
         """
@@ -6897,10 +6898,10 @@ class BaseLLMHTTPHandler:
                 custom_llm_provider=custom_llm_provider,
                 first_message=first_message,
                 quota_callbacks=_ws_quota_callbacks,
+                turn_admission=turn_admission,
                 **kwargs,
             )
-            await handler.run()
-            return None
+            return await handler.run()
 
         import websockets
         from websockets.asyncio.client import ClientConnection
@@ -7021,6 +7022,7 @@ class BaseLLMHTTPHandler:
                     authorized_model=model,
                     custom_llm_provider=custom_llm_provider,
                     request_defaults=request_defaults,
+                    turn_admission=turn_admission,
                 )
                 return await streaming.bidirectional_forward()
 

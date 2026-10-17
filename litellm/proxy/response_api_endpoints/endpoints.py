@@ -63,6 +63,7 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attributio
     request_tags_from_request_data,
 )
 from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
+from litellm.proxy.utils import handle_exception_on_proxy
 from litellm.router import Router
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
@@ -1759,12 +1760,14 @@ def _routing_hints_from_first_ws_frame(first_message: str) -> Mapping[str, objec
 
 
 def _responses_ws_failure_frame(failure: Exception) -> str:
-    raw_status: Final = getattr(failure, "status_code", None)
-    status: Final = raw_status if isinstance(raw_status, int) and not isinstance(raw_status, bool) else 500
+    proxy_exception: Final = handle_exception_on_proxy(failure)
+    status: Final = int(proxy_exception.code) if str(proxy_exception.code).isdigit() else 500
     error_type: Final = (
         "rate_limit_exceeded" if status == 429 else "invalid_request_error" if 400 <= status < 500 else "server_error"
     )
-    return json.dumps({"type": "error", "status": status, "error": {"type": error_type, "message": str(failure)}})
+    return json.dumps(
+        {"type": "error", "status": status, "error": {"type": error_type, "message": proxy_exception.message}}
+    )
 
 
 async def _enforce_responses_ws_first_frame_model_auth(
@@ -1924,7 +1927,6 @@ async def _responses_websocket_session(
                 request_data=routed_data,
             )
     except Exception as e:
-        verbose_proxy_logger.exception("Responses WebSocket error")
         with contextlib.suppress(Exception):
             await websocket.send_text(_responses_ws_failure_frame(e))
         await proxy_logging_obj.post_call_failure_hook(
