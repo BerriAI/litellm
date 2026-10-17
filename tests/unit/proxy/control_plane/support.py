@@ -34,6 +34,7 @@ class RoutedTransport:  # mutable-ok: records calls for assertions
 
     routes: Mapping[str, Iterator[httpx.Response | Exception]]
     calls: list[tuple[str, dict[str, str] | None, dict[str, str] | None]] = field(default_factory=list)
+    writes: list[tuple[str, str, dict[str, object] | None]] = field(default_factory=list)
 
     async def request(
         self,
@@ -45,8 +46,12 @@ class RoutedTransport:  # mutable-ok: records calls for assertions
         headers: dict[str, str] | None = None,
         timeout: float,
     ) -> httpx.Response:
-        assert method == "GET", "fleet reads never write"
         self.calls.append((url, dict(params) if params else None, headers))
+        if method != "GET":
+            self.writes.append((method, url, json))
+        return self._answer(url)
+
+    def _answer(self, url: str) -> httpx.Response:
         outcome = next(self.routes[url], None)
         if outcome is None:
             raise AssertionError(f"no scripted outcome left for {url}")
@@ -75,8 +80,12 @@ class Minter:
         return {"Authorization": f"Bearer {self.codec.mint(principal)}"}
 
 
-def rig(routes: Mapping[str, list[httpx.Response | Exception]]) -> tuple[TestClient, RoutedTransport, Minter]:
-    settings = ControlPlaneSettings.model_validate({"LITELLM_MASTER_KEY": MASTER_KEY, "dataplanes": DATAPLANES})
+def rig(
+    routes: Mapping[str, list[httpx.Response | Exception]], **overrides: object
+) -> tuple[TestClient, RoutedTransport, Minter]:
+    settings = ControlPlaneSettings.model_validate(
+        {"LITELLM_MASTER_KEY": MASTER_KEY, "dataplanes": DATAPLANES, **overrides}
+    )
     queues: defaultdict[str, Iterator[httpx.Response | Exception]] = defaultdict(lambda: iter(()))
     queues.update({url: iter(outcomes) for url, outcomes in routes.items()})
     transport = RoutedTransport(queues)

@@ -107,6 +107,7 @@ class ControlPlaneSettings(BaseSettings):
     dataplane_timeout_seconds: float = DEFAULT_DATAPLANE_TIMEOUT_SECONDS
     dataplane_retry_attempts: int = 3
     fanout_concurrency: int = 16
+    audit_capacity: int = 10_000
     api_prefix: str = "/api/v1"
 
     @property
