@@ -4,6 +4,7 @@ turn (LIT-9744)"""
 
 import asyncio
 import hashlib
+import json
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -81,8 +82,14 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Rig]:
         yield _Rig(owned, cert)
 
 
+def _nested(frame: str) -> str:
+    """The ``{"type": "response.create", "response": {...}}`` wire shape the WS layer accepts next to the flat one."""
+    flat: Final = json.loads(frame)
+    return json.dumps({"type": flat["type"], "response": {key: value for key, value in flat.items() if key != "type"}})
+
+
 async def _session(
-    proxy_url: str, key: str, model: str, texts: tuple[str, ...]
+    proxy_url: str, key: str, model: str, frames: tuple[str, ...]
 ) -> tuple[tuple[dict[str, JsonValue], ...], ...]:
     proxy: Final = proxy_url.rstrip("/").replace("http://", "ws://")
     async with websockets.connect(
@@ -90,7 +97,7 @@ async def _session(
         additional_headers={"Authorization": f"Bearer {key}"},
         open_timeout=10,
     ) as connection:
-        return tuple([await turn(connection, create(model, text)) for text in texts])
+        return tuple([await turn(connection, frame) for frame in frames])
 
 
 def _spend_rows(key: str) -> list[dict[str, JsonValue]]:
@@ -121,8 +128,16 @@ def test_every_turn_runs_the_pre_call_guardrail_and_bills_only_its_own_guardrail
         )
         key: Final = scenario.key(models=[model])
         tag: Final = uuid.uuid4().hex
-        texts: Final = (f"one {tag}", f"one two {tag}", f"one two three {tag}", f"{_BLOCKED_WORD} {tag}", f"one {tag}")
-        turns: Final = asyncio.run(_session(str(rig.gateway.client.base_url), key, model, texts))
+        texts: Final = (
+            f"one {tag}",
+            f"one two {tag}",
+            f"one two three {tag}",
+            f"{_BLOCKED_WORD} {tag}",
+            f"one {tag}",
+            f"{_BLOCKED_WORD} again {tag}",
+        )
+        frames: Final = tuple(create(model, text) for text in texts[:-1]) + (_nested(create(model, texts[-1])),)
+        turns: Final = asyncio.run(_session(str(rig.gateway.client.base_url), key, model, frames))
 
         assert [events[-1]["type"] for events in turns] == [
             "response.completed",
@@ -130,6 +145,7 @@ def test_every_turn_runs_the_pre_call_guardrail_and_bills_only_its_own_guardrail
             "response.completed",
             "error",
             "response.completed",
+            "error",
         ], [[event["type"] for event in events] for events in turns]
         assert "blocked" in str(turns[3][-1]["error"]), turns[3]
 
@@ -138,8 +154,10 @@ def test_every_turn_runs_the_pre_call_guardrail_and_bills_only_its_own_guardrail
             f"{text}{_MARKER}" for text in texts if _BLOCKED_WORD not in text
         ], forwarded
 
-        rows: Final = eventually(lambda: _spend_rows(key), lambda values: len(values) == 5, seconds=70)
-        assert [row["status"] for row in rows] == ["success", "success", "success", "failure", "success"], rows
+        rows: Final = eventually(lambda: _spend_rows(key), lambda values: len(values) == 6, seconds=70)
+        assert [row["status"] for row in rows] == ["success", "success", "success", "failure", "success", "failure"], (
+            rows
+        )
         expected: Final = [
             (0.0 if _BLOCKED_WORD in text else _llm_cost()) + _COST_PER_WORD * len(text.split()) for text in texts
         ]

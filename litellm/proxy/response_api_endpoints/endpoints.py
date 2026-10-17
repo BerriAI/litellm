@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import copy
 import json
+import uuid
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
@@ -62,6 +63,9 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
 )
 from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
 from litellm.proxy.hooks.responses_id_security import ResponsesIDSecurity, decrypted_response_id
+from litellm.proxy.litellm_pre_call_utils import (
+    _UNTRUSTED_METADATA_CONTROL_FIELDS,  # pyright: ignore[reportPrivateUsage]  # the HTTP path's own strip list
+)
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import (
     request_tags_from_request_data,
 )
@@ -1817,7 +1821,8 @@ async def _enforce_responses_ws_first_frame_model_auth(
 _WS_FRAME: Final = TypeAdapter(dict[str, object])
 _GUARDRAIL_INFORMATION: Final = TypeAdapter(list[dict[str, object]])
 _GUARDRAIL_INFORMATION_KEY: Final = "standard_logging_guardrail_information"
-_GUARDED_FRAME_FIELDS: Final = ("input", "instructions")
+_GUARDED_FRAME_FIELDS: Final = ("input", "instructions", "tools")
+_CLIENT_METADATA_KEYS: Final = ("metadata", "litellm_metadata")
 
 
 class _PreCallGuardrailWalk(Protocol):
@@ -1852,9 +1857,12 @@ def _responses_ws_frame_guard(
 
     async def guard(frame: str) -> GuardedResponsesWsFrame:
         frame_obj: Final = _WS_FRAME.validate_json(frame)
+        nested: Final = frame_obj.get("response")
+        body: Final = _WS_FRAME.validate_python(nested) if isinstance(nested, dict) else frame_obj
         frame_data: Final = {
-            **{key: value for key, value in frame_obj.items() if key != "type"},
+            **{key: _without_untrusted_metadata(key, value) for key, value in body.items() if key != "type"},
             "model": model,
+            "litellm_call_id": str(uuid.uuid4()),
             metadata_key: copy.deepcopy(bucket),
         }
         try:
@@ -1864,16 +1872,29 @@ def _responses_ws_frame_guard(
         except Exception as e:
             await _bill_rejected_frame(rejected_frame_auth, e, frame_data)
             raise
-        rewritten: Final = {
-            **frame_obj,
-            **{key: guarded_data[key] for key in _GUARDED_FRAME_FIELDS if key in guarded_data},
-        }
+        guarded_fields: Final = {key: guarded_data[key] for key in _GUARDED_FRAME_FIELDS if key in guarded_data}
+        rewritten: Final = (
+            {**frame_obj, "response": {**body, **guarded_fields}}
+            if isinstance(nested, dict)
+            else {**frame_obj, **guarded_fields}
+        )
         return GuardedResponsesWsFrame(
             frame=json.dumps(rewritten),
             guardrail_information=_recorded_guardrail_information(guarded_data.get(metadata_key)),
         )
 
     return guard
+
+
+def _without_untrusted_metadata(key: str, value: object) -> object:
+    """Like the HTTP path, drop the proxy-owned ``user_api_key_*`` and guardrail control keys a client may forge."""
+    if key not in _CLIENT_METADATA_KEYS or not isinstance(value, dict):
+        return value
+    return {
+        name: item
+        for name, item in _WS_FRAME.validate_python(value).items()
+        if not name.startswith("user_api_key_") and name not in _UNTRUSTED_METADATA_CONTROL_FIELDS and name != "headers"
+    }
 
 
 async def _bill_rejected_frame(

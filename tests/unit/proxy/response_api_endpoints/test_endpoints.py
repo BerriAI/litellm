@@ -2047,6 +2047,49 @@ class TestResponsesWSFirstFrameModelAuth:
             {"guardrail_cost": 0.5}
         ]
         assert failure["request_data"]["input"] == "hi"
+        assert len(failure["request_data"]["litellm_call_id"]) == 36
+
+    @pytest.mark.asyncio
+    async def test_frame_guard_guards_the_nested_response_body_and_copies_back_tools(self):
+        from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
+
+        async def pre_call_hook(user_api_key_dict, data, call_type, guardrails_only):
+            return {**data, "input": data["input"] + " [guarded]", "tools": data["tools"][:1]}
+
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=pre_call_hook)
+        guard = _responses_ws_frame_guard(
+            {"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock(), proxy_logging_obj
+        )
+        tools = [{"type": "function", "name": "a"}, {"type": "function", "name": "b"}]
+
+        guarded = await guard(json.dumps({"type": "response.create", "response": {"input": "hi", "tools": tools}}))
+
+        assert proxy_logging_obj.pre_call_hook.await_args.kwargs["data"]["input"] == "hi"
+        assert json.loads(guarded.frame) == {
+            "type": "response.create",
+            "response": {"input": "hi [guarded]", "tools": tools[:1]},
+        }
+
+    @pytest.mark.asyncio
+    async def test_frame_guard_strips_the_proxy_owned_metadata_keys_a_client_sends(self):
+        from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
+
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=lambda **kwargs: kwargs["data"])
+        guard = _responses_ws_frame_guard(
+            {"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock(), proxy_logging_obj
+        )
+        metadata = {
+            "user_api_key_metadata": {"disable_global_guardrails": True},
+            "disable_global_guardrails": True,
+            "headers": {"x-litellm-tags": "forged"},
+            "tag": "kept",
+        }
+
+        await guard(json.dumps({"type": "response.create", "input": "hi", "metadata": metadata}))
+
+        assert proxy_logging_obj.pre_call_hook.await_args.kwargs["data"]["metadata"] == {"tag": "kept"}
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("provider_rejected", [True, False])
