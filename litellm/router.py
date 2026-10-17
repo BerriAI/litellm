@@ -81,6 +81,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.otel.routing import routing_decision_attributes
 from litellm.integrations.otel.runtime import phase_attributes, phase_event, phase_span
 from litellm.litellm_core_utils.asyncify import run_async_function
+from litellm.litellm_core_utils.completion_timeout import CompletionTimeout, StreamKind
 from litellm.litellm_core_utils.core_helpers import (
     coerce_token_limit,
     get_litellm_metadata_from_kwargs,
@@ -4694,6 +4695,7 @@ class Router:
         elif splits_stream_timeout:
             request_kwargs: Final = _REQUEST_KWARGS_ADAPTER.validate_python(kwargs)
             deployment_params: Final = _DEPLOYMENT_PARAMS_ADAPTER.validate_python(deployment["litellm_params"])
+            non_stream_timeout: Final = self._get_non_stream_timeout(kwargs=request_kwargs, data=deployment_params)
             stream_timeout: Final = (
                 self._get_stream_timeout(kwargs=request_kwargs, data=deployment_params)
                 if request_kwargs.get("stream")
@@ -4701,7 +4703,13 @@ class Router:
             )
             kwargs.update(
                 {
-                    "timeout": self._get_non_stream_timeout(kwargs=request_kwargs, data=deployment_params),
+                    "timeout": non_stream_timeout
+                    if stream_timeout is None or non_stream_timeout is None
+                    else CompletionTimeout.for_stream(
+                        StreamKind.FAKED,
+                        CompletionTimeout.as_limit(non_stream_timeout),
+                        CompletionTimeout.as_limit(stream_timeout),
+                    ),
                     **({"stream_timeout": stream_timeout} if stream_timeout is not None else {}),
                 }
             )

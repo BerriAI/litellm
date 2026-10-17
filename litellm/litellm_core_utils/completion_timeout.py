@@ -85,20 +85,21 @@ class CompletionTimeout:
                 assert_never(stream_kind)
 
     @staticmethod
-    def _coerce(
-        timeout: object, custom_llm_provider: str, supports_httpx_timeout: Callable[[str], bool]
-    ) -> float | httpx.Timeout:
+    def as_limit(timeout: object) -> float | httpx.Timeout:
         if isinstance(timeout, (httpx.Timeout, SDKTimeout)):
-            normalized: Final = CompletionTimeout.normalize(timeout)
-            if supports_httpx_timeout(custom_llm_provider):
-                return normalized
-            read_timeout: Final = normalized.read
-            return (
-                float(read_timeout) if read_timeout is not None else COMPLETION_HTTP_FALLBACK_SECONDS
-            )  # default 10 min timeout
+            return CompletionTimeout.normalize(timeout)
         if isinstance(timeout, (float, int, str)):
             return float(timeout)
         raise TypeError(f"timeout must be a number or an httpx.Timeout, got {type(timeout).__name__}")
+
+    @staticmethod
+    def _coerce(
+        timeout: object, custom_llm_provider: str, supports_httpx_timeout: Callable[[str], bool]
+    ) -> float | httpx.Timeout:
+        limit: Final = CompletionTimeout.as_limit(timeout)
+        if not isinstance(limit, httpx.Timeout) or supports_httpx_timeout(custom_llm_provider):
+            return limit
+        return float(limit.read) if limit.read is not None else COMPLETION_HTTP_FALLBACK_SECONDS
 
     @staticmethod
     def resolve(

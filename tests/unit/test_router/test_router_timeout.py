@@ -18,6 +18,7 @@ from litellm import Router
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.router_utils.cooldown_handlers import is_caller_timeout_408
+from litellm.types.integrations.custom_logger import WEBSEARCH_INTERCEPTION_PREFIX, as_converted_stream
 from litellm.types.llms.openai import AllMessageValues
 import time
 from unittest.mock import patch, MagicMock
@@ -271,6 +272,46 @@ async def test_prompt_managed_fake_stream_keeps_the_timeout_its_caller_or_target
     )
 
     assert isinstance(response, litellm.CustomStreamWrapper)
+    assert "".join([chunk.choices[0].delta.content or "" async for chunk in response]) == "hi"
+
+
+class _AnswersStreamsInOnePiece(CustomLogger):
+    async def async_pre_call_deployment_hook(self, kwargs: dict, call_type: object) -> dict:
+        return as_converted_stream(kwargs, WEBSEARCH_INTERCEPTION_PREFIX)
+
+
+@pytest.mark.asyncio
+async def test_stream_a_deployment_hook_answers_in_one_piece_gets_the_longer_limit(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "callbacks", [_AnswersStreamsInOnePiece()])
+    respx_mock.post(url__regex=r"https://bedrock-runtime\.us-east-1\.amazonaws\.com/.*").mock(
+        side_effect=slow_upstream_answer(CONVERSE_ANSWER)
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "claude",
+                "litellm_params": {
+                    "model": "bedrock/converse/anthropic.claude-sonnet-4-5-v1:0",
+                    "aws_access_key_id": "fake",
+                    "aws_secret_access_key": "fake",
+                    "aws_region_name": "us-east-1",
+                },
+            }
+        ],
+        timeout=STREAM_TIMEOUT_SECONDS,
+        stream_timeout=UPSTREAM_FIRST_BYTE_SECONDS * 2,
+        num_retries=0,
+    )
+
+    response: Final = await router.acompletion(
+        model="claude",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+    )
+
     assert "".join([chunk.choices[0].delta.content or "" async for chunk in response]) == "hi"
 
 

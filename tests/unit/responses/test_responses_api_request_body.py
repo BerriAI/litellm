@@ -17,6 +17,11 @@ import respx
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from tests.unit.llms.bedrock.slow_upstream import (
+    STREAM_TIMEOUT_SECONDS,
+    UPSTREAM_FIRST_BYTE_SECONDS,
+    slow_upstream_sync_client,
+)
 
 
 def _expected_dir() -> Path:
@@ -1048,3 +1053,26 @@ def test_non_streamed_response_ignores_a_stream_timeout_it_never_uses() -> None:
     )
 
     assert response.output[0].content[0].text == "Done."
+
+
+def test_faked_stream_accepts_a_text_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "slow-faked-responses-model",
+        {"litellm_provider": "openai", "mode": "responses", "supports_native_streaming": False},
+    )
+    answer: Final = json.dumps(_minimal_responses_api_payload("resp_faked", "slow-faked-responses-model")).encode()
+
+    response: Final = litellm.responses(
+        model="openai/slow-faked-responses-model",
+        input="hi",
+        stream=True,
+        timeout=str(UPSTREAM_FIRST_BYTE_SECONDS * 2),
+        stream_timeout=STREAM_TIMEOUT_SECONDS,
+        api_key="fake-key",
+        client=slow_upstream_sync_client(answer),
+    )
+
+    assert [event.response.output[0].content[0].text for event in response if event.type == "response.completed"] == [
+        "Done."
+    ]
