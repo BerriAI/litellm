@@ -2081,11 +2081,18 @@ def get_response_cost_from_hidden_params(
 
     additional_headers: Final = _hidden_params_dict.get("additional_headers", {})
     if additional_headers and "llm_provider-x-litellm-response-cost" in additional_headers:
-        response_cost: Final = additional_headers["llm_provider-x-litellm-response-cost"]
-        if response_cost is None:
-            return None
-        return float(additional_headers["llm_provider-x-litellm-response-cost"])
+        return _billable_header_cost(additional_headers["llm_provider-x-litellm-response-cost"])
     return None
+
+
+def _billable_header_cost(value: object) -> float | None:
+    if not isinstance(value, (str, int, float)):
+        return None
+    try:
+        cost: Final = float(value)
+    except ValueError:
+        return None
+    return cost if math.isfinite(cost) and cost >= 0 else None
 
 
 def response_cost_calculator(
