@@ -566,10 +566,21 @@ def test_restamp_streaming_chunk_leaves_nested_none_model_untouched():
     assert result.response.model is None
 
 
-def test_restamp_streaming_chunk_does_not_add_nested_response_to_other_events():
+@pytest.mark.parametrize("event_type", ["response.output_text.delta", "response.custom_event"])
+def test_restamp_streaming_chunk_does_not_add_nested_response_to_other_events(event_type):
+    from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
     from litellm.proxy.proxy_server import _restamp_streaming_chunk_model
 
-    chunk = {"type": "response.output_text.delta", "delta": "hi"}
+    chunk = OpenAIResponsesAPIConfig.get_event_model_class(event_type).model_validate(
+        {
+            "type": event_type,
+            "sequence_number": 3,
+            "item_id": "msg_1",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "hi",
+        }
+    )
     result, _ = _restamp_streaming_chunk_model(
         chunk=chunk,
         requested_model_from_client="client-model",
@@ -577,7 +588,8 @@ def test_restamp_streaming_chunk_does_not_add_nested_response_to_other_events():
         model_mismatch_logged=False,
     )
 
-    assert "response" not in result
+    assert "response" not in result.model_dump()
+    assert result.delta == "hi"
 
 
 def test_restamp_streaming_chunk_keeps_nested_model_when_raw_name_requested():
