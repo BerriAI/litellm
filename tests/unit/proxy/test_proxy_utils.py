@@ -2009,19 +2009,19 @@ def test_provider_specific_header():
     )
     # Verify multi-provider support: anthropic headers work across multiple providers
     assert data["provider_specific_header"] == {
-        "custom_llm_provider": "anthropic,bedrock,bedrock_mantle,vertex_ai",
+        "custom_llm_provider": "anthropic,bedrock,bedrock_mantle,vertex_ai,databricks",
         "extra_headers": {
             "anthropic-beta": "prompt-caching-2024-07-31",
         },
     }
 
 
-def test_client_anthropic_beta_headers_stay_off_databricks_claude_deployments():
-    """A Databricks Claude serving endpoint answers 400 "Unexpected value(s) ... for the
-    anthropic-beta header" to betas Claude Code sends on every turn, prompt-caching-scope-2026-01-05
-    among them (probed 2026-10-12), so the client's header is not forwarded to that route and the
-    betas a Databricks turn needs are derived from the request body instead."""
-    from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("local_beta_headers_config")
+async def test_client_anthropic_betas_reach_databricks_claude_filtered_to_the_ones_the_workspace_accepts():
+    import httpx
+
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
     from litellm.proxy.litellm_pre_call_utils import add_provider_specific_headers_to_request
 
     data: Final[dict] = {"model": "databricks-claude-sonnet-4-6"}  # mutable-ok: the function under test writes into it
@@ -2029,23 +2029,44 @@ def test_client_anthropic_beta_headers_stay_off_databricks_claude_deployments():
         data=data,
         headers={
             "content-type": "application/json",
-            "anthropic-beta": "dangerous-tool-use-2026-09-03,prompt-caching-scope-2026-01-05",
+            "anthropic-beta": "context-1m-2025-08-07,prompt-caching-scope-2026-01-05",
             "anthropic-version": "2023-06-01",
         },
     )
+    received: Final[list[httpx.Request]] = []  # mutable-ok: the fake workspace records what the proxy sent
 
-    assert (
-        ProviderSpecificHeaderUtils.get_provider_specific_headers(
-            provider_specific_header=data["provider_specific_header"], custom_llm_provider="databricks"
+    def workspace_answers(request: httpx.Request) -> httpx.Response:
+        received.append(request)
+        return httpx.Response(
+            status_code=200,
+            json={
+                "id": "msg_bdrk_01",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-6",
+                "content": [{"type": "text", "text": "hello"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 12, "output_tokens": 6},
+            },
+            request=request,
         )
-        == {}
-    )
-    assert ProviderSpecificHeaderUtils.get_provider_specific_headers(
-        provider_specific_header=data["provider_specific_header"], custom_llm_provider="anthropic"
-    ) == {
-        "anthropic-beta": "dangerous-tool-use-2026-09-03,prompt-caching-scope-2026-01-05",
-        "anthropic-version": "2023-06-01",
-    }
+
+    upstream: Final = AsyncHTTPHandler(transport=httpx.MockTransport(workspace_answers))
+    try:
+        await litellm.anthropic.messages.acreate(
+            max_tokens=16,
+            messages=[{"role": "user", "content": "hi"}],
+            model="databricks/databricks-claude-sonnet-4-6",
+            api_key="dapimykey",
+            api_base="https://my.workspace.cloud.databricks.com/serving-endpoints",
+            client=upstream,
+            provider_specific_header=data["provider_specific_header"],
+        )
+    finally:
+        await upstream.close()
+
+    assert received[0].headers["anthropic-beta"] == "context-1m-2025-08-07"
 
 
 def test_provider_specific_header_multi_provider():
@@ -2113,7 +2134,7 @@ def test_provider_specific_header_multi_provider():
     assert "provider_specific_header" in data
     assert (
         data["provider_specific_header"]["custom_llm_provider"]
-        == "anthropic,bedrock,bedrock_mantle,vertex_ai"
+        == "anthropic,bedrock,bedrock_mantle,vertex_ai,databricks"
     )
     assert data["provider_specific_header"]["extra_headers"] == {
         "anthropic-beta": "context-1m-2025-08-07",

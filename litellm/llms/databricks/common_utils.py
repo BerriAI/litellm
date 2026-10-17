@@ -31,11 +31,13 @@ class DatabricksException(BaseLLMException):
 
 
 DATABRICKS_ANTHROPIC_MESSAGES_PATH: Final = "/anthropic/v1/messages"
+DATABRICKS_SERVING_ENDPOINTS_MESSAGES_PATH: Final = f"/serving-endpoints{DATABRICKS_ANTHROPIC_MESSAGES_PATH}"
 DATABRICKS_AI_GATEWAY_ANTHROPIC_PATH: Final = "/ai-gateway/anthropic"
 DATABRICKS_AI_GATEWAY_MESSAGES_PATH: Final = f"{DATABRICKS_AI_GATEWAY_ANTHROPIC_PATH}/v1/messages"
 DATABRICKS_WORKSPACE_ROUTE_PREFIXES: Final = (
     "/serving-endpoints",
-    f"/serving-endpoints{DATABRICKS_ANTHROPIC_MESSAGES_PATH}",
+    "/serving-endpoints/anthropic",
+    DATABRICKS_SERVING_ENDPOINTS_MESSAGES_PATH,
     "/ai-gateway/mlflow/v1",
     DATABRICKS_AI_GATEWAY_ANTHROPIC_PATH,
     DATABRICKS_AI_GATEWAY_MESSAGES_PATH,
@@ -183,6 +185,11 @@ class DatabricksBase:
     @staticmethod
     def uses_ai_gateway(model: str) -> bool:
         return model.removeprefix("databricks/").count(".") >= 2
+
+    @staticmethod
+    def recognizes_workspace_route(api_base: str) -> bool:
+        route: Final = urlsplit(api_base).path.rstrip("/")
+        return route == "" or route.endswith(DATABRICKS_WORKSPACE_ROUTE_PREFIXES)
 
     @staticmethod
     def workspace_root(api_base: str) -> str:

@@ -1,4 +1,5 @@
 import json
+from collections.abc import AsyncIterator
 from typing import Final
 
 import httpx
@@ -17,6 +18,8 @@ CLAUDE_MODEL: Final = "databricks-claude-sonnet-4-6"
 UNITY_CATALOG_CLAUDE_MODEL: Final = "system.ai.claude-sonnet-4-6"
 WORKSPACE_URL: Final = "https://my.workspace.cloud.databricks.com"
 MESSAGES_URL: Final = f"{DATABRICKS_API_BASE}/anthropic/v1/messages"
+ANTHROPIC_ROUTE_API_BASE: Final = f"{DATABRICKS_API_BASE}/anthropic"
+OPTED_IN_MODEL_INFO: Final = {"supported_endpoints": ["/v1/messages"]}
 AI_GATEWAY_MESSAGES_URL: Final = f"{WORKSPACE_URL}/ai-gateway/anthropic/v1/messages"
 DANGEROUS_TOOL_USE_BETA: Final = "dangerous-tool-use-2026-09-03"
 AUTO_MODE_SAFEGUARDS: Final = [
@@ -64,7 +67,7 @@ def test_names_outside_the_foundation_claude_models_keep_the_chat_completions_br
 
 @pytest.mark.parametrize(
     "api_base",
-    [DATABRICKS_API_BASE, f"{DATABRICKS_API_BASE}/", MESSAGES_URL],
+    [DATABRICKS_API_BASE, f"{DATABRICKS_API_BASE}/", ANTHROPIC_ROUTE_API_BASE, MESSAGES_URL],
 )
 def test_complete_url_targets_the_workspace_anthropic_messages_route(api_base: str) -> None:
     url: Final = DatabricksAnthropicMessagesConfig().get_complete_url(
@@ -118,7 +121,7 @@ def test_validate_environment_reads_the_workspace_credentials_from_the_environme
 
 @pytest.mark.parametrize(
     "api_base",
-    [DATABRICKS_API_BASE, f"{DATABRICKS_API_BASE}/", MESSAGES_URL],
+    [DATABRICKS_API_BASE, f"{DATABRICKS_API_BASE}/", ANTHROPIC_ROUTE_API_BASE, MESSAGES_URL],
 )
 def test_validation_then_url_building_appends_the_messages_route_once(api_base: str) -> None:
     config: Final = DatabricksAnthropicMessagesConfig()
@@ -148,6 +151,7 @@ def test_validation_then_url_building_appends_the_messages_route_once(api_base: 
         f"{WORKSPACE_URL}/ai-gateway/mlflow/v1",
         f"{WORKSPACE_URL}/ai-gateway/anthropic",
         AI_GATEWAY_MESSAGES_URL,
+        ANTHROPIC_ROUTE_API_BASE,
         MESSAGES_URL,
         f"{MESSAGES_URL}/",
     ],
@@ -317,6 +321,7 @@ async def _workspace_request_body(**request_params: object) -> dict[str, object]
         ([*SERVER_TOOLS, BASH_TOOL], {"type": "any"}, [BASH_TOOL], {"type": "any"}),
         ([*SERVER_TOOLS, BASH_TOOL], {"type": "tool", "name": "web_search"}, [BASH_TOOL], None),
         (SERVER_TOOLS[:1], {"type": "auto"}, None, None),
+        ([{"type": "web_search_20250305", "max_uses": 8}, BASH_TOOL], {"type": "any"}, [BASH_TOOL], {"type": "any"}),
     ],
 )
 async def test_drop_params_drops_the_server_tools_the_workspace_rejects(
@@ -538,3 +543,127 @@ async def test_streaming_message_delta_keeps_safeguard_results(local_beta_header
     assert len(relayed_deltas) == 1, relayed.decode()
     assert relayed_deltas[0]["delta"]["safeguard_results"] == SAFEGUARD_RESULTS
     assert b'"id": "toolu_bdrk_01"' in relayed
+
+
+CHAT_COMPLETION: Final = {
+    "id": "chatcmpl_01",
+    "object": "chat.completion",
+    "created": 1792227137,
+    "model": "claude-sonnet-4-6",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "hello"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 12, "completion_tokens": 6, "total_tokens": 18},
+}
+MESSAGE: Final = {
+    "id": "msg_bdrk_01",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-sonnet-4-6",
+    "content": [{"type": "text", "text": "hello"}],
+    "stop_reason": "end_turn",
+    "stop_sequence": None,
+    "usage": {"input_tokens": 12, "output_tokens": 6},
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "api_base", "request_params", "expected_url"),
+    [
+        (UNITY_CATALOG_CLAUDE_MODEL, "http://gateway.internal/dbx", {}, "http://gateway.internal/dbx/chat/completions"),
+        (CLAUDE_MODEL, "http://gateway.internal/dbx", {}, "http://gateway.internal/dbx/chat/completions"),
+        (
+            CLAUDE_MODEL,
+            "http://gateway.internal/dbx-anthropic",
+            {"model_info": OPTED_IN_MODEL_INFO},
+            "http://gateway.internal/dbx-anthropic/v1/messages",
+        ),
+        (CLAUDE_MODEL, ANTHROPIC_ROUTE_API_BASE, {"model_info": OPTED_IN_MODEL_INFO}, MESSAGES_URL),
+        (UNITY_CATALOG_CLAUDE_MODEL, WORKSPACE_URL, {}, AI_GATEWAY_MESSAGES_URL),
+    ],
+)
+async def test_each_api_base_reaches_a_route_the_workspace_serves(
+    model: str, api_base: str, request_params: dict[str, object], expected_url: str
+) -> None:
+    received: Final[list[httpx.Request]] = []  # mutable-ok: the fake upstream records what litellm sent
+
+    def upstream_answers(request: httpx.Request) -> httpx.Response:
+        received.append(request)
+        return _reply(request, CHAT_COMPLETION if request.url.path.endswith("/chat/completions") else MESSAGE)
+
+    upstream: Final = AsyncHTTPHandler(transport=httpx.MockTransport(upstream_answers))
+    try:
+        await litellm.anthropic.messages.acreate(
+            max_tokens=64,
+            messages=USER_TURN,
+            model=f"databricks/{model}",
+            api_key=DATABRICKS_API_KEY,
+            api_base=api_base,
+            client=upstream,
+            **request_params,
+        )
+    finally:
+        await upstream.close()
+
+    assert [str(request.url) for request in received] == [expected_url]
+
+
+class _ChunkedStream(httpx.AsyncByteStream):
+    def __init__(self, body: bytes, chunk_size: int) -> None:
+        self._chunks: Final = tuple(body[start : start + chunk_size] for start in range(0, len(body), chunk_size))
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        for chunk in self._chunks:
+            yield chunk
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("chunk_size", [7, 4096])
+async def test_streamed_message_stop_drops_the_bedrock_invocation_metrics(chunk_size: int) -> None:
+    events: Final = (
+        ("message_start", {"type": "message_start", "message": {**MESSAGE, "content": [], "stop_reason": None}}),
+        ("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}),
+        ("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "hi"}}),
+        ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        ("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 4}}),
+        (
+            "message_stop",
+            {
+                "type": "message_stop",
+                "amazon-bedrock-invocationMetrics": {
+                    "inputTokenCount": 18,
+                    "outputTokenCount": 4,
+                    "invocationLatency": 496,
+                    "firstByteLatency": 487,
+                },
+            },
+        ),
+    )
+    sse_body: Final = "".join(f"event: {name}\ndata: {json.dumps(payload)}\n\n" for name, payload in events).encode()
+
+    def workspace_streams(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status_code=200,
+            headers={"content-type": "text/event-stream"},
+            stream=_ChunkedStream(sse_body, chunk_size),
+            request=request,
+        )
+
+    upstream: Final = AsyncHTTPHandler(transport=httpx.MockTransport(workspace_streams))
+    try:
+        stream = await litellm.anthropic.messages.acreate(
+            max_tokens=64,
+            messages=USER_TURN,
+            model=f"databricks/{CLAUDE_MODEL}",
+            api_key=DATABRICKS_API_KEY,
+            api_base=DATABRICKS_API_BASE,
+            stream=True,
+            client=upstream,
+        )
+        relayed: Final = b"".join([chunk async for chunk in stream])
+    finally:
+        await upstream.close()
+
+    relayed_events: Final = [
+        json.loads(line.removeprefix(b"data:")) for line in relayed.splitlines() if line.startswith(b"data:")
+    ]
+    assert relayed_events == [*(payload for _, payload in events[:-1]), {"type": "message_stop"}], relayed.decode()

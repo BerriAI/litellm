@@ -4,7 +4,7 @@ from typing import ClassVar, Final
 import httpx
 
 from litellm._logging import verbose_logger
-from litellm.anthropic_beta_headers_manager import get_unsupported_headers
+from litellm.anthropic_beta_headers_manager import get_unsupported_headers, is_beta_header_supported
 from litellm.exceptions import AuthenticationError
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.anthropic_messages.transformation import (
@@ -706,7 +706,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         httpx_response: httpx.Response,
         request_body: dict,
         litellm_logging_obj: LiteLLMLoggingObj,
-    ) -> AsyncIterator:
+    ) -> AsyncIterator[bytes]:
         """Helper function to handle Anthropic streaming responses using the existing logging handlers"""
         from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
             BaseAnthropicMessagesStreamingIterator,
@@ -729,6 +729,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         optional_params: dict,
         custom_llm_provider: str = "anthropic",
         messages: Sequence[object] = (),
+        beta_map_provider: str | None = None,
     ) -> dict:
         """
         Auto-inject anthropic-beta headers based on features used.
@@ -745,6 +746,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             optional_params: Optional parameters including tools, context_management, output_format, speed
             custom_llm_provider: Provider name for looking up correct tool search header
             messages: Request messages, scanned for per-message output_config
+            beta_map_provider: Provider whose beta map column gates safeguards, defaults to custom_llm_provider
         """
         beta_values: Final[set[str]] = set()
 
@@ -796,7 +798,10 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         if optional_params.get("speed") == "fast":
             beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.FAST_MODE_2026_02_01.value)
 
-        if optional_params.get("safeguards") is not None:
+        if optional_params.get("safeguards") is not None and is_beta_header_supported(
+            ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value,
+            beta_map_provider or custom_llm_provider,
+        ):
             beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value)
 
         if messages_carry_output_config(messages):

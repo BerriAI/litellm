@@ -1,14 +1,19 @@
-from collections.abc import Mapping
+import json
+from collections.abc import AsyncIterator, Mapping
 from typing import Final
+
+import httpx
 
 import litellm
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.llms.databricks.common_utils import (
     DATABRICKS_AI_GATEWAY_MESSAGES_PATH,
     DATABRICKS_ANTHROPIC_MESSAGES_PATH,
+    DATABRICKS_SERVING_ENDPOINTS_MESSAGES_PATH,
     DatabricksBase,
 )
 from litellm.types.router import GenericLiteLLMParams
@@ -18,6 +23,7 @@ DROP_CONTAINER_WARNING: Final = (
     "Dropping `container` for model=%s. The Databricks Anthropic Messages route rejects it, "
     "and the chat completions bridge it replaces never forwarded it."
 )
+BEDROCK_INVOCATION_METRICS_FIELD: Final = "amazon-bedrock-invocationMetrics"
 
 
 def _is_unsupported_server_tool(tool: object) -> bool:
@@ -36,13 +42,38 @@ def _without_unsupported_server_tools(params: Mapping[str, object]) -> dict[str,
     kept_tools: Final = [tool for tool in sent_tools if not _is_unsupported_server_tool(tool)]
     dropped_names: Final = frozenset(_tool_name(tool) for tool in sent_tools if _is_unsupported_server_tool(tool))
     forced_tool: Final = _tool_name(params.get("tool_choice"))
-    keeps_tool_choice: Final = "tool_choice" in params and bool(kept_tools) and forced_tool not in dropped_names
+    keeps_tool_choice: Final = (
+        "tool_choice" in params and bool(kept_tools) and (forced_tool is None or forced_tool not in dropped_names)
+    )
     remaining: Final = {key: value for key, value in params.items() if key not in ("tools", "tool_choice")}
     return (
         remaining
         | ({"tools": kept_tools} if kept_tools else {})
         | ({"tool_choice": params["tool_choice"]} if keeps_tool_choice else {})
     )
+
+
+def _without_invocation_metrics(sse_line: bytes) -> bytes:
+    if not sse_line.startswith(b"data:") or BEDROCK_INVOCATION_METRICS_FIELD.encode() not in sse_line:
+        return sse_line
+    event: Final = as_str_mapping(json.loads(sse_line.removeprefix(b"data:")))
+    if event is None:
+        return sse_line
+    kept_fields: Final = {key: value for key, value in event.items() if key != BEDROCK_INVOCATION_METRICS_FIELD}
+    return b"data: " + json.dumps(kept_fields, separators=(",", ":")).encode()
+
+
+async def _strip_invocation_metrics(sse_stream: AsyncIterator[bytes]) -> AsyncIterator[bytes]:
+    partial_line: Final = bytearray()
+    async for chunk in sse_stream:
+        partial_line.extend(chunk)
+        if complete_end := partial_line.rfind(b"\n") + 1:
+            yield b"\n".join(
+                _without_invocation_metrics(line) for line in bytes(partial_line[:complete_end]).split(b"\n")
+            )
+            del partial_line[:complete_end]
+    if partial_line:
+        yield _without_invocation_metrics(bytes(partial_line))
 
 
 class DatabricksAnthropicMessagesConfig(DatabricksBase, AnthropicMessagesConfig):
@@ -60,6 +91,26 @@ class DatabricksAnthropicMessagesConfig(DatabricksBase, AnthropicMessagesConfig)
 
     def handles_web_search_natively(self) -> bool:
         return False
+
+    def serves_api_base(self, api_base: str | None) -> bool:
+        resolved_api_base: Final = self.resolve_api_base(api_base)
+        return resolved_api_base is None or self.recognizes_workspace_route(resolved_api_base)
+
+    def get_async_streaming_response_iterator(
+        self,
+        model: str,
+        httpx_response: httpx.Response,
+        request_body: dict[str, object],  # mutable-ok: mirrors the base signature
+        litellm_logging_obj: LiteLLMLoggingObj,
+    ) -> AsyncIterator[bytes]:
+        return _strip_invocation_metrics(
+            super().get_async_streaming_response_iterator(
+                model=model,
+                httpx_response=httpx_response,
+                request_body=request_body,
+                litellm_logging_obj=litellm_logging_obj,
+            )
+        )
 
     def validate_anthropic_messages_environment(
         self,
@@ -99,12 +150,12 @@ class DatabricksAnthropicMessagesConfig(DatabricksBase, AnthropicMessagesConfig)
         litellm_params: dict[str, object],  # mutable-ok: mirrors the base signature
         stream: bool | None = None,
     ) -> str:
-        resolved_api_base: Final = self._get_api_base(api_base).rstrip("/")
-        if self.uses_ai_gateway(model):
-            return f"{self.workspace_root(resolved_api_base)}{DATABRICKS_AI_GATEWAY_MESSAGES_PATH}"
-        if resolved_api_base.endswith(DATABRICKS_ANTHROPIC_MESSAGES_PATH):
-            return resolved_api_base
-        return f"{resolved_api_base}{DATABRICKS_ANTHROPIC_MESSAGES_PATH}"
+        messages_path: Final = (
+            DATABRICKS_AI_GATEWAY_MESSAGES_PATH
+            if self.uses_ai_gateway(model)
+            else DATABRICKS_SERVING_ENDPOINTS_MESSAGES_PATH
+        )
+        return f"{self.workspace_root(self._get_api_base(api_base))}{messages_path}"
 
     def transform_anthropic_messages_request(
         self,
