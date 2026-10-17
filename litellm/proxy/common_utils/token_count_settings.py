@@ -1,9 +1,12 @@
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import MappingProxyType
-from typing import Final
+from typing import Final, Literal
+
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 import litellm
+from litellm.anthropic_interface.exceptions.exception_mapping_utils import AnthropicExceptionMapping
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.proxy._types import ProxyException
 from litellm.types.token_count import TokenCountSourceFields
@@ -13,6 +16,26 @@ CANNOT_COUNT_MODEL_STATUSES: Final = frozenset({400, 404})
 TOKENIZER_LOAD_WAIT_SECONDS: Final = 5.0
 TOKENIZER_LOAD_REUSE_SECONDS: Final = 60.0
 TOKENIZER_LOAD_MAX_RUNNING: Final = 4
+
+
+class _UpstreamErrorDetail(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="allow")
+    message: str
+
+
+class _UpstreamErrorEnvelope(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="allow")
+    type: Literal["error"]
+    error: _UpstreamErrorDetail
+
+
+def _with_hint(message: str, hint: str) -> str:
+    try:
+        envelope: Final = _UpstreamErrorEnvelope.model_validate_json(message)
+    except ValidationError:
+        return f"{AnthropicExceptionMapping.extract_error_message(message)}. {hint}"
+    detail: Final = envelope.error.model_copy(update={"message": f"{envelope.error.message}. {hint}"})
+    return envelope.model_copy(update={"error": detail}).model_dump_json()
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,6 +59,9 @@ class ProviderCountFailure:
     @property
     def cannot_count_model(self) -> bool:
         return not self.rejected_before_provider_call and self.status_code in CANNOT_COUNT_MODEL_STATUSES
+
+    def with_hint(self, hint: str) -> "ProviderCountFailure":
+        return replace(self, message=_with_hint(self.message, hint))
 
     def to_proxy_exception(self) -> ProxyException:
         return ProxyException(

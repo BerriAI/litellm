@@ -5,6 +5,7 @@ from typing import Final
 import pytest
 
 from litellm.proxy.common_utils.token_count_settings import (
+    ProviderCountFailure,
     TokenCountModel,
     TokenCountSettings,
     count_source_fields,
@@ -109,3 +110,34 @@ def test_every_shipped_token_count_model_is_another_mapped_model_of_the_same_pro
         or count_model["model"] == name
         or not count_model.get("region")
     } == {}
+
+
+_UPSTREAM_404: Final = {
+    "type": "error",
+    "request_id": "req_upstream",
+    "error": {"type": "not_found_error", "message": "The model 'anthropic.claude-opus-5-5' does not exist"},
+}
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        (
+            json.dumps(_UPSTREAM_404),
+            {
+                **_UPSTREAM_404,
+                "error": {
+                    "type": "not_found_error",
+                    "message": "The model 'anthropic.claude-opus-5-5' does not exist. Enable eu-west-1",
+                },
+            },
+        ),
+        (json.dumps({"message": "Too many tokens"}), "Too many tokens. Enable eu-west-1"),
+        ("scripted 404", "scripted 404. Enable eu-west-1"),
+    ],
+)
+def test_hint_lands_in_the_upstream_error_message_and_keeps_its_envelope(message: str, expected: object) -> None:
+    hinted: Final = ProviderCountFailure(status_code=404, message=message).with_hint("Enable eu-west-1")
+
+    assert (json.loads(hinted.message) if isinstance(expected, dict) else hinted.message) == expected
+    assert hinted.status_code == 404

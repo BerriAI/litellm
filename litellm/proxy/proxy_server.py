@@ -30,7 +30,7 @@ from collections.abc import (
 from collections.abc import (
     Set as AbstractSet,
 )
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from itertools import chain
 from types import MappingProxyType, TracebackType, UnionType
@@ -14470,17 +14470,6 @@ def _get_provider_token_counter(
     return None, None, None
 
 
-def _deployment_in_region(deployment: Mapping[str, object] | None, region: str | None) -> dict[str, object] | None:
-    if deployment is None:
-        return None
-    if region is None:
-        return dict(deployment)
-    return {
-        **deployment,
-        "litellm_params": {**(as_str_mapping(deployment.get("litellm_params")) or {}), "aws_region_name": region},
-    }
-
-
 async def _try_provider_token_count(
     provider_counter: "BaseTokenCounter",
     custom_llm_provider: str | None,
@@ -14499,12 +14488,22 @@ async def _try_provider_token_count(
     """Attempt provider-specific token counting. Returns None to fall through to local counting."""
     if not provider_counter.should_use_token_counting_api(custom_llm_provider=custom_llm_provider):
         return None
+    deployment_in_region: Final = (
+        None
+        if deployment is None
+        else dict(deployment)
+        if region is None
+        else {
+            **deployment,
+            "litellm_params": {**(as_str_mapping(deployment.get("litellm_params")) or {}), "aws_region_name": region},
+        }
+    )
     try:
         result: Final = await provider_counter.count_tokens(
             model_to_use=model_to_use or "",
             messages=messages,
             contents=contents,
-            deployment=_deployment_in_region(deployment, region),
+            deployment=deployment_in_region,
             request_model=request_model,
             tools=tools,
             system=system,
@@ -14549,10 +14548,9 @@ async def _provider_token_count(
     failure: Final = (
         counted
         if count_model is None or count_model.region is None
-        else replace(
-            counted,
-            message=f"{counted.message}. This model counts tokens with {count_model.model} in {count_model.region}. "
-            f"If that region is not enabled for the AWS account, enable it or set token_count_model in model_info",
+        else counted.with_hint(
+            f"This model counts tokens with {count_model.model} in {count_model.region}. "
+            "If that region is not enabled for the AWS account, enable it or set token_count_model in model_info"
         )
     )
     if failure.cannot_count_model and settings.framing is not None and local_estimate_allowed:
