@@ -222,6 +222,35 @@ class NotFoundError(openai.NotFoundError):
         return _message
 
 
+class OpenRouterRegionNotSupportedError(NotFoundError):
+    """
+    Raised when OpenRouter returns HTTP 404 indicating no in-region endpoint exists
+    for the requested model in the specified data region (e.g. 'us' or 'eu').
+    """
+
+    def __init__(
+        self,
+        message: str,
+        model: str,
+        llm_provider: str = "openrouter",
+        response: httpx.Response | None = None,  # pyright: ignore[reportUnknownMemberType,reportUnknownParameterType]  # httpx.Response type is untyped
+        litellm_debug_info: str | None = None,
+        max_retries: int | None = None,
+        num_retries: int | None = None,
+        region: str | None = None,
+    ) -> None:
+        self.region = region
+        super().__init__(  # pyright: ignore[reportUnknownMemberType]  # NotFoundError.__init__ is untyped
+            message=message,
+            model=model,
+            llm_provider=llm_provider,
+            response=response,
+            litellm_debug_info=litellm_debug_info,
+            max_retries=max_retries,
+            num_retries=num_retries,
+        )
+
+
 class BadRequestError(openai.BadRequestError):
     def __init__(
         self,

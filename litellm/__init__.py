@@ -1400,6 +1400,7 @@ from .exceptions import (
     MalformedRequestFieldError as MalformedRequestFieldError,
     VectorStoreSearchError,
     NotFoundError,
+    OpenRouterRegionNotSupportedError as OpenRouterRegionNotSupportedError,
     PermissionDeniedError,
     RateLimitError,
     RateLimitErrorCategory,

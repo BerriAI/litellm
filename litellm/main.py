@@ -127,6 +127,10 @@ from litellm.llms.cohere.common_utils import CohereModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, http2_enabled
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+from litellm.llms.openrouter.data_residency import (
+    infer_openrouter_data_residency,
+    resolve_openrouter_api_base,
+)
 from litellm.llms.vertex_ai.common_utils import (
     VertexAIModelRoute,
     get_vertex_ai_model_route,
@@ -3415,7 +3419,17 @@ def _complete_openrouter(ctx: CompletionDispatchContext) -> _CompletionDispatchR
     stream: Final = ctx.stream
     timeout: Final = ctx.timeout
 
-    api_base = api_base or litellm.api_base or get_secret_str("OPENROUTER_API_BASE") or "https://openrouter.ai/api/v1"
+    api_base = resolve_openrouter_api_base(  # rebind-ok: regional endpoint resolution for openrouter
+        api_base=api_base,
+        litellm_params=litellm_params,
+        optional_params=optional_params,  # pyright: ignore[reportUnknownArgumentType]  # untyped optional_params in dispatch context
+    )
+
+    litellm_params["api_base"] = api_base
+    litellm_params["data_residency"] = infer_openrouter_data_residency("openrouter", api_base)
+
+    ## Load Config
+    config: Final = litellm.OpenrouterConfig.get_config()
 
     api_key = (
         api_key
@@ -3439,8 +3453,6 @@ def _complete_openrouter(ctx: CompletionDispatchContext) -> _CompletionDispatchR
 
     headers = openrouter_headers
 
-    ## Load Config
-    config: Final = litellm.OpenrouterConfig.get_config()
     for k, v in _provider_config_items(config):
         if k == "extra_body":
             # we use openai 'extra_body' to pass openrouter specific params - transforms, route, models
@@ -6786,9 +6798,14 @@ def embedding(
                 headers=headers,
             )
         elif custom_llm_provider == "openrouter":
-            api_base = (
-                api_base or litellm.api_base or get_secret_str("OPENROUTER_API_BASE") or "https://openrouter.ai/api/v1"
+            api_base = resolve_openrouter_api_base(  # rebind-ok: regional endpoint resolution for openrouter
+                api_base=api_base,
+                litellm_params=litellm_params_dict,  # pyright: ignore[reportUnknownArgumentType]  # untyped litellm_params in embedding
+                optional_params=optional_params,  # pyright: ignore[reportUnknownArgumentType]  # untyped optional_params in embedding
             )
+
+            litellm_params_dict["api_base"] = api_base
+            litellm_params_dict["data_residency"] = infer_openrouter_data_residency("openrouter", api_base)
 
             api_key = (
                 api_key

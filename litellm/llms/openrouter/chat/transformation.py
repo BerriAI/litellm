@@ -22,6 +22,7 @@ from litellm.types.utils import ModelResponse, ModelResponseStream
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 from ..common_utils import OpenRouterException
+from ..data_residency import resolve_openrouter_api_base
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -46,6 +47,35 @@ def openrouter_model_supports_cache_control(model: str) -> bool:
 
 
 class OpenrouterConfig(OpenAIGPTConfig):
+    region: str | None = None
+
+    def __init__(
+        self,
+        region: str | None = None,
+    ) -> None:
+        self.region = region
+        super().__init__()  # pyright: ignore[reportUnknownMemberType]  # OpenAIGPTConfig.__init__ is untyped
+
+    def get_complete_url(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+        model: str,
+        optional_params: dict,  # pyright: ignore[reportMissingTypeArgument,reportUnknownParameterType]  # mutable-ok: overrides OpenAIGPTConfig.get_complete_url signature
+        litellm_params: dict,  # pyright: ignore[reportMissingTypeArgument,reportUnknownParameterType]  # mutable-ok: overrides OpenAIGPTConfig.get_complete_url signature
+        stream: bool | None = None,
+    ) -> str:
+        resolved_base: Final = resolve_openrouter_api_base(
+            api_base=api_base,
+            region=self.region,
+            litellm_params=litellm_params,  # pyright: ignore[reportUnknownArgumentType]  # overrides untyped OpenAIGPTConfig signature
+            optional_params=optional_params,  # pyright: ignore[reportUnknownArgumentType]  # overrides untyped OpenAIGPTConfig signature
+        ).rstrip("/")
+        endpoint: Final = "chat/completions"
+        if endpoint in resolved_base:
+            return resolved_base
+        return f"{resolved_base}/{endpoint}"
+
     def get_supported_openai_params(self, model: str) -> list:
         """
         Include reasoning parameters regardless of model-map capabilities.
