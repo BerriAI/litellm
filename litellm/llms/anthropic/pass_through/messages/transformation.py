@@ -657,10 +657,10 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             messages = strip_advisor_blocks_from_messages(messages)
 
         anthropic_messages_request: Final[AnthropicMessagesRequest] = AnthropicMessagesRequest(
-            messages=strip_encrypted_reasoning_blocks_from_anthropic_messages(messages),
             max_tokens=max_tokens,
             model=model,
             **anthropic_messages_optional_request_params,
+            messages=strip_encrypted_reasoning_blocks_from_anthropic_messages(messages),
         )
         return dict(anthropic_messages_request)
 

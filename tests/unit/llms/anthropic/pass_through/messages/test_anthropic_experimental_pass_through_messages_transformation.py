@@ -10,6 +10,7 @@ from litellm.llms.anthropic.pass_through.messages.transformation import (
 from litellm.llms.anthropic.wif import get_anthropic_wif_token
 from litellm.llms.minimax.messages.transformation import MinimaxMessagesConfig
 from litellm.llms.tencent.messages.transformation import TencentAnthropicMessagesConfig
+from litellm.types.router import GenericLiteLLMParams
 from tests.unit.llms.anthropic.test_anthropic_wif import (
     ScriptedPoster,
     make_engine,
@@ -116,3 +117,21 @@ def test_wif_token_exchange_reaches_only_anthropic_not_minimax_or_tencent(
         assert config._allows_workload_identity is False
 
     assert len(poster.requests) == 1
+
+
+def test_messages_request_body_ends_with_messages_after_system_and_tools() -> None:
+    messages: Final = [{"role": "user", "content": "Hello"}]
+    request: Final = AnthropicMessagesConfig().transform_anthropic_messages_request(
+        model="claude-opus-5-5",
+        messages=messages,
+        anthropic_messages_optional_request_params={
+            "max_tokens": 256,
+            "system": [{"type": "text", "text": "You are terse."}],
+            "tools": [{"name": "get_weather", "input_schema": {"type": "object", "properties": {}}}],
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert list(request)[-1] == "messages", f"key order sent upstream: {list(request)}"
+    assert request["messages"] == messages
