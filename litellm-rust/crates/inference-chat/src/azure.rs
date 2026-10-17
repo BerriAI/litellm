@@ -129,6 +129,7 @@ impl ChatCompletionsRoute {
             headers: authenticated.headers,
             body,
             api_key,
+            adapter: None,
         })
     }
 

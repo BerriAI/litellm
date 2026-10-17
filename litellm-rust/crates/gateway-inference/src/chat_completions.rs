@@ -274,6 +274,7 @@ async fn openai(
     body: Map<String, Value>,
     extra_headers: Option<Map<String, Value>>,
 ) -> Result<Response, Error> {
+    let usage = ReportedUsage::default();
     let machine = gateway.chat_completions.clone().openai_machine(
         OpenAiChatCall {
             model: deployment.model.clone(),
@@ -286,6 +287,7 @@ async fn openai(
             litellm_params: provider_params(deployment),
             drop_params: drop_params(gateway, deployment),
             model_info: gateway.model_info(),
+            usage: usage.clone(),
         },
         None,
     );
@@ -293,7 +295,9 @@ async fn openai(
         |body: Bytes| ([(CONTENT_TYPE, "application/json")], body),
         |error| Bytes::from(Error::from(error).openai_sse_frame()),
     );
-    Ok(litellm_host_http::serve(machine, (), (), encoder, None).await?)
+    let mut response = litellm_host_http::serve(machine, (), (), encoder, None).await?;
+    response.extensions_mut().insert(usage);
+    Ok(response)
 }
 
 /// A stream from a provider chat translates (Anthropic, Bedrock), sent as OpenAI chunks. The

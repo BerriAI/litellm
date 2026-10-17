@@ -10,6 +10,7 @@ pub mod constants;
 pub(crate) mod handler;
 mod media;
 pub mod openai;
+pub mod openai_compatible;
 mod prepare;
 pub mod stream;
 use litellm_llms_types::formats::chat_completions::ChatCompletionsResponse;
