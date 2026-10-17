@@ -1,7 +1,8 @@
 use litellm_auth::CredentialPlacement;
 use litellm_llms_types::{
     formats::messages::{
-        ContextEdit, ContextManagement, Message, MessagesOptionalParams, MessagesRequest, Speed,
+        ContentBlockType, ContextEdit, ContextManagement, Message, MessagesOptionalParams,
+        MessagesRequest, Speed, ThinkingConfig, ThinkingDisplay,
     },
     providers::anthropic::{AnthropicBeta, BetaProvider, BetaSet, DEFAULT_HEADERS},
     recognized::Recognized,
@@ -31,12 +32,8 @@ pub struct AnthropicMessagesConfig;
 pub const ANTHROPIC_MESSAGES_CONFIG: AnthropicMessagesConfig = AnthropicMessagesConfig;
 
 impl BaseMessagesConfig for AnthropicMessagesConfig {
-    fn shape_request(
-        &self,
-        request: MessagesRequest,
-        reasoning_auto_summary: bool,
-    ) -> Result<MessagesRequest, Error> {
-        shape_anthropic_messages_request(request, reasoning_auto_summary)
+    fn shape_request(&self, request: MessagesRequest) -> Result<MessagesRequest, Error> {
+        shape_anthropic_messages_request(request)
     }
 
     fn get_complete_url(
@@ -120,7 +117,6 @@ pub(crate) fn transform_messages_request(
     if request.params.max_tokens.is_none() {
         return Err(Error::MissingField("max_tokens"));
     }
-    let request = drop_unsupported_params(request, context)?;
     let request = translate_thinking(request, &context.thinking)?;
     let context_management = request
         .params
@@ -170,6 +166,9 @@ fn feature_betas(request: &MessagesRequest) -> BetaSet {
         messages_carry_output_config(&request.messages)
             .then_some(AnthropicBeta::PerTurnControl20260701),
         has_advisor_tool(tools).then_some(AnthropicBeta::AdvisorTool20260301),
+        displays_thinking_updates(params).then_some(AnthropicBeta::ThinkingDisplayUpdates20260818),
+        changes_tools_mid_conversation(&request.messages)
+            .then_some(AnthropicBeta::MidConversationToolChanges20260701),
         is_tool_search_used(tools).then_some(AnthropicBeta::AdvancedToolUse20251120),
     ]
     .into_iter()
@@ -206,82 +205,36 @@ fn uses_structured_output(params: &MessagesOptionalParams) -> bool {
             .is_some_and(|config| config.format.is_some())
 }
 
+fn displays_thinking_updates(params: &MessagesOptionalParams) -> bool {
+    let display = match params.thinking.as_ref().and_then(Recognized::known) {
+        Some(ThinkingConfig::Enabled(thinking)) => thinking.display.as_ref(),
+        Some(ThinkingConfig::Adaptive(thinking)) => thinking.display.as_ref(),
+        Some(ThinkingConfig::Disabled(_)) | None => None,
+    };
+    display.and_then(Recognized::known) == Some(&ThinkingDisplay::Updates)
+}
+
+fn changes_tools_mid_conversation(messages: &[Message]) -> bool {
+    messages
+        .iter()
+        .filter(|message| message.role == "system")
+        .flat_map(Message::blocks)
+        .any(|block| {
+            matches!(
+                &block.block_type,
+                Some(ContentBlockType::Other(kind)) if kind == "tool_addition" || kind == "tool_removal"
+            ) && block
+                .extra
+                .get("tool")
+                .and_then(|tool| tool.get("type"))
+                .is_some_and(|kind| kind == "tool_reference")
+        })
+}
+
 fn messages_carry_output_config(messages: &[Message]) -> bool {
     messages
         .iter()
         .any(|message| message.extra.contains_key("output_config"))
-}
-
-fn unsupported_param(model: &str, param: &str, value: &str, hint: &str) -> Error {
-    Error::InvalidRequest(crate::ErrorDetail::UnsupportedParameter {
-        model: model.into(),
-        param: param.into(),
-        value: value.into(),
-        hint: hint.into(),
-    })
-}
-
-fn drop_unsupported_params(
-    request: MessagesRequest,
-    context: &MessagesTransformContext,
-) -> Result<MessagesRequest, Error> {
-    let capabilities = &context.thinking.capabilities;
-    let model = request.model.clone();
-    let reject = |param: &str, value: String, hint: &str| -> Result<(), Error> {
-        if context.drop_params {
-            return Ok(());
-        }
-        Err(unsupported_param(&model, param, &value, hint))
-    };
-    let params = request.params;
-    let speed = match &params.speed {
-        Some(speed) if !capabilities.supports_speed => {
-            reject("speed", format!("'{}'", speed_text(speed)), "")?;
-            None
-        }
-        _ => params.speed.clone(),
-    };
-    if capabilities.supports_sampling_params {
-        return Ok(MessagesRequest {
-            params: MessagesOptionalParams { speed, ..params },
-            ..request
-        });
-    }
-    let temperature = match params.temperature {
-        Some(temperature) if temperature != 1.0 => {
-            reject(
-                "temperature",
-                json!(temperature).to_string(),
-                "Only temperature=1 is supported. ",
-            )?;
-            None
-        }
-        temperature => temperature,
-    };
-    if let Some(top_p) = params.top_p {
-        reject("top_p", json!(top_p).to_string(), "")?;
-    }
-    if let Some(top_k) = params.top_k {
-        reject("top_k", json!(top_k).to_string(), "")?;
-    }
-    Ok(MessagesRequest {
-        params: MessagesOptionalParams {
-            speed,
-            temperature,
-            top_p: None,
-            top_k: None,
-            ..params
-        },
-        ..request
-    })
-}
-
-fn speed_text(speed: &Recognized<Speed>) -> String {
-    match speed {
-        Recognized::Known(speed) => <&'static str>::from(*speed).to_string(),
-        Recognized::Unrecognized(Value::String(text)) => text.clone(),
-        Recognized::Unrecognized(other) => other.to_string(),
-    }
 }
 
 fn compact_edit_from_openai(entry: &Map<String, Value>) -> Option<ContextEdit> {
@@ -394,15 +347,11 @@ mod tests {
             .collect()
     }
 
-    fn transform(
-        fields: Value,
-        capabilities: MessagesModelCapabilities,
-        drop_params: bool,
-    ) -> Result<Value, Error> {
+    fn transform(fields: Value, capabilities: MessagesModelCapabilities) -> Result<Value, Error> {
         ANTHROPIC_MESSAGES_CONFIG
             .transform_anthropic_messages_request(
                 request(fields),
-                &MessagesTransformContext::with_lookup(capabilities, drop_params, &no_env),
+                &MessagesTransformContext::with_lookup(capabilities, &no_env),
             )
             .map(|transformed| serde_json::to_value(transformed).unwrap())
     }
@@ -424,56 +373,18 @@ mod tests {
         MessagesModelCapabilities::default()
     }
 
-    #[fixture]
-    fn sampling_removed() -> MessagesModelCapabilities {
-        MessagesModelCapabilities {
-            supports_sampling_params: false,
-            ..Default::default()
-        }
-    }
-
-    #[fixture]
-    fn fast_mode() -> MessagesModelCapabilities {
-        MessagesModelCapabilities {
-            supports_speed: true,
-            ..Default::default()
-        }
-    }
-
     #[rstest]
-    #[case::alone(json!({"max_tokens": null}))]
-    #[case::ahead_of_the_param_gate(json!({"max_tokens": null, "speed": "fast"}))]
-    fn missing_max_tokens_is_rejected(#[case] fields: Value, unmapped: MessagesModelCapabilities) {
+    fn missing_max_tokens_is_rejected(unmapped: MessagesModelCapabilities) {
         assert_eq!(
-            transform(fields, unmapped, false),
+            transform(json!({"max_tokens": null}), unmapped),
             Err(Error::MissingField("max_tokens"))
         );
     }
 
     #[rstest]
-    #[case::sampling_params_on_a_sampling_model(
-        unmapped(),
-        false,
-        json!({"temperature": 0.3, "top_p": 0.9, "top_k": 40})
-    )]
-    #[case::sampling_params_on_a_sampling_model_under_drop_params(
-        unmapped(),
-        true,
-        json!({"temperature": 0.3, "top_p": 0.9, "top_k": 40})
-    )]
-    #[case::unit_temperature_on_a_sampling_removed_model(
-        sampling_removed(),
-        false,
-        json!({"temperature": 1.0})
-    )]
-    #[case::unit_temperature_on_a_sampling_removed_model_under_drop_params(
-        sampling_removed(),
-        true,
-        json!({"temperature": 1.0})
-    )]
-    #[case::speed_on_a_fast_mode_model(fast_mode(), false, json!({"speed": "fast"}))]
-    #[case::speed_on_a_fast_mode_model_under_drop_params(fast_mode(), true, json!({"speed": "fast"}))]
-    #[case::native_context_management_edits(unmapped(), false, json!({"context_management": {"edits": [{
+    #[case::sampling_params(unmapped(), json!({"temperature": 0.3, "top_p": 0.9, "top_k": 40}))]
+    #[case::speed(unmapped(), json!({"speed": "fast"}))]
+    #[case::native_context_management_edits(unmapped(), json!({"context_management": {"edits": [{
         "type": "clear_tool_uses_20250919",
         "trigger": {"type": "input_tokens", "value": 30000},
         "keep": {"type": "tool_uses", "value": 3},
@@ -481,11 +392,11 @@ mod tests {
         "exclude_tools": ["web_search"],
         "clear_tool_inputs": false
     }]}}))]
-    #[case::first_party_billing_header_system_block(unmapped(), false, json!({"system": [
+    #[case::first_party_billing_header_system_block(unmapped(), json!({"system": [
         {"type": "text", "text": "x-anthropic-billing-header: cc_version=1"},
         {"type": "text", "text": "real system prompt"}
     ]}))]
-    #[case::anthropic_signed_reasoning_history(unmapped(), false, json!({"messages": [
+    #[case::anthropic_signed_reasoning_history(unmapped(), json!({"messages": [
         {"role": "user", "content": "Solve it."},
         {"role": "assistant", "content": [
             {"type": "thinking", "thinking": "plan", "signature": "EqQBCkYIAxgCIkA_anthropic_signed"},
@@ -493,109 +404,15 @@ mod tests {
             {"type": "text", "text": "The answer."}
         ]}
     ]}))]
-    #[case::advisor_history_alongside_the_advisor_tool(unmapped(), false, json!({
+    #[case::advisor_history_alongside_the_advisor_tool(unmapped(), json!({
         "messages": advisor_history(),
         "tools": [{"type": "advisor_20260301", "name": "advisor"}]
     }))]
     fn request_is_forwarded_unchanged(
         #[case] capabilities: MessagesModelCapabilities,
-        #[case] drop_params: bool,
         #[case] fields: Value,
     ) {
-        assert_eq!(
-            transform(fields.clone(), capabilities, drop_params),
-            Ok(body(fields))
-        );
-    }
-
-    #[rstest]
-    #[case::temperature(sampling_removed(), json!({"temperature": 0.3}), json!({}))]
-    #[case::top_p(sampling_removed(), json!({"top_p": 0.9}), json!({}))]
-    #[case::top_k(sampling_removed(), json!({"top_k": 40}), json!({}))]
-    #[case::every_sampling_param_keeping_the_rest(
-        sampling_removed(),
-        json!({"temperature": 0.3, "top_p": 0.9, "top_k": 40, "stream": true}),
-        json!({"stream": true})
-    )]
-    #[case::speed_on_a_sampling_model(
-        unmapped(),
-        json!({"speed": "fast", "temperature": 0.5}),
-        json!({"temperature": 0.5})
-    )]
-    #[case::speed_on_a_sampling_removed_model(
-        sampling_removed(),
-        json!({"speed": "fast", "temperature": 1.0}),
-        json!({"temperature": 1.0})
-    )]
-    fn removed_params_are_dropped_under_drop_params(
-        #[case] capabilities: MessagesModelCapabilities,
-        #[case] fields: Value,
-        #[case] expected: Value,
-    ) {
-        assert_eq!(transform(fields, capabilities, true), Ok(body(expected)));
-    }
-
-    #[rstest]
-    #[case::temperature(
-        sampling_removed(),
-        json!({"temperature": 0.3}),
-        "claude does not support temperature=0.3. Only temperature=1 is supported. To drop unsupported params, set `litellm.drop_params = True`."
-    )]
-    #[case::temperature_just_below_one(
-        sampling_removed(),
-        json!({"temperature": 0.99}),
-        "claude does not support temperature=0.99. Only temperature=1 is supported. To drop unsupported params, set `litellm.drop_params = True`."
-    )]
-    #[case::whole_number_temperature_keeps_its_decimal(
-        sampling_removed(),
-        json!({"temperature": 2.0}),
-        "claude does not support temperature=2.0. Only temperature=1 is supported. To drop unsupported params, set `litellm.drop_params = True`."
-    )]
-    #[case::top_p(
-        sampling_removed(),
-        json!({"top_p": 0.9}),
-        "claude does not support top_p=0.9. To drop unsupported params, set `litellm.drop_params = True`."
-    )]
-    #[case::top_k(
-        sampling_removed(),
-        json!({"top_k": 5}),
-        "claude does not support top_k=5. To drop unsupported params, set `litellm.drop_params = True`."
-    )]
-    #[case::top_k_next_to_unit_temperature(
-        sampling_removed(),
-        json!({"temperature": 1.0, "top_k": 5}),
-        "claude does not support top_k=5. To drop unsupported params, set `litellm.drop_params = True`."
-    )]
-    #[case::temperature_ahead_of_top_k(
-        sampling_removed(),
-        json!({"temperature": 0.5, "top_k": 5}),
-        "claude does not support temperature=0.5. Only temperature=1 is supported. To drop unsupported params, set `litellm.drop_params = True`."
-    )]
-    #[case::top_p_ahead_of_top_k(
-        sampling_removed(),
-        json!({"top_p": 0.9, "top_k": 5}),
-        "claude does not support top_p=0.9. To drop unsupported params, set `litellm.drop_params = True`."
-    )]
-    #[case::speed(
-        unmapped(),
-        json!({"speed": "fast"}),
-        "claude does not support speed='fast'. To drop unsupported params, set `litellm.drop_params = True`."
-    )]
-    #[case::speed_ahead_of_sampling_params(
-        sampling_removed(),
-        json!({"speed": "fast", "temperature": 0.5}),
-        "claude does not support speed='fast'. To drop unsupported params, set `litellm.drop_params = True`."
-    )]
-    fn removed_params_are_rejected_without_drop_params(
-        #[case] capabilities: MessagesModelCapabilities,
-        #[case] fields: Value,
-        #[case] message: &str,
-    ) {
-        let Error::InvalidRequest(detail) = transform(fields, capabilities, false).unwrap_err()
-        else {
-            panic!("expected an invalid request");
-        };
-        assert_eq!(detail.to_string(), message);
+        assert_eq!(transform(fields.clone(), capabilities), Ok(body(fields)));
     }
 
     #[rstest]
@@ -671,11 +488,7 @@ mod tests {
         unmapped: MessagesModelCapabilities,
     ) {
         assert_eq!(
-            transform(
-                json!({"context_management": context_management}),
-                unmapped,
-                false
-            ),
+            transform(json!({"context_management": context_management}), unmapped),
             Ok(body(json!({"context_management": expected})))
         );
     }
@@ -697,8 +510,7 @@ mod tests {
         assert_eq!(
             transform(
                 merged(tools.clone(), json!({"messages": advisor_history()})),
-                unmapped,
-                false
+                unmapped
             ),
             Ok(body(merged(tools, json!({"messages": stripped}))))
         );
@@ -716,7 +528,7 @@ mod tests {
             {"role": "user", "content": "And the next one?"}
         ]);
         assert_eq!(
-            transform(json!({"messages": messages}), unmapped, false),
+            transform(json!({"messages": messages}), unmapped),
             Ok(body(json!({"messages": [
                 {"role": "user", "content": "Solve it."},
                 {"role": "assistant", "content": [{"type": "text", "text": "The answer."}]},
@@ -732,7 +544,6 @@ mod tests {
                 supports_reasoning: true,
                 ..Default::default()
             },
-            false,
             &env(&[(LOW_BUDGET_ENV, "2000")]),
         );
         let transformed = ANTHROPIC_MESSAGES_CONFIG
@@ -754,16 +565,15 @@ mod tests {
     fn new_reads_thinking_budgets_from_the_process_environment() {
         if std::env::var_os(PROCESS_ENV_PROBE).is_some() {
             assert_eq!(
-                MessagesTransformContext::new(sampling_removed(), true),
+                MessagesTransformContext::new(MessagesModelCapabilities::default()),
                 MessagesTransformContext {
                     thinking: ThinkingContext {
-                        capabilities: sampling_removed(),
+                        capabilities: MessagesModelCapabilities::default(),
                         budgets: ThinkingBudgets {
                             low: 2000,
                             ..ThinkingBudgets::default()
                         },
                     },
-                    drop_params: true,
                 }
             );
             return;
@@ -1025,6 +835,34 @@ mod tests {
         json!({"messages": [{"role": "user", "content": "hi", "output_config": null}]}),
         &["per-turn-control-2026-07-01"]
     )]
+    #[case::adaptive_thinking_display_updates(
+        json!({"thinking": {"type": "adaptive", "display": "updates"}}),
+        &["thinking-display-updates-2026-08-18"]
+    )]
+    #[case::enabled_thinking_display_updates(
+        json!({"thinking": {"type": "enabled", "budget_tokens": 1024, "display": "updates"}}),
+        &["thinking-display-updates-2026-08-18"]
+    )]
+    #[case::summarized_thinking_display(json!({"thinking": {"type": "adaptive", "display": "summarized"}}), &[])]
+    #[case::adaptive_thinking_without_display(json!({"thinking": {"type": "adaptive"}}), &[])]
+    #[case::disabled_thinking(json!({"thinking": {"type": "disabled"}}), &[])]
+    #[case::system_tool_addition(
+        json!({"messages": [{"role": "system", "content": [{"type": "tool_addition", "tool": {"type": "tool_reference", "name": "bash"}}]}]}),
+        &["mid-conversation-tool-changes-2026-07-01"]
+    )]
+    #[case::system_tool_removal(
+        json!({"messages": [{"role": "system", "content": [{"type": "tool_removal", "tool": {"type": "tool_reference", "name": "bash"}}]}]}),
+        &["mid-conversation-tool-changes-2026-07-01"]
+    )]
+    #[case::tool_addition_outside_a_system_message(
+        json!({"messages": [{"role": "user", "content": [{"type": "tool_addition", "tool": {"type": "tool_reference", "name": "bash"}}]}]}),
+        &[]
+    )]
+    #[case::tool_addition_without_a_tool_reference(
+        json!({"messages": [{"role": "system", "content": [{"type": "tool_addition", "tool": {"type": "custom", "name": "bash"}}]}]}),
+        &[]
+    )]
+    #[case::system_text_block(json!({"messages": [{"role": "system", "content": [{"type": "text", "text": "hi"}]}]}), &[])]
     fn feature_betas_follow_the_request(#[case] fields: Value, #[case] expected: &[&str]) {
         assert_eq!(feature_betas(&request(fields)), betas(expected));
     }

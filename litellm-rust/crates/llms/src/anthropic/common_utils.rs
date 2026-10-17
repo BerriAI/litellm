@@ -1871,9 +1871,7 @@ mod tests {
     }
 
     #[rstest]
-    fn unmapped_model_has_no_reasoning_features_but_accepts_sampling_params(
-        unmapped: MessagesModelCapabilities,
-    ) {
+    fn unmapped_model_has_no_reasoning_features(unmapped: MessagesModelCapabilities) {
         assert_eq!(
             unmapped,
             MessagesModelCapabilities {
@@ -1882,8 +1880,6 @@ mod tests {
                 thinking_always_on: false,
                 supports_legacy_thinking: false,
                 supports_output_config: false,
-                supports_sampling_params: true,
-                supports_speed: false,
                 supports_mid_conversation_system: false,
                 effort_tiers: tiers(false, false, false, false, false, false),
             }
@@ -1895,14 +1891,6 @@ mod tests {
     }
 
     #[rstest]
-    #[case::sampling_params_removed(
-        json!({"supports_sampling_params": false}),
-        MessagesModelCapabilities { supports_sampling_params: false, ..MessagesModelCapabilities::default() }
-    )]
-    #[case::fast_mode(
-        json!({"supports_speed": true}),
-        MessagesModelCapabilities { supports_speed: true, ..MessagesModelCapabilities::default() }
-    )]
     #[case::partial_effort_tiers(
         json!({"supports_reasoning": true, "effort_tiers": {"xhigh": true}}),
         MessagesModelCapabilities {

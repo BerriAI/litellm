@@ -123,12 +123,8 @@ impl BaseMessagesConfig for BedrockMantleAnthropicMessagesConfig {
         transform_messages_request(request, context)
     }
 
-    fn shape_request(
-        &self,
-        request: MessagesRequest,
-        reasoning_auto_summary: bool,
-    ) -> Result<MessagesRequest, Error> {
-        shape_anthropic_messages_request(request, reasoning_auto_summary)
+    fn shape_request(&self, request: MessagesRequest) -> Result<MessagesRequest, Error> {
+        shape_anthropic_messages_request(request)
     }
 
     fn wire_body(&self, body: Value) -> Value {
