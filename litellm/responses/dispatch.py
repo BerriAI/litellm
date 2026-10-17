@@ -3,11 +3,9 @@ from collections.abc import Awaitable, Callable, Coroutine, Mapping
 from types import MappingProxyType
 from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding selects a sync result or an async awaitable
 
-from litellm.exceptions import BadRequestError
-from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.responses import main
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
-from litellm.rust_bridge import detectors
+from litellm.rust_bridge import detectors, provider
 from litellm.rust_bridge.catalog import Feature, Route, RouteContext
 from litellm.rust_bridge.dispatch import PublicDispatch
 from litellm.rust_bridge.public_call import (
@@ -16,7 +14,6 @@ from litellm.rust_bridge.public_call import (
     bind,
     native_call,
     native_call_hook,
-    optional_str,
     signature,
 )
 from litellm.rust_bridge.responses.entrypoints import (
@@ -65,14 +62,6 @@ def _public_request(
     return native_call(legacy, args, kwargs)
 
 
-def _provider(request: NativeCall) -> str | None:
-    provider: Final = optional_str(request.resolved.get("custom_llm_provider"))
-    try:
-        return get_llm_provider(str(request.resolved["model"]), provider)[1]
-    except BadRequestError:
-        return provider
-
-
 _FEATURES: Final[detectors.Detectors] = MappingProxyType(
     {
         **detectors.COMMON,
@@ -105,9 +94,10 @@ _SYNC_FEATURES: Final[detectors.Detectors] = MappingProxyType(
 
 
 def _context(request: NativeCall, features: detectors.Detectors) -> RouteContext:
+    resolution: Final = provider.resolve(request)
     return RouteContext(
         Route.RESPONSES,
-        provider=_provider(request),
+        provider=resolution.provider if isinstance(resolution, provider.Resolved) else None,
         model=str(request.resolved["model"]),
         features=detectors.detected(features, request),
     )

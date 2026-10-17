@@ -388,6 +388,8 @@ async def test_deployment_hook_keeps_only_sync_calls_on_python(monkeypatch: pyte
         ({"model": "anthropic/claude-sonnet-4-5"}, False),
         ({"model": "claude-sonnet-4-5"}, False),
         ({"model": "gpt-5", "custom_llm_provider": "azure"}, False),
+        ({"model": "gpt-5", "api_base": "https://api.groq.com/openai/v1"}, False),
+        ({"model": "gpt-5", "use_litellm_proxy": True}, False),
     ),
 )
 def test_provider_rule_sees_the_resolved_provider(kwargs: Mapping[str, object], native: bool) -> None:
