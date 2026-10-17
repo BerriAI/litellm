@@ -43,8 +43,10 @@ from litellm.litellm_core_utils.fallback_generalizations import (
 FALLBACK_GENERALIZATIONS_KEY: Final = "fallback_generalizations"
 _CATALOG_ADAPTER: Final = TypeAdapter(dict[str, dict[str, object]])
 _BUNDLED_CATALOG_ADAPTER: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
+_COST_ENTRY_ADAPTER: Final = TypeAdapter(dict[str, object])
 _CLI_ENTRYPOINT_NAMES: Final = frozenset({"lite", "litellm-proxy"})
 _NO_EDITS: Final[Mapping[str, object]] = MappingProxyType({})
+_ABSENT: Final = object()
 
 
 def _is_cli_process() -> bool:
@@ -699,23 +701,55 @@ def _entries_changed_since_import(fetch: _ImportFetch) -> Mapping[str, object]:
     return MappingProxyType({key: value for key, value in current if fetch.bundled_as_loaded.get(key) != value})
 
 
+def _edit_overlaid_on(
+    remote: Mapping[str, object], edited: Mapping[str, object], as_loaded: Mapping[str, object]
+) -> dict[str, object]:  # mutable-ok: becomes a litellm.model_cost entry, a plain mutable dict by contract
+    removed: Final = as_loaded.keys() - edited.keys()
+    changed: Final = {name: value for name, value in edited.items() if as_loaded.get(name, _ABSENT) != value}
+    return {name: value for name, value in {**remote, **changed}.items() if name not in removed}
+
+
+def _edit_writes(
+    onto: Mapping[str, object], key: str, edited: object, as_loaded: Mapping[str, object] | None
+) -> Mapping[str, object]:
+    remote: Final = onto.get(key)
+    if as_loaded is None or not isinstance(remote, Mapping) or not isinstance(edited, Mapping):
+        return MappingProxyType({key: edited})
+    overlaid: Final = _edit_overlaid_on(
+        _COST_ENTRY_ADAPTER.validate_python(remote), _COST_ENTRY_ADAPTER.validate_python(edited), as_loaded
+    )
+    if not isinstance(remote, AliasedCostEntry):
+        return MappingProxyType({key: overlaid})
+    shared: Final = AliasedCostEntry(overlaid, remote.names)
+    return MappingProxyType(dict.fromkeys((name for name in (key, *remote.names) if onto.get(name) is remote), shared))
+
+
+def _edits_overlaid_on(
+    fetch: _ImportFetch, onto: Mapping[str, object], edits: Mapping[str, object]
+) -> Mapping[str, object]:
+    writes: Final = (
+        _edit_writes(onto, key, edited, fetch.bundled_as_loaded.get(key)).items() for key, edited in edits.items()
+    )
+    return MappingProxyType(dict(chain.from_iterable(writes)))
+
+
 def _carry_edits_made_during_adoption(
     fetch: _ImportFetch,
     adopted: dict[str, object],  # mutable-ok: the dict just adopted as litellm.model_cost, updated in place
     carried: Mapping[str, object],
-    finalized: Mapping[str, object],
+    as_adopted: Mapping[str, object],
 ) -> None:
     changed: Final = tuple(_entries_changed_since_import(fetch).items())
     late: Final = {
         key: value
         for key, value in changed
-        if value is not carried.get(key) and adopted.get(key) is carried.get(key, finalized.get(key))
+        if value is not carried.get(key) and adopted.get(key) is as_adopted.get(key)
     }
     if not late or not _litellm_model_cost_is(adopted):
         return
     from litellm import utils
 
-    adopted.update(late)
+    adopted.update(_edits_overlaid_on(fetch, as_adopted, late))
     utils._invalidate_model_cost_lowercase_map()  # pyright: ignore[reportPrivateUsage]  # required cache invalidation
 
 
@@ -762,13 +796,16 @@ def _adopt_remote_model_cost_map(
         return
     finalized: Final = _finalize_loaded_model_cost_map(result).model_cost_map
     edits: Final = _entries_changed_since_import(import_fetch) if import_fetch is not None else _NO_EDITS
-    adopted: Final = {**finalized, **edits}
+    adopted: Final = (
+        {**finalized, **_edits_overlaid_on(import_fetch, finalized, edits)} if import_fetch is not None else finalized
+    )
+    as_adopted: Final = MappingProxyType(dict(adopted))
     _cost_map_source_info.source = "remote"
     _cost_map_source_info.fallback_reason = None
     _cost_map_source_info.loaded_at = datetime.now(timezone.utc)
     adopt_model_cost_map(adopted)
     if import_fetch is not None:
-        _carry_edits_made_during_adoption(import_fetch, adopted=adopted, carried=edits, finalized=finalized)
+        _carry_edits_made_during_adoption(import_fetch, adopted=adopted, carried=edits, as_adopted=as_adopted)
         _PendingImportFetch.adoptions += 1
 
 

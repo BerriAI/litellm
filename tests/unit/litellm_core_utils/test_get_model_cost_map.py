@@ -817,6 +817,22 @@ def _held_client(outcome):
     return httpx.Client(transport=httpx.MockTransport(handler)), started, release
 
 
+def _rate_limited_then_held_client(body: bytes):
+    retry_started = threading.Event()
+    release = threading.Event()
+    served = []
+
+    def handler(request):
+        served.append(request)
+        if len(served) == 1:
+            return httpx.Response(429)
+        retry_started.set()
+        release.wait(timeout=10)
+        return httpx.Response(200, content=body)
+
+    return httpx.Client(transport=httpx.MockTransport(handler)), retry_started, release
+
+
 def _finish_fetch(release):
     release.set()
     threads = _fetch_threads()
@@ -992,6 +1008,106 @@ def test_an_edit_written_through_a_stale_reference_during_adoption_survives_it(
     assert litellm.model_cost["my-late-edit"] is late_entry
     assert litellm.model_cost["gpt-4o-mini"]["input_cost_per_token"] == 42.0
     assert litellm.model_cost["gpt-4o"]["input_cost_per_token"] == 7.0
+
+
+def _remote_map_repricing_gpt_4o() -> tuple[bytes, float]:
+    remote_map = _load_root_cost_map()
+    remote_price = remote_map["gpt-4o"]["input_cost_per_token"] * 10
+    remote_map["gpt-4o"] = {**remote_map["gpt-4o"], "input_cost_per_token": remote_price}
+    return json.dumps(remote_map).encode(), remote_price
+
+
+def test_a_router_built_before_the_remote_map_lands_prices_its_models_from_the_remote_map(
+    isolated_litellm_cost_state, monkeypatch
+):
+    import litellm
+    from litellm.litellm_core_utils.get_model_cost_map import load_model_cost_map_at_import
+
+    body, remote_price = _remote_map_repricing_gpt_4o()
+    client, retry_started, release = _rate_limited_then_held_client(body)
+    try:
+        monkeypatch.setattr(
+            litellm, "model_cost", load_model_cost_map_at_import(url=_URL, client=client, sleep=lambda _: None)
+        )
+        assert retry_started.wait(timeout=10)
+        litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt-4o",
+                    "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-test"},
+                }
+            ]
+        )
+    finally:
+        _finish_fetch(release)
+
+    assert litellm.model_cost["gpt-4o"]["input_cost_per_token"] == remote_price
+    assert litellm.get_model_info("openai/gpt-4o")["input_cost_per_token"] == remote_price
+
+
+def test_a_partial_edit_made_before_the_remote_map_lands_keeps_only_the_fields_it_changed(
+    isolated_litellm_cost_state, monkeypatch
+):
+    import litellm
+    from litellm.litellm_core_utils.get_model_cost_map import load_model_cost_map_at_import
+
+    body, remote_price = _remote_map_repricing_gpt_4o()
+    client, started, release = _held_client(httpx.Response(200, content=body))
+    try:
+        monkeypatch.setattr(litellm, "model_cost", load_model_cost_map_at_import(url=_URL, client=client))
+        assert started.wait(timeout=10)
+        edited = {
+            name: value for name, value in litellm.model_cost["gpt-4o"].items() if name != "output_cost_per_token"
+        }
+        litellm.model_cost["gpt-4o"] = {
+            **edited,
+            "max_tokens": 7,
+        }  # test-quality-ok: the edit is what is under test, and the fixture restores model_cost
+    finally:
+        _finish_fetch(release)
+
+    assert litellm.model_cost["gpt-4o"]["input_cost_per_token"] == remote_price
+    assert litellm.model_cost["gpt-4o"]["max_tokens"] == 7
+    assert "output_cost_per_token" not in litellm.model_cost["gpt-4o"]
+
+
+def _cost_map_with_aliased_model(input_cost_per_token: float) -> bytes:
+    cost_map = _load_root_cost_map()
+    cost_map["my-aliased-model"] = {
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "input_cost_per_token": input_cost_per_token,
+        "output_cost_per_token": 1.0,
+        "aliases": ["my-aliased-model-alias"],
+    }
+    return json.dumps(cost_map).encode()
+
+
+def test_an_edit_to_an_aliased_model_made_before_the_remote_map_lands_stays_shared_by_its_aliases(
+    isolated_litellm_cost_state, monkeypatch
+):
+    import litellm
+    from litellm.litellm_core_utils.get_model_cost_map import load_model_cost_map_at_import
+
+    monkeypatch.setattr(GetModelCostMap, "_loaded_catalog", GetModelCostMap._loaded_catalog)
+    monkeypatch.setattr(GetModelCostMap, "_loaded_catalog_fields", GetModelCostMap._loaded_catalog_fields)
+    monkeypatch.setattr(
+        GetModelCostMap, "read_local_model_cost_map_bytes", staticmethod(lambda: _cost_map_with_aliased_model(1.0))
+    )
+    client, retry_started, release = _rate_limited_then_held_client(_cost_map_with_aliased_model(5.0))
+    try:
+        monkeypatch.setattr(
+            litellm, "model_cost", load_model_cost_map_at_import(url=_URL, client=client, sleep=lambda _: None)
+        )
+        assert retry_started.wait(timeout=10)
+        litellm.register_model({"my-aliased-model": {"output_cost_per_token": 9.0}}, persist_across_reloads=False)
+    finally:
+        _finish_fetch(release)
+
+    entry = litellm.model_cost["my-aliased-model"]
+    assert litellm.model_cost["my-aliased-model-alias"] is entry
+    assert entry["input_cost_per_token"] == 5.0
+    assert entry["output_cost_per_token"] == 9.0
 
 
 class _ReleaseWhenALookupWaits(logging.Handler):
