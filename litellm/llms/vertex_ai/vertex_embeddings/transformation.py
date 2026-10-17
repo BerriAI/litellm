@@ -1,5 +1,5 @@
 import types
-from typing import Final, Literal
+from typing import Final, Literal, cast
 
 from litellm.litellm_core_utils.hidden_params import set_hidden_param
 from litellm.llms.vertex_ai.common_utils import pop_vertex_request_labels
@@ -245,7 +245,8 @@ class VertexAITextEmbeddingConfig(LiteLLMBaseModel):
                 }
             )
             input_tokens += embedding["statistics"]["token_count"]
-            if isinstance(billable := embedding["statistics"].get("billableCharacterCount"), (int, float)):
+            _statistics: Final = cast("dict[str, object]", embedding["statistics"])
+            if isinstance(billable := _statistics.get("billableCharacterCount"), (int, float)):
                 billable_counts.append(int(billable))
 
         model_response.object = "list"
