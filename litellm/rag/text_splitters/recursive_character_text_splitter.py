@@ -23,6 +23,15 @@ class RecursiveCharacterTextSplitter:
         chunk_overlap: int = DEFAULT_CHUNK_OVERLAP,
         separators: list[str] | None = None,
     ):
+        if chunk_size <= 0:
+            raise ValueError(f"chunk_size must be positive, got {chunk_size}")
+        if chunk_overlap < 0:
+            raise ValueError(f"chunk_overlap must be non-negative, got {chunk_overlap}")
+        if chunk_overlap >= chunk_size:
+            raise ValueError(
+                "chunk_overlap must be smaller than chunk_size, "
+                f"got chunk_overlap={chunk_overlap}, chunk_size={chunk_size}"
+            )
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
         self.separators = separators or ["\n\n", "\n", " ", ""]
