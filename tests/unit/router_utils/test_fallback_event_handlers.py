@@ -1872,11 +1872,11 @@ async def test_streaming_refusal_without_fallback_row_passes_frames_through():
 async def test_refused_stream_built_from_a_finished_agentic_turn_is_delivered_without_a_fallback():
     """Websearch, MCP and advisor loops run their tools before streaming the final reply, so a
     fallback would run every tool call again for a reply the client then gets from another model."""
-    fake = FakeAnthropicUpstream()
-    router = _router(content_policy_fallbacks=[{"fable-tier": ["opus-target"]}])
+    fake: Final = FakeAnthropicUpstream()
+    router: Final = _router(content_policy_fallbacks=[{"fable-tier": ["opus-target"]}])
 
     with fake.install():
-        stream = await router._aanthropic_messages_streaming_iterator(
+        stream: Final = await router._aanthropic_messages_streaming_iterator(
             response=FakeAnthropicMessagesStreamIterator(REFUSAL_RESPONSE),
             initial_kwargs=mid_stream_fallback_hop_kwargs(
                 model="fable-tier",
@@ -1890,14 +1890,14 @@ async def test_refused_stream_built_from_a_finished_agentic_turn_is_delivered_wi
                 },
             ),
         )
-        events = [
+        events: Final = [
             json.loads(line[len(b"data: ") :])
             for line in (await _collect(stream)).splitlines()
             if line.startswith(b"data: ")
         ]
 
     assert fake.calls == []
-    message_delta = next(event for event in events if event["type"] == "message_delta")
+    message_delta: Final = next(event for event in events if event["type"] == "message_delta")
     assert message_delta["delta"]["stop_reason"] == "refusal"
     assert message_delta["delta"]["stop_details"] == REFUSAL_RESPONSE["stop_details"]
 
