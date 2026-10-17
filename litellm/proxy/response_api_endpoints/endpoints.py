@@ -29,6 +29,7 @@ from pydantic import ConfigDict, TypeAdapter, ValidationError
 from starlette.websockets import WebSocket, WebSocketDisconnect
 from typing_extensions import ReadOnly, TypedDict
 
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import EMPTY_MAPPING, MANAGED_BACKGROUND_RESPONSE_METADATA_KEY, TERMINAL_RESPONSE_STATUSES
 from litellm.integrations.custom_guardrail import ModifyResponseException
@@ -59,6 +60,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
     read_request_body,
     safe_set_request_parsed_body,
 )
+from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
 from litellm.proxy.hooks.responses_id_security import ResponsesIDSecurity, decrypted_response_id
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import (
     request_tags_from_request_data,
@@ -1828,14 +1830,6 @@ class _PreCallGuardrailWalk(Protocol):
         guardrails_only: bool,
     ) -> dict[str, object]: ...  # mutable-ok: ProxyLogging.pre_call_hook returns the guardrails' own dict
 
-    async def post_call_failure_hook(
-        self,
-        *,
-        user_api_key_dict: UserAPIKeyAuth,
-        original_exception: Exception,
-        request_data: dict[str, object],  # mutable-ok: ProxyLogging.post_call_failure_hook stamps the failure row on it
-    ) -> object: ...
-
 
 def _responses_ws_frame_guard(
     admitted: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth, proxy_logging_obj: _PreCallGuardrailWalk
@@ -1868,9 +1862,7 @@ def _responses_ws_frame_guard(
                 user_api_key_dict=user_api_key_dict, data=frame_data, call_type="aresponses", guardrails_only=True
             )
         except Exception as e:
-            await proxy_logging_obj.post_call_failure_hook(
-                user_api_key_dict=rejected_frame_auth, original_exception=e, request_data=frame_data
-            )
+            await _bill_rejected_frame(rejected_frame_auth, e, frame_data)
             raise
         rewritten: Final = {
             **frame_obj,
@@ -1882,6 +1874,20 @@ def _responses_ws_frame_guard(
         )
 
     return guard
+
+
+async def _bill_rejected_frame(
+    user_api_key_dict: UserAPIKeyAuth,
+    exception: Exception,
+    frame_data: dict[str, object],  # mutable-ok: the spend logger stamps the failure row on the request dict
+) -> None:
+    """Only the spend logger sees a rejected frame; the other failure hooks (the rate limiter's slot release,
+    alerting) belong to the live connection, which stays open."""
+    for callback in litellm.callbacks:
+        if isinstance(callback, ProxyDBLogger):
+            await callback.async_post_call_failure_hook(
+                request_data=frame_data, original_exception=exception, user_api_key_dict=user_api_key_dict
+            )
 
 
 def _recorded_guardrail_information(bucket: object) -> tuple[Mapping[str, object], ...]:
