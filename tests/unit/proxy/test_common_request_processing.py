@@ -11062,3 +11062,40 @@ class TestResponseCostFromLoggingObjForCacheHits:
 
         assert fresh_cost is not None and fresh_cost > 0
         assert hit_cost == 0.0
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("hidden_params", "expected_header"),
+        (({"cache_hit": True, "response_cost": 0.0}, "0.0"), ({"response_cost": 0.0}, None)),
+    )
+    async def test_only_a_cache_hit_sends_a_zero_cost_header(self, hidden_params, expected_header):
+        response = MagicMock()
+        response._hidden_params = hidden_params
+        request = MagicMock(spec=Request)
+        request.headers = {}
+        logging_obj = MagicMock()
+        logging_obj.litellm_call_id = "cache-hit-header"
+        proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+
+        headers = await ProxyBaseLLMRequestProcessing.build_litellm_proxy_success_headers_from_llm_response(
+            response=response,
+            request_data={"model": "gpt-5.4-mini"},
+            request=request,
+            user_api_key_dict=MagicMock(tpm_limit=None, rpm_limit=None, max_budget=None, allowed_model_region=None),
+            logging_obj=logging_obj,
+            version="1.0.0",
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+        assert headers.get("x-litellm-response-cost") == expected_header
+
+    def test_a_fresh_zero_cost_v1_messages_call_still_sends_no_cost_header(self):
+        logging_obj = self._logging_obj()
+        logging_obj.model_call_details["response_cost"] = 0.0
+
+        cost = ProxyBaseLLMRequestProcessing._response_cost_from_logging_obj(
+            response=dict(self.BODY), logging_obj=logging_obj
+        )
+
+        assert cost == ""

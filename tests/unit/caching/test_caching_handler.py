@@ -14,6 +14,7 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm import aembedding, completion, embedding, aresponses, responses
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.caching.caching import Cache
 from litellm.responses.streaming_iterator import CachedResponsesAPIStreamingIterator
 
@@ -263,21 +264,35 @@ async def test_cache_hit_reports_zero_response_cost(copilot_response_cache: Cach
 
 
 @pytest.mark.asyncio
-async def test_async_cache_hit_names_the_same_litellm_model_as_the_call_it_replays(
-    copilot_response_cache: Cache,
-) -> None:
-    messages: Final = [{"role": "user", "content": "provider model on a cache hit"}]
-    first: Final = await litellm.acompletion(
-        model="openai/gpt-4o-mini", messages=messages, mock_response="cached answer", caching=True
+async def test_async_cache_hits_never_use_up_a_deployment_tpm_limit(copilot_response_cache: Cache) -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "tpm-limited",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "sk-test",
+                    "mock_response": "cached answer",
+                    "tpm": 100,
+                },
+            }
+        ],
+        routing_strategy="usage-based-routing-v2",
+        num_retries=0,
     )
-    await asyncio.gather(*_PENDING_CACHE_WRITES)
-    second: Final = await litellm.acompletion(
-        model="openai/gpt-4o-mini", messages=messages, mock_response="cached answer", caching=True
-    )
+    messages: Final = [{"role": "user", "content": "tpm limit and cache hits"}]
 
-    assert second._hidden_params["cache_hit"] is True
-    assert second._hidden_params["litellm_model_name"] == first._hidden_params["litellm_model_name"]
-    assert second.model == first.model
+    async def call_and_settle() -> litellm.ModelResponse:
+        response: Final = await router.acompletion(model="tpm-limited", messages=messages, caching=True)
+        await asyncio.gather(*_PENDING_CACHE_WRITES)
+        await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10)
+        return response
+
+    first: Final = await call_and_settle()
+    hits: Final = [await call_and_settle() for _ in range(8)]
+
+    assert first.usage.total_tokens * len(hits) > 100
+    assert all(hit._hidden_params["cache_hit"] is True for hit in hits)
 
 
 def _logging_obj_left_with_a_cache_hit(messages: list[dict[str, str]]) -> LiteLLMLogging:

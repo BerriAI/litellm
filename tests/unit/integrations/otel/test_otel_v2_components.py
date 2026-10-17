@@ -2,6 +2,7 @@
 baggage helpers, metrics, the typed coercion helpers, mapper branches, span-name
 builders, and the registry validator's failure paths. Needs the OTel SDK."""
 
+from typing import Final
 import contextlib
 import json
 import threading
@@ -361,12 +362,11 @@ def test_genai_mapper_cost_breakdown_absent():
 def test_genai_mapper_cache_hit_attrs():
     from litellm.integrations.otel.model.semconv import LiteLLM
 
-    attrs = GenAIMapper().map(replace(_full_llm_call(), cache_hit=True, saved_cache_cost=0.002))
+    attrs: Final = GenAIMapper().map(replace(_full_llm_call(), cache_hit=True, saved_cache_cost=0.002))
     assert attrs[LiteLLM.CACHE_HIT] is True
     assert attrs[LiteLLM.SAVED_CACHE_COST] == 0.002
 
-    # The default (None) keeps the span sparse: neither key present.
-    uncached = GenAIMapper().map(_full_llm_call())
+    uncached: Final = GenAIMapper().map(_full_llm_call())
     assert LiteLLM.CACHE_HIT not in uncached
     assert LiteLLM.SAVED_CACHE_COST not in uncached
 

@@ -385,7 +385,6 @@ class LLMCachingHandler:
                         model=provider_model,
                         custom_llm_provider=kwargs.get("custom_llm_provider", None),
                         args=args,
-                        litellm_model_name=model,
                     )
                     if not _should_defer_streaming_cache_hit_callbacks(cached_result=cached_result):
                         # LOG SUCCESS
@@ -951,7 +950,6 @@ class LLMCachingHandler:
         model: str,
         args: tuple[object, ...],
         custom_llm_provider: str | None = None,
-        litellm_model_name: str | None = None,
     ) -> (
         ModelResponse
         | TextCompletionResponse
@@ -975,7 +973,6 @@ class LLMCachingHandler:
             model: str:
             custom_llm_provider: Optional[str] = None:
             args: Optional[Tuple[Any, ...]] = None:
-            litellm_model_name: the provider-prefixed model a miss stamps on the hidden params, when ``model`` is stripped
 
         Returns:
             Optional[Any]:
@@ -1096,7 +1093,7 @@ class LLMCachingHandler:
         update_response_metadata(
             result=cached_result,
             logging_obj=logging_obj,
-            model=litellm_model_name or model,
+            model=model,
             kwargs=kwargs,
             start_time=self.start_time,
             end_time=datetime.datetime.now(),
