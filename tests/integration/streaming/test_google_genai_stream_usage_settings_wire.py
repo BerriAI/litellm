@@ -1,16 +1,14 @@
 import json
-import re
 import threading
 import uuid
 from collections.abc import Callable, Mapping, Sequence
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import ExitStack
 from hashlib import sha256
 from pathlib import Path
 from typing import Final
 
 import httpx
-import psutil
 import pytest
 import yaml
 from integration._support.client import Gateway, eventually, held, object_value
@@ -38,7 +36,6 @@ _GEMINI_USAGE: Final = {
     "totalTokenCount": _PROMPT_TOKENS + _COMPLETION_TOKENS,
 }
 _ZERO_USAGE: Final = {"promptTokenCount": 0, "candidatesTokenCount": 0, "totalTokenCount": 0}
-_STARTED_WORKER: Final = re.compile(r"Started server process \[(\d+)\]")
 _BURST_SELECT: Final = (
     'SELECT api_key, prompt_tokens, completion_tokens FROM "LiteLLM_SpendLogs"'
     " WHERE api_key = ANY(string_to_array(%s, ','))"
@@ -67,6 +64,7 @@ _UPSTREAM_ASKS_FOR_USAGE: Final = {
     },
 }
 _SETTING_VALUES: Final = {"always_off": False, "always_on": True}
+_STREAMS_PER_WORKER: Final = 6
 
 
 def _openai_frame(chunk: Mapping[str, JsonValue], response_id: str) -> bytes:
@@ -273,20 +271,15 @@ def _stream_or_dropped(client: httpx.Client, key: str) -> httpx.Response | None:
         return None
 
 
-def _local_port(client: httpx.Client) -> int:
-    with client.stream("GET", "/health/liveliness") as response:
-        port: Final = int(response.extensions["network_stream"].get_extra_info("client_addr")[1])
-        response.read()
-    assert response.status_code == 200, response.text
-    return port
-
-
-def _accepted_client_ports(pid: int, proxy_port: int) -> frozenset[int]:
-    return frozenset(
-        connection.raddr.port
-        for connection in psutil.Process(pid).net_connections(kind="tcp")
-        if connection.raddr and connection.laddr.port == proxy_port
+def _held_streams(
+    stack: ExitStack, pool: ThreadPoolExecutor, url: str, keys: Sequence[str], wire: Wire, held: int
+) -> tuple[Future[httpx.Response | None], ...]:
+    clients: Final = tuple(stack.enter_context(httpx.Client(base_url=url, timeout=60, trust_env=False)) for _ in keys)
+    futures: Final = tuple(
+        pool.submit(_stream_or_dropped, client, key) for client, key in zip(clients, keys, strict=True)
     )
+    eventually(wire.received.qsize, lambda size: size >= held, seconds=60)
+    return futures
 
 
 @pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
@@ -297,49 +290,26 @@ def test_worker_killed_mid_stream_leaves_the_sibling_billing_each_stream_once(ga
         stack.callback(gate.set)
         config: Final = _owned_config(tmp_path / "worker-kill.yaml", gateway, wire, {})
         owned: Final = stack.enter_context(
-            owned_proxy_process(
-                gateway,
-                tmp_path,
-                {},
-                config=config,
-                workers=2,
-                healthcheck=WorkerHealthcheck.LENIENT,
-            )
+            owned_proxy_process(gateway, tmp_path, {}, config=config, workers=2, healthcheck=WorkerHealthcheck.LENIENT)
         )
-        workers: Final = eventually(
-            lambda: tuple(int(pid) for pid in _STARTED_WORKER.findall(owned.log.read_text())),
-            lambda pids: len(pids) == 2,
-            seconds=30,
-        )
+        victim, survivor = sorted(eventually(owned.worker_pids, lambda pids: len(pids) == 2, seconds=30))
         scenario: Final = stack.enter_context(owned.gateway.scenario())
-        proxy_url: Final = owned.gateway.client.base_url
-        clients: Final = tuple(
-            stack.enter_context(httpx.Client(base_url=str(proxy_url), timeout=60, trust_env=False)) for _ in range(12)
-        )
-        keys: Final = tuple(scenario.key(models=[_ADAPTER_MODEL]) for _ in clients)
-        with owned.suspended(workers[1]):
-            first_worker_ports: Final = tuple(_local_port(client) for client in clients[:6])
-        with owned.suspended(workers[0]):
-            second_worker_ports: Final = tuple(_local_port(client) for client in clients[6:])
-        ports: Final = first_worker_ports + second_worker_ports
-        pool: Final = stack.enter_context(ThreadPoolExecutor(max_workers=len(clients)))
-        futures: Final = tuple(
-            pool.submit(_stream_or_dropped, client, key) for client, key in zip(clients, keys, strict=True)
-        )
-        eventually(wire.received.qsize, lambda size: size >= len(clients), seconds=60)
-        shares: Final = {pid: _accepted_client_ports(pid, proxy_url.port or 0) & frozenset(ports) for pid in workers}
-        assert sum(map(len, shares.values())) == len(clients), shares
-        assert shares[workers[0]] == frozenset(first_worker_ports), shares
-        assert shares[workers[1]] == frozenset(second_worker_ports), shares
-        victim: Final = min((pid for pid in workers if shares[pid]), key=lambda pid: len(shares[pid]))
+        victim_keys: Final = tuple(scenario.key(models=[_ADAPTER_MODEL]) for _ in range(_STREAMS_PER_WORKER))
+        survivor_keys: Final = tuple(scenario.key(models=[_ADAPTER_MODEL]) for _ in range(_STREAMS_PER_WORKER))
+        proxy_url: Final = str(owned.gateway.client.base_url)
+        pool: Final = stack.enter_context(ThreadPoolExecutor(max_workers=2 * _STREAMS_PER_WORKER))
+        with owned.suspended(survivor):
+            on_victim: Final = _held_streams(stack, pool, proxy_url, victim_keys, wire, _STREAMS_PER_WORKER)
+        with owned.suspended(victim):
+            on_survivor: Final = _held_streams(stack, pool, proxy_url, survivor_keys, wire, 2 * _STREAMS_PER_WORKER)
         with owned.replacing_worker(victim) as kill:
             kill()
             gate.set()
-            results: Final = tuple(future.result(timeout=60) for future in futures)
-        survivors: Final = tuple(
-            (key, result) for port, key, result in zip(ports, keys, results, strict=True) if port not in shares[victim]
-        )
-        assert survivors, shares
+            dropped: Final = tuple(future.result(timeout=60) for future in on_victim)
+            survivors: Final = tuple(
+                zip(survivor_keys, (future.result(timeout=60) for future in on_survivor), strict=True)
+            )
+        assert dropped == (None,) * _STREAMS_PER_WORKER, dropped
         for _, result in survivors:
             assert result is not None
             _assert_one_stop_with(result, _GEMINI_USAGE)
