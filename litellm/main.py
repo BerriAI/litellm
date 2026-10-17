@@ -4152,9 +4152,11 @@ _AWS_BEDROCK_CLIENT_CREDENTIAL_KEYS: Final = (
 
 
 def _native_output_fallback(
-    ctx: CompletionDispatchContext, first_attempt_params: Mapping[str, object]
+    ctx: CompletionDispatchContext,
+    first_attempt_params: Mapping[str, object],
+    first_attempt_litellm_params: Mapping[str, object],
 ) -> NativeOutputFallback:
-    litellm_params: Final = without_bedrock_native_output_opt_in(ctx.litellm_params)
+    litellm_params: Final = without_bedrock_native_output_opt_in(first_attempt_litellm_params)
     remapped_params: Final = ctx.optional_params_for_model_info(deployment_model_info(litellm_params))
     return NativeOutputFallback(
         optional_params={
@@ -4170,9 +4172,11 @@ def _native_output_fallback(
 
 
 def _converse_native_output_fallback(
-    ctx: CompletionDispatchContext, first_attempt_params: Mapping[str, object]
+    ctx: CompletionDispatchContext,
+    first_attempt_params: Mapping[str, object],
+    first_attempt_litellm_params: Mapping[str, object],
 ) -> NativeOutputFallback | None:
-    fallback: Final = _native_output_fallback(ctx, first_attempt_params)
+    fallback: Final = _native_output_fallback(ctx, first_attempt_params, first_attempt_litellm_params)
     return None if AmazonConverseConfig.sends_native_text_format(fallback.optional_params) else fallback
 
 
@@ -4272,7 +4276,7 @@ def _complete_bedrock(ctx: CompletionDispatchContext) -> _CompletionDispatchResu
         response = call_with_native_output_fallback(
             converse_attempt,
             (
-                partial(_converse_native_output_fallback, ctx, converse_params)
+                partial(_converse_native_output_fallback, ctx, converse_params, dict(litellm_params))
                 if AmazonConverseConfig().uses_opt_in_native_output(converse_model, converse_params, litellm_params)
                 else None
             ),
@@ -4322,7 +4326,7 @@ def _complete_bedrock(ctx: CompletionDispatchContext) -> _CompletionDispatchResu
         response = call_with_native_output_fallback(
             invoke_attempt,
             (
-                partial(_native_output_fallback, ctx, invoke_params)
+                partial(_native_output_fallback, ctx, invoke_params, dict(litellm_params))
                 if isinstance(provider_config, AmazonAnthropicClaudeConfig)
                 and provider_config.uses_opt_in_native_output(model, invoke_params, litellm_params)
                 else None

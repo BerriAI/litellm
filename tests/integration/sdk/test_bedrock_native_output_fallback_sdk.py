@@ -231,6 +231,27 @@ def test_the_retry_sends_what_a_deployment_without_native_output_sends(
     assert retried == opted_out
 
 
+@_ROUTES
+def test_the_retry_keeps_the_callers_continuation_message(route: str, stream: bool, marker_hex: str) -> None:
+    request_params: Final = {
+        "thinking": {"type": "adaptive"},
+        "response_format": _response_format(_SCHEMA),
+        "messages": [
+            {"role": "user", "content": f"Name a city. probe {marker_hex}"},
+            {"role": "assistant", "content": "Which country should it be in?"},
+        ],
+        "user_continue_message": {"role": "user", "content": "Any country in South America"},
+    }
+
+    rejected, retried = _sent_bodies(route, stream, marker_hex, request_params, None)
+    (opted_out,) = _sent_bodies(
+        route, stream, marker_hex, request_params, {"supports_bedrock_native_structured_output": False}
+    )
+
+    assert _native(rejected, route == "invoke"), rejected
+    assert retried == opted_out
+
+
 _MAX_LENGTH_ONE_OF_SCHEMA: Final = {
     "type": "object",
     "properties": {
