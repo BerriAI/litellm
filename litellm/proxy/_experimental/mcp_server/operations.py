@@ -5,11 +5,11 @@ import time
 import traceback
 import types
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from datetime import datetime
-from functools import partial
+from functools import partial, reduce
 from types import EllipsisType
 from typing import Any, Final, NoReturn, TypeAlias, overload
 
@@ -47,7 +47,7 @@ from mcp.types import (
     ToolsCapability,
 )
 from mcp.types import Tool as MCPTool
-from pydantic import AnyUrl, ConfigDict, Field, SecretStr, TypeAdapter
+from pydantic import AnyUrl, ConfigDict, Field, JsonValue, SecretStr, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
 from litellm._logging import verbose_logger
@@ -317,6 +317,7 @@ async def _build_virtual_call_logging_obj(
     name: str,
     arguments: dict[str, object],
     user_api_key_auth: UserAPIKeyAuth,
+    logging_auth: UserAPIKeyAuth | None = None,
     raw_headers: Mapping[str, str] | None = None,
     client_ip: str | None = None,
 ) -> LiteLLMLoggingObj | None:
@@ -336,7 +337,7 @@ async def _build_virtual_call_logging_obj(
         raw_headers=raw_headers,
         client_ip=client_ip,
     )
-    _, virtual_logging_obj = await ProxyBaseLLMRequestProcessing(
+    pre_call_result: Final = await ProxyBaseLLMRequestProcessing(
         data={"name": name, "arguments": arguments}
     ).common_processing_pre_call_logic(
         request=request,
@@ -345,8 +346,65 @@ async def _build_virtual_call_logging_obj(
         route_type=CallTypes.call_mcp_tool.value,
         proxy_logging_obj=proxy_logging_obj,
         general_settings=general_settings,
+        logging_auth=logging_auth,
     )
+    _, logging_candidate = TypeAdapter(tuple[dict[str, object], object]).validate_python(pre_call_result)
+    if not isinstance(logging_candidate, LiteLLMLoggingObj):
+        verbose_logger.warning("MCP request processing did not return a logging object")
+        return None
+    virtual_logging_obj: Final = logging_candidate
     return virtual_logging_obj
+
+
+async def _log_virtual_mcp_tool_failure(
+    *,
+    logging_obj: LiteLLMLoggingObj | None,
+    exc: Exception,
+    call_start: datetime,
+    name: str,
+    arguments: dict[str, object] | None,
+    user_api_key_auth: UserAPIKeyAuth,
+    raw_headers: Mapping[str, str] | None,
+    client_ip: str | None,
+) -> None:
+    try:
+        failure_logging_obj: Final = (
+            logging_obj
+            if logging_obj is not None
+            else await _build_virtual_call_logging_obj(
+                name=name,
+                arguments=arguments or {},
+                user_api_key_auth=user_api_key_auth,
+                raw_headers=raw_headers,
+                client_ip=client_ip,
+            )
+        )
+        if failure_logging_obj is None:
+            return
+        from litellm.proxy.proxy_server import proxy_logging_obj as request_logging_obj
+
+        failure_end: Final = datetime.now()  # noqa: DTZ005  # matches the logging pipeline start time
+        failure_traceback: Final = traceback.format_exc(limit=MAXIMUM_TRACEBACK_LINES_TO_LOG)
+        failure_logging_obj.failure_handler(exc, failure_traceback, call_start, failure_end)
+        await failure_logging_obj.async_failure_handler(exc, failure_traceback, call_start, failure_end)
+        if isinstance(exc, MCPUpstreamAuthError):
+            return
+        failure_hook: Final = TypeAdapter(Callable[..., Awaitable[HTTPException | None]]).validate_python(
+            request_logging_obj.post_call_failure_hook
+        )
+        await failure_hook(
+            request_data={
+                "name": name,
+                "arguments": arguments,
+                "litellm_logging_obj": failure_logging_obj,
+            },
+            original_exception=exc,
+            user_api_key_dict=user_api_key_auth,
+            route="/mcp/call_tool",
+            traceback_str=failure_traceback,
+        )
+    except Exception:  # noqa: BLE001  # failure logging must not mask the tool call error
+        verbose_logger.exception("Error logging failed MCP proxy tool call")
 
 
 async def _dispatch_virtual_mcp_tool(
@@ -393,11 +451,51 @@ async def _dispatch_virtual_mcp_tool(
     if mcp_proxy_mode and name in MCP_PROXY_TOOL_NAMES:
         assert user_api_key_auth is not None
         proxy_call_start: Final = datetime.now()  # noqa: DTZ005  # logging pipeline uses naive datetimes
+        proxy_arguments: Final = arguments or {}
+        proxy_arguments_json: Final = TypeAdapter(dict[str, JsonValue]).validate_python(proxy_arguments)
+        proxy_tool_id: Final = proxy_arguments.get("tool_id")
+        try:
+            proxy_target_tool: Final = (
+                await find_mcp_proxy_tool(
+                    tool_id=proxy_tool_id,
+                    user_api_key_auth=user_api_key_auth,
+                    mcp_servers=mcp_servers,
+                    client_ip=client_ip,
+                    mcp_auth_header=mcp_auth_header,
+                    mcp_server_auth_headers=mcp_server_auth_headers,
+                    oauth2_headers=oauth2_headers,
+                    raw_headers=raw_headers,
+                )
+                if name == MCP_PROXY_CALL_TOOL_NAME and isinstance(proxy_tool_id, str)
+                else None
+            )
+            proxy_guardrail_auth: Final = (
+                await MCPRequestHandler.billing_auth_for_tool_call(
+                    user_api_key_auth,
+                    tool_name=proxy_target_tool.name,
+                    mcp_servers=mcp_servers,
+                )
+                if proxy_target_tool is not None
+                else user_api_key_auth
+            )
+        except Exception as exc:
+            await _log_virtual_mcp_tool_failure(
+                logging_obj=None,
+                exc=exc,
+                call_start=proxy_call_start,
+                name=name,
+                arguments=arguments,
+                user_api_key_auth=user_api_key_auth,
+                raw_headers=raw_headers,
+                client_ip=client_ip,
+            )
+            raise
         proxy_logging_obj: Final = (
             await _build_virtual_call_logging_obj(
                 name=name,
-                arguments=arguments or {},
+                arguments=proxy_arguments,
                 user_api_key_auth=user_api_key_auth,
+                logging_auth=proxy_guardrail_auth,
                 raw_headers=raw_headers,
                 client_ip=client_ip,
             )
@@ -407,7 +505,7 @@ async def _dispatch_virtual_mcp_tool(
         try:
             proxy_result: Final = await handle_mcp_proxy_tool(
                 name=name,
-                arguments=arguments or {},
+                arguments=proxy_arguments_json,
                 user_api_key_dict=user_api_key_auth,
                 client_ip=client_ip,
                 mcp_servers=mcp_servers,
@@ -417,30 +515,21 @@ async def _dispatch_virtual_mcp_tool(
                 raw_headers=raw_headers,
                 litellm_logging_obj=proxy_logging_obj,
                 incoming_bearer_token=incoming_bearer_token,
+                guardrail_auth=proxy_guardrail_auth,
+                resolved_tool=proxy_target_tool if name == MCP_PROXY_CALL_TOOL_NAME else ...,
             )
         except Exception as exc:
             if proxy_logging_obj is not None:
-                from litellm.proxy.proxy_server import proxy_logging_obj as request_logging_obj
-
-                failure_end: Final = datetime.now()  # noqa: DTZ005  # matches the logging pipeline start time
-                failure_traceback: Final = traceback.format_exc(limit=MAXIMUM_TRACEBACK_LINES_TO_LOG)
-                try:
-                    proxy_logging_obj.failure_handler(exc, failure_traceback, proxy_call_start, failure_end)
-                    await proxy_logging_obj.async_failure_handler(exc, failure_traceback, proxy_call_start, failure_end)
-                    if not isinstance(exc, MCPUpstreamAuthError):
-                        await request_logging_obj.post_call_failure_hook(
-                            request_data={
-                                "name": name,
-                                "arguments": arguments,
-                                "litellm_logging_obj": proxy_logging_obj,
-                            },
-                            original_exception=exc,
-                            user_api_key_dict=user_api_key_auth,
-                            route="/mcp/call_tool",
-                            traceback_str=failure_traceback,
-                        )
-                except Exception:  # noqa: BLE001  # a failing failure hook must not mask the tool call's own error
-                    verbose_logger.exception("Error logging failed MCP proxy tool call")
+                await _log_virtual_mcp_tool_failure(
+                    logging_obj=proxy_logging_obj,
+                    exc=exc,
+                    call_start=proxy_call_start,
+                    name=name,
+                    arguments=arguments,
+                    user_api_key_auth=proxy_guardrail_auth,
+                    raw_headers=raw_headers,
+                    client_ip=client_ip,
+                )
             raise
         if proxy_logging_obj is not None:
             return await _fire_mcp_tool_call_logging(
@@ -448,8 +537,8 @@ async def _dispatch_virtual_mcp_tool(
                 result=proxy_result,
                 start_time=proxy_call_start,
                 end_time=datetime.now(),  # noqa: DTZ005  # matches the logging pipeline start time
-                user_api_key_auth=user_api_key_auth,
-                request_data=types.MappingProxyType({"name": name, "arguments": arguments}),
+                user_api_key_auth=proxy_guardrail_auth,
+                request_data=types.MappingProxyType({"name": name, "arguments": proxy_arguments}),
             )
         return proxy_result
 
@@ -498,15 +587,21 @@ async def _dispatch_virtual_mcp_tool(
             top_k=coerce_top_k(args.get("top_k", DEFAULT_SKILL_SEARCH_TOP_K), default=DEFAULT_SKILL_SEARCH_TOP_K),
             user_api_key_dict=user_api_key_auth,
         )
+    tool_request: Final = TypeAdapter(CallToolRequestParams).validate_python(
+        {"name": args.get("tool_name", ""), "arguments": args.get("arguments") or {}}
+    )
+    tool_guardrail_auth: Final = await MCPRequestHandler.billing_auth_for_tool_call(
+        user_api_key_auth,
+        tool_name=tool_request.name,
+        mcp_servers=mcp_servers,
+    )
     virtual_logging_obj: Final = await _build_virtual_call_logging_obj(
-        name=name,
-        arguments=args,
+        name=tool_request.name,
+        arguments=tool_request.arguments or {},
         user_api_key_auth=user_api_key_auth,
+        logging_auth=tool_guardrail_auth,
         raw_headers=raw_headers,
         client_ip=client_ip,
-    )
-    tool_request: Final = CallToolRequestParams.model_validate(
-        types.MappingProxyType({"name": args.get("tool_name", ""), "arguments": args.get("arguments") or {}})
     )
     return await handle_mcp_tool_call(
         tool_name=tool_request.name,
@@ -520,6 +615,7 @@ async def _dispatch_virtual_mcp_tool(
         raw_headers=raw_headers,
         litellm_logging_obj=virtual_logging_obj,
         incoming_bearer_token=incoming_bearer_token,
+        guardrail_auth=tool_guardrail_auth,
     )
 
 
@@ -1775,7 +1871,7 @@ async def _list_mcp_resource_templates(
 
 def _resolve_display_name_to_original(
     name: str,
-    allowed_mcp_servers: list[MCPServer],
+    allowed_mcp_servers: Sequence[MCPServer],
 ) -> str:
     """Translate a display-name override back to the original prefixed tool name.
 
@@ -1790,6 +1886,15 @@ def _resolve_display_name_to_original(
             if display_name == name:
                 return add_server_prefix_to_name(unprefixed_name, get_server_prefix(server))
     return name
+
+
+def resolve_native_tool_name_for_server(
+    name: str,
+    server: MCPServer,
+    allowed_mcp_servers: Sequence[MCPServer],
+) -> str:
+    display_name_resolved: Final = _resolve_display_name_to_original(name, allowed_mcp_servers)
+    return strip_known_server_prefix(display_name_resolved, server)
 
 
 async def _get_byok_credential(
@@ -1988,6 +2093,7 @@ async def execute_mcp_tool(
     raw_headers: dict[str, str] | None = None,
     host_progress_callback: ProgressCallback | None = None,
     guardrail_context: Mapping[str, object] | None = None,
+    guardrail_auth: UserAPIKeyAuth | None = None,
     client_ip: str | None = None,
     wire_compat: WireCompat = WireCompat.LEGACY,
     input_responses: InputResponses | None = None,
@@ -2012,6 +2118,7 @@ async def execute_mcp_tool(
         start_time=start_time,
         host_progress_callback=host_progress_callback,
         guardrail_context=guardrail_context,
+        guardrail_auth=guardrail_auth,
         logging_data=types.MappingProxyType(kwargs),
         input_responses=input_responses,
         request_state=request_state,
@@ -2031,6 +2138,7 @@ async def _execute_mcp_tool(
     raw_headers: dict[str, str] | None = None,
     host_progress_callback: ProgressCallback | None = None,
     guardrail_context: Mapping[str, object] | None = None,
+    guardrail_auth: UserAPIKeyAuth | None = None,
     client_ip: str | None = None,
     wire_compat: WireCompat = WireCompat.LEGACY,
     input_responses: InputResponses | None = None,
@@ -2138,7 +2246,7 @@ async def _execute_mcp_tool(
                     break
         if mcp_server is not None:
             server_name = mcp_server.name
-            original_tool_name = strip_known_server_prefix(name, mcp_server)
+            original_tool_name = resolve_native_tool_name_for_server(name, mcp_server, allowed_mcp_servers)
 
         if requested_server is not None:
             if mcp_server is not None and mcp_server.server_id != requested_server.server_id:
@@ -2156,7 +2264,7 @@ async def _execute_mcp_tool(
             if mcp_server is None:
                 mcp_server = requested_server
                 server_name = requested_server.name
-                original_tool_name = strip_known_server_prefix(name, requested_server)
+                original_tool_name = resolve_native_tool_name_for_server(name, requested_server, allowed_mcp_servers)
 
     # Only enforce server-level permissions when we can resolve a server
     if server_name:
@@ -2186,6 +2294,14 @@ async def _execute_mcp_tool(
         mcp_server = global_mcp_server_manager.get_mcp_server_from_tool_name(  # rebind-ok: pre-existing rebinding on a rename-only line
             name
         )
+
+    effective_guardrail_auth: Final = await MCPRequestHandler.guardrail_auth_for_call(
+        guardrail_auth=guardrail_auth,
+        user_api_key_auth=user_api_key_auth,
+        server=mcp_server,
+        tool_name=original_tool_name,
+        allowed_mcp_servers=allowed_mcp_servers,
+    )
 
     client_auth_header: Final = mcp_auth_header
     if mcp_server:
@@ -2274,6 +2390,7 @@ async def _execute_mcp_tool(
                 ),
             ),
             incoming_bearer_token=incoming_bearer_token,
+            guardrail_auth=effective_guardrail_auth,
         )
         # `pre_call_tool_check` may return guardrail-modified
         # arguments; honor them on the local path too.
@@ -2322,6 +2439,7 @@ async def _execute_mcp_tool(
             name=original_tool_name,
             arguments=arguments,
             user_api_key_auth=user_api_key_auth,
+            guardrail_auth=effective_guardrail_auth,
             mcp_auth_header=mcp_auth_header,
             catalog_auth_header=client_auth_header,
             mcp_server_auth_headers=mcp_server_auth_headers,
@@ -2331,7 +2449,11 @@ async def _execute_mcp_tool(
             litellm_logging_obj=litellm_logging_obj,
             guardrail_context=guardrail_context,
             host_progress_callback=_guarded_progress_callback(
-                host_progress_callback, litellm_logging_obj, user_api_key_auth, kwargs
+                callback=host_progress_callback,
+                logging_obj=litellm_logging_obj,
+                original_auth=user_api_key_auth,
+                guardrail_auth=effective_guardrail_auth,
+                request_data=kwargs,
             ),
             wire_compat=wire_compat,
             input_responses=input_responses,
@@ -2410,6 +2532,7 @@ async def _execute_mcp_tool(
                     ),
                 ),
                 incoming_bearer_token=incoming_bearer_token,
+                guardrail_auth=effective_guardrail_auth,
             )
             if "arguments" in hook_result:
                 arguments = hook_result["arguments"]  # pyright: ignore[reportAny]  # hook returns untyped args
@@ -2422,7 +2545,8 @@ async def _execute_mcp_tool(
     return await _run_post_mcp_call_guardrails(
         result=converted,
         litellm_logging_obj=litellm_logging_obj,
-        user_api_key_auth=user_api_key_auth,
+        original_auth=user_api_key_auth,
+        guardrail_auth=effective_guardrail_auth,
         request_data=kwargs,
     )
 
@@ -2430,7 +2554,8 @@ async def _execute_mcp_tool(
 def _guarded_progress_callback(
     callback: ProgressCallback | None,
     logging_obj: LiteLLMLoggingObj | None,
-    caller: UserAPIKeyAuth | None,
+    original_auth: UserAPIKeyAuth | None,
+    guardrail_auth: UserAPIKeyAuth | None,
     request_data: Mapping[str, object],
 ) -> ProgressCallback | None:
     if callback is None:
@@ -2442,7 +2567,11 @@ def _guarded_progress_callback(
             return
         try:
             checked: Final = await _run_post_mcp_call_guardrails(
-                CallToolResult(content=[TextContent(type="text", text=message)]), logging_obj, caller, request_data
+                CallToolResult(content=[TextContent(type="text", text=message)]),
+                litellm_logging_obj=logging_obj,
+                original_auth=original_auth,
+                guardrail_auth=guardrail_auth,
+                request_data=request_data,
             )
             filtered: Final = TextContent.model_validate(checked.content[0]).text
         except Exception:  # noqa: BLE001  # any guardrail failure must withhold unverified progress text
@@ -2457,7 +2586,8 @@ def _guarded_progress_callback(
 async def _run_post_mcp_call_guardrails(
     result: CallToolResult,
     litellm_logging_obj: LiteLLMLoggingObj | None,
-    user_api_key_auth: UserAPIKeyAuth | None,
+    original_auth: UserAPIKeyAuth | None,
+    guardrail_auth: UserAPIKeyAuth | None,
     request_data: Mapping[str, object],
 ) -> CallToolResult:
     """Run ``post_mcp_call`` guardrails over an executed tool result.
@@ -2472,13 +2602,137 @@ async def _run_post_mcp_call_guardrails(
 
     if proxy_logging_obj is None:
         return result
+    post_auth: Final = guardrail_auth if guardrail_auth is not None else original_auth
+    if post_auth is original_auth:
+        request_data_for_hook: Final = (
+            litellm_logging_obj.model_call_details if litellm_logging_obj is not None else dict(request_data)
+        )
+        return await proxy_logging_obj.post_mcp_call_hook(
+            response=result,
+            request_data=request_data_for_hook,
+            user_api_key_dict=post_auth,
+        )
+    from litellm.proxy.litellm_pre_call_utils import add_guardrails_from_auth_metadata
+
+    base_request_data: Final[Mapping[str, object]] = (
+        litellm_logging_obj.model_call_details if litellm_logging_obj is not None else request_data
+    )
+    request_metadata: Final[object | None] = base_request_data.get("metadata")
+    metadata: Final[Mapping[str, object]] = (
+        TypeAdapter(Mapping[str, object]).validate_python(request_metadata)
+        if isinstance(request_metadata, Mapping)
+        else {}
+    )
+    post_auth_metadata: Final[Mapping[str, object]] = (
+        TypeAdapter(Mapping[str, object]).validate_python(post_auth.metadata)
+        if post_auth is not None and post_auth.metadata is not None
+        else {}
+    )
+    post_auth_team_metadata: Final[Mapping[str, object]] = (
+        TypeAdapter(Mapping[str, object]).validate_python(post_auth.team_metadata)
+        if post_auth is not None and post_auth.team_metadata is not None
+        else {}
+    )
+    post_auth_project_metadata: Final[Mapping[str, object]] = (
+        TypeAdapter(Mapping[str, object]).validate_python(post_auth.project_metadata)
+        if post_auth is not None and post_auth.project_metadata is not None
+        else {}
+    )
+    auth_guardrail_data: Final[dict[str, object]] = {"metadata": {}}  # mutable-ok: resolver writes metadata
+    if post_auth is not None:
+        auth_for_guardrail_resolution: Final = post_auth.model_copy(
+            update={
+                "metadata": _guardrail_metadata_for_legacy_resolver(post_auth_metadata),
+                "team_metadata": _guardrail_metadata_for_legacy_resolver(post_auth_team_metadata),
+                "project_metadata": _guardrail_metadata_for_legacy_resolver(post_auth_project_metadata),
+            }
+        )
+        add_guardrails_from_auth_metadata(
+            user_api_key_dict=auth_for_guardrail_resolution,
+            data=auth_guardrail_data,
+            metadata_variable_name="metadata",
+        )
+    auth_metadata: Final = auth_guardrail_data.get("metadata")
+    resolved_auth_metadata: Final[Mapping[str, object]] = (
+        TypeAdapter(Mapping[str, object]).validate_python(auth_metadata) if isinstance(auth_metadata, Mapping) else {}
+    )
+    request_guardrails: Final = _guardrails_from_metadata(metadata)
+    request_guardrail_names: Final = frozenset[str]().union(
+        *(_guardrail_names_from_entry(entry) for entry in request_guardrails)
+    )
+    auth_guardrails: Final = _deduplicate_auth_guardrails(
+        (
+            *_auth_guardrails_from_metadata(post_auth_metadata),
+            *_auth_guardrails_from_metadata(post_auth_team_metadata),
+            *_auth_guardrails_from_metadata(post_auth_project_metadata),
+            *_auth_guardrails_from_metadata(resolved_auth_metadata),
+        ),
+        request_guardrail_names,
+    )
+    merged_guardrails: Final = (*request_guardrails, *auth_guardrails)
+    guardrail_request_data: Final = {
+        **base_request_data,
+        "metadata": {
+            **metadata,
+            **resolved_auth_metadata,
+            "guardrails": list(merged_guardrails),
+        },
+    }
     return await proxy_logging_obj.post_mcp_call_hook(
         response=result,
-        request_data=(
-            litellm_logging_obj.model_call_details if litellm_logging_obj is not None else dict(request_data)
-        ),
-        user_api_key_dict=user_api_key_auth,
+        request_data=guardrail_request_data,
+        user_api_key_dict=post_auth,
     )
+
+
+def _guardrails_from_metadata(metadata: Mapping[str, object] | None) -> tuple[object, ...]:
+    if metadata is None:
+        return ()
+    guardrails_value: Final = metadata.get("guardrails")
+    if not isinstance(guardrails_value, list):
+        return ()
+    return TypeAdapter(tuple[object, ...]).validate_python(guardrails_value)
+
+
+def _guardrail_metadata_for_legacy_resolver(metadata: Mapping[str, object]) -> dict[str, object]:
+    return {
+        **metadata,
+        "guardrails": [entry for entry in _guardrails_from_metadata(metadata) if isinstance(entry, str)],
+    }
+
+
+def _auth_guardrails_from_metadata(metadata: Mapping[str, object]) -> tuple[object, ...]:
+    return tuple(
+        TypeAdapter(Mapping[object, object]).validate_python(guardrail) if isinstance(guardrail, Mapping) else guardrail
+        for guardrail in _guardrails_from_metadata(metadata)
+        if isinstance(guardrail, (str, Mapping))
+    )
+
+
+def _guardrail_names_from_entry(entry: object) -> frozenset[str]:
+    if isinstance(entry, str):
+        return frozenset({entry})
+    if not isinstance(entry, Mapping):
+        return frozenset()
+    typed_entry: Final[Mapping[object, object]] = TypeAdapter(Mapping[object, object]).validate_python(entry)
+    return frozenset(name for name in typed_entry if isinstance(name, str))
+
+
+def _deduplicate_auth_guardrails(
+    guardrails: tuple[object, ...],
+    request_guardrail_names: frozenset[str],
+) -> tuple[object, ...]:
+    def keep_distinct(
+        accumulated: tuple[tuple[object, ...], frozenset[str]],
+        entry: object,
+    ) -> tuple[tuple[object, ...], frozenset[str]]:
+        kept_entries, kept_names = accumulated
+        entry_names: Final = _guardrail_names_from_entry(entry)
+        if entry_names & (request_guardrail_names | kept_names):
+            return accumulated
+        return (*kept_entries, entry), kept_names | entry_names
+
+    return reduce(keep_distinct, guardrails, ((), frozenset()))[0]
 
 
 def suppress_completed_success_logging(logging_obj: LiteLLMLoggingObj) -> None:
@@ -2607,6 +2861,14 @@ def _single_scoped_server(
     return allowed_mcp_servers[0]
 
 
+async def resolve_scoped_mcp_server(
+    user_api_key_auth: UserAPIKeyAuth,
+    mcp_servers: Sequence[str],
+) -> MCPServer | None:
+    allowed_mcp_servers: Final = await _get_allowed_mcp_servers(user_api_key_auth, mcp_servers)
+    return _single_scoped_server(mcp_servers, allowed_mcp_servers)
+
+
 @client
 @catalog_operation(lambda: global_mcp_server_manager)
 async def call_mcp_tool(
@@ -2623,6 +2885,7 @@ async def call_mcp_tool(
     input_responses: InputResponses | None = None,
     request_state: str | None = None,
     incoming_bearer_token: SecretStr | None | EllipsisType = ...,
+    guardrail_auth: UserAPIKeyAuth | None = None,
     **kwargs: Any,
 ) -> CallToolResult | InputRequiredResult:
     """
@@ -2686,6 +2949,7 @@ async def call_mcp_tool(
             request_state=request_state,
             incoming_bearer_token=incoming_bearer_token,
             requested_server_id=scoped_server.server_id if scoped_server is not None else None,
+            guardrail_auth=guardrail_auth,
             **kwargs,
         )
     except Exception as e:
@@ -2874,6 +3138,7 @@ async def _handle_managed_mcp_tool(
     litellm_logging_obj: LiteLLMLoggingObj | None = None,
     host_progress_callback: ProgressCallback | None = None,
     guardrail_context: Mapping[str, object] | None = None,
+    guardrail_auth: UserAPIKeyAuth | None = None,
     client_ip: str | None = None,
     wire_compat: WireCompat = WireCompat.LEGACY,
     input_responses: InputResponses | None = None,
@@ -2903,6 +3168,7 @@ async def _handle_managed_mcp_tool(
         host_progress_callback=host_progress_callback,
         litellm_logging_obj=litellm_logging_obj,
         guardrail_context=guardrail_context,
+        guardrail_auth=guardrail_auth,
         wire_compat=wire_compat,
         input_responses=input_responses,
         request_state=request_state,
@@ -3099,7 +3365,16 @@ async def _execute_mcp_server_tool_call(
             raw_headers=raw_headers,
             client_ip=_client_ip,
         )
-        if user_api_key_auth is not None:
+        guardrail_auth: Final = (
+            await MCPRequestHandler.billing_auth_for_tool_call(
+                user_api_key_auth,
+                tool_name=params.name,
+                mcp_servers=mcp_servers,
+            )
+            if user_api_key_auth is not None
+            else None
+        )
+        if guardrail_auth is not None:
             data = await add_litellm_data_to_request(
                 data=body_data,
                 request=request,
@@ -3111,9 +3386,7 @@ async def _execute_mcp_server_tool_call(
                 # half (an already-over-budget team stops granting) lives in the source gate.
                 # Authorization is unaffected: it ran before this, and the union is resolved
                 # from the untouched auth object passed to call_mcp_tool below.
-                user_api_key_dict=await MCPRequestHandler.billing_auth_for_tool_call(
-                    user_api_key_auth, tool_name=params.name
-                ),
+                user_api_key_dict=guardrail_auth,
                 proxy_config=proxy_config,
             )
         else:
@@ -3132,6 +3405,7 @@ async def _execute_mcp_server_tool_call(
             input_responses=params.input_responses,
             request_state=params.request_state,
             incoming_bearer_token=context.incoming_bearer_token,
+            guardrail_auth=guardrail_auth,
             **data,  # for logging
         )
     except MCPMissingUserEnvVarsError as e:
@@ -3593,6 +3867,7 @@ class GatewayOperations:
                     client_ip=_client_ip,
                     host_progress_callback=operation.host_progress_callback,
                     guardrail_context=operation.guardrail_context,
+                    guardrail_auth=operation.guardrail_auth,
                     wire_compat=context.wire_compat,
                     input_responses=operation.input_responses,
                     request_state=operation.request_state,
