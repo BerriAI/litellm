@@ -56,6 +56,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
 )
 from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices, Usage
+from tests._support.clock_loops import AutojumpClockLoop
 
 from .conftest import normalize
 
@@ -1068,15 +1069,26 @@ async def test_guardrail_block_sends_the_failure_hook_replacement(
 
 
 @pytest.mark.asyncio
-async def test_guardrail_block_before_the_first_chunk_keeps_its_http_status() -> None:
-    status_code, media_type, frames = await _served(_blocked_after(0, {"error": _BLOCK_MESSAGE}))
+@pytest.mark.parametrize(
+    "detail,expected_fields",
+    [
+        pytest.param({"error": _BLOCK_MESSAGE}, {"error": _BLOCK_MESSAGE}, id="json_detail"),
+        pytest.param(
+            {"error": _BLOCK_MESSAGE, "matched_span": _UNSERIALIZABLE_SPAN},
+            {"error": _BLOCK_MESSAGE, "matched_span": str(_UNSERIALIZABLE_SPAN)},
+            id="non_json_detail",
+        ),
+    ],
+)
+async def test_guardrail_block_before_the_first_chunk_keeps_its_http_status(
+    detail: dict[str, object], expected_fields: dict[str, str]
+) -> None:
+    status_code, media_type, frames = await _served(_blocked_after(0, detail))
 
     assert (status_code, media_type) == (400, "text/event-stream")
     assert len(frames) == 2
-    assert _error_of(frames[0]) == _BLOCK_ERROR
+    assert _error_of(frames[0]) == {**_BLOCK_ERROR, "provider_specific_fields": expected_fields}
     assert frames[1] == "data: [DONE]"
-
-
 
 
 async def _blocked_after_a_stall() -> AsyncIterator[ModelResponseStream]:
@@ -1085,13 +1097,17 @@ async def _blocked_after_a_stall() -> AsyncIterator[ModelResponseStream]:
         yield chunk
 
 
-@pytest.mark.asyncio
-async def test_guardrail_block_after_a_keepalive_ping_ends_the_stream_with_an_error_event(
+def test_guardrail_block_after_a_keepalive_ping_ends_the_stream_with_an_error_event(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "sse_keepalive_ping_interval_seconds", 1)
+    loop: Final = AutojumpClockLoop()
 
-    status_code, _, frames = await _served(_blocked_after_a_stall())
+    try:
+        status_code, _, frames = loop.run_until_complete(_served(_blocked_after_a_stall()))
+    finally:
+        loop.run_until_complete(loop.shutdown_asyncgens())
+        loop.close()
 
     assert status_code == 200
     assert frames[0] == ": ping"

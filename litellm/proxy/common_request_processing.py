@@ -1011,7 +1011,7 @@ def sse_error_payload(exc: BaseException) -> tuple[int, Mapping[str, object]]:
 
 def _sse_error_frames(error_obj: Mapping[str, object]) -> tuple[str, str]:
     """The two frames an SSE stream ends with once it can no longer raise."""
-    return f"data: {json.dumps({'error': error_obj})}\n\n", "data: [DONE]\n\n"
+    return f"data: {json.dumps({'error': error_obj}, default=str)}\n\n", "data: [DONE]\n\n"
 
 
 def _sse_stream_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
