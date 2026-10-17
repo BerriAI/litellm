@@ -219,11 +219,12 @@ class RAGIngestOptions(TypedDict, total=False):
 class RAGIngestResponse(TypedDict, total=False):
     """Response from RAG ingest API."""
 
-    id: str  # Unique ingest job ID
-    status: Literal["completed", "in_progress", "failed"]
-    vector_store_id: str  # The vector store ID (created or existing)
-    file_id: str | None  # The file ID in the vector store
-    error: str | None  # Error message if status is "failed"
+    id: ReadOnly[str]  # Unique ingest job ID
+    status: ReadOnly[Literal["completed", "in_progress", "failed"]]
+    vector_store_id: ReadOnly[str]  # The vector store ID (created or existing)
+    file_id: ReadOnly[str | None]  # The file ID in the vector store
+    error: ReadOnly[str | None]  # Error message if status is "failed"
+    error_status_code: ReadOnly[int | None]
 
 
 class RAGIngestRequest(LiteLLMBaseModel):

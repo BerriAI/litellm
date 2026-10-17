@@ -149,6 +149,14 @@ async def _raise_when_input_file_must_be_managed(model: str, credentials: Mappin
     )
 
 
+def _raise_when_routing_headers_disagree(request: Request, body_model: object) -> None:
+    if (isinstance(body_model, str) and body_model) or request.query_params.get("model"):
+        return
+    if len(frozenset(request.headers.getlist("x-litellm-model"))) < 2:
+        return
+    raise batch_error(400, "Send one x-litellm-model header. This request has several naming different models")
+
+
 def _litellm_metadata_of(data: MutableMapping[str, object]) -> MutableMapping[str, object]:
     """The request's litellm_metadata mapping, created on the request when it carries none.
 
@@ -274,6 +282,7 @@ async def create_batch(
     data: dict = {}
     try:
         data = await read_request_body(request=request)  # rebind-ok: pre-existing rebinding on a rename-only line
+        _raise_when_routing_headers_disagree(request, data.get("model"))
         verbose_proxy_logger.debug(
             "Request received by LiteLLM:\n%s",
             json.dumps(data, indent=4),
