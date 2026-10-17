@@ -350,6 +350,7 @@ def test_proxy_admin_viewer_blocked_management_writes(blocked_route):
         "/model/info",
         "/jwt/key/mapping/list",
         "/jwt/key/mapping/info",
+        "/usage/ai/chat",
     ],
 )
 def test_proxy_admin_viewer_allowed_management_reads(allowed_read_route):
