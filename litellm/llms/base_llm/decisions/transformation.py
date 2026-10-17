@@ -495,6 +495,11 @@ class BaseDecisionsConfig(ABC):
     def resolve_connection(self, api_base: str | None, api_key: str | None) -> tuple[str | None, str | None]:
         return self.resolve_api_base(api_base), self.resolve_api_key(api_key)
 
+    def resolve_credential(
+        self, api_key: str | None, api_base: str, litellm_params: Mapping[str, object]
+    ) -> str | None:
+        return api_key
+
     @staticmethod
     def _first_secret(names: tuple[str, ...]) -> str | None:
         return next((value for value in (get_secret_str(name) for name in names) if value), None)

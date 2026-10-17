@@ -150,9 +150,9 @@ def _is_reaped(process: psutil.Process) -> bool:
     return False
 
 
-def _wait_until_reaped(process: psutil.Process, supervisor: psutil.Process, seconds: float) -> None:
+def _wait_until_reaped(process: psutil.Process, seconds: float) -> None:
     deadline: Final = time.monotonic() + seconds
-    while not _is_reaped(process) and not _is_stopped(supervisor):
+    while not _is_reaped(process):
         assert time.monotonic() < deadline, f"The supervisor did not reap worker {process.pid} within {seconds:.0f}s"
         time.sleep(0.05)
 
@@ -160,8 +160,6 @@ def _wait_until_reaped(process: psutil.Process, supervisor: psutil.Process, seco
 @dataclass(frozen=True, slots=True)
 class WorkerKill:
     victim: psutil.Process
-    supervisor: psutil.Process
-    reap_seconds: float
     fired: threading.Event
 
     def freeze(self) -> psutil.Process:
@@ -173,7 +171,6 @@ class WorkerKill:
         with suppress(psutil.NoSuchProcess):
             self.victim.kill()
         _wait_until_gone(self.victim, STRICT_HEALTHCHECK_SECONDS)
-        _wait_until_reaped(self.victim, self.supervisor, self.reap_seconds)
         self.fired.set()
 
 
@@ -250,22 +247,22 @@ class OwnedProxy:
         assert pid in before, f"{pid} is not a serving worker of this proxy: {sorted(before)}"
         return psutil.Process(pid), before
 
-    def _worker_kill(self, victim: psutil.Process) -> WorkerKill:
-        reap_seconds: Final = healthcheck_seconds(self.healthcheck) + STRICT_HEALTHCHECK_SECONDS
-        return WorkerKill(victim, psutil.Process(self.process.pid), reap_seconds, threading.Event())
+    def _replacement_of(self, victim: psutil.Process, before: frozenset[int]) -> int:
+        _wait_until_reaped(victim, healthcheck_seconds(self.healthcheck) + STRICT_HEALTHCHECK_SECONDS)
+        return self._await_replacement(before)
 
     @contextmanager
     def replacing_worker(self, pid: int) -> Iterator[WorkerKill]:
         victim, before = self._victim(pid)
-        kill: Final = self._worker_kill(victim)
+        kill: Final = WorkerKill(victim, threading.Event())
         yield kill
         assert kill.fired.is_set(), f"replacing_worker({pid}) exited without killing the worker"
-        self._await_replacement(before)
+        self._replacement_of(victim, before)
 
     def kill_worker(self, pid: int) -> int:
         victim, before = self._victim(pid)
-        self._worker_kill(victim)()
-        return self._await_replacement(before)
+        WorkerKill(victim, threading.Event())()
+        return self._replacement_of(victim, before)
 
     @contextmanager
     def suspended(self, pid: int) -> Iterator[psutil.Process]:

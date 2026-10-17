@@ -442,15 +442,26 @@ def _sdk_api_client(
         )
     if api == "image_variations":
         variation_factory: Final = OpenAIImageVariationsHandler()
-        params: Final = {
-            "api_key": "transport-only",
-            "base_url": kwargs["api_base"],
-            "timeout": timeout,
-        }
         return (
-            variation_factory.get_async_client(client=client, init_client_params=params)
+            variation_factory.get_async_client(
+                client=client,
+                api_key="transport-only",
+                api_base="https://sdk-default.example/v1",
+                timeout=timeout,
+                max_retries=0,
+                organization=None,
+                litellm_params={},
+            )
             if is_async
-            else variation_factory.get_sync_client(client=client, init_client_params=params)
+            else variation_factory.get_sync_client(
+                client=client,
+                api_key="transport-only",
+                api_base="https://sdk-default.example/v1",
+                timeout=timeout,
+                max_retries=0,
+                organization=None,
+                litellm_params={},
+            )
         )
     if api == "azure_gateway":
         return BaseAzureLLM()._init_azure_client_for_cloudflare_ai_gateway(
