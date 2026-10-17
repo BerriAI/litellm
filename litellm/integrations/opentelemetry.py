@@ -2462,6 +2462,21 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 value=standard_logging_payload["call_type"],
             )
 
+            operation_name: Final = (
+                self._gen_ai_operation_name(kwargs)
+                if self._gen_ai_semconv_latest_experimental
+                else (
+                    "chat"
+                    if standard_logging_payload.get("call_type") == "completion"
+                    else standard_logging_payload.get("call_type") or "chat"
+                )
+            )
+            self.safe_set_attribute(
+                span=span,
+                key=SpanAttributes.GEN_AI_OPERATION_NAME.value,
+                value=operation_name,
+            )
+
             # The Generative AI Provider: Azure, OpenAI, etc.
             provider_name: Final = litellm_params.get("custom_llm_provider", "Unknown")
             # Latest-experimental semconv replaced gen_ai.system with
@@ -2630,20 +2645,6 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                         key=SpanAttributes.GEN_AI_SYSTEM_INSTRUCTIONS.value,
                         value=safe_dumps(transformed_system_instructions),
                     )
-
-            if self._gen_ai_semconv_latest_experimental:
-                operation_name = self._gen_ai_operation_name(kwargs)
-            else:
-                operation_name = (
-                    "chat"
-                    if standard_logging_payload.get("call_type") == "completion"
-                    else standard_logging_payload.get("call_type") or "chat"
-                )
-            self.safe_set_attribute(
-                span=span,
-                key=SpanAttributes.GEN_AI_OPERATION_NAME.value,
-                value=operation_name,
-            )
 
             if standard_logging_payload.get("request_id"):
                 self.safe_set_attribute(
