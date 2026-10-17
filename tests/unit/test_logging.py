@@ -34,6 +34,7 @@ from litellm._logging import (
     _parse_json_logs_env,
     _plain_log_format,
     _stdout_truncation_marker,
+    print_startup_message,
     turn_on_json,
     format_base64_size,
     session_id_var,
@@ -1790,3 +1791,89 @@ def test_print_verbose_formats_args_only_when_set_verbose_is_on(monkeypatch, cap
     logging_module.print_verbose("key %s value %s", "k1", _StrCountingValue())
     assert _StrCountingValue.str_calls == 1
     assert capsys.readouterr().out == "key k1 value cached-vector\n"
+
+
+def test_print_startup_message_prints_plain_mode_text_unchanged(monkeypatch, capfd):
+    """Operators without JSON logs keep the colored, spaced terminal output exactly as before."""
+    monkeypatch.setattr(litellm, "json_logs", False)
+
+    print_startup_message("\n\033[1;32mLiteLLM: Proxy initialized with Config, Set models:\033[0m\n")
+
+    out, err = capfd.readouterr()
+    assert out == "\n\033[1;32mLiteLLM: Proxy initialized with Config, Set models:\033[0m\n\n"
+    assert err == ""
+
+
+def test_print_startup_message_is_one_json_record_in_json_mode(monkeypatch, capfd):
+    """With JSON logs on, a multi-line colored startup message is one INFO record with the colors and the
+    surrounding blank lines removed, so a log pipeline parses it like every other line. The logger sits
+    at WARNING, as it does in the CLI process, and the record still goes out: a print has no level."""
+    monkeypatch.setattr(litellm, "json_logs", True)
+    monkeypatch.setattr(sys, "excepthook", sys.excepthook)  # turn_on_json swaps it; put it back at teardown
+    turn_on_json()
+    verbose_proxy_logger.setLevel(logging.WARNING)
+
+    print_startup_message(
+        "\n\033[1;32mLiteLLM: Proxy initialized with Config, Set models:\033[0m\n\033[32m    gpt-4o\033[0m\n\n"
+    )
+
+    out, err = capfd.readouterr()
+    assert err == ""
+    lines: Final = [raw for raw in out.splitlines() if raw.strip()]
+    assert len(lines) == 1, lines
+    record: Final = json.loads(lines[0])
+    assert record["message"] == "LiteLLM: Proxy initialized with Config, Set models:\n    gpt-4o"
+    assert record["level"] == "INFO"
+    assert record["component"] == "LiteLLM Proxy"
+    # the record names the call site, not the helper, so operators can find the message
+    assert str(record["logger"]).startswith("test_logging.py:"), record["logger"]
+
+
+def test_print_startup_message_yellow_notice_is_an_info_record_on_stdout(monkeypatch, capfd):
+    """An operator notice printed in yellow (an ignored flag, a deprecation) stays on stdout in JSON mode,
+    where the print put it, as one INFO record with the color codes removed."""
+    monkeypatch.setattr(litellm, "json_logs", True)
+    monkeypatch.setattr(sys, "excepthook", sys.excepthook)
+    turn_on_json()
+    verbose_proxy_logger.setLevel(logging.WARNING)
+
+    print_startup_message("\033[1;33mLiteLLM: --ciphers is not applied when using --run_granian.\033[0m\n")
+
+    out, err = capfd.readouterr()
+    assert err == ""
+    lines: Final = [raw for raw in out.splitlines() if raw.strip()]
+    assert len(lines) == 1, lines
+    record: Final = json.loads(lines[0])
+    assert record["message"] == "LiteLLM: --ciphers is not applied when using --run_granian."
+    assert record["level"] == "INFO"
+
+
+def test_print_startup_message_shows_above_the_json_handler_level(monkeypatch, capfd):
+    """`LITELLM_LOG=WARNING` sets the JSON handler to WARNING, which drops the INFO logger lines; the
+    startup notices still go out, as the prints they replace did at every level."""
+    monkeypatch.setattr(litellm, "json_logs", True)
+    monkeypatch.setattr(sys, "excepthook", sys.excepthook)
+    turn_on_json()
+    verbose_proxy_logger.setLevel(logging.INFO)
+    for json_handler in verbose_proxy_logger.handlers:
+        monkeypatch.setattr(json_handler, "level", logging.WARNING)
+
+    print_startup_message("\033[94m\nSetting Cache on Proxy\033[0m")
+    verbose_proxy_logger.info("enable_redis_auth_cache is not set")
+
+    out, _ = capfd.readouterr()
+    lines: Final = [raw for raw in out.splitlines() if raw.strip()]
+    assert [json.loads(raw)["message"] for raw in lines] == ["Setting Cache on Proxy"]
+
+
+def test_print_startup_message_blank_spacer_emits_no_json_record(monkeypatch, capfd):
+    """A spacer that only pads the terminal has nothing to say to a log pipeline."""
+    monkeypatch.setattr(litellm, "json_logs", True)
+    monkeypatch.setattr(sys, "excepthook", sys.excepthook)
+    turn_on_json()
+    verbose_proxy_logger.setLevel(logging.INFO)
+
+    print_startup_message("")
+    print_startup_message("\n\033[0m\n")
+
+    assert capfd.readouterr() == ("", "")

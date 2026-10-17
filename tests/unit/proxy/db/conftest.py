@@ -100,6 +100,8 @@ if not earlier_calls and os.environ.get("FAKE_PRISMA_HANG_FIRST"):
     grandchild = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"])
     pathlib.Path(os.environ["FAKE_PRISMA_GRANDCHILD_PIDFILE"]).write_text(str(grandchild.pid))
     time.sleep(600)
+if os.environ.get("FAKE_PRISMA_STDOUT"):
+    sys.stdout.write(os.environ["FAKE_PRISMA_STDOUT"])
 sys.exit(0)
 """
 
@@ -111,6 +113,8 @@ class FakePrismaCli:
     With FAKE_PRISMA_HANG_FIRST set it hangs on its first call from a process tree
     of its own, the way the real CLI wraps Node around a Rust schema engine, so a
     timeout that kills only the direct child leaves the rest of that tree running.
+    With FAKE_PRISMA_STDOUT set it writes that text to stdout, the way `migrate diff
+    --script` prints the SQL that would close a schema gap.
     """
 
     calls_file: Path
@@ -142,6 +146,7 @@ def fake_prisma_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generato
     monkeypatch.setenv("FAKE_PRISMA_GRANDCHILD_PIDFILE", str(cli.grandchild_pidfile))
     monkeypatch.setenv("LITELLM_PRISMA_COMMAND_TIMEOUT", "1")
     monkeypatch.delenv("FAKE_PRISMA_HANG_FIRST", raising=False)
+    monkeypatch.delenv("FAKE_PRISMA_STDOUT", raising=False)
     yield cli
     if cli.grandchild_pidfile.exists():
         try:
