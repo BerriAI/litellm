@@ -3299,6 +3299,33 @@ def test_naming_tag_routed_deployments_leaves_the_request_metadata_untouched() -
     assert metadata == {"tags": ["tenant-a"]}
 
 
+@pytest.mark.parametrize(
+    ("has_request_input", "expected"), ((True, (TENANT_A, SHARED)), (False, EVERY_TENANT)), ids=("chat", "no-input")
+)
+def test_region_routable_deployments_follow_the_pre_call_region_check(
+    has_request_input: bool, expected: tuple[CooldownDeploymentInfo, ...]
+) -> None:
+    router: Final = _tenant_router((), **REGION_CHECKS_ON)
+    kept: Final = router._region_routable_deployments(
+        router.get_model_list(model_name="tenants") or [], {"allowed_model_region": "eu"}, has_request_input
+    )
+    assert router._deployment_ids(kept) == frozenset(deployment["model_id"] for deployment in expected)
+
+
+def test_routable_cooled_deployment_ids_skip_healthy_deployments_and_peel_tag_fallbacks() -> None:
+    router: Final = _tenant_router((TENANT_A, SHARED), **TAGS_ON)
+    routable: Final = asyncio.run(
+        router._async_routable_cooled_deployment_ids(
+            model="tenants",
+            request_deployments=router.get_model_list(model_name="tenants") or [],
+            cooldown_deployments=(TENANT_A["model_id"], SHARED["model_id"]),
+            request_kwargs={"metadata": {}},
+            has_request_input=True,
+        )
+    )
+    assert routable == frozenset((TENANT_A["model_id"], SHARED["model_id"]))
+
+
 REACHABILITY_REQUESTS: Final = (
     {"metadata": {"tags": ["tenant-a"]}},
     {"metadata": {}},
