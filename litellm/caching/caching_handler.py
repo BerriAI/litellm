@@ -184,7 +184,7 @@ def _should_defer_streaming_cache_hit_callbacks(*, cached_result: object) -> boo
     """
     from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 
-    stream_replay_classes: tuple[type, ...] = (CustomStreamWrapper, BaseResponsesAPIStreamingIterator)
+    base_replay_classes: Final = (CustomStreamWrapper, BaseResponsesAPIStreamingIterator)
     try:
         from litellm.llms.anthropic.pass_through.messages.response_cache import (
             CachedAnthropicMessagesStreamIterator,
@@ -193,11 +193,8 @@ def _should_defer_streaming_cache_hit_callbacks(*, cached_result: object) -> boo
         # The Anthropic Messages replay is only reachable through proxy-only
         # extras (fastapi). A base SDK install can never hold one, so the
         # isinstance check can safely go ahead without it.
-        pass
-    else:
-        stream_replay_classes = (*stream_replay_classes, CachedAnthropicMessagesStreamIterator)
-
-    return isinstance(cached_result, stream_replay_classes)
+        return isinstance(cached_result, base_replay_classes)
+    return isinstance(cached_result, (*base_replay_classes, CachedAnthropicMessagesStreamIterator))
 
 
 def _prompt_tokens_details_as_mapping(details: "PromptTokensDetailsWrapper") -> Mapping[str, object]:
