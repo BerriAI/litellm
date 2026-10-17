@@ -772,3 +772,98 @@ def test_restamp_streaming_chunk_rewrites_nested_model_in_guardrail_block_frames
     assert [frame for frame, event in zip(client_frames, events) if "response" not in event] == [
         frame for frame in frames if b'"response"' not in frame
     ]
+
+
+def test_restamp_streaming_chunk_rewrites_nested_model_on_dict_lifecycle_events():
+    from litellm.proxy.proxy_server import _restamp_streaming_chunk_model
+
+    chunk = {"type": "response.completed", "response": {"id": "resp_test", "model": "gpt-backend-2026-01-01"}}
+    result, _ = _restamp_streaming_chunk_model(
+        chunk=chunk,
+        requested_model_from_client="client-model",
+        request_data={"litellm_call_id": "test-call-id"},
+        model_mismatch_logged=False,
+    )
+
+    assert result["response"] == {"id": "resp_test", "model": "client-model"}
+    assert chunk["response"]["model"] == "gpt-backend-2026-01-01", "the priced original must not change"
+
+
+_BACKEND_COMPLETED_EVENT = b'{"type":"response.completed","response":{"id":"resp_1","model":"gpt-backend-2026-01-01"}}'
+
+
+@pytest.mark.parametrize(
+    "frame",
+    [
+        pytest.param(b"event: response.completed\ndata: " + _BACKEND_COMPLETED_EVENT + b"\n\n", id="event_line_first"),
+        pytest.param(b"data:" + _BACKEND_COMPLETED_EVENT + b"\n\n", id="no_space_after_data"),
+        pytest.param(
+            b"data: " + _BACKEND_COMPLETED_EVENT + b"\n\ndata: " + _BACKEND_COMPLETED_EVENT + b"\r\n\r\n",
+            id="coalesced_frames",
+        ),
+    ],
+)
+def test_restamp_streaming_chunk_rewrites_nested_model_on_every_sse_data_line(frame):
+    from litellm.proxy.proxy_server import _restamp_streaming_chunk_model
+
+    result, _ = _restamp_streaming_chunk_model(
+        chunk=frame,
+        requested_model_from_client="client-model",
+        request_data={"litellm_call_id": "test-call-id"},
+        model_mismatch_logged=False,
+    )
+
+    def is_data_line(line: bytes) -> bool:
+        return line.startswith(b"data:")
+
+    result_lines = result.splitlines(keepends=True)
+    frame_lines = frame.splitlines(keepends=True)
+    data_events = [json.loads(line.removeprefix(b"data:")) for line in result_lines if is_data_line(line)]
+    assert len(data_events) == len([line for line in frame_lines if is_data_line(line)])
+    assert {event["response"]["model"] for event in data_events} == {"client-model"}
+    assert [line for line in result_lines if not is_data_line(line)] == [
+        line for line in frame_lines if not is_data_line(line)
+    ]
+    assert [line[len(line.rstrip(b"\r\n")) :] for line in result_lines] == [
+        line[len(line.rstrip(b"\r\n")) :] for line in frame_lines
+    ]
+
+
+_SKIPPED_RESTAMPS = {
+    "azure_model_router": ("azure_ai/model_router", {}),
+    "fastest_response": ("openai/gpt-4o,gemini/gemini-2.5-flash", {"fastest_response": True}),
+}
+
+
+@pytest.mark.parametrize("skip", _SKIPPED_RESTAMPS.keys())
+def test_restamp_streaming_chunk_keeps_nested_model_where_the_top_level_model_is_kept(skip):
+    from litellm.proxy.proxy_server import _restamp_streaming_chunk_model
+
+    requested_model, request_data = _SKIPPED_RESTAMPS[skip]
+    frame = b"data: " + _BACKEND_COMPLETED_EVENT + b"\n\n"
+    results = [
+        _restamp_streaming_chunk_model(
+            chunk=chunk,
+            requested_model_from_client=requested_model,
+            request_data=request_data,
+            model_mismatch_logged=False,
+        )[0]
+        for chunk in (_make_response_created_event("gpt-backend-2026-01-01"), frame)
+    ]
+
+    assert results[0].response.model == "gpt-backend-2026-01-01"
+    assert results[1] == frame
+
+
+def test_restamp_streaming_chunk_leaves_raw_sse_passthrough_frames_untouched():
+    from litellm.proxy.proxy_server import _restamp_streaming_chunk_model
+
+    frame = b"data: " + _BACKEND_COMPLETED_EVENT + b"\n\n"
+    result, _ = _restamp_streaming_chunk_model(
+        chunk=frame,
+        requested_model_from_client="client-model",
+        request_data={"_litellm_raw_sse_stream": True},
+        model_mismatch_logged=False,
+    )
+
+    assert result == frame

@@ -9897,7 +9897,8 @@ def _restamp_nested_response_model(
     chunk: BaseModel | Mapping[str, object], target_model: str
 ) -> BaseModel | Mapping[str, object]:
     if not isinstance(chunk, BaseModel):
-        return chunk
+        restamped_event: Final = _event_with_restamped_nested_model(chunk, target_model)
+        return chunk if restamped_event is None else restamped_event
     nested_response: Final = _nested_response_of(chunk)
     if isinstance(nested_response, ResponsesAPIResponse):
         if nested_response.model in (None, target_model):
@@ -9909,23 +9910,39 @@ def _restamp_nested_response_model(
     return chunk.model_copy(update={"response": {**untyped_response, "model": target_model}})
 
 
-_SSE_DATA_FIELD_PREFIX: Final = b"data: "
+def _event_with_restamped_nested_model(event: Mapping[str, object], target_model: str) -> Mapping[str, object] | None:
+    nested_response: Final = as_str_mapping(event.get("response"))
+    if nested_response is None or nested_response.get("model") in (None, target_model):
+        return None
+    return {**event, "response": {**nested_response, "model": target_model}}
+
+
+_SSE_DATA_FIELD: Final = b"data:"
+_SSE_NESTED_RESPONSE_MARKER: Final = b'"response"'
 _SSE_EVENT_OBJECT: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 
 
 def _restamp_nested_response_model_in_sse_frame(frame: bytes, target_model: str) -> bytes:
-    if not frame.startswith(_SSE_DATA_FIELD_PREFIX):
+    if _SSE_NESTED_RESPONSE_MARKER not in frame:
         return frame
+    return b"".join(
+        _restamp_nested_response_model_in_sse_line(line, target_model) for line in frame.splitlines(keepends=True)
+    )
+
+
+def _restamp_nested_response_model_in_sse_line(line: bytes, target_model: str) -> bytes:
+    if not line.startswith(_SSE_DATA_FIELD):
+        return line
     try:
-        event: Final = _SSE_EVENT_OBJECT.validate_json(frame.removeprefix(_SSE_DATA_FIELD_PREFIX))
+        event: Final = _SSE_EVENT_OBJECT.validate_json(line.removeprefix(_SSE_DATA_FIELD).strip())
     except ValidationError:
-        return frame
-    nested_response: Final = as_str_mapping(event.get("response"))
-    if nested_response is None or nested_response.get("model") in (None, target_model):
-        return frame
-    restamped_event: Final = {**event, "response": {**nested_response, "model": target_model}}
+        return line
+    restamped_event: Final = _event_with_restamped_nested_model(event, target_model)
+    if restamped_event is None:
+        return line
     serialized_event: Final = json.dumps(restamped_event, separators=(",", ":"), ensure_ascii=False)
-    return _SSE_DATA_FIELD_PREFIX + serialized_event.encode() + b"\n\n"
+    line_ending: Final = line[len(line.rstrip(b"\r\n")) :]
+    return _SSE_DATA_FIELD + b" " + serialized_event.encode() + line_ending
 
 
 def _fast_serialize_simple_model_response_stream(
