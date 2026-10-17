@@ -21,7 +21,11 @@ litellm-gateway-auth.workspace = true
 litellm-gateway-hooks.workspace = true
 litellm-model-catalog.workspace = true
 litellm-gateway-ui.workspace = true
+litellm-auth-aws.workspace = true
 litellm-auth-types.workspace = true
+base64.workspace = true
+md-5 = "0.11.0"
+sha2.workspace = true
 litellm-config.workspace = true
 litellm-db.workspace = true
 litellm-http = { workspace = true, features = ["mcp"] }
@@ -39,7 +43,7 @@ uuid.workspace = true
 tower-sessions-moka-store = "0.15.0"
 
 [dev-dependencies]
-base64.workspace = true
+wiremock.workspace = true
 litellm-db-testing.workspace = true
 sqlx.workspace = true
 rstest.workspace = true

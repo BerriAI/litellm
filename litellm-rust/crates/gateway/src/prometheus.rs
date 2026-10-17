@@ -678,16 +678,31 @@ impl<'a> Values<'a> {
 /// reports for them; a provider error is named the way the proxy maps its status, prefixed by
 /// the provider.
 fn exception_class(record: &Record) -> String {
-    let status = record.outcome.status;
+    let class = error_class(record);
     let Some(deployment) = &record.outcome.deployment else {
+        return class.to_owned();
+    };
+    match deployment.provider() {
+        Some(provider) if !provider.is_empty() => {
+            let mut letters = provider.chars();
+            let first = letters.next().map(|c| c.to_uppercase().collect::<String>());
+            format!("{}{}.{class}", first.unwrap_or_default(), letters.as_str())
+        }
+        _ => class.to_owned(),
+    }
+}
+
+/// The class of the exception the proxy raises for a failed request, without the provider.
+pub(crate) fn error_class(record: &Record) -> &'static str {
+    let status = record.outcome.status;
+    if record.outcome.deployment.is_none() {
         return match status {
             400 => "BudgetExceededError",
             429 | 503 => "HTTPException",
             _ => "ProxyException",
-        }
-        .to_owned();
-    };
-    let class = match status {
+        };
+    }
+    match status {
         400 => "BadRequestError",
         401 => "AuthenticationError",
         403 => "PermissionDeniedError",
@@ -698,14 +713,6 @@ fn exception_class(record: &Record) -> String {
         500 => "InternalServerError",
         503 => "ServiceUnavailableError",
         _ => "APIError",
-    };
-    match deployment.provider() {
-        Some(provider) if !provider.is_empty() => {
-            let mut letters = provider.chars();
-            let first = letters.next().map(|c| c.to_uppercase().collect::<String>());
-            format!("{}{}.{class}", first.unwrap_or_default(), letters.as_str())
-        }
-        _ => class.to_owned(),
     }
 }
 
