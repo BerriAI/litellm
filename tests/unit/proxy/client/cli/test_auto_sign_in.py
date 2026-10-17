@@ -183,15 +183,28 @@ def test_the_browser_sign_in_never_looks_for_a_browser_in_ci(requests_mock: Mock
     assert echoed == []
 
 
-@pytest.mark.parametrize("name", ["www-browser", "links", "elinks", "lynx", "w3m"])
-def test_a_text_mode_browser_counts_as_no_browser(requests_mock: Mocker, name: str) -> None:
+@pytest.mark.parametrize(
+    ("name", "environ"),
+    [
+        ("www-browser", {"TERM": "xterm"}),
+        ("links", {"TERM": "xterm"}),
+        ("elinks", {"TERM": "xterm"}),
+        ("lynx", {"TERM": "xterm"}),
+        ("w3m", {"TERM": "xterm"}),
+        ("lynx", {"BROWSER": "lynx"}),
+        ("/usr/bin/w3m", {"BROWSER": "/usr/bin/w3m"}),
+    ],
+)
+def test_a_text_mode_browser_fails_at_once_even_when_browser_picks_it(
+    requests_mock: Mocker, name: str, environ: dict[str, str]
+) -> None:
     echoed: list[str] = []
 
     outcome: Final = pkce_browser_sign_in(
-        BASE_URL, echoed.append, find_browser=lambda: webbrowser.GenericBrowser(name), environ={"TERM": "xterm"}
+        BASE_URL, echoed.append, find_browser=lambda: webbrowser.GenericBrowser(name), environ=environ
     )
 
-    assert outcome == PkceFailure("only a text-mode web browser is available on this machine")
+    assert outcome == PkceFailure("the web browser is a text-mode one, which lite cannot show while a command waits")
     assert requests_mock.call_count == 0
     assert echoed == []
 
@@ -219,11 +232,11 @@ def test_an_ssh_session_without_a_display_never_opens_a_browser_on_the_remote_sc
 @pytest.mark.parametrize(
     "environ",
     [
-        {"BROWSER": "w3m"},
-        {"CI": "false", "BROWSER": "w3m"},
-        {"CI": "0", "BROWSER": "w3m"},
-        {"SSH_CONNECTION": "203.0.113.7 52144 10.0.0.5 22", "BROWSER": "w3m"},
-        {"SSH_CONNECTION": "203.0.113.7 52144 10.0.0.5 22", "DISPLAY": "localhost:10.0", "BROWSER": "w3m"},
+        {"BROWSER": "firefox"},
+        {"CI": "false", "BROWSER": "firefox"},
+        {"CI": "0", "BROWSER": "firefox"},
+        {"SSH_CONNECTION": "203.0.113.7 52144 10.0.0.5 22", "BROWSER": "firefox"},
+        {"SSH_CONNECTION": "203.0.113.7 52144 10.0.0.5 22", "DISPLAY": "localhost:10.0", "BROWSER": "firefox"},
     ],
     ids=["browser-picks-it", "ci-false", "ci-zero", "ssh-with-a-browser-forwarder", "ssh-with-x11-forwarding"],
 )
@@ -234,7 +247,7 @@ def test_a_browser_the_user_picked_starts_the_sign_in_and_names_how_long_it_wait
     echoed: list[str] = []
 
     outcome: Final = pkce_browser_sign_in(
-        BASE_URL, echoed.append, find_browser=lambda: webbrowser.GenericBrowser("w3m"), environ=environ
+        BASE_URL, echoed.append, find_browser=lambda: webbrowser.GenericBrowser("firefox"), environ=environ
     )
 
     assert isinstance(outcome, PkceFailure)
@@ -401,7 +414,7 @@ def test_a_proxy_without_browser_sign_in_is_named_as_too_old_instead_of_pointing
 
     def sign_in_with_a_picked_browser(base_url: str, echo: Callable[[str], None]) -> PkceCredential | PkceFailure:
         return pkce_browser_sign_in(
-            base_url, echo, find_browser=lambda: webbrowser.GenericBrowser("w3m"), environ={"BROWSER": "w3m"}
+            base_url, echo, find_browser=lambda: webbrowser.GenericBrowser("firefox"), environ={"BROWSER": "firefox"}
         )
 
     result: Final = CliRunner().invoke(

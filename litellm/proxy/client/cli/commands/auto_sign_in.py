@@ -69,8 +69,8 @@ def pkce_browser_sign_in(
         browser: Final = find_browser()
     except webbrowser.Error:
         return PkceFailure("no web browser is available on this machine")
-    if browser.name in _TEXT_MODE_BROWSERS and "BROWSER" not in environ:
-        return PkceFailure("only a text-mode web browser is available on this machine")
+    if Path(browser.name).name in _TEXT_MODE_BROWSERS:
+        return PkceFailure("the web browser is a text-mode one, which lite cannot show while a command waits")
     echo(
         f"lite is opening your browser to sign in and waits up to {LOGIN_TIMEOUT_SECONDS // 60} minutes "
         "for you to approve it. A shell or agent that stops commands sooner should run this one with a longer timeout."
