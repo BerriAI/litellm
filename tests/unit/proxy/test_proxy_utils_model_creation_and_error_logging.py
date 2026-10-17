@@ -687,8 +687,9 @@ class TestPostCallFailureHookEstimatesDispatchedInputTokens:
     """A non-stream request that failed after dispatch (timeout, provider
     error) consumed provider-billed input tokens but recovered no usage.
     post_call_failure_hook must estimate the input side onto request_data so
-    the spend log's failure row records what was sent instead of zero, while
-    never charging spend for the failure (LIT-5690).
+    the spend log's failure row records what was sent instead of zero
+    (LIT-5690), priced at the model's input rate since the provider bills the
+    prompt it accepted (LIT-145).
     """
 
     async def _run(self, request_data):
@@ -711,7 +712,7 @@ class TestPostCallFailureHookEstimatesDispatchedInputTokens:
         return logging_obj
 
     @pytest.mark.asyncio
-    async def test_dispatched_failure_estimates_input_tokens_with_zero_cost(self):
+    async def test_dispatched_failure_estimates_input_tokens_priced_at_input_rate(self):
         from datetime import datetime
 
         from litellm.types.utils import Usage
@@ -735,7 +736,9 @@ class TestPostCallFailureHookEstimatesDispatchedInputTokens:
         assert estimated.prompt_tokens > 0
         assert estimated.completion_tokens == 0
         assert estimated.total_tokens == estimated.prompt_tokens
-        assert request_data["response_cost"] == 0.0
+        expected_input_cost, _ = litellm.cost_per_token(model="gpt-3.5-turbo", prompt_tokens=estimated.prompt_tokens)
+        assert expected_input_cost > 0
+        assert request_data["response_cost"] == pytest.approx(expected_input_cost)
 
     @pytest.mark.asyncio
     async def test_failure_before_dispatch_stays_zero(self):
@@ -1901,7 +1904,7 @@ def test_usage_the_stream_already_recovered_beats_an_estimate():
     assert lifted == (recovered, 0.25)
 
 
-def test_a_request_that_reached_a_provider_bills_its_input_at_no_cost():
+def test_a_request_that_reached_a_provider_bills_its_input_at_the_input_rate():
     from litellm.proxy.utils import _failure_usage_to_lift
 
     lifted = _failure_usage_to_lift(
@@ -1918,7 +1921,9 @@ def test_a_request_that_reached_a_provider_bills_its_input_at_no_cost():
     usage, response_cost = lifted
     assert usage.prompt_tokens > 0
     assert usage.completion_tokens == 0
-    assert response_cost == 0.0
+    expected_input_cost, _ = litellm.cost_per_token(model=FAILURE_USAGE_MODEL, prompt_tokens=usage.prompt_tokens)
+    assert expected_input_cost > 0
+    assert response_cost == pytest.approx(expected_input_cost)
 
 
 @pytest.mark.parametrize(
@@ -2011,8 +2016,12 @@ def test_a_dispatched_failure_lifts_the_fields_the_spend_log_needs():
     assert lifted["start_time"] == 1699999999.0
     assert lifted["first_api_call_start_time"] == 1700000000.0
     assert lifted["call_type"] == "acompletion"
-    assert lifted["response_cost"] == 0.0
     assert lifted["combined_usage_object"].prompt_tokens > 0
+    expected_input_cost, _ = litellm.cost_per_token(
+        model=FAILURE_USAGE_MODEL, prompt_tokens=lifted["combined_usage_object"].prompt_tokens
+    )
+    assert expected_input_cost > 0
+    assert lifted["response_cost"] == pytest.approx(expected_input_cost)
     assert lifted["standard_logging_object"] == {"id": "log-1"}
 
 
