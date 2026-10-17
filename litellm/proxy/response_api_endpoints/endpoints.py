@@ -1884,7 +1884,7 @@ def _responses_ws_frame_guard(
     return guard
 
 
-def _recorded_guardrail_information(bucket: object) -> tuple[dict[str, object], ...]:
+def _recorded_guardrail_information(bucket: object) -> tuple[Mapping[str, object], ...]:
     recorded: Final = (
         _WS_FRAME.validate_python(bucket).get(_GUARDRAIL_INFORMATION_KEY) if isinstance(bucket, dict) else None
     )
