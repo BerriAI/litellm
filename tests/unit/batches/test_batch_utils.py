@@ -1983,6 +1983,20 @@ def test_total_cost_bills_cached_tokens_per_line_at_the_batch_cached_rate():
     assert result.cost == pytest.approx(long_line + short_line)
 
 
+def test_extract_credentials_keeps_openai_workload_identity_params():
+    params = {
+        "openai_identity_provider_id": "idp_deployment",
+        "openai_service_account_id": "user-deployment",
+        "openai_identity_token_file": "/var/run/secrets/token",
+        "model": "gpt-4o",
+    }
+    assert bu._extract_file_access_credentials(params) == {
+        "openai_identity_provider_id": "idp_deployment",
+        "openai_service_account_id": "user-deployment",
+        "openai_identity_token_file": "/var/run/secrets/token",
+    }
+
+
 # --------------------------------------------------------------------------- #
 # batch_cost_is_final
 # --------------------------------------------------------------------------- #

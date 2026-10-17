@@ -23,6 +23,8 @@ Metric = Literal[
     "memory_growth_megabytes",
     "postgres_calls_per_request",
     "postgres_background_calls_per_request",
+    "postgres_max_statement_per_request",
+    "postgres_max_background_statement_per_request",
     "cpu_seconds_per_request",
     "redis_calls_per_request",
     "redis_background_calls_per_request",
@@ -148,6 +150,9 @@ class PerformanceTestCase:
     traffic: Traffic
     limits: tuple[Limit, ...]
     mock_latency: MockLatency = field(default_factory=lambda: MockLatency())
+    background_cap_exempt_tables: frozenset[str] = frozenset()
+    """Tables whose background write is one upsert per writer flush and, at this case's request rate, lands
+    above the `postgres_max_background_statement_per_request` cap without being per request."""
 
     def team(self, name: str) -> Team:
         return next(team for team in self.teams if team.name == name)
