@@ -1,18 +1,25 @@
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping
 from typing import TYPE_CHECKING, Final
 
+from opentelemetry.sdk.trace import ReadableSpan
+
 from litellm._logging import verbose_logger
 from litellm.integrations.otel.logger import OpenTelemetryV2
 from litellm.integrations.otel.mappers.langfuse import (
     LANGFUSE_OBSERVATION_INPUT,
     LANGFUSE_OBSERVATION_OUTPUT,
+    LANGFUSE_TRACE_NAME,
     LangfuseMapper,
 )
+from litellm.integrations.otel.model.metadata import internal_call_origin
 from litellm.integrations.otel.model.request_io import request_input, response_output, stream_output
 from litellm.integrations.otel.model.trace_controls import caller_trace_controls
+from litellm.integrations.otel.model.utils import as_str
 from litellm.integrations.otel.plumbing.context import request_root_span
 
 if TYPE_CHECKING:
+    from opentelemetry.trace import Span
+
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
     from litellm.types.utils import ModelResponseStream
 
@@ -24,8 +31,25 @@ class LangfuseOpenTelemetryV2(OpenTelemetryV2):
     def log_pre_api_call(self, model: str, messages: object, kwargs: Mapping[str, object]) -> None:
         root: Final = request_root_span()
         if root is not None and root.is_recording():
-            root.set_attributes(LangfuseMapper.trace_attributes(caller_trace_controls(kwargs)))
+            root.set_attributes(
+                LangfuseMapper.trace_attributes(
+                    caller_trace_controls(kwargs),
+                    as_str(kwargs.get("call_type")) if self._derives_trace_name(root, kwargs) else None,
+                )
+            )
         super().log_pre_api_call(model, messages, kwargs)
+
+    def _derives_trace_name(self, root: "Span", kwargs: Mapping[str, object]) -> bool:
+        """Whether this call may name the request root after its call type: the call is not one litellm made for
+        its own features, this logger's provider started the root with no parent, and neither the caller nor an
+        earlier call in the request has named it."""
+        return (
+            internal_call_origin(None, kwargs) is None
+            and isinstance(root, ReadableSpan)
+            and root.parent is None
+            and root.resource is self.tracer_provider.resource
+            and LANGFUSE_TRACE_NAME not in (root.attributes or {})
+        )
 
 
 class LangfuseContentOpenTelemetryV2(LangfuseOpenTelemetryV2):

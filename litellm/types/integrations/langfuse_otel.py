@@ -31,6 +31,8 @@ class LangfuseSpanAttributes(str, Enum):
     OBSERVATION_OUTPUT = "langfuse.observation.output"
 
     # ---- Trace-level metadata ----
+    TRACE_INPUT = "langfuse.trace.input"
+    TRACE_OUTPUT = "langfuse.trace.output"
     TRACE_USER_ID = "user.id"
     SESSION_ID = "session.id"
     TAGS = "langfuse.trace.tags"

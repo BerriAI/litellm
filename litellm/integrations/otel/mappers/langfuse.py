@@ -89,10 +89,10 @@ class LangfuseMapper:
                 return {}
 
     @staticmethod
-    def trace_attributes(trace: TraceControls) -> AttributeMap:
+    def trace_attributes(trace: TraceControls, call_type: str | None = None) -> AttributeMap:
         return drop_none_pairs(
             (
-                (LANGFUSE_TRACE_NAME, trace.name or None),
+                (LANGFUSE_TRACE_NAME, trace.name or (f"litellm-{call_type}" if call_type else None)),
                 (LANGFUSE_TRACE_USER_ID, trace.user_id or None),
                 (LANGFUSE_TRACE_SESSION_ID, trace.session_id or None),
                 (LANGFUSE_TRACE_TAGS, trace.tags or None),
