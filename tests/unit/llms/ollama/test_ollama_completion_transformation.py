@@ -21,7 +21,14 @@ from litellm.types.utils import Message, ModelResponse, ModelResponseStream
 
 
 class TestOllamaConfig:
-    @pytest.mark.parametrize("body", [{}, {"error": {"message": "upstream broke"}}])
+    @pytest.mark.parametrize(
+        "body",
+        [
+            {},
+            {"error": {"message": "upstream broke"}},
+            {"response": "", "error": {"message": "upstream broke"}},
+        ],
+    )
     def test_transform_response_rejects_payload_without_completion(self, body):
         raw_response = MagicMock()
         raw_response.json.return_value = body
@@ -620,7 +627,10 @@ class TestOllamaConfig:
 
 @pytest.mark.parametrize(
     "response_body",
-    [pytest.param({}, id="missing-response"), pytest.param({"error": {"message": "upstream broke"}}, id="error")],
+    [
+        pytest.param({}, id="missing-response"),
+        pytest.param({"response": "", "error": {"message": "upstream broke"}}, id="error"),
+    ],
 )
 def test_completion_with_invalid_success_reply_raises_api_connection_error(
     respx_mock: respx.MockRouter, response_body: dict[str, object]

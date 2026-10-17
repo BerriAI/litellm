@@ -837,6 +837,7 @@ def _run_transform_response(response_body: dict) -> ModelResponse:
         {},
         {"error": {"message": "upstream broke"}},
         {"choices": None},
+        {"choices": "not-a-list"},
         {"choices": []},
         {"choices": [{}]},
         {"choices": [{"message": {}}]},
