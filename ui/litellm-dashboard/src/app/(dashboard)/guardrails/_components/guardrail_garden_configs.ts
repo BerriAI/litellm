@@ -322,6 +322,12 @@ export const GUARDRAIL_PRESETS: Record<string, GuardrailPreset> = {
     mode: "pre_call",
     defaultOn: false,
   },
+  thirdlaw: {
+    provider: "ThirdLaw",
+    guardrailNameSuggestion: "ThirdLaw Guardrail",
+    mode: "pre_call",
+    defaultOn: false,
+  },
   promptguard: {
     provider: "Promptguard",
     guardrailNameSuggestion: "PromptGuard",
