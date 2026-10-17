@@ -681,6 +681,44 @@ async def typesafe_proxy_route(
     return await endpoint_func(request, fastapi_response, user_api_key_dict)
 
 
+@router.api_route(
+    "/eu_jev/{endpoint:path}",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+    tags=["eu/jev Pass-through", "pass-through"],
+)
+async def eu_jev_proxy_route(
+    endpoint: str,
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> Response:
+    """[Docs](https://docs.litellm.ai/docs/pass_through/eu_jev)"""
+    base_target_url: Final = get_secret_str("EU_JEV_API_BASE") or "https://eu-jev.com"
+    encoded_endpoint: Final = httpx.URL(endpoint).path
+    normalized_endpoint: Final = encoded_endpoint if encoded_endpoint.startswith("/") else f"/{encoded_endpoint}"
+    base_url: Final = httpx.URL(base_target_url)
+    updated_url: Final = base_url.copy_with(
+        path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(base_url, normalized_endpoint),
+    )
+    eu_jev_api_key: Final = passthrough_endpoint_router.get_credentials(
+        custom_llm_provider="eu_jev",
+        region_name=None,
+    )
+    endpoint_func: Final = create_pass_through_route(
+        endpoint=endpoint,
+        target=str(updated_url),
+        custom_headers={
+            "Authorization": f"Bearer {eu_jev_api_key}",
+            "Content-Type": "application/json",
+        },
+        custom_llm_provider="eu_jev",
+        is_streaming_request=False,
+    )
+    return TypeAdapter(Response, config=ConfigDict(arbitrary_types_allowed=True)).validate_python(
+        await endpoint_func(request, fastapi_response, user_api_key_dict)
+    )
+
+
 @router.post(
     "/laya/v1/systemone",
     tags=["Laya Pass-through", "pass-through"],
