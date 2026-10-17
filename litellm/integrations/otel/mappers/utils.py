@@ -135,9 +135,9 @@ def message_content(message: object) -> str | None:
     return None
 
 
-def output_messages(data: LLMCallSpanData) -> list:
+def output_messages(data: LLMCallSpanData) -> tuple[object, ...]:
     """The ``message`` payload of each response choice."""
-    return [c.get("message") for c in data.choices_out if isinstance(c, dict)]
+    return tuple(c.get("message") for c in data.choices_out if isinstance(c, dict))
 
 
 def message_tool_calls(message: object) -> tuple[MessageToolCall, ...]:

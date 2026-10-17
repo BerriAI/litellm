@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from opentelemetry.sdk.trace import TracerProvider
 
+import litellm
 from litellm.integrations.langfuse.langfuse_otel import LangfuseOtelLogger
 from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
 from litellm.types.llms.openai import ResponsesAPIResponse
@@ -486,6 +487,187 @@ class TestLangfuseOtelIntegration:
             config = LangfuseOtelLogger.get_langfuse_otel_config()
             assert isinstance(config, OpenTelemetryConfig)
             # Endpoint assertion removed as side effect is gone
+
+    def test_request_metadata_is_emitted_under_langfuse_observation_and_trace_metadata_keys(self) -> None:
+        request_metadata: Final = {
+            "user_api_key_hash": "hash123",
+            "user_api_key_alias": "prod-key",
+            "user_api_key_user_id": "user-1",
+            "user_api_key_end_user_id": "end-user-1",
+            "user_api_key_team_id": "team-1",
+            "user_api_key_team_alias": "team-a",
+            "spend_logs_metadata": {"env": "prod"},
+            "requester_ip_address": "10.0.0.1",
+            "requester_metadata": {"ticket": "LIT-8283"},
+        }
+        kwargs: Final[dict[str, object]] = {
+            "litellm_params": {"metadata": {}},
+            "standard_logging_object": {"metadata": request_metadata},
+        }
+
+        with patch("litellm.integrations.arize._utils.safe_set_attribute") as mock_safe_set_attribute:
+            LangfuseOtelLogger._set_langfuse_specific_attributes(MagicMock(), kwargs, None)
+
+            actual: Final = {call.args[1]: call.args[2] for call in mock_safe_set_attribute.call_args_list}
+
+            assert json.loads(actual["langfuse.observation.metadata"]) == {**request_metadata}
+            assert {key: value for key, value in actual.items() if key.startswith("langfuse.trace.metadata.")} == {
+                "langfuse.trace.metadata.user_api_key_alias": "prod-key",
+                "langfuse.trace.metadata.user_api_key_user_id": "user-1",
+                "langfuse.trace.metadata.user_api_key_end_user_id": "end-user-1",
+                "langfuse.trace.metadata.user_api_key_team_id": "team-1",
+                "langfuse.trace.metadata.user_api_key_team_alias": "team-a",
+            }
+
+    def test_request_metadata_redaction_matches_vanilla_langfuse(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(litellm, "redact_user_api_key_info", True)
+        request_metadata: Final = {
+            "user_api_key_hash": "hash123",
+            "user_api_key_alias": "prod-key",
+            "user_api_key_user_id": "user-1",
+            "user_api_key_end_user_id": "end-user-1",
+            "user_api_key_team_id": "team-1",
+            "user_api_key_team_alias": "team-a",
+            "spend_logs_metadata": {"env": "prod"},
+            "requester_ip_address": "10.0.0.1",
+            "requester_metadata": {"ticket": "LIT-8283"},
+        }
+        kwargs: Final[dict[str, object]] = {
+            "litellm_params": {"metadata": {}},
+            "standard_logging_object": {"metadata": request_metadata},
+        }
+
+        with patch("litellm.integrations.arize._utils.safe_set_attribute") as mock_safe_set_attribute:
+            LangfuseOtelLogger._set_langfuse_specific_attributes(MagicMock(), kwargs, None)
+
+            actual: Final = {call.args[1]: call.args[2] for call in mock_safe_set_attribute.call_args_list}
+
+            assert json.loads(actual["langfuse.observation.metadata"]) == {
+                "spend_logs_metadata": {"env": "prod"},
+                "requester_ip_address": "10.0.0.1",
+                "requester_metadata": {"ticket": "LIT-8283"},
+            }
+            assert not [key for key in actual if key.startswith("langfuse.trace.metadata.")]
+
+    def test_request_metadata_omits_prompt_mcp_and_vector_store_content(self) -> None:
+        request_metadata: Final = {
+            "prompt_management_metadata": {
+                "prompt_id": "prompt-1",
+                "prompt_variables": {"input": "prompt-variables-secret"},
+                "prompt_integration": "prompt-service",
+            },
+            "mcp_tool_call_metadata": {
+                "name": "lookup_weather",
+                "mcp_server_name": "weather-server",
+                "arguments": {"location": "mcp-arguments-secret"},
+                "result": {"forecast": "mcp-result-secret"},
+            },
+            "vector_store_request_metadata": [
+                {
+                    "vector_store_id": "vs-1",
+                    "custom_llm_provider": "openai",
+                    "query": "vector-query-secret",
+                    "vector_store_search_response": {"text": "vector-response-secret"},
+                    "start_time": 1.0,
+                    "end_time": 2.0,
+                }
+            ],
+        }
+        kwargs: Final[dict[str, object]] = {
+            "litellm_params": {"metadata": {}},
+            "standard_logging_object": {"metadata": request_metadata},
+        }
+
+        with patch("litellm.integrations.arize._utils.safe_set_attribute") as mock_safe_set_attribute:
+            LangfuseOtelLogger._set_langfuse_specific_attributes(MagicMock(), kwargs, None)
+
+        actual: Final = {call.args[1]: call.args[2] for call in mock_safe_set_attribute.call_args_list}
+        observation_metadata: Final = actual["langfuse.observation.metadata"]
+        serialized: Final = json.dumps(observation_metadata)
+        parsed: Final = json.loads(observation_metadata)
+
+        assert "prompt-variables-secret" not in serialized
+        assert "mcp-arguments-secret" not in serialized
+        assert "mcp-result-secret" not in serialized
+        assert "vector-query-secret" not in serialized
+        assert "vector-response-secret" not in serialized
+        assert parsed["prompt_management_metadata"]["prompt_id"] == "prompt-1"
+        assert parsed["prompt_management_metadata"]["prompt_integration"] == "prompt-service"
+        assert parsed["mcp_tool_call_metadata"]["name"] == "lookup_weather"
+        assert parsed["mcp_tool_call_metadata"]["mcp_server_name"] == "weather-server"
+        assert parsed["vector_store_request_metadata"][0]["vector_store_id"] == "vs-1"
+        assert parsed["vector_store_request_metadata"][0]["custom_llm_provider"] == "openai"
+        assert parsed["vector_store_request_metadata"][0]["start_time"] == 1.0
+        assert parsed["vector_store_request_metadata"][0]["end_time"] == 2.0
+
+    def test_request_metadata_drops_null_fields_and_skips_empty_trace_identities(self) -> None:
+        request_metadata: Final = {
+            "user_api_key_alias": "prod-key",
+            "user_api_key_user_id": "user-1",
+            "user_api_key_end_user_id": None,
+            "user_api_key_team_id": "",
+            "user_api_key_team_alias": None,
+            "team_id": None,
+            "team_alias": None,
+            "spend_logs_metadata": {"env": "prod"},
+        }
+        kwargs: Final[dict[str, object]] = {
+            "litellm_params": {"metadata": {}},
+            "standard_logging_object": {"metadata": request_metadata},
+        }
+
+        with patch("litellm.integrations.arize._utils.safe_set_attribute") as mock_safe_set_attribute:
+            LangfuseOtelLogger._set_langfuse_specific_attributes(MagicMock(), kwargs, None)
+
+            actual: Final = {call.args[1]: call.args[2] for call in mock_safe_set_attribute.call_args_list}
+
+            assert json.loads(actual["langfuse.observation.metadata"]) == {
+                "user_api_key_alias": "prod-key",
+                "user_api_key_user_id": "user-1",
+                "user_api_key_team_id": "",
+                "spend_logs_metadata": {"env": "prod"},
+                "requester_metadata": {},
+            }
+            assert {key: value for key, value in actual.items() if key.startswith("langfuse.trace.metadata.")} == {
+                "langfuse.trace.metadata.user_api_key_alias": "prod-key",
+                "langfuse.trace.metadata.user_api_key_user_id": "user-1",
+            }
+
+    def test_request_metadata_keys_are_absent_without_standard_logging_object(self) -> None:
+        kwargs: Final = {"litellm_params": {"metadata": {"trace_metadata": {"k": "v"}}}}
+
+        with patch("litellm.integrations.arize._utils.safe_set_attribute") as mock_safe_set_attribute:
+            LangfuseOtelLogger._set_langfuse_specific_attributes(MagicMock(), kwargs, None)
+
+            actual: Final = {call.args[1]: call.args[2] for call in mock_safe_set_attribute.call_args_list}
+
+            assert [key for key in actual if key.startswith("langfuse.trace.metadata")] == ["langfuse.trace.metadata"]
+            assert "langfuse.observation.metadata" not in actual
+
+    @pytest.mark.parametrize(
+        "unexpected_shape",
+        [
+            {"prompt_management_metadata": {1: "one", "prompt_id": "prompt-1"}},
+            {"mcp_tool_call_metadata": {1: "one", "name": "lookup_weather"}},
+            {"vector_store_request_metadata": [{1: "one", "vector_store_id": "vs-1"}]},
+        ],
+    )
+    def test_request_metadata_of_unexpected_shape_keeps_the_observation_output(
+        self, unexpected_shape: dict[str, object]
+    ) -> None:
+        kwargs: Final[dict[str, object]] = {
+            "litellm_params": {"metadata": {}},
+            "standard_logging_object": {"metadata": {**unexpected_shape, "spend_logs_metadata": {"env": "prod"}}},
+        }
+        response_obj: Final = {"choices": [{"message": {"role": "assistant", "content": "hello"}}]}
+
+        with patch("litellm.integrations.arize._utils.safe_set_attribute") as mock_safe_set_attribute:
+            LangfuseOtelLogger._set_langfuse_specific_attributes(MagicMock(), kwargs, response_obj)
+
+            actual: Final = {call.args[1]: call.args[2] for call in mock_safe_set_attribute.call_args_list}
+
+            assert json.loads(actual["langfuse.observation.metadata"])["spend_logs_metadata"] == {"env": "prod"}
+            assert json.loads(actual["langfuse.observation.output"]) == {"role": "assistant", "content": "hello"}
 
 
 class TestLangfuseOtelKeyDynamicConfig:

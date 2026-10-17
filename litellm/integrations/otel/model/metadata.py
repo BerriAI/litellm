@@ -59,6 +59,11 @@ if TYPE_CHECKING:
 
 _INTERNAL_CALL_ORIGINS: Final[frozenset[str]] = frozenset(get_args(InternalCallOrigin))
 _AUTH_ATTRIBUTE: Final = TypeAdapter(object)
+_REQUEST_METADATA_MAPPING_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+_NESTED_METADATA_MAPPING_ADAPTER: Final[TypeAdapter[Mapping[object, object]]] = TypeAdapter(Mapping[object, object])
+_PROMPT_MANAGEMENT_CONTENT_FIELDS: Final[frozenset[str]] = frozenset({"prompt_variables"})
+_MCP_TOOL_CALL_CONTENT_FIELDS: Final[frozenset[str]] = frozenset({"arguments", "result"})
+_VECTOR_STORE_CONTENT_FIELDS: Final[frozenset[str]] = frozenset({"query", "vector_store_search_response"})
 
 REQUESTER_METADATA_KEY: Final = "requester_metadata"
 REQUESTER_METADATA_PATH: Final = f"{REQUESTER_METADATA_KEY}."
@@ -462,6 +467,60 @@ def _model_info_id(model_info: object) -> str | None:
     if isinstance(model_info, Mapping):
         return as_str(model_info.get("id"))
     return None
+
+
+def exported_request_metadata(payload: Mapping[str, object]) -> Mapping[str, object]:
+    """The request metadata as the logging callbacks export it: ``user_api_key_*``
+    dropped when ``litellm.redact_user_api_key_info`` is on, header keys nested
+    under ``requester_metadata``, ``None`` values dropped."""
+    from litellm.integrations.langfuse.langfuse import log_requester_metadata
+    from litellm.litellm_core_utils.redact_messages import (  # pyright: ignore[reportUnknownVariableType]  # helper uses bare dict
+        redact_user_api_key_info as _redact_user_api_key_info,
+    )
+
+    raw_metadata: Final = payload.get("metadata")
+    metadata: Final = _REQUEST_METADATA_MAPPING_ADAPTER.validate_python(
+        raw_metadata if isinstance(raw_metadata, Mapping) else MappingProxyType({})
+    )
+    redact_metadata: Final = cast(  # cast-ok: adapter validates the helper's output below
+        Callable[[dict[str, object]], object],
+        _redact_user_api_key_info,
+    )
+    redacted: Final = _REQUEST_METADATA_MAPPING_ADAPTER.validate_python(redact_metadata(dict(metadata)))
+    exported: Final = _REQUEST_METADATA_MAPPING_ADAPTER.validate_python(log_requester_metadata(redacted))
+    null_filtered: Final = MappingProxyType({key: value for key, value in exported.items() if value is not None})
+    return _without_request_metadata_content(null_filtered)
+
+
+def _without_mapping_content_fields(value: object, content_fields: frozenset[str]) -> object:
+    if not isinstance(value, dict):
+        return value
+    mapping: Final = _NESTED_METADATA_MAPPING_ADAPTER.validate_python(value)
+    return {key: item for key, item in mapping.items() if key not in content_fields}
+
+
+def _without_vector_store_content_fields(value: object) -> object:
+    if not isinstance(value, list):
+        return value
+    return tuple(_without_mapping_content_fields(item, _VECTOR_STORE_CONTENT_FIELDS) for item in value)
+
+
+def _request_metadata_value_without_content(key: str, value: object) -> object:
+    match key:
+        case "prompt_management_metadata":
+            return _without_mapping_content_fields(value, _PROMPT_MANAGEMENT_CONTENT_FIELDS)
+        case "mcp_tool_call_metadata":
+            return _without_mapping_content_fields(value, _MCP_TOOL_CALL_CONTENT_FIELDS)
+        case "vector_store_request_metadata":
+            return _without_vector_store_content_fields(value)
+        case _:
+            return value
+
+
+def _without_request_metadata_content(metadata: Mapping[str, object]) -> Mapping[str, object]:
+    return MappingProxyType(
+        {key: _request_metadata_value_without_content(key, value) for key, value in metadata.items()}
+    )
 
 
 def _team_metadata_dict(value: object) -> Mapping[str, object] | None:
