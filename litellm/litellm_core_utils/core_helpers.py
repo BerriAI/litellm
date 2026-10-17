@@ -551,17 +551,24 @@ def process_response_headers(
     return {**additional_headers, **({"request-id": request_id} if request_id is not None else {})}
 
 
+def upstream_non_openai_attributes(
+    response_type: "type[ModelResponseStream]", original_chunk: "ModelResponseStream"
+) -> Mapping[str, object]:
+    # Access model_fields on the class, not the instance, to avoid Pydantic 2.11+ deprecation warnings
+    expected_keys: Final = frozenset(response_type.model_fields).union({"usage"})
+    return MappingProxyType(
+        {key: value for key, value in original_chunk.model_dump().items() if key not in expected_keys}
+    )
+
+
 def preserve_upstream_non_openai_attributes(
     model_response: "ModelResponseStream", original_chunk: "ModelResponseStream"
 ):
     """
     Preserve non-OpenAI attributes from the original chunk.
     """
-    # Access model_fields on the class, not the instance, to avoid Pydantic 2.11+ deprecation warnings
-    expected_keys: Final = set(type(model_response).model_fields.keys()).union({"usage"})
-    for key, value in original_chunk.model_dump().items():
-        if key not in expected_keys:
-            setattr(model_response, key, value)
+    for key, value in upstream_non_openai_attributes(type(model_response), original_chunk).items():
+        setattr(model_response, key, value)
 
 
 def safe_deep_copy(data):

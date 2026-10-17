@@ -46,7 +46,7 @@ from litellm.types.utils import (
 from litellm.types.utils import GenericStreamingChunk as GChunk
 
 from ..exceptions import OpenAIError
-from .core_helpers import map_finish_reason, process_response_headers
+from .core_helpers import map_finish_reason, process_response_headers, upstream_non_openai_attributes
 from .exception_mapping_utils import exception_type
 from .llm_response_utils.get_api_base import get_api_base
 from .rules import Rules
@@ -86,6 +86,12 @@ def _stamp_served_service_tier(response: ModelResponseStream, complete_streaming
 def _apply_provider_fields(response: ModelResponseStream, fields: Mapping[str, object]) -> None:
     for key, value in fields.items():
         setattr(response, key, value)
+
+
+def _stamp_upstream_attributes(response: ModelResponseStream, attributes: Mapping[str, object]) -> None:
+    for key, value in attributes.items():
+        if value is not None:
+            setattr(response, key, value)
 
 
 def is_async_iterable(obj: object) -> bool:
@@ -296,6 +302,7 @@ class CustomStreamWrapper:
         self.stream_options = stream_options or getattr(logging_obj, "stream_options", None)
         self.messages = getattr(logging_obj, "messages", None)
         self.sent_stream_usage = False
+        self._usage_chunk_upstream_attributes: Mapping[str, object] = MappingProxyType({})
         self.send_stream_usage = True if self.check_send_stream_usage(self.stream_options) else False
         self.tool_call = False
         self.chunks: list = []  # keep track of the returned chunks - used for calculating the input/output tokens for stream options
@@ -1546,6 +1553,9 @@ class CustomStreamWrapper:
                         except Exception:
                             model_response.choices[0].delta = Delta()
                 else:
+                    self._usage_chunk_upstream_attributes = upstream_non_openai_attributes(
+                        ModelResponseStream, original_chunk
+                    )
                     if self.send_stream_usage is True:
                         model_response.choices = []
                         return model_response
@@ -1989,6 +1999,7 @@ class CustomStreamWrapper:
 
                 if self.sent_stream_usage is False and self.send_stream_usage is True:
                     self.sent_stream_usage = True
+                    _stamp_upstream_attributes(response, self._usage_chunk_upstream_attributes)
                     return response
                 self.close()
                 raise  # Re-raise StopIteration
@@ -2233,6 +2244,7 @@ class CustomStreamWrapper:
 
             if self.sent_stream_usage is False and self.send_stream_usage is True:
                 self.sent_stream_usage = True
+                _stamp_upstream_attributes(response, self._usage_chunk_upstream_attributes)
                 return response
 
             _deferred_cb: Final = getattr(

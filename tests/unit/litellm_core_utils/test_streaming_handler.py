@@ -777,6 +777,52 @@ def test_finish_reason_with_holding_chunk_preserves_non_openai_attributes(
     assert getattr(returned_chunk, "custom_field", None) == {"key": "value"}
 
 
+def _stream_ending_with_provider_usage_chunk() -> list[ModelResponseStream]:
+    def chunk(choices: list[StreamingChoices], usage: Usage | None = None) -> ModelResponseStream:
+        return ModelResponseStream(
+            id="chatcmpl-usage-fields",
+            created=1742056047,
+            model=None,
+            object="chat.completion.chunk",
+            choices=choices,
+            usage=usage,
+        )
+
+    usage_chunk: Final = chunk([], Usage(prompt_tokens=20, completion_tokens=10, total_tokens=30))
+    setattr(usage_chunk, "provider_metrics", {"energy_wh": 0.5})
+    return [
+        chunk([StreamingChoices(index=0, delta=Delta(content="Hello!", role="assistant"))]),
+        chunk([StreamingChoices(finish_reason="stop", index=0, delta=Delta())]),
+        usage_chunk,
+    ]
+
+
+@pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])
+@pytest.mark.asyncio
+async def test_final_usage_chunk_keeps_provider_fields_from_usage_only_chunk(sync_mode: bool):
+    response: Final = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(model_responses=_stream_ending_with_provider_usage_chunk()),
+        model="gpt-5.5",
+        custom_llm_provider="openai",
+        logging_obj=Logging(
+            model="gpt-5.5",
+            messages=[{"role": "user", "content": "Hey"}],
+            stream=True,
+            call_type="completion",
+            start_time=time.time(),
+            litellm_call_id="usage-fields",
+            function_id="usage-fields",
+        ),
+        stream_options={"include_usage": True},
+    )
+
+    chunks: Final = list(response) if sync_mode else [chunk async for chunk in response]
+
+    assert chunks[-1].usage is not None
+    assert chunks[-1].usage.total_tokens == 30
+    assert getattr(chunks[-1], "provider_metrics", None) == {"energy_wh": 0.5}
+
+
 def test_set_response_id_propagation_empty_to_valid(
     initialized_custom_stream_wrapper: CustomStreamWrapper,
 ):
