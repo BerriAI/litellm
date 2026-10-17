@@ -1219,6 +1219,9 @@ _UPSTREAM_BODY: Final = {
             ),
             "cyber_policy", id="upstream_body_code_and_message",
         ),
+        pytest.param(
+            "upstream_failure", RuntimeError("Upstream rejected request"), "server_error", id="builtin_exception"
+        ),
         *(
             pytest.param(
                 "upstream_failure", HTTPException(status_code=status, detail="Upstream rejected request"),
@@ -1233,7 +1236,7 @@ _UPSTREAM_BODY: Final = {
 )
 async def test_responses_stream_keeps_tool_deltas_and_only_emits_a_valid_terminal(
     terminal: Literal["completed", "serialization_failure", "failure_after_completed", "upstream_failure"],
-    upstream_error: HTTPException | OpenAIAPIError | None,
+    upstream_error: Exception | None,
     expected_code: str | None,
 ) -> None:
     class ToolDelta(BaseModel):
