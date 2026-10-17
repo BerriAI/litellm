@@ -38,14 +38,19 @@ _COMPACTION_ITEM: Final = {
 _TURN_AFTER_COMPACTION: Final = {"role": "user", "content": "And Osaka?"}
 
 
+@pytest.mark.parametrize(
+    "earlier_item",
+    [
+        pytest.param({"role": "user", "content": "Plan a Tokyo trip. " * 500}, id="user_turn"),
+        pytest.param({"role": ["system"], "content": "Plan a Tokyo trip."}, id="list_role"),
+        pytest.param({"role": {"name": "system"}, "content": "Plan a Tokyo trip."}, id="dict_role"),
+    ],
+)
 @pytest.mark.parametrize("model", [CL100K_MODEL, "claude-sonnet-5-5"])
 @pytest.mark.asyncio
-async def test_history_before_a_compaction_item_is_not_counted(model: str) -> None:
+async def test_history_before_a_compaction_item_is_not_counted(model: str, earlier_item: dict[str, object]) -> None:
     compacted_body: Final = {"model": model, "input": [_COMPACTION_ITEM, _TURN_AFTER_COMPACTION]}
-    full_body: Final = {
-        "model": model,
-        "input": [{"role": "user", "content": "Plan a Tokyo trip. " * 500}, _COMPACTION_ITEM, _TURN_AFTER_COMPACTION],
-    }
+    full_body: Final = {"model": model, "input": [earlier_item, _COMPACTION_ITEM, _TURN_AFTER_COMPACTION]}
 
     full_counts: Final = await count_input_tokens(
         request_body=full_body, raw_body=json.dumps(full_body).encode(), models=(model,)

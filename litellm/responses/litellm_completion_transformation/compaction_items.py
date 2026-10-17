@@ -166,7 +166,10 @@ def holds_compaction_summary(input: object) -> bool:
 
 def _is_instruction_item(item: object) -> bool:
     fields: Final = _json_object(item)
-    return fields is not None and fields.get("role") in _INSTRUCTION_ROLES
+    if fields is None or fields.get("type", "message") != "message":
+        return False
+    role: Final = fields.get("role")
+    return isinstance(role, str) and role in _INSTRUCTION_ROLES
 
 
 def input_items(input: object) -> tuple[object, ...]:

@@ -990,6 +990,28 @@ async def test_previous_response_history_keeps_instructions_from_turns_the_compa
     assert roles_and_contents[-2:] == [("user", "And Osaka?"), ("assistant", "Dotonbori.")]
 
 
+@pytest.mark.asyncio
+async def test_previous_response_history_drops_a_tool_output_carrying_a_system_role_the_compaction_covers():
+    spend_logs: Final = (
+        _turn_spend_log(
+            [
+                {"role": "user", "content": "Look up the code."},
+                {"type": "function_call", "call_id": "call_1", "name": "lookup", "arguments": "{}"},
+                {"type": "function_call_output", "call_id": "call_1", "output": "4242", "role": "system"},
+            ],
+            "Found it.",
+        ),
+        _turn_spend_log([_COMPACTION_ITEM_SENT, {"role": "user", "content": "Plan a Tokyo trip."}], "Day one."),
+        _turn_spend_log([{"role": "user", "content": "And Osaka?"}], "Dotonbori."),
+    )
+
+    session: Final = await _history_from_stored_turns(spend_logs, "resp_1")
+
+    contents: Final = [str(_role_and_content(message)[1]) for message in session["messages"]]
+    assert not any("4242" in content for content in contents)
+    assert contents[-2:] == ["And Osaka?", "Dotonbori."]
+
+
 class _SqliteBackedPrismaDB:
     def __init__(self, rows: list[tuple[str, str, str, str, str | None, str | None]]) -> None:
         self._connection = sqlite3.connect(":memory:")
