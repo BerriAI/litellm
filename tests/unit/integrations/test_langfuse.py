@@ -1,6 +1,7 @@
 import datetime
 import json
 import logging
+import sys
 import threading
 import time
 import types
@@ -19,7 +20,11 @@ from litellm.integrations.langfuse.langfuse import LangFuseLogger
 from litellm.integrations.langfuse.langfuse_otel import LangfuseOtelLogger
 from litellm.integrations.langfuse.langfuse_sdk import resolve_trace_id
 from litellm.integrations.opentelemetry import OpenTelemetryConfig
-from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.responses.utils import ResponseAPILoggingUtils
+
+# Import LangfuseUsageDetails directly from the module where it's defined
+from litellm.types.integrations.langfuse import *
+from litellm.types.llms.openai import InputTokensDetails, ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.services import ServiceLoggerPayload, ServiceTypes
 from litellm.types.utils import (
     Choices,
@@ -32,11 +37,6 @@ from litellm.types.utils import (
     TextChoices,
     TextCompletionResponse,
 )
-
-# Import LangfuseUsageDetails directly from the module where it's defined
-from litellm.types.integrations.langfuse import *
-from litellm.responses.utils import ResponseAPILoggingUtils
-from litellm.types.llms.openai import InputTokensDetails, ResponseAPIUsage, ResponsesAPIResponse
 
 
 @pytest.mark.asyncio
@@ -1883,11 +1883,8 @@ def test_session_header_trace_without_call_id_keeps_session_alias():
 def test_every_proxy_session_header_shape_is_classified_as_a_session_alias():
     from litellm.constants import TRACE_ID_SOURCE_METADATA_KEY
     from litellm.integrations.langfuse.langfuse import _is_session_header_trace
-    from litellm.proxy.litellm_pre_call_utils import (
-        _CODEX_SESSION_ID_HEADERS,
-        LiteLLMProxyRequestSetup,
-        get_chain_id_from_headers,
-    )
+    from litellm.litellm_core_utils.session_context import _CODEX_SESSION_ID_HEADERS
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, get_chain_id_from_headers
 
     session: Final = "session-7125-abcdef"
     affinity: Final = "web:alice.smith:7f3e9c2a-5b1d-4e8f-9a6c-0d2b4f6e8a1c"
@@ -1925,6 +1922,21 @@ def test_every_proxy_session_header_shape_is_classified_as_a_session_alias():
         headers=named_trace, data=named_data, _metadata_variable_name="metadata"
     )
     assert _is_session_header_trace(named_data["metadata"], session, {"headers": named_trace}) is False
+
+
+def test_session_header_trace_is_classified_without_the_proxy_extras(monkeypatch: pytest.MonkeyPatch):
+    """An SDK-only install has no FastAPI, so classifying a trace id must not pull in the proxy."""
+    from litellm.integrations.langfuse.langfuse import langfuse_trace_id
+
+    monkeypatch.setitem(sys.modules, "fastapi", None)
+    monkeypatch.delitem(sys.modules, "litellm.proxy.litellm_pre_call_utils", raising=False)
+    session: Final = "session-7125-abcdef"
+    proxy_server_request: Final = {"headers": {"x-litellm-session-id": session}}
+
+    trace_id: Final = langfuse_trace_id({}, None, session, "call-1234", proxy_server_request)
+
+    assert trace_id == "call-1234"
+    assert "litellm.proxy.litellm_pre_call_utils" not in sys.modules
 
 
 def test_session_affinity_beside_traceparent_keeps_the_real_trace():

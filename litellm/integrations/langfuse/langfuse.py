@@ -27,6 +27,7 @@ from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     validate_langfuse_environment_value,
 )
 from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
+from litellm.litellm_core_utils.session_context import resolve_session_context
 from litellm.llms.custom_httpx.http_handler import get_httpx_client
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.secret_managers.main import str_to_bool
@@ -78,8 +79,6 @@ def _string_headers(raw_headers: Mapping[str, object]) -> Mapping[str, str]:
 def _trace_id_source(metadata: Mapping[str, object], trace_id: object, raw_headers: Mapping[str, object]) -> object:
     """Request setup records what set the trace id. A log that skipped request setup (an SDK call,
     an MCP round inside a response) only carries the headers, so resolve the source from them."""
-    from litellm.proxy.litellm_pre_call_utils import resolve_session_context
-
     recorded_source: Final = metadata.get(TRACE_ID_SOURCE_METADATA_KEY)
     if recorded_source is not None:
         return recorded_source

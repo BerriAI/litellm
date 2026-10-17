@@ -435,8 +435,10 @@ def _team_metadata_requires_trace_id(team_object: LiteLLM_TeamTable) -> bool:
 
 
 def _request_has_trace_id(request_body: Mapping[str, object], request: Request, *, headers_only: bool = False) -> bool:
-    from litellm.proxy.litellm_pre_call_utils import (
+    from litellm.litellm_core_utils.session_context import (
         _trace_id_from_traceparent,  # pyright: ignore[reportPrivateUsage]  # reuse W3C traceparent parser
+    )
+    from litellm.proxy.litellm_pre_call_utils import (
         get_chain_id_from_headers,
         metadata_variable_name_for_route,
     )

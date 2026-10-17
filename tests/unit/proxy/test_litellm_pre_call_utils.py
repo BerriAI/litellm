@@ -3929,7 +3929,7 @@ def test_get_chain_id_from_headers_bare_session_id_loses_to_more_specific_header
 
 
 def test_trace_id_from_traceparent_valid():
-    from litellm.proxy.litellm_pre_call_utils import _trace_id_from_traceparent
+    from litellm.litellm_core_utils.session_context import _trace_id_from_traceparent
 
     assert (
         _trace_id_from_traceparent("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
@@ -3954,13 +3954,13 @@ def test_trace_id_from_traceparent_valid():
     ],
 )
 def test_trace_id_from_traceparent_rejects_malformed(traceparent: str):
-    from litellm.proxy.litellm_pre_call_utils import _trace_id_from_traceparent
+    from litellm.litellm_core_utils.session_context import _trace_id_from_traceparent
 
     assert _trace_id_from_traceparent(traceparent) is None
 
 
 def test_session_id_from_baggage_valid():
-    from litellm.proxy.litellm_pre_call_utils import _session_id_from_baggage
+    from litellm.litellm_core_utils.session_context import _session_id_from_baggage
 
     assert _session_id_from_baggage("session.id=abc-123,user.id=42") == "abc-123"
     assert _session_id_from_baggage("user.id=42, session.id=xyz-789") == "xyz-789"
@@ -3975,7 +3975,7 @@ def test_session_id_from_baggage_valid():
     ],
 )
 def test_session_id_from_baggage_absent_or_empty(baggage: str):
-    from litellm.proxy.litellm_pre_call_utils import _session_id_from_baggage
+    from litellm.litellm_core_utils.session_context import _session_id_from_baggage
 
     assert _session_id_from_baggage(baggage) is None
 
