@@ -7,7 +7,7 @@ Docs - https://docs.mistral.ai/api/
 """
 
 from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping
-from itertools import accumulate
+from itertools import accumulate, count
 from typing import TYPE_CHECKING, Final, Literal, cast, get_type_hints, overload
 
 import httpx
@@ -277,22 +277,25 @@ class MistralConfig(OpenAIGPTConfig):
         messages = handle_messages_with_content_list_to_str_conversion(messages)
 
         ## 3. Handle name in message
-        tool_call_turns: Final = accumulate(
-            enumerate(messages), MistralConfig._tool_call_turn, initial=_NO_TOOL_CALL_TURN
+        prepared_messages: Final = tuple(
+            MistralConfig._handle_tool_call_message(MistralConfig._handle_name_in_message(m)) for m in messages
         )
-        tool_reply_keys: Final = tuple(map(MistralConfig._tool_reply_key, messages, tool_call_turns))
+        empty_flags: Final = tuple(map(MistralConfig._is_empty_assistant_message, prepared_messages))
+        tool_call_turns: Final = accumulate(
+            zip(count(), prepared_messages, empty_flags, strict=False),
+            MistralConfig._tool_call_turn,
+            initial=_NO_TOOL_CALL_TURN,
+        )
+        tool_reply_keys: Final = tuple(map(MistralConfig._tool_reply_key, prepared_messages, tool_call_turns))
         first_reply_positions: Final = {
             key: position for position, key in reversed(tuple(enumerate(tool_reply_keys))) if key is not None
         }
         answering_positions: Final = frozenset(first_reply_positions.values())
-        new_messages: Final[list[AllMessageValues]] = []
-        for position, m in enumerate(messages):
-            m = MistralConfig._handle_name_in_message(m)
-            m = MistralConfig._handle_tool_call_message(m)
-            if MistralConfig._is_empty_assistant_message(m) and position not in answering_positions:
-                continue
-            m = strip_none_values_from_message(MistralConfig._with_tool_reply_content(m))
-            new_messages.append(m)
+        new_messages: Final[list[AllMessageValues]] = [
+            strip_none_values_from_message(MistralConfig._with_tool_reply_content(m))
+            for position, (m, is_empty) in enumerate(zip(prepared_messages, empty_flags, strict=True))
+            if not is_empty or position in answering_positions
+        ]
 
         if is_async:
             return super()._transform_messages(new_messages, model, True)
@@ -491,12 +494,12 @@ class MistralConfig(OpenAIGPTConfig):
 
     @staticmethod
     def _tool_call_turn(
-        turn: tuple[int, frozenset[str]], positioned_message: tuple[int, AllMessageValues]
+        turn: tuple[int, frozenset[str]], message_entry: tuple[int, AllMessageValues, bool]
     ) -> tuple[int, frozenset[str]]:
-        match positioned_message:
-            case (position, {"role": "assistant", "tool_calls": list(tool_calls)}):
+        match message_entry:
+            case (position, {"role": "assistant", "tool_calls": list(tool_calls)}, _):
                 return position, frozenset(filter(None, map(MistralConfig._tool_call_id, tool_calls)))
-            case (_, {"role": "tool"}):
+            case (_, {"role": "tool"}, _) | (_, _, True):
                 return turn
             case _:
                 return _NO_TOOL_CALL_TURN

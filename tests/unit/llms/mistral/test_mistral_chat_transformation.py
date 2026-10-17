@@ -1088,6 +1088,33 @@ def test_mistral_transform_request_keeps_an_empty_tool_message_answering_a_call_
     assert request["messages"][1]["content"] == ""
 
 
+@pytest.mark.parametrize("placeholder_role", ["assistant", "user"])
+def test_mistral_transform_request_keeps_an_empty_tool_message_after_a_dropped_empty_placeholder(placeholder_role):
+    messages: List[AllMessageValues] = cast(
+        List[AllMessageValues],
+        [
+            {"role": "user", "content": "weather?"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "weather", "arguments": "{}"}}
+                ],
+            },
+            {"role": placeholder_role, "content": ""},
+            {"role": "tool", "tool_call_id": "call_1", "content": ""},
+            {"role": "user", "content": "thanks"},
+        ],
+    )
+
+    request = MistralConfig().transform_request(
+        model="mistral-small-latest", messages=messages, optional_params={}, litellm_params={}, headers={}
+    )
+
+    assert [m.get("role") for m in request["messages"]] == ["user", "assistant", "tool", "user"]
+    assert request["messages"][2]["content"] == ""
+
+
 def test_mistral_transform_request_drops_an_empty_tool_message_whose_call_id_is_not_a_string():
     messages: List[AllMessageValues] = cast(
         List[AllMessageValues],
