@@ -59,6 +59,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.qohash import (
 from litellm.types.proxy.guardrails.guardrail_hooks.qualifire import (
     QualifireGuardrailConfigModel,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.realmlabs import (
+    RealmLabsGuardrailConfigModel,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.repelloai import (
     RepelloAIGuardrailConfigModel,
 )
@@ -129,6 +132,7 @@ class SupportedGuardrailIntegrations(Enum):
     MCP_SECURITY = "mcp_security"
     ONYX = "onyx"
     PROMPTGUARD = "promptguard"
+    REALMLABS = "realmlabs"
     XECGUARD = "xecguard"
     PROMPT_SECURITY = "prompt_security"
     GENERIC_GUARDRAIL_API = "generic_guardrail_api"
@@ -1365,6 +1369,7 @@ class LitellmParams(  # pyright: ignore[reportIncompatibleVariableOverride]  # o
     GraySwanGuardrailConfigModel,
     NomaGuardrailConfigModel,
     PromptGuardConfigModel,
+    RealmLabsGuardrailConfigModel,
     XecGuardConfigModel,
     ToolPermissionGuardrailConfigModel,
     ZscalerAIGuardConfigModel,
