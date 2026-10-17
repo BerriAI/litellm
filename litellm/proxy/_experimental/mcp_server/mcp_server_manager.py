@@ -455,6 +455,7 @@ class MCPServerConfig(TypedDict, total=False):
     upstream_token_header: ReadOnly[str]
     id_jag_resource_token_endpoint: str
     id_jag_resource: str
+    id_jag_subject_source: ReadOnly[str]
     id_jag_resource_client_id: ReadOnly[str]
     id_jag_resource_client_secret: ReadOnly[str]
     client_private_key: str
@@ -2789,6 +2790,7 @@ class MCPServerManager:
                 # ID-JAG fields
                 id_jag_resource_token_endpoint=server_config.get("id_jag_resource_token_endpoint", None),
                 id_jag_resource=server_config.get("id_jag_resource", None),
+                id_jag_subject_source=server_config.get("id_jag_subject_source", None),
                 id_jag_resource_client_id=server_config.get("id_jag_resource_client_id", None),
                 id_jag_resource_client_secret=server_config.get("id_jag_resource_client_secret", None),
                 client_private_key=server_config.get("client_private_key", None),
@@ -3380,6 +3382,7 @@ class MCPServerManager:
                 credentials_dict.get("id_jag_resource_token_endpoint") if credentials_dict else None
             ),
             id_jag_resource=(credentials_dict.get("id_jag_resource") if credentials_dict else None),
+            id_jag_subject_source=(credentials_dict.get("id_jag_subject_source") if credentials_dict else None),
             id_jag_resource_client_id=(credentials_dict.get("id_jag_resource_client_id") if credentials_dict else None),
             id_jag_resource_client_secret=self._decrypt_credential_field(
                 credentials_dict.get("id_jag_resource_client_secret") if credentials_dict else None,

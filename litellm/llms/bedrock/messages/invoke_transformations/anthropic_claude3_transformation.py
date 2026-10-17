@@ -90,6 +90,9 @@ class AmazonAnthropicClaudeMessagesConfig(
     def beta_headers_provider(self) -> str:
         return self.custom_llm_provider or "bedrock"
 
+    def drops_dangerous_tool_use_beta_without_safeguards(self) -> bool:
+        return True
+
     BEDROCK_INVOKE_ALLOWED_TOP_LEVEL_FIELDS = frozenset(BedrockInvokeAnthropicMessagesRequest.__annotations__.keys())
 
     def get_error_class(
@@ -552,8 +555,17 @@ class AmazonAnthropicClaudeMessagesConfig(
         if anthropic_model_info.is_eager_input_streaming_used(tools):
             beta_set.add(ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER)
 
+        dangerous_tool_use_beta: Final = ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value
         if anthropic_messages_optional_request_params.get("safeguards") is not None:
-            beta_set.add(ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value)
+            beta_set.add(dangerous_tool_use_beta)
+        elif dangerous_tool_use_beta in beta_set and self.drops_dangerous_tool_use_beta_without_safeguards():
+            beta_set.discard(dangerous_tool_use_beta)
+            verbose_logger.debug(
+                "Bedrock Invoke: dropping %s from client headers because the request has no safeguards. Bedrock "
+                "answers it with 'invalid beta flag' next to structured outputs before Opus 4.7, and on Sonnet 4.5, "
+                "Opus 4.5, and Opus 4.6 even alone.",
+                dangerous_tool_use_beta,
+            )
 
         self._filter_context_management_for_bedrock_invoke(
             anthropic_messages_request=anthropic_messages_request,
