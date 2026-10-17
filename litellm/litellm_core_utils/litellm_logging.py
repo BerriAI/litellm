@@ -2565,7 +2565,9 @@ class Logging(LiteLLMLoggingBaseClass):
         if not build_logging_payload:
             return None
 
-        standard_logging_payload: Final = self._build_standard_logging_payload(logging_result, start_time, end_time)
+        standard_logging_payload: Final = self._build_standard_logging_payload(
+            logging_result, start_time, end_time, isolate_call_details=not publish_logging_payload
+        )
         if not publish_logging_payload:
             return standard_logging_payload
         self.model_call_details["standard_logging_object"] = standard_logging_payload
@@ -2587,12 +2589,16 @@ class Logging(LiteLLMLoggingBaseClass):
         await invalidate_baseline_cache(self, reason, completed=completed)
 
     def _build_standard_logging_payload(
-        self, init_response_obj: object, start_time: dt_object, end_time: dt_object
+        self,
+        init_response_obj: object,
+        start_time: dt_object,
+        end_time: dt_object,
+        isolate_call_details: bool = False,
     ) -> StandardLoggingPayload | None:
         """Build StandardLoggingPayload and accumulate its construction time."""
         _start: Final = time.time()
         payload: Final = get_standard_logging_object_payload(
-            kwargs=self.model_call_details,
+            kwargs=dict(self.model_call_details) if isolate_call_details else self.model_call_details,
             init_response_obj=init_response_obj,
             start_time=start_time,
             end_time=end_time,
@@ -2768,8 +2774,9 @@ class Logging(LiteLLMLoggingBaseClass):
         publish_logging_payload: bool,
     ) -> StandardLoggingPayload | None:
         if standard_logging_object is not None:
-            if publish_logging_payload:
-                self.model_call_details["standard_logging_object"] = standard_logging_object
+            if not publish_logging_payload:
+                return standard_logging_object.copy()
+            self.model_call_details["standard_logging_object"] = standard_logging_object
             return standard_logging_object
         if result is None or self.stream is True:
             # Streaming reaches here before its cost is known, so the cost
@@ -3057,16 +3064,23 @@ class Logging(LiteLLMLoggingBaseClass):
                             emit_standard_logging_payload(standard_logging_payload)
             callback_logging_payload: Final = (
                 self._build_standard_logging_payload(
-                    self.model_call_details["complete_streaming_response"], start_time, end_time
+                    self.model_call_details["complete_streaming_response"],
+                    start_time,
+                    end_time,
+                    isolate_call_details=True,
                 )
                 if for_async_request and complete_streaming_response is not None
                 else request_logging_payload
             )
             call_details: dict[str, Any]  # mutable-ok: legacy loggers take a plain dict
             call_details = (  # rebind-ok: logging hooks may return a new dict
-                {**self.model_call_details, "standard_logging_object": callback_logging_payload}
-                if for_async_request
-                else self.model_call_details
+                self.model_call_details
+                if not for_async_request
+                else (
+                    dict(self.model_call_details)
+                    if callback_logging_payload is None
+                    else {**self.model_call_details, "standard_logging_object": callback_logging_payload}
+                )
             )
             callbacks: Final = self.get_combined_callback_list(
                 dynamic_success_callbacks=self.dynamic_success_callbacks,
@@ -4252,6 +4266,15 @@ class Logging(LiteLLMLoggingBaseClass):
             cache_hit,
             for_async_request=True,
         )
+
+    def handle_sync_cache_hit_success_callbacks(
+        self,
+        result: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+        cache_hit: bool | None = None,
+    ) -> None:
+        executor.submit(self.success_handler, result, start_time, end_time, cache_hit)
 
     def _should_run_sync_callbacks_for_async_calls(self) -> bool:
         """

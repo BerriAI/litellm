@@ -7638,9 +7638,10 @@ def test_cache_callback_alone_does_not_start_sync_callbacks_for_async_requests(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("turn_off_message_logging", [False, True])
 @pytest.mark.parametrize("make_response", [ModelResponse, _responses_api_response_with_text])
 async def test_sync_success_handler_landing_after_logging_hook_keeps_hook_payload_edits(
-    monkeypatch: pytest.MonkeyPatch, make_response: Callable[[], object]
+    monkeypatch: pytest.MonkeyPatch, make_response: Callable[[], object], turn_off_message_logging: bool
 ) -> None:
     mirrored: Final = {"x-ratelimit-model_per_project-limit-requests": 600}
     response: Final = make_response()
@@ -7667,11 +7668,52 @@ async def test_sync_success_handler_landing_after_logging_hook_keeps_hook_payloa
 
     monkeypatch.setattr(litellm, "_async_success_callback", [])
     monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "turn_off_message_logging", turn_off_message_logging)
     logging_obj: Final = _async_request_logging_obj("late-sync-rebuild", [MirroringHook(), Recorder()])
 
     await logging_obj.async_success_handler(result=response)
 
     assert seen_edits == [(mirrored, "masked by hook")]
+
+
+@pytest.mark.asyncio
+async def test_sync_only_logger_keeps_the_async_payload_when_its_result_builds_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sync_payloads: Final[list[object]] = []
+
+    class AthinaRecorder:
+        def log_event(
+            self,
+            kwargs: dict[str, object],
+            response_obj: object,
+            start_time: object,
+            end_time: object,
+            print_verbose: object,
+        ) -> None:
+            sync_payloads.append(kwargs.get("standard_logging_object"))
+
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "success_callback", ["athina"])
+    monkeypatch.setattr(litellm_logging, "athinaLogger", AthinaRecorder())
+    logging_obj: Final = LitellmLogging(
+        model="pass-through-model",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="pass_through_endpoint",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="pass-through-sync-logger",
+        function_id="pass-through-sync-logger",
+    )
+    logging_obj.update_environment_variables(litellm_params={"metadata": {}}, optional_params={})
+    raw_body: Final = json.dumps({"answer": "plain text"})
+    await logging_obj.async_success_handler(result=raw_body)
+    async_payload: Final = logging_obj.model_call_details.get("standard_logging_object")
+    assert isinstance(async_payload, dict)
+
+    logging_obj.success_handler(result=raw_body, for_async_request=True)
+
+    assert sync_payloads == [async_payload]
 
 
 @pytest.mark.asyncio

@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 load_dotenv()
 import asyncio
 import hashlib
+import threading
 import random
 
 import pytest
@@ -63,6 +64,39 @@ def setup_cache():
     cache = Cache(type=LiteLLMCacheType.LOCAL)
     litellm.cache = cache
     return cache
+
+
+def test_sync_cache_hit_reaches_sync_custom_logger(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.integrations.custom_logger import CustomLogger
+
+    logged_cache_hits: Final[list[object]] = []
+    cache_hit_logged: Final = threading.Event()
+
+    class SyncRecorder(CustomLogger):
+        def log_success_event(
+            self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+        ) -> None:
+            logged_cache_hits.append(kwargs.get("cache_hit"))
+            if kwargs.get("cache_hit") is True:
+                cache_hit_logged.set()
+
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "input_callback", [])
+    monkeypatch.setattr(litellm, "callbacks", [SyncRecorder()])
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+    request: Final = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": f"sync cache hit {uuid.uuid4()}"}],
+        "mock_response": "cached answer",
+        "caching": True,
+    }
+
+    completion(**request)
+    completion(**request)
+
+    assert cache_hit_logged.wait(timeout=10)
+    assert True in logged_cache_hits
 
 
 @pytest.fixture
@@ -1072,7 +1106,7 @@ def test_sync_get_cache_does_not_eagerly_log_streaming_responses_hits():
         stream=True,
         start_time=datetime.now(),
     )
-    logging_obj.handle_sync_success_callbacks_for_async_calls = MagicMock()
+    logging_obj.handle_sync_cache_hit_success_callbacks = MagicMock()
 
     kwargs = {
         "model": original_model,
@@ -1096,7 +1130,7 @@ def test_sync_get_cache_does_not_eagerly_log_streaming_responses_hits():
     assert isinstance(
         cached_response.cached_result, CachedResponsesAPIStreamingIterator
     )
-    logging_obj.handle_sync_success_callbacks_for_async_calls.assert_not_called()
+    logging_obj.handle_sync_cache_hit_success_callbacks.assert_not_called()
 
 
 def test_sync_get_cache_defers_streaming_completion_hit_callbacks():
@@ -1116,7 +1150,7 @@ def test_sync_get_cache_defers_streaming_completion_hit_callbacks():
         stream=True,
         start_time=datetime.now(),
     )
-    logging_obj.handle_sync_success_callbacks_for_async_calls = MagicMock()
+    logging_obj.handle_sync_cache_hit_success_callbacks = MagicMock()
 
     kwargs = {
         "model": original_model,
@@ -1137,7 +1171,7 @@ def test_sync_get_cache_defers_streaming_completion_hit_callbacks():
     )
 
     assert cached_response.cached_result is not None
-    logging_obj.handle_sync_success_callbacks_for_async_calls.assert_not_called()
+    logging_obj.handle_sync_cache_hit_success_callbacks.assert_not_called()
 
 
 def test_should_defer_streaming_cache_hit_callbacks_for_any_streaming_request():
@@ -3069,7 +3103,7 @@ async def test_a_cache_hit_inside_an_internal_sub_call_is_free_and_fires_no_call
     async_logging.async_success_handler = AsyncMock()
     async_logging.handle_sync_success_callbacks_for_async_calls = MagicMock()
     sync_logging: Final = _build_logging_obj(CallTypes.completion.value, stream=False)
-    sync_logging.handle_sync_success_callbacks_for_async_calls = MagicMock()
+    sync_logging.handle_sync_cache_hit_success_callbacks = MagicMock()
 
     with internal_sub_call() if internal else nullcontext():
         async_hit: Final = await LLMCachingHandler(
@@ -3100,4 +3134,4 @@ async def test_a_cache_hit_inside_an_internal_sub_call_is_free_and_fires_no_call
     assert sync_hit.cached_result._hidden_params.get("response_cost") == 0.0
     assert async_logging.async_success_handler.called is not internal
     assert async_logging.handle_sync_success_callbacks_for_async_calls.called is not internal
-    assert sync_logging.handle_sync_success_callbacks_for_async_calls.called is not internal
+    assert sync_logging.handle_sync_cache_hit_success_callbacks.called is not internal
