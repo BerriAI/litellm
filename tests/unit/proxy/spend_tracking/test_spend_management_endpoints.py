@@ -4486,7 +4486,7 @@ async def test_view_spend_logs_summarize_groups_by_day_in_sql(client, monkeypatc
         assert not hasattr(mock_prisma_client.db, "group_by")
         assert mock_prisma_client.db.captured_params == (
             "2024-01-01T00:00:00+00:00",
-            "2024-01-03T00:00:00+00:00",
+            "2024-01-04T00:00:00+00:00",
             "hashed::sk-abc",
             "req-123",
             "u1",
@@ -4580,7 +4580,7 @@ async def test_view_spend_logs_summarize_unhashed_api_key_without_padding(client
         data = response.json()
         assert mock_prisma_client.db.captured_params == (
             "2024-01-01T00:00:00+00:00",
-            "2024-01-01T00:00:00+00:00",
+            "2024-01-02T00:00:00+00:00",
             "plain-key",
         )
         assert data == [
