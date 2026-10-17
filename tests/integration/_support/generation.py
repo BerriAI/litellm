@@ -6,7 +6,7 @@ from contextlib import contextmanager
 import httpx
 from hypothesis import Phase, settings
 
-from integration._support.client import Gateway
+from tests.integration._support.client import Gateway
 
 LIFECYCLE_SETTINGS: Final = settings(
     max_examples=20,

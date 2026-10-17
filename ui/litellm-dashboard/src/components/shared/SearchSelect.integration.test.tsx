@@ -111,4 +111,36 @@ describe("SearchSelect", () => {
     expect(screen.queryByText("Growth")).not.toBeInTheDocument();
     expect(onValueChange).not.toHaveBeenCalled();
   });
+
+  it("supports keyboard select, clear, and reselect", async () => {
+    const onValueChange = vi.fn();
+    const user = userEvent.setup();
+    function Controlled() {
+      const [value, setValue] = useState<string | null>(null);
+      return (
+        <SearchSelect
+          options={OPTIONS}
+          value={value}
+          onValueChange={(next) => {
+            setValue(next);
+            onValueChange(next);
+          }}
+        />
+      );
+    }
+
+    render(<Controlled />);
+    const input = screen.getByRole("combobox");
+    await user.tab();
+    await user.keyboard("{Enter}");
+    await user.keyboard("{ArrowDown}{Enter}");
+    expect(onValueChange).toHaveBeenLastCalledWith("team-1");
+    const clear = screen.getByRole("button", { name: "Clear" });
+    clear.focus();
+    await user.keyboard("{Enter}");
+    expect(onValueChange).toHaveBeenLastCalledWith(null);
+    input.focus();
+    await user.keyboard("{Enter}{ArrowDown}{Enter}");
+    expect(onValueChange).toHaveBeenLastCalledWith("team-1");
+  });
 });

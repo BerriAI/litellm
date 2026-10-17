@@ -3,6 +3,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -32,6 +33,8 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
 
+_STR_MAPPING_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
 
 def _usage_restated_from_xai_ticks(usage: ResponseAPIUsage | None) -> ResponseAPIUsage | None:
     reported_cost: Final = xai_reported_cost_in_usd(getattr(usage, "cost_in_usd_ticks", None))
@@ -46,7 +49,6 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
     Inherits from OpenAIResponsesAPIConfig since XAI's Responses API is largely
     compatible with OpenAI's, with a few differences:
-    - Does not support the 'instructions' parameter
     - Requires code_interpreter tools to have 'container' field removed
     - Recommends store=false when sending images
 
@@ -56,20 +58,6 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
     @property
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.XAI
-
-    def get_supported_openai_params(self, model: str) -> list:
-        """
-        Get supported parameters for XAI Responses API.
-
-        XAI supports most OpenAI Responses API params except 'instructions'.
-        """
-        supported_params: Final = super().get_supported_openai_params(model)
-
-        # Remove 'instructions' as it's not supported by XAI
-        if "instructions" in supported_params:
-            supported_params.remove("instructions")
-
-        return supported_params
 
     def _transform_web_search_tool(self, tool: Mapping[str, object]) -> Mapping[str, object]:
         """
@@ -81,30 +69,25 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         - enable_image_understanding
 
         XAI does NOT support search_context_size (OpenAI-specific).
+
+        Domains may come nested under 'filters' (the OpenAI/XAI documented shape) or flat on the tool.
         """
         xai_tool: Final[dict[str, object]] = {"type": "web_search"}
 
-        # Remove search_context_size if present (not supported by XAI)
         if "search_context_size" in tool:
             verbose_logger.info(
                 "XAI does not support 'search_context_size' parameter. Removing it from web_search tool."
             )
 
-        # Handle filters (XAI-specific structure)
-        filters: Final = {}
-        if "allowed_domains" in tool:
-            allowed_domains: Final = tool["allowed_domains"]
-            filters["allowed_domains"] = allowed_domains
+        nested_filters: Final = tool.get("filters")
+        domains: Final = (
+            _STR_MAPPING_ADAPTER.validate_python(nested_filters) if isinstance(nested_filters, Mapping) else tool
+        )
+        filters: Final = {key: domains[key] for key in ("allowed_domains", "excluded_domains") if key in domains}
 
-        if "excluded_domains" in tool:
-            excluded_domains: Final = tool["excluded_domains"]
-            filters["excluded_domains"] = excluded_domains
-
-        # Add filters if any were specified
         if filters:
             xai_tool["filters"] = filters
 
-        # Handle enable_image_understanding (top-level in XAI format)
         if "enable_image_understanding" in tool:
             xai_tool["enable_image_understanding"] = tool["enable_image_understanding"]
 
@@ -160,18 +143,12 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         Map parameters for XAI Responses API.
 
         Handles XAI-specific transformations:
-        1. Drops 'instructions' parameter (not supported)
-        2. Transforms code_interpreter tools to remove 'container' field
-        3. Transforms web_search tools to XAI format (removes search_context_size, adds filters)
-        4. Transforms x_search tools to XAI format
-        5. Sets store=false when images are detected (recommended by XAI)
+        1. Transforms code_interpreter tools to remove 'container' field
+        2. Transforms web_search tools to XAI format (removes search_context_size, adds filters)
+        3. Transforms x_search tools to XAI format
+        4. Sets store=false when images are detected (recommended by XAI)
         """
         params: Final = dict(response_api_optional_params)
-
-        # Drop instructions parameter (not supported by XAI)
-        if "instructions" in params:
-            verbose_logger.debug("XAI Responses API does not support 'instructions' parameter. Dropping it.")
-            params.pop("instructions")
 
         if "metadata" in params:
             verbose_logger.debug("XAI Responses API does not support 'metadata' parameter. Dropping it.")

@@ -29,7 +29,7 @@ def parse_sse_json_chunk(chunk: str) -> dict[str, object] | None:
     # Import locally to avoid a circular import with the streaming handler.
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 
-    stripped_chunk: Final = (CustomStreamWrapper._strip_sse_data_from_chunk(chunk.strip()) or "").strip()
+    stripped_chunk: Final = (CustomStreamWrapper.strip_sse_data_from_chunk(chunk.strip()) or "").strip()
     if not stripped_chunk or stripped_chunk == STREAM_SSE_DONE_STRING or stripped_chunk.startswith("event:"):
         return None
     try:
