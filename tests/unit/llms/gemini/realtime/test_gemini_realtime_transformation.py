@@ -5,7 +5,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-
 import litellm
 from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
 from litellm.types.llms.gemini import BidiGenerateContentServerMessage
@@ -2235,3 +2234,86 @@ def test_gemini_realtime_response_done_reports_no_grounding_when_none_ran():
 
     assert input_details.get("web_search_requests") is None
     assert input_details.get("google_maps_grounding_requests") is None
+
+
+def _transform_input(**overrides: object) -> dict:
+    base = {
+        "session_configuration_request": None,
+        "current_output_item_id": None,
+        "current_response_id": None,
+        "current_conversation_id": None,
+        "current_delta_chunks": [],
+        "current_item_chunks": [],
+        "current_delta_type": None,
+    }
+    base.update(overrides)
+    return base
+
+
+def _client_frames(config: GeminiRealtimeConfig, *events: dict) -> list[dict]:
+    out: list[dict] = []
+    for event in events:
+        out += [json.loads(m) for m in config.transform_realtime_request(json.dumps(event), "gemini-3.8-live", None)]
+    return out
+
+
+def _user_item(text: str, **extra: object) -> dict:
+    return {
+        "type": "conversation.item.create",
+        **extra,
+        "item": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": text}]},
+    }
+
+
+def test_gemini_response_create_alone_hands_the_floor_to_the_model():
+    frames = _client_frames(GeminiRealtimeConfig(), {"type": "response.create"})
+    assert frames == [{"clientContent": {"turnComplete": True}}]
+
+
+def test_gemini_response_create_after_a_completed_item_does_not_generate_twice():
+    """Standard OpenAI clients send the item and then response.create: the item
+    already completed the turn, the trigger must not start a second generation."""
+    frames = _client_frames(GeminiRealtimeConfig(), _user_item("Bonjour."), {"type": "response.create"})
+    assert len(frames) == 1
+    assert frames[0]["clientContent"]["turnComplete"] is True
+
+
+def test_gemini_history_replay_with_turn_complete_false_generates_once():
+    config = GeminiRealtimeConfig()
+    frames = _client_frames(
+        config,
+        _user_item("tour 1", turn_complete=False),
+        _user_item("tour 2", turn_complete=False),
+        _user_item("tour 3", turn_complete=False),
+        {"type": "response.create"},
+    )
+    assert [f["clientContent"].get("turnComplete") for f in frames] == [False, False, False, True]
+    assert all("turns" in f["clientContent"] for f in frames[:3]) and "turns" not in frames[3]["clientContent"]
+
+
+def test_gemini_response_create_after_a_tool_response_does_not_generate_twice():
+    config = GeminiRealtimeConfig()
+    config._tool_call_id_to_name["call_1"] = "set_username"
+    frames = _client_frames(
+        config,
+        {
+            "type": "conversation.item.create",
+            "item": {"type": "function_call_output", "call_id": "call_1", "output": "{}"},
+        },
+        {"type": "response.create"},
+    )
+    assert [next(iter(f)) for f in frames] == ["toolResponse"]
+
+
+def test_gemini_response_create_works_again_once_the_turn_completed():
+    config = GeminiRealtimeConfig()
+    _client_frames(config, _user_item("Bonjour."))
+    config.transform_realtime_response(
+        json.dumps({"serverContent": {"turnComplete": True}}),
+        "gemini-3.8-live",
+        MagicMock(),
+        realtime_response_transform_input=_transform_input(
+            current_output_item_id="item_1", current_response_id="resp_1", current_delta_type="audio"
+        ),
+    )
+    assert _client_frames(config, {"type": "response.create"}) == [{"clientContent": {"turnComplete": True}}]

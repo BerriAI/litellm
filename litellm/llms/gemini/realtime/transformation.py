@@ -107,6 +107,7 @@ class _OpenAIRealtimeClientEvent(TypedDict, total=False):
     audio: ReadOnly[Required[str]]
     session: ReadOnly[dict[str, object]]
     item: ReadOnly[dict[str, object]]
+    turn_complete: ReadOnly[bool]
 
 
 def _parse_setup(session_configuration_request: str) -> BidiGenerateContentSetup:
@@ -146,6 +147,8 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
     def __init__(self):
         super().__init__()
         self._tool_call_id_to_name: OrderedDict[str, str] = OrderedDict()
+        # the last client frame already asked Gemini for a generation
+        self._generation_requested: bool = False
         # Gemini Live sometimes emits usageMetadata in a standalone frame between
         # turns; buffer it here so the next response.done carries the token counts.
         self._pending_usage_metadata: dict | None = None
@@ -542,8 +545,11 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         item_type: Final = item.get("type")
 
         if item_type == "function_call_output":
+            self._generation_requested = True
             return self._handle_function_call_output(item)
-        return self._handle_user_text_content(item)
+        turn_complete: Final = bool(json_message["turn_complete"]) if "turn_complete" in json_message else True
+        self._generation_requested = turn_complete
+        return self._handle_user_text_content(item, turn_complete=turn_complete)
 
     def _handle_function_call_output(self, item: dict) -> list[str]:
         """Transform function_call_output to Gemini toolResponse format."""
@@ -579,8 +585,12 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
 
         return [json.dumps(tool_response_message)]
 
-    def _handle_user_text_content(self, item: dict) -> list[str]:
-        """Transform user text content to Gemini clientContent format."""
+    def _handle_user_text_content(self, item: dict, turn_complete: bool = True) -> list[str]:
+        """Transform user text content to Gemini clientContent format.
+
+        turn_complete=False appends the turn without asking for a generation; a later
+        response.create then requests exactly one answer.
+        """
         content_list: Final = item.get("content", [])
         text_parts = [c.get("text", "") for c in content_list if isinstance(c, dict) and c.get("type") == "input_text"]
         text: Final = " ".join(filter(None, text_parts))
@@ -590,7 +600,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         client_content_message: Final = {
             "clientContent": {
                 "turns": [{"role": "user", "parts": [{"text": text}]}],
-                "turnComplete": True,
+                "turnComplete": turn_complete,
             }
         }
 
@@ -619,7 +629,12 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             return self._handle_session_update(json_message, model, session_configuration_request)
 
         if msg_type == "response.create":
-            return []  # Gemini responds automatically; nothing to forward
+            # an item that completed the turn, or a tool response, already asked Gemini
+            # to answer; a bare turnComplete would start a second generation
+            if self._generation_requested:
+                self._generation_requested = False
+                return []
+            return [json.dumps({"clientContent": {"turnComplete": True}})]
 
         if msg_type == "conversation.item.create":
             return self._handle_conversation_item(json_message)
@@ -1277,6 +1292,8 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
 
         server_content: Final = json_message.get("serverContent")
         if isinstance(server_content, dict):
+            if "turnComplete" in server_content:
+                self._generation_requested = False
             input_tx: Final = server_content.get("inputTranscription")
             if isinstance(input_tx, dict) and input_tx.get("text"):
                 transcription_usage: Final = self._consume_input_transcription_usage_estimate(model)
