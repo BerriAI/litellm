@@ -92,21 +92,28 @@ OPENAI_STOCK_REALTIME_VOICES: Final[frozenset[str]] = frozenset(
 )
 
 
-def _gemini_live_speech_config(voice: object) -> Mapping[str, object] | None:
-    """Build the Gemini Live speechConfig for a client-requested voice.
+def _gemini_live_speech_config(voice: object, language_code: str | None = None) -> Mapping[str, object] | None:
+    """Build the Gemini Live speechConfig for a client-requested voice and language.
 
     OpenAI stock voice names have no Gemini equivalent and Gemini Live closes
     the session on an unknown voice, so they are dropped with a warning and
     the model keeps its default voice. Every other name is forwarded verbatim.
+    The language reaches speechConfig.languageCode on its own: without it
+    Gemini Live picks the spoken language itself and drifts mid-conversation.
     """
-    if isinstance(voice, str) and voice.lower() in OPENAI_STOCK_REALTIME_VOICES:
+    dropped_voice: Final = isinstance(voice, str) and voice.lower() in OPENAI_STOCK_REALTIME_VOICES
+    if dropped_voice:
         verbose_logger.warning(
             "Gemini Realtime: voice %s is an OpenAI voice with no Gemini equivalent; "
             "dropping it so the session keeps the model's default voice.",
             voice,
         )
+    voice_params: Final[Mapping[str, object]] = {} if dropped_voice or voice is None else {"voice": voice}
+    language_params: Final[Mapping[str, object]] = {"language_code": language_code} if language_code else {}
+    audio_params: Final[Mapping[str, object]] = {**voice_params, **language_params}
+    if not audio_params:
         return None
-    return VertexGeminiConfig().map_audio_params({"voice": voice})
+    return VertexGeminiConfig().map_audio_params({**audio_params})
 
 
 class _GeminiLiveSetupEnvelope(TypedDict, total=False):
@@ -334,6 +341,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             "input_audio_transcription",
             "turn_detection",
             "voice",
+            "language",
         ]
 
     def map_openai_params(self, optional_params: dict, non_default_params: dict) -> dict:
@@ -378,8 +386,13 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                     optional_params["realtimeInputConfig"] = BidiGenerateContentRealtimeInputConfig(
                         automaticActivityDetection=transformed_audio_activity_config
                     )
-            elif key == "voice":
-                speech_config = _gemini_live_speech_config(value)
+            elif key == "voice" or (key == "language" and "voice" not in non_default_params):
+                speech_config = _gemini_live_speech_config(
+                    value if key == "voice" else None,
+                    non_default_params["language"]
+                    if "language" in non_default_params and isinstance(non_default_params["language"], str)
+                    else None,
+                )
                 if speech_config:
                     optional_params["generationConfig"]["speechConfig"] = speech_config
         if len(optional_params["generationConfig"]) == 0:
@@ -437,6 +450,8 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             output_cfg: Final = audio.get("output")
             if isinstance(output_cfg, dict) and output_cfg.get("voice"):
                 normalized["voice"] = output_cfg["voice"]
+            if isinstance(output_cfg, dict) and "language" in output_cfg and output_cfg["language"]:
+                normalized["language"] = output_cfg["language"]
 
         extracted_turn_detection: Final = GeminiRealtimeConfig._extract_turn_detection(normalized)
         if extracted_turn_detection is not None and not isinstance(normalized.get("turn_detection"), dict):

@@ -2281,3 +2281,29 @@ def test_gemini_interrupted_emits_speech_started_before_response_done():
     assert types.index("input_audio_buffer.speech_started") < types.index("response.done")
     speech_started = next(e for e in result["response"] if e["type"] == "input_audio_buffer.speech_started")
     assert speech_started["item_id"] == "item_1"
+
+
+def _speech_config_for(session: dict) -> dict | None:
+    messages = GeminiRealtimeConfig().transform_realtime_request(
+        json.dumps({"type": "session.update", "session": session}),
+        "gemini-3.8-live",
+        session_configuration_request=None,
+    )
+    return json.loads(messages[0])["setup"].get("generationConfig", {}).get("speechConfig")
+
+
+def test_gemini_output_language_reaches_speech_config_language_code():
+    """session.audio.output.language -> speechConfig.languageCode, next to the voice."""
+    speech_config = _speech_config_for({"audio": {"output": {"voice": "Puck", "language": "fr-FR"}}})
+    assert speech_config is not None
+    assert speech_config["languageCode"] == "fr-FR"
+    assert speech_config["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Puck"
+
+
+def test_gemini_output_language_is_kept_without_a_voice():
+    assert _speech_config_for({"audio": {"output": {"language": "fr-FR"}}}) == {"languageCode": "fr-FR"}
+
+
+def test_gemini_output_language_is_kept_when_an_openai_voice_is_dropped():
+    speech_config = _speech_config_for({"audio": {"output": {"voice": "marin", "language": "fr-FR"}}})
+    assert speech_config == {"languageCode": "fr-FR"}
