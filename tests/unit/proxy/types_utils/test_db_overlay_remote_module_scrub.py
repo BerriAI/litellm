@@ -182,6 +182,21 @@ def test_litellm_jwtauth_custom_validate_stripped():
     assert cleaned["litellm_jwtauth"]["user_id_jwt_field"] == "sub"
 
 
+@pytest.mark.parametrize("remote", ["s3://attacker/m.scanner", "gcs://attacker/m.scanner"])
+def test_rag_ingest_malware_scanner_stripped(remote):
+    overlay = {"rag_ingest": {"malware_scanner": remote}, "custom_auth": "my_auth.handler"}
+    cleaned = _scrub_db_overlay_remote_module_loads("general_settings", overlay)
+    assert cleaned["rag_ingest"]["malware_scanner"] is None
+    assert cleaned["custom_auth"] == "my_auth.handler"
+    assert overlay["rag_ingest"]["malware_scanner"] == remote
+
+
+def test_rag_ingest_local_malware_scanner_preserved():
+    overlay = {"rag_ingest": {"malware_scanner": "custom_scanner.scanner"}}
+    cleaned = _scrub_db_overlay_remote_module_loads("general_settings", overlay)
+    assert cleaned["rag_ingest"]["malware_scanner"] == "custom_scanner.scanner"
+
+
 def test_local_dotted_name_preserved():
     # The scrub only targets s3:// / gcs:// scheme prefixes — legitimate
     # dotted module names (the documented operator flow) must pass
