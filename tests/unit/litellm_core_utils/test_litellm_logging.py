@@ -7821,6 +7821,43 @@ async def test_client_wrapped_failure_gives_a_logger_in_litellm_callbacks_one_ho
     assert recorder.hooks == ["async_failure", "sync_failure"]
 
 
+def _legacy_success_callback(*_: object) -> None:
+    pass
+
+
+class _InlineExecutor:
+    def submit(self, fn: Callable[..., object], /, *args: object, **kwargs: object) -> None:
+        fn(*args, **kwargs)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("with_fallbacks", "expected"), [(False, ["async_success"]), (True, ["sync_success"])])
+@pytest.mark.usefixtures("no_global_callbacks")
+async def test_async_success_keeps_the_sync_hook_when_the_async_success_is_skipped(
+    monkeypatch: pytest.MonkeyPatch, with_fallbacks: bool, expected: list[str]
+) -> None:
+    monkeypatch.setattr(litellm_logging, "executor", _InlineExecutor())
+    monkeypatch.setattr(litellm, "success_callback", [_legacy_success_callback])
+    recorder: Final = _AsyncHookRecorder()
+    logging_obj: Final = _hook_count_logging_obj(
+        "aspeech", recorder, async_success_listed=True, async_failure_listed=True
+    )
+    now: Final = datetime.datetime.now()
+
+    litellm.utils._dispatch_success_logging(
+        logging_obj=logging_obj,
+        result=ModelResponse(),
+        start_time=now,
+        end_time=now,
+        is_completion_with_fallbacks=with_fallbacks,
+        is_litellm_internal_call=False,
+    )
+    await asyncio.sleep(0)
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10)
+
+    assert recorder.hooks == expected
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("turn_off_message_logging", [False, True])
 @pytest.mark.parametrize("make_response", [ModelResponse, _responses_api_response_with_text])

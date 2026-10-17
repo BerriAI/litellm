@@ -1390,6 +1390,7 @@ def _dispatch_success_logging(
         result=result,
         start_time=start_time,
         end_time=end_time,
+        async_handler_runs=not is_completion_with_fallbacks,
     )
 
 

@@ -2986,6 +2986,7 @@ class Logging(LiteLLMLoggingBaseClass):
         cache_hit: bool | None = None,
         *,
         for_async_request: bool = False,
+        async_handler_runs: bool = True,
         **kwargs: object,  # kwargs-ok: forwarded to _success_handler_body
     ) -> None:
         """Restores trace_id/session_id contextvars once this attempt's own success
@@ -2998,6 +2999,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     end_time=end_time,
                     cache_hit=cache_hit,
                     for_async_request=for_async_request,
+                    async_handler_runs=async_handler_runs,
                     **kwargs,
                 )
         finally:
@@ -3010,6 +3012,7 @@ class Logging(LiteLLMLoggingBaseClass):
         end_time: datetime.datetime | None = None,
         cache_hit: bool | None = None,
         for_async_request: bool = False,
+        async_handler_runs: bool = True,
         **kwargs: Any,  # kwargs-ok: forwarded from success_handler
     ) -> None:
         verbose_logger.debug("Logging Details LiteLLM-Success Call: Cache_hit=%s", cache_hit)
@@ -3423,7 +3426,9 @@ class Logging(LiteLLMLoggingBaseClass):
                                 result = call_details_view["complete_response"]
 
                             if not (
-                                for_async_request and self._async_handler_logs_to(callback, "async_log_success_event")
+                                for_async_request
+                                and async_handler_runs
+                                and self._async_handler_logs_to(callback, "async_log_success_event")
                             ):
                                 callback.log_success_event(
                                     kwargs=call_details,
@@ -4268,6 +4273,8 @@ class Logging(LiteLLMLoggingBaseClass):
         start_time: datetime.datetime,
         end_time: datetime.datetime,
         cache_hit: bool | None = None,
+        *,
+        async_handler_runs: bool = True,
     ) -> None:
         """
         Handles calling success callbacks for Async calls.
@@ -4284,6 +4291,7 @@ class Logging(LiteLLMLoggingBaseClass):
             end_time,
             cache_hit,
             for_async_request=True,
+            async_handler_runs=async_handler_runs,
         )
 
     def handle_sync_cache_hit_success_callbacks(

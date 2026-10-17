@@ -69,6 +69,8 @@ def setup(
 
 # Loggers whose current native call is async: their sync failure step is followed by the async one
 _ASYNC_CALLS: Final[weakref.WeakSet[Logging]] = weakref.WeakSet()
+# Loggers whose async success handler was enqueued or deferred ahead of the sync success step
+_ASYNC_SUCCESS_SCHEDULED: Final[weakref.WeakSet[LoggingSurface]] = weakref.WeakSet()
 
 
 def _begin_call(call_setup: CallSetup, asynchronous: bool) -> CallSetup:
@@ -76,6 +78,7 @@ def _begin_call(call_setup: CallSetup, asynchronous: bool) -> CallSetup:
         _ASYNC_CALLS.add(call_setup.logger)
     else:
         _ASYNC_CALLS.discard(call_setup.logger)
+    _ASYNC_SUCCESS_SCHEDULED.discard(call_setup.logger)
     return _claim_budget_reservation(call_setup, asynchronous)
 
 
@@ -139,7 +142,13 @@ class LoggingSurface(Protocol):
     ) -> object: ...
 
     def handle_sync_success_callbacks_for_async_calls(
-        self, result: object, start_time: datetime.datetime, end_time: datetime.datetime, cache_hit: bool | None = None
+        self,
+        result: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+        cache_hit: bool | None = None,
+        *,
+        async_handler_runs: bool = True,
     ) -> None: ...
 
     def failure_handler(
@@ -168,6 +177,7 @@ class LoggingSurface(Protocol):
         cache_hit: bool | None = None,
         *,
         for_async_request: bool = False,
+        async_handler_runs: bool = True,
         **kwargs: object,
     ) -> None: ...
 
@@ -248,6 +258,7 @@ def defers_async_logging(logger: LoggingSurface) -> bool:
 
 
 def defer_success(logger: LoggingSurface, pending: object) -> None:
+    _ASYNC_SUCCESS_SCHEDULED.add(logger)
     setattr(logger, "_native_pending_logging", pending)
 
 
@@ -263,6 +274,7 @@ def sync_success_for_async_call(
         start_time=start,
         end_time=end,
         cache_hit=_cache_hit(logger),
+        async_handler_runs=logger in _ASYNC_SUCCESS_SCHEDULED,
     )
 
 
@@ -296,6 +308,7 @@ def submit_success(logger: LoggingSurface, response: object, start: datetime.dat
 def async_success_handler(
     logger: LoggingSurface, response: object, start: datetime.datetime, end: datetime.datetime
 ) -> Coroutine[object, object, None]:
+    _ASYNC_SUCCESS_SCHEDULED.add(logger)
     return logger.async_success_handler(response, start, end, cache_hit=_cache_hit(logger))
 
 

@@ -26,9 +26,42 @@ _PNG_BYTES: Final = (
     b"\x89\x99=\x1d\x00\x00\x00\x00IEND\xaeB`\x82"
 )
 _IMAGE_REPLY: Final = json.dumps({"created": 1700000000, "data": [{"b64_json": base64.b64encode(_PNG_BYTES).decode()}]})
+_MESSAGE_REPLY: Final = json.dumps(
+    {
+        "id": "msg_hook_count",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-haiku-4-5",
+        "content": [{"type": "text", "text": "ok"}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 3, "output_tokens": 1},
+    }
+)
+_RESPONSE_REPLY: Final = json.dumps(
+    {
+        "id": "resp_hook_count",
+        "object": "response",
+        "created_at": 1,
+        "status": "completed",
+        "model": "gpt-4o-mini",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_hook_count",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 3, "output_tokens": 1, "total_tokens": 4},
+    }
+)
 _SURFACE_CALL_TYPES: Final = {
     "chat": "acompletion",
     "embedding": "aembedding",
+    "messages": "anthropic_messages",
+    "responses": "aresponses",
     "speech": "aspeech",
     "transcription": "atranscription",
     "image_generation": "aimage_generation",
@@ -36,7 +69,7 @@ _SURFACE_CALL_TYPES: Final = {
     "ocr": "aocr",
     "search": "asearch",
 }
-_IN_THE_ASYNC_FLAG_LIST: Final = frozenset({"chat", "embedding"})
+_IN_THE_ASYNC_FLAG_LIST: Final = frozenset({"chat", "embedding", "messages", "responses"})
 
 
 def _provider(request: Request) -> Reply:
@@ -72,6 +105,8 @@ def _provider(request: Request) -> Reply:
                 }
             ).encode()
         ),
+        "/v1/messages": lambda: Reply(body=_MESSAGE_REPLY.encode()),
+        "/v1/responses": lambda: Reply(body=_RESPONSE_REPLY.encode()),
         "/v1/audio/speech": lambda: Reply(body=_WAV_BYTES, content_type="audio/wav"),
         "/v1/audio/transcriptions": lambda: Reply(body=b'{"text":"hook count transcript"}'),
         "/v1/images/generations": lambda: Reply(body=_IMAGE_REPLY.encode()),
@@ -154,6 +189,8 @@ def hook_proxy(
                 (
                     _model(f"hooks-chat-{outcome}", "openai/gpt-4o-mini", base + "/v1"),
                     _model(f"hooks-embedding-{outcome}", "openai/text-embedding-3-small", base + "/v1"),
+                    _model(f"hooks-messages-{outcome}", "anthropic/claude-haiku-4-5", base),
+                    _model(f"hooks-responses-{outcome}", "openai/gpt-4o-mini", base + "/v1"),
                     _model(f"hooks-speech-{outcome}", "openai/gpt-4o-mini-tts", base + "/v1"),
                     _model(f"hooks-transcription-{outcome}", "openai/whisper-1", base + "/v1"),
                     _model(f"hooks-image_generation-{outcome}", "openai/gpt-image-1", base + "/v1"),
@@ -225,6 +262,11 @@ def _send(proxy: Gateway, surface: str, outcome: str, call_id: str, key: str | N
     routes: Final[dict[str, tuple[str, dict[str, object]]]] = {
         "chat": ("/v1/chat/completions", {"model": model, "messages": [{"role": "user", "content": nonce}]}),
         "embedding": ("/v1/embeddings", {"model": model, "input": nonce}),
+        "messages": (
+            "/v1/messages",
+            {"model": model, "max_tokens": 16, "messages": [{"role": "user", "content": nonce}]},
+        ),
+        "responses": ("/v1/responses", {"model": model, "input": nonce}),
         "speech": ("/v1/audio/speech", {"model": model, "input": nonce, "voice": "alloy", "response_format": "wav"}),
         "image_generation": ("/v1/images/generations", {"model": model, "prompt": nonce, "n": 1}),
         "ocr": (
@@ -270,7 +312,7 @@ def test_custom_logger_gets_one_async_hook_per_request_with_the_response_cache_o
     _assert_one_hook_per_request(records, surface, outcome, call_id)
 
 
-@pytest.mark.parametrize("surface", sorted(_SURFACE_CALL_TYPES.keys() - _IN_THE_ASYNC_FLAG_LIST))
+@pytest.mark.parametrize("surface", sorted(_SURFACE_CALL_TYPES))
 def test_custom_logger_gets_one_async_hook_per_request_rejected_by_key_auth(
     hook_proxy: tuple[Gateway, HookRecords], surface: str
 ) -> None:

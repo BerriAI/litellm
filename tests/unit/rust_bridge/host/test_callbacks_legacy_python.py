@@ -1,6 +1,6 @@
 import datetime
 import inspect
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
@@ -8,10 +8,12 @@ from typing import Final
 import pytest
 from pydantic import TypeAdapter
 
+import litellm
 from litellm._internal_context import is_internal_call
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.rust_bridge.host import callbacks_legacy_python as legacy
+from litellm.litellm_core_utils import litellm_logging
 from litellm.rust_bridge.host.callbacks_legacy_python import failure_handler, setup
 from litellm.types.utils import ModelResponse
 
@@ -168,10 +170,18 @@ def test_failure_handler_of_an_internal_call_leaves_the_outer_budget_reservation
     pending.close()
 
 
-class _FailureHooks(CustomLogger):
+class _Hooks(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
         self.hooks: list[str] = []
+
+    def log_success_event(self, kwargs: object, response_obj: object, start_time: object, end_time: object) -> None:
+        self.hooks.append("sync_success")
+
+    async def async_log_success_event(
+        self, kwargs: object, response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.hooks.append("async_success")
 
     def log_failure_event(self, kwargs: object, response_obj: object, start_time: object, end_time: object) -> None:
         self.hooks.append("sync_failure")
@@ -182,15 +192,17 @@ class _FailureHooks(CustomLogger):
         self.hooks.append("async_failure")
 
 
-def _logger_with_failure_hooks(hooks: _FailureHooks) -> Logging:
+def _logger_with_hooks(hooks: _Hooks) -> Logging:
     logger: Final = Logging(
         model="mistral/mistral-ocr-latest",
         messages=[],
         stream=False,
         call_type="aocr",
         start_time=datetime.datetime.now(),
-        litellm_call_id="failure-hooks",
-        function_id="failure-hooks",
+        litellm_call_id="hooks",
+        function_id="hooks",
+        dynamic_success_callbacks=[hooks],
+        dynamic_async_success_callbacks=[hooks],
         dynamic_failure_callbacks=[hooks],
         dynamic_async_failure_callbacks=[hooks],
     )
@@ -200,9 +212,9 @@ def _logger_with_failure_hooks(hooks: _FailureHooks) -> Logging:
 
 @pytest.mark.asyncio
 async def test_failure_of_an_async_call_gives_a_logger_with_both_failure_hooks_only_the_async_one() -> None:
-    hooks: Final = _FailureHooks()
+    hooks: Final = _Hooks()
     now: Final = datetime.datetime.now()
-    kwargs: Final = {**_OCR_KWARGS, "litellm_logging_obj": _logger_with_failure_hooks(hooks)}
+    kwargs: Final = {**_OCR_KWARGS, "litellm_logging_obj": _logger_with_hooks(hooks)}
     result: Final = setup("aocr", (), kwargs, now, asynchronous=True)
 
     assert failure_handler(result.logger, RuntimeError("upstream refused"), now, now, asynchronous=False) is None
@@ -215,9 +227,9 @@ async def test_failure_of_an_async_call_gives_a_logger_with_both_failure_hooks_o
 
 @pytest.mark.parametrize("earlier_async_call", [False, True])
 def test_failure_of_a_sync_call_keeps_the_sync_failure_hook(earlier_async_call: bool) -> None:
-    hooks: Final = _FailureHooks()
+    hooks: Final = _Hooks()
     now: Final = datetime.datetime.now()
-    kwargs: Final = {**_OCR_KWARGS, "litellm_logging_obj": _logger_with_failure_hooks(hooks)}
+    kwargs: Final = {**_OCR_KWARGS, "litellm_logging_obj": _logger_with_hooks(hooks)}
     if earlier_async_call:
         setup("aocr", (), kwargs, now, asynchronous=True)
     result: Final = setup("ocr", (), kwargs, now, asynchronous=False)
@@ -225,6 +237,58 @@ def test_failure_of_a_sync_call_keeps_the_sync_failure_hook(earlier_async_call: 
     assert failure_handler(result.logger, RuntimeError("upstream refused"), now, now, asynchronous=False) is None
 
     assert hooks.hooks == ["sync_failure"]
+
+
+def _legacy_success_callback(*_: object) -> None:
+    pass
+
+
+class _InlineExecutor:
+    def submit(self, fn: Callable[..., object], /, *args: object, **kwargs: object) -> None:
+        fn(*args, **kwargs)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("async_step", "expected"),
+    [("enqueued", ["async_success"]), ("deferred", []), ("skipped", ["sync_success"])],
+)
+async def test_success_of_an_async_call_keeps_the_sync_hook_only_when_no_async_success_is_scheduled(
+    monkeypatch: pytest.MonkeyPatch, async_step: str, expected: list[str]
+) -> None:
+    monkeypatch.setattr(litellm_logging, "executor", _InlineExecutor())
+    monkeypatch.setattr(litellm, "success_callback", [_legacy_success_callback])
+    hooks: Final = _Hooks()
+    now: Final = datetime.datetime.now()
+    kwargs: Final = {**_OCR_KWARGS, "litellm_logging_obj": _logger_with_hooks(hooks)}
+    logger: Final = setup("aocr", (), kwargs, now, asynchronous=True).logger
+    response: Final = ModelResponse()
+
+    if async_step == "enqueued":
+        await legacy.async_success_handler(logger, response, now, now)
+    elif async_step == "deferred":
+        legacy.defer_success(logger, object())
+    legacy.sync_success_for_async_call(logger, response, now, now)
+
+    assert hooks.hooks == expected
+
+
+def test_success_of_a_later_call_on_the_same_logger_does_not_reuse_the_earlier_async_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm_logging, "executor", _InlineExecutor())
+    monkeypatch.setattr(litellm, "success_callback", [_legacy_success_callback])
+    hooks: Final = _Hooks()
+    now: Final = datetime.datetime.now()
+    kwargs: Final = {**_OCR_KWARGS, "litellm_logging_obj": _logger_with_hooks(hooks)}
+    legacy.async_success_handler(
+        setup("aocr", (), kwargs, now, asynchronous=True).logger, ModelResponse(), now, now
+    ).close()
+    logger: Final = setup("aocr", (), kwargs, now, asynchronous=True).logger
+
+    legacy.sync_success_for_async_call(logger, ModelResponse(), now, now)
+
+    assert hooks.hooks == ["sync_success"]
 
 
 CONTRACT_PATH: Final = Path(__file__).parents[4] / "litellm-rust/crates/callbacks-legacy-python/python_contract.json"
