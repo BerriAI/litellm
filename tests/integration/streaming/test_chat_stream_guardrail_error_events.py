@@ -14,8 +14,11 @@ import yaml
 from integration._support.client import JSON_OBJECT, Gateway, eventually, list_value, object_value, string_value
 from integration._support.database import read_rows
 from integration._support.process import OwnedProxy, WorkerHealthcheck, graceful_stop_seconds, owned_proxy_process
+from integration._support.responses_stream import healthy_stream
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue
+
+from litellm.proxy import client as proxy_client
 
 pytestmark: Final = [
     pytest.mark.timeout(2 * graceful_stop_seconds() + 120),
@@ -27,8 +30,11 @@ _FILTER: Final = "keeper-filter"
 _SPAN_POST: Final = "span-post-call"
 _SPAN_PRE: Final = "span-pre-call"
 _BUFFERED: Final = "buffered-post-call"
+_RAISING: Final = "raising-post-call"
 _REPLACE: Final = "replace-client-error"
 _REPLACEMENT_MESSAGE: Final = "Request blocked by policy"
+_CRASH_MESSAGE: Final = "Guardrail service crashed while scanning"
+_RAISED_BLOCK: Final = "Raised block: policy"
 _SPAN: Final = "spanword"
 _LEAD: Final = "The lighthouse on the northern cliff has guided ships for two hundred years, and "
 _TEXTS: Final[Mapping[str, tuple[str, ...]]] = {
@@ -76,11 +82,25 @@ class BufferingGuardrail(CustomGuardrail):
             yield chunk
 
 
+class RaisingGuardrail(CustomGuardrail):
+    async def async_post_call_streaming_iterator_hook(self, user_api_key_dict, response, request_data):
+        prompt = str(request_data.get("messages") or request_data.get("input"))
+        found = re.search("raise-(builtin|http)-after-([0-9]+)", prompt)
+        sent = 0
+        async for chunk in response:
+            if found is not None and sent == int(found.group(2)):
+                if found.group(1) == "builtin":
+                    raise RuntimeError("{_CRASH_MESSAGE}")
+                raise HTTPException(status_code=400, detail={{"error": "{_RAISED_BLOCK}"}})
+            yield chunk
+            sent += 1
+
+
 class ReplacesClientErrors(CustomLogger):
     async def async_post_call_failure_hook(
         self, request_data, original_exception, user_api_key_dict, traceback_str=None
     ):
-        if "{_REPLACE}" in str(request_data.get("messages")):
+        if "{_REPLACE}" in str(request_data.get("messages") or request_data.get("input")):
             return HTTPException(status_code=403, detail="{_REPLACEMENT_MESSAGE}")
         return None
 
@@ -114,7 +134,10 @@ def _respond(request: Request) -> Reply:
     found: Final = _SCENARIO.search(request.body)
     assert found is not None, request.body
     name: Final = found.group(1).decode()
-    chunks: Final = _stream(f"chatcmpl-{found.group(2).decode()}", _TEXTS[name])
+    marker: Final = found.group(2).decode()
+    if request.target.endswith("/responses"):
+        return Reply(content_type="text/event-stream", chunks=healthy_stream(f"resp_{marker}", "".join(_TEXTS[name])))
+    chunks: Final = _stream(f"chatcmpl-{marker}", _TEXTS[name])
     match name:
         case "buffered":
             return Reply(content_type="text/event-stream", chunks=chunks, pause_between_chunks=_BUFFERED_PAUSE_SECONDS)
@@ -135,6 +158,7 @@ def _config(upstream_url: str) -> dict[str, JsonValue]:
         (_SPAN_POST, f"{_MODULE}.SpanGuardrail", "post_call"),
         (_SPAN_PRE, f"{_MODULE}.SpanGuardrail", "pre_call"),
         (_BUFFERED, f"{_MODULE}.BufferingGuardrail", "post_call"),
+        (_RAISING, f"{_MODULE}.RaisingGuardrail", "post_call"),
     )
     return {
         **base,
@@ -192,11 +216,17 @@ def rig(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory) -> I
             yield Rig(proxy, upstream)
 
 
-def _body(scenario: str, marker: str, guardrails: Sequence[str], **extra: JsonValue) -> dict[str, JsonValue]:
+def _prompt(scenario: str, marker: str, *directives: str) -> str:
+    return " ".join((f"scenario-{scenario}", f"marker-{marker}", *directives))
+
+
+def _body(
+    scenario: str, marker: str, guardrails: Sequence[str], *directives: str, **extra: JsonValue
+) -> dict[str, JsonValue]:
     return {
         "model": _MODEL,
         "stream": True,
-        "messages": [{"role": "user", "content": f"scenario-{scenario} marker-{marker}"}],
+        "messages": [{"role": "user", "content": _prompt(scenario, marker, *directives)}],
         "guardrails": list(guardrails),
         "num_retries": 0,
         "cache": {"no-cache": True},
@@ -391,6 +421,117 @@ def test_mid_stream_block_releases_the_parallel_request_slot_and_logs_one_failur
         seconds=70,
     )
     assert [row["status"] for row in rows] == ["failure"], rows
+
+
+def test_failure_hook_replacement_hides_a_non_http_failure_mid_stream(rig: Rig) -> None:
+    marker: Final = _marker()
+    response: Final = _stream_chat(rig, _body("clean", marker, (_RAISING,), "raise-builtin-after-1", _REPLACE))
+    ended: Final = _ended_in_band(response, 200)
+    assert ended.content == _TEXTS["clean"][0], response.text
+    assert ended.error["code"] == "403", ended.error
+    assert ended.error["message"] == _REPLACEMENT_MESSAGE, ended.error
+    assert _CRASH_MESSAGE not in response.text, response.text
+    assert _calls_with(rig.upstream, marker) == 1
+
+
+def test_failure_hook_replacement_answers_an_early_non_http_failure_as_a_json_error(rig: Rig) -> None:
+    marker: Final = _marker()
+    response: Final = _stream_chat(rig, _body("clean", marker, (_RAISING,), "raise-builtin-after-0", _REPLACE))
+    assert response.status_code == 403, response.text
+    assert response.headers["content-type"].startswith("application/json"), response.headers
+    error: Final = object_value(JSON_OBJECT.validate_json(response.content)["error"])
+    assert error["code"] == "403", error
+    assert error["message"] == _REPLACEMENT_MESSAGE, error
+    assert _CRASH_MESSAGE not in response.text, response.text
+    assert _calls_with(rig.upstream, marker) == 1
+
+
+def test_early_non_http_failure_without_a_replacement_keeps_its_json_error_body(rig: Rig) -> None:
+    marker: Final = _marker()
+    response: Final = _stream_chat(rig, _body("clean", marker, (_RAISING,), "raise-builtin-after-0"))
+    assert response.status_code == 500, response.text
+    assert response.headers["content-type"].startswith("application/json"), response.headers
+    error: Final = object_value(JSON_OBJECT.validate_json(response.content)["error"])
+    assert error["code"] == "500", error
+    assert _CRASH_MESSAGE in string_value(error["message"]), error
+    assert _calls_with(rig.upstream, marker) == 1
+
+
+def _responses_body(marker: str, *directives: str) -> dict[str, JsonValue]:
+    return {
+        "model": _MODEL,
+        "stream": True,
+        "input": _prompt("clean", marker, *directives),
+        "guardrails": [_RAISING],
+        "cache": {"no-cache": True},
+    }
+
+
+def _failed_response_error(response: httpx.Response) -> dict[str, JsonValue]:
+    assert response.status_code == 200, response.text
+    lines: Final = _data_lines(response.text)
+    assert lines[-1] == "[DONE]" and lines.count("[DONE]") == 1, response.text
+    events: Final = _payloads(response.text)
+    kinds: Final = tuple(string_value(event["type"]) for event in events)
+    assert kinds[0] == "response.created" and kinds[-1] == "response.failed", response.text
+    assert "response.completed" not in kinds and kinds.count("response.failed") == 1, response.text
+    streamed: Final = "".join(
+        string_value(event.get("delta") or "") for event in events if event["type"] == "response.output_text.delta"
+    )
+    assert streamed == "".join(_TEXTS["clean"]), response.text
+    created: Final = object_value(events[0]["response"])
+    failed: Final = object_value(events[-1]["response"])
+    assert failed["status"] == "failed" and failed["id"] == created["id"], failed
+    return object_value(failed["error"])
+
+
+def test_responses_stream_failing_on_a_builtin_exception_ends_with_response_failed(rig: Rig) -> None:
+    marker: Final = _marker()
+    response: Final = rig.proxy.gateway.request(
+        "POST", "/v1/responses", _responses_body(marker, "raise-builtin-after-2")
+    )
+    error: Final = _failed_response_error(response)
+    assert error == {"code": "server_error", "message": _CRASH_MESSAGE}, error
+    assert _calls_with(rig.upstream, marker) == 1
+
+
+def test_responses_stream_failure_hook_replacement_is_the_failed_response_error(rig: Rig) -> None:
+    marker: Final = _marker()
+    response: Final = rig.proxy.gateway.request(
+        "POST", "/v1/responses", _responses_body(marker, "raise-http-after-2", _REPLACE)
+    )
+    error: Final = _failed_response_error(response)
+    assert error["code"] == "permission_error", error
+    assert _REPLACEMENT_MESSAGE in string_value(error["message"]), error
+    assert _RAISED_BLOCK not in response.text, response.text
+    assert _calls_with(rig.upstream, marker) == 1
+
+
+def _until_stream_error(stream: Iterator[Mapping[str, object]]) -> Iterator[Mapping[str, object] | Exception]:
+    try:
+        yield from stream
+    except proxy_client.StreamError as error:
+        yield error
+
+
+def test_python_client_raises_the_block_error_after_the_partial_reply(rig: Rig) -> None:
+    marker: Final = _marker()
+    with rig.proxy.gateway.scenario() as scenario:
+        client: Final = proxy_client.ChatClient(
+            str(rig.proxy.gateway.client.base_url), api_key=scenario.key(metadata={"guardrails": [_FILTER]})
+        )
+        stream: Final = client.completions_stream(
+            model=_MODEL, messages=[{"role": "user", "content": _prompt("filter-late", marker)}]
+        )
+        *chunks, last = tuple(_until_stream_error(stream))
+    assert isinstance(last, proxy_client.StreamError), last
+    payloads: Final = tuple(JSON_OBJECT.validate_python(chunk) for chunk in chunks)
+    assert all("error" not in payload for payload in payloads), payloads
+    content: Final = _content(payloads)
+    assert content and _LEAD.startswith(content), payloads
+    assert "keeper" in str(last), str(last)
+    assert JSON_OBJECT.validate_python(last.error)["code"] == "400", last.error
+    assert _calls_with(rig.upstream, marker) == 1
 
 
 def test_non_streaming_pre_call_block_with_an_unencodable_detail_answers_400(rig: Rig) -> None:

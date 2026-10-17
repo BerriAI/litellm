@@ -24,7 +24,7 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 from fastapi import HTTPException, Response
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from openai import APIError as OpenAIAPIError
 from pydantic import BaseModel
 
@@ -1051,7 +1051,6 @@ class _ReplacesClientErrors(CustomLogger):
             lambda: _blocked_after(0, {"error": _BLOCK_MESSAGE}), _BLOCK_MESSAGE, 403, id="block_before_the_first_chunk"
         ),
         pytest.param(lambda: _blocked_after(1, {"error": _BLOCK_MESSAGE}), _BLOCK_MESSAGE, 200, id="block_mid_stream"),
-        pytest.param(lambda: _upstream_fails_after(0), "upstream reset", 403, id="failure_before_the_first_chunk"),
         pytest.param(lambda: _upstream_fails_after(1), "upstream reset", 200, id="failure_mid_stream"),
     ],
 )
@@ -1074,6 +1073,45 @@ async def test_stream_error_sends_the_failure_hook_replacement(
         "code": "403",
     }
     assert frames[-1] == "data: [DONE]"
+
+
+@pytest.mark.asyncio
+async def test_failure_before_the_first_chunk_answers_the_failure_hook_replacement_as_json(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [_ReplacesClientErrors()])
+
+    response: Final = await create_response(
+        generator=async_data_generator(
+            response=_upstream_fails_after(0), user_api_key_dict=_user_auth(), request_data={}
+        ),
+        media_type="text/event-stream",
+        headers={},
+    )
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 403
+    assert json.loads(bytes(response.body))["error"]["message"] == "Request blocked by policy"
+    assert b"upstream reset" not in bytes(response.body)
+
+
+@pytest.mark.asyncio
+async def test_failure_before_the_first_chunk_on_a_bare_stream_still_ends_with_the_replacement_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [_ReplacesClientErrors()])
+
+    frames: Final = tuple(
+        [
+            frame
+            async for frame in async_data_generator(
+                response=_upstream_fails_after(0), user_api_key_dict=_user_auth(), request_data={}
+            )
+        ]
+    )
+
+    assert _error_of(frames[0].strip())["message"] == "Request blocked by policy"
+    assert frames[1:] == ("data: [DONE]\n\n",)
 
 
 @pytest.mark.asyncio

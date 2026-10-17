@@ -10457,9 +10457,7 @@ async def async_data_generator(
             if ends_with_openai_done:
                 yield _OPENAI_STREAM_DONE_FRAME
             return
-        if isinstance(client_error, HTTPException) and not stream_started:
-            raise client_error
-        if isinstance(e, HTTPException) and not ends_with_openai_done:
+        if isinstance(e, HTTPException) and (not stream_started or not ends_with_openai_done):
             raise client_error
         error_returned: Final = json.dumps(
             {
