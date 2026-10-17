@@ -1,10 +1,14 @@
 import inspect
 from collections.abc import Awaitable, Callable, Coroutine, Mapping
+from types import MappingProxyType
 from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding selects a sync result or an async awaitable
 
+from litellm.exceptions import BadRequestError
+from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.responses import main
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
-from litellm.rust_bridge.catalog import Route, RouteContext
+from litellm.rust_bridge import detectors
+from litellm.rust_bridge.catalog import Feature, Route, RouteContext
 from litellm.rust_bridge.dispatch import PublicDispatch
 from litellm.rust_bridge.public_call import (
     AsyncFlag,
@@ -61,24 +65,64 @@ def _public_request(
     return native_call(legacy, args, kwargs)
 
 
-def _context(request: NativeCall) -> RouteContext:
+def _provider(request: NativeCall) -> str | None:
+    provider: Final = optional_str(request.resolved.get("custom_llm_provider"))
+    try:
+        return get_llm_provider(str(request.resolved["model"]), provider)[1]
+    except BadRequestError:
+        return provider
+
+
+_FEATURES: Final[detectors.Detectors] = MappingProxyType(
+    {
+        **detectors.COMMON,
+        Feature.DROP_PARAMS: detectors.drop_params,
+        Feature.MODIFY_PARAMS: detectors.modify_params,
+        Feature.STREAMING: detectors.streaming,
+        Feature.PROMPT_MANAGEMENT: detectors.prompt_management,
+        Feature.TEXT_FORMAT: detectors.text_format,
+        Feature.CHAT_COMPLETIONS_BRIDGE: detectors.chat_completions_bridge,
+        Feature.RETRIES_FALLBACKS: detectors.retries_fallbacks,
+        Feature.DEPLOYMENT_RESPONSE_ID: detectors.deployment_response_id,
+        Feature.ENCODED_ITEM_IDS: detectors.encoded_item_ids,
+        Feature.INPUT_REWRITE: detectors.input_rewrite,
+        Feature.EXTRA_BODY: detectors.extra_body,
+        Feature.PROVIDER_AFFINITY: detectors.provider_affinity,
+        Feature.RESPONSE_CACHE: detectors.response_cache,
+        Feature.MANAGED_RESOURCE_IDS: detectors.managed_resource_ids,
+        Feature.CACHE_CONTROL_MARKS: detectors.cache_control_marks,
+        Feature.ANTHROPIC_TOOL_SEARCH: detectors.anthropic_tool_search,
+        Feature.TOOL_SCHEMA_REPAIR: detectors.tool_schema_repair,
+        Feature.MODEL_PARAM_GATING: detectors.model_param_gating,
+        Feature.WORKLOAD_IDENTITY: detectors.openai_workload_identity,
+        Feature.CLIENT_HEADERS: detectors.client_headers,
+    }
+)
+
+_SYNC_FEATURES: Final[detectors.Detectors] = MappingProxyType(
+    {**_FEATURES, Feature.DEPLOYMENT_HOOK: detectors.deployment_hook}
+)
+
+
+def _context(request: NativeCall, features: detectors.Detectors) -> RouteContext:
     return RouteContext(
         Route.RESPONSES,
-        provider=optional_str(request.resolved.get("custom_llm_provider")),
+        provider=_provider(request),
         model=str(request.resolved["model"]),
+        features=detectors.detected(features, request),
     )
 
 
 _DISPATCH: Final = PublicDispatch(
     route=Route.RESPONSES,
     request=lambda args, kwargs: _public_request(_RESPONSES, args, kwargs),
-    context=_context,
+    context=lambda request: _context(request, _SYNC_FEATURES),
 )
 
 _ADISPATCH: Final = PublicDispatch(
     route=Route.RESPONSES,
     request=lambda args, kwargs: _public_request(_ARESPONSES, args, kwargs),
-    context=_context,
+    context=lambda request: _context(request, _FEATURES),
 )
 
 
