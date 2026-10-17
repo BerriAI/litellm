@@ -169,6 +169,8 @@ with a request to `tiered-model` to use the matching timeout, in seconds
 The request's `service_tier` takes precedence over the deployment's tier and the
 router's `default_litellm_params.service_tier`. For streaming requests, a matching
 `stream_timeout_by_service_tier` entry wins over `timeout_by_service_tier`.
+Without a matching stream entry, an existing deployment or router stream timeout
+takes precedence over `timeout_by_service_tier`.
 Caller timeouts, including the proxy's `x-litellm-timeout` header, still take
 precedence. Missing or unmatched tiers keep the existing timeout behavior
 

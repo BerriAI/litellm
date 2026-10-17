@@ -19,18 +19,21 @@ def get_service_tier_timeout(
     request: Mapping[str, object],
     deployment: Mapping[str, object],
     defaults: Mapping[str, object],
-) -> float | None:
+    *,
+    stream_timeout: float | str | None = None,
+) -> float | str | None:
     tier: Final = request.get("service_tier", deployment.get("service_tier", defaults.get("service_tier")))
     if not isinstance(tier, str):
         return None
     stream_overrides: Final = deployment.get("stream_timeout_by_service_tier") if request.get("stream") else None
-    stream_timeout: Final = (
+    stream_tier_timeout: Final = (
         _TIER_TIMEOUTS.validate_python(stream_overrides).get(tier) if stream_overrides is not None else None
     )
-    if stream_timeout is not None:
-        return stream_timeout
+    if stream_tier_timeout is not None:
+        return stream_tier_timeout
     overrides: Final = deployment.get("timeout_by_service_tier")
-    return _TIER_TIMEOUTS.validate_python(overrides).get(tier) if overrides is not None else None
+    timeout: Final = _TIER_TIMEOUTS.validate_python(overrides).get(tier) if overrides is not None else None
+    return stream_timeout if request.get("stream") and timeout is not None and stream_timeout is not None else timeout
 
 
 class CompletionTimeout:

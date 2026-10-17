@@ -45,7 +45,7 @@ def resolve_llm_passthrough_timeout(
     router_timeout: float | str | None = None,
     router_stream_timeout: float | str | None = None,
     *,
-    service_tier_timeout: float | None = None,
+    service_tier_timeout: float | str | None = None,
 ) -> float:
     """
     Resolve upstream httpx timeout for SDK native passthrough (e.g. Bedrock /converse,

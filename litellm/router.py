@@ -38,13 +38,26 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache, partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Generic, Literal, NoReturn, Optional, TypeAlias, TypeVar, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Any,
+    Final,
+    Generic,
+    Literal,
+    NoReturn,
+    Optional,
+    TypeAlias,
+    TypeVar,
+    Union,
+    cast,
+)
 
 import anyio
 import httpx
 import openai
 from openai import AsyncOpenAI
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import BaseModel, BeforeValidator, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import assert_never, overload
 
 import litellm
@@ -544,7 +557,16 @@ _NO_SESSION_KWARGS: Final[Mapping[str, Mapping[str, object]]] = MappingProxyType
 _NO_DEFAULT_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
 _SESSION_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
-_LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
+
+def _parameter_mapping(value: object) -> object:
+    return value.model_dump(exclude_none=True) if isinstance(value, BaseModel) else value
+
+
+_LITELLM_PARAMS_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(
+    Annotated[Mapping[str, object], BeforeValidator(_parameter_mapping)]
+)
+_STREAM_TIMEOUT_ADAPTER: Final[TypeAdapter[float | str | None]] = TypeAdapter(float | str | None)
 _TimeoutValue: TypeAlias = float | str | httpx.Timeout | None
 
 
@@ -4660,6 +4682,7 @@ class Router:
 
         kwargs["model_info"] = model_info
 
+        timeout_params: Final = _LITELLM_PARAMS_ADAPTER.validate_python(deployment["litellm_params"])
         if function_name == "_ageneric_api_call_with_fallbacks":
             from litellm.passthrough.timeout_utils import (
                 resolve_llm_passthrough_timeout,
@@ -4681,19 +4704,26 @@ class Router:
             )
             kwargs["timeout"] = resolve_llm_passthrough_timeout(
                 kwargs=kwargs,
-                litellm_params=deployment["litellm_params"],
+                litellm_params=timeout_params,
                 router_timeout=_router_timeout,
                 router_stream_timeout=_router_stream_timeout,
                 service_tier_timeout=get_service_tier_timeout(
                     _FALLBACK_HOP_ADAPTER.validate_python(kwargs),
-                    _LITELLM_PARAMS_ADAPTER.validate_python(deployment["litellm_params"]),
+                    timeout_params,
                     _LITELLM_PARAMS_ADAPTER.validate_python(self.default_litellm_params),  # pyright: ignore[reportUnknownMemberType]  # Validate legacy router defaults.
+                    stream_timeout=_STREAM_TIMEOUT_ADAPTER.validate_python(
+                        timeout_params.get("stream_timeout")
+                        if timeout_params.get("stream_timeout") is not None
+                        else _router_stream_timeout
+                    )
+                    if kwargs.get("stream")
+                    else None,
                 ),
             )
         else:
             kwargs["timeout"] = self._get_timeout(
                 kwargs=dict(_FALLBACK_HOP_ADAPTER.validate_python(kwargs)),
-                data=dict(_LITELLM_PARAMS_ADAPTER.validate_python(deployment["litellm_params"])),
+                data=dict(timeout_params),
             )
 
         self._update_kwargs_with_default_litellm_params(kwargs=kwargs, metadata_variable_name=metadata_variable_name)
@@ -4761,6 +4791,7 @@ class Router:
             request_params,
             _LITELLM_PARAMS_ADAPTER.validate_python(data),
             _LITELLM_PARAMS_ADAPTER.validate_python(self.default_litellm_params),  # pyright: ignore[reportUnknownMemberType]  # Validate legacy router defaults.
+            stream_timeout=self._get_stream_timeout(kwargs=kwargs, data=data) if kwargs.get("stream") else None,
         )
         if tier_timeout is not None:
             explicit_stream_timeout: Final = (

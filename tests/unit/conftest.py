@@ -95,6 +95,7 @@ CALLBACK_LISTS: Final = (
 )
 RESET_TO_NONE_GLOBALS: Final = ("model_fallbacks", "cache")
 RESTORED_GLOBALS: Final = (
+    "default_fallbacks",
     "disable_aiohttp_transport",
     "force_ipv4",
     "drop_params",
