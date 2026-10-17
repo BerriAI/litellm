@@ -35,6 +35,10 @@ from litellm.constants import (
     TOKEN_COUNTER_MAX_EXACT_CHARS,
 )
 from litellm.litellm_core_utils.asyncify import asyncify
+from litellm.litellm_core_utils.prompt_templates.chat_template_tools import (
+    ChatTemplateToolSection,
+    chat_template_tool_section,
+)
 from litellm.litellm_core_utils.tokenizer import HuggingFaceTokenizer, OpenAIEncoding
 
 if TYPE_CHECKING:
@@ -404,6 +408,7 @@ class _MessageCountParams:
             self.tokens_per_message = 3
             self.tokens_per_name = 1
         self.count_function = _get_count_function(model, custom_tokenizer)
+        self.tool_section = chat_template_tool_section(model)
 
 
 def token_counter(
@@ -467,7 +472,9 @@ def token_counter(
         num_tokens = _count_messages(params, new_messages, use_default_image_token_count, default_token_count)
         if count_response_tokens is False:
             includes_system_message: Final = any(message.get("role", None) == "system" for message in new_messages)
-            num_tokens += _count_extra(params.count_function, tools, tool_choice, includes_system_message)
+            num_tokens += _count_extra(
+                params.count_function, tools, tool_choice, includes_system_message, params.tool_section
+            )
 
     else:
         raise ValueError("Either text or messages must be provided")
@@ -501,7 +508,8 @@ def messages_reach_token_count(
         _count_messages(params, [message], use_default_image_token_count, None) for message in new_messages
     )
     running_totals: Final = accumulate(
-        per_message_counts, initial=_count_extra(params.count_function, tools, None, includes_system_message)
+        per_message_counts,
+        initial=_count_extra(params.count_function, tools, None, includes_system_message, params.tool_section),
     )
     return any(total >= threshold for total in running_totals)
 
@@ -592,6 +600,7 @@ def _count_extra(
     tools: list[ChatCompletionToolParam] | None,
     tool_choice: ChatCompletionNamedToolChoiceParam | None,
     includes_system_message: bool,
+    tool_section: ChatTemplateToolSection | None,
 ) -> int:
     """Count extra tokens for function definitions and tool choices.
     Args:
@@ -599,26 +608,50 @@ def _count_extra(
         tools (Optional[List[ChatCompletionToolParam]]): The available tools.
         tool_choice (Optional[ChatCompletionNamedToolChoiceParam]): The tool choice.
         includes_system_message (bool): Whether the messages include a system message.
+        tool_section (Optional[ChatTemplateToolSection]): How the model's chat template renders tools, if known.
     """
+    reply_primer_tokens: Final = 3
+    return (
+        reply_primer_tokens
+        + _count_tool_definitions(count_function, tools, includes_system_message, tool_section)
+        + _count_tool_choice(count_function, tool_choice)
+    )
 
-    num_tokens = 3  # every reply is primed with <|start|>assistant<|message|>
 
-    if tools:
-        num_tokens += count_function(_format_function_definitions(tools))
-        num_tokens += 9  # Additional tokens for function definition of tools
-    # If there's a system message and tools are present, subtract four tokens
-    if tools and includes_system_message:
-        num_tokens -= 4
-    # If tool_choice is 'none', add one token.
-    # If it's an object, add 4 + the number of tokens in the function name.
-    # If it's undefined or 'auto', don't add anything.
+def _count_tool_definitions(
+    count_function: TokenCounterFunction,
+    tools: Sequence[object] | None,
+    includes_system_message: bool,
+    tool_section: ChatTemplateToolSection | None,
+) -> int:
+    if not tools:
+        return 0
+    if tool_section is not None:
+        return _count_chat_template_tools(count_function, tools, includes_system_message, tool_section)
+    system_message_discount: Final = 4 if includes_system_message else 0
+    return count_function(_format_function_definitions(tools)) + 9 - system_message_discount
+
+
+def _count_tool_choice(
+    count_function: TokenCounterFunction,
+    tool_choice: ChatCompletionNamedToolChoiceParam | None,
+) -> int:
     if tool_choice == "none":
-        num_tokens += 1
-    elif isinstance(tool_choice, dict):
-        num_tokens += 7
-        num_tokens += count_function(str(tool_choice["function"]["name"]))
+        return 1
+    if isinstance(tool_choice, dict):
+        return 7 + count_function(str(tool_choice["function"]["name"]))
+    return 0
 
-    return num_tokens
+
+def _count_chat_template_tools(
+    count_function: TokenCounterFunction,
+    tools: Sequence[object],
+    includes_system_message: bool,
+    tool_section: ChatTemplateToolSection,
+) -> int:
+    system_turn_tokens: Final = 0 if includes_system_message else tool_section.implicit_system_turn_tokens
+    schemas: Final = tool_section.render_tool_schemas(tuple(_function_definitions(tools)))
+    return tool_section.preamble_tokens + system_turn_tokens + count_function(schemas)
 
 
 def _get_extrapolating_count_function(
@@ -1034,13 +1067,16 @@ def _format_function_definitions(tools: Sequence[object]) -> str:
     lines: Final = []
     lines.append("namespace functions {")
     lines.append("")
-    for tool in tools:
-        if not isinstance(tool, Mapping):
-            continue
-        for function in _function_definitions_for_tool(cast(Mapping[str, object], tool)):
-            lines.extend(_format_single_function_definition(function))
+    for function in _function_definitions(tools):
+        lines.extend(_format_single_function_definition(function))
     lines.append("} // namespace functions")
     return "\n".join(lines)
+
+
+def _function_definitions(tools: Sequence[object]) -> Iterable[Mapping[str, object]]:
+    for tool in tools:
+        if isinstance(tool, Mapping):
+            yield from _function_definitions_for_tool(cast(Mapping[str, object], tool))
 
 
 def _function_definitions_for_tool(tool: Mapping[str, object]) -> Iterable[Mapping[str, object]]:
