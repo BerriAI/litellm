@@ -3349,6 +3349,22 @@ def test_session_headers_still_beat_the_body_session_with_correlation_logging(
     assert spend_log_session == "hdr-session-1"
 
 
+def test_traceparent_beside_x_litellm_trace_id_is_not_the_spend_log_session(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
+    metadata: Final[dict[str, str]] = {"session_id": "convo-1"}
+    data: Final[dict[str, object]] = {"metadata": metadata}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers={
+            "x-litellm-trace-id": "req-trace-1",
+            "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+        },
+        data=data,
+        _metadata_variable_name="metadata",
+    )
+    assert metadata[CALLER_SESSION_ID_METADATA_KEY] == "convo-1"
+    assert data["litellm_trace_id"] == "req-trace-1"
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("forged_in", ["metadata", "litellm_metadata"])
 @pytest.mark.parametrize(
@@ -3719,6 +3735,167 @@ def test_add_litellm_metadata_groups_opencode_turns_into_one_session():
         assert turn["litellm_trace_id"] == OPENCODE_SESSION_ID
 
 
+PI_AI_SESSION_ID = "web:alice.smith:7f3e9c2a-5b1d-4e8f-9a6c-0d2b4f6e8a1c"
+
+
+def _apply_session_sources(
+    headers: dict[str, str], data: dict[str, object], parent_otel_span: object = None
+) -> dict[str, object]:
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="metadata", parent_otel_span=parent_otel_span
+    )
+    return data
+
+
+def _session_from_affinity_only(data: dict[str, object] | None = None) -> object:
+    payload: Final = data if data is not None else {"metadata": {}}
+    _apply_session_sources({"x-session-affinity": PI_AI_SESSION_ID}, payload)
+    return payload.get("litellm_session_id")
+
+
+@pytest.mark.parametrize(
+    "session_affinity",
+    [
+        PI_AI_SESSION_ID,
+        "cron:nightly.report:fire:9f8e7d6c5b4a",
+        "7f3e9c2a-5b1d-4e8f-9a6c-0d2b4f6e8a1c:task:3",
+        "ses_f91e6e825ffeuhlu5EbglxjAN2",
+    ],
+)
+def test_add_litellm_metadata_session_affinity_alone_sets_session_and_trace(session_affinity: str):
+    data: Final = _apply_session_sources({"X-Session-Affinity": session_affinity}, {"metadata": {}})
+
+    assert data["litellm_session_id"] == session_affinity
+    assert data["litellm_trace_id"] == session_affinity
+    assert data["metadata"]["session_id"] == session_affinity
+    assert data["metadata"]["trace_id"] == session_affinity
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["", "short", "web:alice smith:1234", "web:alice/1234567", f"{PI_AI_SESSION_ID}\n", "a" * 257, "web:alice:1234567\x00"],
+)
+def test_session_affinity_rejects_junk_values(value: str):
+    from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
+
+    data: Final = _apply_session_sources({"x-session-affinity": value}, {"metadata": {}})
+
+    assert get_chain_id_from_headers({"x-session-affinity": value}) is None
+    assert "litellm_session_id" not in data
+    assert "litellm_trace_id" not in data
+    assert data["metadata"] == {}
+    assert _session_from_affinity_only() == PI_AI_SESSION_ID
+
+
+@pytest.mark.parametrize("value", ["web:alice:1234", "a" * 256])
+def test_session_affinity_accepts_colons_at_both_length_bounds(value: str):
+    from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
+
+    assert get_chain_id_from_headers({"x-session-affinity": value}) == value
+
+
+@pytest.mark.parametrize(
+    "winning_headers",
+    [
+        {"x-litellm-trace-id": "other-session-1234"},
+        {"x-litellm-session-id": "other-session-1234"},
+        {"x-claude-code-session-id": "other-session-1234"},
+        {"session-id": "other-session-1234", "user-agent": "codex_cli_rs/0.104.0 (Mac OS 15.6.1; arm64) iTerm.app"},
+        {"x-session-id": "other-session-1234"},
+    ],
+)
+def test_every_session_header_beats_session_affinity_everywhere(winning_headers: dict[str, str]):
+    from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
+
+    headers: Final = {**winning_headers, "x-session-affinity": PI_AI_SESSION_ID}
+    data: Final = _apply_session_sources(headers, {"metadata": {}})
+
+    assert get_chain_id_from_headers(headers) == "other-session-1234"
+    assert data["litellm_session_id"] == "other-session-1234"
+    assert data["litellm_trace_id"] == "other-session-1234"
+    assert data["metadata"]["session_id"] == "other-session-1234"
+    assert get_chain_id_from_headers({"x-session-affinity": PI_AI_SESSION_ID}) == PI_AI_SESSION_ID
+    assert _session_from_affinity_only() == PI_AI_SESSION_ID
+
+
+def test_anthropic_metadata_session_beats_session_affinity():
+    data: Final = _apply_session_sources(
+        {"x-session-affinity": PI_AI_SESSION_ID},
+        {"metadata": {"user_id": "user_abc123_account__session_e96634a3-fa28-4083-b354-55542e2dca01"}},
+    )
+
+    assert data["litellm_session_id"] == "e96634a3-fa28-4083-b354-55542e2dca01"
+    assert data["metadata"]["session_id"] == "e96634a3-fa28-4083-b354-55542e2dca01"
+    assert "litellm_trace_id" not in data
+    assert _session_from_affinity_only({"metadata": {"user_id": "user_abc123_account"}}) == PI_AI_SESSION_ID
+
+
+def test_baggage_session_beats_session_affinity():
+    from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
+
+    headers: Final = {"baggage": "session.id=baggage-session-42", "x-session-affinity": PI_AI_SESSION_ID}
+    data: Final = _apply_session_sources(headers, {"metadata": {}})
+
+    assert data["litellm_session_id"] == "baggage-session-42"
+    assert data["metadata"]["session_id"] == "baggage-session-42"
+    assert "litellm_trace_id" not in data
+    assert get_chain_id_from_headers(headers) == PI_AI_SESSION_ID
+    assert get_chain_id_from_headers({**headers, "baggage": "user.id=42"}) == PI_AI_SESSION_ID
+    assert _session_from_affinity_only() == PI_AI_SESSION_ID
+
+
+def test_traceparent_keeps_trace_id_while_session_affinity_fills_session_id():
+    from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
+
+    headers: Final = {
+        "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+        "x-session-affinity": PI_AI_SESSION_ID,
+    }
+    data: Final = _apply_session_sources(headers, {"metadata": {}})
+
+    assert data["litellm_trace_id"] == "4bf92f3577b34da6a3ce929d0e0e4736"
+    assert data["metadata"]["trace_id"] == "4bf92f3577b34da6a3ce929d0e0e4736"
+    assert data["litellm_session_id"] == PI_AI_SESSION_ID
+    assert data["metadata"]["session_id"] == PI_AI_SESSION_ID
+    assert get_chain_id_from_headers(headers) == PI_AI_SESSION_ID
+    assert get_chain_id_from_headers({"traceparent": headers["traceparent"]}) is None
+
+
+def test_parent_otel_span_trace_beats_session_affinity():
+    span: Final = NonRecordingSpan(SpanContext(trace_id=0xABCDEF0123456789ABCDEF0123456789, span_id=0x1, is_remote=True))
+    data: Final = _apply_session_sources({"x-session-affinity": PI_AI_SESSION_ID}, {"metadata": {}}, parent_otel_span=span)
+
+    assert data["litellm_trace_id"] == "abcdef0123456789abcdef0123456789"
+    assert data["metadata"]["trace_id"] == "abcdef0123456789abcdef0123456789"
+    assert data["litellm_session_id"] == PI_AI_SESSION_ID
+    assert data["metadata"]["session_id"] == PI_AI_SESSION_ID
+    assert _session_from_affinity_only() == PI_AI_SESSION_ID
+
+
+def test_mcp_prestamped_session_affinity_still_fills_metadata():
+    data: Final = _apply_session_sources(
+        {"x-session-affinity": PI_AI_SESSION_ID},
+        {"metadata": {}, "litellm_trace_id": PI_AI_SESSION_ID, "litellm_session_id": PI_AI_SESSION_ID},
+    )
+
+    assert data["metadata"]["session_id"] == PI_AI_SESSION_ID
+    assert data["metadata"]["trace_id"] == PI_AI_SESSION_ID
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"metadata": {"session_id": "caller-session"}},
+        {"metadata": {}, "litellm_session_id": "caller-session"},
+    ],
+)
+def test_caller_body_session_beats_session_affinity(body: dict[str, object]):
+    data: Final = _apply_session_sources({"x-session-affinity": PI_AI_SESSION_ID}, copy.deepcopy(body))
+
+    assert data == body
+    assert _session_from_affinity_only() == PI_AI_SESSION_ID
+
+
 @pytest.mark.parametrize("value", ["short", "has spaces!!", ""])
 def test_get_chain_id_from_headers_bare_session_id_ignores_implausible_value(value: str):
     from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
@@ -3752,7 +3929,7 @@ def test_get_chain_id_from_headers_bare_session_id_loses_to_more_specific_header
 
 
 def test_trace_id_from_traceparent_valid():
-    from litellm.proxy.litellm_pre_call_utils import _trace_id_from_traceparent
+    from litellm.litellm_core_utils.session_context import _trace_id_from_traceparent
 
     assert (
         _trace_id_from_traceparent("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
@@ -3777,13 +3954,13 @@ def test_trace_id_from_traceparent_valid():
     ],
 )
 def test_trace_id_from_traceparent_rejects_malformed(traceparent: str):
-    from litellm.proxy.litellm_pre_call_utils import _trace_id_from_traceparent
+    from litellm.litellm_core_utils.session_context import _trace_id_from_traceparent
 
     assert _trace_id_from_traceparent(traceparent) is None
 
 
 def test_session_id_from_baggage_valid():
-    from litellm.proxy.litellm_pre_call_utils import _session_id_from_baggage
+    from litellm.litellm_core_utils.session_context import _session_id_from_baggage
 
     assert _session_id_from_baggage("session.id=abc-123,user.id=42") == "abc-123"
     assert _session_id_from_baggage("user.id=42, session.id=xyz-789") == "xyz-789"
@@ -3798,7 +3975,7 @@ def test_session_id_from_baggage_valid():
     ],
 )
 def test_session_id_from_baggage_absent_or_empty(baggage: str):
-    from litellm.proxy.litellm_pre_call_utils import _session_id_from_baggage
+    from litellm.litellm_core_utils.session_context import _session_id_from_baggage
 
     assert _session_id_from_baggage(baggage) is None
 
@@ -8563,6 +8740,39 @@ async def test_missing_session_id_reject_accepts_baggage_session_id(path: str, c
     )
 
     assert updated["litellm_session_id"] == "baggage-session-42"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("path", "client_body", "metadata_key"),
+    [
+        ("/v1/chat/completions", {"model": "gpt-4o", "messages": []}, "metadata"),
+        ("/v1/messages", {"model": "claude-haiku-4-5", "messages": [], "max_tokens": 5}, "litellm_metadata"),
+        ("/v1/responses", {"model": "gpt-4o", "input": "hi"}, "litellm_metadata"),
+    ],
+)
+async def test_session_affinity_header_groups_spend_log_session_on_every_llm_route(
+    path: str, client_body: dict[str, object], metadata_key: str
+):
+    """Two turns of a pi-ai session carrying only x-session-affinity must land in SpendLogs under
+    that id on every LLM route, instead of one random session per request."""
+    request: Final = _request_for(path)
+    request.headers = {"x-session-affinity": PI_AI_SESSION_ID}
+
+    turns: Final = [
+        await add_litellm_data_to_request(
+            data=copy.deepcopy(client_body),
+            request=request,
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+            proxy_config=MagicMock(),
+            general_settings={},
+        )
+        for _ in range(2)
+    ]
+
+    for turn in turns:
+        assert _spend_log_session_id(turn, metadata_key=metadata_key) == PI_AI_SESSION_ID
+        assert turn["litellm_trace_id"] == PI_AI_SESSION_ID
 
 
 @pytest.mark.asyncio
