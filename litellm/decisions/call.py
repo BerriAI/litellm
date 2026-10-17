@@ -1,12 +1,13 @@
 import json
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import dataclass, field, replace
 from functools import partial
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
 
 import httpx
 from pydantic import BaseModel, ConfigDict, StrictBool, TypeAdapter, ValidationError
+from pydantic_core import to_jsonable_python
 from typing_extensions import assert_never
 
 import litellm
@@ -417,11 +418,19 @@ def _outbound_headers(
     return MappingProxyType({**(extra_headers or {}), **forwarded})
 
 
+_LOGGED_FIELDS_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+
+
+def _jsonable_fallback(value: object) -> object:
+    return dict(_LOGGED_FIELDS_ADAPTER.validate_python(value)) if isinstance(value, Mapping) else str(value)
+
+
 def _logged_request_message(fields: RequestFields) -> ChatCompletionUserMessage:
-    caller_fields: Final[Mapping[str, object]] = asdict(fields)
+    caller_fields: Final = _LOGGED_FIELDS_ADAPTER.validate_python(
+        to_jsonable_python(fields, fallback=_jsonable_fallback)
+    )
     sent_fields: Final = json.dumps(
-        dict((name, value) for name, value in caller_fields.items() if value not in (None, (), [], {})),
-        default=str,
+        dict((name, value) for name, value in caller_fields.items() if value not in (None, [], {}))
     )
     return ChatCompletionUserMessage(role="user", content=sent_fields)
 
