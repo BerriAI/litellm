@@ -7768,24 +7768,33 @@ async def test_sync_only_logger_keeps_the_async_payload_when_its_result_builds_n
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.parametrize("entrypoint", ["handle_sync_success_callbacks_for_async_calls", "dispatch_success_handlers"])
+@pytest.mark.parametrize(
+    ("callback_name", "logger_global"),
+    [
+        ("athina", "athinaLogger"),
+        ("promptlayer", "promptLayerLogger"),
+        ("wandb", "weightsBiasesLogger"),
+        ("lunary", "lunaryLogger"),
+        ("helicone", "heliconeLogger"),
+        ("greenscale", "greenscaleLogger"),
+        ("s3", "s3Logger"),
+    ],
+)
 async def test_sync_only_logger_gets_its_own_payload_for_async_requests(
-    monkeypatch: pytest.MonkeyPatch, stream: bool, entrypoint: str
+    monkeypatch: pytest.MonkeyPatch, stream: bool, entrypoint: str, callback_name: str, logger_global: str
 ) -> None:
     sync_logged: Final = threading.Event()
     sync_payloads: Final[list[object]] = []
     async_payloads: Final[list[object]] = []
 
-    class AthinaRecorder:
-        def log_event(
-            self,
-            kwargs: dict[str, object],
-            response_obj: object,
-            start_time: object,
-            end_time: object,
-            print_verbose: object,
-        ) -> None:
+    class LegacyLoggerRecorder:
+        def _record(self, **call: object) -> None:
+            kwargs = call["kwargs"]
+            assert isinstance(kwargs, dict)
             sync_payloads.append(kwargs["standard_logging_object"])
             sync_logged.set()
+
+        log_event = log_success = _record
 
     class AsyncRecorder(CustomLogger):
         async def async_log_success_event(
@@ -7794,8 +7803,8 @@ async def test_sync_only_logger_gets_its_own_payload_for_async_requests(
             async_payloads.append(kwargs["standard_logging_object"])
 
     monkeypatch.setattr(litellm, "_async_success_callback", [])
-    monkeypatch.setattr(litellm, "success_callback", ["athina"])
-    monkeypatch.setattr(litellm_logging, "athinaLogger", AthinaRecorder())
+    monkeypatch.setattr(litellm, "success_callback", [callback_name])
+    monkeypatch.setattr(litellm_logging, logger_global, LegacyLoggerRecorder())
     response: Final = ModelResponse(id="chatcmpl-sync-only")
     logging_obj: Final = _async_request_logging_obj("sync-only-logger", [AsyncRecorder()], stream=stream)
     now: Final = datetime.datetime.now()
