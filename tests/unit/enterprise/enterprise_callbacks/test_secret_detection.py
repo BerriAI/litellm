@@ -124,6 +124,15 @@ def test_tool_payload_redacts_keyword_values_that_need_json_escaping(password):
     }
 
 
+@pytest.mark.parametrize(
+    ("password", "redacted"),
+    (('Zx9qL2mN8vB4"kR7Tq', '[REDACTED]"kR7Tq'), ('Zx9qL2mN8vB4\\"kR7Tq', '[REDACTED]"kR7Tq')),
+    ids=("quote", "backslash-quote"),
+)
+def test_tool_payload_redacts_a_keyword_match_that_stops_inside_an_escape(password: str, redacted: str) -> None:
+    assert _guardrail().redact_tool_payload({"password": password}) == {"password": redacted}
+
+
 def _recorded_scans(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     scanned: Final[list[str]] = []
     scan: Final = secret_detection._scan_lines

@@ -336,6 +336,30 @@ def test_tool_argument_compatibility(caller: Caller, shape: str) -> None:
     _stored(caller, response.json()["id"], masked=shape != "unchanged")
 
 
+@pytest.mark.parametrize(
+    ("original", "masked"),
+    (
+        (
+            '{ "env" : "' + TEXT + '", "amount": 0.123456789012345678901, "price": 1.50, "limit": 1e5 }',
+            '{ "env" : "AWS_ACCESS_KEY_ID=[REDACTED]", "amount": 0.123456789012345678901, "price": 1.50, "limit": 1e5 }',
+        ),
+        ('{"password": "Zx9qL2mN8vB4\\"kR7Tq", "path": ".env"}', '{"password": "[REDACTED]\\"kR7Tq", "path": ".env"}'),
+    ),
+    ids=("number-literals", "keyword-match-inside-escape"),
+)
+def test_masked_tool_arguments_keep_their_other_text(caller: Caller, original: str, masked: str) -> None:
+    marker: Final = _identity()
+    body: Final = _body("openai", marker)
+    body["messages"][1]["tool_calls"][0]["function"]["arguments"] = original
+    response: Final = caller.rig.proxy.request("POST", "/v1/chat/completions", body, key=caller.key)
+    assert response.status_code == 200 and "accepted" in response.text, response.text
+    selected: Final = tuple(request for request in caller.rig.wire.drain() if marker.encode() in request.body)
+    assert len(selected) == 1, selected
+    observed: Final = json.loads(selected[0].body)["messages"][1]["tool_calls"][0]["function"]["arguments"]
+    assert observed == masked, observed
+    _stored(caller, response.json()["id"])
+
+
 @pytest.mark.parametrize("path", ("/v1/responses", "/v1/completions"), ids=("responses", "plain-completion"))
 def test_existing_text_shapes_still_redact(caller: Caller, path: str) -> None:
     marker: Final = _identity()

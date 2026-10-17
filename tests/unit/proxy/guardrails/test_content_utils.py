@@ -1025,6 +1025,32 @@ def test_tool_arguments_with_non_finite_numbers_keep_their_original_bytes(argume
 
 
 @pytest.mark.parametrize(
+    ("arguments", "masked"),
+    (
+        (
+            '{ "token" : "secret", "amount": 0.123456789012345678901, "price": 1.50, "limit": 1e5 }',
+            '{ "token" : "[MASKED]", "amount": 0.123456789012345678901, "price": 1.50, "limit": 1e5 }',
+        ),
+        (
+            '{"caf\\u00e9":"caf\\u00e9","list":["secret", "", "a\\"secret\\"b"],\n "secret": "keep"}',
+            '{"caf\\u00e9":"caf\\u00e9","list":["[MASKED]", "", "a\\"[MASKED]\\"b"],\n "secret": "keep"}',
+        ),
+    ),
+    ids=("number-literals", "escapes-and-keys"),
+)
+def test_masked_tool_arguments_change_only_the_masked_strings(arguments: str, masked: str) -> None:
+    data = {"messages": [{"tool_calls": [{"function": {"arguments": arguments}}]}]}
+    assert walk_user_text(data, lambda text: text.replace("secret", "[MASKED]")) == 1
+    assert data["messages"][0]["tool_calls"][0]["function"]["arguments"] == masked
+
+
+def test_tool_visitor_that_changes_the_payload_shape_writes_its_payload_as_arguments() -> None:
+    data = {"messages": [{"tool_calls": [{"function": {"arguments": '{ "token": "secret", "note": "keep" }'}}]}]}
+    assert walk_user_text(data, lambda text: text, lambda payload: {"token": "[MASKED]"}) == 1
+    assert data["messages"][0]["tool_calls"][0]["function"]["arguments"] == '{"token": "[MASKED]"}'
+
+
+@pytest.mark.parametrize(
     "data",
     (
         {

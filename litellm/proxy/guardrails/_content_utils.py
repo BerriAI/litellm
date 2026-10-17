@@ -10,6 +10,7 @@ every text fragment.
 
 import json
 import math
+import re
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Final
@@ -100,6 +101,32 @@ def _tool_arguments(arguments: str) -> JsonValue:
     )
     json.dumps(parsed, ensure_ascii=False).encode("utf-8")  # raises for lone surrogates, which stay raw text
     return parsed
+
+
+_JSON_STRING_TOKEN: Final = re.compile(r'"[^"\\]*(?:\\.[^"\\]*)*"')
+
+_KEY_SUFFIX: Final = re.compile(r"[ \t\n\r]*:")
+
+
+def _value_string_spans(arguments: str) -> Iterator[tuple[int, int]]:
+    """Yield the span of every non-empty string value in the valid JSON ``arguments``, in document order."""
+    for token in _JSON_STRING_TOKEN.finditer(arguments):
+        if token.end() - token.start() > 2 and _KEY_SUFFIX.match(arguments, token.end()) is None:
+            yield token.span()
+
+
+def _respliced(arguments: str, parsed: JsonValue, rewritten: JsonValue) -> str:
+    """Write the string values that differ between ``parsed`` and ``rewritten`` into ``arguments``, keeping its other text."""
+    spans: Final = tuple(_value_string_spans(arguments))
+    before: Final = tuple(iter_tool_json_text(parsed))
+    after: Final = tuple(iter_tool_json_text(rewritten))
+    if not len(spans) == len(before) == len(after):
+        return json.dumps(rewritten, ensure_ascii=False)
+    changed: Final = tuple((span, new) for span, old, new in zip(spans, before, after) if new != old)
+    starts: Final = (0, *(end for (_, end), _ in changed))
+    ends: Final = (*(start for (start, _), _ in changed), len(arguments))
+    replacements: Final = (*(json.dumps(new, ensure_ascii=False) for _, new in changed), "")
+    return "".join(arguments[start:end] + replacement for start, end, replacement in zip(starts, ends, replacements))
 
 
 def iter_tool_json_fields(value: object) -> Iterator[tuple[str | None, str]]:
@@ -363,7 +390,7 @@ def walk_user_text(
             visited += 1  # rebind-ok: scalar arguments still undergo the text callback
             return visit(arguments)
         rewritten: Final = _rewrite_tool(parsed)
-        return arguments if rewritten == parsed else json.dumps(rewritten, ensure_ascii=False)
+        return arguments if rewritten == parsed else _respliced(arguments, parsed, rewritten)
 
     def _rewrite_part(part: Mapping[str, object], native: bool) -> Mapping[str, object]:
         nonlocal visited

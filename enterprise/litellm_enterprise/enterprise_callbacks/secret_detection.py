@@ -458,6 +458,9 @@ _JSON_STRING: Final = TypeAdapter(str)
 
 _KEY_CONTEXT: Final = 64
 
+# A detector can stop a match inside an escape of a JSON-escaped line, as at the backslash of \".
+_CUT_ESCAPE: Final = re.compile(r"(?<=.)\\(?:u[0-9A-Fa-f]{0,3})?\Z", re.DOTALL)
+
 _ASSIGNMENT_LINE: Final = re.compile(r"[^\s\[#;:=][^:=]*[:=]")
 
 _SHELL_ASSIGNMENT: Final = re.compile(r"(?P<key>[^\s\[#;:=](?:[^:=]*[^\s:=])?)=(?P<value>\S+)")
@@ -546,10 +549,12 @@ def _quoted_assignments(text: str) -> tuple[str, ...]:
 
 
 def _json_unescaped(value: str) -> str:
-    try:
-        return _JSON_STRING.validate_json(f'"{value}"')
-    except ValueError:
-        return value
+    for candidate in (value, _CUT_ESCAPE.sub("", value)):
+        try:
+            return _JSON_STRING.validate_json(f'"{candidate}"')
+        except ValueError:
+            continue
+    return value
 
 
 def _key_context(key: str) -> str:
@@ -645,7 +650,7 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
             "Detected and redacted secrets in tool payload: %s",
             sorted(dict.fromkeys(secret["type"] for secret in detected)),
         )
-        values: Final = sorted({secret["value"] for secret in detected}, key=len, reverse=True)  # longest match wins
+        values: Final = sorted({secret["value"] for secret in detected}, key=len, reverse=True)
         pattern: Final = re.compile("|".join(re.escape(value) for value in values))
         return map_tool_json_text(payload, lambda text: pattern.sub("[REDACTED]", text))
 
