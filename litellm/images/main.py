@@ -986,7 +986,7 @@ def image_edit(
 
 @client
 async def aimage_edit(
-    image: FileTypes | list[FileTypes],
+    image: FileTypes | list[FileTypes] | None,
     model: str,
     prompt: str,
     mask: str | None = None,
@@ -1026,7 +1026,7 @@ async def aimage_edit(
                 model=model, api_base=local_vars.get("base_url", None)
             )
 
-        images: Final = image if isinstance(image, list) else [image]
+        images: Final = image if isinstance(image, list) else ([image] if image is not None else [])
 
         func: Final = partial(
             image_edit,
