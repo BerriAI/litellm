@@ -253,8 +253,10 @@ from litellm.router import Router
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.litellm_params import AGENTIC_LOOP_KWARG_NAMES
 from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS
+from litellm.types.router import holds_api_key_secret_reference
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
+    API_KEY_SECRET_REFERENCE_REJECTION,
     CAPTURE_MESSAGE_CONTENT_VAR,
     EXCLUDED_SERVICES_VAR,
     CustomPricingLiteLLMParams,
@@ -2735,6 +2737,9 @@ async def add_litellm_data_to_request(
             else None
         ),
     )
+
+    if holds_api_key_secret_reference(data):  # pyright: ignore[reportUnknownArgumentType]  # data is an untyped dict
+        raise HTTPException(status_code=400, detail=API_KEY_SECRET_REFERENCE_REJECTION)
 
     ## ENFORCED PARAMS CHECK
     # loop through each enforced param

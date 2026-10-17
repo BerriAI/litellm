@@ -139,6 +139,76 @@ async def test_gpt_token_counting():
     assert response.request_model == "gpt-4"
 
 
+
+@pytest.mark.asyncio
+async def test_token_counter_leaves_the_routers_deployment_without_the_credentials_it_resolves(tmp_path, monkeypatch):
+    """token_counter reads the router's own deployment, so loading the named credential into it would leave the
+    token read from the file on the shared deployment for every later request."""
+    from litellm.types.utils import CredentialItem
+
+    monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(tmp_path))
+    token_file = tmp_path / "token"
+    token_file.write_text("sa-token-from-file")
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="mistral-sa",
+                credential_values={"api_key": f"oidc/file/{token_file}"},
+                credential_info={},
+            )
+        ],
+    )
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": "devstral",
+                "litellm_params": {"model": "mistral/devstral-latest", "litellm_credential_name": "mistral-sa"},
+            }
+        ]
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", llm_router)
+
+    response = await token_counter(
+        request=TokenCountRequest(model="devstral", messages=[{"role": "user", "content": "hello"}])
+    )
+
+    assert response.total_tokens > 0
+    stored = (await llm_router.async_get_available_deployment(model="devstral", request_kwargs={}))["litellm_params"]
+    assert "api_key" not in stored
+    assert stored["litellm_credential_name"] == "mistral-sa"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call_endpoint", [False, True], ids=["local tokenizer", "provider count api"])
+async def test_token_counter_reads_an_oidc_api_key_only_when_it_calls_the_provider(
+    tmp_path, monkeypatch, call_endpoint
+):
+    monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(tmp_path))
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": "claude",
+                "litellm_params": {
+                    "model": "anthropic/claude-sonnet-5-5",
+                    "api_key": f"oidc/file/{tmp_path / 'missing-token'}",
+                },
+            }
+        ]
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", llm_router)
+    request = TokenCountRequest(model="claude", messages=[{"role": "user", "content": "hello"}])
+
+    if not call_endpoint:
+        assert (await token_counter(request=request, call_endpoint=call_endpoint)).total_tokens > 0
+        return
+    with pytest.raises(ProxyException) as excinfo:
+        await token_counter(request=request, call_endpoint=call_endpoint)
+    assert excinfo.value.code == "401"
+    assert str(tmp_path) not in excinfo.value.message
+
+
 @pytest.mark.asyncio
 async def test_anthropic_messages_count_tokens_endpoint():
     """

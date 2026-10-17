@@ -13,6 +13,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+import litellm
+
 ADVISOR_TOOL = {
     "type": "advisor_20260301",
     "name": "advisor",
@@ -773,6 +775,24 @@ def test_resolve_advisor_credentials_rejects_api_base_without_api_key():
         return_value=True,
     ):
         with pytest.raises(ValueError, match="api_base"):
+            _resolve_advisor_credentials(tool)
+
+
+@pytest.mark.parametrize("api_base", [None, "https://other.example"])
+def test_resolve_advisor_credentials_rejects_an_oidc_secret_reference_api_key(api_base):
+    from litellm.llms.anthropic.pass_through.messages.interceptors.advisor import (
+        _resolve_advisor_credentials,
+    )
+
+    tool = {**ADVISOR_TOOL, "api_key": "oidc/env/LITELLM_MASTER_KEY", "api_base": api_base}
+    with (
+        patch(
+            "litellm.llms.anthropic.pass_through.messages.interceptors.advisor._allow_client_side_advisor_credentials",
+            return_value=True,
+        ),
+        patch("litellm.llms.anthropic.pass_through.messages.interceptors.advisor.validate_url"),
+    ):
+        with pytest.raises(litellm.BadRequestError, match="oidc/ secret reference"):
             _resolve_advisor_credentials(tool)
 
 

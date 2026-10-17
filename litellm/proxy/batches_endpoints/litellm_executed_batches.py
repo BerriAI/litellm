@@ -35,6 +35,7 @@ from litellm.repositories.managed_batch_repository import ManagedBatchRepository
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import LiteLLMBatchCreateRequest, OpenAIFileObject, OpenAIFilesPurpose
 from litellm.types.utils import LITELLM_EXECUTED_BATCH_PROVIDERS, ExtractedFileData, LiteLLMBatch, LlmProviders
+from litellm.utils import resolve_api_key_secret_reference
 
 if TYPE_CHECKING:
     from prisma import types as prisma_types
@@ -241,7 +242,11 @@ def _upstream_of(credentials: Mapping[str, object], provider: str) -> tuple[str,
         )
     except Exception:  # noqa: BLE001  # get_llm_provider raises on a model it cannot map, which means nothing to probe
         return None
-    return None if resolved_api_base is None else (resolved_api_base, resolved_api_key)
+    if resolved_api_base is None:
+        return None
+    return resolved_api_base, resolve_api_key_secret_reference(
+        resolved_api_key, model=model, llm_provider=provider, upstream=credentials
+    )
 
 
 async def litellm_executed_provider_for(

@@ -312,6 +312,43 @@ class TestModelManagementAuthChecks:
         assert result is True
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("model_info", "api_key", "refused"),
+        [
+            ({"team_id": "test_team"}, "oidc/env/MISTRAL_SA_TOKEN", True),
+            ({}, "oidc/env/MISTRAL_SA_TOKEN", False),
+            ({"team_id": "test_team"}, "sk-static", False),
+        ],
+        ids=["team model with a reference", "proxy-level model with a reference", "team model with a plain key"],
+    )
+    async def test_an_admin_cannot_save_an_oidc_api_key_reference_on_a_team_model(
+        self, model_info: dict, api_key: str, refused: bool
+    ):
+        """A team model's inline api_key is never resolved, so saving an oidc/ reference there would only ever send
+        the reference text upstream."""
+        model_params = Deployment(
+            model_name="test_model",
+            litellm_params=LiteLLM_Params(model="mistral/devstral-latest", api_key=api_key),
+            model_info=model_info,
+        )
+
+        async def save() -> object:
+            return await ModelManagementAuthChecks.can_user_make_model_call(
+                model_params=model_params,
+                user_api_key_dict=self.admin_user,
+                prisma_client=MockPrismaClient(team_exists=True),
+                premium_user=True,
+                incoming_params={"model": "mistral/devstral-latest", "api_key": api_key},
+            )
+
+        if not refused:
+            assert await save() is True
+            return
+        with pytest.raises(Exception, match="team model cannot hold an oidc/ api_key secret reference") as exc_info:
+            await save()
+        assert (getattr(exc_info.value, "param", None), getattr(exc_info.value, "code", None)) == ("api_key", "400")
+
+    @pytest.mark.asyncio
     async def test_can_user_make_model_call_normal_user_fails(self):
         """Test that normal users cannot make model calls"""
         model_params = Deployment(
@@ -8597,6 +8634,63 @@ class TestNonAdminCannotPersistWifFieldsOnModel:
     which server-side secret is read and where it is sent. A team admin who is otherwise
     authorized for a team-scoped model must not be able to set one via /model/new,
     /model/update, or PATCH /model/{id}/update; a proxy admin still can."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "stored_api_key, patched_params",
+        [
+            ("sk-static", {"api_key": "oidc/file//var/run/secrets/kubernetes.io/serviceaccount/token"}),
+            ("oidc/file//var/run/secrets/kubernetes.io/serviceaccount/token", {"api_base": "https://attacker.example"}),
+        ],
+        ids=["sets_the_reference", "redirects_a_stored_reference"],
+    )
+    async def test_patch_model_non_admin_cannot_touch_an_oidc_api_key_reference(
+        self, stored_api_key: str, patched_params: dict
+    ):
+        """The call path reads an oidc/ api_key from the proxy's own filesystem, so a team admin who could set one, or
+        move a deployment that has one to another api_base, could send the proxy's token to a host they pick."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            patch_model,
+        )
+
+        non_admin = UserAPIKeyAuth(user_id="team_admin", user_role=LitellmUserRoles.INTERNAL_USER)
+        existing_row = MagicMock()
+        existing_row.litellm_params = {"model": "mistral/devstral-latest", "api_key": stored_api_key}
+        existing_row.model_dump.return_value = {
+            "model_name": "devstral",
+            "litellm_params": existing_row.litellm_params,
+            "model_info": {"id": "m1"},
+        }
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=existing_row)
+
+        with (
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.proxy_server.prisma_client",
+                mock_prisma,
+            ),
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.proxy_server.llm_router",
+                MagicMock(**{"get_model_ids.return_value": ["m1"]}),
+            ),
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.proxy_server.store_model_in_db",
+                True,
+            ),
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.proxy_server.premium_user",
+                True,
+            ),
+        ):
+            with pytest.raises(Exception, match="oidc/ api_key secret reference") as exc_info:
+                await patch_model(
+                    model_id="m1",
+                    patch_data=updateDeployment(litellm_params=updateLiteLLMParams(**patched_params)),
+                    user_api_key_dict=non_admin,
+                )
+            assert getattr(exc_info.value, "param", "") == "api_key"
+            mock_prisma.db.litellm_proxymodeltable.update.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_patch_model_non_admin_cannot_set_wif_field(self):
