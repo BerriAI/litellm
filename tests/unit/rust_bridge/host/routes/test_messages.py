@@ -2,6 +2,7 @@ from types import MappingProxyType
 from typing import Final
 
 import pytest
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS
@@ -126,6 +127,22 @@ def test_native_request_rejections_map_to_the_public_400() -> None:
     assert not isinstance(
         messages_host.map_failure(ValueError("plain"), request.resolved, "anthropic"), litellm.BadRequestError
     )
+
+
+@pytest.mark.parametrize("model", ("anthropic/claude-sonnet-5", "claude-sonnet-5"))
+@pytest.mark.parametrize("status", (400, 429))
+def test_upstream_failure_preserves_the_model_the_messages_caller_supplied(model: str, status: int) -> None:
+    class UpstreamFailure(Exception):
+        headers: Final = ()
+
+    upstream: Final = UpstreamFailure(status, '{"error":{"message":"provider rejected request"}}')
+
+    mapped: Final = messages_host.map_failure(upstream, {"model": model}, "anthropic")
+
+    assert isinstance(mapped, (litellm.BadRequestError, litellm.RateLimitError))
+    assert TypeAdapter(str).validate_python(getattr(mapped, "model")) == model
+    assert mapped.status_code == status
+    assert mapped.__context__ is upstream
 
 
 def test_stream_hidden_params_projects_upstream_headers_the_way_the_python_handler_does() -> None:
