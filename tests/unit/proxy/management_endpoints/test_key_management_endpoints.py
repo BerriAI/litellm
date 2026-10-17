@@ -19755,21 +19755,13 @@ def _owner_route_update_status(existing: list[str], incoming: list[str]) -> int 
 @pytest.mark.parametrize(
     ("existing", "incoming", "expected_status"),
     [
-        (["/key/spend/report", "llm_api_routes"], [], None),
-        (["/key/spend/report", "llm_api_routes"], ["llm_api_routes"], None),
-        (["/key/spend/report", "llm_api_routes"], ["info_routes"], None),
-        (["llm_api_routes", "/key/spend/report", "/global/spend/report"], [], 403),
-        (["llm_api_routes", "/key/spend/report"], ["/global/spend/report"], 403),
+        (["llm_api_routes"], [], None),
+        (["llm_api_routes", "/key/spend/report"], [], 403),
+        (["llm_api_routes", "/key/spend/report"], ["llm_api_routes"], 403),
     ],
-    ids=[
-        "full_access",
-        "ai_apis",
-        "read_only",
-        "admin_set_routes_beyond_the_default",
-        "widening_to_a_non_preset_route",
-    ],
+    ids=["preset_to_full_access", "default_list_to_full_access", "default_list_to_ai_apis"],
 )
-def test_owner_route_update_on_a_key_created_with_the_default_allowed_routes(
+def test_owner_cannot_change_the_routes_a_key_got_from_default_key_generate_params(
     monkeypatch, existing, incoming, expected_status
 ):
     monkeypatch.setattr(

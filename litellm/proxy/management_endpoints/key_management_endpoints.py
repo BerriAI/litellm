@@ -1062,17 +1062,12 @@ def _is_safe_preset_route_transition(
     (empty = full access, which non-admins already get from a default
     `/key/generate`), with one carve-out: a read-only (`info_routes`) key
     stays read-only, so widening it needs an admin. Requiring the existing
-    side to be a safe preset, or the `default_key_generate_params` routes a
-    key was created with, keeps an owner from clearing an admin-set custom
-    route restriction (LIT-4139).
+    side to be a safe preset keeps an owner from clearing an admin-set
+    custom route restriction (LIT-4139).
     """
     incoming: Final = frozenset(incoming_allowed_routes or ())
     existing: Final = frozenset(existing_allowed_routes or ())
-    configured_default: Final = _configured_default_allowed_routes()
-    existing_is_configured_default: Final = configured_default is not None and existing == frozenset(configured_default)
-    if not incoming <= _NON_ADMIN_SAFE_ALLOWED_ROUTES_PRESETS:
-        return False
-    if not (existing <= _NON_ADMIN_SAFE_ALLOWED_ROUTES_PRESETS or existing_is_configured_default):
+    if not (incoming | existing) <= _NON_ADMIN_SAFE_ALLOWED_ROUTES_PRESETS:
         return False
     return existing != _READ_ONLY_ALLOWED_ROUTES_PRESET or incoming == existing
 
