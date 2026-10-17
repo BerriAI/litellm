@@ -109,10 +109,12 @@ from ..common_utils import (
     AnthropicError,
     AnthropicModelInfo,
     eager_input_streaming_flag,
+    has_context_1m_suffix,
     process_anthropic_headers,
     refusal_provider_specific_fields,
     requires_native_compaction_beta,
     strip_advisor_blocks_from_messages,
+    strip_context_1m_suffix,
 )
 
 if TYPE_CHECKING:
@@ -2207,6 +2209,15 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         """
         Translate messages to anthropic format.
         """
+        if has_context_1m_suffix(model):
+            return AnthropicConfig.transform_request(
+                self,
+                model=strip_context_1m_suffix(model),
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                headers=headers,
+            )
         ## VALIDATE REQUEST
         """Anthropic requires ``tools`` when messages include tool blocks; LiteLLM injects a dummy tool if omitted (no ``modify_params`` needed)."""
         from litellm.litellm_core_utils.prompt_templates.factory import (
