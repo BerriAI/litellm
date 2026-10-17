@@ -2903,7 +2903,9 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             # gen_ai.* / metadata.* attributes — duplicating them here doubles
             # storage and adds noise (Issue #3).
             litellm_params: Final = kwargs.get("litellm_params", {}) or {}
-            custom_llm_provider: Final = litellm_params.get("custom_llm_provider", "Unknown")
+            custom_llm_provider: Final = (
+                litellm_params.get("custom_llm_provider") or kwargs.get("custom_llm_provider") or "Unknown"
+            )
 
             _raw_response = kwargs.get("original_response")
             _additional_args: Final = kwargs.get("additional_args", {}) or {}
