@@ -59,10 +59,10 @@ func TestTeamMemberReadRefreshesRoleAndBudget(t *testing.T) {
 
 	client := NewClient(srv.URL, "test-key", true)
 	d := schema.TestResourceDataRaw(t, resourceLiteLLMTeamMember().Schema, map[string]interface{}{
-		"team_id":           "team-1",
-		"user_id":           "user-1",
-		"user_email":        "old@example.com",
-		"role":              "user",
+		"team_id":            "team-1",
+		"user_id":            "user-1",
+		"user_email":         "old@example.com",
+		"role":               "user",
 		"max_budget_in_team": 1.0,
 	})
 	d.SetId("team-1:user-1")
