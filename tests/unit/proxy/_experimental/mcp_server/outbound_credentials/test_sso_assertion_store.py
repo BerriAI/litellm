@@ -612,6 +612,27 @@ async def test_login_refresh_token_round_trips_beside_the_saml_assertion():
     assert login_refresh_token_expired(fetched, now + timedelta(seconds=3600))
 
 
+def test_renewal_follows_a_rotated_login_refresh_token_that_is_the_id_jag_subject():
+    """When the OIDC login's own refresh token is the ID-JAG subject (the SSO client is the ID-JAG
+    client), a renewal that rotated it leaves the old token revoked at the IdP, so the subject moves
+    to the token the renewal returned."""
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    login = assertion_from_sso_login(_make_id_token(), "sso-rt")
+    assert login is not None
+    previous = with_login_refresh_token(
+        login, "sso-rt", None, now, endpoint="https://idp.example.com/token", client_id="agent"
+    )
+    renewed = assertion_from_sso_login(_make_id_token(7200), "sso-rt-2")
+    assert renewed is not None
+
+    carried = carry_exchanged_refresh_token(previous, renewed)
+
+    assert carried.exchanged_refresh_token is not None
+    assert carried.exchanged_refresh_token.get_secret_value() == "sso-rt-2"
+    assert carried.exchanged_refresh_token_endpoint == "https://idp.example.com/token"
+    assert carried.exchanged_refresh_token_client_id == "agent"
+
+
 def test_renewal_carries_the_exchanged_refresh_token_forward():
     """An OIDC renewal rebuilds the row from the new id_token. The refresh token the ID-JAG client
     exchanged at login is unrelated to that renewal and must survive it."""

@@ -429,10 +429,11 @@ def _login_refresh_token_subject(
     assertion: SSOIdentityAssertion, config: IdJagConfig, now: datetime
 ) -> Result[_IdJagSubjectToken, CredError]:
     """The subject for a server configured with ``id_jag_subject_source: refresh_token``: the refresh
-    token the ID-JAG client exchanged the login assertion for when the user signed in. Never the SSO
-    refresh token an OIDC login holds, that one is bound to the SSO client. The assertion's own expiry
-    does not apply here, a SAML assertion is spent minutes after login while the refresh token it
-    bought lives as long as the IdP said."""
+    token the ID-JAG client holds from the user's sign-in, exchanged from the login assertion or, when
+    the SSO client is this server's IdP client, the one the OIDC login itself returned. The login-time
+    hook records which client and endpoint it is bound to, and a token bound elsewhere is never sent
+    here. The assertion's own expiry does not apply, a SAML assertion is spent minutes after login
+    while the refresh token it bought lives as long as the IdP said."""
     if assertion.exchanged_refresh_token is None:
         return Error(
             CredError.of_precondition_required(

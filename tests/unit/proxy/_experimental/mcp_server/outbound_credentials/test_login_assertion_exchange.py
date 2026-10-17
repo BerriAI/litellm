@@ -13,6 +13,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.login_assertion
     refresh_token_exchange_targets,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Error, Ok, Result
+from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_refresher import SSOClientConfig
 from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (
     SAML2_SUBJECT_TOKEN_TYPE,
     SSOIdentityAssertion,
@@ -159,6 +160,90 @@ async def test_an_oidc_login_is_exchanged_at_the_id_jag_client_and_keeps_its_sso
     assert endpoint.calls[0][2]["subject_token"] == "id-token"
     assert endpoint.calls[0][2]["subject_token_type"] == "urn:ietf:params:oauth:token-type:id_token"
     assert exchanged.refresh_token is not None and exchanged.refresh_token.get_secret_value() == "sso-rt"
+    assert exchanged.exchanged_refresh_token is not None
+    assert exchanged.exchanged_refresh_token.get_secret_value() == "rt-1"
+
+
+def _sso_client(client_id: str = "agent", endpoint: str = "https://idp.example.com/token") -> SSOClientConfig:
+    return SSOClientConfig(
+        token_endpoint=endpoint, client_id=client_id, client_secret=SecretStr("s"), auth_method="client_secret_basic"
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_oidc_login_through_the_id_jag_client_keeps_its_own_refresh_token_without_an_exchange():
+    """Okta refuses requested_token_type=refresh_token for an id_token subject. When the SSO app is the
+    ID-JAG client itself, the refresh token the login returned is already that client's, so it is bound
+    to the target and nothing is posted to the IdP."""
+    endpoint = _Endpoint(
+        Error(
+            CredError.of_upstream_unavailable(
+                "token exchange failed with status 400: 'requested_token_type' is invalid or not supported."
+            )
+        )
+    )
+    oidc = SSOIdentityAssertion(id_token=SecretStr("id-token"), refresh_token=SecretStr("sso-rt"))
+
+    kept = await exchange_login_assertion_for_refresh_token(
+        oidc, (_config(),), endpoint, _NOW, sso_client=_sso_client()
+    )
+
+    assert endpoint.calls == []
+    assert kept.exchanged_refresh_token is not None and kept.exchanged_refresh_token.get_secret_value() == "sso-rt"
+    assert kept.exchanged_refresh_token_expires_at is None
+    assert kept.exchanged_refresh_token_endpoint == "https://idp.example.com/token"
+    assert kept.exchanged_refresh_token_client_id == "agent"
+    assert kept.id_token == oidc.id_token and kept.refresh_token == oidc.refresh_token
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "sso_client",
+    [
+        pytest.param(_sso_client(client_id="sso-app"), id="other-client"),
+        pytest.param(_sso_client(endpoint="https://other-idp.example.com/token"), id="other-endpoint"),
+        pytest.param(None, id="unknown-client"),
+    ],
+)
+async def test_a_login_refresh_token_from_another_client_or_issuer_is_never_presented(
+    sso_client: SSOClientConfig | None,
+):
+    endpoint = _Endpoint(Ok(ExchangedToken(access_token="rt-1", expires_in=3600)))
+    oidc = SSOIdentityAssertion(id_token=SecretStr("id-token"), refresh_token=SecretStr("sso-rt"))
+
+    exchanged = await exchange_login_assertion_for_refresh_token(
+        oidc, (_config(),), endpoint, _NOW, sso_client=sso_client
+    )
+
+    assert [(call[0], call[1], call[2]["subject_token"]) for call in endpoint.calls] == [
+        ("https://idp.example.com/token", "agent", "id-token")
+    ]
+    assert exchanged.exchanged_refresh_token is not None
+    assert exchanged.exchanged_refresh_token.get_secret_value() == "rt-1"
+
+
+@pytest.mark.asyncio
+async def test_the_login_refresh_token_binds_to_the_target_whose_client_issued_it_not_the_first():
+    endpoint = _Endpoint(Ok(ExchangedToken(access_token="rt-1", expires_in=3600)))
+    oidc = SSOIdentityAssertion(id_token=SecretStr("id-token"), refresh_token=SecretStr("sso-rt"))
+    targets = (_config(client_id="other-agent"), _config(client_id="agent"))
+
+    kept = await exchange_login_assertion_for_refresh_token(oidc, targets, endpoint, _NOW, sso_client=_sso_client())
+
+    assert endpoint.calls == []
+    assert kept.exchanged_refresh_token_client_id == "agent"
+    assert kept.exchanged_refresh_token is not None and kept.exchanged_refresh_token.get_secret_value() == "sso-rt"
+
+
+@pytest.mark.asyncio
+async def test_a_saml_login_through_the_id_jag_client_still_exchanges_its_assertion():
+    endpoint = _Endpoint(Ok(ExchangedToken(access_token="rt-1", expires_in=3600)))
+
+    exchanged = await exchange_login_assertion_for_refresh_token(
+        _saml(), (_config(),), endpoint, _NOW, sso_client=_sso_client()
+    )
+
+    assert endpoint.calls[0][2]["subject_token_type"] == "urn:ietf:params:oauth:token-type:saml2"
     assert exchanged.exchanged_refresh_token is not None
     assert exchanged.exchanged_refresh_token.get_secret_value() == "rt-1"
 
