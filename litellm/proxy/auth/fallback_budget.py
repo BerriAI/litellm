@@ -130,6 +130,22 @@ async def is_token_within_budget_for_model(
     if is_model_cost_zero(model=model, llm_router=llm_router):
         return True
 
+    # Gating check: team member overall budget within their team. 
+    # Prevents zero-cost models with paid fallbacks from exceeding the member's team budget cap.
+    team_member_budget: Final = valid_token.team_member_budget
+    if (
+        team_member_budget is not None
+        and valid_token.user_id is not None
+        and valid_token.team_id is not None
+    ):
+        team_member_spend: Final = await _counter_spend(
+            counter_key=f"spend:team_member:{valid_token.user_id}:{valid_token.team_id}",
+            fallback_spend=valid_token.team_member_spend or 0.0,
+            max_budget=team_member_budget,
+        )
+        if team_member_spend >= team_member_budget:
+            return False
+
     key_budget: Final = valid_token.max_budget
     if key_budget is not None and valid_token.token is not None:
         key_spend: Final = await _counter_spend(
