@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { EndUser } from "@/app/(dashboard)/hooks/customers/useCustomers";
 import type { MCPServer, MCPToolset } from "@/components/mcp_tools/types";
 import {
@@ -33,6 +33,23 @@ const server: MCPServer = {
 };
 
 describe("shared customer budgets", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("counts customers per budget on browsers without Map.groupBy", () => {
+    vi.stubGlobal("Map", Object.assign(class extends Map {}, { groupBy: undefined }));
+    const linked = { ...customer, budget_id: "shared-budget" };
+
+    expect(
+      getCustomerBudgetCounts([
+        linked,
+        { ...linked, user_id: "another-customer" },
+        { ...customer, user_id: "no-budget" },
+      ]),
+    ).toEqual(new Map([["shared-budget", 2]]));
+  });
+
   it("allows a budget linked to only one customer", () => {
     const owned = { ...customer, budget_id: "own-budget" };
     expect(

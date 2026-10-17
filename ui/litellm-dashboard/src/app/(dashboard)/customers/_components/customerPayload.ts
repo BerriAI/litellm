@@ -1,15 +1,13 @@
 import type { EndUser } from "@/app/(dashboard)/hooks/customers/useCustomers";
 import type { UpdateCustomerRequest } from "@/app/(dashboard)/hooks/customers/customerApi";
 import type { MCPServer, MCPToolset } from "@/components/mcp_tools/types";
-import { mcpServersForIdentifier } from "@/components/mcp_server_management/effectiveMcpServers";
+import { mcpAllowedToolsFor, mcpServersForIdentifier } from "@/components/mcp_server_management/effectiveMcpServers";
 import { extractMcpEntitlement, type McpEntitlementUpdate } from "@/components/mcp_server_management/mcpEntitlement";
 
 export const getCustomerBudgetCounts = (customers: readonly EndUser[]): ReadonlyMap<string, number> =>
-  new Map(
-    Array.from(
-      Map.groupBy(customers, (customer) => customer.budget_id ?? ""),
-      ([budgetId, linkedCustomers]) => [budgetId, linkedCustomers.length] as const,
-    ).filter(([budgetId]) => Boolean(budgetId)),
+  customers.reduce(
+    (counts, { budget_id }) => (budget_id ? counts.set(budget_id, (counts.get(budget_id) ?? 0) + 1) : counts),
+    new Map<string, number>(),
   );
 
 export const hasSharedCustomerBudget = (customer: EndUser, budgetCounts: ReadonlyMap<string, number>): boolean =>
@@ -147,4 +145,26 @@ export const buildCustomerPayload = (
     ...(existing || values.models.length > 0 ? { models: values.models } : {}),
     ...(grant ? { object_permission: grant } : {}),
   };
+};
+
+export const newDirectServersWithoutAllowlist = (
+  values: CustomerFormValues,
+  existing: EndUser | null,
+  servers: MCPServer[],
+  toolsets: MCPToolset[],
+): readonly MCPServer[] => {
+  const grant = changedMcpGrant(values, existing, servers, toolsets);
+  if (!grant) return [];
+  const exemptServerIds = new Set([
+    ...(existing?.object_permission?.mcp_servers ?? []).flatMap((identifier) =>
+      mcpServersForIdentifier(servers, identifier).map((server) => server.server_id),
+    ),
+    ...toolsets
+      .filter((toolset) => grant.mcp_toolsets.includes(toolset.toolset_id))
+      .flatMap((toolset) => toolset.tools.map((tool) => tool.server_id)),
+  ]);
+  return grant.mcp_servers
+    .flatMap((identifier) => mcpServersForIdentifier(servers, identifier))
+    .filter((server) => !exemptServerIds.has(server.server_id))
+    .filter((server) => mcpAllowedToolsFor(server, grant.mcp_tool_permissions, servers) === undefined);
 };
