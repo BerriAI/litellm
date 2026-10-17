@@ -197,6 +197,24 @@ async def test_a_replayed_stream_keeps_cached_tokens_reported_only_in_the_prompt
     assert rebuilt.usage.prompt_tokens_details.audio_tokens == 1
 
 
+@pytest.mark.parametrize("replay", ["async", "sync"])
+@pytest.mark.asyncio
+async def test_a_replayed_stream_keeps_integral_counts_cached_as_floats_or_numeric_strings(replay):
+    cached = _async_payload()
+    cached["usage"] = {
+        "prompt_tokens": 100.0,
+        "completion_tokens": "6",
+        "total_tokens": 106.0,
+        "cache_read_input_tokens": 90.0,
+    }
+
+    chunks = await _collect_async(cached) if replay == "async" else list(convert_to_streaming_response(cached))
+    usage: Final = next(c.usage for c in chunks if getattr(c, "usage", None) is not None)
+
+    assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (100, 6, 106)
+    assert usage.cache_read_input_tokens == 90
+
+
 @pytest.mark.parametrize(
     "field, value",
     [

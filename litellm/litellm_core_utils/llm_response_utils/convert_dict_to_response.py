@@ -425,6 +425,7 @@ _FIELD_MAP: Final = TypeAdapter(dict[str, object])
 _COMPLETION_TOKENS_DETAILS: Final = TypeAdapter(CompletionTokensDetailsWrapper)
 _PROMPT_TOKENS_DETAILS: Final = TypeAdapter(PromptTokensDetailsWrapper)
 _PROMPT_CACHE_TOKEN_COUNTS: Final = TypeAdapter(_PromptCacheTokenCounts)
+_TOKEN_COUNT: Final = TypeAdapter(int)
 _PROMPT_CACHE_TOKEN_FIELDS: Final = ("cache_read_input_tokens", "cache_creation_input_tokens")
 
 
@@ -453,21 +454,28 @@ def _cached_prompt_tokens_details(usage: _CachedUsageDetails) -> PromptTokensDet
         return None
 
 
+def _cached_token_count(count: object) -> int | None:
+    try:
+        return _TOKEN_COUNT.validate_python(count)
+    except ValidationError:
+        return None
+
+
 def _cached_prompt_cache_token_counts(usage: _CachedUsageDetails) -> _PromptCacheTokenCounts:
     return _PROMPT_CACHE_TOKEN_COUNTS.validate_python(
-        {field: count for field in _PROMPT_CACHE_TOKEN_FIELDS if type(count := usage.get(field)) is int}
+        {
+            field: count
+            for field in _PROMPT_CACHE_TOKEN_FIELDS
+            if (count := _cached_token_count(usage.get(field))) is not None
+        }
     )
-
-
-def _cached_token_count(count: object) -> int:
-    return count if type(count) is int else 0
 
 
 def _replayed_usage(usage: _CachedUsageDetails) -> Usage:
     return Usage(
-        completion_tokens=_cached_token_count(usage.get("completion_tokens")),
-        prompt_tokens=_cached_token_count(usage.get("prompt_tokens")),
-        total_tokens=_cached_token_count(usage.get("total_tokens")),
+        completion_tokens=_cached_token_count(usage.get("completion_tokens")) or 0,
+        prompt_tokens=_cached_token_count(usage.get("prompt_tokens")) or 0,
+        total_tokens=_cached_token_count(usage.get("total_tokens")) or 0,
         completion_tokens_details=_cached_completion_tokens_details(usage),
         prompt_tokens_details=_cached_prompt_tokens_details(usage),
         **_cached_prompt_cache_token_counts(usage),
