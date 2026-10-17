@@ -1,4 +1,4 @@
-import { sessionLogoutCall } from "@/components/networking";
+import { getUiPageUrl, sessionLogoutCall } from "@/components/networking";
 import { clearTokenCookies } from "@/utils/cookieUtils";
 import { clearStoredReturnUrl } from "@/utils/returnUrlUtils";
 import useProxySettings from "@/app/(dashboard)/hooks/proxySettings/useProxySettings";
@@ -33,7 +33,7 @@ export function useLogout(accessToken: string | null): () => void {
 
   return () => {
     void revokeSessionAndClearClientState(accessToken).finally(() => {
-      window.location.href = proxySettings.PROXY_LOGOUT_URL || "";
+      window.location.href = getUiPageUrl(proxySettings.PROXY_LOGOUT_URL || "");
     });
   };
 }

@@ -35,6 +35,7 @@ import logging
 from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Dict, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -57,7 +58,7 @@ from litellm.types.llms.openai import BatchJobStatus
 from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 from litellm.types.utils import CredentialItem, LiteLLMBatch, SpecialEnums
 
-from fastapi import Request, Response
+from fastapi import HTTPException, Request, Response
 
 # --------------------------------------------------------------------------- #
 # Fixtures: distinguishable credentials per model so a wrong/hardcoded model_id
@@ -519,6 +520,29 @@ async def test_create__fallback_explicit_provider_bypasses_not_found_gate(harnes
     await call_create(harness, provider="anthropic")
 
     assert harness.acreate_kwargs()["custom_llm_provider"] == "anthropic"
+
+
+@pytest.mark.asyncio
+async def test_create__fallback_workload_identity_alone_forwards(
+    harness: Harness, no_openai_creds: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    token_file = tmp_path / "subject_token.jwt"
+    token_file.write_text("subject-token-from-file")
+    monkeypatch.setenv("OPENAI_IDENTITY_PROVIDER_ID", "idp_test123")
+    monkeypatch.setenv("OPENAI_SERVICE_ACCOUNT_ID", "user-test456")
+    monkeypatch.setenv("OPENAI_IDENTITY_TOKEN_FILE", str(token_file))
+    set_body(
+        harness,
+        {
+            "input_file_id": "file-plain",
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+        },
+    )
+
+    await call_create(harness)
+
+    assert harness.acreate_kwargs()["custom_llm_provider"] == "openai"
 
 
 @pytest.mark.asyncio
@@ -1162,6 +1186,34 @@ async def test_create__uses_acreate_batch_route_type(harness, openai_env_creds):
     await call_create(harness)
 
     assert harness.pre_call.call_args.kwargs["route_type"] == "acreate_batch"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("loadbalancing", [True, False], ids=["load_balanced", "unified_branch"])
+async def test_create__pre_call_ownership_denial_stops_every_dispatch_branch(harness, loadbalancing: bool):
+    set_body(
+        harness,
+        {
+            "input_file_id": "litellm_proxy_unified_id",
+            "model": "vertex-model",
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+        },
+    )
+    harness.is_known_model.return_value = True
+    harness.pre_call.side_effect = HTTPException(status_code=403, detail="does not have access to the file")
+
+    with (
+        patch.object(litellm, "enable_loadbalancing_on_batch_endpoints", loadbalancing),
+        patch.object(endpoints, "is_base64_encoded_unified_file_id", return_value="unified-xyz"),
+        patch.object(endpoints, "get_models_from_unified_file_id", return_value=["vertex-model"]),
+        pytest.raises(ProxyException) as exc,
+    ):
+        await call_create(harness)
+
+    assert exc.value.code == "403", exc.value
+    harness.router_acreate.assert_not_called()
+    harness.litellm_acreate.assert_not_called()
 
 
 def install_managed_files_hook(harness: Harness) -> AsyncMock:

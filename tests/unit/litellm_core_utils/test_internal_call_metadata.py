@@ -1,11 +1,17 @@
 """Unit tests for internal-call metadata forwarding: budget-reservation stripping and origin stamping."""
 
-from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
+from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY, MANAGED_BACKGROUND_RESPONSE_METADATA_KEY
 from litellm.litellm_core_utils.internal_call_metadata import (
     forwarded_internal_call_metadata,
+    is_unbilled_non_inference_call,
+    is_unbilled_non_inference_call_from_params,
     sanitized_forwardable_call_metadata,
 )
-from litellm.types.utils import SHADOW_EVAL_ROUTER_CALL_ORIGIN
+from litellm.types.utils import (
+    BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
+    BACKGROUND_RESPONSE_STATUS_POLL_CALL_ORIGIN,
+    SHADOW_EVAL_ROUTER_CALL_ORIGIN,
+)
 
 PARENT = {
     "user_api_key": "sk-hash",
@@ -119,3 +125,69 @@ class TestSubCallMetadataSanitization:
         assert sanitized_auth.team_id == "team-1"
         assert sanitized_auth.api_key == auth.api_key
         assert auth.budget_reservation == {"reserved_cost": 1.0}
+
+
+class TestNonInferenceCallBilling:
+    """A read of a stored object replays the usage of the call that created it, so it is free. A
+    background create returns no usage, so its reads are where the job's spend shows up: the cost
+    poll's stamped read bills it, and any unmarked read (the SDK, a proxy with no database) bills
+    it too, because nothing else ever will."""
+
+    BACKGROUND = {"id": "resp_1", "background": True, "status": "completed"}
+    FOREGROUND = {"id": "resp_2", "background": False, "status": "completed"}
+    COST_POLL = {INTERNAL_CALL_ORIGIN_METADATA_KEY: BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN}
+    STATUS_POLL = {INTERNAL_CALL_ORIGIN_METADATA_KEY: BACKGROUND_RESPONSE_STATUS_POLL_CALL_ORIGIN}
+    MANAGED_READ = {"user_api_key": "sk-hash", MANAGED_BACKGROUND_RESPONSE_METADATA_KEY: True}
+
+    def test_unmarked_read_of_a_background_response_is_billed(self):
+        assert is_unbilled_non_inference_call("aget_responses", None, self.BACKGROUND) is False
+        assert is_unbilled_non_inference_call("aget_responses", {"user_api_key": "sk-hash"}, self.BACKGROUND) is False
+        assert is_unbilled_non_inference_call_from_params("aget_responses", {}, self.BACKGROUND) is False
+
+    def test_managed_read_and_status_poll_of_a_background_response_are_free(self):
+        assert is_unbilled_non_inference_call("aget_responses", self.MANAGED_READ, self.BACKGROUND) is True
+        assert is_unbilled_non_inference_call("acancel_responses", self.MANAGED_READ, self.BACKGROUND) is True
+        assert is_unbilled_non_inference_call("aget_responses", self.STATUS_POLL, self.BACKGROUND) is True
+        assert is_unbilled_non_inference_call_from_params(
+            "aget_responses", {"metadata": self.MANAGED_READ}, self.BACKGROUND
+        ) is True
+        assert is_unbilled_non_inference_call_from_params(
+            "aget_responses", {"litellm_metadata": self.STATUS_POLL}, self.BACKGROUND
+        ) is True
+
+    def test_a_marker_that_is_not_true_does_not_waive_the_charge(self):
+        not_true = {MANAGED_BACKGROUND_RESPONSE_METADATA_KEY: "true"}
+        assert is_unbilled_non_inference_call("aget_responses", not_true, self.BACKGROUND) is False
+
+    def test_cost_poll_read_is_billed_even_when_marked(self):
+        assert is_unbilled_non_inference_call("aget_responses", self.COST_POLL, self.BACKGROUND) is False
+        assert is_unbilled_non_inference_call(
+            "aget_responses", {**self.MANAGED_READ, **self.COST_POLL}, self.BACKGROUND
+        ) is False
+        assert is_unbilled_non_inference_call_from_params(
+            "aget_responses", {"litellm_metadata": self.COST_POLL}, self.FOREGROUND
+        ) is False
+
+    def test_read_of_a_foreground_response_is_free_whatever_it_carries(self):
+        assert is_unbilled_non_inference_call("aget_responses", None, self.FOREGROUND) is True
+        assert is_unbilled_non_inference_call("aget_responses", {"user_api_key": "sk-hash"}, self.FOREGROUND) is True
+        assert is_unbilled_non_inference_call(
+            "aget_responses", {INTERNAL_CALL_ORIGIN_METADATA_KEY: SHADOW_EVAL_ROUTER_CALL_ORIGIN}, self.FOREGROUND
+        ) is True
+
+    def test_inference_calls_are_billed_unless_the_proxy_tracks_their_background_response(self):
+        assert is_unbilled_non_inference_call("aresponses", None, self.BACKGROUND) is False
+        assert is_unbilled_non_inference_call("aresponses", self.MANAGED_READ, self.FOREGROUND) is False
+        assert is_unbilled_non_inference_call_from_params("aresponses", {}, self.BACKGROUND) is False
+        assert is_unbilled_non_inference_call_from_params("acompletion", {"metadata": self.MANAGED_READ}, None) is False
+
+    def test_a_tracked_streamed_background_create_is_free_in_every_shape_its_stream_logs(self):
+        from litellm.types.llms.openai import ResponseCompletedEvent, ResponsesAPIResponse
+
+        finished = ResponsesAPIResponse(**{**self.BACKGROUND, "created_at": 1, "output": []})
+        completed_event = ResponseCompletedEvent(type="response.completed", response=finished)
+        for logged in (finished, completed_event, completed_event.model_dump(), self.BACKGROUND):
+            assert is_unbilled_non_inference_call("aresponses", self.MANAGED_READ, logged) is True
+            assert is_unbilled_non_inference_call_from_params(
+                "aresponses", {"litellm_metadata": self.MANAGED_READ}, logged
+            ) is True
