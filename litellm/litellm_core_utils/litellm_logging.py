@@ -3072,14 +3072,22 @@ class Logging(LiteLLMLoggingBaseClass):
                 if for_async_request and complete_streaming_response is not None
                 else request_logging_payload
             )
+            shared_logging_payload: Final[StandardLoggingPayload | None] = self.model_call_details.get(
+                "standard_logging_object"
+            )
+            isolated_logging_payload: Final = (
+                callback_logging_payload
+                if callback_logging_payload is not None or shared_logging_payload is None
+                else shared_logging_payload.copy()
+            )
             call_details: dict[str, Any]  # mutable-ok: legacy loggers take a plain dict
             call_details = (  # rebind-ok: logging hooks may return a new dict
                 self.model_call_details
                 if not for_async_request
                 else (
                     dict(self.model_call_details)
-                    if callback_logging_payload is None
-                    else {**self.model_call_details, "standard_logging_object": callback_logging_payload}
+                    if isolated_logging_payload is None
+                    else {**self.model_call_details, "standard_logging_object": isolated_logging_payload}
                 )
             )
             callbacks: Final = self.get_combined_callback_list(

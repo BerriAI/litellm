@@ -7676,19 +7676,20 @@ async def test_sync_success_handler_landing_after_logging_hook_keeps_hook_payloa
     assert seen_edits == [(mirrored, "masked by hook")]
 
 
+class _ResponseEditingHook(CustomLogger):
+    def logging_hook(
+        self, kwargs: dict[str, object], result: object, call_type: str
+    ) -> tuple[dict[str, object], object]:
+        payload = kwargs["standard_logging_object"]
+        assert isinstance(payload, dict)
+        payload["response"] = "edited by sync hook"
+        return kwargs, result
+
+
 def test_sync_logging_hook_edits_stay_off_a_caller_supplied_payload_for_async_requests(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     sync_payloads: Final[list[object]] = []
-
-    class EditingHook(CustomLogger):
-        def logging_hook(
-            self, kwargs: dict[str, object], result: object, call_type: str
-        ) -> tuple[dict[str, object], object]:
-            payload = kwargs["standard_logging_object"]
-            assert isinstance(payload, dict)
-            payload["response"] = "edited by sync hook"
-            return kwargs, result
 
     class AthinaRecorder:
         def log_event(
@@ -7702,7 +7703,7 @@ def test_sync_logging_hook_edits_stay_off_a_caller_supplied_payload_for_async_re
             sync_payloads.append(kwargs["standard_logging_object"])
 
     monkeypatch.setattr(litellm, "_async_success_callback", [])
-    monkeypatch.setattr(litellm, "success_callback", [EditingHook(), "athina"])
+    monkeypatch.setattr(litellm, "success_callback", [_ResponseEditingHook(), "athina"])
     monkeypatch.setattr(litellm_logging, "athinaLogger", AthinaRecorder())
     logging_obj: Final = _async_request_logging_obj("caller-supplied-payload", [])
     supplied_payload: Final = {"id": "caller-supplied-payload", "response": "original"}
@@ -7754,10 +7755,14 @@ async def test_sync_only_logger_keeps_the_async_payload_when_its_result_builds_n
     await logging_obj.async_success_handler(result=raw_body)
     async_payload: Final = logging_obj.model_call_details.get("standard_logging_object")
     assert isinstance(async_payload, dict)
+    async_payload_before_sync: Final = dict(async_payload)
+    monkeypatch.setattr(litellm, "success_callback", [_ResponseEditingHook(), "athina"])
 
     logging_obj.success_handler(result=raw_body, for_async_request=True)
 
-    assert sync_payloads == [async_payload]
+    assert sync_payloads == [{**async_payload_before_sync, "response": "edited by sync hook"}]
+    assert logging_obj.model_call_details["standard_logging_object"] is async_payload
+    assert async_payload == async_payload_before_sync
 
 
 @pytest.mark.asyncio
