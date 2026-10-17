@@ -1760,6 +1760,23 @@ class TestBedrockBatchNonChatEndpointRecords:
         assert "metadata" not in model_input
         assert "requestMetadata" not in model_input
 
+    def test_nova_record_request_metadata_stays_out_of_the_bedrock_body(self):
+        model_input = self._transform(
+            {
+                "custom_id": "4d",
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": {
+                    "model": self.NOVA_MODEL,
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "requestMetadata": {"ticket": "b\u00a0c"},
+                },
+            }
+        )
+
+        assert "requestMetadata" not in model_input
+        assert model_input["messages"] == [{"role": "user", "content": [{"text": "hi"}]}]
+
     @pytest.mark.parametrize(
         "body",
         [

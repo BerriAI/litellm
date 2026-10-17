@@ -6,11 +6,12 @@ import json
 from pathlib import Path
 from typing import Final
 
-from pydantic import ConfigDict, TypeAdapter
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
+from litellm.types.utils import ProviderSpecificModelInfo
 
-_JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True))
+_PROVIDER_INFO_ADAPTER: Final = TypeAdapter(ProviderSpecificModelInfo)
 
 
 class SimpleProviderConfig:
@@ -26,6 +27,9 @@ class SimpleProviderConfig:
         self.constraints = data.get("constraints", {})
         self.special_handling = data.get("special_handling", {})
         self.supported_endpoints = data.get("supported_endpoints", [])
+        self.provider_info: ProviderSpecificModelInfo = (
+            _PROVIDER_INFO_ADAPTER.validate_python(data["provider_info"]) if "provider_info" in data else {}
+        )
 
 
 class JSONProviderRegistry:
@@ -49,10 +53,10 @@ class JSONProviderRegistry:
 
         try:
             with open(json_path) as f:
-                data: Final = _JSON_OBJECT.validate_python(json.load(f))
+                data: Final = json.load(f)
 
             for slug, config in data.items():
-                cls._providers[slug] = SimpleProviderConfig(slug, _JSON_OBJECT.validate_python(config))
+                cls._providers[slug] = SimpleProviderConfig(slug, config)
 
             cls._loaded = True
         except Exception as e:
