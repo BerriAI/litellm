@@ -70,7 +70,7 @@ async def test_new_tag_rolls_back_row_and_deployments_when_tagging_fails():
     every deployment it reached, and the fresh row is deleted so a retry works."""
     table = _make_table()
     deployments = [_deployment("model-1"), _deployment("model-2")]
-    with _patched(table, deployments, [None, HTTPException(status_code=500, detail="db write failed")]) as (
+    with _patched(table, deployments, [True, HTTPException(status_code=500, detail="db write failed")]) as (
         add_tag,
         remove_tag,
     ):
@@ -85,9 +85,9 @@ async def test_new_tag_rolls_back_row_and_deployments_when_tagging_fails():
     assert exc_info.value.detail == "db write failed"
     # every deployment write was attempted (return_exceptions gather)
     assert add_tag.await_count == 2
-    # rollback: untag everywhere the new tag could have landed...
-    assert remove_tag.await_count == 2
-    assert sorted(id(c.kwargs["deployment"]) for c in remove_tag.await_args_list) == sorted(id(d) for d in deployments)
+    # rollback: untag only the deployment this create actually appended to...
+    assert remove_tag.await_count == 1
+    assert id(remove_tag.await_args_list[0].kwargs["deployment"]) == id(deployments[0])
     assert all(c.kwargs["tag"] == TAG_NAME for c in remove_tag.await_args_list)
     # ...then delete the orphaned row
     table.delete.assert_awaited_once_with(where={"tag_name": TAG_NAME})
@@ -97,7 +97,7 @@ async def test_new_tag_rolls_back_row_and_deployments_when_tagging_fails():
 async def test_new_tag_success_path_does_not_rollback():
     table = _make_table()
     deployments = [_deployment("model-1")]
-    with _patched(table, deployments, [None]) as (add_tag, remove_tag):
+    with _patched(table, deployments, [True]) as (add_tag, remove_tag):
         resp = await endpoints.new_tag(
             tag=TagNewRequest(name=TAG_NAME, models=["model-a"]),
             user_api_key_dict=UserAPIKeyAuth(user_id="admin"),
@@ -223,3 +223,33 @@ async def test_new_tag_rollback_keeps_caller_supplied_budget():
 
     table.delete.assert_awaited_once_with(where={"tag_name": TAG_NAME})
     budget_table.delete.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_new_tag_rollback_preserves_preexisting_membership():
+    """A deployment can already carry the tag name as a raw litellm_params
+    string (config-defined, no Tag row). _add_tag_to_deployment returns False
+    for it, and the rollback must leave that membership alone while untagging
+    the deployment the create actually appended to."""
+    table = _make_table()
+    preexisting = _deployment("model-1")
+    appended = _deployment("model-2")
+    failing = _deployment("model-3")
+    deployments = [preexisting, appended, failing]
+    with _patched(table, deployments, [False, True, HTTPException(status_code=500, detail="db write failed")]) as (
+        add_tag,
+        remove_tag,
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await endpoints.new_tag(
+                tag=TagNewRequest(name=TAG_NAME, models=["model-a"]),
+                user_api_key_dict=UserAPIKeyAuth(user_id="admin"),
+            )
+
+    assert exc_info.value.status_code == 500
+    assert add_tag.await_count == 3
+    # only the deployment this create appended to gets untagged
+    remove_tag.assert_awaited_once()
+    assert id(remove_tag.await_args_list[0].kwargs["deployment"]) == id(appended)
+    # the orphan row is still deleted so a retry works
+    table.delete.assert_awaited_once_with(where={"tag_name": TAG_NAME})

@@ -1476,12 +1476,13 @@ async def test_add_tag_to_deployment_no_duplicate_tags():
             model_info=ModelInfo(id="model-789"),
         )
 
-        # Try to add an existing tag
-        await _add_tag_to_deployment(deployment, "existing-tag")
+        # Try to add an existing tag - it is already there, so the helper
+        # reports False and skips the write (rollback relies on this contract)
+        result = await _add_tag_to_deployment(deployment, "existing-tag")
 
-        # Verify update was called
-        update_call = mock_db.litellm_proxymodeltable.update.call_args
-        updated_params = json.loads(update_call[1]["data"]["litellm_params"])
+        assert result is False
+        mock_db.litellm_proxymodeltable.update.assert_not_called()
+        updated_params = db_model.litellm_params
 
         # Verify no duplicate tags
         assert updated_params["tags"].count("existing-tag") == 1
