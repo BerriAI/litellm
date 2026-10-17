@@ -229,7 +229,7 @@ The rollout decision comes from [catalog.py](../../../litellm/rust_bridge/catalo
 | `test_hashicorp_secret_manager_rotate_secret_with_team_overrides` | [rotation_applies_timeout_to_each_request](../secrets-hashicorp/tests/secret_manager/writes.rs) |
 | `test_hashicorp_secret_manager_rotate_secret_value_mismatch` | [a_different_replacement_never_deletes_the_current_secret](../secrets-types/tests/rotation.rs) |
 
-## [tests/litellm_utils_tests/test_cyberark.py](../../../tests/litellm_utils_tests/test_cyberark.py)
+## [tests/unit/secret_managers/test_cyberark_secret_manager.py](../../../tests/unit/secret_managers/test_cyberark_secret_manager.py) (moved from tests/litellm_utils_tests/test_cyberark.py)
 
 | Python test | Rust coverage or boundary |
 | --- | --- |

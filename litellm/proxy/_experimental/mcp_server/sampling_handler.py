@@ -772,11 +772,11 @@ async def _check_model_access(model: str, user_api_key_auth: "UserAPIKeyAuth | N
         import litellm
         from litellm.proxy._types import ModelAccessDeniedProxyException
         from litellm.proxy.auth.auth_checks import (
-            _check_team_member_model_access,
             can_key_call_model,
             can_project_access_model,
             can_team_access_model,
             can_user_call_model,
+            check_team_member_model_access,
             get_project_object,
             get_team_object,
             get_user_object,
@@ -832,7 +832,7 @@ async def _check_model_access(model: str, user_api_key_auth: "UserAPIKeyAuth | N
                     team_model_aliases=getattr(user_api_key_auth, "team_model_aliases", None),
                 )
                 if _user_id and _proxy_logging_obj:
-                    await _check_team_member_model_access(
+                    await check_team_member_model_access(
                         model=model,
                         team_object=team_obj,
                         valid_token=user_api_key_auth,

@@ -83,10 +83,13 @@ def _oauth_token_error(code: str, status: int = 400) -> JSONResponse:
     return JSONResponse(status_code=status, content={"error": code}, headers=TOKEN_NO_CACHE_HEADERS)
 
 
-def _user_id_from_session_cookie(request: Request) -> str | None:
+def user_id_from_session_cookie(request: Request) -> str | None:
     """Return user_id from the UI ``token`` cookie, or None if missing/invalid."""
     user_id, _ = _session_identity_from_cookie(request)
     return user_id
+
+
+_user_id_from_session_cookie: Final = user_id_from_session_cookie
 
 
 def _session_identity_from_cookie(request: Request) -> tuple[str | None, str | None]:

@@ -69,17 +69,20 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
         litellm_params: dict,  # mutable-ok: matches the base chat transform signature
         headers: dict,  # mutable-ok: matches the base chat transform signature
     ) -> dict:  # mutable-ok: the handler sends this body straight to httpx
-        request: Final = super().transform_request(
+        request: Final[dict[str, object]] = super().transform_request(  # mutable-ok: base transform returns a dict
             model=model,
             messages=messages,
             optional_params=optional_params,
             litellm_params=litellm_params,
             headers=headers,
         )
+        container_request: Final = {
+            key: value for key, value in request.items() if key not in self.aws_authentication_params
+        }
         served_model_name: Final = litellm_params.get("hf_model_name")
         if not isinstance(served_model_name, str):
-            return request
-        return {**request, "model": served_model_name}
+            return container_request
+        return {**container_request, "model": served_model_name}
 
     def get_complete_url(
         self,

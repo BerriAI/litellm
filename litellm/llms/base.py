@@ -1,5 +1,5 @@
 ## This is a template base class to be used for adding new LLM providers via API calls
-from typing import TYPE_CHECKING, Any, Union
+from typing import TYPE_CHECKING, Union
 
 import httpx
 
@@ -76,11 +76,17 @@ class BaseLLM:
         if hasattr(self, "_aclient_session"):
             await self._aclient_session.aclose()
 
-    def validate_environment(self, *args, **kwargs) -> Any | None:  # set up the environment required to run the model
+    def validate_environment(
+        self, *args, **kwargs
+    ) -> object | None:  # set up the environment required to run the model
         return None
 
-    def completion(self, *args, **kwargs) -> Any:  # logic for parsing in - calling - parsing out model completion calls
+    def completion(
+        self, *args, **kwargs
+    ) -> object | None:  # logic for parsing in - calling - parsing out model completion calls
         return None
 
-    def embedding(self, *args, **kwargs) -> Any:  # logic for parsing in - calling - parsing out model embedding calls
+    def embedding(
+        self, *args, **kwargs
+    ) -> object | None:  # logic for parsing in - calling - parsing out model embedding calls
         return None

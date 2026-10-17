@@ -169,7 +169,7 @@ class SemanticToolFilterHook(CustomLogger):
 
     def _selected_tool_names(self, filtered_tools: Sequence[object]) -> list[str]:
         """Names of the semantically selected tools, as produced by the MCP expansion."""
-        names: Final = (self.filter._extract_tool_info(tool)[0] for tool in filtered_tools)
+        names: Final = (self.filter.extract_tool_info(tool)[0] for tool in filtered_tools)
         return [name for name in names if name]
 
     @staticmethod
@@ -219,7 +219,7 @@ class SemanticToolFilterHook(CustomLogger):
             return False
         if isinstance(tool, dict) and tool.get("type") == "function" and isinstance(tool.get("name"), str):
             return False
-        name, _ = self.filter._extract_tool_info(tool)
+        name, _ = self.filter.extract_tool_info(tool)
         return bool(name) and name in self.filter._tool_map
 
     def _get_metadata_variable_name(self, data: dict) -> str:
@@ -397,14 +397,14 @@ class SemanticToolFilterHook(CustomLogger):
 
             filtered_mcp_names: Final[set[str]] = set()
             for t in filtered_mcp_tools:
-                name, _ = self.filter._extract_tool_info(t)
+                name, _ = self.filter.extract_tool_info(t)
                 if name:
                     filtered_mcp_names.add(name)
 
             filtered_tools: Final[list[object]] = []
             for i, t in enumerate(tools):
                 if i in mcp_indices:
-                    name, _ = self.filter._extract_tool_info(t)
+                    name, _ = self.filter.extract_tool_info(t)
                     if name in filtered_mcp_names:
                         filtered_tools.append(t)
                 else:

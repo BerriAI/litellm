@@ -16,8 +16,8 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_ollama_image,
-    custom_prompt,
     ollama_pt,
+    render_custom_prompt_template,
 )
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_inline_remote_media,
@@ -39,6 +39,7 @@ from litellm.types.utils import (
     ModelResponseStream,
     ProviderField,
     StreamingChoices,
+    generate_id,
 )
 
 from ..common_utils import OllamaError, OllamaModelInfo, convert_image
@@ -96,6 +97,7 @@ class _OllamaGenerateResponse(TypedDict):
 
 
 _OLLAMA_GENERATE_RESPONSE: Final = TypeAdapter(_OllamaGenerateResponse)
+_JSON_VALUE: Final = TypeAdapter(object)
 _JSON_CODE_FENCE: Final = re.compile(r"^```(?:json)?\s*(.*?)\s*(?:```)?$", re.DOTALL)
 _JSON_OBJECT_START: Final = re.compile(r"(?:```(?:json)?\s*)?\{")
 _JSON_OBJECT_PARTIAL_START: Final = re.compile(r"`{0,3}|```(?:j|js|jso|json)?\s*")
@@ -333,7 +335,9 @@ class OllamaConfig(BaseConfig):
                 model_response.choices[0].finish_reason = "stop"
             else:
                 try:
-                    response_content: Final[object] = json.loads(_strip_json_code_fence(response_text))
+                    response_content: Final = _JSON_VALUE.validate_python(
+                        json.loads(_strip_json_code_fence(response_text))
+                    )
 
                     # Check if this is a function call format with name/arguments structure
                     if (
@@ -433,11 +437,8 @@ class OllamaConfig(BaseConfig):
         if model in custom_prompt_dict:
             # check if the model has a registered custom prompt
             model_prompt_details: Final = custom_prompt_dict[model]
-            ollama_prompt = custom_prompt(
-                role_dict=model_prompt_details["roles"],
-                initial_prompt_value=model_prompt_details["initial_prompt_value"],
-                final_prompt_value=model_prompt_details["final_prompt_value"],
-                messages=messages,
+            ollama_prompt = render_custom_prompt_template(
+                template=model_prompt_details, messages=messages, model=model, llm_provider="ollama"
             )
         elif text_completion_request:  # handle `/completions` requests
             ollama_prompt = get_str_from_messages(messages=messages)
@@ -499,14 +500,10 @@ class OllamaConfig(BaseConfig):
 
         Some providers need `model` in `api_base`
         """
-        if api_base is None:
-            api_base = "http://localhost:11434"
-        if api_base.endswith("/api/generate"):
-            url = api_base
-        else:
-            url = f"{api_base}/api/generate"
-
-        return url
+        clean_api_base: Final = (api_base or "http://localhost:11434").rstrip("/")
+        if clean_api_base.endswith("/api/generate"):
+            return clean_api_base
+        return f"{clean_api_base}/api/generate"
 
     def get_model_response_iterator(
         self,
@@ -524,6 +521,7 @@ class OllamaConfig(BaseConfig):
 class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
     def __init__(self, streaming_response, sync_stream: bool, json_mode: bool | None = False):
         super().__init__(streaming_response, sync_stream, json_mode)
+        self.response_id: Final[str] = generate_id()
         self.started_reasoning_content: bool = False
         self.finished_reasoning_content: bool = False
         self.streamed_content: bool = False
@@ -622,6 +620,7 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
                         content = self._hold_json_object_start(text)
 
                 return ModelResponseStream(
+                    id=self.response_id,
                     choices=[
                         StreamingChoices(
                             index=0,
@@ -641,24 +640,26 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
                 # Return reasoning content as ModelResponseStream so UIs can render it
                 thinking_content: Final = chunk.get("thinking") or ""
                 return ModelResponseStream(
+                    id=self.response_id,
                     choices=[
                         StreamingChoices(
                             index=0,
                             delta=Delta(reasoning_content=thinking_content),
                         )
-                    ]
+                    ],
                 )
             else:
                 # In this case, 'thinking' is not present in the chunk, chunk["done"] is false,
                 # and chunk["response"] is falsy (None or empty string),
                 # but Ollama is just starting to stream, so it should be processed as a normal dict
                 return ModelResponseStream(
+                    id=self.response_id,
                     choices=[
                         StreamingChoices(
                             index=0,
                             delta=Delta(reasoning_content=""),
                         )
-                    ]
+                    ],
                 )
                 # raise Exception(f"Unable to parse ollama chunk - {chunk}")
         except Exception as e:

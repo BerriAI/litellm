@@ -2,7 +2,6 @@ import json
 import math
 import os
 import re
-import signal
 import threading
 import uuid
 from collections.abc import Callable, Generator, Iterator, Mapping
@@ -964,11 +963,11 @@ def test_killing_one_worker_mid_burst_keeps_the_chain_entry_served(rig: ChainRig
                 held_by: Final = MappingProxyType({pid: _open_upstream_connections(pid, wire.url) for pid in workers})
                 assert sum(held_by.values()) == GATEWAY_BURST, held_by
                 victim_pid, survivor_pid = sorted(workers, key=held_by.__getitem__)
-                victim: Final = psutil.Process(victim_pid)
-                victim.suspend()
-                victim.send_signal(signal.SIGKILL)
-                release.set()
-                responses: Final = {marker: future.result() for marker, future in pending.items()}
+                with owned.replacing_worker(victim_pid) as kill:
+                    kill.freeze()
+                    kill()
+                    release.set()
+                    responses: Final = {marker: future.result() for marker, future in pending.items()}
             served: Final = frozenset(
                 marker for marker, response in responses.items() if response is not None and response.status_code == 200
             )

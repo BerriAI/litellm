@@ -1,7 +1,6 @@
 # What is this?
 ## Allocates dynamic tpm/rpm quota for a project based on current traffic
 ## Tracks num active projects per minute
-
 import asyncio
 import os
 from collections.abc import Callable
@@ -23,7 +22,7 @@ from litellm.proxy.hooks.rate_limiter_utils import (
     resolve_llm_provider_for_rate_limit,
 )
 from litellm.types.router import ModelGroupInfo
-from litellm.types.utils import CallTypesLiteral
+from litellm.types.utils import CallTypesLiteral, LLMResponseTypes
 from litellm.utils import get_utc_datetime
 
 
@@ -83,7 +82,7 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
     def __init__(self, internal_usage_cache: DualCache, time_fn: Callable[[], datetime] = get_utc_datetime):
         self.internal_usage_cache = DynamicRateLimiterCache(cache=internal_usage_cache, time_fn=time_fn)
 
-    def update_variables(self, llm_router: Router):
+    def update_variables(self, llm_router: Router) -> None:
         self.llm_router = llm_router
 
     @with_service_target("rate_limits")
@@ -241,7 +240,9 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
         return None
 
     @with_service_target("rate_limits")
-    async def async_post_call_success_hook(self, data: dict, user_api_key_dict: UserAPIKeyAuth, response):
+    async def async_post_call_success_hook(
+        self, data: dict, user_api_key_dict: UserAPIKeyAuth, response: LLMResponseTypes
+    ) -> LLMResponseTypes | None:
         try:
             if isinstance(response, ModelResponse):
                 model_id: Final = response.hidden_params["model_id"]
@@ -281,3 +282,6 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
                 "litellm.proxy.hooks.dynamic_rate_limiter.py::async_post_call_success_hook(): Exception occured - %s", e
             )
             return response
+
+
+PROXY_DynamicRateLimitHandler: Final = _PROXY_DynamicRateLimitHandler

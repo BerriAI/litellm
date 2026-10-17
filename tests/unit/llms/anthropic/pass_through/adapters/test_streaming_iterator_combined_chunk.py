@@ -12,8 +12,16 @@ content survives.
 import asyncio
 import json
 from types import SimpleNamespace
-from typing import AsyncIterator
+from typing import AsyncIterator, Final
 
+import anthropic
+import httpx
+import pytest
+
+from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+    convert_to_streaming_response,
+    convert_to_streaming_response_async,
+)
 from litellm.llms.anthropic.pass_through.adapters.streaming_iterator import (
     AnthropicStreamWrapper,
     _CombinedChunkSplitter,
@@ -137,6 +145,43 @@ def test_delayed_usage_chunk_preserves_cache_tokens():
     assert message_delta["usage"]["output_tokens"] == 5
     assert message_delta["usage"]["cache_read_input_tokens"] == 30
     assert message_delta["usage"]["cache_creation_input_tokens"] == 20
+
+
+def _cached_bedrock_response(cache_read: int, cache_write: int) -> dict:
+    return {
+        "id": "chatcmpl-cached",
+        "object": "chat.completion",
+        "created": 1700000000,
+        "model": "us.anthropic.claude-opus-4-7",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "pong"}, "finish_reason": "stop"}],
+        "usage": Usage(
+            prompt_tokens=42145,
+            completion_tokens=6,
+            total_tokens=42151,
+            cache_read_input_tokens=cache_read,
+            cache_creation_input_tokens=cache_write,
+        ).model_dump(),
+    }
+
+
+async def _replay_async(cached: dict) -> list[ModelResponseStream]:
+    return [chunk async for chunk in convert_to_streaming_response_async(cached)]
+
+
+@pytest.mark.parametrize("cache_read, cache_write", [(42139, 0), (0, 42139)], ids=["read", "write"])
+@pytest.mark.parametrize("replay", ["async", "sync"])
+def test_a_cache_hit_replayed_as_a_messages_stream_keeps_the_prompt_cache_tokens(replay, cache_read, cache_write):
+    cached: Final = _cached_bedrock_response(cache_read, cache_write)
+    chunks: Final = (
+        asyncio.run(_replay_async(cached)) if replay == "async" else list(convert_to_streaming_response(cached))
+    )
+
+    events: Final = list(AnthropicStreamWrapper(completion_stream=iter(chunks), model="claude-opus-4-7"))
+    message_delta: Final = next(event for event in events if event.get("type") == "message_delta")
+
+    assert message_delta["usage"]["input_tokens"] == 6
+    assert message_delta["usage"].get("cache_read_input_tokens", 0) == cache_read
+    assert message_delta["usage"].get("cache_creation_input_tokens", 0) == cache_write
 
 
 def test_splitter_passes_through_non_combined_chunks():
@@ -273,3 +318,93 @@ def test_thinking_then_signature_chunk_does_not_crash_stream():
 
     assert "message_stop" in sse
     assert "Done" in sse
+
+
+def _fake_stream_with_thinking(thinking_blocks: list[dict[str, str]]) -> MockResponseIterator:
+    model_response: Final = ModelResponse()
+    model_response.choices = [
+        Choices(
+            index=0,
+            message=Message(
+                role="assistant",
+                content='{"a": 1}',
+                reasoning_content="".join(block.get("thinking", "") for block in thinking_blocks),
+                thinking_blocks=thinking_blocks,
+            ),
+            finish_reason="stop",
+        )
+    ]
+    model_response.usage = Usage(prompt_tokens=5, completion_tokens=7, total_tokens=12)
+    return MockResponseIterator(model_response=model_response)
+
+
+def _anthropic_sdk_final_content(
+    completion_stream: "MockResponseIterator | AsyncIterator[ModelResponseStream]",
+) -> list[dict[str, object]]:
+    sse: Final = _collect_async(AnthropicStreamWrapper(completion_stream=completion_stream, model="claude"))
+    transport: Final = httpx.MockTransport(
+        lambda request: httpx.Response(200, content=sse.encode(), headers={"content-type": "text/event-stream"})
+    )
+    client: Final = anthropic.Anthropic(api_key="transport-only", http_client=httpx.Client(transport=transport))
+    with client.messages.stream(
+        model="claude", max_tokens=16, messages=[{"role": "user", "content": "hi"}]
+    ) as stream:
+        return [block.model_dump(exclude_none=True) for block in stream.get_final_message().content]
+
+
+@pytest.mark.parametrize(
+    "thinking_blocks",
+    [
+        [
+            {"type": "thinking", "thinking": "first", "signature": "SIG_A"},
+            {"type": "thinking", "thinking": "second", "signature": "SIG_B"},
+        ],
+        [
+            {"type": "redacted_thinking", "data": "OPAQUE"},
+            {"type": "thinking", "thinking": "visible", "signature": "SIG_C"},
+        ],
+        [
+            {"type": "thinking", "thinking": "unsigned", "signature": ""},
+            {"type": "thinking", "thinking": "signed", "signature": "SIG_D"},
+        ],
+    ],
+    ids=["two_signed_thinking_blocks", "redacted_then_signed_thinking", "unsigned_then_signed_thinking"],
+)
+def test_fake_stream_gives_each_thinking_block_its_own_content_block(thinking_blocks: list[dict[str, str]]):
+    content: Final = _anthropic_sdk_final_content(_fake_stream_with_thinking(thinking_blocks))
+
+    assert content == [*thinking_blocks, {"type": "text", "text": '{"a": 1}'}]
+
+
+def _native_thinking_chunk(thinking: str, index: int, signature: str | None = None) -> ModelResponseStream:
+    block: Final = {"type": "thinking", "thinking": thinking, "index": index, **({"signature": signature} if signature else {})}
+    return ModelResponseStream(
+        choices=[StreamingChoices(index=0, delta=Delta(reasoning_content=thinking or None, thinking_blocks=[block]))]
+    )
+
+
+async def _native_stream_with_two_thinking_blocks() -> "AsyncIterator[ModelResponseStream]":
+    for chunk in (
+        _native_thinking_chunk("ab", 0),
+        _native_thinking_chunk("cd", 0),
+        _native_thinking_chunk("", 0, "SIG_A"),
+        _native_thinking_chunk("ef", 1),
+        _native_thinking_chunk("gh", 1),
+        _native_thinking_chunk("", 1, "SIG_B"),
+        ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(content="hi"))]),
+        ModelResponseStream(
+            choices=[StreamingChoices(index=0, delta=Delta(), finish_reason="stop")],
+            usage=Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+        ),
+    ):
+        yield chunk
+
+
+def test_native_stream_thinking_blocks_keep_their_text_once():
+    content: Final = _anthropic_sdk_final_content(_native_stream_with_two_thinking_blocks())
+
+    assert content == [
+        {"type": "thinking", "thinking": "abcd", "signature": "SIG_A"},
+        {"type": "thinking", "thinking": "efgh", "signature": "SIG_B"},
+        {"type": "text", "text": "hi"},
+    ]

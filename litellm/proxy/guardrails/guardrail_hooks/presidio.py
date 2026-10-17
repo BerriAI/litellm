@@ -19,7 +19,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, cast
 
 import aiohttp
-from pydantic import ConfigDict, TypeAdapter, with_config
+from pydantic import ConfigDict, JsonValue, TypeAdapter, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
@@ -30,6 +30,7 @@ from litellm.constants import (
     PRESIDIO_ANALYZE_CHUNK_CONCURRENCY,
     PRESIDIO_ANALYZE_CHUNK_OVERLAP_CHARS,
 )
+from litellm.litellm_core_utils.core_helpers import attribute_items, attribute_or_none
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
@@ -91,6 +92,10 @@ class _JsonResponse(Protocol):
 
 async def _json_body(response: _JsonResponse) -> object:
     return await response.json()
+
+
+def _write_attribute(target: object, name: str, value: object) -> None:
+    setattr(target, name, value)
 
 
 _LoopSemaphores = dict[asyncio.AbstractEventLoop, asyncio.Semaphore]
@@ -279,7 +284,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         self,
         presidio_analyzer_api_base: str | None = None,
         presidio_anonymizer_api_base: str | None = None,
-    ):
+    ) -> None:
         self.presidio_analyzer_api_base: str | None = presidio_analyzer_api_base or get_secret(
             "PRESIDIO_ANALYZER_API_BASE", None
         )
@@ -922,7 +927,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
     def raise_exception_if_blocked_entities_detected(
         self, analyze_results: list[PresidioAnalyzeResponseItem] | _PresidioAnonymizeResponse
-    ):
+    ) -> None:
         """
         Raise an exception if blocked entities are detected
         """
@@ -1022,7 +1027,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         cache: DualCache,
         data: dict,
         call_type: str,
-    ):
+    ) -> dict[str, object]:
         """
         - Check if request turned off pii
             - Check if user allowed to turn off pii (key permissions -> 'allow_pii_controls')
@@ -1212,10 +1217,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
     async def async_post_call_success_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         response: ModelResponse | EmbeddingResponse | ImageResponse,
-    ):
+    ) -> dict[str, JsonValue] | ModelResponse | EmbeddingResponse | ImageResponse:
         """
         Output parse the response object to replace the masked tokens with user sent values
         """
@@ -1373,37 +1378,41 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         )
 
             # 2. Process tool calls
-            tool_calls = getattr(message, "tool_calls", None)
-            if tool_calls:
-                for tool_call in tool_calls:
-                    function = getattr(tool_call, "function", None)
-                    if function and hasattr(function, "arguments"):
-                        args = function.arguments
-                        if isinstance(args, str):
-                            if mode == "unmask":
-                                function.arguments = self._unmask_pii_text(args, pii_tokens)
-                            elif mode == "mask":
-                                function.arguments = await self.check_pii(
-                                    text=args,
-                                    output_parse_pii=False,
-                                    presidio_config=presidio_config,
-                                    request_data=request_data,
-                                )
-
-            # 3. Process legacy function calls
-            function_call = getattr(message, "function_call", None)
-            if function_call and hasattr(function_call, "arguments"):
-                args = function_call.arguments
+            for tool_call in attribute_items(message, "tool_calls"):
+                function = attribute_or_none(tool_call, "function")
+                args = attribute_or_none(function, "arguments") if function else None
                 if isinstance(args, str):
                     if mode == "unmask":
-                        function_call.arguments = self._unmask_pii_text(args, pii_tokens)
+                        _write_attribute(function, "arguments", self._unmask_pii_text(args, pii_tokens))
                     elif mode == "mask":
-                        function_call.arguments = await self.check_pii(
-                            text=args,
+                        _write_attribute(
+                            function,
+                            "arguments",
+                            await self.check_pii(
+                                text=args,
+                                output_parse_pii=False,
+                                presidio_config=presidio_config,
+                                request_data=request_data,
+                            ),
+                        )
+
+            # 3. Process legacy function calls
+            function_call = attribute_or_none(message, "function_call")
+            legacy_args = attribute_or_none(function_call, "arguments") if function_call else None
+            if isinstance(legacy_args, str):
+                if mode == "unmask":
+                    _write_attribute(function_call, "arguments", self._unmask_pii_text(legacy_args, pii_tokens))
+                elif mode == "mask":
+                    _write_attribute(
+                        function_call,
+                        "arguments",
+                        await self.check_pii(
+                            text=legacy_args,
                             output_parse_pii=False,
                             presidio_config=presidio_config,
                             request_data=request_data,
-                        )
+                        ),
+                    )
         return response
 
     async def _mask_output_response(
@@ -1523,7 +1532,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         await self._process_response_for_pii(response=assembled, request_data=request_data, mode="mask")
         if model_response_text(assembled) == original_text:
             return chunks
-        return anthropic_sse_chunks_from_response(assembled)
+        return anthropic_sse_chunks_from_response(assembled, chunks)
 
     @staticmethod
     def _unmask_sse_bytes_chunk(chunk: bytes, pii_tokens: dict[str, str]) -> bytes:
@@ -1546,7 +1555,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         and delta.get("type") == "text_delta"
                         and isinstance(delta.get("text"), str)
                     ):
-                        unmasked = _OPTIONAL_PresidioPIIMasking._unmask_pii_text(delta["text"], pii_tokens)
+                        unmasked = OPTIONAL_PresidioPIIMasking._unmask_pii_text(delta["text"], pii_tokens)
                         if unmasked != delta["text"]:
                             event["delta"]["text"] = unmasked
                             line = "data: " + json.dumps(event, ensure_ascii=False)
@@ -1707,7 +1716,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
         return None
 
-    def print_verbose(self, print_statement):
+    def print_verbose(self, print_statement) -> None:
         try:
             verbose_proxy_logger.debug(print_statement)
             if litellm.set_verbose:
@@ -1771,3 +1780,6 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             self.presidio_analyze_chunk_size_bytes = self._coerce_analyze_chunk_size(
                 litellm_params.presidio_analyze_chunk_size_bytes
             )
+
+
+OPTIONAL_PresidioPIIMasking = _OPTIONAL_PresidioPIIMasking

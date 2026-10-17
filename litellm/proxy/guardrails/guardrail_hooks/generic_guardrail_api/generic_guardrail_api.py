@@ -7,10 +7,12 @@
 
 import fnmatch
 import os
-from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional
+from collections.abc import Callable, Mapping, Sequence
+from typing import TYPE_CHECKING, Final, Literal, Optional
 
 import httpx
+from pydantic import JsonValue, TypeAdapter, ValidationError
+from pydantic_core import PydanticSerializationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm._version import version as litellm_version
@@ -38,6 +40,10 @@ if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 GUARDRAIL_NAME: Final = "generic_guardrail_api"
+_CHAT_ROW: Final[TypeAdapter[AllMessageValues]] = TypeAdapter(AllMessageValues)
+_SENT_ROW: Final = TypeAdapter(Mapping[str, object])
+_SENT_ROWS: Final = TypeAdapter(Sequence[Mapping[str, object]])
+_JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 
 # Headers whose values are forwarded as-is (case-insensitive). Glob patterns supported (e.g. x-stainless-*, x-litellm*).
 _HEADER_VALUE_ALLOWLIST: Final = frozenset(
@@ -150,23 +156,65 @@ def _extract_inbound_headers(
     return None
 
 
+def _is_contained_in(part: JsonValue, whole: JsonValue) -> bool:
+    pending: Final[list[tuple[JsonValue, JsonValue]]] = [(part, whole)]  # mutable-ok: worklist, recursion is banned
+    while pending:
+        match pending.pop():
+            case dict() as part_dict, dict() as whole_dict:
+                if not part_dict.keys() <= whole_dict.keys():
+                    return False
+                pending.extend((value, whole_dict[key]) for key, value in part_dict.items())
+            case list() as part_list, list() as whole_list:
+                if len(part_list) != len(whole_list):
+                    return False
+                pending.extend(zip(part_list, whole_list, strict=True))
+            case part_leaf, whole_leaf if part_leaf != whole_leaf:
+                return False
+            case _:
+                pass
+    return True
+
+
+def _is_shown_row(shown: AllMessageValues, returned: AllMessageValues) -> bool:
+    return returned == shown
+
+
+def _is_echo(original: AllMessageValues, returned: AllMessageValues) -> bool:
+    """A server that parses rows with its own message types and echoes them back drops the
+    keys those types do not declare. That is still an echo as long as nothing changed and
+    every key the chat completion types declare is kept."""
+    if returned == original:
+        return True
+    try:
+        sent: Final[JsonValue] = _JSON.validate_json(_SENT_ROW.dump_json(original))
+        declared: Final[JsonValue] = _JSON.validate_json(
+            _CHAT_ROW.dump_json(_CHAT_ROW.validate_python(original), warnings="error")
+        )
+        echoed: Final[JsonValue] = _JSON.validate_python(returned)
+    except (ValidationError, PydanticSerializationError):
+        return False
+    return _is_contained_in(echoed, sent) and _is_contained_in(declared, echoed)
+
+
 def _structured_rows_to_write_back(
     original_rows: Sequence[AllMessageValues] | None,
-    shown_rows: Sequence[AllMessageValues] | None,
+    compared_rows: Sequence[AllMessageValues] | None,
     returned_rows: Sequence[AllMessageValues],
+    is_echo: Callable[[AllMessageValues, AllMessageValues], bool],
 ) -> tuple[AllMessageValues, ...] | None:
-    """The request model drops row keys its message types do not declare, so a
-    row the server echoes back verbatim is restored to the original row object.
-    A server that echoes every row back unchanged has not rewritten anything
-    per row, so its answer is read from texts, as it was before rows could be
-    returned at all."""
-    if original_rows is None or shown_rows is None or len(returned_rows) != len(original_rows):
+    """A row the server echoes back is restored to the original row object. A server
+    that echoes every row back has not rewritten anything per row, so its answer is
+    read from texts, as it was before rows could be returned at all."""
+    if original_rows is None or compared_rows is None or len(returned_rows) != len(original_rows):
         return tuple(returned_rows)
-    if all(returned == shown for shown, returned in zip(shown_rows, returned_rows)):
+    echoed: Final = tuple(
+        is_echo(compared, returned) for compared, returned in zip(compared_rows, returned_rows, strict=True)
+    )
+    if all(echoed):
         return None
     return tuple(
-        original if returned == shown else returned
-        for original, shown, returned in zip(original_rows, shown_rows, returned_rows)
+        original if was_echoed else returned
+        for original, returned, was_echoed in zip(original_rows, returned_rows, echoed, strict=True)
     )
 
 
@@ -194,16 +242,18 @@ class GenericGuardrailAPI(CustomGuardrail):
 
     def __init__(
         self,
-        headers: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
         api_base: str | None = None,
         api_key: str | None = None,
         additional_provider_specific_params: Mapping[str, object] | None = None,
         unreachable_fallback: Literal["fail_closed", "fail_open"] = "fail_closed",
         fail_on_error: bool | None = True,
+        forward_messages_as_sent: bool | None = False,
         extra_headers: list | None = None,
         streaming_end_of_stream_only: bool | None = None,
         streaming_sampling_rate: int | None = None,
         streaming_transform_mode: Literal["block_only", "incremental_diff"] | None = None,
+        streaming_buffer_until_moderated: bool | None = None,
         **kwargs,
     ):
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
@@ -234,6 +284,7 @@ class GenericGuardrailAPI(CustomGuardrail):
         self.unreachable_fallback: Literal["fail_closed", "fail_open"] = unreachable_fallback
 
         self.fail_on_error: bool = True if fail_on_error is None else fail_on_error
+        self.forward_messages_as_sent: bool = bool(forward_messages_as_sent)
 
         # Read by UnifiedLLMGuardrails.async_post_call_streaming_iterator_hook
         # via getattr(guardrail_to_apply, "streaming_*", default).
@@ -250,6 +301,8 @@ class GenericGuardrailAPI(CustomGuardrail):
         self.streaming_transform_mode: Literal["block_only", "incremental_diff"] = (
             "block_only" if streaming_transform_mode is None else streaming_transform_mode
         )
+        if streaming_buffer_until_moderated is not None:
+            self.streaming_buffer_until_moderated: bool = streaming_buffer_until_moderated
 
         # Set supported event hooks
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
@@ -313,15 +366,17 @@ class GenericGuardrailAPI(CustomGuardrail):
         http_status_code: int | None = None,
     ) -> GenericGuardrailAPIInputs:
         status_suffix: Final = f" http_status_code={http_status_code}" if http_status_code else ""
+        error_type: Final = "HTTPStatusError" if isinstance(error, httpx.HTTPStatusError) else type(error).__name__
         verbose_proxy_logger.critical(
             "Generic Guardrail API error (fail-open). Proceeding without guardrail.%s "
-            "guardrail_name=%s api_base=%s input_type=%s litellm_call_id=%s litellm_trace_id=%s",
+            "guardrail_name=%s api_base=%s input_type=%s litellm_call_id=%s litellm_trace_id=%s error_type=%s",
             status_suffix,
             getattr(self, "guardrail_name", None),
             getattr(self, "api_base", None),
             input_type,
             getattr(logging_obj, "litellm_call_id", None) if logging_obj else None,
             getattr(logging_obj, "litellm_trace_id", None) if logging_obj else None,
+            error_type,
             exc_info=error,
         )
         # Keep flow going - treat as action=NONE (no modifications)
@@ -336,10 +391,23 @@ class GenericGuardrailAPI(CustomGuardrail):
             headers.update(self.headers)
         return headers
 
+    def _request_body(
+        self,
+        guardrail_request: GenericGuardrailAPIRequest,
+        structured_messages: Sequence[AllMessageValues] | None,
+    ) -> Mapping[str, object]:
+        body: Final[Mapping[str, object]] = guardrail_request.model_dump(mode="json")
+        if not self.forward_messages_as_sent or structured_messages is None:
+            return body
+        return {
+            **body,
+            "structured_messages": _SENT_ROWS.dump_python(_SENT_ROWS.validate_python(structured_messages), mode="json"),
+        }
+
     def _build_guardrail_return_inputs(
         self,
         *,
-        texts: list,
+        texts: list[str],
         images: list[str] | None,
         tools: list[ChatCompletionToolParam] | None,
         structured_messages: Sequence[AllMessageValues] | None,
@@ -358,8 +426,13 @@ class GenericGuardrailAPI(CustomGuardrail):
             return_inputs["tools"] = guardrail_response.tools
         elif tools:
             return_inputs["tools"] = tools
+        compared_rows, is_echo = (
+            (structured_messages, _is_echo) if self.forward_messages_as_sent else (shown_messages, _is_shown_row)
+        )
         rows_to_write_back: Final = (
-            _structured_rows_to_write_back(structured_messages, shown_messages, guardrail_response.structured_messages)
+            _structured_rows_to_write_back(
+                structured_messages, compared_rows, guardrail_response.structured_messages, is_echo
+            )
             if guardrail_response.structured_messages
             else None
         )
@@ -462,7 +535,7 @@ class GenericGuardrailAPI(CustomGuardrail):
                 litellm_version=litellm_version,
                 images=images,
                 tools=([GuardrailToolParam.model_validate(t) for t in tools] if tools else None),
-                structured_messages=structured_messages,
+                structured_messages=None if self.forward_messages_as_sent else structured_messages,
                 tool_calls=tool_calls,
                 additional_provider_specific_params=additional_params,
                 input_type=input_type,
@@ -475,7 +548,7 @@ class GenericGuardrailAPI(CustomGuardrail):
             # Use mode="json" to ensure all iterables are converted to lists
             response: Final = await self.async_handler.post(
                 url=self.api_base,
-                json=guardrail_request.model_dump(mode="json"),
+                json=dict(self._request_body(guardrail_request, structured_messages)),
                 headers=headers,
                 timeout=self.timeout,
             )

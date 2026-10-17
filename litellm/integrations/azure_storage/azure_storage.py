@@ -2,7 +2,7 @@ import asyncio
 import os
 import time
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from functools import cache
 from typing import Final
 from urllib.parse import unquote
@@ -28,7 +28,7 @@ from litellm.secret_managers.get_azure_ad_token_provider import (
 from litellm.types.secret_managers.get_azure_ad_token_provider import (
     AzureCredentialType,
 )
-from litellm.types.utils import StandardLoggingPayload
+from litellm.types.utils import StandardAuditLogPayload, StandardLoggingPayload
 
 AZURE_STORAGE_TOKEN_SCOPE: Final = "https://storage.azure.com/.default"
 _ADLS_SAFE_NAME: Final = str.maketrans("/", "_", "=")
@@ -159,6 +159,24 @@ class AzureBlobStorageLogger(CustomBatchLogger):
             self.log_queue.append(standard_logging_payload)
         except Exception as e:
             verbose_logger.exception("AzureBlobStorageLogger Layer Error - %s", e)
+
+    async def async_log_audit_log_event(self, audit_log: StandardAuditLogPayload) -> None:
+        now: Final = datetime.now(timezone.utc)
+        file_path: Final = f"audit_logs/{now.strftime('%Y-%m-%d')}/{now.strftime('%H-%M-%S')}_{audit_log['id']}.json"
+        await self._upload_json_to_file_path(file_path=file_path, json_payload=safe_dumps(audit_log))
+
+    async def _upload_json_to_file_path(self, file_path: str, json_payload: str) -> None:
+        payload_bytes: Final = json_payload.encode("utf-8")
+        if self.azure_storage_account_key:
+            await self._upload_bytes_with_account_key(file_path=file_path, content=payload_bytes)
+            return
+
+        await self.set_valid_azure_ad_token()
+        async_client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
+        base_url: Final = f"{self.azure_storage_dfs_endpoint}/{self.azure_storage_file_system}/{file_path}"
+        await self._create_file(async_client, base_url)
+        await self._append_data(async_client, base_url, json_payload)
+        await self._flush_data(async_client, base_url, len(payload_bytes))
 
     async def async_send_batch(self):
         """
@@ -366,41 +384,22 @@ class AzureBlobStorageLogger(CustomBatchLogger):
         This is used when Azure Storage Account Key is set - Azure Storage Account Key does not work directly with Azure Rest API
         """
 
-        # Create an async service client
-
-        service_client: Final = await self.get_service_client()
-        # Get file system client
-        file_system_client: Final = service_client.get_file_system_client(file_system=self.azure_storage_file_system)
-
         try:
-            # Create directory with today's date
-            from datetime import datetime
-
             today: Final = datetime.now().strftime("%Y-%m-%d")
-            directory_client: Final = file_system_client.get_directory_client(today)
-
-            # check if the directory exists
-            if not await directory_client.exists():
-                await directory_client.create_directory()
-                verbose_logger.debug("Created directory: %s", today)
-
-            # Create a file client
             file_name: Final = adls_safe_file_name(payload.get("id"))
-            file_client: Final = directory_client.get_file_client(file_name)
-
-            # Create the file
-            await file_client.create_file()
-
-            # Content to append
-            content: Final = safe_dumps(payload).encode("utf-8")
-
-            # Append content to the file
-            await file_client.append_data(data=content, offset=0, length=len(content))
-
-            # Flush the content to finalize the file
-            await file_client.flush_data(position=len(content), offset=0)
-
+            await self._upload_bytes_with_account_key(
+                file_path=f"{today}/{file_name}", content=safe_dumps(payload).encode("utf-8")
+            )
             verbose_logger.debug("Successfully uploaded and wrote to %s/%s", today, file_name)
 
         except Exception as e:
             verbose_logger.exception("Error occurred: %s", e)
+
+    async def _upload_bytes_with_account_key(self, file_path: str, content: bytes) -> None:
+        service_client: Final = await self.get_service_client()
+        file_client: Final = service_client.get_file_system_client(
+            file_system=self.azure_storage_file_system
+        ).get_file_client(file_path)
+        await file_client.create_file()
+        await file_client.append_data(data=content, offset=0, length=len(content))
+        await file_client.flush_data(position=len(content), offset=0)
