@@ -2,7 +2,7 @@ import asyncio
 import json
 import threading
 import time
-from typing import Final, NoReturn, Optional
+from typing import Final, NoReturn, Optional, cast
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
@@ -10,6 +10,7 @@ import pytest
 import litellm
 from litellm import verbose_logger
 from litellm._logging import session_id_var, trace_id_var
+from openai.types.chat import ChatCompletionChunk
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.streaming_handler import (
     CustomStreamWrapper,
@@ -4881,6 +4882,81 @@ def test_handle_stream_fallback_error_restores_context_only_after_exception_mapp
     finally:
         trace_id_var.set("")
         session_id_var.set("")
+
+
+def test_openai_chunk_creator_skips_full_chunk_dump_and_delta_rebuild(
+    monkeypatch: pytest.MonkeyPatch,
+    logging_obj: Logging,
+) -> None:
+    missing: Final = object()
+    full_chunk_dumps: Final[list[ChatCompletionChunk]] = []
+    delta_constructions: Final[list[Delta]] = []
+    original_chunk_model_dump: Final = ChatCompletionChunk.model_dump
+    original_delta_init: Final = Delta.__init__
+    chunks: Final[list[ChatCompletionChunk]] = [
+        ChatCompletionChunk(
+            id="chunk-1",
+            created=1,
+            model="gpt-4o",
+            object="chat.completion.chunk",
+            choices=[{"index": 0, "delta": {"role": "assistant", "content": "hello"}, "finish_reason": None}],
+        ),
+        ChatCompletionChunk(
+            id="chunk-2",
+            created=1,
+            model="gpt-4o",
+            object="chat.completion.chunk",
+            choices=[{"index": 0, "delta": {"content": " world"}, "finish_reason": None}],
+            citations=["https://a"],
+            custom_chunk_attribute="custom value",
+        ),
+        ChatCompletionChunk(
+            id="chunk-3",
+            created=1,
+            model="gpt-4o",
+            object="chat.completion.chunk",
+            choices=[{"index": 0, "delta": {}, "finish_reason": "stop"}],
+        ),
+    ]
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iter(()),
+        model="gpt-4o",
+        custom_llm_provider="openai",
+        logging_obj=logging_obj,
+    )
+
+    def count_chunk_model_dump(
+        self: ChatCompletionChunk,
+        *,
+        include: object = missing,
+    ) -> object:
+        if include is missing:
+            full_chunk_dumps.append(self)
+            return original_chunk_model_dump(self)
+        return original_chunk_model_dump(self, include=cast(frozenset[str] | None, include))
+
+    def count_delta_init(self: Delta, *args: object, **kwargs: object) -> None:
+        delta_constructions.append(self)
+        original_delta_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(ChatCompletionChunk, "model_dump", count_chunk_model_dump)
+    monkeypatch.setattr(Delta, "__init__", count_delta_init)
+
+    outputs: Final[list[ModelResponseStream | None]] = [
+        wrapper.chunk_creator(chunk=chunk) for chunk in chunks
+    ]
+    emitted_chunks: Final = tuple(output for output in outputs if output is not None)
+
+    assert len(emitted_chunks) == 3
+    assert full_chunk_dumps == []
+    assert len(delta_constructions) <= len(emitted_chunks) * 3
+    assert emitted_chunks[0].choices[0].delta.role == "assistant"
+    assert emitted_chunks[1].choices[0].delta.role is None
+    assert getattr(emitted_chunks[1], "citations") == ["https://a"]
+    assert getattr(emitted_chunks[1], "custom_chunk_attribute") == "custom value"
+    chunk2_delta: Final = emitted_chunks[1].model_dump()["choices"][0]["delta"]
+    assert "provider_specific_fields" in chunk2_delta
+    assert chunk2_delta["provider_specific_fields"] is None
 
 
 def test_chunk_creator_preserves_hidden_provider_specific_fields_from_parsed_chunk():
