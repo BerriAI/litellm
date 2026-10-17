@@ -9948,8 +9948,10 @@ async def test_gemini_sends_a_boolean_for_a_gateway_default_written_as_text_or_n
 
     assert sent["includeThoughts"] is expected
 
+
 def test_vertex_ai_does_not_bypass_adc_without_gemini_provider():
     from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+
     vertex_base = VertexBase()
     bypass = vertex_base._should_bypass_adc(
         custom_llm_provider="vertex_ai",

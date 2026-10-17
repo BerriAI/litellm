@@ -67,9 +67,7 @@ async def test_gemini_embedding_sends_batch_request_and_parses_vectors(
         ]
     }
     assert [item["embedding"] for item in response.data] == [[0.1, 0.2, 0.3]]
-    local_token_count: Final = litellm.token_counter(
-        model="gemini-embedding-001", text="good morning from litellm"
-    )
+    local_token_count: Final = litellm.token_counter(model="gemini-embedding-001", text="good morning from litellm")
     assert local_token_count > 0
     assert (response.usage.prompt_tokens, response.usage.total_tokens) == (
         local_token_count,

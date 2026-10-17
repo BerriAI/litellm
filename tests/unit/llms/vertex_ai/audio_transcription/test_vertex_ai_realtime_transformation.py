@@ -176,7 +176,12 @@ def test_unsupported_session_settings_are_rejected(payload: str, message: str):
 
 def _configure_command(turn_detection: str, drop_params: bool) -> list[object]:
     config = vertex_realtime_config(
-        MODEL, access_token="token", resolve_access_token=_token, project="proj-1", location="us", drop_params=drop_params
+        MODEL,
+        access_token="token",
+        resolve_access_token=_token,
+        project="proj-1",
+        location="us",
+        drop_params=drop_params,
     )
     config.transform_session_created_event(MODEL, "sess_1")
     return [
