@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+from pydantic import SecretStr
 import respx
 from fastapi import HTTPException, Request
 
@@ -9082,7 +9083,8 @@ async def test_debug_page_survives_a_store_outage(monkeypatch, caplog):
     not the page."""
     from litellm.proxy.management_endpoints.ui_sso import warn_if_id_jag_capture_gap
 
-    monkeypatch.setenv("SAML_IDP_METADATA_URL", "https://idp.example.com/metadata")
+    for var in ("MICROSOFT_CLIENT_ID", "GOOGLE_CLIENT_ID", "GENERIC_CLIENT_ID", "SAML_IDP_METADATA_URL"):
+        monkeypatch.delenv(var, raising=False)
     retention_check = AsyncMock(side_effect=Exception("db down"))
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
         assert await warn_if_id_jag_capture_gap(retention_enabled=retention_check) is None
@@ -9208,7 +9210,7 @@ async def test_saml_callback_enforces_free_sso_user_limit_after_validation():
 
     async def _fake_handle_acs(**kwargs):
         call_order.append("validate")
-        return CustomOpenID(
+        return (CustomOpenID(
             id="dana@litellm.ai",
             email="dana@litellm.ai",
             first_name=None,
@@ -9218,7 +9220,7 @@ async def test_saml_callback_enforces_free_sso_user_limit_after_validation():
             provider="saml",
             team_ids=[],
             user_role=None,
-        )
+        ), None)
 
     async def _fake_count_billable_users():
         call_order.append("count")
@@ -9741,6 +9743,81 @@ async def test_redirect_from_openid_persists_assertion_under_canonical_user_id()
 
 
 @pytest.mark.asyncio
+async def test_redirect_from_openid_persists_the_login_exchanged_assertion():
+    """A server with ``id_jag_subject_source: refresh_token`` needs the refresh token the login
+    assertion was exchanged for, so the funnel persists what the login-time exchange returns, not
+    the raw capture."""
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (
+        assertion_from_sso_login,
+    )
+
+    assertion = assertion_from_sso_login(_ema_id_token(), "rt_1")
+    assert assertion is not None
+    mock_request = MagicMock(spec=Request)
+    mock_request.scope = {}
+    mock_request.base_url = "http://localhost:4000/"
+    mock_request.cookies = {}
+
+    retain_mock = AsyncMock()
+    exchanged = assertion.model_copy(update={"exchanged_refresh_token": SecretStr("rt-from-login")})
+    exchange_mock = AsyncMock(return_value=exchanged)
+    with (
+        patch("litellm.proxy.utils.get_prisma_client_or_throw", return_value=MagicMock()),
+        patch("litellm.proxy.proxy_server.master_key", "sk-master"),
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+        patch("litellm.proxy.proxy_server.premium_user", False),
+        patch("litellm.proxy.proxy_server.user_custom_sso", None),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+        patch("litellm.proxy.proxy_server.redis_usage_cache", None),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch(
+            "litellm.proxy.proxy_server.generate_key_helper_fn",
+            AsyncMock(
+                return_value={"token": "sk-ui-key", "user_id": "canonical-user-id"}
+            ),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.ui_sso.get_user_info_from_db",
+            AsyncMock(return_value=None),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.ui_sso.check_and_update_if_proxy_admin_id",
+            AsyncMock(return_value="internal_user"),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.ui_sso.retain_sso_identity_assertion_for_ema",
+            retain_mock,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.ui_sso.exchange_login_assertion_if_configured",
+            exchange_mock,
+        ),
+    ):
+        response = await SSOAuthenticationHandler.get_redirect_response_from_openid(
+            result=CustomOpenID(
+                id="raw-idp-subject",
+                email="u@example.com",
+                first_name="U",
+                last_name="Ser",
+                display_name="U Ser",
+                provider="generic",
+                team_ids=[],
+                user_role=None,
+            ),
+            request=mock_request,
+            received_response=None,
+            generic_client_id="cid",
+            ui_access_mode=None,
+            access_token_payload=None,
+            jwt_handler=None,
+            sso_assertion=assertion,
+        )
+    exchange_mock.assert_awaited_once_with(assertion)
+    retain_mock.assert_awaited_once()
+    assert retain_mock.await_args.kwargs["assertion"] is exchanged
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "provider_env, sso_class, payload, needs_graph",
     [
@@ -9967,7 +10044,6 @@ def _id_jag_gap_warnings(caplog) -> list[str]:
 @pytest.mark.parametrize(
     "provider_env, expected_fragment",
     [
-        ({"SAML_IDP_METADATA_URL": "https://idp.example.com/metadata"}, "saml"),
         ({}, "no SSO provider is configured"),
     ],
 )

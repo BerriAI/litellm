@@ -74,14 +74,11 @@ class TestIdJagAssertionCaptureGap:
         monkeypatch.setenv(env_var, "configured")
         assert id_jag_assertion_capture_gap() is None
 
-    def test_saml_is_named_with_the_oidc_remedy(self, monkeypatch):
+    def test_saml_has_no_gap(self, monkeypatch: pytest.MonkeyPatch):
+        """The SAML callback retains the signed assertion as the saml2 subject token, so a SAML
+        deployment is a capturing one and must not be told to switch to an OIDC provider."""
         monkeypatch.setenv("SAML_IDP_METADATA_URL", "https://idp.example.com/metadata")
-        gap = id_jag_assertion_capture_gap()
-        assert gap is not None
-        assert "saml" in gap
-        assert "GOOGLE_CLIENT_ID" in gap
-        assert "MICROSOFT_CLIENT_ID" in gap
-        assert "GENERIC_CLIENT_ID" in gap
+        assert id_jag_assertion_capture_gap() is None
 
     def test_no_sso_configured_reports_a_gap(self):
         gap = id_jag_assertion_capture_gap()
@@ -100,12 +97,9 @@ class TestIdJagAssertionCaptureGapAtStartup:
     def test_no_provider_at_startup_is_not_yet_a_gap(self):
         assert id_jag_assertion_capture_gap_at_startup() is None
 
-    def test_saml_at_startup_reports_the_capture_gap(self, monkeypatch):
+    def test_saml_at_startup_has_no_gap(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("SAML_IDP_METADATA_URL", "https://idp.example.com/metadata")
-        startup_gap = id_jag_assertion_capture_gap_at_startup()
-        callback_gap = id_jag_assertion_capture_gap()
-        assert startup_gap is not None
-        assert startup_gap == callback_gap
+        assert id_jag_assertion_capture_gap_at_startup() is None
 
     @pytest.mark.parametrize("env_var", ["GOOGLE_CLIENT_ID", "MICROSOFT_CLIENT_ID", "GENERIC_CLIENT_ID"])
     def test_an_oidc_provider_at_startup_has_no_gap(self, monkeypatch, env_var):
