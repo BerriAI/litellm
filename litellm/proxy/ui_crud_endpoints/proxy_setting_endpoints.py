@@ -343,7 +343,7 @@ class UISettings(LiteLLMBaseModel):
     )
 
     enable_chat_ui: bool = Field(
-        default=False,
+        default=True,
         description="If true, shows the Chat page in the UI sidebar, letting users chat with an LLM and connect their own MCP server credentials via OAuth.",
     )
 

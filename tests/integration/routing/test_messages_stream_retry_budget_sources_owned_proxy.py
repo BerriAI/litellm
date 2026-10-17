@@ -1,7 +1,9 @@
 import json
+import threading
 import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
+from itertools import groupby, islice
 from pathlib import Path
 from typing import Final, Literal
 
@@ -12,6 +14,7 @@ from integration._support.anthropic_sse import (
     LIFECYCLE,
     PING,
     Attempts,
+    SseEvent,
     delta_text,
     dropping_reply,
     error_body,
@@ -64,7 +67,9 @@ def _served_id(backend: str, marker: str, attempt: int) -> str:
     return f"msg_{backend}_{marker}_a{attempt}"
 
 
-def _primary_reply(behavior: str, attempt: int, full: tuple[bytes, bytes, bytes, bytes]) -> Reply:
+def _primary_reply(
+    behavior: str, attempt: int, full: tuple[bytes, bytes, bytes, bytes], content_gate: threading.Event
+) -> Reply:
     dropped: Final = dropping_reply(full, abort_after=1)
     match behavior:
         case "drop-once":
@@ -72,7 +77,13 @@ def _primary_reply(behavior: str, attempt: int, full: tuple[bytes, bytes, bytes,
         case "drop-always":
             return dropped
         case "hold-ping":
-            return stream_reply((full[0], PING, full[1] + full[2] + full[3]), pause=0.25)
+            return Reply(
+                content_type="text/event-stream",
+                chunks=(full[0], full[1] + full[2] + full[3]),
+                gate_after_first=content_gate,
+                heartbeat=PING,
+                pause_between_chunks=0.25,
+            )
         case "drop-then-too-long":
             if attempt == 1:
                 return dropped
@@ -92,7 +103,7 @@ def _fallback_reply(behavior: str, full: tuple[bytes, bytes, bytes, bytes]) -> R
     return stream_reply(full)
 
 
-def _respond(attempts: Attempts) -> Callable[[Request], Reply]:
+def _respond(attempts: Attempts, content_gate: threading.Event) -> Callable[[Request], Reply]:
     def respond(request: Request) -> Reply:
         assert (request.method, request.target) == ("POST", "/v1/messages"), request
         assert request.headers["x-api-key"] == _API_KEY, request.headers
@@ -104,9 +115,19 @@ def _respond(attempts: Attempts) -> Callable[[Request], Reply]:
         full: Final = message_stream(_served_id(backend, marker, attempt), backend, _TEXT)
         if backend != _PRIMARY:
             return _fallback_reply(behavior, full)
-        return _primary_reply(behavior, attempt, full)
+        return _primary_reply(behavior, attempt, full, content_gate)
 
     return respond
+
+
+def _stream_body(model: str, behavior: Behavior, marker: str, **extra: JsonValue) -> dict[str, JsonValue]:
+    return {
+        "model": model,
+        "max_tokens": 16,
+        "stream": True,
+        "messages": [{"role": "user", "content": f"{behavior}:{marker}"}],
+        **extra,
+    }
 
 
 def _deployment(name: str, backend: str, **extra: JsonValue) -> dict[str, JsonValue]:
@@ -154,19 +175,10 @@ def _config(wire: Wire, directory: Path) -> Path:
 class _Rig:
     proxy: Gateway
     attempts: Attempts
+    content_gate: threading.Event
 
     def stream(self, model: str, behavior: Behavior, marker: str, **extra: JsonValue) -> httpx.Response:
-        return self.proxy.request(
-            "POST",
-            "/v1/messages",
-            {
-                "model": model,
-                "max_tokens": 16,
-                "stream": True,
-                "messages": [{"role": "user", "content": f"{behavior}:{marker}"}],
-                **extra,
-            },
-        )
+        return self.proxy.request("POST", "/v1/messages", _stream_body(model, behavior, marker, **extra))
 
     def attempts_on(self, backend: str, marker: str) -> int:
         return self.attempts.count(f"{backend}:{marker}")
@@ -175,10 +187,14 @@ class _Rig:
 @pytest.fixture(scope="module")
 def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Rig]:
     attempts: Final = Attempts()
+    content_gate: Final = threading.Event()
     directory: Final = tmp_path_factory.mktemp("messages-retry-budget-sources")
-    with gateway_from_environment() as gateway, wire_server(_respond(attempts)) as wire:
+    with gateway_from_environment() as gateway, wire_server(_respond(attempts, content_gate)) as wire:
         with owned_proxy(gateway, directory, {}, config=_config(wire, directory), workers=2) as proxy:
-            yield _Rig(proxy, attempts)
+            try:
+                yield _Rig(proxy, attempts, content_gate)
+            finally:
+                content_gate.set()
 
 
 def _assert_completed(response: httpx.Response, served_id: str) -> None:
@@ -219,12 +235,32 @@ def test_request_num_retries_zero_turns_the_router_budget_off(rig: _Rig) -> None
     assert rig.attempts_on(_PRIMARY, marker) == 1
 
 
+def _live_events(lines: Iterator[str]) -> Iterator[SseEvent]:
+    for has_text, block in groupby(lines, key=bool):
+        if has_text:
+            yield from parse_sse("\n".join(block))
+
+
 def test_lifecycle_frames_are_held_until_content_while_pings_go_out_live(rig: _Rig) -> None:
     marker: Final = uuid.uuid4().hex
-    response: Final = rig.stream(_ROUTER_BUDGET, "hold-ping", marker)
-    assert response.status_code == 200, response.text
-    events: Final = parse_sse(response.text)
-    assert event_types(events) == ("ping", *LIFECYCLE), events
+    rig.content_gate.clear()
+    try:
+        with rig.proxy.client.stream(
+            "POST",
+            "/v1/messages",
+            json=_stream_body(_ROUTER_BUDGET, "hold-ping", marker),
+            headers={"Authorization": f"Bearer {rig.proxy.key}"},
+        ) as response:
+            assert response.status_code == 200, response.read()
+            arriving: Final = _live_events(response.iter_lines())
+            before_content: Final = tuple(islice(arriving, 2))
+            rig.content_gate.set()
+            after_content: Final = tuple(arriving)
+    finally:
+        rig.content_gate.set()
+    assert event_types(before_content) == ("ping", "ping"), before_content
+    events: Final = before_content + after_content
+    assert tuple(kind for kind in event_types(events) if kind != "ping") == LIFECYCLE, events
     assert message_id(events) == _served_id(_PRIMARY, marker, 1), events
     assert delta_text(events) == _TEXT, events
     assert rig.attempts_on(_PRIMARY, marker) == 1
