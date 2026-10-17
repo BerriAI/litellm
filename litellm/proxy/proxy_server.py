@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import enum
+import gc
 import importlib
 import inspect
 import io
@@ -1746,6 +1747,8 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
             async with AsyncExitStack() as admin_mcp_stack:
                 try:
                     await admin_mcp_stack.enter_async_context(admin_mcp_lifespan(app))
+                    gc.freeze()
+                    verbose_proxy_logger.warning("gc.freeze pinned %d startup objects", gc.get_freeze_count())
                     yield state
                 finally:
                     if model_info_scheduler is not None and model_info_scheduler.running:
