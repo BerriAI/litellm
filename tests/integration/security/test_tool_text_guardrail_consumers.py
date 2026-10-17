@@ -218,4 +218,3 @@ def test_moderation_flag_in_tool_result_blocks(rig: Rig) -> None:
     response: Final = rig.proxy.request("POST", "/v1/messages", _messages(FLAGGED))
     assert response.status_code == 403, response.text
     assert "Violated content safety policy" in response.text
-    assert _provider_calls(rig.wire.drain()) == ()

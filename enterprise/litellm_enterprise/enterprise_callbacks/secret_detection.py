@@ -548,7 +548,7 @@ def _json_unescaped(value: str) -> str:
 
 def _json_line(key: str | None, text: str) -> str:
     value: Final = json.dumps(text, ensure_ascii=False)
-    return value if key is None else f"{json.dumps(key[-_KEY_CONTEXT:], ensure_ascii=False)}: {value}"
+    return value if key is None else f'"{json.dumps(key, ensure_ascii=False)[1:-1][-_KEY_CONTEXT:]}": {value}'
 
 
 def _value_in_texts(value: str, texts: Sequence[str]) -> str | None:
