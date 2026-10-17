@@ -11,6 +11,7 @@ from pydantic import ConfigDict, TypeAdapter
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import VERTEX_BATCH_PREDICTION_JOBS_ROUTE
+from litellm.litellm_core_utils.hidden_params import set_hidden_param
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import (
     InteractionsUsageObjectTransformation,
@@ -788,6 +789,7 @@ class VertexPassthroughLoggingHandler:
 
         kwargs["response_cost"] = response_cost
         kwargs["model"] = model
+        set_hidden_param(litellm_model_response, "response_cost", response_cost)
 
         # pretty print standard logging object
         verbose_proxy_logger.debug("kwargs= %s", kwargs)
