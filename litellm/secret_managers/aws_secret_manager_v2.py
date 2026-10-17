@@ -21,8 +21,6 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter, with_config
-from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -41,14 +39,6 @@ from .base_secret_manager import BaseSecretManager
 
 if TYPE_CHECKING:
     from botocore.awsrequest import HTTPHeaders
-
-
-@with_config(ConfigDict(extra="allow", strict=True))
-class _GetSecretValueResponse(TypedDict):
-    SecretString: ReadOnly[str]
-
-
-_GET_SECRET_VALUE_RESPONSE: Final = TypeAdapter(_GetSecretValueResponse)
 
 
 class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
@@ -164,8 +154,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         try:
             response: Final = await async_client.post(url=endpoint_url, headers=headers, data=body.decode("utf-8"))
             response.raise_for_status()
-            response_payload: Final = _GET_SECRET_VALUE_RESPONSE.validate_python(response.json())
-            return response_payload["SecretString"]
+            return response.json()["SecretString"]
         except httpx.TimeoutException:
             raise ValueError("Timeout error occurred")
         except Exception as e:

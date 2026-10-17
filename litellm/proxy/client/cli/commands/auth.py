@@ -8,7 +8,7 @@ from urllib.parse import urlencode
 
 import click
 import requests
-from pydantic import ConfigDict, TypeAdapter, with_config
+from pydantic import ConfigDict, TypeAdapter
 from rich.console import Console
 from rich.table import Table
 from typing_extensions import NotRequired, ReadOnly, TypedDict, assert_never
@@ -114,23 +114,21 @@ def _optional_cli_context_obj(view: _OptionalCliContextObjView) -> CliContextObj
     return view.obj
 
 
-@with_config(ConfigDict(strict=True, extra="allow", hide_input_in_errors=True))
 class CliPollData(TypedDict, total=False):
-    status: ReadOnly[str]
-    key: ReadOnly[str]
-    user_id: ReadOnly[str]
-    teams: ReadOnly[list[str]]
-    team_details: ReadOnly[object]
-    requires_team_selection: ReadOnly[bool]
-    team_id: ReadOnly[str | None]
+    status: str
+    key: str
+    user_id: str
+    teams: list[str]
+    team_details: object
+    requires_team_selection: bool
+    team_id: str
 
 
-@with_config(ConfigDict(strict=True, extra="allow", hide_input_in_errors=True))
 class CliSsoStartData(TypedDict):
     login_id: ReadOnly[str]
     poll_secret: ReadOnly[str]
     user_code: ReadOnly[str]
-    verification_uri_complete: ReadOnly[NotRequired[object]]
+    verification_uri_complete: ReadOnly[NotRequired[str]]
 
 
 class CliAuthResult(TypedDict):
@@ -143,8 +141,6 @@ class CliAuthResult(TypedDict):
 _TeamMapping: Final = TypeVar("_TeamMapping", bound=Mapping[str, object])
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
-_CLI_POLL_DATA: Final = TypeAdapter(CliPollData)
-_CLI_SSO_START_DATA: Final = TypeAdapter(CliSsoStartData)
 
 KEYRING_INSTALL_HINT: Final = "pip install 'litellm[cli]'"
 
@@ -549,7 +545,7 @@ def _poll_for_ready_data(
         try:
             response = requests.get(url, headers=headers, timeout=request_timeout)
             if response.status_code == 200:
-                data = _CLI_POLL_DATA.validate_python(response.json())
+                data: CliPollData = response.json()
                 status = data.get("status")
                 if status == "ready":
                     return data
@@ -621,7 +617,7 @@ def _start_cli_sso_flow(base_url: str) -> CliSsoStartData:
         )
 
     try:
-        raw_data: Final[object] = response.json()
+        data: Final[CliSsoStartData] = response.json()
     except ValueError:
         content_type: Final = response.headers.get("content-type", "unknown")
         raise ValueError(
@@ -630,7 +626,6 @@ def _start_cli_sso_flow(base_url: str) -> CliSsoStartData:
             f"Response starts with: {response.text[:200]!r}"
         )
 
-    data: Final = _JSON_OBJECT.validate_python(raw_data)
     required_fields: Final[tuple[str, ...]] = ("login_id", "poll_secret", "user_code")
     missing_fields: Final = tuple(field for field in required_fields if not isinstance(data.get(field), str))
     if missing_fields:
@@ -638,7 +633,7 @@ def _start_cli_sso_flow(base_url: str) -> CliSsoStartData:
             f"The response from {start_url} is missing required field(s): {', '.join(missing_fields)}. "
             "The proxy version may not match this CLI; upgrade whichever is older."
         )
-    return _CLI_SSO_START_DATA.validate_python(data)
+    return data
 
 
 def _get_cli_sso_poll_headers(poll_secret: str) -> dict[str, str]:

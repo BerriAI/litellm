@@ -44,7 +44,7 @@ class _ReplicatePrediction(TypedDict):
     urls: ReadOnly[NotRequired[_ReplicatePredictionUrls]]
 
 
-_JSON_BODY: Final = TypeAdapter(object)
+_JSON_BODY: Final = TypeAdapter(object, config=ConfigDict(hide_input_in_errors=True))
 _REPLICATE_PREDICTION: Final = TypeAdapter(_ReplicatePrediction)
 
 

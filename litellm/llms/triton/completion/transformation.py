@@ -34,17 +34,17 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 
-@with_config(ConfigDict(strict=True, extra="allow", hide_input_in_errors=True))
+@with_config(ConfigDict(strict=True, extra="allow"))
 class _TritonGenerateResponse(TypedDict):
     text_output: ReadOnly[str | None]
 
 
-@with_config(ConfigDict(strict=True, extra="allow", hide_input_in_errors=True))
+@with_config(ConfigDict(strict=True, extra="allow"))
 class _TritonInferOutput(TypedDict):
     data: ReadOnly[str | Sequence[str] | None]
 
 
-@with_config(ConfigDict(strict=True, extra="allow", hide_input_in_errors=True))
+@with_config(ConfigDict(strict=True, extra="allow"))
 class _TritonInferResponse(TypedDict):
     outputs: ReadOnly[Sequence[object]]
 

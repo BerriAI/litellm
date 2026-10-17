@@ -467,7 +467,9 @@ async def _aiter_bytes_then_close(response: httpx.Response, *, chunk_size: int) 
 
 _DECODED_BODY_STALE_HEADERS: Final[frozenset[str]] = frozenset({"content-encoding", "content-length"})
 _OPTIONAL_PARAMS: Final = TypeAdapter(Mapping[str, object])
-_PREFETCHED_SOURCE_DATA: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
+_PREFETCHED_SOURCE_DATA: Final = TypeAdapter(
+    dict[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True)
+)
 
 
 def _decoded_body_headers(response: httpx.Response) -> httpx.Headers:

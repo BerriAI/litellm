@@ -150,7 +150,7 @@ def _typed_gets_litellm_params(fn: _GetsLitellmParams) -> _GetsLitellmParams:
 
 _SHOULD_STORE_RESULT_IN_CACHE_ATTR: Final = "_should_store_result_in_cache"
 _UNMASK_PII_TEXT_ATTR: Final = "_unmask_pii_text"
-_JSON_VALUE: Final = TypeAdapter(object, config=ConfigDict(strict=True))
+_JSON_VALUE: Final = TypeAdapter(object, config=ConfigDict(strict=True, hide_input_in_errors=True))
 
 
 def _load_json_object(payload: str | bytes) -> dict[str, object]:

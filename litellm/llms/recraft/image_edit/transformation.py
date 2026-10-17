@@ -35,7 +35,7 @@ class _RecraftImageEditResponse(TypedDict):
     data: ReadOnly[Sequence[_RecraftImageData]]
 
 
-_JSON_BODY: Final = TypeAdapter(object)
+_JSON_BODY: Final = TypeAdapter(object, config=ConfigDict(hide_input_in_errors=True))
 _RECRAFT_IMAGE_EDIT_RESPONSE: Final = TypeAdapter(_RecraftImageEditResponse)
 
 

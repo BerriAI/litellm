@@ -10,7 +10,7 @@ from pydantic import ConfigDict, TypeAdapter
 
 from litellm._logging import verbose_logger
 
-_JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True))
 
 
 class SimpleProviderConfig:

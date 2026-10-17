@@ -22,8 +22,6 @@ from typing import Final, TypeVar
 from urllib.parse import urlparse
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter, with_config
-from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm.integrations.batch_utils import (
@@ -45,16 +43,6 @@ DEFAULT_AZURE_AUTHORITY_HOST: Final = "https://login.microsoftonline.com"
 DEFAULT_AZURE_MONITOR_SCOPE: Final = "https://monitor.azure.com/.default"
 
 _QueuedPayload = TypeVar("_QueuedPayload", StandardLoggingPayload, StandardAuditLogPayload)
-
-
-@with_config(ConfigDict(extra="allow", strict=True))
-class _OAuthTokenResponse(TypedDict):
-    access_token: NotRequired[ReadOnly[str | None]]
-    expires_in: NotRequired[ReadOnly[int | float]]
-
-
-_OAUTH_TOKEN_RESPONSE: Final = TypeAdapter(_OAuthTokenResponse)
-
 
 MONITOR_SCOPE_BY_AUTHORITY_HOST: Final[Mapping[str, str]] = MappingProxyType(
     {
@@ -238,7 +226,7 @@ class AzureSentinelLogger(CustomBatchLogger):
         if response.status_code != 200:
             raise Exception(f"Failed to get OAuth2 token: {response.status_code} - {response.text}")
 
-        token_response: Final = _OAUTH_TOKEN_RESPONSE.validate_python(response.json(), strict=True)
+        token_response: Final = response.json()
         self.oauth_token = token_response.get("access_token")
         expires_in: Final = token_response.get("expires_in", 3600)
 

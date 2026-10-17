@@ -41,7 +41,7 @@ if TYPE_CHECKING:
 
 
 _CACHE_RESPONSE_ADAPTER: Final[TypeAdapter[str | bytes | None]] = TypeAdapter(
-    str | bytes | None, config=ConfigDict(strict=True)
+    str | bytes | None, config=ConfigDict(strict=True, hide_input_in_errors=True)
 )
 
 

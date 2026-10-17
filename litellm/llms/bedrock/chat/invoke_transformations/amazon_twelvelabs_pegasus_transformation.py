@@ -36,7 +36,7 @@ else:
     LiteLLMLoggingObj = Any
 
 
-@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+@with_config(ConfigDict(extra="allow", strict=True))
 class _PegasusResponse(TypedDict):
     message: NotRequired[ReadOnly[str | None]]
     finishReason: NotRequired[ReadOnly[str]]

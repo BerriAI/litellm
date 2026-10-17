@@ -13,8 +13,10 @@ from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_COMPETITOR_DISCOVERY_MODEL
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
 
-_TOOL_ARGUMENTS: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
-_SELECTED_TEMPLATES: Final = TypeAdapter(list[dict[str, object]], config=ConfigDict(strict=True))
+_TOOL_ARGUMENTS: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True))
+_SELECTED_TEMPLATES: Final = TypeAdapter(
+    list[dict[str, object]], config=ConfigDict(strict=True, hide_input_in_errors=True)
+)
 
 SUGGEST_TOOL: Final = {
     "type": "function",

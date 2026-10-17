@@ -40,7 +40,7 @@ class _VertexRankResponse(TypedDict):
     records: ReadOnly[NotRequired[Sequence[_VertexRankRecord]]]
 
 
-_JSON_BODY: Final = TypeAdapter(object)
+_JSON_BODY: Final = TypeAdapter(object, config=ConfigDict(hide_input_in_errors=True))
 _VERTEX_RANK_RESPONSE: Final = TypeAdapter(_VertexRankResponse)
 
 

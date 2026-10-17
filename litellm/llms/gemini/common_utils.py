@@ -18,13 +18,13 @@ from litellm.types.utils import CountContextManagement, TokenCountMessagesFormat
 
 
 class _GeminiModelPayload(BaseModel):
-    model_config = ConfigDict(extra="allow", frozen=True, strict=True)
+    model_config = ConfigDict(extra="allow", frozen=True, strict=True, hide_input_in_errors=True)
 
     name: str
 
 
 class _GeminiModelsResponsePayload(BaseModel):
-    model_config = ConfigDict(extra="allow", frozen=True, strict=True)
+    model_config = ConfigDict(extra="allow", frozen=True, strict=True, hide_input_in_errors=True)
 
     models: list[_GeminiModelPayload]
 

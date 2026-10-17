@@ -59,7 +59,9 @@ class _ArizePhoenixPromptData(TypedDict, total=False):
 
 _ARIZE_PHOENIX_PROMPT_DATA: Final = TypeAdapter(_ArizePhoenixPromptData)
 _ARIZE_PHOENIX_PROVIDER_PARAMS: Final = TypeAdapter(_ArizePhoenixProviderParams)
-_ARIZE_PHOENIX_PROVIDER_MAPPING: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(strict=True))
+_ARIZE_PHOENIX_PROVIDER_MAPPING: Final = TypeAdapter(
+    Mapping[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True)
+)
 _EMPTY_PROVIDER_PARAMS: Final[Mapping[str, object]] = {}
 
 

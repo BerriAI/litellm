@@ -13,7 +13,7 @@ from collections.abc import Set as AbstractSet
 from typing import Any, Final, Literal, Protocol, overload
 from urllib.parse import quote
 
-from pydantic import TypeAdapter
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
@@ -691,7 +691,7 @@ class MCPMissingUserEnvVarsError(Exception):
 # identifier rules — letters, digits, underscores, can't start with a digit.
 _ENV_VAR_PATTERN: Final = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
-_JSON_VALUE: Final = TypeAdapter(object)
+_JSON_VALUE: Final = TypeAdapter(object, config=ConfigDict(hide_input_in_errors=True))
 
 
 def parse_admin_env_vars(

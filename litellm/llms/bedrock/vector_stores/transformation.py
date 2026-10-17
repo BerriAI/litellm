@@ -34,19 +34,19 @@ else:
     LiteLLMLoggingObj = Any
 
 
-@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+@with_config(ConfigDict(extra="allow", strict=True))
 class _KBContent(TypedDict):
     text: ReadOnly[NotRequired[str | None]]
 
 
-@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+@with_config(ConfigDict(extra="allow", strict=True))
 class _KBRetrievalResult(TypedDict):
     content: ReadOnly[NotRequired[_KBContent | None]]
     score: ReadOnly[NotRequired[int | float | None]]
     metadata: ReadOnly[NotRequired[Mapping[str, object] | None]]
 
 
-@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+@with_config(ConfigDict(extra="allow", strict=True))
 class _KBResponse(TypedDict):
     retrievalResults: ReadOnly[NotRequired[Sequence[_KBRetrievalResult] | None]]
 

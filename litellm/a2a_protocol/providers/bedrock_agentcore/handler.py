@@ -9,7 +9,7 @@ import json
 from collections.abc import AsyncIterator, Mapping
 from typing import Final
 
-from pydantic import TypeAdapter
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.a2a_protocol.providers.bedrock_agentcore.transformation import (
@@ -19,7 +19,7 @@ from litellm.llms.bedrock.base_aws_llm import run_aws_signing
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
-_JSON_OBJECT: Final = TypeAdapter(dict[str, object])
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class BedrockAgentCoreA2AHandler:

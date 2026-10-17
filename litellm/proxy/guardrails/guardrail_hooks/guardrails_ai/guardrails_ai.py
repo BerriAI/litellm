@@ -51,12 +51,12 @@ class GuardrailsAIResponsePreCall(TypedDict):
     outputs: list[InferenceData]
 
 
-@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+@with_config(ConfigDict(extra="allow", strict=True))
 class _PreCallOutput(_ValidatedTypedDict):
     data: ReadOnly[NotRequired[Sequence[str]]]
 
 
-@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+@with_config(ConfigDict(extra="allow", strict=True))
 class _PreCallResponse(_ValidatedTypedDict):
     outputs: ReadOnly[NotRequired[Sequence[_PreCallOutput]]]
 

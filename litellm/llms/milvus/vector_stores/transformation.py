@@ -38,9 +38,11 @@ class _MilvusSearchResponse(TypedDict):
 
 
 _MILVUS_SEARCH_RESPONSE: Final = TypeAdapter(_MilvusSearchResponse)
-_MILVUS_SEARCH_TEXT: Final[TypeAdapter[str | None]] = TypeAdapter(str | None, config=ConfigDict(strict=True))
+_MILVUS_SEARCH_TEXT: Final[TypeAdapter[str | None]] = TypeAdapter(
+    str | None, config=ConfigDict(strict=True, hide_input_in_errors=True)
+)
 _MILVUS_SEARCH_SCORE: Final[TypeAdapter[int | float | None]] = TypeAdapter(
-    int | float | None, config=ConfigDict(strict=True)
+    int | float | None, config=ConfigDict(strict=True, hide_input_in_errors=True)
 )
 
 MILVUS_OPTIONAL_PARAMS: Final = {

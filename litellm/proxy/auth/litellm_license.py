@@ -4,11 +4,10 @@ import base64
 import json
 import os
 from datetime import datetime
-from typing import TYPE_CHECKING, Final, TypedDict
+from typing import TYPE_CHECKING, Final
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter, with_config
-from typing_extensions import ReadOnly
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import NON_LLM_CONNECTION_TIMEOUT
@@ -16,14 +15,6 @@ from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 if TYPE_CHECKING:
     from litellm.proxy._types import EnterpriseLicenseData
-
-
-@with_config(ConfigDict(extra="allow", strict=True))
-class _AirgappedLicensePayload(TypedDict):
-    expiration_date: ReadOnly[str]
-
-
-_AIRGAPPED_LICENSE_PAYLOAD: Final = TypeAdapter(_AirgappedLicensePayload)
 
 
 AUTO_ROUTER_LICENSE_FEATURE: Final = "auto_router"
@@ -210,7 +201,7 @@ class LicenseCheck:
             )
 
             # Decode and parse the data
-            license_data: Final = _AIRGAPPED_LICENSE_PAYLOAD.validate_python(json.loads(message.decode()))
+            license_data: Final = json.loads(message.decode())
 
             # Check expiration date
             expiration_date: Final = datetime.strptime(license_data["expiration_date"], "%Y-%m-%d")

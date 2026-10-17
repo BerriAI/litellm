@@ -213,7 +213,7 @@ class _KeyAliasRow(TypedDict):
 
 _KEY_ALIAS_COUNT_ROWS: Final = TypeAdapter(list[_KeyAliasCountRow])
 _KEY_ALIAS_ROWS: Final = TypeAdapter(list[_KeyAliasRow])
-_KEY_TOKEN_HASH: Final = TypeAdapter[str | None](str | None, config=ConfigDict(strict=True))
+_KEY_TOKEN_HASH: Final = TypeAdapter[str | None](str | None, config=ConfigDict(strict=True, hide_input_in_errors=True))
 
 
 class _UserRowLike(Protocol):
