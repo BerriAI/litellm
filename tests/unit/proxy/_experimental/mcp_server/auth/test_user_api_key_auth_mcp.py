@@ -1,6 +1,7 @@
 import contextlib
 import json
 import os
+import uuid
 from collections.abc import Sequence
 from collections.abc import Set as AbstractSet
 from datetime import datetime, timedelta, timezone
@@ -12,6 +13,7 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from starlette.datastructures import Headers
+from starlette.requests import Request
 
 from litellm.caching.caching import DualCache
 from litellm.constants import MCP_ALL_TOOLS_WILDCARD
@@ -23,6 +25,7 @@ from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     is_mcp_admitted_user_subject,
 )
 from litellm.proxy._types import (
+    LiteLLM_MCPServerTable,
     LiteLLM_ObjectPermissionTable,
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
@@ -31,7 +34,164 @@ from litellm.proxy._types import (
     SpecialMCPServerNames,
     UserAPIKeyAuth,
 )
+from litellm.types.mcp import MCPAuth
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
 from litellm.types.agents import AgentCaller
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path,auth_type,delegate_auth_to_upstream,pass_through,bearer_presented,mcp_auth_header,"
+    "mcp_server_auth_headers,mcp_servers,expected",
+    [
+        pytest.param(
+            "/mcp/legacy",
+            MCPAuth.oauth2,
+            True,
+            False,
+            False,
+            None,
+            None,
+            None,
+            "defer_to_route_challenge",
+            id="legacy-delegate-without-bearer",
+        ),
+        pytest.param(
+            "/mcp/legacy",
+            MCPAuth.oauth2,
+            True,
+            False,
+            True,
+            None,
+            None,
+            None,
+            None,
+            id="legacy-delegate-with-bearer",
+        ),
+        pytest.param(
+            "/mcp/passthrough",
+            None,
+            False,
+            True,
+            True,
+            None,
+            None,
+            None,
+            "defer_to_route_challenge",
+            id="pass-through-with-bearer",
+        ),
+        pytest.param(
+            "/mcp/oauth",
+            MCPAuth.oauth2,
+            False,
+            False,
+            False,
+            None,
+            None,
+            None,
+            "gateway_challenge",
+            id="gateway-dcr-per-server",
+        ),
+        pytest.param(
+            "/mcp",
+            None,
+            False,
+            False,
+            False,
+            None,
+            None,
+            None,
+            "gateway_challenge",
+            id="aggregate-mcp",
+        ),
+        pytest.param(
+            "/mcp",
+            None,
+            False,
+            False,
+            False,
+            None,
+            None,
+            ["oauth"],
+            "gateway_challenge",
+            id="aggregate-mcp-scoped-by-header",
+        ),
+        pytest.param(
+            "/mcp/oauth",
+            MCPAuth.oauth2,
+            False,
+            False,
+            False,
+            "Bearer upstream",
+            None,
+            None,
+            None,
+            id="legacy-mcp-auth-header",
+        ),
+        pytest.param(
+            "/mcp/oauth",
+            MCPAuth.oauth2,
+            False,
+            False,
+            False,
+            None,
+            {"oauth": {"Authorization": "Bearer upstream"}},
+            None,
+            None,
+            id="server-specific-mcp-auth-header",
+        ),
+    ],
+)
+async def test_cold_start_fallback_classifies_structural_challenges(
+    path: str,
+    auth_type: MCPAuth | None,
+    delegate_auth_to_upstream: bool,
+    pass_through: bool,
+    bearer_presented: bool,
+    mcp_auth_header: str | None,
+    mcp_server_auth_headers: dict[str, dict[str, str]] | None,
+    mcp_servers: list[str] | None,
+    expected: Literal["defer_to_route_challenge", "gateway_challenge"] | None,
+) -> None:
+    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import _cold_start_fallback
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    server_alias: Final = f"cold-start-{uuid.uuid4().hex}"
+    request_path: Final = f"/mcp/{server_alias}" if path != "/mcp" else path
+    request_mcp_servers: Final[list[str] | None] = [server_alias] if mcp_servers is not None else None
+    server_auth_type: Final = auth_type or (MCPAuth.oauth2 if mcp_servers is not None else MCPAuth.none)
+    server_row: Final = LiteLLM_MCPServerTable(
+        server_id=f"cold-start-{uuid.uuid4().hex}",
+        server_name=server_alias,
+        alias=server_alias,
+        url=None,
+        transport="http",
+        auth_type=server_auth_type,
+        oauth2_flow="authorization_code" if server_auth_type == MCPAuth.oauth2 else None,
+        delegate_auth_to_upstream=delegate_auth_to_upstream,
+        dcr_bridge=server_auth_type == MCPAuth.oauth2 and not delegate_auth_to_upstream,
+        oauth_passthrough=pass_through,
+        extra_headers=["Authorization"] if pass_through else [],
+        created_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        updated_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+    )
+    request: Final = Request({"type": "http", "method": "POST", "path": request_path, "headers": []})
+    try:
+        await global_mcp_server_manager.add_server(server_row)
+        registered_server: Final[MCPServer | None] = global_mcp_server_manager.get_mcp_server_by_name(server_alias)
+        assert isinstance(registered_server, MCPServer)
+        assert registered_server.is_oauth_passthrough is pass_through
+        result: Final = _cold_start_fallback(
+            request=request,
+            request_route=request_path,
+            mcp_servers=request_mcp_servers,
+            mcp_auth_header=mcp_auth_header,
+            mcp_server_auth_headers=mcp_server_auth_headers,
+            bearer_presented=bearer_presented,
+        )
+        assert result == expected
+    finally:
+        global_mcp_server_manager.remove_server(server_row)
 
 
 @pytest.mark.parametrize(
