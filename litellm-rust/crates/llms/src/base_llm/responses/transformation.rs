@@ -1,15 +1,48 @@
-use litellm_types::responses::streaming_websocket::ResponsesWsEvent;
+use litellm_llms_types::formats::responses::{
+    ResponsesApiResponse, streaming::ResponsesStreamEvent,
+};
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 
-use crate::Error;
+use crate::{Error, base_llm::auth::ValidatedEnvironment};
+
+pub trait BaseResponsesApiConfig: Sync {
+    fn secret_names(
+        &self,
+        api_key: Option<&str>,
+        api_base: Option<&str>,
+    ) -> &'static [&'static str];
+
+    fn validate_environment(
+        &self,
+        headers: Vec<(String, String)>,
+        api_key: Option<&str>,
+        lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<ValidatedEnvironment, Error>;
+
+    fn get_complete_url(
+        &self,
+        api_base: Option<&str>,
+        lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> String;
+
+    fn transform_responses_api_request(
+        &self,
+        model: &str,
+        input: Value,
+        params: Map<String, Value>,
+    ) -> Result<Value, Error>;
+
+    fn transform_response_api_response(&self, body: Value) -> Result<ResponsesApiResponse, Error>;
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ResponsesWsTransformResult {
-    pub events: Vec<ResponsesWsEvent>,
+    pub events: Vec<ResponsesStreamEvent>,
 }
 
 impl ResponsesWsTransformResult {
-    pub fn passthrough(event: ResponsesWsEvent) -> Self {
+    pub fn passthrough(event: ResponsesStreamEvent) -> Self {
         Self {
             events: vec![event],
         }
@@ -25,18 +58,18 @@ pub trait ResponsesWebSocketProviderConfig: Sync {
 
     fn transform_ws_request(
         &self,
-        event: &ResponsesWsEvent,
+        event: &ResponsesStreamEvent,
         model: &str,
     ) -> Result<ResponsesWsTransformResult, Error>;
 
     fn transform_ws_response(
         &self,
-        event: &ResponsesWsEvent,
+        event: &ResponsesStreamEvent,
         model: &str,
     ) -> Result<ResponsesWsTransformResult, Error>;
 }
 
-pub fn enforce_model(event: &ResponsesWsEvent, model: &str) -> ResponsesWsEvent {
+pub fn enforce_model(event: &ResponsesStreamEvent, model: &str) -> ResponsesStreamEvent {
     if !event.is_response_create() {
         return event.clone();
     }
@@ -70,7 +103,7 @@ pub fn enforce_model(event: &ResponsesWsEvent, model: &str) -> ResponsesWsEvent 
 mod tests {
     use super::*;
 
-    fn event(value: serde_json::Value) -> ResponsesWsEvent {
+    fn event(value: serde_json::Value) -> ResponsesStreamEvent {
         serde_json::from_value(value).expect("valid event")
     }
 

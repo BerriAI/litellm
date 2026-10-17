@@ -1,12 +1,12 @@
-use litellm_types::llms::anthropic_messages::anthropic_response::AnthropicMessagesResponse;
+use litellm_llms_types::formats::batches::{BatchRequestCounts, BatchResponse, BatchStatus};
+use litellm_llms_types::formats::messages::MessagesResponse;
+use litellm_llms_types::providers::anthropic::{BATCHES_PATH, MESSAGES_PATH};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use time::OffsetDateTime;
 use url::Url;
 
 use crate::{Error, anthropic::common_utils::resolve_anthropic_api_base};
-
-const BATCHES_PATH_SUFFIX: &str = "/v1/messages/batches";
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AnthropicBatchRequestCounts {
@@ -45,46 +45,8 @@ struct BatchResultRecord {
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum BatchResult {
-    Succeeded {
-        message: Box<AnthropicMessagesResponse>,
-    },
-    Errored {
-        error: Value,
-    },
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum BatchStatus {
-    InProgress,
-    Cancelling,
-    Completed,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct BatchRequestCounts {
-    pub total: u64,
-    pub completed: u64,
-    pub failed: u64,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LiteLlmMessageBatch {
-    pub id: String,
-    pub object: String,
-    pub endpoint: String,
-    pub input_file_id: String,
-    pub completion_window: String,
-    pub status: BatchStatus,
-    pub output_file_id: String,
-    pub created_at: i64,
-    pub in_progress_at: Option<i64>,
-    pub expires_at: Option<i64>,
-    pub completed_at: Option<i64>,
-    pub expired_at: Option<i64>,
-    pub cancelling_at: Option<i64>,
-    pub cancelled_at: Option<i64>,
-    pub request_counts: BatchRequestCounts,
+    Succeeded { message: Box<MessagesResponse> },
+    Errored { error: Value },
 }
 
 pub trait AnthropicBatchesConfig {
@@ -100,7 +62,7 @@ pub trait AnthropicBatchesConfig {
         &self,
         response: AnthropicMessageBatch,
         now: i64,
-    ) -> Result<LiteLlmMessageBatch, Error>;
+    ) -> Result<BatchResponse, Error>;
 
     fn retrieve_batch_url(
         &self,
@@ -115,9 +77,9 @@ pub trait AnthropicBatchesConfig {
         &self,
         response: AnthropicMessageBatch,
         now: i64,
-    ) -> LiteLlmMessageBatch;
+    ) -> BatchResponse;
 
-    fn transform_batch_results(&self, body: &str) -> Result<Vec<AnthropicMessagesResponse>, Error>;
+    fn transform_batch_results(&self, body: &str) -> Result<Vec<MessagesResponse>, Error>;
 }
 
 pub struct AnthropicBatchesTransformation;
@@ -143,12 +105,12 @@ fn batches_base_url(
 ) -> Result<Url, Error> {
     let api_base = resolve_anthropic_api_base(api_base, env_lookup);
     let api_base = api_base.trim_end_matches('/');
-    let complete_url = if api_base.ends_with(BATCHES_PATH_SUFFIX) {
+    let complete_url = if api_base.ends_with(BATCHES_PATH) {
         api_base.to_string()
-    } else if let Some(base) = api_base.strip_suffix("/v1/messages") {
-        format!("{base}{BATCHES_PATH_SUFFIX}")
+    } else if let Some(base) = api_base.strip_suffix(MESSAGES_PATH) {
+        format!("{base}{BATCHES_PATH}")
     } else {
-        format!("{api_base}{BATCHES_PATH_SUFFIX}")
+        format!("{api_base}{BATCHES_PATH}")
     };
     Url::parse(&complete_url).map_err(|error| {
         Error::InvalidRequest(crate::ErrorDetail::invalid("Anthropic API base", error))
@@ -172,7 +134,7 @@ impl AnthropicBatchesConfig for AnthropicBatchesTransformation {
         &self,
         _response: AnthropicMessageBatch,
         _now: i64,
-    ) -> Result<LiteLlmMessageBatch, Error> {
+    ) -> Result<BatchResponse, Error> {
         Err(Error::Unsupported("Anthropic message batch creation"))
     }
 
@@ -200,7 +162,7 @@ impl AnthropicBatchesConfig for AnthropicBatchesTransformation {
         &self,
         response: AnthropicMessageBatch,
         now: i64,
-    ) -> LiteLlmMessageBatch {
+    ) -> BatchResponse {
         let created_at = timestamp(response.created_at.as_deref());
         let ended_at = timestamp(response.ended_at.as_deref());
         let expires_at = timestamp(response.expires_at.as_deref());
@@ -221,10 +183,10 @@ impl AnthropicBatchesConfig for AnthropicBatchesTransformation {
             failed: response.request_counts.errored,
         };
 
-        LiteLlmMessageBatch {
+        BatchResponse {
             id: response.id.clone(),
             object: "batch".into(),
-            endpoint: "/v1/messages".into(),
+            endpoint: MESSAGES_PATH.into(),
             input_file_id: "None".into(),
             completion_window: "24h".into(),
             status,
@@ -248,7 +210,7 @@ impl AnthropicBatchesConfig for AnthropicBatchesTransformation {
         }
     }
 
-    fn transform_batch_results(&self, body: &str) -> Result<Vec<AnthropicMessagesResponse>, Error> {
+    fn transform_batch_results(&self, body: &str) -> Result<Vec<MessagesResponse>, Error> {
         body.lines()
             .filter(|line| !line.trim().is_empty())
             .enumerate()

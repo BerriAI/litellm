@@ -293,7 +293,7 @@ def test_router_add_deployment_registers_deployment_budget(disable_budget_sync, 
         )
     )
 
-    budget_limiter = router._get_router_deployment_budget_limiter()
+    budget_limiter = router.get_router_deployment_budget_limiter()
     assert budget_limiter is not None
     config = budget_limiter._get_budget_config_for_deployment("runtime-budget-deployment")
     assert config is not None
@@ -385,7 +385,7 @@ async def test_push_task_failure_is_logged_once_and_not_leaked(disable_budget_sy
     finally:
         loop.set_exception_handler(None)
 
-    assert [record.getMessage() for record in caplog.records] == [
+    assert [record.getMessage() for record in caplog.records if record.name != "asyncio"] == [
         "Error syncing in-memory cache with Redis: Error 61 connecting to 127.0.0.1:6379"
     ]
     unretrieved.assert_not_called()

@@ -2,9 +2,9 @@
 
 Tsubasa uses LiteLLM's existing OpenAI-compatible Chat Completions transport
 
-Tsubasa is currently in website-only mode. API access is unavailable, and live
-tool-calling and structured-output qualification is pending. These examples are
-for use after the service is enabled
+Use an active Tsubasa API key for text chat. This integration does not declare
+tool-calling, structured-output, vision, or reasoning support. Hosted inference
+has not been qualified through this integration
 
 ## API key
 

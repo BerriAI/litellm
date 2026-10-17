@@ -14,7 +14,7 @@ from typing_extensions import ReadOnly
 import litellm
 from litellm import LlmProviders
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.bedrock.chat.invoke_handler import MockResponseIterator
+from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.databricks.streaming_utils import ModelResponseIterator
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
@@ -268,7 +268,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
                 model=model, provider=LlmProviders(custom_llm_provider)
             )
             if isinstance(provider_config, OpenAIGPTConfig) or isinstance(provider_config, OpenAIConfig):
-                messages = provider_config._transform_messages(messages=messages, model=model)
+                messages = provider_config.transform_messages(messages=messages, model=model)
 
         data: Final = {
             "model": model,

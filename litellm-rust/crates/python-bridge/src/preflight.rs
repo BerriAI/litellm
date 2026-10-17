@@ -1,9 +1,7 @@
-//! The SDK's request policy the driver runs on every route's keyword view before the host
-//! projects from it: credential-name inheritance from `litellm.credential_list`, then the
-//! budget and retry-count limits. It is the `@client` prologue after `function_setup` and the
-//! deployment hook, and belongs to no callback contract.
-
+use litellm_host::hooks::CallHooks;
+use litellm_host_python::{PythonOwned, PythonRuntime};
 use pyo3::{
+    gc::{PyTraverseError, PyVisit},
     prelude::*,
     types::{PyDict, PyList},
 };
@@ -35,16 +33,26 @@ impl PythonPreflight {
 #[cfg(test)]
 pub(crate) const PYTHON_CONTRACT: &str = include_str!("../preflight_contract.json");
 
-/// Rewrites `arguments` in place, in the order the Python wrapper runs: credentials first,
-/// so the limits see the same view the provider request is built from.
-pub(crate) fn sdk_preflight(py: Python<'_>, arguments: &Bound<'_, PyDict>) -> PyResult<()> {
-    inherit_credentials(py, arguments, || {
-        Ok(PythonPreflight::CredentialList
-            .call(py, ())?
-            .cast_into::<PyList>()?)
-    })?;
-    PythonPreflight::CheckLimits.call(py, (arguments,))?;
-    Ok(())
+pub(crate) struct SdkPolicy;
+
+impl CallHooks<PythonRuntime> for SdkPolicy {
+    fn arguments_prepared(&mut self, py: Python<'_>, arguments: &Py<PyDict>) -> PyResult<()> {
+        inherit_credentials(py, arguments.bind(py), || {
+            Ok(PythonPreflight::CredentialList
+                .call(py, ())?
+                .cast_into::<PyList>()?)
+        })?;
+        PythonPreflight::CheckLimits.call(py, (arguments,))?;
+        Ok(())
+    }
+}
+
+impl PythonOwned for SdkPolicy {
+    fn close(&mut self, _: Python<'_>) {}
+
+    fn traverse(&self, _: &PyVisit<'_>) -> Result<(), PyTraverseError> {
+        Ok(())
+    }
 }
 
 struct CredentialEntry<'py>(Bound<'py, PyAny>);
@@ -400,7 +408,7 @@ arguments = {'litellm_credential_name': 'ocr-test'}
         });
     }
 
-    #[test]
+    #[rstest::rstest]
     fn an_unknown_name_is_reported_with_the_loaded_count_and_leaves_the_arguments_alone() {
         let _guard = PREFLIGHT_MODULE
             .lock()
@@ -417,7 +425,9 @@ preflight.credential_list = lambda: [Credential(), Credential()]
 arguments = {'litellm_credential_name': 'missing'}
 ",
             );
-            sdk_preflight(py, &argument_dict(&locals)).unwrap();
+            SdkPolicy
+                .arguments_prepared(py, &argument_dict(&locals).unbind())
+                .unwrap();
             py.run(
                 c"
 assert arguments == {'litellm_credential_name': 'missing'}, arguments
@@ -431,7 +441,7 @@ assert preflight.checked == [arguments]
         });
     }
 
-    #[test]
+    #[rstest::rstest]
     fn limits_are_checked_on_the_arguments_after_credentials_are_inherited() {
         let _guard = PREFLIGHT_MODULE
             .lock()
@@ -453,7 +463,9 @@ preflight.check_limits = check_limits
 arguments = {'litellm_credential_name': 'ocr-test'}
 ",
             );
-            let error = sdk_preflight(py, &argument_dict(&locals)).unwrap_err();
+            let error = SdkPolicy
+                .arguments_prepared(py, &argument_dict(&locals).unbind())
+                .unwrap_err();
             assert!(
                 error
                     .value(py)

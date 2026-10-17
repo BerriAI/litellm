@@ -1,6 +1,7 @@
 import copy
 import enum
 import re
+from collections.abc import AsyncIterator, Iterator
 from typing import TYPE_CHECKING, Final, cast
 
 import httpx
@@ -9,7 +10,7 @@ from httpx import Response
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    _audio_or_image_in_message_content,
+    audio_or_image_in_message_content,
     convert_content_list_to_str,
     filter_value_from_dict,
 )
@@ -21,13 +22,13 @@ from litellm.llms.azure_ai.common_utils import (
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
 from litellm.llms.openai.common_utils import drop_params_from_unprocessable_entity_error
-from litellm.llms.openai.openai import OpenAIConfig
+from litellm.llms.openai.openai import OpenAIChatCompletionResponseIterator, OpenAIConfig
 from litellm.llms.xai.chat.transformation import XAIChatConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import ModelResponse, ProviderField
-from litellm.utils import _add_path_to_api_base, supports_tool_choice
+from litellm.types.utils import ModelResponse, ModelResponseStream, ProviderField
+from litellm.utils import add_path_to_api_base, supports_tool_choice
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
@@ -43,6 +44,14 @@ NON_OPENAI_SPEC_MESSAGE_FIELDS: Final = (
     "provider_specific_fields",
     "cache_control",
 )
+
+
+class AzureAIChatCompletionResponseIterator(OpenAIChatCompletionResponseIterator):
+    def chunk_parser(self, chunk: dict[str, object]) -> ModelResponseStream:  # mutable-ok: mirrors override contract
+        usage: Final = chunk.get("usage")
+        if isinstance(usage, dict):
+            XAIChatConfig.fold_reasoning_tokens_into_completion(usage)
+        return super().chunk_parser(chunk)
 
 
 class AzureAIGPT5Config(OpenAIGPT5Config):
@@ -117,7 +126,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         if "grok" in model:
             # Reuse Xai method for Grok model
             xai_config: Final = XAIChatConfig()
-            return xai_config._supports_stop_reason(model)
+            return xai_config.supports_stop_reason(model)
         return True
 
     def validate_environment(
@@ -138,7 +147,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         else:
             # No api_key provided — fall back to Azure AD token-based auth
             litellm_params_obj = GenericLiteLLMParams(**(litellm_params if isinstance(litellm_params, dict) else {}))
-            headers = BaseAzureLLM._base_validate_azure_environment(headers=headers, litellm_params=litellm_params_obj)
+            headers = BaseAzureLLM.base_validate_azure_environment(headers=headers, litellm_params=litellm_params_obj)
 
         headers["Content-Type"] = "application/json"
 
@@ -193,9 +202,9 @@ class AzureAIStudioConfig(OpenAIConfig):
 
         # Add the path to the base URL
         if "services.ai.azure.com" in api_base:
-            new_url = _add_path_to_api_base(api_base=api_base, ending_path="/models/chat/completions")
+            new_url = add_path_to_api_base(api_base=api_base, ending_path="/models/chat/completions")
         else:
-            new_url = _add_path_to_api_base(api_base=api_base, ending_path="/chat/completions")
+            new_url = add_path_to_api_base(api_base=api_base, ending_path="/chat/completions")
 
         # Use the new query_params dictionary
         final_url: Final = httpx.URL(new_url).copy_with(params=query_params)
@@ -245,7 +254,7 @@ class AzureAIStudioConfig(OpenAIConfig):
                 filter_value_from_dict(message_dict, field)
 
             # Do nothing if the message contains an image or audio
-            if _audio_or_image_in_message_content(message):
+            if audio_or_image_in_message_content(message):
                 continue
 
             texts = convert_content_list_to_str(message=message)
@@ -281,6 +290,15 @@ class AzureAIStudioConfig(OpenAIConfig):
             custom_llm_provider = "azure"
         return api_base, dynamic_api_key, custom_llm_provider
 
+    def get_openai_compatible_provider_info(
+        self,
+        model: str,
+        api_base: str | None,
+        api_key: str | None,
+        custom_llm_provider: str,
+    ) -> tuple[str | None, str | None, str]:
+        return self._get_openai_compatible_provider_info(model, api_base, api_key, custom_llm_provider)
+
     def transform_request(
         self,
         model: str,
@@ -310,7 +328,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         json_mode: bool | None = None,
     ) -> ModelResponse:
         model_response.model = f"azure_ai/{model}"
-        return super().transform_response(
+        response: Final = super().transform_response(
             model=model,
             raw_response=raw_response,
             model_response=model_response,
@@ -321,6 +339,20 @@ class AzureAIStudioConfig(OpenAIConfig):
             litellm_params=litellm_params,
             encoding=encoding if encoding is not None else None,
             api_key=api_key,
+            json_mode=json_mode,
+        )
+        XAIChatConfig.fold_reasoning_tokens_into_completion(response)
+        return response
+
+    def get_model_response_iterator(
+        self,
+        streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
+        sync_stream: bool,
+        json_mode: bool | None = False,
+    ) -> "AzureAIChatCompletionResponseIterator":
+        return AzureAIChatCompletionResponseIterator(
+            streaming_response=streaming_response,
+            sync_stream=sync_stream,
             json_mode=json_mode,
         )
 

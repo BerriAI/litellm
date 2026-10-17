@@ -22,6 +22,7 @@ vi.mock("@/components/networking", () => ({
   invitationCreateCall: vi.fn().mockResolvedValue({}),
   userUpdateUserCall: vi.fn().mockResolvedValue({}),
   getProxyBaseUrl: vi.fn().mockReturnValue("http://localhost:4000"),
+  getUiPageUrl: (url: string) => url,
   getProxyUISettings: vi.fn().mockResolvedValue({
     PROXY_BASE_URL: null,
     PROXY_LOGOUT_URL: null,
