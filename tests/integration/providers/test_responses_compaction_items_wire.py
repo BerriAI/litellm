@@ -485,10 +485,9 @@ def _assert_reached(
                 message for message in _objects(body["messages"]) if message["role"] == "assistant"
             )
             blocks: Final = tuple(
-                block
-                for message in assistant
-                if isinstance(message["content"], list)
-                for block in _objects(message["content"])
+                chain.from_iterable(
+                    _objects(message["content"]) for message in assistant if isinstance(message["content"], list)
+                )
             )
             assert _block(summary) in blocks, body["messages"]
             assert summary not in _anthropic_texts(body, "user")
