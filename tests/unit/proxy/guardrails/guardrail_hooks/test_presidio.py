@@ -3359,11 +3359,11 @@ async def test_anonymize_text_uses_correct_positions_with_parse_pii():
     assert "john@example.com" in token_values
     assert "555-867-5309" in token_values
 
-    # Tokens must be numbered in left-to-right order of appearance:
-    # PERSON (pos 11) → _1, EMAIL_ADDRESS (pos 35) → _2, PHONE_NUMBER (pos 59) → _3
-    assert pii_tokens.get("<PERSON_1>") == "John Smith"
-    assert pii_tokens.get("<EMAIL_ADDRESS_2>") == "john@example.com"
-    assert pii_tokens.get("<PHONE_NUMBER_3>") == "555-867-5309"
+    # Each token sits exactly where its value was, so unmasking restores the text
+    assert re.fullmatch(
+        r"My name is <PERSON_\w+>, my email is <EMAIL_ADDRESS_\w+>, phone <PHONE_NUMBER_\w+>", result
+    )
+    assert OPTIONAL_PresidioPIIMasking._unmask_pii_text(result, pii_tokens) == original_text
 
 
 def test_unmask_sse_bytes_chunk_replaces_text_delta():
@@ -3782,11 +3782,10 @@ async def test_output_parse_pii_numbered_tokens_across_chunks():
             presidio_config=None,
             request_data=request_data,
         )
-    assert masked.count("<CREDIT_CARD_1>") == 1
-    assert masked.count("<CREDIT_CARD_2>") == 1
     pii_tokens = request_data["metadata"]["pii_tokens"]
-    assert pii_tokens["<CREDIT_CARD_1>"] == CHUNK_MARKER_ONE
-    assert pii_tokens["<CREDIT_CARD_2>"] == CHUNK_MARKER_TWO
+    assert sorted(pii_tokens.values()) == sorted([CHUNK_MARKER_ONE, CHUNK_MARKER_TWO])
+    assert all(masked.count(token) == 1 for token in pii_tokens)
+    assert OPTIONAL_PresidioPIIMasking._unmask_pii_text(masked, pii_tokens) == text
 
 
 @pytest.mark.asyncio
@@ -4830,3 +4829,57 @@ def test_get_session_iterator_reuses_one_session_per_background_loop(
     assert len(sessions) == 10
     assert all(session is sessions[0] for session in sessions)
     assert presidio_guardrail._http_session is None
+
+
+
+def _finalize_tokens(guardrail, text: str, spans: list[tuple[str, str]], request_data: dict) -> str:
+    analyze_results = [
+        {"start": text.index(v), "end": text.index(v) + len(v), "entity_type": e, "score": 0.9} for e, v in spans
+    ]
+    return guardrail._finalize_presidio_anonymize_numbered_tokens(text, analyze_results, request_data, {})
+
+
+def test_parse_pii_tokens_do_not_collide_across_message_parts():
+    """Every message / content part is masked by its own call sharing one pii_tokens
+    dict; per-call numbering made the second part's <PERSON_1> overwrite the first's."""
+    guardrail = OPTIONAL_PresidioPIIMasking(mock_testing=True, output_parse_pii=True)
+    request_data = {}
+    first = _finalize_tokens(guardrail, "John Smith lives in Boston", [("PERSON", "John Smith"), ("LOCATION", "Boston")], request_data)
+    second = _finalize_tokens(guardrail, "Jane Doe lives in Denver", [("PERSON", "Jane Doe"), ("LOCATION", "Denver")], request_data)
+
+    pii_tokens = request_data["metadata"]["pii_tokens"]
+    assert len(pii_tokens) == 4
+    assert OPTIONAL_PresidioPIIMasking._unmask_pii_text(first, pii_tokens) == "John Smith lives in Boston"
+    assert OPTIONAL_PresidioPIIMasking._unmask_pii_text(second, pii_tokens) == "Jane Doe lives in Denver"
+
+
+def test_parse_pii_tokens_independent_of_part_order():
+    """Parts are masked concurrently, so tokens must not depend on completion order,
+    or the masked history changes on every turn. One value gets one token."""
+    guardrail = OPTIONAL_PresidioPIIMasking(mock_testing=True, output_parse_pii=True)
+    parts = [
+        ("John Smith, Boston", [("PERSON", "John Smith"), ("LOCATION", "Boston")]),
+        ("Jane Doe, Boston", [("PERSON", "Jane Doe"), ("LOCATION", "Boston")]),
+    ]
+    forward, backward = {}, {}
+    masked_forward = [_finalize_tokens(guardrail, t, spans, forward) for t, spans in parts]
+    masked_backward = [_finalize_tokens(guardrail, t, spans, backward) for t, spans in reversed(parts)][::-1]
+
+    assert masked_forward == masked_backward
+    assert masked_forward[0].split(", ")[1] == masked_forward[1].split(", ")[1]
+    assert len(forward["metadata"]["pii_tokens"]) == 3
+
+
+def test_parse_pii_tokens_differ_between_end_users():
+    guardrail = OPTIONAL_PresidioPIIMasking(mock_testing=True, output_parse_pii=True)
+    alice = _finalize_tokens(guardrail, "John Smith", [("PERSON", "John Smith")], {"user": "alice"})
+    bob = _finalize_tokens(guardrail, "John Smith", [("PERSON", "John Smith")], {"user": "bob"})
+    assert alice != bob
+
+
+def test_pii_token_falls_back_to_full_digest_on_collision():
+    from litellm.proxy.guardrails.guardrail_hooks.presidio import _pii_token
+
+    short = _pii_token("PERSON", "John Smith", {}, "")
+    longer = _pii_token("PERSON", "John Smith", {short: "someone else"}, "")
+    assert longer != short and longer.startswith(short[:-1])
