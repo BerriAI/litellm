@@ -271,6 +271,34 @@ def _marker_trace_span_attributes(sink: Wire, batches: list[bytes], marker: str)
     return tuple(attributes for trace_id, attributes in spans if trace_id == marker_trace)
 
 
+def _marker_trace_root_attributes(sink: Wire, batches: list[bytes], marker: str) -> tuple[dict[str, object], ...]:
+    batches.extend(request.body for request in sink.drain())
+    spans: Final = tuple(
+        (span.trace_id.hex(), bool(span.parent_span_id), {a.key: _attribute_value(a.value) for a in span.attributes})
+        for body in batches
+        for resource in _export(body).resource_spans
+        for scope in resource.scope_spans
+        for span in scope.spans
+    )
+    marker_trace: Final = next(
+        (
+            trace_id
+            for trace_id, _has_parent, attributes in spans
+            if any(isinstance(value, str) and marker in value for value in attributes.values())
+        ),
+        None,
+    )
+    return tuple(
+        attributes for trace_id, has_parent, attributes in spans if trace_id == marker_trace and not has_parent
+    )
+
+
+def _export(body: bytes) -> trace_service_pb2.ExportTraceServiceRequest:
+    export: Final = trace_service_pb2.ExportTraceServiceRequest()
+    export.ParseFromString(body)
+    return export
+
+
 def _user_id_session_id(attributes: Mapping[str, object]) -> dict[str, object]:
     return {key: attributes.get(key) for key in ("user.id", "session.id")}
 
