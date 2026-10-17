@@ -50,6 +50,9 @@ class YouComSearchConfig(BaseSearchConfig):
     def ui_friendly_name() -> str:
         return "You.com"
 
+    def domain_filter_params(self) -> frozenset[str]:
+        return frozenset(("search_domain_filter", "include_domains", "exclude_domains"))
+
     def validate_environment(
         self,
         headers: dict,
