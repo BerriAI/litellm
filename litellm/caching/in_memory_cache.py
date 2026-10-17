@@ -48,7 +48,7 @@ class InMemoryCache(BaseCache):
 
         # in-memory cache
         self.cache_dict: dict = {}
-        self.ttl_dict: dict = {}
+        self.ttl_dict: dict[str, float] = {}
         self.expiration_heap: list[tuple[float, str]] = []
         self._increment_lock = threading.Lock()
         self._write_lock = threading.Lock()
@@ -284,7 +284,7 @@ class InMemoryCache(BaseCache):
     def delete_cache(self, key: str) -> None:
         self._remove_key(key)
 
-    async def async_get_ttl(self, key: str) -> int | None:
+    async def async_get_ttl(self, key: str) -> float | None:
         """
         Get the remaining TTL of a key in in-memory cache
         """

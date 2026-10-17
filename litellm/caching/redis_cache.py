@@ -85,6 +85,8 @@ class _AsyncRedisCommands(Protocol):
 
     def ttl(self, name: str) -> Awaitable[int]: ...
 
+    def get(self, name: str) -> Awaitable[bytes | str | None]: ...
+
     def expire(self, name: str, time: int) -> Awaitable[bool]: ...
 
     def rpush(self, name: str, *values: str | bytes | float) -> Awaitable[int]: ...
@@ -345,6 +347,9 @@ class RedisCircuitBreaker:
 
 
 _RedisCallResult = TypeVar("_RedisCallResult")
+_Decoded = TypeVar("_Decoded")
+
+_UNDECODABLE_VALUE_ERRORS: Final = (ValueError, TypeError, SyntaxError, MemoryError, RecursionError)
 
 
 _swallowed_redis_failures: Final[ContextVar[int]] = ContextVar("litellm_swallowed_redis_failures", default=0)
@@ -1694,49 +1699,82 @@ class RedisCache(BaseCache):
 
     @_redis_circuit_breaker_guard
     async def async_get_cache(self, key, parent_otel_span: Span | None = None, **kwargs):
-        from redis.asyncio import Redis
-
-        _redis_client: Final[Redis] = self.init_async_client()
-        key = self.check_and_fix_namespace(key=key)
-        start_time: Final = time.time()
-
+        commands: Final = self._async_commands()
+        namespaced_key: Final = self.check_and_fix_namespace(key=key)
         try:
-            print_verbose(f"Get Async Redis Cache: key: {key}")
-            cached_response: Final = await _redis_client.get(key)
-            print_verbose("Got Async Redis Cache: key: %s, cached_response %s", key, cached_response)
-            response: Final = self._get_cache_logic(cached_response=cached_response)
-
-            end_time = time.time()
-            _duration = end_time - start_time
-            asyncio.create_task(
-                self.service_logger_obj.async_service_success_hook(
-                    service=ServiceTypes.REDIS,
-                    duration=_duration,
-                    call_type="async_get_cache",
-                    caller=_get_call_stack_info(),
-                    start_time=start_time,
-                    end_time=end_time,
-                    parent_otel_span=parent_otel_span,
-                )
+            return await self._async_get_reporting_to_service_hooks(
+                functools.partial(commands.get, namespaced_key), namespaced_key, parent_otel_span, self._get_cache_logic
             )
-            return response
         except Exception as e:
-            end_time = time.time()
-            _duration = end_time - start_time
+            print_verbose(f"litellm.caching.caching: async get() - Got exception from REDIS: {e}")
+            _record_swallowed_redis_failure(self._circuit_breaker, e)
+
+    @_redis_circuit_breaker_guard
+    async def async_get_and_refresh_ttl_or_raise(
+        self, key: str, ttl: int, parent_otel_span: Span | None = None
+    ) -> object:
+        namespaced_key: Final = self.check_and_fix_namespace(key=key)
+        return await self._async_get_reporting_to_service_hooks(
+            functools.partial(self._get_and_expire, namespaced_key, ttl),
+            namespaced_key,
+            parent_otel_span,
+            self._decode_or_miss,
+        )
+
+    async def _get_and_expire(self, namespaced_key: str, ttl: int) -> bytes | str | None:
+        async with self._async_commands().pipeline(transaction=False) as pipe:
+            pipe.get(namespaced_key)
+            pipe.expire(namespaced_key, ttl)
+            cached_response, _ = await pipe.execute()
+        return cached_response
+
+    def _decode_or_miss(self, cached_response: bytes | str | None) -> object:
+        try:
+            return self._get_cache_logic(cached_response=cached_response)
+        except _UNDECODABLE_VALUE_ERRORS:
+            return None
+
+    async def _async_get_reporting_to_service_hooks(
+        self,
+        fetch: Callable[[], Awaitable[bytes | str | None]],
+        namespaced_key: str,
+        parent_otel_span: Span | None,
+        decode: Callable[[bytes | str | None], _Decoded],
+    ) -> _Decoded:
+        start_time: Final = time.time()
+        try:
+            print_verbose(f"Get Async Redis Cache: key: {namespaced_key}")
+            cached_response: Final = await fetch()
+            print_verbose("Got Async Redis Cache: key: %s, cached_response %s", namespaced_key, cached_response)
+            decoded: Final = decode(cached_response)
+        except Exception as e:
+            failed_at: Final = time.time()
             asyncio.create_task(
                 self.service_logger_obj.async_service_failure_hook(
                     service=ServiceTypes.REDIS,
-                    duration=_duration,
+                    duration=failed_at - start_time,
                     error=e,
                     call_type="async_get_cache",
                     caller=_get_call_stack_info(),
                     start_time=start_time,
-                    end_time=end_time,
+                    end_time=failed_at,
                     parent_otel_span=parent_otel_span,
                 )
             )
-            print_verbose(f"litellm.caching.caching: async get() - Got exception from REDIS: {e}")
-            _record_swallowed_redis_failure(self._circuit_breaker, e)
+            raise
+        end_time: Final = time.time()
+        asyncio.create_task(
+            self.service_logger_obj.async_service_success_hook(
+                service=ServiceTypes.REDIS,
+                duration=end_time - start_time,
+                call_type="async_get_cache",
+                caller=_get_call_stack_info(),
+                start_time=start_time,
+                end_time=end_time,
+                parent_otel_span=parent_otel_span,
+            )
+        )
+        return decoded
 
     @_redis_circuit_breaker_guard
     async def async_batch_get_cache(

@@ -296,6 +296,29 @@ class DualCache(BaseCache):
                 verbose_logger, logging.ERROR, "LiteLLM Cache: exception in async_get_cache", e, with_traceback=True
             )
 
+    async def async_get_cache_redis_first(self, key: str, ttl: int) -> object:
+        if self.redis_cache is None:
+            return await self._local_copy(key)
+        try:
+            redis_result: Final = await self.redis_cache.async_get_and_refresh_ttl_or_raise(key, ttl)
+        except Exception as e:  # noqa: BLE001  # any Redis fault falls back to the local pin instead of failing the request
+            log_redis_failure(
+                verbose_logger,
+                logging.ERROR,
+                "LiteLLM Cache: exception in async_get_cache_redis_first",
+                e,
+                with_traceback=True,
+            )
+            return await self._local_copy(key)
+        if redis_result is None:
+            self.in_memory_cache.delete_cache(key)
+            return None
+        await self.in_memory_cache.async_set_cache(key, redis_result, **self._backfill_kwargs({"ttl": ttl}))
+        return redis_result
+
+    async def _local_copy(self, key: str) -> object:
+        return await self.in_memory_cache.async_get_cache(key)
+
     def _reserve_redis_batch_keys(
         self,
         current_time: float,
@@ -729,7 +752,7 @@ class DualCache(BaseCache):
         for start in range(0, len(keys), DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE):
             await self.redis_cache.delete_cache_keys(keys[start : start + DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE])
 
-    async def async_get_ttl(self, key: str) -> int | None:
+    async def async_get_ttl(self, key: str) -> float | None:
         """
         Get the remaining TTL of a key in in-memory cache or redis
         """
