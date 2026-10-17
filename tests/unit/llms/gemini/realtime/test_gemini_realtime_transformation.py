@@ -5,7 +5,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-
 import litellm
 from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
 from litellm.types.llms.gemini import BidiGenerateContentServerMessage
@@ -2235,3 +2234,53 @@ def test_gemini_realtime_response_done_reports_no_grounding_when_none_ran():
 
     assert input_details.get("web_search_requests") is None
     assert input_details.get("google_maps_grounding_requests") is None
+
+
+def _state(**overrides: object) -> dict:
+    base = {
+        "session_configuration_request": json.dumps(
+            {"setup": {"model": "gemini-3.8-live", "generationConfig": {"responseModalities": ["AUDIO"]}}}
+        ),
+        "current_output_item_id": None,
+        "current_response_id": None,
+        "current_conversation_id": None,
+        "current_delta_chunks": [],
+        "current_item_chunks": [],
+        "current_delta_type": None,
+    }
+    base.update(overrides)
+    return base
+
+
+def test_gemini_response_done_lists_the_output_items_of_the_turn():
+    """OpenAI's response.done carries the items it produced; Gemini never lists them,
+    so the bridge must remember the output_item.done events it emitted since the
+    previous response.done, across frames."""
+    config = GeminiRealtimeConfig()
+    state = _state()
+    for frame in (
+        {"serverContent": {"modelTurn": {"parts": [{"inlineData": {"mimeType": "audio/pcm", "data": "AA=="}}]}}},
+        {"serverContent": {"generationComplete": True}},
+    ):
+        result = config.transform_realtime_response(
+            json.dumps(frame), "gemini-3.8-live", MagicMock(), realtime_response_transform_input=state
+        )
+        state = _state(
+            current_output_item_id=result["current_output_item_id"],
+            current_response_id=result["current_response_id"],
+            current_conversation_id=result["current_conversation_id"],
+            current_delta_type=result["current_delta_type"],
+            current_item_chunks=result["current_item_chunks"] or [],
+        )
+    item_id = state["current_output_item_id"]
+    result = config.transform_realtime_response(
+        json.dumps({"serverContent": {"turnComplete": True}}),
+        "gemini-3.8-live",
+        MagicMock(),
+        realtime_response_transform_input=state,
+    )
+    done = next(e for e in result["response"] if e["type"] == "response.done")
+    assert [item["id"] for item in done["response"]["output"]] == [item_id]
+    assert done["response"]["output"][0]["type"] == "message"
+    # consumed: the next turn starts empty
+    assert config._pending_output_items == ()
