@@ -17,6 +17,9 @@ _REJECTION: Final = BedrockError(
     status_code=400,
     message='{"message":"The model returned the following errors: output_config.format: Extra inputs are not permitted"}',
 )
+_SCHEMA_REFUSAL: Final = BedrockError(
+    status_code=400, message='{"message":"output_config.format.schema: pattern is too complex for structured output"}'
+)
 _OTHER_400: Final = BedrockError(status_code=400, message='{"message":"messages.0.content: Field required"}')
 
 
@@ -92,11 +95,29 @@ def test_no_second_request_without_both_a_rejection_and_a_fallback(
     assert bedrock.sent == (None,)
 
 
-def test_a_rejection_logs_how_to_skip_the_rejected_call(caplog: pytest.LogCaptureFixture) -> None:
-    bedrock: Final = ScriptedBedrock(errors=(_REJECTION, None), asynchronous=False)
+@_MODES
+def test_a_rejection_reaches_the_caller_when_the_retry_would_send_native_output_again(asynchronous: bool) -> None:
+    bedrock: Final = ScriptedBedrock(errors=(_REJECTION,), asynchronous=asynchronous)
+
+    with pytest.raises(BedrockError) as raised:
+        _resolve(call_with_native_output_fallback(bedrock, lambda: None, _MODEL))
+
+    assert raised.value is _REJECTION
+    assert bedrock.sent == (None,)
+
+
+@pytest.mark.parametrize(
+    ("error", "advises_opting_out"),
+    [(_REJECTION, True), (_SCHEMA_REFUSAL, False)],
+    ids=["native_output_unsupported", "schema_refused"],
+)
+def test_a_rejection_logs_the_retry_and_advises_opting_out_only_when_native_output_is_unsupported(
+    error: BedrockError, advises_opting_out: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    bedrock: Final = ScriptedBedrock(errors=(error, None), asynchronous=False)
 
     with caplog.at_level("WARNING", logger="LiteLLM"):
         _call(bedrock, _FALLBACK)
 
     assert _MODEL in caplog.text
-    assert "supports_bedrock_native_structured_output: false" in caplog.text
+    assert ("supports_bedrock_native_structured_output: false" in caplog.text) is advises_opting_out

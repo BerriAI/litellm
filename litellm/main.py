@@ -4169,6 +4169,13 @@ def _native_output_fallback(
     )
 
 
+def _converse_native_output_fallback(
+    ctx: CompletionDispatchContext, first_attempt_params: Mapping[str, object]
+) -> NativeOutputFallback | None:
+    fallback: Final = _native_output_fallback(ctx, first_attempt_params)
+    return None if AmazonConverseConfig.sends_native_text_format(fallback.optional_params) else fallback
+
+
 def _complete_bedrock(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base: Final = ctx.api_base
@@ -4265,7 +4272,7 @@ def _complete_bedrock(ctx: CompletionDispatchContext) -> _CompletionDispatchResu
         response = call_with_native_output_fallback(
             converse_attempt,
             (
-                partial(_native_output_fallback, ctx, converse_params)
+                partial(_converse_native_output_fallback, ctx, converse_params)
                 if AmazonConverseConfig().uses_opt_in_native_output(converse_model, converse_params, litellm_params)
                 else None
             ),

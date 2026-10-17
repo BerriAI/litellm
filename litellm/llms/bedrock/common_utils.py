@@ -308,8 +308,9 @@ def without_bedrock_native_output_opt_in(litellm_params: Mapping[str, object]) -
     }
 
 
+_BEDROCK_NATIVE_OUTPUT_UNSUPPORTED: Final = "output_config.format: Extra inputs are not permitted"
 _BEDROCK_NATIVE_OUTPUT_REJECTIONS: Final = (
-    "output_config.format: Extra inputs are not permitted",
+    _BEDROCK_NATIVE_OUTPUT_UNSUPPORTED,
     "compilation exceeded limits: Schema is too complex",
     "output_config.format.schema:",
 )
@@ -319,12 +320,17 @@ def is_bedrock_native_output_rejection(status_code: int, error_text: str) -> boo
     return status_code == 400 and any(rejection in error_text for rejection in _BEDROCK_NATIVE_OUTPUT_REJECTIONS)
 
 
-def warn_bedrock_native_output_rejected(model: str) -> None:
+def warn_bedrock_native_output_rejected(model: str, error_text: str) -> None:
+    opt_out_advice: Final = (
+        " Set `supports_bedrock_native_structured_output: false` in this deployment's model_info to skip the "
+        "rejected call."
+        if _BEDROCK_NATIVE_OUTPUT_UNSUPPORTED in error_text
+        else ""
+    )
     verbose_logger.warning(
-        "Bedrock rejected native structured output for model=%s, so litellm sent the request again without it. "
-        "Set `supports_bedrock_native_structured_output: false` in this deployment's model_info to skip the "
-        "rejected call.",
+        "Bedrock rejected native structured output for model=%s, so litellm sent the request again without it.%s",
         model,
+        opt_out_advice,
     )
 
 

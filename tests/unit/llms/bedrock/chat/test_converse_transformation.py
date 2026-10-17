@@ -10671,3 +10671,49 @@ def test_a_malformed_caller_output_config_gets_bedrocks_own_400(
         )
 
     assert route.call_count == 1
+
+
+_CALLER_OUTPUT_CONFIG: Final = {
+    "textFormat": {
+        "type": "json_schema",
+        "structure": {
+            "jsonSchema": {"name": "capital", "schema": json.dumps(CAPITAL_RESPONSE_FORMAT["json_schema"]["schema"])}
+        },
+    }
+}
+_BEDROCK_SCHEMA_REFUSAL: Final = "output_config.format.schema: pattern is too complex for structured output"
+
+
+@pytest.mark.parametrize(
+    ("caller_params", "expected_calls"),
+    [
+        ({"thinking": ADAPTIVE_THINKING}, 2),
+        ({"outputConfig": _CALLER_OUTPUT_CONFIG}, 1),
+        ({"outputConfig": _CALLER_OUTPUT_CONFIG, "thinking": ADAPTIVE_THINKING}, 1),
+    ],
+    ids=["litellm_native_output", "caller_output_config", "caller_output_config_thinking"],
+)
+@pytest.mark.respx(assert_all_called=True)
+def test_a_refused_native_schema_is_sent_again_only_when_the_retry_drops_native_output(
+    caller_params: dict, expected_calls: int, respx_mock: respx.Router, local_model_cost_map: None
+) -> None:
+    route: Final = respx_mock.post(url__regex=r"/converse$").mock(
+        return_value=httpx.Response(400, json={"message": _BEDROCK_SCHEMA_REFUSAL})
+    )
+
+    with pytest.raises(litellm.BadRequestError, match=re.escape(_BEDROCK_SCHEMA_REFUSAL)):
+        completion(
+            model=f"bedrock/converse/{_OPUS}",
+            messages=[{"role": "user", "content": "What is the capital of France?"}],
+            response_format=CAPITAL_RESPONSE_FORMAT,
+            num_retries=0,
+            aws_access_key_id="fake",
+            aws_secret_access_key="fake",
+            aws_region_name="us-east-1",
+            client=HTTPHandler(),
+            **caller_params,
+        )
+
+    assert route.call_count == expected_calls
+    assert all("outputConfig" in json.loads(call.request.content) for call in route.calls[:1])
+    assert all("outputConfig" not in json.loads(call.request.content) for call in route.calls[1:])

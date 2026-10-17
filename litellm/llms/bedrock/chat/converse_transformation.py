@@ -1406,11 +1406,15 @@ class AmazonConverseConfig(BaseConfig):
         optional_params["json_mode"] = True
         return optional_params
 
+    @staticmethod
+    def sends_native_text_format(optional_params: Mapping[str, object]) -> bool:
+        return _has_native_text_format(optional_params.get("outputConfig"))
+
     def uses_opt_in_native_output(
         self, model: str, optional_params: Mapping[str, object], litellm_params: Mapping[str, object]
     ) -> bool:
         native_output_requested: Final = (
-            optional_params.get("json_mode") is True and _has_native_text_format(optional_params.get("outputConfig"))
+            optional_params.get("json_mode") is True and self.sends_native_text_format(optional_params)
         ) or requests_output_config_format(optional_params)
         return native_output_requested and bedrock_native_output_is_opt_in(
             bedrock_capability_model(model, litellm_params.get("base_model")),

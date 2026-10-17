@@ -1098,3 +1098,74 @@ def test_a_request_retried_without_native_output_lands_one_success_spend_row(gat
             seconds=70,
         )
         assert rows[0]["status"] == "success", rows
+
+
+_CALLER_OUTPUT_CONFIG_WITH_A_SCHEMA_OBJECT: Final[dict[str, JsonValue]] = {
+    "textFormat": {"type": "json_schema", "structure": {"jsonSchema": {"name": "risk", "schema": {"type": "object"}}}}
+}
+_BEDROCK_SCHEMA_OBJECT_400: Final = "Start of structure or map found where not expected"
+
+
+def _converse_json_schema_field(body: Mapping[str, JsonValue]) -> JsonValue:
+    text_format: Final = object_value(body.get("outputConfig") or {}).get("textFormat") or {}
+    structure: Final = object_value(text_format).get("structure") or {}
+    return object_value(object_value(structure).get("jsonSchema") or {}).get("schema")
+
+
+def _deserializing_like_bedrock(request: Request) -> Reply:
+    schema: Final = _converse_json_schema_field(_JSON.validate_json(request.body))
+    if schema is None or isinstance(schema, str):
+        return _bedrock(request)
+    return Reply(status=400, body=json.dumps({"Message": _BEDROCK_SCHEMA_OBJECT_400}).encode())
+
+
+def test_a_malformed_caller_output_config_on_an_opt_in_model_gets_bedrocks_own_400_after_one_call(
+    gateway: Gateway,
+) -> None:
+    marker, marker_hex = _marker()
+    with wire_server(_deserializing_like_bedrock) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire, "converse", _OPUS_4_8)
+        response: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            _chat_body(
+                model,
+                marker,
+                thinking=_ADAPTIVE,
+                response_format=_response_format(_SCHEMA),
+                outputConfig=_CALLER_OUTPUT_CONFIG_WITH_A_SCHEMA_OBJECT,
+            ),
+        )
+        assert response.status_code == 400, response.text
+        assert _BEDROCK_SCHEMA_OBJECT_400 in response.text, response.text
+        _, body = _one_call(wire, marker_hex)
+        assert body["outputConfig"] == _CALLER_OUTPUT_CONFIG_WITH_A_SCHEMA_OBJECT, body
+
+
+_CALLER_OUTPUT_CONFIG: Final[dict[str, JsonValue]] = {
+    "textFormat": {"type": "json_schema", "structure": {"jsonSchema": {"name": "risk", "schema": json.dumps(_SCHEMA)}}}
+}
+
+
+@pytest.mark.parametrize("thinking", [None, _ADAPTIVE], ids=["no_thinking", "adaptive_thinking"])
+def test_a_caller_output_config_bedrock_refuses_is_sent_once_on_an_opt_in_model(
+    gateway: Gateway, thinking: dict[str, JsonValue] | None
+) -> None:
+    marker, marker_hex = _marker()
+    with wire_server(_rejecting_native_output(_PATTERN_TOO_COMPLEX)) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire, "converse", _OPUS_4_8)
+        response: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            _chat_body(
+                model,
+                marker,
+                response_format=_response_format(_SCHEMA),
+                outputConfig=_CALLER_OUTPUT_CONFIG,
+                **({} if thinking is None else {"thinking": thinking}),
+            ),
+        )
+        assert response.status_code == 400, response.text
+        assert "pattern is too complex for structured output" in response.text, response.text
+        _, body = _one_call(wire, marker_hex)
+        assert body["outputConfig"] == _CALLER_OUTPUT_CONFIG, body

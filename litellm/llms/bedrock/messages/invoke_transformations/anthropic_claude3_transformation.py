@@ -135,7 +135,7 @@ class AmazonAnthropicClaudeMessagesConfig(
             e.response.status_code, e.response.text
         ):
             return False
-        warn_bedrock_native_output_rejected(model)
+        warn_bedrock_native_output_rejected(model, e.response.text)
         return True
 
     def validate_anthropic_messages_environment(
