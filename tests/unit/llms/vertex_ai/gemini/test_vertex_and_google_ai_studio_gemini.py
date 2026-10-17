@@ -9297,6 +9297,197 @@ def test_vertex_ai_cache_creation_kwarg_cannot_change_usage_or_cost() -> None:
     assert response._hidden_params["response_cost"] > 0
 
 
+def test_explicit_api_key_prevents_default_credentials_error_sync(monkeypatch):
+    from google.auth.exceptions import DefaultCredentialsError
+
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
+    from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+
+    monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
+    monkeypatch.delenv("VERTEXAI_PROJECT", raising=False)
+    monkeypatch.delenv("VERTEXAI_CREDENTIALS", raising=False)
+
+    def _mock_default_auth(*args: object, scopes: object = None) -> tuple[object, str]:
+        raise DefaultCredentialsError("Could not automatically determine credentials")
+
+    monkeypatch.setattr(VertexBase, "_credentials_from_default_auth", _mock_default_auth)
+
+    mock_sync_client: Final = MagicMock(spec=HTTPHandler)
+    mock_sync_resp: Final = MagicMock()
+    mock_sync_resp.status_code = 200
+    mock_sync_resp.headers = {"Content-Type": "application/json"}
+    mock_sync_resp.json.return_value = {
+        "candidates": [
+            {"content": {"parts": [{"text": "Hello from Google AI Studio"}], "role": "model"}, "finishReason": "STOP"}
+        ],
+        "usageMetadata": {"promptTokenCount": 2, "candidatesTokenCount": 3, "totalTokenCount": 5},
+    }
+    mock_sync_client.post.return_value = mock_sync_resp
+
+    vertex_llm: Final = VertexLLM()
+    response: Final = vertex_llm.completion(
+        model="gemini-2.5-flash",
+        messages=[{"role": "user", "content": "hi"}],
+        model_response=litellm.ModelResponse(),
+        print_verbose=print,
+        custom_llm_provider="vertex_ai",
+        encoding=None,
+        logging_obj=MagicMock(),
+        optional_params={},
+        acompletion=False,
+        timeout=10,
+        vertex_project=None,
+        vertex_location=None,
+        vertex_credentials=None,
+        gemini_api_key="test-api-key-12345",
+        litellm_params={},
+        client=mock_sync_client,
+    )
+
+    assert response.choices[0].message.content == "Hello from Google AI Studio"
+    mock_sync_client.post.assert_called_once()
+    called_url: Final = str(
+        mock_sync_client.post.call_args.kwargs.get("url")
+        or (mock_sync_client.post.call_args.args[0] if mock_sync_client.post.call_args.args else "")
+    )
+    called_headers: Final = mock_sync_client.post.call_args.kwargs.get("headers") or (
+        mock_sync_client.post.call_args.args[1] if len(mock_sync_client.post.call_args.args) > 1 else {}
+    )
+    assert "generativelanguage.googleapis.com" in called_url
+    assert called_headers.get("x-goog-api-key") == "test-api-key-12345"
+
+    monkeypatch.setattr(
+        "litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.get_httpx_client",
+        lambda *args: mock_sync_client,
+    )
+    mock_sync_client.post.reset_mock()
+    response2: Final = litellm.completion(
+        model="gemini-2.5-flash",
+        messages=[{"role": "user", "content": "hello"}],
+        api_key="test-api-key-12345",
+        client=mock_sync_client,
+    )
+    assert response2.choices[0].message.content == "Hello from Google AI Studio"
+    mock_sync_client.post.assert_called_once()
+    called_url2: Final = str(
+        mock_sync_client.post.call_args.kwargs.get("url")
+        or (mock_sync_client.post.call_args.args[0] if mock_sync_client.post.call_args.args else "")
+    )
+    called_headers2: Final = mock_sync_client.post.call_args.kwargs.get("headers") or (
+        mock_sync_client.post.call_args.args[1] if len(mock_sync_client.post.call_args.args) > 1 else {}
+    )
+    assert "generativelanguage.googleapis.com" in called_url2
+    assert called_headers2.get("x-goog-api-key") == "test-api-key-12345"
+
+
+@pytest.mark.asyncio
+async def test_explicit_api_key_prevents_default_credentials_error_async(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from google.auth.exceptions import DefaultCredentialsError
+
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
+    from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+
+    monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
+    monkeypatch.delenv("VERTEXAI_PROJECT", raising=False)
+    monkeypatch.delenv("VERTEXAI_CREDENTIALS", raising=False)
+
+    def _mock_default_auth(*args: object, scopes: object = None) -> tuple[object, str]:
+        raise DefaultCredentialsError("Could not automatically determine credentials")
+
+    monkeypatch.setattr(VertexBase, "_credentials_from_default_auth", _mock_default_auth)
+
+    mock_async_client: Final = AsyncMock(spec=AsyncHTTPHandler)
+    mock_async_resp: Final = MagicMock()
+    mock_async_resp.status_code = 200
+    mock_async_resp.headers = {"Content-Type": "application/json"}
+    mock_async_resp.json.return_value = {
+        "candidates": [{"content": {"parts": [{"text": "Async response"}], "role": "model"}, "finishReason": "STOP"}],
+        "usageMetadata": {"promptTokenCount": 2, "candidatesTokenCount": 2, "totalTokenCount": 4},
+    }
+    mock_async_client.post.return_value = mock_async_resp
+
+    vertex_llm: Final = VertexLLM()
+    response: Final = await vertex_llm.completion(
+        model="gemini-2.5-flash",
+        messages=[{"role": "user", "content": "hi"}],
+        model_response=litellm.ModelResponse(),
+        print_verbose=print,
+        custom_llm_provider="vertex_ai",
+        encoding=None,
+        logging_obj=MagicMock(),
+        optional_params={},
+        acompletion=True,
+        timeout=10,
+        vertex_project=None,
+        vertex_location=None,
+        vertex_credentials=None,
+        gemini_api_key="test-async-api-key",
+        litellm_params={},
+        client=mock_async_client,
+    )
+
+    assert response.choices[0].message.content == "Async response"
+    mock_async_client.post.assert_awaited_once()
+    called_url: Final = str(
+        mock_async_client.post.call_args.kwargs.get("url")
+        or (mock_async_client.post.call_args.args[0] if mock_async_client.post.call_args.args else "")
+    )
+    called_headers: Final = mock_async_client.post.call_args.kwargs.get("headers") or (
+        mock_async_client.post.call_args.args[1] if len(mock_async_client.post.call_args.args) > 1 else {}
+    )
+    assert "generativelanguage.googleapis.com" in called_url
+    assert called_headers.get("x-goog-api-key") == "test-async-api-key"
+
+
+def test_missing_api_key_and_credentials_raises_default_credentials_error(monkeypatch):
+    from google.auth.exceptions import DefaultCredentialsError
+
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
+    from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+
+    monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
+    monkeypatch.delenv("VERTEXAI_PROJECT", raising=False)
+    monkeypatch.delenv("VERTEXAI_CREDENTIALS", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("PALM_API_KEY", raising=False)
+    monkeypatch.setattr(litellm, "api_key", None)
+
+    def _mock_default_auth(*args: object, scopes: object = None) -> tuple[object, str]:
+        raise DefaultCredentialsError("Could not automatically determine credentials")
+
+    monkeypatch.setattr(VertexBase, "_credentials_from_default_auth", _mock_default_auth)
+
+    vertex_llm: Final = VertexLLM()
+    with pytest.raises(Exception) as exc_info:
+        vertex_llm.completion(
+            model="gemini-2.5-flash",
+            messages=[{"role": "user", "content": "hi"}],
+            model_response=litellm.ModelResponse(),
+            print_verbose=print,
+            custom_llm_provider="vertex_ai",
+            encoding=None,
+            logging_obj=MagicMock(),
+            optional_params={},
+            acompletion=False,
+            timeout=10,
+            vertex_project=None,
+            vertex_location=None,
+            vertex_credentials=None,
+            gemini_api_key=None,
+            litellm_params={},
+            client=MagicMock(spec=HTTPHandler),
+        )
+    assert "DefaultCredentialsError" in str(
+        type(exc_info.value).__name__
+    ) or "Could not automatically determine credentials" in str(exc_info.value)
+
+
 def load_vertex_ai_credentials():
     # Define the path to the vertex_key.json file
     print("loading vertex ai credentials")
