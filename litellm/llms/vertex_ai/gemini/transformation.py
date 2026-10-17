@@ -184,9 +184,10 @@ def _apply_gemini_metadata(
     model: str | None,
     media_resolution_enum: dict[str, str] | None,
     video_metadata: Mapping[str, object] | None,
+    media_processing: str | None = None,
 ) -> PartType:
     """
-    Apply media_resolution and video_metadata parameters to a Gemini part.
+    Apply media_resolution, video_metadata and media_processing parameters to a Gemini part.
 
     - Per-part media_resolution: Gemini 3+ only (2.x uses generation_config global).
     - video_metadata (fps, startOffset, endOffset): all Gemini models (1.x, 2.x, 3+).
@@ -205,6 +206,9 @@ def _apply_gemini_metadata(
         gemini_video_metadata: Final = gemini_video_metadata_from_openai(video_metadata)
         if gemini_video_metadata:
             part_dict["video_metadata"] = gemini_video_metadata
+
+    if media_processing is not None:
+        part_dict["media_processing"] = media_processing
 
     return cast(PartType, part_dict)
 
@@ -481,6 +485,7 @@ def _process_gemini_media(
     video_metadata: Mapping[str, object] | None = None,
     vertex_project: str | None = None,
     vertex_credentials: VERTEX_CREDENTIALS_TYPES | None = None,
+    media_processing: str | None = None,
 ) -> PartType:
     """
     Given a media URL (image, audio, or video), return the appropriate PartType for Gemini
@@ -492,6 +497,7 @@ def _process_gemini_media(
         media_resolution_enum: Media resolution level (for Gemini 3+)
         model: The model name (to check version compatibility)
         video_metadata: Video-specific metadata (fps, start_offset, end_offset)
+        media_processing: How Gemini processes the media, e.g. STATIC or AGENTIC
     """
 
     try:
@@ -556,7 +562,7 @@ def _process_gemini_media(
                 )
             file_data = FileDataType(mime_type=mime_type, file_uri=image_url)
             part: PartType = {"file_data": file_data}
-            return _apply_gemini_metadata(part, model, media_resolution_enum, video_metadata)
+            return _apply_gemini_metadata(part, model, media_resolution_enum, video_metadata, media_processing)
         elif image_url.startswith(GEMINI_FILES_API_URI_PREFIX):
             # Gemini Files API URIs — the file is already uploaded to Google's
             # servers; pass the URI through as file_data without fetching it.
@@ -568,16 +574,16 @@ def _process_gemini_media(
                 # Gemini Files API references can be passed through as URI-only.
                 file_data = cast(FileDataType, {"file_uri": image_url})
             part = {"file_data": file_data}
-            return _apply_gemini_metadata(part, model, media_resolution_enum, video_metadata)
+            return _apply_gemini_metadata(part, model, media_resolution_enum, video_metadata, media_processing)
         elif "https://" in image_url and (image_type := format or get_image_mime_type_from_url(image_url)) is not None:
             file_data = FileDataType(mime_type=image_type, file_uri=image_url)
             part = {"file_data": file_data}
-            return _apply_gemini_metadata(part, model, media_resolution_enum, video_metadata)
+            return _apply_gemini_metadata(part, model, media_resolution_enum, video_metadata, media_processing)
         elif "http://" in image_url or "https://" in image_url or "base64" in image_url:
             image: Final = convert_to_anthropic_image_obj(image_url, format=format)
             _blob: Final[BlobType] = {"data": image["data"], "mime_type": image["media_type"]}
             part = {"inline_data": cast(BlobType, _blob)}
-            return _apply_gemini_metadata(part, model, media_resolution_enum, video_metadata)
+            return _apply_gemini_metadata(part, model, media_resolution_enum, video_metadata, media_processing)
         raise Exception(f"Invalid image received - {image_url}")
     except Exception as e:
         raise e
@@ -821,6 +827,7 @@ def gemini_convert_messages_with_history(
                             file_data = file_dict.get("file_data")
                             detail = file_dict.get("detail")
                             video_metadata = file_dict.get("video_metadata")
+                            media_processing = file_dict.get("media_processing")
                             passed_file = file_id or file_data
                             if passed_file is None:
                                 raise Exception("Unknown file type. Please pass in a file_id or file_data")
@@ -837,6 +844,7 @@ def gemini_convert_messages_with_history(
                                     video_metadata=video_metadata,
                                     vertex_project=vertex_project,
                                     vertex_credentials=vertex_credentials,
+                                    media_processing=media_processing,
                                 )
                                 _parts.append(_part)
                             except litellm.BadRequestError:

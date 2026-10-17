@@ -46637,6 +46637,10 @@
               "title": "Format",
               "type": "string"
             },
+            "media_processing": {
+              "title": "Media Processing",
+              "type": "string"
+            },
             "video_metadata": {
               "additionalProperties": true,
               "title": "Video Metadata",

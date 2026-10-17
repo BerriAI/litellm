@@ -19,6 +19,7 @@ from litellm.llms.vertex_ai.gemini.transformation import (
     gemini_convert_messages_with_history,
     transform_request_body,
 )
+from litellm.types.llms.openai import ChatCompletionUserMessage
 from litellm.types.llms.vertex_ai import BlobType, ContentType, PartType
 from litellm.types.utils import Message
 
@@ -1592,6 +1593,36 @@ class TestVideoMetadataAllGeminiModels:
         file_part = self._get_file_part(contents)
         assert "video_metadata" in file_part
         assert file_part["video_metadata"]["fps"] == 2
+
+
+
+@pytest.mark.parametrize(
+    "file_id",
+    ["gs://bucket/video.mp4", "https://generativelanguage.googleapis.com/v1beta/files/abc123"],
+)
+def test_media_processing_is_forwarded_on_the_file_part(file_id: str):
+    message: Final[ChatCompletionUserMessage] = {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "Did the person try on a shoe?"},
+            {
+                "type": "file",
+                "file": {
+                    "file_id": file_id,
+                    "format": "video/mp4",
+                    "media_processing": "AGENTIC",
+                    "video_metadata": {"start_offset": "5s"},
+                },
+            },
+        ],
+    }
+
+    contents: Final = gemini_convert_messages_with_history(messages=[message], model="gemini-3.5-flash")
+
+    file_part: Final = next(part for part in contents[0]["parts"] if "file_data" in part)
+    assert "file_data" in file_part and file_part["file_data"]["file_uri"] == file_id
+    assert file_part.get("media_processing") == "AGENTIC"
+    assert file_part.get("video_metadata") == {"startOffset": "5s"}
 
 
 def test_convert_tool_response_with_base64_image():

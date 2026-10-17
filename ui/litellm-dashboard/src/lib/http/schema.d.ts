@@ -28709,6 +28709,8 @@ export interface components {
             filename?: string;
             /** Format */
             format?: string;
+            /** Media Processing */
+            media_processing?: string;
             /** Video Metadata */
             video_metadata?: {
                 [key: string]: unknown;

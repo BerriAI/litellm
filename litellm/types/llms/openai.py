@@ -842,6 +842,7 @@ class ChatCompletionFileObjectFile(TypedDict, total=False):
     format: str
     detail: str  # For video/image resolution control (low, medium, high, ultra_high)
     video_metadata: dict[str, Any]  # For video-specific metadata (fps, start_offset, end_offset)
+    media_processing: ReadOnly[str]
 
 
 class ChatCompletionFileObject(TypedDict):
