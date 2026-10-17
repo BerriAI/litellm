@@ -2427,9 +2427,13 @@ def with_deployment_api_base(litellm_params: object) -> Mapping[str, object]:
 
 def _api_base_without_credentials(api_base: str) -> str:
     scheme, separator, rest = api_base.partition("://")
-    authority, slash, path = (rest if separator else api_base).partition("/")
-    host_and_path: Final = f"{authority.rpartition('@')[2]}{slash}{path}"
-    return f"{scheme + separator if separator else ''}{host_and_path.split('#', 1)[0].split('?', 1)[0]}"
+    authority_and_rest: Final = rest if separator else api_base
+    authority: Final = re.split(r"[/?#]", authority_and_rest, maxsplit=1)[0]
+    after_authority: Final = authority_and_rest[len(authority) :]
+    if "@" in after_authority:
+        return ""
+    path: Final = re.split(r"[?#]", after_authority, maxsplit=1)[0]
+    return f"{scheme + separator if separator else ''}{authority.rpartition('@')[2]}{path}"
 
 
 def _is_guardrail_block(original_exception: Exception) -> bool:

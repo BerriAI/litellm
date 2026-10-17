@@ -58,18 +58,7 @@ def test_openai_cyber_policy_uses_the_structured_error_code(shape: str, code: st
 
 
 
-@pytest.mark.parametrize(
-    ("configured_api_base", "shown_api_base"),
-    [
-        ("https://qa-user:function-secret@gateway.example/v1?code=function-secret", "https://gateway.example/v1"),
-        ("https://gateway.example/v1#function-secret", "https://gateway.example/v1"),
-        ("qa-user:function-secret@gateway.example:8080/v1", "gateway.example:8080/v1"),
-        ("https://qa-user:qa?function-secret@gateway.example/v1", "https://gateway.example/v1"),
-        ("https://qa-user:qa#function-secret@gateway.example/v1", "https://gateway.example/v1"),
-    ],
-    ids=["userinfo_and_query", "fragment", "no_scheme", "question_mark_in_password", "hash_in_password"],
-)
-def test_api_base_line_keeps_credentials_out(configured_api_base: str, shown_api_base: str) -> None:
+def _debug_info_for_api_base(configured_api_base: str) -> str:
     request: Final = httpx.Request("POST", "https://gateway.example/v1/chat/completions")
     original: Final = OpenAIError(
         status_code=500, message="upstream failed", request=request, response=httpx.Response(500, request=request)
@@ -84,8 +73,50 @@ def test_api_base_line_keeps_credentials_out(configured_api_base: str, shown_api
         )
     debug_info: Final = caught.value.litellm_debug_info
     assert isinstance(debug_info, str)
+    return debug_info
+
+
+@pytest.mark.parametrize(
+    ("configured_api_base", "shown_api_base"),
+    [
+        ("https://qa-user:function-secret@gateway.example/v1?code=function-secret", "https://gateway.example/v1"),
+        ("https://gateway.example/v1#function-secret", "https://gateway.example/v1"),
+        ("qa-user:function-secret@gateway.example:8080/v1", "gateway.example:8080/v1"),
+        ("https://gateway.example?code=function/secret", "https://gateway.example"),
+    ],
+    ids=["userinfo_and_query", "fragment", "no_scheme", "slash_in_query_without_path"],
+)
+def test_api_base_line_keeps_credentials_out(configured_api_base: str, shown_api_base: str) -> None:
+    debug_info: Final = _debug_info_for_api_base(configured_api_base)
     assert f"API Base: `{shown_api_base}`" in debug_info
     assert "function-secret" not in debug_info
+    assert "secret" not in debug_info.split("API Base:", 1)[1].split("\n", 1)[0]
+
+
+@pytest.mark.parametrize(
+    "configured_api_base",
+    [
+        "https://qa-user:qa?function-secret@gateway.example/v1",
+        "https://qa-user:qa#function-secret@gateway.example/v1",
+        "https://qa-user:qa/function-secret@gateway.example/v1",
+        "https://qa-user:qa/function?secret@gateway.example/v1",
+        "https://gateway.example?user=alice@example.org&code=function-secret",
+        "https://gateway.example?email=ops@other-host.example",
+    ],
+    ids=[
+        "question_mark_in_password",
+        "hash_in_password",
+        "slash_in_password",
+        "slash_and_question_mark_in_password",
+        "at_sign_in_query_without_path",
+        "at_sign_names_other_host",
+    ],
+)
+def test_api_base_line_is_left_out_when_an_at_sign_follows_the_host(configured_api_base: str) -> None:
+    debug_info: Final = _debug_info_for_api_base(configured_api_base)
+    assert "API Base:" not in debug_info
+    assert not any(part in debug_info for part in ("qa-user", "function", "secret", "other-host"))
+
 
 # Test cases for is_error_str_context_window_exceeded
 # Tuple format: (error_message, expected_result)
