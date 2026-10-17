@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import random
+import string
 import uuid
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
@@ -15,7 +17,7 @@ import yaml
 from integration._support.client import Gateway
 from integration._support.database import scratch_database
 from integration._support.process import OwnedProxy, owned_proxy_process
-from integration._support.timing import assert_not_delayed_by, timed
+from integration._support.timing import assert_not_delayed_by, assert_within_factor_of_control, timed
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue
 
@@ -95,6 +97,7 @@ def tool_rig(
     *,
     configure: Callable[[dict[str, JsonValue]], None] | None = None,
     environment: Mapping[str, str] | None = None,
+    workers: int = 2,
 ) -> Iterator[Rig]:
     assert os.environ.get("LITELLM_LICENSE"), "LITELLM_LICENSE must be set: hide-secrets is an enterprise feature"
     product_root: Final = Path(os.environ.get("INTEGRATION_PROXY_ROOT") or Path(__file__).resolve().parents[3])
@@ -168,7 +171,7 @@ def tool_rig(
                 directory,
                 child_environment,
                 config=config,
-                workers=2,
+                workers=workers,
             ) as owned:
                 yield Rig(owned.gateway, wire, database, owned, child_environment)
 
@@ -355,3 +358,56 @@ def test_deeply_nested_tool_arguments_do_not_stall_the_worker(rig: Rig) -> None:
 
     control: Final = tuple(call(1) for _ in range(3))
     assert_not_delayed_by((call(300),), control=control, injected_delay=5.0)
+
+
+@pytest.fixture(scope="module")
+def single_worker(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
+    with tool_rig(tmp_path_factory.mktemp("hide-secrets-one-worker"), workers=1) as value:
+        yield value
+
+
+def _tool_history(turns: int, seed: int, shape: str = "anthropic") -> tuple[str, dict[str, JsonValue]]:
+    generator: Final = random.Random(seed)
+    alphabet: Final = string.ascii_letters + string.digits
+    messages: Final[list[JsonValue]] = [{"role": "user", "content": "read the project"}]
+    for turn in range(turns):
+        result = "\n".join("".join(generator.choices(alphabet, k=60)) for _ in range(64))
+        if shape == "anthropic":
+            call: JsonValue = {
+                "type": "tool_use",
+                "id": f"tool_{turn}",
+                "name": "read",
+                "input": {"path": f"{turn}.py"},
+            }
+            messages.append({"role": "assistant", "content": [call]})
+            messages.append(
+                {"role": "user", "content": [{"type": "tool_result", "tool_use_id": f"tool_{turn}", "content": result}]}
+            )
+        else:
+            function: JsonValue = {"name": "read", "arguments": json.dumps({"path": f"{turn}.py"})}
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [{"id": f"call_{turn}", "type": "function", "function": function}],
+                }
+            )
+            messages.append({"role": "tool", "tool_call_id": f"call_{turn}", "content": result})
+    if shape == "anthropic":
+        return "/v1/messages", {"model": "claude", "max_tokens": 32, "messages": messages, "cache": {"no-cache": True}}
+    return "/v1/chat/completions", {"model": "gpt", "messages": messages, "cache": {"no-cache": True}}
+
+
+@pytest.mark.parametrize("shape", ("anthropic", "chat"))
+def test_resent_tool_history_is_scanned_once(single_worker: Rig, shape: str) -> None:
+    path, body = _tool_history(150, seed=2 if shape == "anthropic" else 4, shape=shape)
+    turns: Final = body["messages"]
+    assert isinstance(turns, list)
+    first: Final = timed(lambda: single_worker.proxy.request("POST", path, body))
+    following: Final = {
+        **body,
+        "messages": [*turns, {"role": "assistant", "content": "ok"}, {"role": "user", "content": "next"}],
+    }
+    second: Final = timed(lambda: single_worker.proxy.request("POST", path, following))
+    assert first.value.status_code == 200 and second.value.status_code == 200, (first.value.text, second.value.text)
+    assert_within_factor_of_control(second.seconds, control=first.seconds, factor=0.5)

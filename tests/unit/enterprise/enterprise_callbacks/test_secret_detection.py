@@ -15,10 +15,11 @@ import json
 import sys
 import tempfile
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Final
 
 import pytest
+from litellm_enterprise.enterprise_callbacks import secret_detection
 from litellm_enterprise.enterprise_callbacks.secret_detection import (
     _default_detect_secrets_config,
     _ENTERPRISE_SecretDetection,
@@ -121,6 +122,42 @@ def test_tool_payload_redacts_keyword_values_that_need_json_escaping(password):
         "password": "[REDACTED]",
         "path": ".env",
     }
+
+
+def _recorded_scans(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    scanned: Final[list[str]] = []
+    scan: Final = secret_detection._scan_lines
+
+    def recorded(lines: Sequence[str]) -> frozenset[tuple[str, str]]:
+        scanned.append(lines[0])
+        return scan(lines)
+
+    monkeypatch.setattr(secret_detection, "_scan_lines", recorded)
+    return scanned
+
+
+def test_clean_scans_are_reused_and_secret_scans_are_not(monkeypatch: pytest.MonkeyPatch) -> None:
+    scanned: Final = _recorded_scans(monkeypatch)
+    guardrail: Final = _guardrail()
+    for _ in range(2):
+        assert guardrail.redact_text("nothing sensitive here") == "nothing sensitive here"
+        assert guardrail.redact_text(f"AWS_ACCESS_KEY_ID={AWS_KEY}") == "AWS_ACCESS_KEY_ID=[REDACTED]"
+    assert _guardrail().redact_text("nothing sensitive here") == "nothing sensitive here"
+    assert scanned == [
+        "nothing sensitive here",
+        f"AWS_ACCESS_KEY_ID={AWS_KEY}",
+        f"AWS_ACCESS_KEY_ID={AWS_KEY}",
+        "nothing sensitive here",
+    ]
+
+
+def test_clean_scan_reuse_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    scanned: Final = _recorded_scans(monkeypatch)
+    monkeypatch.setattr(secret_detection, "_CLEAN_SCAN_CACHE_SIZE", 2)
+    guardrail: Final = _guardrail()
+    for text in ("first", "second", "first", "third", "second", "first"):
+        guardrail.scan_message_for_secrets(text)
+    assert scanned == ["first", "second", "third", "second", "first"]
 
 
 @pytest.mark.asyncio

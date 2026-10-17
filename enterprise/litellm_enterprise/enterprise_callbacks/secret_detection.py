@@ -13,10 +13,12 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import configparser
 import contextlib
+import hashlib
 import itertools
 import json
 import re
 import tempfile
+from collections import OrderedDict
 from collections.abc import Generator, Iterator, Sequence
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, ClassVar, Final, Literal, Optional
@@ -466,6 +468,9 @@ _SHELL_TRAILER: Final = re.compile(r"\\|#.*|-*\w[\w.-]*=\S*")
 
 _SCAN_SUFFIX: Final = ".py"
 
+# Digests of scan inputs that held no secret, so the history an agent resends every turn is scanned once.
+_CLEAN_SCAN_CACHE_SIZE: Final = 4096
+
 
 @contextlib.contextmanager
 def _temp_file(text: str) -> Generator[str, None, None]:
@@ -568,11 +573,16 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
 
     def __init__(self, detect_secrets_config: Optional[dict] = None, **kwargs):
         self.user_defined_detect_secrets_config = detect_secrets_config
+        self._clean_scans: OrderedDict[bytes, None] = OrderedDict()
         super().__init__(**kwargs)
 
-    def scan_message_for_secrets(self, message_content: str):
+    def scan_message_for_secrets(self, message_content: str) -> list[dict[str, str]]:
         from detect_secrets.settings import transient_settings
 
+        digest: Final = hashlib.sha256(message_content.encode()).digest()
+        if digest in self._clean_scans:
+            self._clean_scans.move_to_end(digest)
+            return []
         detect_secrets_config = (
             self.user_defined_detect_secrets_config or _default_detect_secrets_config
         )
@@ -581,6 +591,10 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
                 (*message_content.splitlines(), *_quoted_assignments(message_content))
             )
 
+        if not found:
+            self._clean_scans[digest] = None
+            if len(self._clean_scans) > _CLEAN_SCAN_CACHE_SIZE:
+                self._clean_scans.popitem(last=False)
         return [
             {"type": secret_type, "value": value}
             for value, secret_type in sorted(
