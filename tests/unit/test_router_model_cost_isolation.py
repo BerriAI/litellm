@@ -2351,6 +2351,48 @@ def test_an_unmapped_model_routes_the_same_whichever_pin_registers_first(
     assert shared_info.get("mode") == "responses"
 
 
+_FINE_TUNE: Final = "openai/ft:gpt-4o-mini-2024-07-18:routing-test::abc123"
+
+
+def _fine_tune_routing(
+    monkeypatch: pytest.MonkeyPatch, pristine_cost_map: dict[str, object], order: tuple[str | None, ...]
+) -> tuple[object, ...]:
+    from litellm.main import responses_api_bridge_check
+
+    monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(pristine_cost_map))
+    Router(
+        model_list=[
+            {
+                "model_name": f"ft-{mode}",
+                "litellm_params": {"model": _FINE_TUNE, "api_key": "sk-test"},
+                "model_info": {"id": f"ft-{mode}"} if mode is None else {"id": f"ft-{mode}", "mode": mode},
+            }
+            for mode in order
+        ]
+    )
+    return tuple(
+        responses_api_bridge_check(
+            model=_FINE_TUNE.removeprefix("openai/"),
+            custom_llm_provider="openai",
+            deployment_model_info=None if mode is None else {"mode": mode},
+        )[0].get("mode")
+        for mode in (None, "chat", "responses")
+    )
+
+
+@pytest.mark.parametrize("order", list(itertools.permutations(("chat", "responses", None))), ids=str)
+def test_a_fine_tune_routes_the_same_whichever_deployment_registers_first(
+    monkeypatch: pytest.MonkeyPatch, order: tuple[str | None, ...]
+) -> None:
+    """A fine-tune missing from the cost map inherits its base model's row on its first registration, so a
+    ``responses`` pin must not opt the shared row in only when it happens to register before its siblings."""
+    pristine_cost_map: Final = litellm.model_cost
+
+    assert _fine_tune_routing(monkeypatch, pristine_cost_map, order) == _fine_tune_routing(
+        monkeypatch, pristine_cost_map, ("responses", "chat", None)
+    )
+
+
 def test_a_non_routing_mode_pin_still_reaches_the_shared_row(monkeypatch: pytest.MonkeyPatch) -> None:
     """Only ``chat`` and ``responses`` pins are per-deployment routing. Other modes, such as a realtime
     model pinned to ``audio_transcription``, are still read from the shared row by name."""

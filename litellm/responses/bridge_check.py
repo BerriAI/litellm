@@ -13,7 +13,7 @@ from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import OpenAIWebSearchOptions
 from litellm.types.utils import LlmProviders
-from litellm.utils import ProviderConfigManager, get_model_info_helper, model_cost_registration_key
+from litellm.utils import ProviderConfigManager, get_model_info_helper, model_cost_registration_row
 
 _OPENAI_DEFAULT_API_BASE: Final = "https://api.openai.com/v1"
 RESPONSES_ONLY_PROVIDERS: Final = frozenset({"chatgpt", "github_copilot"})
@@ -36,7 +36,8 @@ def keep_registered_mode(backend_key: str, shared_model_info: Mapping[str, objec
     and no other mode replaces a registered ``responses`` mode either.
 
     A ``responses`` pin still marks a row that has no routing mode, since that is how a model missing from
-    the cost map opts into the Responses API. A ``chatgpt`` or ``github_copilot`` row takes any mode until it
+    the cost map opts into the Responses API. A mode the row inherits from the built-in entry its registration
+    falls back to counts as registered, since the first registration writes it whichever deployment that is. A ``chatgpt`` or ``github_copilot`` row takes any mode until it
     is ``responses``, since those providers read it by name to pick their endpoint. Elsewhere a ``chat`` pin
     never marks a row, so the outcome does not depend on which deployment registers first. A ``mode`` that
     is not a string names no mode, so it never reaches the row."""
@@ -44,11 +45,9 @@ def keep_registered_mode(backend_key: str, shared_model_info: Mapping[str, objec
     without_mode: Final = {key: value for key, value in shared_model_info.items() if key != "mode"}
     if not isinstance(deployment_mode, str):
         return without_mode
-    registration_key: Final = model_cost_registration_key(
-        backend_key, shared_model_info.get("litellm_provider", ""), custom_llm_provider=None
-    )
-    registered_row: Final = cast(Mapping[str, object] | None, litellm.model_cost.get(registration_key)) or {}
-    registered_mode: Final = registered_row.get("mode")
+    registered_mode: Final = model_cost_registration_row(
+        backend_key, shared_model_info.get("litellm_provider", "")
+    ).get("mode")
     if registered_mode != "responses" and (
         deployment_mode not in ROUTABLE_MODES or backend_key.split("/", 1)[0] in RESPONSES_ONLY_PROVIDERS
     ):
