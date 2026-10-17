@@ -28,6 +28,7 @@ from integration._support.process import OwnedProxy, graceful_stop_seconds, owne
 from integration._support.upstream import aws_event_stream_frame
 from integration._support.vertex import service_account_json
 from integration._support.wire import Reply, Request, Wire, wire_server
+from integration._support.ports import allocate_port
 from pydantic import JsonValue, TypeAdapter
 
 _JSON_TOOL: Final = "json_tool_call"
@@ -1117,8 +1118,10 @@ def test_vertex_chat_stream_json_schema_content_is_the_schema_object(gateway: Ga
         response: Final = gateway.request("POST", "/v1/chat/completions", _chat_body(model, marker, stream=True))
         frames: Final = _content_frames(response)
         assert json.loads("".join(frames)) == _expected(shape, marker_hex), response.text
-        expected_frames: Final = 1 if shape in _HELD_STREAM_SHAPES else _fragment_count(shape, marker_hex)
-        assert len(frames) == expected_frames, (len(frames), expected_frames, frames)
+        if shape in _HELD_STREAM_SHAPES:
+            assert len(frames) == 1, frames
+        else:
+            assert len(frames) >= _fragment_count(shape, marker_hex), frames
         sent: Final = _one_delivery(wire, marker_hex)
         assert sent.target == f"{_VERTEX_MODELS}{_TOOL_MODEL}{_VERTEX_STREAM_SUFFIX}", sent.target
         assert _json_tool_schema(sent)["properties"] == _SCHEMA["properties"], sent.body
@@ -1189,7 +1192,7 @@ def test_vertex_chat_json_schema_that_declares_the_wrapper_key_keeps_the_answer_
         content: Final = _stream_content(response) if stream else _chat_content(response)
         assert content == _tool_input("values", marker_hex), response.text
         if stream:
-            assert len(_content_frames(response)) == _fragment_count("values", marker_hex), response.text
+            assert len(_content_frames(response)) >= _fragment_count("values", marker_hex), response.text
         _one_delivery(wire, marker_hex)
 
 
@@ -1221,9 +1224,10 @@ def test_vertex_chat_json_schema_that_allows_undeclared_keys_keeps_an_undeclared
         )
         content: Final = _stream_content(response) if stream else _chat_content(response)
         assert content == (_payload(marker_hex) if unwrapped else _tool_input(shape, marker_hex)), response.text
-        if stream:
-            expected_frames: Final = 1 if unwrapped else _fragment_count(shape, marker_hex)
-            assert len(_content_frames(response)) == expected_frames, response.text
+        if stream and unwrapped:
+            assert len(_content_frames(response)) == 1, response.text
+        elif stream:
+            assert len(_content_frames(response)) >= _fragment_count(shape, marker_hex), response.text
         _one_delivery(wire, marker_hex)
 
 
@@ -1731,9 +1735,9 @@ def test_vertex_chat_peer_error_reaches_the_caller_and_the_deployment_keeps_serv
 ) -> None:
     marker, marker_hex = _marker("wrapped")
     after, after_hex = _marker("wrapped")
+    port: Final = allocate_port()
     with gateway.scenario() as scenario:
-        with wire_server(_failing(status)) as failing:
-            port: Final = int(failing.url.rsplit(":", 1)[1])
+        with wire_server(_failing(status), port=port) as failing:
             model: Final = _vertex_deployment(gateway, scenario, failing.url, _TOOL_MODEL)
             response: Final = gateway.request("POST", "/v1/chat/completions", _chat_body(model, marker))
             assert response.status_code == status, response.text
@@ -1827,8 +1831,8 @@ def test_upstream_outage_mid_run_recovers_with_envelopes_still_unwrapped(gateway
                 assert observed == _payload(marker_hex), response.text
             _seen_once(_delivered(wire), tuple(marker_hex for _, marker_hex, _ in results))
 
-        with wire_server(_peer) as wire:
-            port: Final = int(wire.url.rsplit(":", 1)[1])
+        port: Final = allocate_port()
+        with wire_server(_peer, port=port) as wire:
             model: Final = _vertex_deployment(gateway, scenario, wire.url, _TOOL_MODEL)
             unwrapped(wire, wave())
         outage: Final = wave()

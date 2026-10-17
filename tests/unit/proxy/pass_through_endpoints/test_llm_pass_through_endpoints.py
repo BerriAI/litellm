@@ -24,10 +24,15 @@ from starlette.datastructures import FormData
 
 import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_logger import CustomLogger
 from tests._master_key import MASTER_KEY as SHARED_MASTER_KEY
 from litellm.caching.caching import DualCache
 from litellm.types.utils import CallTypesLiteral
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException, ModifyResponseException
+from litellm.proxy._types import AwsErrorTypeProxyException, ProxyException
+from litellm.proxy.utils import ProxyLogging
+from litellm.passthrough.main import raise_for_provider_status
 from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
 from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
@@ -40,6 +45,7 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     azure_proxy_route,
     azure_speech_proxy_route,
     bedrock_llm_proxy_route,
+    bedrock_passthrough_error_response,
     bedrock_proxy_route,
     create_pass_through_route,
     cursor_proxy_route,
@@ -1658,17 +1664,7 @@ class TestBedrockLLMProxyRoute:
 
         bedrock_error_message = '{"message":"ContentBlock object at messages.0.content.0 must set one of the following keys: text, image, toolUse, toolResult, document, video."}'
 
-        # Create a mock httpx.Response for the error
-        mock_error_response = Mock(spec=httpx.Response)
-        mock_error_response.status_code = 400
-        mock_error_response.aread = AsyncMock(return_value=bedrock_error_message.encode("utf-8"))
-
-        # Create the HTTPStatusError
-        mock_http_error = httpx.HTTPStatusError(
-            message="Bad Request",
-            request=Mock(spec=httpx.Request),
-            response=mock_error_response,
-        )
+        mock_http_error = _bedrock_status_error(400, bedrock_error_message.encode("utf-8"))
 
         # Create mocks for all required parameters
         mock_request = MagicMock(spec=Request)
@@ -1924,6 +1920,284 @@ class TestBedrockLLMProxyRoute:
 
         assert exc_info.value.status_code == 400
         assert "Blocked by guardrail" in str(exc_info.value.detail)
+
+
+_THROTTLE_TYPE: Final = "ThrottlingException:http://internal.amazon.com/coral/com.amazon.bedrock/"
+_THROTTLE_BODY: Final = b'{"message":"Too many requests, please wait before trying again."}'
+
+
+def _status_error(
+    status_code: int,
+    content: bytes,
+    headers: Mapping[str, str],
+    url: str,
+    raise_for_status: Callable[[httpx.Response], None],
+) -> httpx.HTTPStatusError:
+    request: Final = httpx.Request("POST", url)
+    response: Final = httpx.Response(status_code, headers=dict(headers), content=content, request=request)
+    with pytest.raises(httpx.HTTPStatusError) as raised:
+        raise_for_status(response)
+    return raised.value
+
+
+def _bedrock_status_error(
+    status_code: int,
+    content: bytes,
+    headers: Mapping[str, str] = MappingProxyType({}),
+    url: str = "https://bedrock-runtime.us-east-1.amazonaws.com/model/m/converse",
+) -> httpx.HTTPStatusError:
+    """An error Bedrock answered the passthrough request with."""
+    return _status_error(status_code, content, headers, url, raise_for_provider_status)
+
+
+def _guardrail_service_status_error(
+    status_code: int, content: bytes, headers: Mapping[str, str]
+) -> httpx.HTTPStatusError:
+    """An error a guardrail service's own HTTP call raised, from a URL shaped like a Bedrock model call."""
+    return _status_error(
+        status_code,
+        content,
+        headers,
+        "https://bedrock-runtime.us-east-1.amazonaws.com/model/m/converse",
+        httpx.Response.raise_for_status,
+    )
+
+
+def _guardrail_detail(message: str) -> dict[str, str]:
+    return {"error": message, "guardrail_name": "block-demo"}
+
+
+class _ReplacesFailures(CustomLogger):
+    def __init__(self, replacement: HTTPException) -> None:
+        super().__init__()
+        self.replacement: Final = replacement
+
+    async def async_post_call_failure_hook(
+        self,
+        request_data: dict,
+        original_exception: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
+        traceback_str: str | None = None,
+    ) -> HTTPException | None:
+        return self.replacement
+
+
+class TestBedrockPassthroughAwsErrors:
+    """A guardrail block or an error Bedrock returned reaches an AWS SDK caller with its code and message."""
+
+    @staticmethod
+    async def _answer(error: Exception) -> Response:
+        return await bedrock_passthrough_error_response(
+            ProxyBaseLLMRequestProcessing(data={}),
+            error,
+            UserAPIKeyAuth(api_key="test-key"),
+            ProxyLogging(user_api_key_cache=DualCache()),
+        )
+
+    @pytest.mark.asyncio
+    async def test_bedrock_error_reaches_the_caller_with_bedrocks_status_header_and_body(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "callbacks", [])
+        error: Final = _bedrock_status_error(
+            429,
+            _THROTTLE_BODY,
+            {
+                "x-amzn-errortype": _THROTTLE_TYPE,
+                "x-amzn-requestid": "req-1",
+                "content-type": "application/x-amz-json-1.1",
+            },
+        )
+
+        response: Final = await self._answer(error)
+
+        assert response.status_code == 429
+        assert response.body == _THROTTLE_BODY
+        assert response.headers["x-amzn-errortype"] == _THROTTLE_TYPE
+        assert response.headers["content-type"] == "application/x-amz-json-1.1"
+        assert response.headers["llm_provider-x-amzn-requestid"] == "req-1"
+
+    @pytest.mark.asyncio
+    async def test_arn_model_error_reaches_the_caller_as_bedrock_sent_it(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(litellm, "callbacks", [])
+        error: Final = _bedrock_status_error(
+            429,
+            _THROTTLE_BODY,
+            {"x-amzn-errortype": _THROTTLE_TYPE},
+            url="https://bedrock-runtime.us-east-1.amazonaws.com/model/"
+            "arn%3Aaws%3Abedrock%3Aus-east-1%3A123%3Aapplication-inference-profile%2Fabc123/converse-stream?trace=a/b",
+        )
+
+        response: Final = await self._answer(error)
+
+        assert (response.status_code, response.body) == (429, _THROTTLE_BODY)
+        assert response.headers["x-amzn-errortype"] == _THROTTLE_TYPE
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("error", "status_code", "body"),
+        (
+            pytest.param(
+                _bedrock_status_error(502, b"<html>bad gateway</html>"),
+                502,
+                "<html>bad gateway</html>",
+                id="bedrock-without-error-type",
+            ),
+            pytest.param(
+                _guardrail_service_status_error(429, _THROTTLE_BODY, {"x-amzn-errortype": _THROTTLE_TYPE}),
+                429,
+                _THROTTLE_BODY.decode(),
+                id="guardrail-service-with-error-type",
+            ),
+        ),
+    )
+    async def test_http_error_bedrock_did_not_answer_with_an_aws_error_type_keeps_the_litellm_error(
+        self, monkeypatch: pytest.MonkeyPatch, error: httpx.HTTPStatusError, status_code: int, body: str
+    ) -> None:
+        monkeypatch.setattr(litellm, "callbacks", [])
+
+        with pytest.raises(HTTPException) as exc_info:
+            await self._answer(error)
+
+        assert exc_info.value.status_code == status_code
+        assert exc_info.value.detail == {"error": body}
+        assert "x-amzn-errortype" not in (exc_info.value.headers or {})
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("error", "replacement", "code"),
+        (
+            pytest.param(
+                _bedrock_status_error(429, _THROTTLE_BODY, {"x-amzn-errortype": _THROTTLE_TYPE}),
+                HTTPException(status_code=503, detail={"error": "rewritten by a callback"}),
+                "503",
+                id="bedrock-error",
+            ),
+            pytest.param(
+                HTTPException(status_code=400, detail=_guardrail_detail("Violated guardrail policy")),
+                HTTPException(status_code=429, detail={"error": "rewritten by a callback"}),
+                "429",
+                id="guardrail-block",
+            ),
+        ),
+    )
+    async def test_error_replaced_by_a_failure_hook_keeps_the_replacement(
+        self, monkeypatch: pytest.MonkeyPatch, error: Exception, replacement: HTTPException, code: str
+    ) -> None:
+        monkeypatch.setattr(litellm, "callbacks", [_ReplacesFailures(replacement)])
+
+        with pytest.raises(ProxyException) as exc_info:
+            await self._answer(error)
+
+        assert (exc_info.value.message, exc_info.value.code) == ("rewritten by a callback", code)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("error", "message", "status_code"),
+        (
+            pytest.param(
+                GuardrailRaisedException(
+                    guardrail_name="block-demo",
+                    message="synthetic policy says no",
+                    should_wrap_with_default_message=False,
+                    blocked_content=True,
+                ),
+                "synthetic policy says no",
+                "400",
+                id="guardrail-raised",
+            ),
+            pytest.param(
+                HTTPException(status_code=400, detail=_guardrail_detail("Violated guardrail policy")),
+                "Violated guardrail policy",
+                "400",
+                id="guardrail-http-400",
+            ),
+            pytest.param(
+                HTTPException(status_code=403, detail=_guardrail_detail("blocked by policy")),
+                "blocked by policy",
+                "403",
+                id="guardrail-http-403",
+            ),
+            pytest.param(
+                BlockedPiiEntityError(entity_type="EMAIL_ADDRESS", guardrail_name="pii"),
+                "Blocked entity detected: EMAIL_ADDRESS by Guardrail: pii. This entity is not allowed to be used in this request.",
+                "400",
+                id="blocked-pii",
+            ),
+        ),
+    )
+    async def test_guardrail_block_is_raised_with_its_aws_error_type(
+        self, monkeypatch: pytest.MonkeyPatch, error: Exception, message: str, status_code: str
+    ) -> None:
+        monkeypatch.setattr(litellm, "callbacks", [])
+
+        with pytest.raises(AwsErrorTypeProxyException) as exc_info:
+            await self._answer(error)
+
+        assert exc_info.value.aws_error_type == "ValidationException"
+        assert (exc_info.value.error.message, exc_info.value.error.code) == (message, status_code)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("error", "message", "code"),
+        (
+            pytest.param(
+                HTTPException(status_code=400, detail={"error": "model not found"}),
+                "model not found",
+                "400",
+                id="request-check-400",
+            ),
+            pytest.param(
+                HTTPException(status_code=403, detail="cache control not allowed"),
+                "cache control not allowed",
+                "403",
+                id="request-check-403",
+            ),
+            pytest.param(
+                HTTPException(status_code=429, detail=_guardrail_detail("vendor rate limited")),
+                "vendor rate limited",
+                "429",
+                id="429",
+            ),
+            pytest.param(
+                GuardrailRaisedException(
+                    guardrail_name="fail-closed",
+                    message="guardrail vendor unreachable",
+                    should_wrap_with_default_message=False,
+                ),
+                "guardrail vendor unreachable",
+                "400",
+                id="guardrail-vendor-unreachable-400",
+            ),
+            pytest.param(
+                GuardrailRaisedException(
+                    guardrail_name="fail-closed",
+                    message="guardrail vendor unreachable",
+                    should_wrap_with_default_message=False,
+                    status_code=503,
+                ),
+                "guardrail vendor unreachable",
+                "503",
+                id="guardrail-vendor-unreachable-503",
+            ),
+            pytest.param(
+                ModifyResponseException(message="replaced", model="bedrock-model", request_data={}),
+                "replaced",
+                "500",
+                id="modify-response",
+            ),
+        ),
+    )
+    async def test_errors_that_are_not_guardrail_blocks_keep_the_litellm_error(
+        self, monkeypatch: pytest.MonkeyPatch, error: Exception, message: str, code: str
+    ) -> None:
+        monkeypatch.setattr(litellm, "callbacks", [])
+
+        with pytest.raises(ProxyException) as exc_info:
+            await self._answer(error)
+
+        assert type(exc_info.value) is ProxyException
+        assert (exc_info.value.message, exc_info.value.code) == (message, code)
 
 
 class TestBedrockAgentRuntimePassthroughToggle:
@@ -7821,6 +8095,20 @@ class TestTypeSafePassthroughRoute:
             sent: Final = route.calls.last.request
             assert sent.headers["authorization"] == "Bearer typesafe-test-key"
             assert json.loads(sent.content or b"{}") == (body or {})
+
+    def test_forwards_only_the_typesafe_danger_zone_headers_upstream(self, client: TestClient) -> None:
+        with respx.mock(assert_all_called=True) as upstream:
+            route = upstream.post("https://typesafe.example/base/v1/systemone").mock(
+                return_value=httpx.Response(200, json={"id": "upstream_123"})
+            )
+            client.post(
+                "/typesafe/v1/systemone",
+                json={"state": "x"},
+                headers={"TypeSafe-Danger-Zone-Images": "true", "X-Unrelated": "1"},
+            )
+
+            sent: Final = route.calls.last.request.headers
+            assert (sent.get("typesafe-danger-zone-images"), sent.get("x-unrelated")) == ("true", None)
 
     @pytest.mark.parametrize(
         "provider, endpoint, is_decision_request",

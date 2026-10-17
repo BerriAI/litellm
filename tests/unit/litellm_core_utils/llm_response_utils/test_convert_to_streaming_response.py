@@ -9,6 +9,8 @@ replay yields multiple word-shaped chunks instead of a single one-shot
 content frame, restoring per-token cadence on cache hits.
 """
 
+from typing import Final
+
 import pytest
 
 import litellm
@@ -216,6 +218,37 @@ async def test_async_tool_calls_and_function_call_only_on_first_chunk():
     for c in chunks[1:]:
         assert c.choices[0].delta.tool_calls is None
         assert c.choices[0].delta.function_call is None
+
+
+@pytest.mark.asyncio
+async def test_async_reasoning_items_and_provider_specific_fields_only_on_first_chunk():
+    reasoning_items: Final = [{"id": "rs_1", "type": "reasoning", "summary": [], "encrypted_content": "enc-1"}]
+    provider_specific_fields: Final = {
+        "tool_search_items": [{"id": "tsc_1", "type": "tool_search_call", "arguments": {"query": "weather"}}]
+    }
+    payload: Final = {
+        **_async_payload(),
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "cached content slices here",
+                    "reasoning_items": reasoning_items,
+                    "provider_specific_fields": provider_specific_fields,
+                },
+                "finish_reason": "stop",
+            }
+        ],
+    }
+    chunks: Final = await _collect_async(payload)
+    assert len(chunks) > 1
+    first_delta: Final = chunks[0].choices[0].delta
+    assert getattr(first_delta, "reasoning_items", None) == reasoning_items
+    assert getattr(first_delta, "provider_specific_fields", None) == provider_specific_fields
+    for c in chunks[1:]:
+        assert getattr(c.choices[0].delta, "reasoning_items", None) is None
+        assert getattr(c.choices[0].delta, "provider_specific_fields", None) is None
 
 
 @pytest.mark.asyncio

@@ -27,6 +27,7 @@ from litellm.constants import (
     PROXY_REJECTED_BEFORE_ROUTING_KEY,
 )
 from litellm.exceptions import (
+    MalformedRequestFieldError,
     validate_rate_limit_category,
     validate_rate_limit_type,
 )
@@ -3098,13 +3099,17 @@ class PrometheusLogger(CustomLogger):
             if exception is not None:
                 exception_status = str(getattr(exception, "status_code", None))
                 if exception_status == "None" or not exception_status:
-                    code: Final = getattr(exception, "code", None)
+                    code: Final[object] = getattr(exception, "code", None)
                     if code is not None:
                         exception_status = str(code)
 
             # On LiteLLM-side rejects (no deployment picked), route request_kwargs["model"]
             # into requested_model and leave deployment-scoped labels empty.
-            deployment_selected: Final = bool(model_id) and not _litellm_params.get(PROXY_REJECTED_BEFORE_ROUTING_KEY)
+            deployment_selected: Final = (
+                bool(model_id)
+                and not _litellm_params.get(PROXY_REJECTED_BEFORE_ROUTING_KEY)
+                and not isinstance(exception, MalformedRequestFieldError)
+            )
             if deployment_selected:
                 label_litellm_model_name = litellm_model_name
                 label_model_id = model_id

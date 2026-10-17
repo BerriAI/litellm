@@ -2,6 +2,8 @@ import asyncio
 import json
 import re
 from datetime import datetime, timezone
+from importlib.resources import files
+from itertools import chain
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -18,7 +20,7 @@ from litellm.router_strategy.complexity_router.fuse_presets import get_fuse_pres
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     ModelGroupInfoProxy,
 )
-from litellm.types.proxy.public_endpoints.public_endpoints import ProviderCreateInfo
+from litellm.types.proxy.public_endpoints.public_endpoints import ProviderCreateInfo, ProviderCredentialField
 from litellm.types.utils import LlmProviders
 
 
@@ -505,6 +507,7 @@ ADD_MODEL_UNLISTED_PROVIDERS: Final = frozenset(
         "charity_engine",
         "chutes",
         "darkbloom",
+        "databricks_agent",
         "gdc",
         "helicone",
         "inception",
@@ -1561,6 +1564,59 @@ async def test_fetch_remote_autorouter_presets_parses_and_rejects_empty(monkeypa
     response.content = b"{}"
     with pytest.raises(ValueError, match="empty"):
         await _fetch_remote_autorouter_presets("https://example.test/presets.json")
+
+
+# ---------------------------------------------------------------------------
+# /public/agents/fields inherited provider credentials
+# ---------------------------------------------------------------------------
+
+
+def test_get_agent_fields_merge_does_not_compound_across_requests():
+    """The inherited-credentials merge runs once, so credential_fields cannot grow per request.
+
+    Caching the raw file contents instead of the merged result would let the merge
+    append inherited fields again on every request.
+    """
+    client = _make_client()
+
+    def counts():
+        return {
+            agent["agent_type"]: len(agent.get("credential_fields") or [])
+            for agent in client.get("/public/agents/fields").json()
+        }
+
+    first = counts()
+    assert first, "expected at least one agent type"
+    assert first == counts() == counts()
+
+
+def test_get_agent_fields_appends_inherited_provider_credential_fields():
+    client: Final = _make_client()
+    providers: Final = {p["provider"]: p for p in client.get("/public/providers/fields").json()}
+    agents: Final = client.get("/public/agents/fields").json()
+    bundled: Final = json.loads(
+        files("litellm.proxy.public_endpoints").joinpath("agent_create_fields.json").read_text(encoding="utf-8")
+    )
+    own_counts: Final = {agent["agent_type"]: len(agent["credential_fields"]) for agent in bundled}
+    expected_inherited: Final = {
+        agent["agent_type"]: providers.get(agent.get("inherit_credentials_from_provider"), {}).get(
+            "credential_fields", []
+        )
+        for agent in bundled
+    }
+    inherited: Final = {
+        agent["agent_type"]: agent["credential_fields"][own_counts[agent["agent_type"]] :] for agent in agents
+    }
+
+    assert any(expected_inherited.values()), "expected at least one agent to inherit provider credential fields"
+    assert all("inherit_credentials_from_provider" not in agent for agent in agents)
+    assert {
+        agent_type: [
+            {key: field[key] for key in field if key in ProviderCredentialField.model_fields} for field in fields
+        ]
+        for agent_type, fields in inherited.items()
+    } == expected_inherited
+    assert all(field["include_in_litellm_params"] is True for field in chain.from_iterable(inherited.values()))
 
 
 @pytest.mark.parametrize("preference", ["auto_install", None])

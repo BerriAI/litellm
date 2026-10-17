@@ -369,7 +369,12 @@ def test_repeated_count_tokens_on_budgeted_key_does_not_reserve_budget_or_block_
             {
                 "path": f"/{counting_upstream.scenario_id}/v1/responses/input_tokens",
                 "authorization": "Bearer integration-provider-key",
-                "body": {"model": "gpt-4o-mini", "input": [{"role": "user", "content": "hello!!!"}]},
+                "body": {
+                    "model": "gpt-4o-mini",
+                    "input": [
+                        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello!!!"}]}
+                    ],
+                },
                 "method": "POST",
                 "api_key": "",
             }

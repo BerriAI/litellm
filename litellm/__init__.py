@@ -118,6 +118,7 @@ success_callback: List[CALLBACK_TYPES] = []
 failure_callback: List[CALLBACK_TYPES] = []
 service_callback: List[CALLBACK_TYPES] = []
 audit_log_callbacks: List[CALLBACK_TYPES] = []
+batch_line_item_callbacks: Sequence[CALLBACK_TYPES] = ()
 # logging_callback_manager is lazy-loaded via __getattr__
 _custom_logger_compatible_callbacks_literal = Literal[
     "lago",
@@ -206,7 +207,7 @@ _async_failure_callback: List[Union[str, Callable[..., object], "CustomLogger"]]
     []
 )  # internal variable - async custom callbacks are routed here.
 pre_call_rules: List[Callable] = []
-post_call_rules: List[Callable] = []
+post_call_rules: List[Callable[..., object]] = []
 turn_off_message_logging: Optional[bool] = False
 standard_logging_payload_excluded_fields: Optional[List[str]] = (
     None  # Fields to exclude from StandardLoggingPayload before callbacks receive it
@@ -392,6 +393,7 @@ key_alias_pattern: str | None = None
 enable_gemini_default_thinking_level_low: bool = (
     False  # opt-in: force thinkingLevel low/minimal for Gemini 3 thinking param mapping
 )
+gemini_include_thoughts_default: bool = True
 ####################
 logging: bool = True
 enable_loadbalancing_on_batch_endpoints: Optional[bool] = None
@@ -1175,7 +1177,9 @@ def _build_models_by_provider() -> dict:
         "edenai": edenai_models,
         "datarobot": datarobot_models,
         "vertex_ai": vertex_chat_models
+        | vertex_code_chat_models
         | vertex_text_models
+        | vertex_code_text_models
         | vertex_anthropic_models
         | vertex_vision_models
         | vertex_language_models
@@ -1183,7 +1187,7 @@ def _build_models_by_provider() -> dict:
         | vertex_minimax_models
         | vertex_moonshot_models
         | vertex_zai_models,
-        "ai21": ai21_models,
+        "ai21": ai21_models | ai21_chat_models,
         "bedrock": bedrock_models | bedrock_converse_models,
         "petals": petals_models,
         "ollama": ollama_models,
@@ -1414,6 +1418,7 @@ from .exceptions import (
     InvalidRequestError,
     BadRequestError,
     ImageFetchError,
+    MalformedRequestFieldError as MalformedRequestFieldError,
     VectorStoreSearchError,
     NotFoundError,
     PermissionDeniedError,
@@ -2287,12 +2292,14 @@ if TYPE_CHECKING:
     get_response_string: Callable[..., str]
     supports_function_calling: Callable[..., bool]
     supports_web_search: Callable[..., bool]
+    supports_tool_search: Callable[..., bool]
     supports_url_context: Callable[..., bool]
     supports_response_schema: Callable[..., bool]
     supports_parallel_function_calling: Callable[..., bool]
     supports_vision: Callable[..., bool]
     supports_audio_input: Callable[..., bool]
     supports_video_input: Callable[..., bool]
+    supports_box_questions: Callable[..., bool]
     supports_audio_output: Callable[..., bool]
     supports_system_messages: Callable[..., bool]
     supports_reasoning: Callable[..., bool]

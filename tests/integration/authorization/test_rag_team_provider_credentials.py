@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-import socket
 import threading
 import time
 import uuid
@@ -34,6 +33,7 @@ from integration._support.client import (
     string_value,
 )
 from integration._support.database import read_rows
+from integration._support.ports import allocate_port
 from integration._support.process import graceful_stop_seconds, owned_proxy, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue
@@ -837,10 +837,7 @@ def _store_rows(store_id: str) -> list[dict[str, JsonValue]]:
 
 
 def _closed_url() -> str:
-    with socket.socket() as reserve:
-        reserve.bind(("127.0.0.1", 0))
-        port: Final = reserve.getsockname()[1]
-    return f"http://127.0.0.1:{port}/v1"
+    return f"http://127.0.0.1:{allocate_port()}/v1"
 
 
 def test_viewer_ingest_and_team_and_jwt_query_use_team_provider_credentials(rag_rig: RagRig) -> None:
