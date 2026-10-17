@@ -166,12 +166,25 @@ def _carries_no_text(content: object) -> bool:
             return False
 
 
+def _content_texts(row: ConverseRow, returned: Mapping[str, object]) -> tuple[str, ...] | None:
+    content: Final = returned.get("content")
+    sent: Final = _text_parts(row.message)
+    if (
+        isinstance(content, str)
+        and len(row.content) > 1
+        and sent is not None
+        and all("\n" not in text for text in sent)
+    ):
+        return tuple(content.split("\n"))
+    return _text_parts(returned)
+
+
 def _content_edits(row: ConverseRow, original: object, returned: Mapping[str, object]) -> tuple[Edit, ...] | None:
     if returned.get("content") == original:
         return ()
     if not row.content and _carries_no_text(returned.get("content")):
         return ()
-    texts: Final = _text_parts(returned)
+    texts: Final = _content_texts(row, returned)
     if texts is None or len(texts) != len(row.content):
         return None
     return _merged(tuple(_slot_edits(slot, text) for slot, text in zip(row.content, texts)))

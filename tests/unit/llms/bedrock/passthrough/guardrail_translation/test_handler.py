@@ -1741,14 +1741,14 @@ class TestConverseRowEditWriteBack:
                 id="role-changed",
             ),
             pytest.param(
-                [
-                    {
-                        "role": "user",
-                        "content": [{"text": "card 4111"}, {"cachePoint": {"type": "default"}}, {"text": "thanks"}],
-                    }
-                ],
+                [{"role": "user", "content": [{"text": "card\n4111"}, {"text": "thanks"}]}],
+                [{"role": "user", "content": "card\n[CARD] thanks"}],
+                id="blocks-that-hold-newlines-joined-with-a-space",
+            ),
+            pytest.param(
+                [{"role": "user", "content": [{"text": "card 4111"}, {"text": "thanks"}, {"text": "bye"}]}],
                 [{"role": "user", "content": "card [CARD]\nthanks"}],
-                id="blocks-merged-around-a-cache-point",
+                id="newline-joined-blocks-with-one-missing",
             ),
             pytest.param([_pay_turn(_CARD_TOOL_CALL)], [_pay_row(content="added text")], id="text-added-to-a-call"),
             pytest.param([_pay_turn(_CARD_TOOL_CALL)], [_pay_row(call_id="t2")], id="tool-call-id-changed"),
@@ -1788,6 +1788,39 @@ class TestConverseRowEditWriteBack:
             )
 
         assert data["data"] == original
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("last_block", "masked_last_block"),
+        [
+            ({"text": "thanks 4111"}, {"text": "thanks [CARD]"}),
+            ({"guardContent": {"text": {"text": "thanks 4111"}}}, {"guardContent": {"text": {"text": "thanks [CARD]"}}}),
+        ],
+        ids=["text", "guard-content"],
+    )
+    async def test_row_joined_with_newlines_is_split_back_into_its_blocks(self, last_block, masked_last_block):
+        cache_point = {"cachePoint": {"type": "default"}}
+        data = _converse_request(
+            {"messages": [{"role": "user", "content": [{"text": "card 4111"}, cache_point, last_block]}]}
+        )
+
+        result = await BedrockPassthroughGuardrailHandler().process_input_messages(
+            data, _replying({"structured_messages": [{"role": "user", "content": "card [CARD]\nthanks [CARD]"}]})
+        )
+
+        assert result["data"]["messages"] == [
+            {"role": "user", "content": [{"text": "card [CARD]"}, cache_point, masked_last_block]}
+        ]
+
+    @pytest.mark.asyncio
+    async def test_single_block_row_keeps_a_newline_the_guardrail_wrote(self):
+        data = _converse_request({"messages": [{"role": "user", "content": [{"text": "card 4111"}]}]})
+
+        result = await BedrockPassthroughGuardrailHandler().process_input_messages(
+            data, _replying({"structured_messages": [{"role": "user", "content": "card\n[CARD]"}]})
+        )
+
+        assert result["data"]["messages"] == [{"role": "user", "content": [{"text": "card\n[CARD]"}]}]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("content", [None, "", []], ids=["none", "empty-string", "empty-list"])
