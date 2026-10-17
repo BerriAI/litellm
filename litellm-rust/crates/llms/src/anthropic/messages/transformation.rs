@@ -152,15 +152,28 @@ pub(crate) fn update_headers_with_anthropic_beta(
     merge_beta_headers(headers, feature_betas(request))
 }
 
+pub(crate) fn update_headers_with_safeguards_beta(
+    headers: Headers,
+    request: &MessagesRequest,
+    provider: BetaProvider,
+) -> Headers {
+    merge_beta_headers(
+        headers,
+        feature_betas(request).union(on_provider(mapped_host_betas(&request.params), provider)),
+    )
+}
+
 /// The betas a request needs on a host with a column in the beta map, filtered and renamed
-/// through that column. A host without one gets `feature_betas` alone, so `safeguards` reaches
-/// it as sent.
+/// through that column.
 pub(crate) fn provider_feature_betas(request: &MessagesRequest, provider: BetaProvider) -> BetaSet {
-    feature_betas(request)
-        .union(mapped_host_betas(&request.params))
-        .iter()
-        .filter_map(|beta| beta.on(provider))
-        .collect()
+    on_provider(
+        feature_betas(request).union(mapped_host_betas(&request.params)),
+        provider,
+    )
+}
+
+fn on_provider(betas: BetaSet, provider: BetaProvider) -> BetaSet {
+    betas.iter().filter_map(|beta| beta.on(provider)).collect()
 }
 
 fn mapped_host_betas(params: &MessagesOptionalParams) -> BetaSet {

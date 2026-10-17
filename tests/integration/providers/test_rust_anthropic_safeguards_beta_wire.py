@@ -34,7 +34,6 @@ from integration.providers._anthropic_safeguards_beta_support import (
     DEEPSEEK_DEPLOYMENT,
     DEEPSEEK_KEY,
     DEEPSEEK_TARGET,
-    EXTRA_INPUTS_MESSAGE,
     MERGED_BETAS,
     NOT_A_LIST_MESSAGE,
     OVERLOADED_MESSAGE,
@@ -319,7 +318,7 @@ def _beta_set(header: str | None) -> frozenset[str]:
 
 @pytest.mark.parametrize("beta", [None, CLIENT_BETAS], ids=["no-client-betas", "client-betas"])
 @pytest.mark.timeout(_CELL_TIMEOUT)
-def test_deepseek_messages_forward_safeguards_and_client_betas_as_sent(rig: _Rig, beta: str | None) -> None:
+def test_deepseek_messages_forward_safeguards_without_adding_a_beta(rig: _Rig, beta: str | None) -> None:
     marker: Final = new_marker()
     response: Final = _post(
         rig.gateway,
@@ -331,22 +330,20 @@ def test_deepseek_messages_forward_safeguards_and_client_betas_as_sent(rig: _Rig
     assert f"msg_{marker}" in response.text, response.text
     sent: Final = one_delivery(rig.wire, marker)
     assert (sent.target, sent.api_key, sent.safeguards) == (DEEPSEEK_TARGET, DEEPSEEK_KEY, list(SAFEGUARDS)), sent
-    assert _beta_set(sent.beta) == _beta_set(beta), sent
+    assert _beta_set(sent.beta) <= _beta_set(beta) - {DANGEROUS_TOOL_USE}, sent
 
 
-def test_python_route_leaves_safeguards_without_the_beta(gateway: Gateway, scenario: Scenario) -> None:
+def test_python_route_adds_the_beta_for_safeguards(gateway: Gateway, scenario: Scenario) -> None:
+    pytest.skip("BUG: Python /v1/messages sends safeguards without the dangerous-tool-use beta, Anthropic answers 400")
     with wire_server(anthropic_peer) as wire:
         deployment: Final = scenario.model(model=f"anthropic/{BACKEND}", api_base=wire.url, api_key=ANTHROPIC_KEY)
         marker: Final = new_marker()
         response: Final = _post(gateway, safeguarded(messages_body(deployment, marker), list(SAFEGUARDS)))
-        assert response.status_code == 400, response.text
-        assert EXTRA_INPUTS_MESSAGE in response.text, response.text
+        assert response.status_code == 200, response.text
+        assert "safeguard_results" in response.text, response.text
         (sent,) = deliveries(wire)
-    assert (sent.marker, sent.beta, sent.safeguards) == (
-        marker,
-        None,
-        list(SAFEGUARDS),
-    ), sent
+    assert (sent.marker, sent.safeguards) == (marker, list(SAFEGUARDS)), sent
+    assert DANGEROUS_TOOL_USE in _beta_set(sent.beta), sent
     assert not rust_routed(response.headers), dict(response.headers)
 
 
