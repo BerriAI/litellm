@@ -1196,6 +1196,9 @@ def _map_sagemaker_exception(
             )
 
 
+_VERTEX_403_STATUS_CODE_PATTERN: Final = re.compile(r"(?<![0-9A-Za-z])403(?![0-9A-Za-z])")
+
+
 def _map_vertex_exception(
     *,
     model: str,
@@ -1206,6 +1209,8 @@ def _map_vertex_exception(
     exception_provider: str,
     extra_information: str,
 ) -> None:
+    status_code: Final[object] = getattr(original_exception, "status_code", None)
+    body_code: Final[int | None] = _get_body_error_code(error_str)
     if "Vertex AI API has not been used in project" in error_str or "Unable to find your project" in error_str:
         raise BadRequestError(
             message=f"litellm.BadRequestError: {custom_llm_provider}Exception - {error_str}",
@@ -1252,7 +1257,11 @@ def _map_vertex_exception(
             llm_provider=custom_llm_provider,
             litellm_debug_info=extra_information,
         )
-    elif "403" in error_str:
+    elif (
+        (not isinstance(status_code, int) or status_code in (403, 500))
+        and body_code in (None, 403)
+        and _VERTEX_403_STATUS_CODE_PATTERN.search(error_str)
+    ):
         raise BadRequestError(
             message=f"{custom_llm_provider.capitalize()}Exception BadRequestError - {error_str}",
             model=model,
@@ -1306,7 +1315,7 @@ def _map_vertex_exception(
     elif (
         isinstance(getattr(original_exception, "status_code", None), int)
         and 500 <= original_exception.status_code < 600
-        and _get_body_error_code(error_str) == 429
+        and body_code == 429
     ):
         # upstream gateway wraps a 429 inside a 5xx envelope
         # e.g. HTTP 500/503 with {"error":{"code":429,...}}.
