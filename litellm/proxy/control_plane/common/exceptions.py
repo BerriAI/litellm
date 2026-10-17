@@ -1,5 +1,6 @@
 """RFC 9457 problem documents for the control plane, same contract as /management/v1."""
 
+from http import HTTPStatus
 from typing import Final
 
 from fastapi import FastAPI, Request
@@ -23,6 +24,10 @@ def problem(slug: str, title: str, status: int, detail: str) -> ProblemDetail:
     return ProblemDetail(type=f"{PROBLEM_TYPE_BASE}{slug}", title=title, status=status, detail=detail)
 
 
+def bad_request(detail: str) -> ProblemDetail:
+    return problem("bad-request", "Bad Request", HTTPStatus.BAD_REQUEST, detail)
+
+
 def unauthorized(detail: str) -> ProblemDetail:
     return problem("unauthorized", "Unauthorized", 401, detail)
 
@@ -41,6 +46,10 @@ def too_many_requests(detail: str) -> ProblemDetail:
 
 def bad_gateway(detail: str) -> ProblemDetail:
     return problem("bad-gateway", "Bad Gateway", 502, detail)
+
+
+def service_unavailable(detail: str) -> ProblemDetail:
+    return problem("service-unavailable", "Service Unavailable", 503, detail)
 
 
 class ControlPlaneException(ManagementProblem):
