@@ -239,5 +239,13 @@
       "/v1/responses",
       "/v1/messages"
     ]
+  },
+  "fikra": {
+    "base_url": "https://api.fikraapi.co.ke/v1",
+    "api_key_env": "FIKRA_API_KEY",
+    "api_base_env": "FIKRA_API_BASE",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    }
   }
 }
