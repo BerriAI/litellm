@@ -1,6 +1,5 @@
 import json
 import math
-import socket
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -14,6 +13,7 @@ from integration._support.client import Gateway, Scenario, eventually, object_va
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy_process
 from integration._support.upstream import ScenarioHandle, delete_scenario, register_scenario
+from integration._support.ports import allocate_port
 from integration.cost_calculation.cost_tracking_case import JsonResponse
 from pydantic import JsonValue, TypeAdapter
 
@@ -83,6 +83,7 @@ _PROVIDERS: Final = (
         "perplexity/pplx-decider-v1-27b",
     ),
     _Provider("typesafe", "typesafe/jev-1.13.0", "/v1/systemone", "jev-1.13.0", _API_KEY, False, "typesafe/jev-1.13.0"),
+    _Provider("nace", "nace/drex-v2.0", "/v1/systemone", "drex-v2.0", _API_KEY, False, "nace/drex-v2.0"),
     _Provider(
         "openrouter",
         "openrouter/typesafe/jev-1.13",
@@ -135,7 +136,7 @@ _PROVIDERS: Final = (
     ),
 )
 _PERPLEXITY: Final = _PROVIDERS[0]
-_OPENROUTER: Final = _PROVIDERS[2]
+_OPENROUTER: Final = next(provider for provider in _PROVIDERS if provider.name == "openrouter")
 _OPENROUTER_CHAT_MODEL: Final = "openrouter/openai/gpt-5-mini"
 _UNSUPPORTED_PROVIDER_MODEL: Final = "anthropic/claude-opus-5-5"
 _CONNECTION_ERROR: Final = "litellm.APIConnectionError"
@@ -233,12 +234,6 @@ def _assert_connection_error(response: httpx.Response) -> None:
     assert 500 <= response.status_code < 600, response.text
     assert _CONNECTION_ERROR in response.text, response.text
     assert _GENERIC_API_ERROR not in response.text, response.text
-
-
-def _free_closed_port() -> int:
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        return probe.getsockname()[1]
 
 
 def _pass_through_config(directory: Path, pass_through_target: str, native_api_base: str) -> Path:
@@ -431,8 +426,8 @@ def test_request_body_api_base_is_refused_like_chat_without_an_upstream_call(gat
     with gateway.scenario() as scenario:
         handle: Final = _register(scenario, _answer_body(_PERPLEXITY))
         model: Final = _deployment(scenario, handle, _PERPLEXITY)
-        decisions: Final = _decide(gateway, model, api_base=f"http://127.0.0.1:{_free_closed_port()}")
-        chat: Final = _chat(gateway, model, api_base=f"http://127.0.0.1:{_free_closed_port()}")
+        decisions: Final = _decide(gateway, model, api_base=f"http://127.0.0.1:{allocate_port()}")
+        chat: Final = _chat(gateway, model, api_base=f"http://127.0.0.1:{allocate_port()}")
         assert 400 <= decisions.status_code < 500, decisions.text
         assert decisions.status_code == chat.status_code, (decisions.text, chat.text)
         assert _upstream_calls(gateway, handle) == []
@@ -542,7 +537,7 @@ def test_unreachable_upstream_fails_only_its_own_deployment(gateway: Gateway, pr
         handle: Final = _register(scenario, _answer_body(provider))
         healthy: Final = _deployment(scenario, handle, provider)
         dead: Final = scenario.model(
-            model=provider.model, api_base=f"http://127.0.0.1:{_free_closed_port()}", api_key=provider.api_key
+            model=provider.model, api_base=f"http://127.0.0.1:{allocate_port()}", api_key=provider.api_key
         )
         failed: Final = _decide(gateway, dead, num_retries=0)
         _assert_connection_error(failed)
@@ -556,7 +551,7 @@ def test_an_unreachable_openrouter_deployment_reports_a_connection_error_on_chat
     gateway: Gateway,
 ) -> None:
     with gateway.scenario() as scenario:
-        dead_api_base: Final = f"http://127.0.0.1:{_free_closed_port()}"
+        dead_api_base: Final = f"http://127.0.0.1:{allocate_port()}"
         chat_model: Final = scenario.model(model=_OPENROUTER_CHAT_MODEL, api_base=dead_api_base, api_key=_API_KEY)
         decisions_model: Final = scenario.model(model=_OPENROUTER.model, api_base=dead_api_base, api_key=_API_KEY)
         chat: Final = _chat(gateway, chat_model, num_retries=0)
@@ -572,7 +567,7 @@ def test_an_unreachable_openrouter_deployment_reports_a_connection_error_on_chat
 
 
 async def test_sdk_openrouter_connection_failures_raise_a_connection_error(gateway: Gateway) -> None:
-    dead_api_base: Final = f"http://127.0.0.1:{_free_closed_port()}"
+    dead_api_base: Final = f"http://127.0.0.1:{allocate_port()}"
     with pytest.raises(litellm.APIConnectionError):
         litellm.completion(
             model=_OPENROUTER_CHAT_MODEL,
@@ -587,14 +582,16 @@ async def test_sdk_openrouter_connection_failures_raise_a_connection_error(gatew
             api_base=dead_api_base,
             api_key=_API_KEY,
         )
-    with pytest.raises(litellm.APIConnectionError):
+    with pytest.raises(litellm.APIConnectionError) as decisions_error:
         litellm.decisions(
             model=_OPENROUTER.model, state=_STATE, questions=_SDK_QUESTIONS, api_base=dead_api_base, api_key=_API_KEY
         )
-    with pytest.raises(litellm.APIConnectionError):
+    assert decisions_error.value.llm_provider == "openrouter"
+    with pytest.raises(litellm.APIConnectionError) as systemone_error:
         await litellm.asystemone(
             model=_OPENROUTER.model, state=_STATE, questions=_SDK_QUESTIONS, api_base=dead_api_base, api_key=_API_KEY
         )
+    assert systemone_error.value.llm_provider == "openrouter"
 
 
 def test_a_deployment_whose_provider_has_no_decisions_support_is_refused_naming_every_supported_provider(

@@ -1,5 +1,5 @@
 from collections.abc import Mapping, Sequence
-from typing import Any, Final
+from typing import Final
 
 from litellm.llms.gemini.count_tokens.handler import GoogleAIStudioTokenCounter
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
@@ -23,10 +23,10 @@ class VertexAITokenCounter(GoogleAIStudioTokenCounter, VertexBase):
         self,
         api_base: str | None = None,
         api_key: str | None = None,
-        headers: dict[str, Any] | None = None,
+        headers: dict[str, object] | None = None,
         model: str = "",
-        litellm_params: dict[str, Any] | None = None,
-    ) -> tuple[dict[str, Any], str]:
+        litellm_params: dict[str, object] | None = None,
+    ) -> tuple[dict[str, object], str]:
         """
         Returns a Tuple of headers and url for the Vertex AI countTokens endpoint.
         """

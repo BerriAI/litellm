@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import copy
 import json
 import re
 import threading
@@ -33,6 +34,7 @@ from litellm.types.decisions import (
     OpenAIDecisionResponse,
     ScoreAnswer,
 )
+from litellm.types.router import ModelInfo
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
 
@@ -118,6 +120,7 @@ _PROVIDERS: Final[tuple[tuple[str, str, str, str], ...]] = (
         "pplx-decider-v1-27b",
     ),
     ("typesafe", "typesafe/jev-1.13", "https://api.typesafe.ai/v1/systemone", "jev-1.13"),
+    ("nace", "nace/drex-v2.0", "https://console.nace.ai/v1/systemone", "drex-v2.0"),
     (
         "openrouter",
         "openrouter/typesafe/jev-1.13",
@@ -3188,6 +3191,147 @@ async def test_box_questions_are_dropped_under_drop_params_and_answered_as_refus
     assert response.model_dump(mode="json")["answers"] == _DROPPED_BOX_ANSWERS[api]
 
 
+_CRACK_BOX_QUESTION: Final[Mapping[str, object]] = MappingProxyType(
+    {"type": "box", "name": "crack", "instructions": "the crack on the screen"}
+)
+_CRACK_BOX_ANSWER: Final[Mapping[str, object]] = MappingProxyType(
+    {"type": "box", "name": "crack", "box": {"top": 0.1, "bottom": 0.4, "left": 0.2, "right": 0.6}, "confidence": 0.7}
+)
+
+
+@pytest.mark.asyncio
+async def test_a_deployment_that_advertises_box_questions_gets_box_answers_from_an_openai_format_provider(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(
+        json={**_OPENAI_RESPONSE, "answers": [dict(_CRACK_BOX_ANSWER)]}
+    )
+
+    response: Final = await litellm.adecisions(
+        model="openai/gpt-6-luna",
+        input="review",
+        questions=[_CRACK_BOX_QUESTION],
+        api_key="deployment-key",
+        model_info={"supports_box_questions": True},
+    )
+
+    assert json.loads(route.calls.last.request.content)["questions"] == [dict(_CRACK_BOX_QUESTION)]
+    assert [answer.model_dump(mode="json") for answer in response.answers] == [dict(_CRACK_BOX_ANSWER)]
+
+
+@pytest.mark.asyncio
+async def test_a_deployment_that_turns_box_questions_off_is_refused_even_when_the_cost_map_allows_them(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post("https://api.typesafe.ai/v1/systemone").respond(json=_RESPONSE)
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=r"\['box questions'\]"):
+        await litellm.adecisions(
+            model="typesafe/jev-1.14.0",
+            input="review",
+            questions=[_CRACK_BOX_QUESTION],
+            api_key="deployment-key",
+            extra_headers={"TypeSafe-Danger-Zone-Images": "true"},
+            model_info={"supports_box_questions": False},
+        )
+
+    assert not route.called
+
+
+@pytest.mark.asyncio
+async def test_a_typesafe_deployment_that_advertises_box_questions_still_needs_the_images_header(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post("https://api.typesafe.ai/v1/systemone").respond(json=_RESPONSE)
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=r"\['box questions'\]"):
+        await litellm.adecisions(
+            model="typesafe/jev-1.14.0",
+            input="review",
+            questions=[_CRACK_BOX_QUESTION],
+            api_key="deployment-key",
+            model_info={"supports_box_questions": True},
+        )
+
+    assert not route.called
+
+
+@pytest.mark.asyncio
+async def test_a_deployment_flag_that_is_not_a_boolean_leaves_the_cost_map_in_charge(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_RESPONSE)
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=r"\['box questions'\]"):
+        await litellm.adecisions(
+            model="openai/gpt-6-luna",
+            input="review",
+            questions=[_CRACK_BOX_QUESTION],
+            api_key="deployment-key",
+            model_info={"supports_box_questions": "true"},
+        )
+
+    assert not route.called
+
+
+@pytest.mark.asyncio
+async def test_an_unflagged_deployment_keeps_box_questions_a_same_model_deployment_advertises(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    backend: Final = "perplexity/pplx-decider-v1-27b"
+    monkeypatch.setitem(litellm.model_cost, backend, copy.deepcopy(litellm.model_cost[backend]))
+    for deployment_id in ("box-flagged", "box-sibling"):
+        monkeypatch.setitem(litellm.model_cost, deployment_id, {})
+    route: Final = respx_mock.post(_PERPLEXITY_DECISIONS_URL).respond(
+        json={
+            "model": "pplx-decider-v1-27b",
+            "answers": {"crack": {k: v for k, v in _CRACK_BOX_ANSWER.items() if k != "name"}},
+            "usage": {"input_tokens": _INPUT_TOKENS, "output_tokens": _OUTPUT_TOKENS},
+        }
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "flagged",
+                "litellm_params": {"model": backend, "api_key": "k"},
+                "model_info": {"id": "box-flagged", "supports_box_questions": True},
+            },
+            {
+                "model_name": "sibling",
+                "litellm_params": {"model": backend, "api_key": "k"},
+                "model_info": {"id": "box-sibling"},
+            },
+        ]
+    )
+
+    response: Final = await router.adecisions(model="sibling", input="review", questions=[_CRACK_BOX_QUESTION])
+
+    assert "crack" in json.loads(route.calls.last.request.content)["questions"]
+    assert [answer.model_dump(mode="json") for answer in response.answers] == [dict(_CRACK_BOX_ANSWER)]
+
+
+@pytest.mark.asyncio
+async def test_a_model_info_object_instead_of_a_dict_still_reaches_the_provider(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_RESPONSE)
+
+    response: Final = await litellm.adecisions(
+        model="openai/gpt-6-luna",
+        input="review",
+        questions=[{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+        api_key="deployment-key",
+        model_info=ModelInfo(id="deployment-1"),
+    )
+
+    assert route.called
+    assert response.answers[0].model_dump(mode="json")["name"] == "is_defect"
+
+
 def test_dropping_every_question_answers_400_before_http(respx_mock: respx.MockRouter) -> None:
     route: Final = respx_mock.post(_PERPLEXITY_DECISIONS_URL).respond(json=_RESPONSE)
 
@@ -3202,3 +3346,137 @@ def test_dropping_every_question_answers_400_before_http(respx_mock: respx.MockR
 
     assert caught.value.status_code == 400
     assert not route.called
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("openai_format", (False, True))
+@pytest.mark.parametrize(
+    ("provider", "model", "url", "key_env"),
+    (
+        ("nace", "drex-test-alias", "https://console.nace.ai/v1/systemone", "NACE_API_KEY"),
+        ("openrouter", "nace/drex-test-alias", "https://openrouter.ai/api/alpha/decisions", "OPENROUTER_API_KEY"),
+        (
+            "fireworks_ai",
+            "accounts/test/models/drex-test-alias",
+            "https://api.fireworks.ai/inference/v1/systemone",
+            "FIREWORKS_API_KEY",
+        ),
+    ),
+)
+async def test_decision_hosts_preserve_drex_model_routing_credentials_and_returned_model_pricing(
+    provider: str,
+    model: str,
+    url: str,
+    key_env: str,
+    openai_format: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.setenv(key_env, "host-test-key")
+    monkeypatch.delenv("NACE_API_BASE", raising=False)
+    monkeypatch.delenv("NACE_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_BASE", raising=False)
+    monkeypatch.delenv("FIREWORKS_API_BASE", raising=False)
+    monkeypatch.setitem(
+        litellm.model_cost,
+        f"{provider}/{model}",
+        {
+            "litellm_provider": provider,
+            "mode": "evaluation",
+            "input_cost_per_token": 0.001,
+            "output_cost_per_token": 0,
+        },
+    )
+    monkeypatch.setitem(
+        litellm.model_cost,
+        f"{provider}/drex-test-resolved",
+        {
+            "litellm_provider": provider,
+            "mode": "evaluation",
+            "input_cost_per_token": 0.002,
+            "output_cost_per_token": 0,
+        },
+    )
+    payload: Final = {**_RESPONSE, "model": "drex-test-resolved", "request_id": "request-test"}
+    upstream: Final = respx_mock.post(url).respond(json=payload)
+    if openai_format:
+        response: Final = await litellm.adecisions(
+            model=f"{provider}/{model}",
+            input="damaged order",
+            questions=[{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+        )
+        assert isinstance(response, OpenAIDecisionResponse)
+        assert response.answers[0].model_dump() == {"type": "predicate", "name": "is_defect", "probability": 0.9}
+    else:
+        systemone_response: Final = await litellm.asystemone(
+            model=f"{provider}/{model}",
+            state="damaged order",
+            questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        )
+        assert systemone_response.answers["is_defect"] == NoulAnswer(type="noul", noul=0.9)
+        assert litellm.completion_cost(completion_response=systemone_response, call_type="asystemone") == pytest.approx(
+            _INPUT_TOKENS * 0.002
+        )
+    assert upstream.call_count == 1
+    assert upstream.calls[0].request.headers["authorization"] == "Bearer host-test-key"
+    assert json.loads(upstream.calls[0].request.content) == {
+        "model": model,
+        "state": "damaged order",
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    }
+
+
+@pytest.mark.parametrize("base_env", ("NACE_API_BASE", "NACE_BASE_URL"))
+def test_nace_sync_call_uses_environment_base_and_explicit_credentials(
+    base_env: str,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.setenv(base_env, "https://nace.example/v1/")
+    monkeypatch.setenv("NACE_API_KEY", "environment-key")
+    upstream: Final = respx_mock.post("https://nace.example/v1/systemone").respond(json=_RESPONSE)
+    response: Final = litellm.systemone(
+        model="nace/drex-v2.0",
+        state={"message": "damaged order"},
+        api_key="explicit-key",
+        questions={"is_defect": {"type": "noul", "criteria": {"true": "damaged", "false": "intact"}}},
+    )
+    assert response.answers["is_defect"] == NoulAnswer(type="noul", noul=0.9)
+    assert upstream.calls[0].request.headers["authorization"] == "Bearer explicit-key"
+    assert json.loads(upstream.calls[0].request.content) == {
+        "model": "drex-v2.0",
+        "state": {"message": "damaged order"},
+        "questions": {"is_defect": {"type": "noul", "criteria": {"true": "damaged", "false": "intact"}}},
+    }
+
+
+@pytest.mark.parametrize(
+    ("status", "exception"),
+    (
+        (401, litellm.AuthenticationError),
+        (402, litellm.PaymentRequiredError),
+        (422, litellm.BadRequestError),
+        (429, litellm.RateLimitError),
+        (529, litellm.APIError),
+    ),
+)
+def test_nace_upstream_failures_preserve_status_and_message(
+    status: int,
+    exception: type[Exception],
+    respx_mock: respx.MockRouter,
+) -> None:
+    upstream: Final = respx_mock.post("https://console.nace.ai/v1/systemone").respond(
+        status,
+        json={"error": {"message": "decision rejected"}, "request_id": "request-test"},
+        headers={"retry-after": "1"},
+    )
+    with pytest.raises(exception, match="decision rejected") as error:
+        litellm.systemone(
+            model="nace/drex-v2.0",
+            state="text",
+            api_key="test-key",
+            questions={"a": {"type": "noul", "instructions": "Is it urgent?"}},
+            num_retries=0,
+        )
+    assert getattr(error.value, "status_code") == status
+    assert upstream.call_count == 1

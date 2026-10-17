@@ -465,7 +465,7 @@ class LiteLLMAnthropicMessagesAdapter:
         *,
         custom_llm_provider: str | None = None,
         preserve_midturn_system: bool = False,
-    ) -> list:
+    ) -> list[AllMessageValues]:
         new_messages: Final[list[AllMessageValues]] = []
         replayable_messages: Final = strip_encrypted_reasoning_blocks_from_anthropic_messages(messages)
         leading_count: Final = next(
@@ -1352,12 +1352,12 @@ class LiteLLMAnthropicMessagesAdapter:
         choices: list[Choices],
         tool_name_mapping: dict[str, str] | None = None,
     ) -> list[dict[str, object]]:
-        new_content: Final[list[dict[str, Any]]] = []
+        new_content: Final[list[dict[str, object]]] = []
         for choice, compaction_blocks in (
             (choice, _compaction_blocks(_optional_attr(choice.message, "provider_specific_fields")))
             for choice in choices
         ):
-            new_content.extend(_COMPACTION_BLOCK.validate_python(block) for block in compaction_blocks)
+            new_content.extend(dict(_COMPACTION_BLOCK.validate_python(block)) for block in compaction_blocks)
             # Handle thinking blocks first
             if hasattr(choice.message, "thinking_blocks") and choice.message.thinking_blocks:
                 for thinking_block in choice.message.thinking_blocks:
@@ -1627,7 +1627,7 @@ class LiteLLMAnthropicMessagesAdapter:
     def translate_streaming_openai_chunk_to_anthropic_content_block(
         self, choices: list[OpenAIStreamingChoice | StreamingChoices]
     ) -> tuple[
-        Literal["text", "tool_use", "thinking"],
+        Literal["text", "tool_use", "thinking", "redacted_thinking"],
         "ContentBlockContentBlockDict",
     ]:
         from litellm._uuid import uuid
@@ -1664,6 +1664,10 @@ class LiteLLMAnthropicMessagesAdapter:
                 thinking_blocks = choice.delta.thinking_blocks or []
                 if len(thinking_blocks) > 0:
                     thinking_block = thinking_blocks[0]
+                    if thinking_block["type"] == "redacted_thinking":
+                        return "redacted_thinking", ChatCompletionRedactedThinkingBlock(
+                            type="redacted_thinking", data=thinking_block.get("data") or ""
+                        )
                     if thinking_block["type"] == "thinking":
                         thinking = thinking_block.get("thinking") or ""
                         signature = thinking_block.get("signature") or ""
@@ -1672,7 +1676,7 @@ class LiteLLMAnthropicMessagesAdapter:
                         assert isinstance(signature, str)
 
                         return "thinking", ChatCompletionThinkingBlock(
-                            type="thinking", thinking=thinking, signature=signature
+                            type="thinking", thinking=thinking if signature else "", signature=signature
                         )
             # OpenAI-compatible reasoning backends (e.g. vLLM/SGLang reasoning
             # parsers) populate ``reasoning_content`` without ``thinking_blocks``.

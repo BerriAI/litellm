@@ -1,13 +1,18 @@
 import json
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from functools import partial
+from itertools import chain
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Optional, cast
 
 import httpx
 from httpx import Response
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig, PassthroughStreamCollector
+from litellm.types.llms.openai import ChatCompletionSystemMessage, ChatCompletionUserMessage
 from litellm.types.utils import ModelResponseStream
 
 from ..base_aws_llm import BaseAWSLLM
@@ -39,7 +44,8 @@ def _plain_text_delta(chunk: ModelResponseStream) -> str | None:
     choice: Final = chunk.choices[0]
     if choice.finish_reason or choice.logprobs is not None:
         return None
-    populated: Final = frozenset(key for key, value in choice.delta.model_dump().items() if value is not None)
+    delta_fields: Final[Mapping[str, object]] = MappingProxyType(choice.delta.model_dump())
+    populated: Final = frozenset(key for key, value in delta_fields.items() if value is not None)
     if not populated <= _TEXT_ONLY_DELTA_FIELDS:
         return None
     content: Final = choice.delta.get("content")
@@ -89,6 +95,57 @@ def _translate_message(decoder: "AWSEventStreamDecoder", message: str) -> ModelR
     return None
 
 
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])
+_JSON_OBJECTS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+
+
+def _leaf_texts(block: Mapping[str, object]) -> Iterator[str]:
+    """The prompt text a content block carries itself: its text or JSON, or a tool call's input."""
+    text: Final = block.get("text")
+    if isinstance(text, str):
+        yield text
+    if "json" in block:
+        yield json.dumps(block["json"], default=str)
+    if "toolUse" in block:
+        yield json.dumps(_JSON_OBJECT.validate_python(block["toolUse"]).get("input"), default=str)
+
+
+def _block_texts(block: Mapping[str, object]) -> Iterator[str]:
+    """The prompt text a request content block carries, including the blocks of a tool result's content, which
+    Bedrock does not nest further."""
+    yield from _leaf_texts(block)
+    if "toolResult" not in block:
+        return
+    tool_result: Final = _JSON_OBJECT.validate_python(block["toolResult"])
+    yield from chain.from_iterable(map(_leaf_texts, _JSON_OBJECTS.validate_python(tool_result.get("content", ()))))
+
+
+def _content_text(content: object) -> str:
+    if isinstance(content, str):
+        return content
+    return "\n".join(chain.from_iterable(map(_block_texts, _JSON_OBJECTS.validate_python(content))))
+
+
+def _chat_message(turn: Mapping[str, object]) -> ChatCompletionUserMessage:
+    return ChatCompletionUserMessage(role="user", content=_content_text(turn.get("content", "")))
+
+
+def _count_prompt_tokens(model: str, request_body: object) -> int:
+    """Estimate a Bedrock request's prompt tokens from its system prompt and turns, the way a chat completions
+    stream that ended before the provider reported usage is estimated."""
+    from litellm.litellm_core_utils.token_counter import token_counter
+
+    body: Final = _JSON_OBJECT.validate_python(request_body)
+    if "messages" not in body:
+        return 0
+    system: Final = body.get("system")
+    messages: Final = (
+        *((ChatCompletionSystemMessage(role="system", content=_content_text(system)),) if system else ()),
+        *map(_chat_message, _JSON_OBJECTS.validate_python(body["messages"])),
+    )
+    return token_counter(model=model, messages=messages)
+
+
 def _build_logged_response(
     chunks: Sequence[ModelResponseStream], litellm_logging_obj: "LiteLLMLoggingObj"
 ) -> Optional["CostResponseTypes"]:
@@ -96,7 +153,13 @@ def _build_logged_response(
 
     if len(chunks) == 0:
         return None
-    return stream_chunk_builder(chunks=list(chunks), logging_obj=litellm_logging_obj)
+    return stream_chunk_builder(
+        chunks=list(chunks),
+        logging_obj=litellm_logging_obj,
+        count_prompt_tokens=partial(
+            _count_prompt_tokens, litellm_logging_obj.model, litellm_logging_obj.model_call_details.get("input")
+        ),
+    )
 
 
 class BedrockEventStreamCollector:

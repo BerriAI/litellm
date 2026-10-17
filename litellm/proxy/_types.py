@@ -62,6 +62,7 @@ from litellm.types.mcp import (
     MCPAuth,
     MCPAuthType,
     MCPCredentials,
+    MCPDisabledCapabilities,
     MCPTransport,
     MCPTransportType,
     MCPUpstreamProtocol,
@@ -551,6 +552,7 @@ class LiteLLMRoutes(enum.Enum):
         + list(agent_inference_routes)
         + model_info_routes
     )
+    llm_api_routes_without_mcp = sorted(set(llm_api_routes) - set(mcp_inference_routes))
     info_routes = [
         "/key/info",
         "/key/health",
@@ -2900,9 +2902,20 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         description="MCP revisions enabled by the gateway. Defaults to all completed legacy revisions. "
         "Modern protocol serving requires explicit opt-in. Apps/Tasks remain disabled.",
     )
+    mcp_disabled_capabilities: MCPDisabledCapabilities | None = Field(
+        None,
+        description="MCP capabilities the gateway stops serving on every route, any of 'prompts' and 'resources'. "
+        "A disabled capability is left out of the initialize and server/discover responses, its list operations "
+        "return an empty list without contacting any upstream MCP server, and its get/read operations answer "
+        "METHOD_NOT_FOUND. Unset means prompts and resources stay advertised.",
+    )
     mcp_allowed_clients: list[MCPAllowedClient] | None = Field(
         None,
         description="MCP client applications admitted by the gateway, each an {alias, value} pair where alias is the name shown in the dashboard and logs and value is the identity that must match exactly. When set, every MCP request must carry a client identity equal to one of the values: a JWT caller is identified by the claim named in litellm_jwtauth.mcp_client_id_jwt_field, any other caller by the header named in mcp_client_id_header. A request with no resolvable identity, or an unlisted one, is rejected with 403. Unset means every client is admitted.",
+    )
+    mcp_require_explicit_server_scope: bool = Field(
+        default=False,
+        description="Require aggregate MCP requests to include x-mcp-servers unless a toolset or gateway OAuth session already scopes the server. Off by default.",
     )
     mcp_client_id_header: str | None = Field(
         None,
@@ -3028,6 +3041,13 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "where a team-scoped key is governed only by the team and team-member "
             "budgets and the key owner's personal max_budget does not apply "
             "(see GitHub issue #12905)."
+        ),
+    )
+    agent_access_default_deny: bool = Field(
+        False,
+        description=(
+            "When true, a key with no agent grants on itself or its team can reach no agents instead of all agents. "
+            "Proxy admins are exempt."
         ),
     )
     user_url_validation: bool | None = Field(
@@ -3808,6 +3828,16 @@ class ModelAccessDeniedProxyException(ProxyException):
 
     def sanitized_internal_message(self) -> str:
         return self.internal_message.replace("\r", "").replace("\n", "")
+
+
+class AwsErrorTypeProxyException(Exception):
+    """A ProxyException answered to an AWS SDK, which reads the error code from the ``x-amzn-errortype`` header and
+    the message from a top-level ``message`` field."""
+
+    def __init__(self, error: ProxyException, aws_error_type: str) -> None:
+        super().__init__(error.message)
+        self.error: Final = error
+        self.aws_error_type: Final = aws_error_type
 
 
 from litellm.types.proxy.common_proxy_errors import (  # noqa: E402  # public re-export
@@ -4748,6 +4778,26 @@ class JWTIssuerConfig(LiteLLMBaseModel):
 DEFAULT_JWKS_STALE_TTL: Final = 3600
 
 
+class IdJagRequestingApp(LiteLLMBaseModel):
+    """A requesting application the operator lets redeem an ID-JAG (Identity Assertion
+    Authorization Grant) at the MCP gateway's ``POST /token``. ``client_id`` is the value
+    the identity provider puts in the assertion's ``client_id`` claim and the app sends as
+    the ``client_id`` form field. A ``client_secret`` makes the app a confidential client
+    that must authenticate with it (HTTP Basic or the ``client_secret`` form field); without
+    one the app is a public client."""
+
+    model_config = ConfigDict(frozen=True)
+
+    client_id: str = Field(
+        min_length=1, description="The requesting app's client_id as the identity provider asserts it."
+    )
+    client_secret: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Shared secret the app must present at the gateway's token endpoint. Omit for a public client.",
+    )
+
+
 class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     """
     A class to define the roles and permissions for a LiteLLM Proxy w/ JWT Auth.
@@ -4927,6 +4977,10 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     issuers: list[JWTIssuerConfig] | None = Field(
         default=None,
         description="Optional issuer-bound JWT validation rules. When a token's `iss` matches a configured issuer, validation uses that issuer's JWKS, audience, and claim mappings. Tokens with an unlisted `iss` fall back to the global JWT_AUDIENCE/JWT_ISSUER validation path — this is additive routing, not an allow-list.",
+    )
+    id_jag_requesting_apps: tuple[IdJagRequestingApp, ...] | None = Field(
+        default=None,
+        description="Requesting apps allowed to redeem an ID-JAG at the MCP gateway's POST /token with the RFC 7523 jwt-bearer grant. Unset or empty turns that grant off.",
     )
     #########################################################
 

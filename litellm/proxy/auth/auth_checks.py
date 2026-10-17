@@ -95,7 +95,12 @@ from litellm.proxy.auth.model_access_denied import (
     model_access_denied_client_message,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import publish_auth_cache_invalidation
+from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+    broadcast_evictions,
+    evict_local,
+    evict_shared,
+    publish_auth_cache_invalidation,
+)
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
     _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -3141,6 +3146,16 @@ async def _invalidate_usage_cache_entry(
         )
 
 
+async def await_inflight_team_membership_load(user_id: str, team_id: str) -> None:
+    """Wait for a membership load already reading the DB, so a load that read the row before a
+    write committed cannot re-cache the old row after the write's eviction."""
+    inflight: Final[object] = _team_membership_inflight.pop(
+        team_membership_reservation_cache_key(user_id=user_id, team_id=team_id), None
+    )
+    if isinstance(inflight, asyncio.Task) and inflight is not asyncio.current_task():
+        await asyncio.wait((inflight,))
+
+
 @with_service_target(SPEND_COUNTERS_TARGET)
 async def invalidate_team_member_spend_state(
     user_id: str,
@@ -3198,11 +3213,7 @@ async def invalidate_team_member_spend_state(
         publish_auth_cache_invalidation,
     )
 
-    inflight: Final[object] = _team_membership_inflight.pop(
-        team_membership_reservation_cache_key(user_id=user_id, team_id=team_id), None
-    )
-    if isinstance(inflight, asyncio.Task) and inflight is not asyncio.current_task():
-        await asyncio.wait((inflight,))
+    await await_inflight_team_membership_load(user_id=user_id, team_id=team_id)
 
     if new_spend is not None:
         from litellm.proxy.proxy_server import SPEND_DB_FLOOR_CACHE_TTL_SECONDS, spend_counter_cache
@@ -3378,26 +3389,19 @@ async def delete_cache_key_objects(
 
     Best-effort per key: the rows are already deleted by the time this runs, so an unreachable
     cache backend must not abort the caller partway through its own cascade.
-    """
-    results: Final = await asyncio.gather(
-        *(
-            delete_cache_key_object(
-                hashed_token=hashed_token,
-                user_api_key_cache=user_api_key_cache,
-                proxy_logging_obj=proxy_logging_obj,
-            )
-            for hashed_token in hashed_tokens
-        ),
-        return_exceptions=True,
-    )
 
-    for hashed_token, result in zip(hashed_tokens, results):
-        if isinstance(result, BaseException):
-            verbose_proxy_logger.warning(
-                "Failed to evict cached key entry for %s; a deleted key may authenticate until its TTL expires: %s",
-                hashed_token,
-                result,
-            )
+    Every token is dropped from this worker's memory first, then from the auth cache and the
+    internal usage cache in one batch each, so a deleted key stops authenticating here the instant
+    its rows are gone instead of refilling from Redis on the next miss. Every other worker then
+    gets the eviction in one pipelined broadcast: a publish per key would pass the publisher's
+    pending cap on a bulk delete, and the dropped keys would keep authenticating there until their
+    TTL.
+    """
+    evict_local(cache_keys=hashed_tokens, user_api_key_cache=user_api_key_cache)
+    await evict_shared(cache_keys=hashed_tokens, cache=user_api_key_cache)
+    if proxy_logging_obj is not None:
+        await evict_shared(cache_keys=hashed_tokens, cache=proxy_logging_obj.internal_usage_cache.dual_cache)
+    await broadcast_evictions(cache_keys=hashed_tokens)
 
 
 class _TeamNotFoundDetail(TypedDict):
@@ -3965,6 +3969,7 @@ class ExperimentalUIJWTToken:
         team_models: Sequence[str] | None = None,
         team_model_aliases: Mapping[str, str] | None = None,
         max_budget: float | None = None,
+        allowed_routes: Sequence[str] | None = None,
     ) -> str:
         """
         Generate a JWT token for CLI authentication with configurable expiration.
@@ -3978,6 +3983,8 @@ class ExperimentalUIJWTToken:
             team_alias: Team alias for the selected team, if available
             team_models: Model allowlist granted by the selected team
             team_model_aliases: Team model aliases for the selected team
+            allowed_routes: Route groups the session may call, enforced like a virtual key's
+                ``allowed_routes`` on every route; None leaves every route the role allows
 
         Returns:
             Encrypted JWT token string
@@ -4022,6 +4029,7 @@ class ExperimentalUIJWTToken:
             max_parallel_requests=None,
             user_role=LitellmUserRoles(user_info.user_role),
             is_session_token=True,
+            allowed_routes=list(allowed_routes) if allowed_routes is not None else None,
         )
 
         return encrypt_bearer_token(valid_token.model_dump_json(exclude_none=True), prefix=LITELLM_SESSION_TOKEN_PREFIX)
