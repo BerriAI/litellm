@@ -2338,6 +2338,21 @@ class OpenAIRealtimeDoneEvent(TypedDict):
     type: Literal["response.done"]
 
 
+class OpenAIRealtimeOutputVideoDelta(TypedDict):
+    """A fragmented-MP4 chunk of a Gemini Live avatar stream; the video counterpart of
+    response.output_audio.delta. The ids are those of the open response, or None when
+    the video flows outside a turn."""
+
+    type: ReadOnly[Literal["response.output_video.delta"]]
+    event_id: ReadOnly[str]
+    response_id: ReadOnly[str | None]
+    item_id: ReadOnly[str | None]
+    output_index: ReadOnly[int]
+    content_index: ReadOnly[int]
+    mime_type: ReadOnly[str | None]
+    delta: ReadOnly[str]
+
+
 class OpenAIRealtimeInputAudioBufferSpeechEvent(TypedDict):
     type: ReadOnly[Literal["input_audio_buffer.speech_started", "input_audio_buffer.speech_stopped"]]
     event_id: ReadOnly[str]
@@ -2468,6 +2483,7 @@ OpenAIRealtimeEvents = (
     | OpenAIRealtimeFunctionCallArgumentsDone
     | OpenAIRealtimeDoneEvent
     | OpenAIRealtimeInputAudioBufferSpeechEvent
+    | OpenAIRealtimeOutputVideoDelta
     | OpenAIRealtimeInputAudioTranscriptionDelta
     | OpenAIRealtimeInputAudioTranscriptionCompleted
     | OpenAIRealtimeTranscriptionSessionCreated
