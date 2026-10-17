@@ -2,7 +2,7 @@ import json
 import webbrowser
 from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Final
+from typing import TYPE_CHECKING, Final, Protocol
 
 import pytest
 import requests
@@ -15,6 +15,9 @@ from litellm.proxy.client.cli.commands.auth import CliTokenData, get_stored_api_
 from litellm.proxy.client.cli.commands.auto_sign_in import PkceBrowserSignIn, open_browser_detached
 from litellm.proxy.client.cli.commands.pkce_login import PkceCredential, PkceFailure, pkce_token_record
 from tests.unit.litellm_core_utils.fake_secret_vault import FakeSecretVault
+
+if TYPE_CHECKING:
+    from requests_mock.request import Request
 
 BASE_URL: Final = "https://proxy.example.com"
 SIGNED_IN_KEY: Final = "sk-signed-in"
@@ -79,11 +82,19 @@ def _lite(args: Sequence[str], vault: object, sign_in: FakeBrowserSignIn, global
     )
 
 
-def _bearers(route) -> list[str | None]:
+class _MockedRoute(Protocol):
+    @property
+    def request_history(self) -> Sequence["Request"]: ...
+
+    @property
+    def call_count(self) -> int: ...
+
+
+def _bearers(route: _MockedRoute) -> list[str | None]:
     return [request.headers.get("Authorization") for request in route.request_history]
 
 
-def _key_check(requests_mock, status_code: int):
+def _key_check(requests_mock: Mocker, status_code: int) -> _MockedRoute:
     return requests_mock.get(f"{BASE_URL}/key/info", status_code=status_code, json={"info": {}})
 
 
