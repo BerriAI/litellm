@@ -1043,11 +1043,14 @@ async def test_converse_null_request_metadata_is_treated_as_absent_like_bedrock_
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("action", ["invoke", "invoke-with-response-stream"])
-async def test_invoke_metadata_too_long_for_the_header_is_sent_in_the_body(
+async def test_invoke_metadata_too_long_for_the_header_sends_the_leading_pairs_that_fit(
     action: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", REQUEST_METADATA_FIELDS)
     long_pairs: Final = {f"{index:02d}".ljust(256, "k"): "\n" * 256 for index in range(12)}
+    resolved: Final = tuple(
+        {"user_api_key_alias": "prod-key", "user_api_key_team_alias": "platform", **long_pairs}.items()
+    )
 
     request: Final = await _sent_passthrough_request(
         action,
@@ -1056,11 +1059,12 @@ async def test_invoke_metadata_too_long_for_the_header_is_sent_in_the_body(
         request_headers={f"x-pass-{REQUEST_METADATA_HEADER}": '{"user_api_key_team_alias":"forged"}'},
     )
 
-    assert REQUEST_METADATA_HEADER not in request.headers
-    assert json.loads(request.content) == {
-        **INVOKE_BODY,
-        "requestMetadata": {"user_api_key_alias": "prod-key", "user_api_key_team_alias": "platform", **long_pairs},
-    }
+    header: Final = request.headers[REQUEST_METADATA_HEADER]
+    sent: Final = json.loads(header)
+    one_more_pair: Final = json.dumps(dict(resolved[: len(sent) + 1]), separators=(",", ":"))
+    assert sent == dict(resolved[: len(sent)])
+    assert len(header) <= 8500 < len(one_more_pair)
+    assert json.loads(request.content) == INVOKE_BODY
 
 
 @pytest.mark.asyncio

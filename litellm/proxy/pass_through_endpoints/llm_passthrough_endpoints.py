@@ -1094,7 +1094,7 @@ def _aws_error_type(error: Exception, handled: ProxyException) -> str | None:
     refusal_status: Final = _guardrail_refusal_status(error)
     if refusal_status is not None:
         return "ValidationException" if str(refusal_status) == handled.code else None
-    return httpx.Headers(handled.headers).get(AWS_ERROR_TYPE_HEADER)
+    return next((value for name, value in handled.headers.items() if name.lower() == AWS_ERROR_TYPE_HEADER), None)
 
 
 def _bedrock_error_response(error: Exception, handled: HTTPException) -> Response | None:

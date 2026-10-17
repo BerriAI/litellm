@@ -2167,6 +2167,18 @@ class TestBedrockPassthroughAwsErrors:
             await self._answer(BedrockError(status_code=400, message="bad request"))
 
         assert exc_info.value.code == "400"
+
+    @pytest.mark.asyncio
+    async def test_error_with_a_non_ascii_header_value_keeps_the_proxy_shape(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "callbacks", [])
+        error: Final = HTTPException(status_code=403, detail="model not allowed", headers={"x-model-group": "modèle"})
+
+        with pytest.raises(ProxyException) as exc_info:
+            await self._answer(error)
+
+        assert (exc_info.value.code, exc_info.value.headers.get("x-model-group")) == ("403", "modèle")
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("error", "message", "code"),

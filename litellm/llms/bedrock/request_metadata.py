@@ -224,11 +224,6 @@ def _longest_fitting_prefix(resolved: Mapping[str, str]) -> dict[str, str]:
     )
 
 
-def bedrock_request_metadata_fits_header(litellm_params: Mapping[str, object] | None) -> bool:
-    resolved: Final = resolve_bedrock_request_metadata(litellm_params)
-    return resolved is None or _fits_header(resolved)
-
-
 def bedrock_request_metadata_headers(
     litellm_params: Mapping[str, object] | None,
 ) -> tuple[frozenset[str], tuple[tuple[str, str], ...]]:

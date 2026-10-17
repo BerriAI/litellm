@@ -17,7 +17,6 @@ from ..common_utils import BedrockError, BedrockEventStreamDecoderBase, BedrockM
 from ..request_metadata import (
     BEDROCK_REQUEST_METADATA_HEADER,
     BedrockRequestMetadataViolation,
-    bedrock_request_metadata_fits_header,
     bedrock_request_metadata_headers,
     bedrock_request_metadata_is_owned,
     bedrock_request_metadata_violation,
@@ -106,20 +105,15 @@ def _with_request_metadata(
             action, body, litellm_params
         )
     if action in _BEDROCK_INVOKE_ACTIONS:
-        return _with_invoke_request_metadata(action, headers, body, litellm_params)
+        return _with_invoke_request_metadata(headers, body, litellm_params)
     return headers, body
 
 
 def _with_invoke_request_metadata(
-    action: str,
     headers: Mapping[str, str],
     body: Mapping[str, object],
     litellm_params: Mapping[str, object],
 ) -> tuple[Mapping[str, str], Mapping[str, object]]:
-    if not bedrock_request_metadata_fits_header(litellm_params):
-        return _without_owned_request_metadata_header(headers), _with_body_request_metadata(
-            action, body, litellm_params
-        )
     owned_names, metadata_headers = bedrock_request_metadata_headers(litellm_params)
     return merge_bedrock_invoke_headers(dict(headers), (), metadata_headers, owned_names), body
 
