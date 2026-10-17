@@ -28,7 +28,7 @@ import yaml
 from pydantic import JsonValue, TypeAdapter
 
 from litellm.proxy._lazy_features import LAZY_FEATURES, LazyFeature
-from tests.integration._support.client import Gateway, eventually, object_value, string_value
+from tests.integration._support.client import GATEWAY_LIMITS, Gateway, eventually, object_value, string_value
 from tests.integration._support.mcp import McpPeer, call_tool, echo_tool, scripted_peer, tool_calls, tool_names
 from tests.integration._support.process import OwnedProxy, owned_proxy_process
 from tests.integration._support.wire import Reply, Request, Wire, wire_server
@@ -448,7 +448,9 @@ def test_disable_lazy_routes_flag_route_table_survives_a_boot_burst_and_a_killed
         victim: Final = min(eventually(owned.worker_pids, lambda workers: len(workers) == 2))
         with owned.replacing_worker(victim) as kill:
             kill()
-            with httpx.Client(base_url=owned.gateway.client.base_url, timeout=15, trust_env=False) as fresh:
+            with httpx.Client(
+                base_url=owned.gateway.client.base_url, timeout=15, trust_env=False, limits=GATEWAY_LIMITS
+            ) as fresh:
                 survivor: Final = Gateway(fresh, owned.gateway.key, owned.gateway.upstream_url)
                 during: Final = tuple(survivor.request("GET", "/v1/mcp/server").status_code for _ in range(10))
         assert during == (200,) * 10, during

@@ -18,7 +18,15 @@ from typing import Final
 import httpx
 import psutil
 import pytest
-from integration._support.client import JSON_OBJECT, Gateway, Scenario, eventually, object_value, string_value
+from integration._support.client import (
+    GATEWAY_LIMITS,
+    JSON_OBJECT,
+    Gateway,
+    Scenario,
+    eventually,
+    object_value,
+    string_value,
+)
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy_process, paused, stop_child
 from integration._support.upstream import ScenarioHandle, delete_scenario, register_scenario
@@ -1695,7 +1703,9 @@ def test_upstream_pause_and_worker_kill_preserve_required_body_status(
             record_property("chaos_spend_row_counts", str(tuple(len(rows) for rows in spend_rows)))
             with owned.replacing_worker(min(workers)) as kill:
                 kill()
-                with httpx.Client(base_url=candidate.client.base_url, timeout=15, trust_env=False) as fresh:
+                with httpx.Client(
+                    base_url=candidate.client.base_url, timeout=15, trust_env=False, limits=GATEWAY_LIMITS
+                ) as fresh:
                     survivor: Final = Gateway(fresh, candidate.key, candidate.upstream_url)
                     post_kill: Final = tuple(
                         _post(survivor, path, body) for path, body, _expected, _identity in missing_calls[:5]

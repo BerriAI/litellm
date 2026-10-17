@@ -17,11 +17,17 @@ from redis import Redis
 from redis.client import PubSub
 
 from tests.integration._support.budget import case_timeout_seconds
-from tests.integration._support.client import JSON_OBJECT, Gateway, eventually, object_value, string_value
+from tests.integration._support.client import (
+    GATEWAY_LIMITS,
+    JSON_OBJECT,
+    Gateway,
+    eventually,
+    object_value,
+    string_value,
+)
 from tests.integration._support.database import read_rows
 from tests.integration._support.process import owned_proxy_process
 from tests.integration._support.redis_process import owned_redis
-from tests.integration._support.timing import assert_cut_short
 
 _USERS: Final = 60
 _BURST: Final = 30
@@ -29,6 +35,7 @@ _WEDGED_PUBLISHES_PER_BURST_USER: Final = 2
 _HANDLER_BUDGET_SECONDS: Final = 0.75
 _BULK_BUDGET_SECONDS: Final = 2.0
 _COORDINATION_SOCKET_TIMEOUT_SECONDS: Final = 5.0
+_EVICTION_WAIT_CAP_SECONDS: Final = 2.0
 _CHANNEL: Final = "litellm_proxy.auth_cache_invalidation"
 
 
@@ -157,7 +164,9 @@ def test_user_budget_updates_return_promptly_while_coordination_redis_is_wedged(
                 )
                 with owned.replacing_worker(min(owned.worker_pids())) as kill, coordination.paused():
                     kill()
-                    with httpx.Client(base_url=candidate.client.base_url, timeout=15, trust_env=False) as fresh:
+                    with httpx.Client(
+                        base_url=candidate.client.base_url, timeout=15, trust_env=False, limits=GATEWAY_LIMITS
+                    ) as fresh:
                         survivor: Final = Gateway(fresh, candidate.key, candidate.upstream_url)
                         timings["s2_wedged_control"] = _timed_post(
                             survivor, "/user/update", {"user_id": users[0], "tpm_limit": 1000}
@@ -245,7 +254,10 @@ def test_user_budget_updates_return_promptly_while_coordination_redis_is_wedged(
                             if i % 5 in (0, 1, 4) and status == 200
                         )
                         timings["c1_burst_p95"] = elapsed_sorted[int(len(elapsed_sorted) * 0.95) - 1]
-                        assert_cut_short(timings["c1_burst_p95"], injected_delay=_COORDINATION_SOCKET_TIMEOUT_SECONDS)
+                        assert timings["c1_burst_p95"] < _EVICTION_WAIT_CAP_SECONDS, (
+                            f"burst p95 {timings['c1_burst_p95']:.3f}s reached the {_EVICTION_WAIT_CAP_SECONDS}s "
+                            "cap on the proxy's own Redis waits, so burst updates waited on the wedged Redis"
+                        )
                         eventually(
                             lambda: survivor.request("GET", "/health/liveliness").status_code,
                             lambda status: status == 200,
