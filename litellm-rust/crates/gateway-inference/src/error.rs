@@ -177,12 +177,18 @@ impl Error {
 /// A hook's refusal, in the proxy's error shape and with the hook's headers.
 fn refused(refusal: Refusal) -> Response {
     let status = StatusCode::from_u16(refusal.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-    let body = json!({"error": {
-        "message": refusal.message,
-        "type": refusal.kind,
-        "param": refusal.param,
-        "code": status.as_u16().to_string(),
-    }});
+    let body = match refusal.anthropic {
+        true => json!({"type": "error", "error": {
+            "type": refusal.kind,
+            "message": refusal.message,
+        }}),
+        false => json!({"error": {
+            "message": refusal.message,
+            "type": refusal.kind,
+            "param": refusal.param,
+            "code": status.as_u16().to_string(),
+        }}),
+    };
     let mut response = (status, Json(body)).into_response();
     response.headers_mut().extend(refusal.headers);
     response

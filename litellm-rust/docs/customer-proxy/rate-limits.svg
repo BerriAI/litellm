@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 620" font-family="-apple-system, Segoe UI, Helvetica, Arial, sans-serif" font-size="14">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#475569"/></marker>
+    <marker id="r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#dc2626"/></marker>
+  </defs>
+  <rect width="1000" height="620" fill="#ffffff"/>
+  <text x="24" y="34" font-size="18" font-weight="600" fill="#0f172a">Rate limits hook: the proxy's limiter on the proxy's shared counters</text>
+
+  <rect x="24" y="60" width="300" height="150" rx="8" fill="#eff6ff" stroke="#3b82f6"/>
+  <text x="38" y="84" font-weight="600" fill="#1e3a8a">Scopes, in the proxy's order</text>
+  <text x="38" y="106" fill="#1e293b" font-size="13">api_key: key rpm/tpm (else budget row's),</text>
+  <text x="38" y="124" fill="#1e293b" font-size="13">   max_parallel_requests</text>
+  <text x="38" y="142" fill="#1e293b" font-size="13">user, team, team_member (team:user)</text>
+  <text x="38" y="160" fill="#1e293b" font-size="13">end_user: its budget row, or the default</text>
+  <text x="38" y="182" fill="#64748b" font-size="13">read with the key; end users cached 60 s</text>
+  <text x="38" y="200" fill="#64748b" font-size="13">no limits set: no Redis call at all</text>
+
+  <rect x="360" y="60" width="616" height="150" rx="8" fill="#fffbeb" stroke="#f59e0b"/>
+  <text x="374" y="84" font-weight="600" fill="#92400e">Three Redis scripts, in the proxy's phases</text>
+  <text x="374" y="106" fill="#1e293b" font-size="13">1. requests: +1 on every {scope:id}:requests in one call, fixed window from the first hit;</text>
+  <text x="374" y="124" fill="#1e293b" font-size="13">   over when count &gt; limit; the count is never given back</text>
+  <text x="374" y="142" fill="#1e293b" font-size="13">2. in flight (key only): ZSET of slots on Redis TIME, pruned at 3600 s, full at limit</text>
+  <text x="374" y="160" fill="#1e293b" font-size="13">3. tokens: reserve chars/4 + output x candidates on every scope, all or none;</text>
+  <text x="374" y="178" fill="#1e293b" font-size="13">   output = max_tokens, else the configured estimate, else max(input, min(1024, tpm/4));</text>
+  <text x="374" y="196" fill="#1e293b" font-size="13">   a limit under 4096 caps an uncapped request at that floor upstream</text>
+  <line x1="324" y1="135" x2="356" y2="135" stroke="#475569" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <rect x="24" y="246" width="460" height="130" rx="8" fill="#fef2f2" stroke="#dc2626"/>
+  <text x="38" y="270" font-weight="600" fill="#991b1b">Refusal: 429, first scope over</text>
+  <text x="38" y="292" fill="#1e293b" font-size="13">"Rate limit exceeded for api_key: &lt;hash&gt;. Limit type: requests.</text>
+  <text x="38" y="310" fill="#1e293b" font-size="13">  Current limit: 10, Remaining: 0. Limit resets at: ... UTC"</text>
+  <text x="38" y="332" fill="#1e293b" font-size="13">chat: throttling_error + retry-after, rate_limit_type, reset_at</text>
+  <text x="38" y="350" fill="#1e293b" font-size="13">messages: Anthropic rate_limit_error envelope, no retry headers</text>
+  <text x="38" y="368" fill="#64748b" font-size="13">a refused token reservation gives its slot back</text>
+  <path d="M500 210 L500 230 L254 230 L254 242" fill="none" stroke="#dc2626" stroke-width="1.5" marker-end="url(#r)"/>
+
+  <rect x="516" y="246" width="460" height="130" rx="8" fill="#f8fafc" stroke="#64748b"/>
+  <text x="530" y="270" font-weight="600" fill="#0f172a">Admitted: request runs</text>
+  <text x="530" y="292" fill="#334155" font-size="13">complete responses carry where each limit stands:</text>
+  <text x="530" y="310" fill="#334155" font-size="13">x-ratelimit-{scope}-remaining-{type}, -limit-{type}</text>
+  <text x="530" y="328" fill="#334155" font-size="13">every response: x-litellm-key-rpm-limit / -tpm-limit</text>
+  <text x="530" y="350" fill="#64748b" font-size="13">streams get no x-ratelimit-* headers, as in the proxy</text>
+  <path d="M760 210 L760 242" fill="none" stroke="#475569" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <rect x="24" y="412" width="952" height="80" rx="8" fill="#f5f3ff" stroke="#8b5cf6"/>
+  <text x="38" y="436" font-weight="600" fill="#5b21b6">Settle (off the request path)</text>
+  <text x="38" y="458" fill="#1e293b" font-size="13">tokens: INCRBYFLOAT (actual - reserved) on each reserved scope, actual = all tokens but cache reads; a failure returns the reservation</text>
+  <text x="38" y="476" fill="#1e293b" font-size="13">in flight: ZREM the request's slot when the response ends, fails, or the client goes away</text>
+  <line x1="746" y1="376" x2="746" y2="408" stroke="#475569" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <rect x="24" y="522" width="952" height="76" rx="8" fill="#ecfdf5" stroke="#10b981"/>
+  <text x="38" y="546" font-weight="600" fill="#065f46">Same keys, scripts and windows as the Python proxy, under its namespace</text>
+  <text x="38" y="568" fill="#1e293b" font-size="13">ns:{api_key:&lt;hash&gt;}:window | requests | tokens | max_parallel_requests: gateway replicas and Python proxies enforce one limit.</text>
+  <text x="38" y="586" fill="#64748b" font-size="13">No Redis, or Redis unreachable: the same logic on this replica's counters (fail_closed_rate_limit_enforcement: 503 instead)</text>
+</svg>

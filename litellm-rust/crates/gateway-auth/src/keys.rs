@@ -241,7 +241,7 @@ pub enum Refusal {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, strum::Display, strum::VariantArray)]
 pub enum Restriction {
-    #[strum(serialize = "rate limits")]
+    #[strum(serialize = "per-model, per-tag or dynamic rate limits")]
     RateLimits,
     #[strum(serialize = "guardrails or policies")]
     Guardrails,
@@ -298,6 +298,34 @@ pub struct KeyProfile {
     pub metadata: Arc<Map<String, Value>>,
     pub team_metadata: Arc<Map<String, Value>>,
     pub budgets: KeyBudgets,
+    pub limits: KeyLimits,
+}
+
+/// Requests and tokens per rate limit window.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct Limits {
+    pub rpm: Option<i64>,
+    pub tpm: Option<i64>,
+}
+
+impl Limits {
+    pub fn is_set(&self) -> bool {
+        self.rpm.is_some() || self.tpm.is_some()
+    }
+}
+
+/// The rate limits of a key and of who it belongs to, read with the key and refreshed with it.
+/// End users' limits are read on their own.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct KeyLimits {
+    /// The key's own limits, else its budget table's.
+    pub key: Limits,
+    /// Requests the key may have in flight at once.
+    pub max_parallel_requests: Option<i64>,
+    pub user: Limits,
+    pub team: Limits,
+    /// The key's user within its team, from the membership's budget table.
+    pub team_member: Limits,
 }
 
 /// Stored spend against an optional budget, as the key store last read it.

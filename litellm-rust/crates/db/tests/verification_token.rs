@@ -1,8 +1,8 @@
 use std::time::{Duration, SystemTime};
 
 use litellm_db::{
-    EndUser, Restrictions, Team, TeamMembership, User, VerificationToken, find_end_user,
-    find_verification_token,
+    EndUser, RateLimits, Restrictions, Team, TeamMembership, User, VerificationToken,
+    find_end_user, find_verification_token,
 };
 use litellm_db_testing::MigratedPostgres;
 use rstest::rstest;
@@ -93,6 +93,8 @@ async fn reads_the_gating_columns_of_a_verification_token_and_its_owners() {
             key_alias: None,
             key_name: None,
             metadata: json!({}),
+            limits: RateLimits::default(),
+            max_parallel_requests: None,
             restrictions: Restrictions::default(),
             team_id: None,
             team: None,
@@ -115,6 +117,8 @@ async fn reads_the_gating_columns_of_a_verification_token_and_its_owners() {
             key_alias: Some("prod".into()),
             key_name: Some("sk-...abcd".into()),
             metadata: json!({"tags": ["a"]}),
+            limits: RateLimits::default(),
+            max_parallel_requests: None,
             restrictions: Restrictions::default(),
             team_id: Some("team-1".into()),
             team: Some(Team {
@@ -124,16 +128,21 @@ async fn reads_the_gating_columns_of_a_verification_token_and_its_owners() {
                 spend: 2.5,
                 max_budget: Some(10.0),
                 metadata: json!({"require_trace_id": true}),
-                restrictions: Restrictions {
-                    rate_limits: true,
-                    ..Restrictions::default()
+                limits: RateLimits {
+                    rpm: None,
+                    tpm: Some(100),
                 },
+                restrictions: Restrictions::default(),
             }),
             team_membership: TeamMembership {
                 spend: Some(0.0),
                 max_budget: None,
                 default_max_budget: None,
-                rate_limits: true,
+                limits: RateLimits {
+                    rpm: Some(3),
+                    tpm: None,
+                },
+                rate_limits: false,
                 allowed_models: vec![],
             },
             user_id: Some("user-1".into()),
@@ -141,8 +150,11 @@ async fn reads_the_gating_columns_of_a_verification_token_and_its_owners() {
                 spend: 0.0,
                 max_budget: Some(1.0),
                 models: vec!["gpt-b".into()],
+                limits: RateLimits {
+                    rpm: Some(5),
+                    tpm: None,
+                },
                 restrictions: Restrictions {
-                    rate_limits: true,
                     policies: true,
                     ..Restrictions::default()
                 },
@@ -152,7 +164,7 @@ async fn reads_the_gating_columns_of_a_verification_token_and_its_owners() {
     assert_eq!(
         find("restricted").await.restrictions,
         Restrictions {
-            rate_limits: true,
+            rate_limits: false,
             policies: true,
             model_aliases: true,
             object_permissions: true,
@@ -162,16 +174,33 @@ async fn reads_the_gating_columns_of_a_verification_token_and_its_owners() {
             agent: true,
         }
     );
+    let limited = find("limited-only").await;
     assert_eq!(
-        find("limited-only").await.restrictions,
-        Restrictions {
-            rate_limits: true,
-            ..Restrictions::default()
+        (limited.max_parallel_requests, limited.restrictions),
+        (Some(2), Restrictions::default())
+    );
+    // A key's own limits win; its budget row's fill the gaps.
+    assert_eq!(
+        find("restricted").await.limits,
+        RateLimits {
+            rpm: Some(10),
+            tpm: None
         }
     );
-    // Budgets are not restrictions; limits held in a budget row or per model are.
+    let budget_row = find("budget-row-limits").await;
+    assert_eq!(
+        (budget_row.limits, budget_row.restrictions),
+        (
+            RateLimits {
+                rpm: Some(3),
+                tpm: None
+            },
+            Restrictions::default()
+        )
+    );
+    // Budgets and plain limits are not restrictions; limits per model are.
     assert_eq!(find("budgeted").await.restrictions, Restrictions::default());
-    for token in ["budget-row-limits", "budget-row-model-limits", "model-rpm"] {
+    for token in ["budget-row-model-limits", "model-rpm"] {
         assert_eq!(
             find(token).await.restrictions,
             Restrictions {
@@ -188,6 +217,7 @@ async fn reads_the_gating_columns_of_a_verification_token_and_its_owners() {
             spend: Some(0.75),
             max_budget: Some(5.0),
             default_max_budget: None,
+            limits: RateLimits::default(),
             rate_limits: false,
             allowed_models: vec!["gpt-a".into()],
         }
@@ -216,15 +246,17 @@ async fn reads_end_user_budgets_with_their_default() {
     let postgres = MigratedPostgres::start().await.unwrap();
     let pool = postgres.pool();
     setup(pool).await;
-    let find =
-        async |id: &str, default: Option<&str>| find_end_user(pool, id, default).await.unwrap();
+    let find = async |id: &str, default: Option<&str>| {
+        find_end_user(pool, id, default, None).await.unwrap()
+    };
 
     assert_eq!(
         find("end-1", Some("b-2")).await,
         EndUser {
             spend: Some(1.5),
             blocked: false,
-            max_budget: Some(5.0)
+            max_budget: Some(5.0),
+            limits: RateLimits::default(),
         }
     );
     assert_eq!(
@@ -232,16 +264,37 @@ async fn reads_end_user_budgets_with_their_default() {
         EndUser {
             spend: Some(0.25),
             blocked: true,
-            max_budget: Some(5.0)
+            max_budget: Some(5.0),
+            limits: RateLimits::default(),
         }
     );
     assert_eq!(find("end-2", None).await.max_budget, None);
+    // An override replaces the row's own budget.
+    assert_eq!(
+        find_end_user(pool, "end-1", None, Some("b-2"))
+            .await
+            .unwrap()
+            .limits,
+        RateLimits {
+            rpm: Some(3),
+            tpm: None
+        }
+    );
+    // A row without its own budget takes the default's limits too.
+    assert_eq!(
+        find("end-2", Some("b-2")).await.limits,
+        RateLimits {
+            rpm: Some(3),
+            tpm: None
+        }
+    );
     assert_eq!(
         find("unknown", Some("b-1")).await,
         EndUser {
             spend: None,
             blocked: false,
-            max_budget: Some(5.0)
+            max_budget: Some(5.0),
+            limits: RateLimits::default(),
         }
     );
 }

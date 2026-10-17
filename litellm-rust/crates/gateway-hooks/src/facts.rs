@@ -8,7 +8,7 @@ use bytes::Bytes;
 use http::HeaderMap;
 use serde_json::{Map, Value};
 
-use litellm_gateway_auth::keys::KeyBudgets;
+use litellm_gateway_auth::keys::{KeyBudgets, KeyLimits};
 
 use crate::usage::Usage;
 
@@ -104,6 +104,7 @@ pub struct KeyFacts {
     pub metadata: Arc<Map<String, Value>>,
     pub team_metadata: Arc<Map<String, Value>>,
     pub budgets: KeyBudgets,
+    pub limits: KeyLimits,
 }
 
 /// What the gateway knows about a request before it is sent, shared by every hook and observer.

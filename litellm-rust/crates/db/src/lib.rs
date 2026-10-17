@@ -16,5 +16,6 @@ pub use spend::{
 };
 pub use sqlx::PgPool;
 pub use verification_token::{
-    Restrictions, Team, TeamMembership, User, VerificationToken, find_verification_token,
+    RateLimits, Restrictions, Team, TeamMembership, User, VerificationToken,
+    find_verification_token,
 };
