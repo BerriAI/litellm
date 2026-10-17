@@ -22,6 +22,7 @@ from litellm.llms.anthropic.pass_through.context_management import (
     PolyfillResult,
     apply_context_management,
 )
+from litellm.llms.anthropic.pass_through.convertible_blocks import reject_malformed_tool_result_text
 from litellm.llms.anthropic.pass_through.safeguards import (
     SafeguardsEvaluator,
     build_safeguards_evaluator,
@@ -725,6 +726,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
 
         proxy_litellm_metadata, user_api_key_auth = _extract_proxy_litellm_metadata(kwargs)
         request_kwargs: Final = _REQUEST_KWARGS.validate_python(kwargs)
+        reject_malformed_tool_result_text(messages, model, request_kwargs)
         sub_call_logging_kwargs: Final = proxy_sub_call_logging_kwargs(request_kwargs)
         sub_call_trace_id: Final = proxy_sub_call_trace_id(request_kwargs)
 
@@ -846,6 +848,8 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 output_format=output_format,
                 **kwargs,
             )
+
+        reject_malformed_tool_result_text(messages, model, _REQUEST_KWARGS.validate_python(kwargs))
 
         # Run the context_management polyfill on the sync path too so that
         # ``litellm.messages.create()`` callers don't silently lose edits like

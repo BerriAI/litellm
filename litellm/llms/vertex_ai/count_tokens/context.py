@@ -152,6 +152,17 @@ def unconvertible_messages_error(
     return None if error_message is None else VertexGeminiCountContextError(error_message=error_message)
 
 
+def malformed_tool_result_text_count_error(
+    messages: Sequence[Mapping[str, object]] | None,
+    messages_format: TokenCountMessagesFormat,
+    deployment: Mapping[str, object] | None,
+) -> VertexGeminiCountContextError | None:
+    from litellm.llms.anthropic.pass_through.convertible_blocks import malformed_tool_result_count_error
+
+    error_message: Final = malformed_tool_result_count_error(messages, messages_format, deployment)
+    return None if error_message is None else VertexGeminiCountContextError(error_message=error_message)
+
+
 def count_context_error_response(
     error: VertexGeminiCountContextError, request_model: str, model_used: str
 ) -> TokenCountResponse:

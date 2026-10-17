@@ -30,6 +30,10 @@ from litellm.llms.anthropic.pass_through.adapters.transformation import (
     LiteLLMAnthropicMessagesAdapter,
     is_provider_native_tool_dict,
 )
+from litellm.llms.anthropic.pass_through.convertible_blocks import (
+    keep_non_string_tool_result_texts,
+    scannable_tool_result_request,
+)
 from litellm.llms.anthropic.pass_through.stream_assembly import (
     build_complete_streaming_response,
     build_usage_only_response_from_chunks,
@@ -492,8 +496,8 @@ class AnthropicMessagesHandler(BaseTranslation):
         ``get_streaming_string_so_far``): raw SSE ``bytes`` -- which may bundle
         several events separated by a blank line -- and an already-parsed event
         ``dict``."""
-        if isinstance(item, dict):
-            return (_as_str_mapping(item),)
+        if (event := as_str_mapping(item)) is not None:
+            return (event,)
         if not isinstance(item, (bytes, bytearray)):
             return ()
         return tuple(
@@ -509,7 +513,7 @@ class AnthropicMessagesHandler(BaseTranslation):
             chat_completion_compatible_request,
             _tool_name_mapping,
         ) = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
-            anthropic_message_request=cast(AnthropicMessagesRequest, data.copy()),
+            anthropic_message_request=cast(AnthropicMessagesRequest, scannable_tool_result_request(data)),
             preserve_midturn_system=True,
         )
         return chat_completion_compatible_request
@@ -831,7 +835,7 @@ class AnthropicMessagesHandler(BaseTranslation):
 
     @staticmethod
     def _write_back_structured_messages(
-        data: dict,  # mutable-ok: API message payload
+        data: dict[str, object],  # mutable-ok: API message payload
         structured_messages: list,  # mutable-ok: API message payload
         hoisted_system_message: object = None,
         preserve_system_messages: bool = False,
@@ -898,7 +902,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                 for block in content:
                     if isinstance(block, dict) and block.get("type") == "thinking":
                         block.pop("cache_control", None)
-        data["messages"] = converted
+        data["messages"] = keep_non_string_tool_result_texts(converted, data.get("messages"))
 
     @staticmethod
     def _extract_midturn_system_text(
@@ -1539,8 +1543,8 @@ class AnthropicMessagesHandler(BaseTranslation):
 
     @staticmethod
     def _rewrite_buffered_item(item: object, rewrite_event: _SSEEventRewriter) -> object:
-        if isinstance(item, dict):
-            return _rewritten_event(_as_str_mapping(item), rewrite_event)
+        if (event := as_str_mapping(item)) is not None:
+            return _rewritten_event(event, rewrite_event)
         if isinstance(item, (bytes, bytearray)):
             return AnthropicMessagesHandler._rewrite_sse_events(bytes(item), rewrite_event)
         return item

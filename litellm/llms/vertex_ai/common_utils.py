@@ -1357,6 +1357,7 @@ class VertexAITokenCounter(BaseTokenCounter):
                 count_context_error_response,
                 gemini_count_contents,
                 inference_request_view,
+                malformed_tool_result_text_count_error,
                 provider_error_response,
                 unconvertible_messages_error,
                 vertex_gemini_count_context,
@@ -1374,7 +1375,9 @@ class VertexAITokenCounter(BaseTokenCounter):
             count_context: Final = vertex_gemini_count_context(system=request_view.system, tools=tools)
             if isinstance(count_context, VertexGeminiCountContextError):
                 return count_context_error_response(count_context, request_model, model_to_use)
-            blocks_error: Final = unconvertible_messages_error(request_view.messages, messages_format)
+            blocks_error: Final = unconvertible_messages_error(
+                request_view.messages, messages_format
+            ) or malformed_tool_result_text_count_error(messages, messages_format, deployment)
             if blocks_error is not None:
                 return count_context_error_response(blocks_error, request_model, model_to_use)
 
