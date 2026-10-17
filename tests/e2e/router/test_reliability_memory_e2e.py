@@ -296,6 +296,7 @@ class TestReliabilityMemory:
             f"leaves the worker little room for traffic"
         )
 
+    @pytest.mark.filterwarnings("ignore:record_property is incompatible with junit_family")
     @pytest.mark.covers("reliability.perf.memory.under_slo")
     @meta(
         Subject(
