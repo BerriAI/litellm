@@ -10588,7 +10588,7 @@ async def async_data_generator(
         if receipt_stream is not None and receipt_capture is not None and not stream_completed:
             with anyio.CancelScope(shield=True):
                 try:
-                    async with asyncio.timeout(receipt_capture.runtime.settings.drain_timeout_seconds):
+                    with anyio.fail_after(receipt_capture.runtime.settings.drain_timeout_seconds):
                         await receipt_stream.drain()
                         ProxyLogging.fire_deferred_stream_logging(request_data)
                         await await_charge_receipt(request)

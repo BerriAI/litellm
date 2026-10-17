@@ -91,7 +91,6 @@ _CAPTURED_IDENTITY_CALL_TYPES: Final[frozenset[str]] = frozenset(
 )
 _CHARGE_DETAILS: Final = TypeAdapter(dict[str, object])
 _CHARGE_COST: Final[TypeAdapter[float | None]] = TypeAdapter(float | None)
-_CHARGE_KEY: Final[TypeAdapter[str | None]] = TypeAdapter(str | None)
 
 
 def _proxy_stamped_used_client_oauth_token(
@@ -360,7 +359,7 @@ class _ProxyDBLogger(CustomLogger):
             end_time=datetime.now(),
             org_id=user_api_key_dict.org_id,
             project_id=user_api_key_dict.project_id,
-            key_spend_committed=required_capture is not None,
+            **({"key_spend_committed": True} if required_capture is not None else {}),
         )
 
     async def _PROXY_track_cost_callback(
@@ -445,12 +444,14 @@ class _ProxyDBLogger(CustomLogger):
             )
 
             if response_cost is not None:
-                user_api_key: Final = _CHARGE_KEY.validate_python(
+                user_api_key: Final = (
                     committed_charge.key_hash
                     if committed_charge is not None
                     else required_key
                     if counter_only
-                    else metadata.get("user_api_key", None)
+                    else metadata_key
+                    if isinstance(metadata_key := metadata.get("user_api_key"), str)
+                    else None
                 )
                 verbose_proxy_logger.debug(
                     "user_api_key %s, user_id %s, team_id %s, end_user_id %s",
@@ -942,7 +943,7 @@ async def _update_database_and_spend_counters_in_batch(
             end_time=end_time,
             org_id=org_id,
             project_id=project_id,
-            key_spend_committed=charge_already_committed,
+            **({"key_spend_committed": True} if charge_already_committed else {}),
         )
     except Exception:
         if budget_reservation is not None:

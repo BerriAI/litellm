@@ -322,7 +322,6 @@ _VIEW_SETUP_DEADLINE_SECONDS: Final = 15 * 60.0
 _VIEW_SETUP_GATE_TABLE: Final = '"LiteLLM_SpendLogs"'
 _VIEW_SETUP_GATE_PROBE_ROWS: Final = TypeAdapter(tuple[Mapping[str, bool], ...])
 _CHARGE_LOGGING_VALUE: Final = TypeAdapter(object)
-_STREAM_LOGGING_DATA: Final = TypeAdapter(Mapping[str, object])
 
 _ViewSetupOutcome: TypeAlias = Literal["ready", "timed_out"]
 _ViewSetupAttempt: TypeAlias = Literal["ready", "table_missing"] | Exception
@@ -4382,7 +4381,7 @@ class ProxyLogging:
         record_served_output_texts(logging_obj.model_call_details, texts)
 
     @staticmethod
-    def fire_deferred_stream_logging(request_data: object) -> None:
+    def fire_deferred_stream_logging(request_data: Mapping[str, object]) -> None:
         """
         Fire the deferred streaming logging callback after the full streaming
         pipeline (including guardrail end-of-stream blocks) has completed.
@@ -4391,8 +4390,8 @@ class ProxyLogging:
         scheduling via create_task (which would race with unified_guardrail's
         end-of-stream block).  This method retrieves and fires them.
         """
-        logging_obj: Final = _STREAM_LOGGING_DATA.validate_python(request_data).get("litellm_logging_obj")
-        if not isinstance(logging_obj, Logging):
+        logging_obj: Final = request_data.get("litellm_logging_obj")
+        if logging_obj is None:
             return
         _deferred_cb: Final[Callable[..., Coroutine[object, object, object]] | None] = getattr(
             logging_obj, "_on_deferred_stream_complete", None

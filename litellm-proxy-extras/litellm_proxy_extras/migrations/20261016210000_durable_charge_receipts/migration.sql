@@ -1,4 +1,4 @@
-CREATE TABLE "LiteLLM_ChargeReceipt" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_ChargeReceipt" (
     "event_id" TEXT NOT NULL,
     "key_hash" TEXT NOT NULL,
     "payload" JSONB NOT NULL,
@@ -14,8 +14,8 @@ CREATE TABLE "LiteLLM_ChargeReceipt" (
     CONSTRAINT "LiteLLM_ChargeReceipt_pkey" PRIMARY KEY ("event_id")
 );
 
-CREATE INDEX "LiteLLM_ChargeReceipt_pending_idx"
+CREATE INDEX IF NOT EXISTS "LiteLLM_ChargeReceipt_pending_idx"
 ON "LiteLLM_ChargeReceipt" ("delivered_at", "retry_at", "lease_until", "event_id");
 
-CREATE INDEX "LiteLLM_ChargeReceipt_key_idx"
+CREATE INDEX IF NOT EXISTS "LiteLLM_ChargeReceipt_key_idx"
 ON "LiteLLM_ChargeReceipt" ("key_hash", "created_at");

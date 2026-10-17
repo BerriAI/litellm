@@ -445,3 +445,27 @@ async def test_stream_chunk_does_not_commit_zero_before_final_usage(journal: Jou
     )
     assert await journal.receipt_count() == 1
     assert (await journal.balance()).spend == 0
+
+
+class ObservedPollingQuery:
+    def __init__(self, database: Prisma, stop: asyncio.Event) -> None:
+        self.database: Final = database
+        self.stop: Final = stop
+        self.calls = 0
+
+    async def __call__(self, query: str, *parameters: object) -> Sequence[Mapping[str, object]]:
+        rows: Final = await self.database.query_raw(query, *parameters)
+        self.calls += 1
+        if self.calls >= 2:
+            self.stop.set()
+        return rows
+
+
+async def test_idle_publisher_continues_after_poll_timeout(journal: JournalCase) -> None:
+    stop: Final = asyncio.Event()
+    query: Final = ObservedPollingQuery(journal.database, stop)
+    async with httpx.AsyncClient() as client:
+        publisher: Final = ChargeReceiptPublisher(ChargeReceiptStore(query), receipt_settings(journal), client)
+        await asyncio.wait_for(publisher.run(stop), timeout=5)
+    assert query.calls == 2 and stop.is_set()
+    assert await journal.receipt_count() == 0 and (await journal.balance()).spend == 0

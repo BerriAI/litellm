@@ -88,11 +88,12 @@ class ChargeReceiptPublisher:
                 verbose_proxy_logger.warning("Charge receipt delivery paused; pending events remain durable")
             try:
                 await asyncio.wait_for(stop.wait(), timeout=self.settings.poll_seconds)
-            except TimeoutError:
+            except asyncio.TimeoutError:
                 pass
 
 
 async def run_charge_receipt_publisher() -> None:
+    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy.utils import PrismaClient, ProxyLogging
 
@@ -113,8 +114,11 @@ async def run_charge_receipt_publisher() -> None:
         store: Final = ChargeReceiptStore(writer_query(client))
         if not await store.ready():
             raise SystemExit("Charge receipt delivery requires the durable receipt schema.")
-        async with httpx.AsyncClient() as http:
-            await ChargeReceiptPublisher(store, settings, http).run(stop)
+        http: Final = get_async_httpx_client("charge_receipts")
+        try:
+            await ChargeReceiptPublisher(store, settings, http.client).run(stop)
+        finally:
+            await http.close()
     finally:
         for signum in (signal.SIGTERM, signal.SIGINT):
             loop.remove_signal_handler(signum)

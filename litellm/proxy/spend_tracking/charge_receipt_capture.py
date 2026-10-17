@@ -7,6 +7,7 @@ from math import isfinite
 from typing import Final
 from uuid import uuid4
 
+import anyio
 from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
@@ -66,7 +67,7 @@ class ChargeReceiptRuntime:
             if self.available:
                 return True
             try:
-                async with asyncio.timeout(self.settings.commit_timeout_seconds):
+                with anyio.fail_after(self.settings.commit_timeout_seconds):
                     self.available = await self.store.ready()
             except TimeoutError:
                 self.available = False
@@ -95,7 +96,7 @@ class ChargeReceiptRuntime:
     async def close(self) -> None:
         self.closing = True
         try:
-            async with asyncio.timeout(self.settings.commit_timeout_seconds + 2):
+            with anyio.fail_after(self.settings.commit_timeout_seconds + 2):
                 tasks: Final = tuple(self._tasks)
                 if tasks:
                     await asyncio.gather(*(asyncio.shield(task) for task in tasks), return_exceptions=True)
@@ -190,14 +191,14 @@ class ChargeCapture:
             self.receipt = receipt
             if self.runtime.before_commit is not None and details is not None:
                 try:
-                    async with asyncio.timeout(min(1, self.runtime.settings.commit_timeout_seconds)):
+                    with anyio.fail_after(min(1, self.runtime.settings.commit_timeout_seconds)):
                         await self.runtime.before_commit(details, event, self.key_hash)
                 except Exception:  # noqa: BLE001  # cache failure must not prevent durable financial capture
                     verbose_proxy_logger.warning(
                         "Spend counter preparation unavailable; attempting durable charge capture"
                     )
             try:
-                async with asyncio.timeout(self.runtime.settings.commit_timeout_seconds):
+                with anyio.fail_after(self.runtime.settings.commit_timeout_seconds):
                     self.result = await self._append_with_retry(receipt)
             except TimeoutError:
                 self.result = ReceiptFailure("database_unavailable")
@@ -231,7 +232,7 @@ class ChargeCapture:
 
     async def wait(self) -> bool:
         try:
-            async with asyncio.timeout(self.runtime.settings.commit_timeout_seconds + 2):
+            with anyio.fail_after(self.runtime.settings.commit_timeout_seconds + 2):
                 await self._done.wait()
         except TimeoutError:
             return False
