@@ -1882,6 +1882,11 @@ def _responses_ws_frame_guard(
         except Exception as e:
             await _bill_rejected_frame(rejected_frame_auth, e, frame_data)
             raise
+        if guarded_data.get("model") != model:
+            raise ValueError(
+                f"a guardrail rerouted this turn to {guarded_data.get('model')!r}; an open Responses WebSocket"
+                f" is bound to {model!r}, send this turn over HTTP /v1/responses"
+            )
         guarded_fields: Final = {key: guarded_data[key] for key in _GUARDED_FRAME_FIELDS if key in guarded_data}
         rewritten: Final = (
             {**frame_obj, "response": {**body, **guarded_fields}}
