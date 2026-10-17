@@ -2145,19 +2145,60 @@ class TestResponsesWSFirstFrameModelAuth:
     async def test_frame_guard_rejects_a_turn_a_guardrail_rerouted_to_another_model(self):
         from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
 
+        from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
+
+        async def pre_call_hook(user_api_key_dict, data, call_type, guardrails_only):
+            data["litellm_metadata"]["standard_logging_guardrail_information"] = [{"guardrail_cost": 0.5}]
+            return {**data, "model": "onprem-llama"}
+
         proxy_logging_obj = MagicMock()
-        proxy_logging_obj.pre_call_hook = AsyncMock(
-            side_effect=lambda **kwargs: {**kwargs["data"], "model": "onprem-llama"}
-        )
+        proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=pre_call_hook)
+        spend_logger = MagicMock(spec=ProxyDBLogger)
+        spend_logger.async_post_call_failure_hook = AsyncMock()
         guard = _responses_ws_frame_guard(
             {"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock(), proxy_logging_obj
         )
 
         with (
-            patch.object(litellm, "callbacks", []),
+            patch.object(litellm, "callbacks", [spend_logger]),
             pytest.raises(ValueError, match="rerouted this turn to 'onprem-llama'"),
         ):
             await guard(json.dumps({"type": "response.create", "input": "my SSN is 123-45-6789"}))
+
+        failure = spend_logger.async_post_call_failure_hook.await_args.kwargs
+        assert "rerouted this turn to 'onprem-llama'" in str(failure["original_exception"])
+        assert failure["request_data"]["litellm_metadata"]["standard_logging_guardrail_information"] == [
+            {"guardrail_cost": 0.5}
+        ]
+
+    @pytest.mark.asyncio
+    async def test_frame_guard_hands_back_the_pii_tokens_presidio_masked_with_and_drops_forged_ones(self):
+        from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
+
+        async def pre_call_hook(user_api_key_dict, data, call_type, guardrails_only):
+            assert data["metadata"] == {"trace": "t1"}, "a client cannot seed pii_tokens"
+            data["metadata"]["pii_tokens"] = {"<EMAIL_ADDRESS_1>": "alice@example.com"}
+            return {**data, "input": "email <EMAIL_ADDRESS_1> please"}
+
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=pre_call_hook)
+        guard = _responses_ws_frame_guard(
+            {"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock(), proxy_logging_obj
+        )
+
+        with patch.object(litellm, "callbacks", []):
+            guarded = await guard(
+                json.dumps(
+                    {
+                        "type": "response.create",
+                        "input": "email alice@example.com please",
+                        "metadata": {"trace": "t1", "pii_tokens": {"<EMAIL_ADDRESS_1>": "mallory@example.com"}},
+                    }
+                )
+            )
+
+        assert json.loads(guarded.frame)["input"] == "email <EMAIL_ADDRESS_1> please"
+        assert dict(guarded.pii_tokens) == {"<EMAIL_ADDRESS_1>": "alice@example.com"}
 
     @pytest.mark.asyncio
     async def test_frame_guard_rejects_a_frame_that_carries_input_at_both_levels(self):

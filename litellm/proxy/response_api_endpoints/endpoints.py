@@ -1819,6 +1819,7 @@ async def _enforce_responses_ws_first_frame_model_auth(
 
 _WS_FRAME: Final = TypeAdapter(dict[str, object])
 _GUARDRAIL_INFORMATION: Final = TypeAdapter(list[dict[str, object]])
+_PII_TOKENS: Final = TypeAdapter(dict[str, str])
 _GUARDRAIL_INFORMATION_KEY: Final = "standard_logging_guardrail_information"
 _GUARDED_FRAME_FIELDS: Final = ("input", "instructions", "tools")
 _CLIENT_METADATA_KEYS: Final = ("metadata", "litellm_metadata")
@@ -1883,10 +1884,12 @@ def _responses_ws_frame_guard(
             await _bill_rejected_frame(rejected_frame_auth, e, frame_data)
             raise
         if guarded_data.get("model") != model:
-            raise ValueError(
+            rerouted: Final = ValueError(
                 f"a guardrail rerouted this turn to {guarded_data.get('model')!r}; an open Responses WebSocket"
                 f" is bound to {model!r}, send this turn over HTTP /v1/responses"
             )
+            await _bill_rejected_frame(rejected_frame_auth, rerouted, frame_data)
+            raise rerouted
         guarded_fields: Final = {key: guarded_data[key] for key in _GUARDED_FRAME_FIELDS if key in guarded_data}
         rewritten: Final = (
             {**frame_obj, "response": {**body, **guarded_fields}}
@@ -1896,6 +1899,7 @@ def _responses_ws_frame_guard(
         return GuardedResponsesWsFrame(
             frame=json.dumps(rewritten),
             guardrail_information=_recorded_guardrail_information(guarded_data.get(metadata_key)),
+            pii_tokens=_recorded_pii_tokens(guarded_data.get("metadata")),
         )
 
     return guard
@@ -1910,7 +1914,7 @@ def _without_untrusted_metadata(key: str, value: object) -> object:
         for name, item in _WS_FRAME.validate_python(value).items()
         if not name.startswith("user_api_key_")
         and name not in _UNTRUSTED_METADATA_CONTROL_FIELDS
-        and name not in ("headers", *_CLIENT_GUARDRAIL_SELECTORS)
+        and name not in ("headers", "pii_tokens", *_CLIENT_GUARDRAIL_SELECTORS)
     }
 
 
@@ -1929,6 +1933,15 @@ async def _bill_rejected_frame(
                 )
             except Exception:  # noqa: BLE001  # billing never replaces the guardrail's own error
                 verbose_proxy_logger.exception("[Non-Blocking] Responses WebSocket: billing a rejected frame failed")
+
+
+def _recorded_pii_tokens(metadata: object) -> Mapping[str, str]:
+    """Presidio stores the tokens it masked a frame with in ``metadata.pii_tokens``; the socket unmasks with them."""
+    recorded: Final = _WS_FRAME.validate_python(metadata).get("pii_tokens") if isinstance(metadata, dict) else None
+    return MappingProxyType(_PII_TOKENS.validate_python(recorded)) if isinstance(recorded, dict) else _NO_PII_TOKENS
+
+
+_NO_PII_TOKENS: Final[Mapping[str, str]] = MappingProxyType({})
 
 
 def _recorded_guardrail_information(bucket: object) -> tuple[Mapping[str, object], ...]:

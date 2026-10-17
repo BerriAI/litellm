@@ -1997,6 +1997,34 @@ class TestNativeWebSocketGuardrailMasking:
     """Exercises the input/output PII masking hooks on ResponsesWebSocketStreaming."""
 
     @pytest.mark.asyncio
+    async def test_a_reply_to_a_frame_the_guard_masked_is_unmasked_with_the_guard_s_tokens(self):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.responses.streaming_iterator import GuardedResponsesWsFrame
+
+        guardrail = _FakeWSGuardrail()
+
+        async def guard(frame: str) -> GuardedResponsesWsFrame:
+            masked = await guardrail.check_pii(json.loads(frame)["input"], True, None, walk := {})
+            return GuardedResponsesWsFrame(
+                frame=json.dumps({"type": "response.create", "input": masked}),
+                pii_tokens=walk["metadata"]["pii_tokens"],
+            )
+
+        backend_ws = MagicMock()
+        backend_ws.send = AsyncMock()
+        handler = _make_streaming(
+            backend_ws=backend_ws, request_data={}, guardrail_callbacks=[guardrail], frame_guard=guard
+        )
+        handler.logging_obj.copy_for_new_call.return_value = handler.logging_obj
+
+        await handler._forward_guarded_frame(json.dumps({"type": "response.create", "input": "email alice@example.com"}))
+
+        assert json.loads(backend_ws.send.await_args.args[0])["input"] == "email <EMAIL_ADDRESS_1>"
+        reply = json.dumps({"type": "response.output_text.delta", "delta": "Sent to <EMAIL_ADDRESS_1>"})
+        assert json.loads(handler._unmask_response_event(reply))["delta"] == "Sent to alice@example.com"
+
+    @pytest.mark.asyncio
     async def test_mask_response_create_flat_string_input(self):
         guardrail = _FakeWSGuardrail()
         handler = _make_streaming(

@@ -1938,10 +1938,12 @@ _GUARDRAIL_INFORMATION_KEY: Final = "standard_logging_guardrail_information"
 @dataclass(frozen=True, slots=True)
 class GuardedResponsesWsFrame:
     """A ``response.create`` frame after the proxy's pre_call guardrails ran on it: the frame to forward (guardrails
-    may rewrite ``input`` and ``instructions``) and the guardrail records that bill against this turn only."""
+    may rewrite ``input`` and ``instructions``), the guardrail records that bill against this turn only, and the
+    Presidio ``pii_tokens`` the walk masked with, which the handler needs to unmask the provider's reply."""
 
     frame: str
     guardrail_information: tuple[Mapping[str, object], ...] = ()
+    pii_tokens: Mapping[str, str] = MappingProxyType({})
 
 
 ResponsesWsFrameGuard: TypeAlias = Callable[[str], Awaitable[GuardedResponsesWsFrame]]
@@ -2201,9 +2203,19 @@ class ResponsesWebSocketStreaming:
         guarded: Final = await self._guard_frame(message)
         if guarded is None:
             return
+        if guarded.pii_tokens:
+            self._remember_pii_tokens(guarded.pii_tokens)
         masked: Final = await self._mask_response_create(guarded.frame)
         self._record_client_frame(masked, guarded.guardrail_information)
         await self.backend_ws.send(masked)
+
+    def _remember_pii_tokens(self, pii_tokens: Mapping[str, str]) -> None:
+        metadata: Final = self.request_data.get("metadata")
+        known: Final = metadata.get("pii_tokens") if _is_json_object(metadata) else None
+        self.request_data["metadata"] = {
+            **(metadata if _is_json_object(metadata) else {}),
+            "pii_tokens": {**(known if _is_str_mapping(known) else {}), **pii_tokens},
+        }
 
     def _record_backend_event(self, event: str) -> None:
         event_obj: Final = _json_object_or_none(event)
