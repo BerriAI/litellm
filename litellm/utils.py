@@ -3269,7 +3269,7 @@ def _builtin_cost_map() -> Mapping[str, dict[str, object]]:
     return cast(Mapping[str, dict[str, object]], litellm.model_cost)
 
 
-def _replace_cost_map_entry(key: str, entry: dict[str, object]) -> None:
+def _replace_cost_map_entry(key: str, entry: Mapping[str, object]) -> None:
     current: Final = _builtin_cost_map().get(key)
     merged: Final = {**(current or {}), **entry}
     if not isinstance(current, AliasedCostEntry):
@@ -3371,25 +3371,21 @@ class _LookupMiss:
 
 @dataclass(frozen=True, slots=True)
 class _FallbackRegistration:
-    key: str
     entry: Mapping[str, object]
     matched_builtin: bool
 
 
-def _fallback_registration(
-    key: str, provider: str, value: Mapping[str, object], lookup: _LookupMiss
-) -> _FallbackRegistration:
-    """A tripped lookup of a key that names a catalog row writes into that row, as the untripped lookup does, so a
-    transient failure never leaves a shadow key behind. Otherwise the key keeps its own entry, seeded from the
-    capability rules an unregistered lookup resolves it to, with the matched built-in entry on top."""
+def _fallback_registration(key: str, provider: str, value: Mapping[str, object]) -> _FallbackRegistration:
+    """The key keeps its own entry, seeded from the capability rules an unregistered lookup resolves it to, with the
+    matched built-in entry on top. The matched row's provider stays behind, since the key's own lookup can reject it
+    (an ``azure_ai/`` key never resolves to an ``openai`` entry), and the key keeps the provider its caller gave."""
     match: Final = _resolve_builtin_model_cost_entry(key=key, provider=provider)
-    if match is not None and match.names_the_row and lookup.tripped:
-        return _FallbackRegistration(key=match.key, entry=match.entry, matched_builtin=True)
     generalized: Final[Mapping[str, object]] = match_capability_generalizations(key) or {}
     if match is None:
-        return _FallbackRegistration(key=key, entry=generalized, matched_builtin=False)
+        return _FallbackRegistration(entry=generalized, matched_builtin=False)
     inherited: Final = match.entry if match.names_the_row else _without_overridden_price_variants(match.entry, value)
-    return _FallbackRegistration(key=key, entry={**generalized, **inherited}, matched_builtin=True)
+    own_fields: Final = {name: field_value for name, field_value in inherited.items() if name != "litellm_provider"}
+    return _FallbackRegistration(entry={**generalized, **own_fields}, matched_builtin=True)
 
 
 def _resolve_builtin_model_cost_entry(key: str, provider: str) -> _BuiltinCostMatch | None:
@@ -3453,14 +3449,10 @@ def is_generalized_model_info(model_info: ModelInfo) -> bool:
     return key not in litellm.model_cost and match_capability_generalizations(key) is not None
 
 
-def _get_builtin_model_info_for_registration(model: str, custom_llm_provider: str | None) -> ModelInfo | _LookupMiss:
-    """Resolve ``model`` to its built-in cost-map entry for registration merging.
+_REGISTRATION_ATTEMPTS: Final = 3
 
-    Misses when the lookup cannot map the model or resolved it via a
-    fallback-generalization capability rule, since a rule-derived entry carries no
-    pricing, and marks the miss tripped when the lookup raised anything else, such
-    as a concurrent registration changing the map mid-walk.
-    """
+
+def _lookup_for_registration(model: str, custom_llm_provider: str | None) -> ModelInfo | _LookupMiss:
     try:
         info: Final = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
     except ModelNotMappedError:
@@ -3468,6 +3460,101 @@ def _get_builtin_model_info_for_registration(model: str, custom_llm_provider: st
     except Exception:
         return _LookupMiss(tripped=True)
     return _LookupMiss(tripped=False) if is_generalized_model_info(info) else info
+
+
+def _get_builtin_model_info_for_registration(model: str, custom_llm_provider: str | None) -> ModelInfo | _LookupMiss:
+    """Resolve ``model`` to its built-in cost-map entry for registration merging.
+
+    Misses when the lookup cannot map the model or resolved it via a
+    fallback-generalization capability rule, since a rule-derived entry carries no
+    pricing. A lookup that raised anything else, such as a concurrent registration
+    changing the map mid-walk, is retried, so a transient failure registers exactly
+    where the untripped lookup would.
+    """
+    lookups: Final = (_lookup_for_registration(model, custom_llm_provider) for _ in range(_REGISTRATION_ATTEMPTS))
+    return next(
+        (lookup for lookup in lookups if not (isinstance(lookup, _LookupMiss) and lookup.tripped)),
+        _LookupMiss(tripped=True),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _RegistrationWrite:
+    key: str
+    entry: Mapping[str, object]
+
+
+def _registration_base(
+    key: str, value: Mapping[str, object], custom_llm_provider: str | None, warning_display_name: str | None
+) -> _RegistrationWrite:
+    provider: Final = str(value.get("litellm_provider") or "")
+    if provider in PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO or any(
+        key.startswith(f"{p}/") for p in PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO
+    ):
+        return _RegistrationWrite(key=key, entry=dict(_builtin_cost_map().get(key, {})))
+    builtin_model_info: Final = _get_builtin_model_info_for_registration(
+        model=key, custom_llm_provider=custom_llm_provider
+    )
+    if not isinstance(builtin_model_info, _LookupMiss):
+        return _RegistrationWrite(
+            key=builtin_model_info["key"],
+            entry=dict(_without_synthesized_costs(builtin_model_info, key=key, value=value)),
+        )
+    fallback: Final = _fallback_registration(key=key, provider=provider, value=value)
+    if not fallback.matched_builtin and (
+        value.get("cache_creation_input_token_cost") is None
+        and value.get("cache_read_input_token_cost") is None
+        and value.get("tiered_pricing") is None
+        and (value.get("input_cost_per_token") is not None or value.get("output_cost_per_token") is not None)
+    ):
+        verbose_logger.warning(
+            "register_model: model=%s has custom pricing but not in built-in cost map and no prefix/region variant matched; cache_creation_input_token_cost and cache_read_input_token_cost will default to 0 for this model (input/output cost tracking is unaffected). To track cache cost, add them to model_info",
+            warning_display_name or key,
+        )
+    return _RegistrationWrite(key=key, entry=dict(fallback.entry))
+
+
+def _registration_write(
+    key: str, value: Mapping[str, object], custom_llm_provider: str | None, warning_display_name: str | None
+) -> _RegistrationWrite:
+    base: Final = _registration_base(key, value, custom_llm_provider, warning_display_name)
+    # ``get_model_info`` returns ``litellm_provider: None`` when the
+    # provider is unknown (e.g. custom deployments registered via
+    # ``Router.add_deployment``). Persisting that None into
+    # ``litellm.model_cost`` causes ``_check_provider_match`` to drop
+    # custom pricing on subsequent cost lookups.
+    existing_model: Final = {
+        name: field_value
+        for name, field_value in base.entry.items()
+        if name != "litellm_provider" or field_value is not None
+    }
+    return _RegistrationWrite(key=base.key, entry=update_dictionary(existing_model, value))
+
+
+def _registration_attempt(
+    key: str,
+    value: Mapping[str, object],
+    custom_llm_provider: str | None,
+    warning_display_name: str | None,
+    final_attempt: bool,
+) -> _RegistrationWrite | None:
+    source: Final = litellm.model_cost
+    write: Final = _registration_write(key, value, custom_llm_provider, warning_display_name)
+    return write if final_attempt or litellm.model_cost is source else None
+
+
+def _registration_write_on_current_map(
+    key: str, value: Mapping[str, object], custom_llm_provider: str | None, warning_display_name: str | None
+) -> _RegistrationWrite:
+    """A price data reload that swaps the map while the entry is being built would otherwise get the old map's
+    prices written over its own, so the entry is rebuilt from the map that is current when it is written."""
+    attempts: Final = (
+        _registration_attempt(
+            key, value, custom_llm_provider, warning_display_name, final_attempt=attempt == _REGISTRATION_ATTEMPTS - 1
+        )
+        for attempt in range(_REGISTRATION_ATTEMPTS)
+    )
+    return next(write for write in attempts if write is not None)
 
 
 _runtime_registered_model_cost: Final[dict[str, dict[str, object]]] = {}  # mutable-ok: replayed on reload
@@ -3582,60 +3669,14 @@ def register_model(
         for _registered_key, _registered_value in _registrations.items():
             _runtime_registered_model_cost[_registered_key] = dict(_registered_value)
 
-    _skip_get_model_info_providers: Final = PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO
-
     for key, value in loaded_model_cost.items():
-        ## get model info ##
-        provider = value.get("litellm_provider", "")
-        _key_str = str(key)
-        if provider in _skip_get_model_info_providers or any(
-            _key_str.startswith(f"{p}/") for p in _skip_get_model_info_providers
-        ):
-            existing_model = dict(_builtin_cost_map().get(key, {}))
-            model_cost_key = key
-        else:
-            builtin_model_info = _get_builtin_model_info_for_registration(
-                model=_key_str, custom_llm_provider=custom_llm_provider
-            )
-            if not isinstance(builtin_model_info, _LookupMiss):
-                existing_model = dict(_without_synthesized_costs(builtin_model_info, key=_key_str, value=value))
-                model_cost_key = builtin_model_info["key"]
-            else:
-                # An exact entry ends the lookup ladder before the capability rules are
-                # consulted, so seed from them: otherwise registering an unmapped model
-                # shadows the very defaults it would have resolved to unregistered.
-                fallback = _fallback_registration(
-                    key=_key_str, provider=provider, value=value, lookup=builtin_model_info
-                )
-                model_cost_key = fallback.key
-                existing_model = dict(fallback.entry)
-                if not fallback.matched_builtin and (
-                    value.get("cache_creation_input_token_cost") is None
-                    and value.get("cache_read_input_token_cost") is None
-                    and value.get("tiered_pricing") is None
-                    and (
-                        value.get("input_cost_per_token") is not None or value.get("output_cost_per_token") is not None
-                    )
-                ):
-                    verbose_logger.warning(
-                        "register_model: model=%s has custom pricing but not in built-in cost map and no prefix/region variant matched; cache_creation_input_token_cost and cache_read_input_token_cost will default to 0 for this model (input/output cost tracking is unaffected). To track cache cost, add them to model_info",
-                        warning_display_name or key,
-                    )
-        # ``get_model_info`` returns ``litellm_provider: None`` when the
-        # provider is unknown (e.g. custom deployments registered via
-        # ``Router.add_deployment``). Persisting that None into
-        # ``litellm.model_cost`` causes ``_check_provider_match`` to drop
-        # custom pricing on subsequent cost lookups.
-        if existing_model.get("litellm_provider") is None:
-            existing_model.pop("litellm_provider", None)
-        ## override / add new keys to the existing model cost dictionary
-        updated_dictionary = update_dictionary(existing_model, value)
-        _replace_cost_map_entry(model_cost_key, updated_dictionary)
+        write = _registration_write_on_current_map(str(key), value, custom_llm_provider, warning_display_name)
+        _replace_cost_map_entry(write.key, write.entry)
 
         # Invalidate case-insensitive lookup map since model_cost was modified
         _invalidate_model_cost_lowercase_map()
 
-        verbose_logger.debug("added/updated model=%s in litellm.model_cost: %s", model_cost_key, model_cost_key)
+        verbose_logger.debug("added/updated model=%s in litellm.model_cost: %s", write.key, write.key)
         # add new model names to provider lists
         if value.get("litellm_provider") == "openai":
             if key not in litellm.open_ai_chat_completion_models:
