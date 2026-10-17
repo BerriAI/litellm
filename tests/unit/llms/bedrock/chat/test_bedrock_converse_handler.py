@@ -210,9 +210,10 @@ def test_bearer_token_auth_serves_when_boto3_resolves_no_sigv4_credentials(monke
 
 @pytest.mark.parametrize("configured_through", ["env_var", "api_key"])
 def test_bearer_token_auth_never_runs_the_sigv4_credential_chain(monkeypatch, configured_through):
-    """The deployment's AWS profile does not exist, so resolving SigV4 credentials
-    raises; a bearer-token deployment must still serve the request, since the
-    bearer token alone signs it."""
+    """The process's default AWS profile does not exist, so resolving SigV4
+    credentials raises; a bearer-token deployment must still serve the request,
+    since the bearer token alone signs it."""
+    monkeypatch.setenv("AWS_PROFILE", "litellm-no-such-aws-profile")
     if configured_through == "env_var":
         monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "bedrock-bearer-token")
     else:
@@ -221,7 +222,7 @@ def test_bearer_token_auth_never_runs_the_sigv4_credential_chain(monkeypatch, co
 
     response = BedrockConverseLLM().completion(
         **_completion_kwargs(
-            optional_params={"maxTokens": 16, "aws_profile_name": "litellm-no-such-aws-profile"},
+            optional_params={"maxTokens": 16},
             litellm_params={},
             client=client,
             api_key="bedrock-bearer-token" if configured_through == "api_key" else None,
@@ -230,6 +231,26 @@ def test_bearer_token_auth_never_runs_the_sigv4_credential_chain(monkeypatch, co
 
     assert response.choices[0].message.content == "hi"
     assert client.post.call_args.kwargs["headers"]["Authorization"] == "Bearer bedrock-bearer-token"
+
+
+def test_explicit_deployment_keys_sign_over_the_env_bearer_token(monkeypatch):
+    monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "bedrock-bearer-token")
+    client = _sync_client_returning_converse_response()
+
+    response = BedrockConverseLLM().completion(
+        **_completion_kwargs(
+            optional_params={
+                "maxTokens": 16,
+                "aws_access_key_id": "AKIAEXPLICITDEPLOYMENT",
+                "aws_secret_access_key": "explicit-secret",
+            },
+            litellm_params={},
+            client=client,
+        )
+    )
+
+    assert response.choices[0].message.content == "hi"
+    assert "Credential=AKIAEXPLICITDEPLOYMENT/" in client.post.call_args.kwargs["headers"]["Authorization"]
 
 
 def test_session_tags_sign_the_request_and_stay_out_of_the_body(monkeypatch):

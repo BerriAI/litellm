@@ -68,6 +68,7 @@ from litellm.types.guardrails import (
     GuardrailEventHooks,
     LitellmParams,
 )
+from litellm.types.llms.bedrock import AwsAuthParams
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
 from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockChecksMessage,
@@ -320,6 +321,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         # store kwargs as optional_params
         self.optional_params = kwargs
+        self.aws_auth_params: Final = AwsAuthParams.model_validate(kwargs)
 
         self.disable_exception_on_block: bool = disable_exception_on_block or False
         """
@@ -861,7 +863,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         proxy_endpoint_url = f"{proxy_endpoint_url}{request_path}"
         encoded_data: Final = json.dumps(data).encode("utf-8")
 
-        aws_bearer_token: Final = bedrock_bearer_token(api_key)
+        aws_bearer_token: Final = bedrock_bearer_token(api_key, self.aws_auth_params)
 
         if aws_bearer_token is not None:
             try:
@@ -1015,7 +1017,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         allow_chunking: bool,
     ) -> BedrockGuardrailResponse:
         credentials, aws_region_name = await run_aws_signing(
-            self._load_credentials, bearer_token=bedrock_bearer_token(api_key)
+            self._load_credentials, bearer_token=bedrock_bearer_token(api_key, self.aws_auth_params)
         )
 
         completed_chunk_usages: Final[list[BedrockGuardrailUsage]] = []  # mutable-ok: billed-chunk usage accumulator
@@ -1958,7 +1960,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         api_key: Final[str | None] = request_data.get("api_key") if request_data else None
         credentials, aws_region_name = await run_aws_signing(
-            self._load_credentials, bearer_token=bedrock_bearer_token(api_key)
+            self._load_credentials, bearer_token=bedrock_bearer_token(api_key, self.aws_auth_params)
         )
         body: Final[dict[str, object]] = {"messages": checks_messages, "checks": self.checks}
 

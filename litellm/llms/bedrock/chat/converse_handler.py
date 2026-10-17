@@ -337,15 +337,14 @@ class BedrockConverseLLM(BaseAWSLLM):
         )
 
         auth_params: Final = pop_aws_auth_params(optional_params)
+        aws_bearer_token: Final = bedrock_bearer_token(api_key, auth_params)
         aws_bedrock_runtime_endpoint: Final = optional_params.pop("aws_bedrock_runtime_endpoint", None)
         optional_params.pop("aws_region_name", None)
 
         litellm_params["aws_region_name"] = aws_region_name  # [DO NOT DELETE] important for async calls
 
         credentials: Final[Credentials | None] = (
-            None
-            if bedrock_bearer_token(api_key) is not None
-            else self.resolve_credentials(auth_params, aws_region_name)
+            None if aws_bearer_token is not None else self.resolve_credentials(auth_params, aws_region_name)
         )
 
         ### SET RUNTIME ENDPOINT ###
