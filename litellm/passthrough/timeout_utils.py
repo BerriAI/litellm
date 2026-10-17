@@ -44,10 +44,14 @@ def resolve_llm_passthrough_timeout(
     litellm_params: Mapping[str, object] | None = None,
     router_timeout: float | str | None = None,
     router_stream_timeout: float | str | None = None,
+    *,
+    service_tier_timeout: float | str | None = None,
 ) -> float:
     """
     Resolve upstream httpx timeout for SDK native passthrough (e.g. Bedrock /converse,
     Anthropic /v1/messages).
+
+    A matching service-tier timeout precedes deployment/router defaults, after caller timeout fields.
 
     Non-streaming precedence: kwargs timeout/request_timeout -> litellm_params
     timeout/request_timeout -> router_timeout -> litellm.request_timeout (litellm_settings.request_timeout,
@@ -69,6 +73,16 @@ def resolve_llm_passthrough_timeout(
         else ()
     )
     candidates: Final = (
+        *(
+            (
+                request.get("stream_timeout") if request.get("stream") else None,
+                request.get("timeout"),
+                request.get("request_timeout"),
+                service_tier_timeout,
+            )
+            if service_tier_timeout is not None
+            else ()
+        ),
         *stream_candidates,
         request.get("timeout"),
         request.get("request_timeout"),

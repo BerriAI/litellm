@@ -38,7 +38,7 @@ if TYPE_CHECKING:
 
 from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
-from .litellm_params import RoutingStrategyName
+from .litellm_params import RoutingStrategyName, ServiceTierTimeout
 from .llms.bedrock import AwsSessionTag
 from .llms.openai import OpenAIFileObject
 from .search import SearchProvider
@@ -503,6 +503,8 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     otpm: int | None = None
     timeout: float | str | httpx.Timeout | SDKTimeout | None = None  # if str, pass in as os.environ/
     stream_timeout: float | str | None = None  # timeout when making stream=True calls, if str, pass in as os.environ/
+    timeout_by_service_tier: Mapping[str, ServiceTierTimeout] | None = None
+    stream_timeout_by_service_tier: Mapping[str, ServiceTierTimeout] | None = None
     max_retries: int | None = None
     drop_params: bool | str | None = None
     organization: str | None = None  # for openai orgs
@@ -707,6 +709,8 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     responses_api_version: ReadOnly[str | None]
     timeout: float | str | httpx.Timeout | SDKTimeout | None  # writable-ok: preserve timeout updates
     stream_timeout: float | str | None
+    timeout_by_service_tier: ReadOnly[Mapping[str, ServiceTierTimeout] | None]
+    stream_timeout_by_service_tier: ReadOnly[Mapping[str, ServiceTierTimeout] | None]
     max_retries: int | None
     organization: list | str | None  # for openai orgs
     provider_affinity_header: ReadOnly[str | None]

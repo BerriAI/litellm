@@ -38,13 +38,26 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache, partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Generic, Literal, NoReturn, Optional, TypeAlias, TypeVar, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Any,
+    Final,
+    Generic,
+    Literal,
+    NoReturn,
+    Optional,
+    TypeAlias,
+    TypeVar,
+    Union,
+    cast,
+)
 
 import anyio
 import httpx
 import openai
 from openai import AsyncOpenAI
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import BaseModel, BeforeValidator, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import assert_never, overload
 
 import litellm
@@ -81,6 +94,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.otel.routing import routing_decision_attributes
 from litellm.integrations.otel.runtime import phase_attributes, phase_event, phase_span
 from litellm.litellm_core_utils.asyncify import run_async_function
+from litellm.litellm_core_utils.completion_timeout import get_service_tier_timeout
 from litellm.litellm_core_utils.core_helpers import (
     coerce_token_limit,
     get_litellm_metadata_from_kwargs,
@@ -543,7 +557,24 @@ _NO_SESSION_KWARGS: Final[Mapping[str, Mapping[str, object]]] = MappingProxyType
 _NO_DEFAULT_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
 _SESSION_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
-_LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
+
+def _parameter_mapping(value: object) -> object:
+    return value.model_dump(exclude_none=True) if isinstance(value, BaseModel) else value
+
+
+_LITELLM_PARAMS_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(
+    Annotated[Mapping[str, object], BeforeValidator(_parameter_mapping)]
+)
+_STREAM_TIMEOUT_ADAPTER: Final[TypeAdapter[float | str | None]] = TypeAdapter(float | str | None)
+_TimeoutValue: TypeAlias = float | str | httpx.Timeout | None
+
+
+class _ResolvedTimeout(BaseModel):
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+    value: _TimeoutValue
+
+
 _SILENT_MODEL_ADAPTER: Final = TypeAdapter(str | list[str])
 _RESOLVED_RETRY_POLICY_ADAPTER: Final = TypeAdapter(RetryPolicy | None)
 _ROUTING_KWARGS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
@@ -4651,6 +4682,7 @@ class Router:
 
         kwargs["model_info"] = model_info
 
+        timeout_params: Final = _LITELLM_PARAMS_ADAPTER.validate_python(deployment["litellm_params"])
         if function_name == "_ageneric_api_call_with_fallbacks":
             from litellm.passthrough.timeout_utils import (
                 resolve_llm_passthrough_timeout,
@@ -4672,12 +4704,27 @@ class Router:
             )
             kwargs["timeout"] = resolve_llm_passthrough_timeout(
                 kwargs=kwargs,
-                litellm_params=deployment["litellm_params"],
+                litellm_params=timeout_params,
                 router_timeout=_router_timeout,
                 router_stream_timeout=_router_stream_timeout,
+                service_tier_timeout=get_service_tier_timeout(
+                    _FALLBACK_HOP_ADAPTER.validate_python(kwargs),
+                    timeout_params,
+                    _LITELLM_PARAMS_ADAPTER.validate_python(self.default_litellm_params),  # pyright: ignore[reportUnknownMemberType]  # Validate legacy router defaults.
+                    stream_timeout=_STREAM_TIMEOUT_ADAPTER.validate_python(
+                        timeout_params.get("stream_timeout")
+                        if timeout_params.get("stream_timeout") is not None
+                        else _router_stream_timeout
+                    )
+                    if kwargs.get("stream")
+                    else None,
+                ),
             )
         else:
-            kwargs["timeout"] = self._get_timeout(kwargs=kwargs, data=deployment["litellm_params"])
+            kwargs["timeout"] = self._get_timeout(
+                kwargs=dict(_FALLBACK_HOP_ADAPTER.validate_python(kwargs)),
+                data=dict(timeout_params),
+            )
 
         self._update_kwargs_with_default_litellm_params(kwargs=kwargs, metadata_variable_name=metadata_variable_name)
         hop_kwargs: Final = _FALLBACK_HOP_ADAPTER.validate_python(kwargs)
@@ -4737,8 +4784,33 @@ class Router:
         )
         return timeout
 
-    def _get_timeout(self, kwargs: dict, data: dict) -> float | int | None:
+    def _get_timeout(self, kwargs: dict[str, object], data: dict[str, object]) -> _TimeoutValue:
         """Helper to get timeout from kwargs or deployment params"""
+        request_params: Final = _FALLBACK_HOP_ADAPTER.validate_python(kwargs)
+        tier_timeout: Final = get_service_tier_timeout(
+            request_params,
+            _LITELLM_PARAMS_ADAPTER.validate_python(data),
+            _LITELLM_PARAMS_ADAPTER.validate_python(self.default_litellm_params),  # pyright: ignore[reportUnknownMemberType]  # Validate legacy router defaults.
+            stream_timeout=self._get_stream_timeout(kwargs=kwargs, data=data) if kwargs.get("stream") else None,
+        )
+        if tier_timeout is not None:
+            explicit_stream_timeout: Final = (
+                request_params.get("stream_timeout") if request_params.get("stream") else None
+            )
+            return _ResolvedTimeout.model_validate(
+                {
+                    "value": next(
+                        value
+                        for value in (
+                            explicit_stream_timeout,
+                            request_params.get("timeout"),
+                            request_params.get("request_timeout"),
+                            tier_timeout,
+                        )
+                        if value is not None
+                    )
+                }
+            ).value
         timeout: float | int | None = None
         if kwargs.get("stream", False):
             timeout = self._get_stream_timeout(kwargs=kwargs, data=data)

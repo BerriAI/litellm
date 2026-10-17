@@ -2,13 +2,38 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Final
 
 import httpx
 from openai import Timeout as SDKTimeout
+from pydantic import TypeAdapter
 
 from litellm.constants import COMPLETION_HTTP_FALLBACK_SECONDS
+from litellm.types.litellm_params import ServiceTierTimeout
+
+_TIER_TIMEOUTS: Final = TypeAdapter(Mapping[str, ServiceTierTimeout])
+
+
+def get_service_tier_timeout(
+    request: Mapping[str, object],
+    deployment: Mapping[str, object],
+    defaults: Mapping[str, object],
+    *,
+    stream_timeout: float | str | None = None,
+) -> float | str | None:
+    tier: Final = request.get("service_tier", deployment.get("service_tier", defaults.get("service_tier")))
+    if not isinstance(tier, str):
+        return None
+    stream_overrides: Final = deployment.get("stream_timeout_by_service_tier") if request.get("stream") else None
+    stream_tier_timeout: Final = (
+        _TIER_TIMEOUTS.validate_python(stream_overrides).get(tier) if stream_overrides is not None else None
+    )
+    if stream_tier_timeout is not None:
+        return stream_tier_timeout
+    overrides: Final = deployment.get("timeout_by_service_tier")
+    timeout: Final = _TIER_TIMEOUTS.validate_python(overrides).get(tier) if overrides is not None else None
+    return stream_timeout if request.get("stream") and timeout is not None and stream_timeout is not None else timeout
 
 
 class CompletionTimeout:

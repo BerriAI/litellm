@@ -143,6 +143,41 @@ response = client.chat.completions.create(
 
 [**Docs: LLM Providers**](https://docs.litellm.ai/docs/providers)
 
+#### Deployment timeouts by service tier
+
+Set `timeout_by_service_tier` in a deployment's `litellm_params` to allow slower
+service tiers more time without increasing the timeout for other requests
+
+```yaml
+model_list:
+  - model_name: tiered-model
+    litellm_params:
+      model: os.environ/OPENAI_MODEL
+      api_key: os.environ/OPENAI_API_KEY
+      timeout: 60
+      stream_timeout: 30
+      timeout_by_service_tier:
+        flex: 900
+      stream_timeout_by_service_tier:
+        flex: 120
+```
+
+Set `OPENAI_MODEL` to the provider model name, including the `openai/` prefix,
+and start the proxy with `litellm --config config.yaml`. Send `service_tier: flex`
+with a request to `tiered-model` to use the matching timeout, in seconds
+
+The request's `service_tier` takes precedence over the deployment's tier and the
+router's `default_litellm_params.service_tier`. For streaming requests, a matching
+`stream_timeout_by_service_tier` entry wins over `timeout_by_service_tier`.
+Without a matching stream entry, an existing deployment or router stream timeout
+takes precedence over `timeout_by_service_tier`.
+Caller timeouts, including the proxy's `x-litellm-timeout` header, still take
+precedence. Missing or unmatched tiers keep the existing timeout behavior
+
+Both maps accept positive, finite durations and stay local to LiteLLM.
+Each fallback deployment resolves its own tier timeout. These settings control
+per-attempt upstream timeouts, not a deadline across retries and fallbacks
+
 </details>
 
 <details>

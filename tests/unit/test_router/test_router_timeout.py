@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from collections.abc import Mapping
 from typing import Final
 from unittest.mock import AsyncMock, Mock
 
@@ -13,8 +14,112 @@ import respx
 
 import litellm
 from litellm import Router
+from litellm.litellm_core_utils.completion_timeout import get_service_tier_timeout
+from litellm.passthrough.timeout_utils import resolve_llm_passthrough_timeout
+from litellm.router import _parameter_mapping
+from litellm.types.router import LiteLLM_Params
+from pydantic import ValidationError
 import time
 from unittest.mock import patch, MagicMock
+
+
+@pytest.mark.parametrize("as_model", (False, True))
+def test_parameter_mapping_preserves_zero_timeouts_and_provider_options(as_model: bool) -> None:
+    params: Final = {
+        "model": "openai/audit-model",
+        "timeout": 0.0,
+        "stream": False,
+        "timeout_by_service_tier": {"flex": 4},
+        "provider_option": {"enabled": False},
+    }
+    normalized: Final = _parameter_mapping(LiteLLM_Params.model_validate(params) if as_model else params)
+    assert isinstance(normalized, Mapping)
+    assert {key: normalized[key] for key in params} == params
+    assert "stream_timeout" not in normalized
+
+
+@pytest.mark.parametrize(
+    "request_params,expected",
+    (
+        ({"service_tier": "flex"}, 4),
+        ({"service_tier": "flex", "stream": True}, 6),
+        ({"service_tier": "flex", "timeout": 0.3}, 0.3),
+        ({"service_tier": "flex", "request_timeout": 0.4}, 0.4),
+        ({"service_tier": "flex", "stream": True, "timeout": 0.3}, 0.3),
+        ({"service_tier": "flex", "stream": True, "stream_timeout": 0.2, "timeout": 0.3}, 0.2),
+        ({"service_tier": "auto"}, 1),
+        ({}, 1),
+    ),
+)
+def test_service_tier_timeout_preserves_caller_overrides_on_both_router_paths(
+    request_params: dict[str, object], expected: float
+) -> None:
+    router: Final = Router(model_list=[])
+    deployment: Final = {
+        "timeout": 1,
+        "stream_timeout": 1,
+        "timeout_by_service_tier": {"flex": 4},
+        "stream_timeout_by_service_tier": {"flex": 6},
+    }
+    assert router._get_timeout(kwargs=request_params, data=deployment) == expected
+    assert resolve_llm_passthrough_timeout(
+        kwargs=request_params,
+        litellm_params=deployment,
+        service_tier_timeout=get_service_tier_timeout(request_params, deployment, {}),
+    ) == expected
+
+
+@pytest.mark.parametrize("value", (0, -1, float("nan"), float("inf"), "invalid"))
+@pytest.mark.parametrize("field", ("timeout_by_service_tier", "stream_timeout_by_service_tier"))
+def test_service_tier_timeout_rejects_invalid_deployment_durations(field: str, value: object) -> None:
+    with pytest.raises(ValidationError, match=field):
+        LiteLLM_Params.model_validate({"model": "openai/audit-model", field: {"flex": value}})
+
+
+def test_service_tier_timeout_preserves_an_explicit_httpx_timeout() -> None:
+    router: Final = Router(model_list=[])
+    timeout: Final = httpx.Timeout(0.3, connect=0.2)
+    assert router._get_timeout(
+        kwargs={"service_tier": "flex", "timeout": timeout},
+        data={"timeout_by_service_tier": {"flex": 4}},
+    ) is timeout
+
+
+@pytest.mark.parametrize("function_name", (None, "_ageneric_api_call_with_fallbacks"))
+@pytest.mark.parametrize("as_model", (False, True))
+@pytest.mark.parametrize(
+    "deployment_params,router_settings,request_params,expected",
+    (
+        ({"stream_timeout": 30}, {}, {"stream": True}, 30),
+        ({"stream_timeout": 30, "stream_timeout_by_service_tier": {"priority": 8}}, {}, {"stream": True}, 30),
+        ({"stream_timeout": 30, "stream_timeout_by_service_tier": {"flex": 8}}, {}, {"stream": True}, 8),
+        ({}, {"stream_timeout": 30}, {"stream": True}, 30),
+        ({}, {"default_litellm_params": {"stream_timeout": 40}}, {"stream": True}, 40),
+        ({}, {}, {"stream": True}, 4),
+        ({"stream_timeout": 30}, {}, {"stream": True, "timeout": 0.3}, 0.3),
+        ({"stream_timeout": 30}, {}, {"stream": True, "stream_timeout": 0.2}, 0.2),
+        ({"stream_timeout": 30}, {}, {"service_tier": "default", "stream": True}, 30),
+        ({"stream_timeout": 30}, {}, {}, 4),
+    ),
+)
+def test_service_tier_timeout_accepts_model_deployments_and_preserves_stream_limits(
+    function_name: str | None,
+    as_model: bool,
+    deployment_params: dict[str, object],
+    router_settings: dict[str, object],
+    request_params: dict[str, object],
+    expected: float,
+) -> None:
+    router: Final = Router(model_list=[], **router_settings)
+    params: Final = {"model": "openai/audit-model", "timeout": 1, "timeout_by_service_tier": {"flex": 4}, **deployment_params}
+    deployment: Final = {
+        "model_name": "audit",
+        "litellm_params": LiteLLM_Params.model_validate(params) if as_model else params,
+        "model_info": {},
+    }
+    kwargs: Final = {"service_tier": "flex", **request_params}
+    router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs, function_name=function_name)
+    assert kwargs["timeout"] == expected
 
 
 @pytest.fixture
