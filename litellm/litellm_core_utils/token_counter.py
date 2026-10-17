@@ -611,10 +611,11 @@ def _count_extra(
         tool_section (Optional[ChatTemplateToolSection]): How the model's chat template renders tools, if known.
     """
     reply_primer_tokens: Final = 3
+    tool_choice_tokens: Final = 0 if tool_section is not None else _count_tool_choice(count_function, tool_choice)
     return (
         reply_primer_tokens
         + _count_tool_definitions(count_function, tools, includes_system_message, tool_section)
-        + _count_tool_choice(count_function, tool_choice)
+        + tool_choice_tokens
     )
 
 
@@ -649,8 +650,11 @@ def _count_chat_template_tools(
     includes_system_message: bool,
     tool_section: ChatTemplateToolSection,
 ) -> int:
+    functions: Final = tuple(function for function in _function_definitions(tools) if function.get("name"))
+    if not functions:
+        return 0
     system_turn_tokens: Final = 0 if includes_system_message else tool_section.implicit_system_turn_tokens
-    schemas: Final = tool_section.render_tool_schemas(tuple(_function_definitions(tools)))
+    schemas: Final = tool_section.render_tool_schemas(functions)
     return tool_section.preamble_tokens + system_turn_tokens + count_function(schemas)
 
 
