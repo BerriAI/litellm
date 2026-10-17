@@ -451,7 +451,7 @@ class TestProxyBaseLLMRequestProcessing:
             mock_add_litellm_data_to_request,
         )
         mock_general_settings = {}
-        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict = ProxyUserAPIKeyAuth()
         mock_proxy_config = MagicMock(spec=ProxyConfig)
         route_type = "acompletion"
 
@@ -573,7 +573,7 @@ class TestProxyBaseLLMRequestProcessing:
         returned_data, logging_obj = await processing_obj.common_processing_pre_call_logic(
             request=mock_request,
             general_settings={},
-            user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+            user_api_key_dict=ProxyUserAPIKeyAuth(),
             proxy_logging_obj=mock_proxy_logging_obj,
             proxy_config=MagicMock(spec=ProxyConfig),
             route_type=route_type,
@@ -711,6 +711,9 @@ class TestProxyBaseLLMRequestProcessing:
 
         assert returned_data["metadata"]["tags"] == ["existing-tag"]
         tag_budget_check.assert_not_awaited()
+
+
+
 
     @pytest.mark.asyncio
     async def test_common_processing_pre_call_logic_skips_guardrail_tag_budget_check_for_zero_cost_model(
@@ -1019,7 +1022,7 @@ class TestProxyBaseLLMRequestProcessing:
         )
 
         mock_general_settings = {}
-        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict = ProxyUserAPIKeyAuth()
         mock_proxy_config = MagicMock(spec=ProxyConfig)
 
         mock_router_settings = {
@@ -2041,7 +2044,7 @@ class TestProxyBaseLLMRequestProcessing:
             mock_add_litellm_data_to_request,
         )
         mock_general_settings = {}
-        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict = ProxyUserAPIKeyAuth()
         mock_proxy_config = MagicMock(spec=ProxyConfig)
         route_type = "acompletion"
 
@@ -7422,6 +7425,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
             return processor.data, logging_obj
 
         mock_router = MagicMock()
+        mock_router.endpoint_error_for_request.return_value = None
         mock_router.fallbacks = [{"gpt-4": ["gpt-3.5-turbo"]}]
 
         with patch.object(
@@ -7463,6 +7467,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
             )
 
         mock_router = MagicMock()
+        mock_router.endpoint_error_for_request.return_value = None
         mock_router.fallbacks = None
 
         with patch.object(
@@ -7502,6 +7507,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
             )
 
         mock_router = MagicMock()
+        mock_router.endpoint_error_for_request.return_value = None
         mock_router.fallbacks = [{"gpt-4": ["gpt-3.5-turbo", "claude-3-haiku"]}]
 
         with patch.object(
@@ -7529,6 +7535,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
 
         assert processor.data["model"] == "gpt-4"
 
+
     @pytest.mark.asyncio
     async def test_fallback_uses_key_level_router_settings(self):
         from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
@@ -7545,6 +7552,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
             return processor.data, MagicMock()
 
         mock_router = MagicMock()
+        mock_router.endpoint_error_for_request.return_value = None
         mock_router.fallbacks = [{"gpt-4": ["gpt-3.5-turbo"]}]
 
         user_api_key_dict = MagicMock()
@@ -7592,6 +7600,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
             )
 
         mock_router = MagicMock()
+        mock_router.endpoint_error_for_request.return_value = None
         mock_router.fallbacks = [{"gpt-4": ["gpt-3.5-turbo"]}]
 
         with patch.object(
@@ -7636,6 +7645,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
             raise ValueError("unexpected auth failure on fallback")
 
         mock_router = MagicMock()
+        mock_router.endpoint_error_for_request.return_value = None
         mock_router.fallbacks = [{"gpt-4": ["gpt-3.5-turbo"]}]
 
         with patch.object(
@@ -7745,6 +7755,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
             return processor.data, MagicMock()
 
         mock_router = MagicMock()
+        mock_router.endpoint_error_for_request.return_value = None
         mock_router.fallbacks = [{primary_model: [fallback_model]}]
 
         with patch.object(

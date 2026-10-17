@@ -2109,6 +2109,8 @@ class TestResponsesWSFirstFrameModelAuth:
         )
 
 
+
+
 class TestReadWSModelFromFirstFrameErrors:
     @pytest.mark.asyncio
     async def test_transport_error_first_frame_closes_with_internal_error(self):

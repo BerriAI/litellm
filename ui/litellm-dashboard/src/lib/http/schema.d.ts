@@ -49962,6 +49962,11 @@ export interface components {
             discoverable?: boolean | null;
             /** Enable Tag Filtering */
             enable_tag_filtering?: boolean | null;
+            /**
+             * Enforce Supported Endpoints
+             * @default false
+             */
+            enforce_supported_endpoints: boolean;
             /** Id */
             id: string | null;
             /** Input Cost Per Character */
