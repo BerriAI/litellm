@@ -2956,7 +2956,9 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
                     team_member_budget: Final = team_member_info.litellm_budget_table.effective_max_budget(
                         now=datetime.now(timezone.utc),
                     )
-                    if team_member_budget is not None and team_member_budget > 0:
+                    if team_member_budget is not None:
+                        valid_token.max_budget_in_team = team_member_budget
+                        valid_token.team_member_max_budget = team_member_budget
                         # Read from cross-pod counter (Redis-first) if available
                         from litellm.proxy.proxy_server import get_current_spend
 
@@ -3396,6 +3398,15 @@ async def _load_team_member_default_model_budget(
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
         )
+        if membership is not None:
+            user_api_key_auth_obj.team_member_spend = membership.spend
+            member_budget_row_early: Final = membership.litellm_budget_table
+            if member_budget_row_early is not None:
+                member_budget: Final = member_budget_row_early.effective_max_budget(now=datetime.now(timezone.utc))
+                if member_budget is not None:
+                    user_api_key_auth_obj.max_budget_in_team = member_budget
+                    user_api_key_auth_obj.team_member_max_budget = member_budget
+
         member_budget_row: Final = membership.litellm_budget_table if membership is not None else None
         member_budget_value: Final[object] = (
             getattr(member_budget_row, "model_max_budget", None) if member_budget_row is not None else None
@@ -3419,6 +3430,20 @@ async def _load_team_member_default_model_budget(
             user_api_key_cache=user_api_key_cache,
             raise_on_lookup_error=True,
         )
+        # Team-level default budget of 0 denotes unset / no cap (individual membership row can explicitly set 0.0 to block).
+        if (
+            user_api_key_auth_obj.max_budget_in_team is None
+            and team_member_default_budget is not None
+            and team_member_default_budget.max_budget is not None
+            and team_member_default_budget.max_budget > 0
+        ):
+            default_max: Final = team_member_default_budget.max_budget + (
+                member_budget_row.active_temp_budget_increase(now=datetime.now(timezone.utc))
+                if member_budget_row is not None
+                else 0.0
+            )
+            user_api_key_auth_obj.max_budget_in_team = default_max
+            user_api_key_auth_obj.team_member_max_budget = default_max
     except Exception:
         if not skip_budget_checks:
             raise

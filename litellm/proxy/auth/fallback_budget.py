@@ -11,9 +11,9 @@ attempted, mirroring `fallback_model_access.py`. It deliberately leaves the prim
 a zero-cost model is never blocked by budget, and only the paid fallback is refused. On by default;
 set `general_settings.enforce_fallback_budget: false` to restore the unguarded behaviour.
 
-Scope: the key's and the user's `max_budget`, plus the team member's per-model caps. Not covered yet,
-and each needs a read-only evaluation path before it can be: team and team-member overall, end-user,
-org, global and other per-model budgets, whose auth-path functions enforce rather than report (they
+Scope: the key's and the user's `max_budget`, the team member's overall budget (`max_budget_in_team`),
+plus the team member's per-model caps. Not covered yet, and each needs a read-only evaluation path before
+it can be: team overall, end-user, org, global and other per-model budgets, whose auth-path functions enforce rather than report (they
 raise), so reusing them would fire threshold alerts and take spend reservations for a target that is
 then skipped; and the key's rolling `budget_limits` windows, whose accumulated spend lives only in
 per-window counters (`spend:key:{token}:window:{budget_duration}`), so enforcing them means more
@@ -154,6 +154,25 @@ async def is_token_within_budget_for_model(
             max_budget=user_budget,
         )
         if user_spend >= user_budget:
+            return False
+
+    member_team_budget: Final = getattr(valid_token, "max_budget_in_team", None)
+    team_member_budget: Final = (
+        member_team_budget
+        if member_team_budget is not None
+        else getattr(valid_token, "team_member_max_budget", None)
+    )
+    if (
+        team_member_budget is not None
+        and valid_token.user_id is not None
+        and valid_token.team_id is not None
+    ):
+        team_member_spend: Final = await _counter_spend(
+            counter_key=f"spend:team_member:{valid_token.user_id}:{valid_token.team_id}",
+            fallback_spend=valid_token.team_member_spend or 0.0,
+            max_budget=team_member_budget,
+        )
+        if team_member_spend >= team_member_budget:
             return False
 
     team_member_model_max_budget: Final = valid_token.team_member_model_max_budget
