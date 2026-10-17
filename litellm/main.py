@@ -123,6 +123,7 @@ from litellm.llms.bedrock.common_utils import (
     without_bedrock_route_prefix,
 )
 from litellm.llms.bedrock_mantle.chat.claude_transformation import bedrock_mantle_chat_config
+from litellm.llms.bedrock_mantle.common_utils import is_mantle_claude_model
 from litellm.llms.cohere.common_utils import CohereModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, http2_enabled
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
@@ -216,6 +217,12 @@ from .litellm_core_utils.streaming_chunk_builder_utils import (
     ChunkProcessor as ChunkProcessor,  # noqa: PLC0414  # public re-export
 )
 from .llms.anthropic.chat import AnthropicChatCompletion
+from .llms.anthropic.chat.prompt_cache_breakpoints import (
+    ClaudeRoute,
+    carries_prompt_cache_breakpoint,
+    claude_prompt_cache,
+    resolved_claude_prompt_cache,
+)
 from .llms.azure.audio_transcriptions import AzureAudioTranscription
 from .llms.azure.azure import AzureChatCompletion, check_dynamic_azure_params
 from .llms.azure.chat.o_series_handler import AzureOpenAIO1ChatCompletion
@@ -223,6 +230,8 @@ from .llms.azure.completion.handler import AzureTextCompletion
 from .llms.azure_ai.anthropic.handler import AzureAnthropicChatCompletion
 from .llms.azure_ai.embed import AzureAIEmbedding
 from .llms.bedrock.chat import BedrockConverseLLM
+from .llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+from .llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import AmazonAnthropicClaudeConfig
 from .llms.bedrock.embed.embedding import BedrockEmbedding
 from .llms.bedrock.image_edit.handler import BedrockImageEdit
 from .llms.bedrock.image_generation.image_handler import BedrockImageGeneration
@@ -1094,6 +1103,44 @@ def _is_claude_tool_target(custom_llm_provider: str | None, model: str) -> bool:
     if custom_llm_provider == "azure_ai" or custom_llm_provider == "vertex_ai":
         return "claude" in model_lower
     return False
+
+
+def _is_claude_prompt_cache_target(custom_llm_provider: str | None, model: str, base_model: str | None) -> bool:
+    if custom_llm_provider == "bedrock_mantle":
+        return is_mantle_claude_model(model)
+    if custom_llm_provider in ("anthropic", "bedrock") and "claude" not in model.lower():
+        return base_model is not None and "claude" in base_model.lower()
+    return _is_claude_tool_target(custom_llm_provider=custom_llm_provider, model=model)
+
+
+def _reaches_converse(
+    provider_config: BaseConfig | None,
+    custom_llm_provider: str | None,
+    model: str,
+    route_params: Mapping[str, object],
+    additional_drop_params: object,
+) -> bool:
+    """A Bedrock model on the native Chat Completions route still reaches Converse when the request needs it."""
+    if isinstance(provider_config, AmazonConverseConfig):
+        return True
+    if custom_llm_provider != "bedrock":
+        return False
+    return bedrock_route_for_request(model, route_params, _listed_drop_params(additional_drop_params)) == "converse"
+
+
+def _claude_route(provider_config: BaseConfig | None, reaches_converse: bool) -> ClaudeRoute:
+    if reaches_converse:
+        return "converse"
+    if isinstance(provider_config, AmazonAnthropicClaudeConfig):
+        return "bedrock_invoke"
+    return "anthropic"
+
+
+def _listed_drop_params(additional_drop_params: object) -> tuple[str, ...]:
+    if not isinstance(additional_drop_params, (list, tuple)):
+        return ()
+    listed: Final = cast(Sequence[object], additional_drop_params)  # cast-ok: elements checked below
+    return tuple(param for param in listed if isinstance(param, str))
 
 
 def _history_without_unanswered_tool_search_calls(
@@ -4133,6 +4180,9 @@ _ADDITIONAL_DROP_PARAMS_ADAPTER: Final = TypeAdapter(list[str])
 _OPTIONAL_PARAMS_ADAPTER: Final = TypeAdapter(dict[str, object])
 _REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_map_request_params: Final = cast(  # cast-ok: takes the same untyped request params as completion()'s real mapping
+    Callable[..., Mapping[str, object]], get_optional_params
+)
 _PROVIDER_ROUTING_HINTS: Final = TypeAdapter(ProviderRoutingHints)
 _BASE_URL_HINT: Final = TypeAdapter(BaseUrlRoutingHint)
 
@@ -5615,25 +5665,43 @@ def completion(
                 base_model=base_model,
             )
 
-        if provider_config is not None:
-            translated_messages: Final = provider_config.translate_developer_role_to_system_role(messages=messages)
-            history_for_route: Final = _history_without_unanswered_tool_search_calls(
-                translated_messages, custom_llm_provider, provider_config
-            )
-            messages = (  # rebind-ok: completion() rewrites messages step by step for the provider
-                translated_messages if history_for_route is None else list(history_for_route)
-            )
-
-        if (
-            supports_system_message is not None
-            and isinstance(supports_system_message, bool)
-            and supports_system_message is False
-        ):
-            messages = map_system_message_pt(messages=messages)
-
-        if dynamic_api_key is not None:
-            api_key = dynamic_api_key
-        # check if user passed in any of the OpenAI optional params
+        request_messages: Final = cast(list[object], messages)  # cast-ok: completion types messages as a bare List
+        history_for_route: Final = (
+            None
+            if provider_config is None
+            else _history_without_unanswered_tool_search_calls(request_messages, custom_llm_provider, provider_config)
+        )
+        routed_messages: Final = request_messages if history_for_route is None else list(history_for_route)
+        claude_drop_params: Final = litellm.drop_params is True or (
+            "drop_params" in kwargs
+            and normalize_drop_params(cast(object, kwargs["drop_params"])) is True  # cast-ok: untyped request kwargs
+        )
+        request_tools: Final = cast(list[object] | None, tools)  # cast-ok: completion types tools as a bare List
+        claude_cache_target: Final = provider_config is not None and _is_claude_prompt_cache_target(
+            custom_llm_provider=custom_llm_provider,
+            model=model,
+            base_model=base_model if isinstance(base_model, str) else None,
+        )
+        reaches_converse: Final = claude_cache_target and _reaches_converse(
+            provider_config,
+            custom_llm_provider,
+            model,
+            MappingProxyType(
+                {
+                    "tools": request_tools,
+                    "functions": cast(object, functions),  # cast-ok: completion types functions as a bare List
+                    "response_format": cast(object, response_format),  # cast-ok: completion types it as a bare dict
+                    "stop": cast(object, stop),  # cast-ok: completion types stop loosely
+                    "thinking": thinking,
+                    "reasoning_effort": reasoning_effort,
+                    **non_default_params,
+                }
+            ),
+            kwargs.get("additional_drop_params"),
+        )
+        validated_model_info: Final = (
+            _MODEL_INFO_ADAPTER.validate_python(model_info) if isinstance(model_info, dict) else None
+        )
         bridges_to_responses_api: Final = (
             responses_api_model_info.get("mode") == "responses" and not skip_responses_api_bridge
         )
@@ -5642,7 +5710,7 @@ def completion(
             if bridges_to_responses_api
             else kwargs.get("allowed_openai_params")
         )
-        optional_param_args: Final = {
+        request_param_args: Final = {
             "functions": functions,
             "function_call": function_call,
             "temperature": temperature,
@@ -5695,9 +5763,68 @@ def completion(
             accepts_summary=provider_config is not None
             and provider_config.accepts_reasoning_summary_in_reasoning_effort,
         )
+        converse_sends_tools: Final = (
+            reaches_converse
+            and carries_prompt_cache_breakpoint(routed_messages, request_tools)
+            and AmazonConverseConfig.sends_tools(
+                _map_request_params(
+                    **{**request_param_args, "reasoning_effort": provider_reasoning_effort},
+                    model_info=validated_model_info,
+                    **non_default_params,
+                ),
+                routed_messages,
+            )
+        )
+        claude_cache: Final = (
+            resolved_claude_prompt_cache(
+                claude_prompt_cache(
+                    routed_messages,
+                    request_tools,
+                    non_default_params,
+                    drop_params=claude_drop_params,
+                    tool_history_as_text=reaches_converse
+                    and AmazonConverseConfig.sends_tool_history_as_text(converse_sends_tools),
+                    tool_config_cache_control=(
+                        AmazonConverseConfig.tool_config_cache_control(
+                            non_default_params.get("cache_control_injection_points")
+                        )
+                        if converse_sends_tools
+                        else None
+                    ),
+                    route=_claude_route(provider_config, reaches_converse),
+                    pairs_unanswered_tool_calls=litellm.modify_params is True,
+                ),
+                model=model,
+                llm_provider=custom_llm_provider,
+            )
+            if claude_cache_target
+            else None
+        )
+        provider_messages: Final = cast(  # cast-ok: completion() only renames marks and drops tool_search calls
+            list[AllMessageValues], routed_messages if claude_cache is None else list(claude_cache.messages)
+        )
+        if provider_config is not None:
+            messages = (  # rebind-ok: completion() rewrites messages step by step for the provider
+                provider_config.translate_developer_role_to_system_role(messages=provider_messages)
+            )
+
+        if (
+            supports_system_message is not None
+            and isinstance(supports_system_message, bool)
+            and supports_system_message is False
+        ):
+            messages = map_system_message_pt(messages=messages)
+
+        if dynamic_api_key is not None:
+            api_key = dynamic_api_key
+        optional_param_args: Final = {
+            **request_param_args,
+            "tools": tools if claude_cache is None or claude_cache.tools is None else list(claude_cache.tools),
+            "messages": messages,
+        }
         optional_params = get_optional_params(
             **{**optional_param_args, "reasoning_effort": provider_reasoning_effort},
-            model_info=_MODEL_INFO_ADAPTER.validate_python(model_info) if isinstance(model_info, dict) else None,
+            model_info=validated_model_info,
             **non_default_params,
         )
         processed_non_default_params: Final = pre_process_non_default_params(

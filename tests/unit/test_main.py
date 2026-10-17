@@ -8,11 +8,12 @@ import logging
 import os
 import threading
 import urllib.parse
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
 from importlib import import_module
+from itertools import chain
 from pathlib import Path
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -23,6 +24,7 @@ import respx
 from openai import APITimeoutError, AsyncOpenAI
 from openai._legacy_response import LegacyAPIResponse
 from openai.types.chat.chat_completion import ChatCompletion
+from pydantic import BaseModel
 
 import litellm
 from litellm import (
@@ -626,6 +628,1030 @@ def test_completion_strips_an_unanswered_claude_tool_search_call_only_for_routes
     )
 
     assert called_names(json.loads(route.calls.last.request.content)) == sent_names
+
+
+_CONVERSE_ROUTE: Final = r"https://bedrock-runtime\.us-east-1\.amazonaws\.com/model/.*/converse"
+_CONVERSE_REPLY: Final = {
+    "output": {"message": {"role": "assistant", "content": [{"text": "18C"}]}},
+    "stopReason": "end_turn",
+    "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+}
+_FAKE_AWS: Final = {"aws_access_key_id": "fake", "aws_secret_access_key": "fake", "aws_region_name": "us-east-1"}
+_BREAKPOINT: Final = {"mode": "explicit"}
+
+
+def _converse_cache_points(body: Mapping[str, object]) -> tuple[str, ...]:
+    system: Final = body.get("system")
+    messages: Final = body["messages"]
+    assert isinstance(system, list) and isinstance(messages, list)
+    in_messages: Final = tuple(chain.from_iterable(message["content"] for message in messages))
+    return (
+        *("system" for block in system if "cachePoint" in block),
+        *("message" for block in in_messages if "cachePoint" in block),
+    )
+
+
+def test_a_breakpoint_on_an_unanswered_tool_search_call_takes_no_slot_from_the_four_under_drop_params(
+    respx_mock: respx.MockRouter,
+):
+    route: Final = respx_mock.post(url__regex=_CONVERSE_ROUTE).respond(json=_CONVERSE_REPLY)
+
+    litellm.completion(
+        model="bedrock/converse/us.anthropic.claude-opus-5-5",
+        messages=[
+            {"role": "system", "content": [{"type": "text", "text": "sys", "prompt_cache_breakpoint": _BREAKPOINT}]},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": str(index), "prompt_cache_breakpoint": _BREAKPOINT} for index in range(3)
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{**_CLAUDE_TOOL_SEARCH_CALL, "prompt_cache_breakpoint": _BREAKPOINT}],
+            },
+            {"role": "user", "content": "And tomorrow?"},
+        ],
+        tools=[{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}],
+        drop_params=True,
+        **_FAKE_AWS,
+    )
+
+    assert _converse_cache_points(json.loads(route.calls.last.request.content)) == ("system", *("message",) * 3)
+
+
+def test_breakpoints_on_tool_history_converse_sends_as_text_take_no_slot_under_drop_params(
+    respx_mock: respx.MockRouter,
+):
+    route: Final = respx_mock.post(url__regex=_CONVERSE_ROUTE).respond(json=_CONVERSE_REPLY)
+
+    litellm.completion(
+        model="bedrock/converse/us.anthropic.claude-opus-5-5",
+        messages=[
+            {"role": "system", "content": [{"type": "text", "text": "sys", "prompt_cache_breakpoint": _BREAKPOINT}]},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": str(index), "prompt_cache_breakpoint": _BREAKPOINT} for index in range(3)
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{**_LOADED_FUNCTION_CALL, "prompt_cache_breakpoint": _BREAKPOINT}],
+            },
+            {**_WEATHER_RESULT, "prompt_cache_breakpoint": _BREAKPOINT},
+            {"role": "user", "content": "And tomorrow?"},
+        ],
+        drop_params=True,
+        **_FAKE_AWS,
+    )
+
+    assert _converse_cache_points(json.loads(route.calls.last.request.content)) == ("system", *("message",) * 3)
+
+
+def test_breakpoints_on_one_converse_tool_result_take_one_slot_under_drop_params(respx_mock: respx.MockRouter):
+    route: Final = respx_mock.post(url__regex=_CONVERSE_ROUTE).respond(json=_CONVERSE_REPLY)
+
+    litellm.completion(
+        model="bedrock/converse/us.anthropic.claude-opus-5-5",
+        messages=[
+            {"role": "system", "content": [{"type": "text", "text": "sys", "prompt_cache_breakpoint": _BREAKPOINT}]},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": str(index), "prompt_cache_breakpoint": _BREAKPOINT} for index in range(2)
+                ],
+            },
+            {"role": "assistant", "content": None, "tool_calls": [_LOADED_FUNCTION_CALL]},
+            {
+                **_WEATHER_RESULT,
+                "content": [
+                    {"type": "text", "text": text, "prompt_cache_breakpoint": _BREAKPOINT} for text in ("18C", "sunny")
+                ],
+            },
+        ],
+        tools=[{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}],
+        drop_params=True,
+        **_FAKE_AWS,
+    )
+
+    assert _converse_cache_points(json.loads(route.calls.last.request.content)) == ("system", *("message",) * 3)
+
+
+def test_a_breakpoint_reaches_bedrock_mantle_claude_as_cache_control(respx_mock: respx.MockRouter):
+    route: Final = respx_mock.post("https://bedrock-mantle.us-east-1.api.aws/anthropic/v1/messages").respond(
+        json={
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "anthropic.claude-opus-5-5",
+            "content": [{"type": "text", "text": "hi"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        }
+    )
+
+    litellm.completion(
+        model="bedrock_mantle/anthropic.claude-opus-5-5",
+        messages=[
+            {"role": "system", "content": [{"type": "text", "text": "sys", "prompt_cache_breakpoint": _BREAKPOINT}]},
+            {"role": "user", "content": "Say hi."},
+        ],
+        api_key="fake",
+        aws_region_name="us-east-1",
+    )
+
+    assert json.loads(route.calls.last.request.content)["system"] == [
+        {"type": "text", "text": "sys", "cache_control": {"type": "ephemeral"}}
+    ]
+
+
+def test_a_string_additional_drop_params_still_reaches_claude_on_the_anthropic_route(respx_mock: respx.MockRouter):
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").respond(
+        json={
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-opus-5-5",
+            "content": [{"type": "text", "text": "hi"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        }
+    )
+
+    response: Final = litellm.completion(
+        model="anthropic/claude-opus-5-5",
+        messages=[{"role": "user", "content": "Say hi."}],
+        api_key="fake",
+        additional_drop_params="temperature",
+    )
+
+    assert (route.call_count, response.choices[0].message.content) == (1, "hi")
+
+
+def test_a_five_minute_cache_control_under_a_tools_function_leaves_converse_free_to_send_the_hour(
+    respx_mock: respx.MockRouter,
+):
+    route: Final = respx_mock.post(url__regex=_CONVERSE_ROUTE).respond(json=_CONVERSE_REPLY)
+
+    litellm.completion(
+        model="bedrock/converse/us.anthropic.claude-opus-5-5",
+        messages=[
+            {"role": "system", "content": [{"type": "text", "text": "sys", "prompt_cache_breakpoint": _BREAKPOINT}]},
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "hi", "prompt_cache_breakpoint": _ONE_HOUR_BREAKPOINT}],
+            },
+        ],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "parameters": {"type": "object"},
+                    "cache_control": {"type": "ephemeral", "ttl": "5m"},
+                },
+            }
+        ],
+        **_FAKE_AWS,
+    )
+
+    body: Final = json.loads(route.calls.last.request.content)
+    sent: Final = (*body["system"], *(block for message in body["messages"] for block in message["content"]))
+    assert [block["cachePoint"].get("ttl") for block in sent if "cachePoint" in block] == ["1h", "1h"]
+
+
+def test_a_breakpoint_on_a_tool_search_call_modify_params_answers_takes_a_slot_under_drop_params(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "modify_params", True)
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").respond(
+        json={
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-opus-5-5",
+            "content": [{"type": "text", "text": "hi"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        }
+    )
+
+    litellm.completion(
+        model="anthropic/claude-opus-5-5",
+        messages=[
+            {"role": "system", "content": [{"type": "text", "text": "sys", "prompt_cache_breakpoint": _BREAKPOINT}]},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": str(index), "prompt_cache_breakpoint": _BREAKPOINT} for index in range(3)
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{**_CLAUDE_TOOL_SEARCH_CALL, "prompt_cache_breakpoint": _BREAKPOINT}],
+            },
+            {"role": "user", "content": "And tomorrow?"},
+        ],
+        drop_params=True,
+        api_key="fake",
+    )
+
+    body: Final = json.loads(route.calls.last.request.content)
+    assert (json.dumps(body).count('"cache_control"'), "cache_control" in json.dumps(body["system"])) == (4, False)
+
+
+_WEATHER_TOOL: Final = {"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}
+
+
+class _Forecast(BaseModel):
+    summary: str
+
+
+_NATIVE_JSON_SCHEMA: Final = {
+    "response_format": {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "forecast",
+            "schema": {"type": "object", "properties": {"summary": {"type": "string"}}},
+        },
+    },
+    "thinking": {"type": "enabled", "budget_tokens": 1024},
+    "model_info": {"supports_bedrock_native_structured_output": True},
+}
+_RESPONSE_FORMATS_CONVERSE_SENDS_AS_A_TOOL: Final = [
+    pytest.param(
+        {"response_format": {"type": "json_schema", "json_schema": {"name": "forecast", "schema": {"type": "object"}}}},
+        id="dict",
+    ),
+    pytest.param({"response_format": _Forecast}, id="pydantic"),
+    pytest.param({**_NATIVE_JSON_SCHEMA, "additional_drop_params": ["thinking"]}, id="deployment-drops-thinking"),
+    pytest.param(
+        {
+            **_NATIVE_JSON_SCHEMA,
+            "model": "bedrock/converse/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123",
+            "base_model": "anthropic.claude-sonnet-5-5",
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "forecast", "schema": {"type": "object", "additionalProperties": True}},
+            },
+        },
+        id="profile-arn-open-schema",
+    ),
+]
+
+
+@pytest.mark.parametrize("response_format_args", _RESPONSE_FORMATS_CONVERSE_SENDS_AS_A_TOOL)
+def test_breakpoints_on_converse_tool_history_beside_a_json_schema_response_format_keep_to_four_under_drop_params(
+    respx_mock: respx.MockRouter, response_format_args: Mapping[str, object]
+):
+    route: Final = respx_mock.post(url__regex=_CONVERSE_ROUTE).respond(json=_CONVERSE_REPLY)
+
+    litellm.completion(
+        **{
+            "model": "bedrock/converse/us.anthropic.claude-opus-5-5",
+            "drop_params": True,
+            **_FAKE_AWS,
+            **response_format_args,
+        },
+        messages=[
+            {"role": "system", "content": [{"type": "text", "text": "sys", "prompt_cache_breakpoint": _BREAKPOINT}]},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": str(index), "prompt_cache_breakpoint": _BREAKPOINT} for index in range(3)
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{**_LOADED_FUNCTION_CALL, "prompt_cache_breakpoint": _BREAKPOINT}],
+            },
+            {**_WEATHER_RESULT, "prompt_cache_breakpoint": _BREAKPOINT},
+            {"role": "user", "content": "And tomorrow?"},
+        ],
+    )
+
+    assert _converse_cache_points(json.loads(route.calls.last.request.content)) == ("message",) * 4
+
+
+_RESPONSE_FORMATS_CONVERSE_SENDS_WITHOUT_A_TOOL: Final = [
+    pytest.param({"response_format": {"type": "json_object"}}, id="json-object"),
+    pytest.param({"response_format": {"type": "text"}}, id="text"),
+    pytest.param(_NATIVE_JSON_SCHEMA, id="native-json-schema"),
+]
+
+
+@pytest.mark.parametrize("response_format_args", _RESPONSE_FORMATS_CONVERSE_SENDS_WITHOUT_A_TOOL)
+def test_breakpoints_on_converse_tool_history_sent_as_text_beside_a_toolless_response_format_take_no_slot(
+    respx_mock: respx.MockRouter, response_format_args: Mapping[str, object]
+):
+    route: Final = respx_mock.post(url__regex=_CONVERSE_ROUTE).respond(json=_CONVERSE_REPLY)
+
+    litellm.completion(
+        model="bedrock/converse/us.anthropic.claude-opus-5-5",
+        messages=[
+            {"role": "system", "content": [{"type": "text", "text": "sys", "prompt_cache_breakpoint": _BREAKPOINT}]},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": str(index), "prompt_cache_breakpoint": _BREAKPOINT} for index in range(3)
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{**_LOADED_FUNCTION_CALL, "prompt_cache_breakpoint": _BREAKPOINT}],
+            },
+            {**_WEATHER_RESULT, "prompt_cache_breakpoint": _BREAKPOINT},
+            {"role": "user", "content": "And tomorrow?"},
+        ],
+        drop_params=True,
+        **response_format_args,
+        **_FAKE_AWS,
+    )
+
+    assert _converse_cache_points(json.loads(route.calls.last.request.content)) == ("system", *("message",) * 3)
+
+
+def test_breakpoints_on_one_tool_results_parts_reach_claude_as_one_mark_on_the_result(respx_mock: respx.MockRouter):
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").respond(
+        json={
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-opus-5-5",
+            "content": [{"type": "text", "text": "18C"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        }
+    )
+
+    litellm.completion(
+        model="anthropic/claude-opus-5-5",
+        messages=[
+            _USER_TURN,
+            {"role": "assistant", "content": None, "tool_calls": [_LOADED_FUNCTION_CALL]},
+            {
+                **_WEATHER_RESULT,
+                "content": [
+                    {"type": "text", "text": text, "prompt_cache_breakpoint": _BREAKPOINT} for text in ("18C", "sunny")
+                ],
+            },
+        ],
+        tools=[_WEATHER_TOOL],
+        api_key="fake",
+    )
+
+    assert json.loads(route.calls.last.request.content)["messages"][2]["content"] == [
+        {
+            "type": "tool_result",
+            "tool_use_id": "toolu_01weather",
+            "content": [{"type": "text", "text": "18C"}, {"type": "text", "text": "sunny"}],
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
+
+
+def test_tool_breakpoints_before_a_one_hour_tool_config_cache_point_reach_converse_as_one_hour(
+    respx_mock: respx.MockRouter,
+):
+    route: Final = respx_mock.post(url__regex=_CONVERSE_ROUTE).respond(json=_CONVERSE_REPLY)
+
+    litellm.completion(
+        model="bedrock/converse/us.anthropic.claude-opus-5-5",
+        messages=[_USER_TURN],
+        tools=[
+            {**_WEATHER_TOOL, "prompt_cache_breakpoint": _BREAKPOINT},
+            {"type": "function", "function": {"name": "get_time"}, "prompt_cache_breakpoint": _BREAKPOINT},
+        ],
+        cache_control_injection_points=[{"location": "tool_config", "control": {"type": "ephemeral", "ttl": "1h"}}],
+        **_FAKE_AWS,
+    )
+
+    sent_tools: Final = json.loads(route.calls.last.request.content)["toolConfig"]["tools"]
+    assert [tool.get("cachePoint", tool.get("toolSpec", {}).get("name")) for tool in sent_tools] == [
+        "get_weather",
+        {"type": "default", "ttl": "1h"},
+        "get_time",
+        {"type": "default", "ttl": "1h"},
+    ]
+
+
+_ONE_HOUR_BREAKPOINT: Final = {"mode": "explicit", "ttl": "1h"}
+_FIVE_MINUTE_TOOL_CONFIG: Final = [{"location": "tool_config", "control": {"type": "ephemeral", "ttl": "5m"}}]
+
+
+def _converse_cache_point_ttls(body: Mapping[str, object]) -> tuple[str | None, ...]:
+    tool_config: Final = body.get("toolConfig")
+    tools: Final = tool_config["tools"] if isinstance(tool_config, dict) else []
+    messages: Final = body["messages"]
+    assert isinstance(messages, list)
+    in_messages: Final = tuple(chain.from_iterable(message["content"] for message in messages))
+    return tuple(block["cachePoint"].get("ttl") for block in (*tools, *in_messages) if "cachePoint" in block)
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        pytest.param("bedrock/converse/us.anthropic.claude-opus-5-5", id="converse"),
+        pytest.param("bedrock/chat_completions/us.anthropic.claude-opus-5-5", id="chat-completions-falls-back"),
+    ],
+)
+def test_a_one_hour_breakpoint_after_a_five_minute_tool_config_cache_point_reaches_converse_as_five_minutes(
+    respx_mock: respx.MockRouter, model: str
+):
+    route: Final = respx_mock.post(url__regex=_CONVERSE_ROUTE).respond(json=_CONVERSE_REPLY)
+
+    litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": [{"type": "text", "text": "hi", "prompt_cache_breakpoint": _ONE_HOUR_BREAKPOINT}]}],
+        tools=[_WEATHER_TOOL],
+        cache_control_injection_points=_FIVE_MINUTE_TOOL_CONFIG,
+        drop_params=True,
+        **_FAKE_AWS,
+    )
+
+    assert _converse_cache_point_ttls(json.loads(route.calls.last.request.content)) == ("5m", None)
+
+
+@pytest.mark.parametrize("response_format_args", _RESPONSE_FORMATS_CONVERSE_SENDS_WITHOUT_A_TOOL)
+def test_a_one_hour_breakpoint_beside_a_toolless_response_format_ignores_the_unsent_tool_config_cache_point(
+    respx_mock: respx.MockRouter, response_format_args: Mapping[str, object]
+):
+    route: Final = respx_mock.post(url__regex=_CONVERSE_ROUTE).respond(json=_CONVERSE_REPLY)
+
+    litellm.completion(
+        model="bedrock/converse/us.anthropic.claude-opus-5-5",
+        messages=[
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "hi", "prompt_cache_breakpoint": _ONE_HOUR_BREAKPOINT}],
+            }
+        ],
+        cache_control_injection_points=_FIVE_MINUTE_TOOL_CONFIG,
+        drop_params=True,
+        **response_format_args,
+        **_FAKE_AWS,
+    )
+
+    assert _converse_cache_point_ttls(json.loads(route.calls.last.request.content)) == ("1h",)
+
+
+@pytest.mark.parametrize("response_format_args", _RESPONSE_FORMATS_CONVERSE_SENDS_AS_A_TOOL)
+def test_a_one_hour_breakpoint_beside_a_response_format_converse_sends_as_a_tool_reaches_converse_as_five_minutes(
+    respx_mock: respx.MockRouter, response_format_args: Mapping[str, object]
+):
+    route: Final = respx_mock.post(url__regex=_CONVERSE_ROUTE).respond(json=_CONVERSE_REPLY)
+
+    litellm.completion(
+        **{
+            "model": "bedrock/converse/us.anthropic.claude-opus-5-5",
+            "drop_params": True,
+            **_FAKE_AWS,
+            **response_format_args,
+        },
+        messages=[
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "hi", "prompt_cache_breakpoint": _ONE_HOUR_BREAKPOINT}],
+            }
+        ],
+        cache_control_injection_points=_FIVE_MINUTE_TOOL_CONFIG,
+    )
+
+    assert _converse_cache_point_ttls(json.loads(route.calls.last.request.content)) == ("5m", None)
+
+
+@pytest.mark.parametrize(
+    "response_format",
+    [
+        pytest.param("json_object", id="string"),
+        pytest.param([{"type": "json_object"}], id="list"),
+        pytest.param({"type": "json_schema", "json_schema": "forecast"}, id="string-json-schema"),
+        pytest.param({"type": "json_schema", "json_schema": {"name": "forecast"}}, id="json-schema-without-schema"),
+    ],
+)
+def test_a_malformed_response_format_the_deployment_drops_reaches_converse_beside_a_breakpoint(
+    respx_mock: respx.MockRouter, response_format: object
+):
+    route: Final = respx_mock.post(url__regex=_CONVERSE_ROUTE).respond(json=_CONVERSE_REPLY)
+
+    litellm.completion(
+        model="bedrock/converse/us.anthropic.claude-opus-5-5",
+        messages=[
+            {"role": "system", "content": [{"type": "text", "text": "sys", "prompt_cache_breakpoint": _BREAKPOINT}]},
+            _USER_TURN,
+        ],
+        response_format=response_format,
+        additional_drop_params=["response_format"],
+        **_FAKE_AWS,
+    )
+
+    assert _converse_cache_points(json.loads(route.calls.last.request.content)) == ("system",)
+
+
+def test_an_unsupported_param_beside_a_malformed_response_format_and_a_breakpoint_is_reported_as_unsupported():
+    with pytest.raises(litellm.UnsupportedParamsError, match="frequency_penalty"):
+        litellm.completion(
+            model="bedrock/converse/us.anthropic.claude-opus-5-5",
+            messages=[
+                {"role": "user", "content": [{"type": "text", "text": "hi", "prompt_cache_breakpoint": _BREAKPOINT}]}
+            ],
+            response_format={"type": "json_schema", "json_schema": {"name": "forecast"}},
+            frequency_penalty=0.5,
+            **_FAKE_AWS,
+        )
+
+
+def test_a_one_hour_breakpoint_after_the_dummy_tools_five_minute_cache_point_reaches_converse_as_five_minutes(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "modify_params", True)
+    monkeypatch.setattr(litellm, "bedrock_neutralize_orphaned_tool_blocks", False)
+    route: Final = respx_mock.post(url__regex=_CONVERSE_ROUTE).respond(json=_CONVERSE_REPLY)
+
+    litellm.completion(
+        model="bedrock/converse/us.anthropic.claude-opus-5-5",
+        messages=[
+            _USER_TURN,
+            {"role": "assistant", "content": None, "tool_calls": [_LOADED_FUNCTION_CALL]},
+            _WEATHER_RESULT,
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "And tomorrow?", "prompt_cache_breakpoint": _ONE_HOUR_BREAKPOINT}],
+            },
+        ],
+        cache_control_injection_points=_FIVE_MINUTE_TOOL_CONFIG,
+        drop_params=True,
+        **_FAKE_AWS,
+    )
+
+    assert _converse_cache_point_ttls(json.loads(route.calls.last.request.content)) == ("5m", None)
+
+
+def _converse_cache_point_places(body: Mapping[str, object]) -> tuple[tuple[str, str | None], ...]:
+    tool_config: Final = body.get("toolConfig")
+    tools: Final = tool_config["tools"] if isinstance(tool_config, dict) else []
+    system: Final = body.get("system", [])
+    messages: Final = body["messages"]
+    assert isinstance(system, list) and isinstance(messages, list)
+    in_messages: Final = tuple(chain.from_iterable(message["content"] for message in messages))
+    blocks: Final = (
+        *(("tool", block) for block in tools),
+        *(("system", block) for block in system),
+        *(("message", block) for block in in_messages),
+    )
+    return tuple((place, block["cachePoint"].get("ttl")) for place, block in blocks if "cachePoint" in block)
+
+
+@pytest.mark.parametrize("drop_params", [False, True])
+@pytest.mark.parametrize(
+    "later_tools",
+    [
+        pytest.param([], id="function-last"),
+        pytest.param([{"type": "bash_20250124", "name": "bash"}], id="bash-sent-outside-the-tool-config"),
+    ],
+)
+def test_a_five_minute_tool_config_cache_point_converse_leaves_out_does_not_shorten_later_one_hour_breakpoints(
+    respx_mock: respx.MockRouter, drop_params: bool, later_tools: list[Mapping[str, str]]
+):
+    route: Final = respx_mock.post(url__regex=_CONVERSE_ROUTE).respond(json=_CONVERSE_REPLY)
+
+    litellm.completion(
+        model="bedrock/converse/us.anthropic.claude-opus-5-5",
+        messages=[
+            {"role": "system", "content": [{"type": "text", "text": "sys", "prompt_cache_breakpoint": _BREAKPOINT}]},
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "hi", "prompt_cache_breakpoint": _ONE_HOUR_BREAKPOINT}],
+            },
+        ],
+        tools=[{**_WEATHER_TOOL, "prompt_cache_breakpoint": _ONE_HOUR_BREAKPOINT}, *later_tools],
+        cache_control_injection_points=_FIVE_MINUTE_TOOL_CONFIG,
+        drop_params=drop_params,
+        **_FAKE_AWS,
+    )
+
+    assert _converse_cache_point_places(json.loads(route.calls.last.request.content)) == (
+        ("tool", "1h"),
+        ("system", "1h"),
+        ("message", "1h"),
+    )
+
+
+def test_a_tool_config_cache_point_after_a_tool_mark_without_a_ttl_still_shortens_a_later_one_hour_breakpoint(
+    respx_mock: respx.MockRouter,
+):
+    route: Final = respx_mock.post(url__regex=_CONVERSE_ROUTE).respond(json=_CONVERSE_REPLY)
+
+    litellm.completion(
+        model="bedrock/converse/us.anthropic.claude-opus-5-5",
+        messages=[
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "hi", "prompt_cache_breakpoint": _ONE_HOUR_BREAKPOINT}],
+            }
+        ],
+        tools=[{**_WEATHER_TOOL, "cache_control": {"type": "ephemeral"}}],
+        cache_control_injection_points=_FIVE_MINUTE_TOOL_CONFIG,
+        drop_params=True,
+        **_FAKE_AWS,
+    )
+
+    assert _converse_cache_point_places(json.loads(route.calls.last.request.content)) == (
+        ("tool", None),
+        ("tool", "5m"),
+        ("message", None),
+    )
+
+
+_INVOKE_ROUTE: Final = r"https://bedrock-runtime\.us-east-1\.amazonaws\.com/model/.*/invoke"
+_CLAUDE_REPLY: Final = {
+    "id": "msg_1",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-opus-5-5",
+    "content": [{"type": "text", "text": "hi"}],
+    "stop_reason": "end_turn",
+    "usage": {"input_tokens": 1, "output_tokens": 1},
+}
+_FIVE_MINUTES: Final = {"type": "ephemeral", "ttl": "5m"}
+_SERVER_SEARCH_CALL: Final = {
+    "id": "srvtoolu_01websearch",
+    "type": "function",
+    "function": {"name": "web_search", "arguments": '{"query": "Paris weather"}'},
+}
+
+
+def _sent_cache_ttls(body: Mapping[str, object]) -> tuple[str | None, ...]:
+    system: Final = body["system"]
+    messages: Final = body["messages"]
+    assert isinstance(system, list) and isinstance(messages, list)
+    blocks: Final = (*system, *chain.from_iterable(message["content"] for message in messages))
+    marks: Final = tuple(block.get("cache_control") or block.get("cachePoint") for block in blocks)
+    return tuple(mark.get("ttl") for mark in marks if mark is not None)
+
+
+def test_a_string_additional_drop_params_on_bedrock_invoke_still_answers_unsupported_params_error(
+    respx_mock: respx.MockRouter,
+):
+    with pytest.raises(litellm.UnsupportedParamsError):
+        litellm.completion(
+            model="bedrock/invoke/us.anthropic.claude-opus-5-5",
+            messages=[{"role": "user", "content": "Say hi."}],
+            logit_bias={"1": 1},
+            additional_drop_params="logit_bias",
+            **_FAKE_AWS,
+        )
+
+    assert respx_mock.calls.call_count == 0
+
+
+@pytest.mark.parametrize("marker", [{"mode": "implicit"}, 5, ""], ids=["implicit-mode", "int", "empty"])
+def test_a_breakpoint_drop_params_drops_leaves_key_auto_caching_on(respx_mock: respx.MockRouter, marker: object):
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").respond(json=_CLAUDE_REPLY)
+
+    litellm.completion(
+        model="anthropic/claude-opus-5-5",
+        messages=[
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": [{"type": "text", "text": "Weather?", "prompt_cache_breakpoint": marker}]},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{**_LOADED_FUNCTION_CALL, "prompt_cache_breakpoint": marker}],
+            },
+            _WEATHER_RESULT,
+            {"role": "user", "content": "And tomorrow?"},
+        ],
+        tools=[_WEATHER_TOOL],
+        enable_prompt_caching=True,
+        drop_params=True,
+        api_key="fake",
+    )
+
+    assert json.dumps(json.loads(route.calls.last.request.content)).count('"cache_control"') == 2
+
+
+@pytest.mark.parametrize(
+    ("model", "url_pattern", "reply", "route_kwargs", "tool"),
+    [
+        pytest.param(
+            "anthropic/claude-opus-5-5",
+            r"https://api\.anthropic\.com/v1/messages",
+            _CLAUDE_REPLY,
+            {"api_key": "fake"},
+            {
+                "type": "mcp",
+                "server_label": "docs",
+                "server_url": "https://example.com/mcp",
+                "cache_control": _FIVE_MINUTES,
+            },
+            id="anthropic-mcp",
+        ),
+        pytest.param(
+            "anthropic/claude-opus-5-5",
+            r"https://api\.anthropic\.com/v1/messages",
+            _CLAUDE_REPLY,
+            {"api_key": "fake"},
+            {
+                "type": "namespace",
+                "name": "agents",
+                "tools": [{"type": "function", "name": "spawn", "parameters": {"type": "object"}}],
+                "cache_control": _FIVE_MINUTES,
+            },
+            id="anthropic-namespace",
+        ),
+        pytest.param(
+            "anthropic/claude-opus-5-5",
+            r"https://api\.anthropic\.com/v1/messages",
+            _CLAUDE_REPLY,
+            {"api_key": "fake"},
+            {
+                "type": "namespace",
+                "name": "agents",
+                "tools": [{"type": "web_search_20250305", "cache_control": _FIVE_MINUTES}],
+            },
+            id="anthropic-nameless-namespace-member",
+        ),
+        pytest.param(
+            "bedrock/converse/us.anthropic.claude-opus-5-5",
+            _CONVERSE_ROUTE,
+            _CONVERSE_REPLY,
+            _FAKE_AWS,
+            {
+                "type": "namespace",
+                "name": "agents",
+                "tools": [
+                    {"name": "spawn", "input_schema": {"type": "object"}, "cache_control": _FIVE_MINUTES}
+                ],
+            },
+            id="converse-namespace-member",
+        ),
+        pytest.param(
+            "bedrock/invoke/us.anthropic.claude-opus-5-5",
+            _INVOKE_ROUTE,
+            _CLAUDE_REPLY,
+            _FAKE_AWS,
+            {"type": "tool_search_tool_bm25_20251119", "name": "tool_search", "cache_control": _FIVE_MINUTES},
+            id="invoke-tool-search-bm25",
+        ),
+        pytest.param(
+            "bedrock/converse/us.anthropic.claude-opus-5-5",
+            _CONVERSE_ROUTE,
+            _CONVERSE_REPLY,
+            _FAKE_AWS,
+            {"type": "tool_search_tool_regex_20251119", "name": "tool_search", "cache_control": _FIVE_MINUTES},
+            id="converse-tool-search-regex",
+        ),
+        pytest.param(
+            "anthropic/claude-opus-5-5",
+            r"https://api\.anthropic\.com/v1/messages",
+            _CLAUDE_REPLY,
+            {"api_key": "fake"},
+            {
+                "type": "function",
+                "function": {"name": "spawn", "parameters": {"type": "object"}, "cache_control": "ephemeral"},
+            },
+            id="anthropic-string-function-mark",
+        ),
+        pytest.param(
+            "bedrock/invoke/us.anthropic.claude-opus-5-5",
+            _INVOKE_ROUTE,
+            _CLAUDE_REPLY,
+            _FAKE_AWS,
+            {
+                "type": "namespace",
+                "name": "agents",
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {"name": "spawn", "parameters": {"type": "object"}, "cache_control": "ephemeral"},
+                    }
+                ],
+            },
+            id="invoke-namespace-member-string-function-mark",
+        ),
+    ],
+)
+def test_a_five_minute_mark_on_a_tool_the_route_sends_unmarked_leaves_the_system_breakpoint_free_to_take_the_hour(
+    respx_mock: respx.MockRouter,
+    model: str,
+    url_pattern: str,
+    reply: Mapping[str, object],
+    route_kwargs: Mapping[str, str],
+    tool: Mapping[str, object],
+):
+    route: Final = respx_mock.post(url__regex=url_pattern).respond(json=reply)
+
+    litellm.completion(
+        model=model,
+        messages=[
+            {"role": "system", "content": [{"type": "text", "text": "sys", "prompt_cache_breakpoint": _BREAKPOINT}]},
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "hi", "prompt_cache_breakpoint": _ONE_HOUR_BREAKPOINT}],
+            },
+        ],
+        tools=[_WEATHER_TOOL, tool],
+        **route_kwargs,
+    )
+
+    assert _sent_cache_ttls(json.loads(route.calls.last.request.content)) == ("1h", "1h")
+
+
+@pytest.mark.parametrize(
+    "member",
+    [
+        {"type": "function", "name": "spawn", "parameters": {"type": "object"}, "cache_control": _FIVE_MINUTES},
+        {
+            "type": "function",
+            "function": {"name": "spawn", "parameters": {"type": "object"}, "cache_control": _FIVE_MINUTES},
+        },
+    ],
+    ids=["flat", "function_form"],
+)
+def test_a_five_minute_mark_on_a_namespace_member_leaves_no_hour_after_it_under_drop_params(
+    respx_mock: respx.MockRouter, member: Mapping[str, object]
+):
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").respond(json=_CLAUDE_REPLY)
+
+    litellm.completion(
+        model="anthropic/claude-opus-5-5",
+        messages=[
+            {"role": "system", "content": [{"type": "text", "text": "sys", "prompt_cache_breakpoint": _BREAKPOINT}]},
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "hi", "prompt_cache_breakpoint": _ONE_HOUR_BREAKPOINT}],
+            },
+        ],
+        tools=[_WEATHER_TOOL, {"type": "namespace", "name": "agents", "tools": [member]}],
+        drop_params=True,
+        api_key="fake",
+    )
+
+    body: Final = json.loads(route.calls.last.request.content)
+    sent_tool_marks: Final = tuple(tool.get("cache_control") for tool in body["tools"])
+    assert (sent_tool_marks, _sent_cache_ttls(body)) == ((None, _FIVE_MINUTES), (None, None))
+
+
+@pytest.mark.parametrize(
+    ("key", "mark"),
+    [("prompt_cache_breakpoint", _BREAKPOINT), ("cache_control", {"type": "ephemeral"})],
+    ids=["breakpoint", "cache_control"],
+)
+def test_a_marked_past_server_tool_call_takes_a_slot_from_operator_injection_points_on_converse(
+    respx_mock: respx.MockRouter, key: str, mark: Mapping[str, str]
+):
+    route: Final = respx_mock.post(url__regex=_CONVERSE_ROUTE).respond(json=_CONVERSE_REPLY)
+
+    litellm.completion(
+        model="bedrock/converse/us.anthropic.claude-opus-5-5",
+        messages=[
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": [{"type": "text", "text": str(index), key: mark} for index in range(3)]},
+            {
+                "role": "assistant",
+                "content": "Searching.",
+                "tool_calls": [{**_SERVER_SEARCH_CALL, key: mark}],
+                "provider_specific_fields": {
+                    "web_search_results": [
+                        {"type": "web_search_tool_result", "tool_use_id": _SERVER_SEARCH_CALL["id"], "content": []}
+                    ]
+                },
+            },
+            {"role": "tool", "tool_call_id": _SERVER_SEARCH_CALL["id"], "content": "Sunny"},
+            {"role": "user", "content": "Thanks"},
+        ],
+        tools=[{"type": "function", "function": {"name": "web_search", "parameters": {"type": "object"}}}],
+        cache_control_injection_points=[
+            {"location": "message", "role": "system"},
+            {"location": "message", "index": -1},
+        ],
+        **_FAKE_AWS,
+    )
+
+    assert _converse_cache_points(json.loads(route.calls.last.request.content)) == ("message",) * 4
+
+
+@pytest.mark.parametrize(
+    ("key", "mark"),
+    [("prompt_cache_breakpoint", _BREAKPOINT), ("cache_control", {"type": "ephemeral"})],
+    ids=["breakpoint", "cache_control"],
+)
+def test_a_marked_past_server_tool_call_leaves_the_operator_system_point_in_place_on_openrouter(
+    respx_mock: respx.MockRouter, openai_api_response: Mapping[str, object], key: str, mark: Mapping[str, str]
+):
+    route: Final = respx_mock.post("https://openrouter.ai/api/v1/chat/completions").respond(json=openai_api_response)
+
+    litellm.completion(
+        model="openrouter/anthropic/claude-opus-5-5",
+        messages=[
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": [{"type": "text", "text": str(index), key: mark} for index in range(3)]},
+            {
+                "role": "assistant",
+                "content": "Searching.",
+                "tool_calls": [{**_SERVER_SEARCH_CALL, key: mark}],
+                "provider_specific_fields": {
+                    "web_search_results": [
+                        {"type": "web_search_tool_result", "tool_use_id": _SERVER_SEARCH_CALL["id"], "content": []}
+                    ]
+                },
+            },
+            {"role": "tool", "tool_call_id": _SERVER_SEARCH_CALL["id"], "content": "Sunny"},
+            {"role": "user", "content": "Thanks"},
+        ],
+        cache_control_injection_points=[
+            {"location": "message", "role": "system"},
+            {"location": "message", "index": -1},
+        ],
+        api_key="fake",
+    )
+
+    assert "cache_control" in json.dumps(json.loads(route.calls.last.request.content)["messages"][0])
+
+
+@pytest.mark.parametrize(
+    ("model", "api_base", "url"),
+    [
+        ("openrouter/anthropic/claude-opus-5-5", None, "https://openrouter.ai/api/v1/chat/completions"),
+        (
+            "databricks/databricks-claude-opus-4-5",
+            "https://adb-cache.cloud.databricks.com/serving-endpoints",
+            "https://adb-cache.cloud.databricks.com/serving-endpoints/chat/completions",
+        ),
+    ],
+    ids=["openrouter", "databricks"],
+)
+def test_a_breakpoint_on_a_tool_call_the_route_never_translates_leaves_the_operator_system_point_in_place(
+    respx_mock: respx.MockRouter,
+    openai_api_response: Mapping[str, object],
+    model: str,
+    api_base: str | None,
+    url: str,
+):
+    route: Final = respx_mock.post(url).respond(json=openai_api_response)
+
+    litellm.completion(
+        model=model,
+        messages=[
+            {"role": "system", "content": "sys"},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": str(index), "prompt_cache_breakpoint": _BREAKPOINT} for index in range(3)
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": "Looking it up.",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "lookup", "arguments": "{}"},
+                        "prompt_cache_breakpoint": _BREAKPOINT,
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "Sunny"},
+            {"role": "user", "content": "Thanks"},
+        ],
+        cache_control_injection_points=[{"location": "message", "role": "system"}],
+        api_key="fake",
+        api_base=api_base,
+    )
+
+    assert "cache_control" in json.dumps(json.loads(route.calls.last.request.content)["messages"][0])
+
+
+def test_a_tuple_additional_drop_params_places_the_same_breakpoints_as_a_list(respx_mock: respx.MockRouter):
+    route: Final = respx_mock.post(url__regex=_CONVERSE_ROUTE).respond(json=_CONVERSE_REPLY)
+
+    def sent_with(additional_drop_params: Sequence[str]) -> object:
+        litellm.completion(
+            model="bedrock/chat_completions/us.anthropic.claude-opus-5-5",
+            messages=[
+                {"role": "system", "content": [{"type": "text", "text": "sys", "prompt_cache_breakpoint": _BREAKPOINT}]},
+                *(
+                    {"role": role, "content": [{"type": "text", "text": role, "prompt_cache_breakpoint": _BREAKPOINT}]}
+                    for role in ("user", "assistant", "user")
+                ),
+            ],
+            tools=[{**_WEATHER_TOOL, "function": {**_WEATHER_TOOL["function"], "cache_control": _FIVE_MINUTES}}],
+            reasoning_effort="none",
+            drop_params=True,
+            additional_drop_params=additional_drop_params,
+            **_FAKE_AWS,
+        )
+        return json.loads(route.calls.last.request.content)
+
+    assert sent_with(("reasoning_effort",)) == sent_with(["reasoning_effort"])
 
 
 def test_completion_keeps_a_function_call_whose_id_only_looks_like_a_claude_server_tool(

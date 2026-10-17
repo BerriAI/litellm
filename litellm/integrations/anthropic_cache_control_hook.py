@@ -20,6 +20,7 @@ from urllib.parse import urlparse
 from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
+from litellm.constants import MAX_CACHE_CONTROL_BLOCKS
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
 from litellm.integrations.prompt_management_base import PromptManagementClient
@@ -30,6 +31,10 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.prompt_templates.factory import (
     tool_call_ids_answered_by_client,
     tool_call_ids_answered_in,
+)
+from litellm.llms.anthropic.chat.prompt_cache_breakpoints import (
+    prompt_cache_breakpoint_is_usable,
+    tool_mark_may_reach_claude,
 )
 from litellm.llms.anthropic.common_utils import (
     is_claude_code_one_shot_subagent_request,
@@ -44,7 +49,6 @@ from litellm.types.integrations.anthropic_cache_control_hook import (
 )
 from litellm.types.llms.anthropic import (
     ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX,
-    ANTHROPIC_TOOL_SEARCH_TOOL_TYPES,
     AllAnthropicToolsValues,
     AnthropicSystemMessageContent,
 )
@@ -63,11 +67,6 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
-
-
-# Anthropic (and Bedrock Claude) reject requests with more than 4 cache_control
-# breakpoints: "A maximum of 4 blocks with cache_control may be provided."
-MAX_CACHE_CONTROL_BLOCKS: Final = 4
 
 CACHE_BREAKPOINT_KEYS: Final = ("cache_control", "prompt_cache_breakpoint")
 OPENAI_PROMPT_CACHE_BREAKPOINT_MIN_GPT_VERSION: Final = (5, 6)
@@ -217,7 +216,14 @@ def targets_openai_api(api_base: object) -> bool:
 
 
 def _carries_cache_breakpoint(block: object) -> bool:
-    return any(_attribute_or_key(block, key) is not None for key in CACHE_BREAKPOINT_KEYS)
+    return any(_carries_mark(block, key) for key in CACHE_BREAKPOINT_KEYS)
+
+
+def _carries_mark(block: object, key: str) -> bool:
+    mark: Final = _attribute_or_key(block, key)
+    if key == "prompt_cache_breakpoint":
+        return prompt_cache_breakpoint_is_usable(mark)
+    return mark is not None
 
 
 def _attribute_or_key(value: object, key: str) -> object | None:
@@ -234,8 +240,11 @@ def _as_object_list(value: object | None) -> list[object] | None:
     return _validated_object_list(value)
 
 
-def _tool_call_carries_cache_breakpoint(tool_call: object, message: object, answered_tool_ids: Container[str]) -> bool:
-    if _attribute_or_key(tool_call, "cache_control") is None:
+def _tool_call_carries_cache_breakpoint(
+    tool_call: object, message: object, answered_tool_ids: Container[str], openai_dialect: bool = False
+) -> bool:
+    keys: Final = ("cache_control",) if openai_dialect else CACHE_BREAKPOINT_KEYS
+    if not any(_carries_mark(tool_call, key) for key in keys):
         return False
 
     return not tool_call_is_rebuilt_as_server_tool_use(
@@ -243,21 +252,47 @@ def _tool_call_carries_cache_breakpoint(tool_call: object, message: object, answ
     )
 
 
-def _tool_call_ids_answered_by_client_when_a_server_tool_call_is_marked(
+def _tool_call_ids_sent_as_tool_calls_when_a_server_tool_call_is_marked(
     messages: Sequence[object], model: str | None = None, custom_llm_provider: str | None = None
 ) -> frozenset[str]:
     if not _marks_a_server_tool_call(messages):
         return frozenset()
     if model is not None and not _builds_anthropic_messages(model, custom_llm_provider):
-        return tool_call_ids_answered_in(messages)
+        return (
+            _tool_call_ids(messages)
+            if _served_by_bedrock(model, custom_llm_provider)
+            else tool_call_ids_answered_in(messages)
+        )
     return tool_call_ids_answered_by_client(messages, _keeps_mid_conversation_system(model, custom_llm_provider))
 
 
-def _marks_a_server_tool_call(messages: Sequence[object]) -> bool:
-    tool_calls: Final = itertools.chain.from_iterable(
+def _tool_calls(messages: Sequence[object]) -> Iterable[object]:
+    return itertools.chain.from_iterable(
         _as_object_list(_attribute_or_key(message, "tool_calls")) or () for message in messages
     )
-    return any(_is_marked_server_tool_call(tool_call) for tool_call in tool_calls)
+
+
+def _tool_call_ids(messages: Sequence[object]) -> frozenset[str]:
+    ids: Final = (_attribute_or_key(tool_call, "id") for tool_call in _tool_calls(messages))
+    return frozenset(tool_call_id for tool_call_id in ids if isinstance(tool_call_id, str))
+
+
+def _marks_a_server_tool_call(messages: Sequence[object]) -> bool:
+    return any(_is_marked_server_tool_call(tool_call) for tool_call in _tool_calls(messages))
+
+
+def _served_by_bedrock(model: str, custom_llm_provider: str | None) -> bool:
+    from litellm.exceptions import BadRequestError
+    from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider, get_llm_provider
+    from litellm.types.utils import LlmProviders
+
+    if declared_authenticating_provider(model, custom_llm_provider) is not None:
+        return False
+    try:
+        _, provider, _, _ = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
+    except (BadRequestError, ValueError):
+        return False
+    return provider == LlmProviders.BEDROCK.value
 
 
 def _builds_anthropic_messages(model: str, custom_llm_provider: str | None) -> bool:
@@ -278,6 +313,14 @@ def _builds_anthropic_messages(model: str, custom_llm_provider: str | None) -> b
     except (BadRequestError, ValueError):
         return True
     return isinstance(chat_config, AnthropicConfig) and not isinstance(chat_config, OpenAIGPTConfig)
+
+
+def _tool_call_breakpoints_become_marks(
+    messages: Sequence[object], model: str, custom_llm_provider: str | None
+) -> bool:
+    if not any(_carries_mark(tool_call, "prompt_cache_breakpoint") for tool_call in _tool_calls(messages)):
+        return True
+    return _builds_anthropic_messages(model, custom_llm_provider) or _served_by_bedrock(model, custom_llm_provider)
 
 
 def _custom_llm_provider(non_default_params: Mapping[str, object], point: Mapping[str, object]) -> str | None:
@@ -310,7 +353,7 @@ def _is_marked_server_tool_call(tool_call: object) -> bool:
     return (
         isinstance(tool_call_id, str)
         and tool_call_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX)
-        and _attribute_or_key(tool_call, "cache_control") is not None
+        and _carries_cache_breakpoint(tool_call)
     )
 
 
@@ -318,10 +361,6 @@ def _tool_carries_cache_breakpoint(tool: object) -> bool:
     return _carries_cache_breakpoint(tool) or (
         isinstance(tool, dict) and _carries_cache_breakpoint(tool.get("function"))
     )
-
-
-def _chat_transform_drops_tool_cache_control(tool: object) -> bool:
-    return isinstance(tool, dict) and tool.get("type") in ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
 
 
 def _accepts_prompt_cache_breakpoint(block: object) -> bool:
@@ -443,11 +482,14 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         reserved_blocks: Final = AnthropicCacheControlHook._blocks_reserved_outside_messages(
             remaining_points, external_breakpoints, openai_dialect
         )
-        answered_tool_ids: Final = _tool_call_ids_answered_by_client_when_a_server_tool_call_is_marked(
+        answered_tool_ids: Final = _tool_call_ids_sent_as_tool_calls_when_a_server_tool_call_is_marked(
+            processed_messages, model, custom_llm_provider
+        )
+        census_dialect: Final = openai_dialect or not _tool_call_breakpoints_become_marks(
             processed_messages, model, custom_llm_provider
         )
         breakpoints_before: Final = AnthropicCacheControlHook.count_request_cache_breakpoints(
-            processed_messages, answered_tool_ids=answered_tool_ids
+            processed_messages, answered_tool_ids=answered_tool_ids, openai_dialect=census_dialect
         )
         processed_messages = self._apply_message_injections(
             points=applied_message_points,
@@ -455,11 +497,12 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             max_blocks=MAX_CACHE_CONTROL_BLOCKS - reserved_blocks,
             openai_dialect=openai_dialect,
             answered_tool_ids=answered_tool_ids,
+            census_dialect=census_dialect,
         )
         if (
             openai_dialect
             and AnthropicCacheControlHook.count_request_cache_breakpoints(
-                processed_messages, answered_tool_ids=answered_tool_ids
+                processed_messages, answered_tool_ids=answered_tool_ids, openai_dialect=True
             )
             > breakpoints_before
             and non_default_params.get("prompt_cache_options") is None
@@ -475,7 +518,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             *AnthropicCacheControlHook._points_with_a_slot_left(
                 remaining_points,
                 AnthropicCacheControlHook.count_request_cache_breakpoints(
-                    processed_messages, answered_tool_ids=answered_tool_ids
+                    processed_messages, answered_tool_ids=answered_tool_ids, openai_dialect=census_dialect
                 )
                 + external_breakpoints,
                 openai_dialect,
@@ -513,19 +556,23 @@ class AnthropicCacheControlHook(CustomPromptManagement):
 
     @staticmethod
     def count_request_cache_breakpoints(
-        messages: Iterable[object], system: object = None, answered_tool_ids: frozenset[str] | None = None
+        messages: Iterable[object],
+        system: object = None,
+        answered_tool_ids: frozenset[str] | None = None,
+        openai_dialect: bool = False,
     ) -> int:
         system_blocks: Final = (
             sum(1 for block in system if _carries_cache_breakpoint(block)) if isinstance(system, list) else 0
         )
         message_list: Final = tuple(messages)
         client_answers: Final = (
-            _tool_call_ids_answered_by_client_when_a_server_tool_call_is_marked(message_list)
+            _tool_call_ids_sent_as_tool_calls_when_a_server_tool_call_is_marked(message_list)
             if answered_tool_ids is None
             else answered_tool_ids
         )
         return system_blocks + sum(
-            AnthropicCacheControlHook._count_cache_control_blocks(msg, client_answers) for msg in message_list
+            AnthropicCacheControlHook._count_cache_control_blocks(msg, client_answers, openai_dialect)
+            for msg in message_list
         )
 
     @staticmethod
@@ -601,6 +648,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         max_blocks: int,
         openai_dialect: bool = False,
         answered_tool_ids: frozenset[str] | None = None,
+        census_dialect: bool | None = None,
     ) -> list[AllMessageValues]:
         """Apply message-level cache control injection points in order.
 
@@ -612,12 +660,13 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         so earlier points win when slots are scarce.
         """
         client_answers: Final = (
-            _tool_call_ids_answered_by_client_when_a_server_tool_call_is_marked(messages)
+            _tool_call_ids_sent_as_tool_calls_when_a_server_tool_call_is_marked(messages)
             if answered_tool_ids is None
             else answered_tool_ids
         )
+        counted_dialect: Final = openai_dialect if census_dialect is None else census_dialect
         used_blocks = AnthropicCacheControlHook.count_request_cache_breakpoints(
-            messages, answered_tool_ids=client_answers
+            messages, answered_tool_ids=client_answers, openai_dialect=counted_dialect
         )
 
         limit_reached = False
@@ -635,14 +684,18 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                     limit_reached = True
                     break
 
-                if AnthropicCacheControlHook._message_has_cache_control(messages[target_index], client_answers):
+                if AnthropicCacheControlHook._message_has_cache_control(
+                    messages[target_index], client_answers, counted_dialect
+                ):
                     # Client already marked this message; don't overwrite it.
                     continue
 
                 messages[target_index] = AnthropicCacheControlHook._safe_insert_cache_control_in_message(
                     messages[target_index], control, openai_dialect
                 )
-                if AnthropicCacheControlHook._message_has_cache_control(messages[target_index], client_answers):
+                if AnthropicCacheControlHook._message_has_cache_control(
+                    messages[target_index], client_answers, counted_dialect
+                ):
                     used_blocks += 1
 
             if limit_reached:
@@ -696,7 +749,9 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         return []
 
     @staticmethod
-    def _count_cache_control_blocks(message: object, answered_tool_ids: Container[str] = frozenset()) -> int:
+    def _count_cache_control_blocks(
+        message: object, answered_tool_ids: Container[str] = frozenset(), openai_dialect: bool = False
+    ) -> int:
         message_count: Final = 1 if _carries_cache_breakpoint(message) else 0
         content: Final = _as_object_list(_attribute_or_key(message, "content"))
         content_count: Final = sum(1 for block in content if _carries_cache_breakpoint(block)) if content else 0
@@ -705,7 +760,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             sum(
                 1
                 for tool_call in tool_calls
-                if _tool_call_carries_cache_breakpoint(tool_call, message, answered_tool_ids)
+                if _tool_call_carries_cache_breakpoint(tool_call, message, answered_tool_ids, openai_dialect)
             )
             if tool_calls
             else 0
@@ -713,9 +768,11 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         return message_count + content_count + tool_call_count
 
     @staticmethod
-    def _message_has_cache_control(message: AllMessageValues, answered_tool_ids: Container[str]) -> bool:
+    def _message_has_cache_control(
+        message: AllMessageValues, answered_tool_ids: Container[str], openai_dialect: bool = False
+    ) -> bool:
         """Return True if the message already carries any cache_control."""
-        return AnthropicCacheControlHook._count_cache_control_blocks(message, answered_tool_ids) > 0
+        return AnthropicCacheControlHook._count_cache_control_blocks(message, answered_tool_ids, openai_dialect) > 0
 
     @staticmethod
     def _safe_insert_cache_control_in_message(
@@ -1108,9 +1165,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
 
         configured: Final = configured_injection_points(non_default_params.get("cache_control_injection_points"))
         if configured:
-            tools_keeping_marks: Final = tuple(
-                tool for tool in tools or () if not _chat_transform_drops_tool_cache_control(tool)
-            )
+            tools_keeping_marks: Final = tuple(filter(tool_mark_may_reach_claude, tools or ()))
             stamped: Final = AnthropicCacheControlHook._stamped_for_prompt_hook(
                 configured,
                 AnthropicCacheControlHook.count_external_cache_breakpoints(

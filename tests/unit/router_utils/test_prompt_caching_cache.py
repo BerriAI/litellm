@@ -1,5 +1,7 @@
 import asyncio
-from typing import Final
+from functools import reduce
+from itertools import chain
+from typing import Final, cast
 
 import pytest
 
@@ -11,6 +13,7 @@ from litellm.router_utils.prompt_caching_cache import (
     PromptCachingCache,
 )
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
+from litellm.types.utils import ChatCompletionMessageToolCall, Function, Message
 
 
 class _ManualClock:
@@ -101,6 +104,19 @@ def _tool(cache_control: dict[str, str] | None) -> ChatCompletionToolParam:
             None,
             PROMPT_CACHE_ONE_HOUR_PIN_TTL_SECONDS,
             id="1h-system-then-5m-turn",
+        ),
+        pytest.param(
+            [
+                {
+                    "role": "system",
+                    "content": "Here is the full text of a complex legal agreement" * 200,
+                    "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "1h"},
+                },
+                {"role": "user", "content": "Reply with the single word ok."},
+            ],
+            None,
+            PROMPT_CACHE_ONE_HOUR_PIN_TTL_SECONDS,
+            id="1h-breakpoint",
         ),
         pytest.param(
             _system_block_messages({"type": "ephemeral"}),
@@ -272,6 +288,195 @@ def test_sync_one_hour_message_level_pin_outlives_the_five_minute_window() -> No
     assert cache.get_model_id(messages=one_hour, tools=None) is None
 
 
+def _tool_call(call_id: str) -> dict[str, object]:
+    return {"id": call_id, "type": "function", "function": {"name": "lookup_clause", "arguments": "{}"}}
+
+
+def _answered_tool_call(call_id: str) -> tuple[AllMessageValues, AllMessageValues]:
+    return (
+        {"role": "assistant", "content": None, "tool_calls": [_tool_call(call_id)]},
+        {"role": "tool", "tool_call_id": call_id, "content": "Section 9."},
+    )
+
+
+def _tool_call_turn(*answered_call_ids: str, marked_call_id: str) -> list[AllMessageValues]:
+    marked_call: Final = {**_tool_call(marked_call_id), "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "1h"}}
+    return [
+        {"role": "system", "content": "Here is the full text of a complex legal agreement" * 200},
+        {"role": "user", "content": "Find the termination clause."},
+        *chain.from_iterable(map(_answered_tool_call, answered_call_ids)),
+        {"role": "assistant", "content": None, "tool_calls": [marked_call]},
+    ]
+
+
+def test_a_one_hour_breakpoint_on_a_tool_call_keeps_the_pin_after_the_mark_moves_to_the_next_call() -> None:
+    clock: Final = _ManualClock()
+    cache: Final = _pin_cache(clock)
+
+    cache.add_model_id(
+        model_id="deployment-1h",
+        messages=_tool_call_turn(marked_call_id="call_1"),
+        tools=None,
+        honors_one_hour_ttl=True,
+    )
+    clock.advance(PROMPT_CACHE_PIN_TTL_SECONDS + 1)
+
+    assert cache.get_model_id(messages=_tool_call_turn("call_1", marked_call_id="call_2"), tools=None) == {
+        "model_id": "deployment-1h"
+    }
+
+
+def _marked_lookup_call() -> ChatCompletionMessageToolCall:
+    return ChatCompletionMessageToolCall(
+        id="call_1",
+        type="function",
+        function=Function(name="lookup_clause", arguments="{}"),
+        prompt_cache_breakpoint={"mode": "explicit", "ttl": "1h"},
+    )
+
+
+@pytest.mark.parametrize(
+    "marked_turn",
+    [
+        Message(content=None, tool_calls=[_marked_lookup_call()]),
+        {"role": "assistant", "content": None, "tool_calls": [_marked_lookup_call()]},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": ({**_tool_call("call_1"), "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "1h"}},),
+        },
+    ],
+    ids=["response_message", "response_tool_calls", "tuple_of_dicts"],
+)
+def test_a_one_hour_breakpoint_keeps_the_pin_whatever_shape_the_marked_tool_calls_come_in(marked_turn: object) -> None:
+    clock: Final = _ManualClock()
+    cache: Final = _pin_cache(clock)
+    messages: Final = cast(list[AllMessageValues], [*_tool_call_turn(marked_call_id="call_1")[:-1], marked_turn])
+
+    cache.add_model_id(model_id="deployment-1h", messages=messages, tools=None, honors_one_hour_ttl=True)
+    clock.advance(PROMPT_CACHE_PIN_TTL_SECONDS + 1)
+
+    assert cache.get_model_id(messages=messages, tools=None) == {"model_id": "deployment-1h"}
+
+
+def test_a_deeply_nested_value_on_a_tool_call_after_the_mark_keeps_the_pin() -> None:
+    cache: Final = _pin_cache(_ManualClock())
+    deep_call: Final = {**_tool_call("call_1"), "x": reduce(lambda inner, _: {"x": inner}, range(300), "leaf")}
+    messages: Final = cast(
+        list[AllMessageValues],
+        [
+            {
+                "role": "system",
+                "content": "Here is the full text of a complex legal agreement" * 200,
+                "cache_control": {"type": "ephemeral"},
+            },
+            {"role": "user", "content": "Find the termination clause."},
+            {"role": "assistant", "content": None, "tool_calls": [deep_call]},
+            {"role": "tool", "tool_call_id": "call_1", "content": "Section 9."},
+        ],
+    )
+
+    cache.add_model_id(model_id="deployment-1", messages=messages, tools=None)
+
+    assert cache.get_model_id(messages=messages, tools=None) == {"model_id": "deployment-1"}
+
+
+_DEEP_VALUE: Final = reduce(lambda inner, _: {"x": inner}, range(300), "leaf")
+
+
+@pytest.mark.parametrize(
+    "marked_turn",
+    [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{**_tool_call("call_1"), "cache_control": {"type": "ephemeral"}, "x": _DEEP_VALUE}],
+        },
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{**_tool_call("call_1"), "prompt_cache_breakpoint": {"mode": "explicit"}, "x": _DEEP_VALUE}],
+        },
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{**_tool_call("call_1"), "cache_control": {"type": "ephemeral", "x": _DEEP_VALUE}}],
+        },
+        {
+            "role": "user",
+            "content": "Find the termination clause.",
+            "cache_control": {"type": "ephemeral"},
+            "x": _DEEP_VALUE,
+        },
+    ],
+    ids=["tool_call_cache_control", "tool_call_breakpoint", "inside_the_mark", "marked_message"],
+)
+def test_a_marked_turn_too_deep_to_serialize_keeps_the_pin_of_the_mark_before_it(marked_turn: object) -> None:
+    cache: Final = _pin_cache(_ManualClock())
+    first_turn: Final = _system_block_messages({"type": "ephemeral"})
+    messages: Final = cast(list[AllMessageValues], [*first_turn, marked_turn])
+
+    cache.add_model_id(model_id="deployment-1", messages=first_turn, tools=None)
+
+    assert cache.get_model_id(messages=messages, tools=None) == {"model_id": "deployment-1"}
+    assert asyncio.run(cache.async_get_model_id(messages=messages, tools=None)) == {"model_id": "deployment-1"}
+
+    cache.add_model_id(model_id="deployment-2", messages=messages, tools=None, honors_one_hour_ttl=True)
+
+    assert cache.get_model_id(messages=first_turn, tools=None) == {"model_id": "deployment-2"}
+
+
+def _deep_marked_question(question: str) -> AllMessageValues:
+    return cast(
+        AllMessageValues,
+        {"role": "user", "content": question, "cache_control": {"type": "ephemeral"}, "x": _DEEP_VALUE},
+    )
+
+
+def test_a_pin_written_past_two_turns_too_deep_to_serialize_lands_on_the_mark_before_the_first() -> None:
+    cache: Final = _pin_cache(_ManualClock())
+    first_turn: Final = _system_block_messages({"type": "ephemeral"})
+    messages: Final = [
+        *first_turn,
+        _deep_marked_question("Find the termination clause."),
+        cast(
+            AllMessageValues,
+            {"role": "user", "content": "Now the renewal clause.", "cache_control": {"type": "ephemeral"}},
+        ),
+        _deep_marked_question("And the governing law."),
+    ]
+
+    cache.add_model_id(model_id="deployment-1", messages=first_turn, tools=None)
+    cache.add_model_id(model_id="deployment-2", messages=messages, tools=None)
+
+    assert cache.get_model_id(messages=first_turn, tools=None) == {"model_id": "deployment-2"}
+
+
+def test_a_pin_cut_before_a_turn_too_deep_to_serialize_lasts_only_as_long_as_the_marks_it_kept() -> None:
+    clock: Final = _ManualClock()
+    cache: Final = _pin_cache(clock)
+    first_turn: Final = _system_block_messages({"type": "ephemeral"})
+    messages: Final = cast(
+        list[AllMessageValues],
+        [
+            *first_turn,
+            {"role": "assistant", "content": None, "tool_calls": [{**_tool_call("call_1"), "x": _DEEP_VALUE}]},
+            {"role": "tool", "tool_call_id": "call_1", "content": "Section 9."},
+            {
+                "role": "user",
+                "content": "Find the renewal clause.",
+                "cache_control": {"type": "ephemeral", "ttl": "1h"},
+            },
+        ],
+    )
+
+    cache.add_model_id(model_id="deployment-1", messages=messages, tools=None, honors_one_hour_ttl=True)
+
+    assert cache.get_model_id(messages=first_turn, tools=None) == {"model_id": "deployment-1"}
+    clock.advance(PROMPT_CACHE_PIN_TTL_SECONDS + 1)
+    assert cache.get_model_id(messages=first_turn, tools=None) is None
+
+
 async def _first_non_none(read):
     while True:
         value = await read()
@@ -367,7 +572,11 @@ def test_extract_cacheable_prefix_mixed_string_and_list_content():
 
 
 @pytest.mark.asyncio
-async def test_same_cacheable_prefix_routes_to_same_deployment() -> None:
+@pytest.mark.parametrize(
+    "mark",
+    ({"cache_control": {"type": "ephemeral"}}, {"prompt_cache_breakpoint": {"mode": "explicit"}}),
+)
+async def test_same_cacheable_prefix_routes_to_same_deployment(mark: dict[str, dict[str, str]]) -> None:
     from litellm import Router
 
     def _messages(user_content: str):
@@ -382,7 +591,7 @@ async def test_same_cacheable_prefix_routes_to_same_deployment() -> None:
                     {
                         "type": "text",
                         "text": "Here is the full text of a complex legal agreement" * 400,
-                        "cache_control": {"type": "ephemeral"},
+                        **mark,
                     },
                 ],
             },
@@ -416,9 +625,7 @@ async def test_same_cacheable_prefix_routes_to_same_deployment() -> None:
     assert key1 is not None
     assert key1 == key2 == key3
 
-    response1: Final = await router.acompletion(
-        model="test-model", messages=messages1, mock_response="ok"
-    )
+    response1: Final = await router.acompletion(model="test-model", messages=messages1, mock_response="ok")
     model_id_1: Final = response1._hidden_params["model_id"]
     assert model_id_1 in {"deployment-1", "deployment-2", "deployment-3"}
 
@@ -440,12 +647,8 @@ async def test_same_cacheable_prefix_routes_to_same_deployment() -> None:
     )
     assert cached_2 == {"model_id": model_id_1}
 
-    response2: Final = await router.acompletion(
-        model="test-model", messages=messages2, mock_response="ok"
-    )
-    response3: Final = await router.acompletion(
-        model="test-model", messages=messages3, mock_response="ok"
-    )
+    response2: Final = await router.acompletion(model="test-model", messages=messages2, mock_response="ok")
+    response3: Final = await router.acompletion(model="test-model", messages=messages3, mock_response="ok")
     model_id_2: Final = response2._hidden_params["model_id"]
     model_id_3: Final = response3._hidden_params["model_id"]
 

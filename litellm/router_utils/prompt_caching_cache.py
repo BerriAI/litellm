@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from itertools import accumulate, chain
 from typing import TYPE_CHECKING, Any, Final, cast
 
-from pydantic import JsonValue, TypeAdapter
+from pydantic import BaseModel, JsonValue, TypeAdapter
 from pydantic_core import to_jsonable_python
 from typing_extensions import TypedDict
 
@@ -40,6 +40,8 @@ PROMPT_CACHE_PIN_TTL_SECONDS: Final = 300
 PROMPT_CACHE_ONE_HOUR_PIN_TTL_SECONDS: Final = 3600
 _PROMPT_CACHE_PINS_TARGET: Final = "prompt_cache_pins"
 _TOOL_RUN_BLOCK_TYPES: Final = frozenset({"tool_use", "tool_result"})
+_MARK_KEYS: Final = frozenset({"cache_control", "prompt_cache_breakpoint"})
+_ENVELOPE_SKIPPED_KEYS: Final = _MARK_KEYS | {"content"}
 _PREFIX_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, JsonValue], ...])
 _TOOLS_ADAPTER: Final = TypeAdapter(tuple[JsonValue, ...])
 _PINS_ADAPTER: Final[TypeAdapter[tuple[JsonValue, ...] | None]] = TypeAdapter(tuple[JsonValue, ...] | None)
@@ -59,6 +61,45 @@ def _canonical_bytes(value: object) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
 
 
+def _mark_pin_ttl_seconds(block: Mapping[str, object]) -> int | None:
+    cache_control: Final = block.get("cache_control")
+    marker: Final = block.get("prompt_cache_breakpoint")
+    if isinstance(cache_control, dict) and cache_control.get("type") == "ephemeral":
+        return (
+            PROMPT_CACHE_ONE_HOUR_PIN_TTL_SECONDS if cache_control.get("ttl") == "1h" else PROMPT_CACHE_PIN_TTL_SECONDS
+        )
+    if isinstance(marker, dict) and marker.get("mode") == "explicit":
+        return PROMPT_CACHE_ONE_HOUR_PIN_TTL_SECONDS if marker.get("ttl") == "1h" else PROMPT_CACHE_PIN_TTL_SECONDS
+    return None
+
+
+def _carries_cache_mark(block: Mapping[str, object]) -> bool:
+    return _mark_pin_ttl_seconds(block) is not None
+
+
+def _tool_call_fields(call: object) -> Mapping[str, object]:
+    if isinstance(call, BaseModel):
+        return dict(call)
+    if isinstance(call, Mapping):
+        return call
+    return {}
+
+
+def _carries_marked_tool_call(message: Mapping[str, object]) -> bool:
+    tool_calls: Final = message.get("tool_calls")
+    return isinstance(tool_calls, (list, tuple)) and any(
+        _carries_cache_mark(_tool_call_fields(call)) for call in tool_calls
+    )
+
+
+def _unmarked(block: JsonValue) -> JsonValue:
+    return {key: value for key, value in block.items() if key not in _MARK_KEYS} if isinstance(block, dict) else block
+
+
+def _envelope_value(key: str, value: JsonValue) -> JsonValue:
+    return [_unmarked(call) for call in value] if key == "tool_calls" and isinstance(value, list) else value
+
+
 def _block_unit(
     envelope: tuple[tuple[str, JsonValue], ...], message_run_type: str | None, block: JsonValue
 ) -> tuple[bytes, str | None]:
@@ -66,12 +107,14 @@ def _block_unit(
         return _canonical_bytes((envelope, block)), message_run_type
     block_type: Final = block.get("type")
     block_run_type: Final = block_type if isinstance(block_type, str) and block_type in _TOOL_RUN_BLOCK_TYPES else None
-    stripped: Final = _sorted_pairs(item for item in block.items() if item[0] != "cache_control")
+    stripped: Final = _sorted_pairs(item for item in block.items() if item[0] not in _MARK_KEYS)
     return _canonical_bytes((envelope, stripped)), message_run_type or block_run_type
 
 
 def _message_units(message: Mapping[str, JsonValue]) -> tuple[tuple[bytes, str | None], ...]:
-    envelope: Final = _sorted_pairs(item for item in message.items() if item[0] not in ("content", "cache_control"))
+    envelope: Final = _sorted_pairs(
+        (key, _envelope_value(key, value)) for key, value in message.items() if key not in _ENVELOPE_SKIPPED_KEYS
+    )
     message_run_type: Final = "tool_result" if message.get("role") == "tool" else None
     content: Final = message.get("content")
     if isinstance(content, list) and content:
@@ -111,6 +154,26 @@ def _positions_of(
     )
 
 
+def _jsonable_message(message: AllMessageValues) -> tuple[Mapping[str, JsonValue], ...]:
+    try:
+        jsonable: Final = to_jsonable_python(
+            truncate_base64_in_messages([message]), serialize_unknown=True, bytes_mode="base64"
+        )
+    except ValueError:
+        return ()
+    return _PREFIX_ADAPTER.validate_python(jsonable)
+
+
+def _readable_prefix(messages: Sequence[AllMessageValues]) -> tuple[Mapping[str, JsonValue], ...]:
+    prefix: Final = PromptCachingCache.extract_cacheable_prefix(list(messages))
+    jsonables: Final = tuple(map(_jsonable_message, prefix))
+    readable_count: Final = next((index for index, jsonable in enumerate(jsonables) if not jsonable), len(prefix))
+    if readable_count == len(prefix):
+        return tuple(chain.from_iterable(jsonables))
+    readable_prefix: Final = PromptCachingCache.extract_cacheable_prefix(prefix[:readable_count])
+    return tuple(chain.from_iterable(map(_jsonable_message, readable_prefix)))
+
+
 def _lookback_keys(positions: tuple[PrefixPosition, ...]) -> tuple[str, ...]:
     if not positions:
         return ()
@@ -119,17 +182,17 @@ def _lookback_keys(positions: tuple[PrefixPosition, ...]) -> tuple[str, ...]:
 
 
 def _breakpoint_pin_ttl_seconds(carrier: JsonValue | Mapping[str, JsonValue]) -> int | None:
-    if not isinstance(carrier, Mapping):
-        return None
-    cache_control: Final = carrier.get("cache_control")
-    if not isinstance(cache_control, dict) or cache_control.get("type") != "ephemeral":
-        return None
-    return PROMPT_CACHE_ONE_HOUR_PIN_TTL_SECONDS if cache_control.get("ttl") == "1h" else PROMPT_CACHE_PIN_TTL_SECONDS
+    return _mark_pin_ttl_seconds(carrier) if isinstance(carrier, Mapping) else None
 
 
 def _breakpoint_carriers(message: Mapping[str, JsonValue]) -> tuple[JsonValue | Mapping[str, JsonValue], ...]:
     content: Final = message.get("content")
-    return (message, *content) if isinstance(content, list) else (message,)
+    tool_calls: Final = message.get("tool_calls")
+    return (
+        message,
+        *(content if isinstance(content, list) else ()),
+        *(tool_calls if isinstance(tool_calls, list) else ()),
+    )
 
 
 def _pinned_value(value: JsonValue) -> PromptCachingCacheValue | None:
@@ -157,7 +220,7 @@ class PromptCachingCache:
         Extract the cacheable prefix from messages.
 
         The cacheable prefix is everything UP TO AND INCLUDING the LAST content block
-        (across all messages) that has cache_control. This includes ALL blocks before
+        (across all messages) that has cache_control or prompt_cache_breakpoint. This includes ALL blocks before
         the last cacheable block (even if they don't have cache_control).
 
         Args:
@@ -179,31 +242,22 @@ class PromptCachingCache:
             # Check for cache_control at message level (when content is a string)
             # This handles the case where cache_control is a sibling of string content:
             # {"role": "user", "content": "...", "cache_control": {"type": "ephemeral"}}
-            message_level_cache_control = message.get("cache_control")
-            if (
-                message_level_cache_control is not None
-                and isinstance(message_level_cache_control, dict)
-                and message_level_cache_control.get("type") == "ephemeral"
-            ):
+            if _carries_cache_mark(message):
                 last_cacheable_message_idx = msg_idx
                 # Set to None to indicate the entire message content is cacheable
                 # (not a specific content block index within a list)
                 last_cacheable_content_idx = None
 
             # Also check for cache_control within content blocks (when content is a list)
-            if not isinstance(content, list):
-                continue
-
-            for content_idx, content_block in enumerate(content):
-                if isinstance(content_block, dict):
-                    cache_control = content_block.get("cache_control")
-                    if (
-                        cache_control is not None
-                        and isinstance(cache_control, dict)
-                        and cache_control.get("type") == "ephemeral"
-                    ):
+            if isinstance(content, list):
+                for content_idx, content_block in enumerate(content):
+                    if isinstance(content_block, dict) and _carries_cache_mark(content_block):
                         last_cacheable_message_idx = msg_idx
                         last_cacheable_content_idx = content_idx
+
+            if _carries_marked_tool_call(message):
+                last_cacheable_message_idx = msg_idx
+                last_cacheable_content_idx = None
 
         # If no cacheable block found, return empty list (no cacheable prefix)
         if last_cacheable_message_idx is None:
@@ -258,16 +312,7 @@ class PromptCachingCache:
         """
         if not messages:
             return ()
-        return _positions_of(
-            _PREFIX_ADAPTER.validate_python(
-                to_jsonable_python(
-                    truncate_base64_in_messages(PromptCachingCache.extract_cacheable_prefix(messages)),
-                    serialize_unknown=True,
-                    bytes_mode="base64",
-                )
-            ),
-            tools,
-        )
+        return _positions_of(_readable_prefix(messages), tools)
 
     @staticmethod
     async def async_prefix_positions(
@@ -285,11 +330,7 @@ class PromptCachingCache:
     ) -> int:
         if not messages:
             return PROMPT_CACHE_PIN_TTL_SECONDS
-        prefix: Final = _PREFIX_ADAPTER.validate_python(
-            to_jsonable_python(
-                PromptCachingCache.extract_cacheable_prefix(list(messages)), serialize_unknown=True, bytes_mode="base64"
-            )
-        )
+        prefix: Final = _readable_prefix(messages)
         tool_carriers: Final = _TOOLS_ADAPTER.validate_python(
             to_jsonable_python(tools or (), serialize_unknown=True, bytes_mode="base64")
         )
