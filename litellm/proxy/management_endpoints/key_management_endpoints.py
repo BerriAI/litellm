@@ -5052,10 +5052,17 @@ async def generate_key_helper_fn(
         if isinstance(saved_token["metadata"], str):
             saved_token["metadata"] = json.loads(saved_token["metadata"])
         if isinstance(saved_token["permissions"], str):
-            if "get_spend_routes" in saved_token["permissions"] and premium_user is not True:
-                raise ValueError("get_spend_routes permission is only available for LiteLLM Enterprise users")
-
-            saved_token["permissions"] = json.loads(saved_token["permissions"])
+            saved_permissions: Final = TypeAdapter[dict[str, object] | None](dict[str, object] | None).validate_json(
+                saved_token["permissions"]
+            )
+            if saved_permissions is not None and "get_spend_routes" in saved_permissions and premium_user is not True:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail={
+                        "error": "get_spend_routes permission is only available for LiteLLM Enterprise users. "
+                        f"{CommonProxyErrors.not_premium_user.value}"
+                    },
+                )
         if isinstance(saved_token["model_max_budget"], str):
             saved_token["model_max_budget"] = json.loads(saved_token["model_max_budget"])
         router_settings = cast(dict | None, saved_token.get("router_settings"))

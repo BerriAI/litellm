@@ -1,7 +1,7 @@
 import asyncio
 from collections.abc import Mapping
 from contextlib import ExitStack
-from typing import Final
+from typing import Final, Literal
 from types import SimpleNamespace
 import json
 from datetime import datetime, timedelta, timezone
@@ -99,6 +99,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     validate_key_team_change,
 )
 from litellm.proxy.proxy_server import app
+from litellm.types.proxy.common_proxy_errors import CommonProxyErrors
 from litellm.types.proxy.management_endpoints.key_management_endpoints import (
     BulkUpdateKeyRequest,
     BulkUpdateKeyResponse,
@@ -18033,6 +18034,85 @@ async def test_permissions_admin_can_set_any(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("request_type", "table_name", "premium_user", "permission_value"),
+    [
+        pytest.param("key", "key", False, True, id="key-non-premium-true"),
+        pytest.param("key", "key", None, True, id="key-premium-unavailable-true"),
+        pytest.param("key", "key", False, False, id="key-non-premium-false"),
+        pytest.param("key", "key", False, "false", id="key-non-premium-string-false"),
+        pytest.param("user", None, False, True, id="user-non-premium-true"),
+        pytest.param("user", None, None, True, id="user-premium-unavailable-true"),
+    ],
+)
+async def test_generate_key_helper_rejects_get_spend_routes_for_non_premium(
+    monkeypatch: pytest.MonkeyPatch,
+    request_type: Literal["key", "user"],
+    table_name: Literal["key"] | None,
+    premium_user: bool | None,
+    permission_value: bool | str,
+) -> None:
+    mock_prisma_client: Final = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", premium_user)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await generate_key_helper_fn(
+            request_type=request_type,
+            token="sk-test-generate-key-license-check",
+            table_name=table_name,
+            permissions={"get_spend_routes": permission_value},
+        )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == {
+        "error": (
+            "get_spend_routes permission is only available for LiteLLM Enterprise users. "
+            f"{CommonProxyErrors.not_premium_user.value}"
+        )
+    }
+    mock_prisma_client.insert_data.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("premium_user", "permissions"),
+    [
+        pytest.param(True, {"get_spend_routes": True}, id="licensed-global-spend"),
+        pytest.param(False, None, id="no-permissions"),
+        pytest.param(False, {}, id="empty-permissions"),
+        pytest.param(False, {"allow_pii_controls": True}, id="ordinary-permission"),
+        pytest.param(False, {"ordinary_permission": "get_spend_routes"}, id="substring-in-value"),
+    ],
+)
+async def test_generate_key_helper_persists_allowed_permissions(
+    monkeypatch: pytest.MonkeyPatch,
+    premium_user: bool,
+    permissions: dict[str, object] | None,
+) -> None:
+    mock_prisma_client: Final = AsyncMock()
+    mock_prisma_client.insert_data.return_value = SimpleNamespace(
+        token=None,
+        litellm_budget_table=None,
+        created_at=None,
+        updated_at=None,
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", premium_user)
+
+    result: Final = await generate_key_helper_fn(
+        request_type="key",
+        token="sk-test-generate-key-license-check",
+        table_name="key",
+        permissions=permissions,
+    )
+
+    mock_prisma_client.insert_data.assert_awaited_once()
+    assert result["permissions"] == json.dumps(permissions)
+    assert json.loads(mock_prisma_client.insert_data.call_args.kwargs["data"]["permissions"]) == permissions
+
+
+@pytest.mark.asyncio
 async def test_permissions_explicit_empty_rejected_for_non_admin_on_generate(monkeypatch):
     """`_common_key_generation_helper` rejects a non-admin when
     `permissions` is present in the request body, even as `{}`. Omit-default
@@ -21034,8 +21114,13 @@ async def test_key_generation_premium_permission_error_precedes_project_ownershi
             team_table=None,
         )
 
-    assert error.value.status_code == 500
-    assert error.value.detail == {"error": "Internal Server Error."}
+    assert error.value.status_code == 403
+    assert error.value.detail == {
+        "error": (
+            "get_spend_routes permission is only available for LiteLLM Enterprise users. "
+            f"{CommonProxyErrors.not_premium_user.value}"
+        )
+    }
     mock_prisma_client.insert_data.assert_not_awaited()
 
 
