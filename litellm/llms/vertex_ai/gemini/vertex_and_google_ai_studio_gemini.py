@@ -1237,6 +1237,50 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 optional_params["include_server_side_tool_invocations"] = True
                 return
 
+    @staticmethod
+    def _supports_sampling_params(model: str) -> bool:
+        from litellm.utils import get_bundled_model_cost_map
+
+        candidates = (
+            model,
+            f"vertex_ai/{model}",
+            f"gemini/{model}",
+            model.replace("vertex_ai/", "").replace("gemini/", ""),
+        )
+        for cost_map in (litellm.model_cost, get_bundled_model_cost_map()):
+            if not isinstance(cost_map, dict):
+                continue
+            for cand in candidates:
+                model_entry = cost_map.get(cand)
+                if isinstance(model_entry, dict):
+                    val = model_entry.get("supports_sampling_params")
+                    if isinstance(val, bool):
+                        return val
+        return True
+
+    @classmethod
+    def supports_sampling_params(cls, model: str) -> bool:
+        return cls._supports_sampling_params(model)
+
+    @staticmethod
+    def _apply_sampling_param(
+        optional_params: dict,
+        model: str,
+        param: str,
+        value: Any,
+        drop_params: bool,
+    ) -> None:
+        if VertexGeminiConfig._supports_sampling_params(model):
+            optional_params[param] = value
+        elif not (litellm.drop_params or drop_params):
+            raise litellm.utils.UnsupportedParamsError(
+                message=(
+                    f"{model} does not support {param}={value}. "
+                    "To drop unsupported params, set `litellm.drop_params = True`."
+                ),
+                status_code=400,
+            )
+
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -1260,7 +1304,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                             model,
                         )
                         gemini_sampling_params_warned = True
-                optional_params["temperature"] = value
+                self._apply_sampling_param(optional_params, model, "temperature", value, drop_params)
             elif param == "top_p":
                 if VertexGeminiConfig._is_gemini_3_or_newer(model) and not gemini_sampling_params_warned:
                     verbose_logger.warning(
@@ -1268,7 +1312,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         model,
                     )
                     gemini_sampling_params_warned = True
-                optional_params["top_p"] = value
+                self._apply_sampling_param(optional_params, model, "top_p", value, drop_params)
             elif param == "top_k":
                 if VertexGeminiConfig._is_gemini_3_or_newer(model) and not gemini_sampling_params_warned:
                     verbose_logger.warning(
@@ -1276,7 +1320,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         model,
                     )
                     gemini_sampling_params_warned = True
-                optional_params["top_k"] = value
+                self._apply_sampling_param(optional_params, model, "top_k", value, drop_params)
             elif (
                 param == "stream" and value is True
             ):  # sending stream = False, can cause it to get passed unchecked and raise issues

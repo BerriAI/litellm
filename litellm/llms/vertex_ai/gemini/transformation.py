@@ -1191,6 +1191,13 @@ def transform_request_body(
 
         filtered_params = {k: v for k, v in optional_params.items() if _get_equivalent_key(k, set(config_fields))}
 
+        from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+
+        if not VertexGeminiConfig.supports_sampling_params(model):
+            filtered_params.pop("temperature", None)
+            filtered_params.pop("top_p", None)
+            filtered_params.pop("top_k", None)
+
         generation_config: Final[GenerationConfig | None] = GenerationConfig(**filtered_params)
 
         # For Gemini 2.x models, also add media_resolution to generation_config (global)
