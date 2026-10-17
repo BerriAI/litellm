@@ -76,8 +76,8 @@ def known_params(names: Collection[str], request: Mapping[str, object]) -> Mappi
 
 
 def inference_decline_reason(parameters: tuple[str, ...], kwargs: Mapping[str, object]) -> str | None:
-    if litellm.drop_params or litellm.modify_params:
-        return "native inference does not implement the configured parameter rewrites"
+    if litellm.modify_params:
+        return "native inference does not implement modify_params"
     for name, value in kwargs.items():
         if value is None:
             continue

@@ -52,3 +52,23 @@ async def test_continuation_ids_are_decoded_before_they_reach_the_wire(
     await call(server, asynchronous=asynchronous, previous_response_id=previous)
 
     assert _OBJECT.validate_python(server.requests[0].body)["previous_response_id"] == original
+
+
+@pytest.mark.asyncio
+async def test_global_drop_params_is_served_natively(server: RecordingServer, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "drop_params", True)
+
+    await call(server, max_output_tokens=16)
+
+    assert_served_natively(server)
+    assert _OBJECT.validate_python(server.requests[0].body)["max_output_tokens"] == 16
+
+
+@pytest.mark.asyncio
+async def test_reasoning_effort_reaches_the_wire_as_reasoning(server: RecordingServer) -> None:
+    await call(server, reasoning_effort="low")
+
+    assert_served_natively(server)
+    body: Final = _OBJECT.validate_python(server.requests[0].body)
+    assert body["reasoning"] == {"effort": "low"}
+    assert "reasoning_effort" not in body

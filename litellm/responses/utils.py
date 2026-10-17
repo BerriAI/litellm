@@ -202,7 +202,7 @@ class ResponsesAPIRequestUtils:
         response_api_optional_params: ResponsesAPIOptionalRequestParams,
         allowed_openai_params: list[str] | None = None,
         drop_params: bool | None = None,
-    ) -> dict:
+    ) -> Mapping[str, object]:
         """
         Get optional parameters for the responses API.
 
