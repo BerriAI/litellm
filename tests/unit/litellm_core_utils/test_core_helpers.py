@@ -22,13 +22,14 @@ from litellm.litellm_core_utils.core_helpers import (
     map_finish_reason,
     normalize_drop_params,
     process_response_headers,
+    preserve_upstream_non_openai_attributes,
     reconstruct_model_name,
     redact_nested_match_and_regex_keys,
     set_provider_response_headers_in_hidden_params,
     unbind_budget_reservation_from_callbacks,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.types.utils import ImageResponse, TranscriptionResponse
+from litellm.types.utils import Delta, ImageResponse, ModelResponseStream, StreamingChoices, TranscriptionResponse
 
 
 def test_parent_otel_span_reads_dict_like_metadata_by_index():
@@ -55,6 +56,22 @@ def test_native_request_id_survives_stream_header_processing(header: str) -> Non
 
     assert processed["request-id"] == "req_native"
     assert processed[header if header.startswith("llm_provider-") else "llm_provider-" + header] == "req_native"
+
+
+def test_preserve_upstream_non_openai_attributes_keeps_scalar_and_structured_values() -> None:
+    original_chunk: Final = ModelResponseStream(
+        choices=[StreamingChoices(index=0, delta=Delta(content="hello"))],
+        scalar_attribute="scalar",
+        structured_attribute={"items": ["value"]},
+    )
+    model_response: Final = ModelResponseStream(
+        choices=[StreamingChoices(index=0, delta=Delta(content="hello"))]
+    )
+
+    preserve_upstream_non_openai_attributes(model_response, original_chunk)
+
+    assert model_response.scalar_attribute == "scalar"
+    assert model_response.structured_attribute == {"items": ["value"]}
 
 
 class TestBudgetReservationBinding:

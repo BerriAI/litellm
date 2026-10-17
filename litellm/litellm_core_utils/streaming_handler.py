@@ -15,6 +15,7 @@ from typing import Any, Final, NoReturn, Protocol, TypeVar, cast
 import anyio
 import httpx
 from openai.types.chat import ChatCompletionChunk
+from openai.types.chat.chat_completion_chunk import ChoiceDelta
 from pydantic import BaseModel, ValidationError
 from typing_extensions import NotRequired, TypedDict
 
@@ -1011,6 +1012,7 @@ class CustomStreamWrapper:
         completion_obj: dict[str, Any],
         model_response: ModelResponseStream,
         response_obj: dict[str, Any],
+        plain_delta_created: bool = False,
     ):
         from litellm.litellm_core_utils.core_helpers import (
             preserve_upstream_non_openai_attributes,
@@ -1030,18 +1032,52 @@ class CustomStreamWrapper:
                 original_chunk: Final = response_obj.get("original_chunk", None)
                 if original_chunk:
                     if len(original_chunk.choices) > 0:
-                        choices: Final = []
-                        for choice in original_chunk.choices:
-                            try:
-                                if isinstance(choice, BaseModel):
-                                    choice_json = choice.model_dump()
-                                    choice_json.pop(
-                                        "finish_reason", None
-                                    )  # for mistral etc. which return a value in their last chunk (not-openai compatible).
-                                    choices.append(StreamingChoices(**choice_json))
-                            except Exception:
-                                choices.append(StreamingChoices())
-                        setattr(model_response, "choices", choices)
+                        original_chunk_for_reuse: Final[object] = cast(  # cast-ok: runtime type-check before access
+                            object,
+                            original_chunk,
+                        )
+                        upstream_choice: Final = (
+                            original_chunk_for_reuse.choices[0]
+                            if isinstance(original_chunk_for_reuse, ChatCompletionChunk)
+                            and len(original_chunk_for_reuse.choices) == 1
+                            else None
+                        )
+                        upstream_delta: Final = cast(  # cast-ok: [LIT006] runtime delta may be absent
+                            ChoiceDelta | None,
+                            getattr(upstream_choice, "delta", None),
+                        )
+                        can_reuse_choice: Final = (
+                            plain_delta_created
+                            and upstream_choice is not None
+                            and upstream_delta is not None
+                            and not upstream_choice.__pydantic_extra__
+                            and upstream_choice.logprobs is None
+                            and upstream_delta.tool_calls is None
+                            and upstream_delta.function_call is None
+                            and all(
+                                value is None or isinstance(value, (str, int, float, bool))
+                                for value in cast(  # cast-ok: validate Pydantic's dynamic values as scalars
+                                    dict[str, object],
+                                    dict(upstream_delta),
+                                ).values()
+                            )
+                        )
+                        if can_reuse_choice and upstream_choice is not None:
+                            model_response.choices[0].finish_reason = None  # rebind-ok: keep reused choice
+                            model_response.choices[0].index = upstream_choice.index  # rebind-ok: keep reused choice
+                        else:
+                            choices: Final = []
+                            for choice in original_chunk.choices:
+                                try:
+                                    if isinstance(choice, BaseModel):
+                                        choice_json = choice.model_dump()
+                                        choice_json.pop(
+                                            "finish_reason", None
+                                        )  # for mistral etc. which return a value in their last chunk (not-openai compatible).
+                                        choices.append(StreamingChoices(**choice_json))
+                                except Exception:
+                                    choices.append(StreamingChoices())
+                            setattr(model_response, "choices", choices)
                     else:
                         return
                     model_response.system_fingerprint = original_chunk.system_fingerprint
@@ -1553,6 +1589,7 @@ class CustomStreamWrapper:
                                 else dict(original_chunk.choices[0].delta)
                             )
                             model_response.choices[0].delta = Delta(**delta)
+                            response_obj["_plain_delta_created"] = True
                         except Exception:
                             model_response.choices[0].delta = Delta()
                 else:
@@ -1581,6 +1618,7 @@ class CustomStreamWrapper:
                 completion_obj=completion_obj,
                 model_response=model_response,
                 response_obj=response_obj,
+                plain_delta_created=response_obj.get("_plain_delta_created") is True,
             )
             return result
 

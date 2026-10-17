@@ -2,10 +2,12 @@ import asyncio
 import json
 import threading
 import time
+from collections.abc import Callable
 from typing import Final, NoReturn, Optional, cast
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
+from pydantic import BaseModel
 
 import litellm
 from litellm import verbose_logger
@@ -4888,34 +4890,35 @@ def test_openai_chunk_creator_skips_full_chunk_dump_and_delta_rebuild(
     monkeypatch: pytest.MonkeyPatch,
     logging_obj: Logging,
 ) -> None:
-    missing: Final = object()
-    full_chunk_dumps: Final[list[ChatCompletionChunk]] = []
+    model_dumps: Final[list[BaseModel]] = []
     delta_constructions: Final[list[Delta]] = []
-    original_chunk_model_dump: Final = ChatCompletionChunk.model_dump
+    streaming_choice_constructions: Final[list[StreamingChoices]] = []
+    original_base_model_dump: Final = BaseModel.model_dump
     original_delta_init: Final = Delta.__init__
+    original_streaming_choice_init: Final = StreamingChoices.__init__
     chunks: Final[list[ChatCompletionChunk]] = [
         ChatCompletionChunk(
             id="chunk-1",
             created=1,
             model="gpt-4o",
             object="chat.completion.chunk",
-            choices=[{"index": 0, "delta": {"role": "assistant", "content": "hello"}, "finish_reason": None}],
+            choices=[
+                {
+                    "index": 0,
+                    "delta": {"role": "assistant", "content": "hello"},
+                    "finish_reason": None,
+                }
+            ],
         ),
         ChatCompletionChunk(
             id="chunk-2",
             created=1,
             model="gpt-4o",
             object="chat.completion.chunk",
-            choices=[{"index": 0, "delta": {"content": " world"}, "finish_reason": None}],
-            citations=["https://a"],
+            choices=[
+                {"index": 0, "delta": {"content": " world"}, "finish_reason": None}
+            ],
             custom_chunk_attribute="custom value",
-        ),
-        ChatCompletionChunk(
-            id="chunk-3",
-            created=1,
-            model="gpt-4o",
-            object="chat.completion.chunk",
-            choices=[{"index": 0, "delta": {}, "finish_reason": "stop"}],
         ),
     ]
     wrapper: Final = CustomStreamWrapper(
@@ -4925,38 +4928,110 @@ def test_openai_chunk_creator_skips_full_chunk_dump_and_delta_rebuild(
         logging_obj=logging_obj,
     )
 
-    def count_chunk_model_dump(
-        self: ChatCompletionChunk,
-        *,
-        include: object = missing,
+    def count_base_model_dump(
+        self: BaseModel,
+        *args: object,
+        **kwargs: object,
     ) -> object:
-        if include is missing:
-            full_chunk_dumps.append(self)
-            return original_chunk_model_dump(self)
-        return original_chunk_model_dump(self, include=cast(frozenset[str] | None, include))
+        model_dumps.append(self)
+        return cast(Callable[..., object], original_base_model_dump)(
+            self, *args, **kwargs
+        )
 
     def count_delta_init(self: Delta, *args: object, **kwargs: object) -> None:
         delta_constructions.append(self)
         original_delta_init(self, *args, **kwargs)
 
-    monkeypatch.setattr(ChatCompletionChunk, "model_dump", count_chunk_model_dump)
+    def count_streaming_choice_init(
+        self: StreamingChoices,
+        *args: object,
+        **kwargs: object,
+    ) -> None:
+        streaming_choice_constructions.append(self)
+        cast(Callable[..., None], original_streaming_choice_init)(self, *args, **kwargs)
+
+    monkeypatch.setattr(BaseModel, "model_dump", count_base_model_dump)
     monkeypatch.setattr(Delta, "__init__", count_delta_init)
+    monkeypatch.setattr(StreamingChoices, "__init__", count_streaming_choice_init)
 
     outputs: Final[list[ModelResponseStream | None]] = [
         wrapper.chunk_creator(chunk=chunk) for chunk in chunks
     ]
     emitted_chunks: Final = tuple(output for output in outputs if output is not None)
 
-    assert len(emitted_chunks) == 3
-    assert full_chunk_dumps == []
-    assert len(delta_constructions) <= len(emitted_chunks) * 3
+    assert len(emitted_chunks) == 2
+    assert len(delta_constructions) == len(emitted_chunks) * 2
+    assert len(streaming_choice_constructions) == len(emitted_chunks)
+    assert model_dumps == []
+    assert [chunk.choices[0].delta.content for chunk in emitted_chunks] == [
+        "hello",
+        " world",
+    ]
     assert emitted_chunks[0].choices[0].delta.role == "assistant"
     assert emitted_chunks[1].choices[0].delta.role is None
-    assert getattr(emitted_chunks[1], "citations") == ["https://a"]
     assert getattr(emitted_chunks[1], "custom_chunk_attribute") == "custom value"
-    chunk2_delta: Final = emitted_chunks[1].model_dump()["choices"][0]["delta"]
-    assert "provider_specific_fields" in chunk2_delta
-    assert chunk2_delta["provider_specific_fields"] is None
+    assert (
+        "provider_specific_fields"
+        in emitted_chunks[1].choices[0].delta.model_fields_set
+    )
+    assert emitted_chunks[1].choices[0].delta.provider_specific_fields is None
+
+    finish_chunk: Final = ChatCompletionChunk(
+        id="finish-chunk",
+        created=1,
+        model="gpt-4o",
+        object="chat.completion.chunk",
+        choices=[{"index": 0, "delta": {}, "finish_reason": "stop"}],
+    )
+    finish_output: Final = wrapper.chunk_creator(chunk=finish_chunk)
+
+    assert finish_output is not None
+    assert finish_output.choices[0].finish_reason == "stop"
+    assert finish_output.choices[0].delta.content is None
+
+
+def test_openai_chunk_creator_keeps_multiple_choice_logprobs_and_extras(
+    logging_obj: Logging,
+) -> None:
+    chunk: Final = ChatCompletionChunk(
+        id="chunk-with-multiple-choices",
+        created=1,
+        model="gpt-4o",
+        object="chat.completion.chunk",
+        citations=["https://a"],
+        choices=[
+            {
+                "index": 3,
+                "delta": {"content": "first"},
+                "finish_reason": None,
+                "logprobs": {"content": []},
+            },
+            {
+                "index": 7,
+                "delta": {"content": "second"},
+                "finish_reason": None,
+                "custom_choice_attribute": "choice extra",
+            },
+        ],
+    )
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iter(()),
+        model="gpt-4o",
+        custom_llm_provider="openai",
+        logging_obj=logging_obj,
+    )
+
+    result: Final = wrapper.chunk_creator(chunk=chunk)
+
+    assert result is not None
+    assert [choice.index for choice in result.choices] == [3, 7]
+    result_logprobs = result.choices[0].logprobs
+    chunk_logprobs = chunk.choices[0].logprobs
+    assert result_logprobs is not None
+    assert chunk_logprobs is not None
+    assert result_logprobs.model_dump() == chunk_logprobs.model_dump()
+    assert getattr(result.choices[1], "custom_choice_attribute") == "choice extra"
+    assert getattr(result, "citations") == ["https://a"]
 
 
 def test_chunk_creator_preserves_hidden_provider_specific_fields_from_parsed_chunk():
