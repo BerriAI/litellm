@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
+import respx
 from pydantic import JsonValue, TypeAdapter
 
 import litellm
@@ -173,53 +174,54 @@ def _weather_tool_result_messages(text: JsonValue) -> list[dict[str, object]]:
     ]
 
 
+_COUNT_TOKENS_URL: Final = "https://count-tokens.test/v1beta/models/gemini-2.5-flash:countTokens"
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("text", (None, 5))
 async def test_google_ai_studio_count_tokens_rejects_a_non_string_tool_result_text_without_request(
-    text: JsonValue,
+    text: JsonValue, respx_mock: respx.MockRouter
 ) -> None:
-    peer: Final = _GeminiCountTokensPeer()
-    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(peer))
+    count_route: Final = respx_mock.post(_COUNT_TOKENS_URL).respond(200, json={"totalTokens": 11})
 
-    with patch.object(gemini_count_tokens_handler, "get_async_httpx_client", return_value=client):
-        result: Final = await GoogleAIStudioTokenCounter().count_tokens(
-            model_to_use="gemini-2.5-flash",
-            messages=_weather_tool_result_messages(text),
-            contents=None,
-            deployment={"litellm_params": {"api_key": "test-key", "api_base": "https://count-tokens.test"}},
-            request_model="gemini/gemini-2.5-flash",
-            messages_format="anthropic",
-        )
+    result: Final = await GoogleAIStudioTokenCounter().count_tokens(
+        model_to_use="gemini-2.5-flash",
+        messages=_weather_tool_result_messages(text),
+        contents=None,
+        deployment={"litellm_params": {"api_key": "test-key", "api_base": "https://count-tokens.test"}},
+        request_model="gemini/gemini-2.5-flash",
+        messages_format="anthropic",
+    )
 
     assert result is not None
     assert result.error is True
     assert result.status_code == 400
     assert result.error_message == "tool_result toolu_01 content.0.text: Input should be a valid string"
-    assert peer.request_body is None
+    assert not count_route.called
 
 
 @pytest.mark.asyncio
-async def test_google_ai_studio_count_tokens_leaves_out_a_numeric_tool_result_text_under_drop_params() -> None:
-    peer: Final = _GeminiCountTokensPeer()
-    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(peer))
+async def test_google_ai_studio_count_tokens_leaves_out_a_numeric_tool_result_text_under_drop_params(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    count_route: Final = respx_mock.post(_COUNT_TOKENS_URL).respond(200, json={"totalTokens": 11})
 
-    with patch.object(gemini_count_tokens_handler, "get_async_httpx_client", return_value=client):
-        result: Final = await GoogleAIStudioTokenCounter().count_tokens(
-            model_to_use="gemini-2.5-flash",
-            messages=_weather_tool_result_messages(5),
-            contents=None,
-            deployment={
-                "litellm_params": {"api_key": "test-key", "api_base": "https://count-tokens.test", "drop_params": True}
-            },
-            request_model="gemini/gemini-2.5-flash",
-            messages_format="anthropic",
-        )
+    result: Final = await GoogleAIStudioTokenCounter().count_tokens(
+        model_to_use="gemini-2.5-flash",
+        messages=_weather_tool_result_messages(5),
+        contents=None,
+        deployment={
+            "litellm_params": {"api_key": "test-key", "api_base": "https://count-tokens.test", "drop_params": True}
+        },
+        request_model="gemini/gemini-2.5-flash",
+        messages_format="anthropic",
+    )
 
     assert result is not None
     assert result.error is False
     assert result.total_tokens == 11
-    assert peer.request_body is not None
-    assert peer.request_body["contents"] == [
+    assert _JSON_BODY.validate_json(count_route.calls.last.request.content)["contents"] == [
         {"role": "user", "parts": [{"text": "What is the weather in Paris?"}]},
         {"role": "model", "parts": [{"function_call": {"name": "get_weather", "args": {"city": "Paris"}}}]},
         {
