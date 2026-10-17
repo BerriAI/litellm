@@ -972,14 +972,17 @@ def test_model_group_alias_to_an_embedding_only_group_keeps_serving_embeddings(r
     assert routed.upstream.targets(marker) == ("/v1/embeddings",)
 
 
-_REWRITER: Final = """from litellm.integrations.custom_guardrail import CustomGuardrail
+_REWRITER: Final = """from litellm.integrations.custom_logger import CustomLogger
 
 
-class WebSocketModelRewriter(CustomGuardrail):
+class WebSocketModelRewriter(CustomLogger):
     async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
         if call_type == "_aresponses_websocket" and data.get("model") == "__SOURCE__":
             data["model"] = "__TARGET__"
         return data
+
+
+rewriter = WebSocketModelRewriter()
 """
 
 
@@ -1000,16 +1003,7 @@ def _rewritten_config(directory: Path, api_base: str, source: str, target: str, 
             _routed_entry(target, api_base, f"openai/{_EMBEDDING_MODEL}", _EMBED_ONLY),
         ],
         "router_settings": {**object_value(shared["router_settings"]), "num_retries": 0},
-        "guardrails": [
-            {
-                "guardrail_name": f"{module}-guardrail",
-                "litellm_params": {
-                    "guardrail": f"{module}.WebSocketModelRewriter",
-                    "mode": "pre_call",
-                    "default_on": True,
-                },
-            }
-        ],
+        "litellm_settings": {**object_value(shared["litellm_settings"]), "callbacks": [f"{module}.rewriter"]},
     }
     path: Final = directory / "gate-rewritten-config.yaml"
     path.write_text(yaml.safe_dump(config, sort_keys=False))
