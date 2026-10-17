@@ -6,7 +6,7 @@ use litellm_core_utils::settings::resolve_non_empty;
 use litellm_http::request::{header_value, with_header, without_headers};
 use litellm_llms_types::{
     formats::messages::MessagesRequest,
-    providers::anthropic::{BetaProvider, DEFAULT_HEADERS, MESSAGES_PATH},
+    providers::anthropic::{DEFAULT_HEADERS, MESSAGES_PATH},
 };
 use litellm_router_types::LitellmParams;
 use serde_json::Value;
@@ -15,7 +15,7 @@ use crate::{
     Error, ErrorDetail,
     anthropic::messages::{
         handler::shape_anthropic_messages_request,
-        transformation::{transform_messages_request, update_headers_with_safeguards_beta},
+        transformation::{transform_messages_request, update_headers_with_anthropic_beta},
     },
     base_llm::{
         auth::{AuthScheme, Headers, ValidatedEnvironment},
@@ -174,7 +174,7 @@ impl BaseMessagesConfig for BedrockClaudePlatformMessagesConfig {
             Some(workspace) => with_header(headers, WORKSPACE_HEADER, workspace.into()),
             None => headers,
         };
-        update_headers_with_safeguards_beta(headers, request, BetaProvider::Anthropic)
+        update_headers_with_anthropic_beta(headers, request)
     }
 
     fn wire_body(&self, body: Value) -> Value {
@@ -353,21 +353,6 @@ mod tests {
         );
         assert!(
             matches!(environment.auth, AuthScheme::AwsSigV4 { region, service: SERVICE, .. } if region == expected_region)
-        );
-    }
-
-    #[rstest]
-    #[case::safeguards(json!([{"type": "dangerous_tool_use"}]), Some("dangerous-tool-use-2026-09-03"))]
-    #[case::null_safeguards(Value::Null, None)]
-    fn safeguards_need_the_dangerous_tool_use_beta(
-        #[case] safeguards: Value,
-        #[case] expected: Option<&str>,
-    ) {
-        let request = serde_json::from_value(json!({"model": "claude-test", "max_tokens": 16, "messages": [], "safeguards": safeguards})).unwrap();
-        let headers = BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG.request_headers(vec![], &request);
-        assert_eq!(
-            header_value(&headers, "anthropic-beta").map(|value| value.to_string()),
-            expected.map(str::to_string)
         );
     }
 

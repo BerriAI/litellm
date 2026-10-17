@@ -1084,7 +1084,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[rstest]
     fn hosts_without_a_beta_map_column_get_safeguards_without_a_derived_beta() {
         let client = headers(&[("anthropic-beta", "claude-code-20250219")]);
         assert_eq!(

@@ -82,7 +82,6 @@ def test_worker_sigkill_mid_safeguards_burst_leaves_the_replacement_adding_the_b
     release: Final = threading.Event()
     with ExitStack() as stack:
         wire: Final = stack.enter_context(wire_server(holding_peer(held, release)))
-        stack.callback(release.set)
         config: Final = owned_config(tmp_path, gateway, wire.url)
         owned: Final = stack.enter_context(
             owned_proxy_process(gateway, tmp_path, {"LITELLM_RUST": "true"}, config=config, workers=2)
@@ -91,6 +90,7 @@ def test_worker_sigkill_mid_safeguards_burst_leaves_the_replacement_adding_the_b
         workers: Final = eventually(lambda: started_workers(owned.log), lambda pids: len(pids) == 2, seconds=30)
         clients: Final = _clients(stack, str(proxy_url), _BURST)
         pool: Final = stack.enter_context(ThreadPoolExecutor(max_workers=len(clients)))
+        stack.callback(release.set)
         ports: Final = tuple(_local_port(client) for client in clients)
         markers: Final = tuple(new_marker() for _ in clients)
         futures: Final = tuple(
@@ -131,10 +131,10 @@ def test_proxy_shutdown_mid_safeguards_burst_then_a_fresh_boot_keeps_adding_the_
     release: Final = threading.Event()
     with ExitStack() as stack:
         wire: Final = stack.enter_context(wire_server(holding_peer(held, release)))
-        stack.callback(release.set)
         config: Final = owned_config(tmp_path, gateway, wire.url)
         markers: Final = tuple(new_marker() for _ in range(_BURST))
         pool: Final = stack.enter_context(ThreadPoolExecutor(max_workers=len(markers)))
+        stack.callback(release.set)
         with owned_proxy_process(gateway, tmp_path, {"LITELLM_RUST": "true"}, config=config, workers=2) as first:
             clients: Final = _clients(stack, str(first.gateway.client.base_url), len(markers))
             futures: Final = tuple(
