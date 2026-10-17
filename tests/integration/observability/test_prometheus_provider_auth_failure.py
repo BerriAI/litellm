@@ -79,6 +79,9 @@ REJECTED_CELLS: Final = (
     "caller-extra-headers",
     "caller-headers",
     "caller-provider-specific-header",
+    "plain-extra-headers",
+    "plain-headers",
+    "plain-provider-specific-header",
 )
 GATED_CELLS: Final = ("invalid-key", "missing-key", "expired-key", "blocked-key", "no-model-access")
 HEALTHY_CELLS: Final = (*GATED_CELLS, "healthy", "key-rpm-limit")
@@ -532,10 +535,10 @@ def anthropic_messages(gateway: Gateway, cell: str, key: str, headers: dict[str,
     return gateway.request("POST", "/v1/messages", body, key=key, headers=headers)
 
 
-def caller_authorization(field: str, value: str) -> JsonValue:
+def caller_header(field: str, header: str, value: str) -> JsonValue:
     if field == "provider_specific_header":
-        return {"custom_llm_provider": "openai", "extra_headers": {"Authorization": value}}
-    return {"Authorization": value}
+        return {"custom_llm_provider": "openai", "extra_headers": {header: value}}
+    return {header: value}
 
 
 @pytest.mark.parametrize(
@@ -549,21 +552,47 @@ def caller_authorization(field: str, value: str) -> JsonValue:
 def test_a_provider_401_on_an_authorization_header_the_caller_sends_stays_out_of_the_deployment_metrics(
     rig: Rig, cell: str, field: str
 ) -> None:
-    caller_header: Final = f"Bearer sk-{cell}-{uuid.uuid4().hex}"
+    caller_value: Final = f"Bearer sk-{cell}-{uuid.uuid4().hex}"
     rig.upstream.drain()
     response: Final = rig.gateway.request(
         "POST",
         "/v1/chat/completions",
-        {"model": name(cell), "messages": messages(cell), field: caller_authorization(field, caller_header)},
+        {"model": name(cell), "messages": messages(cell), field: caller_header(field, "Authorization", caller_value)},
     )
     assert response.status_code == 401, response.text
-    assert [request.headers["authorization"] for request in rig.upstream.drain()] == [caller_header]
+    assert [request.headers["authorization"] for request in rig.upstream.drain()] == [caller_value]
     samples: Final = until(rig.gateway, PROXY_FAILED, requested_model=name(cell))
     observed: Final = recorded(samples, model_id=identity(cell))
     assert values(samples, FAILURES, model_id=identity(cell)) == [], observed
     assert values(samples, TOTALS, model_id=identity(cell)) == [], observed
     assert values(samples, LLM_FAILED, model_id=identity(cell)) == [], observed
     assert values(samples, STATE, model_id=identity(cell)) == [], observed
+
+
+@pytest.mark.parametrize(
+    "cell,field",
+    [
+        ("plain-extra-headers", "extra_headers"),
+        ("plain-headers", "headers"),
+        ("plain-provider-specific-header", "provider_specific_header"),
+    ],
+)
+def test_a_provider_401_on_the_deployments_own_key_counts_when_the_caller_sends_a_plain_header(
+    rig: Rig, cell: str, field: str
+) -> None:
+    trace: Final = f"{cell}-{uuid.uuid4().hex}"
+    rig.upstream.drain()
+    response: Final = rig.gateway.request(
+        "POST",
+        "/v1/chat/completions",
+        {"model": name(cell), "messages": messages(cell), field: caller_header(field, "X-Caller-Trace", trace)},
+    )
+    assert response.status_code == 401, response.text
+    reached: Final = rig.upstream.drain()
+    assert [(request.headers["authorization"], request.headers.get("x-caller-trace")) for request in reached] == [
+        (f"Bearer sk-deployment-credential-{cell}", trace)
+    ]
+    assert_recorded_as_a_deployment_failure(rig, cell, "401")
 
 
 def test_a_provider_401_on_an_anthropic_deployments_own_key_is_recorded(rig: Rig) -> None:

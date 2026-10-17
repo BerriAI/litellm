@@ -245,27 +245,15 @@ class TestSkipMetricsValidation:
                 False,
             ),
             ({"litellm_params": {"proxy_server_request": {"body": {"extra_body": "azure_ad_token"}}}}, False),
+            ({"litellm_params": {"proxy_server_request": {"credential_fields": ("extra_headers",)}}}, True),
             (
                 {
                     "litellm_params": {
                         "proxy_server_request": {"body": {"extra_headers": {"Authorization": "Bearer sk-caller"}}}
                     }
                 },
-                True,
-            ),
-            (
-                {"litellm_params": {"proxy_server_request": {"body": {"extra_headers": {"API-Key": "caller-key"}}}}},
-                True,
-            ),
-            (
-                {
-                    "litellm_params": {
-                        "proxy_server_request": {"body": {"extra_headers": {"traceparent": "00-trace-span-01"}}}
-                    }
-                },
                 False,
             ),
-            ({"litellm_params": {"proxy_server_request": {"body": {"extra_headers": "authorization"}}}}, False),
         ],
         ids=[
             "caller-supplied-api-key",
@@ -280,10 +268,8 @@ class TestSkipMetricsValidation:
             "caller-supplied-azure-ad-token-in-extra-body",
             "deployment-azure-ad-token",
             "malformed-extra-body",
-            "caller-authorization-in-extra-headers",
-            "caller-api-key-header-in-extra-headers",
-            "traceparent-only-extra-headers",
-            "malformed-extra-headers",
+            "caller-supplied-extra-headers",
+            "extra-headers-not-stamped-by-the-proxy",
         ],
     )
     def test_skip_a_provider_401_on_a_credential_the_caller_owns(self, prometheus_logger, logged_call, expected):

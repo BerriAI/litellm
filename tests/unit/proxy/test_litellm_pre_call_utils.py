@@ -879,6 +879,84 @@ async def test_add_litellm_data_to_request_body_snapshot_excludes_proxy_server_r
     assert snapshot_body["messages"] == [{"role": "user", "content": "hello"}]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "sent,request_headers,expected",
+    [
+        ({"headers": {"Authorization": "Bearer sk-caller"}}, {}, ("headers",)),
+        ({"headers": {"X-Trace-Id": "trace-1"}}, {}, ()),
+        ({"extra_headers": {"API-Key": "caller-azure-key"}}, {}, ("extra_headers",)),
+        ({"extra_headers": {"traceparent": "00-trace-span-01"}}, {}, ()),
+        (
+            {"provider_specific_header": {"custom_llm_provider": "openai", "extra_headers": {"x-api-key": "caller"}}},
+            {},
+            ("provider_specific_header",),
+        ),
+        (
+            {
+                "provider_specific_header": [
+                    {"custom_llm_provider": "anthropic", "extra_headers": {"anthropic-beta": "tools"}},
+                    {"custom_llm_provider": "gemini", "extra_headers": {"X-Goog-Api-Key": "caller"}},
+                ]
+            },
+            {},
+            ("provider_specific_header",),
+        ),
+        (
+            {
+                "provider_specific_header": {
+                    "custom_llm_provider": "anthropic",
+                    "extra_headers": {"anthropic-beta": "x"},
+                }
+            },
+            {},
+            (),
+        ),
+        ({"headers": "authorization", "provider_specific_header": "x-api-key"}, {}, ()),
+        ({"api_key": "sk-caller", "headers": {"Ocp-Apim-Subscription-Key": "caller"}}, {}, ("api_key", "headers")),
+        ({}, {"anthropic-beta": "tools-2024-04-04"}, ()),
+    ],
+    ids=[
+        "authorization-in-headers",
+        "plain-headers",
+        "api-key-in-extra-headers",
+        "traceparent-only-extra-headers",
+        "credential-in-provider-specific-header",
+        "credential-in-one-provider-specific-header-entry",
+        "plain-provider-specific-header",
+        "malformed-header-fields",
+        "api-key-and-credential-headers",
+        "proxy-forwarded-provider-header",
+    ],
+)
+async def test_credential_fields_name_only_the_fields_that_carry_a_caller_credential(
+    sent: dict[str, object], request_headers: dict[str, str], expected: tuple[str, ...]
+) -> None:
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    request_mock: Final = MagicMock(spec=Request)
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json", **request_headers}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+    data: Final = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}], **sent}
+
+    updated: Final = await add_litellm_data_to_request(
+        data=data,
+        request=request_mock,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key", user_id="test-user"),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated["proxy_server_request"]["credential_fields"] == expected
+
+
 def test_initial_snapshot_refresh_clears_a_previous_guardrail_checkpoint() -> None:
     from litellm.integrations.shadow_eval_logger import GuardrailRequestSnapshot
     from litellm.litellm_core_utils.litellm_logging import Logging
