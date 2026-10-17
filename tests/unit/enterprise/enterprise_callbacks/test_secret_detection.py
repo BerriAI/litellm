@@ -159,14 +159,22 @@ def test_list_items_are_scanned_beside_their_parent_key_or_quoted(payload, expec
     assert _guardrail().redact_tool_payload(payload) == expected
 
 
-@pytest.mark.parametrize("key", ("k" * 10_000, "\u0000" * 1000), ids=("long", "control-characters"))
-def test_scanned_key_context_is_capped_after_escaping(monkeypatch, key):
+@pytest.mark.parametrize(
+    ("key", "line"),
+    (
+        ("k" * 10_000, '"' + "k" * 64 + '": "v"'),
+        ("\u0000" * 1000, '"0000' + "\\u0000" * 10 + '": "v"'),
+        ("token" + " " * 1000, '"token": "v"'),
+    ),
+    ids=("long", "control-characters", "whitespace"),
+)
+def test_scanned_key_context_is_collapsed_and_capped_after_escaping(monkeypatch, key, line):
     guardrail = _guardrail()
     scan = guardrail.scan_message_for_secrets
     scanned = []
     monkeypatch.setattr(guardrail, "scan_message_for_secrets", lambda text: scanned.append(text) or scan(text))
     assert guardrail.redact_tool_payload({key: ["v", "w"]}) == {key: ["v", "w"]}
-    assert max(len(line) for text in scanned for line in text.splitlines()) == 64 + len('"": "v"')
+    assert max((line for text in scanned for line in text.splitlines()), key=len) == line
 
 
 def test_long_key_over_a_list_is_scanned_in_bounded_time():
