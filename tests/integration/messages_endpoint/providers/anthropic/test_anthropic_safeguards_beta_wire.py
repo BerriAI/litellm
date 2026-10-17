@@ -337,6 +337,27 @@ def test_a_deployment_dropping_safeguards_sends_neither_the_field_nor_the_beta(
         _spend_row(f"msg_{marker}")
 
 
+def test_a_deployment_dropping_context_management_sends_neither_the_field_nor_its_beta(gateway: Gateway) -> None:
+    marker: Final = uuid.uuid4().hex
+    with wire_server(anthropic_peer) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model=f"anthropic/{ANTHROPIC_MODEL}",
+            api_base=wire.url,
+            api_key=ANTHROPIC_KEY,
+            additional_drop_params=["context_management"],
+        )
+        body: Final = {
+            **messages_body(model, marker, safeguards=_OMITTED),
+            "context_management": {"edits": [{"type": "clear_tool_uses_20250919"}]},
+        }
+        response: Final = _post(gateway, body)
+        _assert_answered(response, marker)
+        _expect_messages(
+            _only(wire), target="/v1/messages", auth=("x-api-key", ANTHROPIC_KEY), beta=None, safeguards=_OMITTED
+        )
+        _spend_row(f"msg_{marker}")
+
+
 @pytest.mark.parametrize("row", tuple(_FOUNDRY_SHAPES))
 def test_azure_ai_messages_derive_the_beta_instead_of_forwarding_the_client_header(gateway: Gateway, row: str) -> None:
     case: Final = _FOUNDRY_SHAPES[row]

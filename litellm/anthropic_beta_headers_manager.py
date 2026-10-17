@@ -22,6 +22,7 @@ Environment Variables:
 - LITELLM_ANTHROPIC_BETA_HEADERS_URL: Custom URL for remote config (optional)
 """
 
+import asyncio
 import json
 import os
 from importlib.resources import files
@@ -181,6 +182,11 @@ def _load_beta_headers_config() -> dict:
     verbose_logger.debug("Loaded and cached beta headers config")
 
     return _BETA_HEADERS_CONFIG
+
+
+async def aload_beta_headers_config() -> None:
+    if _BETA_HEADERS_CONFIG is None:
+        await asyncio.to_thread(_load_beta_headers_config)
 
 
 def reload_beta_headers_config() -> dict:
