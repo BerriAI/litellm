@@ -3285,6 +3285,22 @@ def test_reasoning_effort_maps_to_thinking_level_gemini_3():
     assert result["thinkingConfig"]["thinkingLevel"] == "high"
     assert result["thinkingConfig"]["includeThoughts"] is True
 
+    # xhigh has no Gemini thinkingLevel above high, so it uses that ceiling.
+    optional_params = {}
+    non_default_params = {"reasoning_effort": "xhigh"}
+    result = v.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model=model,
+        drop_params=False,
+    )
+    assert result["thinkingConfig"]["thinkingLevel"] == "high"
+    assert result["thinkingConfig"]["includeThoughts"] is True
+    assert (
+        VertexGeminiConfig._map_reasoning_effort_to_thinking_budget("xhigh", "gemini-2.5-pro")
+        == VertexGeminiConfig._map_reasoning_effort_to_thinking_budget("high", "gemini-2.5-pro")
+    )
+
     # Test disable -> low + includeThoughts=False (cannot fully disable in Gemini 3)
     optional_params = {}
     non_default_params = {"reasoning_effort": "disable"}

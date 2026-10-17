@@ -985,7 +985,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 "thinkingBudget": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
                 "includeThoughts": sends_thoughts,
             }
-        elif reasoning_effort == "high":
+        elif reasoning_effort in ("high", "xhigh"):
+            # Gemini has no thinking budget above high. OpenAI clients send xhigh.
             return {
                 "thinkingBudget": DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
                 "includeThoughts": sends_thoughts,
@@ -1037,7 +1038,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             return {"thinkingLevel": "low", "includeThoughts": sends_thoughts}
         elif reasoning_effort == "medium":
             return {"thinkingLevel": "medium", "includeThoughts": sends_thoughts}
-        elif reasoning_effort == "high":
+        elif reasoning_effort in ("high", "xhigh"):
+            # Gemini 3+ thinkingLevel tops out at high. Keep xhigh instead of 400.
             return {"thinkingLevel": "high", "includeThoughts": sends_thoughts}
         elif reasoning_effort in ("disable", "none"):
             return {
