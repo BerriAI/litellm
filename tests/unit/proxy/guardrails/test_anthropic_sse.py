@@ -204,6 +204,19 @@ def test_masked_stream_drops_the_unmasked_upstream_explanations(
     assert {key: message_delta["delta"][key] for key in expected_fields} == expected_fields
 
 
+def test_masked_stream_drops_safeguard_results_it_cannot_read():
+    upstream_delta: Final = {
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "safeguard_results": {"type": "dangerous_tool_use", "explanation": f"saw SSN {SSN}"},
+    }
+
+    assert _rewritten_delta(_upstream_stream(upstream_delta), _set_text("my SSN is <US_SSN>")) == {
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+    }
+
+
 def test_rewritten_stream_keeps_only_the_verdicts_of_tool_uses_it_still_delivers():
     kept_verdict = {"type": "evaluated", "outcome": "not_flagged"}
     upstream = _upstream_stream(

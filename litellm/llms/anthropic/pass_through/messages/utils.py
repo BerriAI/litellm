@@ -133,7 +133,7 @@ def filtered_safeguard_results(raw: object, kept_tool_use_ids: frozenset[str], k
     try:
         results: Final = _SAFEGUARD_RESULT_ITEMS.validate_python(raw)
     except ValidationError:
-        return raw
+        return raw if keep_explanations else None
     kept: Final = tuple(_kept_tool_use_verdicts(result, kept_tool_use_ids) for result in results)
     return kept if keep_explanations else tuple(_result_without_explanations(result) for result in kept)
 

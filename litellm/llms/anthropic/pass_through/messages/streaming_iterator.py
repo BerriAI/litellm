@@ -284,11 +284,11 @@ def anthropic_messages_response_as_sse_events(response: AnthropicMessagesRespons
     content_events: Final = (
         event for index, block in enumerate(content_blocks) for event in _anthropic_content_block_events(index, block)
     )
-    # A real message_start always carries a null stop_reason/stop_sequence and
-    # a zero output_tokens, and no stop_details or safeguard_results - those are
-    # only known once generation finishes, so copying the completed response's
-    # final values here would let a client treat the message as already
-    # finished, or double-count output tokens.
+    # A real message_start always carries a null stop_reason/stop_sequence/stop_details,
+    # a zero output_tokens and no safeguard_results - those are only known once
+    # generation finishes, so copying the completed response's final values here
+    # would let a client treat the message as already finished, or double-count
+    # output tokens.
     message_start_usage: Final = {
         **(response.get("usage") or {}),
         "output_tokens": 0,
@@ -303,6 +303,7 @@ def anthropic_messages_response_as_sse_events(response: AnthropicMessagesRespons
             "content": [],
             "stop_reason": None,
             "stop_sequence": None,
+            "stop_details": None,
             "usage": message_start_usage,
         },
     }

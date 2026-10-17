@@ -1323,7 +1323,7 @@ def test_anthropic_messages_response_as_sse_events_keeps_message_delta_fields_ou
     }
     decoded = _decode_sse_events(anthropic_messages_response_as_sse_events(response))
     message_start = decoded[0][1]["message"]
-    assert "stop_details" not in message_start
+    assert message_start["stop_details"] is None
     assert "safeguard_results" not in message_start
     assert decoded[-2][1]["delta"] == {
         "stop_reason": "refusal",
