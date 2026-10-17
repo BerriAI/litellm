@@ -5117,7 +5117,7 @@ class Router:
                 }
             )
         litellm_logging_object = cast(LiteLLMLogging, litellm_logging_object)
-        caller_timeout: Final = kwargs.get("timeout")
+        caller_timeout: Final = kwargs.get("timeout") or kwargs.get("request_timeout")
         caller_stream_timeout: Final = kwargs.get("stream_timeout")
         specific_deployment: Final = kwargs.pop("specific_deployment", None)
         prompt_management_deployment: Final = await self.async_get_available_deployment(

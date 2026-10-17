@@ -6996,7 +6996,7 @@ def test_mock_request_with_mock_timeout_raises_litellm_timeout():
 
 
 @pytest.mark.asyncio
-async def test_async_mock_timeout_on_a_stream_waits_only_for_the_stream_timeout():
+async def test_async_mock_timeout_on_a_stream_waits_only_for_the_stream_timeout() -> None:
     with pytest.raises(litellm.Timeout):
         await asyncio.wait_for(
             litellm.acompletion(

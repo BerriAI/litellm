@@ -1481,20 +1481,16 @@ def _get_wrapper_num_retries(kwargs: dict[str, Any], exception: Exception) -> tu
     return num_retries, kwargs
 
 
-def _reported_timeout(value: object) -> float | int | httpx.Timeout | None:
-    return value if isinstance(value, float | int | httpx.Timeout) else None
-
-
-def _get_wrapper_timeout(kwargs: dict[str, object]) -> float | int | httpx.Timeout | None:
+def _get_wrapper_timeout(kwargs: dict[str, object]) -> object:
     from litellm.litellm_core_utils.litellm_logging import Logging
 
-    stream_timeout: Final = _reported_timeout(kwargs.get("stream_timeout"))
-    if kwargs.get("stream") is not True or stream_timeout is None:
-        return _reported_timeout(kwargs.get("timeout"))
+    if kwargs.get("stream") is not True:
+        return kwargs.get("timeout")
     logging_obj: Final = kwargs.get("litellm_logging_obj")
-    if not isinstance(logging_obj, Logging) or logging_obj.applied_timeout is None:
-        return stream_timeout
-    return logging_obj.applied_timeout
+    if isinstance(logging_obj, Logging) and logging_obj.applied_timeout is not None:
+        return logging_obj.applied_timeout
+    stream_timeout: Final = kwargs.get("stream_timeout")
+    return kwargs.get("timeout") if stream_timeout is None else stream_timeout
 
 
 def check_coroutine(value) -> bool:

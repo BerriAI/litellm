@@ -313,6 +313,20 @@ def test_sync_converse_streaming_fails_at_the_request_timeout_not_the_upstreams_
         litellm.completion(client=slow_upstream_sync_client(), **_converse_streaming_kwargs())
 
 
+@pytest.mark.asyncio
+async def test_live_stream_with_a_text_stream_timeout_reports_the_stream_timeout_it_was_cut_at() -> None:
+    with pytest.raises(litellm.Timeout) as excinfo:
+        await litellm.acompletion(
+            client=slow_upstream_async_client(),
+            **{
+                **_converse_streaming_kwargs(),
+                "timeout": UPSTREAM_FIRST_BYTE_SECONDS * 2,
+                "stream_timeout": str(STREAM_TIMEOUT_SECONDS),
+            },
+        )
+    assert getattr(excinfo.value, "timeout", None) == STREAM_TIMEOUT_SECONDS
+
+
 
 _FAKE_STREAMED_REQUESTS: Final = pytest.mark.parametrize(
     ("model", "request_params"),

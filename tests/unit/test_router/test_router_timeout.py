@@ -219,12 +219,22 @@ async def test_prompt_managed_stream_keeps_the_target_deployments_own_stream_tim
 
 
 @pytest.mark.asyncio
-async def test_prompt_managed_fake_stream_keeps_the_target_deployments_own_timeout() -> None:
+@pytest.mark.parametrize(
+    ("agent_params", "target_params", "request_params"),
+    [
+        ({}, {"timeout": UPSTREAM_FIRST_BYTE_SECONDS * 2}, {}),
+        ({"timeout": STREAM_TIMEOUT_SECONDS}, {}, {"request_timeout": UPSTREAM_FIRST_BYTE_SECONDS * 2}),
+    ],
+    ids=["target_deployment_timeout", "caller_request_timeout"],
+)
+async def test_prompt_managed_fake_stream_keeps_the_timeout_its_caller_or_target_set(
+    agent_params: Mapping[str, float], target_params: Mapping[str, float], request_params: Mapping[str, float]
+) -> None:
     router: Final = Router(
         model_list=[
             {
                 "model_name": "jamba-agent",
-                "litellm_params": {"model": "litellm_agent/jamba-target"},
+                "litellm_params": {"model": "litellm_agent/jamba-target", **agent_params},
             },
             {
                 "model_name": "jamba-target",
@@ -233,7 +243,7 @@ async def test_prompt_managed_fake_stream_keeps_the_target_deployments_own_timeo
                     "aws_access_key_id": "fake",
                     "aws_secret_access_key": "fake",
                     "aws_region_name": "us-east-1",
-                    "timeout": UPSTREAM_FIRST_BYTE_SECONDS * 2,
+                    **target_params,
                 },
             },
         ],
@@ -248,6 +258,7 @@ async def test_prompt_managed_fake_stream_keeps_the_target_deployments_own_timeo
         messages=messages,
         stream=True,
         client=slow_upstream_async_client(CONVERSE_ANSWER),
+        **request_params,
         litellm_logging_obj=LiteLLMLogging(
             model="jamba-agent",
             messages=messages,
