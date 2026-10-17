@@ -63,7 +63,7 @@ describe("ViewSwitcher", () => {
       fireEvent.click(button);
     });
     expect(await screen.findByText("Chat")).toBeInTheDocument();
-    expect(screen.getByText(/Admins can enable in Settings/i)).toBeInTheDocument();
+    expect(screen.getByText(/Settings > Admin Settings > UI Settings/i)).toBeInTheDocument();
 
     act(() => {
       fireEvent.click(screen.getByText("Chat"));
@@ -113,7 +113,7 @@ describe("ViewSwitcher", () => {
       fireEvent.click(screen.getByRole("button"));
     });
     expect(await screen.findByText("Chat")).toBeInTheDocument();
-    expect(screen.queryByText(/Admins can enable in Settings/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Settings > Admin Settings > UI Settings/i)).not.toBeInTheDocument();
 
     act(() => {
       fireEvent.click(screen.getByText("Chat"));
@@ -224,7 +224,7 @@ describe("ViewSwitcher", () => {
     });
     expect(await screen.findByText("Observability")).toBeInTheDocument();
     expect(screen.getByText("Chat")).toBeInTheDocument();
-    expect(screen.getByText(/Admins can enable in Settings/i)).toBeInTheDocument();
+    expect(screen.getByText(/Settings > Admin Settings > UI Settings/i)).toBeInTheDocument();
 
     act(() => {
       fireEvent.click(screen.getByText("Chat"));
