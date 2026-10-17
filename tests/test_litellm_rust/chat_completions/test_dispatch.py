@@ -4,7 +4,6 @@ from typing import Final, cast  # noqa: TID251  # narrows legacy callable signat
 import pytest
 
 import litellm
-from litellm.caching.caching import Cache
 from litellm.chat_completions import dispatch
 from litellm.chat_completions.dispatch import (
     _ADISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch
@@ -235,7 +234,6 @@ async def test_acompletion_marker_binds_positionals_by_the_sync_signature() -> N
         (Feature.CALLER_CLIENT, {"client": object()}, {}),
         (Feature.TIMEOUT_VARIANTS, {"request_timeout": 5}, {}),
         (Feature.TLS_POLICY, {}, {"ssl_security_level": "DEFAULT@SECLEVEL=1"}),
-        (Feature.RESPONSE_CACHE, {}, {"cache": Cache()}),
     ),
 )
 def test_each_detected_feature_reaches_its_rule(

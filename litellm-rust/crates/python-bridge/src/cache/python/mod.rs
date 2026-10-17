@@ -1,6 +1,5 @@
-mod host;
+mod binding;
 mod service;
 
-pub(crate) use host::PythonCache;
-pub(crate) use service::CacheCall;
-pub(super) use service::service;
+pub(crate) use binding::CachedBinding;
+pub(crate) use service::{Cached, scoped};

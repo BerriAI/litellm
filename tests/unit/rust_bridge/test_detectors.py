@@ -8,7 +8,6 @@ import httpx
 import pytest
 
 import litellm
-from litellm.caching.caching import Cache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.responses.utils import ResponsesAPIRequestUtils
@@ -321,22 +320,6 @@ def test_websearch_interception_needs_the_interception_logger(monkeypatch: pytes
     assert not detectors.websearch_interception(call())
     monkeypatch.setattr(litellm, "callbacks", [WebSearchInterceptionLogger()])
     assert detectors.websearch_interception(call())
-
-
-@pytest.mark.parametrize(
-    ("cache", "kwargs", "expected"),
-    (
-        (None, {}, False),
-        (Cache(), {}, True),
-        (Cache(), {"cache": {"ttl": 60}}, True),
-        (Cache(), {"cache": {"no-cache": True}}, False),
-    ),
-)
-def test_response_cache_is_skipped_only_by_no_cache(
-    monkeypatch: pytest.MonkeyPatch, cache: Cache | None, kwargs: Mapping[str, object], expected: bool
-) -> None:
-    monkeypatch.setattr(litellm, "cache", cache)
-    assert detectors.response_cache(call(**kwargs)) is expected
 
 
 @pytest.mark.parametrize(

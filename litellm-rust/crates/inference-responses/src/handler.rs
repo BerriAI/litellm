@@ -36,14 +36,11 @@ pub(super) async fn execute(
         )
         .await?;
     let cache = cache.filter(|_| authenticated.signer.is_none());
-    let cache_request = litellm_inference::caching::CacheRequest::from_wire(
-        identity,
-        cache.as_ref().map(|_| &wire),
-    );
+    let cache_request = litellm_inference::caching::CacheRequest::from_wire::<
+        super::route::Responses,
+    >(identity, &wire, cache.as_ref(), cache_options);
     litellm_inference::caching::execute_streaming::<super::route::Responses, _, _>(
         cache_request,
-        cache.as_ref().map(|cache| cache.service.clone()),
-        cache.as_ref().map(|cache| cache.options(cache_options)),
         interceptors,
         observers,
         || async move {

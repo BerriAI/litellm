@@ -8,6 +8,8 @@ Storage traits, codecs, and backend capabilities belong in `litellm-cache` and t
 
 Construct and inject the response-cache service at the Python bridge or gateway boundary, as with the HTTP client. Reuse it across calls. Core and provider code must not discover cache configuration through Python globals, process configuration, or backend-specific factories
 
+`ResponseCacheService::prepare` binds each call to its selected adapter. Effective-request identity is a lazy input, invoked only by native preparation. `PreparedCache` carries policy, entry limits and lookup/store operations, not a mandatory native request. Native calls retain their own `ResponseCacheRequest`; Python delegation never constructs one. Hits carry the adapter's authoritative key
+
 Keep `ResponseCache<B>` generic over its storage backend. Preserve typed backend contexts and capability bounds internally. Inject an object-safe service into core for runtime backend selection, so storage types do not spread through route and host types. Keep API request and response types statically typed. Add a generic parameter only where it preserves a useful type relationship or capability
 
 Keep the core service contract narrow. Lookup and store must not require connection testing, ping, flush, deletion, counters, queues, or scripts. Require batch operations where a consumer needs partial hits, and keep management capabilities on their own interfaces. An exact-only adapter must remain explicit about its matching restriction. Supporting semantic matching requires a defined lookup-context and embedding execution contract, not just a renamed trait

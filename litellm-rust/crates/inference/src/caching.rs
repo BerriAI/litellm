@@ -8,8 +8,7 @@ use std::{
 use bytes::{Bytes, BytesMut};
 use futures_util::{StreamExt, TryStreamExt, stream};
 use litellm_cache_response::{
-    CacheOptions, CachePolicy, ResponseCacheRequest, ResponseCacheService, ResponseEnvelope,
-    ScopedCache, cache_key,
+    CacheOptions, CachePolicy, PreparedCache, ResponseCacheService, ResponseEnvelope, ScopedCache,
 };
 use litellm_host::{
     call::{CallOutput, OutputOf},
@@ -36,13 +35,36 @@ pub trait Cachable: Protocol<Error = RouteError> {
 
 pub struct CacheRequest {
     pub identity: ProviderIdentity,
-    pub input: Value,
+    session: Option<CacheSession>,
 }
 
 impl CacheRequest {
-    pub fn from_wire(identity: ProviderIdentity, wire: Option<&WireRequest>) -> Self {
-        Self {
-            input: wire.map_or(Value::Null, |wire| {
+    pub fn prepare<P: Cachable>(
+        identity: ProviderIdentity,
+        service: Option<Arc<dyn ResponseCacheService>>,
+        options: Option<CacheOptions>,
+        input: &dyn Fn(&ProviderIdentity) -> Value,
+    ) -> Self {
+        let session = options
+            .filter(|options| options.policy.enabled())
+            .zip(service)
+            .map(|(options, service)| CacheSession {
+                prepared: service.prepare(options, P::SURFACE, &|| input(&identity)),
+            });
+        Self { identity, session }
+    }
+
+    pub fn from_wire<P: Cachable>(
+        identity: ProviderIdentity,
+        wire: &WireRequest,
+        cache: Option<&ScopedCache>,
+        policy: Option<CachePolicy>,
+    ) -> Self {
+        Self::prepare::<P>(
+            identity,
+            cache.map(|cache| cache.service.clone()),
+            cache.map(|cache| cache.options(policy)),
+            &|identity| {
                 serde_json::json!({
                     "provider": identity.provider,
                     "model": identity.model,
@@ -50,9 +72,8 @@ impl CacheRequest {
                     "headers": wire.headers,
                     "body": wire.body,
                 })
-            }),
-            identity,
-        }
+            },
+        )
     }
 }
 
@@ -71,35 +92,23 @@ pub enum CachedOutput<R> {
 }
 
 struct CacheSession {
-    service: Arc<dyn ResponseCacheService>,
-    request: ResponseCacheRequest,
+    prepared: PreparedCache,
 }
 
 impl CacheSession {
-    fn prepare<P: Cachable>(
-        service: Option<Arc<dyn ResponseCacheService>>,
-        options: Option<CacheOptions>,
-        request: &CacheRequest,
-    ) -> Option<Self> {
-        let options = options.filter(|options| options.policy.enabled())?;
-        let service = service?;
-        let input = request.input.clone();
-        let request = options.request(&service.config().namespace, P::SURFACE, input);
-        Some(Self { service, request })
-    }
-
-    async fn lookup<P: Cachable>(&self) -> Option<CachedOutput<P::Response>>
+    async fn lookup<P: Cachable>(&self) -> Option<(CachedOutput<P::Response>, String)>
     where
         P::Response: DeserializeOwned,
     {
-        if !self.request.controls.reads() {
+        if !self.prepared.policy.reads() {
             return None;
         }
-        match self.service.lookup(&self.request, now()).await {
-            Ok(Some(value)) => {
-                serde_json::from_value::<ResponseEnvelope<CachedOutput<P::Response>>>(value)
+        match self.prepared.call.lookup(now()).await {
+            Ok(Some(hit)) => {
+                serde_json::from_value::<ResponseEnvelope<CachedOutput<P::Response>>>(hit.value)
                     .ok()
                     .and_then(|entry| entry.decode(P::SURFACE))
+                    .map(|output| (output, hit.key))
             }
             Ok(None) => None,
             Err(_) => {
@@ -110,15 +119,10 @@ impl CacheSession {
     }
 
     async fn store(&self, entry: Value) {
-        if !self.request.controls.writes() {
+        if !self.prepared.policy.writes() {
             return;
         }
-        if self
-            .service
-            .store(&self.request, entry, now())
-            .await
-            .is_err()
-        {
+        if self.prepared.call.store(entry, now()).await.is_err() {
             tracing::warn!("response cache write failed");
         }
     }
@@ -127,7 +131,7 @@ impl CacheSession {
     where
         P::Response: Serialize,
     {
-        if !self.request.controls.writes() || !P::reusable(response) {
+        if !self.prepared.policy.writes() || !P::reusable(response) {
             return;
         }
         if let Ok(value) = serde_json::to_value(response)
@@ -143,8 +147,6 @@ impl CacheSession {
 
 pub async fn execute_unary<P, F, Fut>(
     request: CacheRequest,
-    cache: Option<Arc<dyn ResponseCacheService>>,
-    options: Option<CacheOptions>,
     interceptors: &impl Interceptors<RouteError>,
     observers: Option<&ObservationSender>,
     provider: F,
@@ -155,14 +157,16 @@ where
     F: FnOnce() -> Fut,
     Fut: Future<Output = Result<P::Response, RouteError>>,
 {
-    let identity = request.identity.clone();
+    let CacheRequest { identity, session } = request;
     crate::diagnostic::provider(&identity.model, &identity.provider);
-    let session = CacheSession::prepare::<P>(cache, options, &request);
     let hit = match &session {
-        Some(session) => session.lookup::<P>().await.and_then(|entry| match entry {
-            CachedOutput::Response(response) => Some((response, cache_key(&session.request.key))),
-            CachedOutput::Stream(_) => None,
-        }),
+        Some(session) => session
+            .lookup::<P>()
+            .await
+            .and_then(|(entry, key)| match entry {
+                CachedOutput::Response(response) => Some((response, key)),
+                CachedOutput::Stream(_) => None,
+            }),
         None => None,
     };
     let (response, source) = match hit {
@@ -189,8 +193,6 @@ where
 
 pub async fn execute_streaming<P, F, Fut>(
     request: CacheRequest,
-    cache: Option<Arc<dyn ResponseCacheService>>,
-    options: Option<CacheOptions>,
     interceptors: &impl Interceptors<RouteError>,
     observers: Option<&ObservationSender>,
     provider: F,
@@ -201,9 +203,8 @@ where
     F: FnOnce() -> Fut,
     Fut: Future<Output = Result<OutputOf<P>, RouteError>>,
 {
-    let identity = request.identity.clone();
+    let CacheRequest { identity, session } = request;
     crate::diagnostic::provider(&identity.model, &identity.provider);
-    let session = CacheSession::prepare::<P>(cache, options, &request);
     let cache = CallCache::<P> {
         session,
         protocol: PhantomData,
@@ -238,23 +239,9 @@ impl<P: StreamCachable> CallCache<P> {
         identity: &ProviderIdentity,
         wire: &WireRequest,
     ) -> Self {
-        let session = cache.and_then(|cache| {
-            if !policy.enabled() {
-                return None;
-            }
-            let options = cache.options(Some(policy));
-            let request = CacheRequest::from_wire(identity.clone(), Some(wire));
-            Some(CacheSession {
-                request: options.request(
-                    &cache.service.config().namespace,
-                    P::SURFACE,
-                    request.input,
-                ),
-                service: cache.service.clone(),
-            })
-        });
+        let request = CacheRequest::from_wire::<P>(identity.clone(), wire, cache, Some(policy));
         Self {
-            session,
+            session: request.session,
             protocol: PhantomData,
         }
     }
@@ -264,16 +251,12 @@ impl<P: StreamCachable> CallCache<P> {
         P::Response: DeserializeOwned,
     {
         let session = self.session.as_ref()?;
-        let output = match session.lookup::<P>().await? {
+        let (entry, key) = session.lookup::<P>().await?;
+        let output = match entry {
             CachedOutput::Response(response) => CallOutput::Complete(response),
             CachedOutput::Stream(data) => P::replay(Bytes::from(data))?,
         };
-        Some((
-            output,
-            ResultSource::Cache {
-                key: cache_key(&session.request.key),
-            },
-        ))
+        Some((output, ResultSource::Cache { key }))
     }
 
     pub async fn finish(self, output: OutputOf<P>, source: &ResultSource) -> OutputOf<P>
@@ -281,7 +264,7 @@ impl<P: StreamCachable> CallCache<P> {
         P::Response: Serialize,
     {
         let Some(session) = self.session.filter(|session| {
-            *source == ResultSource::Provider && session.request.controls.writes()
+            *source == ResultSource::Provider && session.prepared.policy.writes()
         }) else {
             return output;
         };
@@ -309,8 +292,7 @@ fn capture_stream<P: StreamCachable>(
                 Some(chunk) => {
                     let captured = captured.and_then(|mut data| {
                         let bytes = P::bytes(&chunk);
-                        if data.len().saturating_add(bytes.len())
-                            > session.service.config().max_entry_bytes
+                        if data.len().saturating_add(bytes.len()) > session.prepared.max_entry_bytes
                         {
                             return None;
                         }

@@ -12,7 +12,7 @@ use prepare::{prepare_provider_request, resolve_request};
 use litellm_auth::AuthServices;
 use litellm_secrets::source::SecretSource;
 use std::sync::Arc;
-use types::ChatCompletionsRequest;
+use types::{ChatCompletionsCall, ChatCompletionsRequest};
 
 #[derive(Clone)]
 pub struct ChatCompletionsRoute {
@@ -49,18 +49,23 @@ impl ChatCompletionsRoute {
         interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
         options: impl Into<litellm_inference::CallOptions>,
     ) -> Result<ChatCompletionsResponse, Error> {
+        self.execute_call(request.into(), interceptors, options)
+            .await
+    }
+
+    pub async fn execute_call(
+        &self,
+        call: ChatCompletionsCall,
+        interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
+        options: impl Into<litellm_inference::CallOptions>,
+    ) -> Result<ChatCompletionsResponse, Error> {
         let litellm_inference::CallOptions {
             cache: cache_options,
             observers,
         } = options.into();
         litellm_host::lifecycle::observe_unary(
             observers.clone(),
-            self.run_call(
-                request.into(),
-                cache_options,
-                interceptors,
-                observers.as_ref(),
-            ),
+            self.run_call(call, cache_options, interceptors, observers.as_ref()),
         )
         .await
     }
