@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 470" font-family="-apple-system, Segoe UI, Helvetica, Arial, sans-serif" font-size="14">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#475569"/></marker>
+  </defs>
+  <rect width="1000" height="470" fill="#ffffff"/>
+  <text x="24" y="34" font-size="18" font-weight="600" fill="#0f172a">prometheus observer: the proxy's request metrics, off the request path</text>
+
+  <rect x="24" y="60" width="290" height="170" rx="8" fill="#eff6ff" stroke="#3b82f6"/>
+  <text x="38" y="84" font-weight="600" fill="#1e3a8a">At startup</text>
+  <text x="38" y="106" fill="#1e293b" font-size="13">on when callbacks, success_callback</text>
+  <text x="38" y="124" fill="#1e293b" font-size="13">   or failure_callback list prometheus</text>
+  <text x="38" y="146" fill="#1e293b" font-size="13">prometheus_metrics_config,</text>
+  <text x="38" y="164" fill="#1e293b" font-size="13">   _exclude_metrics, _exclude_labels,</text>
+  <text x="38" y="182" fill="#1e293b" font-size="13">   _latency_buckets as the proxy reads them</text>
+  <text x="38" y="204" fill="#64748b" font-size="13">a label a metric lacks stops startup</text>
+
+  <rect x="350" y="60" width="300" height="170" rx="8" fill="#fffbeb" stroke="#f59e0b"/>
+  <text x="364" y="84" font-weight="600" fill="#92400e">Request finishes (observer)</text>
+  <text x="364" y="106" fill="#1e293b" font-size="13">record: key, team, user, end user,</text>
+  <text x="364" y="124" fill="#1e293b" font-size="13">   deployment, usage, cost, timings</text>
+  <text x="364" y="146" fill="#1e293b" font-size="13">label values hashed, no allocation;</text>
+  <text x="364" y="164" fill="#1e293b" font-size="13">   a series is made once, on first sight</text>
+  <text x="364" y="186" fill="#1e293b" font-size="13">atomic adds; nothing awaits</text>
+  <text x="364" y="208" fill="#64748b" font-size="13">the response is already on its way</text>
+  <line x1="314" y1="145" x2="346" y2="145" stroke="#475569" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <rect x="686" y="60" width="290" height="170" rx="8" fill="#f0fdf4" stroke="#22c55e"/>
+  <text x="700" y="84" font-weight="600" fill="#14532d">GET /metrics (scrape)</text>
+  <text x="700" y="106" fill="#1e293b" font-size="13">gateway ops metrics, then the</text>
+  <text x="700" y="124" fill="#1e293b" font-size="13">   observer's families in text format</text>
+  <text x="700" y="146" fill="#1e293b" font-size="13">shared names (total requests, total</text>
+  <text x="700" y="164" fill="#1e293b" font-size="13">   latency, deployment failures) come</text>
+  <text x="700" y="182" fill="#1e293b" font-size="13">   from the observer alone, proxy labels</text>
+  <line x1="650" y1="145" x2="682" y2="145" stroke="#475569" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <rect x="24" y="260" width="460" height="186" rx="8" fill="#f8fafc" stroke="#94a3b8"/>
+  <text x="38" y="284" font-weight="600" fill="#0f172a">Success</text>
+  <text x="38" y="306" fill="#1e293b" font-size="13">proxy_total_requests, requests, spend</text>
+  <text x="38" y="326" fill="#1e293b" font-size="13">total / input / output / cached / cache creation tokens</text>
+  <text x="38" y="346" fill="#1e293b" font-size="13">request_total_latency, llm_api_latency (from upstream send)</text>
+  <text x="38" y="366" fill="#1e293b" font-size="13">llm_api_time_to_first_token (streams only)</text>
+  <text x="38" y="386" fill="#1e293b" font-size="13">deployment_state = 0, deployment success / total</text>
+  <text x="38" y="406" fill="#1e293b" font-size="13">deployment_latency_per_output_token</text>
+  <text x="38" y="430" fill="#64748b" font-size="13">metric and label names are the proxy's</text>
+
+  <rect x="516" y="260" width="460" height="186" rx="8" fill="#fef2f2" stroke="#ef4444"/>
+  <text x="530" y="284" font-weight="600" fill="#7f1d1d">Failure</text>
+  <text x="530" y="306" fill="#1e293b" font-size="13">proxy_failed_requests + proxy_total_requests, always</text>
+  <text x="530" y="326" fill="#1e293b" font-size="13">exception_class as the proxy names it</text>
+  <text x="530" y="346" fill="#1e293b" font-size="13">   (e.g. Openai.RateLimitError, BudgetExceededError)</text>
+  <text x="530" y="370" fill="#1e293b" font-size="13">after routing only: llm_api_failed_requests,</text>
+  <text x="530" y="390" fill="#1e293b" font-size="13">   deployment_state = 1, deployment failure / total</text>
+  <text x="530" y="430" fill="#64748b" font-size="13">refusals before routing carry no deployment labels</text>
+</svg>

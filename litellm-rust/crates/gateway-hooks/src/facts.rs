@@ -221,6 +221,8 @@ pub struct Outcome {
     /// In dollars, from usage and the deployment's prices; `None` when either is missing.
     pub cost: Option<f64>,
     pub time_to_first_byte: Option<Duration>,
+    /// When the attempt that served, or failed last, was sent to the provider.
+    pub upstream_started_at: Option<SystemTime>,
     pub ended_at: SystemTime,
     /// The stream stopped before its end: the client went away or the upstream failed.
     pub interrupted: bool,
