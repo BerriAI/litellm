@@ -1914,7 +1914,7 @@ async def _bill_rejected_frame(
                 await callback.async_post_call_failure_hook(  # pyright: ignore[reportUnknownMemberType]  # bare dict
                     request_data=frame_data, original_exception=exception, user_api_key_dict=user_api_key_dict
                 )
-            except Exception:
+            except Exception:  # noqa: BLE001  # billing never replaces the guardrail's own error
                 verbose_proxy_logger.exception("[Non-Blocking] Responses WebSocket: billing a rejected frame failed")
 
 
