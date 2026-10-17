@@ -285,6 +285,7 @@ async fn responses_cache_identity_follows_resolved_configuration_and_request_cal
                     api_base: None,
                     custom_llm_provider: None,
                     api_version: None,
+                    litellm_params: Default::default(),
                     extra_headers: None,
                     timeout: None,
                 },

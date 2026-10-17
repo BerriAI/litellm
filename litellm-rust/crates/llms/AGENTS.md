@@ -58,7 +58,7 @@
 
 - `AnthropicConfig`, `AmazonConverseConfig` and the non-OCR base traits are partial. Preserve their acceptance gates, passthrough and host fallback contracts
 - `OpenAiResponsesApiConfig` implements WebSocket transformations and direct HTTP Responses, without Python's model-specific param rewriting or Responses-to-Chat emulation
-- OpenAI-compatible Responses hosts (`openrouter`, `azure`, `xai`, `hosted_vllm`, `fireworks_ai`, `databricks`) reuse the OpenAI request and response transforms as free functions and own only their credentials, URL and host-specific item rules
+- OpenAI-compatible Responses hosts (`openrouter`, `azure`, `xai`, `hosted_vllm`, `fireworks_ai`, `databricks`, `bedrock_mantle`) reuse the OpenAI request and response transforms as free functions and own only their credentials, URL and host-specific item rules
 - Chat `supported_openai_param_mappings` lists OpenAI/provider name pairs, unlike Python's name-only list. Audio `map_transcription_params` is a Rust filtering helper
 - Auth resolution is split between configs and route preparation in `inference-<format>`
 
