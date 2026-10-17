@@ -305,6 +305,7 @@ TOKEN_COUNT_ENTRY: Final = MappingProxyType(
         "mode": "chat",
         "token_count_framing": 78,
         "token_count_model": {"model": "us.anthropic.claude-opus-5-5", "region": "us-east-1"},
+        "token_count_tokenizer": "kimi_k3",
     }
 )
 
@@ -315,6 +316,7 @@ TOKEN_COUNT_ENTRY: Final = MappingProxyType(
         {"token_count_framing": 0},
         {"token_count_framing": 78},
         {"token_count_model": {"model": "us.anthropic.claude-opus-5-5"}},
+        {"token_count_tokenizer": "kimi_k3"},
     ],
 )
 def test_generator_classifies_token_count_settings(setting: dict):
@@ -337,6 +339,8 @@ def test_generator_classifies_token_count_settings(setting: dict):
         {"token_count_model": {"region": "us-east-1"}},
         {"token_count_model": "us.anthropic.claude-opus-5-5"},
         {"token_count_model": {"model": "us.anthropic.claude-opus-5-5", "zone": "us-east-1"}},
+        {"token_count_tokenizer": "cl100k_base"},
+        {"token_count_tokenizer": True},
     ],
 )
 def test_generated_token_count_schema_rejects_malformed_settings(setting: dict):

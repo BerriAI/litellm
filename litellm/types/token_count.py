@@ -3,6 +3,7 @@ from typing import Literal, TypeAlias
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 TokenCountSource: TypeAlias = Literal["provider", "token_count_model", "local_estimate"]
+TokenCountTokenizer: TypeAlias = Literal["kimi_k3"]
 
 
 class TokenCountModelInfo(TypedDict):

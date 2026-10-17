@@ -303,6 +303,11 @@ def string_key_schemas(modes: tuple) -> dict[str, JsonSchema]:
             "type": "string",
             "enum": ["lyria_predict", "lyria_interactions"],
         },
+        "token_count_tokenizer": {
+            "type": "string",
+            "description": "Tokenizer litellm counts this model's requests with when the provider cannot count them.",
+            "enum": ["kimi_k3"],
+        },
     }
 
 

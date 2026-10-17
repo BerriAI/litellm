@@ -1233,6 +1233,13 @@
           },
           "description": "Model that counts tokens for this one, and the AWS region its count API runs in."
         },
+        "token_count_tokenizer": {
+          "type": "string",
+          "description": "Tokenizer litellm counts this model's requests with when the provider cannot count them.",
+          "enum": [
+            "kimi_k3"
+          ]
+        },
         "tpm": {
           "type": "integer",
           "minimum": 0,

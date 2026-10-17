@@ -67,6 +67,14 @@ def test_no_setting_anywhere_means_the_model_counts_itself_without_framing() -> 
     assert resolve_token_count_settings(configured={}, default={}) == TokenCountSettings(framing=None, count_model=None)
 
 
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [("kimi_k3", "kimi_k3"), ("cl100k_base", None), (None, None), (True, None)],
+)
+def test_only_a_tokenizer_litellm_ships_is_taken_from_the_cost_map(value: object, expected: str | None) -> None:
+    assert resolve_token_count_settings(configured={}, default={"token_count_tokenizer": value}).tokenizer == expected
+
+
 def _counted(source: str | None, model_used: str = "us.anthropic.claude-opus-5-5") -> TokenCountResponse:
     return TokenCountResponse(
         total_tokens=7,

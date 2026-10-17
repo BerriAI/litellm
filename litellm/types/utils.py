@@ -58,7 +58,7 @@ from litellm.types.llms.base import (
     LiteLLMPydanticObjectBase,
 )
 from litellm.types.mcp import MCPServerCostInfo
-from litellm.types.token_count import TokenCountModelInfo, TokenCountSource
+from litellm.types.token_count import TokenCountModelInfo, TokenCountSource, TokenCountTokenizer
 from litellm.types.workload_identity import (
     ANTHROPIC_WIF_KWARGS_KEYS,
     OPENAI_WIF_KWARGS_KEYS,
@@ -233,6 +233,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_regex_lookaround: ReadOnly[bool | None]
     token_count_framing: ReadOnly[int | None]
     token_count_model: ReadOnly[TokenCountModelInfo | None]
+    token_count_tokenizer: ReadOnly[TokenCountTokenizer | None]
 
 
 class SearchContextCostPerQuery(TypedDict, total=False):

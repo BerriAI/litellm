@@ -3,6 +3,8 @@
 
 
 import asyncio
+import base64
+import hashlib
 import itertools
 import json
 import logging
@@ -10,6 +12,7 @@ import threading
 import traceback
 from collections.abc import Callable, Coroutine, Mapping
 from functools import partial
+from pathlib import Path
 from types import MappingProxyType
 from typing import Final, NoReturn
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -17,12 +20,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import anyio
 import httpx
 import pytest
+import tiktoken
 from dotenv import load_dotenv
+from pydantic import BaseModel, ConfigDict, JsonValue
 from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
 from tokenizers.pre_tokenizers import Whitespace
 from tokenizers.processors import TemplateProcessing
-from pydantic import BaseModel, ConfigDict, JsonValue
 
 load_dotenv()
 
@@ -34,27 +38,34 @@ from fastapi.responses import JSONResponse
 
 import litellm
 from litellm import Router
+from litellm._logging import verbose_proxy_logger
 from litellm.llms.anthropic.count_tokens import handler as anthropic_count_tokens_handler
+from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock.count_tokens.bedrock_token_counter import BedrockTokenCounter
 from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
+from litellm.llms.bedrock.count_tokens.kimi_k3 import (
+    KIMI_K3_RANKS_SHA256,
+    KimiK3Encodings,
+    KimiK3TokenizerSource,
+    kimi_k3_template_tokens,
+    kimi_k3_tokens,
+    load_kimi_k3_encoding,
+)
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm._logging import verbose_proxy_logger
 from litellm.llms.gemini.count_tokens import handler as gemini_count_tokens_handler
 from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler import VertexAIPartnerModelsTokenCounter
 from litellm.proxy._types import ProxyException, TokenCountRequest
-from litellm.rust_bridge.fork_guard import ForkedAfterNativeRuntimeStarted
 from litellm.proxy.anthropic_endpoints.endpoints import (
     count_tokens as anthropic_count_tokens,
 )
-from litellm.llms.base_llm.base_utils import BaseTokenCounter
-from litellm.proxy.google_endpoints.endpoints import _google_count_tokens_request
 from litellm.proxy.common_utils.token_count_settings import (
     ProviderCountFailure,
     TokenCountModel,
     TokenCountSettings,
     cost_map_entry,
 )
+from litellm.proxy.google_endpoints.endpoints import _google_count_tokens_request
 from litellm.proxy.proxy_server import (
     _estimate_or_provider_error,
     _provider_token_count,
@@ -62,7 +73,24 @@ from litellm.proxy.proxy_server import (
     count_request_tokens,
     token_counter,
 )
+from litellm.rust_bridge.fork_guard import ForkedAfterNativeRuntimeStarted
 from litellm.types.utils import SelectTokenizerResponse, TokenCountMessagesFormat, TokenCountResponse
+
+
+def _hugging_face_offline() -> NoReturn:
+    raise OSError("unit tests never download the Kimi K3 tokenizer")
+
+
+@pytest.fixture(autouse=True)
+def _kimi_k3_tokenizer_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "_KIMI_K3_ENCODINGS",
+        KimiK3Encodings(
+            source=KimiK3TokenizerSource(ranks_path=_hugging_face_offline, sha256=KIMI_K3_RANKS_SHA256),
+            retry_after_seconds=60,
+        ),
+    )
 
 
 @pytest.mark.asyncio
@@ -2104,6 +2132,150 @@ async def test_framing_comes_from_the_row_the_deployment_provider_or_base_model_
     assert prefixed.total_tokens == litellm.token_counter(model="system.ai.kimi-k3", messages=messages) + framing
     assert split.total_tokens == prefixed.total_tokens
     assert aliased.total_tokens == litellm.token_counter(model="gpt-5.4-mini", messages=messages) + framing
+
+
+_KIMI_WEATHER: Final = {
+    "type": "function",
+    "function": {
+        "name": "get_weather",
+        "description": "Get the weather",
+        "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+    },
+}
+
+
+def _byte_level_kimi_k3(path: Path) -> KimiK3TokenizerSource:
+    path.write_bytes(b"\n".join(base64.b64encode(bytes((value,))) + b" %d" % value for value in range(256)))
+    return KimiK3TokenizerSource(ranks_path=lambda: str(path), sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+
+
+def _available_kimi_k3(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tiktoken.Encoding:
+    source: Final = _byte_level_kimi_k3(tmp_path / "tiktoken.model")
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server, "_KIMI_K3_ENCODINGS", KimiK3Encodings(source=source, retry_after_seconds=60)
+    )
+    encoding: Final = load_kimi_k3_encoding(source)
+    assert encoding is not None
+    return encoding
+
+
+def _shipped_kimi_k3_framing() -> int:
+    framing: Final = cost_map_entry("bedrock/us.moonshotai.kimi-k3")["token_count_framing"]
+    assert isinstance(framing, int)
+    return framing
+
+
+@pytest.mark.asyncio
+async def test_bedrock_kimi_k3_is_counted_with_its_tokenizer_plus_the_shipped_framing_in_both_request_formats(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    _framed_kimi(monkeypatch)
+    encoding: Final = _available_kimi_k3(monkeypatch, tmp_path)
+    question: Final = {"role": "user", "content": "Weather in Paris?"}
+    openai_messages: Final = [
+        {"role": "system", "content": "Be terse."},
+        question,
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "c1", "type": "function", "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": "c1", "content": "Sun"},
+    ]
+
+    openai: Final = await count_request_tokens(
+        request=TokenCountRequest(model="kimi", messages=openai_messages, tools=[_KIMI_WEATHER]), call_endpoint=True
+    )
+    anthropic: Final = await count_request_tokens(
+        request=TokenCountRequest(
+            model="kimi",
+            system="Be terse.",
+            messages=[
+                question,
+                {
+                    "role": "assistant",
+                    "content": [{"type": "tool_use", "id": "c1", "name": "get_weather", "input": {"city": "Paris"}}],
+                },
+                {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "c1", "content": "Sun"}]},
+            ],
+            tools=[
+                {
+                    "name": "get_weather",
+                    "description": "Get the weather",
+                    "input_schema": _KIMI_WEATHER["function"]["parameters"],
+                }
+            ],
+        ),
+        call_endpoint=True,
+        messages_format="anthropic",
+    )
+    exact: Final = kimi_k3_tokens(encoding, "us.moonshotai.kimi-k3", openai_messages, [_KIMI_WEATHER])
+
+    assert exact is not None
+    assert (openai.total_tokens, openai.tokenizer_type, openai.count_source) == (
+        exact + _shipped_kimi_k3_framing(),
+        "huggingface_tokenizer",
+        "local_estimate",
+    )
+    assert (anthropic.total_tokens, anthropic.tokenizer_type) == (openai.total_tokens, "huggingface_tokenizer")
+
+
+@pytest.mark.asyncio
+async def test_bedrock_kimi_k3_deployment_with_a_custom_tokenizer_keeps_counting_with_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    _framed_kimi_with_custom_tokenizer(monkeypatch, "lit-tests/kimi-custom-tokenizer")
+    _available_kimi_k3(monkeypatch, tmp_path)
+    custom: Final = litellm.utils.select_tokenizer(model="gpt-5.4-mini")
+    monkeypatch.setattr(litellm.utils, "select_tokenizer", lambda model, custom_tokenizer=None: custom)
+    messages: Final = [{"role": "user", "content": "What is new?"}]
+
+    counted: Final = await token_counter(request=TokenCountRequest(model="kimi", messages=messages), call_endpoint=True)
+
+    assert counted.total_tokens == (
+        litellm.token_counter(model=counted.model_used, messages=messages, custom_tokenizer=custom)
+        + kimi_k3_template_tokens(len(messages), False)
+        + _shipped_kimi_k3_framing()
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("messages", "tools"),
+    [
+        pytest.param([{"role": "user", "content": "What is new?"}], None, id="one_message"),
+        pytest.param(
+            [
+                {"role": "system", "content": "Be terse."},
+                {"role": "user", "content": "Weather in Paris?"},
+                {"role": "assistant", "content": "Sunny."},
+                {"role": "user", "content": "And Oslo?"},
+            ],
+            [_KIMI_WEATHER],
+            id="turns_and_tools",
+        ),
+    ],
+)
+async def test_bedrock_kimi_k3_without_its_tokenizer_adds_the_template_offsets_to_the_local_estimate(
+    monkeypatch: pytest.MonkeyPatch, messages: list[dict[str, object]], tools: list[dict[str, object]] | None
+):
+    _framed_kimi(monkeypatch)
+
+    counted: Final = await token_counter(
+        request=TokenCountRequest(model="kimi", messages=messages, tools=tools), call_endpoint=True
+    )
+    estimate: Final = litellm.token_counter(
+        model=counted.model_used,
+        messages=messages,
+        tools=tools,
+        custom_tokenizer=litellm.utils.select_tokenizer(model=counted.model_used),
+    )
+
+    assert counted.total_tokens == (
+        estimate + kimi_k3_template_tokens(len(messages), tools is not None) + _shipped_kimi_k3_framing()
+    )
 
 
 @pytest.mark.asyncio

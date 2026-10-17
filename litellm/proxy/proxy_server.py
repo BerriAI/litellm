@@ -98,6 +98,13 @@ from litellm.litellm_core_utils.litellm_logging import (
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.token_counter import offload_token_count
+from litellm.llms.bedrock.count_tokens.kimi_k3 import (
+    HUGGING_FACE_SOURCE,
+    KimiK3Encodings,
+    kimi_k3_anthropic_tokens,
+    kimi_k3_template_tokens,
+    kimi_k3_tokens,
+)
 from litellm.proxy._types import (
     UI_TEAM_ID,
     AwsErrorTypeProxyException,
@@ -14877,6 +14884,30 @@ async def _local_token_estimate(
     return _LocalTokenEstimate(total_tokens=total_tokens, tokenizer_type=str(tokenizer["type"]))
 
 
+_KIMI_K3_ENCODINGS: Final = KimiK3Encodings(
+    source=HUGGING_FACE_SOURCE, retry_after_seconds=TOKENIZER_LOAD_REUSE_SECONDS
+)
+
+
+async def _kimi_k3_count(
+    request: TokenCountRequest,
+    messages_format: TokenCountMessagesFormat,
+    model: str,
+    messages: Sequence[AllMessageValues],
+    tools: Sequence[ChatCompletionToolParam] | None,
+) -> int | None:
+    encoding: Final = await _KIMI_K3_ENCODINGS.encoding(TOKENIZER_LOAD_WAIT_SECONDS)
+    if encoding is None:
+        return None
+    match messages_format:
+        case "anthropic":
+            return await offload_token_count(kimi_k3_anthropic_tokens)(
+                encoding, model, request.model_dump(include={"messages", "system", "tools"}, exclude_none=True)
+            )
+        case "openai":
+            return await offload_token_count(kimi_k3_tokens)(encoding, model, messages, tools)
+
+
 class _TokenCountDeployment(TypedDict, total=False):
     litellm_params: ReadOnly[Mapping[str, object]]
     model_info: ReadOnly[Mapping[str, object]]
@@ -15106,6 +15137,21 @@ async def count_request_tokens(
     counted_tools: Final = cast(  # cast-ok: raw OpenAI or Anthropic tool dicts, both of which token_counter formats
         list[ChatCompletionToolParam] | None, tools if counted_messages is not None else None
     )
+    framing: Final = settings.framing if counted_messages is not None and settings.framing is not None else 0
+    kimi_k3_messages: Final = counted_messages if settings.tokenizer == "kimi_k3" else None
+    exact: Final = (
+        await _kimi_k3_count(request, messages_format, model_to_use, kimi_k3_messages, counted_tools)
+        if kimi_k3_messages is not None and custom_tokenizer is None
+        else None
+    )
+    if exact is not None:
+        return TokenCountResponse(
+            total_tokens=exact + framing,
+            request_model=request.model,
+            model_used=model_to_use,
+            tokenizer_type="huggingface_tokenizer",
+            count_source="local_estimate",
+        )
     estimate: Final = await _local_token_estimate(
         model=model_to_use,
         prompt=prompt if counted_messages is None else None,
@@ -15114,9 +15160,11 @@ async def count_request_tokens(
         custom_tokenizer=custom_tokenizer,
         provider_failure=ladder,
     )
-    framing: Final = settings.framing if counted_messages is not None and settings.framing is not None else 0
+    template: Final = (
+        0 if kimi_k3_messages is None else kimi_k3_template_tokens(len(kimi_k3_messages), bool(counted_tools))
+    )
     return TokenCountResponse(
-        total_tokens=estimate.total_tokens + framing,
+        total_tokens=estimate.total_tokens + template + framing,
         request_model=request.model,
         model_used=model_to_use,
         tokenizer_type=estimate.tokenizer_type,

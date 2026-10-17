@@ -9,7 +9,7 @@ import litellm
 from litellm.anthropic_interface.exceptions.exception_mapping_utils import AnthropicExceptionMapping
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.proxy._types import ProxyException
-from litellm.types.token_count import TokenCountSourceFields
+from litellm.types.token_count import TokenCountSourceFields, TokenCountTokenizer
 from litellm.types.utils import TokenCountResponse
 
 CANNOT_COUNT_MODEL_STATUSES: Final = frozenset({400, 404})
@@ -48,6 +48,7 @@ class TokenCountModel:
 class TokenCountSettings:
     framing: int | None
     count_model: TokenCountModel | None
+    tokenizer: TokenCountTokenizer | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,11 +109,20 @@ def _resolved_count_model(configured: object, default: object) -> TokenCountMode
     return None if default_mapping is None else _count_model(default_mapping)
 
 
+def _tokenizer(value: object) -> TokenCountTokenizer | None:
+    match value:
+        case "kimi_k3":
+            return "kimi_k3"
+        case _:
+            return None
+
+
 def resolve_token_count_settings(configured: Mapping[str, object], default: Mapping[str, object]) -> TokenCountSettings:
     framing: Final = _framing(configured.get("token_count_framing"))
     return TokenCountSettings(
         framing=framing if framing is not None else _framing(default.get("token_count_framing")),
         count_model=_resolved_count_model(configured.get("token_count_model"), default.get("token_count_model")),
+        tokenizer=_tokenizer(default.get("token_count_tokenizer")),
     )
 
 
