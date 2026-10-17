@@ -759,7 +759,7 @@ class TestPostCallFailureHookEstimatesDispatchedInputTokens:
 
         from fastapi import HTTPException
 
-        from litellm.constants import LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED
+        from litellm.constants import LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED, LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL
         from litellm.types.utils import Usage
 
         request_data = {
@@ -769,6 +769,7 @@ class TestPostCallFailureHookEstimatesDispatchedInputTokens:
                     "model": "gpt-3.5-turbo",
                     "messages": [{"role": "user", "content": "count these input tokens please"}],
                     "call_type": "acompletion",
+                    LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL: True,
                 }
             ),
             "metadata": {},

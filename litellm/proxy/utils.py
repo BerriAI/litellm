@@ -1035,7 +1035,11 @@ def _failure_usage_to_lift(
         return _billed_across_attempts(failed_attempts, recovered_usage, model_call_details.get("response_cost"))
     if recovered_usage is not None:
         return recovered_usage, model_call_details.get("response_cost")
-    if not dispatched or model_call_details.get(LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL):
+    if not dispatched:
+        return None
+    if model_call_details.get(LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL) and not provider_billed:
+        # The proxy-only error handler stamps this flag on a client disconnect too, even though the
+        # request had already reached the provider, so a billed failure keeps its estimate.
         return None
     if str(model_call_details.get("call_type")) not in _INPUT_ESTIMABLE_CALL_TYPES:
         return None
@@ -1175,13 +1179,10 @@ _PROXY_ONLY_LLM_API_ERRORS: Final = (HTTPException, ProxyException, GuardrailRai
 _LOG_DB_METRICS_CALL_TYPES: Final = frozenset(("get_data", "insert_data", "update_data", "delete_data"))
 
 
-def _exception_chain(exception: BaseException) -> Iterator[BaseException]:
-    seen: Final[set[int]] = set()  # mutable-ok: cycle guard while walking __cause__/__context__
-    current: BaseException | None = exception
-    while current is not None and id(current) not in seen:
-        seen.add(id(current))
-        yield current
-        current = current.__cause__ or current.__context__  # rebind-ok: walking the chain
+def _exception_chain(exception: BaseException | None, seen: frozenset[int] = frozenset()) -> tuple[BaseException, ...]:
+    if exception is None or id(exception) in seen:
+        return ()
+    return (exception, *_exception_chain(exception.__cause__ or exception.__context__, seen | {id(exception)}))
 
 
 def _timed_out_reading_from_provider(exception: Exception) -> bool:
