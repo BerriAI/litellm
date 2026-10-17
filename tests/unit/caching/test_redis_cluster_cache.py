@@ -160,12 +160,13 @@ async def test_disconnect_still_closes_redis_client_when_cluster_aclose_fails(mo
         password="hello",
     )
     cache.redis_async_client = MagicMock(aclose=AsyncMock(side_effect=RuntimeError("aclose failed")))
-    cache.redis_client = MagicMock()
+    mock_redis_client = MagicMock()
+    cache.redis_client = mock_redis_client
 
     with pytest.raises(RuntimeError, match="aclose failed"):
         await cache.disconnect()
 
-    cache.redis_client.close.assert_called_once()
+    mock_redis_client.close.assert_called_once()
 
 
 @pytest.mark.asyncio

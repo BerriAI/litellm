@@ -433,11 +433,12 @@ async def test_disconnect_with_no_connection_pool_does_not_raise():
     redis_cache = RedisCache.__new__(RedisCache)
     redis_cache.async_redis_conn_pool = None
     redis_cache.redis_kwargs = {}
-    redis_cache.redis_client = MagicMock()
+    mock_redis_client = MagicMock()
+    redis_cache.redis_client = mock_redis_client
 
     await redis_cache.disconnect()
 
-    redis_cache.redis_client.close.assert_called_once()
+    mock_redis_client.close.assert_called_once()
 
 
 def _closed_port() -> int:
