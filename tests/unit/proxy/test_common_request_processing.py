@@ -9602,6 +9602,29 @@ class TestInjectCostIntoUsageDict:
         assert result["usage"]["cost"] == pytest.approx(expected_flex_cost)
         assert result["usage"]["cost"] < self._expected_cost("gpt-5-mini", 1000, 100)
 
+    def test_openai_chunk_usage_cost_includes_web_search_fee(self) -> None:
+        """Streamed usage.cost must include the Claude web search fee: server_tool_use survives the usage rebuild (issue #46365)."""
+        event: Final = {
+            "id": "chatcmpl-1",
+            "object": "chat.completion.chunk",
+            "choices": [],
+            "usage": {
+                "prompt_tokens": 10760,
+                "completion_tokens": 399,
+                "total_tokens": 11159,
+                "server_tool_use": {"web_search_requests": 1},
+            },
+        }
+        model: Final = "vertex_ai/claude-opus-5-5"
+
+        result: Final = ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(event, model)
+
+        assert result is not None
+        token_cost: Final = self._expected_cost(model, 10760, 399)
+        search_fee: Final = litellm.model_cost[model]["search_context_cost_per_query"]["search_context_size_medium"]
+        assert result["usage"]["cost"] == pytest.approx(token_cost + search_fee)
+        assert result["usage"]["server_tool_use"] == {"web_search_requests": 1}
+
     def test_openai_chunk_with_null_usage_is_not_modified(self):
         event = {
             "id": "chatcmpl-1",

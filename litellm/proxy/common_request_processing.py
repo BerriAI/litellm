@@ -4624,6 +4624,10 @@ class ProxyBaseLLMRequestProcessing:
             total_tokens=total_tokens,
             completion_tokens_details=usage.get("completion_tokens_details"),
             prompt_tokens_details=usage.get("prompt_tokens_details"),
+            # Built-in tool usage (e.g. Claude web search count) carries
+            # per-call fees priced by StandardBuiltInToolCostTracking;
+            # dropping it under-reports usage.cost (issue #46365).
+            server_tool_use=usage.get("server_tool_use"),
         )
 
     @staticmethod
