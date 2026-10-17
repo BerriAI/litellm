@@ -405,8 +405,15 @@ def _normalize_answer(value: object) -> Mapping[str, object]:
 
 def parse_systemone_response(payload: object, request: DecisionsIRRequest) -> DecisionsIRResponse:
     response: Final = _MAPPING.validate_python(payload)
-    answers: Final = _MAPPING.validate_python(response.get("answers"))
-    normalized: Final = {**response, "answers": {name: _normalize_answer(answer) for name, answer in answers.items()}}
+    answers: Final = response.get("answers")
+    normalized: Final = (
+        {
+            **response,
+            "answers": {name: _normalize_answer(answer) for name, answer in _MAPPING.validate_python(answers).items()},
+        }
+        if isinstance(answers, Mapping)
+        else response
+    )
     return systemone_response_to_ir(_SYSTEMONE_RESPONSE_ADAPTER.validate_python(normalized), request)
 
 

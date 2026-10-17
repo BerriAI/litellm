@@ -864,6 +864,11 @@ def _declares_rates(model_info: ModelInfo | None) -> bool:
     return entry is not None and _cost_map_entry_prices_anything(entry)
 
 
+def cost_map_key_prices_anything(key: str) -> bool:
+    entry: Final = _raw_cost_map_entry(key)
+    return entry is not None and _cost_map_entry_prices_anything(entry)
+
+
 def _base_model_pricing_provider(base_model: str, custom_llm_provider: str | None) -> str | None:
     """The provider to price an explicit base_model under, when the deployment's own provider has
     no rates for it (e.g. chatgpt/ subscription rows) but the base model's own row does"""
