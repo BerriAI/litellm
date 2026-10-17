@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 600" font-family="-apple-system, Segoe UI, Helvetica, Arial, sans-serif" font-size="14">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#475569"/></marker>
+    <marker id="r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#dc2626"/></marker>
+  </defs>
+  <rect width="1000" height="600" fill="#ffffff"/>
+  <text x="24" y="34" font-size="18" font-weight="600" fill="#0f172a">Budgets hook: proxy checks on the proxy's shared spend counters</text>
+
+  <rect x="24" y="60" width="300" height="140" rx="8" fill="#eff6ff" stroke="#3b82f6"/>
+  <text x="38" y="84" font-weight="600" fill="#1e3a8a">Key store row (cached with the key)</text>
+  <text x="38" y="106" fill="#1e293b" font-size="13">key spend + max_budget (or budget row's)</text>
+  <text x="38" y="124" fill="#1e293b" font-size="13">team, user spend + budgets</text>
+  <text x="38" y="142" fill="#1e293b" font-size="13">team member spend, member budget</text>
+  <text x="38" y="160" fill="#1e293b" font-size="13">(+ active temp increase, or team default)</text>
+  <text x="38" y="182" fill="#64748b" font-size="13">end users: own lookup, cached 60 s</text>
+
+  <rect x="360" y="60" width="616" height="140" rx="8" fill="#fffbeb" stroke="#f59e0b"/>
+  <text x="374" y="84" font-weight="600" fill="#92400e">One Redis script per request (atomic)</text>
+  <text x="374" y="106" fill="#1e293b" font-size="13">1. read spend:key / team / user / end_user / team_member counters; missing or below</text>
+  <text x="374" y="124" fill="#1e293b" font-size="13">   the stored spend: seed or raise to it (the proxy's reseed + set-max repair)</text>
+  <text x="374" y="142" fill="#1e293b" font-size="13">2. checks in the proxy's order: member, key, team (&gt;), user, zero member, end user (&gt;)</text>
+  <text x="374" y="160" fill="#1e293b" font-size="13">3. reserve the max-cost estimate on every counter with a positive budget;</text>
+  <text x="374" y="178" fill="#1e293b" font-size="13">   shrink to what is left, refuse when nothing is (1e-12), as the proxy</text>
+  <line x1="324" y1="130" x2="356" y2="130" stroke="#475569" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <rect x="24" y="236" width="460" height="110" rx="8" fill="#fef2f2" stroke="#dc2626"/>
+  <text x="38" y="260" font-weight="600" fill="#991b1b">Refusal: 422 (budget_exceeded_status_code)</text>
+  <text x="38" y="282" fill="#1e293b" font-size="13">{"error": {"message", "type": "budget_exceeded",</text>
+  <text x="38" y="300" fill="#1e293b" font-size="13">  "param": null, "code": "422"}} on both endpoints</text>
+  <text x="38" y="322" fill="#1e293b" font-size="13">proxy messages, Python float repr; no provider call</text>
+  <path d="M500 200 L500 220 L254 220 L254 232" fill="none" stroke="#dc2626" stroke-width="1.5" marker-end="url(#r)"/>
+
+  <rect x="516" y="236" width="460" height="110" rx="8" fill="#f8fafc" stroke="#64748b"/>
+  <text x="530" y="260" font-weight="600" fill="#0f172a">Admitted: request runs</text>
+  <text x="530" y="282" fill="#334155" font-size="13">estimate = input tokens x input price +</text>
+  <text x="530" y="300" fill="#334155" font-size="13">min(max_tokens or 16384, model max) x output price</text>
+  <text x="530" y="322" fill="#334155" font-size="13">lease renews reserved counters every TTL/2</text>
+  <path d="M760 200 L760 232" fill="none" stroke="#475569" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <rect x="24" y="382" width="952" height="96" rx="8" fill="#f5f3ff" stroke="#8b5cf6"/>
+  <text x="38" y="406" font-weight="600" fill="#5b21b6">Settle (off the request path)</text>
+  <text x="38" y="428" fill="#1e293b" font-size="13">success: INCRBYFLOAT (actual - reserved) on reserved counters, actual on the others; failure: release the reservation</text>
+  <text x="38" y="446" fill="#1e293b" font-size="13">a counter that expired mid-request is reseeded and charged the whole cost; EXPIRE ttl (default_redis_ttl, 60 s) refreshed</text>
+  <text x="38" y="464" fill="#1e293b" font-size="13">script failure: the counters are deleted so the next read reseeds them, as the proxy does</text>
+  <line x1="746" y1="346" x2="746" y2="378" stroke="#475569" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <rect x="24" y="508" width="952" height="72" rx="8" fill="#ecfdf5" stroke="#10b981"/>
+  <text x="38" y="532" font-weight="600" fill="#065f46">Same keys, values and TTLs as the Python proxy, under its namespace</text>
+  <text x="38" y="554" fill="#1e293b" font-size="13">gateway replicas and Python proxies on one Redis enforce one budget; the proxy's reset job deletes counters and they reseed.</text>
+  <text x="38" y="572" fill="#64748b" font-size="13">No Redis, or Redis unreachable: the same logic on this replica's counters (fail_closed_budget_enforcement: 503 instead)</text>
+</svg>

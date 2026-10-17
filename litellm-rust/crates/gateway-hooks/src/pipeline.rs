@@ -24,6 +24,7 @@ impl Pipeline {
         let mut reads = observers.reads();
         for hook in &hooks {
             reads |= hook.reads();
+            hook.prepare(&prices);
         }
         // Cost is computed from usage and the deployment that served the request.
         if reads.contains(Facts::COST) {

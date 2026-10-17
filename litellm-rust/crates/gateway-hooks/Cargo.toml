@@ -10,6 +10,7 @@ bytes.workspace = true
 futures-util.workspace = true
 http.workspace = true
 litellm-cost.workspace = true
+litellm-gateway-auth.workspace = true
 litellm-model-catalog.workspace = true
 memchr = "2"
 serde.workspace = true

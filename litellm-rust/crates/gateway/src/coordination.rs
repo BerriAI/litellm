@@ -267,8 +267,14 @@ impl Coordination {
         }))
     }
 
-    fn connection(&self) -> Option<ConnectionManager> {
+    /// The shared connection, once Redis has answered.
+    pub(crate) fn connection(&self) -> Option<ConnectionManager> {
         self.connection.get().cloned()
+    }
+
+    /// `key` under the configured namespace, as the proxy prefixes its keys.
+    pub(crate) fn namespaced(&self, key: &str) -> String {
+        self.settings.key(key)
     }
 
     /// Whether the connection shared state is written and read through is up yet.
