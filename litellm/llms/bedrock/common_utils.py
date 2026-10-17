@@ -1340,6 +1340,42 @@ def bedrock_declared_cache_point_support(model: str) -> bool | None:
     )
 
 
+_ZAI_GLM_FAMILY_MODEL_RE: Final = re.compile(r"(^|[./])zai\.glm-")
+
+
+def bedrock_model_accepts_cache_point_in_tool_config(model: str | None) -> bool:
+    """
+    Whether a Converse ``cachePoint`` block may be appended to ``toolConfig.tools``.
+
+    zai.glm-family models reject the field there ("This model doesn't support the
+    cachePoint field") while accepting it in system and message content. Verified
+    against ``global.zai.glm-5.3`` on Converse in us-east-1 (issue #46254): a system
+    cache point already caches the tool definitions, because Bedrock's prefix order
+    is tools then system, so skipping the tool_config point loses no cached prefix.
+    Model-wide acceptance stays with ``bedrock_model_accepts_cache_points``.
+    """
+    if model is None:
+        return True
+    return not _ZAI_GLM_FAMILY_MODEL_RE.search(model)
+
+
+def bedrock_model_accepts_cache_point_after_tool_result(model: str | None) -> bool:
+    """
+    Whether a Converse ``cachePoint`` block may directly follow a ``toolResult`` block.
+
+    zai.glm-family models reject that position ("Cache point cannot be inserted after
+    the preceding content block for this model") while accepting the same block after
+    a text block (issue #46254, verified on ``global.zai.glm-5.3``).
+    """
+    if model is None:
+        return True
+    return not _ZAI_GLM_FAMILY_MODEL_RE.search(model)
+
+
+def bedrock_model_accepts_cache_point_after_tool_use(model: str | None) -> bool:
+    return model is None or _ZAI_GLM_FAMILY_MODEL_RE.search(model) is None
+
+
 def bedrock_supports_tool_search(model: str) -> bool:
     """
     Whether Bedrock InvokeModel admits the ``tool_search_tool_*`` tool types on ``model``.

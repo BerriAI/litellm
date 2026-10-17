@@ -118,6 +118,7 @@ from ..common_utils import (
     bedrock_cache_point_ttl_supported,
     bedrock_capability_model,
     bedrock_converse_supports_parallel_tool_use_config,
+    bedrock_model_accepts_cache_point_in_tool_config,
     bedrock_model_accepts_cache_points,
     bedrock_reasoning_effort_disabled,
     bedrock_rejects_stop_sequences,
@@ -1998,6 +1999,7 @@ class AmazonConverseConfig(BaseConfig):
             cache_injection_points
             and len(bedrock_tools) > 0
             and bedrock_model_accepts_cache_points(model, deployment_model)
+            and bedrock_model_accepts_cache_point_in_tool_config(model)
         ):
             for point in cache_injection_points:
                 if point.get("location") == "tool_config":
