@@ -1,8 +1,9 @@
+import asyncio
 import copy
 import json
 from collections.abc import Iterator
-from typing import Final
-from unittest.mock import MagicMock, patch
+from typing import Any, Dict, Final, List
+from unittest.mock import MagicMock, Mock, patch
 
 import httpx
 import pytest
@@ -14,6 +15,7 @@ from fastapi.testclient import TestClient
 from pydantic import BaseModel, ConfigDict
 
 import litellm
+from litellm._version import version
 from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
@@ -26,13 +28,9 @@ from litellm.llms.databricks.chat.transformation import (
     DatabricksConfig,
     _sanitize_empty_content,
 )
+from litellm.types.utils import ChatCompletionMessageToolCall, ModelResponse
 from litellm.types.llms.openai import AllMessageValues
-import asyncio
-from unittest.mock import Mock
-from litellm._version import version
 from litellm.utils import CustomStreamWrapper
-from typing import Any, Dict
-from typing import List
 
 DATABRICKS_API_BASE: Final = "https://my.workspace.cloud.databricks.com/serving-endpoints"
 DATABRICKS_API_KEY: Final = "dapimykey"
@@ -1132,6 +1130,67 @@ def test_chunk_parser_surfaces_top_level_reasoning_delta(reasoning_key: str) -> 
     assert parsed.choices[0].delta.content is None
 
 
+def test_completion_accepts_tool_call_without_content(respx_mock: respx.MockRouter) -> None:
+    upstream: Final = respx_mock.post("https://example.databricks.test/serving-endpoints/chat/completions").mock(
+        return_value=httpx.Response(
+            status_code=200,
+            json={
+                "id": "chatcmpl-tool-call",
+                "object": "chat.completion",
+                "created": 1677652288,
+                "model": "my-custom-model",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "tool_calls": [
+                                {
+                                    "id": "call_weather",
+                                    "type": "function",
+                                    "function": {"name": "get_weather", "arguments": '{"city":"Paris"}'},
+                                }
+                            ],
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ],
+                "usage": {"prompt_tokens": 9, "completion_tokens": 5, "total_tokens": 14},
+            },
+        )
+    )
+
+    response: Final = litellm.completion(
+        model="databricks/my-custom-model",
+        messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+                },
+            }
+        ],
+        api_base="https://example.databricks.test/serving-endpoints",
+        api_key="fake-databricks-api-key",
+        num_retries=0,
+    )
+
+    assert upstream.call_count == 1
+    assert isinstance(response, ModelResponse)
+    assert response.choices[0].finish_reason == "tool_calls"
+    message: Final = response.choices[0].message
+    assert message.content is None
+    assert message.tool_calls is not None
+    assert len(message.tool_calls) == 1
+    tool_call: Final = message.tool_calls[0]
+    assert isinstance(tool_call, ChatCompletionMessageToolCall)
+    assert tool_call.id == "call_weather"
+    assert tool_call.function.name == "get_weather"
+    assert tool_call.function.arguments == '{"city":"Paris"}'
+
+
 def test_completion_merges_leading_system_and_developer_messages_for_chat_template_models(
     respx_mock: respx.MockRouter,
 ):
@@ -1143,7 +1202,9 @@ def test_completion_merges_leading_system_and_developer_messages_for_chat_templa
                 "object": "chat.completion",
                 "created": 1677652288,
                 "model": "my-custom-model",
-                "choices": [{"index": 0, "message": {"role": "assistant", "content": "Answer"}, "finish_reason": "stop"}],
+                "choices": [
+                    {"index": 0, "message": {"role": "assistant", "content": "Answer"}, "finish_reason": "stop"}
+                ],
                 "usage": {"prompt_tokens": 9, "completion_tokens": 1, "total_tokens": 10},
             },
         )
@@ -1179,7 +1240,9 @@ def test_completion_merges_system_messages_when_one_has_empty_content(respx_mock
                 "object": "chat.completion",
                 "created": 1677652288,
                 "model": "my-custom-model",
-                "choices": [{"index": 0, "message": {"role": "assistant", "content": "Answer"}, "finish_reason": "stop"}],
+                "choices": [
+                    {"index": 0, "message": {"role": "assistant", "content": "Answer"}, "finish_reason": "stop"}
+                ],
                 "usage": {"prompt_tokens": 9, "completion_tokens": 1, "total_tokens": 10},
             },
         )
