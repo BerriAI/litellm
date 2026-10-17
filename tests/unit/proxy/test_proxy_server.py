@@ -16,6 +16,7 @@ import litellm.proxy.proxy_server
 load_dotenv()
 import io
 import json
+from pathlib import Path
 
 # this file is to test litellm/proxy
 
@@ -3239,6 +3240,104 @@ async def test_update_config_success_callback_normalization(monkeypatch):
     assert "sQs" not in callbacks
     # Existing callback should still be present
     assert "langfuse" in callbacks
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("cache_params", "expected_type", "expected_host", "expected_port"),
+    (
+        ({"mode": "default_off"}, "redis", "127.0.0.1", 6384),
+        ({"mode": "default_off", "host": "127.0.0.2", "port": 6385}, "redis", "127.0.0.2", 6385),
+        ({"mode": "default_off", "url": "redis://127.0.0.3:6386/3"}, "redis", "127.0.0.3", 6386),
+        ({"mode": "default_off", "type": "redis", "host": "127.0.0.2", "port": 6385}, "redis", "127.0.0.2", 6385),
+        ({"mode": "default_off", "type": "local"}, "local", None, None),
+    ),
+)
+async def test_cache_options_preserve_resolved_backend_and_explicit_connection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    cache_params: dict[str, str | int],
+    expected_type: Literal["redis", "local"],
+    expected_host: str | None,
+    expected_port: int | None,
+) -> None:
+    from pytest_socket import socket_allow_hosts
+
+    from litellm.caching.redis_cache import RedisCache
+    from litellm.proxy import proxy_server
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    monkeypatch.setattr(proxy_server, "redis_usage_cache", None)
+    for shared_cache in (
+        proxy_server.spend_counter_cache,
+        proxy_server.cli_sso_session_cache,
+        proxy_server.litellm_config_cache,
+    ):
+        monkeypatch.setattr(shared_cache, "redis_cache", None)
+        monkeypatch.setattr(shared_cache, "default_redis_ttl", shared_cache.default_redis_ttl)
+
+    socket_allow_hosts([], allow_unix_socket=True)
+    monkeypatch.setenv("REDIS_HOST", "127.0.0.1")
+    monkeypatch.setenv("REDIS_PORT", "6384")
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    monkeypatch.delenv("REDIS_PASSWORD", raising=False)
+    config_path: Final = tmp_path / "cache.yaml"
+    config_path.write_text(
+        json.dumps({"model_list": [], "litellm_settings": {"cache": True, "cache_params": cache_params}})
+    )
+
+    await ProxyConfig().load_config(router=None, config_file_path=str(config_path))
+
+    cache: Final = litellm.cache
+    assert cache is not None
+    assert cache.type == expected_type
+    assert cache.mode == cache_params["mode"]
+    if expected_type == "redis":
+        assert isinstance(cache.cache, RedisCache)
+        connection: Final = cache.cache.redis_client.connection_pool.connection_kwargs
+        assert (connection["host"], connection["port"]) == (expected_host, expected_port)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("cache_params", "expected_type"),
+    (
+        ({}, "redis"),
+        ({"ttl": 60}, "redis"),
+        ({"mode": "default_off"}, "redis"),
+        ({"supported_call_types": ["acompletion"]}, "redis"),
+        ({"type": "local", "ttl": 60}, "local"),
+    ),
+)
+async def test_cache_without_redis_connection_requires_explicit_local_backend(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    cache_params: dict[str, str | int | list[str]],
+    expected_type: Literal["redis", "local"],
+) -> None:
+    from litellm.caching.in_memory_cache import InMemoryCache
+    from litellm.proxy import proxy_server
+
+    for name in ("REDIS_HOST", "REDIS_PORT", "REDIS_URL", "REDIS_PASSWORD"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+    monkeypatch.setattr(litellm, "cache", None)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", False)
+    config_path: Final = tmp_path / "cache.yaml"
+    config_path.write_text(
+        json.dumps({"model_list": [], "litellm_settings": {"cache": True, "cache_params": cache_params}})
+    )
+
+    if expected_type == "redis":
+        with pytest.raises(ValueError, match="Either 'host' or 'url' must be specified for redis"):
+            await proxy_server.ProxyConfig().load_config(router=None, config_file_path=str(config_path))
+        return
+
+    await proxy_server.ProxyConfig().load_config(router=None, config_file_path=str(config_path))
+    assert litellm.cache is not None
+    assert isinstance(litellm.cache.cache, InMemoryCache)
+    assert litellm.cache.type == expected_type
 
 
 @pytest.mark.parametrize(
