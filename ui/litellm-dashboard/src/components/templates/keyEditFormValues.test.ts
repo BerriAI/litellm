@@ -4,6 +4,36 @@ import { keyEditFormSchema, toKeyEditFormValues, toSubmittedValues } from "./key
 
 const parse = (values: Record<string, unknown>) => keyEditFormSchema.safeParse(values);
 
+describe("key model aliases", () => {
+  it("loads key aliases independently of team aliases", () => {
+    const keyData = {
+      aliases: { chat: "chat-dev" },
+      team_model_aliases: { chat: "team-chat" },
+    } as unknown as KeyResponse;
+    expect(toKeyEditFormValues(keyData).aliases).toEqual(keyData.aliases);
+  });
+
+  it("preserves aliases through schema validation", () => {
+    expect(keyEditFormSchema.parse({ aliases: { chat: "chat-dev" } })).toEqual({ aliases: { chat: "chat-dev" } });
+  });
+
+  it("rejects alias targets that are not model names", () => {
+    expect(parse({ aliases: { chat: 123 } }).success).toBe(false);
+  });
+
+  it("submits a changed mapping including an explicitly emptied one", () => {
+    const gates = { canViewPolicies: false, canViewPrompts: false, aliasesChanged: true };
+    expect(toSubmittedValues({ aliases: { chat: "chat-prod" } }, gates).aliases).toEqual({ chat: "chat-prod" });
+    expect(toSubmittedValues({ aliases: {} }, gates).aliases).toEqual({});
+  });
+
+  it("omits aliases when the field was not changed", () => {
+    expect(
+      toSubmittedValues({ aliases: { chat: "chat-dev" } }, { canViewPolicies: false, canViewPrompts: false }),
+    ).not.toHaveProperty("aliases");
+  });
+});
+
 describe("tpd_limit round trip", () => {
   const keyData = { token: "tok", models: [], rpm_limit: 5, tpd_limit: 250000 } as unknown as KeyResponse;
 

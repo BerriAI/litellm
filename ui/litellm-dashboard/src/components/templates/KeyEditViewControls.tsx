@@ -8,6 +8,7 @@ import { FormField } from "@/components/shared/form/FormField";
 import { toast } from "@/lib/toast";
 import AgentSelector from "../agent_management/AgentSelector";
 import RateLimitTypeFormItem from "../common_components/RateLimitTypeFormItem";
+import ModelAliasManager from "../common_components/ModelAliasManager";
 import NumericalInput from "../shared/numerical_input";
 import SkillSelector from "../skills/SkillSelector";
 import { moveTagsOutOfMetadataJson } from "./keyEditFieldNormalizers";
@@ -28,6 +29,28 @@ const KEY_TYPE_OPTIONS = [
   { value: "llm_api", label: "AI APIs", hint: "Can call only AI API routes (chat/completions, embeddings, etc.)" },
   { value: "management", label: "Management", hint: "Can call only management routes (user/team/key management)" },
 ];
+
+export const BUDGET_WINDOWS_HINT =
+  "Set multiple independent budget windows (e.g., hourly $10 AND monthly $200). Each window tracks spend separately and resets on its own schedule.";
+
+export const KeyModelAliasField = ({
+  control,
+  accessToken,
+}: {
+  control: Control<KeyEditFormValues>;
+  accessToken: string;
+}) => (
+  <FormField control={control} name="aliases" label="Model Aliases">
+    {({ value, onChange }) => (
+      <ModelAliasManager
+        accessToken={accessToken}
+        initialModelAliases={value}
+        onAliasUpdate={onChange}
+        showExampleConfig={false}
+      />
+    )}
+  </FormField>
+);
 
 export const KeyTypeSelect = ({
   id,
