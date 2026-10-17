@@ -374,9 +374,6 @@ async def gemini_proxy_route(
         raise Exception(
             "Required 'GEMINI_API_KEY'/'GOOGLE_API_KEY' in environment to make pass-through calls to Google AI Studio."
         )
-    # Merge query parameters, giving precedence to those in updated_url
-    merged_params: Final = dict(request.query_params)
-    merged_params.update({"key": gemini_api_key})
 
     ## check for streaming
     is_streaming_request = False
@@ -387,9 +384,12 @@ async def gemini_proxy_route(
     endpoint_func: Final = create_pass_through_route(
         endpoint=endpoint,
         target=str(updated_url),
+        custom_headers={"x-goog-api-key": gemini_api_key},
         custom_llm_provider="gemini",
         is_streaming_request=is_streaming_request,
-        query_params=merged_params,
+        query_params=dict(request.query_params),
+        # `key` is the LiteLLM virtual key; the provider key goes in the x-goog-api-key header.
+        excluded_query_params=("key",),
     )  # dynamically construct pass-through endpoint based on incoming path
     received_value: Final = await endpoint_func(
         request,
