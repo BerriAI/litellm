@@ -1414,6 +1414,7 @@ def _public_named_router(*team_rows: dict) -> MagicMock:
     router = MagicMock()
     router.get_model_list.return_value = list(team_rows)
     router.get_model_listing_info.return_value = None
+    router.routable_model_group.side_effect = lambda model_name: model_name
     return router
 
 

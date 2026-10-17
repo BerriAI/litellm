@@ -6,7 +6,7 @@ from typing import Final, Generic, TypeAlias, TypeVar
 
 from litellm.rust_bridge import catalog, runtime
 from litellm.rust_bridge.bindings import NativeBinding
-from litellm.rust_bridge.catalog import Route, RouteContext, RouteRule, Rules
+from litellm.rust_bridge.catalog import Route, RouteContext, Rules
 from litellm.rust_bridge.configuration import Decision
 from litellm.rust_bridge.configuration import decision as rollout_decision
 
@@ -35,7 +35,7 @@ class PublicDispatch(Generic[RequestT]):
 
     def _requires_projection(self, rules: Rules) -> bool:
         for rule in rules:
-            if not isinstance(rule, RouteRule) or rule.route is not self.route:
+            if rule.route is not self.route:
                 continue
             if rule.providers is not None or rule.models is not None:
                 if rollout_decision(rule.rollout) is not Decision.PYTHON:

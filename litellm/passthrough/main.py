@@ -6,10 +6,11 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import weakref
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Coroutine, Generator, Iterator
 from functools import partial
 from types import TracebackType
-from typing import Any, Final, cast
+from typing import Final, cast
 
 import httpx
 from httpx._types import CookieTypes, QueryParamTypes, RequestContent, RequestFiles
@@ -25,6 +26,23 @@ from litellm.utils import client
 
 base_llm_http_handler = BaseLLMHTTPHandler()
 from .utils import BasePassthroughUtils
+
+_provider_errors: Final[weakref.WeakSet[httpx.HTTPStatusError]] = weakref.WeakSet()
+
+
+def raise_for_provider_status(response: httpx.Response) -> None:
+    """``response.raise_for_status()`` for the provider's response to a passthrough request, recording the raised
+    error as the provider's own."""
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as error:
+        _provider_errors.add(error)
+        raise
+
+
+def is_provider_error(error: httpx.HTTPStatusError) -> bool:
+    """Whether ``error`` is the provider's own error response to a passthrough request."""
+    return error in _provider_errors
 
 
 async def _as_async_generator(iterable: AsyncIterator[bytes]) -> AsyncGenerator[bytes, bytes]:
@@ -104,7 +122,7 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[bytes, bytes]):
     def headers(self, value: httpx.Headers) -> None:
         self._headers = value
 
-    def __await__(self) -> Iterator[Any]:
+    def __await__(self) -> Generator[object, None, AsyncPassthroughStreamingResponse]:
         async def _init():
             if not self._initialized:
                 self._response = await self._response_coro
@@ -112,7 +130,7 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[bytes, bytes]):
                 self.status_code = self._response.status_code
                 self._initialized = True
                 try:
-                    self._response.raise_for_status()
+                    raise_for_provider_status(self._response)
                     self._iterator = _as_async_generator(self._response.aiter_bytes())
                 except Exception:  # noqa: BLE001 # Safe catch-all for cleanup logic
                     try:
@@ -626,7 +644,7 @@ async def _async_passthrough_request(
         else:
             response: Final = await response_result
             await response.aread()
-            response.raise_for_status()
+            raise_for_provider_status(response)
             return response
     else:
         # Fallback for sync-like behavior (shouldn't happen in async path)
