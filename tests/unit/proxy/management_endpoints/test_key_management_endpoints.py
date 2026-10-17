@@ -22799,8 +22799,13 @@ async def test_team_admin_creates_an_llm_api_key_owned_by_an_internal_user_teamm
 
 
 @pytest.mark.asyncio
-async def test_custom_key_policy_sees_the_routes_a_member_key_is_saved_with(monkeypatch):
-    monkeypatch.setattr(litellm, "default_key_generate_params", {"allowed_routes": ["/chat/completions"]})
+@pytest.mark.parametrize(
+    "default_key_generate_params",
+    [None, {"allowed_routes": ["/chat/completions"]}],
+    ids=["default_off", "default_without_llm_api_routes"],
+)
+async def test_custom_key_policy_sees_the_routes_a_member_key_is_saved_with(monkeypatch, default_key_generate_params):
+    monkeypatch.setattr(litellm, "default_key_generate_params", default_key_generate_params)
     received: list[CustomKeyPolicyRequest] = []
     generate_key: Final = AsyncMock(return_value={"key": "sk-member", "user_id": "member-1", "team_id": "team-1"})
 
