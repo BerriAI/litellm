@@ -627,6 +627,35 @@ def test_vertex_status_substring_without_status_code_does_not_map_to_403() -> No
     assert excinfo.value.status_code != 403
 
 
+def test_vertex_wrapped_500_with_403_body_maps_to_bad_request() -> None:
+    original_exception: Final = BaseLLMException(
+        status_code=500,
+        message='Error code: 403 - {"error": {"code": 403, "message": "Permission denied"}}',
+    )
+
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        exception_type(
+            model="gemini/gemini-2.5-flash",
+            original_exception=original_exception,
+            custom_llm_provider="vertex_ai",
+        )
+
+    assert excinfo.value.status_code == 403
+
+
+def test_vertex_wrapped_500_with_embedded_403_text_does_not_map_to_403() -> None:
+    original_exception: Final = BaseLLMException(status_code=500, message="scripted vertex rejection f4039")
+
+    with pytest.raises(litellm.InternalServerError) as excinfo:
+        exception_type(
+            model="gemini/gemini-2.5-flash",
+            original_exception=original_exception,
+            custom_llm_provider="vertex_ai",
+        )
+
+    assert excinfo.value.status_code == 500
+
+
 class TestGetBodyErrorCode:
     """Unit tests for _get_body_error_code helper."""
 
