@@ -6813,6 +6813,36 @@ def _autorouter_savings_for_payload(
         return None
 
 
+_CACHE_HIT_ZEROED_AMOUNTS: Final = MappingProxyType(
+    {
+        "cache_read_cost": CostBreakdown(cache_read_cost=0.0),
+        "cache_creation_cost": CostBreakdown(cache_creation_cost=0.0),
+        "reasoning_cost": CostBreakdown(reasoning_cost=0.0),
+        "original_cost": CostBreakdown(original_cost=0.0),
+        "discount_amount": CostBreakdown(discount_amount=0.0),
+        "margin_fixed_amount": CostBreakdown(margin_fixed_amount=0.0),
+        "margin_total_amount": CostBreakdown(margin_total_amount=0.0),
+    }
+)
+
+
+def _cache_hit_cost_breakdown(served: CostBreakdown | None) -> CostBreakdown:
+    """Every amount at 0, keeping the pricing basis and rates the served call recorded, which savings reports read."""
+    zero_costs: Final = CostBreakdown(input_cost=0.0, output_cost=0.0, total_cost=0.0, tool_usage_cost=0.0)
+    if served is None:
+        return zero_costs
+    zeroed_additional_costs: Final = (
+        CostBreakdown(additional_costs=dict.fromkeys(served["additional_costs"], 0.0))
+        if "additional_costs" in served
+        else CostBreakdown()
+    )
+    return functools.reduce(
+        lambda breakdown, zeroed: breakdown | zeroed,
+        (_CACHE_HIT_ZEROED_AMOUNTS[key] for key in served if key in _CACHE_HIT_ZEROED_AMOUNTS),
+        served | zero_costs | zeroed_additional_costs,
+    )
+
+
 def get_standard_logging_object_payload(
     kwargs: dict | None,
     init_response_obj: object,
@@ -6981,7 +7011,7 @@ def get_standard_logging_object_payload(
 
         request_cost_breakdown: Final = cost_breakdown_with_guardrail(
             (
-                CostBreakdown(input_cost=0.0, output_cost=0.0, total_cost=0.0, tool_usage_cost=0.0)
+                _cache_hit_cost_breakdown(logging_obj.cost_breakdown)
                 if cache_hit is True
                 else logging_obj.cost_breakdown
             ),

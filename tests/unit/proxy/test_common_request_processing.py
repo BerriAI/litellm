@@ -11068,27 +11068,35 @@ class TestResponseCostFromLoggingObjForCacheHits:
         ("hidden_params", "expected_header"),
         (({"cache_hit": True, "response_cost": 0.0}, "0.0"), ({"response_cost": 0.0}, None)),
     )
-    async def test_only_a_cache_hit_sends_a_zero_cost_header(self, hidden_params, expected_header):
-        response = MagicMock()
+    async def test_only_a_cache_hit_sends_a_zero_cost_header(
+        self, monkeypatch: pytest.MonkeyPatch, hidden_params: dict[str, object], expected_header: str | None
+    ):
+        response: Final = litellm.ModelResponse()
         response._hidden_params = hidden_params
-        request = MagicMock(spec=Request)
-        request.headers = {}
-        logging_obj = MagicMock()
-        logging_obj.litellm_call_id = "cache-hit-header"
-        proxy_logging_obj = MagicMock(spec=ProxyLogging)
-        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+        fastapi_response: Final = Response()
 
-        headers = await ProxyBaseLLMRequestProcessing.build_litellm_proxy_success_headers_from_llm_response(
-            response=response,
-            request_data={"model": "gpt-5.4-mini"},
-            request=request,
-            user_api_key_dict=MagicMock(tpm_limit=None, rpm_limit=None, max_budget=None, allowed_model_region=None),
-            logging_obj=logging_obj,
-            version="1.0.0",
-            proxy_logging_obj=proxy_logging_obj,
+        async def served() -> litellm.ModelResponse:
+            return response
+
+        async def route_request(**_: object):
+            return served()
+
+        monkeypatch.setattr(litellm.proxy.common_request_processing, "route_request", route_request)
+
+        await ProxyBaseLLMRequestProcessing(
+            data={"model": "gpt-5.4-mini", "litellm_logging_obj": self._logging_obj()}
+        ).base_process_llm_request(
+            request=Request({"type": "http", "method": "POST", "headers": []}),
+            fastapi_response=fastapi_response,
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+            route_type="acompletion",
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+            general_settings={},
+            proxy_config=MagicMock(spec=ProxyConfig),
+            skip_pre_call_logic=True,
         )
 
-        assert headers.get("x-litellm-response-cost") == expected_header
+        assert fastapi_response.headers.get("x-litellm-response-cost") == expected_header
 
     def test_a_fresh_zero_cost_v1_messages_call_still_sends_no_cost_header(self):
         logging_obj = self._logging_obj()

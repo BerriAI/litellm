@@ -7415,8 +7415,57 @@ def test_cache_hit_payload_keeps_zero_components_beside_guardrail_cost(logging_o
         "input_cost": 0.0,
         "output_cost": 0.0,
         "tool_usage_cost": 0.0,
+        "service_tier": None,
+        "data_residency": None,
+        "vertex_location": None,
         "guardrail_cost": pytest.approx(0.0003),
         "total_cost": pytest.approx(0.0003),
+    }
+
+
+def test_cache_hit_payload_keeps_the_served_pricing_basis_with_every_amount_at_zero(logging_obj):
+    logging_obj.set_cost_breakdown(
+        input_cost=0.00003,
+        output_cost=0.0000129,
+        total_cost=0.0000474,
+        cost_for_built_in_tools_cost_usd_dollar=0.0000011,
+        additional_costs={"azure_model_router_flat_cost": 0.00014},
+        original_cost=0.00005,
+        discount_percent=0.1,
+        discount_amount=0.000005,
+        margin_percent=0.05,
+        margin_fixed_amount=0.000001,
+        margin_total_amount=0.0000035,
+        cache_read_cost=0.000002,
+        cache_creation_cost=0.000003,
+        reasoning_cost=0.000004,
+        service_tier="priority",
+        data_residency="eu",
+        vertex_location="europe-west4",
+    )
+    kwargs: Final = {"litellm_call_id": "hit-basis-call", "model": "gpt-4o", "messages": [], "cache_hit": True}
+
+    payload: Final = _build_success_payload(logging_obj, kwargs)
+
+    assert payload is not None
+    assert payload["cost_breakdown"] == {
+        "input_cost": 0.0,
+        "output_cost": 0.0,
+        "total_cost": 0.0,
+        "tool_usage_cost": 0.0,
+        "additional_costs": {"azure_model_router_flat_cost": 0.0},
+        "original_cost": 0.0,
+        "discount_percent": 0.1,
+        "discount_amount": 0.0,
+        "margin_percent": 0.05,
+        "margin_fixed_amount": 0.0,
+        "margin_total_amount": 0.0,
+        "cache_read_cost": 0.0,
+        "cache_creation_cost": 0.0,
+        "reasoning_cost": 0.0,
+        "service_tier": "priority",
+        "data_residency": "eu",
+        "vertex_location": "europe-west4",
     }
 
 
@@ -10153,7 +10202,11 @@ def test_cache_hit_payload_reports_zero_cost_though_the_call_priced_the_response
         assert payload is not None
         assert payload["response_cost"] == 0.0
         assert payload["hidden_params"]["response_cost"] == 0.0
-        assert payload["cost_breakdown"] == {"input_cost": 0.0, "output_cost": 0.0, "total_cost": 0.0, "tool_usage_cost": 0.0}
+        hit_breakdown: Final = payload["cost_breakdown"]
+        basis_and_rates: Final = ("service_tier", "data_residency", "vertex_location", "discount_percent", "margin_percent")
+        assert hit_breakdown is not None and hit_breakdown.keys() == logging_obj.cost_breakdown.keys()
+        assert all(hit_breakdown[key] == logging_obj.cost_breakdown[key] for key in basis_and_rates if key in hit_breakdown)
+        assert all(value == 0.0 for key, value in hit_breakdown.items() if key not in basis_and_rates)
         assert payload["saved_cache_cost"] == header_price
     finally:
         litellm.model_cost.pop(deployment_id, None)
