@@ -44,6 +44,8 @@ pytestmark = pytest.mark.timeout(2 * graceful_stop_seconds() + 240)
 
 DATABRICKS_MODEL: Final = "safeguards-databricks"
 UNITY_CATALOG_MODEL: Final = "safeguards-databricks-unity-catalog"
+UNITY_CATALOG_ROOT_MODEL: Final = "safeguards-databricks-unity-catalog-root"
+SDK_MODEL: Final = "safeguards-databricks-sdk"
 DROP_PARAMS_MODEL: Final = "safeguards-databricks-drop-params"
 ENVIRONMENT_MODEL: Final = "safeguards-databricks-environment"
 GPT_MODEL: Final = "safeguards-databricks-gpt"
@@ -54,12 +56,15 @@ EDENAI_MODEL: Final = "safeguards-edenai"
 
 SERVING_TARGET: Final = "/dbx/serving-endpoints/anthropic/v1/messages"
 UNITY_CATALOG_TARGET: Final = "/dbxuc/ai-gateway/anthropic/v1/messages"
+UNITY_CATALOG_ROOT_TARGET: Final = "/ai-gateway/anthropic/v1/messages"
+SDK_TARGET: Final = "/dbxsdk/serving-endpoints/anthropic/v1/messages"
 ENVIRONMENT_TARGET: Final = "/dbxenv/serving-endpoints/anthropic/v1/messages"
 SERVING_CHAT_TARGET: Final = "/dbx/serving-endpoints/chat/completions"
 GATEWAY_CHAT_TARGET: Final = "/gw/dbx/chat/completions"
 AZURE_TARGET: Final = "/azure/anthropic/v1/messages"
 DATABRICKS_KEY: Final = "synthetic-databricks-key"
 ENVIRONMENT_KEY: Final = "synthetic-databricks-environment-key"
+SDK_TOKEN: Final = "synthetic-databricks-sdk-token"
 PARTNER_USER_AGENT: Final = "partnerapp/2.0"
 INVOCATION_METRICS: Final = "amazon-bedrock-invocationMetrics"
 BILLING_BLOCK: Final[Mapping[str, JsonValue]] = {
@@ -73,6 +78,16 @@ def environment(wire_url: str) -> Mapping[str, str]:
         "DATABRICKS_API_BASE": f"{wire_url}/dbxenv/serving-endpoints",
         "DATABRICKS_API_KEY": ENVIRONMENT_KEY,
         "DATABRICKS_USER_AGENT": PARTNER_USER_AGENT,
+        "LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS": "True",
+    }
+
+
+def sdk_environment(wire_url: str) -> Mapping[str, str]:
+    return {
+        "DATABRICKS_HOST": f"{wire_url}/dbxsdk",
+        "DATABRICKS_TOKEN": SDK_TOKEN,
+        "DATABRICKS_AUTH_TYPE": "pat",
+        "DATABRICKS_CONFIG_FILE": "/dev/null",
         "LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS": "True",
     }
 
@@ -92,6 +107,7 @@ def extra_models(wire_url: str) -> Sequence[Mapping[str, JsonValue]]:
             "system.ai.claude-sonnet-4-6",
             f"{wire_url}/dbxuc/serving-endpoints/anthropic/v1/messages",
         ),
+        databricks(UNITY_CATALOG_ROOT_MODEL, "system.ai.claude-sonnet-4-6", wire_url),
         databricks(
             DROP_PARAMS_MODEL, "databricks-claude-opus-4-6", f"{wire_url}/dbx/serving-endpoints", drop_params=True
         ),
@@ -103,10 +119,38 @@ def extra_models(wire_url: str) -> Sequence[Mapping[str, JsonValue]]:
     )
 
 
+def sdk_models(wire_url: str) -> Sequence[Mapping[str, JsonValue]]:
+    return (
+        {
+            "model_name": SDK_MODEL,
+            "litellm_params": {
+                "model": "databricks/databricks-claude-haiku-4-5",
+                "api_base": f"{wire_url}/dbxsdk/serving-endpoints",
+            },
+        },
+    )
+
+
 @pytest.fixture(scope="module")
 def databricks_rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
     with safeguards_rig(
         tmp_path_factory.mktemp("databricks-native-messages"), environment=environment, extra_models=extra_models
+    ) as rig:
+        yield rig
+
+
+@pytest.fixture(scope="module")
+def sdk_rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
+    with safeguards_rig(
+        tmp_path_factory.mktemp("databricks-sdk-auth"),
+        environment=sdk_environment,
+        remove_environment=(
+            "DATABRICKS_API_KEY",
+            "DATABRICKS_API_BASE",
+            "DATABRICKS_CLIENT_ID",
+            "DATABRICKS_CLIENT_SECRET",
+        ),
+        extra_models=sdk_models,
     ) as rig:
         yield rig
 
@@ -205,16 +249,21 @@ def test_claude_stream_drops_invocation_metrics_and_keeps_every_other_frame(
     assert only_backend_call(databricks_rig, request_nonce).target == SERVING_TARGET
 
 
-def test_unity_catalog_claude_name_with_a_full_messages_url_reaches_the_ai_gateway_route(databricks_rig: Rig) -> None:
+@pytest.mark.parametrize(
+    ("model", "target"),
+    ((UNITY_CATALOG_MODEL, UNITY_CATALOG_TARGET), (UNITY_CATALOG_ROOT_MODEL, UNITY_CATALOG_ROOT_TARGET)),
+    ids=("full_messages_url", "workspace_root"),
+)
+def test_unity_catalog_claude_name_reaches_the_ai_gateway_route(databricks_rig: Rig, model: str, target: str) -> None:
     request_nonce: Final = nonce()
     identity: Final = tool_id(request_nonce)
     message: Final = scripted_message(identity, safeguard_results=list(workspace_verdict(identity)))
     databricks_rig.register(request_nonce, native_backend(message, stream=False))
-    request: Final = auto_mode_body(UNITY_CATALOG_MODEL, request_nonce)
+    request: Final = auto_mode_body(model, request_nonce)
     body: Final = json_body(databricks_rig.post(request))
     assert body["safeguard_results"] == workspace_verdict(identity), body
     sent: Final = only_backend_call(databricks_rig, request_nonce)
-    assert sent.target == UNITY_CATALOG_TARGET, sent.target
+    assert sent.target == target, sent.target
     assert request_json(sent)["safeguards"] == request["safeguards"], sent.body
 
 
@@ -229,6 +278,26 @@ def test_environment_only_deployment_reaches_the_native_route_with_the_environme
     assert sent.target == ENVIRONMENT_TARGET, sent.target
     assert sent.headers.get("authorization") == f"Bearer {ENVIRONMENT_KEY}", sent.headers
     assert sent.headers.get("user-agent", "").startswith("partnerapp_litellm/"), sent.headers
+
+
+def test_client_anthropic_headers_leave_sdk_auth_in_charge_of_the_native_route(sdk_rig: Rig) -> None:
+    request_nonce: Final = nonce()
+    identity: Final = tool_id(request_nonce)
+    sdk_rig.register(
+        request_nonce, native_backend(scripted_message(identity, model="databricks-claude-haiku-4-5"), stream=False)
+    )
+    json_body(
+        sdk_rig.post(
+            auto_mode_body(SDK_MODEL, request_nonce),
+            beta="context-1m-2025-08-07,fast-mode-2026-02-01",
+            headers={"anthropic-version": "2023-06-01"},
+        )
+    )
+    sent: Final = only_backend_call(sdk_rig, request_nonce)
+    assert sent.target == SDK_TARGET, sent.target
+    assert sent.headers.get("authorization") == f"Bearer {SDK_TOKEN}", sent.headers
+    assert beta_values(sent) == {"context-1m-2025-08-07", DANGEROUS_TOOL_USE_BETA}, sent.headers
+    assert sent.headers.get("anthropic-version") == "2023-06-01", sent.headers
 
 
 @pytest.mark.parametrize(
