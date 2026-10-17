@@ -288,22 +288,28 @@ def render_model_deprecation_email(
     return subject, body + EMAIL_FOOTER
 
 
+_ENTERPRISE_BASE_EMAIL_LOGGER: Final = (
+    "litellm_enterprise.enterprise_callbacks.send_emails.base_email",
+    "BaseEmailLogger",
+)
+_ENTERPRISE_SMTP_EMAIL_LOGGER: Final = (
+    "litellm_enterprise.enterprise_callbacks.send_emails.smtp_email",
+    "SMTPEmailLogger",
+)
+
+
+def _class_identity(cls: type) -> tuple[str, str]:
+    return (cls.__module__, cls.__qualname__)
+
+
 def _is_noop_email_logger(email_logger: object) -> bool:
     """The proxy hands out the bare enterprise base logger when no email provider is configured"""
-    try:
-        from litellm_enterprise.enterprise_callbacks.send_emails.base_email import BaseEmailLogger
-    except ImportError:
-        return False
-    return type(email_logger) is BaseEmailLogger
+    return _class_identity(type(email_logger)) == _ENTERPRISE_BASE_EMAIL_LOGGER
 
 
 def _is_smtp_email_logger(email_logger: object) -> bool:
     """The enterprise SMTP logger fires one task per recipient without awaiting it, so its failures are invisible"""
-    try:
-        from litellm_enterprise.enterprise_callbacks.send_emails.smtp_email import SMTPEmailLogger
-    except ImportError:
-        return False
-    return isinstance(email_logger, SMTPEmailLogger)
+    return _ENTERPRISE_SMTP_EMAIL_LOGGER in map(_class_identity, type(email_logger).__mro__)
 
 
 def make_email_deliverer(
