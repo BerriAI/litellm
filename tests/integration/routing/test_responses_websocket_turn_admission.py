@@ -1,5 +1,4 @@
 import asyncio
-import contextlib
 import hashlib
 import os
 import uuid
@@ -257,12 +256,6 @@ async def _until(read: Callable[[], float], satisfied: Callable[[float], bool]) 
     return await asyncio.to_thread(eventually, read, satisfied, 15)
 
 
-async def _close_code(connection: websockets.ClientConnection) -> int | None:
-    with contextlib.suppress(TimeoutError):
-        await asyncio.wait_for(connection.wait_closed(), timeout=20)
-    return connection.close_code
-
-
 def _failure_rows(key: str) -> list[dict[str, JsonValue]]:
     rows: Final = eventually(
         lambda: read_rows(SPEND_ROWS_FOR_KEY, (_key_hash(key),)),
@@ -304,7 +297,7 @@ def test_a_turn_past_the_deployment_budget_is_refused_on_the_open_socket_and_log
 
 
 @pytest.mark.parametrize("relay", ("native", "managed"))
-def test_a_turn_whose_admission_check_fails_gets_a_500_frame_and_ends_the_socket_as_its_failure(
+def test_a_turn_whose_admission_check_fails_gets_a_500_frame_and_the_socket_serves_the_next_turn(
     faulting: Gateway, cert: tuple[Path, Path], relay: str
 ) -> None:
     with responses_peer(cert) as peer, faulting.scenario() as scenario:
@@ -312,26 +305,27 @@ def test_a_turn_whose_admission_check_fails_gets_a_500_frame_and_ends_the_socket
         key: Final = scenario.key(models=[deployment.name])
         fault: Final = f"turn check unavailable {uuid.uuid4().hex}"
 
-        def fail_the_turn_check() -> None:
+        def set_the_turn_check_fault(value: str) -> None:
             faulting.request(
                 "PATCH",
                 f"/model/{deployment.identity}/update",
-                {"model_info": {"id": deployment.identity, TURN_CHECK_FAULT: fault}},
+                {"model_info": {"id": deployment.identity, TURN_CHECK_FAULT: value}},
             ).raise_for_status()
             eventually(
-                lambda: _configured(faulting, deployment, "model_info").get(TURN_CHECK_FAULT),
-                lambda configured: configured == fault,
+                lambda: _configured(faulting, deployment, "model_info").get(TURN_CHECK_FAULT) or "",
+                lambda configured: configured == value,
                 seconds=15,
             )
 
-        async def session() -> tuple[tuple[dict[str, JsonValue], ...], tuple[dict[str, JsonValue], ...], int | None]:
+        async def session() -> tuple[tuple[dict[str, JsonValue], ...], ...]:
             async with _socket(faulting, key, deployment.name) as connection:
                 first: Final = await _say(connection, deployment.name)
-                await asyncio.to_thread(fail_the_turn_check)
+                await asyncio.to_thread(set_the_turn_check_fault, fault)
                 second: Final = await _say(connection, deployment.name)
-                return first, second, await _close_code(connection)
+                await asyncio.to_thread(set_the_turn_check_fault, "")
+                return first, second, await _say(connection, deployment.name)
 
-        first, second, close_code = asyncio.run(session())
+        first, second, third = asyncio.run(session())
 
         completed(first)
         assert [event.get("type") for event in second] == ["error"], second
@@ -339,8 +333,8 @@ def test_a_turn_whose_admission_check_fails_gets_a_500_frame_and_ends_the_socket
         error: Final = object_value(second[0]["error"])
         assert error["type"] == "server_error", second
         assert fault in string_value(error["message"]), second
-        assert close_code == 1011, close_code
-        assert deployment.forwarded_turns() == 1
+        completed(third)
+        assert deployment.forwarded_turns() == 2
         failures: Final = _failure_rows(key)
         assert len(failures) == 1, failures
         assert failures[0]["model_group"] == deployment.name, failures

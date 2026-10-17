@@ -178,6 +178,7 @@ async def test_async_post_call_failure_hook_logs_the_routed_model_group_on_the_f
         ({"metadata": {}, "litellm_metadata": {"tags": ["ws-tag"]}}, ["ws-tag"]),
         ({"metadata": {"tags": ["caller-tag"]}, "litellm_metadata": {"tags": ["routed-tag"]}}, ["caller-tag"]),
         ({"metadata": {}, "litellm_metadata": {"tags": "not-a-list"}}, []),
+        ({"metadata": {}, "litellm_metadata": {"tags": ["ws-tag", 1, {"a": 1}]}}, []),
     ],
 )
 async def test_async_post_call_failure_hook_logs_the_routed_tags_on_the_failure_row(

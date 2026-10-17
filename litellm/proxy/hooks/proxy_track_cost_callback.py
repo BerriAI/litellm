@@ -5,6 +5,8 @@ from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol, cast
 
+from pydantic import TypeAdapter, ValidationError
+
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.batches.batch_utils import batch_cost_is_final
@@ -106,7 +108,21 @@ def _str_keyed_fields(value: object) -> Mapping[str, object]:
     return value if is_str_keyed_mapping(value) else {}
 
 
-_ROUTED_METADATA_FIELD_TYPES: Final = MappingProxyType({"model_group": str, "tags": list})
+def _is_model_group(value: object) -> bool:
+    return isinstance(value, str) and bool(value)
+
+
+_TAG_LIST: Final = TypeAdapter(list[str])
+
+
+def _is_tag_list(value: object) -> bool:
+    try:
+        return bool(_TAG_LIST.validate_python(value, strict=True))
+    except ValidationError:
+        return False
+
+
+_ROUTED_METADATA_FIELD_CHECKS: Final = MappingProxyType({"model_group": _is_model_group, "tags": _is_tag_list})
 
 
 def _routed_metadata_fallback(request_data: Mapping[str, object]) -> Mapping[str, object]:
@@ -114,10 +130,8 @@ def _routed_metadata_fallback(request_data: Mapping[str, object]) -> Mapping[str
     routed_metadata: Final = _str_keyed_fields(request_data.get("litellm_metadata"))
     return {
         field: routed_metadata[field]
-        for field, field_type in _ROUTED_METADATA_FIELD_TYPES.items()
-        if not caller_metadata.get(field)
-        and isinstance(routed_metadata.get(field), field_type)
-        and routed_metadata[field]
+        for field, is_valid in _ROUTED_METADATA_FIELD_CHECKS.items()
+        if not caller_metadata.get(field) and is_valid(routed_metadata.get(field))
     }
 
 

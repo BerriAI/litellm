@@ -1932,16 +1932,17 @@ def _turn_admission_error_frame(failure: Exception) -> str:
     return json.dumps({"type": "error", "status": 500, "error": {"type": "server_error", "message": str(failure)}})
 
 
-async def _answer_rejected_turn(websocket: ResponsesClientWebSocket, rejection: Exception) -> None:
+def _turn_rejection_frame(rejection: Exception) -> str:
     match rejection:
         case RateLimitError():
-            with contextlib.suppress(Exception):
-                await websocket.send_text(_turn_refusal_frame(rejection))
+            return _turn_refusal_frame(rejection)
         case _:
-            with contextlib.suppress(Exception):
-                await websocket.send_text(_turn_admission_error_frame(rejection))
-            with contextlib.suppress(Exception):
-                await websocket.close(code=1011, reason="Internal server error")
+            return _turn_admission_error_frame(rejection)
+
+
+async def _answer_rejected_turn(websocket: ResponsesClientWebSocket, rejection: Exception) -> None:
+    with contextlib.suppress(Exception):
+        await websocket.send_text(_turn_rejection_frame(rejection))
 
 
 RESPONSES_WS_LOGGED_EVENT_TYPES: Final = [

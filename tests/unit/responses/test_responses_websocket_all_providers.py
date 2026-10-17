@@ -7,6 +7,7 @@ Tests that:
 3. Providers without native websocket support use ManagedResponsesWebSocketHandler
 """
 
+import asyncio
 import json
 from collections.abc import Mapping
 from typing import Final
@@ -1381,7 +1382,7 @@ class _ClientSocket:
 def _admission_crashing_the_next_turn():
     from unittest.mock import AsyncMock
 
-    return AsyncMock(side_effect=ValueError("budget store unreachable"))
+    return AsyncMock(side_effect=[ValueError("custom check failed"), None])
 
 
 def _errors(websocket: _ClientSocket) -> list[tuple[object, object]]:
@@ -1509,14 +1510,14 @@ class TestWebSocketTurnAdmission:
 
 
     @pytest.mark.asyncio
-    async def test_native_relay_ends_the_socket_with_a_500_when_turn_admission_crashes(self):
+    async def test_native_relay_answers_a_crashed_turn_check_with_a_500_and_keeps_serving(self):
         from unittest.mock import AsyncMock
 
         first, second, third = _turn_frames()
         backend_ws: Final = MagicMock()
         backend_ws.send = AsyncMock()
         backend_ws.close = AsyncMock()
-        backend_ws.recv = AsyncMock(side_effect=Exception("stop"))
+        backend_ws.recv = AsyncMock(side_effect=asyncio.Event().wait)
         websocket: Final = _ClientSocket(second, third)
         handler: Final = _make_streaming(
             websocket=websocket,
@@ -1529,12 +1530,15 @@ class TestWebSocketTurnAdmission:
         failure: Final = await handler.bidirectional_forward()
 
         assert isinstance(failure, ValueError)
-        assert [json.loads(call.args[0]) for call in backend_ws.send.await_args_list] == [json.loads(first)]
-        assert _errors(websocket) == [(500, {"type": "server_error", "message": "budget store unreachable"})]
-        assert websocket.close_code == 1011
+        assert [json.loads(call.args[0]) for call in backend_ws.send.await_args_list] == [
+            json.loads(first),
+            json.loads(third),
+        ]
+        assert _errors(websocket) == [(500, {"type": "server_error", "message": "custom check failed"})]
+        assert websocket.close_code is None
 
     @pytest.mark.asyncio
-    async def test_managed_relay_ends_the_socket_with_a_500_when_turn_admission_crashes(
+    async def test_managed_relay_answers_a_crashed_turn_check_with_a_500_and_keeps_serving(
         self, monkeypatch: pytest.MonkeyPatch
     ):
         import litellm
@@ -1574,9 +1578,9 @@ class TestWebSocketTurnAdmission:
         failure: Final = await handler.run()
 
         assert isinstance(failure, ValueError)
-        assert answered == ["one"]
-        assert _errors(websocket) == [(500, {"type": "server_error", "message": "budget store unreachable"})]
-        assert websocket.close_code == 1011
+        assert answered == ["one", "three"]
+        assert _errors(websocket) == [(500, {"type": "server_error", "message": "custom check failed"})]
+        assert websocket.close_code is None
 
 def _deployment_defaults():
     from types import MappingProxyType
