@@ -247,7 +247,7 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
   }, [visible, accessToken]);
 
   const loadAvailableModels = async () => {
-    if (!accessToken) return;
+    if (!accessToken || !userId) return;
     try {
       const response = await modelAvailableCall(accessToken, userId, userRole);
       if (response?.data) {
