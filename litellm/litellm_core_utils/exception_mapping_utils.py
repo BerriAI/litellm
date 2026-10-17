@@ -2413,6 +2413,18 @@ def _map_exception_by_status(
             )
 
 
+_NO_LITELLM_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def with_deployment_api_base(litellm_params: object) -> Mapping[str, object]:
+    params: Final = as_str_mapping(litellm_params) or _NO_LITELLM_PARAMS
+    metadata: Final = as_str_mapping(params.get("metadata"))
+    deployment_api_base: Final = None if metadata is None else metadata.get("api_base")
+    if not isinstance(deployment_api_base, str) or not deployment_api_base:
+        return params
+    return MappingProxyType({**params, "api_base": deployment_api_base})
+
+
 def _is_guardrail_block(original_exception: Exception) -> bool:
     from litellm.integrations.custom_guardrail import is_guardrail_intervention
 

@@ -47,7 +47,7 @@ from litellm.types.utils import GenericStreamingChunk as GChunk
 
 from ..exceptions import OpenAIError
 from .core_helpers import map_finish_reason, process_response_headers
-from .exception_mapping_utils import exception_type
+from .exception_mapping_utils import exception_type, with_deployment_api_base
 from .llm_response_utils.get_api_base import get_api_base
 from .rules import Rules
 
@@ -2371,8 +2371,7 @@ class CustomStreamWrapper:
             model=self.model,
             custom_llm_provider=self.custom_llm_provider,
             original_exception=original_exception,
-            completion_kwargs={"messages": self.messages},
-            extra_kwargs=self.logging_obj.model_call_details.get("litellm_params", {}),
+            extra_kwargs=with_deployment_api_base(self.logging_obj.model_call_details.get("litellm_params")),
         )
 
     def _handle_stream_fallback_error(self, e: Exception) -> "NoReturn":

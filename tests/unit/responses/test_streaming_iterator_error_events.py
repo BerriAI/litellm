@@ -19,6 +19,7 @@ Also covers: ErrorEventError.param must accept dict payloads without raising a
 Pydantic ValidationError (previously typed as Optional[str]).
 """
 
+import asyncio
 import json
 from datetime import datetime
 from importlib import import_module
@@ -38,8 +39,8 @@ from litellm.responses.streaming_iterator import (
     _ERROR_CODE_HTTP_STATUS,
     BaseResponsesAPIStreamingIterator,
     ResponsesAPIStreamingIterator,
+    ResponsesWebSocketStreaming,
     SyncResponsesAPIStreamingIterator,
-    _ResponsesWsTurn,
     _status_code_for_error_fields,
 )
 from litellm.utils import ProviderConfigManager
@@ -664,6 +665,7 @@ def test_openai_top_level_error_event_keeps_the_provider_code_and_message(
 
 
 _AZURE_RESPONSES_API_BASE: Final = "https://responses-mid-stream.openai.azure.com"
+_AZURE_RESPONSES_REQUEST_URL: Final = f"{_AZURE_RESPONSES_API_BASE}/openai/responses?api-version=2025-04-01-preview"
 _AZURE_RESPONSES_FAILED_EVENT: Final = {
     "type": "response.failed",
     "sequence_number": 2,
@@ -679,7 +681,7 @@ _AZURE_RESPONSES_FAILED_EVENT: Final = {
 }
 
 
-def _azure_responses_logging_obj() -> LiteLLMLoggingObj:
+def _azure_responses_logging_obj(logged_api_base: str, routed_api_base: str | None) -> LiteLLMLoggingObj:
     logging_obj: Final = LiteLLMLoggingObj(
         model="gpt-5.4-mini",
         messages=[],
@@ -693,9 +695,13 @@ def _azure_responses_logging_obj() -> LiteLLMLoggingObj:
         model="gpt-5.4-mini",
         optional_params={},
         litellm_params=get_litellm_params(
-            api_base=_AZURE_RESPONSES_API_BASE,
+            api_base=logged_api_base,
             custom_llm_provider="azure",
-            metadata={"model_group": "gpt-5.4-mini-azure", "deployment": "azure/gpt-5.4-mini"},
+            metadata={
+                "model_group": "gpt-5.4-mini-azure",
+                "deployment": "azure/gpt-5.4-mini",
+                "api_base": routed_api_base,
+            },
         ),
     )
     return logging_obj
@@ -727,7 +733,7 @@ async def test_response_failed_after_output_reports_the_deployment_it_was_sent_t
         responses_api_provider_config=ProviderConfigManager.get_provider_responses_api_config(
             provider="azure", model="gpt-5.4-mini"
         ),
-        logging_obj=_azure_responses_logging_obj(),
+        logging_obj=_azure_responses_logging_obj(_AZURE_RESPONSES_REQUEST_URL, _AZURE_RESPONSES_API_BASE),
         custom_llm_provider="azure",
     )
     stream: Final = aiter(iterator)
@@ -739,10 +745,46 @@ async def test_response_failed_after_output_reports_the_deployment_it_was_sent_t
     _assert_names_the_azure_deployment(exc_info.value.original_exception)
 
 
-def test_responses_websocket_turn_failure_reports_the_deployment_it_was_sent_to():
-    turn: Final = _ResponsesWsTurn(logging_obj=_azure_responses_logging_obj(), events=(_AZURE_RESPONSES_FAILED_EVENT,))
+class _ScriptedAzureSocket:
+    def __init__(self, events: tuple[str, ...]) -> None:
+        self._events = iter(events)
+        self._drained = asyncio.Event()
 
-    failure: Final = turn.failure("gpt-5.4-mini", "azure")
+    async def recv(self, decode: bool = False) -> str:
+        event: Final = next(self._events, None)
+        if event is None:
+            self._drained.set()
+            raise ConnectionError("backend closed")
+        return event
+
+    async def send(self, message: str) -> None:
+        return None
+
+    async def close(self) -> None:
+        return None
+
+    async def send_text(self, data: str) -> None:
+        return None
+
+    async def receive_text(self) -> str:
+        await self._drained.wait()
+        raise ConnectionError("client closed")
+
+
+@pytest.mark.asyncio
+async def test_responses_websocket_turn_failure_reports_the_deployment_it_was_sent_to():
+    connection_logging_obj: Final = _azure_responses_logging_obj(_AZURE_RESPONSES_API_BASE, None)
+    connection_logging_obj.pre_call(input=None, api_key="", additional_args={"api_base": _AZURE_RESPONSES_API_BASE})
+    socket: Final = _ScriptedAzureSocket((json.dumps(_AZURE_RESPONSES_FAILED_EVENT),))
+    streaming: Final = ResponsesWebSocketStreaming(
+        websocket=socket,
+        backend_ws=socket,
+        logging_obj=connection_logging_obj,
+        authorized_model="gpt-5.4-mini",
+        custom_llm_provider="azure",
+    )
+
+    failure: Final = await streaming.bidirectional_forward()
 
     assert failure is not None
     _assert_names_the_azure_deployment(failure)

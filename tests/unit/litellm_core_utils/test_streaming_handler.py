@@ -1386,10 +1386,13 @@ async def test_async_streaming_read_timeout_triggers_midstream_fallback(
 
 
 _AZURE_DEPLOYMENT_API_BASE: Final = "https://mid-stream-debug.openai.azure.com"
+_AZURE_DEPLOYMENT_REQUEST_URL: Final = (
+    f"{_AZURE_DEPLOYMENT_API_BASE}/openai/deployments/gpt-5.4-mini/chat/completions?api-version=2025-04-01-preview"
+)
 _MID_STREAM_START_TIME: Final = 1_790_000_000.0
 
 
-def _azure_deployment_logging_obj(api_base: str | None) -> Logging:
+def _azure_deployment_logging_obj(logged_api_base: str | None, routed_api_base: str | None) -> Logging:
     logging_obj: Final = Logging(
         model="gpt-5.4-mini",
         messages=[{"role": "user", "content": "Count from 1 to 40"}],
@@ -1403,9 +1406,13 @@ def _azure_deployment_logging_obj(api_base: str | None) -> Logging:
         model="gpt-5.4-mini",
         optional_params={},
         litellm_params=get_litellm_params(
-            api_base=api_base,
+            api_base=logged_api_base,
             custom_llm_provider="azure",
-            metadata={"model_group": "gpt-5.4-mini-azure", "deployment": "azure/gpt-5.4-mini"},
+            metadata={
+                "model_group": "gpt-5.4-mini-azure",
+                "deployment": "azure/gpt-5.4-mini",
+                "api_base": routed_api_base,
+            },
         ),
     )
     return logging_obj
@@ -1436,7 +1443,8 @@ async def _drain(wrapper: CustomStreamWrapper, sync_mode: bool) -> None:
 
 
 async def _mid_stream_debug_info(
-    api_base: str | None,
+    logged_api_base: str | None,
+    routed_api_base: str | None,
     failure: Literal["transport_error", "unparseable_chunk"],
     sync_mode: bool,
 ) -> str:
@@ -1444,7 +1452,7 @@ async def _mid_stream_debug_info(
     wrapper: Final = CustomStreamWrapper(
         completion_stream=chunks if sync_mode else _as_async(chunks),
         model="gpt-5.4-mini-2026-03-17",
-        logging_obj=_azure_deployment_logging_obj(api_base=api_base),
+        logging_obj=_azure_deployment_logging_obj(logged_api_base, routed_api_base),
         custom_llm_provider="azure",
     )
     with pytest.raises(MidStreamFallbackError) as excinfo:
@@ -1458,21 +1466,29 @@ async def _mid_stream_debug_info(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.parametrize("failure", ["transport_error", "unparseable_chunk"])
+@pytest.mark.parametrize(
+    ("logged_api_base", "routed_api_base"),
+    [(_AZURE_DEPLOYMENT_REQUEST_URL, _AZURE_DEPLOYMENT_API_BASE), (_AZURE_DEPLOYMENT_API_BASE, None)],
+    ids=["routed", "sdk"],
+)
 async def test_mid_stream_error_reports_the_deployment_it_was_sent_to(
-    failure: Literal["transport_error", "unparseable_chunk"], sync_mode: bool
+    logged_api_base: str,
+    routed_api_base: str | None,
+    failure: Literal["transport_error", "unparseable_chunk"],
+    sync_mode: bool,
 ):
-    debug_info: Final = await _mid_stream_debug_info(_AZURE_DEPLOYMENT_API_BASE, failure, sync_mode)
+    debug_info: Final = await _mid_stream_debug_info(logged_api_base, routed_api_base, failure, sync_mode)
 
     assert f"API Base: `{_AZURE_DEPLOYMENT_API_BASE}`" in debug_info
     assert "model_group: `gpt-5.4-mini-azure`" in debug_info
     assert "deployment: `azure/gpt-5.4-mini`" in debug_info
-    assert "Count from 1 to 40" in debug_info
+    assert "Count from 1 to 40" not in debug_info
     assert "api.openai.com" not in debug_info
 
 
 @pytest.mark.asyncio
 async def test_mid_stream_error_leaves_out_an_api_base_it_cannot_resolve():
-    debug_info: Final = await _mid_stream_debug_info(None, "transport_error", sync_mode=False)
+    debug_info: Final = await _mid_stream_debug_info(None, None, "transport_error", sync_mode=False)
 
     assert "model_group: `gpt-5.4-mini-azure`" in debug_info
     assert "API Base:" not in debug_info

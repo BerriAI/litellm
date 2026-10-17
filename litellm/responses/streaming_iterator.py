@@ -28,6 +28,7 @@ from litellm.constants import (
 from litellm.exceptions import MidStreamFallbackError, RateLimitError
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import process_response_headers
+from litellm.litellm_core_utils.exception_mapping_utils import with_deployment_api_base
 from litellm.litellm_core_utils.internal_call_metadata import without_budget_reservation
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_base
@@ -281,8 +282,8 @@ def _map_stream_error_to_exception(
         body=error_body,
         headers=headers,
     )
-    litellm_params: Final[LiteLLM_Params | Mapping[str, object]] = (
-        {}
+    litellm_params: Final = (
+        None
         if logging_obj is None
         else _typed_gets_litellm_params(logging_obj.model_call_details.get)("litellm_params", {})
     )
@@ -292,7 +293,7 @@ def _map_stream_error_to_exception(
             custom_llm_provider=custom_llm_provider,
             original_exception=provider_exception,
             completion_kwargs={},
-            extra_kwargs=litellm_params,
+            extra_kwargs=with_deployment_api_base(litellm_params),
         )
     except Exception as mapped_exception:
         return mapped_exception
@@ -2116,7 +2117,11 @@ class ResponsesWebSocketStreaming:
         )
         self._detach_budget_reservation()
         turn_logging_obj.model_call_details["messages"] = list(_logged_user_messages(client_frame))
-        turn_logging_obj.pre_call(input=client_frame, api_key="")
+        connection_params: Final = _json_object_or_none(
+            _typed_gets_litellm_params(turn_logging_obj.model_call_details.get)("litellm_params", {})
+        )
+        connection_api_base: Final = None if connection_params is None else connection_params.get("api_base")
+        turn_logging_obj.pre_call(input=client_frame, api_key="", additional_args={"api_base": connection_api_base})
         self._open_turns = (*self._open_turns, _ResponsesWsTurn(logging_obj=turn_logging_obj))
 
     def _detach_budget_reservation(self) -> None:
