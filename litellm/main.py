@@ -77,7 +77,7 @@ from litellm.litellm_core_utils.audio_utils.utils import (
 from litellm.litellm_core_utils.chat_completion_agentic_loop import (
     maybe_run_chat_completion_agentic_loop,
 )
-from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
+from litellm.litellm_core_utils.completion_timeout import CompletionTimeout, StreamKind
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_litellm_params import (
     AWS_CREDENTIAL_KWARGS_KEYS,
@@ -255,6 +255,7 @@ from .llms.openai.completion.handler import OpenAITextCompletion
 from .llms.openai.image_variations.handler import OpenAIImageVariationsHandler
 from .llms.openai.openai import OpenAIChatCompletion
 from .llms.openai.transcriptions.handler import OpenAIAudioTranscription
+from .llms.openai.workload_identity import build_openai_client
 from .llms.openai_like.chat.handler import OpenAILikeChatHandler
 from .llms.openai_like.embedding.handler import OpenAILikeEmbeddingHandler
 from .llms.ovhcloud.chat.transformation import OVHCloudChatConfig
@@ -529,7 +530,14 @@ async def acompletion(
     mock_timeout = kwargs.get("mock_timeout", None)
 
     if mock_timeout is True:
-        await _handle_mock_timeout_async(mock_timeout, timeout, model)
+        stream_timeout: Final = kwargs.get("stream_timeout")
+        await _handle_mock_timeout_async(
+            mock_timeout,
+            stream_timeout
+            if stream is True and isinstance(stream_timeout, int | float | str | httpx.Timeout)
+            else timeout,
+            model,
+        )
 
     loop: Final = asyncio.get_event_loop()
     custom_llm_provider = kwargs.get("custom_llm_provider", None)
@@ -1077,6 +1085,11 @@ def mock_completion(
 from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the old definition site
     _resolve_openai_api_base as _resolve_openai_api_base,  # pyright: ignore[reportPrivateUsage]  # noqa: PLC0414  # re-export of moved helper
 )
+from litellm.responses.bridge_check import (
+    bridge_reasoning_effort,
+    keep_registered_mode,
+    str_keyed_mapping,
+)
 from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the old definition site
     responses_api_bridge_check as responses_api_bridge_check,  # pyright: ignore[reportUnknownVariableType]  # noqa: PLC0414  # re-export of moved function
 )
@@ -1127,6 +1140,52 @@ def _drop_anthropic_only_tool_keys(tools: list[dict[str, object]] | None) -> lis
     if tools is None:
         return None
     return [_without_anthropic_only_tool_keys(tool) if isinstance(tool, dict) else tool for tool in tools]
+
+
+def _azure_completion_fakes_stream(model: str, base_model: str | None) -> bool:
+    if not litellm.AzureOpenAIO1Config().is_o_series_model(model=base_model or model):
+        return False
+    o_series_handler_config: Final = ProviderConfigManager.get_provider_chat_config(
+        model=model, provider=LlmProviders.AZURE
+    )
+    return o_series_handler_config is not None and o_series_handler_config.should_fake_stream(
+        model=model, stream=True, custom_llm_provider=LlmProviders.AZURE.value
+    )
+
+
+def _completion_fakes_stream(
+    model: str,
+    custom_llm_provider: str | None,
+    provider_config: BaseConfig | None,
+    optional_params: Mapping[str, object],
+    *,
+    base_model: str | None,
+    bridges_to_responses_api: bool,
+) -> bool:
+    if optional_params.get("fake_stream") is True:
+        return True
+    if custom_llm_provider is None:
+        return False
+    if bridges_to_responses_api:
+        responses_config: Final = ProviderConfigManager.get_provider_responses_api_config(
+            provider=custom_llm_provider, model=model
+        )
+        return responses_config is not None and responses_config.should_fake_stream(
+            model=model, stream=True, custom_llm_provider=custom_llm_provider
+        )
+    if (
+        custom_llm_provider == LlmProviders.VERTEX_AI.value
+        and get_vertex_ai_model_route(model=model, litellm_params={"base_model": base_model})
+        == VertexAIModelRoute.GEMMA
+    ):
+        return True
+    if isinstance(provider_config, litellm.AmazonAI21Config):
+        return True
+    if custom_llm_provider == LlmProviders.AZURE.value:
+        return _azure_completion_fakes_stream(model, base_model)
+    return provider_config is not None and provider_config.should_fake_stream(
+        model=model, stream=True, custom_llm_provider=custom_llm_provider
+    )
 
 
 class _ProxyAuthHeadersProvider(Protocol):
@@ -1200,6 +1259,8 @@ def _register_custom_pricing_for_request(
     pricing overrides (e.g. a zero-cost wildcard) from clobbering built-in
     pricing used by sibling deployments of the same backend model. Direct SDK
     calls keep the legacy behavior of registering the shared key with pricing.
+    Either way the shared key's ``mode`` follows ``keep_registered_mode``, as on
+    deployment registration, since a call routes by its own ``model_info``.
     """
     entry: Final = _build_custom_pricing_entry(
         custom_llm_provider=custom_llm_provider,
@@ -1209,16 +1270,24 @@ def _register_custom_pricing_for_request(
     shared_key: Final = f"{custom_llm_provider}/{model}"
     deployment_id: Final = _get_router_deployment_id(kwargs)
     if deployment_id is None:
-        litellm.register_model({shared_key: entry}, persist_across_reloads=False)
+        litellm.register_model({shared_key: keep_registered_mode(shared_key, entry)}, persist_across_reloads=False)
         return
+    shared_entry: Final = keep_registered_mode(
+        shared_key, CustomPricingLiteLLMParams.strip_custom_pricing_fields(entry)
+    )
     litellm.register_model(
-        {
-            deployment_id: entry,
-            shared_key: CustomPricingLiteLLMParams.strip_custom_pricing_fields(entry),
-        },
+        {deployment_id: entry},
         persist_across_reloads=False,
         warning_display_name=shared_key,
         custom_llm_provider=custom_llm_provider,
+        add_to_provider_model_sets=False,
+    )
+    litellm.register_model(
+        {shared_key: shared_entry},
+        persist_across_reloads=False,
+        warning_display_name=shared_key,
+        custom_llm_provider=custom_llm_provider,
+        add_to_provider_model_sets=False,
     )
 
 
@@ -4126,6 +4195,7 @@ def _complete_sagemaker(ctx: CompletionDispatchContext) -> _CompletionDispatchRe
 _ADDITIONAL_DROP_PARAMS_ADAPTER: Final = TypeAdapter(list[str])
 _OPTIONAL_PARAMS_ADAPTER: Final = TypeAdapter(dict[str, object])
 _REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _PROVIDER_ROUTING_HINTS: Final = TypeAdapter(ProviderRoutingHints)
 _BASE_URL_HINT: Final = TypeAdapter(BaseUrlRoutingHint)
 
@@ -5532,6 +5602,9 @@ def completion(
             custom_llm_provider=custom_llm_provider,
             web_search_options=web_search_options,
             api_base=api_base,
+            deployment_model_info=str_keyed_mapping(
+                cast(object, model_info)  # cast-ok: model_info is the untyped dict kwarg
+            ),
         )
 
         if not _is_claude_tool_target(custom_llm_provider=custom_llm_provider, model=model):
@@ -5553,15 +5626,6 @@ def completion(
             model_response_hidden_params["region_name"] = kwargs.get(
                 "aws_region_name", None
             )  # support region-based pricing for bedrock
-
-        ### TIMEOUT LOGIC ###
-        timeout = CompletionTimeout.resolve(
-            timeout,
-            kwargs,
-            custom_llm_provider,
-            global_timeout=get_configured_request_timeout(),
-            supports_httpx_timeout=supports_httpx_timeout,
-        )
 
         ### REGISTER CUSTOM MODEL PRICING -- IF GIVEN ###
         if (
@@ -5689,8 +5753,37 @@ def completion(
             and provider_config.accepts_reasoning_summary_in_reasoning_effort,
         )
         optional_params = get_optional_params(
-            **{**optional_param_args, "reasoning_effort": provider_reasoning_effort}, **non_default_params
+            **{**optional_param_args, "reasoning_effort": provider_reasoning_effort},
+            model_info=_MODEL_INFO_ADAPTER.validate_python(model_info) if isinstance(model_info, dict) else None,
+            **non_default_params,
         )
+        stream_kind: Final = (
+            (
+                StreamKind.FAKED
+                if _completion_fakes_stream(
+                    model,
+                    custom_llm_provider,
+                    provider_config,
+                    optional_params,
+                    base_model=base_model if isinstance(base_model, str) else None,
+                    bridges_to_responses_api=bridges_to_responses_api is True,
+                )
+                else StreamKind.LIVE
+            )
+            if stream is True
+            else StreamKind.NOT_STREAMED
+        )
+
+        ### TIMEOUT LOGIC ###
+        timeout = CompletionTimeout.resolve(
+            timeout,
+            kwargs,
+            custom_llm_provider,
+            global_timeout=get_configured_request_timeout(),
+            supports_httpx_timeout=supports_httpx_timeout,
+            stream_kind=stream_kind,
+        )
+        logging.record_applied_timeout(timeout)
         processed_non_default_params: Final = pre_process_non_default_params(
             model=model,
             passed_params=optional_param_args,
@@ -5785,6 +5878,7 @@ def completion(
                     "github_copilot_user_session",
                     PROVIDER_AFFINITY_HEADER_KWARG_KEY,
                     "fireworks_forward_user_id",
+                    "responses_api_version",
                 )
                 if key in kwargs
             },
@@ -5848,9 +5942,12 @@ def completion(
                 custom_llm_provider=custom_llm_provider,
                 web_search_options=web_search_options,
                 tools=tools,
-                reasoning_effort=reasoning_effort,
+                reasoning_effort=bridge_reasoning_effort(reasoning_effort, optional_params.get("extra_body")),
                 reasoning_summary=_reasoning_summary_for_bridge,
                 api_base=api_base,
+                deployment_model_info=str_keyed_mapping(
+                    cast(object, model_info)  # cast-ok: model_info is the untyped dict kwarg
+                ),
             )
 
         # Use base_model (the true underlying model) for Azure model-type
@@ -7860,17 +7957,14 @@ def adapter_completion(*, adapter_id: str, **kwargs) -> BaseModel | AdapterCompl
 
 
 def moderation(input: str, model: str | None = None, api_key: str | None = None, **kwargs) -> OpenAIModerationResponse:
-    from litellm.llms.openai.common_utils import OpenAIHTTPClient
-
-    # only supports open ai for now
-    api_key = api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
-
-    # Extract api_base from kwargs
+    static_api_key: Final = api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
     api_base: Final = kwargs.get("api_base", None)
 
-    openai_client = kwargs.get("client", None)
-    if openai_client is None:
-        openai_client = openai.OpenAI(api_key=api_key, base_url=api_base, http_client=OpenAIHTTPClient())
+    openai_client: Final = kwargs.get("client", None) or build_openai_client(
+        api_key=static_api_key,
+        api_base=api_base,
+        litellm_params=kwargs,
+    )
 
     if model is not None:
         response = openai_client.moderations.create(input=input, model=model)
@@ -7893,8 +7987,7 @@ async def amoderation(
 ) -> OpenAIModerationResponse:
     from openai import AsyncOpenAI
 
-    # only supports open ai for now
-    api_key = api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
+    static_api_key: Final = api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
     optional_params: Final = GenericLiteLLMParams.model_validate(kwargs)
     litellm_logging_obj: Final[LiteLLMLoggingObj | None] = kwargs.get("litellm_logging_obj", None)
     _dynamic_api_base = None
@@ -7920,8 +8013,9 @@ async def amoderation(
         # _get_openai_client maintains in-memory caching logic for OpenAI clients
         _openai_client: AsyncOpenAI = openai_chat_completions.get_openai_client(
             is_async=True,
-            api_key=api_key,
+            api_key=static_api_key,
             api_base=optional_params.api_base or _dynamic_api_base,
+            litellm_params=optional_params.model_dump(exclude_none=True),
         )
     else:
         _openai_client = openai_client
@@ -7941,7 +8035,7 @@ async def amoderation(
         moderation_request: Final = {"input": input, "model": model}
         litellm_logging_obj.pre_call(
             input=input,
-            api_key=api_key,
+            api_key=static_api_key,
             additional_args={
                 "complete_input_dict": moderation_request,
                 "api_base": str(_openai_client.base_url),
@@ -8174,9 +8268,7 @@ def transcription(
             or get_secret("OPENAI_ORGANIZATION")
             or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
         )
-        # set API KEY
-
-        api_key = api_key or litellm.api_key or litellm.openai_key or get_secret("OPENAI_API_KEY")
+        static_api_key: Final = api_key or litellm.api_key or litellm.openai_key or get_secret("OPENAI_API_KEY")
         response = openai_audio_transcriptions.audio_transcriptions(
             model=model,
             audio_file=file,
@@ -8188,7 +8280,7 @@ def transcription(
             logging_obj=litellm_logging_obj,
             max_retries=max_retries,
             api_base=api_base,
-            api_key=api_key,
+            api_key=static_api_key,
             provider_config=provider_config,
             litellm_params=litellm_params_dict,
             shared_session=shared_session,
@@ -8510,6 +8602,7 @@ def speech(
             client=client,  # pass AsyncOpenAI, OpenAI client
             aspeech=aspeech,
             shared_session=shared_session,
+            litellm_params=litellm_params_dict,
         )
     elif custom_llm_provider in AZURE_OPENAI_AUDIO_PROVIDERS:
         # Check if this is Azure Speech Service (Cognitive Services TTS)

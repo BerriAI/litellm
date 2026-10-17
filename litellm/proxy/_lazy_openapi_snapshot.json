@@ -14261,6 +14261,19 @@
               "description": "Whether to fail the request if the guardrail encounters an error. Implemented by guardrail='model_armor', 'generic_guardrail_api' and 'crowdstrike_aidr'. True (default) raises the error. False logs a critical error and lets the request proceed, so only a valid guardrail response can block or modify it.",
               "title": "Fail On Error"
             },
+            "forward_messages_as_sent": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": false,
+              "description": "Only honored by guardrail='generic_guardrail_api'. When True, structured_messages reaches the guardrail exactly as the client sent it, so rows can carry provider-native content blocks and keys the OpenAI chat types do not declare. Default False sends OpenAI-format chat rows with undeclared keys removed.",
+              "title": "Forward Messages As Sent"
+            },
             "guard_name": {
               "anyOf": [
                 {
@@ -14398,6 +14411,20 @@
               ],
               "description": "Optional field if guardrail requires a 'model' parameter",
               "title": "Model"
+            },
+            "num_retries": {
+              "anyOf": [
+                {
+                  "maximum": 5.0,
+                  "minimum": 0.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "How many more times to send a guardrail check whose connection timed out waiting for the answer or was dropped after the request went out. Each retry opens a fresh connection and gets the full timeout. Connect failures, HTTP error statuses and BLOCKED verdicts are not retried. Unset or 0 sends each check once, and the most allowed is 5. Implemented by guardrail='generic_guardrail_api', other guardrails ignore it.",
+              "title": "Num Retries"
             },
             "on_sensitive_data": {
               "anyOf": [
@@ -16612,6 +16639,19 @@
               "description": "HTTP timeout in seconds for checking attached files. Default: 10.",
               "title": "File Guardrail Timeout"
             },
+            "forward_messages_as_sent": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": false,
+              "description": "Only honored by guardrail='generic_guardrail_api'. When True, structured_messages reaches the guardrail exactly as the client sent it, so rows can carry provider-native content blocks and keys the OpenAI chat types do not declare. Default False sends OpenAI-format chat rows with undeclared keys removed.",
+              "title": "Forward Messages As Sent"
+            },
             "gateway_name": {
               "anyOf": [
                 {
@@ -16974,6 +17014,20 @@
               ],
               "description": "If True, logs violations without blocking. Defaults to False if not provided",
               "title": "Monitor Mode"
+            },
+            "num_retries": {
+              "anyOf": [
+                {
+                  "maximum": 5.0,
+                  "minimum": 0.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "How many more times to send a guardrail check whose connection timed out waiting for the answer or was dropped after the request went out. Each retry opens a fresh connection and gets the full timeout. Connect failures, HTTP error statuses and BLOCKED verdicts are not retried. Unset or 0 sends each check once, and the most allowed is 5. Implemented by guardrail='generic_guardrail_api', other guardrails ignore it.",
+              "title": "Num Retries"
             },
             "on_disallowed_action": {
               "default": "block",

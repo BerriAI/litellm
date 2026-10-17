@@ -28,6 +28,7 @@ from litellm.integrations.anthropic_cache_control_hook import (
     configured_injection_points,
 )
 from litellm.litellm_core_utils.asyncify import run_async_function
+from litellm.litellm_core_utils.completion_timeout import CompletionTimeout, StreamKind
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
@@ -68,6 +69,7 @@ from litellm.types.llms.openai import (
 
 # Handle ResponseText import with fallback
 if TYPE_CHECKING:
+    from litellm.responses.streaming_iterator import ResponsesWsFrameGuard
     from litellm.types.llms.openai import ResponseText
 else:
     ResponseText = str  # Fallback for ResponseText import
@@ -1560,7 +1562,7 @@ def responses(
         )
         reasoning_effort: Final[object] = local_vars.get("reasoning_effort")
         request_reasoning: Final = (
-            LiteLLMResponsesTransformationHandler().map_reasoning_effort(reasoning_effort)
+            LiteLLMResponsesTransformationHandler().map_reasoning_effort(reasoning_effort, model, custom_llm_provider)
             if current_reasoning is None and reasoning_effort is not None
             else current_reasoning
         )
@@ -1661,6 +1663,17 @@ def responses(
         if custom_llm_provider is None:
             raise ValueError("custom_llm_provider is required but passed as None")
 
+        fake_stream: Final = responses_api_provider_config.should_fake_stream(
+            model=model, stream=stream, custom_llm_provider=custom_llm_provider
+        )
+        applied_timeout: Final = CompletionTimeout.for_stream(
+            (StreamKind.FAKED if fake_stream else StreamKind.LIVE) if stream is True else StreamKind.NOT_STREAMED,
+            CompletionTimeout.as_limit(timeout or request_timeout),
+            None
+            if stream is not True or litellm_params.stream_timeout is None
+            else float(litellm_params.stream_timeout),
+        )
+        litellm_logging_obj.record_applied_timeout(applied_timeout)
         response = base_llm_http_handler.response_api_handler(
             model=model,
             input=input,
@@ -1671,12 +1684,10 @@ def responses(
             logging_obj=litellm_logging_obj,
             extra_headers=effective_extra_headers,
             extra_body=extra_body,
-            timeout=timeout or request_timeout,
+            timeout=applied_timeout,
             _is_async=_is_async,
             client=kwargs.get("client"),
-            fake_stream=responses_api_provider_config.should_fake_stream(
-                model=model, stream=stream, custom_llm_provider=custom_llm_provider
-            ),
+            fake_stream=fake_stream,
             litellm_metadata=kwargs.get("litellm_metadata", {}),
             shared_session=kwargs.get("shared_session"),
         )
@@ -2608,6 +2619,7 @@ async def _aresponses_websocket(
     api_base: str | None = None,
     api_key: str | None = None,
     timeout: float | None = None,
+    responses_ws_frame_guard: "ResponsesWsFrameGuard | None" = None,
     **kwargs,
 ) -> Exception | None:
     """
@@ -2700,5 +2712,6 @@ async def _aresponses_websocket(
         litellm_metadata=_build_litellm_metadata_for_ws(kwargs),
         custom_llm_provider=_custom_llm_provider,
         request_defaults=_build_responses_websocket_request_defaults(deployment_kwargs),
+        frame_guard=responses_ws_frame_guard,
         **remaining_kwargs,
     )
