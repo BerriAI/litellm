@@ -3608,6 +3608,7 @@ class ProxyLogging:
                 original_exception,
                 traceback_str,
             ),
+            kwargs={"for_async_request": True},
             daemon=True,
         ).start()
 
