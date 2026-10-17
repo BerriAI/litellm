@@ -32,7 +32,13 @@ def upgrade_case() -> PerformanceTestCase:
         limits=tuple(
             limit
             for limit in CASE.limits
-            if limit.metric not in {"cpu_seconds_per_request", "postgres_calls_per_request", "redis_calls_per_request"}
+            if limit.metric
+            in {
+                "unexpected_status_count",
+                "gateway_added_seconds",
+                "time_to_first_token_seconds",
+                "memory_growth_megabytes",
+            }
         ),
     )
 

@@ -269,17 +269,19 @@ def test_invalid_200_is_not_an_allowed_non_200(failed: WireRecord) -> None:
 @pytest.mark.parametrize(
     "failures,overhead,ttft,growth,expected",
     [
-        (3, 0.38, 3.0, 100, ()),
-        (4, 0.38, 3.0, 100, ("unexpected_status_count",)),
-        (3, 0.39, 3.0, 100, ("gateway_added_seconds percentile 50",)),
-        (3, 0.38, 3.1, 100, ("time_to_first_token_seconds percentile 99",)),
-        (3, 0.38, 3.0, 101, ("memory_growth_megabytes",)),
+        (3, 0.29, 3.7, 100, ()),
+        (4, 0.29, 3.7, 100, ("unexpected_status_count",)),
+        (3, 0.30, 3.7, 100, ("gateway_added_seconds percentile 50",)),
+        (3, 0.29, 3.8, 100, ("time_to_first_token_seconds percentile 99",)),
+        (3, 0.29, 3.7, 101, ("memory_growth_megabytes",)),
     ],
 )
 def test_upgrade_verdict_uses_regular_limits_without_cpu_or_datastore_samples(
     failures: int, overhead: float, ttft: float, growth: float, expected: tuple[str, ...]
 ) -> None:
-    nonstream: Final = tuple(record(i).model_copy(update={"total_s": 1 + overhead}) for i in range(100))
+    nonstream: Final = tuple(
+        record(i).model_copy(update={"total_s": overhead, "mock_delay_s": 0}) for i in range(100)
+    )
     stream: Final = record(100).model_copy(update={"stream": True, "first_token_s": ttft})
     observed: Final = Observation(
         records=(*nonstream, stream, *(failed_record(i) for i in range(101, 101 + failures))),
