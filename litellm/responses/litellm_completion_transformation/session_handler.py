@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
     from litellm.responses.litellm_completion_transformation.transformation import (
         ChatCompletionSession,
+        SessionMessage,
     )
 else:
     ChatCompletionSession = Any
@@ -103,6 +104,25 @@ def _replay_start(
     )
 
 
+def _referenced_request_ids(previous_response_id: str, client_response_ids: tuple[str, ...]) -> tuple[str, ...]:
+    decoded_response_id: Final = ResponsesAPIRequestUtils.decode_responses_api_response_id(previous_response_id)
+    response_id: Final = decoded_response_id.get("response_id", previous_response_id)
+    return tuple(dict.fromkeys((response_id, previous_response_id, *client_response_ids)))
+
+
+def _turns_through_referenced_response(
+    spend_logs: Sequence["SpendLogsPayload"], referenced_request_ids: tuple[str, ...]
+) -> int:
+    return next(
+        (
+            index + 1
+            for index in range(len(spend_logs) - 1, -1, -1)
+            if spend_logs[index].get("request_id") in referenced_request_ids
+        ),
+        len(spend_logs),
+    )
+
+
 def _replayed_request(
     index: int,
     proxy_server_request: Mapping[str, object] | None,
@@ -152,6 +172,7 @@ class ResponsesSessionHandler:
         """
         from litellm.responses.litellm_completion_transformation.transformation import (
             ChatCompletionSession,
+            with_stored_calls_the_input_answers,
         )
 
         verbose_proxy_logger.debug("inside get_chat_completion_message_history_for_previous_response_id")
@@ -168,30 +189,31 @@ class ResponsesSessionHandler:
         if len(all_spend_logs) > 0:
             litellm_session_id = all_spend_logs[0].get("session_id")
 
-        chat_completion_message_history: list[
-            AllMessageValues
-            | GenericChatCompletionMessage
-            | ChatCompletionMessageToolCall
-            | ChatCompletionResponseMessage
-            | Message
-        ] = []
         proxy_server_requests: Final = [
             await ResponsesSessionHandler.get_proxy_server_request_from_spend_log(spend_log=spend_log)
             for spend_log in all_spend_logs
         ]
-        start: Final = _replay_start(all_spend_logs, proxy_server_requests)
+        replayable_turns: Final = _turns_through_referenced_response(
+            all_spend_logs, _referenced_request_ids(previous_response_id, client_response_ids)
+        )
+        start: Final = _replay_start(all_spend_logs[:replayable_turns], proxy_server_requests[:replayable_turns])
         earlier_instructions: Final = _instruction_items_before(proxy_server_requests, start)
-        for index in range(start.index, len(all_spend_logs)):
-            chat_completion_message_history = (
-                ResponsesSessionHandler.extend_chat_completion_message_with_spend_log_payload(
-                    spend_log=all_spend_logs[index],
-                    proxy_server_request_dict=_replayed_request(
-                        index, proxy_server_requests[index], start, earlier_instructions
-                    ),
-                    chat_completion_message_history=chat_completion_message_history,
-                    item_cache_control=item_cache_control,
-                )
-            )
+        replayed_history: Final = ResponsesSessionHandler._history_of_turns(
+            all_spend_logs[start.index :],
+            [
+                _replayed_request(index, proxy_server_requests[index], start, earlier_instructions)
+                for index in range(start.index, len(all_spend_logs))
+            ],
+            item_cache_control,
+        )
+        history_before_replay: Final = ResponsesSessionHandler._history_of_turns(
+            all_spend_logs[: start.index], proxy_server_requests[: start.index], item_cache_control
+        )
+        chat_completion_message_history: Final = (
+            list(with_stored_calls_the_input_answers(replayed_history, history_before_replay))
+            if history_before_replay
+            else replayed_history
+        )
 
         verbose_proxy_logger.debug(
             "chat_completion_message_history %s",
@@ -208,6 +230,24 @@ class ResponsesSessionHandler:
                 ),
                 None,
             ),
+        )
+
+    @staticmethod
+    def _history_of_turns(
+        spend_logs: Sequence["SpendLogsPayload"],
+        proxy_server_requests: Sequence[Mapping[str, object] | None],
+        item_cache_control: bool,
+    ) -> list["SessionMessage"]:
+        return list(
+            chain.from_iterable(
+                ResponsesSessionHandler.extend_chat_completion_message_with_spend_log_payload(
+                    spend_log=spend_log,
+                    proxy_server_request_dict=proxy_server_request,
+                    chat_completion_message_history=[],
+                    item_cache_control=item_cache_control,
+                )
+                for spend_log, proxy_server_request in zip(spend_logs, proxy_server_requests, strict=True)
+            )
         )
 
     @staticmethod
@@ -416,12 +456,11 @@ class ResponsesSessionHandler:
 
         verbose_proxy_logger.debug("decoding response id=%s", previous_response_id)
 
-        decoded_response_id: Final = ResponsesAPIRequestUtils.decode_responses_api_response_id(previous_response_id)
-        response_id: Final = decoded_response_id.get("response_id", previous_response_id)
+        request_ids: Final = list(_referenced_request_ids(previous_response_id, client_response_ids))
+        response_id: Final = request_ids[0]
         if prisma_client is None:
             return []
 
-        request_ids: Final = list(dict.fromkeys((response_id, previous_response_id, *client_response_ids)))
         query: Final = """
             WITH matching_session AS (
                 SELECT session_id, api_key, "user", team_id

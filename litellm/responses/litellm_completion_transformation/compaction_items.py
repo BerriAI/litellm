@@ -142,10 +142,7 @@ def compaction_summary(item: object) -> str | None:
     return None if block is None else block.summary
 
 
-def summary_only_compaction_item(item: object) -> str | None:
-    summary: Final = compaction_summary(item)
-    if summary is None:
-        return None
+def summary_only_compaction_content(summary: str) -> str:
     return json.dumps({"type": "compaction", "content": summary}, separators=(",", ":"))
 
 

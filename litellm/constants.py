@@ -579,6 +579,7 @@ NON_LLM_CONNECTION_TIMEOUT: Final = get_env_int(
 )  # timeout for adjacent services (e.g. jwt auth)
 MAX_EXCEPTION_MESSAGE_LENGTH: Final = get_env_int("MAX_EXCEPTION_MESSAGE_LENGTH", 2000)
 MAX_STRING_LENGTH_PROMPT_IN_DB: Final = get_env_int("MAX_STRING_LENGTH_PROMPT_IN_DB", 2048)
+MAX_STRING_LENGTH_COMPACTION_SUMMARY_IN_DB: Final = 64 * 1024
 BEDROCK_MAX_POLICY_SIZE: Final = get_env_int("BEDROCK_MAX_POLICY_SIZE", 75)
 # One entry per distinct AWS credential-argument set. Per-user cost attribution passes the attributed
 # identity as aws_session_name, so this bounds how many attributed identities keep a cached STS session.

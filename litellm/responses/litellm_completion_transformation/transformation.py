@@ -368,7 +368,7 @@ def _stored_turn_with_calls(message: SessionMessage, call_ids: frozenset[str]) -
     )
 
 
-def _with_stored_calls_the_input_answers(
+def with_stored_calls_the_input_answers(
     new_messages: Sequence[_MessageT], session_history: Sequence[SessionMessage]
 ) -> tuple[_MessageT | SessionMessage, ...]:
     answered: Final = _answered_tool_call_ids(new_messages)
@@ -1227,7 +1227,7 @@ class LiteLLMCompletionResponsesConfig:
         original_new_messages: Final = _messages.copy() if _messages else []
 
         new_messages: Final = (
-            _with_stored_calls_the_input_answers(_messages[instructions_end:], session_history)
+            with_stored_calls_the_input_answers(_messages[instructions_end:], session_history)
             if input_replaces_history
             else _messages[instructions_end:]
         )

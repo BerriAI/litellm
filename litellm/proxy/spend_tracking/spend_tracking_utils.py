@@ -25,6 +25,7 @@ from litellm.constants import (
     LITTELM_CLI_SERVICE_ACCOUNT_NAME,
     LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
     MAX_SPEND_LOG_MODEL_NAME_LENGTH,
+    MAX_STRING_LENGTH_COMPACTION_SUMMARY_IN_DB,
     MCP_SPEND_LOG_MODEL_PREFIX,
     NON_INFERENCE_CALL_TYPES,
     REDACTED_BY_LITELM_STRING,
@@ -67,7 +68,10 @@ from litellm.proxy._types import (
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.proxy.utils import PrismaClient, hash_token
-from litellm.responses.litellm_completion_transformation.compaction_items import summary_only_compaction_item
+from litellm.responses.litellm_completion_transformation.compaction_items import (
+    compaction_summary,
+    summary_only_compaction_content,
+)
 from litellm.types.router import DeploymentTypedDict, LiteLLM_Params
 from litellm.types.utils import (
     BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
@@ -1183,11 +1187,25 @@ def _is_spend_log_content(parent: Mapping[str, object], key: str) -> bool:
 
 
 def _is_compaction_block_summary(parent: Mapping[str, object], key: str, keep_compaction_blocks: bool) -> bool:
+    return keep_compaction_blocks and key == "content" and parent.get("type") == "compaction"
+
+
+def _truncated_for_db(value: str, max_length: int) -> str:
+    if len(value) <= max_length:
+        return value
+    start_chars: Final = int(max_length * 0.35)
+    end_chars: Final = int(max_length * 0.65)
     return (
-        keep_compaction_blocks
-        and key == "content"
-        and parent.get("type") == "compaction"
-        and isinstance(parent.get(key), str)
+        f"{value[:start_chars]}"
+        f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {len(value) - start_chars - end_chars} chars. "
+        f"{LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE}) ..."
+        f"{value[len(value) - end_chars :]}"
+    )
+
+
+def _compaction_summary_for_db(summary: str) -> str:
+    return _truncated_for_db(
+        summary, max(_get_max_string_length_prompt_in_db(), MAX_STRING_LENGTH_COMPACTION_SUMMARY_IN_DB)
     )
 
 
@@ -1207,11 +1225,6 @@ def _sanitize_request_body_for_spend_logs_payload(
     SensitiveDataMasker classifies as credentials with REDACTED_BY_LITELM_STRING, except inside tool payloads
     and logprobs.
     """
-    from litellm.constants import (
-        LITELLM_TRUNCATED_PAYLOAD_FIELD,
-        LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE,
-    )
-
     if visited is None:
         visited = set()
     if max_string_length_prompt_in_db is None:
@@ -1231,44 +1244,14 @@ def _sanitize_request_body_for_spend_logs_payload(
         elif isinstance(value, list):
             return [_sanitize_value(item, mask_credentials) for item in value]
         elif isinstance(value, str):
-            if len(value) > max_string_length_prompt_in_db:
-                # Keep 35% from beginning and 65% from end (end is usually more important)
-                # This split ensures we keep more context from the end of conversations
-                start_ratio: Final = 0.35
-                end_ratio: Final = 0.65
-
-                # Calculate character distribution
-                start_chars: Final = int(max_string_length_prompt_in_db * start_ratio)
-                end_chars = int(max_string_length_prompt_in_db * end_ratio)
-
-                # Ensure we don't exceed the total limit
-                total_keep: Final = start_chars + end_chars
-                if total_keep > max_string_length_prompt_in_db:
-                    end_chars = max_string_length_prompt_in_db - start_chars
-
-                # If the string length is less than what we want to keep, just truncate normally
-                if len(value) <= max_string_length_prompt_in_db:
-                    return value
-
-                # Calculate how many characters are being skipped
-                skipped_chars: Final = len(value) - total_keep
-
-                # Build the truncated string: beginning + truncation marker + end
-                truncated_value: Final = (
-                    f"{value[:start_chars]}"
-                    f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars. "
-                    f"{LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE}) ..."
-                    f"{value[-end_chars:]}"
-                )
-                return truncated_value
-            return value
+            return _truncated_for_db(value, max_string_length_prompt_in_db)
         return value
 
     return {
         k: REDACTED_BY_LITELM_STRING
         if mask_credentials and _is_request_body_credential(k, v)
-        else v
-        if _is_compaction_block_summary(request_body, k, keep_compaction_blocks)
+        else _compaction_summary_for_db(v)
+        if isinstance(v, str) and _is_compaction_block_summary(request_body, k, keep_compaction_blocks)
         else _sanitize_value(v, mask_credentials and not _is_spend_log_content(request_body, k))
         for k, v in request_body.items()
         if k not in _SENSITIVE_REQUEST_BODY_KEYS
@@ -1787,11 +1770,14 @@ def _stored_request_without_requester_ip_address(request_body: Mapping[object, o
     }
 
 
-def _with_whole_compaction_summary(item: object, stored_item: object) -> object:
-    summary_only: Final = summary_only_compaction_item(item)
-    if summary_only is None or not isinstance(stored_item, Mapping):
+def _with_bounded_compaction_summary(item: object, stored_item: object) -> object:
+    summary: Final = compaction_summary(item)
+    if summary is None or not isinstance(stored_item, Mapping):
         return stored_item
-    return {**_OBJECT_MAPPING.validate_python(stored_item), "encrypted_content": summary_only}
+    return {
+        **_OBJECT_MAPPING.validate_python(stored_item),
+        "encrypted_content": summary_only_compaction_content(_compaction_summary_for_db(summary)),
+    }
 
 
 def _sanitize_proxy_server_request_body(request_body: Mapping[str, object]) -> Mapping[object, object]:
@@ -1803,7 +1789,7 @@ def _sanitize_proxy_server_request_body(request_body: Mapping[str, object]) -> M
     return {
         **sanitized,
         "input": [
-            _with_whole_compaction_summary(item, stored_item)
+            _with_bounded_compaction_summary(item, stored_item)
             for item, stored_item in zip(
                 _OBJECT_LIST.validate_python(items), _OBJECT_LIST.validate_python(stored_items)
             )

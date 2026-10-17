@@ -1,6 +1,7 @@
 import json
 import sqlite3
 from collections.abc import Sequence
+from itertools import chain
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, patch
@@ -1018,7 +1019,6 @@ async def test_previous_response_history_drops_a_tool_output_carrying_a_system_r
     assert contents[-2:] == ["And Osaka?", "Dotonbori."]
 
 
-
 def _output_message(text: str) -> dict[str, object]:
     return {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": text}]}
 
@@ -1052,6 +1052,72 @@ async def test_previous_response_history_starts_at_a_compaction_item_in_a_stored
         "And Osaka?",
         "Dotonbori.",
     ]
+
+
+def _tool_call_ids(message: object) -> tuple[str, ...]:
+    tool_calls: Final = message.get("tool_calls") if isinstance(message, dict) else getattr(message, "tool_calls", None)
+    return tuple(call["id"] if isinstance(call, dict) else call.id for call in tool_calls or ())
+
+
+_WEATHER_CALL_TURN: Final = {
+    "request_id": "resp_weather",
+    "session_id": "session-compacted",
+    "proxy_server_request": json.dumps({"input": [{"role": "user", "content": "Weather in Paris?"}]}),
+    "response": {
+        "id": "chatcmpl-weather",
+        "object": "chat.completion",
+        "choices": [
+            {
+                "index": 0,
+                "finish_reason": "tool_calls",
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+                        }
+                    ],
+                },
+            }
+        ],
+    },
+}
+
+
+def _compacted_weather_answer(request_id: str) -> dict[str, object]:
+    return {
+        **_turn_spend_log(
+            [_COMPACTION_ITEM_SENT, {"type": "function_call_output", "call_id": "call_1", "output": "sunny"}],
+            "It is sunny.",
+        ),
+        "request_id": request_id,
+    }
+
+
+@pytest.mark.asyncio
+async def test_previous_response_history_ignores_a_compaction_item_sent_after_the_referenced_response():
+    session: Final = await _history_from_stored_turns(
+        (_WEATHER_CALL_TURN, _compacted_weather_answer("resp_first_send")), "resp_weather"
+    )
+
+    assert _role_and_content(session["messages"][0]) == ("user", "Weather in Paris?")
+    assert tuple(chain.from_iterable(map(_tool_call_ids, session["messages"]))) == ("call_1",)
+
+
+@pytest.mark.asyncio
+async def test_a_turn_after_a_compaction_item_keeps_the_stored_call_its_tool_output_answers():
+    session: Final = await _history_from_stored_turns(
+        (_WEATHER_CALL_TURN, _compacted_weather_answer("resp_compacted")), "resp_compacted"
+    )
+
+    roles: Final = [_role_and_content(message)[0] for message in session["messages"]]
+    assert roles == ["user", "assistant", "tool", "assistant"]
+    assert _tool_call_ids(session["messages"][1]) == ("call_1",)
+    assert ("user", "Weather in Paris?") not in map(_role_and_content, session["messages"])
+
 
 class _SqliteBackedPrismaDB:
     def __init__(self, rows: list[tuple[str, str, str, str, str | None, str | None]]) -> None:
