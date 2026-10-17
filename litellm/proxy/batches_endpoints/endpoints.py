@@ -113,6 +113,22 @@ def _litellm_executed_batch_runner(llm_router: Router, proxy_logging_obj: ProxyL
     )
 
 
+def _public_model_name_for_auth(llm_router: "Router | None", model_id: str) -> str | None:
+    """The allowlist-visible name for a model id embedded in a unified batch id.
+
+    Team-scoped deployments carry a generated internal ``model_name``
+    (``model_name_{team_id}_{uuid}``); the name key and team allowlists hold is
+    ``model_info.team_public_model_name``. Authorize against the public name so
+    retrieve/cancel see the same grants a chat request for the model would.
+    """
+    if llm_router is None:
+        return None
+    deployment: Final = llm_router.get_deployment(model_id=model_id)
+    if deployment is None:
+        return None
+    return deployment.model_info.team_public_model_name
+
+
 async def _batch_from_database(
     batch_id: str,
     unified_batch_id: str | Literal[False],
@@ -614,8 +630,11 @@ async def retrieve_batch(
             resolved_unified_model: Final = (
                 llm_router.resolve_model_name_from_model_id(unified_model_id) if llm_router is not None else None
             )
+            public_model_name: Final = (
+                _public_model_name_for_auth(llm_router, unified_model_id) if llm_router is not None else None
+            )
             await authorize_model_for_key(
-                model_id=resolved_unified_model or unified_model_id,
+                model_id=public_model_name or resolved_unified_model or unified_model_id,
                 llm_router=llm_router,
                 user_api_key_dict=user_api_key_dict,
             )
@@ -1123,8 +1142,11 @@ async def cancel_batch(
             resolved_unified_model: Final = (
                 llm_router.resolve_model_name_from_model_id(unified_model_id) if llm_router is not None else None
             )
+            public_model_name: Final = (
+                _public_model_name_for_auth(llm_router, unified_model_id) if llm_router is not None else None
+            )
             await authorize_model_for_key(
-                model_id=resolved_unified_model or unified_model_id,
+                model_id=public_model_name or resolved_unified_model or unified_model_id,
                 llm_router=llm_router,
                 user_api_key_dict=user_api_key_dict,
             )
