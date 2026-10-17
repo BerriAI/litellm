@@ -3612,7 +3612,6 @@ class TestResponsesInputTokens:
         assert response.status_code == 429, response.text
         assert response.json()["error"]["message"] == "rate limited"
 
-
     @pytest.mark.parametrize(
         "provider_body, status_code, expected_error",
         [
@@ -3679,10 +3678,15 @@ class TestResponsesInputTokens:
             ),
         ],
     )
-    def test_provider_count_error_answers_in_openai_error_shape(self, provider_body, status_code, expected_error):
+    def test_provider_count_error_answers_in_openai_error_shape(
+        self,
+        provider_body: str | Mapping[str, object],
+        status_code: int,
+        expected_error: Mapping[str, str | None],
+    ) -> None:
         from litellm.proxy._types import ProxyException
 
-        failing_counter = AsyncMock(
+        failing_counter: Final = AsyncMock(
             side_effect=ProxyException(
                 message=provider_body if isinstance(provider_body, str) else json.dumps(provider_body),
                 type="token_counting_error",
@@ -3695,10 +3699,10 @@ class TestResponsesInputTokens:
         assert response.status_code == status_code, response.text
         assert response.json() == {"error": expected_error}
 
-    def test_non_provider_count_error_keeps_its_own_type(self):
+    def test_non_provider_count_error_keeps_its_own_type(self) -> None:
         from litellm.proxy._types import ProxyException
 
-        failing_counter = AsyncMock(
+        failing_counter: Final = AsyncMock(
             side_effect=ProxyException(
                 message="Token counting is disabled and no provider API result available",
                 type="token_counting_disabled",
@@ -3710,6 +3714,33 @@ class TestResponsesInputTokens:
 
         assert response.status_code == 503, response.text
         assert response.json()["error"]["type"] == "token_counting_disabled"
+
+    def test_provider_count_error_names_the_call_id_when_opted_in(self) -> None:
+        from litellm.proxy._types import ProxyException
+
+        failing_counter: Final = AsyncMock(
+            side_effect=ProxyException(
+                message="Vertex AI does not support counting tokens for zai-org/glm-5.2-maas.",
+                type="token_counting_error",
+                param="model",
+                code="400",
+                headers={"x-litellm-call-id": "call-9564"},
+            )
+        )
+        with patch("litellm.proxy.proxy_server.general_settings", {"include_call_id_in_error_body": True}):
+            response, _ = self._post_input_tokens({"model": "gpt-4o", "input": "hi"}, counter=failing_counter)
+
+        assert response.status_code == 400, response.text
+        assert response.json() == {
+            "error": {
+                "message": "Vertex AI does not support counting tokens for zai-org/glm-5.2-maas.",
+                "type": "invalid_request_error",
+                "param": None,
+                "code": None,
+                "litellm_call_id": "call-9564",
+            }
+        }
+
 
 class TestGuardrailBlockedResponsesShape:
     """A pre_call block raises ModifyResponseException before any provider call.

@@ -1,5 +1,5 @@
 """
-Token counter for Vertex AI Partner Models (Anthropic Claude, Mistral, etc.)
+Token counter for Vertex AI Partner Models (Anthropic Claude, Meta Llama)
 
 This handler provides token counting for partner models hosted on Vertex AI.
 Unlike Gemini models which use Google's token counting API, partner models use
@@ -14,8 +14,6 @@ from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 
 _COUNT_TOKENS_PUBLISHERS: Final = (
     ("claude", "anthropic"),
-    ("mistral", "mistralai"),
-    ("codestral", "mistralai"),
     ("llama", "meta"),
     ("meta/", "meta"),
 )
@@ -29,7 +27,7 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
     """
     Token counter for Vertex AI Partner Models.
 
-    Handles token counting for models like Claude (Anthropic), Mistral, etc.
+    Handles token counting for models like Claude (Anthropic) and Llama (Meta)
     that are available through Vertex AI's partner model program.
     """
 

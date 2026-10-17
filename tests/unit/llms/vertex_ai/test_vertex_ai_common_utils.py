@@ -54,7 +54,13 @@ async def test_vertex_gemini_rejects_non_text_system_blocks_before_request(
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "model",
-    ("zai-org/glm-5.2-maas", "deepseek-ai/deepseek-v3.2-maas", "qwen/qwen3-coder-480b-a35b-instruct-maas"),
+    (
+        "zai-org/glm-5.2-maas",
+        "deepseek-ai/deepseek-v3.2-maas",
+        "qwen/qwen3-coder-480b-a35b-instruct-maas",
+        "mistral-medium-3",
+        "codestral-2501",
+    ),
 )
 async def test_vertex_partner_model_without_a_count_api_answers_400_naming_the_model(model: str) -> None:
     result: Final = await VertexAITokenCounter().count_tokens(
