@@ -10,10 +10,12 @@ from pathlib import Path
 from queue import SimpleQueue
 from types import MappingProxyType
 from typing import Final, Literal
+from urllib.parse import urlsplit
 
 import anthropic
 import httpx
 import openai
+import psutil
 import pytest
 import yaml
 from integration._support.client import Gateway, Scenario, eventually, object_value, string_value
@@ -976,6 +978,15 @@ def _holding_upstream(held: SimpleQueue[str], release: threading.Event) -> Calla
     return hold
 
 
+def _held_upstream_calls(pid: int, wire: Wire) -> int:
+    port: Final = urlsplit(wire.url).port
+    return sum(
+        1
+        for connection in psutil.Process(pid).net_connections(kind="tcp")
+        if connection.status == psutil.CONN_ESTABLISHED and connection.raddr and connection.raddr.port == port
+    )
+
+
 async def _follow_up(gateway: Gateway) -> tuple[_Call, ...]:
     calls: Final = (*_waves(_PINNED, 6), *_waves(_SIBLING, 6))
     answers: Final = await _burst(_proxy_url(gateway), gateway.key, calls)
@@ -1003,7 +1014,10 @@ async def test_a_worker_kill_and_a_restart_in_either_order_keep_each_deployment_
                 _burst(_proxy_url(owned.gateway), owned.gateway.key, burst_calls, tolerate_drops=True)
             )
             await asyncio.to_thread(eventually, held.qsize, lambda size: size == len(burst_calls), 60)
-            with owned.replacing_worker(workers[0]) as kill:
+            held_by_worker: Final = MappingProxyType({pid: _held_upstream_calls(pid, wire) for pid in workers})
+            assert sum(held_by_worker.values()) == len(burst_calls), held_by_worker
+            victim: Final = max(workers, key=held_by_worker.__getitem__)
+            with owned.replacing_worker(victim) as kill:
                 kill.freeze()
                 await asyncio.to_thread(kill)
                 release.set()
@@ -1013,7 +1027,7 @@ async def test_a_worker_kill_and_a_restart_in_either_order_keep_each_deployment_
                 for call, answer in zip(burst_calls, served, strict=True)
                 if answer is not None
             )
-            assert 0 < len(survivors) < len(burst_calls), served
+            assert len(survivors) == len(burst_calls) - held_by_worker[victim], (held_by_worker, served)
             after_kill: Final = await _follow_up(owned.gateway)
         pinned_first: Final = _yaml_config(wire, tmp_path, (_PINNED, _SIBLING), "pinned-first")
         with owned_proxy_process(gateway, tmp_path, {}, config=pinned_first, workers=2) as restarted:
