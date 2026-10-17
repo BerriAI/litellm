@@ -19,7 +19,6 @@ def is_baggage_mapped_route(route: str) -> bool:
         RouteChecks.is_llm_api_route(route)
         and not RouteChecks.is_unbilled_route(route)
         and not RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.mcp_inference_routes.value)
-        and not RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.agent_inference_routes.value)
     )
 
 

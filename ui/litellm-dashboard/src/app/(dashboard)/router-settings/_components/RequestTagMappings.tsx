@@ -34,7 +34,7 @@ const BAGGAGE_KEY_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
 
 const isExact = (rule: RequestTagMapping) => rule.value !== undefined && rule.value !== null;
 
-export const mappingProblem = (rule: RequestTagMapping): string | null => {
+const mappingProblem = (rule: RequestTagMapping): string | null => {
   if (!rule.key) return "Enter a baggage key";
   if (!BAGGAGE_KEY_PATTERN.test(rule.key)) return "Use only letters, digits, and !#$%&'*+-.^_`|~ in the baggage key";
   if (isExact(rule)) {
@@ -44,8 +44,16 @@ export const mappingProblem = (rule: RequestTagMapping): string | null => {
   return rule.tag_prefix ? null : "Enter a tag prefix";
 };
 
+const matchIdentity = (rule: RequestTagMapping) => JSON.stringify([rule.key, isExact(rule) ? rule.value : null]);
+
+const problemAt = (rules: RequestTagMapping[], index: number): string | null => {
+  const identity = matchIdentity(rules[index]);
+  const duplicated = rules.slice(0, index).some((earlier) => matchIdentity(earlier) === identity);
+  return mappingProblem(rules[index]) ?? (duplicated ? "Another mapping already matches this key and value" : null);
+};
+
 export const requestTagMappingsAreValid = (value: unknown) =>
-  Array.isArray(value) && value.every((rule) => isMapping(rule) && mappingProblem(rule) === null);
+  Array.isArray(value) && value.every(isMapping) && value.every((_, index) => problemAt(value, index) === null);
 
 export function RequestTagMappingsEditor({ value, onChange, disabled = false }: Props) {
   const rules = Array.isArray(value) ? value.filter(isMapping) : [];
@@ -59,7 +67,7 @@ export function RequestTagMappingsEditor({ value, onChange, disabled = false }: 
       </p>
       {rules.map((rule, index) => {
         const exact = isExact(rule);
-        const problem = mappingProblem(rule);
+        const problem = problemAt(rules, index);
         const label = `Mapping ${index + 1}`;
         return (
           <fieldset key={index} disabled={disabled} className="space-y-3 rounded-lg border p-3 disabled:opacity-60">

@@ -2085,10 +2085,9 @@ class LiteLLMProxyRequestSetup:
             if unbudgeted_tag is not None:
                 raise mapping_rejection(f"Mapped tag {unbudgeted_tag} requires an existing tag budget")
         if mapped:
-            client_has_tags: Final = (
-                "tags" in normalized_client_metadata
-                or "tags" in normalized_alternate_metadata
-                or any(member.strip() for member in request.headers.get("x-litellm-tags", "").split(","))
+            client_has_tags: Final = (isinstance(client_metadata, dict) and "tags" in client_metadata) or (
+                get_metadata_variable_name_from_kwargs(request_data) == "metadata"
+                and any(member.strip() for member in request.headers.get("x-litellm-tags", "").split(","))
             )
             mapped_tags: Final = tuple(tag for tag, _ in mapped)
             request.state.litellm_baggage_client_metadata_tags = client_has_tags  # rebind-ok: request input flag

@@ -120,6 +120,21 @@ describe("RequestTagMappingsEditor", () => {
     expect(screen.getByRole("button", { name: "Update" })).toBeEnabled();
   });
 
+  it("blocks saving a second mapping for the same key and value until it differs", () => {
+    render(<Editor initial={[exact, { ...exact, tag: "sales" }, variable]} changed={vi.fn()} />);
+    expect(screen.getByText("Another mapping already matches this key and value")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Update" })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("Mapping 2 match value"), { target: { value: "b" } });
+    expect(screen.queryByText("Another mapping already matches this key and value")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Update" })).toBeEnabled();
+  });
+
+  it("blocks saving a second any-value mapping for the same key", () => {
+    render(<Editor initial={[variable, { ...variable, tag_prefix: "team:" }]} changed={vi.fn()} />);
+    expect(screen.getByText("Another mapping already matches this key and value")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Update" })).toBeDisabled();
+  });
+
   it("deletes one rule while keeping the other mode intact", async () => {
     const changed = vi.fn();
     render(<Editor initial={[exact, variable]} changed={changed} />);

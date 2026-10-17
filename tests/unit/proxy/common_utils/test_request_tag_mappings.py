@@ -222,7 +222,10 @@ async def test_budgeted_mapper_admits_a_tag_with_a_max_budget_and_unbudgeted_rul
     assert data["metadata"]["tags"] == ["usecase:a", "region:sg"]
 
 
-@pytest.mark.parametrize("route", ["/v1/chat/completions", "/chat/completions", "/v1/messages", "/v1/responses"])
+@pytest.mark.parametrize(
+    "route",
+    ["/v1/chat/completions", "/chat/completions", "/v1/messages", "/v1/responses", "/a2a/qa-agent/message/send"],
+)
 def test_inference_routes_take_baggage_mappings(route):
     assert is_baggage_mapped_route(route)
 
@@ -231,14 +234,14 @@ def test_inference_routes_take_baggage_mappings(route):
     "route",
     [
         "/utils/token_counter",
+        "/utils/transform_request",
         "/v1/messages/count_tokens",
         "/v1/responses/input_tokens",
         "/v1beta/models/gemini-pro:countTokens",
         "/mcp",
-        "/a2a/qa-agent/message/send",
     ],
 )
-def test_unbilled_mcp_and_agent_routes_skip_baggage_mappings(route):
+def test_unbilled_and_mcp_routes_skip_baggage_mappings(route):
     assert not is_baggage_mapped_route(route)
 
 
