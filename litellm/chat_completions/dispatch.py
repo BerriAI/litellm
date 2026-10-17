@@ -1,9 +1,11 @@
 import inspect
 from collections.abc import Awaitable, Callable, Coroutine, Mapping
+from types import MappingProxyType
 from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding selects a sync result or an async awaitable
 
 from litellm import main
-from litellm.rust_bridge.catalog import Route, RouteContext
+from litellm.rust_bridge import detectors
+from litellm.rust_bridge.catalog import Feature, Route, RouteContext
 from litellm.rust_bridge.chat_completions.entrypoints import (
     NATIVE_ACOMPLETION,
     NATIVE_COMPLETION,
@@ -63,11 +65,32 @@ def _public_request(
     return native_call(legacy, args, kwargs)
 
 
+_FEATURES: Final[detectors.Detectors] = MappingProxyType(
+    {
+        **detectors.COMMON,
+        Feature.MOCK_RESPONSE: detectors.chat_mock_response,
+        Feature.AGENTIC_LOOP_HOOK: detectors.chat_agentic_loop_hook,
+        Feature.RESPONSE_CACHE: detectors.response_cache,
+        Feature.STREAMING: detectors.streaming,
+        Feature.DROP_PARAMS: detectors.drop_params,
+        Feature.MODIFY_PARAMS: detectors.modify_params,
+        Feature.EXTRA_BODY: detectors.extra_body,
+        Feature.RETRIES_FALLBACKS: detectors.chat_retries_fallbacks,
+        Feature.PROMPT_MANAGEMENT: detectors.prompt_management,
+        Feature.CACHE_CONTROL_INJECTION: detectors.cache_control_injection,
+        Feature.MODEL_PARAM_GATING: detectors.chat_model_param_gating,
+        Feature.MODEL_LIST: detectors.model_list,
+        Feature.MODEL_ALIAS_MAP: detectors.model_alias_map,
+    }
+)
+
+
 def _context(request: NativeCall) -> RouteContext:
     return RouteContext(
         Route.CHAT_COMPLETIONS,
         provider=optional_str(request.resolved.get("custom_llm_provider")),
         model=str(request.resolved["model"]),
+        features=detectors.detected(_FEATURES, request),
     )
 
 
