@@ -97,6 +97,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
     ResponsesAPIStatus,
     ToolChoice,
+    ToolMessageContentPart,
     ValidChatCompletionMessageContentTypes,
     ValidChatCompletionMessageContentTypesLiteral,
 )
@@ -2068,7 +2069,7 @@ class LiteLLMCompletionResponsesConfig:
 
         def _normalize_function_call_output_to_tool_content(
             output: object,
-        ) -> str | list[ChatCompletionTextObject | ChatCompletionImageObject]:
+        ) -> str | list[ToolMessageContentPart]:
             """
             Normalize Responses API function_call_output.output into a shape that downstream
             chat adapters (esp. Gemini) can reliably consume.
@@ -2081,7 +2082,7 @@ class LiteLLMCompletionResponsesConfig:
 
             For chat tool messages we normalize to either:
             - string (preferred)
-            - list of {"type": "text"|"image_url", ...} blocks (for multimodal tool outputs)
+            - list of {"type": "text"|"image_url"|"tool_reference", ...} blocks
             """
             if output is None:
                 return ""
@@ -2090,7 +2091,7 @@ class LiteLLMCompletionResponsesConfig:
 
             # Some adapters represent tool output as a list of "input_*" parts
             if isinstance(output, list):
-                normalized_blocks: Final[list[ChatCompletionTextObject | ChatCompletionImageObject]] = []
+                normalized_blocks: Final[list[ToolMessageContentPart]] = []
                 text_acc: Final[list[str]] = []
                 for part in output:
                     if not isinstance(part, dict):
@@ -2101,6 +2102,12 @@ class LiteLLMCompletionResponsesConfig:
                         if isinstance(txt, str) and txt:
                             text_acc.append(txt)
                             normalized_blocks.append({"type": "text", "text": txt})
+                    elif part_type == "tool_reference":
+                        match cast(Mapping[str, object], part):  # cast-ok: dict checked above
+                            case {"tool_name": str(tool_name)} if tool_name:
+                                normalized_blocks.append({"type": "tool_reference", "tool_name": tool_name})
+                            case _:
+                                continue
                     elif part_type in ("input_image", "image_url"):
                         image_url_val = part.get("image_url") or part.get("url")
                         if isinstance(image_url_val, dict):
@@ -2115,9 +2122,7 @@ class LiteLLMCompletionResponsesConfig:
                                 }
                             )
 
-                # Prefer structured blocks if we have images; otherwise return a string.
-                if any(b.get("type") == "image_url" for b in normalized_blocks):
-                    # Ensure we include any accumulated text as text blocks too
+                if any(b["type"] in ("image_url", "tool_reference") for b in normalized_blocks):
                     return normalized_blocks
                 if text_acc:
                     return "".join(text_acc)
