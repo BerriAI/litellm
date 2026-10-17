@@ -1080,37 +1080,30 @@ async def test_malformed_caller_request_metadata_is_dropped_when_params_are_drop
     assert json.loads(dropped.content) == {**body, "requestMetadata": EXPECTED_REQUEST_METADATA}
 
 
-CALLER_TEAM: Final = {"user_api_key_team_alias": "caller-team"}
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("action", "body", "caller_metadata", "kept_metadata"),
+    ("action", "body", "caller_metadata"),
     [
-        ("converse", CONVERSE_BODY, {"user_api_key_team_alias": "caller-team", "bad!": "x"}, CALLER_TEAM),
-        ("invoke", INVOKE_BODY, {"user_api_key_team_alias": "caller-team", "bad!": "x"}, CALLER_TEAM),
-        ("invoke", INVOKE_BODY, None, None),
+        ("converse", CONVERSE_BODY, {"user_api_key_team_alias": "caller-team", "bad!": "x"}),
+        ("invoke", INVOKE_BODY, {"user_api_key_team_alias": "caller-team", "bad!": "x"}),
+        ("invoke", INVOKE_BODY, None),
     ],
 )
 @pytest.mark.parametrize("drop_globally", [True, False])
-async def test_malformed_caller_request_metadata_is_dropped_when_params_are_dropped_and_forwarding_is_off(
+async def test_passthrough_body_is_sent_as_is_when_params_are_dropped_and_forwarding_is_off(
     action: str,
     body: dict[str, object],
     caller_metadata: dict[str, str] | None,
-    kept_metadata: dict[str, str] | None,
     drop_globally: bool,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", None)
     monkeypatch.setattr(litellm, "drop_params", drop_globally)
+    caller_body: Final = {**body, "requestMetadata": caller_metadata}
 
-    dropped: Final = await _sent_passthrough_request(
-        action,
-        {**body, "requestMetadata": caller_metadata},
-        PROXY_IDENTITY,
-        **({} if drop_globally else {"drop_params": True}),
+    sent: Final = await _sent_passthrough_request(
+        action, caller_body, PROXY_IDENTITY, **({} if drop_globally else {"drop_params": True})
     )
 
-    expected: Final = body if kept_metadata is None else {**body, "requestMetadata": kept_metadata}
-    assert json.loads(dropped.content) == expected
-    assert REQUEST_METADATA_HEADER not in dropped.headers
+    assert json.loads(sent.content) == caller_body
+    assert REQUEST_METADATA_HEADER not in sent.headers

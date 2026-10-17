@@ -231,7 +231,6 @@ def bedrock_request_metadata_fits_header(litellm_params: Mapping[str, object] | 
 
 def bedrock_request_metadata_headers(
     litellm_params: Mapping[str, object] | None,
-    caller_metadata: object = None,
 ) -> tuple[frozenset[str], tuple[tuple[str, str], ...]]:
     """
     The signed ``X-Amzn-Bedrock-Request-Metadata`` header for an Invoke request whose body carries
@@ -246,7 +245,7 @@ def bedrock_request_metadata_headers(
     """
     if not bedrock_request_metadata_is_owned():
         return frozenset(), ()
-    resolved: Final = resolve_bedrock_request_metadata(litellm_params, caller_metadata)
+    resolved: Final = resolve_bedrock_request_metadata(litellm_params)
     fitting: Final = {} if resolved is None else _longest_fitting_prefix(resolved)
     if not fitting:
         return _OWNED_HEADER_NAMES, ()

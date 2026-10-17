@@ -20,7 +20,6 @@ from ..request_metadata import (
     bedrock_request_metadata_fits_header,
     bedrock_request_metadata_headers,
     bedrock_request_metadata_is_owned,
-    bedrock_request_metadata_is_rewritten,
     bedrock_request_metadata_violation,
     caller_request_metadata_violations_are_dropped,
     merge_bedrock_invoke_headers,
@@ -326,11 +325,7 @@ class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamD
     ) -> tuple[dict, bytes | None]:
         optional_params: Final = litellm_params.copy()
         signed_headers, signed_body = _with_request_metadata(
-            action=(
-                _bedrock_endpoint_action(api_base)
-                if bedrock_request_metadata_is_rewritten(litellm_params.get("drop_params") is True)
-                else None
-            ),
+            action=_bedrock_endpoint_action(api_base) if bedrock_request_metadata_is_owned() else None,
             headers=headers,
             body=request_data or {},
             litellm_params=litellm_params,
