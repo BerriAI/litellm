@@ -5248,13 +5248,22 @@ def test_get_spend_logs_metadata_sibling_fields_preserved():
     assert meta["user_api_key_team_id"] == "team-123"
 
 
-def test_get_logging_payload_preserves_user_email_in_spend_log_metadata():
+@pytest.mark.parametrize(
+    ("user_email", "stored_email"),
+    [
+        ("sso-user@example.com", "sso-user@example.com"),
+        ("", None),
+        ("   ", None),
+        (None, None),
+    ],
+)
+def test_get_logging_payload_stores_user_email_in_spend_log_metadata(user_email, stored_email):
     payload = get_logging_payload(
         kwargs={
             "model": "gpt-4o-mini",
             "litellm_params": {
                 "metadata": {
-                    "user_api_key_user_email": "sso-user@example.com",
+                    "user_api_key_user_email": user_email,
                     "user_api_key_user_id": "okta|abc123",
                 }
             },
@@ -5266,7 +5275,7 @@ def test_get_logging_payload_preserves_user_email_in_spend_log_metadata():
 
     metadata = json.loads(payload["metadata"])
 
-    assert metadata["user_api_key_user_email"] == "sso-user@example.com"
+    assert metadata["user_api_key_user_email"] == stored_email
     assert metadata["user_api_key_user_id"] == "okta|abc123"
 
 

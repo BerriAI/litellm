@@ -3675,18 +3675,6 @@ async def _wait_for_mock_call(mock, timeout=10, interval=0.1):
     mock.assert_called_once()  # will raise with a clear message
 
 
-def _with_user_email_metadata(payload: SpendLogsPayload) -> SpendLogsPayload:
-    return {
-        **payload,
-        "metadata": json.dumps(
-            {
-                **json.loads(payload["metadata"]),
-                "user_api_key_user_email": None,
-            }
-        ),
-    }
-
-
 class TestSpendLogsPayload:
     def setup_method(self):
         self._original_callbacks = litellm.callbacks[:]
@@ -3722,44 +3710,42 @@ class TestSpendLogsPayload:
 
             kwargs = mock_client.call_args.kwargs
             payload: SpendLogsPayload = kwargs["payload"]
-            expected_payload = _with_user_email_metadata(
-                SpendLogsPayload(
-                    **{
-                        "request_id": "chatcmpl-34df56d5-4807-45c1-bb99-61e52586b802",
-                        "session_id": "1234567890",
-                        "call_type": "acompletion",
-                        "api_key": "",
-                        "cache_hit": "None",
-                        "startTime": datetime.datetime(2025, 3, 24, 22, 2, 42, 975883, tzinfo=datetime.timezone.utc),
-                        "endTime": datetime.datetime(2025, 3, 24, 22, 2, 42, 989132, tzinfo=datetime.timezone.utc),
-                        "completionStartTime": datetime.datetime(
-                            2025, 3, 24, 22, 2, 42, 989132, tzinfo=datetime.timezone.utc
-                        ),
-                        "model": "gpt-4o",
-                        "user": "",
-                        "team_id": "",
-                        "metadata": '{"actor_agent_id": null, "target_agent_id": null, "billing_agent_id": null, "agent_execution_mode": null, "verified_human_user_id": null, "applied_guardrails": [], "attempted_fallbacks": null, "original_model_group": null, "batch_models": null, "batch_successful_requests": null, "batch_failed_requests": null, "mcp_tool_call_metadata": null, "vector_store_request_metadata": null, "routing_decision": null, "internal_call_origin": null, "guardrail_information": null, "compression_savings": null, "litellm_gateway_injected_cache": null, "router_metadata": null, "autorouter_savings_estimate": null, "autorouter_baseline_observation": null, "azure_spillover": null, "used_client_oauth_token": null, "litellm_roi_estimator": false, "usage_object": {"completion_tokens": 20, "prompt_tokens": 10, "total_tokens": 30, "completion_tokens_details": null, "prompt_tokens_details": null}, "model_map_information": {"model_map_key": "gpt-4o", "model_map_value": {"key": "gpt-4o", "max_tokens": 16384, "max_input_tokens": 128000, "max_output_tokens": 16384, "input_cost_per_token": 2.5e-06, "cache_creation_input_token_cost": null, "cache_read_input_token_cost": 1.25e-06, "input_cost_per_character": null, "input_cost_per_token_above_128k_tokens": null, "input_cost_per_token_above_200k_tokens": null, "input_cost_per_query": null, "input_cost_per_second": null, "input_cost_per_audio_token": null, "input_cost_per_token_batches": 1.25e-06, "output_cost_per_token_batches": 5e-06, "output_cost_per_token": 1e-05, "output_cost_per_audio_token": null, "output_cost_per_character": null, "output_cost_per_token_above_128k_tokens": null, "output_cost_per_character_above_128k_tokens": null, "output_cost_per_token_above_200k_tokens": null, "output_cost_per_second": null, "output_cost_per_reasoning_token": null, "output_cost_per_image": null, "output_vector_size": null, "litellm_provider": "openai", "mode": "chat", "supports_system_messages": true, "supports_response_schema": true, "supports_vision": true, "supports_function_calling": true, "supports_tool_choice": true, "supports_assistant_prefill": false, "supports_prompt_caching": true, "supports_audio_input": false, "supports_audio_output": false, "supports_pdf_input": false, "supports_embedding_image_input": false, "supports_native_streaming": null, "supports_web_search": true, "supports_reasoning": false, "search_context_cost_per_query": {"search_context_size_low": 0.03, "search_context_size_medium": 0.035, "search_context_size_high": 0.05}, "tpm": null, "rpm": null, "supported_openai_params": ["frequency_penalty", "logit_bias", "logprobs", "top_logprobs", "max_tokens", "max_completion_tokens", "modalities", "prediction", "n", "presence_penalty", "seed", "stop", "stream", "stream_options", "temperature", "top_p", "tools", "tool_choice", "function_call", "functions", "max_retries", "extra_headers", "parallel_tool_calls", "audio", "response_format", "user"]}}, "additional_usage_values": {"completion_tokens_details": null, "prompt_tokens_details": null}}',
-                        "cache_key": "Cache OFF",
-                        "spend": 0.00022500000000000002,
-                        "total_tokens": 30,
-                        "prompt_tokens": 10,
-                        "completion_tokens": 20,
-                        "request_tags": "[]",
-                        "end_user": "test_user_1",
-                        "api_base": "",
-                        "model_group": "",
-                        "model_id": "",
-                        "requester_ip_address": None,
-                        "custom_llm_provider": "openai",
-                        "messages": "{}",
-                        "response": "{}",
-                        "proxy_server_request": "{}",
-                        "status": "success",
-                        "mcp_namespaced_tool_name": None,
-                        "agent_id": None,
-                        "billing_agent_id": None,
-                    }
-                )
+            expected_payload = SpendLogsPayload(
+                **{
+                    "request_id": "chatcmpl-34df56d5-4807-45c1-bb99-61e52586b802",
+                    "session_id": "1234567890",
+                    "call_type": "acompletion",
+                    "api_key": "",
+                    "cache_hit": "None",
+                    "startTime": datetime.datetime(2025, 3, 24, 22, 2, 42, 975883, tzinfo=datetime.timezone.utc),
+                    "endTime": datetime.datetime(2025, 3, 24, 22, 2, 42, 989132, tzinfo=datetime.timezone.utc),
+                    "completionStartTime": datetime.datetime(
+                        2025, 3, 24, 22, 2, 42, 989132, tzinfo=datetime.timezone.utc
+                    ),
+                    "model": "gpt-4o",
+                    "user": "",
+                    "team_id": "",
+                    "metadata": '{"user_api_key_user_email": null, "actor_agent_id": null, "target_agent_id": null, "billing_agent_id": null, "agent_execution_mode": null, "verified_human_user_id": null, "applied_guardrails": [], "attempted_fallbacks": null, "original_model_group": null, "batch_models": null, "batch_successful_requests": null, "batch_failed_requests": null, "mcp_tool_call_metadata": null, "vector_store_request_metadata": null, "routing_decision": null, "internal_call_origin": null, "guardrail_information": null, "compression_savings": null, "litellm_gateway_injected_cache": null, "router_metadata": null, "autorouter_savings_estimate": null, "autorouter_baseline_observation": null, "azure_spillover": null, "used_client_oauth_token": null, "litellm_roi_estimator": false, "usage_object": {"completion_tokens": 20, "prompt_tokens": 10, "total_tokens": 30, "completion_tokens_details": null, "prompt_tokens_details": null}, "model_map_information": {"model_map_key": "gpt-4o", "model_map_value": {"key": "gpt-4o", "max_tokens": 16384, "max_input_tokens": 128000, "max_output_tokens": 16384, "input_cost_per_token": 2.5e-06, "cache_creation_input_token_cost": null, "cache_read_input_token_cost": 1.25e-06, "input_cost_per_character": null, "input_cost_per_token_above_128k_tokens": null, "input_cost_per_token_above_200k_tokens": null, "input_cost_per_query": null, "input_cost_per_second": null, "input_cost_per_audio_token": null, "input_cost_per_token_batches": 1.25e-06, "output_cost_per_token_batches": 5e-06, "output_cost_per_token": 1e-05, "output_cost_per_audio_token": null, "output_cost_per_character": null, "output_cost_per_token_above_128k_tokens": null, "output_cost_per_character_above_128k_tokens": null, "output_cost_per_token_above_200k_tokens": null, "output_cost_per_second": null, "output_cost_per_reasoning_token": null, "output_cost_per_image": null, "output_vector_size": null, "litellm_provider": "openai", "mode": "chat", "supports_system_messages": true, "supports_response_schema": true, "supports_vision": true, "supports_function_calling": true, "supports_tool_choice": true, "supports_assistant_prefill": false, "supports_prompt_caching": true, "supports_audio_input": false, "supports_audio_output": false, "supports_pdf_input": false, "supports_embedding_image_input": false, "supports_native_streaming": null, "supports_web_search": true, "supports_reasoning": false, "search_context_cost_per_query": {"search_context_size_low": 0.03, "search_context_size_medium": 0.035, "search_context_size_high": 0.05}, "tpm": null, "rpm": null, "supported_openai_params": ["frequency_penalty", "logit_bias", "logprobs", "top_logprobs", "max_tokens", "max_completion_tokens", "modalities", "prediction", "n", "presence_penalty", "seed", "stop", "stream", "stream_options", "temperature", "top_p", "tools", "tool_choice", "function_call", "functions", "max_retries", "extra_headers", "parallel_tool_calls", "audio", "response_format", "user"]}}, "additional_usage_values": {"completion_tokens_details": null, "prompt_tokens_details": null}}',
+                    "cache_key": "Cache OFF",
+                    "spend": 0.00022500000000000002,
+                    "total_tokens": 30,
+                    "prompt_tokens": 10,
+                    "completion_tokens": 20,
+                    "request_tags": "[]",
+                    "end_user": "test_user_1",
+                    "api_base": "",
+                    "model_group": "",
+                    "model_id": "",
+                    "requester_ip_address": None,
+                    "custom_llm_provider": "openai",
+                    "messages": "{}",
+                    "response": "{}",
+                    "proxy_server_request": "{}",
+                    "status": "success",
+                    "mcp_namespaced_tool_name": None,
+                    "agent_id": None,
+                    "billing_agent_id": None,
+                }
             )
 
             differences = _compare_nested_dicts(payload, expected_payload, ignore_keys=ignored_keys)
