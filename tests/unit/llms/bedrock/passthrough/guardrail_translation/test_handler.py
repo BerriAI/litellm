@@ -2303,6 +2303,46 @@ class TestConverseGuardrailsThatReadFlatTextsOnly:
         assert result["data"]["messages"] == [{"role": "user", "content": [{"text": "Card [CARD] please"}]}]
 
 
+_GUARDRAIL_CONFIG = {"guardrailIdentifier": "gr-1", "guardrailVersion": "1"}
+
+
+class TestConverseGuardContentText:
+    def test_guard_content_text_is_scanned_like_a_text_block(self):
+        body = {
+            "system": [{"guardContent": {"text": {"text": "sys 4111"}}}],
+            "messages": [
+                {"role": "user", "content": [{"text": "hi"}, {"guardContent": {"text": {"text": "card 4111"}}}]}
+            ],
+        }
+
+        texts, holders = _extract_converse_texts(body, skip_system=False, skip_tool=False)
+
+        assert texts == ["sys 4111", "hi", "card 4111"]
+        assert holders[2] == (body["messages"][0]["content"][1]["guardContent"]["text"], "text")
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "masker_class",
+        [_ScriptedGuardrail, _FlatTextsOnlyGuardrail],
+        ids=["supports-structured-messages", "flat-texts-only"],
+    )
+    @pytest.mark.parametrize("guarded", [True, False], ids=["guardrail-config", "no-guardrail-config"])
+    async def test_tool_history_written_as_text_is_masked_by_the_next_guardrail(self, masker_class, guarded):
+        data = _card_in_every_turn_data()
+        if guarded:
+            data["data"]["guardrailConfig"] = _GUARDRAIL_CONFIG
+        handler = BedrockPassthroughGuardrailHandler()
+        tool_remover = _ScriptedGuardrail(lambda inputs: {"texts": inputs["texts"], "tools": []})
+
+        without_tools = await handler.process_input_messages(data, tool_remover)
+        result = await handler.process_input_messages(
+            without_tools, masker_class(lambda inputs: {"texts": _masked_texts(inputs)})
+        )
+
+        assert "toolConfig" not in result["data"]
+        assert "4111" not in json.dumps(result["data"])
+
+
 def _decoded_frames(raw: bytes) -> list[tuple[str, str, dict]]:
     import json
     from botocore.eventstream import EventStreamBuffer

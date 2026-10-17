@@ -146,9 +146,9 @@ def _collect_strings(node: object, holders: list[_StringHolder]) -> None:
 
 
 def _collect_block_text(block: dict, holders: list[_StringHolder]) -> None:
-    text: Final = block.get("text")
-    if isinstance(text, str) and text:
-        holders.append((block, "text"))
+    holder: Final = _block_text_holder(block)
+    if holder is not None and _child(*holder):
+        holders.append(holder)
 
 
 def _request_field_holders(body: Mapping[str, object]) -> tuple[_StringHolder, ...]:
@@ -168,8 +168,8 @@ def _extract_converse_texts(
 
     Returns (texts, holders) where each holder is the (container, key) pair
     that owns the extracted string, so write-back mutates it in place. Besides
-    top-level ``text`` blocks this scans the arbitrary-JSON fields a caller can
-    hide prompt content in -- ``toolUse.input`` and
+    top-level ``text`` and ``guardContent`` blocks this scans the arbitrary-JSON
+    fields a caller can hide prompt content in -- ``toolUse.input`` and
     ``toolResult.content[].json`` (alongside ``toolResult.content[].text``) --
     as well as ``additionalModelRequestFields``, a free-form model-parameter bag
     with no schema that a caller can route blocked content through.
