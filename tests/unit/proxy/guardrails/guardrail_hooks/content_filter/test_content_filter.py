@@ -393,6 +393,90 @@ class TestContentFilterGuardrail:
         assert result is not None
         assert result[1] == "aws_access_key"
 
+    def test_aws_secret_key_patterns(self):
+        """
+        Test AWS Secret Key pattern detection for actual key
+        """
+        patterns: Final = [
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="aws_secret_key",
+                action=ContentFilterAction.BLOCK,
+            ),
+        ]
+
+        guardrail: Final = ContentFilterGuardrail(
+            guardrail_name="test-aws-secret-key",
+            patterns=patterns,
+        )
+
+        result: Final = guardrail._check_patterns("My key is wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY")
+        assert result is not None
+        assert result[1] == "aws_secret_key"
+
+    def test_aws_secret_key_patterns_filepath(self):
+        """
+        Test AWS Secret Key pattern detection to ensure it doesn't match long filepaths
+        """
+        patterns: Final = [
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="aws_secret_key",
+                action=ContentFilterAction.BLOCK,
+            ),
+        ]
+
+        guardrail: Final = ContentFilterGuardrail(
+            guardrail_name="test-aws-secret-key-filepath",
+            patterns=patterns,
+        )
+
+        result: Final = guardrail._check_patterns("Please read the file at " +
+                                       "coding2/projects/files/others/file/coders.txt")
+        assert result is None
+
+    def test_aws_secret_key_patterns_slash_check(self):
+        """
+        Test AWS Secret Key pattern detection to verify it rejects even with exactly 4 slashes
+        """
+        patterns: Final = [
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="aws_secret_key",
+                action=ContentFilterAction.BLOCK,
+            ),
+        ]
+
+        guardrail: Final = ContentFilterGuardrail(
+            guardrail_name="test-aws-secret-key-slash-check",
+            patterns=patterns,
+        )
+
+        result: Final = guardrail._check_patterns("My key is w/alrXUtnFEMI/K7MDENG/bPxRfiCY/XAMPLEKEY")
+        assert result is not None
+        assert result[1] == "aws_secret_key"
+
+    def test_aws_secret_key_patterns_digit_check(self):
+        """
+        Test AWS Secret Key pattern detection to verify it rejects even with no digits
+        """
+        patterns: Final = [
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="aws_secret_key",
+                action=ContentFilterAction.BLOCK,
+            ),
+        ]
+
+        guardrail: Final = ContentFilterGuardrail(
+            guardrail_name="test-aws-secret-key-digit-check",
+            patterns=patterns,
+        )
+
+        result: Final = guardrail._check_patterns("My key is w/alrXUtnFEMI/KdMDENG/bPxRfiCY/XAMPLEKEY")
+        assert result is not None
+        assert result[1] == "aws_secret_key"
+
     @pytest.mark.asyncio
     async def test_streaming_hook_mask(self):
         """
