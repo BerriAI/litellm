@@ -3946,6 +3946,74 @@ def test_numbered_tokens_collapse_overlapping_detections_into_one_token_per_run(
     assert OPTIONAL_PresidioPIIMasking._unmask_pii_text(masked, expected_tokens) == text
 
 
+@pytest.mark.parametrize(
+    ("parts", "expected_masked", "expected_tokens"),
+    [
+        pytest.param(
+            (
+                (
+                    "My number is 4251234567.",
+                    [
+                        {"entity_type": "PHONE_NUMBER", "start": 13, "end": 23, "score": 0.75},
+                        {"entity_type": "US_BANK_NUMBER", "start": 13, "end": 23, "score": 0.05},
+                        {"entity_type": "US_DRIVER_LICENSE", "start": 13, "end": 23, "score": 0.01},
+                    ],
+                ),
+                (
+                    "Also call +1 (206) 555-0199.",
+                    [{"entity_type": "PHONE_NUMBER", "start": 10, "end": 27, "score": 0.4}],
+                ),
+            ),
+            ("My number is <PHONE_NUMBER_1>.", "Also call <PHONE_NUMBER_2>."),
+            {"<PHONE_NUMBER_1>": "4251234567", "<PHONE_NUMBER_2>": "+1 (206) 555-0199"},
+            id="overlapping-run-then-plain-detection",
+        ),
+        pytest.param(
+            (
+                ("Call John Smith.", [{"entity_type": "PERSON", "start": 5, "end": 15, "score": 0.85}]),
+                ("Again John Smith.", [{"entity_type": "PERSON", "start": 6, "end": 16, "score": 0.85}]),
+            ),
+            ("Call <PERSON_1>.", "Again <PERSON_1>."),
+            {"<PERSON_1>": "John Smith"},
+            id="same-value-keeps-its-token",
+        ),
+        pytest.param(
+            (
+                ("Call John Smith.", [{"entity_type": "PERSON", "start": 5, "end": 15, "score": 0.85}]),
+                (
+                    "Ann Lee and Bob Ray.",
+                    [
+                        {"entity_type": "PERSON", "start": 0, "end": 7, "score": 0.85},
+                        {"entity_type": "PERSON", "start": 12, "end": 19, "score": 0.85},
+                    ],
+                ),
+            ),
+            ("Call <PERSON_1>.", "<PERSON_3> and <PERSON_2>."),
+            {"<PERSON_1>": "John Smith", "<PERSON_2>": "Bob Ray", "<PERSON_3>": "Ann Lee"},
+            id="bump-skips-every-claimed-number",
+        ),
+    ],
+)
+def test_numbered_tokens_stay_unique_across_parts_of_one_request(
+    parts: tuple[tuple[str, list[PresidioAnalyzeResponseItem]], ...],
+    expected_masked: tuple[str, ...],
+    expected_tokens: dict[str, str],
+) -> None:
+    guardrail: Final = OPTIONAL_PresidioPIIMasking(mock_testing=True)
+    request_data: Final = {"metadata": {}}
+
+    masked: Final = tuple(
+        guardrail._finalize_presidio_anonymize_numbered_tokens(text, results, request_data, {})
+        for text, results in parts
+    )
+
+    assert masked == expected_masked
+    assert request_data["metadata"]["pii_tokens"] == expected_tokens
+    assert OPTIONAL_PresidioPIIMasking._unmask_pii_text(" | ".join(masked), expected_tokens) == " | ".join(
+        text for text, _ in parts
+    )
+
+
 @pytest.mark.asyncio
 async def test_analyze_text_chunked_failure_stays_fail_closed():
     """If one chunk still fails, the chunked path raises exactly like a single

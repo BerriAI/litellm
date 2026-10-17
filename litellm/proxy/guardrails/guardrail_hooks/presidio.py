@@ -12,11 +12,11 @@ import asyncio
 import json
 import re
 import threading
-from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Awaitable, Iterator, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Awaitable, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
-from itertools import accumulate, pairwise
+from itertools import accumulate, count, pairwise
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, cast
 
 import aiohttp
@@ -234,6 +234,17 @@ def _resolve_overlapping_spans(analyze_results: Sequence[PresidioAnalyzeResponse
         len(detections),
     )
     return tuple(_collapse_run(detections[first:last]) for first, last in pairwise(boundaries) if first < last)
+
+
+def _unclaimed_numbered_token(pii_tokens: Mapping[str, str], entity_type: str, seq: int, original: str) -> str:
+    """
+    ``<entity_type_seq>``, or the next number up when the request already maps that token to another value.
+
+    Every message and content part numbers its tokens from 1 into one request-wide
+    ``pii_tokens`` map, so without the bump a later part overwrites an earlier part's
+    value and unmasking restores the wrong one.
+    """
+    return next(token for n in count(seq) if pii_tokens.get(token := f"<{entity_type}_{n}>", original) == original)
 
 
 class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
@@ -876,13 +887,14 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             request_data["metadata"] = {}
         if "pii_tokens" not in request_data["metadata"]:
             request_data["metadata"]["pii_tokens"] = {}
-        pii_tokens: Final = request_data["metadata"]["pii_tokens"]
+        pii_tokens: Final = cast("dict[str, str]", request_data["metadata"]["pii_tokens"])  # cast-ok: this hook's map
 
         runs: Final = _resolve_overlapping_spans(analyze_results)
 
         for seq, run in reversed(tuple(enumerate(runs, start=1))):
-            replacement = f"<{run.entity_type}_{seq}>"
-            pii_tokens[replacement] = text[run.start : run.end]
+            original = text[run.start : run.end]
+            replacement = _unclaimed_numbered_token(pii_tokens, run.entity_type, seq, original)
+            pii_tokens[replacement] = original
             new_text = new_text[: run.start] + replacement + new_text[run.end :]
             masked_entity_count[run.entity_type] = masked_entity_count.get(run.entity_type, 0) + 1
         return new_text

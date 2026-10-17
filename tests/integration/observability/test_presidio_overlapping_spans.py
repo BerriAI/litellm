@@ -18,9 +18,11 @@ MODEL: Final = "gpt-6.1-sol"
 PHONE: Final = "4251234567"
 EMAIL: Final = "john.smith@example.com"
 INTERNATIONAL_PHONE: Final = "+33 1 42 68 53 00"
+US_PHONE: Final = "+1 (206) 555-0199"
 SAME_SPAN: Final = f"Repeat exactly: my number is {PHONE}"
 NESTED: Final = f"contact {EMAIL} today"
 CONTAINED_FRAGMENT: Final = f"her phone is {INTERNATIONAL_PHONE}."
+SEPARATE_PARTS: Final = (f"My number is {PHONE}.", f"Also call {US_PHONE}.")
 # Spans, scores and anonymized texts recorded from presidio-analyzer and presidio-anonymizer 2.2.364 on 2026-10-16
 DETECTIONS: Final = MappingProxyType(
     {
@@ -28,6 +30,7 @@ DETECTIONS: Final = MappingProxyType(
         EMAIL: (("EMAIL_ADDRESS", 0, 22, 1.0), ("URL", 0, 7, 0.5), ("URL", 11, 22, 0.5)),
         "today": (("DATE_TIME", 0, 5, 0.85),),
         INTERNATIONAL_PHONE: (("DATE_TIME", 12, 17, 0.85), ("PHONE_NUMBER", 0, 17, 0.75)),
+        US_PHONE: (("PHONE_NUMBER", 0, 17, 0.4),),
     }
 )
 ANONYMIZED: Final = MappingProxyType(
@@ -35,6 +38,8 @@ ANONYMIZED: Final = MappingProxyType(
         SAME_SPAN: "Repeat exactly: my number is <PHONE_NUMBER>",
         NESTED: "contact <EMAIL_ADDRESS> <DATE_TIME>",
         CONTAINED_FRAGMENT: "her phone is <PHONE_NUMBER>.",
+        SEPARATE_PARTS[0]: "My number is <PHONE_NUMBER>.",
+        SEPARATE_PARTS[1]: "Also call <PHONE_NUMBER>.",
     }
 )
 CASES: Final = (
@@ -66,6 +71,17 @@ def _anonymize(request: Request) -> Reply:
     return Reply(body=json.dumps({"text": ANONYMIZED[text], "items": []}).encode())
 
 
+def _texts(messages: list[dict]) -> tuple[str, ...]:
+    return tuple(
+        chain.from_iterable(
+            (message["content"],)
+            if isinstance(message["content"], str)
+            else (part["text"] for part in message["content"])
+            for message in messages
+        )
+    )
+
+
 def _chunk(text: str, finish: str | None) -> bytes:
     delta: Final = {"role": "assistant", "content": text} if finish is None else {}
     payload: Final = {
@@ -81,7 +97,7 @@ def _chunk(text: str, finish: str | None) -> bytes:
 def _echo(request: Request) -> Reply:
     assert request.target == "/v1/chat/completions", request.target
     body: Final = json.loads(request.body)
-    text: Final = body["messages"][-1]["content"]
+    text: Final = " | ".join(_texts(body["messages"]))
     if body.get("stream"):
         pieces: Final = tuple(text[index : index + 6] for index in range(0, len(text), 6))
         return Reply(
@@ -155,9 +171,9 @@ def input_scope_rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
         yield rig
 
 
-def _send(rig: Rig, text: str, stream: bool) -> tuple[int, str]:
+def _send(rig: Rig, messages: list[dict], stream: bool) -> tuple[int, str]:
     rig.provider.drain()
-    body: Final = {"model": MODEL, "messages": [{"role": "user", "content": text}], "stream": stream}
+    body: Final = {"model": MODEL, "messages": messages, "stream": stream}
     headers: Final = {"Authorization": f"Bearer {rig.proxy.key}"}
     if not stream:
         response: Final = rig.proxy.client.post("/v1/chat/completions", json=body, headers=headers)
@@ -175,10 +191,10 @@ def _send(rig: Rig, text: str, stream: bool) -> tuple[int, str]:
     return 200, "".join(frame["choices"][0]["delta"].get("content") or "" for frame in frames if frame["choices"])
 
 
-def _forwarded(rig: Rig) -> str:
+def _forwarded(rig: Rig) -> tuple[str, ...]:
     received: Final = rig.provider.drain()
     assert len(received) == 1, received
-    return json.loads(received[0].body)["messages"][-1]["content"]
+    return _texts(json.loads(received[0].body)["messages"])
 
 
 @STREAM
@@ -186,9 +202,9 @@ def _forwarded(rig: Rig) -> str:
 def test_overlapping_detections_reach_the_provider_as_one_token_and_come_back_unmasked(
     input_scope_rig: Rig, text: str, forwarded: str, stream: bool
 ) -> None:
-    status, replied = _send(input_scope_rig, text, stream)
+    status, replied = _send(input_scope_rig, [{"role": "user", "content": text}], stream)
     assert status == 200, replied
-    assert _forwarded(input_scope_rig) == forwarded
+    assert _forwarded(input_scope_rig) == (forwarded,)
     assert replied == text
 
 
@@ -197,7 +213,27 @@ def test_overlapping_detections_reach_the_provider_as_one_token_and_come_back_un
 def test_default_scope_masks_the_cleanly_restored_reply_like_presidio_masks_the_original(
     default_scope_rig: Rig, text: str, forwarded: str, stream: bool
 ) -> None:
-    status, replied = _send(default_scope_rig, text, stream)
+    status, replied = _send(default_scope_rig, [{"role": "user", "content": text}], stream)
     assert status == 200, replied
-    assert _forwarded(default_scope_rig) == forwarded
+    assert _forwarded(default_scope_rig) == (forwarded,)
     assert replied == ANONYMIZED[text]
+
+
+@STREAM
+@pytest.mark.parametrize(
+    "messages",
+    [
+        pytest.param(
+            [{"role": "user", "content": [{"type": "text", "text": part} for part in SEPARATE_PARTS]}],
+            id="content_parts",
+        ),
+        pytest.param([{"role": "user", "content": part} for part in SEPARATE_PARTS], id="messages"),
+    ],
+)
+def test_one_type_in_separate_parts_gets_distinct_tokens_and_each_part_comes_back_as_itself(
+    input_scope_rig: Rig, messages: list[dict], stream: bool
+) -> None:
+    status, replied = _send(input_scope_rig, messages, stream)
+    assert status == 200, replied
+    assert _forwarded(input_scope_rig) == ("My number is <PHONE_NUMBER_1>.", "Also call <PHONE_NUMBER_2>.")
+    assert replied == " | ".join(SEPARATE_PARTS)
