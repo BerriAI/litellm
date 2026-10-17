@@ -2737,7 +2737,7 @@ async def test_azure_ai_decisions_use_entra_token_without_api_key(
     assert route.calls[0].request.headers["authorization"] == "Bearer entra-access-token"
 
 
-def test_azure_ai_systemone_prefers_entra_token_to_environment_api_key(
+def test_azure_ai_systemone_environment_api_key_wins_over_deployment_entra(
     monkeypatch: pytest.MonkeyPatch,
     respx_mock: respx.MockRouter,
 ) -> None:
@@ -2756,11 +2756,11 @@ def test_azure_ai_systemone_prefers_entra_token_to_environment_api_key(
     )
 
     assert route.called
-    assert route.calls[0].request.headers["authorization"] == "Bearer entra-access-token"
+    assert route.calls[0].request.headers["authorization"] == "Bearer env-key"
 
 
 @pytest.mark.asyncio
-async def test_azure_ai_decisions_prefers_entra_token_to_environment_api_key(
+async def test_azure_ai_decisions_environment_api_key_wins_over_deployment_entra(
     monkeypatch: pytest.MonkeyPatch,
     respx_mock: respx.MockRouter,
 ) -> None:
@@ -2779,7 +2779,7 @@ async def test_azure_ai_decisions_prefers_entra_token_to_environment_api_key(
     )
 
     assert route.called
-    assert route.calls[0].request.headers["authorization"] == "Bearer entra-access-token"
+    assert route.calls[0].request.headers["authorization"] == "Bearer env-key"
 
 
 def test_azure_ai_decisions_uses_environment_api_key_without_entra_credentials(
@@ -2863,13 +2863,13 @@ def test_azure_ai_decisions_malformed_credential_is_a_sanitized_bad_request(
             input="review",
             questions=_PREDICATE_QUESTIONS,
             api_base="https://res.services.ai.azure.com",
-            azure_ad_token="entra-access-token",
-            azure_scope=123,
+            tenant_id="tenant-id",
+            client_id="client-id",
+            client_secret=123,
         )
 
     assert caught.value.status_code == 400
-    assert "azure_scope" in str(caught.value)
-    assert "entra-access-token" not in str(caught.value)
+    assert "`client_secret`" in str(caught.value)
     assert "123" not in str(caught.value)
     assert not route.called
 

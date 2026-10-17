@@ -11,7 +11,6 @@ import litellm
 from litellm.llms.azure_ai.common_utils import (
     AZURE_ENTRA_LITELLM_PARAM_KEYS,
     get_azure_ai_auth_headers,
-    has_azure_entra_params,
 )
 from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig
 
@@ -23,22 +22,12 @@ class AzureAIDecisionsConfig(BaseDecisionsConfig):
     """Microsoft Foundry decision models (Microsoft-Decision-1), where model is the deployment name"""
 
     path = "/providers/microsoft/v1/systemone"
-    api_key_env = ()
+    api_key_env = ("AZURE_AI_API_KEY",)
     api_base_env = ("AZURE_AI_API_BASE",)
     api_key_required = False
 
     def missing_api_base_message(self, custom_llm_provider: str) -> str:
         return "Missing AZURE_AI_API_BASE - set AZURE_AI_API_BASE or pass api_base, e.g. https://<resource>.services.ai.azure.com"
-
-    def select_api_key(
-        self,
-        explicit_api_key: str | None,
-        provider_api_key: str | None,
-        litellm_params: Mapping[str, object],
-    ) -> str | None:
-        if explicit_api_key or has_azure_entra_params(litellm_params):
-            return explicit_api_key
-        return provider_api_key
 
     def validate_environment(
         self,
@@ -60,7 +49,7 @@ class AzureAIDecisionsConfig(BaseDecisionsConfig):
                 )
             )
             raise litellm.BadRequestError(
-                message=f"Invalid Azure AI credential parameter(s): {', '.join(field_names)}",
+                message=f"Invalid Azure AI credential parameter(s): {', '.join(f'`{name}`' for name in field_names)}",
                 model=model,
                 llm_provider="azure_ai",
             ) from error
