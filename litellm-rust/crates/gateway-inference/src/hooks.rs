@@ -154,6 +154,20 @@ impl Tracking {
         self.admission.edit().apply_upstream_body(body);
     }
 
+    /// The headers the gateway would forward, after the hooks' changes; `None` when no hook
+    /// changes upstream headers.
+    pub(crate) fn edit_headers(
+        &self,
+        forwarded: Vec<(String, String)>,
+    ) -> Option<Vec<(String, String)>> {
+        let edit = self.admission.edit();
+        edit.changes_upstream_headers().then(|| {
+            let mut forwarded = forwarded;
+            edit.apply_upstream_headers(&mut forwarded);
+            forwarded
+        })
+    }
+
     /// Notes the deployment an attempt went to; the last one is the one that served.
     pub(crate) fn attempt(&self, name: &str, attempt: &Attempt<'_>) {
         if !self.pipeline.reads(Facts::DEPLOYMENT) {
