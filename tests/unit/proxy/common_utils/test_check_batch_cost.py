@@ -3299,11 +3299,13 @@ class TestMultiPodBatchCostClaim:
         assert json.loads(row.file_object)["status"] == "in_progress"
 
     @pytest.mark.asyncio
-    async def test_a_failed_spend_log_write_releases_the_claim(self):
+    @pytest.mark.parametrize("stored_as_json_string", (True, False))
+    async def test_a_failed_spend_log_write_releases_the_claim(self, stored_as_json_string: bool) -> None:
         """A transient failure while billing a claimed batch must hand the row back, or its
         spend is silently lost instead of being retried on the next cycle."""
         row = _FakeManagedObjectRow()
-        original_file_object: Final = row.file_object
+        original_file_object: Final = row.file_object if stored_as_json_string else json.loads(row.file_object)
+        row.file_object = original_file_object
         journal = []
         prisma = self._prisma(row, journal)
 
@@ -3313,7 +3315,7 @@ class TestMultiPodBatchCostClaim:
         assert journal == ["fetch", "claim", "bill", "release"]
         assert row.batch_processed is False
         assert row.status == "in_progress"
-        assert row.file_object == original_file_object
+        assert json.loads(row.file_object) == original_file_object
 
         with self._billing_patches(journal) as logging_obj:
             await self._instance(prisma, self._router()).check_batch_cost()

@@ -3,6 +3,7 @@ Polls LiteLLM_ManagedObjectTable to check if the batch job is complete, and if t
 """
 
 import asyncio
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import replace as dataclasses_replace
 from datetime import datetime, timedelta, timezone
@@ -271,7 +272,11 @@ class CheckBatchCost:
         try:
             await _managed_object_table(self.prisma_client).update_many(
                 where={"id": job.id, "batch_processed": True},
-                data={"batch_processed": False, "status": original_status, "file_object": original_file_object},
+                data={
+                    "batch_processed": False,
+                    "status": original_status,
+                    "file_object": json.dumps(original_file_object),
+                },
             )
         except Exception as db_err:
             verbose_proxy_logger.error(
@@ -570,8 +575,6 @@ class CheckBatchCost:
 
     @staticmethod
     def _get_input_file_id(job: "ManagedObjectRow") -> Optional[str]:
-        import json
-
         from litellm.types.utils import LiteLLMBatch
 
         file_object: Final = job.file_object
