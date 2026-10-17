@@ -323,7 +323,7 @@ def remove_items_at_indices(items: _PoppableByIndex | None, indices: Iterable[in
             items.pop(index)
 
 
-def add_missing_spend_metadata_to_litellm_metadata(litellm_metadata: dict, metadata: dict) -> dict:
+def add_missing_spend_metadata_to_litellm_metadata(litellm_metadata: dict, metadata: Mapping[str, object]) -> dict:
     """
     Helper to get litellm metadata for spend tracking
 
@@ -331,7 +331,7 @@ def add_missing_spend_metadata_to_litellm_metadata(litellm_metadata: dict, metad
     and user_api_key values are in 'metadata'.
     """
     potential_spend_tracking_metadata_substring: Final = "user_api_key"
-    for key, value in metadata.items():
+    for key, value in dict(metadata).items():
         if potential_spend_tracking_metadata_substring in key:
             litellm_metadata[key] = value
     return litellm_metadata
