@@ -2092,6 +2092,33 @@ class TestResponsesWSFirstFrameModelAuth:
         assert proxy_logging_obj.pre_call_hook.await_args.kwargs["data"]["metadata"] == {"tag": "kept"}
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "frame",
+        [
+            {"type": "response.create", "input": "forbidden", "guardrails": []},
+            {"type": "response.create", "input": "forbidden", "metadata": {"guardrails": []}},
+            {"type": "response.create", "response": {"input": "forbidden", "guardrails": [], "policies": []}},
+        ],
+    )
+    async def test_frame_guard_keeps_the_admitted_guardrail_list_when_a_frame_tries_to_replace_it(self, frame):
+        from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
+
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=lambda **kwargs: kwargs["data"])
+        guard = _responses_ws_frame_guard(
+            {"model": "gpt-4o-mini", "litellm_metadata": {"guardrails": ["key-required"]}},
+            MagicMock(),
+            proxy_logging_obj,
+        )
+
+        await guard(json.dumps(frame))
+
+        scanned = proxy_logging_obj.pre_call_hook.await_args.kwargs["data"]
+        assert "guardrails" not in scanned and "policies" not in scanned
+        assert "guardrails" not in (scanned.get("metadata") or {})
+        assert scanned["litellm_metadata"]["guardrails"] == ["key-required"]
+
+    @pytest.mark.asyncio
     async def test_frame_guard_rejects_a_frame_that_carries_input_at_both_levels(self):
         from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
 

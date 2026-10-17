@@ -1823,6 +1823,8 @@ _GUARDRAIL_INFORMATION: Final = TypeAdapter(list[dict[str, object]])
 _GUARDRAIL_INFORMATION_KEY: Final = "standard_logging_guardrail_information"
 _GUARDED_FRAME_FIELDS: Final = ("input", "instructions", "tools")
 _CLIENT_METADATA_KEYS: Final = ("metadata", "litellm_metadata")
+# the guardrail list is merged from key, team and the admission frame; a later frame cannot shrink it
+_CLIENT_GUARDRAIL_SELECTORS: Final = ("guardrails", "guardrail_config", "policies")
 
 
 class _PreCallGuardrailWalk(Protocol):
@@ -1864,7 +1866,11 @@ def _responses_ws_frame_guard(
             )
         body: Final = _WS_FRAME.validate_python(nested) if isinstance(nested, dict) else frame_obj
         frame_data: Final = {
-            **{key: _without_untrusted_metadata(key, value) for key, value in body.items() if key != "type"},
+            **{
+                key: _without_untrusted_metadata(key, value)
+                for key, value in body.items()
+                if key != "type" and key not in _CLIENT_GUARDRAIL_SELECTORS
+            },
             "model": model,
             "litellm_call_id": str(uuid.uuid4()),
             metadata_key: copy.deepcopy(bucket),
@@ -1897,7 +1903,9 @@ def _without_untrusted_metadata(key: str, value: object) -> object:
     return {
         name: item
         for name, item in _WS_FRAME.validate_python(value).items()
-        if not name.startswith("user_api_key_") and name not in _UNTRUSTED_METADATA_CONTROL_FIELDS and name != "headers"
+        if not name.startswith("user_api_key_")
+        and name not in _UNTRUSTED_METADATA_CONTROL_FIELDS
+        and name not in ("headers", *_CLIENT_GUARDRAIL_SELECTORS)
     }
 
 
