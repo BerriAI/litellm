@@ -642,7 +642,7 @@ class Logging(LiteLLMLoggingBaseClass):
         litellm_trace_id: str | None = None,
         dynamic_input_callbacks: list[str | Callable | CustomLogger] | None = None,
         dynamic_success_callbacks: list[str | Callable | CustomLogger] | None = None,
-        dynamic_async_success_callbacks: list[str | Callable | CustomLogger] | None = None,
+        dynamic_async_success_callbacks: list[str | Callable[..., object] | CustomLogger] | None = None,
         dynamic_failure_callbacks: list[str | Callable | CustomLogger] | None = None,
         dynamic_async_failure_callbacks: list[str | Callable | CustomLogger] | None = None,
         applied_guardrails: list[str] | None = None,
@@ -719,7 +719,7 @@ class Logging(LiteLLMLoggingBaseClass):
         # Initialize dynamic callbacks
         self.dynamic_input_callbacks: list[str | Callable | CustomLogger] | None = dynamic_input_callbacks
         self.dynamic_success_callbacks: list[str | Callable | CustomLogger] | None = dynamic_success_callbacks
-        self.dynamic_async_success_callbacks: list[str | Callable | CustomLogger] | None = (
+        self.dynamic_async_success_callbacks: list[str | Callable[..., object] | CustomLogger] | None = (
             dynamic_async_success_callbacks
         )
         self.dynamic_failure_callbacks: list[str | Callable | CustomLogger] | None = dynamic_failure_callbacks
