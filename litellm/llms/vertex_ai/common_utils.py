@@ -1301,7 +1301,7 @@ class VertexAITokenCounter(BaseTokenCounter):
                 model_used=model_to_use,
                 tokenizer_type="vertex_ai_partner_models",
                 error=True,
-                error_message=f"Vertex AI does not support counting tokens for {model_to_use}.",
+                error_message=f"LiteLLM does not support counting tokens for Vertex AI model {model_to_use}.",
                 status_code=400,
             )
 

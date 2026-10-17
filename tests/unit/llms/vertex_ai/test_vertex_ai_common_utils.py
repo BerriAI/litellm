@@ -60,9 +60,11 @@ async def test_vertex_gemini_rejects_non_text_system_blocks_before_request(
         "qwen/qwen3-coder-480b-a35b-instruct-maas",
         "mistral-medium-3",
         "codestral-2501",
+        "openai/gpt-oss-120b-maas",
+        "google/gemma-4-26b-a4b-it-maas",
     ),
 )
-async def test_vertex_partner_model_without_a_count_api_answers_400_naming_the_model(model: str) -> None:
+async def test_vertex_partner_model_without_an_inference_matching_count_answers_400_naming_the_model(model: str) -> None:
     result: Final = await VertexAITokenCounter().count_tokens(
         model_to_use=model,
         messages=[{"role": "user", "content": "Count this"}],
@@ -75,7 +77,7 @@ async def test_vertex_partner_model_without_a_count_api_answers_400_naming_the_m
     assert result is not None
     assert result.error is True
     assert result.status_code == 400
-    assert result.error_message == f"Vertex AI does not support counting tokens for {model}."
+    assert result.error_message == f"LiteLLM does not support counting tokens for Vertex AI model {model}."
 
 
 class _VertexCountTokensPeer:

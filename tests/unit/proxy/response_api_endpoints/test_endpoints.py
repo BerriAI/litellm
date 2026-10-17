@@ -3800,7 +3800,7 @@ class TestResponsesInputTokens:
 
         failing_counter: Final = AsyncMock(
             side_effect=ProxyException(
-                message="Vertex AI does not support counting tokens for zai-org/glm-5.2-maas.",
+                message="LiteLLM does not support counting tokens for Vertex AI model zai-org/glm-5.2-maas.",
                 type="token_counting_error",
                 param="model",
                 code="400",
@@ -3813,7 +3813,7 @@ class TestResponsesInputTokens:
         assert response.status_code == 400, response.text
         assert response.json() == {
             "error": {
-                "message": "Vertex AI does not support counting tokens for zai-org/glm-5.2-maas.",
+                "message": "LiteLLM does not support counting tokens for Vertex AI model zai-org/glm-5.2-maas.",
                 "type": "invalid_request_error",
                 "param": None,
                 "code": None,
