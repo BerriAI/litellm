@@ -15,6 +15,8 @@ litellm-gateway-mcp.workspace = true
 tokio-util = "0.7"
 thiserror.workspace = true
 futures-util.workspace = true
+http.workspace = true
+rand.workspace = true
 litellm-gateway-auth.workspace = true
 litellm-gateway-hooks.workspace = true
 litellm-model-catalog.workspace = true
@@ -38,6 +40,8 @@ tower-sessions-moka-store = "0.15.0"
 
 [dev-dependencies]
 base64.workspace = true
+litellm-db-testing.workspace = true
+sqlx.workspace = true
 rstest.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["sync", "io-util"] }
