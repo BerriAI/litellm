@@ -225,14 +225,14 @@ impl Descriptor {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Kind {
+pub(crate) enum Kind {
     Requests,
     Tokens,
     Parallel,
 }
 
 impl Kind {
-    fn name(self) -> &'static str {
+    pub(crate) fn name(self) -> &'static str {
         match self {
             Self::Requests => "requests",
             Self::Tokens => "tokens",
@@ -250,15 +250,25 @@ struct Status {
     remaining: i64,
 }
 
-/// The token reservation went over on the descriptor at `index`, which held `current`.
+/// A counter to check and add to: `{prefix}:requests` or `{prefix}:tokens` in its window.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Pair {
+    pub(crate) prefix: String,
+    pub(crate) kind: Kind,
+    pub(crate) limit: i64,
+    pub(crate) increment: i64,
+}
+
+/// Every pair's count after adding, or the pair at `index` that would go over, which held
+/// `current`.
 #[derive(Debug, PartialEq)]
-enum Reserved {
+pub(crate) enum Reserved {
     Counts(Vec<i64>),
     Over { index: usize, current: i64 },
 }
 
 /// Redis could not be used and the settings say to refuse rather than fall back.
-struct Unavailable;
+pub(crate) struct Unavailable;
 
 #[derive(Debug)]
 struct Window {
@@ -307,27 +317,24 @@ impl Local {
             .collect()
     }
 
-    fn reserve(
-        &mut self,
-        scopes: &[(String, i64)],
-        increment: i64,
-        now: u64,
-        size: u64,
-    ) -> Reserved {
-        for (index, (prefix, limit)) in scopes.iter().enumerate() {
-            let current = match self.windows.get(prefix) {
-                Some(window) if now.saturating_sub(window.start) < size => window.tokens,
+    fn check_and_add(&mut self, pairs: &[Pair], now: u64, size: u64) -> Reserved {
+        for (index, pair) in pairs.iter().enumerate() {
+            let current = match self.windows.get(&pair.prefix) {
+                Some(window) if now.saturating_sub(window.start) < size => match pair.kind {
+                    Kind::Requests => window.requests,
+                    _ => window.tokens,
+                },
                 _ => 0,
             };
-            if blocked(current, increment, *limit) {
+            if blocked(current, pair.increment, pair.limit) {
                 return Reserved::Over { index, current };
             }
         }
         Reserved::Counts(
-            scopes
+            pairs
                 .iter()
-                .map(|(prefix, _)| {
-                    let (window, expired) = self.window(prefix, now, size);
+                .map(|pair| {
+                    let (window, expired) = self.window(&pair.prefix, now, size);
                     if expired {
                         *window = Window {
                             start: now,
@@ -335,11 +342,24 @@ impl Local {
                             tokens: 0,
                         };
                     }
-                    window.tokens += increment;
-                    window.tokens
+                    let count = match pair.kind {
+                        Kind::Requests => &mut window.requests,
+                        _ => &mut window.tokens,
+                    };
+                    *count += pair.increment;
+                    *count
                 })
                 .collect(),
         )
+    }
+
+    /// A counter's value in its current window.
+    fn read(&self, prefix: &str, kind: Kind, now: u64, size: u64) -> Option<i64> {
+        let window = self.windows.get(prefix)?;
+        (now.saturating_sub(window.start) < size).then_some(match kind {
+            Kind::Requests => window.requests,
+            _ => window.tokens,
+        })
     }
 
     fn charge(&mut self, deltas: &[(String, i64)]) {
@@ -380,7 +400,7 @@ fn blocked(current: i64, increment: i64, limit: i64) -> bool {
 }
 
 /// Where the counters live.
-struct Store {
+pub(crate) struct Store {
     redis: Option<Arc<Coordination>>,
     local: Mutex<Local>,
     window: u64,
@@ -388,6 +408,15 @@ struct Store {
 }
 
 impl Store {
+    pub(crate) fn new(redis: Option<Arc<Coordination>>, window: u64, fail_closed: bool) -> Self {
+        Self {
+            redis,
+            local: Mutex::default(),
+            window,
+            fail_closed,
+        }
+    }
+
     fn connection(&self) -> Option<(ConnectionManager, &Coordination)> {
         let redis = self.redis.as_deref()?;
         Some((redis.connection()?, redis))
@@ -414,7 +443,7 @@ impl Store {
     }
 
     /// Counts the request on each prefix's window and returns the counts.
-    async fn requests(&self, prefixes: &[String]) -> Result<Vec<i64>, Unavailable> {
+    pub(crate) async fn requests(&self, prefixes: &[String]) -> Result<Vec<i64>, Unavailable> {
         let now = epoch_seconds();
         if self.redis.is_some() {
             let error = match self.connection() {
@@ -501,20 +530,42 @@ impl Store {
         scopes: &[(String, i64)],
         increment: i64,
     ) -> Result<(Reserved, bool), Unavailable> {
+        let pairs: Vec<Pair> = scopes
+            .iter()
+            .map(|(prefix, limit)| Pair {
+                prefix: prefix.clone(),
+                kind: Kind::Tokens,
+                limit: *limit,
+                increment,
+            })
+            .collect();
+        self.check_and_add(&pairs).await
+    }
+
+    /// Adds every pair's increment, or none when one would go over its limit. `true` when the
+    /// counters are in Redis.
+    pub(crate) async fn check_and_add(
+        &self,
+        pairs: &[Pair],
+    ) -> Result<(Reserved, bool), Unavailable> {
         if self.redis.is_some() {
             let error = match self.connection() {
                 Some((mut connection, redis)) => {
                     let mut command = redis::cmd("EVAL");
-                    command.arg(RESERVE).arg(scopes.len() * 2);
-                    for (prefix, _) in scopes {
+                    command.arg(RESERVE).arg(pairs.len() * 2);
+                    for pair in pairs {
                         command
-                            .arg(redis.namespaced(&format!("{prefix}:window")))
-                            .arg(redis.namespaced(&format!("{prefix}:tokens")));
+                            .arg(redis.namespaced(&format!("{}:window", pair.prefix)))
+                            .arg(redis.namespaced(&format!(
+                                "{}:{}",
+                                pair.prefix,
+                                pair.kind.name()
+                            )));
                     }
-                    for (_, limit) in scopes {
+                    for pair in pairs {
                         command
-                            .arg(*limit)
-                            .arg(increment)
+                            .arg(pair.limit)
+                            .arg(pair.increment)
                             .arg(self.window)
                             .arg(self.window);
                     }
@@ -528,7 +579,7 @@ impl Store {
                             ));
                         }
                         Ok(reply) => match reply.as_slice() {
-                            [1, index, current, _] if (1..=scopes.len() as i64).contains(index) => {
+                            [1, index, current, _] if (1..=pairs.len() as i64).contains(index) => {
                                 return Ok((
                                     Reserved::Over {
                                         index: (*index - 1) as usize,
@@ -548,13 +599,34 @@ impl Store {
         }
         Ok((
             self.local()
-                .reserve(scopes, increment, epoch_seconds(), self.window),
+                .check_and_add(pairs, epoch_seconds(), self.window),
             false,
         ))
     }
 
+    /// A counter's current value, `None` when it is not set.
+    pub(crate) async fn read(&self, prefix: &str, kind: Kind) -> Option<i64> {
+        if let Some((mut connection, redis)) = self.connection() {
+            let key = redis.namespaced(&format!("{prefix}:{}", kind.name()));
+            match redis::cmd("GET")
+                .arg(key)
+                .query_async::<Option<String>>(&mut connection)
+                .await
+            {
+                Ok(value) => {
+                    return value
+                        .and_then(|value| value.parse::<f64>().ok())
+                        .map(|value| value as i64);
+                }
+                Err(error) => tracing::warn!(%error, "reading a rate limit counter failed"),
+            }
+        }
+        self.local()
+            .read(prefix, kind, epoch_seconds(), self.window)
+    }
+
     /// Adds each delta to its prefix's tokens.
-    async fn charge(&self, deltas: Vec<(String, i64)>, shared: bool) {
+    pub(crate) async fn charge(&self, deltas: Vec<(String, i64)>, shared: bool) {
         if shared && let Some((mut connection, redis)) = self.connection() {
             let mut command = redis::cmd("EVAL");
             command.arg(CHARGE).arg(deltas.len());
@@ -711,12 +783,7 @@ impl RateLimiter {
         database: Option<PgPool>,
     ) -> Self {
         Self {
-            store: Arc::new(Store {
-                redis,
-                local: Mutex::default(),
-                window: settings.window,
-                fail_closed: settings.fail_closed,
-            }),
+            store: Arc::new(Store::new(redis, settings.window, settings.fail_closed)),
             settings,
             end_users: database.map(EndUsers::new),
         }
@@ -801,22 +868,15 @@ impl RateLimiter {
             status.limit,
             status.remaining.max(0),
         );
-        let mut refusal = match request.route {
-            Route::Messages => Refusal::new(429, "rate_limit_error", message).anthropic(),
-            Route::ChatCompletions => {
-                let mut refusal = Refusal::new(429, "throttling_error", message).without_param();
-                for (name, value) in [
-                    ("retry-after", self.settings.window.to_string()),
-                    ("rate_limit_type", status.kind.name().to_owned()),
-                    ("reset_at", reset_at),
-                ] {
-                    if let Ok(value) = HeaderValue::from_str(&value) {
-                        refusal = refusal.with_header(HeaderName::from_static(name), value);
-                    }
-                }
-                refusal
-            }
-        };
+        let mut refusal = throttled(
+            request.route,
+            message,
+            vec![
+                ("retry-after", self.settings.window.to_string()),
+                ("rate_limit_type", status.kind.name().to_owned()),
+                ("reset_at", reset_at),
+            ],
+        );
         for (name, value) in key_limit_headers(request.key.as_deref()) {
             refusal = refusal.with_header(name, value);
         }
@@ -824,11 +884,37 @@ impl RateLimiter {
     }
 
     fn unavailable(&self, request: &RequestFacts) -> Refusal {
-        match request.route {
-            Route::Messages => Refusal::new(503, "api_error", FAIL_CLOSED).anthropic(),
-            Route::ChatCompletions => {
-                Refusal::new(503, "internal_server_error", FAIL_CLOSED).without_param()
+        unavailable(request.route)
+    }
+}
+
+/// The proxy's 429 from one of its own limiters: on Chat Completions its error body with the
+/// limiter's headers, on `/v1/messages` Anthropic's envelope, where the proxy drops them.
+pub(crate) fn throttled(
+    route: Route,
+    message: String,
+    headers: Vec<(&'static str, String)>,
+) -> Refusal {
+    match route {
+        Route::Messages => Refusal::new(429, "rate_limit_error", message).anthropic(),
+        Route::ChatCompletions => {
+            let mut refusal = Refusal::new(429, "throttling_error", message).without_param();
+            for (name, value) in headers {
+                if let Ok(value) = HeaderValue::from_str(&value) {
+                    refusal = refusal.with_header(HeaderName::from_static(name), value);
+                }
             }
+            refusal
+        }
+    }
+}
+
+/// The proxy's 503 when counters cannot be verified and enforcement fails closed.
+pub(crate) fn unavailable(route: Route) -> Refusal {
+    match route {
+        Route::Messages => Refusal::new(503, "api_error", FAIL_CLOSED).anthropic(),
+        Route::ChatCompletions => {
+            Refusal::new(503, "internal_server_error", FAIL_CLOSED).without_param()
         }
     }
 }
@@ -1150,35 +1236,35 @@ mod tests {
         assert_eq!(estimate(&request, Some(&key), "other", 100_000).tokens, 10);
     }
 
+    fn reserve(local: &mut Local, increment: i64, now: u64) -> Reserved {
+        let pair = Pair {
+            prefix: "{api_key:h}".into(),
+            kind: Kind::Tokens,
+            limit: 10,
+            increment,
+        };
+        local.check_and_add(&[pair], now, 60)
+    }
+
     #[rstest]
     fn local_windows_count_reserve_and_reset() {
         let mut local = Local::default();
         let prefixes = vec!["{api_key:h}".to_owned()];
         assert_eq!(local.requests(&prefixes, 100, 60), [1]);
         assert_eq!(local.requests(&prefixes, 159, 60), [2]);
-        let scopes = vec![("{api_key:h}".to_owned(), 10)];
+        assert_eq!(reserve(&mut local, 6, 159), Reserved::Counts(vec![6]));
         assert_eq!(
-            local.reserve(&scopes, 6, 159, 60),
-            Reserved::Counts(vec![6])
-        );
-        assert_eq!(
-            local.reserve(&scopes, 6, 159, 60),
+            reserve(&mut local, 6, 159),
             Reserved::Over {
                 index: 0,
                 current: 6
             }
         );
         local.charge(&[("{api_key:h}".to_owned(), -4)]);
-        assert_eq!(
-            local.reserve(&scopes, 8, 159, 60),
-            Reserved::Counts(vec![10])
-        );
+        assert_eq!(reserve(&mut local, 8, 159), Reserved::Counts(vec![10]));
         // The window started at 100 is over at 160: requests and tokens start again.
         assert_eq!(local.requests(&prefixes, 160, 60), [1]);
-        assert_eq!(
-            local.reserve(&scopes, 10, 160, 60),
-            Reserved::Counts(vec![10])
-        );
+        assert_eq!(reserve(&mut local, 10, 160), Reserved::Counts(vec![10]));
     }
 
     #[rstest]
