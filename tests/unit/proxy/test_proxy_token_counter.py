@@ -9,6 +9,7 @@ import itertools
 import json
 import logging
 import threading
+import time
 import traceback
 from collections.abc import Callable, Coroutine, Mapping
 from functools import partial
@@ -74,6 +75,7 @@ from litellm.proxy.proxy_server import (
     token_counter,
 )
 from litellm.rust_bridge.fork_guard import ForkedAfterNativeRuntimeStarted
+from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
 from litellm.types.utils import SelectTokenizerResponse, TokenCountMessagesFormat, TokenCountResponse
 
 
@@ -2467,6 +2469,58 @@ async def test_shipped_token_count_model_keeps_the_prompt_in_the_deployment_geog
     )
 
     assert (counter.calls[0][0], counter.regions[0]) == ("anthropic.claude-opus-5-5", counted_in)
+
+
+class _SlowVault:
+    def sync_read_secret(self, secret_name: str) -> None:
+        time.sleep(0.5)
+
+
+async def _longest_stall(done: asyncio.Event) -> float:
+    if done.is_set():
+        return 0.0
+    started: Final = time.monotonic()
+    await asyncio.sleep(0.01)
+    return max(time.monotonic() - started, await _longest_stall(done))
+
+
+@pytest.mark.asyncio
+async def test_region_lookup_for_a_shipped_count_model_leaves_the_event_loop_free(monkeypatch: pytest.MonkeyPatch):
+    from litellm.proxy import proxy_server
+
+    counter: Final = _ScriptedCounter({"anthropic.claude-opus-5-5": _provider_reply("opus", total_tokens=447)})
+
+    def bedrock_counter(deployment: object, model: str) -> tuple[_ScriptedCounter, str, str]:
+        return counter, model, "bedrock"
+
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        Router(
+            model_list=[{"model_name": "sonnet", "litellm_params": {"model": "bedrock/anthropic.claude-sonnet-5-5"}}]
+        ),
+    )
+    monkeypatch.setattr(proxy_server, "_get_provider_token_counter", bedrock_counter)
+    monkeypatch.setattr(litellm, "secret_manager_client", _SlowVault())
+    monkeypatch.setattr(litellm, "_key_management_system", KeyManagementSystem.HASHICORP_VAULT)
+    monkeypatch.setattr(litellm, "_key_management_settings", KeyManagementSettings(access_mode="read_only"))
+    done: Final = asyncio.Event()
+
+    async def count() -> TokenCountResponse:
+        try:
+            return await token_counter(
+                request=TokenCountRequest(model="sonnet", messages=[{"role": "user", "content": "hi"}]),
+                call_endpoint=True,
+            )
+        finally:
+            done.set()
+
+    started: Final = time.monotonic()
+    stall, response = await asyncio.gather(_longest_stall(done), count())
+
+    assert time.monotonic() - started >= 1.0
+    assert stall < 0.4
+    assert response.total_tokens == 447
 
 
 @pytest.mark.asyncio

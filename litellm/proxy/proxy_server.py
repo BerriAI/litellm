@@ -15179,7 +15179,7 @@ async def count_request_tokens(
     deployment_view: Final = _TOKEN_COUNT_DEPLOYMENT.validate_python(
         deployment or _model_group_deployment(llm_router, request.model) or {}
     )
-    settings: Final = resolve_token_count_settings(
+    settings: Final = await asyncify(resolve_token_count_settings)(
         configured=deployment_view.get("model_info", {}),
         default=await asyncify(cost_map_entry)(*_token_count_settings_model(deployment_view, request.model)),
         deployment_region=partial(_deployment_aws_region, deployment_view),
