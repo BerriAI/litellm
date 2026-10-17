@@ -3254,16 +3254,12 @@ class PrometheusLogger(CustomLogger):
         deployment.
         """
         try:
-            additional_headers: Final[Mapping[str, object]] = (
-                standard_logging_payload.get("hidden_params", {}) or {}
-            ).get("additional_headers") or {}
+            additional_headers: Final = (standard_logging_payload.get("hidden_params", {}) or {}).get(
+                "additional_headers"
+            ) or {}
 
-            already_have_tokens: Final = (
-                _number_or_none(additional_headers.get("x_ratelimit_remaining_tokens"), _REMAINING_USAGE) is not None
-            )
-            already_have_requests: Final = (
-                _number_or_none(additional_headers.get("x_ratelimit_remaining_requests"), _REMAINING_USAGE) is not None
-            )
+            already_have_tokens: Final = additional_headers.get("x_ratelimit_remaining_tokens") is not None
+            already_have_requests: Final = additional_headers.get("x_ratelimit_remaining_requests") is not None
             if already_have_tokens and already_have_requests:
                 return
 
