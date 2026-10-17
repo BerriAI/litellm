@@ -4068,11 +4068,13 @@ class TestCreatorTurnedOffMessageLogging:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("kind", ["sync", "async", "custom", "overlapping", "general"])
+@pytest.mark.parametrize("kind", ["sync", "async", "custom", "overlapping", "general", "executor_shutdown"])
 @pytest.mark.parametrize("initialized", [False, True])
 @pytest.mark.parametrize("claimed", [False, True])
 async def test_batch_cost_reaches_configured_success_callbacks(
-    kind: Literal["sync", "async", "custom", "overlapping", "general"], initialized: bool, claimed: bool
+    kind: Literal["sync", "async", "custom", "overlapping", "general", "executor_shutdown"],
+    initialized: bool,
+    claimed: bool,
 ) -> None:
     import litellm
     from litellm.integrations.custom_logger import CustomLogger
@@ -4093,6 +4095,8 @@ async def test_batch_cost_reaches_configured_success_callbacks(
         kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
     ) -> None:
         record(kwargs, response_obj, start_time, end_time)
+        if kind == "executor_shutdown" and kwargs.get("call_type") == "aretrieve_batch":
+            executor.shutdown(wait=True)
 
     class BatchRecorder(CustomLogger):
         async def async_log_success_event(
@@ -4106,6 +4110,9 @@ async def test_batch_cost_reaches_configured_success_callbacks(
             litellm.logging_callback_manager.add_litellm_success_callback(record)
         case "async":
             litellm.logging_callback_manager.add_litellm_success_callback(async_record)
+        case "executor_shutdown":
+            litellm.logging_callback_manager.add_litellm_success_callback(async_record)
+            litellm.logging_callback_manager.add_litellm_success_callback(record)
         case "custom" | "overlapping":
             litellm.logging_callback_manager.add_litellm_success_callback(callback)
             if kind == "overlapping":
@@ -4176,9 +4183,14 @@ async def test_batch_cost_reaches_configured_success_callbacks(
         if initialized:
             await litellm.afile_content(file_id="output", **credentials)
             await GLOBAL_LOGGING_WORKER.flush()
-        result: Final = await checker._track_completed_batch_cost(job, response, "deployment", "batch-record", None)
+        if kind == "executor_shutdown" and claimed:
+            with pytest.raises(RuntimeError):
+                await checker._track_completed_batch_cost(job, response, "deployment", "batch-record", None)
+            prisma.db.litellm_managedobjecttable.update_many.assert_awaited_once()
+        else:
+            result: Final = await checker._track_completed_batch_cost(job, response, "deployment", "batch-record", None)
+            assert result == ((model, "openai") if claimed else None)
         await GLOBAL_LOGGING_WORKER.flush()
-    assert result == ((model, "openai") if claimed else None)
     assert events.qsize() == int(claimed)
     if claimed:
         cost, prompt_tokens, completion_tokens = events.get_nowait()

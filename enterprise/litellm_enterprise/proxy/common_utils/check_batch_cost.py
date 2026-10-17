@@ -811,14 +811,15 @@ class CheckBatchCost:
                 batch_prompt_cost=batch_result.prompt_cost,
                 batch_completion_cost=batch_result.completion_cost,
             )
-            logging_obj.handle_sync_success_callbacks_for_async_calls(
-                result=response,
-                start_time=logging_obj.start_time,
-                end_time=datetime.now(),
-            )
         except Exception:
             await self._release_job_claim(job)
             raise
+
+        logging_obj.handle_sync_success_callbacks_for_async_calls(
+            result=response,
+            start_time=logging_obj.start_time,
+            end_time=datetime.now(),
+        )
 
         # Record batch duration (completed_at - created_at)
         if prom_logger and response.completed_at and response.created_at:
