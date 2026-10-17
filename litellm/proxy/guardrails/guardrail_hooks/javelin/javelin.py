@@ -111,6 +111,7 @@ class JavelinGuardrail(CustomGuardrail):
                 url=url,
                 headers=headers,
                 json=dict(request),
+                timeout=self.timeout,
             )
             verbose_proxy_logger.debug("Javelin Guardrail: Javelin guard API response: %s", response.json())
             response_data: Final = response.json()

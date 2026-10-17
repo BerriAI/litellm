@@ -5,13 +5,13 @@ import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings"
 import PolicySelector from "@/components/policies/PolicySelector";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
+import { SearchSelect, SearchSelectOption } from "@/components/shared/SearchSelect";
 import React, { useEffect, useRef, useState } from "react";
 import { hasCapability } from "../../utils/capabilities";
 import { isProxyAdminRole, rolesWithWriteAccess } from "../../utils/roles";
@@ -20,7 +20,6 @@ import BudgetDurationDropdown from "../common_components/budget_duration_dropdow
 import { mapInternalToDisplayNames } from "../callback_info_helpers";
 import KeyLifecycleSettings from "../common_components/KeyLifecycleSettings";
 import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSelector";
-import RateLimitTypeFormItem from "../common_components/RateLimitTypeFormItem";
 import OrganizationDropdown from "../common_components/OrganizationDropdown";
 import RouterSettingsAccordion, { RouterSettingsAccordionRef } from "../common_components/RouterSettingsAccordion";
 import { routerSettingsEditorValue, routerSettingsUpdate } from "../common_components/routerSettingsPayload";
@@ -35,6 +34,7 @@ import {
   KeyAgentAndSkillFields,
   KeyBudgetNumberField,
   KeyMetadataField,
+  KeyRateLimitFields,
   KeyTypeSelect,
   labelWithHint,
   moveMetadataTagsToTagsField,
@@ -45,8 +45,16 @@ import {
   McpServersAndGroups,
   toKeyEditFormValues,
   toSubmittedValues,
+  clearMcpGrants,
+  writeMcpToolPermissions,
 } from "./keyEditFormValues";
 import { BudgetFallbacksEditor } from "../key_team_helpers/BudgetFallbacksEditor";
+import { END_USER_BUDGET_HINT, EndUserBudgetSelect } from "../key_team_helpers/EndUserBudgetSelect";
+import {
+  endUserBudgetIdUpdate,
+  keyOffersEndUserBudget,
+  storedEndUserBudgetId,
+} from "../key_team_helpers/endUserBudgetPayload";
 import { ModelMaxBudgetField } from "../key_team_helpers/ModelMaxBudgetEditor";
 import { useModelMaxBudgetField } from "../key_team_helpers/useModelMaxBudgetField";
 import { BudgetWindowEntry, BudgetWindowsEditor } from "../key_team_helpers/BudgetWindowsEditor";
@@ -74,7 +82,7 @@ import VectorStoreSelector from "../vector_store_management/VectorStoreSelector"
 interface KeyEditViewProps {
   keyData: KeyResponse;
   onCancel: () => void;
-  onSubmit: (values: any) => Promise<void>;
+  onSubmit: (values: any, dirtyFields: readonly string[]) => Promise<void>;
   teams?: any[] | null;
   accessToken: string | null;
   userID: string | null;
@@ -82,7 +90,11 @@ interface KeyEditViewProps {
   premiumUser?: boolean;
 }
 
-export function KeyEditView({
+const sessionKey = (keyData: KeyResponse) => keyData.token || keyData.token_id;
+
+export const KeyEditView = (props: KeyEditViewProps) => <KeyEditSession key={sessionKey(props.keyData)} {...props} />;
+
+function KeyEditSession({
   keyData,
   onCancel,
   onSubmit,
@@ -98,7 +110,9 @@ export function KeyEditView({
   const canEditEstimates = userRole != null && isProxyAdminRole(userRole);
   const estimateTooltip = estimateTooltips(canEditEstimates);
   const form = useZodForm<KeyEditFormValues, KeyEditFormValues>(keyEditFormSchema, {
-    defaultValues: toKeyEditFormValues(keyData),
+    // Refresh untouched fields without erasing the user's in-progress edits.
+    values: toKeyEditFormValues(keyData),
+    resetOptions: { keepDirtyValues: true },
   });
   const [promptsList, setPromptsList] = useState<string[]>([]);
   const [tagsList, setTagsList] = useState<Record<string, Tag>>({});
@@ -124,8 +138,11 @@ export function KeyEditView({
     keyData.budget_fallbacks && typeof keyData.budget_fallbacks === "object" ? keyData.budget_fallbacks : {},
   );
   const modelBudget = useModelMaxBudgetField(keyData.token, keyData.model_max_budget);
+  const storedEndUserBudgetIdValue = storedEndUserBudgetId(keyData.metadata);
+  const [endUserBudgetId, setEndUserBudgetId] = useState<string | null>(storedEndUserBudgetIdValue || null);
   const routerSettingsRef = useRef<RouterSettingsAccordionRef>(null);
   const keyTypeFieldId = React.useId();
+  const endUserBudgetFieldId = React.useId();
   const { data: organizations, isLoading: isOrganizationsLoading } = useOrganizations();
   const { data: uiSettingsData } = useUISettings();
   const enableProjectsUI = Boolean(uiSettingsData?.values?.enable_projects_ui);
@@ -137,9 +154,8 @@ export function KeyEditView({
   const selectedModels = (form.watch("models") as string[] | undefined) ?? [];
   const allowedRoutes = parseAllowedRoutes(allowedRoutesValue);
   const isModelsDisabled = allowedRoutes.includes("management_routes") || allowedRoutes.includes("info_routes");
-  const mcpSelection = form.watch("mcp_servers_and_groups") as
-    | { servers?: string[]; accessGroups?: string[]; toolsets?: string[] }
-    | undefined;
+  const mcpSelection = form.watch("mcp_servers_and_groups") as McpServersAndGroups | undefined;
+  const mcpScope = { teamId: form.watch("team_id") ?? null, userId: keyData.user_id };
   const mcpToolPermissions = form.watch("mcp_tool_permissions");
 
   useEffect(() => {
@@ -178,22 +194,16 @@ export function KeyEditView({
 
   // Sync disabled callbacks with form when component mounts
   useEffect(() => {
-    form.setValue("disabled_callbacks", disabledCallbacks);
+    form.setValue("disabled_callbacks", disabledCallbacks, { shouldDirty: true });
   }, [form, disabledCallbacks]);
-
-  useEffect(() => {
-    form.reset(toKeyEditFormValues(keyData));
-  }, [keyData, form]);
 
   // Sync auto-rotation state with form values
   useEffect(() => {
-    form.setValue("auto_rotate", autoRotationEnabled);
+    form.setValue("auto_rotate", autoRotationEnabled, { shouldDirty: true });
   }, [autoRotationEnabled, form]);
 
   useEffect(() => {
-    if (rotationInterval) {
-      form.setValue("rotation_interval", rotationInterval);
-    }
+    if (rotationInterval) form.setValue("rotation_interval", rotationInterval, { shouldDirty: true });
   }, [rotationInterval, form]);
 
   // Fetch tags for selector
@@ -290,6 +300,11 @@ export function KeyEditView({
 
       modelBudget.applyTo(values);
 
+      const endUserBudgetUpdate = endUserBudgetIdUpdate(endUserBudgetId, storedEndUserBudgetIdValue);
+      if (endUserBudgetUpdate !== undefined) {
+        values.end_user_budget_id = endUserBudgetUpdate;
+      }
+
       const routerSettings = routerSettingsUpdate(
         routerSettingsRef.current?.getValue()?.router_settings,
         keyData.router_settings,
@@ -303,6 +318,7 @@ export function KeyEditView({
           ...values,
           ...(detachProject && enableProjectsUI && canDetachProject ? { project_id: null } : {}),
         }),
+        [...Object.keys(form.formState.dirtyFields), ...(budgetLimitsUnchanged ? [] : ["budget_limits"])],
       );
     } finally {
       setIsKeySaving(false);
@@ -312,24 +328,21 @@ export function KeyEditView({
   const handleOrganizationChange = (setField: (value: string | null) => void, orgId: string | null) => {
     setField(orgId);
     setSelectedOrganizationId(orgId);
-    form.setValue("team_id", null);
+    form.setValue("team_id", null, { shouldDirty: true });
   };
 
   const handleTeamChange = (setField: (value: string | null) => void, teamId: string | null) => {
     setField(teamId);
-    const selectedTeam = teams?.find((t) => t.team_id === teamId) || null;
-    if (selectedTeam?.organization_id) {
-      setSelectedOrganizationId(selectedTeam.organization_id);
-      form.setValue("organization_id", selectedTeam.organization_id);
-    } else if (!teamId) {
-      setSelectedOrganizationId(null);
-      form.setValue("organization_id", null);
-    }
+    clearMcpGrants(form.setValue);
+    const organizationId = teams?.find((t) => t.team_id === teamId)?.organization_id;
+    if (!organizationId) return;
+    setSelectedOrganizationId(organizationId);
+    form.setValue("organization_id", organizationId, { shouldDirty: true });
   };
 
   const handleDisabledCallbacksChange = (internalValues: string[]) => {
     setDisabledCallbacks(mapInternalToDisplayNames(internalValues));
-    form.setValue("disabled_callbacks", internalValues);
+    form.setValue("disabled_callbacks", internalValues, { shouldDirty: true });
   };
 
   const modelOptions = [
@@ -344,6 +357,17 @@ export function KeyEditView({
   const visibleTeams = selectedOrganizationId
     ? teams?.filter((t) => t.organization_id === selectedOrganizationId)
     : teams;
+
+  const teamOptionsFor = (selectedTeamId: string | null): SearchSelectOption[] => {
+    const selectedTeamOutsideFilter = teams?.find((t) => t.team_id === selectedTeamId && !visibleTeams?.includes(t));
+    return [...(selectedTeamOutsideFilter ? [selectedTeamOutsideFilter] : []), ...(visibleTeams ?? [])].map(
+      ({ team_id, team_alias }: { team_id: string; team_alias?: string | null }) => ({
+        label: team_alias || "-",
+        value: team_id,
+        sublabel: team_id,
+      }),
+    );
+  };
 
   return (
     <TooltipProvider>
@@ -394,14 +418,14 @@ export function KeyEditView({
               onChange={(value) => {
                 switch (value) {
                   case "default":
-                    form.setValue("allowed_routes", "");
+                    form.setValue("allowed_routes", "", { shouldDirty: true });
                     break;
                   case "llm_api":
-                    form.setValue("allowed_routes", "llm_api_routes");
+                    form.setValue("allowed_routes", "llm_api_routes", { shouldDirty: true });
                     break;
                   case "management":
-                    form.setValue("allowed_routes", "management_routes");
-                    form.setValue("models", []);
+                    form.setValue("allowed_routes", "management_routes", { shouldDirty: true });
+                    form.setValue("models", [], { shouldDirty: true });
                     break;
                 }
               }}
@@ -484,39 +508,22 @@ export function KeyEditView({
             />
           </Field>
 
-          <FormField control={form.control} name="tpm_limit" label="TPM Limit">
-            {({ ref: _ref, ...field }) => <NumericalInput {...field} value={field.value ?? ""} min={0} />}
-          </FormField>
-
-          <FormField control={form.control} name="tpm_limit_type">
-            {({ value, onChange, id }) => (
-              <RateLimitTypeFormItem
-                id={id}
-                type="tpm"
-                name="tpm_limit_type"
-                showDetailedDescriptions={false}
-                value={value as string | null}
-                onChange={onChange}
+          {keyOffersEndUserBudget(keyData.metadata) && (
+            <Field>
+              <FieldLabel htmlFor={endUserBudgetFieldId}>
+                {labelWithHint("Default Customer Budget", END_USER_BUDGET_HINT)}
+              </FieldLabel>
+              <EndUserBudgetSelect
+                id={endUserBudgetFieldId}
+                accessToken={accessToken}
+                value={endUserBudgetId}
+                onChange={setEndUserBudgetId}
+                canEdit={userRole != null && isProxyAdminRole(userRole)}
               />
-            )}
-          </FormField>
+            </Field>
+          )}
 
-          <FormField control={form.control} name="rpm_limit" label="RPM Limit">
-            {({ ref: _ref, ...field }) => <NumericalInput {...field} value={field.value ?? ""} min={0} />}
-          </FormField>
-
-          <FormField control={form.control} name="rpm_limit_type">
-            {({ value, onChange, id }) => (
-              <RateLimitTypeFormItem
-                id={id}
-                type="rpm"
-                name="rpm_limit_type"
-                showDetailedDescriptions={false}
-                value={value as string | null}
-                onChange={onChange}
-              />
-            )}
-          </FormField>
+          <KeyRateLimitFields control={form.control} />
 
           <FormField
             control={form.control}
@@ -621,18 +628,20 @@ export function KeyEditView({
             }
           </FormField>
 
-          <FormField
-            control={form.control}
-            name="disable_global_guardrails"
-            label={labelWithHint(
-              "Disable Global Guardrails",
-              "When enabled, this key will bypass any guardrails configured to run on every request (global guardrails)",
-            )}
-          >
-            {({ value, onChange, ref: _ref, ...field }) => (
-              <Switch {...field} checked={Boolean(value)} onCheckedChange={onChange} disabled={!canEditGuardrails} />
-            )}
-          </FormField>
+          {userRole != null && isProxyAdminRole(userRole) && (
+            <FormField
+              control={form.control}
+              name="disable_global_guardrails"
+              label={labelWithHint(
+                "Disable Global Guardrails",
+                "When enabled, this key will bypass any guardrails configured to run on every request (global guardrails)",
+              )}
+            >
+              {({ value, onChange, ref: _ref, ...field }) => (
+                <Switch {...field} checked={Boolean(value)} onCheckedChange={onChange} disabled={!canEditGuardrails} />
+              )}
+            </FormField>
+          )}
 
           {canViewPolicies && (
             <FormField
@@ -753,6 +762,7 @@ export function KeyEditView({
                 onChange={onChange}
                 value={value as McpServersAndGroups | undefined}
                 accessToken={accessToken || ""}
+                {...mcpScope}
                 placeholder="Select MCP servers or access groups (optional)"
                 allowNoMcpServers
               />
@@ -766,7 +776,7 @@ export function KeyEditView({
               selectedAccessGroups={mcpSelection?.accessGroups || []}
               selectedToolsets={mcpSelection?.toolsets || []}
               toolPermissions={(mcpToolPermissions as Record<string, string[]> | undefined) || {}}
-              onChange={(toolPerms) => form.setValue("mcp_tool_permissions", toolPerms)}
+              onChange={writeMcpToolPermissions(form)}
             />
           </div>
 
@@ -796,29 +806,19 @@ export function KeyEditView({
           <FormField
             control={form.control}
             name="team_id"
-            label="Team ID"
+            label="Team"
             description={hasProject ? "Team is locked because this key belongs to a project" : undefined}
           >
             {({ value, onChange, id }) => (
-              <Select
+              <SearchSelect
+                options={teamOptionsFor((value as string | null) ?? null)}
                 value={(value as string | null) ?? null}
-                onValueChange={(teamId: string | null) => handleTeamChange(onChange, teamId)}
+                onValueChange={(teamId) => handleTeamChange(onChange, teamId)}
                 disabled={hasProject}
-                items={Object.fromEntries(
-                  (visibleTeams ?? []).map((t) => [t.team_id, `${t.team_alias} (${t.team_id})`]),
-                )}
-              >
-                <SelectTrigger id={id} className="w-full">
-                  <SelectValue placeholder="Select team" />
-                </SelectTrigger>
-                <SelectContent>
-                  {visibleTeams?.map((t) => (
-                    <SelectItem key={t.team_id} value={t.team_id}>
-                      {`${t.team_alias} (${t.team_id})`}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                inputId={id}
+                placeholder="Select team"
+                emptyText="No teams found"
+              />
             )}
           </FormField>
 
@@ -828,7 +828,9 @@ export function KeyEditView({
               canDetach={canDetachProject}
               pending={detachProject}
               disabled={isKeySaving}
-              onToggle={() => form.setValue("project_id", detachProject ? keyData.project_id : null)}
+              onToggle={() =>
+                form.setValue("project_id", detachProject ? keyData.project_id : null, { shouldDirty: true })
+              }
             />
           )}
 

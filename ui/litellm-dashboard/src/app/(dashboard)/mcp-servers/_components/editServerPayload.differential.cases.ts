@@ -14,6 +14,7 @@ const SERVER: MCPServer = {
   updated_at: "2024-01-01T00:00:00Z",
   updated_by: "user-1",
   mcp_access_groups: [],
+  rpm: undefined,
 };
 
 export const baseUi: EditServerUiState = {
@@ -45,6 +46,7 @@ const ROOT = {
   url: "https://example.com/mcp",
   auth_type: "none",
   max_concurrent_requests: undefined,
+  rpm: undefined,
   mcp_access_groups: [],
   extra_headers: [],
   static_headers: [],
@@ -293,11 +295,6 @@ export const CASES: readonly DifferentialCase[] = [
     ui: {},
   },
   { label: "credentials absent entirely", values: { ...ROOT, auth_type: "oauth2" }, ui: {} },
-  {
-    label: "removeStoredApp forces an explicit-null app write",
-    values: { ...ROOT, auth_type: "true_passthrough", credentials: { ...CREDS } },
-    ui: { removeStoredApp: true, mcpServer: { ...SERVER, auth_type: "true_passthrough" } },
-  },
   {
     label: "removeStoredApp ignored outside a client-forwarded mode",
     values: { ...ROOT, auth_type: "api_key", credentials: { ...CREDS } },

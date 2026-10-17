@@ -5,6 +5,7 @@ import httpx
 import litellm
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
+from litellm.llms.openai.workload_identity import resolve_openai_bearer_token
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.vector_stores import (
@@ -48,11 +49,13 @@ class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
         }
 
     def validate_environment(self, headers: dict, litellm_params: GenericLiteLLMParams | None) -> dict:
-        litellm_params = litellm_params or GenericLiteLLMParams()
-        api_key = litellm_params.api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
+        params: Final = litellm_params or GenericLiteLLMParams()
+        bearer_token: Final = resolve_openai_bearer_token(
+            api_key=params.api_key, api_base=params.api_base, litellm_params=params.model_dump(exclude_none=True)
+        )
         headers.update(
             {
-                "Authorization": f"Bearer {api_key}",
+                "Authorization": f"Bearer {bearer_token}",
                 "Content-Type": "application/json",
             }
         )
@@ -101,7 +104,8 @@ class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
         extra_body: dict[str, object] | None = None,
     ) -> tuple[str, dict]:
         encoded_vector_store_id: Final = encode_url_path_segment(vector_store_id, field_name="vector_store_id")
-        url: Final = f"{api_base}/{encoded_vector_store_id}/search"
+        base_url, query_separator, query_string = api_base.partition("?")
+        url: Final = f"{base_url}/{encoded_vector_store_id}/search{query_separator}{query_string}"
         typed_request_body: Final = VectorStoreSearchRequest(
             query=query,
             filters=vector_store_search_optional_params.get("filters", None),

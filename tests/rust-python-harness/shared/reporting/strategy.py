@@ -67,13 +67,6 @@ class RunnerArgumentDefinition:
     metavar: str = "ARG"
 
 
-@dataclass(frozen=True, slots=True)
-class RunnerOptionDefinition:
-    option: str
-    help: str
-    choices: tuple[str, ...]
-
-
 class StrategyRunner(Protocol):
     def __call__(
         self,
@@ -97,4 +90,3 @@ class StrategyDefinition:
     render: StrategyRenderer
     surfaces: tuple[Surface, ...] = ()
     runner_argument: RunnerArgumentDefinition | None = None
-    runner_options: tuple[RunnerOptionDefinition, ...] = ()

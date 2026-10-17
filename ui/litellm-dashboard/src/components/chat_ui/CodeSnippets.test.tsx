@@ -48,6 +48,28 @@ describe("CodeSnippets", () => {
     expect(code).toContain("print(response.data[0].embedding)");
   });
 
+  describe("custom headers", () => {
+    const customHeaders = { "anthropic-beta": "context-1m-2025-08-07", "x-request-source": "playground" };
+
+    it("passes configured headers as default_headers on the OpenAI client", () => {
+      const code = generateCodeSnippet({ ...baseParams, endpointType: EndpointType.CHAT, customHeaders });
+      expect(code).toContain('base_url="http://localhost:4000",\n\tdefault_headers={');
+      expect(code).toContain('"anthropic-beta": "context-1m-2025-08-07"');
+      expect(code).toContain('"x-request-source": "playground"');
+    });
+
+    it("passes configured headers as default_headers on the Azure client", () => {
+      const code = generateCodeSnippet({ ...baseParams, selectedSdk: "azure", customHeaders });
+      expect(code).toContain('api_version="2024-02-01",\n\tdefault_headers={');
+      expect(code).toContain('"anthropic-beta": "context-1m-2025-08-07"');
+    });
+
+    it("omits default_headers when no custom headers are configured", () => {
+      expect(generateCodeSnippet(baseParams)).not.toContain("default_headers");
+      expect(generateCodeSnippet({ ...baseParams, customHeaders: {} })).not.toContain("default_headers");
+    });
+  });
+
   describe("base URL selection", () => {
     it("should use LITELLM_UI_API_DOC_BASE_URL when provided", () => {
       const customBaseUrl = "https://custom-doc.example.com";
