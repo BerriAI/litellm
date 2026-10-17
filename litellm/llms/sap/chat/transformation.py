@@ -2,6 +2,7 @@
 Translate from OpenAI's `/v1/chat/completions` to SAP Generative AI Hub's Orchestration Service`v2/completion`
 """
 
+import types
 from collections.abc import AsyncIterator, Iterator, Mapping
 from functools import cached_property
 from typing import TYPE_CHECKING, Any, Final, Union
@@ -141,7 +142,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         tools: list | None = None,
         tool_choice: str | dict | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = types.MappingProxyType(locals().copy())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)

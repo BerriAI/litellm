@@ -1,9 +1,10 @@
 from collections.abc import AsyncIterator, Mapping, Sequence
-from typing import Any, ClassVar, Final
+from typing import ClassVar, Final
 
 import httpx
 
 from litellm._logging import verbose_logger
+from litellm.anthropic_beta_headers_manager import is_beta_header_supported_by_bundled_config
 from litellm.exceptions import AuthenticationError
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.anthropic_messages.transformation import (
@@ -265,7 +266,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         self,
         headers: dict,
         model: str,
-        messages: list[Any],
+        messages: list[object],
         optional_params: dict,
         litellm_params: dict,
         api_key: str | None = None,
@@ -293,7 +294,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         self,
         headers: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
         model: str,
-        messages: list[Any],  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
+        messages: list[object],  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
         optional_params: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
         litellm_params: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
         api_key: str | None = None,
@@ -608,6 +609,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             model=model,
             optional_params=anthropic_messages_optional_request_params,
             custom_llm_provider=self._resolved_provider,
+            drop_params=getattr(litellm_params, "drop_params", None) is True,
         )
 
         self._translate_adaptive_effort_for_non_adaptive_model(
@@ -707,6 +709,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         optional_params: dict,
         custom_llm_provider: str = "anthropic",
         messages: Sequence[object] = (),
+        beta_map_provider: str | None = None,
     ) -> dict:
         """
         Auto-inject anthropic-beta headers based on features used.
@@ -723,8 +726,9 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             optional_params: Optional parameters including tools, context_management, output_format, speed
             custom_llm_provider: Provider name for looking up correct tool search header
             messages: Request messages, scanned for per-message output_config
+            beta_map_provider: Provider whose beta map column gates safeguards, defaults to custom_llm_provider
         """
-        beta_values: Final[set] = set()
+        beta_values: Final[set[str]] = set()
 
         existing_beta: Final = tuple(
             piece.strip()
@@ -773,6 +777,12 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         # Check for fast mode
         if optional_params.get("speed") == "fast":
             beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.FAST_MODE_2026_02_01.value)
+
+        if optional_params.get("safeguards") is not None and is_beta_header_supported_by_bundled_config(
+            ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value,
+            beta_map_provider or custom_llm_provider,
+        ):
+            beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value)
 
         if messages_carry_output_config(messages):
             beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.PER_TURN_CONTROL_2026_07_01.value)

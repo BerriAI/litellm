@@ -1,6 +1,5 @@
 import asyncio
 import json
-import socket
 import threading
 import uuid
 from collections.abc import Iterator, Mapping, Sequence
@@ -25,8 +24,9 @@ from integration._support.client import (
     string_value,
 )
 from integration._support.database import read_rows
-from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
+from integration._support.process import OwnedProxy, WorkerHealthcheck, graceful_stop_seconds, owned_proxy_process
 from integration._support.wire import Reply, Request, wire_server
+from integration._support.ports import allocate_port
 from integration.streaming.faked_responses_case import (
     ANTHROPIC_TOOLS,
     API_KEY,
@@ -39,7 +39,7 @@ from integration.streaming.faked_responses_case import (
     message_item,
     response_body,
 )
-from pydantic import JsonValue, TypeAdapter
+from pydantic import JsonValue
 
 pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
 
@@ -68,9 +68,6 @@ class _Served:
     call_id: str
 
 
-_ADDRESS: Final = TypeAdapter(tuple[str, int])
-
-
 @dataclass(frozen=True, slots=True)
 class _Rig:
     port: int
@@ -79,12 +76,6 @@ class _Rig:
     @property
     def gateway(self) -> Gateway:
         return self.proxy.gateway
-
-
-def _free_port() -> int:
-    with socket.socket() as reserve:
-        reserve.bind(("127.0.0.1", 0))
-        return _ADDRESS.validate_python(reserve.getsockname())[1]
 
 
 def _deployment(name: str, model: str, port: int) -> dict[str, JsonValue]:
@@ -117,10 +108,17 @@ def _config(port: int, directory: Path) -> Path:
 @pytest.fixture(scope="module")
 def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Rig]:
     directory: Final = tmp_path_factory.mktemp("faked-stream-chaos")
-    port: Final = _free_port()
+    port: Final = allocate_port()
     with (
         gateway_from_environment() as shared,
-        owned_proxy_process(shared, directory, {}, config=_config(port, directory), workers=2) as owned,
+        owned_proxy_process(
+            shared,
+            directory,
+            {},
+            config=_config(port, directory),
+            workers=2,
+            healthcheck=WorkerHealthcheck.LENIENT,
+        ) as owned,
     ):
         yield _Rig(port, owned)
 
@@ -315,9 +313,11 @@ class _Held:
         return _respond(request)
 
 
-async def _held_burst(gateway: Gateway, calls: tuple[_Call, ...], held: _Held) -> asyncio.Task[tuple[_Served, ...]]:
+async def _held_burst(
+    gateway: Gateway, calls: tuple[_Call, ...], held: _Held, *, already_held: int = 0
+) -> asyncio.Task[tuple[_Served, ...]]:
     burst: Final = asyncio.create_task(_burst(gateway, calls, tolerate_transport_errors=True))
-    await asyncio.to_thread(eventually, held.markers.qsize, lambda size: size == len(calls), 60)
+    await asyncio.to_thread(eventually, held.markers.qsize, lambda size: size == already_held + len(calls), 60)
     return burst
 
 
@@ -328,12 +328,18 @@ def _held_by(rig: _Rig, upstream: str) -> Mapping[int, int]:
 async def test_held_mixed_burst_spreads_over_both_workers_and_each_value_arrives_once(rig: _Rig) -> None:
     calls: Final = _calls(30)
     held: Final = _Held(threading.Event(), SimpleQueue())
+    first, second = sorted(rig.proxy.worker_pids())
     with wire_server(held.respond, port=rig.port) as wire:
-        burst: Final = await _held_burst(rig.gateway, calls, held)
-        held_by: Final = _held_by(rig, wire.url)
-        held.release.set()
-        served: Final = await burst
-        assert len(held_by) == 2 and all(held_by.values()) and sum(held_by.values()) == 30, held_by
+        try:
+            with rig.proxy.suspended(second):
+                on_first: Final = await _held_burst(rig.gateway, calls[:15], held)
+            with rig.proxy.suspended(first):
+                on_second: Final = await _held_burst(rig.gateway, calls[15:], held, already_held=15)
+            held_by: Final = _held_by(rig, wire.url)
+        finally:
+            held.release.set()
+        served: Final = await on_first + await on_second
+        assert held_by == {first: 15, second: 15}, held_by
         assert len(served) == 30
         for item in served:
             _assert_each_value_once(item)
