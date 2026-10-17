@@ -2623,7 +2623,15 @@ class PrometheusLogger(CustomLogger):
         if self._should_skip_metrics_for_invalid_key(kwargs=kwargs, standard_logging_payload=standard_logging_payload):
             return
 
-        model: Final = kwargs.get("model", "")
+        deployment_model_id: Final = standard_logging_payload.get("model_id", "")  # pyright: ignore[reportUnknownVariableType]  # StandardLoggingPayload.get is partially unknown
+        requested_name: Final = kwargs.get("model", "")  # pyright: ignore[reportUnknownVariableType]  # kwargs is an untyped callback argument
+        # With no deployment behind the call, the name is whatever the caller sent (for example a model the
+        # key may not use). Bound it like ``requested_model`` so unknown names share one series.
+        model: Final = (
+            requested_name
+            if deployment_model_id
+            else _bounded_requested_model_label(requested_name, router_originated=True)  # pyright: ignore[reportUnknownArgumentType]  # caller-supplied value, the helper type-checks it
+        )
 
         litellm_params: Final = kwargs.get("litellm_params", {}) or {}
         get_end_user_id_for_cost_tracking: Final = get_cached_end_user_id_for_cost_tracking()
@@ -2645,7 +2653,7 @@ class PrometheusLogger(CustomLogger):
                 team=user_api_team,
                 team_alias=user_api_team_alias,
                 user=user_id,
-                model_id=standard_logging_payload.get("model_id", ""),
+                model_id=deployment_model_id,
                 requested_model=standard_logging_payload.get("model_group"),
                 api_provider=standard_logging_payload.get("custom_llm_provider"),
                 custom_metadata_labels=get_custom_labels_from_metadata(
