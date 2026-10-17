@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT v.token,\n                  (EXTRACT(EPOCH FROM v.expires) * 1000)::bigint AS \"expires_ms?\",\n                  v.blocked,\n                  v.models,\n                  v.spend,\n                  v.max_budget,\n                  v.allowed_routes,\n                  v.key_alias,\n                  v.key_name,\n                  v.metadata,\n                  (v.rpm_limit IS NOT NULL OR v.tpm_limit IS NOT NULL OR v.tpd_limit IS NOT NULL\n                     OR v.max_parallel_requests IS NOT NULL\n                     OR kb.rpm_limit IS NOT NULL OR kb.tpm_limit IS NOT NULL\n                     OR kb.tpd_limit IS NOT NULL OR kb.max_parallel_requests IS NOT NULL\n                     OR COALESCE(jsonb_path_exists(v.model_max_budget,\n                          '$.* ? (@.rpm_limit != null || @.tpm_limit != null)'), false)\n                     OR COALESCE(jsonb_path_exists(kb.model_max_budget,\n                          '$.* ? (@.rpm_limit != null || @.tpm_limit != null)'), false))\n                    AS \"key_rate_limits!\",\n                  COALESCE(cardinality(v.policies) > 0, false) AS \"key_policies!\",\n                  (v.aliases NOT IN ('{}', 'null')\n                     OR COALESCE(v.router_settings NOT IN ('{}', 'null'), false)) AS \"key_model_aliases!\",\n                  (v.object_permission_id IS NOT NULL) AS \"key_object_permissions!\",\n                  COALESCE(cardinality(v.allowed_cache_controls) > 0, false) AS \"key_cache_controls!\",\n                  (v.project_id IS NOT NULL) AS \"key_project!\",\n                  (v.organization_id IS NOT NULL) AS \"key_organization!\",\n                  (v.agent_id IS NOT NULL) AS \"key_agent!\",\n                  v.team_id,\n                  t.team_id AS \"team_row_id?\",\n                  t.blocked AS \"team_blocked?\",\n                  t.models AS \"team_models?\",\n                  t.spend AS \"team_spend?\",\n                  t.max_budget AS \"team_max_budget?\",\n                  t.metadata AS \"team_metadata?\",\n                  (t.rpm_limit IS NOT NULL OR t.tpm_limit IS NOT NULL OR t.tpd_limit IS NOT NULL\n                     OR t.max_parallel_requests IS NOT NULL\n                     OR COALESCE(jsonb_path_exists(t.model_max_budget,\n                          '$.* ? (@.rpm_limit != null || @.tpm_limit != null)'), false))\n                    AS \"team_rate_limits!\",\n                  COALESCE(cardinality(t.policies) > 0, false) AS \"team_policies!\",\n                  (t.model_id IS NOT NULL\n                     OR COALESCE(t.router_settings NOT IN ('{}', 'null'), false)) AS \"team_model_aliases!\",\n                  (t.object_permission_id IS NOT NULL) AS \"team_object_permissions!\",\n                  (t.organization_id IS NOT NULL) AS \"team_organization!\",\n                  (mb.rpm_limit IS NOT NULL OR mb.tpm_limit IS NOT NULL OR mb.tpd_limit IS NOT NULL\n                     OR mb.max_parallel_requests IS NOT NULL\n                     OR COALESCE(jsonb_path_exists(mb.model_max_budget,\n                          '$.* ? (@.rpm_limit != null || @.tpm_limit != null)'), false))\n                    AS \"member_rate_limits!\",\n                  mb.allowed_models AS \"member_allowed_models?\",\n                  v.user_id,\n                  u.user_id AS \"user_row_id?\",\n                  u.models AS \"user_models?\",\n                  (u.rpm_limit IS NOT NULL OR u.tpm_limit IS NOT NULL\n                     OR u.max_parallel_requests IS NOT NULL\n                     OR COALESCE(jsonb_path_exists(u.model_max_budget,\n                          '$.* ? (@.rpm_limit != null || @.tpm_limit != null)'), false))\n                    AS \"user_rate_limits!\",\n                  COALESCE(cardinality(u.policies) > 0, false) AS \"user_policies!\",\n                  (u.object_permission_id IS NOT NULL) AS \"user_object_permissions!\"\n           FROM \"LiteLLM_VerificationToken\" AS v\n           LEFT JOIN \"LiteLLM_BudgetTable\" AS kb ON v.budget_id = kb.budget_id\n           LEFT JOIN \"LiteLLM_TeamTable\" AS t ON v.team_id = t.team_id\n           LEFT JOIN \"LiteLLM_TeamMembership\" AS tm\n             ON v.team_id = tm.team_id AND v.user_id = tm.user_id\n           LEFT JOIN \"LiteLLM_BudgetTable\" AS mb ON tm.budget_id = mb.budget_id\n           LEFT JOIN \"LiteLLM_UserTable\" AS u ON v.user_id = u.user_id\n           WHERE v.token = $1",
+  "query": "SELECT v.token,\n                  (EXTRACT(EPOCH FROM v.expires) * 1000)::bigint AS \"expires_ms?\",\n                  v.blocked,\n                  v.models,\n                  v.spend,\n                  v.max_budget,\n                  v.allowed_routes,\n                  v.key_alias,\n                  v.key_name,\n                  v.metadata,\n                  (v.rpm_limit IS NOT NULL OR v.tpm_limit IS NOT NULL OR v.tpd_limit IS NOT NULL\n                     OR v.max_parallel_requests IS NOT NULL\n                     OR kb.rpm_limit IS NOT NULL OR kb.tpm_limit IS NOT NULL\n                     OR kb.tpd_limit IS NOT NULL OR kb.max_parallel_requests IS NOT NULL\n                     OR COALESCE(jsonb_path_exists(v.model_max_budget,\n                          '$.* ? (@.rpm_limit != null || @.tpm_limit != null)'), false)\n                     OR COALESCE(jsonb_path_exists(kb.model_max_budget,\n                          '$.* ? (@.rpm_limit != null || @.tpm_limit != null)'), false))\n                    AS \"key_rate_limits!\",\n                  COALESCE(cardinality(v.policies) > 0, false) AS \"key_policies!\",\n                  (v.aliases NOT IN ('{}', 'null')\n                     OR COALESCE(v.router_settings NOT IN ('{}', 'null'), false)) AS \"key_model_aliases!\",\n                  (v.object_permission_id IS NOT NULL) AS \"key_object_permissions!\",\n                  COALESCE(cardinality(v.allowed_cache_controls) > 0, false) AS \"key_cache_controls!\",\n                  (v.project_id IS NOT NULL) AS \"key_project!\",\n                  (v.organization_id IS NOT NULL) AS \"key_organization!\",\n                  (v.agent_id IS NOT NULL) AS \"key_agent!\",\n                  v.team_id,\n                  t.team_id AS \"team_row_id?\",\n                  t.team_alias AS \"team_alias?\",\n                  t.blocked AS \"team_blocked?\",\n                  t.models AS \"team_models?\",\n                  t.spend AS \"team_spend?\",\n                  t.max_budget AS \"team_max_budget?\",\n                  t.metadata AS \"team_metadata?\",\n                  (t.rpm_limit IS NOT NULL OR t.tpm_limit IS NOT NULL OR t.tpd_limit IS NOT NULL\n                     OR t.max_parallel_requests IS NOT NULL\n                     OR COALESCE(jsonb_path_exists(t.model_max_budget,\n                          '$.* ? (@.rpm_limit != null || @.tpm_limit != null)'), false))\n                    AS \"team_rate_limits!\",\n                  COALESCE(cardinality(t.policies) > 0, false) AS \"team_policies!\",\n                  (t.model_id IS NOT NULL\n                     OR COALESCE(t.router_settings NOT IN ('{}', 'null'), false)) AS \"team_model_aliases!\",\n                  (t.object_permission_id IS NOT NULL) AS \"team_object_permissions!\",\n                  (t.organization_id IS NOT NULL) AS \"team_organization!\",\n                  (mb.rpm_limit IS NOT NULL OR mb.tpm_limit IS NOT NULL OR mb.tpd_limit IS NOT NULL\n                     OR mb.max_parallel_requests IS NOT NULL\n                     OR COALESCE(jsonb_path_exists(mb.model_max_budget,\n                          '$.* ? (@.rpm_limit != null || @.tpm_limit != null)'), false))\n                    AS \"member_rate_limits!\",\n                  mb.allowed_models AS \"member_allowed_models?\",\n                  v.user_id,\n                  u.user_id AS \"user_row_id?\",\n                  u.models AS \"user_models?\",\n                  (u.rpm_limit IS NOT NULL OR u.tpm_limit IS NOT NULL\n                     OR u.max_parallel_requests IS NOT NULL\n                     OR COALESCE(jsonb_path_exists(u.model_max_budget,\n                          '$.* ? (@.rpm_limit != null || @.tpm_limit != null)'), false))\n                    AS \"user_rate_limits!\",\n                  COALESCE(cardinality(u.policies) > 0, false) AS \"user_policies!\",\n                  (u.object_permission_id IS NOT NULL) AS \"user_object_permissions!\"\n           FROM \"LiteLLM_VerificationToken\" AS v\n           LEFT JOIN \"LiteLLM_BudgetTable\" AS kb ON v.budget_id = kb.budget_id\n           LEFT JOIN \"LiteLLM_TeamTable\" AS t ON v.team_id = t.team_id\n           LEFT JOIN \"LiteLLM_TeamMembership\" AS tm\n             ON v.team_id = tm.team_id AND v.user_id = tm.user_id\n           LEFT JOIN \"LiteLLM_BudgetTable\" AS mb ON tm.budget_id = mb.budget_id\n           LEFT JOIN \"LiteLLM_UserTable\" AS u ON v.user_id = u.user_id\n           WHERE v.token = $1",
   "describe": {
     "columns": [
       {
@@ -180,6 +180,17 @@
       },
       {
         "ordinal": 20,
+        "name": "team_alias?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TeamTable\"",
+            "name": "team_alias"
+          }
+        }
+      },
+      {
+        "ordinal": 21,
         "name": "team_blocked?",
         "type_info": "Bool",
         "origin": {
@@ -190,7 +201,7 @@
         }
       },
       {
-        "ordinal": 21,
+        "ordinal": 22,
         "name": "team_models?",
         "type_info": "TextArray",
         "origin": {
@@ -201,7 +212,7 @@
         }
       },
       {
-        "ordinal": 22,
+        "ordinal": 23,
         "name": "team_spend?",
         "type_info": "Float8",
         "origin": {
@@ -212,7 +223,7 @@
         }
       },
       {
-        "ordinal": 23,
+        "ordinal": 24,
         "name": "team_max_budget?",
         "type_info": "Float8",
         "origin": {
@@ -223,7 +234,7 @@
         }
       },
       {
-        "ordinal": 24,
+        "ordinal": 25,
         "name": "team_metadata?",
         "type_info": "Jsonb",
         "origin": {
@@ -234,43 +245,43 @@
         }
       },
       {
-        "ordinal": 25,
+        "ordinal": 26,
         "name": "team_rate_limits!",
         "type_info": "Bool",
         "origin": "Expression"
       },
       {
-        "ordinal": 26,
+        "ordinal": 27,
         "name": "team_policies!",
         "type_info": "Bool",
         "origin": "Expression"
       },
       {
-        "ordinal": 27,
+        "ordinal": 28,
         "name": "team_model_aliases!",
         "type_info": "Bool",
         "origin": "Expression"
       },
       {
-        "ordinal": 28,
+        "ordinal": 29,
         "name": "team_object_permissions!",
         "type_info": "Bool",
         "origin": "Expression"
       },
       {
-        "ordinal": 29,
+        "ordinal": 30,
         "name": "team_organization!",
         "type_info": "Bool",
         "origin": "Expression"
       },
       {
-        "ordinal": 30,
+        "ordinal": 31,
         "name": "member_rate_limits!",
         "type_info": "Bool",
         "origin": "Expression"
       },
       {
-        "ordinal": 31,
+        "ordinal": 32,
         "name": "member_allowed_models?",
         "type_info": "TextArray",
         "origin": {
@@ -281,7 +292,7 @@
         }
       },
       {
-        "ordinal": 32,
+        "ordinal": 33,
         "name": "user_id",
         "type_info": "Text",
         "origin": {
@@ -292,7 +303,7 @@
         }
       },
       {
-        "ordinal": 33,
+        "ordinal": 34,
         "name": "user_row_id?",
         "type_info": "Text",
         "origin": {
@@ -303,7 +314,7 @@
         }
       },
       {
-        "ordinal": 34,
+        "ordinal": 35,
         "name": "user_models?",
         "type_info": "TextArray",
         "origin": {
@@ -314,19 +325,19 @@
         }
       },
       {
-        "ordinal": 35,
+        "ordinal": 36,
         "name": "user_rate_limits!",
         "type_info": "Bool",
         "origin": "Expression"
       },
       {
-        "ordinal": 36,
+        "ordinal": 37,
         "name": "user_policies!",
         "type_info": "Bool",
         "origin": "Expression"
       },
       {
-        "ordinal": 37,
+        "ordinal": 38,
         "name": "user_object_permissions!",
         "type_info": "Bool",
         "origin": "Expression"
@@ -363,6 +374,7 @@
       true,
       true,
       true,
+      true,
       null,
       null,
       null,
@@ -378,5 +390,5 @@
       null
     ]
   },
-  "hash": "6ea28ff09b34b8f392af542369ed7d8f244e60752718b7d2df42e646bc4937be"
+  "hash": "aebecf84ec08b203635d59ae2a616bd622e7ed0102166fed8b09b452741c107d"
 }

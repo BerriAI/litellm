@@ -1,6 +1,8 @@
 use litellm_db::{Restrictions, VerificationToken};
+use std::sync::Arc;
+
 use litellm_gateway_auth::keys::{
-    AllowedRoutes, KeyModels, KeyStatus, ModelAccess, Owner, Refusal, Restriction,
+    AllowedRoutes, KeyModels, KeyProfile, KeyStatus, ModelAccess, Owner, Refusal, Restriction,
 };
 use serde_json::Value;
 
@@ -31,14 +33,33 @@ pub(crate) fn status(row: VerificationToken, personal_keys_use_teams: bool) -> K
             refusal,
         };
     }
+    let object = |value: Value| match value {
+        Value::Object(fields) => Arc::new(fields),
+        _ => Arc::default(),
+    };
+    let (team_models, team_alias, team_metadata) = match row.team {
+        Some(team) => (
+            Some(ModelAccess::new(team.models)),
+            team.alias,
+            object(team.metadata),
+        ),
+        None => (None, None, Arc::default()),
+    };
     KeyStatus::Active {
         expires_at: row.expires,
         models: KeyModels {
             key: ModelAccess::new(row.models),
-            team: row.team.map(|team| ModelAccess::new(team.models)),
+            team: team_models,
         },
         allowed_routes: AllowedRoutes::new(row.allowed_routes),
         team_id: row.team_id,
+        profile: Arc::new(KeyProfile {
+            alias: row.key_alias,
+            user_id: row.user_id,
+            team_alias,
+            metadata: object(row.metadata),
+            team_metadata,
+        }),
     }
 }
 
@@ -267,6 +288,7 @@ mod tests {
 
     fn team(blocked: bool, max_budget: Option<f64>, spend: f64) -> Option<Team> {
         Some(Team {
+            alias: None,
             blocked,
             models: strings(&["gpt-b"]),
             spend,
@@ -285,6 +307,7 @@ mod tests {
             },
             allowed_routes: AllowedRoutes::new(strings(&["llm_api_routes"])),
             team_id: team.then(|| "team-1".to_owned()),
+            profile: Default::default(),
         }
     }
 
@@ -662,13 +685,32 @@ mod tests {
             ..row
         };
         let personal = team_id.is_none() && user_id.is_some();
-        assert_eq!(status(row.clone(), false), active(team_id.is_some()));
+        let expected = match active(team_id.is_some()) {
+            KeyStatus::Active {
+                expires_at,
+                models,
+                allowed_routes,
+                team_id,
+                ..
+            } => KeyStatus::Active {
+                expires_at,
+                models,
+                allowed_routes,
+                team_id,
+                profile: Arc::new(KeyProfile {
+                    user_id: user_id.map(str::to_owned),
+                    ..KeyProfile::default()
+                }),
+            },
+            other => other,
+        };
+        assert_eq!(status(row.clone(), false), expected);
         assert_eq!(
             status(row, true),
             if personal {
                 unsupported(Restriction::PersonalKeyTeamModels, Owner::Proxy)
             } else {
-                active(team_id.is_some())
+                expected
             }
         );
     }
