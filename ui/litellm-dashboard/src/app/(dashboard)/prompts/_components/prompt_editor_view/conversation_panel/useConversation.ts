@@ -4,6 +4,7 @@ import { TokenUsage } from "@/components/chat_ui/ResponseMetrics";
 import { Message } from "./types";
 import { convertToDotPrompt, extractVariables } from "../utils";
 import { getProxyBaseUrl, getGlobalLitellmHeaderName } from "@/components/networking";
+import { streamErrorMessage } from "@/utils/streamErrorMessage";
 
 export const useConversation = (prompt: any, accessToken: string | null) => {
   const [isLoading, setIsLoading] = useState(false);
@@ -130,36 +131,43 @@ export const useConversation = (prompt: any, accessToken: string | null) => {
               continue;
             }
 
+            let parsed;
             try {
-              const parsed = JSON.parse(data);
-
-              if (!model && parsed.model) {
-                model = parsed.model;
-              }
-
-              if (parsed.usage) {
-                usage = parsed.usage;
-              }
-
-              const content = parsed.choices?.[0]?.delta?.content;
-              if (content) {
-                if (!timeToFirstToken) {
-                  timeToFirstToken = Date.now() - startTime;
-                }
-                assistantMessage += content;
-                setMessages((prev) => {
-                  const newMessages = [...prev];
-                  newMessages[newMessages.length - 1] = {
-                    role: "assistant",
-                    content: assistantMessage,
-                    model,
-                    timeToFirstToken,
-                  };
-                  return newMessages;
-                });
-              }
+              parsed = JSON.parse(data);
             } catch (e) {
               console.error("Error parsing chunk:", e);
+              continue;
+            }
+
+            const errorMessage = streamErrorMessage(parsed);
+            if (errorMessage !== null) {
+              throw new Error(errorMessage);
+            }
+
+            if (!model && parsed.model) {
+              model = parsed.model;
+            }
+
+            if (parsed.usage) {
+              usage = parsed.usage;
+            }
+
+            const content = parsed.choices?.[0]?.delta?.content;
+            if (content) {
+              if (!timeToFirstToken) {
+                timeToFirstToken = Date.now() - startTime;
+              }
+              assistantMessage += content;
+              setMessages((prev) => {
+                const newMessages = [...prev];
+                newMessages[newMessages.length - 1] = {
+                  role: "assistant",
+                  content: assistantMessage,
+                  model,
+                  timeToFirstToken,
+                };
+                return newMessages;
+              });
             }
           }
         }

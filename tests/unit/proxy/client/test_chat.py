@@ -9,7 +9,7 @@ import pytest
 import requests
 from pydantic import ValidationError
 from litellm.proxy.client.chat import ChatClient
-from litellm.proxy.client.exceptions import UnauthorizedError
+from litellm.proxy.client.exceptions import StreamError, UnauthorizedError
 
 
 def _load_http_mocking_responses():
@@ -281,6 +281,33 @@ def test_completions_stream_yields_parsed_sse_chunks(client, base_url, sample_me
     responses.add(responses.POST, f"{base_url}/chat/completions", body=body, status=200)
 
     assert list(client.completions_stream(model="gpt-4", messages=sample_messages)) == expected
+
+
+@pytest.mark.parametrize(
+    "error_frame, error, message",
+    [
+        (
+            b'data: {"error": {"message": "blocked by guardrail", "type": "None", "code": "400"}}',
+            {"message": "blocked by guardrail", "type": "None", "code": "400"},
+            "blocked by guardrail",
+        ),
+        (b'data: {"error": "upstream cut"}', "upstream cut", "upstream cut"),
+        (b'data: {"error": {"code": "500"}}', {"code": "500"}, "{'code': '500'}"),
+    ],
+)
+@responses.activate
+def test_completions_stream_raises_on_an_error_frame_after_partial_content(
+    client, base_url, sample_messages, error_frame, error, message
+):
+    body = b'data: {"choices": [{"delta": {"content": "Hel"}}]}\n\n' + error_frame + b"\n\ndata: [DONE]\n\n"
+    responses.add(responses.POST, f"{base_url}/chat/completions", body=body, status=200)
+    stream = client.completions_stream(model="gpt-4", messages=sample_messages)
+
+    assert next(stream) == {"choices": [{"delta": {"content": "Hel"}}]}
+    with pytest.raises(StreamError) as raised:
+        next(stream)
+    assert raised.value.error == error
+    assert str(raised.value) == message
 
 
 @responses.activate
