@@ -9,12 +9,16 @@ https://github.com/caozhiyuan/copilot-api
 """
 
 import os
+from collections.abc import Mapping
 from typing import (
     TYPE_CHECKING,
     Any,
     Final,
     cast,  # noqa: TID251  # narrows untyped request dicts at the session boundary
 )
+
+import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -24,6 +28,7 @@ from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfi
 from litellm.types.llms.openai import (
     ResponseInputParam,
     ResponsesAPIOptionalRequestParams,
+    ResponsesAPIResponse,
     ResponsesAPIStreamingResponse,
 )
 from litellm.types.router import GenericLiteLLMParams
@@ -38,6 +43,9 @@ from ..common_utils import (
     pin_session_authorization,
 )
 from ..per_user_auth import require_github_copilot_user_session
+from .collaboration import CopilotPlaintextCollaboration
+
+_RESPONSE_OBJECT: Final = TypeAdapter(Mapping[str, object])
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -97,13 +105,24 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
     - Supports vision requests with special header
     - Requires X-Initiator header based on input analysis
 
+    GITHUB_COPILOT_PLAINTEXT_COLLABORATION=true opts Codex agent messages into
+    plaintext dispatch over HTTPS. It requires stateless requests carrying the
+    encrypted collaboration tool inventory and does not recover old ciphertext.
+
     Reference: https://api.githubcopilot.com/
     """
 
-    def __init__(self) -> None:
+    def __init__(self, plaintext_collaboration: bool | None = None) -> None:
         super().__init__()
         self.authenticator = Authenticator()
         self._stream_item_ids_by_output_index: dict[int, str] = {}
+        enabled: Final = (
+            os.getenv("GITHUB_COPILOT_PLAINTEXT_COLLABORATION", "").lower() == "true"
+            if plaintext_collaboration is None
+            else plaintext_collaboration
+        )
+        self._collaboration = CopilotPlaintextCollaboration() if enabled else None
+        self._unprojected_request: Mapping[str, object] = {}
 
     @property
     def custom_llm_provider(self) -> LlmProviders:
@@ -138,11 +157,64 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         parsed_chunk: dict,
         logging_obj: LiteLLMLoggingObj,
     ) -> ResponsesAPIStreamingResponse:
-        parsed_chunk = self._normalize_stream_item_id(parsed_chunk)
+        normalized: Final = self._normalize_stream_item_id(parsed_chunk)
+        restored: Final = (
+            dict(self._collaboration.restore_event(_RESPONSE_OBJECT.validate_python(normalized)))
+            if self._collaboration is not None
+            else normalized
+        )
         return super().transform_streaming_response(
             model=model,
-            parsed_chunk=parsed_chunk,
+            parsed_chunk=restored,
             logging_obj=logging_obj,
+        )
+
+    def transform_responses_api_request(
+        self,
+        model: str,
+        input: str | ResponseInputParam,
+        response_api_optional_request_params: Mapping[str, object],
+        litellm_params: GenericLiteLLMParams,
+        headers: Mapping[str, str],
+    ) -> dict[str, object]:  # mutable-ok: the HTTP handler expects a mutable provider request
+        request: Final = super().transform_responses_api_request(
+            model=model,
+            input=input,
+            response_api_optional_request_params=dict(response_api_optional_request_params),
+            litellm_params=litellm_params,
+            headers=dict(headers),
+        )
+        if self._collaboration is None:
+            return request
+        self._unprojected_request = _RESPONSE_OBJECT.validate_python(request)
+        return dict(self._collaboration.prepare_request(self._unprojected_request))
+
+    def transform_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        request: Mapping[str, object],
+        model: str,
+        litellm_params: GenericLiteLLMParams,
+    ) -> Mapping[str, object]:
+        if self._collaboration is None:
+            return super().transform_extra_body(extra_body, request, model, litellm_params)
+        merged: Final = self.normalize_responses_api_request_dict({**self._unprojected_request, **extra_body})
+        return self._collaboration.prepare_request(_RESPONSE_OBJECT.validate_python(merged))
+
+    def transform_response_api_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> ResponsesAPIResponse:
+        response: Final = super().transform_response_api_response(model, raw_response, logging_obj)
+        if self._collaboration is None or not self._collaboration.active:
+            return response
+        restored: Final = ResponsesAPIResponse.model_validate(
+            self._collaboration.restore_response(_RESPONSE_OBJECT.validate_python(response.model_dump()))
+        )
+        return response.model_copy(
+            update={"output": restored.output, "tools": restored.tools, "tool_choice": restored.tool_choice}
         )
 
     def _normalize_stream_item_id(self, parsed_chunk: dict) -> dict:
