@@ -27174,6 +27174,9 @@
                         "$ref": "#/components/schemas/CustomToolCallOutputItem"
                       },
                       {
+                        "$ref": "#/components/schemas/ResponseReasoningItem"
+                      },
+                      {
                         "$ref": "#/components/schemas/OutputToolSearchCall"
                       }
                     ]
