@@ -10,6 +10,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.get_llm_provider_logic import (
+    inferred_provider,
     model_matches_wildcard,
     split_route_type_prefix,
     strip_provider_family_prefix,
@@ -24,9 +25,7 @@ from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager, get_valid_models
 
 _CREDENTIAL_LITELLM_PARAM_FIELDS = set(CredentialLiteLLMParams.model_fields)
-
-
-_CREDENTIAL_LITELLM_PARAM_FIELDS = set(CredentialLiteLLMParams.model_fields)
+_KNOWN_PROVIDER_NAMES: Final = frozenset(provider.value for provider in LlmProviders)
 
 
 def _check_wildcard_routing(model: str) -> bool:
@@ -312,13 +311,35 @@ def _deployment_provider_and_path(deployment_model: str, custom_llm_provider: st
     return (custom_llm_provider, deployment_model) if custom_llm_provider else None
 
 
+def _model_id_litellm_infers_provider_for(model: str) -> str:
+    provider, _, model_id = model.partition("/")
+    return model_id if provider in _KNOWN_PROVIDER_NAMES and model_id and "/" not in model_id else model
+
+
+def _namespaced_passthrough_listings(
+    wildcard_model: str, litellm_params: LiteLLM_Params | None
+) -> tuple[_WildcardListing, ...]:
+    if wildcard_model == "*" or wildcard_model.count("*") != 1:
+        return ()
+    provider_models: Final = get_provider_models(
+        provider="*", litellm_params=_hydrate_litellm_credential_name(litellm_params)
+    )
+    model_ids: Final = (_model_id_litellm_infers_provider_for(model) for model in provider_models or ())
+    return tuple(
+        dict.fromkeys(
+            _WildcardListing(listed_id=wildcard_model.replace("*", model_id, 1), routed_model=model_id)
+            for model_id in model_ids
+        )
+    )
+
+
 def _wildcard_listings(wildcard_model: str, litellm_params: LiteLLM_Params | None) -> tuple[_WildcardListing, ...]:
     deployment_model: Final = litellm_params.model if litellm_params is not None else wildcard_model
     provider_and_path: Final = _deployment_provider_and_path(
         deployment_model, litellm_params.custom_llm_provider if litellm_params is not None else None
     )
     if provider_and_path is None:
-        return ()
+        return _namespaced_passthrough_listings(wildcard_model, litellm_params) if deployment_model == "*" else ()
     provider, deployment_path = provider_and_path
 
     route_type_prefix, model_pattern = split_route_type_prefix(deployment_path, provider)
@@ -350,7 +371,10 @@ def _wildcard_listings(wildcard_model: str, litellm_params: LiteLLM_Params | Non
 
 
 def _listings_served_by_route(
-    wildcard_model: str, litellm_params: LiteLLM_Params | None, pattern_router: PatternMatchRouter | None
+    wildcard_model: str,
+    litellm_params: LiteLLM_Params | None,
+    pattern_router: PatternMatchRouter | None,
+    exact_model_names: frozenset[str],
 ) -> tuple[_WildcardListing, ...]:
     listings: Final = _wildcard_listings(wildcard_model, litellm_params)
     if pattern_router is None:
@@ -358,7 +382,8 @@ def _listings_served_by_route(
     return tuple(
         listing
         for listing in listings
-        if not pattern_router.routes_elsewhere(listing.listed_id, wildcard_model, listing.routed_model)
+        if listing.listed_id in exact_model_names
+        or not pattern_router.routes_elsewhere(listing.listed_id, wildcard_model, listing.routed_model)
     )
 
 
@@ -387,7 +412,7 @@ def _model_info_rows(
             shadowed=pattern_router is not None
             and pattern_router.shadowing_regex(listing.listed_id, model_name) is not None,
         )
-        for listing in _listings_served_by_route(model_name, litellm_params, pattern_router)
+        for listing in _listings_served_by_route(model_name, litellm_params, pattern_router, exact_model_names)
         if listing.listed_id not in exact_model_names
     )
 
@@ -442,21 +467,38 @@ def _is_team_only_route(route: str, llm_router: Router, team_id: str | None) -> 
     return team_router is not None and team_router.registers(route) and not llm_router.pattern_router.registers(route)
 
 
-def _ids_listed_by_route(route: str, llm_router: Router | None, team_id: str | None) -> tuple[str, ...]:
+def _proxy_wide_route_sends_to_another_provider(listing: _WildcardListing, pattern_router: PatternMatchRouter) -> bool:
+    provider: Final = inferred_provider(listing.routed_model)
+    return (
+        provider is not None
+        and pattern_router.serves(listing.listed_id)
+        and not pattern_router.routes_to_provider(listing.listed_id, provider)
+    )
+
+
+def _ids_listed_by_route(
+    route: str, llm_router: Router | None, team_id: str | None, exact_model_names: frozenset[str]
+) -> tuple[str, ...]:
     model_list: Final = llm_router.get_model_list(model_name=route, team_id=team_id) if llm_router else None
     pattern_router: Final = llm_router.pattern_router if llm_router else None
     listings: Final = (
         chain.from_iterable(
-            _listings_served_by_route(route, LiteLLM_Params(**router_model["litellm_params"]), pattern_router)
+            _listings_served_by_route(
+                route, LiteLLM_Params(**router_model["litellm_params"]), pattern_router, exact_model_names
+            )
             for router_model in model_list
         )
         if model_list
-        else _listings_served_by_route(route, None, pattern_router)
+        else _listings_served_by_route(route, None, pattern_router, exact_model_names)
     )
-    listed_ids: Final = (listing.listed_id for listing in listings)
     if llm_router is None or not _is_team_only_route(route, llm_router, team_id):
-        return tuple(listed_ids)
-    return tuple(listed_id for listed_id in listed_ids if not llm_router.pattern_router.serves(listed_id))
+        return tuple(listing.listed_id for listing in listings)
+    return tuple(
+        listing.listed_id
+        for listing in listings
+        if listing.listed_id in exact_model_names
+        or not _proxy_wide_route_sends_to_another_provider(listing, llm_router.pattern_router)
+    )
 
 
 def _routes_can_list_same_ids(route: str, other_route: str) -> bool:
@@ -466,7 +508,7 @@ def _routes_can_list_same_ids(route: str, other_route: str) -> bool:
 
 
 def _ids_other_routes_serve_under(
-    wildcards: tuple[str, ...], llm_router: Router | None, team_id: str | None
+    wildcards: tuple[str, ...], llm_router: Router | None, team_id: str | None, exact_model_names: frozenset[str]
 ) -> tuple[str, ...]:
     if llm_router is None or not wildcards:
         return ()
@@ -481,7 +523,7 @@ def _ids_other_routes_serve_under(
         route for route in other_routes if any(_routes_can_list_same_ids(route, wildcard) for wildcard in wildcards)
     )
     other_ids: Final = chain.from_iterable(
-        _ids_listed_by_route(route, llm_router, team_id) for route in overlapping_routes
+        _ids_listed_by_route(route, llm_router, team_id, exact_model_names) for route in overlapping_routes
     )
     return tuple(
         listed_id
@@ -499,11 +541,20 @@ def _get_wildcard_models(
     wildcard_routes: Final = tuple(model for model in unique_models if _check_wildcard_routing(model=model))
     for model in wildcard_routes:
         unique_models.remove(model)
+    exact_model_names: Final = (
+        frozenset(name for name in llm_router.get_model_names(team_id=team_id) if not _check_wildcard_routing(name))
+        if llm_router
+        else frozenset[str]()
+    )
     listed: Final = chain.from_iterable(
-        (*((model,) if return_wildcard_routes else ()), *_ids_listed_by_route(model, llm_router, team_id))
+        (
+            *((model,) if return_wildcard_routes else ()),
+            *_ids_listed_by_route(model, llm_router, team_id, exact_model_names),
+        )
         for model in wildcard_routes
     )
-    return list(dict.fromkeys(chain(listed, _ids_other_routes_serve_under(wildcard_routes, llm_router, team_id))))
+    other_ids: Final = _ids_other_routes_serve_under(wildcard_routes, llm_router, team_id, exact_model_names)
+    return list(dict.fromkeys(chain(listed, other_ids)))
 
 
 def get_all_fallbacks(
