@@ -7,7 +7,7 @@ from fastapi import HTTPException, Request
 from pydantic import ConfigDict, Field, ValidationError
 
 from litellm.litellm_core_utils.litellm_logging import Logging
-from litellm.proxy._types import UserAPIKeyAuth, hash_token
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.spend_tracking.charge_receipt_capture import (
     AuthenticatedBillingContext,
@@ -172,10 +172,9 @@ async def authorize_charge_receipt(
 
 
 def required_receipt_key(auth: UserAPIKeyAuth, runtime: ChargeReceiptRuntime | None) -> str | None:
-    if runtime is None or auth.api_key is None:
+    if runtime is None or auth.token is None:
         return None
-    key_hash: Final = hash_token(auth.api_key) if auth.api_key.startswith("sk-") else auth.api_key
-    return key_hash if key_hash in runtime.settings.key_hashes else None
+    return auth.token if auth.token in runtime.settings.key_hashes else None
 
 
 def bind_charge_receipt(

@@ -1,3 +1,5 @@
+SET LOCAL lock_timeout = '10s';
+
 CREATE TABLE IF NOT EXISTS "LiteLLM_ChargeReceipt" (
     "event_id" TEXT NOT NULL,
     "key_hash" TEXT NOT NULL,

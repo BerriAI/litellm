@@ -469,3 +469,46 @@ async def test_idle_publisher_continues_after_poll_timeout(journal: JournalCase)
         await asyncio.wait_for(publisher.run(stop), timeout=5)
     assert query.calls == 2 and stop.is_set()
     assert await journal.receipt_count() == 0 and (await journal.balance()).spend == 0
+
+
+@pytest.mark.parametrize("amount", (None, -1.0, float("inf"), float("nan")))
+async def test_unpriced_or_invalid_cost_never_becomes_a_confirmed_free_charge(
+    journal: JournalCase,
+    amount: float | None,
+) -> None:
+    runtime: Final = ChargeReceiptRuntime(receipt_settings(journal), journal.store)
+    capture: Final = runtime.bind(BillingContext(request_id=journal.receipt.request_id), journal.receipt.key_hash)
+    result: Final = await capture.capture_event(priced_event().model_copy(update={"response_cost": amount}))
+    assert isinstance(result, FailedCharge) and not await capture.wait()
+    assert await journal.receipt_count() == 0 and (await journal.balance()).spend == 0
+
+
+async def test_missing_database_ack_cannot_release_the_response_as_paid(journal: JournalCase) -> None:
+    from litellm.proxy.spend_tracking.charge_receipt_request import await_charge_receipt
+
+    query: Final = HeldDatabaseQuery(journal.database)
+    runtime: Final = ChargeReceiptRuntime(
+        receipt_settings(journal).model_copy(update={"commit_timeout_seconds": 0.02}),
+        ChargeReceiptStore(query),
+    )
+    capture: Final = runtime.bind(BillingContext(request_id=journal.receipt.request_id), journal.receipt.key_hash)
+    outcome: Final = await asyncio.wait_for(capture.capture_event(priced_event()), timeout=5)
+    assert isinstance(outcome, FailedCharge) and not runtime.available
+    request: Final = Request({"type": "http"})
+    request.state.required_charge_capture = capture
+    with pytest.raises(HTTPException) as error:
+        await await_charge_receipt(request)
+    assert error.value.status_code == 503 and error.value.headers == {"x-should-retry": "false"}
+    assert await journal.receipt_count() == 0 and (await journal.balance()).spend == 0
+
+
+async def test_unavailable_cached_budget_counters_do_not_drop_the_durable_charge(journal: JournalCase) -> None:
+    async def unavailable_cache(details: Mapping[str, object], event: SpendEvent, key_hash: str) -> None:
+        assert key_hash == journal.receipt.key_hash and event.response_cost == 0.25
+        raise ConnectionError("injected cache outage")
+
+    runtime: Final = ChargeReceiptRuntime(receipt_settings(journal), journal.store, before_commit=unavailable_cache)
+    capture: Final = runtime.bind(BillingContext(request_id=journal.receipt.request_id), journal.receipt.key_hash)
+    assert isinstance(await capture.capture_event(priced_event(), {}), CommittedCharge)
+    assert await capture.wait() and await journal.receipt_count() == 1
+    assert (await journal.balance()).spend == 0.25
