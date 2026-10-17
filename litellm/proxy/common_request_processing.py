@@ -2394,6 +2394,9 @@ class ProxyBaseLLMRequestProcessing:
         )
 
         self.data["litellm_logging_obj"] = logging_obj
+        from litellm.proxy.spend_tracking.charge_receipt_request import bind_charge_receipt, receipt_runtime
+
+        bind_charge_receipt(request, _DECODED_JSON.validate_python(logging_obj), receipt_runtime(proxy_logging_obj))
 
         # Merge model-level guardrails before pre_call_hook so DB/UI-configured
         # guardrails actually execute on pre_call. Without this, guardrails set
@@ -2831,6 +2834,10 @@ class ProxyBaseLLMRequestProcessing:
             )
             phase_event("litellm.request.pre_call_completed")
 
+        from litellm.proxy.spend_tracking.charge_receipt_request import bind_charge_receipt, receipt_runtime
+
+        bind_charge_receipt(request, _DECODED_JSON.validate_python(logging_obj), receipt_runtime(proxy_logging_obj))
+
         # Defer async logging when post-call guardrails are configured so the
         # StandardLoggingPayload is built after guardrails write to metadata.
         # Cache the result to avoid scanning litellm.callbacks twice.
@@ -3165,6 +3172,9 @@ class ProxyBaseLLMRequestProcessing:
                     except Exception as e:
                         verbose_proxy_logger.exception("Error in orphaned streaming async logging: %s", e)
 
+        from litellm.proxy.spend_tracking.charge_receipt_request import await_charge_receipt
+
+        await await_charge_receipt(request)
         hidden_params = get_hidden_params_dict(response)  # get any updated response headers
         additional_headers = hidden_params.get("additional_headers", {}) or {}
 

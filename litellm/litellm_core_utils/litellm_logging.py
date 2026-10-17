@@ -125,6 +125,7 @@ from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.agents import LiteLLMSendMessageResponse
+from litellm.types.charge_receipts import CHARGE_OUTCOME_KEY, RequiredChargeCapture
 from litellm.types.containers.main import ContainerObject
 from litellm.types.decisions import DecisionsResponse, OpenAIDecisionResponse
 from litellm.types.integrations.s3_v2 import S3PartitionGranularity
@@ -778,6 +779,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.defer_async_logging: bool = False
         self.enqueue_deferred_logging: Callable[[], None] | None = None
         self._async_success_scheduled: bool = False
+        self.required_charge_capture: RequiredChargeCapture | None = None
         self.on_detached_stream_failure: Callable[[Exception], Awaitable[None]] | None = None
         self.shadow_eval_request_snapshot: GuardrailRequestSnapshot | None = None
 
@@ -2307,6 +2309,9 @@ class Logging(LiteLLMLoggingBaseClass):
         the state the request's other attempts share untouched."""
         attempt: Final = copy.copy(self)
         attempt.model_call_details = dict(self.model_call_details)
+        attempt.required_charge_capture = (
+            self.required_charge_capture.fork() if self.required_charge_capture is not None else None
+        )
         return attempt
 
     def carry_failed_attempt_usage(self) -> None:
@@ -3661,6 +3666,22 @@ class Logging(LiteLLMLoggingBaseClass):
 
                 # print standard logging payload
                 self._emit_stored_standard_logging_payload()
+        captured_response: Final[object] = self.model_call_details.get("async_complete_streaming_response", result)
+        required_charge_outcome: Final = (
+            await self.required_charge_capture.capture_success(
+                self.model_call_details,
+                captured_response,
+                start_time,
+                end_time,
+            )
+            if (
+                self.required_charge_capture is not None
+                and captured_response is not None
+                and (self.stream is not True or self._is_assembled_stream_success(captured_response))
+            )
+            else None
+        )
+
         callbacks: Final = self.get_combined_callback_list(
             dynamic_success_callbacks=self.dynamic_async_success_callbacks,
             global_callbacks=litellm._async_success_callback,
@@ -3709,6 +3730,8 @@ class Logging(LiteLLMLoggingBaseClass):
                 )
                 self._handle_callback_failure(callback=callback)
 
+        if required_charge_outcome is not None:
+            self.model_call_details[CHARGE_OUTCOME_KEY] = required_charge_outcome
         self.mark_logging_complete(event_type="async_success")
 
         for callback in callbacks:

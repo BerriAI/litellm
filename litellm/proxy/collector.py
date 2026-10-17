@@ -208,6 +208,11 @@ def main(argv: Sequence[str]) -> None:
         sys.exit(f"LiteLLM collector: cannot use the pod's pgbouncer: {pooled.reason}")
     if pooled is not None:
         export_pooled_database_url(pooled)
+    if tuple(argv) == ("--charge-receipts",):
+        from litellm.proxy.spend_tracking.charge_receipt_delivery import run_charge_receipt_publisher
+
+        asyncio.run(run_charge_receipt_publisher())
+        return
     settings: Final = CollectorSettings()
     raw_address: Final = address_argument(argv, default=settings.address)
     address: Final = raw_address if isinstance(raw_address, AddressError) else parse_collector_address(raw_address)

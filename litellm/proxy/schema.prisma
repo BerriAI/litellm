@@ -499,6 +499,24 @@ model LiteLLM_SSOIdentityAssertion {
 }
 
 // Generate Tokens for Proxy
+model LiteLLM_ChargeReceipt {
+    event_id            String   @id
+    key_hash            String
+    payload             Json
+    payload_hash        String
+    key_counter_updated Boolean
+    created_at          DateTime @default(now()) @client.Timestamptz(3)
+    retry_at            DateTime @default(now()) @client.Timestamptz(3)
+    attempts            Int      @default(0)
+    lease_owner         String?
+    lease_until         DateTime? @client.Timestamptz(3)
+    delivered_at        DateTime? @client.Timestamptz(3)
+    last_error          String?
+
+    @@index([delivered_at, retry_at, lease_until, event_id], map: "LiteLLM_ChargeReceipt_pending_idx")
+    @@index([key_hash, created_at], map: "LiteLLM_ChargeReceipt_key_idx")
+}
+
 model LiteLLM_VerificationToken {
     token      String   @id
     key_name   String?

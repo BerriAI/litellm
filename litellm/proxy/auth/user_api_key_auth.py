@@ -18,6 +18,7 @@ from typing import Final, NamedTuple, Protocol, Union, cast
 import fastapi
 from fastapi import HTTPException, Request, WebSocket, status
 from fastapi.security.api_key import APIKeyHeader
+from pydantic import TypeAdapter
 from starlette.exceptions import WebSocketException
 
 import litellm
@@ -1202,6 +1203,7 @@ async def user_api_key_auth_websocket_for_model(
         "headers": scope_headers,
         "path": ws_scope.get("path", ""),
         "state": ws_scope.setdefault("state", {}),
+        "litellm_websocket_auth": True,
     }
     for key in ("root_path", "app_root_path"):
         if key in ws_scope:
@@ -3998,6 +4000,9 @@ def _resolve_request_principal(request: Request, valid_token: UserAPIKeyAuth) ->
     )
 
 
+_CHARGE_REQUEST_VALUE: Final = TypeAdapter(object)
+
+
 async def _authorize_authenticated_request(
     user_api_key_auth_obj: UserAPIKeyAuth,
     request: Request,
@@ -4014,6 +4019,15 @@ async def _authorize_authenticated_request(
     """
     ## ENSURE DISABLE ROUTE WORKS ACROSS ALL USER AUTH FLOWS ##
     RouteChecks.should_call_route(route=route, valid_token=user_api_key_auth_obj, request=request)
+    from litellm.proxy.proxy_server import proxy_logging_obj
+    from litellm.proxy.spend_tracking.charge_receipt_request import authorize_charge_receipt, receipt_runtime
+
+    await authorize_charge_receipt(
+        request,
+        user_api_key_auth_obj,
+        receipt_runtime(proxy_logging_obj),
+        _CHARGE_REQUEST_VALUE.validate_python(request_data),
+    )
     await _normalize_claude_model(request_data, user_api_key_auth_obj, request, route)
     await _resolve_router_settings_model_group_alias(request_data, user_api_key_auth_obj, request, route)
 
