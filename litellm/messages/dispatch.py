@@ -1,18 +1,20 @@
 import inspect
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterator, Mapping
+from types import MappingProxyType
 from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding selects a sync result or an async awaitable
 
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.anthropic.pass_through.messages import handler as main
 from litellm.llms.anthropic.pass_through.safeguards import native_route_classifies
-from litellm.rust_bridge.catalog import Route, RouteContext
+from litellm.rust_bridge.catalog import Feature, Route, RouteContext, Target
 from litellm.rust_bridge.dispatch import PublicDispatch
 from litellm.rust_bridge.messages.entrypoints import (
     NATIVE_AMESSAGES,
     NATIVE_MESSAGES,
 )
 from litellm.rust_bridge.public_call import (
+    AsyncFlag,
     NativeCall,
     bind,
     native_call,
@@ -46,6 +48,7 @@ def _python_amessages() -> PythonAmessages:
 
 _PYTHON_MESSAGES: Final = _python_messages()
 _MESSAGES: Final = signature(_PYTHON_MESSAGES)
+_FLAG: Final = AsyncFlag("is_async", sync=_MESSAGES)
 _PYTHON_AMESSAGES: Final = _python_amessages()
 _AMESSAGES: Final = signature(_PYTHON_AMESSAGES)
 
@@ -64,30 +67,44 @@ def _public_request(
     return native_call(legacy, args, kwargs)
 
 
-def _resolved_provider(request: NativeCall) -> str | None:
-    try:
-        return get_llm_provider(
-            str(request.resolved["model"]), optional_str(request.resolved.get("custom_llm_provider"))
-        )[1]
-    except BadRequestError:
-        return optional_str(request.resolved.get("custom_llm_provider"))
-
-
-def _python_serves(request: NativeCall) -> bool:
-    """Vertex AI serves only Claude through the Anthropic Messages config, as
-    ``get_provider_anthropic_messages_config`` does; every other Vertex model keeps Python's
-    translation through Chat Completions. A request Python would answer with classifier
-    ``safeguard_results`` stays on Python too."""
+def _resolved(request: NativeCall) -> tuple[str, str | None]:
     model: Final = str(request.resolved["model"])
-    vertex_without_claude: Final = _resolved_provider(request) == "vertex_ai" and "claude" not in model.lower()
-    return vertex_without_claude or native_route_classifies(model, request.kwargs.get("safeguards"))
+    provider: Final = optional_str(request.resolved.get("custom_llm_provider"))
+    try:
+        resolved_model, resolved_provider, _, _ = get_llm_provider(model, provider)
+    except BadRequestError:
+        return model, provider
+    return resolved_model, resolved_provider
+
+
+def _target(request: NativeCall, model: str, provider: str | None) -> Target:
+    requested_model: Final = str(request.resolved["model"])
+    if main._native_messages_config(model, provider, request.resolved.get("model_info")) is not None:  # pyright: ignore[reportPrivateUsage]  # the handler's own passthrough lookup
+        return Target.MESSAGES
+    compacting: Final = request.resolved.get("compaction") is not None
+    if not compacting and main._should_route_to_responses_api(provider, requested_model, model):  # pyright: ignore[reportPrivateUsage]  # the handler's own translation choice
+        return Target.RESPONSES
+    return Target.CHAT_COMPLETIONS
+
+
+_FEATURES: Final[Mapping[Feature, Callable[[NativeCall], bool]]] = MappingProxyType(
+    {
+        Feature.SAFEGUARDS_CLASSIFIER: lambda request: native_route_classifies(
+            str(request.resolved["model"]), request.resolved.get("safeguards")
+        ),
+    }
+)
 
 
 def _context(request: NativeCall) -> RouteContext:
+    requested_model: Final = str(request.resolved["model"])
+    model, provider = _resolved(request)
     return RouteContext(
         Route.MESSAGES,
-        provider=_resolved_provider(request),
-        model=str(request.resolved["model"]),
+        provider=provider,
+        model=requested_model,
+        target=_target(request, model, provider),
+        features=frozenset(feature for feature, detected in _FEATURES.items() if detected(request)),
     )
 
 
@@ -95,14 +112,12 @@ _DISPATCH: Final = PublicDispatch(
     route=Route.MESSAGES,
     request=lambda args, kwargs: _public_request(_MESSAGES, args, kwargs),
     context=_context,
-    bypass=lambda request: request.kwargs.get("is_async") is True or _python_serves(request),
 )
 
 _ADISPATCH: Final = PublicDispatch(
     route=Route.MESSAGES,
     request=lambda args, kwargs: _public_request(_AMESSAGES, args, kwargs),
     context=_context,
-    bypass=_python_serves,
 )
 
 
@@ -111,9 +126,11 @@ def anthropic_messages_handler(
     **kwargs: object,  # kwargs-ok: preserve the public Anthropic Messages call shape
 ) -> MessagesResult | Coroutine[object, object, MessagesResult]:
     python: Final = _PYTHON_MESSAGES
+    if _FLAG.requested(kwargs):
+        return anthropic_messages(**_FLAG.keywords(args, kwargs))
     return _DISPATCH.run(
         args,
-        kwargs,
+        _FLAG.dropped(kwargs),
         python=python,
         binding=NATIVE_MESSAGES,
         native=native_call_hook,
@@ -124,7 +141,7 @@ async def anthropic_messages(*args: object, **kwargs: object) -> MessagesResult:
     python: Final = _PYTHON_AMESSAGES
     return await _ADISPATCH.arun(
         args,
-        kwargs,
+        _FLAG.dropped(kwargs),
         python=python,
         binding=NATIVE_AMESSAGES,
         native=native_call_hook,
