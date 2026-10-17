@@ -2,7 +2,7 @@ import asyncio
 import copy
 import datetime
 import json
-from collections.abc import Mapping
+from collections.abc import AsyncIterable, Mapping
 from types import MappingProxyType, SimpleNamespace
 from typing import AsyncGenerator, Callable, Final, Iterator, Literal, Optional, Sequence
 from urllib.parse import unquote_plus
@@ -24,6 +24,7 @@ from litellm.litellm_core_utils.bug_report import (
     bug_report_notice,
     build_bug_report,
 )
+from litellm.types.router import RouterRateLimitError, RouterRateLimitErrorBasic
 from litellm.constants import (
     CLIENT_REQUESTED_MODEL_SCOPE_KEY,
     MAX_LITELLM_CALL_ID_LENGTH,
@@ -1722,6 +1723,29 @@ class TestProxyBaseLLMRequestProcessing:
         )
 
         assert "x-litellm-classifier-cost" not in headers
+
+    def test_get_custom_headers_drops_a_provider_header_http_cannot_carry(self):
+        user_api_key_dict: Final = MagicMock(spec=UserAPIKeyAuth)
+        user_api_key_dict.tpm_limit = None
+        user_api_key_dict.rpm_limit = None
+        user_api_key_dict.max_budget = None
+        user_api_key_dict.spend = 0
+
+        headers: Final = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=user_api_key_dict,
+            call_id="call-1",
+            **{
+                "llm_provider-x-amzn-requestid": "req-1",
+                "llm_provider-x-provider-region": "東京リージョン",
+                "llm_provider-x-provider-city": "Zürich",
+            },
+        )
+        response: Final = Response()
+        response.headers.update(headers)
+
+        assert response.headers["llm_provider-x-amzn-requestid"] == "req-1"
+        assert response.headers["llm_provider-x-provider-city"] == "Zürich"
+        assert "llm_provider-x-provider-region" not in response.headers
 
     def test_get_cost_breakdown_from_logging_obj_helper(self):
         """
@@ -4599,6 +4623,32 @@ class TestStreamCloseOnDisconnect:
                 timeout=5,
             )
 
+    async def test_cancelling_the_first_chunk_wait_stops_the_upstream_read(self):
+        reads: list[int] = []
+        closed = asyncio.Event()
+
+        async def slow_upstream():
+            try:
+                while True:
+                    reads.append(len(reads))
+                    await asyncio.sleep(0.01)
+                yield "data: never\n\n"
+            finally:
+                closed.set()
+
+        waiting = asyncio.ensure_future(
+            _buffer_first_chunk_honoring_disconnect(slow_upstream(), request=self._request_that_stays_connected())
+        )
+        await asyncio.sleep(0.05)
+        waiting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiting
+        reads_at_cancel = len(reads)
+        await asyncio.sleep(0.05)
+
+        assert closed.is_set()
+        assert len(reads) == reads_at_cancel
+
     async def test_buffer_first_chunk_raises_sentinel_and_closes_on_disconnect(self):
         closed = asyncio.Event()
 
@@ -4673,6 +4723,21 @@ class TestHandleLLMApiExceptionRetryAfter:
     async def test_handle_llm_api_exception_no_retry_after_for_plain_exception(self):
         proxy_exc = await self._invoke(ValueError("some other failure"))
         assert "retry-after" not in proxy_exc.headers
+
+    @pytest.mark.parametrize(
+        "exc",
+        (
+            RouterRateLimitError(model="gpt-4", cooldown_time=42.3, enable_pre_call_checks=False, cooldown_list=[]),
+            RouterRateLimitErrorBasic(model="gpt-4"),
+        ),
+        ids=("cooldown", "basic"),
+    )
+    async def test_handle_llm_api_exception_answers_a_cooldown_with_429_and_no_bug_notice(self, exc, caplog):
+        with caplog.at_level("ERROR"):
+            proxy_exc = await self._invoke(exc)
+
+        assert (proxy_exc.code, proxy_exc.type) == ("429", "rate_limit_error")
+        assert ISSUE_URL_BASE not in caplog.text
 
     async def test_handle_llm_api_exception_strips_bug_report_notice_from_client_message(self, caplog):
         report = build_bug_report(RuntimeError("boom"), surface="sdk")
@@ -5993,7 +6058,7 @@ class TestAllmPassthroughStreamingProviderGate:
         }
         return ProxyBaseLLMRequestProcessing(data=data)
 
-    async def _run(self, processing_obj, monkeypatch, chunks, stream=None):
+    async def _run(self, processing_obj, monkeypatch, chunks, stream=None, proxy_logging_obj=None, request=None):
         import litellm.proxy.common_request_processing as crp
         from litellm.proxy._types import UserAPIKeyAuth as RealUserAPIKeyAuth
 
@@ -6011,14 +6076,14 @@ class TestAllmPassthroughStreamingProviderGate:
 
         monkeypatch.setattr(crp, "route_request", fake_route_request)
 
-        proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        proxy_logging_obj = proxy_logging_obj if proxy_logging_obj is not None else MagicMock(spec=ProxyLogging)
         proxy_logging_obj.during_call_hook = AsyncMock(return_value=None)
         proxy_logging_obj.update_request_status = AsyncMock(return_value=None)
         proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value=None)
         proxy_logging_obj.post_call_success_hook = AsyncMock()
 
         return await processing_obj.base_process_llm_request(
-            request=MagicMock(spec=Request, headers={}),
+            request=request if request is not None else MagicMock(spec=Request, headers={}),
             fastapi_response=Response(),
             user_api_key_dict=RealUserAPIKeyAuth(api_key="sk-test"),
             route_type="allm_passthrough_route",
@@ -6084,15 +6149,144 @@ class TestAllmPassthroughStreamingProviderGate:
         streamed = [chunk async for chunk in result.body_iterator]
         assert streamed == chunks
 
-    @pytest.mark.asyncio
-    async def test_bedrock_converse_stream_is_buffered_through_handler(
-        self, monkeypatch
-    ):
-        processing_obj = self._build_processing_obj(
-            "bedrock", "model/us.amazon.nova-lite-v1:0/converse-stream"
-        )
-        chunks = [b"raw-1", b"raw-2"]
+    @staticmethod
+    def _converse_frame(event_type: str, payload: dict) -> bytes:
+        import struct
+        from binascii import crc32
 
+        headers = b"".join(
+            bytes((len(name),)) + name + b"\x07" + struct.pack("!H", len(value)) + value
+            for name, value in (
+                (b":event-type", event_type.encode()),
+                (b":content-type", b"application/json"),
+                (b":message-type", b"event"),
+            )
+        )
+        body = json.dumps(payload).encode()
+        prelude = struct.pack("!II", 16 + len(headers) + len(body), len(headers))
+        message = prelude + struct.pack("!I", crc32(prelude)) + headers + body
+        return message + struct.pack("!I", crc32(message))
+
+    def _converse_stream(self) -> list[bytes]:
+        return [
+            self._converse_frame("messageStart", {"role": "assistant"}),
+            self._converse_frame("contentBlockDelta", {"contentBlockIndex": 0, "delta": {"text": "Hello"}}),
+            self._converse_frame("contentBlockStop", {"contentBlockIndex": 0}),
+            self._converse_frame("messageStop", {"stopReason": "end_turn"}),
+        ]
+
+    @staticmethod
+    def _apply_guardrail(**kwargs):
+        from litellm.integrations.custom_guardrail import CustomGuardrail
+
+        class _ApplyGuardrail(CustomGuardrail):
+            async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+                return inputs
+
+        return _ApplyGuardrail(guardrail_name="scan", event_hook="post_call", default_on=True, **kwargs)
+
+    @staticmethod
+    def _success_hook_guardrail():
+        from litellm.integrations.custom_guardrail import CustomGuardrail
+
+        class _SuccessHookGuardrail(CustomGuardrail):
+            async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+                return response
+
+        return _SuccessHookGuardrail(guardrail_name="whole", event_hook="post_call", default_on=True)
+
+    @staticmethod
+    def _native_hooks_guardrail():
+        from litellm.integrations.custom_guardrail import CustomGuardrail
+
+        class _NativeHooksGuardrail(CustomGuardrail):
+            use_native_lifecycle_hooks = True
+
+            async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+                return inputs
+
+        return _NativeHooksGuardrail(guardrail_name="native", event_hook="post_call", default_on=True)
+
+    @classmethod
+    def _release_on_scan_guardrail(cls):
+        guardrail = cls._apply_guardrail()
+        guardrail.streaming_buffer_until_moderated = True
+        guardrail.streaming_buffer_release_on_scan = True
+        return guardrail
+
+    @classmethod
+    def _parallel_guardrail(cls):
+        return cls._apply_guardrail(run_in_parallel=True)
+
+    @staticmethod
+    def _holding_release_on_scan_guardrail():
+        from litellm.integrations.custom_guardrail import CustomGuardrail
+
+        class _HoldingGuardrail(CustomGuardrail):
+            async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+                return inputs
+
+            async def async_post_call_streaming_iterator_hook(self, user_api_key_dict, response, request_data):
+                async for item in response:
+                    yield item
+
+        guardrail = _HoldingGuardrail(guardrail_name="held", event_hook="post_call", default_on=True)
+        guardrail.streaming_buffer_release_on_scan = True
+        return guardrail
+
+    @staticmethod
+    def _recording_upstream(frames: list[bytes], events: list[str]):
+        class _Upstream:
+            def __init__(self) -> None:
+                self._frames = iter(frames)
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self) -> bytes:
+                frame = next(self._frames, None)
+                if frame is None:
+                    raise StopAsyncIteration
+                return frame
+
+            async def aclose(self) -> None:
+                events.append("upstream closed")
+
+            async def wait_for_spend_flush(self) -> bool:
+                events.append("spend logged")
+                return True
+
+        return _Upstream()
+
+    async def _run_converse_stream(
+        self,
+        monkeypatch,
+        guardrail,
+        chunks,
+        event_stream_hook=None,
+        stream=None,
+        failure_hook=None,
+        read_body=True,
+        request=None,
+        endpoint="model/us.amazon.nova-lite-v1:0/converse-stream",
+        model="us.amazon.nova-lite-v1:0",
+        post_call_guarded=True,
+        request_body=None,
+    ):
+        processing_obj = self._build_processing_obj("bedrock", endpoint)
+        processing_obj.data["litellm_logging_obj"].model = model
+        processing_obj.data["data"] = request_body
+        monkeypatch.setattr(litellm, "callbacks", [guardrail])
+        recorded: dict = {}
+
+        async def relay_frames(response, user_api_key_dict, request_data, guardrails):
+            recorded["guardrails"] = list(guardrails)
+            async for item in response:
+                yield item
+
+        self._proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        self._proxy_logging_obj.async_post_call_event_stream_iterator_hook = event_stream_hook or relay_frames
+        self._proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None, side_effect=failure_hook)
         with patch.object(
             ProxyBaseLLMRequestProcessing,
             "_has_post_call_guardrails",
@@ -6100,19 +6294,483 @@ class TestAllmPassthroughStreamingProviderGate:
         ), patch.object(
             ProxyBaseLLMRequestProcessing,
             "_has_post_call_guardrails_for_passthrough",
-            return_value=True,
+            return_value=post_call_guarded,
         ), patch(
             "litellm.llms.bedrock.passthrough.guardrail_translation.handler."
             "BedrockPassthroughGuardrailHandler.de_anonymize_event_stream",
             new=AsyncMock(return_value=b"modified-body"),
         ) as mock_handler:
-            result = await self._run(processing_obj, monkeypatch, chunks)
+            result = await self._run(
+                processing_obj,
+                monkeypatch,
+                chunks,
+                stream=stream,
+                proxy_logging_obj=self._proxy_logging_obj,
+                request=request,
+            )
+            body = (
+                b"".join([chunk async for chunk in result.body_iterator])
+                if isinstance(result, StreamingResponse) and read_body
+                else None
+                if isinstance(result, StreamingResponse)
+                else result.body
+            )
+        return result, body, mock_handler, recorded
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "guardrail_factory",
+        [
+            "_success_hook_guardrail",
+            "_native_hooks_guardrail",
+            "_mask_response_guardrail",
+            "_release_on_scan_guardrail",
+            "_holding_release_on_scan_guardrail",
+            "_parallel_guardrail",
+        ],
+    )
+    @pytest.mark.parametrize(
+        ("endpoint", "model", "request_body"),
+        [
+            ("model/us.amazon.nova-lite-v1:0/converse-stream", "us.amazon.nova-lite-v1:0", None),
+            (
+                "model/us.anthropic.claude-sonnet-5-v1:0/invoke-with-response-stream",
+                "us.anthropic.claude-sonnet-5-v1:0",
+                None,
+            ),
+            (
+                "model/abc/invoke-with-response-stream",
+                "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc",
+                {"anthropic_version": "bedrock-2023-05-31", "max_tokens": 8, "messages": []},
+            ),
+        ],
+        ids=["converse-stream", "claude-invoke-stream", "claude-invoke-stream-behind-an-application-inference-profile"],
+    )
+    async def test_bedrock_stream_is_buffered_for_a_guardrail_that_needs_the_whole_response(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        guardrail_factory: str,
+        endpoint: str,
+        model: str,
+        request_body: Mapping[str, object] | None,
+    ):
+        guardrail = (
+            self._apply_guardrail(mask_response_content=True)
+            if guardrail_factory == "_mask_response_guardrail"
+            else getattr(self, guardrail_factory)()
+        )
+
+        result, body, mock_handler, recorded = await self._run_converse_stream(
+            monkeypatch,
+            guardrail,
+            [b"raw-1", b"raw-2"],
+            endpoint=endpoint,
+            model=model,
+            request_body=request_body,
+        )
 
         assert isinstance(result, Response)
         assert not isinstance(result, StreamingResponse)
-        assert result.body == b"modified-body"
+        assert body == b"modified-body"
         assert result.headers["content-type"] == "application/vnd.amazon.eventstream"
         mock_handler.assert_awaited_once()
+        assert recorded == {}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "streaming_flags",
+        [
+            {},
+            {"streaming_buffer_release_on_scan": True},
+            {
+                "streaming_buffer_until_moderated": True,
+                "streaming_buffer_release_on_scan": True,
+                "streaming_end_of_stream_only": True,
+            },
+        ],
+        ids=["sampled", "release-on-scan-while-sampled", "release-on-scan-at-end-of-stream-only"],
+    )
+    async def test_bedrock_converse_stream_relays_frames_for_an_apply_guardrail_guardrail(
+        self, monkeypatch, streaming_flags
+    ):
+        guardrail = self._apply_guardrail()
+        for name, value in streaming_flags.items():
+            setattr(guardrail, name, value)
+        stream = b"".join(self._converse_stream())
+
+        result, body, mock_handler, recorded = await self._run_converse_stream(
+            monkeypatch, guardrail, [stream[:20], stream[20:]]
+        )
+
+        assert isinstance(result, _UpstreamClosingStreamingResponse)
+        assert result.headers["content-type"] == "application/vnd.amazon.eventstream"
+        assert body == stream
+        assert recorded == {"guardrails": [(guardrail, False)]}
+        mock_handler.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_bedrock_converse_stream_failure_after_the_first_frame_ends_with_an_exception_frame(
+        self, monkeypatch
+    ):
+        from botocore.eventstream import EventStreamBuffer
+
+        from litellm.exceptions import GuardrailRaisedException
+
+        async def block_after_first_frame(response, user_api_key_dict, request_data, guardrails):
+            async for item in response:
+                yield item
+                raise GuardrailRaisedException(
+                    guardrail_name="scan", message="Violated guardrail policy", should_wrap_with_default_message=False
+                )
+
+        frames = self._converse_stream()
+        result, body, _, _ = await self._run_converse_stream(
+            monkeypatch, self._apply_guardrail(), frames, event_stream_hook=block_after_first_frame
+        )
+
+        assert isinstance(result, _UpstreamClosingStreamingResponse)
+        assert body.startswith(frames[0])
+        buffer = EventStreamBuffer()
+        buffer.add_data(body[len(frames[0]) :])
+        messages = list(buffer)
+        assert [(m.headers[":message-type"], m.headers[":exception-type"]) for m in messages] == [
+            ("exception", "validationException")
+        ]
+        assert json.loads(messages[0].payload) == {"message": "Violated guardrail policy"}
+        self._proxy_logging_obj.post_call_failure_hook.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_bedrock_converse_stream_failure_after_the_first_frame_logs_the_upstream_spend_first(
+        self, monkeypatch
+    ):
+        from litellm.exceptions import GuardrailRaisedException
+
+        events: list[str] = []
+        frames = self._converse_stream()
+
+        async def block_after_first_frame(response, user_api_key_dict, request_data, guardrails):
+            async for item in response:
+                yield item
+                raise GuardrailRaisedException(
+                    guardrail_name="scan", message="Violated guardrail policy", should_wrap_with_default_message=False
+                )
+
+        async def failure_hook(**kwargs):
+            events.append("failure hook")
+
+        result, _, _, _ = await self._run_converse_stream(
+            monkeypatch,
+            self._apply_guardrail(),
+            frames,
+            event_stream_hook=block_after_first_frame,
+            stream=self._recording_upstream(frames, events),
+            failure_hook=failure_hook,
+        )
+
+        assert isinstance(result, _UpstreamClosingStreamingResponse)
+        assert events[:3] == ["upstream closed", "spend logged", "failure hook"]
+
+    @pytest.mark.asyncio
+    async def test_bedrock_converse_stream_block_raised_after_the_first_frame_runs_the_failure_hook(self, monkeypatch):
+        from botocore.eventstream import EventStreamBuffer
+
+        async def block_after_first_frame(response, user_api_key_dict, request_data, guardrails):
+            async for item in response:
+                yield item
+                raise HTTPException(status_code=400, detail="Violated guardrail policy")
+
+        frames = self._converse_stream()
+        result, body, _, _ = await self._run_converse_stream(
+            monkeypatch, self._apply_guardrail(), frames, event_stream_hook=block_after_first_frame
+        )
+
+        assert body.startswith(frames[0])
+        buffer = EventStreamBuffer()
+        buffer.add_data(body[len(frames[0]) :])
+        messages = list(buffer)
+        assert [(m.headers[":message-type"], m.headers[":exception-type"]) for m in messages] == [
+            ("exception", "validationException")
+        ]
+        assert json.loads(messages[0].payload) == {"message": "Violated guardrail policy"}
+        self._proxy_logging_obj.post_call_failure_hook.assert_awaited_once()
+        assert self._proxy_logging_obj.post_call_failure_hook.await_args.kwargs["original_exception"].status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_bedrock_converse_stream_failing_after_an_empty_upstream_raises(self, monkeypatch):
+        async def fail_at_the_end(response, user_api_key_dict, request_data, guardrails):
+            async for item in response:
+                yield item
+            raise HTTPException(status_code=503, detail="guardrail unavailable")
+
+        with pytest.raises(HTTPException) as raised:
+            await self._run_converse_stream(monkeypatch, self._apply_guardrail(), [], event_stream_hook=fail_at_the_end)
+
+        assert raised.value.status_code == 503
+
+    @pytest.mark.asyncio
+    async def test_bedrock_converse_stream_closed_before_its_body_starts_closes_the_guardrails_and_the_upstream(
+        self, monkeypatch
+    ):
+        events: list[str] = []
+        frames = self._converse_stream()
+
+        async def scan(response, user_api_key_dict, request_data, guardrails):
+            try:
+                async for item in response:
+                    yield item
+            finally:
+                events.append("guardrails closed")
+
+        result, _, _, _ = await self._run_converse_stream(
+            monkeypatch,
+            self._apply_guardrail(),
+            frames,
+            event_stream_hook=scan,
+            stream=self._recording_upstream(frames, events),
+            read_body=False,
+        )
+        await result.upstream_generator.aclose()
+
+        assert events == ["guardrails closed", "upstream closed"]
+
+    @pytest.mark.asyncio
+    async def test_bedrock_converse_stream_client_leaving_a_held_stream_before_its_first_frame_gets_a_499(
+        self, monkeypatch
+    ):
+        events: list[str] = []
+        frames = self._converse_stream()
+        first_frame_read = asyncio.Event()
+        release_budget = AsyncMock()
+        monkeypatch.setattr(
+            "litellm.proxy.spend_tracking.budget_reservation.release_budget_reservation_on_cancel", release_budget
+        )
+
+        class _SlowUpstream:
+            def __init__(self) -> None:
+                self._frames = iter(frames)
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self) -> bytes:
+                frame = next(self._frames, None)
+                if frame is None:
+                    raise StopAsyncIteration
+                if first_frame_read.is_set():
+                    await asyncio.Event().wait()
+                first_frame_read.set()
+                return frame
+
+            async def aclose(self) -> None:
+                events.append("upstream closed")
+
+            async def wait_for_spend_flush(self) -> bool:
+                events.append("spend logged")
+                return True
+
+        async def hold_until_the_end(response, user_api_key_dict, request_data, guardrails):
+            held = [item async for item in response]
+            for item in held:
+                yield item
+
+        async def client_leaves_once_the_upstream_answers():
+            await first_frame_read.wait()
+            return {"type": "http.disconnect"}
+
+        request = MagicMock(spec=Request, headers={})
+        request.receive = client_leaves_once_the_upstream_answers
+
+        result, body, _, _ = await asyncio.wait_for(
+            self._run_converse_stream(
+                monkeypatch,
+                self._apply_guardrail(),
+                frames,
+                event_stream_hook=hold_until_the_end,
+                stream=_SlowUpstream(),
+                request=request,
+            ),
+            timeout=5,
+        )
+
+        assert isinstance(result, JSONResponse)
+        assert result.status_code == 499
+        assert json.loads(body)["error"]["type"] == "client_disconnect"
+        assert events[-1] == "spend logged"
+        assert "upstream closed" in events
+        self._proxy_logging_obj.post_call_failure_hook.assert_not_awaited()
+        release_budget.assert_not_awaited()
+        self._proxy_logging_obj.arelease_max_parallel_requests_on_disconnect.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_bedrock_converse_stream_client_leaving_before_bedrock_answers_releases_what_the_request_holds(
+        self, monkeypatch
+    ):
+        events: list[str] = []
+        release_budget = AsyncMock()
+        monkeypatch.setattr(
+            "litellm.proxy.spend_tracking.budget_reservation.release_budget_reservation_on_cancel", release_budget
+        )
+
+        class _SilentUpstream:
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self) -> bytes:
+                await asyncio.Event().wait()
+                raise StopAsyncIteration
+
+            async def aclose(self) -> None:
+                events.append("upstream closed")
+
+            async def wait_for_spend_flush(self) -> bool:
+                return False
+
+        async def client_leaves():
+            return {"type": "http.disconnect"}
+
+        request = MagicMock(spec=Request, headers={})
+        request.receive = client_leaves
+
+        result, _, _, _ = await asyncio.wait_for(
+            self._run_converse_stream(
+                monkeypatch, self._apply_guardrail(), [], stream=_SilentUpstream(), request=request
+            ),
+            timeout=5,
+        )
+
+        assert isinstance(result, JSONResponse)
+        assert result.status_code == 499
+        assert "upstream closed" in events
+        release_budget.assert_awaited_once_with(None)
+        self._proxy_logging_obj.arelease_max_parallel_requests_on_disconnect.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_bedrock_converse_stream_failure_before_the_first_frame_raises(self, monkeypatch):
+        events: list[str] = []
+        frames = self._converse_stream()
+
+        async def block_before_any_frame(response, user_api_key_dict, request_data, guardrails):
+            async for _ in response:
+                raise HTTPException(status_code=400, detail="Violated guardrail policy")
+            yield b""
+
+        with pytest.raises(HTTPException) as raised:
+            await self._run_converse_stream(
+                monkeypatch,
+                self._apply_guardrail(),
+                frames,
+                event_stream_hook=block_before_any_frame,
+                stream=self._recording_upstream(frames, events),
+            )
+
+        assert raised.value.status_code == 400
+        assert events[-1] == "spend logged"
+        assert "upstream closed" in events
+        self._proxy_logging_obj.post_call_failure_hook.assert_not_awaited()
+
+    def _invoke_stream(self) -> list[bytes]:
+        import base64
+
+        return [
+            self._converse_frame("chunk", {"bytes": base64.b64encode(json.dumps(event).encode()).decode()})
+            for event in (
+                {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Hello"}},
+                {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 1}},
+            )
+        ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("model", "request_body"),
+        [
+            ("us.anthropic.claude-sonnet-5-v1:0", None),
+            (
+                "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc",
+                {"anthropic_version": "bedrock-2023-05-31", "max_tokens": 8, "messages": []},
+            ),
+        ],
+        ids=["claude-model-id", "application-inference-profile-with-a-claude-body"],
+    )
+    async def test_bedrock_invoke_stream_of_a_claude_model_is_relayed_and_scanned_for_its_text(
+        self, monkeypatch: pytest.MonkeyPatch, model: str, request_body: Mapping[str, object] | None
+    ):
+        from litellm.integrations.custom_guardrail import CustomGuardrail
+        from litellm.llms.pass_through.guardrail_translation.handler import LlmPassthroughRouteHandler
+
+        guardrail = self._apply_guardrail()
+        scanned: dict[str, object] = {}
+
+        async def scan_relayed(
+            response: AsyncIterable[object],
+            user_api_key_dict: ProxyUserAPIKeyAuth,
+            request_data: dict[str, object],
+            guardrails: Sequence[tuple[CustomGuardrail, bool]],
+        ) -> AsyncGenerator[object, None]:
+            items = [item async for item in response]
+            scanned["guardrails"] = list(guardrails)
+            scanned["texts"] = LlmPassthroughRouteHandler().get_streaming_scan_key(items).texts
+            for item in items:
+                yield item
+
+        stream = b"".join(self._invoke_stream())
+        result, body, mock_handler, _ = await self._run_converse_stream(
+            monkeypatch,
+            guardrail,
+            [stream[:20], stream[20:]],
+            event_stream_hook=scan_relayed,
+            endpoint=f"model/{model}/invoke-with-response-stream",
+            model=model,
+            request_body=request_body,
+        )
+
+        assert isinstance(result, _UpstreamClosingStreamingResponse)
+        assert result.headers["content-type"] == "application/vnd.amazon.eventstream"
+        assert body == stream
+        assert scanned == {"guardrails": [(guardrail, False)], "texts": ("Hello",)}
+        mock_handler.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_bedrock_invoke_stream_of_a_claude_model_without_a_post_call_guardrail_streams_as_received(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        result, body, mock_handler, recorded = await self._run_converse_stream(
+            monkeypatch,
+            self._apply_guardrail(),
+            [b"raw-1", b"raw-2"],
+            endpoint="model/us.anthropic.claude-sonnet-5-v1:0/invoke-with-response-stream",
+            model="us.anthropic.claude-sonnet-5-v1:0",
+            post_call_guarded=False,
+        )
+
+        assert isinstance(result, _UpstreamClosingStreamingResponse)
+        assert body == b"raw-1raw-2"
+        assert recorded == {}
+        mock_handler.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("model", "guardrail_factory"),
+        [
+            ("meta.llama4-maverick-17b-instruct-v1:0", "_apply_guardrail"),
+            ("meta.llama4-maverick-17b-instruct-v1:0", "_success_hook_guardrail"),
+        ],
+        ids=["guardrail-the-relay-scans", "guardrail-that-needs-the-whole-response"],
+    )
+    async def test_bedrock_invoke_stream_of_a_model_without_a_stream_translation_streams_as_received(
+        self, monkeypatch: pytest.MonkeyPatch, model: str, guardrail_factory: str
+    ):
+        result, body, mock_handler, recorded = await self._run_converse_stream(
+            monkeypatch,
+            getattr(self, guardrail_factory)(),
+            [b"raw-1", b"raw-2"],
+            endpoint=f"model/{model}/invoke-with-response-stream",
+            model=model,
+        )
+
+        assert isinstance(result, _UpstreamClosingStreamingResponse)
+        assert body == b"raw-1raw-2"
+        assert recorded == {}
+        mock_handler.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_bedrock_invoke_stream_is_not_buffered(self, monkeypatch):
@@ -8282,10 +8940,10 @@ def _apply_stream_usage_tracking(
     route_type: str,
     supports_stream_options: Callable[[], bool] = lambda: True,
 ) -> None:
-    from litellm.proxy.common_request_processing import _stream_usage_tracking_updates
+    from litellm.proxy.common_request_processing import stream_usage_tracking_updates
 
     data.update(
-        _stream_usage_tracking_updates(
+        stream_usage_tracking_updates(
             data=data,
             general_settings=general_settings,
             route_type=route_type,
@@ -8295,6 +8953,32 @@ def _apply_stream_usage_tracking(
 
 
 class TestApplyStreamUsageTracking:
+    @pytest.mark.parametrize(
+        ("general_settings", "requested_stream_options", "expected_stream_options"),
+        [
+            ({"always_include_stream_usage": False}, None, {"include_usage": False}),
+            ({}, None, None),
+            ({"always_include_stream_usage": False}, {"include_usage": True}, {"include_usage": True}),
+        ],
+    )
+    def test_generate_content_stream_passes_only_the_admin_opt_out(
+        self,
+        general_settings: dict[str, bool],
+        requested_stream_options: dict[str, bool] | None,
+        expected_stream_options: dict[str, bool] | None,
+    ):
+        data = {
+            "stream": True,
+            "model": "grok-4.20-non-reasoning",
+            **({} if requested_stream_options is None else {"stream_options": requested_stream_options}),
+        }
+
+        _apply_stream_usage_tracking(
+            data=data, general_settings=general_settings, route_type="agenerate_content_stream"
+        )
+
+        assert data.get("stream_options") == expected_stream_options
+
     def test_default_injects_usage_and_marks_strip_for_chat_completions(self):
         data = {"stream": True, "model": "gpt-5.4-nano"}
 
@@ -8430,10 +9114,10 @@ class TestApplyStreamUsageTracking:
 class TestModelDeploymentsSupportStreamOptions:
     def _support(self, model, llm_router=None, team_id=None) -> bool:
         from litellm.proxy.common_request_processing import (
-            _model_deployments_support_stream_options,
+            model_deployments_support_stream_options,
         )
 
-        return _model_deployments_support_stream_options(model=model, llm_router=llm_router, team_id=team_id)
+        return model_deployments_support_stream_options(model=model, llm_router=llm_router, team_id=team_id)
 
     def test_openai_compatible_deployment_supports_stream_options(self):
         router = litellm.Router(
@@ -8781,6 +9465,76 @@ class TestPerRequestModelGroupAlias:
         )
 
         assert merged_for == ["group-b"]
+
+
+class TestVideoServedModelPin:
+    """A video id names the group a poll asked for and the group that served the task. The served group may only
+    be pinned when the name left after every alias rewrite routes to it, so an edited id cannot undo a key's alias,
+    and only after the pre-call hooks, so a key's rate limits on that name still count the poll, and never over a
+    model a hook picked."""
+
+    @staticmethod
+    def _router() -> litellm.Router:
+        return litellm.Router(
+            model_list=[
+                {"model_name": name, "litellm_params": {"model": "openai/sora-2", "api_key": "sk-fake"}}
+                for name in ("allowed", "restricted")
+            ],
+            routing_groups=[
+                {"group_name": "videos", "models": ["allowed", "restricted"], "routing_strategy": "simple-shuffle"}
+            ],
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("key_aliases", "router_settings", "hook_rewrite", "hooked", "expected"),
+        [
+            ({}, None, None, "videos", "restricted"),
+            ({"videos": "allowed"}, None, None, "allowed", "allowed"),
+            ({}, {"model_group_alias": {"videos": "allowed"}}, None, "allowed", "allowed"),
+            ({}, None, "allowed", "videos", "allowed"),
+        ],
+        ids=["no-alias-pins-the-served-group", "key-alias-wins", "key-or-team-router-alias-wins", "hook-rewrite-wins"],
+    )
+    async def test_served_group_is_pinned_after_the_hooks_only_when_the_aliased_name_routes_to_it(
+        self, monkeypatch, key_aliases, router_settings, hook_rewrite, hooked, expected
+    ):
+        processing_obj = ProxyBaseLLMRequestProcessing(
+            data={"model": "videos", "video_id": "video_abc"}, served_model="restricted"
+        )
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {}
+
+        async def mock_add_litellm_data_to_request(*args, **kwargs):
+            return kwargs.get("data", {})
+
+        async def pre_call_hook(user_api_key_dict, data, call_type, skip_guardrails=False):
+            hooked_data = copy.deepcopy(data)
+            return hooked_data if hook_rewrite is None else {**hooked_data, "model": hook_rewrite}
+
+        mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        mock_proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=pre_call_hook)
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing,
+            "add_litellm_data_to_request",
+            mock_add_litellm_data_to_request,
+        )
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
+        mock_proxy_config = MagicMock(spec=ProxyConfig)
+        mock_proxy_config._get_hierarchical_router_settings = AsyncMock(return_value=router_settings)
+
+        returned_data, _ = await processing_obj.common_processing_pre_call_logic(
+            request=mock_request,
+            general_settings={},
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="hash", models=[], aliases=key_aliases),
+            proxy_logging_obj=mock_proxy_logging_obj,
+            proxy_config=mock_proxy_config,
+            route_type="avideo_status",
+            llm_router=self._router(),
+        )
+
+        assert mock_proxy_logging_obj.pre_call_hook.call_args.kwargs["data"]["model"] == hooked
+        assert returned_data["model"] == expected
 
 
 class TestInjectCostIntoUsageDict:
@@ -10823,3 +11577,63 @@ class TestStreamingContainerOwnershipRecordedBeforeDone:
         assert tuple(chunk for chunk, _ in observed) == self.CHUNKS
         assert tuple(count for _, count in observed) == (0, 0, 0, 0)
         recorder.assert_awaited_once()
+
+
+class TestResponseCostFromLoggingObjForBridgedMessages:
+    """A /v1/messages request answered through the chat bridge arrives here as an Anthropic body whose
+    usage has no reasoning field, while the cost it recomputes must still price the reasoning tokens
+    the provider reported (LIT-9666)."""
+
+    @staticmethod
+    def _logging_obj(model: str):
+        from litellm.litellm_core_utils.litellm_logging import Logging
+
+        logging_obj = Logging(
+            model=model,
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="anthropic_messages",
+            start_time=datetime.datetime.now(),
+            litellm_call_id="lit-9666",
+            function_id="lit-9666",
+        )
+        logging_obj.optional_params = {}
+        return logging_obj
+
+    def test_recomputed_cost_prices_the_reasoning_tokens_of_the_bridged_chat_completion(self):
+        from litellm.types.utils import CompletionTokensDetailsWrapper, ModelResponse, Usage
+        from litellm.llms.anthropic.pass_through.adapters.transformation import LiteLLMAnthropicMessagesAdapter
+
+        model = "dashscope/qwen-turbo"
+        pricing = litellm.get_model_info(model)
+        input_rate = pricing["input_cost_per_token"]
+        output_rate = pricing["output_cost_per_token"]
+        reasoning_rate = pricing["output_cost_per_reasoning_token"]
+        assert input_rate is not None and output_rate is not None and reasoning_rate is not None
+        assert reasoning_rate != output_rate
+        chat_completion = ModelResponse(
+            id="chatcmpl-upstream",
+            model="qwen-turbo",
+            choices=[{"index": 0, "message": {"role": "assistant", "content": "answer"}, "finish_reason": "stop"}],
+            usage=Usage(
+                prompt_tokens=1240,
+                completion_tokens=4040,
+                total_tokens=5280,
+                completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=3480),
+            ),
+        )
+        served = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(response=chat_completion)
+        assert served is not None and "reasoning" not in json.dumps(served["usage"])
+        logging_obj = self._logging_obj(model)
+        logging_obj.record_bridged_model_response(chat_completion)
+
+        cost = ProxyBaseLLMRequestProcessing._response_cost_from_logging_obj(
+            response=dict(served), logging_obj=logging_obj
+        )
+
+        expected_reasoning = 3480 * reasoning_rate
+        expected_output = expected_reasoning + (4040 - 3480) * output_rate
+        assert cost == pytest.approx(1240 * input_rate + expected_output)
+        assert logging_obj.cost_breakdown is not None
+        assert logging_obj.cost_breakdown["output_cost"] == pytest.approx(expected_output)
+        assert logging_obj.cost_breakdown["reasoning_cost"] == pytest.approx(expected_reasoning)

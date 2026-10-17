@@ -11,6 +11,7 @@ spend tracking stores, so a follow-up previous_response_id still finds the conve
 """
 
 import json
+from collections.abc import Callable
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
@@ -978,6 +979,44 @@ def _reasoning_chunk(reasoning: str, finish_reason: str | None = None) -> ModelR
     )
 
 
+def _with_reasoning(chunk: ModelResponseStream, reasoning: str) -> ModelResponseStream:
+    choice: Final = chunk.choices[0]
+    delta: Final = Delta(**{**choice.delta.model_dump(), "reasoning_content": reasoning})
+    return chunk.model_copy(
+        update={"choices": [StreamingChoices(index=0, delta=delta, finish_reason=choice.finish_reason)]}
+    )
+
+
+def _reasoning_then_text_chunks() -> tuple[ModelResponseStream, ...]:
+    return (_reasoning_chunk("let me think"), _chunk("Hello"), _chunk("!", finish_reason="stop"))
+
+
+def _reasoning_and_text_in_one_chunk() -> tuple[ModelResponseStream, ...]:
+    return (_with_reasoning(_chunk("Hello!", finish_reason="stop"), "let me think"),)
+
+
+def _signed_thinking_and_text_in_one_chunk() -> tuple[ModelResponseStream, ...]:
+    chunk: Final = _chunk("Hello!", finish_reason="stop")
+    signed_block: Final = {"type": "thinking", "thinking": "", "signature": "sig_only"}
+    delta: Final = Delta(**{**chunk.choices[0].delta.model_dump(), "thinking_blocks": [signed_block]})
+    return (
+        chunk.model_copy(update={"choices": [StreamingChoices(index=0, delta=delta, finish_reason="stop")]}),
+    )
+
+
+StreamChunks = Callable[[], tuple[ModelResponseStream, ...]]
+
+REASONING_THEN_TEXT_STREAMS: Final = pytest.mark.parametrize(
+    "stream_chunks",
+    [_reasoning_then_text_chunks, _reasoning_and_text_in_one_chunk],
+    ids=["reasoning_then_text_chunks", "reasoning_and_text_in_one_chunk"],
+)
+
+
+def _event_text(events: list[BaseLiteLLMOpenAIResponseObject], event_type: ResponsesAPIStreamEvents) -> str:
+    return "".join(event.delta for event in events if getattr(event, "type", None) == event_type)
+
+
 def _annotation_only_chunk() -> ModelResponseStream:
     citation: Final = {"start_index": 0, "end_index": 2, "url": "https://example.com", "title": "Example"}
     return ModelResponseStream(
@@ -1134,16 +1173,13 @@ async def test_signature_only_thinking_streams_a_replayable_reasoning_item(sync_
     assert json.loads(reasoning_items[0].encrypted_content)[0]["signature"] == "sig_only"
 
 
+@REASONING_THEN_TEXT_STREAMS
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
-async def test_reasoning_then_text_announces_message_item_before_text_events(sync_mode: bool):
-    iterator: Final = _build_iterator(
-        [
-            _reasoning_chunk("let me think"),
-            _chunk("Hello"),
-            _chunk("!", finish_reason="stop"),
-        ]
-    )
+async def test_reasoning_then_text_announces_message_item_before_text_events(
+    stream_chunks: StreamChunks, sync_mode: bool
+):
+    iterator: Final = _build_iterator(stream_chunks())
 
     events: Final = await _collect_events(iterator, sync_mode)
 
@@ -1171,23 +1207,22 @@ async def test_reasoning_then_text_announces_message_item_before_text_events(syn
         elif event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE and _is_message_item(event):
             assert event.item.id in announced_message_ids
     assert saw_text_delta
-    assert "".join(
-        event.delta for event in events if getattr(event, "type", None) == ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA
-    ) == "Hello!"
+    assert _event_text(events, ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA) == "Hello!"
+    assert _event_text(events, ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA) == "let me think"
     assert announced_indexes_by_item_type["message"] != announced_indexes_by_item_type["reasoning"]
 
 
+@pytest.mark.parametrize(
+    "stream_chunks",
+    [_reasoning_then_text_chunks, _reasoning_and_text_in_one_chunk, _signed_thinking_and_text_in_one_chunk],
+    ids=["reasoning_then_text_chunks", "reasoning_and_text_in_one_chunk", "signed_thinking_and_text_in_one_chunk"],
+)
+@pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
-async def test_reasoning_item_closes_before_message_item_opens():
-    iterator: Final = _build_iterator(
-        [
-            _reasoning_chunk("let me think"),
-            _chunk("Hello"),
-            _chunk("!", finish_reason="stop"),
-        ]
-    )
+async def test_reasoning_item_closes_before_message_item_opens(stream_chunks: StreamChunks, sync_mode: bool):
+    iterator: Final = _build_iterator(stream_chunks())
 
-    events: Final = await _collect_events(iterator, sync_mode=False)
+    events: Final = await _collect_events(iterator, sync_mode)
 
     item_lifecycle: Final = [
         (event.type, event.item.type)
@@ -1201,6 +1236,7 @@ async def test_reasoning_item_closes_before_message_item_opens():
         (ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, "message"),
         (ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE, "message"),
     ]
+    assert _event_text(events, ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA) == "Hello!"
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
@@ -1229,6 +1265,27 @@ async def test_tool_then_reasoning_then_text_gives_message_its_own_output_index(
 
     output_indexes_by_item_id: Final = {event.item.id: event.output_index for event in output_item_added_events}
     assert len(output_indexes_by_item_id) == len(set(output_indexes_by_item_id.values()))
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_reasoning_item_closes_before_a_tool_call_from_the_same_chunk_opens(sync_mode: bool):
+    iterator: Final = _build_iterator([_with_reasoning(_tool_call_chunk(finish_reason="tool_calls"), "let me think")])
+
+    events: Final = await _collect_events(iterator, sync_mode)
+
+    item_lifecycle: Final = [
+        (event.type, event.item.type)
+        for event in events
+        if getattr(event, "type", None)
+        in (ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE)
+    ]
+    assert item_lifecycle == [
+        (ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, "reasoning"),
+        (ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE, "reasoning"),
+        (ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, "function_call"),
+        (ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE, "function_call"),
+    ]
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
@@ -1354,3 +1411,144 @@ async def test_reasoning_item_opens_with_empty_summary_and_a_summary_part(sync_m
     assert part_added.output_index == item_added.output_index
     assert part_added.summary_index == 0
     assert part_added.part == {"type": "summary_text", "text": ""}
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_anthropic_tool_search_call_streams_as_tool_search_call_item(sync_mode: bool):
+    deltas: Final = (
+        Delta(
+            content=None,
+            tool_calls=[
+                {
+                    "index": 0,
+                    "id": "srvtoolu_01Search",
+                    "type": "function",
+                    "function": {"name": "tool_search_tool_regex", "arguments": ""},
+                }
+            ],
+        ),
+        Delta(content=None, tool_calls=[{"index": 0, "function": {"arguments": '{"pattern": '}}]),
+        Delta(content=None, tool_calls=[{"index": 0, "function": {"arguments": '"weather|forecast"}'}}]),
+        Delta(
+            content=None,
+            tool_calls=[
+                {
+                    "index": 1,
+                    "id": "toolu_01Weather",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": '{"city":"Paris"}'},
+                }
+            ],
+        ),
+    )
+    chunks: Final = tuple(
+        ModelResponseStream(
+            id=CHAT_COMPLETION_ID,
+            created=1748575031,
+            model="claude-sonnet-5-5",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    index=0, delta=delta, finish_reason="tool_calls" if index == len(deltas) - 1 else None
+                )
+            ],
+        )
+        for index, delta in enumerate(deltas)
+    )
+    iterator: Final = LiteLLMCompletionStreamingIterator(
+        model="claude-sonnet-5-5",
+        litellm_custom_stream_wrapper=_FakeStreamWrapper(chunks),
+        request_input="What is the weather in Paris right now?",
+        responses_api_request={
+            "tools": [
+                {"type": "tool_search", "execution": "server"},
+                {"type": "function", "name": "get_weather", "parameters": {"type": "object"}, "defer_loading": True},
+            ]
+        },
+        custom_llm_provider="anthropic",
+    )
+    events: Final = (
+        [event.model_dump(exclude_none=True) for event in iterator]
+        if sync_mode
+        else [event.model_dump(exclude_none=True) async for event in iterator]
+    )
+    completed: Final = events[-1]
+    output: Final = completed["response"]["output"]
+    search_item: Final = next(item for item in output if item["type"] == "tool_search_call")
+    function_item: Final = next(item for item in output if item["type"] == "function_call")
+    search_events: Final = [
+        event for event in events if event.get("item_id", event.get("item", {}).get("id")) == search_item["id"]
+    ]
+    function_events: Final = [
+        event for event in events if event.get("item_id", event.get("item", {}).get("id")) == function_item["id"]
+    ]
+
+    assert completed["type"] == "response.completed"
+    assert search_item["id"] == "tsc_srvtoolu_01Search"
+    assert search_item["call_id"] == "srvtoolu_01Search"
+    assert search_item["arguments"] == {"pattern": "weather|forecast"}
+    assert search_item["execution"] == "server"
+    assert search_item["status"] == "completed"
+    assert [event["type"] for event in search_events] == [
+        "response.output_item.added",
+        "response.output_item.done",
+    ]
+    assert search_events[0]["item"]["status"] == "in_progress"
+    assert search_events[0]["item"]["arguments"] == {}
+    assert search_events[-1]["item"] == search_item
+    assert function_item["name"] == "get_weather"
+    assert json.loads(function_item["arguments"]) == {"city": "Paris"}
+    assert "response.function_call_arguments.done" in [event["type"] for event in function_events]
+    assert {event["output_index"] for event in search_events}.isdisjoint(
+        {event["output_index"] for event in function_events}
+    )
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_caller_function_named_like_the_search_tool_streams_as_function_call(sync_mode: bool):
+    chunk: Final = ModelResponseStream(
+        id=CHAT_COMPLETION_ID,
+        created=1748575031,
+        model="claude-sonnet-5-5",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                index=0,
+                finish_reason="tool_calls",
+                delta=Delta(
+                    content=None,
+                    tool_calls=[
+                        {
+                            "index": 0,
+                            "id": "call_01Mine",
+                            "type": "function",
+                            "function": {"name": "tool_search_tool_regex", "arguments": '{"pattern": "weather"}'},
+                        }
+                    ],
+                ),
+            )
+        ],
+    )
+    iterator: Final = LiteLLMCompletionStreamingIterator(
+        model="claude-sonnet-5-5",
+        litellm_custom_stream_wrapper=_FakeStreamWrapper((chunk,)),
+        request_input="What is the weather in Paris right now?",
+        responses_api_request={
+            "tools": [
+                {"type": "tool_search", "execution": "server"},
+                {"type": "function", "name": "tool_search_tool_regex", "parameters": {"type": "object"}},
+            ]
+        },
+        custom_llm_provider="anthropic",
+    )
+    events: Final = (
+        [event.model_dump(exclude_none=True) for event in iterator]
+        if sync_mode
+        else [event.model_dump(exclude_none=True) async for event in iterator]
+    )
+    output: Final = events[-1]["response"]["output"]
+
+    assert [(item["type"], item["name"]) for item in output] == [("function_call", "tool_search_tool_regex")]
+    assert "response.function_call_arguments.done" in [event["type"] for event in events]
