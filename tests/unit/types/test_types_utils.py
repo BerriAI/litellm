@@ -28,6 +28,7 @@ from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
     TextCompletionResponse,
+    Usage,
     all_litellm_params,
     is_decisions_model_mode,
     text_tokens_without_nested_reasoning,
@@ -48,6 +49,26 @@ class _DictHiddenParamsAccessor(Protocol):
 )
 def test_is_decisions_model_mode(mode: str | None, expected: bool) -> None:
     assert is_decisions_model_mode(mode) is expected
+
+
+@pytest.mark.parametrize("cost", [0.0, 0.25, 2])
+def test_usage_preserves_numeric_cost(cost: float) -> None:
+    usage: Final = Usage(prompt_tokens=11, completion_tokens=5, total_tokens=16, cost=cost)
+    assert usage.model_dump(warnings="error")["cost"] == cost
+
+
+def test_usage_ignores_structured_credit_cost_when_serializing() -> None:
+    usage: Final = Usage.model_validate(
+        {
+            "prompt_tokens": 11,
+            "completion_tokens": 5,
+            "total_tokens": 16,
+            "cost": {"currency": "credit", "amount": 7},
+        }
+    )
+    serialized: Final = usage.model_dump(warnings="error")
+    assert "cost" not in serialized
+    assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (11, 5, 16)
 
 
 def test_rust_is_a_known_litellm_param():
