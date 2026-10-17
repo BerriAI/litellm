@@ -25,7 +25,7 @@ import httpx
 import openai
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket
 from fastapi.responses import StreamingResponse
-from pydantic import ConfigDict, TypeAdapter
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 from starlette.websockets import WebSocketState
 from typing_extensions import ReadOnly, TypedDict
 
@@ -2570,10 +2570,41 @@ def _is_vertex_anthropic_count_tokens_route(endpoint: str) -> bool:
     return endpoint.rsplit("/", 1)[-1].split(":", 1)[0] == "count-tokens"
 
 
-def _upstream_headers_for_vertex_route(endpoint: str, headers: Mapping[str, str]) -> Mapping[str, str]:
-    if not _is_vertex_anthropic_count_tokens_route(endpoint):
-        return headers
-    return MappingProxyType({name: value for name, value in headers.items() if name.lower() != "anthropic-beta"})
+_VERTEX_DROPPED_ANTHROPIC_BETAS_SETTING: Final = "vertex_ai_pass_through_drop_anthropic_betas"
+_VERTEX_DROPPED_ANTHROPIC_BETAS: Final[TypeAdapter[frozenset[str] | None]] = TypeAdapter(frozenset[str] | None)
+
+
+def _vertex_dropped_anthropic_betas(general_settings: Mapping[str, object]) -> frozenset[str]:
+    try:
+        configured: Final = _VERTEX_DROPPED_ANTHROPIC_BETAS.validate_python(
+            general_settings.get(_VERTEX_DROPPED_ANTHROPIC_BETAS_SETTING)
+        )
+    except ValidationError as error:
+        raise HTTPException(
+            status_code=500,
+            detail=f"general_settings.{_VERTEX_DROPPED_ANTHROPIC_BETAS_SETTING} must be a list of strings",
+        ) from error
+    return configured or frozenset()
+
+
+def _upstream_vertex_header_value(name: str, value: str, dropped_anthropic_betas: frozenset[str]) -> str | None:
+    if name.lower() != "anthropic-beta":
+        return value
+    betas: Final = tuple(beta.strip() for beta in value.split(","))
+    if dropped_anthropic_betas.isdisjoint(betas):
+        return value
+    return ",".join(beta for beta in betas if beta and beta not in dropped_anthropic_betas) or None
+
+
+def _upstream_headers_for_vertex_route(
+    endpoint: str, headers: Mapping[str, str], dropped_anthropic_betas: frozenset[str]
+) -> Mapping[str, str]:
+    if _is_vertex_anthropic_count_tokens_route(endpoint):
+        return MappingProxyType({name: value for name, value in headers.items() if name.lower() != "anthropic-beta"})
+    upstream_values: Final = (
+        (name, _upstream_vertex_header_value(name, value, dropped_anthropic_betas)) for name, value in headers.items()
+    )
+    return MappingProxyType({name: value for name, value in upstream_values if value is not None})
 
 
 def get_vertex_pass_through_handler(
@@ -2889,6 +2920,7 @@ async def _base_vertex_proxy_route(
     request: Request,
     fastapi_response: Response,
     get_vertex_pass_through_handler: BaseVertexAIPassThroughHandler,
+    general_settings: Mapping[str, object],
     user_api_key_dict: UserAPIKeyAuth | None = None,
     router_credentials: LiteLLM_ManagedVectorStore | None = None,
 ):
@@ -2904,6 +2936,7 @@ async def _base_vertex_proxy_route(
         request: FastAPI request object
         fastapi_response: FastAPI response object
         get_vertex_pass_through_handler: Handler for the specific Vertex AI service
+        general_settings: Proxy general settings, read per request for the anthropic-beta values to drop
         user_api_key_dict: User API key authentication dict
         router_credentials: Optional vector store credentials from registry (LiteLLM_ManagedVectorStore)
     """
@@ -3020,7 +3053,9 @@ async def _base_vertex_proxy_route(
     endpoint_func: Final = create_pass_through_route(
         endpoint=endpoint,
         target=target,
-        custom_headers=_upstream_headers_for_vertex_route(endpoint, headers),
+        custom_headers=_upstream_headers_for_vertex_route(
+            endpoint, headers, _vertex_dropped_anthropic_betas(general_settings)
+        ),
         is_streaming_request=is_streaming_request,
     )  # dynamically construct pass-through endpoint based on incoming path
 
@@ -3084,6 +3119,7 @@ async def vertex_discovery_proxy_route(
         request=request,
         fastapi_response=fastapi_response,
         get_vertex_pass_through_handler=discovery_handler,
+        general_settings=_proxy_general_settings(),
         router_credentials=vector_store_credentials,
     )
 
@@ -3117,6 +3153,7 @@ async def vertex_proxy_route(
         request=request,
         fastapi_response=fastapi_response,
         get_vertex_pass_through_handler=ai_platform_handler,
+        general_settings=_proxy_general_settings(),
         user_api_key_dict=user_api_key_dict,
     )
 
