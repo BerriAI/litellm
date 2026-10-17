@@ -62,6 +62,11 @@ describe("ModelsCell", () => {
     expect(await screen.findByText("d")).toBeInTheDocument();
   });
 
+  it.each([[], ["all-proxy-models"], ["*"]])("uses the customer model scope label for %j", (models) => {
+    render(<ModelsCell models={models} unrestrictedLabel="All models the key can use" />);
+    expect(screen.getByText("All models the key can use")).toBeInTheDocument();
+  });
+
   it("labels the all-proxy-models wildcard", () => {
     render(<ModelsCell models={["all-proxy-models"]} />);
     expect(screen.getByText("All Proxy Models")).toBeInTheDocument();

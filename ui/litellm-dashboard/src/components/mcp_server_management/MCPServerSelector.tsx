@@ -8,6 +8,7 @@ import type { MCPServer } from "@/components/mcp_tools/types";
 import { accessGroupNamesOf } from "./effectiveMcpServers";
 
 interface MCPServerSelectorProps {
+  id?: string;
   onChange: (selected: { servers: string[]; accessGroups: string[]; toolsets: string[] }) => void;
   value?: {
     servers: string[];
@@ -41,6 +42,7 @@ export const serversWithinAccessGroups = (
 };
 
 const MCPServerSelector: React.FC<MCPServerSelectorProps> = ({
+  id,
   onChange,
   value,
   className,
@@ -126,6 +128,7 @@ const MCPServerSelector: React.FC<MCPServerSelectorProps> = ({
   return (
     <div>
       <MultiSelect
+        id={id}
         options={selectOptions}
         value={selectedValues}
         onValueChange={handleChange}

@@ -47,6 +47,20 @@ describe("MCPServerSelector no-mcp-servers option", () => {
     setupMcpMocks();
   });
 
+  it("focuses the selector when its form label is clicked", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <>
+        <label htmlFor="mcp-access">MCP Access</label>
+        <MCPServerSelector id="mcp-access" accessToken="tok" onChange={vi.fn()} />
+      </>,
+    );
+
+    await user.click(screen.getByText("MCP Access"));
+
+    expect(screen.getByLabelText("MCP Access")).toHaveFocus();
+  });
+
   it("hides the No MCP Servers option by default", async () => {
     const user = userEvent.setup();
     renderWithProviders(

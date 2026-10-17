@@ -42,6 +42,7 @@ const LEGACY_PAGE_ROUTES: ReadonlyMap<string, string> = new Map(
     agents: "agents",
     "router-settings": "router-settings",
     users: "users",
+    customers: "customers",
     teams: "teams",
     organizations: "organizations",
   }),

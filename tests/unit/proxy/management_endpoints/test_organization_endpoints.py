@@ -1056,8 +1056,12 @@ async def test_v2_wires_object_permission_onto_org_write(monkeypatch):
 
     upsert = prisma.tx.litellm_objectpermissiontable.upsert.await_args.kwargs
     assert upsert["where"] == {"object_permission_id": "op-123"}
-    assert upsert["data"]["update"]["mcp_servers"] == ["server-1"]
-    assert upsert["data"]["update"]["vector_stores"] == ["vs-1"]
+    assert upsert["data"]["create"] == {
+        "object_permission_id": "op-123",
+        "mcp_servers": ["server-1"],
+        "vector_stores": ["vs-1"],
+    }
+    assert upsert["data"]["update"] == {"vector_stores": ["vs-1"]}
     write_data = prisma.db.litellm_organizationtable.update.await_args.kwargs["data"]
     assert write_data["object_permission_id"] == "op-123"
 
