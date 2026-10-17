@@ -117,9 +117,6 @@ _KEPT_INSIDE_TOOL_RESULT: Final[tuple[tuple[Mapping[str, object], str], ...]] = 
     ({"type": "text", "text": "forty-two"}, "forty-two"),
     ({"type": "image", "source": _PNG}, _PNG["data"]),
     ({"type": "document", "source": _PDF}, _PDF["data"]),
-)
-
-_DROPPED_INSIDE_TOOL_RESULT: Final[tuple[tuple[Mapping[str, object], str, str], ...]] = (
     (
         {
             "type": "search_result",
@@ -128,8 +125,10 @@ _DROPPED_INSIDE_TOOL_RESULT: Final[tuple[tuple[Mapping[str, object], str, str], 
             "content": [{"type": "text", "text": "search-snippet"}],
         },
         "search-snippet",
-        "search_result inside a tool_result",
     ),
+)
+
+_DROPPED_INSIDE_TOOL_RESULT: Final[tuple[tuple[Mapping[str, object], str, str], ...]] = (
     (
         {"type": "document", "source": {"type": "text", "data": "text-notes"}},
         "text-notes",

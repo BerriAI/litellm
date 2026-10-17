@@ -13,6 +13,7 @@ from litellm.llms.anthropic.pass_through.utils import (
     is_reasoning_auto_summary_enabled,
     json_copy_or_original,
     prompt_cache_key_from_user_id,
+    search_result_text,
 )
 
 # OpenAI has a 64-character limit for function/tool names
@@ -1332,6 +1333,8 @@ class LiteLLMAnthropicMessagesAdapter:
                 return ChatCompletionTextObject(type="text", text=str(block.get("text") or ""))
             case "image" | "document":
                 return self._tool_result_image_part(block.get("source"))
+            case "search_result":
+                return self._tool_result_search_result_part(block)
             case "tool_reference":
                 return ChatCompletionToolReferenceObject(
                     type="tool_reference", tool_name=str(block.get("tool_name") or "")
@@ -1346,6 +1349,11 @@ class LiteLLMAnthropicMessagesAdapter:
         if not openai_image_url:
             return None
         return ChatCompletionImageObject(type="image_url", image_url=ChatCompletionImageUrlObject(url=openai_image_url))
+
+    @staticmethod
+    def _tool_result_search_result_part(block: Mapping[str, object]) -> ChatCompletionTextObject | None:
+        rendered: Final = search_result_text(block)
+        return ChatCompletionTextObject(type="text", text=rendered) if rendered else None
 
     def _translate_openai_content_to_anthropic(
         self,

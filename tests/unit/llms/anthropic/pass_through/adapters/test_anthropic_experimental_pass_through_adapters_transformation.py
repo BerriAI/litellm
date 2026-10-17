@@ -4688,7 +4688,7 @@ def test_tool_result_text_beside_tool_reference_keeps_both_parts_in_order():
         "",
         {"not": "a list"},
         [{"type": "future_block", "payload": 1}],
-        [{"type": "search_result", "source": "https://example.com", "title": "t", "content": []}],
+        [{"type": "search_result", "content": []}],
     ],
     ids=["empty_list", "null", "empty_string", "non_list", "unknown_block", "search_result_only"],
 )
@@ -5235,3 +5235,63 @@ def test_eager_input_streaming_tool_reaches_bedrock_converse_as_beta():
 
     assert data["additionalModelRequestFields"]["anthropic_beta"] == ["fine-grained-tool-streaming-2025-05-14"]
     assert data["toolConfig"]["tools"][0]["toolSpec"]["inputSchema"]["json"] == EAGER_INPUT_SCHEMA
+
+
+def test_translate_anthropic_to_openai_keeps_search_result_tool_output():
+    """A tool_result carrying search_result blocks (RAG citations) must reach the model as text.
+
+    The adapter only translated text/image/document/tool_reference blocks, so a
+    search_result-only tool result became an empty tool message and the retrieved
+    content never reached the model.
+    """
+    openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        {
+            "model": "claude-sonnet-4-5",
+            "max_tokens": 100,
+            "messages": [
+                {"role": "user", "content": "How do I configure the timeout?"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_1",
+                            "name": "search_knowledge_base",
+                            "input": {"query": "timeout"},
+                        }
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_1",
+                            "content": [
+                                {
+                                    "type": "search_result",
+                                    "source": "https://docs.company.com/product-guide",
+                                    "title": "Product Configuration Guide",
+                                    "content": [
+                                        {
+                                            "type": "text",
+                                            "text": "The default timeout is 30 seconds.",
+                                        }
+                                    ],
+                                    "citations": {"enabled": True},
+                                }
+                            ],
+                        }
+                    ],
+                },
+            ],
+        }
+    )
+
+    tool_message: Final = openai_request["messages"][2]
+    assert tool_message["role"] == "tool"
+    assert tool_message["content"] == (
+        "Title: Product Configuration Guide\n"
+        "Source: https://docs.company.com/product-guide\n"
+        "The default timeout is 30 seconds."
+    )

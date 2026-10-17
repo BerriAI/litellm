@@ -28,6 +28,7 @@ from litellm.llms.anthropic.pass_through.utils import (
     is_reasoning_auto_summary_enabled,
     json_copy_or_original,
     prompt_cache_key_from_user_id,
+    search_result_text,
 )
 from litellm.types.llms.anthropic import (
     AllAnthropicPassThroughMessageValues,
@@ -206,6 +207,16 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                 with_prompt_cache_breakpoint(last_image, prompt_cache_breakpoint),
             ],
         }
+
+    @staticmethod
+    def _tool_result_inner_text(block: Mapping[str, object]) -> str:
+        match block.get("type"):
+            case "text":
+                return str(block.get("text", ""))
+            case "search_result":
+                return search_result_text(block)
+            case _:
+                return ""
 
     @staticmethod
     def _tool_result_output_value(
@@ -392,7 +403,9 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                                 output_text = inner
                             elif isinstance(inner, list):
                                 parts = [
-                                    c.get("text", "") for c in inner if isinstance(c, dict) and c.get("type") == "text"
+                                    text
+                                    for c in inner
+                                    if isinstance(c, dict) and (text := self._tool_result_inner_text(c))
                                 ]
                                 output_text = "\n".join(parts)
                                 if covered_image_parts or later_image_parts:
