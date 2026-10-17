@@ -6,7 +6,7 @@ via embedding similarity. Smarter than regex (understands intent), lighter
 than an LLM call (~20-50ms per request for embedding).
 """
 
-from typing import TYPE_CHECKING, Any, Final, Protocol
+from typing import TYPE_CHECKING, Final, Protocol
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_guardrail import (
@@ -17,7 +17,7 @@ from litellm.proxy.guardrails.guardrail_hooks.semantic_guard.route_loader import
     SemanticGuardRouteLoader,
 )
 from litellm.types.guardrails import GuardrailEventHooks, Mode
-from litellm.types.utils import CallTypes
+from litellm.types.utils import CallTypes, LLMResponseTypes, ModelResponse
 
 try:
     from fastapi.exceptions import HTTPException
@@ -137,9 +137,11 @@ class SemanticGuardrail(CustomGuardrail):
         self,
         data: dict,
         user_api_key_dict: "UserAPIKeyAuth",
-        response,
+        response: LLMResponseTypes,
     ):
         """Optionally check LLM response for attack patterns."""
+        if not isinstance(response, ModelResponse):
+            return response
         response_text: Final = _extract_response_text(response)
         if not response_text:
             return response
@@ -188,9 +190,9 @@ def _extract_user_text(messages: list) -> str:
     return ""
 
 
-def _extract_response_text(response: Any) -> str:
+def _extract_response_text(response: ModelResponse) -> str:
     """Extract text from every LLM response choice."""
-    if hasattr(response, "choices") and response.choices:
+    if response.choices:
         text_parts: Final[list[str]] = []
         for choice in response.choices:
             if hasattr(choice, "message") and choice.message:

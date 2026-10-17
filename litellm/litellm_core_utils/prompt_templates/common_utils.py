@@ -16,7 +16,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeVar, cast
 
-from pydantic import TypeAdapter
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm import verbose_logger
@@ -2663,6 +2663,19 @@ def merge_consecutive_system_messages(
 
 
 _DECODED_JSON: Final = TypeAdapter(object)
+_DECODED_JSON_MAPPING: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
+
+
+def _decode_json_mapping_at(
+    decoder: json.JSONDecoder,
+    raw: str,
+    index: int,
+) -> tuple[dict[str, object] | None, int]:
+    decoded: Final = decoder.raw_decode(raw, index)
+    value: Final = _DECODED_JSON.validate_python(decoded[0], strict=True)
+    if not isinstance(value, dict):
+        return None, decoded[1]
+    return _DECODED_JSON_MAPPING.validate_python(value, strict=True), decoded[1]
 
 
 def _attempt_json_repair(s: str) -> object | None:
@@ -2829,7 +2842,7 @@ def split_concatenated_json_objects(raw: str) -> list[dict[str, object]]:
             break
 
         try:
-            obj, end_idx = decoder.raw_decode(raw, idx)
+            obj, end_idx = _decode_json_mapping_at(decoder, raw, idx)
         except json.JSONDecodeError as e:
             verbose_logger.warning(
                 "split_concatenated_json_objects: discarding unparseable tool-call "
@@ -2839,12 +2852,12 @@ def split_concatenated_json_objects(raw: str) -> list[dict[str, object]]:
                 e,
             )
             break
-        if isinstance(obj, dict):
-            results.append(obj)
-        else:
+        if obj is None:
             # Non-dict JSON value – wrap in empty dict (Bedrock requires
             # toolUse.input to be an object).
             results.append({})
+        else:
+            results.append(obj)
         idx = end_idx
 
     return results
@@ -2877,10 +2890,10 @@ def salvage_concatenated_tool_arguments(raw: str) -> tuple[dict[str, object], ..
         if idx >= length:
             break
         try:
-            obj, end_idx = decoder.raw_decode(stripped, idx)
+            obj, end_idx = _decode_json_mapping_at(decoder, stripped, idx)
         except json.JSONDecodeError:
             return ()
-        if not isinstance(obj, dict):
+        if obj is None:
             return ()
         idx = end_idx
         if exceeded:

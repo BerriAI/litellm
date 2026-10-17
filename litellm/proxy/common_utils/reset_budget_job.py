@@ -10,6 +10,7 @@ from itertools import chain
 from types import MappingProxyType
 from typing import Final, Generic, Literal, Protocol, TypeVar
 
+from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import assert_never
 
 import litellm
@@ -85,6 +86,15 @@ class _RowReset(Generic[_RowT]):
 
 _LINKED_KEYS_WHERE: Final[Mapping[str, object]] = MappingProxyType({"budget_duration": None, "spend": {"gt": 0}})
 _SPENT_ROWS_WHERE: Final[Mapping[str, object]] = MappingProxyType({"spend": {"gt": 0}})
+_WINDOW_ROWS: Final = TypeAdapter(list[dict[str, object]], config=ConfigDict(hide_input_in_errors=True))
+_WINDOW_JSON_INPUT: Final = TypeAdapter(str | bytes, config=ConfigDict(hide_input_in_errors=True))
+_WINDOW_STRING: Final = TypeAdapter(str, config=ConfigDict(hide_input_in_errors=True))
+
+
+def _window_json_input(value: object) -> str | bytes:
+    if isinstance(value, bytearray):
+        return bytes(value)
+    return _WINDOW_JSON_INPUT.validate_python(value, strict=True)
 
 
 class _BudgetLinkedRow(Protocol):
@@ -1460,7 +1470,7 @@ class ResetBudgetJob:
     @staticmethod
     @with_service_target(SPEND_COUNTERS_TARGET)
     async def _reset_expired_window(
-        window: dict,
+        window: dict[str, object],
         counter_key: str,
         spend_counter_cache: DualCache,
         now: datetime,
@@ -1473,7 +1483,8 @@ class ResetBudgetJob:
         reset_at_str: Final = window.get("reset_at")
         if not reset_at_str:
             return False
-        reset_at: Final = datetime.fromisoformat(reset_at_str.replace("Z", "+00:00")).replace(tzinfo=None)
+        reset_at_value: Final = _WINDOW_STRING.validate_python(reset_at_str, strict=True)
+        reset_at: Final = datetime.fromisoformat(reset_at_value.replace("Z", "+00:00")).replace(tzinfo=None)
         if reset_at > now:
             return False
         new_value: Final = await ResetBudgetJob._window_carried_spend(window, counter_key, spend_counter_cache)
@@ -1483,7 +1494,7 @@ class ResetBudgetJob:
                 await spend_counter_cache.redis_cache.async_set_cache(key=counter_key, value=new_value)
             except Exception as redis_err:
                 verbose_proxy_logger.warning("Failed to reset Redis counter %s: %s", counter_key, redis_err)
-        budget_duration: Final = window["budget_duration"]
+        budget_duration: Final = _WINDOW_STRING.validate_python(window["budget_duration"], strict=True)
         next_reset_at: Final = compute_budget_reset_at(budget_duration=budget_duration, settings=reset_settings)
         window["reset_at"] = next_reset_at.isoformat()
         await ResetBudgetJob._roll_window_spend_row(
@@ -1610,7 +1621,7 @@ class ResetBudgetJob:
         spend_counter_cache: DualCache,
     ) -> str | None:
         """Reset one page of windows; return the next cursor, or None when drained."""
-        rows: Final = await self._with_db_retry(
+        raw_rows: Final = await self._with_db_retry(
             lambda: db_spanned(
                 "reset_budget_windows",
                 source.table,
@@ -1618,35 +1629,50 @@ class ResetBudgetJob:
             ),
             reason=f"reset_budget_read_{source.retry_subject}_windows_failure",
         )
+        rows: Final = _WINDOW_ROWS.validate_python(raw_rows, strict=True)
         for row in rows:
-            raw = row["budget_limits"]
-            if not raw:
-                continue
-            row_id: str = row[source.id_column]
-            windows: list[dict[str, object]] = raw if isinstance(raw, list) else json.loads(raw)
-            changed = False
-            for window in windows:
-                counter_key = f"{source.counter_prefix}:{row_id}:window:{window['budget_duration']}"
-                if await ResetBudgetJob._reset_expired_window(
-                    window,
-                    counter_key,
-                    spend_counter_cache,
-                    now,
-                    self.reset_settings,
-                    prisma_client=self.prisma_client,
-                    entity_type=source.entity_type,
-                    entity_id=row_id,
-                ):
-                    changed = True
-            if changed:
-                await self._with_db_write_retry(
-                    lambda: source.write(self.prisma_client, row_id, json.dumps(windows)),
-                    reason=f"reset_budget_write_{source.retry_subject}_windows_failure",
-                )
+            await self._reset_window_row(
+                row=row,
+                source=source,
+                now=now,
+                spend_counter_cache=spend_counter_cache,
+            )
 
         if len(rows) < RESET_BUDGET_JOB_BATCH_SIZE:
             return None
-        return rows[-1][source.id_column]
+        return _WINDOW_STRING.validate_python(rows[-1][source.id_column], strict=True)
+
+    async def _reset_window_row(
+        self,
+        row: dict[str, object],
+        source: _WindowSource,
+        now: datetime,
+        spend_counter_cache: DualCache,
+    ) -> None:
+        raw: Final = row["budget_limits"]
+        if not raw:
+            return
+        row_id: Final = _WINDOW_STRING.validate_python(row[source.id_column], strict=True)
+        json_value: Final = raw if isinstance(raw, list) else json.loads(_window_json_input(raw))
+        windows: Final = _WINDOW_ROWS.validate_python(json_value, strict=True)
+        reset_results: Final = [
+            await ResetBudgetJob._reset_expired_window(
+                window,
+                f"{source.counter_prefix}:{row_id}:window:{window['budget_duration']}",
+                spend_counter_cache,
+                now,
+                self.reset_settings,
+                prisma_client=self.prisma_client,
+                entity_type=source.entity_type,
+                entity_id=row_id,
+            )
+            for window in windows
+        ]
+        if any(reset_results):
+            await self._with_db_write_retry(
+                lambda: source.write(self.prisma_client, row_id, json.dumps(windows)),
+                reason=f"reset_budget_write_{source.retry_subject}_windows_failure",
+            )
 
     @staticmethod
     async def _reset_budget_common(

@@ -499,7 +499,7 @@ class InternalUsageCache:
         key: str,
         local_only: bool = False,
         **kwargs: object,
-    ) -> Any:
+    ) -> object:
         return self.dual_cache.get_cache(
             key=key,
             local_only=local_only,

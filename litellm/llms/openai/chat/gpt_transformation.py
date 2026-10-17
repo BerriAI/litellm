@@ -10,7 +10,8 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast, overload
 from urllib.parse import urlparse
 
 import httpx
-from pydantic import TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.constants import OPENAI_SYSTEM_MESSAGES_FIRST_PROVIDERS
@@ -76,6 +77,19 @@ else:
 _NO_TOOLS_UPDATE: Final[Mapping[str, object]] = MappingProxyType({})
 _OBJECT_MAPPING: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 _DECODED_JSON: Final = TypeAdapter(object)
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _ModelEntry(TypedDict):
+    id: ReadOnly[str]
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _ModelsListResponse(TypedDict):
+    data: ReadOnly[Sequence[_ModelEntry]]
+
+
+_MODELS_LIST_RESPONSE: Final = TypeAdapter(_ModelsListResponse)
 
 
 def _litellm_params_str(litellm_params: Mapping[str, object] | None, key: str) -> str | None:
@@ -864,7 +878,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         )
         if response.status_code != 200:
             raise Exception(f"Failed to get models: {response.text}")
-        return [model["id"] for model in response.json()["data"]]
+        return [model["id"] for model in _MODELS_LIST_RESPONSE.validate_python(response.json())["data"]]
 
     @staticmethod
     def get_api_key(api_key: str | None = None) -> str | None:
