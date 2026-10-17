@@ -51,7 +51,7 @@ def fingerprints(connection: psycopg.Connection[tuple[object, ...]], ids: tuple[
 def missing_indexes(connection: psycopg.Connection[tuple[object, ...]], names: tuple[str, ...]) -> tuple[str, ...]:
     rows: Final = connection.execute(
         """SELECT name FROM unnest(%s::text[]) AS name WHERE NOT EXISTS (
-           SELECT 1 FROM pg_index WHERE indexrelid = to_regclass(format('public.%I', name))
+           SELECT 1 FROM pg_index WHERE indexrelid = to_regclass(format('public.%%I', name))
            AND indisvalid AND indisready)""",
         (list(names),),
     ).fetchall()
