@@ -1,10 +1,14 @@
 import asyncio
+import json
 import os
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
+import httpx
 import litellm
 import pytest
 from litellm import Router
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 
 @pytest.fixture
@@ -136,6 +140,77 @@ async def test_aspeech_sets_deployment_metadata():
     assert metadata["deployment"] == "openai/tts-1"
     assert metadata["deployment_model_name"] == "tts"
     assert metadata["model_info"]["id"] is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("include_litellm_metadata", [True, False])
+async def test_avector_store_create_keeps_caller_metadata(include_litellm_metadata: bool) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "gpt-5",
+                "litellm_params": {
+                    "model": "openai/gpt-5",
+                    "api_key": "sk-test",
+                    "api_base": "https://example.invalid/v1",
+                },
+            }
+        ]
+    )
+    metadata: Final = {"team": "llmproxy"}
+    litellm_metadata: Final[dict[str, object]] = {}
+    request_kwargs: Final = {
+        "name": "x",
+        "metadata": metadata,
+        **({"litellm_metadata": litellm_metadata} if include_litellm_metadata else {}),
+    }
+    recorded_requests: Final[list[httpx.Request]] = []  # mutable-ok: HTTP transport capture
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        recorded_requests.append(request)
+        return httpx.Response(
+            status_code=200,
+            json={
+                "id": "vs_test",
+                "object": "vector_store",
+                "created_at": 0,
+                "name": "x",
+                "usage_bytes": 0,
+                "file_counts": {
+                    "in_progress": 0,
+                    "completed": 0,
+                    "failed": 0,
+                    "cancelled": 0,
+                    "total": 0,
+                },
+                "status": "completed",
+                "metadata": {},
+            },
+            request=request,
+        )
+
+    client: Final = AsyncHTTPHandler()
+    await client.client.aclose()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as httpx_client:
+        client.client = httpx_client
+        response: Final = await router.avector_store_create(
+            model="gpt-5",
+            **request_kwargs,
+            client=client,
+        )
+
+    assert response["id"] == "vs_test"
+    assert len(recorded_requests) == 1
+    request: Final = recorded_requests[0]
+    assert request.method == "POST"
+    assert request.url.path.endswith("/vector_stores")
+    request_body: Final = json.loads(request.content)
+    assert request_body["metadata"] == {"team": "llmproxy"}
+    if include_litellm_metadata:
+        assert litellm_metadata["deployment"] == "openai/gpt-5"
+        model_info: Final = litellm_metadata["model_info"]
+        assert isinstance(model_info, dict)
+        assert model_info["id"] is not None
 
 
 @pytest.mark.asyncio()
