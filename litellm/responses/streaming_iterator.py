@@ -1935,6 +1935,58 @@ _PER_TURN_METADATA_KEYS: Final = frozenset({"metadata", "litellm_metadata"})
 _GUARDRAIL_INFORMATION_KEY: Final = "standard_logging_guardrail_information"
 
 
+_PII_DELTA_EVENT_TYPES: Final = frozenset(
+    {
+        "response.output_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.refusal.delta",
+        "response.function_call_arguments.delta",
+    }
+)
+
+
+def _unmask_responses_event(response_str: str, pii_tokens: Mapping[str, str], unmask_pii_text: _UnmasksPiiText) -> str:
+    """Put the original PII back into one client-bound event: ``response.completed`` output text, or a delta."""
+    try:
+        evt_obj: Final = _load_json_object(response_str)
+    except (json.JSONDecodeError, TypeError):
+        return response_str
+    event_type: Final = evt_obj.get("type")
+
+    if event_type == "response.completed":
+        modified = False
+        response_obj: Final = evt_obj.get("response")
+        if not _is_json_object(response_obj):
+            return response_str
+        output_items: Final = response_obj.get("output")
+        for output_item in output_items if _is_json_array(output_items) else []:
+            if not _is_json_object(output_item):
+                continue
+            content = output_item.get("content")
+            if not _is_json_array(content):
+                continue
+            for content_block in content:
+                if not _is_json_object(content_block):
+                    continue
+                text = content_block.get("text")
+                if isinstance(text, str):
+                    unmasked = unmask_pii_text(text, pii_tokens)
+                    if unmasked != text:
+                        content_block["text"] = unmasked
+                        modified = True
+        return json.dumps(evt_obj) if modified else response_str
+
+    if event_type in _PII_DELTA_EVENT_TYPES:
+        delta: Final = evt_obj.get("delta")
+        if isinstance(delta, str):
+            unmasked = unmask_pii_text(delta, pii_tokens)
+            if unmasked != delta:
+                evt_obj["delta"] = unmasked
+                return json.dumps(evt_obj)
+
+    return response_str
+
+
 @dataclass(frozen=True, slots=True)
 class GuardedResponsesWsFrame:
     """A ``response.create`` frame after the proxy's pre_call guardrails ran on it: the frame to forward (guardrails
@@ -2459,14 +2511,7 @@ class ResponsesWebSocketStreaming:
         return json.dumps(msg_obj) if modified else message
 
     # Delta event types whose ``delta`` field may contain PII tokens.
-    _DELTA_EVENT_TYPES = frozenset(
-        {
-            "response.output_text.delta",
-            "response.reasoning_summary_text.delta",
-            "response.refusal.delta",
-            "response.function_call_arguments.delta",
-        }
-    )
+    _DELTA_EVENT_TYPES = _PII_DELTA_EVENT_TYPES
 
     # Terminal events that carry the full output text or tool-call arguments
     # already delivered by ``response.completed``. Suppressed when output masking
@@ -2506,47 +2551,9 @@ class ResponsesWebSocketStreaming:
         if not pii_tokens:
             return response_str
 
-        try:
-            evt_obj: Final = _load_json_object(response_str)
-        except (json.JSONDecodeError, TypeError):
-            return response_str
-
         cb: Final = self.guardrail_callbacks[0]
         unmask_pii_text: Final[_UnmasksPiiText] = getattr(cb, _UNMASK_PII_TEXT_ATTR)
-        event_type: Final = evt_obj.get("type")
-
-        if event_type == "response.completed":
-            modified = False
-            response_obj: Final = evt_obj.get("response")
-            if not _is_json_object(response_obj):
-                return response_str
-            output_items: Final = response_obj.get("output")
-            for output_item in output_items if _is_json_array(output_items) else []:
-                if not _is_json_object(output_item):
-                    continue
-                content = output_item.get("content")
-                if not _is_json_array(content):
-                    continue
-                for content_block in content:
-                    if not _is_json_object(content_block):
-                        continue
-                    text = content_block.get("text")
-                    if isinstance(text, str):
-                        unmasked = unmask_pii_text(text, pii_tokens)
-                        if unmasked != text:
-                            content_block["text"] = unmasked
-                            modified = True
-            return json.dumps(evt_obj) if modified else response_str
-
-        if event_type in self._DELTA_EVENT_TYPES:
-            delta: Final = evt_obj.get("delta")
-            if isinstance(delta, str):
-                unmasked = unmask_pii_text(delta, pii_tokens)
-                if unmasked != delta:
-                    evt_obj["delta"] = unmasked
-                    return json.dumps(evt_obj)
-
-        return response_str
+        return _unmask_responses_event(response_str, pii_tokens, unmask_pii_text)
 
     async def _mask_response_completed(self, response_str: str) -> str:
         """
@@ -2740,11 +2747,14 @@ class ManagedResponsesWebSocketHandler:
         first_message: str | None = None,
         quota_callbacks: Sequence[ProjectQuotaCallback] | None = None,
         frame_guard: ResponsesWsFrameGuard | None = None,
+        guardrail_callbacks: Sequence[PresidioGuardrailCallback] | None = None,
         **kwargs: object,
     ) -> None:
         self.websocket = websocket
         self.model = model
         self.frame_guard = frame_guard
+        self.guardrail_callbacks: tuple[PresidioGuardrailCallback, ...] = tuple(guardrail_callbacks or ())
+        self._pii_tokens: Mapping[str, str] = {}
         self.logging_obj = logging_obj
         self.user_api_key_dict = user_api_key_dict
         self.litellm_metadata: Mapping[str, object] = litellm_metadata or {}
@@ -3116,11 +3126,18 @@ class ManagedResponsesWebSocketHandler:
                 except Exception:
                     pass
             try:
-                await self.websocket.send_text(serialized)
+                await self.websocket.send_text(self._unmask_for_client(serialized))
             except Exception as send_exc:
                 verbose_logger.debug("ManagedResponsesWS: error sending chunk to client: %s", send_exc)
                 return terminal_event  # Client disconnected
         return terminal_event
+
+    def _unmask_for_client(self, serialized: str) -> str:
+        """The provider and the turn history keep Presidio's tokens, the client gets the original text back."""
+        if not self._pii_tokens or not self.guardrail_callbacks:
+            return serialized
+        unmask_pii_text: Final[_UnmasksPiiText] = getattr(self.guardrail_callbacks[0], _UNMASK_PII_TEXT_ATTR)
+        return _unmask_responses_event(serialized, self._pii_tokens, unmask_pii_text)
 
     def _save_turn_history(
         self,
@@ -3194,6 +3211,8 @@ class ManagedResponsesWebSocketHandler:
         guarded: Final = await self._guard_frame(raw_message)
         if guarded is None:
             return
+        if guarded.pii_tokens:
+            self._pii_tokens = {**self._pii_tokens, **guarded.pii_tokens}
 
         call_kwargs: Final = self._build_base_call_kwargs(_load_json_object(guarded.frame))
         call_kwargs["stream"] = True

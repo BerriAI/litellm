@@ -341,6 +341,71 @@ class TestManagedWebSocketHandlerIntegration:
         ]
 
     @pytest.mark.asyncio
+    async def test_managed_socket_unmasks_the_reply_with_the_frame_guard_s_pii_tokens(self, monkeypatch):
+        import json
+        from unittest.mock import AsyncMock, MagicMock
+
+        import litellm
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.responses.streaming_iterator import GuardedResponsesWsFrame, ManagedResponsesWebSocketHandler
+
+        presidio = _FakeWSGuardrail()
+
+        async def guard(frame: str) -> GuardedResponsesWsFrame:
+            body = json.loads(frame)
+            masked = await presidio.check_pii(body["input"], True, None, walk := {})
+            return GuardedResponsesWsFrame(
+                frame=json.dumps({**body, "input": masked}), pii_tokens=walk["metadata"]["pii_tokens"]
+            )
+
+        provider_saw: dict = {}
+
+        async def fake_aresponses(**kwargs):
+            provider_saw.update(kwargs)
+
+            async def stream():
+                yield {"type": "response.output_text.delta", "delta": "Sent to <EMAIL_ADDRESS_1>"}
+                yield {
+                    "type": "response.completed",
+                    "response": {
+                        "id": "resp_1",
+                        "output": [
+                            {"type": "message", "content": [{"type": "output_text", "text": "Sent to <EMAIL_ADDRESS_1>"}]}
+                        ],
+                    },
+                }
+
+            return stream()
+
+        monkeypatch.setattr(litellm, "aresponses", fake_aresponses)
+        websocket: Final = MagicMock()
+        websocket.send_text = AsyncMock()
+        handler: Final = ManagedResponsesWebSocketHandler(
+            websocket=websocket,
+            model="anthropic/claude-sonnet-4-5",
+            logging_obj=Logging(
+                model="anthropic/claude-sonnet-4-5",
+                messages=[],
+                stream=True,
+                call_type="aresponses",
+                start_time=0,
+                litellm_call_id="test-id",
+                function_id="test-func",
+            ),
+            frame_guard=guard,
+            guardrail_callbacks=[presidio],
+        )
+
+        await handler._process_response_create(
+            json.dumps({"type": "response.create", "input": "email alice@example.com please"})
+        )
+
+        assert provider_saw["input"] == "email <EMAIL_ADDRESS_1> please"
+        sent: Final = [json.loads(call.args[0]) for call in websocket.send_text.await_args_list]
+        assert sent[0]["delta"] == "Sent to alice@example.com"
+        assert sent[1]["response"]["output"][0]["content"][0]["text"] == "Sent to alice@example.com"
+
+    @pytest.mark.asyncio
     async def test_http_handler_hands_the_frame_guard_to_a_managed_socket(self):
         import json
         from unittest.mock import AsyncMock, MagicMock

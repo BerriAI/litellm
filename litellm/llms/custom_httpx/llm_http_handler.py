@@ -6823,6 +6823,35 @@ class BaseLLMHTTPHandler:
         """
         _ws_quota_callbacks: Final = _collect_ws_project_quota_callbacks()
 
+        _ws_guardrail_callbacks: list = []
+        _ws_output_guardrail_callbacks: list = []
+        try:
+            import litellm as _litellm
+
+            # Use duck-typing so any guardrail that exposes the PII
+            # masking interface works, not just _OPTIONAL_PresidioPIIMasking.
+            # This avoids a layering violation (SDK importing from proxy).
+            _ws_guardrail_callbacks = [
+                cb
+                for cb in _litellm.callbacks
+                if callable(getattr(cb, "check_pii", None))
+                and callable(getattr(cb, "get_presidio_settings_from_request_data", None))
+                and callable(getattr(cb, "_unmask_pii_text", None))
+                and getattr(cb, "output_parse_pii", False)
+            ]
+            _ws_output_guardrail_callbacks = [
+                cb
+                for cb in _litellm.callbacks
+                if callable(getattr(cb, "check_pii", None))
+                and callable(getattr(cb, "get_presidio_settings_from_request_data", None))
+                and getattr(cb, "apply_to_output", False)
+            ]
+        except Exception as _guardrail_exc:
+            verbose_logger.warning(
+                "Responses WebSocket: failed to collect guardrail callbacks — PII masking will be skipped. Error: %s",
+                _guardrail_exc,
+            )
+
         if responses_api_provider_config is None or not responses_api_provider_config.supports_native_websocket():
             from litellm.responses.streaming_iterator import (
                 ManagedResponsesWebSocketHandler,
@@ -6840,6 +6869,7 @@ class BaseLLMHTTPHandler:
                 custom_llm_provider=custom_llm_provider,
                 first_message=first_message,
                 quota_callbacks=_ws_quota_callbacks,
+                guardrail_callbacks=_ws_guardrail_callbacks,  # pyright: ignore[reportUnknownArgumentType]  # duck-typed callbacks from litellm.callbacks
                 frame_guard=frame_guard,
                 **kwargs,
             )
@@ -6921,36 +6951,6 @@ class BaseLLMHTTPHandler:
                 _request_data: Final[dict[str, object]] = {}
                 if litellm_metadata:
                     _request_data["litellm_metadata"] = litellm_metadata
-
-                _ws_guardrail_callbacks: list = []
-                _ws_output_guardrail_callbacks: list = []
-                try:
-                    import litellm as _litellm
-
-                    # Use duck-typing so any guardrail that exposes the PII
-                    # masking interface works, not just _OPTIONAL_PresidioPIIMasking.
-                    # This avoids a layering violation (SDK importing from proxy).
-                    _ws_guardrail_callbacks = [
-                        cb
-                        for cb in _litellm.callbacks
-                        if callable(getattr(cb, "check_pii", None))
-                        and callable(getattr(cb, "get_presidio_settings_from_request_data", None))
-                        and callable(getattr(cb, "_unmask_pii_text", None))
-                        and getattr(cb, "output_parse_pii", False)
-                    ]
-                    _ws_output_guardrail_callbacks = [
-                        cb
-                        for cb in _litellm.callbacks
-                        if callable(getattr(cb, "check_pii", None))
-                        and callable(getattr(cb, "get_presidio_settings_from_request_data", None))
-                        and getattr(cb, "apply_to_output", False)
-                    ]
-                except Exception as _guardrail_exc:
-                    verbose_logger.warning(
-                        "Responses WebSocket: failed to collect guardrail "
-                        "callbacks — PII masking will be skipped. Error: %s",
-                        _guardrail_exc,
-                    )
 
                 streaming: Final = ResponsesWebSocketStreaming(
                     websocket=websocket,
