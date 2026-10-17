@@ -672,6 +672,38 @@ def test_vertex_wrapped_500_with_embedded_403_text_does_not_map_to_403() -> None
     assert excinfo.value.status_code == 500
 
 
+def test_vertex_wrapped_500_with_body_code_429_and_403_token_maps_to_rate_limit() -> None:
+    original_exception: Final = BaseLLMException(
+        status_code=500,
+        message='{"error":{"code":429,"message":"upstream unavailable (request id: 403-xyz)"}}',
+    )
+
+    with pytest.raises(litellm.RateLimitError) as excinfo:
+        exception_type(
+            model="gemini/gemini-2.5-flash",
+            original_exception=original_exception,
+            custom_llm_provider="vertex_ai",
+        )
+
+    assert excinfo.value.status_code == 429
+
+
+def test_vertex_wrapped_500_with_body_code_403_maps_to_bad_request() -> None:
+    original_exception: Final = BaseLLMException(
+        status_code=500,
+        message='{"error":{"code":403,"message":"Permission denied"}}',
+    )
+
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        exception_type(
+            model="gemini/gemini-2.5-flash",
+            original_exception=original_exception,
+            custom_llm_provider="vertex_ai",
+        )
+
+    assert excinfo.value.status_code == 403
+
+
 class TestGetBodyErrorCode:
     """Unit tests for _get_body_error_code helper."""
 
