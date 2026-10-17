@@ -932,8 +932,20 @@ def print_startup_message(message: str) -> None:
     # handler (LITELLM_LOG), and still runs the logger's and the handler's filters and the formatter.
     if not verbose_proxy_logger.filter(record):
         return
-    for json_handler in verbose_proxy_logger.handlers:
+    # uvicorn applies an operator --log_config after proxy_cli's turn_on_json() and before initialize()
+    # re-installs the JSON handler through load_config(); a config that names "LiteLLM Proxy" leaves the
+    # logger without handlers in that window, where the banner and the feedback box are emitted.
+    for json_handler in verbose_proxy_logger.handlers or (_fallback_json_handler(),):
         json_handler.handle(record)
+
+
+def _fallback_json_handler() -> logging.Handler:
+    """JSON handler for a startup message that arrives while the proxy logger has no handler of its own."""
+    handler: Final = LevelRoutingStreamHandler()
+    handler.setFormatter(JsonFormatter())
+    handler.addFilter(_secret_filter)
+    handler.addFilter(_correlation_filter)
+    return handler
 
 
 def _suppress_loggers():

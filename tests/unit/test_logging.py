@@ -1866,6 +1866,36 @@ def test_print_startup_message_shows_above_the_json_handler_level(monkeypatch, c
     assert [json.loads(raw)["message"] for raw in lines] == ["Setting Cache on Proxy"]
 
 
+def test_print_startup_message_emits_json_after_an_operator_log_config_removed_the_handlers(
+    request, monkeypatch, capfd
+):
+    """uvicorn applies an operator `--log_config` after proxy_cli's turn_on_json() and before initialize()
+    re-installs the JSON handler through load_config(); a config that names "LiteLLM Proxy" leaves the
+    logger without handlers in that window, where the banner and the feedback box are emitted, and they
+    still go out as one JSON record each, on stdout."""
+    import logging.config
+
+    monkeypatch.setattr(litellm, "json_logs", True)
+    monkeypatch.setattr(sys, "excepthook", sys.excepthook)
+    turn_on_json()
+    request.addfinalizer(turn_on_json)  # put the JSON handler back for the tests that follow
+    logging.config.dictConfig(
+        {"version": 1, "disable_existing_loggers": False, "loggers": {"LiteLLM Proxy": {"level": "INFO"}}}
+    )
+    assert verbose_proxy_logger.handlers == []
+
+    print_startup_message("\n\033[1;37m#      Give Feedback / Get Help      #\033[0m\n")
+
+    out, err = capfd.readouterr()
+    assert err == ""
+    lines: Final = [raw for raw in out.splitlines() if raw.strip()]
+    assert len(lines) == 1, lines
+    record: Final = json.loads(lines[0])
+    assert record["message"] == "#      Give Feedback / Get Help      #"
+    assert record["level"] == "INFO"
+    assert record["component"] == "LiteLLM Proxy"
+
+
 def test_print_startup_message_blank_spacer_emits_no_json_record(monkeypatch, capfd):
     """A spacer that only pads the terminal has nothing to say to a log pipeline."""
     monkeypatch.setattr(litellm, "json_logs", True)

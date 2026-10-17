@@ -44,6 +44,16 @@ WORKER_COUNTS: Final = (1, 2)
 UNKNOWN_MODEL_STATUS: Final = 400
 BURST_SIZE: Final = 16
 CACHE_SETTINGS: Final[Mapping[str, JsonValue]] = {"cache": True, "cache_params": {"type": "redis"}}
+# an operator logging config of the usual shape: it sets the proxy logger's level and gives it no handler
+# of its own, and formats everything else, uvicorn included, as JSON through the root handler
+OPERATOR_LOG_CONFIG: Final[Mapping[str, JsonValue]] = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {"json": {"()": "litellm._logging.JsonFormatter"}},
+    "handlers": {"stdout": {"class": "logging.StreamHandler", "stream": "ext://sys.stdout", "formatter": "json"}},
+    "loggers": {"LiteLLM Proxy": {"level": "INFO"}},
+    "root": {"level": "INFO", "handlers": ["stdout"]},
+}
 
 
 def _models() -> tuple[str, str]:
@@ -112,8 +122,17 @@ def _boot_serve_and_stop(
     overrides: Mapping[str, str],
     workers: int,
     models: tuple[str, ...],
+    extra_arguments: tuple[str, ...] = (),
 ) -> str:
-    with owned_proxy_process(gateway, directory, overrides, config=config, workers=workers, database_setup=()) as owned:
+    with owned_proxy_process(
+        gateway,
+        directory,
+        overrides,
+        config=config,
+        workers=workers,
+        database_setup=(),
+        extra_arguments=extra_arguments,
+    ) as owned:
         _serve(owned.gateway, models)
         log: Final = owned.log
     return log.read_text()
@@ -133,7 +152,9 @@ def _serve(gateway: Gateway, models: tuple[str, ...]) -> None:
     assert rejected.status_code == UNKNOWN_MODEL_STATUS, rejected.text
 
 
-def _assert_every_line_is_json(log: str, workers: int, models: tuple[str, ...]) -> None:
+def _assert_every_line_is_json(
+    log: str, workers: int, models: tuple[str, ...], *, redis_auth_cache_line: bool = True
+) -> None:
     plaintext: Final = _non_json_lines(log)
     assert plaintext == (), "plaintext lines with JSON logs on:\n" + "\n".join(plaintext)
     messages: Final = _messages(log)
@@ -142,7 +163,8 @@ def _assert_every_line_is_json(log: str, workers: int, models: tuple[str, ...]) 
     for model in models:
         assert any(model in message for message in messages), (model, messages)
     assert any(CACHE_LINE in message for message in messages), messages
-    assert any(REDIS_AUTH_CACHE_LINE in message for message in messages), messages
+    if redis_auth_cache_line:
+        assert any(REDIS_AUTH_CACHE_LINE in message for message in messages), messages
     assert any(CONNECTION_BUDGET_LINE in message for message in messages), messages
     assert sum(BANNER_FRAGMENT in message for message in messages) == workers, messages
     assert sum(FEEDBACK_BOX_LINE in message for message in messages) == workers, messages
@@ -166,6 +188,26 @@ def test_json_logs_config_keeps_every_line_json(gateway: Gateway, tmp_path: Path
     config: Final = _write_config(tmp_path, gateway.upstream_url, models, {**CACHE_SETTINGS, "json_logs": True})
     log: Final = _boot_serve_and_stop(gateway, tmp_path, config, {"LITELLM_LOG": "INFO"}, workers, models)
     _assert_every_line_is_json(log, workers, models)
+
+
+@pytest.mark.parametrize("workers", WORKER_COUNTS)
+def test_json_logs_with_operator_log_config_keeps_every_line_json(
+    gateway: Gateway, tmp_path: Path, workers: int
+) -> None:
+    """uvicorn applies an operator `--log_config` after the CLI process switched JSON on and before
+    `initialize()` switches it on again through the config; a config that names the proxy logger leaves it
+    without handlers in that window, where the banner and the feedback box are emitted. They still arrive,
+    as JSON, one per worker, and the operator's own formatter keeps uvicorn's lines JSON. The Redis
+    auth-cache line is a regular logger line written in that same window; this log_config removed the
+    proxy logger's handlers and left propagation off, so it is lost at one worker on main and here alike."""
+    models: Final = _models()
+    config: Final = _write_config(tmp_path, gateway.upstream_url, models, {**CACHE_SETTINGS, "json_logs": True})
+    log_config: Final = tmp_path / "operator_log_config.yaml"
+    log_config.write_text(yaml.safe_dump(dict(OPERATOR_LOG_CONFIG)))
+    log: Final = _boot_serve_and_stop(
+        gateway, tmp_path, config, {"LITELLM_LOG": "INFO"}, workers, models, ("--log_config", str(log_config))
+    )
+    _assert_every_line_is_json(log, workers, models, redis_auth_cache_line=False)
 
 
 def test_json_logs_default_level_keeps_every_line_json(gateway: Gateway, tmp_path: Path) -> None:
