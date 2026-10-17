@@ -157,7 +157,7 @@ def _anthropic_stream(identity: str, content: Sequence[Mapping[str, JsonValue]])
         },
     )
     blocks: Final = tuple(
-        frame for index, block in enumerate(content) for frame in _anthropic_block_frames(index, block)
+        chain.from_iterable(_anthropic_block_frames(index, block) for index, block in enumerate(content))
     )
     end: Final = cc.sse_frame(
         "message_delta",
@@ -283,7 +283,7 @@ def _message_texts(message: Mapping[str, JsonValue], key: str = "content") -> tu
 
 def _anthropic_texts(body: Mapping[str, JsonValue], role: str) -> tuple[str, ...]:
     messages: Final = tuple(message for message in _objects(body["messages"]) if message["role"] == role)
-    return tuple(text for message in messages for text in _message_texts(message))
+    return tuple(chain.from_iterable(map(_message_texts, messages)))
 
 
 def _word_count(body: Mapping[str, JsonValue]) -> int:
@@ -293,17 +293,18 @@ def _word_count(body: Mapping[str, JsonValue]) -> int:
 
 def _anthropic_block_types(body: Mapping[str, JsonValue]) -> tuple[JsonValue, ...]:
     contents: Final = tuple(message["content"] for message in _objects(body["messages"]))
-    return tuple(block.get("type") for content in contents if isinstance(content, list) for block in _objects(content))
+    blocks: Final = chain.from_iterable(_objects(content) for content in contents if isinstance(content, list))
+    return tuple(block.get("type") for block in blocks)
 
 
 def _gemini_texts(body: Mapping[str, JsonValue], role: str) -> tuple[str, ...]:
     turns: Final = tuple(turn for turn in _objects(body["contents"]) if turn["role"] == role)
-    return tuple(text for turn in turns for text in _message_texts(turn, "parts"))
+    return tuple(chain.from_iterable(_message_texts(turn, "parts") for turn in turns))
 
 
 def _openai_user_texts(body: Mapping[str, JsonValue]) -> tuple[str, ...]:
     items: Final = tuple(item for item in _objects(body["input"]) if item.get("role") == "user")
-    return tuple(text for item in items for text in _message_texts(item))
+    return tuple(chain.from_iterable(map(_message_texts, items)))
 
 
 def _openai_item_types(body: Mapping[str, JsonValue]) -> tuple[JsonValue, ...]:

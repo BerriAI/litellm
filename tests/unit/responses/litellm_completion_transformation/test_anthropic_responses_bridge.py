@@ -51,6 +51,7 @@ async def test_async_response_api_handler_merges_trace_id_without_error():
         instructions: str | None = None,
         request_kwargs: Mapping[str, object] | None = None,
         previous_response_client_ids: tuple[str, ...] = (),
+        input_replaces_history: bool = False,
     ) -> dict[str, object]:
         litellm_completion_request["litellm_trace_id"] = "session-trace"
         return litellm_completion_request
@@ -864,6 +865,66 @@ async def test_router_with_encrypted_content_affinity_sends_the_compaction_block
 
     assert first.output[0].encrypted_content.startswith("litellm_enc:")
     assert _sent_assistant_content(route) == [_COMPACTION_BLOCK, {"type": "text", "text": "The."}]
+
+
+_DOCUMENT_BEFORE_COMPACTION: Final = "The design document pasted before the compaction."
+_TURN_BEFORE_COMPACTION: Final = {
+    "request_id": "chatcmpl-before-compaction",
+    "call_type": "aresponses",
+    "session_id": "session-compacted",
+    "proxy_server_request": {
+        "model": _MODEL,
+        "input": [
+            {"role": "developer", "content": "Use metric units."},
+            {"role": "user", "content": _DOCUMENT_BEFORE_COMPACTION},
+        ],
+    },
+    "response": {
+        "id": "chatcmpl-before-compaction",
+        "object": "chat.completion",
+        "created": 0,
+        "model": _MODEL,
+        "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "Read it."}}],
+    },
+}
+
+
+class _RecordingRawAnthropicMessages:
+    def __init__(self) -> None:
+        self.body: str = ""
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.body = request.content.decode()
+        return _anthropic_message({"type": "text", "text": "dog."})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("context_management", [None, list(_COMPACT_AT_50K)], ids=["summary_text", "native_block"])
+async def test_previous_response_id_with_a_compaction_item_in_input_replays_only_the_stored_instructions(
+    context_management: list[Mapping[str, object]] | None,
+) -> None:
+    anthropic: Final = _RecordingRawAnthropicMessages()
+    compaction_item: Final = {
+        "type": "compaction",
+        "id": "cmp_caller",
+        "encrypted_content": json.dumps(_COMPACTION_BLOCK),
+    }
+
+    with patch("litellm.proxy.proxy_server.prisma_client", _FakePrismaClient([_TURN_BEFORE_COMPACTION])):
+        await litellm.aresponses(
+            model=_MODEL,
+            previous_response_id="chatcmpl-before-compaction",
+            input=[compaction_item, *_NEXT_INPUT],
+            context_management=context_management,
+            api_key="sk-ant-fake",
+            client=AsyncHTTPHandler(transport=httpx.MockTransport(anthropic)),
+        )
+
+    assert _DOCUMENT_BEFORE_COMPACTION not in anthropic.body
+    assert "Read it." not in anthropic.body
+    assert "Use metric units." in anthropic.body
+    assert _COMPACTION_BLOCK["content"] in anthropic.body
+    assert _NEXT_INPUT[0]["content"] in anthropic.body
 
 
 def test_responses_over_anthropic_send_a_compaction_item_as_summary_text_when_the_request_does_not_compact(

@@ -1055,11 +1055,10 @@ def test_get_response_for_spend_logs_payload_truncates_large_base64(mock_should_
     assert parsed["data"][0]["other_field"] == "value"
 
 
-@patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
-def test_get_response_for_spend_logs_payload_keeps_a_long_compaction_summary_whole(mock_should_store):
+def test_get_response_for_spend_logs_payload_keeps_a_long_compaction_summary_whole(monkeypatch: pytest.MonkeyPatch):
     from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB
 
-    mock_should_store.return_value = True
+    monkeypatch.setenv("STORE_PROMPTS_IN_SPEND_LOGS", "true")
     filler = "detail " * (MAX_STRING_LENGTH_PROMPT_IN_DB // 7)
     summary = f"{filler}The cat is named Biscuit. {filler}"
     answer = f"{filler}OK{filler}"
@@ -1087,11 +1086,10 @@ def test_get_response_for_spend_logs_payload_keeps_a_long_compaction_summary_who
     assert LITELLM_TRUNCATED_PAYLOAD_FIELD in message["content"]
 
 
-@patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
-def test_stored_request_keeps_only_the_summary_of_a_long_claude_compaction_input_item(mock_should_store):
+def test_stored_request_keeps_only_the_summary_of_a_long_claude_compaction_input_item(monkeypatch: pytest.MonkeyPatch):
     from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB
 
-    mock_should_store.return_value = True
+    monkeypatch.setenv("STORE_PROMPTS_IN_SPEND_LOGS", "true")
     filler = "detail " * (MAX_STRING_LENGTH_PROMPT_IN_DB // 7)
     summary = f"{filler}The cat is named Biscuit. {filler}"
     claude_item = json.dumps({"type": "compaction", "content": summary, "padding": filler * 10})

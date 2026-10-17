@@ -316,6 +316,14 @@ def _without_stored_tool_search_uses(message: SessionMessage, search_call_ids: f
     return message
 
 
+def _instruction_messages(messages: Sequence[SessionMessage]) -> tuple[SessionMessage, ...]:
+    return tuple(
+        message
+        for message in messages
+        if isinstance(message, Mapping) and message.get("role") in ("system", "developer")
+    )
+
+
 def _stored_compaction_summary(message: SessionMessage) -> str | None:
     return provider_compaction_summary(message.provider_specific_fields) if isinstance(message, Message) else None
 
@@ -1092,6 +1100,7 @@ class LiteLLMCompletionResponsesConfig:
         session_lookup: Callable[[str], Awaitable[ChatCompletionSession]] | None = None,
         request_kwargs: Mapping[str, object] = MappingProxyType({}),
         previous_response_client_ids: tuple[str, ...] = (),
+        input_replaces_history: bool = False,
     ) -> dict:
         """
         Async hook to get the chain of previous input and output pairs and return a list of Chat Completion messages
@@ -1115,8 +1124,11 @@ class LiteLLMCompletionResponsesConfig:
         )
         _messages: Final = litellm_completion_request.get("messages") or []
         route: Final = CompletionRoute(model=model, custom_llm_provider=provider)
+        session_history: Final = chat_completion_session.get("messages") or []
         stored_messages: Final = LiteLLMCompletionResponsesConfig._with_compaction_blocks_the_route_takes(
-            chat_completion_session.get("messages") or [], route, request_fields.get("context_management")
+            _instruction_messages(session_history) if input_replaces_history else session_history,
+            route,
+            request_fields.get("context_management"),
         )
         replayed_messages: Final = (
             LiteLLMCompletionResponsesConfig._without_tool_search_uses_off_anthropic(stored_messages, route)
