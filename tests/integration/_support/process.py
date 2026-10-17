@@ -17,7 +17,7 @@ from ipaddress import IPv4Address
 from itertools import accumulate
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final
+from typing import TYPE_CHECKING, Final
 from urllib.parse import urlsplit
 
 import httpx
@@ -30,8 +30,12 @@ from cryptography.x509.oid import NameOID
 from pydantic import TypeAdapter
 
 from tests.integration._support.budget import import_seconds, readiness_for, readiness_seconds
-from tests.integration._support.client import GATEWAY_LIMITS, Gateway
+from tests.integration._support.client import GATEWAY_LIMITS, Gateway, gateway_from_environment
+from tests.integration._support.database import scratch_database
 from tests.integration._support.ports import allocate_port
+
+if TYPE_CHECKING:
+    import pytest
 
 DB_PUSH: Final = ("--use_prisma_db_push",)
 MIGRATE_DEPLOY: Final = ()
@@ -377,6 +381,18 @@ def owned_proxy(
         inherited=inherited,
     ) as owned:
         yield owned.gateway
+
+
+@contextmanager
+def isolated_gateway(directory: Path, environment: "pytest.MonkeyPatch") -> Iterator[Gateway]:
+    with gateway_from_environment() as shared, scratch_database() as database:
+        environment.setenv("DATABASE_URL", database)
+        environment.setenv("INTEGRATION_PROXY_DATABASE_URL", database)
+        environment.delenv("INTEGRATION_PROXY_READ_REPLICA_URL", raising=False)
+        environment.delenv("DATABASE_URL_READ_REPLICA", raising=False)
+        with owned_proxy(shared, directory, {}) as owned:
+            owned.post("/config/update", {"router_settings": {"num_retries": 0}})
+            yield owned
 
 
 def _stop(process: subprocess.Popen[bytes]) -> None:
