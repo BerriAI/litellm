@@ -20,6 +20,7 @@ from litellm.litellm_core_utils.exception_mapping_utils import (
     exception_type,
     extract_and_raise_litellm_exception,
 )
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.openai.common_utils import OpenAIError
@@ -576,6 +577,131 @@ def test_vertex_ai_rate_limit_error_mapping(error_message, should_raise_rate_lim
                 original_exception=original_exception,
                 custom_llm_provider=custom_llm_provider,
             )
+
+
+def test_vertex_status_code_429_ignores_403_token_in_message() -> None:
+    original_exception: Final = BaseLLMException(status_code=429, message="scripted vertex rejection f4039")
+
+    with pytest.raises(litellm.RateLimitError) as excinfo:
+        exception_type(
+            model="gemini/gemini-2.5-flash",
+            original_exception=original_exception,
+            custom_llm_provider="vertex_ai",
+        )
+
+    assert excinfo.value.status_code == 429
+
+
+def test_vertex_status_code_403_maps_to_403() -> None:
+    original_exception: Final = BaseLLMException(status_code=403, message="permission denied")
+
+    with pytest.raises(litellm.PermissionDeniedError) as excinfo:
+        exception_type(
+            model="gemini/gemini-2.5-flash",
+            original_exception=original_exception,
+            custom_llm_provider="vertex_ai",
+        )
+
+    assert excinfo.value.status_code == 403
+
+
+def test_vertex_status_code_403_with_text_token_maps_to_bad_request() -> None:
+    original_exception: Final = BaseLLMException(
+        status_code=403,
+        message='{"error":{"code":403,"message":"Permission denied"}}',
+    )
+
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        exception_type(
+            model="gemini/gemini-2.5-flash",
+            original_exception=original_exception,
+            custom_llm_provider="vertex_ai",
+        )
+
+    assert excinfo.value.status_code == 403
+
+
+def test_vertex_text_403_without_status_code_still_maps_to_bad_request() -> None:
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        exception_type(
+            model="gemini/gemini-2.5-flash",
+            original_exception=Exception("403 Forbidden: permission denied"),
+            custom_llm_provider="vertex_ai",
+        )
+
+    assert excinfo.value.status_code == 403
+
+
+def test_vertex_status_substring_without_status_code_does_not_map_to_403() -> None:
+    with pytest.raises(litellm.APIConnectionError) as excinfo:
+        exception_type(
+            model="gemini/gemini-2.5-flash",
+            original_exception=Exception("scripted vertex rejection f4039a"),
+            custom_llm_provider="vertex_ai",
+        )
+
+    assert excinfo.value.status_code != 403
+
+
+def test_vertex_wrapped_500_with_403_body_maps_to_bad_request() -> None:
+    original_exception: Final = BaseLLMException(
+        status_code=500,
+        message='Error code: 403 - {"error": {"code": 403, "message": "Permission denied"}}',
+    )
+
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        exception_type(
+            model="gemini/gemini-2.5-flash",
+            original_exception=original_exception,
+            custom_llm_provider="vertex_ai",
+        )
+
+    assert excinfo.value.status_code == 403
+
+
+def test_vertex_wrapped_500_with_embedded_403_text_does_not_map_to_403() -> None:
+    original_exception: Final = BaseLLMException(status_code=500, message="scripted vertex rejection f4039")
+
+    with pytest.raises(litellm.InternalServerError) as excinfo:
+        exception_type(
+            model="gemini/gemini-2.5-flash",
+            original_exception=original_exception,
+            custom_llm_provider="vertex_ai",
+        )
+
+    assert excinfo.value.status_code == 500
+
+
+def test_vertex_wrapped_500_with_body_code_429_and_403_token_maps_to_rate_limit() -> None:
+    original_exception: Final = BaseLLMException(
+        status_code=500,
+        message='{"error":{"code":429,"message":"upstream unavailable (request id: 403-xyz)"}}',
+    )
+
+    with pytest.raises(litellm.RateLimitError) as excinfo:
+        exception_type(
+            model="gemini/gemini-2.5-flash",
+            original_exception=original_exception,
+            custom_llm_provider="vertex_ai",
+        )
+
+    assert excinfo.value.status_code == 429
+
+
+def test_vertex_wrapped_500_with_body_code_403_maps_to_bad_request() -> None:
+    original_exception: Final = BaseLLMException(
+        status_code=500,
+        message='{"error":{"code":403,"message":"Permission denied"}}',
+    )
+
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        exception_type(
+            model="gemini/gemini-2.5-flash",
+            original_exception=original_exception,
+            custom_llm_provider="vertex_ai",
+        )
+
+    assert excinfo.value.status_code == 403
 
 
 class TestGetBodyErrorCode:
