@@ -13,7 +13,7 @@ import copy
 import json
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Literal, TypeAlias
+from typing import Final, Literal, TypeAlias
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -49,6 +49,7 @@ def _make_guardrail(apply_result: dict) -> MagicMock:
     g.apply_guardrail = AsyncMock(return_value=apply_result)
     g.skip_system_message_in_guardrail = False
     g.skip_tool_message_in_guardrail = False
+    g.skip_assistant_message_in_guardrail = False
     return g
 
 
@@ -1355,6 +1356,45 @@ class TestDeAnonymizeConverseStream:
         assert result is stream_bytes
 
 
+@pytest.mark.parametrize("endpoint", ["model/test/converse", "model/test/converse-stream"])
+@pytest.mark.asyncio
+async def test_skip_assistant_preserves_converse_history_and_masks_user(endpoint: str) -> None:
+    assistant: Final = {
+        "role": "assistant",
+        "content": [
+            {"text": "old reply"},
+            {
+                "toolUse": {
+                    "toolUseId": "t1",
+                    "name": "search",
+                    "input": {"q": "old"},
+                }
+            },
+        ],
+    }
+    data: Final = {
+        "endpoint": endpoint,
+        "data": {
+            "messages": [
+                assistant,
+                {"role": "user", "content": [{"text": "private"}]},
+            ]
+        },
+    }
+    original_assistant: Final = copy.deepcopy(assistant)
+    guardrail: Final = MagicMock()
+    guardrail.apply_guardrail = AsyncMock(return_value={"texts": ["[MASKED]"]})
+    guardrail.skip_system_message_in_guardrail = False
+    guardrail.skip_tool_message_in_guardrail = False
+    guardrail.skip_assistant_message_in_guardrail = True
+
+    await BedrockPassthroughGuardrailHandler().process_input_messages(data, guardrail)
+
+    assert guardrail.apply_guardrail.call_args.kwargs["inputs"]["texts"] == ["private"]
+    assert data["data"]["messages"][0] == original_assistant
+    assert data["data"]["messages"][1]["content"][0]["text"] == "[MASKED]"
+
+
 def _decoded_frames(raw: bytes) -> list[tuple[str, str, dict]]:
     import json
     from botocore.eventstream import EventStreamBuffer
@@ -1656,9 +1696,11 @@ class TestConverseStreamGuardrailRelay:
             [f"Card: {_TEST_CARD}. More text here"],
         ]
 
+    @pytest.mark.parametrize("skip_assistant", [False, True])
     @pytest.mark.asyncio
-    async def test_stream_held_until_moderated_applies_masks_per_block(self, monkeypatch):
+    async def test_stream_held_until_moderated_applies_masks_per_block(self, monkeypatch, skip_assistant: bool):
         guardrail = _CardMaskingGuardrail()
+        guardrail.skip_assistant_message_in_guardrail = skip_assistant
 
         relayed = await _relay_through_post_call_guardrail(
             _card_stream(), guardrail, monkeypatch, holds_until_moderated=True
@@ -1675,6 +1717,7 @@ class TestConverseStreamGuardrailRelay:
             "messageStop",
         ]
         assert TestDeAnonymizeConverseStream._deltas_by_block(relayed, "text") == {0: "Card: ****.", 1: "Thanks!"}
+        assert guardrail.received_texts == [[f"Card: {_TEST_CARD}.", "Thanks!"]]
         assert relayed.endswith(b"".join(_card_stream()[3:]))
 
     @pytest.mark.parametrize(

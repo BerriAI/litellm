@@ -19,6 +19,7 @@ from litellm.llms.base_llm.guardrail_translation.base_translation import (
     StreamTransformSink,
 )
 from litellm.llms.base_llm.guardrail_translation.utils import (
+    effective_skip_assistant_message_for_guardrail,
     effective_skip_system_message_for_guardrail,
     effective_skip_tool_message_for_guardrail,
 )
@@ -102,6 +103,7 @@ def _extract_converse_texts(
     body: dict,
     skip_system: bool,
     skip_tool: bool,
+    skip_assistant: bool = False,
 ) -> tuple[list[str], list[_StringHolder]]:
     """
     Walk a Bedrock Converse request body and collect text content.
@@ -139,6 +141,8 @@ def _extract_converse_texts(
 
     for message in body.get("messages") or []:
         if not isinstance(message, dict):
+            continue
+        if skip_assistant and "role" in message and message["role"] == "assistant":
             continue
         for block in message.get("content") or []:
             if not isinstance(block, dict):
@@ -985,8 +989,9 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
 
         skip_system: Final = effective_skip_system_message_for_guardrail(guardrail_to_apply)
         skip_tool: Final = effective_skip_tool_message_for_guardrail(guardrail_to_apply)
+        skip_assistant: Final = effective_skip_assistant_message_for_guardrail(guardrail_to_apply)
 
-        texts, holders = _extract_converse_texts(body, skip_system, skip_tool)
+        texts, holders = _extract_converse_texts(body, skip_system, skip_tool, skip_assistant)
 
         if not texts:
             return data
