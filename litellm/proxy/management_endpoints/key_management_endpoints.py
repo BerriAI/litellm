@@ -897,7 +897,19 @@ def common_key_access_checks(
 router: Final = APIRouter()
 
 
-def handle_key_type(data: GenerateKeyRequest, data_json: dict) -> dict:
+_KEY_TYPE_PRESET_ROUTES: Final = MappingProxyType(
+    {
+        LiteLLMKeyType.LLM_API: ("llm_api_routes",),
+        LiteLLMKeyType.MANAGEMENT: ("management_routes",),
+        LiteLLMKeyType.READ_ONLY: ("info_routes",),
+    }
+)
+
+
+_KeyJsonT = TypeVar("_KeyJsonT", bound=dict[str, object])
+
+
+def handle_key_type(data: GenerateKeyRequest, data_json: _KeyJsonT) -> _KeyJsonT:
     """
     Handle the key type.
     """
@@ -906,13 +918,24 @@ def handle_key_type(data: GenerateKeyRequest, data_json: dict) -> dict:
         data_json.pop("key_type", None)
         return data_json
     data_json["key_type"] = key_type.value
-    if key_type == LiteLLMKeyType.LLM_API:
-        data_json["allowed_routes"] = ["llm_api_routes"]
-    elif key_type == LiteLLMKeyType.MANAGEMENT:
-        data_json["allowed_routes"] = ["management_routes"]
-    elif key_type == LiteLLMKeyType.READ_ONLY:
-        data_json["allowed_routes"] = ["info_routes"]
+    preset_routes: Final = _KEY_TYPE_PRESET_ROUTES.get(key_type)
+    if preset_routes is not None:
+        data_json["allowed_routes"] = list(preset_routes)
     return data_json
+
+
+def _default_allowed_routes_for(key_routes: object, key_type: LiteLLMKeyType | None) -> tuple[object, ...] | None:
+    default_routes: Final[object] = (litellm.default_key_generate_params or {}).get("allowed_routes")
+    if not isinstance(default_routes, list):
+        return None
+    configured_routes: Final[tuple[object, ...]] = tuple(default_routes)
+    preset_routes: Final = _KEY_TYPE_PRESET_ROUTES.get(key_type) if key_type is not None else None
+    default_covers_preset: Final = preset_routes is not None and all(
+        route in configured_routes for route in preset_routes
+    )
+    if key_routes and not default_covers_preset:
+        return None
+    return configured_routes
 
 
 _NON_ADMIN_SAFE_ALLOWED_ROUTES_PRESETS: Final = frozenset({"llm_api_routes", "info_routes"})
@@ -1368,7 +1391,7 @@ async def _common_key_generation_helper(
     # cannot grant a key a higher budget than their own authority.
     # UI session personal keys are capped by user_max_budget when it is available.
     is_ui_session_token: Final = user_api_key_dict.team_id == UI_SESSION_TOKEN_TEAM_ID
-    is_ui_session_team_key = is_ui_session_token and _requested_team_id is not None
+    is_ui_session_team_key: Final = is_ui_session_token and _requested_team_id is not None
     if (
         user_api_key_dict.is_session_token
         and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
@@ -1494,7 +1517,8 @@ async def _common_key_generation_helper(
 
     data_json = data.model_dump(exclude_unset=True, exclude_none=True)
 
-    data_json = handle_key_type(_member_key_request(data, acting_as_team_admin), data_json)
+    member_request: Final = _member_key_request(data, acting_as_team_admin)
+    data_json = handle_key_type(member_request, data_json)
 
     # Re-check allowed_routes after handle_key_type, since key_type can derive
     # an elevated bucket (e.g. ["management_routes"]) that wasn't present in
@@ -1506,13 +1530,11 @@ async def _common_key_generation_helper(
         user_api_key_dict=user_api_key_dict,
         allow_safe_presets=True,
     )
-    _default_allowed_routes: Final = (
-        litellm.default_key_generate_params.get("allowed_routes")
-        if litellm.default_key_generate_params is not None
-        else None
+    default_allowed_routes: Final = _default_allowed_routes_for(
+        data_json.get("allowed_routes"), member_request.key_type
     )
-    if isinstance(_default_allowed_routes, list) and not data_json.get("allowed_routes"):
-        data_json = {**data_json, "allowed_routes": list(_default_allowed_routes)}
+    if default_allowed_routes is not None:
+        data_json["allowed_routes"] = list(default_allowed_routes)
 
     # if we get max_budget passed to /key/generate, then use it as key_max_budget. Since generate_key_helper_fn is used to make new users
     if "max_budget" in data_json:
