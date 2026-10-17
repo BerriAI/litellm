@@ -1,6 +1,7 @@
 from typing import Final
 
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+from litellm.types.llms.openai import AllMessageValues
 
 
 class BasetenConfig(OpenAIGPTConfig):
@@ -82,6 +83,25 @@ class BasetenConfig(OpenAIGPTConfig):
             elif param in supported_openai_params:
                 optional_params[param] = value
         return optional_params
+
+    def transform_request(
+        self,
+        model: str,
+        messages: list[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        # Dedicated deployments route on the deployment ID (e.g. "wd1lndkw"), but the
+        # server may expect a different model name in the request body.
+        served_model_name: Final = litellm_params.get("served_model_name")
+        return super().transform_request(
+            model=served_model_name or model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
 
     def _get_openai_compatible_provider_info(self, api_base: str, api_key: str) -> tuple:
         """

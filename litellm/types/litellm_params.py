@@ -157,6 +157,8 @@ class DispatchOptions:
     use_chat_completions_api: bool | None = None
     use_in_pass_through: bool | None = None
     allowed_openai_params: Sequence[str] | None = None
+    # Model name sent in the request body when it differs from the routed model (e.g. Baseten dedicated deployments)
+    served_model_name: str | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
