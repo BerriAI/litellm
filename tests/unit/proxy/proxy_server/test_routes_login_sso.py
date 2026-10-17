@@ -10,7 +10,10 @@ Routes covered:
 
 from __future__ import annotations
 
+import math
+import time
 from datetime import datetime, timezone
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 from .conftest import normalize
@@ -559,24 +562,30 @@ def test_a_refused_attempt_carries_retry_after(client, monkeypatch, reset_login_
     """The 429 tells the caller how long the block has left."""
     _install_real_auth(monkeypatch, max_failed_login_attempts_per_source=2, failed_login_block_seconds=77)
 
+    started: Final = time.time()
     assert [_json_login(client, "/v2/login") for _ in range(2)] == [401, 401]
 
     refused = client.post("/v2/login", json={"username": "admin", "password": "wrong"})
+    elapsed: Final = time.time() - started
+    retry_after: Final = int(refused.headers["retry-after"])
     assert refused.status_code == 429
-    assert refused.headers.get("retry-after") == "77"
+    assert math.ceil(77 - elapsed) <= retry_after <= 77
 
 
 def test_the_form_returns_a_human_readable_lockout_page(client, monkeypatch, reset_login_throttle):
     """The no-JavaScript form must render a wait page when its POST is throttled."""
     _install_real_auth(monkeypatch, max_failed_login_attempts_per_source=2, failed_login_block_seconds=77)
 
+    started: Final = time.time()
     assert [_form_login(client) for _ in range(2)] == [401, 401]
 
     refused = client.post("/login", data={"username": "admin", "password": "wrong"})
+    elapsed: Final = time.time() - started
+    retry_after: Final = int(refused.headers["retry-after"])
     assert refused.status_code == 429
     assert refused.headers.get("content-type", "").startswith("text/html")
-    assert "Try again in about 77 seconds" in refused.text
-    assert refused.headers.get("retry-after") == "77"
+    assert f"Try again in about {retry_after} seconds" in refused.text
+    assert math.ceil(77 - elapsed) <= retry_after <= 77
 
 
 def test_a_second_username_from_the_same_source_still_gets_through(client, monkeypatch, reset_login_throttle):
