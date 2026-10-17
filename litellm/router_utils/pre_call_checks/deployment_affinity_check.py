@@ -30,6 +30,7 @@ from litellm.caching.dual_cache import DualCache
 from litellm.constants import SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY, SESSION_ID_GENERATED_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger, Span
 from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.router_utils.client_initalization_utils import MaxParallelRequestsLimit
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import CallTypes
 
@@ -86,6 +87,7 @@ class DeploymentAffinityCheck(CustomLogger):
         enable_session_id_affinity: bool = False,
         model_group_affinity_config: dict[str, list[str]] | None = None,
         is_priority_group: Callable[[str], bool] | None = None,
+        enable_session_affinity_yield_on_saturated_deployment: bool = False,
     ):
         super().__init__()
         self.cache = cache
@@ -95,6 +97,9 @@ class DeploymentAffinityCheck(CustomLogger):
         self.enable_session_id_affinity = enable_session_id_affinity
         self.model_group_affinity_config: dict[str, list[str]] = model_group_affinity_config or {}
         self.is_priority_group = is_priority_group
+        self.enable_session_affinity_yield_on_saturated_deployment = (
+            enable_session_affinity_yield_on_saturated_deployment
+        )
 
     def _get_effective_flags(self, model_group: str) -> tuple[bool, bool, bool]:
         """
@@ -330,6 +335,82 @@ class DeploymentAffinityCheck(CustomLogger):
     def _set_local_pin(self, cache_key: str, value: object, ttl_seconds: int) -> None:
         set_local_affinity_pin(self.cache, cache_key, value, ttl_seconds)
 
+    @staticmethod
+    def _max_parallel_requests_cache_key(model_id: str) -> str:
+        return f"{model_id}_max_parallel_requests_client"
+
+    @staticmethod
+    def _deployment_model_id(
+        deployment: dict[str, object],  # mutable-ok: deployment payloads are dicts by router convention; read-only here
+    ) -> str | None:
+        model_info: Final = deployment.get("model_info")
+        if not isinstance(model_info, dict):
+            return None
+        typed_model_info: Final = cast(  # cast-ok: router deployment payloads are str-keyed dicts
+            dict[str, object], model_info
+        )
+        model_id: Final = typed_model_info.get("id")
+        return str(model_id) if model_id is not None else None
+
+    async def _deployment_has_capacity(self, model_id: str) -> bool:
+        """Best-effort capacity probe for max_parallel_requests slots.
+
+        True when the deployment has no slot limit registered (unbounded) or
+        fewer requests in flight than its limit. Fail-open: any cache hiccup or
+        unreadable limit value counts as capacity, so this never blocks routing.
+        """
+        try:
+            cached_limit: Final = cast(  # cast-ok: DualCache returns untyped values; isinstance narrows below
+                object | None,
+                await self.cache.async_get_cache(  # pyright: ignore[reportUnknownMemberType]  # DualCache accessors are untyped legacy; this read is best-effort
+                    key=self._max_parallel_requests_cache_key(model_id)
+                ),
+            )
+        except Exception as e:  # noqa: BLE001  # affinity is best-effort; never break routing
+            verbose_router_logger.debug(
+                "DeploymentAffinityCheck: failed to read max_parallel_requests limit. error=%s",
+                e,
+            )
+            return True
+        if not isinstance(cached_limit, MaxParallelRequestsLimit):
+            return True
+        return cached_limit.in_flight < cached_limit.max_parallel_requests
+
+    async def _yield_session_pin_if_saturated(
+        self,
+        session_deployment: dict[str, object],  # mutable-ok: read-only router dicts
+        healthy_deployments: Sequence[dict[str, object]],  # mutable-ok: read-only router dicts
+    ) -> list[dict[str, object]] | None:  # mutable-ok: read-only router dicts
+        """Idle deployments when the pinned one is saturated, else None.
+
+        Opt-in via session_affinity_yield_on_saturated_deployment. A turn yields
+        only when the pinned deployment is at its max_parallel_requests limit
+        and at least one sibling in the model group has capacity; when every
+        deployment is full it returns None so the caller keeps today's behavior
+        (wait behind the pin or 429). The pin itself is kept, so the session
+        returns to its warm deployment once it frees up.
+        """
+        if not self.enable_session_affinity_yield_on_saturated_deployment:
+            return None
+        pinned_model_id: Final = self._deployment_model_id(session_deployment)
+        if pinned_model_id is None or await self._deployment_has_capacity(pinned_model_id):
+            return None
+        candidates: Final = [
+            (deployment, model_id)
+            for deployment in healthy_deployments
+            if (model_id := self._deployment_model_id(deployment)) is not None and model_id != pinned_model_id
+        ]
+        idle_deployments: Final = [
+            deployment for deployment, model_id in candidates if await self._deployment_has_capacity(model_id)
+        ]
+        if not idle_deployments:
+            return None
+        verbose_router_logger.debug(
+            "DeploymentAffinityCheck: session pin yields, pinned deployment=%s is saturated",
+            pinned_model_id,
+        )
+        return idle_deployments
+
     async def _claim_pin(self, cache_key: str, pin_value: DeploymentAffinityCacheValue, ttl_seconds: int) -> str | None:
         winner: Final = await claim_affinity_pin(self.cache, cache_key, pin_value, ttl_seconds)
         return self._pinned_model_id(winner)
@@ -432,6 +513,16 @@ class DeploymentAffinityCheck(CustomLogger):
                         model_id=session_model_id,
                     )
                     if session_deployment is not None:
+                        yielded_deployments: Final = await self._yield_session_pin_if_saturated(
+                            session_deployment=cast(  # cast-ok: router deployment payloads are str-keyed dicts
+                                dict[str, object], session_deployment
+                            ),
+                            healthy_deployments=cast(  # cast-ok: router deployment payloads are str-keyed dicts
+                                Sequence[dict[str, object]], typed_healthy_deployments
+                            ),
+                        )
+                        if yielded_deployments is not None:
+                            return yielded_deployments
                         verbose_router_logger.debug(
                             "DeploymentAffinityCheck: session-id affinity hit -> deployment=%s session_id=%s",
                             session_model_id,
