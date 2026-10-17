@@ -152,7 +152,7 @@ def _request_logging_obj() -> Logging:
         messages=[{"role": "user", "content": "ping"}],
         stream=True,
         call_type="anthropic_messages",
-        start_time=datetime.now(),
+        start_time=datetime(2026, 1, 1),
         litellm_call_id="fallback-hop",
         function_id="fallback-hop",
     )
@@ -176,7 +176,7 @@ class HopLoggingItsOwnSuccessRouter(FakeRouter):
             choices=[Choices(index=0, message=Message(role="assistant", content="served by the hop"))],
             usage=Usage(prompt_tokens=52, completion_tokens=7, total_tokens=59),
         )
-        now = datetime.now()
+        now = datetime(2026, 1, 1)
         await kwargs["litellm_logging_obj"].async_success_handler(result=hop_response, start_time=now, end_time=now)
         return StreamingWrapper()
 
@@ -191,7 +191,7 @@ async def test_run_async_fallback_opens_the_hop_without_the_superseded_attempts_
         messages=[{"role": "user", "content": "ping"}],
         stream=False,
         call_type="completion",
-        start_time=datetime.now(),
+        start_time=datetime(2026, 1, 1),
         litellm_call_id="fallback-hop-success",
         function_id="fallback-hop-success",
         dynamic_async_success_callbacks=[recorder],
