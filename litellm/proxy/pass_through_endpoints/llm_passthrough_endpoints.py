@@ -3500,14 +3500,23 @@ async def deepgram_listen_websocket_route(
 
 
 _OPENAI_PASSTHROUGH_MANAGEMENT_PREFIXES: Final[tuple[str, ...]] = (
-    "/v1/files",
-    "/v1/batches",
-    "/v1/vector_stores",
-    "/v1/fine_tuning",
-    "/v1/threads",
-    "/v1/assistants",
-    "/v1/models",
+    "/files",
+    "/batches",
+    "/vector_stores",
+    "/fine_tuning",
+    "/threads",
+    "/assistants",
+    "/models",
 )
+
+
+def _strip_openai_version_prefix(normalized_path: str) -> str:
+    """Forwarding adds the implicit /v1 for OpenAI only when the caller omitted
+    it (see _join_url_paths), so both spellings of the same request must hit
+    the gate: `/v1/assistants` and `/assistants` are the same upstream call."""
+    if normalized_path == "/v1" or normalized_path.startswith("/v1/"):
+        return normalized_path[len("/v1"):]
+    return normalized_path
 
 
 def openai_proxy_gate(
@@ -3518,11 +3527,14 @@ def openai_proxy_gate(
     """The /openai passthrough speaks to the shared OpenAI account with
     the proxy's credentials. Inference paths stay available to granted keys;
     object-management paths address the shared account with no tenant records,
-    so they are proxy-admin-only."""
+    so they are proxy-admin-only. The check runs on the canonical forward path:
+    a caller that omits the /v1 segment reaches the same management routes once
+    the forwarder injects the version prefix."""
     if is_proxy_admin(user_api_key_dict):
         return
     normalized: Final = posixpath.normpath(f"/{endpoint_path.strip('/')}")
-    if normalized.startswith(_OPENAI_PASSTHROUGH_MANAGEMENT_PREFIXES):
+    canonical: Final = _strip_openai_version_prefix(normalized)
+    if canonical.startswith(_OPENAI_PASSTHROUGH_MANAGEMENT_PREFIXES):
         raise HTTPException(
             status_code=403,
             detail={

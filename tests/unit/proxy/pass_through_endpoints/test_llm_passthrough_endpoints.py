@@ -568,3 +568,50 @@ def test_openai_proxy_gate_allows_inference_paths_for_any_key():
         user_api_key_dict=UserAPIKeyAuth(api_key="sk-team", user_role=None, user_id="u1"),
         endpoint_path="/v1/responses",
     )
+
+
+def test_openai_proxy_gate_blocks_prefixless_versionless_management_paths():
+    """A caller may omit the implicit /v1 segment that forwarding later adds
+    (_join_url_paths), so the gate must canonicalize before matching — this is
+    the bypass the BerriAI PR reviewer caught on the original version."""
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        openai_proxy_gate,
+    )
+
+    for path in ("/assistants", "/assistants/asst_123", "/files/file-1", "/threads", "/models/gpt-5.1"):
+        with pytest.raises(HTTPException) as exc:
+            openai_proxy_gate(
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-team", user_role=None, user_id="u1"),
+                endpoint_path=path,
+            )
+        assert int(getattr(exc.value, "status_code", 0)) == 403
+
+
+def test_openai_proxy_gate_canonicalizes_the_v1_spelling_identically():
+    """The /v1-prefixed and prefixless shapes are the same decision."""
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    openai_proxy_gate = _openai_proxy_gate_module()
+
+    # both spellings of the inference surface stay open
+    openai_proxy_gate(
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-team", user_role=None, user_id="u1"),
+        endpoint_path="/chat/completions",
+    )
+    openai_proxy_gate(
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-team", user_role=None, user_id="u1"),
+        endpoint_path="/v1/chat/completions",
+    )
+    # both spellings of the management surface are gated
+    for path in ("/assistants", "/v1/assistants", "/files", "/v1/files"):
+        try:
+            openai_proxy_gate(
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-team", user_role=None, user_id="u1"),
+                endpoint_path=path,
+            )
+        except Exception:
+            continue
+        raise AssertionError(f"expected the gate to fire for {path!r}")
