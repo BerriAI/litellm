@@ -43,6 +43,10 @@ SAMPLE_AGGREGATED_RESPONSE = {
                             "spend": 40.0,
                             "api_requests": 300,
                             "total_tokens": 25000,
+                            "prompt_tokens": 15000,
+                            "completion_tokens": 8000,
+                            "cache_read_input_tokens": 1500,
+                            "cache_creation_input_tokens": 500,
                         },
                         "metadata": {},
                         "api_key_breakdown": {},
@@ -155,6 +159,21 @@ class TestSummariseUsageData:
         summary = _summarise_usage_data(SAMPLE_AGGREGATED_RESPONSE)
         assert "gpt-4" in summary
 
+    def test_summarise_breaks_model_tokens_down_by_type(self):
+        summary = _summarise_usage_data(SAMPLE_AGGREGATED_RESPONSE)
+        assert "prompt 15000, completion 8000, cache read 1500, cache creation 500" in summary
+
+    def test_summarise_breaks_total_tokens_down_by_type(self):
+        meta = {
+            **SAMPLE_AGGREGATED_RESPONSE["metadata"],
+            "total_prompt_tokens": 20000,
+            "total_completion_tokens": 10000,
+            "total_cache_read_input_tokens": 0,
+            "total_cache_creation_input_tokens": 0,
+        }
+        summary = _summarise_usage_data({**SAMPLE_AGGREGATED_RESPONSE, "metadata": meta})
+        assert "prompt 20000, completion 10000, cache read 0, cache creation 0" in summary
+
     def test_summarise_includes_providers(self):
         summary = _summarise_usage_data(SAMPLE_AGGREGATED_RESPONSE)
         assert "openai" in summary
@@ -172,6 +191,10 @@ class TestSummariseEntityData:
         assert "Marketing" in summary
         assert "$60.0" in summary
         assert "$40.0" in summary
+
+    def test_team_summary_breaks_tokens_down_by_type(self):
+        summary = _summarise_entity_data(SAMPLE_TEAM_RESPONSE, "Team")
+        assert summary.count("cache creation") == 2
 
     def test_team_summary_empty(self):
         empty = {"results": [], "metadata": {}}
