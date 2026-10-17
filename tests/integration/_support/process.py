@@ -17,7 +17,7 @@ from ipaddress import IPv4Address
 from itertools import accumulate
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final
+from typing import TYPE_CHECKING, Final
 from urllib.parse import urlsplit
 
 import httpx
@@ -30,8 +30,12 @@ from cryptography.x509.oid import NameOID
 from pydantic import TypeAdapter
 
 from tests.integration._support.budget import import_seconds, readiness_for, readiness_seconds
-from tests.integration._support.client import GATEWAY_LIMITS, Gateway
+from tests.integration._support.client import GATEWAY_LIMITS, Gateway, gateway_from_environment
+from tests.integration._support.database import scratch_database
 from tests.integration._support.ports import allocate_port
+
+if TYPE_CHECKING:
+    import pytest
 
 DB_PUSH: Final = ("--use_prisma_db_push",)
 MIGRATE_DEPLOY: Final = ()
@@ -111,7 +115,7 @@ def _is_serving_worker(process: psutil.Process) -> bool:
 
 def _is_gone(process: psutil.Process) -> bool:
     try:
-        return process.status() == psutil.STATUS_ZOMBIE
+        return process.status() == psutil.STATUS_ZOMBIE and process.num_threads() <= 1
     except psutil.NoSuchProcess:
         return True
 
@@ -379,6 +383,18 @@ def owned_proxy(
         yield owned.gateway
 
 
+@contextmanager
+def isolated_gateway(directory: Path, environment: "pytest.MonkeyPatch") -> Iterator[Gateway]:
+    with gateway_from_environment() as shared, scratch_database() as database:
+        environment.setenv("DATABASE_URL", database)
+        environment.setenv("INTEGRATION_PROXY_DATABASE_URL", database)
+        environment.delenv("INTEGRATION_PROXY_READ_REPLICA_URL", raising=False)
+        environment.delenv("DATABASE_URL_READ_REPLICA", raising=False)
+        with owned_proxy(shared, directory, {}) as owned:
+            owned.post("/config/update", {"router_settings": {"num_retries": 0}})
+            yield owned
+
+
 def _stop(process: subprocess.Popen[bytes]) -> None:
     try:
         root_stopped: Final = stop_root_process(process)
@@ -628,8 +644,11 @@ def worker_configuration(config: Path, directory: Path, inherited: Mapping[str, 
         return f"http://127.0.0.1:{inherited['INTEGRATION_PROVIDER_PORT']}"
 
     contents: Final = re.sub(r"http://127[.]0[.]0[.]1:(8190|8191)(?![0-9])", endpoint, config.read_text())
-    directory.mkdir(parents=True, exist_ok=True)
-    destination: Final = directory / f"worker-config-{uuid.uuid4().hex}.yaml"
+    checkouts: Final = (_harness_root(), _proxy_root().resolve())
+    inside_checkout: Final = any(config.resolve().is_relative_to(checkout) for checkout in checkouts)
+    target: Final = directory if inside_checkout else config.parent
+    target.mkdir(parents=True, exist_ok=True)
+    destination: Final = target / f"worker-config-{uuid.uuid4().hex}.yaml"
     loaded: Final[object] = yaml.safe_load(contents)
     if not isinstance(loaded, dict):
         destination.write_text(contents)

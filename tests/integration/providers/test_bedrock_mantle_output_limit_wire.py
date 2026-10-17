@@ -5,7 +5,7 @@ import os
 import re
 import threading
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from queue import SimpleQueue
@@ -21,7 +21,7 @@ import pytest
 import yaml
 from integration._support.client import Gateway, Scenario, eventually, object_value, string_value
 from integration._support.database import read_rows
-from integration._support.process import graceful_stop_seconds, owned_proxy_process
+from integration._support.process import graceful_stop_seconds, isolated_gateway, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
@@ -316,6 +316,15 @@ def _spend_statuses(model: str, expected: int) -> list[JsonValue]:
     )
     assert len({row["request_id"] for row in rows}) == len(rows), rows
     return [row["status"] for row in rows]
+
+
+@pytest.fixture(scope="module")
+def gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Gateway]:
+    with (
+        pytest.MonkeyPatch.context() as environment,
+        isolated_gateway(tmp_path_factory.mktemp("gateway"), environment) as owned,
+    ):
+        yield owned
 
 
 def _proxy_url(gateway: Gateway) -> str:

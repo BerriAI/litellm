@@ -1970,6 +1970,7 @@ class MCPServerManager:
         per_user_oauth_token_store: InvalidatableOAuthTokenStore | None = None,
         per_user_token_cache: MCPPerUserTokenCache | None = None,
         discovery_clock: Callable[[], float] = time.monotonic,
+        upstream_transport: httpx2.AsyncBaseTransport | None = None,
     ):
         self._per_user_oauth_token_store = per_user_oauth_token_store or LazyPerUserOAuthTokenStore(
             self.get_mcp_server_by_id
@@ -1979,6 +1980,7 @@ class MCPServerManager:
             oauth_token_store=self._per_user_oauth_token_store,
             token_exchanger=build_token_exchanger(),
         )
+        self._upstream_transport: httpx2.AsyncBaseTransport | None = upstream_transport
         discovery_ttl: Final = _mcp_discovery_cache_ttl()
         self._prompt_discovery_cache = _DiscoveryCache[ListPromptsResult](
             discovery_ttl, discovery_clock, TypeAdapter(ListPromptsResult)
@@ -4348,6 +4350,7 @@ class MCPServerManager:
                 if resolved_server.allow_elicitation
                 else None
             ),
+            upstream_transport=self._upstream_transport,
         )
 
     _create_mcp_client = create_mcp_client
@@ -4528,7 +4531,7 @@ class MCPServerManager:
                 )
             else:
                 page: Final = (
-                    await client.list_tools_page(params)
+                    await self._fetch_tools_page_with_timeout(client, server, params)
                     if params is not None
                     else ListToolsResult(tools=await self._fetch_tools_with_timeout(client, server.name))
                 )
@@ -5617,6 +5620,19 @@ class MCPServerManager:
                 "Error listing tools from %s: %s%s", server_name, type(e).__name__, _upstream_failure_suffix(e)
             )
             raise_classified_list_failure(e, server_name)
+
+    async def _fetch_tools_page_with_timeout(
+        self, client: MCPClient, server: MCPServer, params: PaginatedRequestParams
+    ) -> ListToolsResult:
+        deadline: Final = (
+            MCP_TOOL_LISTING_TIMEOUT if server.timeout is None else max(server.timeout, MCP_TOOL_LISTING_TIMEOUT)
+        )
+        try:
+            with anyio.fail_after(deadline):
+                return await client.list_tools_page(params)
+        except TimeoutError as e:
+            verbose_logger.warning("Timeout while listing tools from %s", server.name)
+            raise MCPServerListError(ServerListFault(tag="timeout"), server.name) from e
 
     _SHORT_PREFIX_MAX_REHASH_ATTEMPTS = 1024
 
@@ -7466,7 +7482,10 @@ class MCPServerManager:
                     return "ok"
 
                 # Add timeout wrapper to prevent hanging
-                await asyncio.wait_for(client.run_with_session(_noop), timeout=MCP_HEALTH_CHECK_TIMEOUT)
+                await asyncio.wait_for(
+                    client.run_with_session(_noop, quiet_on_error=True),
+                    timeout=MCP_HEALTH_CHECK_TIMEOUT,
+                )
                 self._remember_upstream_initialize_instructions(server, client)
                 status = "healthy"
             except asyncio.TimeoutError:
@@ -7478,6 +7497,12 @@ class MCPServerManager:
             except Exception as e:
                 health_check_error = str(e)
                 status = "unhealthy"
+                verbose_logger.warning(
+                    "MCP health check failed for %s: %s%s",
+                    server.name,
+                    type(e).__name__,
+                    _upstream_failure_suffix(e),
+                )
 
         return LiteLLM_MCPServerTable(
             server_id=server.server_id,
