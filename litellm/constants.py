@@ -1631,6 +1631,7 @@ OUTPUT_TOKEN_CEILING_PARAMS: Final = frozenset({"max_tokens", "max_completion_to
 CLIENT_OUTPUT_CEILING_METADATA_KEY: Final = "_client_output_ceiling"
 CONSUMED_REQUEST_TAGS_METADATA_KEY: Final = "_consumed_request_tags"
 ROUTING_REQUEST_TAGS_METADATA_KEY: Final = "_routing_request_tags"
+VECTOR_STORE_CALLER_METADATA_KWARG: Final = "litellm_vector_store_caller_metadata"
 ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY: Final = "_litellm_router_usage_counted_tokens"
 INTERNAL_CALL_ORIGIN_METADATA_KEY: Final = "internal_call_origin"
 MANAGED_BACKGROUND_RESPONSE_METADATA_KEY: Final = "_managed_background_response"
@@ -1677,9 +1678,7 @@ INVALID_VIRTUAL_KEY_ERROR_MARKER: Final = "_litellm_invalid_virtual_key_error"
 # Python garbage collection threshold configuration
 # Format: "gen0,gen1,gen2" e.g., "1000,50,50"
 PYTHON_GC_THRESHOLD: Final = os.getenv("PYTHON_GC_THRESHOLD")
-# Move objects created during proxy startup into the permanent GC generation so
-# full collections stop walking them (shorter stop-the-world pauses)
-LITELLM_GC_FREEZE_AFTER_STARTUP: Final = os.getenv("LITELLM_GC_FREEZE_AFTER_STARTUP", "false").lower() == "true"
+LITELLM_GC_FREEZE_AFTER_STARTUP: Final = os.getenv("LITELLM_GC_FREEZE_AFTER_STARTUP", "true").lower() == "true"
 
 # pass through route constansts
 BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES: Final = [

@@ -974,7 +974,8 @@ async def test_proxy_startup_event_honors_disable_model_info_refresh(
 
 
 @pytest.mark.asyncio
-async def test_proxy_startup_event_freezes_gc_before_serving() -> None:
+@pytest.mark.parametrize("enabled", [True, False])
+async def test_proxy_startup_event_freezes_gc_before_serving(enabled: bool) -> None:
     """With LITELLM_GC_FREEZE_AFTER_STARTUP (#46517) the startup heap is already frozen
     when the proxy starts serving."""
     scheduler = AsyncIOScheduler()
@@ -985,7 +986,7 @@ async def test_proxy_startup_event_freezes_gc_before_serving() -> None:
     with (
         patch.dict(os.environ, clean_env, clear=True),
         patch.object(ps, "scheduler", scheduler),
-        patch.object(debug_utils, "LITELLM_GC_FREEZE_AFTER_STARTUP", True),
+        patch.object(debug_utils, "LITELLM_GC_FREEZE_AFTER_STARTUP", enabled),
     ):
         try:
             async with proxy_startup_event(app=None):
@@ -995,7 +996,7 @@ async def test_proxy_startup_event_freezes_gc_before_serving() -> None:
             if scheduler.running:
                 scheduler.shutdown(wait=False)
 
-    assert frozen_while_serving > 0
+    assert (frozen_while_serving > 0) is enabled
 
 
 def test_otel_global_provider_published_after_callback_init():
