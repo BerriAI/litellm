@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from collections.abc import Mapping
 from typing import Final
 from unittest.mock import AsyncMock, Mock
 
@@ -15,10 +16,26 @@ import litellm
 from litellm import Router
 from litellm.litellm_core_utils.completion_timeout import get_service_tier_timeout
 from litellm.passthrough.timeout_utils import resolve_llm_passthrough_timeout
+from litellm.router import _parameter_mapping
 from litellm.types.router import LiteLLM_Params
 from pydantic import ValidationError
 import time
 from unittest.mock import patch, MagicMock
+
+
+@pytest.mark.parametrize("as_model", (False, True))
+def test_parameter_mapping_preserves_zero_timeouts_and_provider_options(as_model: bool) -> None:
+    params: Final = {
+        "model": "openai/audit-model",
+        "timeout": 0.0,
+        "stream": False,
+        "timeout_by_service_tier": {"flex": 4},
+        "provider_option": {"enabled": False},
+    }
+    normalized: Final = _parameter_mapping(LiteLLM_Params.model_validate(params) if as_model else params)
+    assert isinstance(normalized, Mapping)
+    assert {key: normalized[key] for key in params} == params
+    assert "stream_timeout" not in normalized
 
 
 @pytest.mark.parametrize(
