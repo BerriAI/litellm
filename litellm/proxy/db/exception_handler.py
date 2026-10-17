@@ -1,5 +1,6 @@
 import os
 import re
+import sys
 from collections.abc import Awaitable, Callable, Iterator
 from http import HTTPStatus
 from typing import Final, Protocol, TypeVar
@@ -107,14 +108,13 @@ class PrismaDBExceptionHandler:
         """
         if os.getenv("DATABASE_URL") or os.getenv("DIRECT_URL"):
             return True
-        try:
-            from litellm.proxy.proxy_server import general_settings
-
-            if isinstance(general_settings, dict):
-                return bool(general_settings.get("database_url"))
-        except Exception:
-            return False
-        return False
+        # Read ``general_settings`` through ``sys.modules``: importing
+        # ``proxy_server`` here could fail or recurse while it is still
+        # being imported, and a proxy server that has not been imported
+        # yet has not configured a database through it either.
+        proxy_server_module = sys.modules.get("litellm.proxy.proxy_server")
+        general_settings = getattr(proxy_server_module, "general_settings", None)
+        return isinstance(general_settings, dict) and bool(general_settings.get("database_url"))
 
     @staticmethod
     def is_database_connection_error(e: Exception) -> bool:

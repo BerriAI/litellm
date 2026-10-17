@@ -964,3 +964,9 @@ def test_is_database_configured(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@localhost:5432/litellm")
     with patch("litellm.proxy.proxy_server.general_settings", {}):
         assert PrismaDBExceptionHandler.is_database_configured() is True
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"database_url": "postgresql://localhost:5432/litellm"},
+    ):
+        assert PrismaDBExceptionHandler.is_database_configured() is True
