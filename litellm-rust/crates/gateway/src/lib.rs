@@ -8,6 +8,7 @@ mod key_status;
 mod keys;
 pub mod metrics;
 mod secrets;
+pub mod spend;
 pub use error::Error;
 
 use std::{sync::Arc, time::Instant};
@@ -135,7 +136,26 @@ pub async fn build_keys(
     config: &Config,
     secrets: &dyn litellm_secrets::source::SecretSource,
 ) -> Result<Option<Arc<dyn KeyLookup>>, Error> {
-    keys::store(config, secrets).await
+    build_database(config, secrets)
+        .await?
+        .map(|pool| build_keys_on(config, pool))
+        .transpose()
+}
+
+/// The proxy's database, if one is configured (see [`keys::database`]).
+pub async fn build_database(
+    config: &Config,
+    secrets: &dyn litellm_secrets::source::SecretSource,
+) -> Result<Option<litellm_db::PgPool>, Error> {
+    keys::database(config, secrets).await
+}
+
+/// The virtual key store over an already built database pool.
+pub fn build_keys_on(
+    config: &Config,
+    pool: litellm_db::PgPool,
+) -> Result<Arc<dyn KeyLookup>, Error> {
+    keys::store(config, pool)
 }
 
 pub fn router(
