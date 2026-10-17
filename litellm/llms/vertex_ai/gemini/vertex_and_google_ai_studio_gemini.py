@@ -1241,7 +1241,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     def _supports_sampling_params(model: str) -> bool:
         from litellm.utils import get_bundled_model_cost_map
 
-        candidates = (
+        candidates: Final = (
             model,
             f"vertex_ai/{model}",
             f"gemini/{model}",
@@ -1264,14 +1264,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     @staticmethod
     def _apply_sampling_param(
-        optional_params: dict,
+        optional_params: dict,  # mutable-ok: in-out request params dict mutated in place
         model: str,
         param: str,
         value: object,
         drop_params: bool,
     ) -> None:
         if VertexGeminiConfig._supports_sampling_params(model):
-            optional_params[param] = value
+            optional_params[param] = value  # rebind-ok: in-place request params mapping
         elif not (litellm.drop_params or drop_params):
             raise litellm.utils.UnsupportedParamsError(
                 message=(
