@@ -3618,6 +3618,57 @@ async def test_load_config_role_permissions_usable_by_jwt_auth(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_load_config_wires_the_configured_malware_scanner_into_uploads(tmp_path):
+    from litellm.proxy.proxy_server import ProxyConfig
+    from litellm.proxy.rag_endpoints.upload_security import EicarTestMalwareScanner, ScanVerdict
+
+    proxy_config: Final = ProxyConfig()
+    (tmp_path / "boot_scanner.py").write_text(
+        "from litellm.proxy.rag_endpoints.upload_security import ScanResult, ScanVerdict\n"
+        "class FlagEverything:\n"
+        "    def scan(self, content):\n"
+        "        return ScanResult(verdict=ScanVerdict.INFECTED, signature='Boot.Test')\n"
+        "scanner = FlagEverything()\n"
+        "not_a_scanner = object()\n"
+    )
+    config_file: Final = tmp_path / "config.yaml"
+
+    config_file.write_text(
+        yaml.dump({"model_list": [], "general_settings": {"rag_ingest": {"malware_scanner": "boot_scanner.scanner"}}})
+    )
+    await proxy_config.load_config(router=MagicMock(), config_file_path=str(config_file))
+    assert proxy_config.rag_ingest_controls.scanner.scan(b"plain text").verdict is ScanVerdict.INFECTED
+    assert proxy_config.rag_ingest_controls.settings.files_api_controls is True
+
+    config_file.write_text(
+        yaml.dump(
+            {
+                "model_list": [],
+                "general_settings": {
+                    "rag_ingest": {"malware_scanner": "boot_scanner.scanner", "files_api_controls": False}
+                },
+            }
+        )
+    )
+    await proxy_config.load_config(router=MagicMock(), config_file_path=str(config_file))
+    assert proxy_config.rag_ingest_controls.settings.files_api_controls is False
+    assert proxy_config.rag_ingest_controls.scanner.scan(b"plain text").verdict is ScanVerdict.INFECTED
+
+    config_file.write_text(yaml.dump({"model_list": []}))
+    await proxy_config.load_config(router=MagicMock(), config_file_path=str(config_file))
+    assert isinstance(proxy_config.rag_ingest_controls.scanner, EicarTestMalwareScanner)
+    assert proxy_config.rag_ingest_controls.settings.files_api_controls is True
+
+    config_file.write_text(
+        yaml.dump(
+            {"model_list": [], "general_settings": {"rag_ingest": {"malware_scanner": "boot_scanner.not_a_scanner"}}}
+        )
+    )
+    with pytest.raises(ValueError, match=re.escape("general_settings.rag_ingest.malware_scanner")):
+        await proxy_config.load_config(router=MagicMock(), config_file_path=str(config_file))
+
+
+@pytest.mark.asyncio
 async def test_load_config_without_role_permissions_leaves_every_role_unrestricted(tmp_path):
     from litellm.proxy.auth.auth_checks import get_role_based_models, get_role_based_routes
     from litellm.proxy.proxy_server import ProxyConfig

@@ -101,6 +101,12 @@ from litellm.proxy.openai_files_endpoints.general_upload_validation import (
     coerce_optional_str_list_setting,
     raise_upload_validation_failure,
 )
+from litellm.proxy.rag_endpoints.upload_security import (
+    MAX_UPLOAD_SIZE_BYTES,
+    MalwareScanner,
+    RejectedUpload,
+    validate_upload,
+)
 from litellm.proxy.utils import PrismaClient, ProxyLogging, is_known_model
 from litellm.repositories.managed_file_repository import ManagedFileRepository
 from litellm.router import Router
@@ -111,6 +117,7 @@ from litellm.types.llms.openai import (
     OpenAIFileObject,
     OpenAIFilesPurpose,
 )
+from litellm.types.proxy.rag_ingest import RagIngestSettings
 
 router: Final = APIRouter()
 
@@ -534,6 +541,45 @@ async def route_create_file(
     return response
 
 
+_VECTOR_STORE_UPLOAD_PURPOSES: Final[frozenset[str]] = frozenset({"assistants", "user_data"})
+
+
+def _vector_store_upload_controls_apply(purpose: str, settings: RagIngestSettings) -> bool:
+    return purpose in _VECTOR_STORE_UPLOAD_PURPOSES and settings.files_api_controls
+
+
+def _upload_read_limit_bytes(max_file_size_mb: int | None, controls_apply: bool) -> int | None:
+    control_limit: Final = MAX_UPLOAD_SIZE_BYTES + 1 if controls_apply else None
+    if max_file_size_mb is None or max_file_size_mb <= 0:
+        return control_limit
+    admin_limit: Final = max_file_size_mb * MB + 1
+    return admin_limit if control_limit is None else min(admin_limit, control_limit)
+
+
+def _in_memory_upload(file_source: bytes | BinaryIO) -> bytes:
+    if isinstance(file_source, bytes):
+        return file_source
+    raise ProxyException(
+        message="Uploads with purpose assistants or user_data must be read into memory before the upload controls run.",
+        type=ProxyErrorTypes.internal_server_error.value,
+        param="file",
+        code=500,
+    )
+
+
+async def _reject_unsafe_vector_store_upload(content: bytes, scanner: MalwareScanner) -> None:
+    validation: Final = await asyncio.to_thread(
+        validate_upload, content=content, scanner=scanner, max_size_bytes=MAX_UPLOAD_SIZE_BYTES
+    )
+    if isinstance(validation, RejectedUpload):
+        raise ProxyException(
+            message=f"{validation.message} Rejection reason: {validation.reason.value}.",
+            type="invalid_request_error",
+            param="file",
+            code=400,
+        )
+
+
 @router.post(
     "/{provider}/v1/files",
     dependencies=[Depends(user_api_key_auth)],
@@ -588,6 +634,7 @@ async def create_file(
         version,
     )
 
+    rag_ingest_controls: Final = proxy_config.rag_ingest_controls
     data: dict = {}
     # Spools this request owns. Starlette owns the upload handle; anything the guardrail scan
     # opens is ours, and a batch upload that fails after the scan would otherwise hold the
@@ -599,18 +646,21 @@ async def create_file(
             raise_upload_validation_failure(unsafe_filename_failure)
 
         max_file_size_mb: Final = coerce_optional_int_setting(general_settings.get("max_file_size_mb"))
+        controls_apply: Final = _vector_store_upload_controls_apply(purpose, rag_ingest_controls.settings)
+        read_limit_bytes: Final = _upload_read_limit_bytes(max_file_size_mb, controls_apply)
 
         # Batch uploads can be gigabytes. Starlette has already spooled the upload
         # to disk, so stream from that handle instead of reading it into memory.
-        # Other uploads stay in-memory bytes, bounded to max_file_size_mb (plus one
-        # byte, to still tell "exactly at the limit" from "over it") when it is set,
-        # so an oversized upload cannot be read to completion before it is rejected.
+        # Other uploads stay in-memory bytes, bounded to the smaller of max_file_size_mb
+        # and the vector store cap (plus one byte, to still tell "exactly at the limit"
+        # from "over it") when either applies, so an oversized upload cannot be read to
+        # completion before it is rejected.
         file_source: bytes | BinaryIO
         if purpose == "batch":
             await file.seek(0)
             file_source = file.file
-        elif max_file_size_mb is not None and max_file_size_mb > 0:
-            file_source = await file.read(max_file_size_mb * MB + 1)
+        elif read_limit_bytes is not None:
+            file_source = await file.read(read_limit_bytes)
         else:
             file_source = await file.read()
         custom_llm_provider = (
@@ -662,6 +712,9 @@ async def create_file(
         blocked_extension_failure: Final = check_blocked_extension(file.filename, blocked_extensions)
         if blocked_extension_failure is not None:
             raise_upload_validation_failure(blocked_extension_failure)
+
+        if controls_apply:
+            await _reject_unsafe_vector_store_upload(_in_memory_upload(file_source), rag_ingest_controls.scanner)
 
         if passthrough:
             _validate_passthrough_upload(
