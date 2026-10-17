@@ -1,5 +1,7 @@
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Final
+from unittest.mock import patch
 
 import pytest
 
@@ -160,12 +162,12 @@ def _configs_that_forward_safeguards_as_sent() -> tuple[AnthropicMessagesConfig,
     )
 
 
-def _safeguards_request(config: AnthropicMessagesConfig) -> dict:
+def _safeguards_request(config: AnthropicMessagesConfig, litellm_params: GenericLiteLLMParams | None = None) -> dict:
     return config.transform_anthropic_messages_request(
         model="claude-sonnet-4-6",
         messages=[{"role": "user", "content": "Use the Bash tool to run: echo hello"}],
         anthropic_messages_optional_request_params={"max_tokens": 64, "safeguards": list(AUTO_MODE_SAFEGUARDS)},
-        litellm_params=GenericLiteLLMParams(),
+        litellm_params=litellm_params or GenericLiteLLMParams(),
         headers={},
     )
 
@@ -206,27 +208,50 @@ def test_unjudged_routes_forward_safeguards_and_the_beta_as_sent(
     assert _derived_beta_header(config)["anthropic-beta"] == DANGEROUS_TOOL_USE_BETA
 
 
+_CLASSIFIER_SETTINGS: Final = {"safeguards_classifier_model": "classifier"}
+
+
 @pytest.mark.parametrize("config", _no_classifier_configs(), ids=type)
-def test_routes_without_the_classifier_drop_safeguards_together_with_the_beta(
-    config: AnthropicMessagesConfig, local_beta_headers_config: None
+@pytest.mark.parametrize(
+    ("litellm_params", "global_drop_params", "general_settings", "forwarded"),
+    (
+        pytest.param(GenericLiteLLMParams(), False, {}, AUTO_MODE_SAFEGUARDS, id="as_sent"),
+        pytest.param(GenericLiteLLMParams(drop_params=True), False, {}, None, id="deployment_drop_params"),
+        pytest.param(GenericLiteLLMParams(), True, {}, None, id="global_drop_params"),
+        pytest.param(GenericLiteLLMParams(), False, _CLASSIFIER_SETTINGS, None, id="proxy_classifier"),
+    ),
+)
+def test_a_route_without_the_classifier_drops_safeguards_only_under_drop_params_or_the_proxy_classifier(
+    config: AnthropicMessagesConfig,
+    litellm_params: GenericLiteLLMParams,
+    global_drop_params: bool,
+    general_settings: Mapping[str, str],
+    forwarded: list[dict] | None,
+    monkeypatch: pytest.MonkeyPatch,
+    local_beta_headers_config: None,
 ) -> None:
-    """A platform without the classifier answers 400 "safeguards: Extra inputs are not permitted"
-    to the body field whatever the header says, so the pair is dropped together and the turn
-    stays a 200 without a verdict, which Claude Code's gateway contract treats as "feature off"."""
-    assert "safeguards" not in _safeguards_request(config)
-    assert "anthropic-beta" not in _beta_header(config, DANGEROUS_TOOL_USE_BETA)
-    assert "anthropic-beta" not in _derived_beta_header(config)
-    assert _beta_header(config, f"context-1m-2025-08-07,{DANGEROUS_TOOL_USE_BETA}") == {
-        "anthropic-beta": "context-1m-2025-08-07"
-    }
+    """A platform without the classifier answers 400 to `safeguards`, which is how litellm treats any
+    unsupported param: dropped under drop_params, forwarded as sent without it. The proxy's own
+    classifier answers in the platform's place, so the field is dropped then too."""
+    monkeypatch.setattr(litellm, "drop_params", global_drop_params)
+    with patch("litellm.proxy.proxy_server.general_settings", general_settings):
+        request: Final = _safeguards_request(config, litellm_params)
+    assert request.get("safeguards") == forwarded
 
 
 @pytest.mark.asyncio
-async def test_no_classifier_route_sends_neither_safeguards_nor_the_beta_on_the_wire(
-    local_beta_headers_config: None,
+@pytest.mark.parametrize(
+    ("drop_params", "forwarded", "forwarded_beta"),
+    (
+        pytest.param(False, AUTO_MODE_SAFEGUARDS, f"context-1m-2025-08-07,{DANGEROUS_TOOL_USE_BETA}", id="as_sent"),
+        pytest.param(True, None, "context-1m-2025-08-07", id="drop_params"),
+    ),
+)
+async def test_a_json_provider_gets_safeguards_and_the_beta_together_unless_drop_params_drops_both(
+    drop_params: bool, forwarded: list[dict] | None, forwarded_beta: str, local_beta_headers_config: None
 ) -> None:
-    """JSON-configured OpenAI-compatible providers forward every beta header untouched, so the
-    pair has to be dropped by the request transform itself, not by the beta header filter."""
+    """JSON-configured OpenAI-compatible providers forward every beta header untouched, so under
+    drop_params the request transform itself drops the beta along with the field."""
     import json
 
     import httpx
@@ -263,6 +288,7 @@ async def test_no_classifier_route_sends_neither_safeguards_nor_the_beta_on_the_
             api_base="https://sail.example.test/v1",
             safeguards=list(AUTO_MODE_SAFEGUARDS),
             extra_headers={"anthropic-beta": f"context-1m-2025-08-07,{DANGEROUS_TOOL_USE_BETA}"},
+            drop_params=drop_params,
             client=upstream,
         )
     finally:
@@ -270,7 +296,7 @@ async def test_no_classifier_route_sends_neither_safeguards_nor_the_beta_on_the_
 
     assert len(received) == 1
     sent: Final = received[0]
-    assert "safeguards" not in json.loads(sent.content)
-    assert sent.headers["anthropic-beta"] == "context-1m-2025-08-07"
+    assert json.loads(sent.content).get("safeguards") == forwarded
+    assert sent.headers["anthropic-beta"] == forwarded_beta
     assert "safeguard_results" not in response
     assert response["content"][0]["text"] == "hello"

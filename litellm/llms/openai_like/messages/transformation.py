@@ -62,6 +62,7 @@ class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
             optional_params=optional_params,
             messages=messages,
             beta_map_provider=LlmProviders.OPENAI_LIKE.value,
+            drop_params=litellm_params.get("drop_params") is True,  # pyright: ignore[reportUnknownMemberType]  # the litellm params arrive as a bare dict
         )
         return merged, api_base
 

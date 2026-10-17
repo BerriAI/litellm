@@ -93,6 +93,9 @@ class DatabricksAnthropicMessagesConfig(DatabricksBase, AnthropicMessagesConfig)
     def handles_web_search_natively(self) -> bool:
         return False
 
+    def drops_safeguards(self, safeguards: object, drop_params: bool) -> bool:
+        return not self.supports_safeguards()
+
     def serves_api_base(self, model: str, api_base: str | None) -> bool:
         resolved_api_base: Final = self.resolve_api_base(api_base)
         return resolved_api_base is None or self.recognizes_workspace_route(resolved_api_base, model)

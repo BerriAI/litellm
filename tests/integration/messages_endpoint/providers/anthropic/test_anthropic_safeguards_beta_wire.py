@@ -533,10 +533,21 @@ _PROVIDERS: Final = MappingProxyType(
             client_beta=_CLIENT_BETAS_WITH_DANGEROUS,
             auth=("authorization", "Bearer synthetic-sail-key"),
             expected_beta=None,
+        ),
+        "D18_sail_with_claude_code_header_and_drop_params": _ProviderCase(
+            parameters={"model": "sail/sail-claude", "api_key": "synthetic-sail-key", "drop_params": True},
+            client_beta=_CLIENT_BETAS_WITH_DANGEROUS,
+            auth=("authorization", "Bearer synthetic-sail-key"),
+            expected_beta=None,
             forwards_safeguards=False,
         ),
         "D19_edenai": _ProviderCase(
             parameters={"model": "edenai/claude-sonnet-4-5", "api_key": "synthetic-edenai-key"},
+            auth=("authorization", "Bearer synthetic-edenai-key"),
+            expected_beta=None,
+        ),
+        "D19_edenai_with_drop_params": _ProviderCase(
+            parameters={"model": "edenai/claude-sonnet-4-5", "api_key": "synthetic-edenai-key", "drop_params": True},
             auth=("authorization", "Bearer synthetic-edenai-key"),
             expected_beta=None,
             forwards_safeguards=False,

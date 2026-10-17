@@ -40,8 +40,7 @@ from ..responses_adapters.handler import LiteLLMMessagesToResponsesAPIHandler
 from ..safeguards import (
     SafeguardsEvaluator,
     native_route_classifies,
-    read_classifier_model_setting,
-    requested_dangerous_tool_use,
+    proxy_serves_safeguards,
     with_safeguard_results,
 )
 from .interceptors import get_messages_interceptors
@@ -166,7 +165,7 @@ def _native_messages_config(
 
 
 async def _proxy_classifies(model: str, safeguards: object, native_config: BaseAnthropicMessagesConfig | None) -> bool:
-    if requested_dangerous_tool_use(safeguards) is None or read_classifier_model_setting() is None:
+    if not proxy_serves_safeguards(safeguards):
         return False
     if native_config is None:
         return True
