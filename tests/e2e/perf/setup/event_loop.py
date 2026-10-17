@@ -115,13 +115,11 @@ def _parse_event(line: str) -> Stall | GcPass | None:
 
 
 def _with_passes(stall: Stall, passes: tuple[GcPass, ...]) -> Stall:
-    if not passes:
+    fitting: Final = tuple(gc_pass for gc_pass in passes if gc_pass.seconds <= stall.seconds)
+    if not fitting:
         return stall
-    return replace(
-        stall,
-        gc_seconds=sum(gc_pass.seconds for gc_pass in passes),
-        gc_generation=max(gc_pass.generation for gc_pass in passes),
-    )
+    longest: Final = max(fitting, key=lambda gc_pass: gc_pass.seconds)
+    return replace(stall, gc_seconds=longest.seconds, gc_generation=longest.generation)
 
 
 def parse_stalls(lines: Iterable[str]) -> tuple[Stall, ...]:
@@ -137,7 +135,7 @@ def parse_stalls(lines: Iterable[str]) -> tuple[Stall, ...]:
 
 def _reported(spec: EventLoopStalls, stall: Stall) -> Stall:
     """A hold the collector accounts for, what is left under the threshold, is the collector's, not the task's."""
-    if stall.gc_generation is None or stall.gc_seconds > stall.seconds:
+    if stall.gc_generation is None:
         return stall
     if stall.seconds - stall.gc_seconds >= spec.max_hold_seconds:
         return stall
