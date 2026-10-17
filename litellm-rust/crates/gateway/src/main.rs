@@ -1,5 +1,6 @@
 use std::{
     error::Error,
+    sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -90,8 +91,23 @@ async fn main() -> Result<(), Box<dyn Error>> {
             },
         )
     });
-    let keys = litellm_gateway::build_keys(&config, inference.secrets.as_ref()).await?;
+    let keys = litellm_gateway::build_keys(&config, inference.secrets.as_ref())
+        .await?
+        .map(|keys| litellm_gateway::key_cache(keys, &config));
     let virtual_keys = keys.is_some();
+    let coordination =
+        litellm_gateway::coordination::RedisSettings::resolve(&config, inference.secrets.as_ref())
+            .await?
+            .map(litellm_gateway::coordination::Coordination::new)
+            .transpose()?;
+    if let Some(coordination) = &coordination {
+        inference
+            .models
+            .share_health(Arc::new(litellm_gateway::coordination::RedisHealth(
+                coordination.clone(),
+            )));
+        coordination.start(inference.clone(), keys.clone(), shutdown.clone());
+    }
     let listener = tokio::net::TcpListener::bind((settings.host.as_str(), settings.port)).await?;
     let address = listener.local_addr()?;
     // Without TCP_NODELAY, Nagle holds small SSE chunks until the client's delayed ACK (~40 ms per stream).
@@ -101,13 +117,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     });
 
-    tracing::info!(%address, models = config.model_list.len(), virtual_keys, log_level = %level, "gateway listening");
+    let shared_state = coordination.is_some();
+    tracing::info!(%address, models = config.model_list.len(), virtual_keys, shared_state, log_level = %level, "gateway listening");
 
     let draining = litellm_gateway::health::Draining::default();
     let metrics = litellm_gateway::metrics::Metrics::new(&config, draining.flag());
     let metrics_auth = litellm_gateway::metrics_auth(&config, inference.secrets.clone());
     let app = litellm_gateway::with_ops(
-        litellm_gateway::router_with_keys(inference, &config, ui, mcp_router, keys),
+        litellm_gateway::router_with_key_cache(inference, &config, ui, mcp_router, keys),
         metrics,
         draining.clone(),
         metrics_auth,

@@ -12,6 +12,15 @@ impl KeyHash {
         Self(hash_token(token.expose()))
     }
 
+    /// A hash as the proxy stores and broadcasts it: 64 lowercase hex digits.
+    pub fn from_hashed(hashed: &str) -> Option<Self> {
+        (hashed.len() == 64
+            && hashed
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
+        .then(|| Self(hashed.to_owned()))
+    }
+
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -321,8 +330,43 @@ pub struct VerifiedKey {
 pub type LookupFuture<'a> =
     Pin<Box<dyn Future<Output = Result<Option<KeyStatus>, KeyError>> + Send + 'a>>;
 
+pub type EntryFuture<'a> = Pin<Box<dyn Future<Output = Result<KeyEntry, KeyError>> + Send + 'a>>;
+
+/// A key's status and the rows it was read from besides its own, whose changes make it stale.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct KeyEntry {
+    pub status: Option<KeyStatus>,
+    pub team_id: Option<String>,
+    pub user_id: Option<String>,
+}
+
+impl From<Option<KeyStatus>> for KeyEntry {
+    fn from(status: Option<KeyStatus>) -> Self {
+        let team_id = match &status {
+            Some(KeyStatus::Active { team_id, .. }) => team_id.clone(),
+            Some(KeyStatus::Refused {
+                refusal: Refusal::TeamMissing { team_id } | Refusal::TeamBlocked { team_id },
+                ..
+            }) => Some(team_id.clone()),
+            _ => None,
+        };
+        Self {
+            status,
+            team_id,
+            user_id: None,
+        }
+    }
+}
+
 pub trait KeyLookup: Send + Sync {
     fn lookup<'a>(&'a self, hash: &'a KeyHash) -> LookupFuture<'a>;
+
+    /// [`KeyLookup::lookup`] with the team and user the answer depends on. The default reads
+    /// the team from the status alone; a store that knows both should say so, so that a cache
+    /// can drop the answer when either changes.
+    fn lookup_entry<'a>(&'a self, hash: &'a KeyHash) -> EntryFuture<'a> {
+        Box::pin(async move { self.lookup(hash).await.map(KeyEntry::from) })
+    }
 }
 
 pub async fn verify_key(

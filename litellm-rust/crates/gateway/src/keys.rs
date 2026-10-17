@@ -5,7 +5,7 @@ use litellm_config::Config;
 use litellm_db::{PgPool, PoolSettings};
 use litellm_gateway_auth::{
     KeyError,
-    keys::{KeyHash, KeyLookup, LookupFuture},
+    keys::{EntryFuture, KeyEntry, KeyHash, KeyLookup, LookupFuture},
 };
 use litellm_secrets::source::SecretSource;
 
@@ -19,11 +19,22 @@ pub struct PostgresKeys {
 
 impl KeyLookup for PostgresKeys {
     fn lookup<'a>(&'a self, hash: &'a KeyHash) -> LookupFuture<'a> {
+        Box::pin(async move { self.lookup_entry(hash).await.map(|entry| entry.status) })
+    }
+
+    fn lookup_entry<'a>(&'a self, hash: &'a KeyHash) -> EntryFuture<'a> {
         Box::pin(async move {
-            litellm_db::find_verification_token(&self.pool, hash.as_str())
+            let row = litellm_db::find_verification_token(&self.pool, hash.as_str())
                 .await
-                .map(|row| row.map(|row| key_status::status(row, self.personal_keys_use_teams)))
-                .map_err(|error| KeyError::Lookup(Box::new(error)))
+                .map_err(|error| KeyError::Lookup(Box::new(error)))?;
+            Ok(match row {
+                Some(row) => KeyEntry {
+                    team_id: row.team_id.clone(),
+                    user_id: row.user_id.clone(),
+                    status: Some(key_status::status(row, self.personal_keys_use_teams)),
+                },
+                None => KeyEntry::default(),
+            })
         })
     }
 }

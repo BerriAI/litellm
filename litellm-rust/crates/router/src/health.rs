@@ -46,19 +46,22 @@ impl Health {
 
     /// Counts a failure and returns whether it put the deployment in cooldown. With
     /// `allowed_fails` set this is Python's v1 rule (more than `allowed_fails` failures in
-    /// the window); without it, Python's v2 rule (a 429 or a rejected call when the group
-    /// has alternatives, or a failure rate over the current minute).
+    /// the window, counted across replicas when `fleet_failures` carries the shared count);
+    /// without it, Python's v2 rule (a 429 or a rejected call when the group has
+    /// alternatives, or a failure rate over the current minute), which Python also keeps
+    /// per process.
     pub(crate) fn record_failure(
         &self,
         now: u64,
         failure: Failure,
         policy: &CooldownPolicy,
         alternatives: bool,
+        fleet_failures: Option<u32>,
     ) -> bool {
         self.roll(now, policy);
         let failures = self.failures.fetch_add(1, Relaxed).saturating_add(1);
         let cool = match policy.allowed_fails {
-            Some(allowed) => failures > allowed,
+            Some(allowed) => fleet_failures.unwrap_or(failures).max(failures) > allowed,
             None => {
                 let total = failures.saturating_add(self.successes.load(Relaxed));
                 let failing = (failures == total && total >= SINGLE_DEPLOYMENT_MINIMUM_REQUESTS)
@@ -75,10 +78,14 @@ impl Health {
         };
         if cool {
             let cooldown = u64::try_from(policy.cooldown_time.as_millis()).unwrap_or(u64::MAX);
-            self.cooldown_until
-                .fetch_max(now.saturating_add(cooldown), Relaxed);
+            self.cool_until(now.saturating_add(cooldown));
         }
         cool
+    }
+
+    /// Cools the deployment until `until`, unless a longer cooldown is already running.
+    pub(crate) fn cool_until(&self, until: u64) {
+        self.cooldown_until.fetch_max(until, Relaxed);
     }
 
     fn roll(&self, now: u64, policy: &CooldownPolicy) {
@@ -135,7 +142,7 @@ mod tests {
 
     fn fail(health: &Health, times: u32, failure: Failure, policy: &CooldownPolicy) -> bool {
         (0..times).fold(false, |_, _| {
-            health.record_failure(1_000, failure, policy, true)
+            health.record_failure(1_000, failure, policy, true, None)
         })
     }
 
@@ -173,7 +180,7 @@ mod tests {
         let health = Health::default();
         fail(&health, 2, Failure::Unavailable, &V1);
 
-        assert!(!health.record_failure(12_000, Failure::Unavailable, &V1, true));
+        assert!(!health.record_failure(12_000, Failure::Unavailable, &V1, true, None));
         assert!(!health.cooling(12_000));
     }
 
@@ -190,7 +197,7 @@ mod tests {
         let health = Health::default();
 
         assert_eq!(
-            health.record_failure(1_000, failure, &V2, alternatives),
+            health.record_failure(1_000, failure, &V2, alternatives, None),
             cooling
         );
     }
@@ -208,6 +215,33 @@ mod tests {
         succeed(&health, successes);
 
         assert_eq!(fail(&health, failures, Failure::Unavailable, &V2), cooling);
+    }
+
+    #[rstest]
+    #[case::fleet_over_allowed(Some(3), true)]
+    #[case::fleet_within_allowed(Some(2), false)]
+    #[case::fleet_behind_this_replica(Some(0), false)]
+    fn allowed_fails_counts_the_fleet_when_shared(
+        #[case] fleet_failures: Option<u32>,
+        #[case] cooling: bool,
+    ) {
+        let health = Health::default();
+
+        assert_eq!(
+            health.record_failure(1_000, Failure::Unavailable, &V1, true, fleet_failures),
+            cooling
+        );
+    }
+
+    #[rstest]
+    fn a_shared_cooldown_never_shortens_a_local_one() {
+        let health = Health::default();
+        fail(&health, 3, Failure::Unavailable, &V1);
+        health.cool_until(5_000);
+
+        assert!(health.cooling(10_999));
+        health.cool_until(20_000);
+        assert!(health.cooling(19_999));
     }
 
     #[rstest]

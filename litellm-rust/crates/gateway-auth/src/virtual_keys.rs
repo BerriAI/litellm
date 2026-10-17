@@ -12,7 +12,7 @@ use moka::Expiry;
 use crate::{
     AuthFuture, Authentication, AuthenticationMethod, Authenticator, Clock, Credential, Error,
     KeyError, KeyGrant, Permissions, Principal, PrincipalKind, VerifiedIdentity,
-    keys::{KeyHash, KeyLookup, KeyStatus, LookupFuture, verify_key},
+    keys::{KeyEntry, KeyHash, KeyLookup, KeyStatus, LookupFuture, verify_key},
 };
 
 pub(crate) const AUTHORITY: &str = "litellm:virtual-key";
@@ -44,7 +44,7 @@ impl Default for KeyCacheSettings {
 
 #[derive(Clone)]
 struct Cached {
-    status: Option<KeyStatus>,
+    entry: KeyEntry,
     ttl: Duration,
 }
 
@@ -62,14 +62,20 @@ impl Expiry<KeyHash, Cached> for PerEntryTtl {
 /// for one key share a single store read. The last answer per key is also kept for `max_stale`:
 /// when the store fails, that answer is served and further reads pause for `negative_ttl`, so keys
 /// seen recently keep working through an outage and requests do not queue on a dead store.
+///
+/// [`CachedKeyLookup::invalidate`] drops answers the proxy reports changed, so a key revoked or
+/// edited there stops being served from here before its TTL runs out.
 pub struct CachedKeyLookup {
     store: Arc<dyn KeyLookup>,
     fresh: moka::future::Cache<KeyHash, Cached>,
-    stale: moka::sync::Cache<KeyHash, Option<KeyStatus>>,
+    stale: moka::sync::Cache<KeyHash, KeyEntry>,
     settings: KeyCacheSettings,
     started: Instant,
     /// Milliseconds after `started` until which the store is not read; 0 when healthy.
     paused_until_ms: AtomicU64,
+    /// Bumped by every invalidation, so a store read that overlapped one is not cached: it may
+    /// have read the row before the change it reports.
+    generation: AtomicU64,
 }
 
 impl CachedKeyLookup {
@@ -79,15 +85,56 @@ impl CachedKeyLookup {
             fresh: moka::future::Cache::builder()
                 .max_capacity(settings.capacity)
                 .expire_after(PerEntryTtl)
+                .support_invalidation_closures()
                 .build(),
             stale: moka::sync::Cache::builder()
                 .max_capacity(settings.capacity)
                 .time_to_live(settings.max_stale)
+                .support_invalidation_closures()
                 .build(),
             settings,
             started: Instant::now(),
             paused_until_ms: AtomicU64::new(0),
+            generation: AtomicU64::new(0),
         }
+    }
+
+    /// Drops the cached answers that a proxy auth cache invalidation for `cache_key` makes
+    /// stale: a key's hash drops that key, `team_id:<id>` every key of the team, and
+    /// `team_membership:<user>:<team>` or a bare user id every key of the user. The last known
+    /// answer is dropped too, so an outage cannot bring a revoked key back.
+    pub async fn invalidate(&self, cache_key: &str) {
+        self.generation.fetch_add(1, Ordering::Relaxed);
+        if let Some(hash) = KeyHash::from_hashed(cache_key) {
+            self.fresh.invalidate(&hash).await;
+            self.stale.invalidate(&hash);
+            return;
+        }
+        let owner = match cache_key.strip_prefix("team_id:") {
+            Some(team_id) => Owner::Team(team_id.to_owned()),
+            None => Owner::User(match cache_key.strip_prefix("team_membership:") {
+                Some(membership) => membership
+                    .rsplit_once(':')
+                    .map_or(membership, |(user_id, _)| user_id)
+                    .to_owned(),
+                None => cache_key.to_owned(),
+            }),
+        };
+        let stale_owner = owner.clone();
+        // Fails only without invalidation closures, which `new` enables.
+        let _ = self
+            .fresh
+            .invalidate_entries_if(move |_, cached| owner.owns(&cached.entry));
+        let _ = self
+            .stale
+            .invalidate_entries_if(move |_, entry| stale_owner.owns(entry));
+    }
+
+    /// Drops every fresh answer, for when invalidations may have been missed. The last known
+    /// answers stay to serve through a store outage.
+    pub fn invalidate_all(&self) {
+        self.generation.fetch_add(1, Ordering::Relaxed);
+        self.fresh.invalidate_all();
     }
 
     fn elapsed_ms(&self) -> u64 {
@@ -113,29 +160,34 @@ impl CachedKeyLookup {
     }
 
     async fn read_store(&self, hash: &KeyHash) -> Result<Cached, KeyError> {
-        let result = tokio::time::timeout(self.settings.lookup_timeout, self.store.lookup(hash))
-            .await
-            .unwrap_or_else(|elapsed| Err(KeyError::Lookup(Box::new(elapsed))));
+        let generation = self.generation.load(Ordering::Relaxed);
+        let result =
+            tokio::time::timeout(self.settings.lookup_timeout, self.store.lookup_entry(hash))
+                .await
+                .unwrap_or_else(|elapsed| Err(KeyError::Lookup(Box::new(elapsed))));
         match result {
-            Ok(status) => {
+            Ok(entry) => {
                 self.paused_until_ms.store(0, Ordering::Relaxed);
-                self.stale.insert(hash.clone(), status.clone());
-                Ok(Cached {
-                    ttl: self.ttl(&status),
-                    status,
-                })
+                let ttl = match self.generation.load(Ordering::Relaxed) == generation {
+                    true => self.ttl(&entry.status),
+                    false => Duration::ZERO,
+                };
+                if !ttl.is_zero() {
+                    self.stale.insert(hash.clone(), entry.clone());
+                }
+                Ok(Cached { entry, ttl })
             }
             Err(error) => {
                 self.pause();
                 match self.stale.get(hash) {
-                    Some(status) => {
+                    Some(entry) => {
                         tracing::warn!(
                             error = %error,
                             "virtual key store unavailable, serving the last known answer"
                         );
                         // Cache it briefly so the next read retries the store soon after it returns.
                         Ok(Cached {
-                            status,
+                            entry,
                             ttl: self.settings.negative_ttl,
                         })
                     }
@@ -146,22 +198,38 @@ impl CachedKeyLookup {
     }
 }
 
+/// Whose change an invalidation reports.
+#[derive(Clone)]
+enum Owner {
+    Team(String),
+    User(String),
+}
+
+impl Owner {
+    fn owns(&self, entry: &KeyEntry) -> bool {
+        match self {
+            Self::Team(team_id) => entry.team_id.as_ref() == Some(team_id),
+            Self::User(user_id) => entry.user_id.as_ref() == Some(user_id),
+        }
+    }
+}
+
 impl KeyLookup for CachedKeyLookup {
     fn lookup<'a>(&'a self, hash: &'a KeyHash) -> LookupFuture<'a> {
         Box::pin(async move {
             if let Some(cached) = self.fresh.get(hash).await {
-                return Ok(cached.status);
+                return Ok(cached.entry.status);
             }
             if self.paused() {
                 return match self.stale.get(hash) {
-                    Some(status) => Ok(status),
+                    Some(entry) => Ok(entry.status),
                     None => Err(KeyError::Lookup("virtual key store unavailable".into())),
                 };
             }
             self.fresh
                 .try_get_with_by_ref(hash, self.read_store(hash))
                 .await
-                .map(|cached| cached.status)
+                .map(|cached| cached.entry.status)
                 .map_err(|error| KeyError::Lookup(Box::new(error)))
         })
     }
@@ -170,14 +238,14 @@ impl KeyLookup for CachedKeyLookup {
 /// Accepts the configured credential (normally the master key) and, failing that, virtual keys.
 pub struct VirtualKeyAuthenticator {
     primary: Arc<dyn Authenticator>,
-    keys: CachedKeyLookup,
+    keys: Arc<CachedKeyLookup>,
     clock: Arc<dyn Clock>,
 }
 
 impl VirtualKeyAuthenticator {
     pub fn new(
         primary: Arc<dyn Authenticator>,
-        keys: CachedKeyLookup,
+        keys: Arc<CachedKeyLookup>,
         clock: Arc<dyn Clock>,
     ) -> Self {
         Self {
@@ -206,7 +274,7 @@ impl Authenticator for VirtualKeyAuthenticator {
             let Credential::Token(token) = credential else {
                 return Err(Error::InvalidToken);
             };
-            let key = verify_key(&self.keys, token, || self.clock.now()).await?;
+            let key = verify_key(self.keys.as_ref(), token, || self.clock.now()).await?;
             let id = key.hash.as_str().to_owned();
             Ok(VerifiedIdentity {
                 principal: Principal::new(AUTHORITY.into(), id.clone(), PrincipalKind::Service),
@@ -417,7 +485,7 @@ mod tests {
             Arc::new(NoAdditionalPolicy),
             Arc::new(SystemClock),
         )
-        .with_virtual_keys(CachedKeyLookup::new(store.clone(), settings()))
+        .with_virtual_keys(Arc::new(CachedKeyLookup::new(store.clone(), settings())))
     }
 
     fn model(name: &str) -> AccessRequest {
@@ -669,6 +737,124 @@ mod tests {
         assert!(call(&auth, "sk-all", "gpt-a").await.is_ok());
     }
 
+    /// A store whose keys belong to `user-1` on `team-1`, counting reads per key.
+    #[derive(Default)]
+    struct Owned {
+        reads: Mutex<HashMap<KeyHash, usize>>,
+        blocked: AtomicBool,
+    }
+
+    impl KeyLookup for Owned {
+        fn lookup<'a>(&'a self, _: &'a KeyHash) -> LookupFuture<'a> {
+            unreachable!("the cache reads entries")
+        }
+
+        fn lookup_entry<'a>(&'a self, hash: &'a KeyHash) -> crate::keys::EntryFuture<'a> {
+            Box::pin(async move {
+                *self.reads.lock().unwrap().entry(hash.clone()).or_default() += 1;
+                tokio::task::yield_now().await;
+                Ok(KeyEntry {
+                    status: Some(match self.blocked.load(Ordering::SeqCst) {
+                        true => KeyStatus::Blocked,
+                        false => active(&[], None),
+                    }),
+                    team_id: Some("team-1".into()),
+                    user_id: Some("user-1".into()),
+                })
+            })
+        }
+    }
+
+    fn hash(token: &str) -> KeyHash {
+        KeyHash::from_token(&SecretValue::new(token))
+    }
+
+    #[rstest]
+    #[case::key_hash(None, &[true, false])]
+    #[case::team(Some("team_id:team-1"), &[true, true])]
+    #[case::user(Some("user-1"), &[true, true])]
+    #[case::membership(Some("team_membership:user-1:team-1"), &[true, true])]
+    #[case::other_team(Some("team_id:team-2"), &[false, false])]
+    #[case::other_user(Some("user-2"), &[false, false])]
+    #[tokio::test]
+    async fn invalidation_drops_the_keys_it_names(
+        #[case] cache_key: Option<&str>,
+        #[case] reread: &[bool],
+    ) {
+        let store = Arc::new(Owned::default());
+        let keys = CachedKeyLookup::new(store.clone(), KeyCacheSettings::default());
+        let tokens = ["sk-a", "sk-b"];
+        for token in tokens {
+            keys.lookup(&hash(token)).await.unwrap();
+        }
+
+        let first = hash("sk-a");
+        keys.invalidate(cache_key.unwrap_or(first.as_str())).await;
+        for token in tokens {
+            keys.lookup(&hash(token)).await.unwrap();
+        }
+
+        let reads = store.reads.lock().unwrap();
+        let expected: Vec<usize> = reread.iter().map(|again| 1 + usize::from(*again)).collect();
+        assert_eq!(
+            tokens.map(|token| reads[&hash(token)]).to_vec(),
+            expected,
+            "{cache_key:?}"
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_revoked_key_is_refused_as_soon_as_it_is_invalidated() {
+        let store = Arc::new(Owned::default());
+        let keys = CachedKeyLookup::new(store.clone(), KeyCacheSettings::default());
+        let key = hash("sk-a");
+        assert!(matches!(
+            keys.lookup(&key).await,
+            Ok(Some(KeyStatus::Active { .. }))
+        ));
+
+        store.blocked.store(true, Ordering::SeqCst);
+        keys.invalidate(key.as_str()).await;
+
+        assert_eq!(keys.lookup(&key).await.unwrap(), Some(KeyStatus::Blocked));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn invalidate_all_rereads_every_key() {
+        let store = Arc::new(Owned::default());
+        let keys = CachedKeyLookup::new(store.clone(), KeyCacheSettings::default());
+        keys.lookup(&hash("sk-a")).await.unwrap();
+
+        keys.invalidate_all();
+        keys.lookup(&hash("sk-a")).await.unwrap();
+
+        assert_eq!(store.reads.lock().unwrap()[&hash("sk-a")], 2);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_read_overlapping_an_invalidation_is_not_cached() {
+        let store = Arc::new(Owned::default());
+        let keys = Arc::new(CachedKeyLookup::new(
+            store.clone(),
+            KeyCacheSettings::default(),
+        ));
+        let key = hash("sk-a");
+        let invalidating = {
+            let keys = keys.clone();
+            let key = key.clone();
+            async move { keys.invalidate(key.as_str()).await }
+        };
+        // The invalidation lands while the read waits on the store.
+        let (read, ()) = tokio::join!(keys.lookup(&key), invalidating);
+        read.unwrap();
+        keys.lookup(&key).await.unwrap();
+
+        assert_eq!(store.reads.lock().unwrap()[&key], 2);
+    }
+
     #[rstest]
     #[tokio::test]
     async fn slow_store_reads_time_out() {
@@ -694,7 +880,7 @@ mod tests {
     async fn rejects_transport_credentials(store: Arc<Store>) {
         let authenticator = VirtualKeyAuthenticator::new(
             Arc::new(Master),
-            CachedKeyLookup::new(store, settings()),
+            Arc::new(CachedKeyLookup::new(store, settings())),
             Arc::new(SystemClock),
         );
         let parts = Request::new(()).into_parts().0;

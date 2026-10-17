@@ -6,13 +6,15 @@ use crate::{Deployment, RoutingStrategy, health::Health};
 
 #[derive(Debug)]
 pub(crate) struct Member {
+    /// The deployment's id in shared state: `model_info.id`, or one derived from the config.
+    pub id: Box<str>,
     pub deployment: Deployment,
     pub health: Arc<Health>,
     weights: [f64; 3],
 }
 
 impl Member {
-    pub(crate) fn new(deployment: Deployment) -> Self {
+    pub(crate) fn new(id: Box<str>, deployment: Deployment) -> Self {
         let params = &deployment.litellm_params;
         let weights = [
             params
@@ -25,6 +27,7 @@ impl Member {
         ]
         .map(|weight| weight.max(0.0));
         Self {
+            id,
             deployment,
             health: Arc::default(),
             weights,
@@ -160,7 +163,13 @@ mod tests {
         let members = config
             .model_list
             .iter()
-            .map(|model| Member::new(Deployment::from_params(&model.litellm_params).unwrap()))
+            .enumerate()
+            .map(|(index, model)| {
+                Member::new(
+                    index.to_string().into(),
+                    Deployment::from_params(&model.litellm_params).unwrap(),
+                )
+            })
             .collect();
         ModelGroup::new("group".into(), members)
     }
@@ -168,9 +177,13 @@ mod tests {
     fn cooling_group(size: usize, cooling: &[usize]) -> ModelGroup {
         let group = group(&vec![""; size]);
         for index in cooling {
-            group.members[*index]
-                .health
-                .record_failure(0, Failure::Unavailable, &COOLDOWN, true);
+            group.members[*index].health.record_failure(
+                0,
+                Failure::Unavailable,
+                &COOLDOWN,
+                true,
+                None,
+            );
         }
         group
     }
