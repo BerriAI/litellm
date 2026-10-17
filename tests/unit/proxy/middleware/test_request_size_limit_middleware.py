@@ -5,6 +5,7 @@ from starlette.types import Message
 
 from litellm.proxy.middleware.request_size_limit_middleware import (
     RequestSizeLimitMiddleware,
+    is_request_size_limit_enabled,
 )
 
 
@@ -133,3 +134,11 @@ async def test_request_size_limit_middleware_rejects_streamed_body_without_conte
         "more_body": False,
     }
     assert received_body_bytes == 1024 * 1024
+
+
+def test_request_size_limit_enabled_when_configured():
+    assert is_request_size_limit_enabled({"max_request_size_mb": 10}) is True
+
+
+def test_request_size_limit_disabled_when_unconfigured():
+    assert is_request_size_limit_enabled({}) is False

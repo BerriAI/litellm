@@ -1,11 +1,21 @@
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Final
 
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 MaxRequestSizeGetter = Callable[[], int | float | None]
 RequestSizeLimitEnabledGetter = Callable[[], bool]
+
+
+def is_request_size_limit_enabled(general_settings: Mapping[str, object]) -> bool:
+    """The guard is on whenever an operator configured a limit, on any tier.
+
+    Gating it on `premium_user` silently ignored `max_request_size_mb` for
+    free-tier deployments, leaving them open to oversized-body memory
+    exhaustion.
+    """
+    return general_settings.get("max_request_size_mb") is not None
 
 
 class RequestEntityTooLarge(Exception):
