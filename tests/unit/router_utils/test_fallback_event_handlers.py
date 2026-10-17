@@ -198,6 +198,7 @@ async def test_run_async_fallback_opens_the_hop_without_the_superseded_attempts_
     )
     logging_obj.model_call_details["custom_llm_provider"] = "openai"
     logging_obj.model_call_details["litellm_params"] = {"acompletion": True}
+    logging_obj.model_call_details["current_attempt_api_call_start_time"] = datetime.now()
     logging_obj.litellm_params = logging_obj.model_call_details["litellm_params"]
     partial_usage: Final = Usage(prompt_tokens=52, completion_tokens=1, total_tokens=53)
     logging_obj.record_partial_usage_for_failure(partial_usage, 0.01)
@@ -215,6 +216,7 @@ async def test_run_async_fallback_opens_the_hop_without_the_superseded_attempts_
     assert [tokens for tokens, _ in recorder.logged] == [7]
     assert recorder.logged[0][1] != 0.01
     assert logging_obj.model_call_details["failed_attempts_usage"] == ((partial_usage, 0.01),)
+    assert logging_obj.model_call_details["current_attempt_api_call_start_time"] is None
 
 
 @pytest.mark.asyncio

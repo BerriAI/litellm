@@ -1186,7 +1186,7 @@ def _failure_fields_to_lift(request_data: Mapping[str, object]) -> Mapping[str, 
     _usage_to_lift: Final = _failure_usage_to_lift(
         model_call_details=_model_call_details,
         request_body=request_data,
-        dispatched=_first_handoff is not None,
+        dispatched=_model_call_details.get("current_attempt_api_call_start_time") is not None,
     )
     _entries: Final = (
         ("start_time", _model_call_details.get("start_time")),

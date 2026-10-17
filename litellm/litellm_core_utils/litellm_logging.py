@@ -805,6 +805,7 @@ class Logging(LiteLLMLoggingBaseClass):
             "litellm_call_id": litellm_call_id,
             "start_time": start_time,
             "first_api_call_start_time": None,
+            "current_attempt_api_call_start_time": None,
             "litellm_params": litellm_params,
         }
         new_call.streaming_chunks = []
@@ -1496,7 +1497,9 @@ class Logging(LiteLLMLoggingBaseClass):
                         "LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging %s", e
                     )
 
-            self.model_call_details["api_call_start_time"] = datetime.datetime.now()
+            api_call_start_time: Final = datetime.datetime.now()
+            self.model_call_details["api_call_start_time"] = api_call_start_time
+            self.model_call_details["current_attempt_api_call_start_time"] = api_call_start_time
             # Set-once first provider-handoff instant. api_call_start_time
             # is overwritten on every retry, so it can't measure one-time
             # preprocessing; pinning the first attempt excludes retry loops
@@ -2318,6 +2321,7 @@ class Logging(LiteLLMLoggingBaseClass):
     def carry_failed_attempt_usage(self) -> None:
         """Move what a failed earlier attempt stashed off the retry sharing this logging object, so the retry logs its
         own usage while the request's failure log still bills every attempt."""
+        self.model_call_details["current_attempt_api_call_start_time"] = None
         usage: Final = self.model_call_details.pop("combined_usage_object", None)
         response_cost: Final = self.model_call_details.pop("response_cost", None)
         if isinstance(usage, Usage):
