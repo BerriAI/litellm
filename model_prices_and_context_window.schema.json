@@ -918,6 +918,9 @@
         "supports_audio_output": {
           "type": "boolean"
         },
+        "supports_bedrock_native_structured_output": {
+          "type": "boolean"
+        },
         "supports_computer_use": {
           "type": "boolean"
         },

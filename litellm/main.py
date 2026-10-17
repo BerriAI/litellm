@@ -4148,6 +4148,10 @@ def _complete_sagemaker(ctx: _CompletionDispatchContext) -> _CompletionDispatchR
     )
 
 
+_OPTIONAL_PARAMS_ADAPTER: Final = TypeAdapter(dict[str, object])
+_MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
+
 def _complete_bedrock(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base: Final = ctx.api_base
@@ -5603,7 +5607,11 @@ def completion(
             "allowed_openai_params": allowed_openai_params,
             "base_model": base_model,
         }
-        optional_params = get_optional_params(**optional_param_args, **non_default_params)
+        optional_params = get_optional_params(
+            **optional_param_args,
+            model_info=_MODEL_INFO_ADAPTER.validate_python(model_info) if isinstance(model_info, dict) else None,
+            **non_default_params,
+        )
         processed_non_default_params: Final = pre_process_non_default_params(
             model=model,
             passed_params=optional_param_args,
