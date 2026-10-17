@@ -1,5 +1,6 @@
 import { formatBudgetReset } from "@/utils/budgetUtils";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
+import { tempBudgetExpiryMs } from "@/components/shared/InheritedBudgetHint";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -28,6 +29,17 @@ const formatNumber = (value: number | null | undefined, digits = 4): string => {
 const formatRateLimit = (value: number | null | undefined): string => {
   if (value === null || value === undefined) return "Unlimited";
   return formatNumberWithCommas(value, 0);
+};
+
+// The member's temporary increase while it is still in effect, with its expiry formatted for display.
+const activeTempBudget = (
+  budgetTable: Parameters<typeof tempBudgetExpiryMs>[0],
+  now: Date = new Date(),
+): { amount: number; expiry: string | null } | null => {
+  const amount = budgetTable?.temp_budget_increase ?? 0;
+  const expiryMs = tempBudgetExpiryMs(budgetTable);
+  if (amount <= 0 || expiryMs === null || expiryMs <= now.getTime()) return null;
+  return { amount, expiry: formatBudgetReset(new Date(expiryMs).toISOString()) };
 };
 
 export default function MyUserTab({ teamId }: MyUserTabProps) {
@@ -69,6 +81,7 @@ export default function MyUserTab({ teamId }: MyUserTabProps) {
   const rpmLimit = budgetTable?.rpm_limit ?? null;
   const budgetReset = formatBudgetReset(budgetTable?.budget_reset_at);
   const allowedModels = budgetTable?.allowed_models ?? null;
+  const tempBudget = activeTempBudget(budgetTable);
 
   return (
     <div className="flex w-full flex-col gap-4">
@@ -103,6 +116,11 @@ export default function MyUserTab({ teamId }: MyUserTabProps) {
                 of {maxBudget === null ? "Unlimited" : `$${formatNumber(maxBudget, 4)}`}
               </span>
             </div>
+            {tempBudget && (
+              <div className="mt-1 text-muted-foreground" data-testid="my-temp-budget">
+                + ${formatNumber(tempBudget.amount, 2)} temporary increase until {tempBudget.expiry}
+              </div>
+            )}
             {budgetReset && <div className="mt-1 text-muted-foreground">Resets {budgetReset}</div>}
           </CardContent>
         </Card>
