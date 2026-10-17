@@ -367,6 +367,99 @@ class Metric:
     RESPONSE_DURATION: Final = "gen_ai.client.response.duration"
 
 
+class MetricBuckets:
+    """Explicit histogram bucket boundaries for the :class:`Metric` instruments.
+
+    Passed as ``explicit_bucket_boundaries_advisory`` when each histogram is
+    created with ``LITELLM_OTEL_SEMCONV_HISTOGRAM_BUCKETS`` on (opentelemetry-api
+    >= 1.30.0), so they apply only when the operator has configured no View for the
+    instrument; an operator's own View always takes precedence. Without them the
+    SDK's default boundaries (0, 5, 10, 25, ... 10000), sized for milliseconds,
+    put almost every seconds-valued latency into a single bucket.
+
+    Values are the GenAI semantic conventions' recommendations, pinned to:
+    https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/gen-ai-metrics.md
+    https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/gen-ai-token-metrics.md
+
+    Changing them is a breaking change for stored data: histograms with different
+    boundaries cannot be merged, so percentiles across the change are wrong.
+    """
+
+    # gen_ai.client.operation.duration
+    OPERATION_DURATION: Final = (
+        0.01,
+        0.02,
+        0.04,
+        0.08,
+        0.16,
+        0.32,
+        0.64,
+        1.28,
+        2.56,
+        5.12,
+        10.24,
+        20.48,
+        40.96,
+        81.92,
+    )
+    # gen_ai.client.token.usage (the spec now splits this into input/output token
+    # metrics with these same boundaries)
+    TOKEN_USAGE: Final = (
+        1,
+        4,
+        16,
+        64,
+        256,
+        1024,
+        4096,
+        16384,
+        65536,
+        262144,
+        1048576,
+        4194304,
+        16777216,
+        67108864,
+    )
+    # gen_ai.server.time_to_first_token
+    TIME_TO_FIRST_TOKEN: Final = (
+        0.001,
+        0.005,
+        0.01,
+        0.02,
+        0.04,
+        0.06,
+        0.08,
+        0.1,
+        0.25,
+        0.5,
+        0.75,
+        1.0,
+        2.5,
+        5.0,
+        7.5,
+        10.0,
+    )
+    # gen_ai.server.time_per_output_token
+    TIME_PER_OUTPUT_TOKEN: Final = (
+        0.01,
+        0.025,
+        0.05,
+        0.075,
+        0.1,
+        0.15,
+        0.2,
+        0.3,
+        0.4,
+        0.5,
+        0.75,
+        1.0,
+        2.5,
+    )
+    # gen_ai.client.response.duration is a vendor metric with no semconv
+    # boundaries; it measures the same kind of latency as OPERATION_DURATION.
+    RESPONSE_DURATION: Final = OPERATION_DURATION
+
+
 # litellm ``custom_llm_provider`` -> ``gen_ai.provider.name`` value.
 _PROVIDER_BY_LITELLM: Final[dict[str, GenAIProvider]] = {
     "openai": GenAIProvider.OPENAI,
