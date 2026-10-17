@@ -7,7 +7,10 @@ from fastapi import FastAPI
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.management_endpoints.prompt_caching_requests import router
+from litellm.proxy.management_endpoints.prompt_caching_requests import (
+    prompt_caching_requests_sql,
+    router,
+)
 
 pytestmark = pytest.mark.usefixtures("local_model_cost_map")
 
@@ -67,3 +70,19 @@ async def test_incomplete_cursor_is_rejected(
     ) as client:
         response: Final = await client.get(_URL, params={"start_date": _START, "end_date": _END, **params})
     assert response.status_code == 400
+
+
+def test_cache_creation_sql_counts_vllm_created_cache_tokens_last() -> None:
+    sql: Final = prompt_caching_requests_sql("all")
+    created: Final = "prompt_tokens_details,created_cache_tokens"
+    assert created in sql
+    # precedence: existing cache-write candidates are coalesced before the vLLM field
+    assert (
+        sql.index("prompt_tokens_details,cache_write_tokens")
+        < sql.index("prompt_tokens_details,cache_creation_tokens")
+        < sql.index(created)
+    )
+
+
+def test_cache_read_sql_ignores_created_cache_tokens() -> None:
+    assert "created_cache_tokens" not in prompt_caching_requests_sql("hits")

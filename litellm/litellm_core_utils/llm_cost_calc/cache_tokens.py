@@ -28,7 +28,8 @@ def extract_cache_creation_tokens(usage_object: Mapping[str, object] | None) -> 
 
     Anthropic writes a top-level ``cache_creation_input_tokens``; OpenAI-compatible
     providers (kimi-k2 etc.) write ``prompt_tokens_details.cache_write_tokens`` or
-    ``prompt_tokens_details.cache_creation_tokens``.
+    ``prompt_tokens_details.cache_creation_tokens``; vLLM >= v0.26.0 writes
+    ``prompt_tokens_details.created_cache_tokens``.
     """
     if not usage_object:
         return 0
@@ -38,10 +39,15 @@ def extract_cache_creation_tokens(usage_object: Mapping[str, object] | None) -> 
     details: Final = usage_object.get("prompt_tokens_details")
     if not isinstance(details, Mapping):
         return 0
+    typed_details: Final[Mapping[str, object]] = details
     written: Final = next(
         (
             value
-            for value in (details.get("cache_write_tokens"), details.get("cache_creation_tokens"))
+            for value in (
+                typed_details.get("cache_write_tokens"),
+                typed_details.get("cache_creation_tokens"),
+                typed_details.get("created_cache_tokens"),
+            )
             if isinstance(value, (int, float)) and value
         ),
         0,

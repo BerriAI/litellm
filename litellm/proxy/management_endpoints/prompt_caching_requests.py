@@ -50,6 +50,7 @@ _CACHE_CREATION_SQL: Final = _cache_tokens_sql(
     "cache_creation_input_tokens",
     "prompt_tokens_details,cache_write_tokens",
     "prompt_tokens_details,cache_creation_tokens",
+    "prompt_tokens_details,created_cache_tokens",
 )
 _GATEWAY_INJECTED_SQL: Final = (
     f"(jsonb_typeof(metadata->'{GATEWAY_INJECTED_CACHE_METADATA_KEY}') = 'string' "
