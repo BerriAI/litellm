@@ -729,7 +729,8 @@ def test_per_user_authorization_code_token_is_read_back_from_the_database_by_a_f
             (owner_id, identity),
         )
         assert len(stored) == 1, stored
-        assert token.encode() not in base64.b64decode(str(stored[0]["credential_b64"])), "stored token is plaintext"
+        stored_bytes: Final = base64.urlsafe_b64decode(str(stored[0]["credential_b64"]))
+        assert token.encode() not in stored_bytes, "stored token is plaintext"
         config: Final = tmp_path / "no_redis.yaml"
         config.write_text(
             "general_settings:\n"
