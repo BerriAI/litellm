@@ -113,6 +113,33 @@ def _without_bags(legacy: inspect.Signature, named: Mapping[str, object]) -> Map
     return MappingProxyType({name: value for name, value in named.items() if legacy.parameters[name].kind not in _BAGS})
 
 
+def _is_true(value: object) -> bool:
+    return value is True
+
+
+@dataclass(frozen=True, slots=True)
+class AsyncFlag:
+    """The keyword that makes a sync entry hand off to its async entry, as in ``completion(..., acompletion=True)``.
+
+    ``is_set`` is the route's own reading of the flag. ``@client`` hands off on ``is True``, the Messages handler on truthiness.
+    """
+
+    name: str
+    sync: inspect.Signature
+    is_set: Callable[[object], bool] = _is_true
+
+    def requested(self, kwargs: Mapping[str, object]) -> bool:
+        return self.is_set(kwargs.get(self.name))
+
+    def dropped(self, kwargs: Mapping[str, object]) -> Mapping[str, object]:
+        return MappingProxyType({name: value for name, value in kwargs.items() if name != self.name})
+
+    def keywords(self, args: tuple[object, ...], kwargs: Mapping[str, object]) -> Mapping[str, object]:
+        """Name positionals by the sync signature, since the async entry may order its parameters differently."""
+        named: Final = _without_bags(self.sync, self.sync.bind_partial(*args, **kwargs).arguments)
+        return self.dropped({**named, **kwargs})
+
+
 def native_call(legacy: inspect.Signature, args: tuple[object, ...], kwargs: Mapping[str, object]) -> NativeCall:
     positional: Final = legacy.bind_partial(*args)
     positional.apply_defaults()
