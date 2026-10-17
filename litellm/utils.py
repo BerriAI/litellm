@@ -3307,18 +3307,18 @@ _BEDROCK_REGION_PREFIXES: Final = (
 _TOKEN_COST_FIELDS: Final = ("input_cost_per_token", "output_cost_per_token")
 
 
-def _builtin_cost_map() -> Mapping[str, dict[str, object]]:
-    return cast(Mapping[str, dict[str, object]], litellm.model_cost)
+def _builtin_cost_map() -> dict[str, Mapping[str, object]]:
+    return cast(dict[str, Mapping[str, object]], litellm.model_cost)
 
 
-def _replace_cost_map_entry(key: str, entry: Mapping[str, object]) -> None:
-    current: Final = _builtin_cost_map().get(key)
+def _replace_cost_map_entry(cost_map: dict[str, Mapping[str, object]], key: str, entry: Mapping[str, object]) -> None:
+    current: Final = cost_map.get(key)
     merged: Final = {**(current or {}), **entry}
     if not isinstance(current, AliasedCostEntry):
-        litellm.model_cost.update({key: merged})
+        cost_map.update({key: merged})
         return
-    sharing_names: Final = tuple(name for name in current.names if _builtin_cost_map().get(name) is current)
-    litellm.model_cost.update(dict.fromkeys((key, *sharing_names), AliasedCostEntry(merged, current.names)))
+    sharing_names: Final = tuple(name for name in current.names if cost_map.get(name) is current)
+    cost_map.update(dict.fromkeys((key, *sharing_names), AliasedCostEntry(merged, current.names)))
 
 
 def _without_synthesized_costs(
@@ -3471,7 +3471,7 @@ def _resolve_builtin_model_cost_entry(key: str, provider: str) -> _BuiltinCostMa
         if (
             entry is not None
             and entry.get("litellm_provider") is not None
-            and _check_provider_match(entry, match_provider)
+            and _check_provider_match(dict(entry), match_provider)
         ):
             return _BuiltinCostMatch(key=candidate, entry=dict(entry), names_the_row=candidate in row_names)
     return None
@@ -3580,16 +3580,19 @@ def _registration_attempt(
     warning_display_name: str | None,
     final_attempt: bool,
 ) -> _RegistrationWrite | None:
-    source: Final = litellm.model_cost
+    source: Final = _builtin_cost_map()
     write: Final = _registration_write(key, value, custom_llm_provider, warning_display_name)
+    _replace_cost_map_entry(_builtin_cost_map() if final_attempt else source, write.key, write.entry)
     return write if final_attempt or litellm.model_cost is source else None
 
 
-def _registration_write_on_current_map(
+def _register_on_current_map(
     key: str, value: Mapping[str, object], custom_llm_provider: str | None, warning_display_name: str | None
 ) -> _RegistrationWrite:
-    """A price data reload that swaps the map while the entry is being built would otherwise get the old map's
-    prices written over its own, so the entry is rebuilt from the map that is current when it is written."""
+    """A price data reload that swaps the map while the entry is being built or written would otherwise get the old
+    map's prices written over its own, or drop the entry with the old map, so each attempt writes into the map it was
+    built from and the entry is rebuilt when a reload replaced that map before the write finished. The last attempt
+    writes into the current map, so the entry is never lost."""
     attempts: Final = (
         _registration_attempt(
             key, value, custom_llm_provider, warning_display_name, final_attempt=attempt == _REGISTRATION_ATTEMPTS - 1
@@ -3717,8 +3720,7 @@ def register_model(
             _runtime_registered_model_cost[_registered_key] = dict(_registered_value)
 
     for key, value in loaded_model_cost.items():
-        write = _registration_write_on_current_map(str(key), value, custom_llm_provider, warning_display_name)
-        _replace_cost_map_entry(write.key, write.entry)
+        write = _register_on_current_map(str(key), value, custom_llm_provider, warning_display_name)
 
         # Invalidate case-insensitive lookup map since model_cost was modified
         _invalidate_model_cost_lowercase_map()
