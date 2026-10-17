@@ -11,7 +11,7 @@ import json
 import logging
 from contextlib import contextmanager
 from hashlib import sha256
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -3077,6 +3077,122 @@ class TestMultiPodBatchCostClaim:
             patch("litellm.litellm_core_utils.litellm_logging.Logging", return_value=logging_obj),
         ):
             yield logging_obj
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("deployment_model", "successes", "failures", "expected_model"),
+        (
+            ("openai/", 0, 2, "openai/"),
+            ("", 0, 2, "model-123"),
+            ("openai/", 2, 1, "batch-test-model"),
+            ("openai/batch-test-model", 2, 1, "batch-test-model"),
+            ("openai/batch-test-model", 2, 0, "batch-test-model"),
+        ),
+    )
+    async def test_batch_accounting_preserves_models_and_mixed_results(
+        self, deployment_model: str, successes: int, failures: int, expected_model: str
+    ) -> None:
+        import base64
+        from datetime import datetime
+
+        import httpx
+        import litellm
+        import respx
+
+        from litellm.integrations.custom_logger import CustomLogger
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+        from litellm.types.utils import LiteLLMBatch, SpecialEnums
+
+        input_rate: Final = 0.000002
+        output_rate: Final = 0.000006
+        litellm.register_model(
+            {
+                "batch-test-model": {
+                    "litellm_provider": "openai",
+                    "mode": "chat",
+                    "input_cost_per_token_batches": input_rate,
+                    "output_cost_per_token_batches": output_rate,
+                }
+            }
+        )
+        success: Final = {
+            "response": {
+                "status_code": 200,
+                "body": {
+                    "model": "batch-test-model",
+                    "usage": {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120},
+                },
+            },
+            "error": None,
+        }
+        failure: Final = {"response": None, "error": {"code": "batch_expired", "message": "expired"}}
+        rows: Final = (success,) * successes + (failure,) * failures
+        content: Final = b"\n".join(json.dumps(row).encode() for row in rows)
+
+        class BatchSpendRecorder(CustomLogger):
+            def __init__(self) -> None:
+                super().__init__()
+                self.calls: tuple[dict[str, object], ...] = ()
+
+            async def async_log_success_event(
+                self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+            ) -> None:
+                if kwargs["call_type"] == "aretrieve_batch":
+                    self.calls += (kwargs,)
+
+        callback: Final = BatchSpendRecorder()
+        litellm.logging_callback_manager.add_litellm_async_success_callback(callback)
+        row: Final = _FakeManagedObjectRow()
+        row.unified_object_id = (
+            base64.urlsafe_b64encode(
+                SpecialEnums.LITELLM_MANAGED_BATCH_COMPLETE_STR.value.format("model-123", "batch-456").encode()
+            )
+            .decode()
+            .rstrip("=")
+        )
+        prisma: Final = self._prisma(row, [])
+        router: Final = self._router()
+        router.get_deployment.return_value = Deployment(
+            model_name="batch-alias",
+            litellm_params=LiteLLM_Params(model=deployment_model, custom_llm_provider="openai"),
+            model_info=ModelInfo(id="model-123"),
+        )
+        router.aretrieve_batch.return_value = LiteLLMBatch(
+            id="batch-456",
+            completion_window="24h",
+            created_at=1,
+            endpoint="/v1/chat/completions",
+            input_file_id="file-input-1",
+            output_file_id=_CLAIM_OUTPUT_FILE_ID,
+            object="batch",
+            status="completed",
+        )
+        router.get_deployment_credentials_with_provider.return_value = {
+            "api_key": "synthetic-key",
+            "custom_llm_provider": "openai",
+        }
+        with respx.mock:
+            respx.get(f"https://api.openai.com/v1/files/{_CLAIM_OUTPUT_FILE_ID}/content").mock(
+                return_value=httpx.Response(200, content=content)
+            )
+            instance: Final = self._instance(prisma, router)
+            await instance.check_batch_cost()
+            await instance.check_batch_cost()
+
+        assert row.batch_processed is True
+        assert row.status == "complete"
+        router.aretrieve_batch.assert_awaited_once()
+        assert len(callback.calls) == 1
+        payload: Final = callback.calls[0]["standard_logging_object"]
+        assert payload["model"] == expected_model
+        assert payload["response_cost"] == pytest.approx(successes * (100 * input_rate + 20 * output_rate))
+        assert payload["prompt_tokens"] == successes * 100
+        assert payload["completion_tokens"] == successes * 20
+        assert payload["hidden_params"]["batch_successful_requests"] == successes
+        assert payload["hidden_params"]["batch_failed_requests"] == failures
+        assert payload["hidden_params"]["batch_models"] == (
+            ["batch-test-model"] if deployment_model == "openai/batch-test-model" else ["batch-test-model"] * successes
+        )
 
     @staticmethod
     def _claim_calls(prisma) -> list:
