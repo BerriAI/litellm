@@ -112,8 +112,8 @@ class PrismaDBExceptionHandler:
         # ``proxy_server`` here could fail or recurse while it is still
         # being imported, and a proxy server that has not been imported
         # yet has not configured a database through it either.
-        proxy_server_module = sys.modules.get("litellm.proxy.proxy_server")
-        general_settings = getattr(proxy_server_module, "general_settings", None)
+        proxy_server_module: Final = sys.modules.get("litellm.proxy.proxy_server")
+        general_settings: Final = getattr(proxy_server_module, "general_settings", None)
         return isinstance(general_settings, dict) and bool(general_settings.get("database_url"))
 
     @staticmethod
