@@ -92,7 +92,7 @@ _CUSTOMER_UPDATE_LOCK_SQL: Final = 'SELECT "user_id" FROM "LiteLLM_EndUserTable"
 def _should_update_field(field: str, value: object, sent_fields: AbstractSet[str]) -> bool:
     if value is None:
         return False
-    if field in sent_fields and (isinstance(value, bool) or field in _CLEARABLE_LIST_FIELDS):
+    if field in sent_fields and (isinstance(value, (int, float)) or field in _CLEARABLE_LIST_FIELDS):
         return True
     if isinstance(value, (list, dict)) and not value:
         return False
@@ -686,7 +686,7 @@ async def _update_single_customer(
             end_user_table_data_typed: Final = LiteLLM_EndUserTable.model_validate(end_user_table_data.model_dump())
             budget_error: Final = (
                 await _customer_budget_update_error(tx, end_user_table_data_typed.budget_id, data.user_id)
-                if "max_budget" in budget_table_data and end_user_table_data_typed.budget_id is not None
+                if budget_table_data and end_user_table_data_typed.budget_id is not None
                 else None
             )
             if budget_error is not None:
