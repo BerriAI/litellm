@@ -21023,8 +21023,13 @@ async def test_key_generation_premium_permission_error_precedes_project_ownershi
             team_table=None,
         )
 
-    assert error.value.status_code == 500
-    assert error.value.detail == {"error": "Internal Server Error."}
+    assert error.value.status_code == 403
+    assert error.value.detail == {
+        "error": (
+            "get_spend_routes permission is only available for LiteLLM Enterprise users. "
+            f"{CommonProxyErrors.not_premium_user.value}"
+        )
+    }
     mock_prisma_client.insert_data.assert_not_awaited()
 
 
