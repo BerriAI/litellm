@@ -4068,11 +4068,11 @@ class TestCreatorTurnedOffMessageLogging:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("kind", ["sync", "async", "custom", "overlapping", "general", "executor_shutdown"])
+@pytest.mark.parametrize("kind", ["sync", "async", "custom", "overlapping", "general", "mixed", "executor_shutdown"])
 @pytest.mark.parametrize("initialized", [False, True])
 @pytest.mark.parametrize("claimed", [False, True])
 async def test_batch_cost_reaches_configured_success_callbacks(
-    kind: Literal["sync", "async", "custom", "overlapping", "general", "executor_shutdown"],
+    kind: Literal["sync", "async", "custom", "overlapping", "general", "mixed", "executor_shutdown"],
     initialized: bool,
     claimed: bool,
 ) -> None:
@@ -4082,14 +4082,22 @@ async def test_batch_cost_reaches_configured_success_callbacks(
     from litellm.types.utils import LiteLLMBatch
     from litellm_enterprise.proxy.common_utils.check_batch_cost import CheckBatchCost
 
-    events: Final[SimpleQueue[tuple[object, int, int]]] = SimpleQueue()
+    events: Final[SimpleQueue[tuple[str, object, int, int]]] = SimpleQueue()
 
-    def record(kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime) -> None:
+    def record(
+        kwargs: dict[str, object],
+        response_obj: object,
+        start_time: datetime,
+        end_time: datetime,
+        recipient: str = "function",
+    ) -> None:
         if kwargs.get("call_type") != "aretrieve_batch":
             return
         assert isinstance(response_obj, LiteLLMBatch)
         assert response_obj.usage is not None
-        events.put((kwargs["response_cost"], response_obj.usage.prompt_tokens, response_obj.usage.completion_tokens))
+        events.put(
+            (recipient, kwargs["response_cost"], response_obj.usage.prompt_tokens, response_obj.usage.completion_tokens)
+        )
 
     async def async_record(
         kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
@@ -4099,10 +4107,15 @@ async def test_batch_cost_reaches_configured_success_callbacks(
             executor.shutdown(wait=True)
 
     class BatchRecorder(CustomLogger):
+        def log_success_event(
+            self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+        ) -> None:
+            record(kwargs, response_obj, start_time, end_time, "custom")
+
         async def async_log_success_event(
             self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
         ) -> None:
-            record(kwargs, response_obj, start_time, end_time)
+            record(kwargs, response_obj, start_time, end_time, "custom")
 
     callback: Final = BatchRecorder()
     match kind:
@@ -4119,6 +4132,9 @@ async def test_batch_cost_reaches_configured_success_callbacks(
                 litellm.logging_callback_manager.add_litellm_async_success_callback(callback)
         case "general":
             litellm.logging_callback_manager.add_litellm_callback(callback)
+        case "mixed":
+            litellm.logging_callback_manager.add_litellm_success_callback(callback)
+            litellm.logging_callback_manager.add_litellm_success_callback(record)
 
     model: Final = "gpt-6.1-sol"
     credentials: Final = {
@@ -4188,8 +4204,17 @@ async def test_batch_cost_reaches_configured_success_callbacks(
         if kind == "executor_shutdown" and claimed:
             prisma.db.litellm_managedobjecttable.update_many.assert_awaited_once()
         await GLOBAL_LOGGING_WORKER.flush()
-    assert events.qsize() == int(claimed)
-    if claimed:
-        cost, prompt_tokens, completion_tokens = events.get_nowait()
+    recipients: Final = (
+        ("custom", "function")
+        if kind == "mixed"
+        else ("custom",)
+        if kind in ("custom", "overlapping", "general")
+        else ("function",)
+    )
+    expected: Final = recipients if claimed else ()
+    assert events.qsize() == len(expected)
+    received: Final = tuple(events.get_nowait() for _ in expected)
+    assert tuple(sorted(event[0] for event in received)) == expected
+    for _, cost, prompt_tokens, completion_tokens in received:
         assert isinstance(cost, float) and cost > 0
         assert (prompt_tokens, completion_tokens) == (10, 5)

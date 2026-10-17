@@ -2238,25 +2238,27 @@ async def test_async_success_handler_truncates_large_base64_off_the_event_loop(m
 
 
 @pytest.mark.parametrize(
-    "async_flag",
+    ("async_flag", "for_async_request"),
     [
-        "acompletion",
-        "aresponses",
-        "allm_passthrough_route",
-        "aanthropic_messages",
-        "agenerate_content",
-        "agenerate_content_stream",
+        ("acompletion", False),
+        ("aresponses", False),
+        ("allm_passthrough_route", False),
+        ("aanthropic_messages", False),
+        ("agenerate_content", False),
+        ("agenerate_content_stream", False),
+        (None, True),
     ],
 )
-def test_success_handler_skips_sync_callbacks_for_async_requests(logging_obj, async_flag):
-    """Ensure sync success callbacks are skipped when async call type flags are set."""
+def test_success_handler_skips_sync_callbacks_for_async_requests(
+    logging_obj: LitellmLogging, async_flag: str | None, for_async_request: bool
+) -> None:
     from litellm.integrations.custom_logger import CustomLogger
 
     class DummyLogger(CustomLogger):
         pass
 
     logging_obj.stream = False  # simulate non-streaming request where sync callbacks would normally run
-    logging_obj.model_call_details["litellm_params"] = {async_flag: True}
+    logging_obj.model_call_details["litellm_params"] = {async_flag: True} if async_flag else {}
     logging_obj.litellm_params = logging_obj.model_call_details["litellm_params"]
 
     dummy_logger = DummyLogger()
@@ -2281,7 +2283,7 @@ def test_success_handler_skips_sync_callbacks_for_async_requests(logging_obj, as
         "get_combined_callback_list",
         return_value=[dummy_logger],
     ):
-        logging_obj.success_handler(result=model_response)
+        logging_obj.success_handler(result=model_response, for_async_request=for_async_request)
 
     dummy_logger.log_success_event.assert_not_called()
     dummy_logger.log_stream_event.assert_not_called()

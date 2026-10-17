@@ -3441,6 +3441,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     if (
                         isinstance(callback, CustomLogger)
                         and is_sync_request
+                        and not for_async_request
                         and self.call_type
                         != CallTypes.pass_through.value  # pass-through endpoints call async_log_success_event
                     ):  # custom logger class
