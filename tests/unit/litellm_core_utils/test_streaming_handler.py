@@ -1,7 +1,11 @@
 import asyncio
 import json
+import sys
 import threading
 import time
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from types import CodeType, FrameType, MappingProxyType
 from typing import AsyncIterator, Final, Iterator, Literal, NoReturn, Optional, cast
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -5021,15 +5025,36 @@ def test_handle_stream_fallback_error_restores_context_only_after_exception_mapp
         session_id_var.set("")
 
 
+@dataclass(frozen=True, slots=True)
+class _ProfiledCall:
+    code: CodeType
+    arguments: Mapping[str, object]
+
+
+def _chunk_creator_calls(
+    wrapper: CustomStreamWrapper,
+    chunks: Sequence[ChatCompletionChunk],
+    codes: frozenset[CodeType],
+) -> tuple[tuple[ModelResponseStream | None, ...], tuple[_ProfiledCall, ...]]:
+    calls: Final[list[_ProfiledCall]] = []
+
+    def record(frame: FrameType, event: str, _arg: object) -> None:
+        if event == "call" and frame.f_code in codes:
+            arguments: Final = dict(cast(Mapping[str, object], frame.f_locals))
+            calls.append(_ProfiledCall(code=frame.f_code, arguments=MappingProxyType(arguments)))
+
+    previous_profiler: Final = sys.getprofile()
+    sys.setprofile(record)
+    try:
+        outputs: Final = tuple(wrapper.chunk_creator(chunk=chunk) for chunk in chunks)
+    finally:
+        sys.setprofile(previous_profiler)
+    return outputs, tuple(calls)
+
+
 def test_openai_chunk_creator_skips_full_chunk_dump_and_delta_rebuild(
-    monkeypatch: pytest.MonkeyPatch,
     logging_obj: Logging,
 ) -> None:
-    missing: Final = object()
-    full_chunk_dumps: Final[list[ChatCompletionChunk]] = []
-    delta_constructions: Final[list[Delta]] = []
-    original_chunk_model_dump: Final = ChatCompletionChunk.model_dump
-    original_delta_init: Final = Delta.__init__
     chunks: Final[list[ChatCompletionChunk]] = [
         ChatCompletionChunk(
             id="chunk-1",
@@ -5061,31 +5086,22 @@ def test_openai_chunk_creator_skips_full_chunk_dump_and_delta_rebuild(
         custom_llm_provider="openai",
         logging_obj=logging_obj,
     )
+    chunk_model_dump: Final = ChatCompletionChunk.model_dump.__code__
+    delta_init: Final = Delta.__init__.__code__
 
-    def count_chunk_model_dump(
-        self: ChatCompletionChunk,
-        *,
-        include: object = missing,
-    ) -> object:
-        if include is missing:
-            full_chunk_dumps.append(self)
-            return original_chunk_model_dump(self)
-        return original_chunk_model_dump(self, include=cast(frozenset[str] | None, include))
-
-    def count_delta_init(self: Delta, *args: object, **kwargs: object) -> None:
-        delta_constructions.append(self)
-        original_delta_init(self, *args, **kwargs)
-
-    monkeypatch.setattr(ChatCompletionChunk, "model_dump", count_chunk_model_dump)
-    monkeypatch.setattr(Delta, "__init__", count_delta_init)
-
-    outputs: Final[list[ModelResponseStream | None]] = [
-        wrapper.chunk_creator(chunk=chunk) for chunk in chunks
-    ]
+    outputs, calls = _chunk_creator_calls(wrapper, chunks, frozenset({chunk_model_dump, delta_init}))
     emitted_chunks: Final = tuple(output for output in outputs if output is not None)
+    full_chunk_dumps: Final = tuple(
+        call
+        for call in calls
+        if call.code is chunk_model_dump
+        and isinstance(call.arguments["self"], ChatCompletionChunk)
+        and call.arguments["include"] is None
+    )
+    delta_constructions: Final = tuple(call for call in calls if call.code is delta_init)
 
     assert len(emitted_chunks) == 3
-    assert full_chunk_dumps == []
+    assert full_chunk_dumps == ()
     assert len(delta_constructions) <= len(emitted_chunks) * 3
     assert emitted_chunks[0].choices[0].delta.role == "assistant"
     assert emitted_chunks[1].choices[0].delta.role is None
