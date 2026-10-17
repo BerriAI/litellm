@@ -5235,3 +5235,32 @@ def test_eager_input_streaming_tool_reaches_bedrock_converse_as_beta():
 
     assert data["additionalModelRequestFields"]["anthropic_beta"] == ["fine-grained-tool-streaming-2025-05-14"]
     assert data["toolConfig"]["tools"][0]["toolSpec"]["inputSchema"]["json"] == EAGER_INPUT_SCHEMA
+
+
+def test_translate_openai_function_call_response_to_anthropic_tool_use():
+    """A legacy OpenAI function_call finish maps to an Anthropic tool_use turn."""
+    response: Final = ModelResponse(
+        id="chatcmpl-function-call",
+        model="legacy-function-model",
+        choices=[
+            Choices(
+                index=0,
+                finish_reason="function_call",
+                message=Message(
+                    role="assistant",
+                    content=None,
+                    function_call={"name": "get_weather", "arguments": '{"location": "Boston"}'},
+                ),
+            )
+        ],
+        usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+    )
+
+    result: Final = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(response)
+
+    assert result["stop_reason"] == "tool_use"
+    [block] = result["content"] or []
+    assert block["type"] == "tool_use"
+    assert block["name"] == "get_weather"
+    assert block["input"] == {"location": "Boston"}
+    assert block["id"] and all(c.isalnum() or c in "-_" for c in block["id"])

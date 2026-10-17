@@ -200,7 +200,7 @@ from litellm.types.llms.openai import (
     ChatCompletionUserMessage,
     ToolMessageContentPart,
 )
-from litellm.types.utils import Choices, ModelResponse, StreamingChoices, Usage
+from litellm.types.utils import Choices, FunctionCall, ModelResponse, StreamingChoices, Usage
 from litellm.utils import supports_mid_conversation_system
 
 from .streaming_iterator import AnthropicSSEStream, AnthropicStreamWrapper
@@ -1431,15 +1431,40 @@ class LiteLLMAnthropicMessagesAdapter:
                     if provider_specific_fields:
                         tool_use_block.provider_specific_fields = provider_specific_fields
                     new_content.append(tool_use_block.model_dump(exclude_none=True))
+            if choice.message.function_call is not None:
+                new_content.append(
+                    self._legacy_function_call_block(choice.message.function_call, tool_name_mapping).model_dump(
+                        exclude_none=True
+                    )
+                )
 
         return new_content
+
+    @staticmethod
+    def _legacy_function_call_block(
+        function_call: FunctionCall, tool_name_mapping: Mapping[str, str] | None
+    ) -> AnthropicResponseContentBlockToolUse:
+        from litellm._uuid import uuid
+
+        raw_name: Final = function_call.name or ""
+        name: Final = tool_name_mapping.get(raw_name, raw_name) if tool_name_mapping else raw_name
+        return AnthropicResponseContentBlockToolUse(
+            type="tool_use",
+            id=normalize_anthropic_tool_use_id(str(uuid.uuid4())),
+            name=name,
+            input=parse_tool_call_arguments(
+                function_call.arguments,
+                tool_name=name,
+                context="Anthropic pass-through adapter",
+            ),
+        )
 
     def _translate_openai_finish_reason_to_anthropic(self, openai_finish_reason: str) -> AnthropicFinishReason:
         if openai_finish_reason == "stop":
             return "end_turn"
         elif openai_finish_reason == "length":
             return "max_tokens"
-        elif openai_finish_reason == "tool_calls":
+        elif openai_finish_reason in ("tool_calls", "function_call"):
             return "tool_use"
         elif openai_finish_reason in ["content_filter", "refusal"]:
             return "refusal"
