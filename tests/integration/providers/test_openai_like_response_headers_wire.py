@@ -2,7 +2,7 @@ import itertools
 import json
 import math
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from hashlib import sha256
 from pathlib import Path
 from types import MappingProxyType
@@ -13,6 +13,7 @@ import pytest
 from integration._support.client import Gateway, Scenario, eventually, held
 from integration._support.database import read_rows
 from integration._support.process import graceful_stop_seconds, owned_proxy
+from integration._support.prometheus_series import Sample, scrape, series_cap_config
 from integration._support.vertex import service_account_json
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
@@ -29,6 +30,15 @@ _SPEND_SELECT: Final = 'SELECT spend FROM "LiteLLM_SpendLogs" WHERE api_key=%s'
 _KEY_SPEND_SELECT: Final = 'SELECT spend FROM "LiteLLM_VerificationToken" WHERE token=%s'
 _PATHS: Final[Mapping[Endpoint, str]] = MappingProxyType(
     {"chat": "/v1/chat/completions", "responses": "/v1/responses", "messages": "/v1/messages"}
+)
+_RATE_LIMIT_HEADERS: Final[Mapping[str, str]] = MappingProxyType(
+    {"x-ratelimit-remaining-requests": "0", "x-ratelimit-remaining-tokens": "856, abc"}
+)
+_METERED_CALLS: Final[tuple[tuple[str, bool], ...]] = (
+    ("groq", False),
+    ("groq", True),
+    ("openai", False),
+    ("openai", True),
 )
 _LATIN1_CALLS: Final[tuple[tuple[Endpoint, str, bool], ...]] = (
     ("chat", "bedrock_mantle", False),
@@ -215,6 +225,25 @@ def _spend(key: str) -> float:
     return float(spend)
 
 
+def _model_values(samples: Sequence[Sample], name: str, model: str) -> tuple[float, ...]:
+    return tuple(
+        sample.value for sample in samples if sample.name == name and sample.labels.get("model_group") == model
+    )
+
+
+def _deployment_metrics(
+    samples: Sequence[Sample], models: Mapping[str, str]
+) -> dict[str, tuple[float, tuple[float, ...], tuple[float, ...]]]:
+    return {
+        call: (
+            sum(_model_values(samples, "litellm_deployment_success_responses_total", model)),
+            _model_values(samples, "litellm_remaining_requests_metric", model),
+            _model_values(samples, "litellm_remaining_tokens_metric", model),
+        )
+        for call, model in models.items()
+    }
+
+
 def _key_spend(key: str) -> float | None:
     rows: Final = read_rows(_KEY_SPEND_SELECT, (sha256(key.encode()).hexdigest(),))
     spend: Final = rows[0]["spend"] if rows else None
@@ -368,3 +397,39 @@ def test_provider_header_outside_latin1_does_not_fail_the_call(gateway: Gateway,
             forwarding, {"llm_provider-x-request-id": request_id, "llm_provider-x-amzn-requestid": request_id}
         )
         assert len(wire.drain()) == len(_LATIN1_CALLS)
+
+
+@pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
+def test_an_unparseable_rate_limit_header_keeps_the_deployment_metrics(gateway: Gateway, tmp_path: Path) -> None:
+    multiproc_dir: Final = tmp_path / "prometheus"
+    multiproc_dir.mkdir()
+    with (
+        wire_server(_peer(_RATE_LIMIT_HEADERS)) as wire,
+        owned_proxy(
+            gateway,
+            tmp_path,
+            {"PROMETHEUS_MULTIPROC_DIR": str(multiproc_dir)},
+            config=series_cap_config(tmp_path, {}),
+            workers=2,
+        ) as metered,
+        metered.scenario() as scenario,
+    ):
+        calls: Final = {
+            f"{member}-{'stream' if stream else 'whole'}": (_MEMBERS[member](metered, scenario, wire), stream)
+            for member, stream in _METERED_CALLS
+        }
+        models: Final = {call: model for call, (model, _) in calls.items()}
+        key: Final = scenario.key(models=list(models.values()))
+        statuses: Final = {
+            call: _send(metered, "chat", model, key, stream=stream).status_code
+            for call, (model, stream) in calls.items()
+        }
+        assert statuses == dict.fromkeys(calls, 200)
+        observed: Final = eventually(
+            lambda: _deployment_metrics(scrape(metered), models),
+            lambda metrics: all(successes >= 1 for successes, _, _ in metrics.values()),
+            30,
+            return_last_on_timeout=True,
+        )
+        assert observed == dict.fromkeys(calls, (1.0, (0.0,), ())), observed
+        assert len(wire.drain()) == len(calls)
