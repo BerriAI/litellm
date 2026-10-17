@@ -8,9 +8,11 @@ sets ``litellm.bedrock_request_metadata_fields`` (``litellm_settings`` on the pr
 Two properties are load-bearing for that billing record and are asserted by the tests:
 proxy identity is resolved first so it can never be evicted by caller-supplied pairs, and the
 whole ``user_api_key_`` prefix is reserved so a caller cannot write a proxy-authoritative
-looking key. Values that break Bedrock's constraints are dropped rather than sanitised or
-rejected, because an operator flipping this setting on must not turn a working request into a
-400 and a silently rewritten attribution key is worse than an absent one.
+looking key. Identity and ``spend_logs_metadata`` values that break Bedrock's constraints are
+dropped rather than sanitised or rejected, because an operator flipping this setting on must not
+turn a working request into a 400 and a silently rewritten attribution key is worse than an
+absent one. A caller's own malformed ``requestMetadata`` is rejected with a 400 unless
+``drop_params`` is set, in which case its bad pairs are dropped the same way.
 """
 
 from __future__ import annotations
@@ -18,7 +20,8 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Mapping, Sized
-from typing import Final
+from dataclasses import dataclass
+from typing import Final, Literal
 
 import litellm
 
@@ -26,15 +29,27 @@ BEDROCK_REQUEST_METADATA_HEADER: Final = "X-Amzn-Bedrock-Request-Metadata"
 BEDROCK_REQUEST_METADATA_MAX_PAIRS: Final = 16
 BEDROCK_REQUEST_METADATA_IDENTITY_PREFIX: Final = "user_api_key_"
 BEDROCK_REQUEST_METADATA_CLIENT_FIELD: Final = "spend_logs_metadata"
+BEDROCK_REQUEST_METADATA_HEADER_MAX_CHARS: Final = 8500
 
 _METADATA_PARAM_NAMES: Final[tuple[str, ...]] = ("metadata", "litellm_metadata")
-_KEY_PATTERN: Final = re.compile(r"^[a-zA-Z0-9\s:_@$#=/+,.-]{1,256}$", re.ASCII)
-_VALUE_PATTERN: Final = re.compile(r"^[a-zA-Z0-9\s:_@$#=/+,.-]{0,256}$", re.ASCII)
+_ALLOWED_CHARACTERS: Final = r"[a-zA-Z0-9\s:_@$#=/+,.-]"
+_KEY_PATTERN: Final = re.compile(rf"^{_ALLOWED_CHARACTERS}{{1,256}}$", re.ASCII)
+_VALUE_PATTERN: Final = re.compile(rf"^{_ALLOWED_CHARACTERS}{{0,256}}$", re.ASCII)
 _OWNED_HEADER_NAMES: Final[frozenset[str]] = frozenset((BEDROCK_REQUEST_METADATA_HEADER.lower(),))
+
+
+@dataclass(frozen=True, slots=True)
+class BedrockRequestMetadataViolation:
+    kind: Literal["type", "constraint"]
+    message: str
 
 
 def _is_forwardable(key: str, value: str) -> bool:
     return _KEY_PATTERN.match(key) is not None and _VALUE_PATTERN.match(value) is not None
+
+
+def _is_reserved(key: str) -> bool:
+    return key.strip().lower().startswith(BEDROCK_REQUEST_METADATA_IDENTITY_PREFIX)
 
 
 def _text_pairs(source: object) -> tuple[tuple[str, str], ...]:
@@ -99,7 +114,7 @@ def _client_pairs(
     candidates: Final = tuple(
         (key, value)
         for key, value in (*_text_pairs(caller_metadata), *spend_logs_pairs)
-        if not key.startswith(BEDROCK_REQUEST_METADATA_IDENTITY_PREFIX) and _is_forwardable(key, value)
+        if not _is_reserved(key) and _is_forwardable(key, value)
     )
     first_index: Final = {key: index for index, (key, _) in reversed(tuple(enumerate(candidates)))}
     return tuple(pair for index, pair in enumerate(candidates) if first_index[pair[0]] == index)[:budget]
@@ -114,9 +129,9 @@ def resolve_bedrock_request_metadata(
     off or nothing survives Bedrock's constraints. The result is a plain dict because it is
     written straight onto the Converse body, which Bedrock types as ``dict[str, str]``.
 
-    ``caller_metadata`` is any ``requestMetadata`` the caller passed explicitly. It has already
-    been validated (and rejected with a 400) by the Converse transformation, so it is only
-    filtered here for the reserved identity prefix and the remaining slot budget.
+    ``caller_metadata`` is any ``requestMetadata`` the caller passed explicitly. Callers reject a
+    malformed one with a 400 unless ``drop_params`` is set, so here its pairs are only filtered for
+    Bedrock's rules, the reserved identity prefix, and the remaining slot budget.
     """
     allowed_fields: Final = _allowed_fields()
     if not allowed_fields:
@@ -133,20 +148,34 @@ def resolve_bedrock_request_metadata(
     return resolved or None
 
 
-def bedrock_request_metadata_violation(caller_metadata: object) -> str | None:
+def _pair_violation(key: str, value: str) -> BedrockRequestMetadataViolation | None:
+    if _KEY_PATTERN.match(key) is None:
+        return BedrockRequestMetadataViolation(
+            "constraint", f"requestMetadata key {key!r} must be 1-256 characters of {_ALLOWED_CHARACTERS}"
+        )
+    if _VALUE_PATTERN.match(value) is None:
+        return BedrockRequestMetadataViolation(
+            "constraint", f"requestMetadata value for key {key!r} must be 0-256 characters of {_ALLOWED_CHARACTERS}"
+        )
+    return None
+
+
+def bedrock_request_metadata_violation(caller_metadata: object) -> BedrockRequestMetadataViolation | None:
+    """Why a caller's ``requestMetadata`` breaks Bedrock's rules, in the order Bedrock checks them: a
+    wrong JSON type before the pair count and character rules. ``None`` means absent or valid."""
     text_pairs: Final = _text_pairs(caller_metadata)
     entry_count: Final = len(caller_metadata) if isinstance(caller_metadata, Sized) else 0
     if caller_metadata is None:
         return None
     if not isinstance(caller_metadata, Mapping):
-        return "requestMetadata must be a dictionary"
-    if entry_count > BEDROCK_REQUEST_METADATA_MAX_PAIRS:
-        return f"requestMetadata can contain a maximum of {BEDROCK_REQUEST_METADATA_MAX_PAIRS} items"
+        return BedrockRequestMetadataViolation("type", "requestMetadata must be a dictionary")
     if len(text_pairs) != entry_count:
-        return "requestMetadata keys and values must be strings"
-    if not all(_is_forwardable(key, value) for key, value in text_pairs):
-        return "requestMetadata keys must be 1-256 and values 0-256 characters of [a-zA-Z0-9\\s:_@$#=/+,.-]"
-    return None
+        return BedrockRequestMetadataViolation("type", "requestMetadata keys and values must be strings")
+    if len(text_pairs) > BEDROCK_REQUEST_METADATA_MAX_PAIRS:
+        return BedrockRequestMetadataViolation(
+            "constraint", f"requestMetadata can contain a maximum of {BEDROCK_REQUEST_METADATA_MAX_PAIRS} items"
+        )
+    return next((violation for key, value in text_pairs if (violation := _pair_violation(key, value))), None)
 
 
 def bedrock_request_metadata_is_owned() -> bool:

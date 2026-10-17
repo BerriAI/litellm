@@ -16,6 +16,8 @@ from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import BedrockError, BedrockEventStreamDecoderBase, BedrockModelInfo
 from ..request_metadata import (
     BEDROCK_REQUEST_METADATA_HEADER,
+    BEDROCK_REQUEST_METADATA_HEADER_MAX_CHARS,
+    BedrockRequestMetadataViolation,
     bedrock_request_metadata_headers,
     bedrock_request_metadata_is_owned,
     bedrock_request_metadata_violation,
@@ -46,23 +48,40 @@ def is_bedrock_streaming_endpoint(endpoint: str) -> bool:
     return _bedrock_endpoint_action(endpoint) in BEDROCK_STREAMING_ACTIONS
 
 
-def _caller_request_metadata(body: Mapping[str, object], litellm_params: Mapping[str, object]) -> object:
-    caller_metadata: Final = body.get("requestMetadata")
+def _caller_request_metadata_violation(
+    action: str, body: Mapping[str, object]
+) -> BedrockRequestMetadataViolation | None:
+    if action in _BEDROCK_INVOKE_ACTIONS and "requestMetadata" in body and body["requestMetadata"] is None:
+        return BedrockRequestMetadataViolation("type", "requestMetadata must be a dictionary")
+    return bedrock_request_metadata_violation(body.get("requestMetadata"))
+
+
+def _aws_error_type(action: str, violation: BedrockRequestMetadataViolation) -> str:
+    if action in _BEDROCK_CONVERSE_ACTIONS and violation.kind == "type":
+        return "SerializationException"
+    return "ValidationException"
+
+
+def _caller_request_metadata(action: str, body: Mapping[str, object], litellm_params: Mapping[str, object]) -> object:
     violation: Final = (
         None
         if caller_request_metadata_violations_are_dropped(litellm_params.get("drop_params") is True)
-        else bedrock_request_metadata_violation(caller_metadata)
+        else _caller_request_metadata_violation(action, body)
     )
     if violation is not None:
-        raise BedrockError(status_code=400, message=violation, headers={AWS_ERROR_TYPE_HEADER: "ValidationException"})
-    return caller_metadata
+        raise BedrockError(
+            status_code=400,
+            message=violation.message,
+            headers={AWS_ERROR_TYPE_HEADER: _aws_error_type(action, violation)},
+        )
+    return body.get("requestMetadata")
 
 
 def _with_body_request_metadata(
-    body: Mapping[str, object], litellm_params: Mapping[str, object]
+    action: str, body: Mapping[str, object], litellm_params: Mapping[str, object]
 ) -> Mapping[str, object]:
     resolved: Final = resolve_bedrock_request_metadata(
-        litellm_params, caller_metadata=_caller_request_metadata(body, litellm_params)
+        litellm_params, caller_metadata=_caller_request_metadata(action, body, litellm_params)
     )
     without_caller: Final = {key: value for key, value in body.items() if key != "requestMetadata"}
     return without_caller if resolved is None else {**without_caller, "requestMetadata": resolved}
@@ -79,13 +98,24 @@ def _with_request_metadata(
     litellm_params: Mapping[str, object],
 ) -> tuple[Mapping[str, str], Mapping[str, object]]:
     if action in _BEDROCK_CONVERSE_ACTIONS:
-        return headers, _with_body_request_metadata(body, litellm_params)
+        return headers, _with_body_request_metadata(action, body, litellm_params)
     if action in _BEDROCK_INVOKE_ACTIONS and "requestMetadata" in body:
-        return _without_request_metadata_header(headers), _with_body_request_metadata(body, litellm_params)
+        return _without_request_metadata_header(headers), _with_body_request_metadata(action, body, litellm_params)
     if action in _BEDROCK_INVOKE_ACTIONS:
-        owned_names, metadata_headers = bedrock_request_metadata_headers(litellm_params)
-        return merge_bedrock_invoke_headers(dict(headers), (), metadata_headers, owned_names), body
+        return _with_invoke_request_metadata(action, headers, body, litellm_params)
     return headers, body
+
+
+def _with_invoke_request_metadata(
+    action: str,
+    headers: Mapping[str, str],
+    body: Mapping[str, object],
+    litellm_params: Mapping[str, object],
+) -> tuple[Mapping[str, str], Mapping[str, object]]:
+    owned_names, metadata_headers = bedrock_request_metadata_headers(litellm_params)
+    if any(len(value) > BEDROCK_REQUEST_METADATA_HEADER_MAX_CHARS for _, value in metadata_headers):
+        return _without_request_metadata_header(headers), _with_body_request_metadata(action, body, litellm_params)
+    return merge_bedrock_invoke_headers(dict(headers), (), metadata_headers, owned_names), body
 
 
 _TEXT_ONLY_DELTA_FIELDS: Final = frozenset({"content", "role"})

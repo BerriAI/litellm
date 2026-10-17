@@ -1,5 +1,7 @@
 import asyncio
 import json
+from collections.abc import Callable, Mapping
+from typing import Final
 
 import pytest
 
@@ -128,12 +130,14 @@ def test_identity_survives_a_caller_filling_every_slot(
     )
 
 
-def test_a_key_sent_twice_keeps_the_caller_value_and_uses_one_slot(monkeypatch: pytest.MonkeyPatch):
+def test_a_key_sent_twice_keeps_the_caller_value_and_uses_one_slot(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", ALL_FIELDS)
-    caller = {f"client_{index:02d}": "caller" for index in range(BEDROCK_REQUEST_METADATA_MAX_PAIRS - len(IDENTITY) - 1)}
-    spend_logs = {**{key: "spend" for key in caller}, "extra": "spend"}
+    caller: Final = {
+        f"client_{index:02d}": "caller" for index in range(BEDROCK_REQUEST_METADATA_MAX_PAIRS - len(IDENTITY) - 1)
+    }
+    spend_logs: Final = {**{key: "spend" for key in caller}, "extra": "spend"}
 
-    resolved = resolve_bedrock_request_metadata(
+    resolved: Final = resolve_bedrock_request_metadata(
         litellm_params("metadata", spend_logs_metadata=spend_logs, **IDENTITY), caller_metadata=caller
     )
 
@@ -170,7 +174,14 @@ def test_a_field_repeated_in_the_allow_list_does_not_consume_a_client_slot(
 @pytest.mark.parametrize("client_source", ["spend_logs_metadata", "requestMetadata"])
 @pytest.mark.parametrize(
     "forged_key",
-    ["user_api_key_team_alias", "user_api_key_org_alias", "user_api_key_hash"],
+    [
+        "user_api_key_team_alias",
+        "user_api_key_org_alias",
+        "user_api_key_hash",
+        "USER_API_KEY_TEAM_ALIAS",
+        "User_Api_Key_Hash",
+        " user_api_key_user_id",
+    ],
 )
 def test_caller_cannot_forge_or_shadow_a_reserved_identity_key(
     forged_key,
@@ -195,8 +206,8 @@ def test_caller_cannot_forge_or_shadow_a_reserved_identity_key(
 
 @pytest.mark.parametrize("team_alias", ["O'Brien's team", "platform\u00a0team", "platform\u3000team"])
 def test_identity_violating_the_character_class_is_dropped_and_the_request_succeeds(
-    team_alias, monkeypatch: pytest.MonkeyPatch
-):
+    team_alias: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A team alias with an apostrophe must not turn a working request into a 400 the moment
     an operator flips the setting on. Bedrock also rejects non-ASCII whitespace (checked live 2026-10-16)."""
     monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", ALL_FIELDS)
@@ -226,22 +237,24 @@ def test_caller_supplied_violation_still_raises_bad_request(monkeypatch: pytest.
 @pytest.mark.parametrize("driver", CONVERSE_DRIVERS)
 @pytest.mark.parametrize("drop_globally", [True, False])
 def test_caller_violations_are_dropped_like_the_passthrough_routes_when_params_are_dropped(
-    driver, drop_globally, monkeypatch: pytest.MonkeyPatch
-):
+    driver: Callable[[Mapping[str, object], Mapping[str, object]], Mapping[str, object]],
+    drop_globally: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", ALL_FIELDS)
     monkeypatch.setattr(litellm, "drop_params", drop_globally)
-    params = {**litellm_params("metadata", **IDENTITY), **({} if drop_globally else {"drop_params": True})}
+    params: Final = {**litellm_params("metadata", **IDENTITY), **({} if drop_globally else {"drop_params": True})}
 
-    body = driver(params, {"requestMetadata": {"team": "O'Brien's team", "ticket": "T-42"}})
+    body: Final = driver(params, {"requestMetadata": {"team": "O'Brien's team", "ticket": "T-42"}})
 
     assert body["requestMetadata"] == {**IDENTITY, "ticket": "T-42"}
 
 
-def test_mapped_caller_violations_are_dropped_when_params_are_dropped(monkeypatch: pytest.MonkeyPatch):
+def test_mapped_caller_violations_are_dropped_when_params_are_dropped(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", ALL_FIELDS)
-    caller = {"team": "O'Brien's team", "ticket": "T-42"}
+    caller: Final = {"team": "O'Brien's team", "ticket": "T-42"}
 
-    mapped = AmazonConverseConfig().map_openai_params(
+    mapped: Final = AmazonConverseConfig().map_openai_params(
         non_default_params={"requestMetadata": caller}, optional_params={}, model=MODEL, drop_params=True
     )
 

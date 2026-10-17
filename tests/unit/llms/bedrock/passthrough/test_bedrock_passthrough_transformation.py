@@ -830,9 +830,17 @@ PROXY_IDENTITY = {
     "user_api_key_team_alias": "platform",
     "spend_logs_metadata": {"agent": "triage-bot"},
 }
-EXPECTED_REQUEST_METADATA = {"user_api_key_alias": "prod-key", "user_api_key_team_alias": "platform", "agent": "triage-bot"}
+EXPECTED_REQUEST_METADATA = {
+    "user_api_key_alias": "prod-key",
+    "user_api_key_team_alias": "platform",
+    "agent": "triage-bot",
+}
 CONVERSE_BODY = {"messages": [{"role": "user", "content": [{"text": "hi"}]}]}
-INVOKE_BODY = {"anthropic_version": "bedrock-2023-05-31", "max_tokens": 8, "messages": [{"role": "user", "content": "hi"}]}
+INVOKE_BODY = {
+    "anthropic_version": "bedrock-2023-05-31",
+    "max_tokens": 8,
+    "messages": [{"role": "user", "content": "hi"}],
+}
 
 
 async def _sent_passthrough_request(
@@ -967,27 +975,92 @@ async def test_passthrough_drops_reserved_caller_keys_when_nothing_resolves(
 
 
 MALFORMED_REQUEST_METADATA: Final = (
-    pytest.param({"user_api_key_team_alias": "forged", "bad!": "x"}, "characters", id="bad-characters"),
-    pytest.param({"ticket": "a\u00a0b"}, "characters", id="non-ascii-whitespace"),
-    pytest.param("ticket=T-42", "must be a dictionary", id="not-a-dictionary"),
-    pytest.param({f"key_{index}": "v" for index in range(17)}, "maximum of 16 items", id="17-pairs"),
-    pytest.param({"ticket": 42}, "must be strings", id="non-string-value"),
+    pytest.param(
+        {"user_api_key_team_alias": "forged", "bad!": "x"}, "key 'bad!' must be", "ValidationException", id="bad-key"
+    ),
+    pytest.param({"ticket": "a\u00a0b"}, "value for key 'ticket' must be", "ValidationException", id="bad-value"),
+    pytest.param("ticket=T-42", "must be a dictionary", "SerializationException", id="not-a-dictionary"),
+    pytest.param({f"key_{index}": "v" for index in range(17)}, "maximum of 16 items", "ValidationException", id="17"),
+    pytest.param({"ticket": 42}, "must be strings", "SerializationException", id="non-string-value"),
 )
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("action", "body"), [("converse", CONVERSE_BODY), ("invoke", INVOKE_BODY)])
-@pytest.mark.parametrize(("caller_metadata", "violation"), MALFORMED_REQUEST_METADATA)
-async def test_malformed_caller_request_metadata_is_rejected_as_a_bedrock_validation_error(
-    action: str, body: dict[str, object], caller_metadata: object, violation: str, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("action", ["converse", "converse-stream"])
+@pytest.mark.parametrize(("caller_metadata", "violation", "converse_error_type"), MALFORMED_REQUEST_METADATA)
+async def test_malformed_converse_request_metadata_is_rejected_with_the_error_type_bedrock_returns(
+    action: str, caller_metadata: object, violation: str, converse_error_type: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", REQUEST_METADATA_FIELDS)
 
     with pytest.raises(BedrockError, match=violation) as rejected:
-        await _sent_passthrough_request(action, {**body, "requestMetadata": caller_metadata}, PROXY_IDENTITY)
+        await _sent_passthrough_request(action, {**CONVERSE_BODY, "requestMetadata": caller_metadata}, PROXY_IDENTITY)
+
+    assert rejected.value.status_code == 400
+    assert httpx.Headers(rejected.value.headers).get("x-amzn-errortype") == converse_error_type
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["invoke", "invoke-with-response-stream"])
+@pytest.mark.parametrize(("caller_metadata", "violation", "converse_error_type"), MALFORMED_REQUEST_METADATA)
+async def test_malformed_invoke_request_metadata_is_rejected_as_a_bedrock_validation_error(
+    action: str, caller_metadata: object, violation: str, converse_error_type: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", REQUEST_METADATA_FIELDS)
+
+    with pytest.raises(BedrockError, match=violation) as rejected:
+        await _sent_passthrough_request(action, {**INVOKE_BODY, "requestMetadata": caller_metadata}, PROXY_IDENTITY)
 
     assert rejected.value.status_code == 400
     assert httpx.Headers(rejected.value.headers).get("x-amzn-errortype") == "ValidationException"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["invoke", "invoke-with-response-stream"])
+async def test_invoke_null_request_metadata_is_rejected_like_bedrock_does(
+    action: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", REQUEST_METADATA_FIELDS)
+
+    with pytest.raises(BedrockError, match="must be a dictionary") as rejected:
+        await _sent_passthrough_request(action, {**INVOKE_BODY, "requestMetadata": None}, PROXY_IDENTITY)
+
+    assert rejected.value.status_code == 400
+    assert httpx.Headers(rejected.value.headers).get("x-amzn-errortype") == "ValidationException"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["converse", "converse-stream"])
+async def test_converse_null_request_metadata_is_treated_as_absent_like_bedrock_does(
+    action: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", REQUEST_METADATA_FIELDS)
+
+    request: Final = await _sent_passthrough_request(action, {**CONVERSE_BODY, "requestMetadata": None}, PROXY_IDENTITY)
+
+    assert json.loads(request.content) == {**CONVERSE_BODY, "requestMetadata": EXPECTED_REQUEST_METADATA}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["invoke", "invoke-with-response-stream"])
+async def test_invoke_metadata_too_long_for_the_header_is_sent_in_the_body(
+    action: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", REQUEST_METADATA_FIELDS)
+    long_pairs: Final = {f"{index:02d}".ljust(256, "k"): "\n" * 256 for index in range(12)}
+
+    request: Final = await _sent_passthrough_request(
+        action,
+        INVOKE_BODY,
+        {**PROXY_IDENTITY, "spend_logs_metadata": long_pairs},
+        request_headers={f"x-pass-{REQUEST_METADATA_HEADER}": '{"user_api_key_team_alias":"forged"}'},
+    )
+
+    assert REQUEST_METADATA_HEADER not in request.headers
+    assert json.loads(request.content) == {
+        **INVOKE_BODY,
+        "requestMetadata": {"user_api_key_alias": "prod-key", "user_api_key_team_alias": "platform", **long_pairs},
+    }
 
 
 @pytest.mark.asyncio
