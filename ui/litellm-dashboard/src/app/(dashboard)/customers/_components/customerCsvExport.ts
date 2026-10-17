@@ -4,6 +4,12 @@ import type { EndUser } from "@/app/(dashboard)/hooks/customers/useCustomers";
 
 const cell = (value: string | number | null | undefined): string | number => value ?? "";
 
+const toolPermissionsCell = (permissions: Readonly<Record<string, readonly string[]>>): string => {
+  const servers = Object.keys(permissions).toSorted();
+  if (servers.length === 0) return "";
+  return JSON.stringify(Object.fromEntries(servers.map((server) => [server, permissions[server].toSorted()])));
+};
+
 export const buildCustomersCsvRows = (customers: EndUser[]): Record<string, string | number>[] =>
   customers.map((customer) => {
     const budget = customer.litellm_budget_table;
@@ -26,6 +32,7 @@ export const buildCustomersCsvRows = (customers: EndUser[]): Record<string, stri
       "MCP Servers": (permission?.mcp_servers ?? []).join(", "),
       "MCP Access Groups": (permission?.mcp_access_groups ?? []).join(", "),
       "MCP Toolsets": (permission?.mcp_toolsets ?? []).join(", "),
+      "MCP Tool Permissions": toolPermissionsCell(permission?.mcp_tool_permissions ?? {}),
       "Allowed Model Region": cell(customer.allowed_model_region),
       "Default Model": cell(customer.default_model),
     };
