@@ -11285,6 +11285,24 @@ def test_is_deployment_blocked_static_helper_reflects_blocked_flag():
     )
 
 
+def test_endpoint_preflight_returns_unavailable_model_errors_as_values() -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "available",
+                "litellm_params": {"model": "openai/gpt-5.4-nano", "api_key": "unit-provider-key"},
+            }
+        ],
+        num_retries=0,
+    )
+    missing: Final = "unregistered-fallback"
+    error: Final = router.endpoint_error_for_request(missing, "acompletion", {})
+    assert isinstance(error, litellm.BadRequestError)
+    assert error.status_code == 400
+    assert error.model == missing
+    assert router.endpoint_error_for_request("available", "acompletion", {}) is None
+
+
 def test_routing_groups_legacy_property_forwards_to_public_attribute():
     router = _router_with_two_deployments([False, False])
 
