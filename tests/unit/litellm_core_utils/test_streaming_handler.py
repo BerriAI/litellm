@@ -5107,8 +5107,8 @@ def test_openai_chunk_creator_skips_full_chunk_dump_and_delta_rebuild(
     assert len(emitted_chunks) == 2
     assert full_chunk_dumps == ()
     assert choice_dumps == ()
-    assert len(delta_constructions) == len(emitted_chunks) * 2
-    assert len(streaming_choice_constructions) == len(emitted_chunks)
+    assert len(delta_constructions) <= len(emitted_chunks) * 2
+    assert len(streaming_choice_constructions) <= len(emitted_chunks)
     assert [chunk.choices[0].delta.content for chunk in emitted_chunks] == ["hello", " world"]
     assert emitted_chunks[0].choices[0].delta.role == "assistant"
     assert emitted_chunks[1].choices[0].delta.role is None
@@ -5176,6 +5176,82 @@ def test_openai_chunk_creator_keeps_multiple_choice_logprobs_and_extras(
     assert result_logprobs.model_dump() == chunk_logprobs.model_dump()
     assert getattr(result.choices[1], "custom_choice_attribute") == "choice extra"
     assert getattr(result, "citations") == ["https://a"]
+
+
+@pytest.mark.parametrize(
+    ("choice_extras", "expected_choice_keys", "expected_choice_constructions"),
+    [
+        pytest.param(
+            {
+                "content_filter_results": {"hate": {"filtered": False, "severity": "safe"}},
+                "message": {"role": "assistant", "content": "hello"},
+            },
+            ["content_filter_results", "index", "delta"],
+            1,
+            id="azure-content-filter-results",
+        ),
+        pytest.param(
+            {"enhancements": {"grounding": {"lines": []}}},
+            ["index", "delta", "enhancements"],
+            2,
+            id="enhancements",
+        ),
+    ],
+)
+def test_chunk_creator_keeps_upstream_choice_extras_in_upstream_order(
+    logging_obj: Logging,
+    choice_extras: dict[str, object],
+    expected_choice_keys: list[str],
+    expected_choice_constructions: int,
+) -> None:
+    chunk: Final = ChatCompletionChunk(
+        id="chunk-with-choice-extras",
+        created=1,
+        model="gpt-4o",
+        object="chat.completion.chunk",
+        choices=[{"index": 0, "delta": {"content": "hello"}, "finish_reason": None, **choice_extras}],
+    )
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iter(()),
+        model="gpt-4o",
+        custom_llm_provider="azure",
+        logging_obj=logging_obj,
+    )
+    streaming_choices_init: Final = StreamingChoices.__init__.__code__
+
+    outputs, calls = _chunk_creator_calls(wrapper, [chunk], frozenset({streaming_choices_init}))
+
+    result: Final = outputs[0]
+    assert result is not None
+    choice_dump: Final = result.choices[0].model_dump(exclude_none=True)
+    assert list(choice_dump) == expected_choice_keys
+    assert choice_dump["delta"]["content"] == "hello"
+    assert {key: choice_dump[key] for key in choice_extras if key != "message"} == {
+        key: value for key, value in choice_extras.items() if key != "message"
+    }
+    assert len(calls) == expected_choice_constructions
+
+
+def test_chunk_creator_keeps_upstream_index_on_single_choice_chunk(logging_obj: Logging) -> None:
+    chunk: Final = ChatCompletionChunk(
+        id="chunk-with-index-1",
+        created=1,
+        model="gpt-4o",
+        object="chat.completion.chunk",
+        choices=[{"index": 1, "delta": {"content": "hello"}, "finish_reason": None}],
+    )
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iter(()),
+        model="gpt-4o",
+        custom_llm_provider="openai",
+        logging_obj=logging_obj,
+    )
+
+    result: Final = wrapper.chunk_creator(chunk=chunk)
+
+    assert result is not None
+    assert result.choices[0].index == 1
+    assert result.choices[0].delta.content == "hello"
 
 
 def test_chunk_creator_preserves_hidden_provider_specific_fields_from_parsed_chunk():

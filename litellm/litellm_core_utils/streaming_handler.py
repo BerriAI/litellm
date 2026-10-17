@@ -15,6 +15,7 @@ from typing import Any, Final, NoReturn, Protocol, TypeVar, cast
 import anyio
 import httpx
 from openai.types.chat import ChatCompletionChunk
+from openai.types.chat.chat_completion_chunk import Choice as ChunkChoice
 from openai.types.chat.chat_completion_chunk import ChoiceDelta
 from pydantic import BaseModel, ValidationError
 from typing_extensions import NotRequired, TypedDict
@@ -87,6 +88,16 @@ def _stamp_served_service_tier(response: ModelResponseStream, complete_streaming
 def _apply_provider_fields(response: ModelResponseStream, fields: Mapping[str, object]) -> None:
     for key, value in fields.items():
         setattr(response, key, value)
+
+
+def _prepend_upstream_choice_extras(
+    choice: StreamingChoices, upstream_choice: ChunkChoice, extra_keys: frozenset[str]
+) -> None:
+    if not extra_keys:
+        return
+    upstream_extras: Final[Mapping[str, object]] = upstream_choice.model_dump(include=set(extra_keys))
+    choice.__pydantic_extra__ = {**upstream_extras, **(choice.__pydantic_extra__ or {})}
+    choice.__pydantic_fields_set__.update(upstream_extras)
 
 
 def is_async_iterable(obj: object) -> bool:
@@ -1046,11 +1057,14 @@ class CustomStreamWrapper:
                             ChoiceDelta | None,
                             getattr(upstream_choice, "delta", None),
                         )
+                        upstream_choice_extra_keys: Final = frozenset(
+                            (upstream_choice.__pydantic_extra__ or {}) if upstream_choice is not None else ()
+                        )
                         can_reuse_choice: Final = (
                             plain_delta_created
                             and upstream_choice is not None
                             and upstream_delta is not None
-                            and not upstream_choice.__pydantic_extra__
+                            and "enhancements" not in upstream_choice_extra_keys
                             and upstream_choice.logprobs is None
                             and upstream_delta.tool_calls is None
                             and upstream_delta.function_call is None
@@ -1065,6 +1079,11 @@ class CustomStreamWrapper:
                         if can_reuse_choice and upstream_choice is not None:
                             model_response.choices[0].finish_reason = None  # rebind-ok: keep reused choice
                             model_response.choices[0].index = upstream_choice.index  # rebind-ok: keep reused choice
+                            _prepend_upstream_choice_extras(
+                                model_response.choices[0],
+                                upstream_choice,
+                                upstream_choice_extra_keys - {"message"},
+                            )
                         else:
                             choices: Final = []
                             for choice in original_chunk.choices:
