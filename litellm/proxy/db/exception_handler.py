@@ -1,3 +1,4 @@
+import os
 import re
 from collections.abc import Awaitable, Callable, Iterator
 from http import HTTPStatus
@@ -88,6 +89,31 @@ class PrismaDBExceptionHandler:
             return _allow_requests_on_db_unavailable
         if str_to_bool(_allow_requests_on_db_unavailable) is True:
             return True
+        return False
+
+    @staticmethod
+    def is_database_configured() -> bool:
+        """True when a database was configured for this proxy.
+
+        A database is configured when ``DATABASE_URL`` (or ``DIRECT_URL``)
+        is present in the environment, or a ``database_url`` is present in
+        ``general_settings``. The CLI / entrypoints assemble ``DATABASE_URL``
+        into ``os.environ`` from discrete ``DATABASE_*`` settings before the
+        proxy starts, so the environment is the canonical signal by request
+        time. When neither is present there is no database to be
+        ``unavailable``: that state never resolves by itself and must not be
+        treated as a transient outage by
+        ``allow_requests_on_db_unavailable``.
+        """
+        if os.getenv("DATABASE_URL") or os.getenv("DIRECT_URL"):
+            return True
+        try:
+            from litellm.proxy.proxy_server import general_settings
+
+            if isinstance(general_settings, dict):
+                return bool(general_settings.get("database_url"))
+        except Exception:
+            return False
         return False
 
     @staticmethod

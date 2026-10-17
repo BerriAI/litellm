@@ -2737,6 +2737,18 @@ async def user_api_key_auth_builder(
         if (
             prisma_client is None
         ):  # if both master key + user key submitted, and user key != master key, and no db connected, raise an error
+            if not PrismaDBExceptionHandler.is_database_configured():
+                # No database was ever configured, so there is no outage to
+                # ride out. ``allow_requests_on_db_unavailable`` must not fail
+                # open here: a non-master key cannot be verified and is
+                # rejected, instead of being admitted via the
+                # ``no_db_connection`` fallback token. See #47119.
+                raise ProxyException(
+                    message="Authentication Error - No database configured. Virtual keys require a configured database; only the master key can be used without one.",
+                    type=ProxyErrorTypes.auth_error,
+                    code=status.HTTP_401_UNAUTHORIZED,
+                    param=None,
+                )
             raise ProxyException(
                 message="No connected db.",
                 type=ProxyErrorTypes.no_db_connection,
