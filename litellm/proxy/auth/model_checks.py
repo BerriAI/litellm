@@ -274,6 +274,8 @@ def _hydrate_litellm_credential_name(
 def _ids_routing_to_catalog_models(
     name_pattern: str, deployment_pattern: str, provider: str, catalog_ids: Sequence[str]
 ) -> tuple[str, ...]:
+    if name_pattern.count("*") != deployment_pattern.count("*"):
+        return ()
     deployment_regex: Final = re.compile(PatternMatchRouter().pattern_to_regex(deployment_pattern))
     provider_id_prefix: Final = f"{provider}/"
     catalog_matches: Final = (
@@ -291,6 +293,13 @@ def _ids_routing_to_catalog_models(
     )
 
 
+def _deployment_pattern_naming_listed_ids(wildcard_suffix: str, litellm_params: LiteLLM_Params | None) -> str | None:
+    if litellm_params is None or not _check_wildcard_routing(litellm_params.model):
+        return None
+    deployment_suffix: Final = litellm_params.model.partition("/")[2]
+    return litellm_params.model if wildcard_suffix != "*" or deployment_suffix != "*" else None
+
+
 def get_known_models_from_wildcard(wildcard_model: str, litellm_params: LiteLLM_Params | None = None) -> list[str]:
     wildcard_model_to_expand: Final = (
         litellm_params.model
@@ -303,6 +312,9 @@ def get_known_models_from_wildcard(wildcard_model: str, litellm_params: LiteLLM_
     try:
         wildcard_provider_prefix, wildcard_suffix = wildcard_model_to_expand.split("/", 1)
     except ValueError:  # safely fail
+        return []
+    deployment_pattern_naming_listed_ids: Final = _deployment_pattern_naming_listed_ids(wildcard_suffix, litellm_params)
+    if deployment_pattern_naming_listed_ids is not None and wildcard_model == "*":
         return []
 
     # Use provider from litellm_params when available, otherwise from wildcard prefix
@@ -321,16 +333,16 @@ def get_known_models_from_wildcard(wildcard_model: str, litellm_params: LiteLLM_
 
     if wildcard_models is None:
         return []
-    if wildcard_suffix != "*":
-        if litellm_params is not None and _check_wildcard_routing(litellm_params.model):
-            return list(
-                _ids_routing_to_catalog_models(
-                    name_pattern=wildcard_model,
-                    deployment_pattern=litellm_params.model,
-                    provider=provider,
-                    catalog_ids=wildcard_models,
-                )
+    if deployment_pattern_naming_listed_ids is not None:
+        return list(
+            _ids_routing_to_catalog_models(
+                name_pattern=wildcard_model,
+                deployment_pattern=deployment_pattern_naming_listed_ids,
+                provider=provider,
+                catalog_ids=wildcard_models,
             )
+        )
+    if wildcard_suffix != "*":
         model_prefix: Final = wildcard_suffix.replace("*", "")
         provider_id_prefix: Final = f"{provider}/"
         filtered_wildcard_models: Final = [
@@ -361,6 +373,17 @@ def get_known_models_from_wildcard(wildcard_model: str, litellm_params: LiteLLM_
                 model = f"{wildcard_provider_prefix}/{model}"
         suffix_appended_wildcard_models.append(model)
     return list(dict.fromkeys(suffix_appended_wildcard_models))
+
+
+def _deployment_model_serving(listed_id: str, name_pattern: str, deployment_model: str) -> str:
+    listed_match: Final = (
+        None if name_pattern == "*" else re.fullmatch(PatternMatchRouter().pattern_to_regex(name_pattern), listed_id)
+    )
+    if listed_match is None:
+        return listed_id
+    return PatternMatchRouter.set_deployment_model_name(
+        matched_pattern=listed_match, litellm_deployment_litellm_model=deployment_model
+    )
 
 
 def expand_wildcard_deployments_for_model_info(
@@ -411,7 +434,9 @@ def expand_wildcard_deployments_for_model_info(
             row["model_name"] = name
             params = row.get("litellm_params")
             if isinstance(params, dict):
-                params["model"] = name
+                params["model"] = _deployment_model_serving(
+                    name, name_pattern=model_name, deployment_model=litellm_model
+                )
             expanded.append(row)
 
     return expanded

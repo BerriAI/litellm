@@ -1284,11 +1284,13 @@ _ROUTE_CF_IDS: Final = {_ROUTE_CF_ID, _ROUTE_CF_SUFFIXED_ID}
         ),
         pytest.param("cloudflare/team-*", "cloudflare/*", None, {*_ROUTE_CF_IDS, _ROUTE_HF_ID}, id="alias"),
         pytest.param("cloudflare/cf-*", "cloudflare/@cf/*", None, _ROUTE_CF_IDS, id="alias-over-partial-deployment"),
-        pytest.param("*", "cloudflare/@cf/*", None, _ROUTE_CF_IDS, id="catch-all-over-partial-deployment"),
+        pytest.param("my-cf/*", "cloudflare/@cf/*", None, _ROUTE_CF_IDS, id="bare-alias-over-partial-deployment"),
+        pytest.param(
+            "cloudflare/team-*", "cloudflare/@cf/*/*", None, set(), id="alias-with-fewer-wildcards-than-its-deployment"
+        ),
         pytest.param(
             "cloudflare/*", "cloudflare/*", "cloudflare/@cf/*", _ROUTE_CF_IDS, id="key-filter-over-provider-wildcard"
         ),
-        pytest.param("*", "gemini/gemini-partial-route-9*", None, {_ROUTE_GEMINI_ID}, id="catch-all-over-bare-id"),
         pytest.param("gemini/gemini-*", "gemini/*", None, {_ROUTE_GEMINI_ID}, id="alias-over-bare-id"),
         pytest.param(
             "gemini/*", "gemini/*", "gemini/gemini-partial-route-9*", {_ROUTE_GEMINI_ID}, id="key-filter-over-bare-id"
@@ -1337,15 +1339,57 @@ def test_every_listed_partial_wildcard_id_routes_to_the_catalog_model_it_names(
             infer_model_from_keys=False,
             llm_router=router,
         )
-        model_info_names: Final = [
-            str(row["model_name"])
+        model_info_rows: Final = tuple(
+            (str(row["model_name"]), TypeAdapter(LiteLLM_Params).validate_python(row["litellm_params"]).model)
             for row in expand_wildcard_deployments_for_model_info(
                 [dict(deployment) for deployment in router.get_model_list() or []]
             )
-        ]
+        )
         listed_v1_models: Final = routed_catalog_ids(v1_models)
-        listed_model_info_names: Final = routed_catalog_ids(model_info_names)
+        listed_model_info_names: Final = routed_catalog_ids([name for name, _ in model_info_rows])
 
     assert listed_v1_models == sorted(reachable)
+    assert [shown_model for _, shown_model in model_info_rows] == [routed_model(name) for name, _ in model_info_rows]
     if key_model is None:
         assert listed_model_info_names == sorted(reachable)
+
+
+@pytest.mark.parametrize("deployment_model", ["cloudflare/@cf/*", "gemini/gemini-partial-route-9*"])
+def test_catch_all_over_a_partial_deployment_lists_no_catalog_ids(deployment_model: str) -> None:
+    from litellm import Router
+    from litellm.proxy.auth.model_checks import expand_wildcard_deployments_for_model_info, get_complete_model_list
+
+    router: Final = Router(model_list=[{"model_name": "*", "litellm_params": {"model": deployment_model}}])
+    deployments: Final = [dict(deployment) for deployment in router.get_model_list() or []]
+    with _registered_chat_models({_ROUTE_CF_ID: "cloudflare", _ROUTE_GEMINI_ID: "gemini"}):
+        v1_models: Final = get_complete_model_list(
+            key_models=[],
+            team_models=[],
+            proxy_model_list=["*"],
+            user_model=None,
+            infer_model_from_keys=False,
+            llm_router=router,
+        )
+        model_info_rows: Final = expand_wildcard_deployments_for_model_info(deployments)
+
+    assert v1_models == []
+    assert model_info_rows == deployments
+
+
+def test_catch_all_model_info_rows_show_the_listed_provider_model() -> None:
+    from pydantic import TypeAdapter
+
+    from litellm.proxy.auth.model_checks import expand_wildcard_deployments_for_model_info
+    from litellm.types.router import LiteLLM_Params
+
+    listed_id: Final = "openai/partial-route-catch-all-model"
+    with _registered_chat_models({listed_id.removeprefix("openai/"): "openai"}):
+        model_info_rows: Final = expand_wildcard_deployments_for_model_info(
+            [{"model_name": "*", "litellm_params": {"model": "openai/*"}}]
+        )
+
+    shown_models: Final = {
+        str(row["model_name"]): TypeAdapter(LiteLLM_Params).validate_python(row["litellm_params"]).model
+        for row in model_info_rows
+    }
+    assert shown_models[listed_id] == listed_id
