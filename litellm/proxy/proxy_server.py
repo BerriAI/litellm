@@ -77,6 +77,7 @@ from litellm.constants import (
     DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL,
     DEFAULT_SHARED_HEALTH_CHECK_TTL,
     DEFAULT_SLACK_ALERTING_THRESHOLD,
+    INTERNAL_CALLBACK_NAMES,
     LANGFUSE_SHUTDOWN_FLUSH_TIMEOUT_MILLIS,
     LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS,
     LITELLM_SETTINGS_SAFE_DB_OVERRIDES,
@@ -530,6 +531,7 @@ from litellm.proxy.common_utils.scheduled_job_stagger import (
     parse_stagger_settings,
     stagger_trigger,
 )
+from litellm.proxy.common_utils.slow_gc_logger import log_slow_gc_passes
 from litellm.proxy.common_utils.swagger_utils import ERROR_RESPONSES
 from litellm.proxy.common_utils.timezone_utils import (
     get_budget_reset_settings,
@@ -1405,6 +1407,10 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
     import json
 
     init_verbose_loggers()
+
+    running_loop: Final = asyncio.get_running_loop()
+    if isinstance(running_loop, asyncio.BaseEventLoop) and running_loop.get_debug():
+        log_slow_gc_passes(threshold_seconds=running_loop.slow_callback_duration, log=verbose_proxy_logger.warning)
 
     prometheus_multiproc_dir: Final = os.environ.get("PROMETHEUS_MULTIPROC_DIR")
     if prometheus_multiproc_dir:
@@ -20393,8 +20399,7 @@ def _hidden_runtime_callback_names(configured_callback_names: frozenset[str]) ->
         if name in CustomLoggerRegistry.CALLBACK_CLASS_STR_TO_CLASS_TYPE
     )
     configured_modules: Final = frozenset(name.rsplit(".", 1)[0] for name in configured_callback_names if "." in name)
-    internal_callback_names: Final = frozenset({"cache", "vector_store_pre_call_hook"})
-    return internal_callback_names | frozenset(
+    return INTERNAL_CALLBACK_NAMES | frozenset(
         callback_name
         for callback_name, callback in litellm.logging_callback_manager.get_callback_objects()
         if isinstance(callback, CustomGuardrail)

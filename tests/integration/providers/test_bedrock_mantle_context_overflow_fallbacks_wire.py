@@ -519,10 +519,12 @@ def test_killing_one_worker_leaves_the_sibling_serving_the_fallback(fb_rig: Rig)
     workers: Final = eventually(fb_rig.owned.worker_pids, lambda pids: len(pids) >= 2, seconds=30)
     with fb_rig.owned.replacing_worker(min(workers)) as kill:
         kill()
-        responses: Final = tuple(
-            fb_rig.gateway.request("POST", "/v1/chat/completions", _chat(fb_rig.models["fb"], _prompt("after kill")))
-            for _ in range(3)
-        )
+        with httpx.Client(base_url=fb_rig.gateway.client.base_url, timeout=15, trust_env=False) as fresh:
+            survivor: Final = Gateway(fresh, fb_rig.gateway.key, fb_rig.gateway.upstream_url)
+            responses: Final = tuple(
+                survivor.request("POST", "/v1/chat/completions", _chat(fb_rig.models["fb"], _prompt("after kill")))
+                for _ in range(3)
+            )
     for response in responses:
         assert response.status_code == 200, response.text
         assert _FALLBACK_TEXT in response.text, response.text
