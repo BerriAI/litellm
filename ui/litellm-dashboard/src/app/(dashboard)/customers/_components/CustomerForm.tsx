@@ -243,6 +243,7 @@ export function CustomerForm({
             <MCPServerSelector
               id={id}
               accessToken={accessToken ?? ""}
+              allowNoMcpServers
               value={value}
               onChange={onChange}
               placeholder="Select MCP servers, access groups or toolsets"
