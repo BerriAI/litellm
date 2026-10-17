@@ -32,13 +32,48 @@ from litellm.proxy.common_utils.openai_error_payload import (
     openai_error_type,
 )
 from litellm.proxy.route_llm_request import route_request
-from litellm.types.images.main import ImageEditRequestParams
+from litellm.types.images.main import (
+    ImageEditRequestParams,
+    ImageVariationRequestParams,
+)
 from litellm.types.llms.openai import ChatCompletionUserMessage
+from litellm.types.utils import ImageResponse
 
 router: Final = APIRouter()
 
 IMAGE_EDIT_NUMERIC_FORM_FIELDS: Final = numeric_form_fields(get_type_hints(ImageEditRequestParams))
 IMAGE_EDIT_OPTIONAL_FIELD_DEFAULTS: Final = MappingProxyType({"prompt": None, "image": None})
+IMAGE_VARIATION_NUMERIC_FORM_FIELDS: Final = numeric_form_fields(get_type_hints(ImageVariationRequestParams))
+IMAGE_VARIATION_OPTIONAL_FIELD_DEFAULTS: Final = MappingProxyType({"image": None})
+
+# The variations route reads a multipart body via request.form(), which FastAPI
+# documents without an application/json request schema (OA001 in the OpenAPI docs
+# gate); the JSON-equivalent schema below documents the same fields for Swagger
+# UI and the generated types without touching runtime parsing.
+# ImageVariationRequestParams carries FileTypes (typing.IO[bytes]) which
+# pydantic cannot turn into a JSON schema, so the documented JSON body
+# schema is spelled out for the shape the multipart form accepts.
+_IMAGE_VARIATION_REQUEST_BODY: Final[dict[str, object]] = {  # mutable-ok: OpenAPI JSON fixture, never mutated
+    "required": True,
+    "content": {
+        "application/json": {
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "model": {"type": "string", "title": "Model"},
+                    "n": {"type": "integer", "title": "N", "default": None},
+                    "size": {"type": "string", "title": "Size", "default": None},
+                    "response_format": {"type": "string", "title": "Response Format", "default": None},
+                    "user": {"type": "string", "title": "User", "default": None},
+                },
+            },
+            "example": {"model": "dall-e-2", "n": 2},
+        }
+    },
+}
+_IMAGE_VARIATION_OPENAPI_EXTRA: Final[dict[str, object]] = {  # mutable-ok: handed to FastAPI which copies openapi_extra
+    "requestBody": _IMAGE_VARIATION_REQUEST_BODY
+}
 
 IMAGE_ARRAY_FIELD: Final = "image[]"
 MASK_ARRAY_FIELD: Final = "mask[]"
@@ -245,7 +280,7 @@ async def image_generation(
 async def image_edit_api(
     request: Request,
     fastapi_response: Response,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008  # FastAPI dependency injection
     image: list[UploadFile] | None = File(None),
     image_array: list[UploadFile] | None = File(None, alias=IMAGE_ARRAY_FIELD),
     mask: list[UploadFile] | None = File(None),
@@ -345,6 +380,104 @@ async def image_edit_api(
             version=version,
         )
     except Exception as e:
+        raise await processor.handle_llm_api_exception(
+            e=e,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+            version=version,
+        )
+
+
+@router.post(
+    "/v1/images/variations",
+    dependencies=[Depends(user_api_key_auth)],
+    responses={200: {"model": ImageResponse}},
+    openapi_extra=dict[str, object](_IMAGE_VARIATION_OPENAPI_EXTRA),
+    tags=["images"],
+)
+@router.post(
+    "/images/variations",
+    dependencies=[Depends(user_api_key_auth)],
+    responses={200: {"model": ImageResponse}},
+    openapi_extra=dict[str, object](_IMAGE_VARIATION_OPENAPI_EXTRA),
+    tags=["images"],
+)
+@router.post(
+    "/openai/deployments/{model:path}/images/variations",
+    dependencies=[Depends(user_api_key_auth)],
+    responses={200: {"model": ImageResponse}},
+    openapi_extra=dict[str, object](_IMAGE_VARIATION_OPENAPI_EXTRA),
+    response_class=ORJSONResponse,  # pyright: ignore[reportDeprecated]  # azure compatible endpoint mirrors image_edit_api's response class
+)  # azure compatible endpoint
+async def image_variation_api(  # noqa: ANN201  # response type mirrors image_edit_api (provider-dependent)
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008  # FastAPI dependency injection
+    image: list[UploadFile] | None = File(None),  # noqa: B008  # FastAPI multipart upload declaration  # mutable-ok: mirrors the edits endpoint's multipart signature
+    model: str | None = None,
+):
+    """
+    Follows the OpenAI Images API spec: https://platform.openai.com/docs/api-reference/images/createVariation
+
+    ```bash
+    curl -X POST "http://localhost:4000/v1/images/variations"     -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -F "model=dall-e-2"         -F "image=@image.png"         -F "n=2"
+    ```
+    """
+    from litellm.proxy.proxy_server import (
+        general_settings,  # pyright: ignore[reportUnknownVariableType]  # proxy_server module globals carry no full annotations yet
+        llm_router,
+        proxy_config,
+        proxy_logging_obj,
+        read_request_body,  # pyright: ignore[reportUnknownVariableType]  # proxy_server module globals carry no full annotations yet
+        select_data_generator,  # pyright: ignore[reportUnknownVariableType]  # proxy_server module globals carry no full annotations yet
+        user_api_base,  # pyright: ignore[reportUnknownVariableType]  # proxy_server module globals carry no full annotations yet
+        user_max_tokens,
+        user_model,  # pyright: ignore[reportUnknownVariableType]  # proxy_server module globals carry no full annotations yet
+        user_request_timeout,
+        user_temperature,  # pyright: ignore[reportUnknownVariableType]  # proxy_server module globals carry no full annotations yet
+        version,
+    )
+
+    form_fields: Final = coerce_numeric_form_fields(
+        # read_request_body's return is partially typed; the form coercion only reads mapping keys
+        parsed_body=await read_request_body(request=request),  # pyright: ignore[reportUnknownArgumentType]  # proxy_server helper's return is partially typed; the coercion only reads mapping keys
+        numeric_fields=IMAGE_VARIATION_NUMERIC_FORM_FIELDS,
+    )
+    data: Final = {
+        key: value
+        for key, value in chain(IMAGE_VARIATION_OPTIONAL_FIELD_DEFAULTS.items(), form_fields.items())
+        if key not in BRACKETED_FILE_FIELDS
+    }
+    image_files: Final = await batch_to_bytesio(image)
+    if image_files:
+        data["image"] = image_files
+    if isinstance(data.get("image"), str):
+        raise HTTPException(
+            status_code=422,
+            detail="'image' must be provided as a multipart file upload, not a string.",
+        )
+
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
+    try:
+        return await processor.base_process_llm_request(
+            request=request,
+            fastapi_response=fastapi_response,
+            user_api_key_dict=user_api_key_dict,
+            route_type="aimage_variation",
+            proxy_logging_obj=proxy_logging_obj,
+            llm_router=llm_router,
+            general_settings=general_settings,  # pyright: ignore[reportUnknownArgumentType]  # proxy_server global; base_process_llm_request declares dict[str, object]
+            proxy_config=proxy_config,
+            select_data_generator=select_data_generator,  # pyright: ignore[reportUnknownArgumentType]  # proxy_server global; the parameter is Callable[..., object] | None
+            model=model,
+            user_model=user_model,  # pyright: ignore[reportUnknownArgumentType]  # proxy_server global; the parameter is str | None
+            user_temperature=user_temperature,  # pyright: ignore[reportUnknownArgumentType]  # proxy_server global; the parameter is float | None
+            user_request_timeout=user_request_timeout,
+            user_max_tokens=user_max_tokens,
+            user_api_base=user_api_base,  # pyright: ignore[reportUnknownArgumentType]  # proxy_server global; the parameter is str | None
+            version=version,
+        )
+    except Exception as e:  # noqa: BLE001  # provider-agnostic error surfacing mirrors image_edit_api
         raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
