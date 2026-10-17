@@ -4191,23 +4191,25 @@ class TestModelInfoCostMapEchoFilter:
             ("bedrock/us.moonshotai.kimi-k3", "token_count_framing", 0),
         ],
     )
-    def test_token_count_setting_is_stored_only_when_the_operator_changed_it(self, model, field, edited):
+    def test_token_count_setting_is_stored_only_when_the_operator_changed_it(
+        self, model: str, field: str, edited: object
+    ) -> None:
         import litellm
         from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
 
-        entry = litellm.get_model_info(model)
+        entry: Final = litellm.get_model_info(model)
         assert entry[field] not in (None, edited), entry
-        db_model = Deployment(
+        db_model: Final = Deployment(
             model_name="count-settings",
             litellm_params=LiteLLM_Params(model=model),
             model_info=ModelInfo(id="dep-echo-count"),
         )
 
-        echoed = update_db_model(
+        echoed: Final = update_db_model(
             db_model=db_model,
             updated_patch=updateDeployment(model_info=ModelInfo(**{**entry, "id": "dep-echo-count"})),
         )
-        changed = update_db_model(
+        changed: Final = update_db_model(
             db_model=db_model,
             updated_patch=updateDeployment(model_info=ModelInfo(**{**entry, "id": "dep-echo-count", field: edited})),
         )
