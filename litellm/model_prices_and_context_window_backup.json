@@ -75530,25 +75530,39 @@
         "supports_vision": true
     },
     "openinfer/@oi/GLM-5.3-Flash": {
-        "max_tokens": 8192,
+        "max_tokens": 393216,
         "max_input_tokens": 393216,
-        "max_output_tokens": 8192,
+        "max_output_tokens": 393216,
         "input_cost_per_token": 1.95e-07,
         "output_cost_per_token": 1.56e-06,
         "litellm_provider": "openinfer",
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_reasoning": true,
         "source": "https://api.openinfer.ai/v1/models"
     },
     "openinfer/@oi/Qwen3.5-27B": {
-        "max_tokens": 8192,
+        "max_tokens": 32768,
         "max_input_tokens": 32768,
-        "max_output_tokens": 8192,
+        "max_output_tokens": 32768,
         "input_cost_per_token": 1.95e-07,
         "output_cost_per_token": 1.56e-06,
         "litellm_provider": "openinfer",
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_reasoning": true,
+        "source": "https://api.openinfer.ai/v1/models"
+    },
+    "openinfer/@oi/Qwen3.5-9B": {
+        "max_tokens": 100000,
+        "max_input_tokens": 100000,
+        "max_output_tokens": 100000,
+        "input_cost_per_token": 5e-06,
+        "output_cost_per_token": 1.5e-07,
+        "litellm_provider": "openinfer",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
         "source": "https://api.openinfer.ai/v1/models"
     },
     "xai/grok-voice-3.0": {

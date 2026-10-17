@@ -6250,11 +6250,13 @@ def get_provider_info(model: str, custom_llm_provider: str | None) -> ProviderSp
             model=model, provider=LlmProviders(custom_llm_provider)
         )
 
-    model_info: ProviderSpecificModelInfo | None = None
     if provider_config:
-        model_info = provider_config.get_provider_info(model=model)
+        return provider_config.get_provider_info(model=model)
 
-    return model_info
+    from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+    json_provider: Final = JSONProviderRegistry.get(custom_llm_provider) if custom_llm_provider else None
+    return json_provider.provider_info if json_provider is not None and json_provider.provider_info else None
 
 
 def _is_potential_model_name_in_model_cost(

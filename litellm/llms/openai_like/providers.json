@@ -235,10 +235,10 @@
     "api_key_env": "OPENINFER_API_KEY",
     "api_base_env": "OPENINFER_API_BASE",
     "base_class": "openai_gpt",
-    "param_mappings": {
-      "max_completion_tokens": "max_tokens"
+    "provider_info": {
+      "supports_function_calling": true
     },
-    "supported_endpoints": ["/v1/chat/completions"]
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/messages"]
   },
   "inferenceapis": {
     "base_url": "https://api.inferenceapis.com/v1",
