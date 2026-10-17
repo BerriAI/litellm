@@ -65,6 +65,7 @@ CONNECTION_NAMES: Final = (
     "api_key",
     "api_base",
     "api_version",
+    "responses_api_version",
     "region_name",
     "headers",
     "provider_specific_header",
@@ -199,6 +200,7 @@ OPTION_NAMES: Final = (
     "prompt_label",
     "litellm_system_prompt",
     "custom_prompt_dict",
+    "initial_prompt_value",
     "roles",
     "final_prompt_value",
     "bos_token",
@@ -227,9 +229,12 @@ AGENTIC_LOOP_STATE_NAMES: Final = (
     "_code_interpreter_interception_sandbox_key",
     "_code_interpreter_interception_session_scoped",
     "_code_interpreter_interception_converted_stream",
+    "_code_interpreter_interception_stream_options",
     "_websearch_interception_emit_native_blocks",
     "_websearch_interception_converted_stream",
+    "_websearch_interception_stream_options",
     "_headroom_interception_converted_stream",
+    "_headroom_interception_stream_options",
 )
 
 INTERNAL_STATE_NAMES: Final = (

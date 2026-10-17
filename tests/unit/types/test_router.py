@@ -63,6 +63,7 @@ def test_custom_pricing_params_keeps_every_field_it_had():
         "output_cost_per_character",
         "cache_read_input_token_cost",
         "cache_creation_input_token_cost",
+        "cache_creation_input_token_cost_above_1hr",
         "cost_per_second",
         "input_cost_per_second",
         "cache_read_input_token_cost_flex",
@@ -372,3 +373,9 @@ def test_server_owned_wif_fields_present_reports_openai_fields():
 def test_reject_server_owned_wif_params_names_each_openai_field(param_name: str):
     with pytest.raises(ValueError, match=param_name):
         reject_server_owned_wif_params({param_name: "client-supplied"})
+
+
+@pytest.mark.parametrize("param_name", openai_wif_litellm_params)
+def test_reject_server_owned_wif_params_catches_the_array_form_key(param_name: str):
+    with pytest.raises(ValueError, match=param_name):
+        reject_server_owned_wif_params({f"{param_name}[]": "client-supplied"})

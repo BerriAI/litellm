@@ -2,6 +2,7 @@ use litellm_auth::{CredentialPlacement, SecretValue};
 use litellm_core_utils::settings::resolve_non_empty;
 use litellm_llms_types::{
     formats::messages::{MessagesOptionalParams, MessagesRequest, MessagesTool},
+    providers::anthropic::{DEFAULT_HEADERS, MESSAGES_PATH},
     recognized::Recognized,
 };
 use litellm_router_types::LitellmParams;
@@ -13,17 +14,12 @@ use crate::{
         common_utils::{filter_billing_headers_from_system, has_anthropic_credential},
         messages::{
             handler::shape_anthropic_messages_request,
-            transformation::{
-                DEFAULT_HEADERS, transform_messages_request, update_headers_with_anthropic_beta,
-            },
+            transformation::{transform_messages_request, update_headers_with_anthropic_beta},
         },
     },
     base_llm::{
         auth::{AuthScheme, Headers, ValidatedEnvironment},
-        messages::{
-            context::MessagesTransformContext,
-            transformation::{BaseMessagesConfig, MESSAGES_PATH_SUFFIX},
-        },
+        messages::{context::MessagesTransformContext, transformation::BaseMessagesConfig},
     },
 };
 
@@ -166,18 +162,18 @@ pub fn complete_deepseek_anthropic_url(
 ) -> String {
     let api_base = get_api_base(api_base, env_lookup);
     let api_base = api_base.trim_end_matches('/');
-    if api_base.ends_with(MESSAGES_PATH_SUFFIX) && api_base.contains("/anthropic/") {
+    if api_base.ends_with(MESSAGES_PATH) && api_base.contains("/anthropic/") {
         return api_base.to_string();
     }
-    let api_base = [MESSAGES_PATH_SUFFIX, "/v1", "/beta"]
+    let api_base = [MESSAGES_PATH, "/v1", "/beta"]
         .into_iter()
         .fold(api_base, |base, suffix| {
             base.strip_suffix(suffix).unwrap_or(base)
         });
     if api_base.ends_with(ANTHROPIC_PATH_SEGMENT) || api_base.contains("/anthropic/") {
-        return format!("{api_base}{MESSAGES_PATH_SUFFIX}");
+        return format!("{api_base}{MESSAGES_PATH}");
     }
-    format!("{api_base}{ANTHROPIC_PATH_SEGMENT}{MESSAGES_PATH_SUFFIX}")
+    format!("{api_base}{ANTHROPIC_PATH_SEGMENT}{MESSAGES_PATH}")
 }
 
 /// DeepSeek rejects Anthropic's explicit `{"type": "custom"}` tool discriminator, so it is
@@ -454,5 +450,28 @@ mod tests {
             body["thinking"],
             json!({"type": "enabled", "budget_tokens": 1024})
         );
+    }
+
+    #[rstest]
+    #[case::without_client_betas(&[])]
+    #[case::with_client_betas(&[("anthropic-beta", "claude-code-20250219,interleaved-thinking-2025-05-14")])]
+    fn safeguards_and_client_betas_reach_deepseek_as_sent(#[case] client: &[(&str, &str)]) {
+        let safeguards = json!([{"type": "dangerous_tool_use", "classifier_context": {"v": 1}}]);
+        let body = json!({
+            "model": "deepseek-v4-pro",
+            "max_tokens": 100,
+            "messages": [{"role": "user", "content": "hi"}],
+            "safeguards": safeguards
+        });
+        let headers: Headers = client
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.to_string()))
+            .collect();
+        assert_eq!(
+            DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG
+                .request_headers(headers.clone(), &request_from(body.clone())),
+            headers
+        );
+        assert_eq!(transformed(body)["safeguards"], safeguards);
     }
 }

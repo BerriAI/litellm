@@ -9,8 +9,11 @@ import logging
 import os
 import sys
 import threading
+from typing import Final
 
+import boto3
 import pytest
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.litellm_core_utils.fallback_generalizations import (
     get_fallback_generalization_rules,
@@ -442,6 +445,22 @@ async def test_loaded_catalog_snapshot_follows_the_fetched_map_and_ignores_later
 
 
 @pytest.mark.asyncio
+async def test_loaded_catalog_fields_follow_each_fetched_map():
+    added = json.loads(_real_map_bytes())
+    added["gpt-5.4-mini"]["supports_litellm_qa_capability"] = True
+    with_field, _ = _mock_client([httpx.Response(200, content=json.dumps(added).encode())])
+    without_field, _ = _mock_client([httpx.Response(200, content=_real_map_bytes())])
+
+    await refetch_model_cost_map(url=_URL, sleep=_SleepRecorder(), rng=random.Random(0), client=with_field)
+    fields_after_adding: Final = GetModelCostMap.loaded_model_cost_map_fields()
+    await refetch_model_cost_map(url=_URL, sleep=_SleepRecorder(), rng=random.Random(0), client=without_field)
+
+    assert "supports_litellm_qa_capability" in fields_after_adding
+    assert "supports_litellm_qa_capability" not in GetModelCostMap.loaded_model_cost_map_fields()
+    assert "max_input_tokens" in GetModelCostMap.loaded_model_cost_map_fields()
+
+
+@pytest.mark.asyncio
 async def test_refetch_revision_follows_the_bytes_not_the_url():
     edited = json.loads(_real_map_bytes())
     edited["gpt-5.4-mini"]["input_cost_per_token"] = 0.5
@@ -501,6 +520,47 @@ from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.utils import _invalidate_model_cost_lowercase_map
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 from unittest.mock import MagicMock, patch
+
+
+class _FakeS3Body:
+    def __init__(self, content: bytes) -> None:
+        self.content: Final = content
+
+    def read(self) -> bytes:
+        return self.content
+
+
+class _FakeS3GetObjectResponse(TypedDict):
+    Body: ReadOnly[_FakeS3Body]
+    ETag: NotRequired[ReadOnly[str]]
+
+
+class _FakeS3Client:
+    def __init__(self, content: bytes) -> None:
+        self.content: Final = content
+        self.calls: list[tuple[str, str]] = []
+
+    def get_object(self, *, Bucket: str, Key: str) -> _FakeS3GetObjectResponse:
+        self.calls.append((Bucket, Key))
+        return {"Body": _FakeS3Body(self.content), "ETag": '"fake-etag"'}
+
+
+def test_get_model_cost_map_fetches_s3_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.litellm_core_utils import get_model_cost_map as module
+
+    source_info = module._cost_map_source_info
+    for name in ("source", "url", "is_env_forced", "fallback_reason", "loaded_at", "source_revision", "etag"):
+        monkeypatch.setattr(source_info, name, getattr(source_info, name))
+
+    s3_content: Final = _make_models(GetModelCostMap.get_backup_model_count())
+    s3_client: Final = _FakeS3Client(json.dumps(s3_content).encode())
+    monkeypatch.setattr(boto3, "client", lambda *args, **kwargs: s3_client)
+
+    cost_map: Final = get_model_cost_map("s3://my-bucket/prices/model_prices.json")
+
+    assert cost_map == s3_content
+    assert s3_client.calls == [("my-bucket", "prices/model_prices.json")]
+    assert get_model_cost_map_source_info()["source"] == "remote"
 
 
 class _SyncSleepRecorder:
@@ -629,6 +689,25 @@ def test_boot_load_does_not_retry_non_retryable_failure():
     source = get_model_cost_map_source_info()
     assert source["source"] == "local"
     assert source["fallback_reason"] is not None
+
+
+def test_boot_load_falls_back_when_urlsplit_rejects_the_url():
+    client, calls = _mock_client([httpx.Response(200, content=_real_map_bytes())], client_cls=httpx.Client)
+    sleeper = _SyncSleepRecorder()
+
+    cost_map = get_model_cost_map(
+        url="http://[bad/model_prices.json",
+        sleep=sleeper,
+        rng=random.Random(0),
+        client=client,
+    )
+    assert calls["count"] == 0
+    assert sleeper.waits == []
+    assert _retry_threads() == []
+    assert cost_map.keys() >= _load_root_cost_map().keys() - {"sample_spec", FALLBACK_GENERALIZATIONS_KEY}
+    source = get_model_cost_map_source_info()
+    assert source["source"] == "local"
+    assert "invalid URL" in (source["fallback_reason"] or "")
 
 
 def test_boot_load_respects_local_env_override(monkeypatch):
@@ -1259,6 +1338,14 @@ class TestGetModelCostMapFallback:
         assert fetches == 1
         assert result.keys() == _backup_keys()
         assert source["source"] == "local"
+
+    def test_should_fallback_when_fetched_json_is_not_object(self, monkeypatch):
+        result, fetches, source = _fetch_with_single_outcome(monkeypatch, httpx.Response(200, content=b"[]"))
+
+        assert fetches == 1
+        assert result.keys() == _backup_keys()
+        assert source["source"] == "local"
+        assert source["fallback_reason"] == f"Remote fetch failed: expected a JSON object from {_URL}, got list"
 
     def test_should_fallback_when_fetched_map_shrinks_dramatically(self, monkeypatch):
         """When upstream returns far fewer models than backup, should fall back."""

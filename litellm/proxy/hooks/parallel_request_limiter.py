@@ -1,6 +1,6 @@
 import asyncio
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn
 
@@ -23,7 +23,7 @@ from litellm.proxy.auth.budget_throttle import throttled_limit
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
-from litellm.types.utils import Usage
+from litellm.types.utils import CallTypes, Usage
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -46,6 +46,14 @@ def _response_total_tokens(response_obj: object) -> int:
         return 0
     response_usage: Final = getattr(response_obj, "usage", None)
     return response_usage.total_tokens if isinstance(response_usage, Usage) else 0
+
+
+_CONNECTION_SCOPED_CALL_TYPES: Final = frozenset({CallTypes.aresponses_websocket.value})
+
+
+def _slots_released(kwargs: Mapping[str, object]) -> int:
+    """A websocket turn callback releases nothing; the socket's slot is released once at disconnect."""
+    return 0 if kwargs.get("call_type") in _CONNECTION_SCOPED_CALL_TYPES else 1
 
 
 class CacheObject(TypedDict):
@@ -105,6 +113,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     additional_details=f"{CommonProxyErrors.max_parallel_request_limit_reached.value}. Hit limit for {rate_limit_type}. Current limits: max_parallel_requests: {max_parallel_requests}, tpm_limit: {tpm_limit}, rpm_limit: {rpm_limit}",
                     rate_limit_type=triggered_type,
                     requested_model=data.get("model") if data else None,
+                    descriptor_key=rate_limit_type,
                 )
             new_val = {
                 "current_requests": 1,
@@ -143,6 +152,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 rate_limit_type=triggered_type,
                 model=resolved_model,
                 llm_provider=llm_provider,
+                descriptor_key=rate_limit_type,
             )
 
         await self.internal_usage_cache.async_batch_set_cache(
@@ -170,6 +180,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         additional_details: str | None = None,
         rate_limit_type: RateLimitType | None = None,
         requested_model: str | None = None,
+        descriptor_key: str | None = None,
     ) -> NoReturn:
         """
         Raise a 429 with a retry-after header for litellm-proxy parallel-request limits.
@@ -207,6 +218,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             rate_limit_type=rate_limit_type or RateLimitType.CONCURRENT_REQUESTS,
             model=resolved_model,
             llm_provider=llm_provider,
+            descriptor_key=descriptor_key,
         )
 
     @with_service_target("rate_limits")
@@ -505,6 +517,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         litellm_parent_otel_span: Final[Span | None] = get_parent_otel_span_from_kwargs(kwargs=kwargs)
         try:
             self.print_verbose("INSIDE parallel request limiter ASYNC SUCCESS LOGGING")
+            released: Final = _slots_released(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # legacy callback kwargs are untyped
 
             global_max_parallel_requests: Final = kwargs["litellm_params"]["metadata"].get(
                 "global_max_parallel_requests", None
@@ -536,7 +549,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 # decrement
                 await self.internal_usage_cache.async_increment_cache(
                     key=_key,
-                    value=-1,
+                    value=-released,
                     local_only=True,
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 )
@@ -564,7 +577,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 }
 
                 new_val = {
-                    "current_requests": max(current["current_requests"] - 1, 0),
+                    "current_requests": max(current["current_requests"] - released, 0),
                     "current_tpm": current["current_tpm"] + total_tokens,
                     "current_rpm": current["current_rpm"],
                 }
@@ -605,7 +618,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 }
 
                 new_val = {
-                    "current_requests": max(current["current_requests"] - 1, 0),
+                    "current_requests": max(current["current_requests"] - released, 0),
                     "current_tpm": current["current_tpm"] + total_tokens,
                     "current_rpm": current["current_rpm"],
                 }
@@ -631,7 +644,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 }
 
                 new_val = {
-                    "current_requests": max(current["current_requests"] - 1, 0),
+                    "current_requests": max(current["current_requests"] - released, 0),
                     "current_tpm": current["current_tpm"] + total_tokens,
                     "current_rpm": current["current_rpm"],
                 }
@@ -657,7 +670,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 }
 
                 new_val = {
-                    "current_requests": max(current["current_requests"] - 1, 0),
+                    "current_requests": max(current["current_requests"] - released, 0),
                     "current_tpm": current["current_tpm"] + total_tokens,
                     "current_rpm": current["current_rpm"],
                 }
@@ -683,7 +696,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 }
 
                 new_val = {
-                    "current_requests": max(current["current_requests"] - 1, 0),
+                    "current_requests": max(current["current_requests"] - released, 0),
                     "current_tpm": current["current_tpm"] + total_tokens,
                     "current_rpm": current["current_rpm"],
                 }
@@ -705,6 +718,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             self.print_verbose("Inside Max Parallel Request Failure Hook")
             litellm_parent_otel_span: Final[Span | None] = get_parent_otel_span_from_kwargs(kwargs=kwargs)
             _metadata: Final = kwargs["litellm_params"].get("metadata", {}) or {}
+            released: Final = _slots_released(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # legacy callback kwargs are untyped
             global_max_parallel_requests: Final = _metadata.get("global_max_parallel_requests", None)
             user_api_key: Final = _metadata.get("user_api_key", None)
             self.print_verbose(f"user_api_key: [set={user_api_key is not None}]")
@@ -732,7 +746,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     # decrement
                     await self.internal_usage_cache.async_increment_cache(
                         key=_key,
-                        value=-1,
+                        value=-released,
                         local_only=True,
                         litellm_parent_otel_span=litellm_parent_otel_span,
                     )
@@ -754,7 +768,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 }
 
                 new_val: Final = {
-                    "current_requests": max(current["current_requests"] - 1, 0),
+                    "current_requests": max(current["current_requests"] - released, 0),
                     "current_tpm": current["current_tpm"],
                     "current_rpm": current["current_rpm"],
                 }
@@ -770,6 +784,33 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             verbose_proxy_logger.exception("Inside Parallel Request Limiter: An exception occurred - %s", e)
 
     @with_service_target("rate_limits")
+    async def async_release_max_parallel_requests_on_disconnect(self, user_api_key_dict: UserAPIKeyAuth) -> None:
+        """Release the slot ``async_pre_call_hook`` took for a connection whose per-turn callbacks released none."""
+        from litellm.proxy.proxy_server import (
+            general_settings,  # pyright: ignore[reportUnknownVariableType]  # module-level settings dict is untyped
+        )
+
+        now: Final = self._clock()
+        await self.async_log_success_event(  # pyright: ignore[reportUnknownMemberType]  # legacy callback signature is untyped
+            kwargs={
+                "litellm_params": {
+                    "metadata": {
+                        "user_api_key": LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict),
+                        "user_api_key_user_id": user_api_key_dict.user_id,
+                        "user_api_key_team_id": user_api_key_dict.team_id,
+                        "user_api_key_model_max_budget": user_api_key_dict.model_max_budget,  # pyright: ignore[reportUnknownMemberType]  # UserAPIKeyAuth.model_max_budget is a bare dict
+                        "global_max_parallel_requests": general_settings.get(  # pyright: ignore[reportUnknownMemberType]  # module-level settings dict is untyped
+                            "global_max_parallel_requests"
+                        ),
+                    }
+                },
+                "user": user_api_key_dict.end_user_id,
+            },
+            response_obj=None,
+            start_time=now,
+            end_time=now,
+        )
+
     async def get_internal_user_object(
         self,
         user_id: str,
@@ -829,10 +870,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 key_remaining_tpm_limit = user_api_key_dict.tpm_limit - current["current_tpm"]
                 key_tpm_limit = user_api_key_dict.tpm_limit
 
-        if hasattr(response, "_hidden_params"):
-            _hidden_params = getattr(response, "_hidden_params")
-        else:
-            _hidden_params = None
+        _hidden_params = getattr(response, "_hidden_params", None)
         if _hidden_params is not None and (isinstance(_hidden_params, BaseModel) or isinstance(_hidden_params, dict)):
             if isinstance(_hidden_params, BaseModel):
                 _hidden_params = _hidden_params.model_dump()

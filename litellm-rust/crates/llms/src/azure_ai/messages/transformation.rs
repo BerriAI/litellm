@@ -1,14 +1,18 @@
-use litellm_auth::{CredentialPlacement, SecretValue};
+use litellm_auth::SecretValue;
 use litellm_http::request::{has_bearer_auth, has_header};
-use litellm_llms_types::formats::messages::MessagesRequest;
+use litellm_llms_types::{
+    formats::messages::MessagesRequest,
+    providers::anthropic::{BetaProvider, DEFAULT_HEADERS, MESSAGES_PATH},
+};
 use litellm_router_types::LitellmParams;
 
 use crate::{
     Error,
-    anthropic::messages::{
-        handler::shape_anthropic_messages_request,
-        transformation::{
-            DEFAULT_HEADERS, transform_messages_request, update_headers_with_anthropic_beta,
+    anthropic::{
+        common_utils::API_KEY_PLACEMENT,
+        messages::{
+            handler::shape_anthropic_messages_request,
+            transformation::{transform_messages_request, update_headers_with_safeguards_beta},
         },
     },
     azure_ai::common_utils::{
@@ -19,12 +23,11 @@ use crate::{
         messages::{
             context::MessagesTransformContext,
             normalization::{normalize_system_role_messages, strip_cache_control_scope},
-            transformation::{BaseMessagesConfig, MESSAGES_PATH_SUFFIX},
+            transformation::BaseMessagesConfig,
         },
     },
 };
 
-const API_KEY_PLACEMENT: CredentialPlacement = CredentialPlacement::Header("x-api-key");
 const ANTHROPIC_PATH_SEGMENT: &str = "/anthropic";
 
 pub struct AzureAnthropicMessagesConfig;
@@ -101,7 +104,7 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
     }
 
     fn request_headers(&self, headers: Headers, request: &MessagesRequest) -> Headers {
-        update_headers_with_anthropic_beta(headers, request)
+        update_headers_with_safeguards_beta(headers, request, BetaProvider::AzureAi)
     }
 }
 
@@ -113,7 +116,7 @@ pub fn complete_azure_anthropic_url(
 
     let api_base = api_base.trim_end_matches('/');
 
-    if api_base.ends_with(MESSAGES_PATH_SUFFIX) {
+    if api_base.ends_with(MESSAGES_PATH) {
         return Ok(api_base.to_string());
     }
 
@@ -121,7 +124,7 @@ pub fn complete_azure_anthropic_url(
         Some((prefix, _)) => format!("{prefix}{ANTHROPIC_PATH_SEGMENT}"),
         None => format!("{api_base}{ANTHROPIC_PATH_SEGMENT}"),
     };
-    Ok(format!("{with_anthropic}{MESSAGES_PATH_SUFFIX}"))
+    Ok(format!("{with_anthropic}{MESSAGES_PATH}"))
 }
 
 #[cfg(test)]
@@ -541,6 +544,12 @@ mod tests {
         &[("x-api-key", "k"), ("anthropic-beta", "structured-outputs-2025-11-13,web-search-2025-03-05")]
     )]
     #[case::no_feature_needs_a_beta(json!({}), &[], &[("x-api-key", "k")])]
+    #[case::safeguards_need_the_dangerous_tool_use_beta(
+        json!({"safeguards": [{"type": "dangerous_tool_use"}]}),
+        &[("anthropic-beta", "claude-code-20250219")],
+        &[("x-api-key", "k"), ("anthropic-beta", "claude-code-20250219,dangerous-tool-use-2026-09-03")]
+    )]
+    #[case::null_safeguards_need_no_beta(json!({"safeguards": null}), &[], &[("x-api-key", "k")])]
     fn request_headers_carry_the_anthropic_feature_betas(
         #[case] fields: serde_json::Value,
         #[case] forwarded: &[(&str, &str)],
