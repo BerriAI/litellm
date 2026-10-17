@@ -11,8 +11,6 @@ from datetime import datetime
 from functools import reduce
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypeVar, cast
 
-from redis.exceptions import RedisError
-
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import RedisCache
@@ -513,6 +511,8 @@ class RedisUpdateBuffer:
         """
         if self.redis_cache is None:
             return
+
+        from redis.exceptions import RedisError
 
         restore_configs: Final = (
             (db_spend_update_transactions, REDIS_UPDATE_BUFFER_KEY),
