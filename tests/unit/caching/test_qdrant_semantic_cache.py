@@ -1,4 +1,5 @@
 import sys
+import threading
 import types
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -993,23 +994,21 @@ def test_qdrant_semantic_cache_defaults_embedding_timeout():
 
 @pytest.mark.asyncio
 async def test_qdrant_async_embedding_truncates_off_the_event_loop(monkeypatch):
-    from tests.large_text import text
-    from tests.unit.litellm_core_utils.event_loop_lag import (
-        assert_loop_stayed_free,
-        timed_with_loop_lags,
-        warm_tokenizer,
-    )
-
     from litellm.caching.qdrant_semantic_cache import QdrantSemanticCache
 
-    warm_tokenizer("sem-embed")
     cache = QdrantSemanticCache.__new__(QdrantSemanticCache)
     cache.embedding_model = "sem-embed"
-    cache.embedding_max_input_tokens = 5
+    cache.embedding_max_input_tokens = None
     cache.embedding_timeout = 5
 
+    truncation_threads = []
+
+    def deployment_limits(model):
+        truncation_threads.append(threading.get_ident())
+        return (5, None)
+
     router = MagicMock()
-    router.get_configured_token_limits.return_value = (8191, None)
+    router.get_configured_token_limits.side_effect = deployment_limits
     router.aembedding = AsyncMock(return_value={"data": [{"embedding": [0.1, 0.2]}]})
     monkeypatch.setitem(
         sys.modules,
@@ -1017,8 +1016,9 @@ async def test_qdrant_async_embedding_truncates_off_the_event_loop(monkeypatch):
         _router_proxy_module(router, "sem-embed"),
     )
 
-    response, took, lags = await timed_with_loop_lags(lambda: cache._get_async_embedding(text * 100))
+    response = await cache._get_async_embedding("one two three four five six seven eight nine ten")
 
     assert response["data"][0]["embedding"] == [0.1, 0.2]
     assert _token_count("sem-embed", router.aembedding.call_args.kwargs["input"]) == 5
-    assert_loop_stayed_free(took, lags)
+    assert len(truncation_threads) == 1
+    assert truncation_threads[0] != threading.get_ident()
