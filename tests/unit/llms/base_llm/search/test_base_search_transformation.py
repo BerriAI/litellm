@@ -31,6 +31,7 @@ from litellm.llms.linkup.search.transformation import LinkupSearchConfig
 from litellm.llms.nimble.search.transformation import NimbleSearchConfig
 from litellm.llms.parallel_ai.search.transformation import ParallelAISearchConfig
 from litellm.llms.perplexity.search.transformation import PerplexitySearchConfig
+from litellm.llms.scavio.search.transformation import ScavioSearchConfig
 from litellm.llms.searchapi.search.transformation import SearchAPIConfig
 from litellm.llms.searxng.search.transformation import SearXNGSearchConfig
 from litellm.llms.serper.search.transformation import SerperSearchConfig
@@ -101,6 +102,7 @@ PROVIDERS: Tuple[ProviderSpec, ...] = (
     (TinyfishSearchConfig, {"TINYFISH_API_KEY": "srv"}, "caller-key", {}),
     (FastCRWSearchConfig, {"CRW_API_KEY": "srv"}, "caller-key", {}),
     (NimbleSearchConfig, {"NIMBLE_API_KEY": "srv"}, "caller-key", {}),
+    (ScavioSearchConfig, {"SCAVIO_API_KEY": "srv"}, "caller-key", {}),
     (BingGroundingSearchConfig, {"BING_GROUNDING_TOKEN": "srv"}, "caller-key", {}),
 )
 
