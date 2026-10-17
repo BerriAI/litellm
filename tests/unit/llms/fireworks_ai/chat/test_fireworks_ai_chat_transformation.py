@@ -12,7 +12,10 @@ from litellm.constants import SESSION_ID_GENERATED_METADATA_KEY
 from litellm.litellm_core_utils.get_supported_openai_params import get_supported_openai_params
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
-from litellm.llms.fireworks_ai.common_utils import get_fireworks_session_id
+from litellm.llms.fireworks_ai.common_utils import (
+    FireworksAIException,
+    get_fireworks_session_id,
+)
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
     Function,
@@ -826,6 +829,12 @@ def _run_transform_response(response_body: dict) -> ModelResponse:
         encoding=None,
         api_key="test-key",
     )
+
+
+@pytest.mark.parametrize("body", [{}, {"error": {"message": "upstream broke"}}, {"choices": None}])
+def test_transform_response_rejects_payload_without_completion_choices(body: dict):
+    with pytest.raises(FireworksAIException):
+        _run_transform_response(body)
 
 
 _REASONING_MODEL = "fireworks_ai/accounts/fireworks/models/glm-5p1"

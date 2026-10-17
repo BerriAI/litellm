@@ -12,6 +12,7 @@ import respx
 import litellm
 from litellm._uuid import uuid
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.ollama.common_utils import OllamaError
 from litellm.llms.ollama.completion.transformation import (
     OllamaConfig,
     OllamaTextCompletionResponseIterator,
@@ -20,6 +21,27 @@ from litellm.types.utils import Message, ModelResponse, ModelResponseStream
 
 
 class TestOllamaConfig:
+    @pytest.mark.parametrize("body", [{}, {"error": {"message": "upstream broke"}}])
+    def test_transform_response_rejects_payload_without_completion(self, body):
+        raw_response = MagicMock()
+        raw_response.json.return_value = body
+        raw_response.text = json.dumps(body)
+        raw_response.status_code = 200
+        raw_response.headers = {}
+
+        with pytest.raises(OllamaError):
+            OllamaConfig().transform_response(
+                model="llama3",
+                raw_response=raw_response,
+                model_response=ModelResponse(choices=[{"message": Message(content="")}]),
+                logging_obj=MagicMock(),
+                request_data={},
+                messages=[],
+                optional_params={},
+                litellm_params={},
+                encoding=None,
+            )
+
     def test_transform_response_standard(self):
         # Initialize config
         config = OllamaConfig()

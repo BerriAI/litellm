@@ -760,6 +760,13 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
         additional_headers: Final = get_response_headers(raw_response_headers)
 
         completion_fields: Final = _JSON_DICT.validate_python(completion_response)
+        choices: Final = completion_fields.get("choices")
+        if not isinstance(choices, list) or not choices:
+            raise FireworksAIException(
+                message=f"Invalid Fireworks AI completion response: {raw_response.text}",
+                status_code=raw_response.status_code,
+                headers=raw_response.headers,
+            )
         response: Final = ModelResponse(**completion_fields)
 
         if response.model is not None:
