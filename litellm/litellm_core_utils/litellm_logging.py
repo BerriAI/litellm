@@ -2660,7 +2660,7 @@ class Logging(LiteLLMLoggingBaseClass):
         response: ModelResponse | TextCompletionResponse | ResponsesAPIResponse | InteractionsAPIResponse,
     ) -> ModelResponse | TextCompletionResponse | ResponsesAPIResponse | InteractionsAPIResponse:
         response_id: Final = self.model_call_details.get("continued_response_id")
-        if not isinstance(response_id, str) or getattr(response, "id", None) == response_id:
+        if not isinstance(response_id, str) or response.id == response_id:
             return response
         return response.model_copy(update={"id": response_id})
 
