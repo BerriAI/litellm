@@ -10,6 +10,7 @@ from typing import Final
 from urllib.parse import parse_qs, urlparse
 
 import pytest
+from pydantic import SecretStr
 from starlette.requests import Request
 from starlette.responses import Response
 
@@ -44,10 +45,12 @@ from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import (
     native_client_auth_contract,
     native_client_authorize,
     open_gateway_dcr_client,
+    refresh_proxy_credential,
     register_aggregate_client,
     revoke_refresh_token,
     supported_grant_types,
 )
+from litellm.proxy._experimental.mcp_server.outbound_credentials.key_derivation import legacy_scrypt
 from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credentials import (
     SessionBearerAdmitted,
     SessionRefreshOpened,
@@ -58,6 +61,8 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credent
 from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token import (
     SESSION_ISSUER,
     SESSION_REFRESH_PREFIX,
+    MintedSessionToken,
+    SessionKeys,
     SessionPrincipal,
     mint_session_refresh_token,
     mint_session_token,
@@ -2954,6 +2959,106 @@ async def test_token_exchange_relays_a_mint_refusal(failure, status, error):
     response = await _exchange_native(client_id, _Minter(failure), _Exchanger())
     assert response.status_code == status
     assert json.loads(response.body)["error"] == error
+
+
+def _legacy_session_refresh(user_id="u1", client_id="claude_code", team_id="team-b"):
+    signing: Final = legacy_scrypt(MASTER_KEY, b"litellm-mcp-gateway:session-signing:")
+    assert signing is not None
+    minted: Final = mint_session_refresh_token(
+        SessionPrincipal(user_id=user_id, client_id=client_id, audience="proxy_api", team_id=team_id),
+        SessionKeys(signing_key=SecretStr(signing)),
+        datetime.now(timezone.utc),
+    )
+    assert isinstance(minted, MintedSessionToken)
+    return minted.token.get_secret_value()
+
+
+@pytest.mark.asyncio
+async def test_claude_code_refresh_of_a_legacy_scrypt_token_is_renewed_during_the_grace_window(monkeypatch):
+    """The Claude Code ``/oauth/token`` refresh grant opens a scrypt-minted proxy-API
+    refresh token while ``LITELLM_MCP_LEGACY_KDF_GRACE=true``, exactly like the DCR
+    refresh grant, and the rotated token it returns opens under the HKDF key."""
+    monkeypatch.setenv("LITELLM_MCP_LEGACY_KDF_GRACE", "true")
+    monkeypatch.delenv("LITELLM_FIPS_MODE", raising=False)
+    minter: Final = _Minter()
+    renewed: Final = await refresh_proxy_credential(
+        refresh_token=_legacy_session_refresh(),
+        client_id="claude_code",
+        master_key=MASTER_KEY,
+        cache=DualCache(),
+        mint_proxy_credential=minter,
+    )
+    assert renewed.status_code == 200, renewed.body
+    body: Final = json.loads(renewed.body)
+    assert body["access_token"] == "sk-cli-u1"
+    assert body["user_id"] == "u1"
+    opened: Final = open_session_refresh_bearer(
+        body["refresh_token"],
+        session_keys_from_master_key(MASTER_KEY),
+        datetime.now(timezone.utc),
+        expected_client_id="claude_code",
+    )
+    assert isinstance(opened, SessionRefreshOpened)
+
+
+@pytest.mark.asyncio
+async def test_claude_code_refresh_of_a_legacy_scrypt_token_is_renewed_by_default_without_the_grace_variable(
+    monkeypatch,
+):
+    """The grace window defaults on: with no ``LITELLM_MCP_LEGACY_KDF_GRACE`` in the
+    environment a scrypt-minted refresh token still renews, so operators do not lose
+    main-era tokens on upgrade day because they never heard of the variable."""
+    monkeypatch.delenv("LITELLM_MCP_LEGACY_KDF_GRACE", raising=False)
+    monkeypatch.delenv("LITELLM_FIPS_MODE", raising=False)
+    minter: Final = _Minter()
+    renewed: Final = await refresh_proxy_credential(
+        refresh_token=_legacy_session_refresh(),
+        client_id="claude_code",
+        master_key=MASTER_KEY,
+        cache=DualCache(),
+        mint_proxy_credential=minter,
+    )
+    assert renewed.status_code == 200, renewed.body
+
+
+def _hkdf_session_refresh(user_id="u1", client_id="claude_code", team_id="team-b"):
+    minted: Final = mint_session_refresh_token(
+        SessionPrincipal(user_id=user_id, client_id=client_id, audience="proxy_api", team_id=team_id),
+        session_keys_from_master_key(MASTER_KEY),
+        datetime.now(timezone.utc),
+    )
+    assert isinstance(minted, MintedSessionToken)
+    return minted.token.get_secret_value()
+
+
+@pytest.mark.asyncio
+async def test_claude_code_refresh_rejects_a_legacy_token_but_renews_an_hkdf_one_when_grace_is_explicitly_disabled(
+    monkeypatch,
+):
+    """``LITELLM_MCP_LEGACY_KDF_GRACE=false`` is the operator's opt-out: the scrypt token
+    answers invalid_grant without running the minter, while an HKDF control renews fine."""
+    monkeypatch.setenv("LITELLM_MCP_LEGACY_KDF_GRACE", "false")
+    monkeypatch.delenv("LITELLM_FIPS_MODE", raising=False)
+    minter: Final = _Minter()
+    refused: Final = await refresh_proxy_credential(
+        refresh_token=_legacy_session_refresh(),
+        client_id="claude_code",
+        master_key=MASTER_KEY,
+        cache=DualCache(),
+        mint_proxy_credential=minter,
+    )
+    assert refused.status_code == 400
+    assert json.loads(refused.body)["error"] == "invalid_grant"
+    assert minter.calls == []
+    control: Final = await refresh_proxy_credential(
+        refresh_token=_hkdf_session_refresh(),
+        client_id="claude_code",
+        master_key=MASTER_KEY,
+        cache=DualCache(),
+        mint_proxy_credential=minter,
+    )
+    assert control.status_code == 200, control.body
+    assert json.loads(control.body)["access_token"] == "sk-cli-u1"
 
 
 @pytest.mark.asyncio
