@@ -13,7 +13,7 @@ from litellm.constants import CONTROL_OPTIONS_KEY
 from litellm.litellm_core_utils.get_litellm_params import (
     _OPTIONAL_KWARGS_KEYS,
     InvalidControlOption,
-    _get_base_model_from_litellm_call_metadata,
+    get_base_model_from_litellm_call_metadata,
     get_litellm_params,
     parse_control_options,
     stored_control_options,
@@ -55,25 +55,30 @@ NAMED_PRICE_PARAMS: Final = frozenset(
 
 class TestGetBaseModelFromLitellmCallMetadata:
     def test_none_metadata_returns_none(self):
-        assert _get_base_model_from_litellm_call_metadata(None) is None
+        assert get_base_model_from_litellm_call_metadata(None) is None
 
     def test_empty_metadata_returns_none(self):
-        assert _get_base_model_from_litellm_call_metadata({}) is None
+        assert get_base_model_from_litellm_call_metadata({}) is None
 
     def test_missing_model_info_returns_none(self):
-        assert _get_base_model_from_litellm_call_metadata({"foo": "bar"}) is None
+        assert get_base_model_from_litellm_call_metadata({"foo": "bar"}) is None
 
     def test_model_info_none_returns_none(self):
-        assert _get_base_model_from_litellm_call_metadata({"model_info": None}) is None
+        assert get_base_model_from_litellm_call_metadata({"model_info": None}) is None
 
     def test_model_info_empty_dict_returns_none(self):
-        assert _get_base_model_from_litellm_call_metadata({"model_info": {}}) is None
+        assert get_base_model_from_litellm_call_metadata({"model_info": {}}) is None
 
     def test_returns_base_model(self):
-        result = _get_base_model_from_litellm_call_metadata(
+        result = get_base_model_from_litellm_call_metadata(
             {"model_info": {"base_model": "gpt-4"}}
         )
         assert result == "gpt-4"
+
+    def test_returns_non_string_base_model_without_filtering(self):
+        result = get_base_model_from_litellm_call_metadata({"model_info": {"base_model": 123}})
+
+        assert result == 123
 
 
 class TestGetLitellmParamsKwargsExtraction:

@@ -91,6 +91,8 @@ class GenAIMapper:
         f"{LiteLLM.COST_PREFIX}margin_fixed_amount": lambda d: d.cost.margin_fixed_amount,
         f"{LiteLLM.COST_PREFIX}margin_percent": lambda d: d.cost.margin_percent,
         f"{LiteLLM.COST_PREFIX}margin_total_amount": lambda d: d.cost.margin_total_amount,
+        LiteLLM.CACHE_HIT: lambda d: d.cache_hit,
+        LiteLLM.SAVED_CACHE_COST: lambda d: d.saved_cache_cost,
         LiteLLM.REQUEST_STREAMING: lambda d: d.is_streaming,
         LiteLLM.REQUEST_ROUTE: lambda d: d.request_route,
         LiteLLM.REQUEST_PURPOSE: lambda d: d.request_purpose,
@@ -174,7 +176,7 @@ class GenAIMapper:
                 return {}
 
     def _llm_call(self, data: LLMCallSpanData) -> AttributeMap:
-        attrs: Final = collect(self._LLM_CALL_ATTRS, data)
+        attrs: Final = {**collect(self._LLM_CALL_ATTRS, data), **data.routing_attributes}
         if data.tools:
             attrs[LiteLLM.TOOLS_DECLARED] = len(data.tools)
             attrs.update(

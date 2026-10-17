@@ -16,7 +16,12 @@ import pytest
 import respx
 
 import litellm
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from tests.unit.llms.bedrock.slow_upstream import (
+    STREAM_TIMEOUT_SECONDS,
+    UPSTREAM_FIRST_BYTE_SECONDS,
+    slow_upstream_sync_client,
+)
 
 
 def _expected_dir() -> Path:
@@ -662,7 +667,7 @@ async def test_aresponses_injection_point_marks_input_text_on_gpt_5_6():
             "prompt_cache_breakpoint": {"mode": "explicit"},
         }
         assert body["input"][1] == {"role": "user", "content": "hi"}
-        assert body["prompt_cache_options"] == {"mode": "explicit"}
+        assert body["prompt_cache_options"] == {"mode": "implicit"}
 
 
 def test_responses_injection_point_marks_input_text_on_gpt_5_6():
@@ -683,7 +688,7 @@ def test_responses_injection_point_marks_input_text_on_gpt_5_6():
             "prompt_cache_breakpoint": {"mode": "explicit"},
         }
         assert body["input"][1] == {"role": "user", "content": "hi"}
-        assert body["prompt_cache_options"] == {"mode": "explicit"}
+        assert body["prompt_cache_options"] == {"mode": "implicit"}
 
 
 @pytest.mark.asyncio
@@ -767,7 +772,7 @@ async def test_aresponses_custom_api_base_opts_in_through_prompt_cache_options()
 async def test_aresponses_regional_openai_api_base_marks_input_text():
     body = await _aresponses_body_with_system_point(model="gpt-5.6", api_base="https://eu.api.openai.com/v1")
     assert body["input"][0]["content"][0]["prompt_cache_breakpoint"] == {"mode": "explicit"}
-    assert body["prompt_cache_options"] == {"mode": "explicit"}
+    assert body["prompt_cache_options"] == {"mode": "implicit"}
 
 
 @pytest.mark.usefixtures("_no_openai_api_base_override")
@@ -824,6 +829,62 @@ async def test_injection_points_still_reach_a_native_responses_provider():
 
     body = _sent_body(mock_post)
     assert body["input"][0]["content"][0]["prompt_cache_breakpoint"] == {"mode": "explicit"}
+    assert "cache_control_injection_points" not in body
+
+
+@pytest.mark.asyncio
+async def test_injection_points_reach_a_provider_prefixed_native_responses_model():
+    """Bedrock Mantle resolves its Responses config from the price map by bare model name,
+    so predicting the bridge with the ``bedrock_mantle/``-prefixed name read as bridged and
+    deferred the system point to a chat-completions pass this native path never runs."""
+    injected_client = AsyncHTTPHandler()
+    mock_post = AsyncMock(
+        return_value=MockResponse(_minimal_responses_api_payload("resp_mantle", "openai.gpt-5.6-sol"), 200)
+    )
+    injected_client.post = mock_post
+
+    await litellm.aresponses(
+        model="bedrock_mantle/openai.gpt-5.6-sol",
+        api_key="fake-bearer-token",
+        aws_region_name="us-east-1",
+        input=copy.deepcopy(_INJECTION_POINT_INPUT),
+        cache_control_injection_points=copy.deepcopy(_SYSTEM_INJECTION_POINT),
+        client=injected_client,
+    )
+
+    assert mock_post.call_args.kwargs["url"].endswith("/openai/v1/responses")
+    body = _sent_body(mock_post)
+    assert body["input"][0]["content"][0]["prompt_cache_breakpoint"] == {"mode": "explicit"}
+    assert body["prompt_cache_options"] == {"mode": "implicit"}
+    assert "cache_control_injection_points" not in body
+
+
+@pytest.mark.asyncio
+async def test_injection_points_reach_a_foundry_deployment_of_an_openai_model(monkeypatch):
+    """The router hands this layer the provider it resolved with the deployment's api_base, but the
+    hook reads the provider from the request kwargs, which never carry it, and resolving
+    ``azure_ai/gpt-6-astra`` by name alone reads the ambient ``AZURE_AI_API_BASE``, so next to an
+    Azure OpenAI one the Foundry deployment got Anthropic marks the Responses transform then stripped."""
+    monkeypatch.setenv("AZURE_AI_API_BASE", "https://other-deployment.openai.azure.com")
+    injected_client = AsyncHTTPHandler()
+    mock_post = AsyncMock(
+        return_value=MockResponse(_minimal_responses_api_payload("resp_foundry", "gpt-6-astra"), 200)
+    )
+    injected_client.post = mock_post
+
+    await litellm.aresponses(
+        model="azure_ai/gpt-6-astra",
+        custom_llm_provider="azure_ai",
+        api_key="fake-api-key",
+        api_base="https://foundry.services.ai.azure.com",
+        input=copy.deepcopy(_INJECTION_POINT_INPUT),
+        cache_control_injection_points=copy.deepcopy(_SYSTEM_INJECTION_POINT),
+        client=injected_client,
+    )
+
+    body = _sent_body(mock_post)
+    assert body["input"][0]["content"][0]["prompt_cache_breakpoint"] == {"mode": "explicit"}
+    assert body["prompt_cache_options"] == {"mode": "implicit"}
     assert "cache_control_injection_points" not in body
 
 
@@ -979,3 +1040,39 @@ async def test_a_native_responses_provider_places_every_point_itself():
 
     assert user_only == [0, 2, 4, 6]
     assert with_unmatchable_system == user_only
+
+
+def test_non_streamed_response_ignores_a_stream_timeout_it_never_uses() -> None:
+    answer: Final = json.dumps(_minimal_responses_api_payload("resp_unstreamed", "gpt-5.6")).encode()
+    client: Final = HTTPHandler(
+        client=httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200, content=answer)))
+    )
+
+    response: Final = litellm.responses(
+        model="openai/gpt-5.6", input="hi", stream_timeout="unset", api_key="fake-key", client=client
+    )
+
+    assert response.output[0].content[0].text == "Done."
+
+
+def test_faked_stream_accepts_a_text_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "slow-faked-responses-model",
+        {"litellm_provider": "openai", "mode": "responses", "supports_native_streaming": False},
+    )
+    answer: Final = json.dumps(_minimal_responses_api_payload("resp_faked", "slow-faked-responses-model")).encode()
+
+    response: Final = litellm.responses(
+        model="openai/slow-faked-responses-model",
+        input="hi",
+        stream=True,
+        timeout=str(UPSTREAM_FIRST_BYTE_SECONDS * 2),
+        stream_timeout=STREAM_TIMEOUT_SECONDS,
+        api_key="fake-key",
+        client=slow_upstream_sync_client(answer),
+    )
+
+    assert [event.response.output[0].content[0].text for event in response if event.type == "response.completed"] == [
+        "Done."
+    ]

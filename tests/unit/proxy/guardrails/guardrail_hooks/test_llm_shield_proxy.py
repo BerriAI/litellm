@@ -58,7 +58,7 @@ def _response(payload: dict, status_code: int = 200) -> Response:
 def _mock_post(guardrail: LLMShieldProxyGuardrail, *payloads: dict) -> AsyncMock:
     """Queues one shield response per expected call."""
     mock = AsyncMock(side_effect=[_response(p) for p in payloads])
-    guardrail.async_handler.post = mock  # type: ignore[method-assign]
+    guardrail.async_handler.post = mock
     return mock
 
 
@@ -115,7 +115,7 @@ class _FakeShield:
 def _shielded(vault: dict[str, str]) -> tuple[LLMShieldProxyGuardrail, _FakeShield]:
     guardrail = _guardrail(event_hook="post_call")
     shield = _FakeShield(vault)
-    guardrail.async_handler.post = shield.post  # type: ignore[method-assign]
+    guardrail.async_handler.post = shield.post
     return guardrail, shield
 
 
@@ -861,7 +861,7 @@ class TestRequestCoverage:
         assert redact_mock.call_args_list[0].kwargs["json"]["texts"] == ["ops@example.com"]
         assert data["tools"][0]["function"]["parameters"]["properties"]["to"]["enum"] == ["[EMAIL_1]"]
 
-        guardrail.async_handler.post = shield.post  # type: ignore[method-assign]
+        guardrail.async_handler.post = shield.post
         call = SimpleNamespace(function=SimpleNamespace(name="notify", arguments='{"to": "[EMAIL_1]"}'))
         reply = ModelResponse(choices=[Choices(message=Message(content=None, tool_calls=None))])
         reply.choices[0].message.tool_calls = [call]
@@ -1919,7 +1919,7 @@ class TestProxyWiring:
             return _response({"texts": restored})
 
         guardrail = _guardrail(event_hook=["pre_call", "post_call"], default_on=False)
-        guardrail.async_handler.post = shield  # type: ignore[method-assign]
+        guardrail.async_handler.post = shield
         cache = InMemoryCache()
         monkeypatch.setattr(litellm, "callbacks", [guardrail])
         monkeypatch.setattr(litellm, "cache", litellm.Cache(type="local"))

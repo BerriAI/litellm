@@ -14,13 +14,14 @@ from typing import Final, Literal, TypeAlias
 
 import httpx
 from openai.types.file_deleted import FileDeleted
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.files.transformation import BaseFilesConfig, LiteLLMLoggingObj
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     CreateFileRequest,
     FileContentRequest,
@@ -54,7 +55,7 @@ class MistralMultipartUpload(TypedDict):
     purpose: ReadOnly[tuple[None, MistralFilePurpose]]
 
 
-class MistralFile(BaseModel):
+class MistralFile(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     id: str
@@ -65,13 +66,13 @@ class MistralFile(BaseModel):
     expires_at: int | None = None
 
 
-class MistralFileList(BaseModel):
+class MistralFileList(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     data: tuple[MistralFile, ...] = ()
 
 
-class MistralFileDeleted(BaseModel):
+class MistralFileDeleted(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     id: str

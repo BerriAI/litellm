@@ -32,20 +32,25 @@ task to settle. A ``BackgroundSettlementStore`` makes the pending settlement
 durable across processes: the create registers the request context that
 billing needs (never provider credentials), the settlement is claimed
 exactly once through the store, and a delete on any replica rebuilds the
-billing context from the store when the poll task is not local. Rows left
-unclaimed by a process that died are resumed at startup. The default store is
-in-memory, which keeps the SDK and single-process behavior unchanged; the
-proxy installs a database-backed one.
+billing context from the store when the poll task is not local. Every row
+still unsettled when a process starts is resumed there, including one whose
+settler died between its claim and its outcome: the database-backed store
+treats a claim as a lease that its settler renews until it records the
+outcome, so such a row is claimable again once the lease runs out. The
+default store is in-memory, which keeps the SDK and single-process behavior
+unchanged; the proxy installs a database-backed one.
 """
 
 import asyncio
+import itertools
 from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
+from openai import APIStatusError
+from pydantic import ConfigDict, JsonValue, TypeAdapter, ValidationError
 from pydantic_core import PydanticSerializationError, to_jsonable_python
 
 from litellm._logging import verbose_logger
@@ -54,9 +59,12 @@ from litellm.constants import (
     BACKGROUND_INTERACTION_COST_POLL_MAX_INTERVAL_SECONDS,
     BACKGROUND_INTERACTION_COST_POLL_TIMEOUT_SECONDS,
     BACKGROUND_INTERACTION_COST_POLLING_ENABLED,
+    BACKGROUND_INTERACTION_SETTLEMENT_CLAIM_LEASE_SECONDS,
 )
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
 from litellm.types.interactions import InteractionsAPIResponse
+from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.router import CredentialLiteLLMParams
 from litellm.types.utils import CustomPricingLiteLLMParams
 
 if TYPE_CHECKING:
@@ -73,7 +81,7 @@ _STATUSES_THAT_PRODUCED_OUTPUT: Final = frozenset({"completed", "requires_action
 SettlementOutcome: TypeAlias = Literal["billed", "released", "unsettled"]
 
 
-class BackgroundInteractionCreateContext(BaseModel):
+class BackgroundInteractionCreateContext(LiteLLMBaseModel):
     """
     The part of a create's logging state that billing its settled result needs,
     in a shape any replica can store and rebuild a logging object from. Provider
@@ -100,6 +108,7 @@ class PendingBackgroundInteraction:
     custom_llm_provider: str
     create_context: BackgroundInteractionCreateContext
     created_at: datetime
+    claim_expires_at: datetime | None = None
 
 
 class BackgroundSettlementStore(Protocol):
@@ -111,9 +120,11 @@ class BackgroundSettlementStore(Protocol):
 
     async def claim(self, interaction_id: str) -> bool: ...
 
+    async def renew_claim(self, interaction_id: str) -> None: ...
+
     async def record_outcome(self, interaction_id: str, outcome: SettlementOutcome) -> None: ...
 
-    async def unclaimed(self) -> Sequence[PendingBackgroundInteraction]: ...
+    async def unsettled(self) -> Sequence[PendingBackgroundInteraction]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,10 +155,13 @@ class InMemoryBackgroundSettlementStore:
         self._rows[interaction_id] = None
         return True
 
+    async def renew_claim(self, interaction_id: str) -> None:
+        return None
+
     async def record_outcome(self, interaction_id: str, outcome: SettlementOutcome) -> None:
         return None
 
-    async def unclaimed(self) -> Sequence[PendingBackgroundInteraction]:
+    async def unsettled(self) -> Sequence[PendingBackgroundInteraction]:
         return tuple(row for row in self._rows.values() if row is not None)
 
 
@@ -168,11 +182,15 @@ class BackgroundInteractionPollContext:
     interaction_id: str
     custom_llm_provider: str
     logging_obj: "LiteLLMLoggingObj"
-    api_key: str | None = None
-    api_base: str | None = None
+    credentials: CredentialLiteLLMParams = field(default_factory=CredentialLiteLLMParams)
+    deployment_id: str | None = None
+    model_group: str | None = None
     initial_interval_seconds: float = BACKGROUND_INTERACTION_COST_POLL_INITIAL_INTERVAL_SECONDS
     max_interval_seconds: float = BACKGROUND_INTERACTION_COST_POLL_MAX_INTERVAL_SECONDS
     timeout_seconds: float = BACKGROUND_INTERACTION_COST_POLL_TIMEOUT_SECONDS
+    start_delay_seconds: float = 0.0
+    outcome_write_timeout_seconds: float = BACKGROUND_INTERACTION_SETTLEMENT_CLAIM_LEASE_SECONDS / 2
+    claim_renewal_interval_seconds: float = BACKGROUND_INTERACTION_SETTLEMENT_CLAIM_LEASE_SECONDS / 3
     store: BackgroundSettlementStore = field(default_factory=InMemoryBackgroundSettlementStore)
     resumed: bool = False
 
@@ -183,13 +201,39 @@ FetchInteraction: TypeAlias = Callable[[BackgroundInteractionPollContext], Await
 async def fetch_background_interaction(context: BackgroundInteractionPollContext) -> InteractionsAPIResponse:
     from litellm.interactions import aget
 
+    credentials: Final = context.credentials
     return await aget(
         interaction_id=context.interaction_id,
         custom_llm_provider=context.custom_llm_provider,
-        api_key=context.api_key,
-        api_base=context.api_base,
+        api_key=credentials.api_key,
+        api_base=credentials.api_base,
+        vertex_project=credentials.vertex_project,
+        vertex_location=credentials.vertex_location,
+        vertex_credentials=credentials.vertex_credentials,
         **{"no-log": True},
     )
+
+
+_FETCH_CREDENTIAL_FIELDS: Final = ("api_key", "api_base", "vertex_project", "vertex_location", "vertex_credentials")
+
+
+def _fetch_credentials(request_kwargs: Mapping[str, object]) -> CredentialLiteLLMParams:
+    try:
+        return CredentialLiteLLMParams.model_validate(
+            {field_name: request_kwargs.get(field_name) for field_name in _FETCH_CREDENTIAL_FIELDS}
+        )
+    except ValidationError:
+        verbose_logger.debug(
+            "Fetching a background interaction with environment credentials: the request's are malformed"
+        )
+        return CredentialLiteLLMParams()
+
+
+_PERMANENT_FETCH_STATUS_CODES: Final = frozenset({400, 401, 403, 404})
+
+
+def _is_permanent_fetch_error(error: Exception) -> bool:
+    return isinstance(error, APIStatusError) and error.status_code in _PERMANENT_FETCH_STATUS_CODES
 
 
 def _poll_intervals(initial: float, maximum: float, timeout: float) -> Iterator[float]:
@@ -230,6 +274,7 @@ _UNCARRIED_METADATA_KEY: Final = "user_api_key_auth"
 _JSON_VALUE: Final = TypeAdapter(JsonValue)
 _STRING: Final = TypeAdapter(str)
 _OBJECT_MAPPING: Final = TypeAdapter(Mapping[str, object])
+_OBJECT_DICT: Final = TypeAdapter(dict[str, object])
 
 
 def _carries(key: str) -> bool:
@@ -255,10 +300,36 @@ def _as_datetime(start_time: datetime | float) -> datetime:
     return start_time if isinstance(start_time, datetime) else datetime.fromtimestamp(start_time, tz=timezone.utc)
 
 
+def _spend_metadata(logging_obj: "LiteLLMLoggingObj") -> Mapping[str, object]:
+    """
+    The metadata the creating worker's own spend row is built from, with the
+    request tags computed once, header-derived ones included, because a
+    rebuilt logging object has no request headers to derive them from.
+    """
+    litellm_params: Final = _OBJECT_DICT.validate_python(logging_obj.model_call_details.get("litellm_params") or {})
+    return {
+        **_OBJECT_MAPPING.validate_python(get_litellm_metadata_from_kwargs(kwargs=logging_obj.model_call_details)),
+        **_request_tags(litellm_params),
+    }
+
+
+def _request_tags(litellm_params: Mapping[str, object]) -> Mapping[str, object]:
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    try:
+        return {
+            "tags": StandardLoggingPayloadSetup.get_request_tags(
+                litellm_params=_OBJECT_DICT.validate_python(litellm_params),
+                proxy_server_request=_OBJECT_DICT.validate_python(litellm_params.get("proxy_server_request") or {}),
+            )
+        }
+    except AttributeError:
+        verbose_logger.debug("Keeping a background interaction's request tags as sent: they are not a list")
+        return {}
+
+
 def _create_context(logging_obj: "LiteLLMLoggingObj", custom_llm_provider: str) -> BackgroundInteractionCreateContext:
-    metadata: Final = _OBJECT_MAPPING.validate_python(
-        get_litellm_metadata_from_kwargs(kwargs=logging_obj.model_call_details)
-    )
+    metadata: Final = _spend_metadata(logging_obj)
     litellm_params: Final = _OBJECT_MAPPING.validate_python(logging_obj.litellm_params)
     model: Final = logging_obj.model_call_details.get("model")
     return BackgroundInteractionCreateContext(
@@ -312,6 +383,16 @@ async def _settled_elsewhere(context: BackgroundInteractionPollContext) -> bool:
         return False
 
 
+async def _settled_elsewhere_before_the_window_ends(
+    context: BackgroundInteractionPollContext, intervals: Iterator[float]
+) -> bool:
+    for interval in intervals:
+        await asyncio.sleep(interval)
+        if await _settled_elsewhere(context):
+            return True
+    return False
+
+
 async def _claim(context: BackgroundInteractionPollContext) -> bool | None:
     """
     Exactly-once gate between every settler of one interaction, on every
@@ -325,12 +406,88 @@ async def _claim(context: BackgroundInteractionPollContext) -> bool | None:
         return None
 
 
-async def _record(context: BackgroundInteractionPollContext, outcome: SettlementOutcome) -> SettlementOutcome:
+async def _wrote_outcome(context: BackgroundInteractionPollContext, outcome: SettlementOutcome) -> bool:
     try:
         await context.store.record_outcome(context.interaction_id, outcome)
-    except Exception:  # noqa: BLE001  # the outcome is an audit trail; the claim already made the settlement exclusive
-        verbose_logger.exception("Could not record the settlement of background interaction %s", context.interaction_id)
+    except Exception as e:  # noqa: BLE001  # a failed write is retried while the claim still shuts out takeovers
+        verbose_logger.warning(
+            "Could not record the settlement of background interaction %s: %s", context.interaction_id, e
+        )
+        return False
+    return True
+
+
+async def _recorded(context: BackgroundInteractionPollContext, outcome: SettlementOutcome) -> bool:
+    """
+    Retries a failed write for half the claim lease, while no other settler
+    can take the row over, so a database blip does not leave the row to a
+    takeover or hold the budget reservation that only a recorded release frees.
+    """
+    retries: Final = _poll_intervals(
+        initial=context.initial_interval_seconds,
+        maximum=context.max_interval_seconds,
+        timeout=context.outcome_write_timeout_seconds,
+    )
+    for delay in itertools.chain((0.0,), retries):
+        await asyncio.sleep(delay)
+        if await _wrote_outcome(context, outcome):
+            return True
+    verbose_logger.error(
+        "Could not record the settlement of background interaction %s within %ss; the next process to take "
+        "over its lapsed claim settles it",
+        context.interaction_id,
+        context.outcome_write_timeout_seconds,
+    )
+    return False
+
+
+async def _bill(context: BackgroundInteractionPollContext, response: InteractionsAPIResponse) -> SettlementOutcome:
+    await _bill_settled_interaction(logging_obj=context.logging_obj, response=response)
+    await _recorded(context, "billed")
+    return "billed"
+
+
+async def _release(
+    context: BackgroundInteractionPollContext, outcome: Literal["released", "unsettled"]
+) -> SettlementOutcome:
+    """
+    A release writes no spend row, so a takeover cannot tell whether the
+    settler before it released. The outcome is recorded first and the
+    reservation released only once it is, which leaves a takeover with
+    nothing to release twice.
+    """
+    if await _recorded(context, outcome):
+        await _release_open_budget_reservation(logging_obj=context.logging_obj)
     return outcome
+
+
+async def _renew_claim_until_cancelled(context: BackgroundInteractionPollContext) -> None:
+    while True:
+        await asyncio.sleep(context.claim_renewal_interval_seconds)
+        try:
+            await context.store.renew_claim(context.interaction_id)
+        except Exception as e:  # noqa: BLE001  # a missed renewal is retried next interval, well inside the lease
+            verbose_logger.warning(
+                "Could not renew the settlement claim of background interaction %s: %s", context.interaction_id, e
+            )
+
+
+async def _settle(
+    context: BackgroundInteractionPollContext, response: InteractionsAPIResponse | None
+) -> SettlementOutcome:
+    """
+    Billing runs every success callback in turn, and a slow one can outlast
+    the claim lease, so the claim is renewed until the outcome is recorded.
+    A settler that stops renewing has died, and only then can another take
+    the row over.
+    """
+    renewal: Final = asyncio.create_task(_renew_claim_until_cancelled(context))
+    try:
+        if response is not None and response.status in _TERMINAL_STATUSES and response.usage is not None:
+            return await _bill(context, response)
+        return await _release(context, "released")
+    finally:
+        renewal.cancel()
 
 
 async def poll_and_log_background_interaction_cost(
@@ -338,17 +495,29 @@ async def poll_and_log_background_interaction_cost(
     fetch_interaction: FetchInteraction = fetch_background_interaction,
 ) -> SettlementOutcome | None:
     last_response: InteractionsAPIResponse | None = None  # rebind-ok: the give-up path settles from the last poll
-    for interval in _poll_intervals(
+    await asyncio.sleep(context.start_delay_seconds)
+    intervals: Final = _poll_intervals(
         initial=context.initial_interval_seconds,
         maximum=context.max_interval_seconds,
         timeout=context.timeout_seconds,
-    ):
+    )
+    for interval in intervals:
         await asyncio.sleep(interval)
         if await _settled_elsewhere(context):
             return None
         try:
             response = await fetch_interaction(context)
         except Exception as e:  # noqa: BLE001  # any fetch error must not kill the billing poll loop
+            if context.resumed and _is_permanent_fetch_error(e):
+                verbose_logger.warning(
+                    "Stopped fetching resumed background interaction %s: the provider answered %s, so this "
+                    "process cannot read it and leaves it to the replica that created it until the poll window ends",
+                    context.interaction_id,
+                    e,
+                )
+                if await _settled_elsewhere_before_the_window_ends(context, intervals):
+                    return None
+                break
             verbose_logger.debug(
                 "Background interaction cost poll for %s failed, will retry: %s",
                 context.interaction_id,
@@ -362,11 +531,11 @@ async def poll_and_log_background_interaction_cost(
             continue
         if not claimed:
             return None
-        return await _record(context, await _settle_terminal(logging_obj=context.logging_obj, response=response))
+        return await _settle(context, response)
     if not await _claim(context):
         return None
     if last_response is not None and last_response.status in _TERMINAL_STATUSES:
-        return await _record(context, await _settle_terminal(logging_obj=context.logging_obj, response=last_response))
+        return await _settle(context, last_response)
     if last_response is not None and last_response.status not in _POLLABLE_STATUSES:
         verbose_logger.error(
             "Gave up cost polling for background interaction %s after %ss: its last status %r is in neither "
@@ -378,20 +547,10 @@ async def poll_and_log_background_interaction_cost(
         )
     else:
         verbose_logger.warning(
-            "Gave up cost polling for background interaction %s after %ss; its usage will not be tracked",
+            "Gave up cost polling for background interaction %s; its usage will not be tracked",
             context.interaction_id,
-            context.timeout_seconds,
         )
-    await _release_open_budget_reservation(logging_obj=context.logging_obj)
-    return await _record(context, "unsettled")
-
-
-async def _settle_terminal(logging_obj: "LiteLLMLoggingObj", response: InteractionsAPIResponse) -> SettlementOutcome:
-    if response.status in _TERMINAL_STATUSES and response.usage is not None:
-        await _bill_settled_interaction(logging_obj=logging_obj, response=response)
-        return "billed"
-    await _release_open_budget_reservation(logging_obj=logging_obj)
-    return "released"
+    return await _release(context, "unsettled")
 
 
 async def _release_open_budget_reservation(logging_obj: "LiteLLMLoggingObj") -> None:
@@ -404,7 +563,9 @@ async def _release_open_budget_reservation(logging_obj: "LiteLLMLoggingObj") -> 
     settlement must release the reservation here or the spend counters stay
     pinned at the estimated cost.
     """
-    metadata: Final = get_litellm_metadata_from_kwargs(kwargs=logging_obj.model_call_details)
+    metadata: Final = _OBJECT_MAPPING.validate_python(
+        get_litellm_metadata_from_kwargs(kwargs=logging_obj.model_call_details)
+    )
     budget_reservation: Final = metadata.get("user_api_key_budget_reservation")
     if not isinstance(budget_reservation, dict):
         return
@@ -517,13 +678,18 @@ class _UnverifiedRegistrationStore:
             return False
         return await self.local.claim(interaction_id)
 
+    async def renew_claim(self, interaction_id: str) -> None:
+        if await self.local.is_claimed(interaction_id):
+            return
+        await self.durable.renew_claim(interaction_id)
+
     async def record_outcome(self, interaction_id: str, outcome: SettlementOutcome) -> None:
         if await self.local.is_claimed(interaction_id):
             return
         await self.durable.record_outcome(interaction_id, outcome)
 
-    async def unclaimed(self) -> Sequence[PendingBackgroundInteraction]:
-        return await self.durable.unclaimed()
+    async def unsettled(self) -> Sequence[PendingBackgroundInteraction]:
+        return await self.durable.unsettled()
 
 
 async def _registered_store(
@@ -558,8 +724,6 @@ async def maybe_schedule_background_interaction_cost_polling(
     logging_obj: Final = create_kwargs.get("litellm_logging_obj")
     if not isinstance(logging_obj, Logging):
         return None
-    api_key: Final = create_kwargs.get("api_key")
-    api_base: Final = create_kwargs.get("api_base")
     pending: Final = PendingBackgroundInteraction(
         interaction_id=response.id,
         custom_llm_provider=custom_llm_provider,
@@ -570,8 +734,7 @@ async def maybe_schedule_background_interaction_cost_polling(
         interaction_id=response.id,
         custom_llm_provider=custom_llm_provider,
         logging_obj=logging_obj,
-        api_key=api_key if isinstance(api_key, str) else None,
-        api_base=api_base if isinstance(api_base, str) else None,
+        credentials=_fetch_credentials(create_kwargs),
         store=await _registered_store(store or _STORE.store, pending),
     )
     return _track_poll(context, fetch_interaction)
@@ -602,10 +765,7 @@ async def _settle_before_delete(
 ) -> SettlementOutcome | None:
     if not await _claim(context):
         return None
-    if response is None:
-        await _release_open_budget_reservation(logging_obj=context.logging_obj)
-        return await _record(context, "released")
-    return await _record(context, await _settle_terminal(logging_obj=context.logging_obj, response=response))
+    return await _settle(context, response)
 
 
 async def maybe_settle_background_interaction_before_delete(
@@ -621,14 +781,11 @@ async def maybe_settle_background_interaction_before_delete(
     pending: Final = await _pending(settlement_store, interaction_id)
     if pending is None:
         return None
-    api_key: Final = delete_kwargs.get("api_key")
-    api_base: Final = delete_kwargs.get("api_base")
     context: Final = BackgroundInteractionPollContext(
         interaction_id=interaction_id,
         custom_llm_provider=pending.custom_llm_provider,
         logging_obj=_rebuild_logging_obj(pending.create_context),
-        api_key=api_key if isinstance(api_key, str) else None,
-        api_base=api_base if isinstance(api_base, str) else None,
+        credentials=_fetch_credentials(delete_kwargs),
         store=settlement_store,
     )
     try:
@@ -643,9 +800,9 @@ async def maybe_settle_background_interaction_before_delete(
     return await _settle_before_delete(context, response)
 
 
-async def _unclaimed(store: BackgroundSettlementStore) -> Sequence[PendingBackgroundInteraction]:
+async def _unsettled(store: BackgroundSettlementStore) -> Sequence[PendingBackgroundInteraction]:
     try:
-        return await store.unclaimed()
+        return await store.unsettled()
     except Exception:  # noqa: BLE001  # an unreadable store at startup leaves its rows for the next boot
         verbose_logger.exception("Could not list the unsettled background interactions")
         return ()
@@ -661,17 +818,36 @@ class PollSchedule:
 DEFAULT_POLL_SCHEDULE: Final = PollSchedule()
 
 
+def _deployment_id(create_context: BackgroundInteractionCreateContext) -> str | None:
+    model_info: Final = create_context.metadata.get("model_info")
+    deployment_id: Final = model_info.get("id") if isinstance(model_info, dict) else None
+    return deployment_id if isinstance(deployment_id, str) else None
+
+
+def _model_group(create_context: BackgroundInteractionCreateContext) -> str | None:
+    model_group: Final = create_context.metadata.get("model_group")
+    return model_group if isinstance(model_group, str) else None
+
+
+def _seconds_until(moment: datetime | None) -> float:
+    if moment is None:
+        return 0.0
+    return max((moment - datetime.now(timezone.utc)).total_seconds(), 0.0)
+
+
 def _resumed_context(
     row: PendingBackgroundInteraction, store: BackgroundSettlementStore, schedule: PollSchedule
 ) -> BackgroundInteractionPollContext:
-    age_seconds: Final = (datetime.now(timezone.utc) - row.created_at).total_seconds()
     return BackgroundInteractionPollContext(
         interaction_id=row.interaction_id,
         custom_llm_provider=row.custom_llm_provider,
         logging_obj=_rebuild_logging_obj(row.create_context),
+        deployment_id=_deployment_id(row.create_context),
+        model_group=_model_group(row.create_context),
         initial_interval_seconds=schedule.initial_interval_seconds,
         max_interval_seconds=schedule.max_interval_seconds,
-        timeout_seconds=max(schedule.timeout_seconds - age_seconds, schedule.initial_interval_seconds),
+        timeout_seconds=schedule.timeout_seconds,
+        start_delay_seconds=_seconds_until(row.claim_expires_at),
         store=store,
         resumed=True,
     )
@@ -683,13 +859,15 @@ async def resume_unsettled_background_interactions(
     schedule: PollSchedule = DEFAULT_POLL_SCHEDULE,
 ) -> tuple["asyncio.Task[SettlementOutcome | None]", ...]:
     """
-    Pick up every settlement no process has claimed, which is what a replica
-    that died mid-poll leaves behind. Each resumed poll keeps the remaining
-    share of the original timeout and gets at least one fetch, so a completed
-    interaction is still billed however late the resume comes.
+    Pick up every settlement no process has finished, which is what a replica
+    that died mid-poll or mid-settlement leaves behind. A row whose claim is
+    still within its lease waits until the lease runs out, then polls like any
+    other. Each resumed poll gets the full poll window however old its row is,
+    so a fetch that fails right after a late restart is retried rather than
+    ending the row as unsettled.
     """
     return tuple(
         _track_poll(_resumed_context(row, store, schedule), fetch_interaction)
-        for row in await _unclaimed(store)
+        for row in await _unsettled(store)
         if row.interaction_id not in _ACTIVE_POLLS
     )

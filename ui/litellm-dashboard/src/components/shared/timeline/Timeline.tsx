@@ -9,6 +9,8 @@ import { DotFieldCanvas, DotFieldRoot } from "@/components/shared/dotField/DotFi
 import type { DotBand, DotColumn } from "@/components/shared/dotField/dots";
 import { cn } from "@/lib/cva.config";
 
+import type { TimeWindow } from "../timeRange/timeRange";
+
 export const TIMELINE_BUCKETS = 60;
 const TICKS = 6;
 const MINUTE_MS = 60 * 1000;
@@ -16,15 +18,12 @@ const HOUR_MS = 60 * MINUTE_MS;
 const DAY_MS = 24 * HOUR_MS;
 const EDGE_FORMAT = "MMM DD, HH:mm";
 
-export interface TimeWindow {
+export interface TimeBucket extends DotColumn {
   startMs: number;
   endMs: number;
 }
 
-export interface Bucket extends DotColumn {
-  startMs: number;
-  endMs: number;
-}
+export type ItemNoun = { readonly singular: string; readonly plural: string };
 
 /** Compact window length, Logfire-style: "45m", "6h 12m", "7d", "152d 23h". */
 export function formatSpan(ms: number): string {
@@ -49,13 +48,15 @@ const tickShift = (t: number): string => {
 };
 
 interface TimelineProps {
-  buckets: readonly Bucket[];
+  buckets: readonly TimeBucket[];
   selection: TimeWindow | null;
   onSelect: (selection: TimeWindow | null) => void;
+  /** What one counted item is called in the hover tooltip. */
+  noun: ItemNoun;
 }
 
-function BucketBar({ bucket }: { bucket: Bucket }) {
-  return <div className="pointer-events-none h-full flex-1" data-testid="timeline-bucket" data-runs={bucket.total} />;
+function BucketBar({ bucket }: { bucket: TimeBucket }) {
+  return <div className="pointer-events-none h-full flex-1" data-testid="timeline-bucket" data-total={bucket.total} />;
 }
 
 function NowEdge() {
@@ -63,7 +64,7 @@ function NowEdge() {
     <>
       <div
         aria-hidden="true"
-        className="pointer-events-none absolute inset-y-0 w-24 bg-gradient-to-r from-transparent via-[#3b5bfd]/[0.08] to-transparent motion-safe:animate-[lens-sweep_6s_linear_infinite] motion-reduce:hidden"
+        className="pointer-events-none absolute inset-y-0 w-24 bg-gradient-to-r from-transparent via-[#3b5bfd]/[0.08] to-transparent motion-safe:animate-[timeline-sweep_6s_linear_infinite] motion-reduce:hidden"
       />
       <div aria-hidden="true" className="pointer-events-none absolute inset-y-0 right-0">
         <span className="absolute inset-y-0 right-0 w-px bg-[#3b5bfd]/50" />
@@ -73,7 +74,17 @@ function NowEdge() {
   );
 }
 
-function BucketTooltip({ bucket, index, bucketCount }: { bucket: Bucket; index: number; bucketCount: number }) {
+function BucketTooltip({
+  bucket,
+  index,
+  bucketCount,
+  noun,
+}: {
+  bucket: TimeBucket;
+  index: number;
+  bucketCount: number;
+  noun: ItemNoun;
+}) {
   return (
     <div
       className="pointer-events-none absolute top-full z-floating mt-1 rounded-md border border-border bg-popover px-2.5 py-1.5 font-mono text-xs text-popover-foreground shadow-md"
@@ -84,7 +95,7 @@ function BucketTooltip({ bucket, index, bucketCount }: { bucket: Bucket; index: 
         {moment(bucket.startMs).format(EDGE_FORMAT)} to {moment(bucket.endMs).format("HH:mm")}
       </div>
       <div>
-        {bucket.total} {bucket.total === 1 ? "run" : "runs"}
+        {bucket.total} {bucket.total === 1 ? noun.singular : noun.plural}
         {bucket.failed > 0 && `, ${bucket.failed} failed`}
       </div>
       <div className="text-info">drag to zoom</div>
@@ -118,7 +129,7 @@ export function dragUpdate(drag: DragState, at: number, buckets = TIMELINE_BUCKE
 }
 
 /** Bucket band covered by a selected window, or null when nothing is selected. */
-export function bandForWindow(buckets: readonly Bucket[], selection: TimeWindow | null): Band | null {
+export function bandForWindow(buckets: readonly TimeBucket[], selection: TimeWindow | null): Band | null {
   if (selection === null) return null;
   const inside = buckets.flatMap((b, i) => (b.startMs >= selection.startMs && b.endMs <= selection.endMs ? [i] : []));
   return inside.length > 0 ? { lo: inside[0], hi: inside[inside.length - 1] } : null;
@@ -183,9 +194,15 @@ function SelectionBracket({
   );
 }
 
-function TickAxis({ range }: { range: TimeWindow }) {
+export function timelineTicks(range: TimeWindow, width: number): number[] {
+  const labelWidth = tickFormat(range) === EDGE_FORMAT ? 140 : 80;
+  const count = Math.max(2, Math.min(TICKS, Math.floor(width / labelWidth)));
+  return Array.from({ length: count }, (_, i) => i / (count - 1));
+}
+
+function TickAxis({ range, width }: { range: TimeWindow; width: number }) {
   const format = tickFormat(range);
-  const ticks = Array.from({ length: TICKS }, (_, i) => i / (TICKS - 1));
+  const ticks = timelineTicks(range, width);
   return (
     <div className="relative mt-0.5 h-5">
       {ticks.map((t) => (
@@ -210,7 +227,7 @@ function TickAxis({ range }: { range: TimeWindow }) {
 }
 
 /** Histogram over the window covered by `buckets`. Drag to select; drag the bracket or its edges to adjust; Esc clears. */
-export function Timeline({ buckets, selection, onSelect }: TimelineProps) {
+export function Timeline({ buckets, selection, onSelect, noun }: TimelineProps) {
   const bucketCount = buckets.length;
   const [hover, setHover] = useState<number | null>(null);
   const [drag, setDrag] = useState<DragState | null>(null);
@@ -272,7 +289,7 @@ export function Timeline({ buckets, selection, onSelect }: TimelineProps) {
   return (
     <div
       className="relative shrink-0 border-b border-border bg-card px-3 pt-2 pb-1 outline-none select-none"
-      data-testid="traces-timeline"
+      data-testid="timeline"
       tabIndex={0}
       onKeyDown={onKeyDown}
     >
@@ -314,9 +331,11 @@ export function Timeline({ buckets, selection, onSelect }: TimelineProps) {
         )}
       </DotFieldRoot>
       <div className="mt-1">
-        <TickAxis range={range} />
+        <TickAxis range={range} width={stripWidth} />
       </div>
-      {hover !== null && !drag && <BucketTooltip bucket={buckets[hover]} index={hover} bucketCount={bucketCount} />}
+      {hover !== null && !drag && (
+        <BucketTooltip bucket={buckets[hover]} index={hover} bucketCount={bucketCount} noun={noun} />
+      )}
       {selection && (
         <button
           type="button"

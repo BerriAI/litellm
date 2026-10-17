@@ -19,6 +19,7 @@ class CacheControlMessageInjectionPoint(TypedDict):
     control: ChatCompletionCachedContent | None
     _litellm_openai_dialect: NotRequired[ReadOnly[bool]]
     _litellm_external_breakpoints: NotRequired[ReadOnly[int]]
+    _litellm_custom_llm_provider: NotRequired[ReadOnly[str]]
 
 
 class CacheControlToolConfigInjectionPoint(TypedDict):
@@ -28,6 +29,7 @@ class CacheControlToolConfigInjectionPoint(TypedDict):
     control: ChatCompletionCachedContent | None
     _litellm_openai_dialect: NotRequired[ReadOnly[bool]]
     _litellm_external_breakpoints: NotRequired[ReadOnly[int]]
+    _litellm_custom_llm_provider: NotRequired[ReadOnly[str]]
 
 
 CacheControlInjectionPoint = CacheControlMessageInjectionPoint | CacheControlToolConfigInjectionPoint

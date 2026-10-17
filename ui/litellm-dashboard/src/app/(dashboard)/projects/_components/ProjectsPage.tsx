@@ -1,6 +1,9 @@
+import { useCanManageProjects } from "@/app/(dashboard)/hooks/projects/projectAccess";
 import { Page, PageContent } from "@/components/shared/Page";
 import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { isUserTeamAdminForAnyTeam } from "@/utils/roles";
 import { Folder, Plus, SearchIcon, X } from "lucide-react";
 import { parseAsString, useQueryState } from "nuqs";
 import { useMemo, useState } from "react";
@@ -15,6 +18,8 @@ import { useClearProjectKeysTableState, useProjectsTableState } from "./useProje
 export function ProjectsPage() {
   const { data: projects, isLoading } = useProjects();
   const { data: teams, isLoading: isTeamsLoading } = useTeams();
+  const { userId } = useAuthorized();
+  const canCreateProject = useCanManageProjects(isUserTeamAdminForAnyTeam(teams ?? null, userId ?? ""));
 
   const [selectedProjectId, setSelectedProjectId] = useQueryState(
     "project",
@@ -64,12 +69,14 @@ export function ProjectsPage() {
           Projects
         </PageHeaderTitle>
         <PageHeaderDescription>Manage projects within your teams</PageHeaderDescription>
-        <PageHeaderControls>
-          <Button onClick={() => setIsCreateModalVisible(true)}>
-            <Plus className="size-4" />
-            Create Project
-          </Button>
-        </PageHeaderControls>
+        {canCreateProject && (
+          <PageHeaderControls>
+            <Button onClick={() => setIsCreateModalVisible(true)}>
+              <Plus className="size-4" />
+              Create Project
+            </Button>
+          </PageHeaderControls>
+        )}
       </PageHeader>
 
       <PageContent className="gap-3">
