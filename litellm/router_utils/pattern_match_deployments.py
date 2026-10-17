@@ -211,9 +211,7 @@ class PatternMatchRouter:
 
     def shadowing_regex(self, request: str, wildcard: str) -> str | None:
         own_regex: Final = self.pattern_to_regex(wildcard)
-        if own_regex not in self.patterns:
-            return None
-        serving_regex: Final = next((regex for regex in self.patterns if matches_from_start(regex, request)), own_regex)
+        serving_regex: Final = next((regex for regex in self.patterns if matches_from_start(regex, request)), None)
         return None if serving_regex == own_regex else serving_regex
 
     def serves(self, request: str) -> bool:

@@ -421,10 +421,10 @@ def test_registers_only_routes_that_were_added(route: str, registered: bool) -> 
         ("openai/gpt-4o", "*", True),
         ("openai/gpt-4o", "openai/*", False),
         ("meta-llama/llama-3-8b", "*", False),
-        ("openai/gpt-4o", "team/*", False),
+        ("openai/gpt-4o", "openai/gpt-*", True),
     ],
 )
-def test_shadowing_regex_only_when_a_more_specific_registered_pattern_serves_the_request(
+def test_shadowing_regex_only_when_another_registered_pattern_serves_the_request(
     request_model: str, wildcard: str, shadowed: bool
 ) -> None:
     pattern_router: Final = PatternMatchRouter()

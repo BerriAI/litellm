@@ -1257,6 +1257,35 @@ def test_key_scoped_to_a_wide_route_lists_ids_a_narrower_route_sends_to_the_same
     assert sorted(listed) == ["openai/gpt-4.1-mini", "openai/gpt-4.1-nano", "openai/gpt-4o"]
 
 
+def test_key_granted_a_pattern_that_is_not_a_route_skips_ids_a_narrower_route_sends_to_another_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm
+    from litellm import Router
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", False)
+    router: Final = Router(
+        model_list=[
+            {"model_name": "openai/*", "litellm_params": {"model": "openai/*"}},
+            {"model_name": "openai/gpt-4o*", "litellm_params": {"model": "anthropic/claude-sonnet-4*"}},
+        ]
+    )
+    monkeypatch.setitem(litellm.models_by_provider, "openai", ["gpt-4o", "gpt-4o-mini", "gpt-4.1"])
+    monkeypatch.setitem(litellm.models_by_provider, "anthropic", ["claude-sonnet-4-5"])
+
+    listed: Final = get_complete_model_list(
+        key_models=["openai/gpt-4*"],
+        team_models=[],
+        proxy_model_list=["openai/*", "openai/gpt-4o*"],
+        user_model=None,
+        infer_model_from_keys=False,
+        llm_router=router,
+    )
+
+    assert sorted(listed) == ["openai/gpt-4.1", "openai/gpt-4o-5"]
+
+
 @pytest.mark.parametrize(
     ("key_models", "expected"),
     [
