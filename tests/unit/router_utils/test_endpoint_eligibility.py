@@ -74,3 +74,14 @@ def test_nested_non_chat_calls_do_not_inherit_the_outer_chat_restriction() -> No
         chat_result: Final = eligible_deployments("shared", (deployment,))
     assert embedding_result == (deployment,)
     assert isinstance(chat_result, UnsupportedEndpointError)
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    ["/messages", "/interactions", "/responses/compact", "/openai/v1/responses/compact", "/openai/v1/chat/completions"],
+)
+def test_chat_endpoint_declarations_keep_their_meaning_across_prefixes(endpoint: str) -> None:
+    deployment: Final = _deployment({"enforce_supported_endpoints": True, "supported_endpoints": [endpoint]})
+    with endpoint_selection("acompletion"):
+        result: Final = eligible_deployments("shared", (deployment,))
+    assert result == (deployment,)

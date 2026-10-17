@@ -28,7 +28,13 @@ CHAT_ENDPOINT_BY_CALL: Final[Mapping[str, str]] = MappingProxyType(
         "acompact_responses": "/v1/responses/compact",
     }
 )
-CHAT_ENDPOINTS: Final = frozenset((*CHAT_ENDPOINT_BY_CALL.values(), "/chat/completions", "/completions", "/responses"))
+
+
+def _endpoint_path(endpoint: str) -> str:
+    return endpoint.removeprefix("/openai").removeprefix("/v1beta").removeprefix("/v1")
+
+
+CHAT_ENDPOINTS: Final = frozenset(_endpoint_path(endpoint) for endpoint in CHAT_ENDPOINT_BY_CALL.values())
 _Deployment: Final = TypeVar("_Deployment", bound=Mapping[str, object])
 _REQUEST_SELECTION: Final[ContextVar[tuple[str | None, str | None]]] = ContextVar(
     "router_request_endpoint", default=(None, None)
@@ -72,7 +78,8 @@ def non_chat_endpoints(deployment: Mapping[str, object]) -> frozenset[str] | Non
     if not declaration.enforce_supported_endpoints or declaration.supported_endpoints is None:
         return None
     endpoints: Final = frozenset(declaration.supported_endpoints)
-    return endpoints if endpoints.isdisjoint(CHAT_ENDPOINTS) else None
+    normalized: Final = frozenset(_endpoint_path(endpoint) for endpoint in endpoints)
+    return endpoints if normalized.isdisjoint(CHAT_ENDPOINTS) else None
 
 
 def eligible_deployments(

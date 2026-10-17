@@ -88,7 +88,7 @@ class TestEmbeddingOnlySupportedEndpoints:
         )
 
     @pytest.mark.covers("llm.embeddings.openai.supported_endpoints_gate.nonstream.works")
-    @meta(_subject(Route.CHAT_COMPLETIONS))
+    @meta(dataclasses.replace(_subject(Route.CHAT_COMPLETIONS), models=(EMBEDDING_BACKEND, CHAT_FALLBACK_BACKEND)))
     def test_chat_completions_with_a_fallback_are_answered_by_the_fallback(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:

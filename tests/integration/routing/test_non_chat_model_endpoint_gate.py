@@ -1425,3 +1425,17 @@ def test_client_routing_fields_cannot_disable_an_explicit_restriction(rig: _Rig)
             additional_drop_params=["original_generic_function"],
         )
         _assert_rejected_chat(rig, response, marker, model)
+
+
+def test_a_compaction_endpoint_declaration_keeps_the_model_available_for_compaction(rig: _Rig) -> None:
+    marker: Final = _marker()
+    with rig.gateway.scenario() as scenario:
+        model, identities = _deploy(
+            scenario,
+            rig.api_base,
+            "compact-declaration",
+            _single({"supported_endpoints": ["/responses/compact"], "enforce_supported_endpoints": True}),
+        )
+        _served_by_every_worker(rig.gateway, frozenset(identities))
+        response: Final = rig.gateway.request("POST", "/responses/compact", {"model": model, "input": marker})
+        _assert_served(rig, response, marker, "/v1/responses/compact")
