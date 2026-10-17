@@ -1410,3 +1410,18 @@ def test_responses_websocket_uses_a_chat_fallback_without_calling_the_embedding_
         (forwarded,) = responses_ws_peer.drain(peer.frames)
         assert marker in json.dumps(forwarded), forwarded
     assert rig.upstream.calls(marker) == ()
+
+
+def test_client_routing_fields_cannot_disable_an_explicit_restriction(rig: _Rig) -> None:
+    marker: Final = _marker()
+    with rig.gateway.scenario() as scenario:
+        model, identities = _deploy(scenario, rig.api_base, "restricted-chat", _single(_EMBED_ONLY))
+        _served_by_every_worker(rig.gateway, frozenset(identities))
+        response: Final = _chat(
+            rig,
+            model,
+            marker,
+            original_generic_function="caller-value",
+            additional_drop_params=["original_generic_function"],
+        )
+        _assert_rejected_chat(rig, response, marker, model)

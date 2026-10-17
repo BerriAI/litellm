@@ -8686,8 +8686,9 @@ class Router:
         Handler for making a call to the .completion()/.embeddings()/etc. functions.
         """
         model_group: Final = kwargs.get("model")
-        endpoint_function: Final = _OPAQUE_VALUE_ADAPTER.validate_python(
-            kwargs.get("original_generic_function") or original_function
+        generic_function: Final = _OPAQUE_VALUE_ADAPTER.validate_python(kwargs.get("original_generic_function"))
+        endpoint_function: Final = (
+            generic_function if callable(generic_function) else _OPAQUE_VALUE_ADAPTER.validate_python(original_function)
         )
         with endpoint_selection(
             getattr(endpoint_function, "__name__", None),
