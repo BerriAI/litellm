@@ -10,12 +10,18 @@ Pins (PR2):
 from __future__ import annotations
 
 import io
+import json
+from collections.abc import Callable
+from contextlib import AbstractContextManager
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
+from fastapi.testclient import TestClient
 
 from litellm.proxy import proxy_server
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.llms.openai import HttpxBinaryResponseContent
 
 
@@ -254,3 +260,33 @@ def test_audio_transcription_error(client, auth_as, patched_transcription_error,
         response = client.post(path, files=files, data=data)
     assert response.status_code == 500
     assert len(response.content) > 0
+
+
+@pytest.mark.parametrize("path", ["/v1/audio/transcriptions", "/audio/transcriptions"])
+def test_repeated_language_fields_reach_gemini_through_proxy(
+    client: TestClient,
+    auth_as: Callable[..., AbstractContextManager[UserAPIKeyAuth]],
+    gemini_transcription_requests: list[httpx.Request],
+    path: str,
+) -> None:
+    with auth_as():
+        response: Final = client.post(
+            path,
+            files=[
+                ("file", ("audio.wav", b"RIFF....WAVEfmt synthetic-audio", "audio/wav")),
+                ("model", (None, "gemini-transcribe")),
+                ("language", (None, "fr")),
+                ("language_codes[]", (None, "en-US")),
+                ("language_codes[]", (None, "es-ES")),
+                ("timestamp_granularities[]", (None, "word")),
+            ],
+        )
+    assert response.status_code == 200, response.text
+    assert response.json()["text"] == "Hello world."
+    assert len(gemini_transcription_requests) == 1
+    assert json.loads(gemini_transcription_requests[0].content)["generation_config"] == {
+        "transcription_config": {
+            "language_codes": ["en-US", "es-ES"],
+            "mode": {"type": "verbatim", "timestamp_granularities": ["word"], "diarization_mode": "speaker"},
+        }
+    }
