@@ -51,7 +51,7 @@ from litellm.proxy import proxy_server
 from litellm.proxy._types import SpanAttributes
 from litellm.types.services import ServiceLoggerPayload, ServiceTypes
 from collections.abc import AsyncIterator
-from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE
+from litellm.constants import KUBERNETES_POD_ROUTING_KEY, LOGGING_WORKER_MAX_TIME_PER_COROUTINE
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.types.utils import ChatCompletionMessageToolCall, Function
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
@@ -361,6 +361,33 @@ def test_v1_routing_diagnostics_add_scalar_attributes_and_preserve_legacy_metada
     }
     assert actual == {f"litellm.routing.{key}": value for key, value in decision.items()}
     assert finished.attributes["metadata.routing_decision"] == str(decision)
+
+
+def test_v1_pod_routing_none_matches_other_none_metadata_attributes() -> None:
+    exporter: Final = InMemorySpanExporter()
+    provider: Final = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    otel: Final = OpenTelemetry(tracer_provider=provider)
+    with provider.get_tracer(__name__).start_as_current_span("inference") as span:
+        otel.set_attributes(
+            span,
+            {
+                "model": "answer",
+                "standard_logging_object": {
+                    "id": "routing-call",
+                    "call_type": "acompletion",
+                    "metadata": {
+                        KUBERNETES_POD_ROUTING_KEY: None,
+                        "other_none": None,
+                    },
+                },
+            },
+            {"model": "answer", "choices": [], "usage": {}},
+        )
+    (finished,) = exporter.get_finished_spans()
+    routing_attribute: Final = finished.attributes["metadata.kubernetes_pod_routing"]
+    assert routing_attribute == finished.attributes["metadata.other_none"]
+    assert routing_attribute != "null"
 
 
 @pytest.mark.parametrize("decision", ["custom", 42, ["custom"]])

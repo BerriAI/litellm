@@ -19,6 +19,7 @@ from litellm.constants import (
     CLI_SESSION_KEY_PREFIX,
     EMPTY_MAPPING,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
+    KUBERNETES_POD_ROUTING_KEY,
     LITELLM_PROXY_MASTER_KEY_ALIAS,
     LITELLM_TRUNCATED_PAYLOAD_FIELD,
     LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE,
@@ -43,6 +44,7 @@ from litellm.litellm_core_utils.classifier_logging import (
 )
 from litellm.litellm_core_utils.core_helpers import (
     get_litellm_metadata_from_kwargs,
+    proxy_stamped_kubernetes_pod_routing,
     proxy_stamped_used_client_oauth_token,
     reconstruct_model_name,
 )
@@ -76,6 +78,7 @@ from litellm.types.utils import (
     CostBreakdown,
     LlmProviders,
     StandardLoggingGuardrailInformation,
+    StandardLoggingKubernetesPodRouting,
     StandardLoggingMCPToolCall,
     StandardLoggingModelInformation,
     StandardLoggingPayload,
@@ -178,6 +181,7 @@ _STAMPED_METADATA_KEYS: Final = frozenset(
         "autorouter_savings_estimate",
         "autorouter_baseline_observation",
         "used_client_oauth_token",
+        KUBERNETES_POD_ROUTING_KEY,
         "litellm_roi_estimator",
     )
 )
@@ -204,6 +208,7 @@ def _get_spend_logs_metadata(
     router_metadata: SpendLogsRouterMetadata | None = None,
     azure_spillover: AzureSpillover | None = None,
     used_client_oauth_token: bool | None = None,
+    kubernetes_pod_routing: StandardLoggingKubernetesPodRouting | None = None,
 ) -> SpendLogsMetadata:
     if metadata is None:
         return SpendLogsMetadata(
@@ -250,6 +255,7 @@ def _get_spend_logs_metadata(
             router_metadata=router_metadata,
             azure_spillover=azure_spillover,
             used_client_oauth_token=used_client_oauth_token,
+            kubernetes_pod_routing=None,
         )
     verbose_proxy_logger.debug(
         "getting payload for SpendLogs, available keys in metadata: " + str(list(metadata.keys()))
@@ -266,6 +272,7 @@ def _get_spend_logs_metadata(
         router_metadata=router_metadata,
         azure_spillover=azure_spillover,
         used_client_oauth_token=used_client_oauth_token,
+        kubernetes_pod_routing=kubernetes_pod_routing,
         litellm_roi_estimator=metadata.get("litellm_roi_estimator") is True,
     )
     _raw_key: Final = clean_metadata.get("user_api_key")
@@ -551,6 +558,16 @@ def get_logging_payload(
     # standardize this function to be used across, s3, dynamoDB, langfuse logging
     litellm_params: Final = kwargs.get("litellm_params", {})
     metadata: Final = get_litellm_metadata_from_kwargs(kwargs)
+    routing_litellm_params: Final[Mapping[str, object] | None] = (
+        litellm_params if isinstance(litellm_params, Mapping) else None
+    )
+    routing_metadata: Final[object] = (
+        routing_litellm_params.get("metadata") if routing_litellm_params is not None else None
+    )
+    kubernetes_pod_routing: Final = proxy_stamped_kubernetes_pod_routing(
+        routing_metadata,
+        routing_litellm_params,
+    )
     completion_start_time: Final = kwargs.get("completion_start_time", end_time)
     call_type: Final = kwargs.get("call_type")
     cache_hit: Final = kwargs.get("cache_hit", False)
@@ -585,7 +602,9 @@ def get_logging_payload(
     id = get_spend_logs_id(call_type or "acompletion", response_obj_dict, kwargs, metadata)
     standard_logging_payload: Final = cast(StandardLoggingPayload | None, kwargs.get("standard_logging_object", None))
 
-    end_user_id = get_end_user_id_for_cost_tracking(litellm_params)
+    end_user_id = get_end_user_id_for_cost_tracking(
+        dict(litellm_params) if isinstance(litellm_params, Mapping) else litellm_params
+    )
 
     api_key = metadata.get("user_api_key", "")
 
@@ -763,6 +782,7 @@ def get_logging_payload(
         used_client_oauth_token=resolve_used_client_oauth_token(
             proxy_stamped_used_client_oauth_token(litellm_params.get("metadata"), litellm_params), custom_llm_provider
         ),
+        kubernetes_pod_routing=kubernetes_pod_routing,
         azure_spillover=azure_spillover(
             response_headers=kwargs.get("response_headers")
             if isinstance(kwargs.get("response_headers"), Mapping)
