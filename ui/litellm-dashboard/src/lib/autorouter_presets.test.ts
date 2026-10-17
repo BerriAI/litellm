@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import type { ComplexityRouterConfigValue } from "@/components/add_model/ComplexityRouterConfig";
 import { BUNDLED_PRESETS_RESPONSE } from "../../tests/mocks/autoRouterPresets";
 import {
   hydratePresets,
@@ -9,7 +10,7 @@ import {
   getMissingModels,
   getReferencedModelsError,
   buildEmptyPrefill,
-  buildPresetPrefill,
+  applyPresetTiers,
   buildModelAvailability,
   deploymentRefsFromModelInfo,
   normalizeModelName,
@@ -43,7 +44,7 @@ describe("autorouter_presets", () => {
     }
   });
 
-  // buildPresetPrefill resolves every model reference through normalizeModelName, so two spellings
+  // applyPresetTiers resolves every model reference through normalizeModelName, so two spellings
   // of the same model in one tier (e.g. "claude-sonnet-4-5" and "claude-sonnet-4.5") collapse to one
   // key. For tier_model_configs that silently drops one model's litellm_params; catch it in the
   // bundled data itself, since nothing else validates preset authoring.
@@ -94,7 +95,9 @@ describe("autorouter_presets", () => {
       expect(config.custom_dimensions).toBeUndefined();
     }
     const config = getPresetByKey("anthropic_family")!.complexity_router_config;
-    expect(buildPresetPrefill(config, groupsOnly([])).complexityRouterConfig.custom_dimensions).toBeUndefined();
+    expect(
+      applyPresetTiers(buildEmptyPrefill().complexityRouterConfig, config, groupsOnly([])).custom_dimensions,
+    ).toBeUndefined();
   });
 
   it("resets both scoring overrides when the form falls back to an empty prefill", () => {
@@ -102,28 +105,18 @@ describe("autorouter_presets", () => {
     expect(buildEmptyPrefill().complexityRouterConfig.dimension_weights).toBeUndefined();
   });
 
-  it("carries a preset's session affinity idle window into the prefilled form state", () => {
-    const config = getPresetByKey("anthropic_family")!.complexity_router_config;
-    const prefill = buildPresetPrefill({ ...config, session_affinity_ttl_seconds: 300 }, groupsOnly([]));
-    expect(prefill.complexityRouterConfig.session_affinity_ttl_seconds).toBe(300);
-    expect(
-      buildPresetPrefill(config, groupsOnly([])).complexityRouterConfig.session_affinity_ttl_seconds,
-    ).toBeUndefined();
-  });
-
-  it("carries a preset's stored weights and custom dimensions into the prefill without rebalancing them", () => {
-    const config = getPresetByKey("anthropic_family")!.complexity_router_config;
-    const weights = { codePresence: 0.4 };
-    const dimension = { name: "domain", weight: 0.9, keywords: ["orbitmesh"] };
-    const prefill = buildPresetPrefill(
-      { ...config, dimension_weights: weights, custom_dimensions: [dimension] },
-      groupsOnly([]),
-    ).complexityRouterConfig;
-    expect(prefill.dimension_weights).toEqual(weights);
-    expect(prefill.custom_dimensions).toEqual([{ ...dimension, id: "stored-0" }]);
-    const plain = buildPresetPrefill(config, groupsOnly([])).complexityRouterConfig;
-    expect(plain.dimension_weights).toBeUndefined();
-    expect(plain.custom_dimensions).toBeUndefined();
+  it("preserves session affinity and custom scoring settings", () => {
+    const config = PRESETS[0].complexity_router_config;
+    const current = {
+      ...buildEmptyPrefill().complexityRouterConfig,
+      session_affinity_ttl_seconds: 300,
+      dimension_weights: { codePresence: 0.4 },
+      custom_dimensions: [{ id: "domain", name: "domain", weight: 0.9, keywords: ["orbitmesh"] }],
+    };
+    const selected = applyPresetTiers(current, config, groupsOnly([]));
+    expect(selected.session_affinity_ttl_seconds).toBe(300);
+    expect(selected.dimension_weights).toEqual(current.dimension_weights);
+    expect(selected.custom_dimensions).toEqual(current.custom_dimensions);
   });
 
   it("keeps the model-family presets on the heuristic classifier", () => {
@@ -180,28 +173,20 @@ describe("autorouter_presets", () => {
     }
   });
 
-  it("carries a preset's modality_routing into the prefilled form state", () => {
-    const preset = getPresetByKey("anthropic_family")!;
-    const withFlag = { ...preset.complexity_router_config, modality_routing: true };
-    const prefill = buildPresetPrefill(withFlag, groupsOnly(getRequiredModelsInPreset(preset)));
-    expect(prefill.complexityRouterConfig.modality_routing).toBe(true);
-    const withoutFlag = buildPresetPrefill(
+  it.each([false, true])("preserves the chosen modality settings %s", (enabled) => {
+    const preset = PRESETS[0];
+    const current = {
+      ...buildEmptyPrefill().complexityRouterConfig,
+      modality_routing: enabled,
+      modality_pin_override: enabled,
+    };
+    const selected = applyPresetTiers(
+      current,
       preset.complexity_router_config,
       groupsOnly(getRequiredModelsInPreset(preset)),
     );
-    expect(withoutFlag.complexityRouterConfig.modality_routing).toBe(false);
-  });
-
-  it("carries a preset's modality_pin_override into the prefilled form state", () => {
-    const preset = getPresetByKey("anthropic_family")!;
-    const withFlag = { ...preset.complexity_router_config, modality_routing: true, modality_pin_override: true };
-    const prefill = buildPresetPrefill(withFlag, groupsOnly(getRequiredModelsInPreset(preset)));
-    expect(prefill.complexityRouterConfig.modality_pin_override).toBe(true);
-    const withoutFlag = buildPresetPrefill(
-      preset.complexity_router_config,
-      groupsOnly(getRequiredModelsInPreset(preset)),
-    );
-    expect(withoutFlag.complexityRouterConfig.modality_pin_override).toBe(false);
+    expect(selected.modality_routing).toBe(enabled);
+    expect(selected.modality_pin_override).toBe(enabled);
   });
 
   it("ships every bundled preset with both modality flags written out, since the payload type requires them", () => {
@@ -213,16 +198,24 @@ describe("autorouter_presets", () => {
 
   it("prefills the anthropic preset's effort through to tier_model_params", () => {
     const preset = getPresetByKey("anthropic_family")!;
-    const prefill = buildPresetPrefill(preset.complexity_router_config, groupsOnly(getRequiredModelsInPreset(preset)));
-    expect(prefill.complexityRouterConfig.tier_model_params).toEqual({
+    const prefill = applyPresetTiers(
+      buildEmptyPrefill().complexityRouterConfig,
+      preset.complexity_router_config,
+      groupsOnly(getRequiredModelsInPreset(preset)),
+    );
+    expect(prefill.tier_model_params).toEqual({
       REASONING: { "claude-fable-5-1": { reasoning_effort: "high" } },
     });
   });
 
   it("prefills the lite preset's efforts through to tier_model_params", () => {
     const lite = getPresetByKey("lite")!;
-    const prefill = buildPresetPrefill(lite.complexity_router_config, groupsOnly(getRequiredModelsInPreset(lite)));
-    expect(prefill.complexityRouterConfig.tier_model_params).toEqual({
+    const prefill = applyPresetTiers(
+      buildEmptyPrefill().complexityRouterConfig,
+      lite.complexity_router_config,
+      groupsOnly(getRequiredModelsInPreset(lite)),
+    );
+    expect(prefill.tier_model_params).toEqual({
       MEDIUM: { "muse-spark-1.3": { reasoning_effort: "xhigh" } },
       COMPLEX: { "kimi-k3": { reasoning_effort: "max" } },
     });
@@ -240,8 +233,12 @@ describe("autorouter_presets", () => {
     expect(preset.complexity_router_config.tier_model_configs).toEqual({
       REASONING: [{ model_name: "gpt-6-astra", litellm_params: { reasoning_effort: "xhigh" } }],
     });
-    const prefill = buildPresetPrefill(preset.complexity_router_config, groupsOnly(getRequiredModelsInPreset(preset)));
-    expect(prefill.complexityRouterConfig.tier_model_params).toEqual({
+    const prefill = applyPresetTiers(
+      buildEmptyPrefill().complexityRouterConfig,
+      preset.complexity_router_config,
+      groupsOnly(getRequiredModelsInPreset(preset)),
+    );
+    expect(prefill.tier_model_params).toEqual({
       REASONING: { "gpt-6-astra": { reasoning_effort: "xhigh" } },
     });
   });
@@ -259,8 +256,12 @@ describe("autorouter_presets", () => {
     expect(preset.complexity_router_config.tier_model_configs).toEqual({
       REASONING: [{ model_name: "claude-opus-5-5", litellm_params: { reasoning_effort: "high" } }],
     });
-    const prefill = buildPresetPrefill(preset.complexity_router_config, groupsOnly(getRequiredModelsInPreset(preset)));
-    expect(prefill.complexityRouterConfig.tier_model_params).toEqual({
+    const prefill = applyPresetTiers(
+      buildEmptyPrefill().complexityRouterConfig,
+      preset.complexity_router_config,
+      groupsOnly(getRequiredModelsInPreset(preset)),
+    );
+    expect(prefill.tier_model_params).toEqual({
       REASONING: { "claude-opus-5-5": { reasoning_effort: "high" } },
     });
   });
@@ -354,7 +355,9 @@ describe("autorouter_presets", () => {
         deployment_affinity: true,
       };
       expect(getMissingModels(config, availability)).toEqual([]);
-      expect(buildPresetPrefill(config, availability).complexityRouterConfig.tiers.SIMPLE).toEqual([group]);
+      expect(applyPresetTiers(buildEmptyPrefill().complexityRouterConfig, config, availability).tiers.SIMPLE).toEqual([
+        group,
+      ]);
     });
 
     it.each([
@@ -431,11 +434,11 @@ describe("autorouter_presets", () => {
           [["a-cloud"], "a-cloud"],
         ] as const) {
           const availability = buildModelAvailability(groups, deployments);
-          const prefill = buildPresetPrefill(config, availability).complexityRouterConfig;
+          const prefill = applyPresetTiers(buildEmptyPrefill().complexityRouterConfig, config, availability);
 
           expect(prefill.tiers.SIMPLE).toEqual([selected]);
           expect(prefill.tier_model_params).toEqual({ SIMPLE: { [selected]: { reasoning_effort: "high" } } });
-          expect(prefill.classifier_llm_config).toEqual({ model: selected, timeout_ms: 3000 });
+          expect(prefill.classifier_llm_config).toBeUndefined();
         }
       },
     );
@@ -536,7 +539,9 @@ describe("autorouter_presets", () => {
         session_affinity: false,
         deployment_affinity: true,
       };
-      expect(buildPresetPrefill(config, availability).complexityRouterConfig.tiers.SIMPLE).toEqual(["claude-opus-5"]);
+      expect(applyPresetTiers(buildEmptyPrefill().complexityRouterConfig, config, availability).tiers.SIMPLE).toEqual([
+        "claude-opus-5",
+      ]);
     });
 
     it.each(getAllPresets().map((preset) => [preset.key, preset] as const))(
@@ -552,8 +557,12 @@ describe("autorouter_presets", () => {
           })),
         );
         expect(getMissingModelsInPreset(preset, availability)).toEqual([]);
-        const prefilled = buildPresetPrefill(preset.complexity_router_config, availability);
-        const prefilledModels = Object.values(prefilled.complexityRouterConfig.tiers).flat();
+        const prefilled = applyPresetTiers(
+          buildEmptyPrefill().complexityRouterConfig,
+          preset.complexity_router_config,
+          availability,
+        );
+        const prefilledModels = Object.values(prefilled.tiers).flat();
         expect(prefilledModels.length).toBeGreaterThan(0);
         for (const model of prefilledModels) expect(groups).toContain(model);
       },
@@ -578,7 +587,7 @@ describe("autorouter_presets", () => {
       );
       const config = simpleTierConfig("claude-opus-5");
       expect(getMissingModels(config, availability)).toEqual([]);
-      expect(buildPresetPrefill(config, availability).complexityRouterConfig.tiers.SIMPLE).toEqual([
+      expect(applyPresetTiers(buildEmptyPrefill().complexityRouterConfig, config, availability).tiers.SIMPLE).toEqual([
         "anthropic/claude-opus-5",
       ]);
     });
@@ -681,7 +690,7 @@ describe("autorouter_presets", () => {
         [wildcardDeployment("anthropic/*"), wildcardDeployment("bedrock/*")],
       );
       const config = simpleTierConfig("claude-opus-5");
-      expect(buildPresetPrefill(config, availability).complexityRouterConfig.tiers.SIMPLE).toEqual([
+      expect(applyPresetTiers(buildEmptyPrefill().complexityRouterConfig, config, availability).tiers.SIMPLE).toEqual([
         "anthropic/claude-opus-5",
       ]);
     });
@@ -760,8 +769,12 @@ describe("autorouter_presets", () => {
           [wildcardDeployment("someprovider/*")],
         );
         expect(getMissingModelsInPreset(preset, availability)).toEqual([]);
-        const prefilled = buildPresetPrefill(preset.complexity_router_config, availability);
-        const prefilledModels = Object.values(prefilled.complexityRouterConfig.tiers).flat();
+        const prefilled = applyPresetTiers(
+          buildEmptyPrefill().complexityRouterConfig,
+          preset.complexity_router_config,
+          availability,
+        );
+        const prefilledModels = Object.values(prefilled.tiers).flat();
         expect(prefilledModels.length).toBeGreaterThan(0);
         for (const model of prefilledModels) expect(expandedGroups).toContain(model);
       },
@@ -876,165 +889,66 @@ describe("autorouter_presets", () => {
     });
   });
 
-  describe("buildPresetPrefill", () => {
-    it("preserves Laya settings and drops inactive classifier settings when prefilling", () => {
-      const config = {
-        tiers: { SIMPLE: ["fast"], MEDIUM: [], COMPLEX: [], REASONING: [] },
-        classifier_type: "oss_classifier" as const,
-        classification_mode: "every_request" as const,
-        session_affinity: false,
-        deployment_affinity: true,
-        modality_routing: false,
-        modality_pin_override: false,
-        opensource_classifier_config: {
-          provider: "laya" as const,
-          model: "english",
-          timeout_ms: 4000,
-          circuit_breaker_enabled: false,
+  describe("applyPresetTiers", () => {
+    const initial: ComplexityRouterConfigValue = {
+      classifier_type: "jev",
+      jev_classifier_config: { deployment_name: "decision", timeout_ms: 4200 },
+      classifier_llm_config: { model: "judge", classification_rubric: "business" },
+      classification_mode: "user_turn",
+      session_affinity: false,
+      classifier_context_window_size: 8,
+      heuristic_v2_success_threshold: 0.7,
+      tiers: { SIMPLE: ["old"], MEDIUM: [], COMPLEX: [], REASONING: [], NON_REASONING: ["relay"] },
+      tier_model_params: { SIMPLE: { old: { temperature: 0.3 } }, NON_REASONING: { relay: { max_tokens: 10 } } },
+      enable_non_reasoning_tier: true,
+      tier_labels: { SIMPLE: "Quick" },
+      default_model: "fallback",
+      plan_mode_min_tier: "REASONING",
+      adaptive: true,
+      deployment_affinity: false,
+    };
+
+    describe.each(["jev", "heuristic", "heuristic_v2", "llm"] as const)("%s classifier", (classifier_type) => {
+      it.each(PRESETS)("keeps non-template settings when selecting $label repeatedly", (preset) => {
+        const current = { ...initial, classifier_type };
+        const availability = groupsOnly(PRESETS.flatMap((item) => [...getRequiredModelsInPreset(item)]));
+        const selected = applyPresetTiers(current, preset.complexity_router_config, availability);
+        const { tiers: _oldTiers, tier_model_params: _oldParams, ...settings } = current;
+        const { tiers, tier_model_params, ...selectedSettings } = selected;
+        expect(selectedSettings).toEqual(settings);
+        expect(tiers).toEqual({ ...preset.complexity_router_config.tiers, NON_REASONING: ["relay"] });
+        expect(tier_model_params?.NON_REASONING).toEqual(initial.tier_model_params?.NON_REASONING);
+        expect(tier_model_params?.SIMPLE?.old).toBeUndefined();
+        const nextPreset = PRESETS.find((item) => item.key !== preset.key)!;
+        const next = applyPresetTiers(selected, nextPreset.complexity_router_config, availability);
+        expect(next).toEqual(applyPresetTiers(current, nextPreset.complexity_router_config, availability));
+      });
+    });
+
+    it("leaves a custom tier draft untouched", () => {
+      const current = {
+        ...initial,
+        custom_tier_set: {
+          tiers: [{ id: "custom", name: "CUSTOM", definition: "custom work", models: ["old"] }],
+          fallback_tier_id: "custom",
         },
-        classifier_llm_config: { model: "stale-judge", timeout_ms: 6000 },
-        classifier_context_window_size: 6,
       };
-      const prefill = buildPresetPrefill(config, groupsOnly(["fast"]));
-      const expectedJevConfig = {
-        classifier_type: "jev",
-        jev_classifier_config: config.opensource_classifier_config,
-        classifier_context_window_size: 6,
-        classifier_llm_config: undefined,
-      };
-      expect(prefill.complexityRouterConfig).toMatchObject(expectedJevConfig);
-      const llmConfig = { ...config, classifier_type: "llm" as const };
-      const llmPrefill = buildPresetPrefill(llmConfig, groupsOnly(["fast"]));
-      expect(llmPrefill.complexityRouterConfig.jev_classifier_config).toBeUndefined();
-      expect(llmPrefill.complexityRouterConfig.classifier_llm_config).toEqual(config.classifier_llm_config);
+      expect(applyPresetTiers(current, PRESETS[0].complexity_router_config, groupsOnly([]))).toBe(current);
     });
 
-    it.each([undefined, 0, 0.95])("carries a preset's success threshold %s into the form", (threshold) => {
-      const preset = getPresetByKey("anthropic_family")!;
-      const config = {
-        ...preset.complexity_router_config,
-        classifier_type: "heuristic_v2" as const,
-        heuristic_v2_success_threshold: threshold,
-      };
-      const prefill = buildPresetPrefill(config, groupsOnly(getRequiredModelsInPreset(preset)));
-      expect(prefill.complexityRouterConfig.heuristic_v2_success_threshold).toBe(threshold);
-    });
-
-    it("prefills a real bundled preset's tiers into the config", () => {
-      const preset = getPresetByKey("anthropic_family")!;
-      const prefill = buildPresetPrefill(
-        preset.complexity_router_config,
-        groupsOnly(getRequiredModelsInPreset(preset)),
-      );
-      expect(prefill.complexityRouterConfig.tiers).toEqual(preset.complexity_router_config.tiers);
-    });
-
-    // `??`, not `||`: match_threshold: 0 and an empty escalation_keywords array are deliberate,
-    // falsy preset values. A prefill that used `||` would silently replace both with the default,
-    // which is exactly the kind of bug this test would have caught before either bundled preset
-    // happened to avoid the case.
-    it("keeps a preset's falsy match_threshold and escalation_keywords instead of defaulting them", () => {
-      const config = {
-        tiers: { SIMPLE: ["gpt-5-nano"], MEDIUM: [], COMPLEX: [], REASONING: [] },
-        classifier_type: "heuristic" as const,
-        classification_mode: "every_request" as const,
-        session_affinity: false,
-        deployment_affinity: true,
-        match_threshold: 0,
-        escalation_keywords: [],
-      };
-      const prefill = buildPresetPrefill(config, groupsOnly(["gpt-5-nano"]));
-      expect(prefill.matchThreshold).toBe(0);
-      expect(prefill.escalationKeywords).toEqual([]);
-    });
-
-    it.each([undefined, false, true])("preserves a preset's context-window escalation setting: %s", (enabled) => {
-      const prefill = buildPresetPrefill(
-        {
-          tiers: { SIMPLE: ["gpt-5-nano"], MEDIUM: [], COMPLEX: [], REASONING: [] },
-          classifier_type: "heuristic",
-          classification_mode: "every_request",
-          session_affinity: false,
-          deployment_affinity: true,
-          enable_context_window_escalation: enabled,
-          context_window_escalation_buffer: 0.9,
+    it("checks only tier models when determining template availability", () => {
+      const preset = {
+        ...PRESETS[0],
+        complexity_router_config: {
+          ...PRESETS[0].complexity_router_config,
+          classifier_llm_config: { model: "unavailable-judge" },
+          embedding_model: "unavailable-embedding",
+          default_model: "unavailable-default",
         },
-        groupsOnly(["gpt-5-nano"]),
-      );
-      expect(prefill.complexityRouterConfig.enable_context_window_escalation).toBe(enabled);
-      expect(prefill.complexityRouterConfig.context_window_escalation_buffer).toBe(0.9);
-    });
-
-    it.each([undefined, false, true])(
-      "preserves cache-routing settings and scalar tier models from a preset: %s",
-      (enabled) => {
-        const config = {
-          ...getPresetByKey("anthropic_family")!.complexity_router_config,
-          tiers: { SIMPLE: "small", MEDIUM: "large", COMPLEX: "large", REASONING: "large" },
-          cache_aware_routing: enabled,
-          cache_aware_routing_output_tokens: 0,
-          cache_aware_routing_timeout_ms: 750,
-        };
-        const prefill = buildPresetPrefill(config, groupsOnly(["small", "large"]));
-        const expected = {
-          tiers: { SIMPLE: ["small"], MEDIUM: ["large"], COMPLEX: ["large"], REASONING: ["large"] },
-          cache_aware_routing: enabled,
-          cache_aware_routing_output_tokens: 0,
-          cache_aware_routing_timeout_ms: 750,
-        };
-        expect(prefill.complexityRouterConfig).toMatchObject(expected);
-      },
-    );
-
-    it("carries a preset's classification_mode and defaults it when the preset omits one", () => {
-      const tiers = { SIMPLE: ["gpt-5-nano"], MEDIUM: [], COMPLEX: [], REASONING: [] };
-      const base = {
-        tiers,
-        classifier_type: "heuristic" as const,
-        classification_mode: "every_request" as const,
-        session_affinity: false,
-        deployment_affinity: true,
       };
-      const availability = groupsOnly(["gpt-5-nano"]);
-      expect(
-        buildPresetPrefill({ ...base, classification_mode: "user_turn" }, availability).complexityRouterConfig
-          .classification_mode,
-      ).toBe("user_turn");
-      expect(buildPresetPrefill(base, availability).complexityRouterConfig.classification_mode).toBe("every_request");
-    });
-
-    it("falls back to the defaults when a preset omits match_threshold and escalation_keywords", () => {
-      const prefill = buildPresetPrefill(
-        {
-          tiers: { SIMPLE: ["gpt-5-nano"], MEDIUM: [], COMPLEX: [], REASONING: [] },
-          classifier_type: "heuristic",
-          classification_mode: "every_request" as const,
-          session_affinity: false,
-          deployment_affinity: true,
-        },
-        groupsOnly(["gpt-5-nano"]),
-      );
-      expect(prefill.matchThreshold).toBe(DEFAULT_MATCH_THRESHOLD);
-      expect(prefill.escalationKeywords).toEqual(DEFAULT_ESCALATION_KEYWORDS);
-    });
-
-    // The whole point of the separator normalization: a caller whose proxy only registered the
-    // dotted form of a version number still gets that model written into the tier, not the
-    // preset's own hyphenated spelling (which the caller never actually registered).
-    it("prefills a preset's tier_labels and leaves them undefined when the preset has none", () => {
-      const base = {
-        tiers: { SIMPLE: ["gpt-5-nano"], MEDIUM: [], COMPLEX: [], REASONING: [] },
-        classifier_type: "heuristic" as const,
-        classification_mode: "every_request" as const,
-        session_affinity: false,
-        deployment_affinity: true,
-      };
-      const labeled = buildPresetPrefill(
-        { ...base, tier_labels: { SIMPLE: "Cheap", REASONING: "Deep" } },
-        groupsOnly(["gpt-5-nano"]),
-      );
-      expect(labeled.complexityRouterConfig.tier_labels).toEqual({ SIMPLE: "Cheap", REASONING: "Deep" });
-      expect(buildPresetPrefill(base, groupsOnly(["gpt-5-nano"])).complexityRouterConfig.tier_labels).toBeUndefined();
+      const tierModels = Object.values(preset.complexity_router_config.tiers).flat();
+      expect(getRequiredModelsInPreset(preset)).toEqual(new Set(tierModels));
+      expect(getMissingModelsInPreset(preset, groupsOnly(tierModels))).toEqual([]);
     });
 
     it("rewrites a preset's model name to the caller's differently-punctuated registered spelling", () => {
@@ -1045,8 +959,12 @@ describe("autorouter_presets", () => {
         session_affinity: false,
         deployment_affinity: true,
       };
-      const prefill = buildPresetPrefill(config, groupsOnly(["claude-sonnet-4.5"]));
-      expect(prefill.complexityRouterConfig.tiers.SIMPLE).toEqual(["claude-sonnet-4.5"]);
+      const prefill = applyPresetTiers(
+        buildEmptyPrefill().complexityRouterConfig,
+        config,
+        groupsOnly(["claude-sonnet-4.5"]),
+      );
+      expect(prefill.tiers.SIMPLE).toEqual(["claude-sonnet-4.5"]);
     });
 
     it("prefills the per-model litellm_params a preset carries in tier_model_configs", () => {
@@ -1060,8 +978,12 @@ describe("autorouter_presets", () => {
         session_affinity: false,
         deployment_affinity: true,
       };
-      const prefill = buildPresetPrefill(config, groupsOnly(["gpt-5-nano", "o3"]));
-      expect(prefill.complexityRouterConfig.tier_model_params).toEqual({
+      const prefill = applyPresetTiers(
+        buildEmptyPrefill().complexityRouterConfig,
+        config,
+        groupsOnly(["gpt-5-nano", "o3"]),
+      );
+      expect(prefill.tier_model_params).toEqual({
         REASONING: { o3: { reasoning_effort: "high" } },
       });
     });
@@ -1080,8 +1002,12 @@ describe("autorouter_presets", () => {
         session_affinity: false,
         deployment_affinity: true,
       };
-      const prefill = buildPresetPrefill(config, groupsOnly(["claude-sonnet-4.5"]));
-      expect(prefill.complexityRouterConfig.tier_model_params).toEqual({
+      const prefill = applyPresetTiers(
+        buildEmptyPrefill().complexityRouterConfig,
+        config,
+        groupsOnly(["claude-sonnet-4.5"]),
+      );
+      expect(prefill.tier_model_params).toEqual({
         REASONING: { "claude-sonnet-4.5": { reasoning_effort: "high" } },
       });
     });
@@ -1103,15 +1029,19 @@ describe("autorouter_presets", () => {
         session_affinity: false,
         deployment_affinity: true,
       };
-      const prefill = buildPresetPrefill(config, groupsOnly(["claude-sonnet-4.5"]));
+      const prefill = applyPresetTiers(
+        buildEmptyPrefill().complexityRouterConfig,
+        config,
+        groupsOnly(["claude-sonnet-4.5"]),
+      );
       // temperature survives from the spelling that would otherwise have been overwritten;
       // reasoning_effort, set by both, resolves last-wins.
-      expect(prefill.complexityRouterConfig.tier_model_params).toEqual({
+      expect(prefill.tier_model_params).toEqual({
         REASONING: { "claude-sonnet-4.5": { reasoning_effort: "low", temperature: 0.2 } },
       });
     });
 
-    it("leaves tier_model_params undefined for a preset that carries no per-model params", () => {
+    it("clears old tier parameters for a preset that carries no per-model params", () => {
       const config = {
         tiers: { SIMPLE: ["gpt-5-nano"], MEDIUM: [], COMPLEX: [], REASONING: [] },
         classifier_type: "heuristic" as const,
@@ -1119,8 +1049,8 @@ describe("autorouter_presets", () => {
         session_affinity: false,
         deployment_affinity: true,
       };
-      const prefill = buildPresetPrefill(config, groupsOnly(["gpt-5-nano"]));
-      expect(prefill.complexityRouterConfig.tier_model_params).toBeUndefined();
+      const prefill = applyPresetTiers(buildEmptyPrefill().complexityRouterConfig, config, groupsOnly(["gpt-5-nano"]));
+      expect(prefill.tier_model_params).toEqual({});
     });
   });
 });
