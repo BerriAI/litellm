@@ -1256,7 +1256,9 @@ def _map_vertex_exception(
             llm_provider=custom_llm_provider,
             litellm_debug_info=extra_information,
         )
-    elif (not isinstance(status_code, int) or status_code == 500) and _VERTEX_403_STATUS_CODE_PATTERN.search(error_str):
+    elif (not isinstance(status_code, int) or status_code in (403, 500)) and _VERTEX_403_STATUS_CODE_PATTERN.search(
+        error_str
+    ):
         raise BadRequestError(
             message=f"{custom_llm_provider.capitalize()}Exception BadRequestError - {error_str}",
             model=model,

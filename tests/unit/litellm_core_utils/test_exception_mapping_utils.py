@@ -605,6 +605,22 @@ def test_vertex_status_code_403_maps_to_403() -> None:
     assert excinfo.value.status_code == 403
 
 
+def test_vertex_status_code_403_with_text_token_maps_to_bad_request() -> None:
+    original_exception: Final = BaseLLMException(
+        status_code=403,
+        message='{"error":{"code":403,"message":"Permission denied"}}',
+    )
+
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        exception_type(
+            model="gemini/gemini-2.5-flash",
+            original_exception=original_exception,
+            custom_llm_provider="vertex_ai",
+        )
+
+    assert excinfo.value.status_code == 403
+
+
 def test_vertex_text_403_without_status_code_still_maps_to_bad_request() -> None:
     with pytest.raises(litellm.BadRequestError) as excinfo:
         exception_type(
