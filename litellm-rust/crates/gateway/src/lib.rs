@@ -10,6 +10,7 @@ mod key_status;
 mod keys;
 pub mod metrics;
 pub mod rate_limits;
+pub mod request_hooks;
 mod secrets;
 pub mod spend;
 pub use error::Error;

@@ -82,6 +82,7 @@ async fn handle(
         None => route,
     };
 
+    let upstream_headers = &upstream_headers(headers, tracking.as_ref());
     let cache_headers = crate::caching::CacheHeaders::default();
     let mut body = Some(body);
     let routed = gateway
@@ -103,7 +104,7 @@ async fn handle(
                 async move {
                     crate::observe::record(name, attempt.deployment);
                     request::authorize(identity, name, attempt.deployment).await?;
-                    let call = project(attempt.deployment, body?, headers)?;
+                    let call = project(attempt.deployment, body?, upstream_headers)?;
                     let machine = route.machine(call, cache_options.policy);
                     let stream = Sse::<Messages, _, _>::new(Json, |error| {
                         Bytes::from(Error::from(error).sse_frame())
@@ -123,10 +124,61 @@ async fn handle(
     }
 }
 
+/// Client headers the provider gets: the API headers scoped to the providers that take them,
+/// and any header a hook set.
+#[derive(Default)]
+struct UpstreamHeaders {
+    scoped: Option<ProviderSpecificHeaders>,
+    extra: Option<Map<String, Value>>,
+}
+
+fn upstream_headers(
+    headers: &HeaderMap,
+    tracking: Option<&crate::hooks::Tracking>,
+) -> UpstreamHeaders {
+    let client = |name: &str| Some(headers.get(name)?.to_str().ok()?.to_owned());
+    let Some(tracking) = tracking else {
+        return UpstreamHeaders {
+            scoped: scoped_headers(client),
+            extra: None,
+        };
+    };
+    let mut names: Vec<&str> = header_scopes()
+        .iter()
+        .flat_map(|(_, names)| names.iter().copied())
+        .collect();
+    names.sort_unstable();
+    names.dedup();
+    let forwarded = names
+        .iter()
+        .filter_map(|name| Some(((*name).to_owned(), client(name)?)))
+        .collect();
+    let Some(sent) = tracking.edit_headers(forwarded) else {
+        return UpstreamHeaders {
+            scoped: scoped_headers(client),
+            extra: None,
+        };
+    };
+    let value = |name: &str| {
+        sent.iter()
+            .find(|(sent, _)| sent.eq_ignore_ascii_case(name))
+            .map(|(_, value)| value.clone())
+    };
+    let extra: Map<String, Value> = sent
+        .iter()
+        .filter(|(name, _)| !names.iter().any(|scoped| scoped.eq_ignore_ascii_case(name)))
+        .map(|(name, value)| (name.clone(), Value::from(value.as_str())))
+        .collect();
+    UpstreamHeaders {
+        scoped: scoped_headers(value),
+        extra: (!extra.is_empty()).then_some(extra),
+    }
+}
+
 fn project(
     deployment: &Deployment,
     body: Map<String, Value>,
-    headers: &HeaderMap,
+    headers: &UpstreamHeaders,
 ) -> Result<MessagesCall, Error> {
     let body = body
         .into_iter()
@@ -141,28 +193,31 @@ fn project(
         api_base: deployment.api_base.clone(),
         custom_llm_provider: deployment.custom_llm_provider.clone(),
         litellm_params: deployment.litellm_params.clone(),
-        extra_headers: None,
-        provider_specific_header: anthropic_api_headers(headers),
+        extra_headers: headers.extra.clone(),
+        provider_specific_header: headers.scoped.clone(),
         timeout: deployment.timeout,
         shaping: deployment.shaping.clone(),
     })
 }
 
-fn anthropic_api_headers(headers: &HeaderMap) -> Option<ProviderSpecificHeaders> {
-    let scopes = [
+fn header_scopes() -> [(&'static str, &'static [&'static str]); 2] {
+    [
         (
             ANTHROPIC_API_HEADER_PROVIDERS,
             ANTHROPIC_API_HEADERS.as_slice(),
         ),
         ("openrouter", OPENROUTER_API_HEADERS.as_slice()),
-    ];
-    let forwarded: Vec<ProviderSpecificHeader> = scopes
+    ]
+}
+
+fn scoped_headers(get: impl Fn(&str) -> Option<String>) -> Option<ProviderSpecificHeaders> {
+    let forwarded: Vec<ProviderSpecificHeader> = header_scopes()
         .into_iter()
         .filter_map(|(provider, names)| {
             let extra_headers: Map<String, Value> = names
                 .iter()
                 .filter_map(|name| {
-                    let value = headers.get(*name)?.to_str().ok()?;
+                    let value = get(name)?;
                     Some(((*name).to_owned(), Value::from(value)))
                 })
                 .collect();

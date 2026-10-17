@@ -146,7 +146,7 @@ pub struct RequestEdit {
     allowed: Targets,
     writer: &'static str,
     header_ops: Vec<HeaderOp>,
-    body_fields: Vec<(String, Value)>,
+    body_fields: Vec<(Vec<String>, Value)>,
     response_headers: Vec<(HeaderName, HeaderValue)>,
     annotations: Annotations,
 }
@@ -183,8 +183,15 @@ impl RequestEdit {
 
     /// Sets a top-level field of the upstream body, replacing what the client sent.
     pub fn set_upstream_body_field(&mut self, field: impl Into<String>, value: Value) {
-        if self.may(Targets::UPSTREAM_BODY) {
-            self.body_fields.push((field.into(), value));
+        self.set_upstream_body_path(vec![field.into()], value);
+    }
+
+    /// Sets a field inside a top-level object of the upstream body, such as
+    /// `["metadata", "user_id"]`, keeping the object's other fields. A missing or non-object
+    /// step becomes an object.
+    pub fn set_upstream_body_path(&mut self, path: Vec<String>, value: Value) {
+        if !path.is_empty() && self.may(Targets::UPSTREAM_BODY) {
+            self.body_fields.push((path, value));
         }
     }
 
@@ -202,7 +209,11 @@ impl RequestEdit {
 
     /// Whether any change reaches the provider.
     pub fn changes_upstream(&self) -> bool {
-        !self.header_ops.is_empty() || !self.body_fields.is_empty()
+        self.changes_upstream_headers() || !self.body_fields.is_empty()
+    }
+
+    pub fn changes_upstream_headers(&self) -> bool {
+        !self.header_ops.is_empty()
     }
 
     /// Applies the header changes in order to the headers about to be sent.
@@ -221,8 +232,24 @@ impl RequestEdit {
 
     /// Applies the body changes in order to the body about to be sent.
     pub fn apply_upstream_body(&self, body: &mut Map<String, Value>) {
-        for (field, value) in &self.body_fields {
-            body.insert(field.clone(), value.clone());
+        for (path, value) in &self.body_fields {
+            let Some((last, parents)) = path.split_last() else {
+                continue;
+            };
+            let mut object = &mut *body;
+            for step in parents {
+                let slot = object
+                    .entry(step.clone())
+                    .or_insert_with(|| Value::Object(Map::new()));
+                if !slot.is_object() {
+                    *slot = Value::Object(Map::new());
+                }
+                let Value::Object(inner) = slot else {
+                    unreachable!("just made an object")
+                };
+                object = inner;
+            }
+            object.insert(last.clone(), value.clone());
         }
     }
 
@@ -325,6 +352,25 @@ mod tests {
         assert_eq!(
             Value::Object(body),
             serde_json::json!({"model": "m", "metadata": "b"})
+        );
+    }
+
+    #[rstest]
+    fn nested_body_fields_keep_their_siblings() {
+        let mut edit = RequestEdit::default();
+        edit.scope("hook", Targets::UPSTREAM_BODY);
+        edit.set_upstream_body_path(vec!["metadata".into(), "user_id".into()], Value::from("u"));
+        edit.set_upstream_body_path(vec!["extra".into(), "a".into()], Value::from(1));
+
+        let serde_json::Value::Object(mut body) =
+            serde_json::json!({"metadata": {"tag": "t"}, "extra": "not an object"})
+        else {
+            unreachable!()
+        };
+        edit.apply_upstream_body(&mut body);
+        assert_eq!(
+            Value::Object(body),
+            serde_json::json!({"metadata": {"tag": "t", "user_id": "u"}, "extra": {"a": 1}})
         );
     }
 
