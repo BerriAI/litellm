@@ -14,6 +14,7 @@ from litellm import utils as litellm_utils_module
 from litellm.caching.caching import DualCache
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
 from tests.unit import conftest as unit_harness
 
 CANARY_MODEL = "conftest-isolation-canary-model"
@@ -103,6 +104,15 @@ def test_live_router_membership_is_scoped_to_this_test():
 def test_live_router_membership_was_rolled_back():
     assert _CanaryRouterHolder.router is not None
     assert _CanaryRouterHolder.router not in litellm_router_module._live_routers
+
+
+def test_turn_off_message_logging_is_scoped_to_this_test():
+    litellm.turn_off_message_logging = True
+    assert should_redact_message_logging({}) is True
+
+
+def test_turn_off_message_logging_was_rolled_back():
+    assert litellm.turn_off_message_logging is False
 
 
 def test_aws_cache_reset_sees_new_handlers_and_replaced_caches(monkeypatch: pytest.MonkeyPatch) -> None:

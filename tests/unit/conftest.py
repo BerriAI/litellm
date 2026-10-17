@@ -120,6 +120,7 @@ RESTORED_GLOBALS: Final = (
     "anthropic_models",
     "token_counter",
     "initialized_langfuse_clients",
+    "turn_off_message_logging",
 )
 MODULE_LEVEL_CLIENTS: Final = ("module_level_client", "module_level_aclient")
 SESSION_CLIENTS: Final = ("base_llm_aiohttp_handler", "httpx_client", "aclient", "client")
