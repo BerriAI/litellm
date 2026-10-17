@@ -30,6 +30,7 @@ from pydantic import TypeAdapter
 from starlette.datastructures import UploadFile as StarletteUploadFile
 from starlette.routing import BaseRoute, Route
 from starlette.websockets import WebSocketState
+from typing_extensions import assert_never
 from websockets.asyncio.client import connect
 from websockets.exceptions import (
     ConnectionClosedError,
@@ -153,6 +154,7 @@ from .upstream_usage_headers import (
 
 if TYPE_CHECKING:
     from litellm.proxy.proxy_server import ProxyConfig
+    from litellm.proxy.utils import PrismaClient
 
 router: Final = APIRouter()
 
@@ -161,6 +163,7 @@ pass_through_endpoint_logging: Final = PassThroughEndpointLogging()
 _METADATA_KEYS: Final = frozenset(("litellm_metadata", "metadata"))
 _DECODED_JSON: Final = TypeAdapter(object)
 _KEPT_OUT_OF_LITELLM_PARAMS: Final = _METADATA_KEYS | frozenset(wire_names(ProxyRequestState))
+_REQUEST_BODY_VIEW: Final = TypeAdapter(Mapping[str, object])
 
 # Global registry to track registered pass-through routes and prevent memory leaks
 _registered_pass_through_routes: Final[dict[str, dict[str, str | bool | list[str] | Mapping[str, object]]]] = {}
@@ -1347,6 +1350,14 @@ async def pass_through_request(
                 )
                 from litellm.proxy.proxy_server import (
                     prisma_client as _passthrough_prisma,
+                )
+
+                await refuse_unissued_response_ids(
+                    url.path,
+                    _REQUEST_BODY_VIEW.validate_python(_parsed_body or {}),
+                    _managed_id_provider,
+                    _passthrough_prisma,
+                    user_api_key_dict,
                 )
 
                 _original_path: Final = url.path
@@ -2889,6 +2900,41 @@ def _own_streamed_managed_ids(
         user_api_key_dict=user_api_key_dict,
         prisma_client=prisma_client,
     )
+
+
+async def refuse_unissued_response_ids(
+    path: str,
+    body: Mapping[str, object],
+    managed_id_provider: str,
+    prisma_client: "PrismaClient | None",
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    from litellm.proxy.hooks.responses_id_security import (
+        UNMANAGED_RESPONSE_ID_DETAIL,
+        proxy_signing_key,
+        unmanaged_response_ids_allowed,
+    )
+    from litellm.proxy.pass_through_endpoints.managed_id_rewriter import (
+        addressed_response_id_issuance,
+    )
+    from litellm.proxy.proxy_server import general_settings_view
+
+    if unmanaged_response_ids_allowed(general_settings_view(), proxy_signing_key(), user_api_key_dict):
+        return
+    issuance: Final = await addressed_response_id_issuance(path, body, managed_id_provider, prisma_client)
+    match issuance:
+        case "issued":
+            return
+        case "unissued":
+            raise HTTPException(status_code=403, detail=UNMANAGED_RESPONSE_ID_DETAIL)
+        case "unverified":
+            raise HTTPException(
+                status_code=503,
+                detail="The proxy could not check who owns this response id because its database lookup failed. "
+                "Retry the request.",
+            )
+        case _:
+            assert_never(issuance)
 
 
 def _should_buffer_passthrough_response(response: httpx.Response) -> bool:

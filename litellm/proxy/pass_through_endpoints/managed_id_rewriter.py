@@ -33,6 +33,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
+from itertools import pairwise
 from typing import (
     TYPE_CHECKING,
     Final,
@@ -51,9 +52,10 @@ from litellm.llms.base_llm.managed_resources.isolation import (
     can_access_resource,
     resolve_resource_owner_id,
 )
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import DB_CONNECTION_ERROR_TYPES, UserAPIKeyAuth
 from litellm.proxy.batches_endpoints.common_utils import validate_batch_list_limit
 from litellm.proxy.common_utils.sse_keepalive import split_complete_sse_frames
+from litellm.repositories.chunked_in import count_in
 from litellm.repositories.managed_file_repository import ManagedFileRepository
 from litellm.repositories.table_repositories import ManagedObjectRepository
 from litellm.types.llms.openai import BATCH_GUARDRAIL_RESPONSE_FIELD, OpenAIFileObject
@@ -70,6 +72,7 @@ from litellm.types.passthrough_endpoints.managed_id_rewriter import (
     PrismaWhere,
     PrismaWhereValue,
     ResourceKind,
+    ResponseIdIssuance,
     SortOrder,
 )
 
@@ -178,8 +181,10 @@ BUILTIN_OUTPUT_ID_FIELD_MAP: Final[dict[_MapKey, list[_FieldSpec]]] = {
 # Prefixes that live in the *file* table rather than the object table.
 _FILE_PREFIXES: Final[frozenset[str]] = frozenset({"file-"})
 
+_RESPONSE_ID_PREFIX: Final = "resp_"
+
 # Raw provider-ID prefixes that live in the object table (batches, responses).
-_OBJECT_PREFIXES: Final[frozenset[str]] = frozenset({"batch_", "resp_"})
+_OBJECT_PREFIXES: Final[frozenset[str]] = frozenset({"batch_", _RESPONSE_ID_PREFIX})
 
 # Guards request-body rewriting against stack exhaustion from adversarially
 # deep payloads. Real OpenAI files/batches bodies nest only a few levels.
@@ -464,6 +469,38 @@ async def _guard_raw_provider_id(
             return
         if existing is not None and not can_access_resource(user_api_key_dict, existing.created_by, existing.team_id):
             raise HTTPException(status_code=404, detail="Managed resource not found.")
+
+
+def _addressed_raw_response_ids(path: str, body: Mapping[str, object]) -> frozenset[str]:
+    segments: Final = tuple(unquote(seg) for seg in path.split("/"))
+    path_ids: Final = frozenset(
+        seg for parent, seg in pairwise(segments) if parent == "responses" and seg.startswith(_RESPONSE_ID_PREFIX)
+    )
+    previous_response_id: Final = body.get("previous_response_id")
+    if isinstance(previous_response_id, str) and previous_response_id.startswith(_RESPONSE_ID_PREFIX):
+        return path_ids | {previous_response_id}
+    return path_ids
+
+
+async def addressed_response_id_issuance(
+    path: str,
+    body: Mapping[str, object],
+    provider: str,
+    prisma_client: PrismaClient | None,
+) -> ResponseIdIssuance:
+    from prisma.errors import PrismaError
+
+    if prisma_client is None:
+        return "issued"
+    object_ids: Final = tuple(f"passthrough:{provider}:{raw_id}" for raw_id in _addressed_raw_response_ids(path, body))
+    if not object_ids:
+        return "issued"
+    try:
+        issued_count: Final = await count_in(_object_table(prisma_client), "model_object_id", object_ids)
+    except (PrismaError, *DB_CONNECTION_ERROR_TYPES):
+        verbose_proxy_logger.warning("managed_id_rewriter: response id ownership lookup failed", exc_info=True)
+        return "unverified"
+    return "issued" if issued_count == len(object_ids) else "unissued"
 
 
 # ---------------------------------------------------------------------------
@@ -817,7 +854,6 @@ async def rewrite_response_ids(
     return mutated if changed else body
 
 
-_RESPONSE_ID_PREFIX: Final = "resp_"
 _STREAMED_RESPONSE_ID_SPEC: Final[_FieldSpec] = ("id", _RESPONSE_ID_PREFIX)
 _SSE_DATA_PREFIX: Final = "data:"
 _SSE_EVENT_ADAPTER: Final = TypeAdapter(Mapping[str, JsonValue])
