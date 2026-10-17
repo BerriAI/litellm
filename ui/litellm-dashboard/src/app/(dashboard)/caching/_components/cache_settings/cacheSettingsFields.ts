@@ -13,7 +13,7 @@ export interface CacheFieldOption {
   readonly label: string;
 }
 
-export type RedisType = "node" | "cluster" | "sentinel" | "semantic";
+export type RedisType = "node" | "cluster" | "sentinel";
 
 export type CacheSection = "connection" | "cluster" | "sentinel" | "semantic" | "ssl" | "cacheManagement" | "gcp";
 
@@ -38,13 +38,12 @@ export interface CacheField {
   readonly secret?: boolean;
 }
 
-export const REDIS_TYPES: readonly RedisType[] = ["node", "cluster", "sentinel", "semantic"];
+export const REDIS_TYPES: readonly RedisType[] = ["node", "cluster", "sentinel"];
 
 export const REDIS_TYPE_DESCRIPTIONS: Readonly<Record<RedisType, string>> = {
   node: "Standard Redis node/single instance",
   cluster: "Redis Cluster mode for high availability and horizontal scaling",
   sentinel: "Redis Sentinel mode for high availability with automatic failover",
-  semantic: "Semantic caching that reuses responses for similar prompts",
 };
 
 const isBlank = (value: unknown): boolean => value === undefined || value === null || String(value).trim() === "";
@@ -181,7 +180,7 @@ export const CACHE_FIELDS: readonly CacheField[] = [
     type: "float",
     section: "semantic",
     helpText: "Similarity threshold for semantic cache",
-    redisType: "semantic",
+    redisType: null,
     defaultValue: 0.8,
     rules: [numberRule],
   },
@@ -191,7 +190,7 @@ export const CACHE_FIELDS: readonly CacheField[] = [
     type: "model-select",
     section: "semantic",
     helpText: "Embedding model for semantic cache",
-    redisType: "semantic",
+    redisType: null,
   },
   {
     name: "semantic_cache_scope",
@@ -200,7 +199,7 @@ export const CACHE_FIELDS: readonly CacheField[] = [
     section: "semantic",
     helpText:
       "Who can share a semantic cache hit. Key shares hits between all end users of a key/team/org. End user also isolates per end user; requests without an end user fall back to the key scope.",
-    redisType: "semantic",
+    redisType: null,
     defaultValue: "key",
     options: [
       { value: "key", label: "Key (shared by all end users of the key/team/org)" },
