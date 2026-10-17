@@ -6,6 +6,7 @@ but litellm_params["litellm_metadata"] is None.
 """
 
 import asyncio
+import copy
 import importlib
 import json
 import os
@@ -36,11 +37,130 @@ from litellm.responses.main import mock_responses_api_response
 from litellm.types.router import BaselineRouteStamp
 from litellm.types.utils import (
     ModelResponse,
+    ModelResponseStream,
     ResponsesAPIResponse,
     StandardLoggingPayload,
     TextCompletionResponse,
 )
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+
+SECRET: Final = "private-redaction-canary"
+SIGNATURE: Final = "opaque-thought-signature"
+
+
+def _provider_fields() -> dict[str, object]:
+    return {
+        "reasoning_content": SECRET,
+        "thinking_blocks": [{"type": "thinking", "thinking": SECRET}],
+        "reasoningContentBlocks": [{"reasoningText": {"text": SECRET}}],
+        "citations": [{"cited_text": SECRET}],
+        "thought_signatures": [SIGNATURE],
+    }
+
+
+def _request_params(metadata: dict[str, object]) -> dict[str, object]:
+    return {
+        "metadata": metadata,
+        "proxy_server_request": {
+            "url": "http://localhost/v1/chat/completions",
+            "body": {
+                "model": "redaction-model",
+                "system": "kept-system",
+                "messages": [{"role": "user", "content": SECRET}],
+                "metadata": metadata,
+            },
+        },
+    }
+
+
+@pytest.mark.parametrize("shape", ["object", "dict_message", "dict_delta"])
+def test_redaction_reuses_message_rules_for_request_body_and_provider_fields(shape: str) -> None:
+    response: Final = ModelResponse(
+        choices=[
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": SECRET, "provider_specific_fields": _provider_fields()},
+            }
+        ]
+    )
+    result: Final = (
+        response
+        if shape == "object"
+        else {"choices": [{"index": 0, "delta": {"content": SECRET, "provider_specific_fields": _provider_fields()}}]}
+        if shape == "dict_delta"
+        else response.model_dump()
+    )
+    original_result: Final = copy.deepcopy(result)
+    params: Final = _request_params({"session_id": "session"})
+    original_params: Final = copy.deepcopy(params)
+    details: Final[dict[str, object]] = {"litellm_params": params}
+
+    redacted: Final = perform_redaction(details, result)
+
+    assert SECRET not in str(redacted) and SECRET not in str(details), (redacted, details)
+    assert SIGNATURE in str(redacted)
+    body: Final = details["litellm_params"]["proxy_server_request"]["body"]
+    assert body["messages"] == [{"role": "user", "content": "redacted-by-litellm"}]
+    assert body["system"] == "kept-system" and body["model"] == "redaction-model"
+    assert body["metadata"] is params["metadata"]
+    assert result == original_result and params == original_params
+
+
+def test_redaction_redacts_reasoning_copied_into_hidden_params_in_place() -> None:
+    hidden_params: Final = {"model_id": "deployment", "provider_specific_fields": _provider_fields()}
+    original_hidden_params: Final = copy.deepcopy(hidden_params)
+    metadata: Final[dict[str, object]] = {"session_id": "session", "hidden_params": hidden_params}
+    params: Final = _request_params(metadata)
+    details: Final[dict[str, object]] = {"litellm_params": params}
+
+    perform_redaction(details, None)
+
+    assert details["litellm_params"]["metadata"] is metadata
+    assert SECRET not in str(details), details
+    assert metadata["hidden_params"]["model_id"] == "deployment"
+    assert metadata["hidden_params"]["provider_specific_fields"]["thought_signatures"] == [SIGNATURE]
+    assert hidden_params == original_hidden_params
+
+
+def test_per_callback_redaction_leaves_shared_request_body_and_hidden_params() -> None:
+    metadata: Final[dict[str, object]] = {"hidden_params": {"provider_specific_fields": _provider_fields()}}
+    params: Final = _request_params(metadata)
+    original_params: Final = copy.deepcopy(params)
+    details: Final[dict[str, object]] = {"litellm_params": params}
+
+    perform_redaction(details, None, redact_streaming_responses=False)
+
+    assert details["litellm_params"] == original_params
+
+
+def test_logger_level_redaction_redacts_its_copy_of_the_request_body() -> None:
+    params: Final = _request_params({"session_id": "session"})
+    original_params: Final = copy.deepcopy(params)
+    details: Final[dict[str, object]] = {"litellm_params": params}
+
+    redacted: Final = CustomLogger(
+        turn_off_message_logging=True
+    ).redact_standard_logging_payload_from_model_call_details(details)
+
+    assert SECRET not in str(redacted["litellm_params"]), redacted
+    assert details["litellm_params"] == original_params
+
+
+@pytest.mark.parametrize("key", ["complete_streaming_response", "async_complete_streaming_response"])
+def test_streaming_redaction_redacts_delta_provider_fields_without_touching_the_chunk_dict(key: str) -> None:
+    fields: Final = _provider_fields()
+    response: Final = ModelResponseStream(
+        choices=[
+            litellm.utils.StreamingChoices(delta=litellm.utils.Delta(content=SECRET, provider_specific_fields=fields))
+        ]
+    )
+    details: Final[dict[str, object]] = {"stream": True, key: response}
+
+    perform_redaction(details, None)
+
+    assert SECRET not in str(response.choices[0].delta), response
+    assert response.choices[0].delta.provider_specific_fields["thought_signatures"] == [SIGNATURE]
+    assert fields == _provider_fields()
 
 
 @pytest.fixture(autouse=True)

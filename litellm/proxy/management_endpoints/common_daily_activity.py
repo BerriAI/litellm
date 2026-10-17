@@ -90,6 +90,8 @@ def parse_canonical_date_range(start_date: str | None, end_date: str | None) -> 
     end: Final = parse_canonical_date(end_date)
     if start is None or end is None:
         return InvalidDateRange(reason="start_date and end_date must be valid YYYY-MM-DD dates")
+    if end < start:
+        return InvalidDateRange(reason="end_date must be on or after start_date")
     return CanonicalDateRange(start=start, end=end)
 
 
