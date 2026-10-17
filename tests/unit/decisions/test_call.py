@@ -1,4 +1,5 @@
 import json
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Final
 
@@ -22,7 +23,7 @@ def _logging_obj(call_type: str) -> Logging:
     )
 
 
-def _logged_request(logging_obj: Logging) -> dict[str, object]:
+def _logged_request(logging_obj: Logging) -> Mapping[str, object]:
     messages: Final = logging_obj.model_call_details["messages"]
     assert len(messages) == 1 and messages[0]["role"] == "user"
     return json.loads(messages[0]["content"])
@@ -76,3 +77,31 @@ def test_prepare_call_logs_every_request_field_the_caller_sent(call_type, fields
     assert logged[input_key] == expected_input
     assert QUESTION_TEXT in json.dumps(logged["questions"])
     assert set(logged) == {input_key, "questions"}
+
+
+def test_prepare_call_logs_the_request_even_when_validation_rejects_it():
+    logging_obj: Final = _logging_obj("asystemone")
+
+    with pytest.raises(Exception, match="Invalid Decisions request"):
+        prepare_call(
+            model="hosted_vllm/jev-fake",
+            fields=SystemOneRequestFields(
+                state={"message": "My card was charged twice."},
+                questions={"billing": {"type": "noul", "instructions": QUESTION_TEXT}},
+                images="not-a-list-of-images",
+                assets=None,
+                audio=None,
+                videos=None,
+            ),
+            safety_identifier=None,
+            api_key="fake-provider-key",
+            api_base="http://127.0.0.1:4010",
+            timeout=None,
+            custom_llm_provider=None,
+            extra_headers=None,
+            kwargs={"litellm_logging_obj": logging_obj},
+        )
+
+    logged: Final = _logged_request(logging_obj)
+    assert set(logged) == {"state", "questions", "images"}
+    assert QUESTION_TEXT in json.dumps(logged["questions"])

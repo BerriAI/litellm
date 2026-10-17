@@ -1,5 +1,6 @@
+import json
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from functools import partial
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
@@ -416,8 +417,12 @@ def _outbound_headers(
     return MappingProxyType({**(extra_headers or {}), **forwarded})
 
 
-def _logged_request_message(request: DecisionsRequestFormat) -> ChatCompletionUserMessage:
-    sent_fields: Final = request.model_dump_json(exclude_none=True, exclude_defaults=True)
+def _logged_request_message(fields: RequestFields) -> ChatCompletionUserMessage:
+    caller_fields: Final[Mapping[str, object]] = asdict(fields)
+    sent_fields: Final = json.dumps(
+        dict((name, value) for name, value in caller_fields.items() if value not in (None, (), [], {})),
+        default=str,
+    )
     return ChatCompletionUserMessage(role="user", content=sent_fields)
 
 
@@ -433,6 +438,9 @@ def prepare_call(
     extra_headers: Mapping[str, str] | None,
     kwargs: Mapping[str, object],
 ) -> DecisionsCall:
+    logging_obj: Final = kwargs.get("litellm_logging_obj")
+    if isinstance(logging_obj, LiteLLMLoggingObj):
+        logging_obj.update_messages([_logged_request_message(fields)])
     upstream_model, provider, dynamic_api_key, dynamic_api_base = litellm.get_llm_provider(
         model=model,
         custom_llm_provider=custom_llm_provider,
@@ -522,7 +530,6 @@ def prepare_call(
             model=model,
             llm_provider=provider,
         )
-    logging_obj: Final = kwargs.get("litellm_logging_obj")
     if isinstance(logging_obj, LiteLLMLoggingObj):
         logging_obj.update_from_kwargs(
             kwargs=dict(kwargs),
@@ -533,7 +540,6 @@ def prepare_call(
             },
             custom_llm_provider=provider,
         )
-        logging_obj.update_messages([_logged_request_message(request)])
     return DecisionsCall(
         model=canonical_model,
         requested_model=model,
