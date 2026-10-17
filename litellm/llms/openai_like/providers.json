@@ -239,5 +239,10 @@
       "/v1/responses",
       "/v1/messages"
     ]
+  },
+  "inworld": {
+    "base_url": "https://api.inworld.ai/v1",
+    "api_key_env": "INWORLD_API_KEY",
+    "api_base_env": "INWORLD_API_BASE"
   }
 }
