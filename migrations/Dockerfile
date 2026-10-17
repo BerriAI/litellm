@@ -41,6 +41,7 @@ RUN for i in 1 2 3; do \
 ENV UV_PYTHON_DOWNLOADS=0
 
 COPY pyproject.toml README.md rust-toolchain.toml ./
+COPY .cargo ./.cargo
 COPY litellm-rust ./litellm-rust
 
 RUN --mount=type=cache,target=/root/.cache/uv \
