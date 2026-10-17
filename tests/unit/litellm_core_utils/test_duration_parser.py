@@ -1,12 +1,12 @@
 import unittest
-from datetime import datetime, time, timezone
+from datetime import datetime, time, timedelta, timezone
 from typing import Final
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 import pytest
 
-import litellm.litellm_core_utils.duration_parser as duration_parser
+from litellm.litellm_core_utils import duration_parser
 from litellm.litellm_core_utils.duration_parser import (
     duration_in_seconds,
     duration_in_seconds_from,
@@ -194,6 +194,50 @@ class TestStandardizedResetTime(unittest.TestCase):
         result = get_next_standardized_reset_time("1d", pre_spring, "US/Eastern")
         self.assertEqual(result, expected)
 
+    def test_minute_reset_non_divisor_of_hour_stays_on_grid(self):
+        """45m resets must land on 45-minute boundaries anchored at midnight.
+
+        Computing the next boundary from the minute-of-hour alone only agrees
+        with that grid when the value divides 60; for 45m it used to produce
+        uneven reset intervals (45, 15, 45, 15 minutes).
+        """
+        # Multiples of 45 minutes since midnight: ..., 10:30, 11:15, 12:00, ...
+        base_time = datetime(2026, 1, 5, 10, 31, 0, tzinfo=timezone.utc)
+        expected = datetime(2026, 1, 5, 11, 15, 0, tzinfo=timezone.utc)
+        result = get_next_standardized_reset_time("45m", base_time, "UTC")
+        self.assertEqual(result, expected)
+
+        # Consecutive resets are a steady 45 minutes apart
+        first = get_next_standardized_reset_time("45m", datetime(2026, 1, 5, 9, 46, 0, tzinfo=timezone.utc), "UTC")
+        second = get_next_standardized_reset_time("45m", first + timedelta(seconds=1), "UTC")
+        self.assertEqual(second - first, timedelta(minutes=45))
+
+    def test_minute_reset_non_divisor_overnight(self):
+        """45m reset just before midnight lands at midnight, not 00:30."""
+        base_time = datetime(2026, 1, 5, 23, 50, 0, tzinfo=timezone.utc)
+        expected = datetime(2026, 1, 6, 0, 0, 0, tzinfo=timezone.utc)
+        result = get_next_standardized_reset_time("45m", base_time, "UTC")
+        self.assertEqual(result, expected)
+
+    def test_second_reset_non_divisor_of_minute_stays_on_grid(self):
+        """90s resets must land on 90-second boundaries anchored at midnight."""
+        base_time = datetime(2026, 1, 5, 0, 0, 50, tzinfo=timezone.utc)
+        expected = datetime(2026, 1, 5, 0, 1, 30, tzinfo=timezone.utc)
+        result = get_next_standardized_reset_time("90s", base_time, "UTC")
+        self.assertEqual(result, expected)
+
+    def test_second_reset_non_divisor_overnight(self):
+        """90s reset just before midnight lands at midnight."""
+        base_time = datetime(2026, 1, 5, 23, 59, 0, tzinfo=timezone.utc)
+        expected = datetime(2026, 1, 6, 0, 0, 0, tzinfo=timezone.utc)
+        result = get_next_standardized_reset_time("90s", base_time, "UTC")
+        self.assertEqual(result, expected)
+
+    def test_zero_minute_and_second_durations_expire_immediately(self):
+        """0m and 0s resolve to "now", matching the hour and day handlers."""
+        base_time = datetime(2026, 1, 5, 10, 31, 42, tzinfo=timezone.utc)
+        self.assertEqual(get_next_standardized_reset_time("0m", base_time, "UTC"), base_time)
+        self.assertEqual(get_next_standardized_reset_time("0s", base_time, "UTC"), base_time)
 
 class TestResetTimeOfDay(unittest.TestCase):
     """A configurable reset_time_of_day shifts day/week/month resets off midnight."""

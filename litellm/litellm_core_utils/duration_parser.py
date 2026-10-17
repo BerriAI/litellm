@@ -305,76 +305,55 @@ def _handle_hour_reset(current_time: datetime, base_midnight: datetime, value: i
 
 
 def _handle_minute_reset(current_time: datetime, base_midnight: datetime, value: int) -> datetime:
-    """Handle minute-based reset times."""
+    """Handle minute-based reset times.
+
+    Boundaries are multiples of `value` minutes since midnight, matching the
+    hour handler's continuous anchoring. Computing the next boundary from the
+    minute-of-hour alone only agrees with that grid when `value` divides 60;
+    for other values (e.g. 45m) it lands off-grid and produces uneven reset
+    intervals.
+    """
     # Handle zero value - immediate expiration
     if value == 0:
         return current_time
 
-    current_hour: Final = current_time.hour
-    current_minute: Final = current_time.minute
-    current_second: Final = current_time.second
-    current_microsecond: Final = current_time.microsecond
-
-    # Calculate next minute aligned with the value
-    if current_second == 0 and current_microsecond == 0:
-        next_minute = (
-            current_minute + value - (current_minute % value) if current_minute % value != 0 else current_minute + value
-        )
-    else:
-        next_minute = (
-            current_minute + value - (current_minute % value) if current_minute % value != 0 else current_minute + value
-        )
-
-    # Handle hour rollover
-    next_hour = current_hour + (next_minute // 60)
-    next_minute = next_minute % 60
+    minutes_since_midnight: Final = current_time.hour * 60 + current_time.minute
+    next_minutes: Final = (minutes_since_midnight // value + 1) * value
 
     # Handle overnight case
-    if next_hour >= 24:
-        next_hour = next_hour % 24
+    if next_minutes >= 24 * 60:
         next_day: Final = base_midnight + timedelta(days=1)
-        return next_day.replace(hour=next_hour, minute=next_minute, second=0, microsecond=0)
+        wrapped: Final = next_minutes % (24 * 60)
+        return next_day.replace(hour=wrapped // 60, minute=wrapped % 60)
 
-    return current_time.replace(hour=next_hour, minute=next_minute, second=0, microsecond=0)
+    return base_midnight.replace(hour=next_minutes // 60, minute=next_minutes % 60)
 
 
 def _handle_second_reset(current_time: datetime, base_midnight: datetime, value: int) -> datetime:
-    """Handle second-based reset times."""
+    """Handle second-based reset times.
+
+    Boundaries are multiples of `value` seconds since midnight, matching the
+    hour handler's continuous anchoring. Computing the next boundary from the
+    second-of-minute alone only agrees with that grid when `value` divides 60.
+    """
     # Handle zero value - immediate expiration
     if value == 0:
         return current_time
 
-    current_hour: Final = current_time.hour
-    current_minute: Final = current_time.minute
-    current_second: Final = current_time.second
-    current_microsecond: Final = current_time.microsecond
-
-    # Calculate next second aligned with the value
-    if current_microsecond == 0:
-        next_second = (
-            current_second + value - (current_second % value) if current_second % value != 0 else current_second + value
-        )
-    else:
-        next_second = (
-            current_second + value - (current_second % value) if current_second % value != 0 else current_second + value
-        )
-
-    # Handle minute rollover
-    additional_minutes: Final = next_second // 60
-    next_second = next_second % 60
-    next_minute = current_minute + additional_minutes
-
-    # Handle hour rollover
-    next_hour = current_hour + (next_minute // 60)
-    next_minute = next_minute % 60
+    seconds_since_midnight: Final = current_time.hour * 3600 + current_time.minute * 60 + current_time.second
+    next_seconds: Final = (seconds_since_midnight // value + 1) * value
 
     # Handle overnight case
-    if next_hour >= 24:
-        next_hour = next_hour % 24
+    if next_seconds >= 24 * 3600:
         next_day: Final = base_midnight + timedelta(days=1)
-        return next_day.replace(hour=next_hour, minute=next_minute, second=next_second, microsecond=0)
+        wrapped: Final = next_seconds % (24 * 3600)
+        return next_day.replace(hour=wrapped // 3600, minute=(wrapped % 3600) // 60, second=wrapped % 60)
 
-    return current_time.replace(hour=next_hour, minute=next_minute, second=next_second, microsecond=0)
+    return base_midnight.replace(
+        hour=next_seconds // 3600,
+        minute=(next_seconds % 3600) // 60,
+        second=next_seconds % 60,
+    )
 
 
 def _handle_month_reset(
