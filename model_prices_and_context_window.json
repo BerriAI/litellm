@@ -45431,6 +45431,38 @@
         "output_cost_per_token": 0.0,
         "source": "https://docs.perplexity.ai/docs/getting-started/pricing"
     },
+    "perplexity/pplx-decider-v1.2": {
+        "input_cost_per_token": 2e-08,
+        "litellm_provider": "perplexity",
+        "max_input_tokens": 262144,
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://docs.perplexity.ai/docs/decisions/quickstart"
+    },
+    "perplexity/pplx-decider-latest": {
+        "input_cost_per_token": 2e-08,
+        "litellm_provider": "perplexity",
+        "max_input_tokens": 262144,
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://docs.perplexity.ai/docs/decisions/quickstart"
+    },
+    "perplexity/pplx-decider-flash-v1.2": {
+        "input_cost_per_token": 1e-08,
+        "litellm_provider": "perplexity",
+        "max_input_tokens": 262144,
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://docs.perplexity.ai/docs/decisions/quickstart"
+    },
+    "perplexity/pplx-decider-flash-latest": {
+        "input_cost_per_token": 1e-08,
+        "litellm_provider": "perplexity",
+        "max_input_tokens": 262144,
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://docs.perplexity.ai/docs/decisions/quickstart"
+    },
     "perplexity/sonar": {
         "input_cost_per_token": 1e-06,
         "litellm_provider": "perplexity",
