@@ -2,7 +2,7 @@
 Translates from OpenAI's `/v1/audio/transcriptions` to ElevenLabs's `/v1/speech-to-text`
 """
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Final
 
 from httpx import Headers, Response
@@ -26,6 +26,20 @@ from ..common_utils import ElevenLabsException
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
+
+
+def _form_scalar(value: object) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
+def _to_form_value(value: str | float | bool | Sequence[object]) -> str | Sequence[str]:
+    # httpx sends a list as one repeated multipart part per element, which is how
+    # ElevenLabs reads a list such as keyterms; str(list) would ship the Python repr
+    if isinstance(value, (list, tuple)):
+        return [_form_scalar(item) for item in value]
+    return _form_scalar(value)
 
 
 class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
@@ -75,16 +89,14 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         # Use common utility to process the audio file
         processed_audio: Final = process_audio_file(audio_file)
 
-        # Prepare form data
-        form_data: Final = {"model_id": model}
+        form_data: Final = {"model_id": _to_form_value(model)}
 
         #########################################################
         # Add OpenAI Compatible Parameters
         #########################################################
         for key, value in optional_params.items():
             if key in self.get_supported_openai_params(model) and value is not None:
-                # Convert values to strings for form data, but skip None values
-                form_data[key] = str(value)
+                form_data[key] = _to_form_value(value)
 
         #########################################################
         # Add Provider Specific Parameters
@@ -96,7 +108,7 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         )
 
         for key, value in provider_specific_params.items():
-            form_data[key] = str(value)
+            form_data[key] = _to_form_value(value)
         #########################################################
         #########################################################
 
