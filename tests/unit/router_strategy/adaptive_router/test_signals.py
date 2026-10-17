@@ -81,6 +81,12 @@ def test_exhaustion_fires_on_infra_signal(fixture):
     assert state.exhaustion_count >= 1
 
 
+@pytest.mark.parametrize("status", [503, 529])
+def test_exhaustion_fires_on_an_overloaded_answer(status):
+    state, _ = _replay([{"user_content": "fix the build", "response_status": status}])
+    assert state.exhaustion_count == 1
+
+
 def test_no_signals_on_clean_session():
     state, _ = _replay(_load("clean_no_signals"))
     assert state.misalignment_count == 0

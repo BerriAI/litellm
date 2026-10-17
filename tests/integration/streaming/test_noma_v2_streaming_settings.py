@@ -65,7 +65,7 @@ BLOCKED: Final = "Request blocked by Noma guardrail"
 SLOW_SECONDS: Final = 1.5
 SAMPLED_SCANS: Final = range(2, 7)
 BUFFERED_BLOCK_STATUS: Final[Mapping[Endpoint, int]] = {"chat": 400, "messages": 400, "responses": 200}
-BUFFERED_OUTAGE_STATUS: Final[Mapping[Endpoint, int]] = {"chat": 503, "messages": 503, "responses": 200}
+BUFFERED_OUTAGE_STATUS: Final[Mapping[Endpoint, int]] = {"chat": 503, "messages": 529, "responses": 200}
 PIECES: Final = (
     " Contact",
     " me",

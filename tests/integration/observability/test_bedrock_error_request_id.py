@@ -424,7 +424,9 @@ def _bedrock_logged_error(endpoint: BedrockEndpoint, failure: BedrockFailure) ->
     shape: Final = _BEDROCK_FAILURES[failure]
     if endpoint == "messages-invoke":
         return "BedrockError", str(shape.bedrock_status)
-    return shape.converse_class, "503" if failure == "exception-event" else str(shape.bedrock_status)
+    if failure != "exception-event":
+        return shape.converse_class, str(shape.bedrock_status)
+    return shape.converse_class, "529" if endpoint == "messages" else "503"
 
 
 def _bedrock_client_status(endpoint: BedrockEndpoint, failure: BedrockFailure, after_output: bool) -> int:
@@ -551,7 +553,7 @@ def test_bedrock_non_stream_500_logs_amzn_request_id_on_every_endpoint(
             endpoint, _bedrock_model(scenario, endpoint, wire.url), amzn_request_id, stream=False
         )
         response: Final = gateway.request("POST", path, body)
-        assert response.status_code == 503, response.text
+        assert response.status_code == (503 if endpoint == "responses" else 529), response.text
         if endpoint == "responses":
             assert response.headers.get("llm_provider-x-amzn-requestid") == amzn_request_id, dict(response.headers)
         assert len(wire.drain()) == 1

@@ -2632,7 +2632,8 @@ class TestCommonRequestProcessingHelpers:
 
     async def test_a_stream_that_fails_before_its_first_byte_answers_as_an_anthropic_json_error(self):
         """A /v1/messages stream whose first chunk is already the error frame has nothing
-        streamed yet, so the failure answers as JSON with the status the upstream gave,
+        streamed yet, so the failure answers as JSON with the status Anthropic answers that upstream failure with
+        (a 503 is its 529 overloaded_error, LIT-9450),
         the shape Anthropic clients raise their status-specific errors on"""
 
         async def stream():
@@ -2643,12 +2644,12 @@ class TestCommonRequestProcessingHelpers:
         response = await create_response(generator, "text/event-stream", {"x-litellm-call-id": "call-8609"})
 
         assert isinstance(response, JSONResponse)
-        assert response.status_code == 503
+        assert response.status_code == 529
         assert response.headers["content-type"] == "application/json"
         assert response.headers["x-litellm-call-id"] == "call-8609"
         assert json.loads(response.body) == {
             "type": "error",
-            "error": {"type": "api_error", "message": "upstream unavailable"},
+            "error": {"type": "overloaded_error", "message": "upstream unavailable"},
         }
         assert generator.ag_frame is None
 
@@ -2684,7 +2685,7 @@ class TestCommonRequestProcessingHelpers:
         assert response.status_code == 200
         assert "".join(await self.consume_stream(response)) == (
             ANTHROPIC_PING_SSE_CHUNK
-            + 'event: error\ndata: {"type": "error", "error": {"type": "api_error", "message": "upstream unavailable"}}\n\n'
+            + 'event: error\ndata: {"type": "error", "error": {"type": "overloaded_error", "message": "upstream unavailable"}}\n\n'
         )
 
     async def test_create_streaming_response_disables_proxy_buffering(self):
@@ -4369,6 +4370,34 @@ class TestStreamCloseOnDisconnect:
         await gen.aclose()
 
         assert upstream.aclosed
+
+    async def test_async_streaming_data_generator_reraises_an_unchanged_http_exception_without_chaining_it_to_itself(
+        self,
+    ):
+        blocked = HTTPException(status_code=400, detail="Content blocked by guardrail")
+
+        class FailingUpstream:
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                raise blocked
+
+        ProxyLogging._callback_capabilities_cache.clear()
+        gen = ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
+            response=FailingUpstream(),
+            user_api_key_dict=ProxyUserAPIKeyAuth(),
+            request_data={"model": "mock-model"},
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=MagicMock()),
+            serialize_chunk=lambda c: "data: x\n\n",
+            serialize_error=lambda e: "data: error\n\n",
+        )
+
+        with pytest.raises(HTTPException) as raised:
+            await gen.__anext__()
+
+        assert raised.value is blocked
+        assert raised.value.__cause__ is not blocked
 
     async def test_async_streaming_data_generator_closes_the_guardrail_chain_on_client_disconnect(
         self,
@@ -10335,6 +10364,43 @@ async def test_base_process_llm_request_audits_a_failure_that_lands_after_its_ke
 
     assert collected[0] == TTFT_PING
     assert collected[-1] == b"data: [DONE]\n\n"
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_answers_a_late_overload_after_its_keepalive_as_an_overloaded_error_event():
+    async def slow_overload(self, **kwargs):
+        await asyncio.sleep(0.25)
+        raise litellm.ServiceUnavailableError(
+            message='BedrockException - {"message": "Bedrock is unable to process your request."}',
+            llm_provider="bedrock",
+            model="global.anthropic.claude-opus-5-5",
+        )
+
+    proxy_logging_obj = MagicMock(spec=ProxyLogging)
+    proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+    processor = ProxyBaseLLMRequestProcessing(data={"model": "global.anthropic.claude-opus-5-5", "stream": True})
+
+    with patch.object(litellm, "sse_keepalive_ping_interval_seconds", 0.05):
+        with patch.object(ProxyBaseLLMRequestProcessing, "_process_llm_request", slow_overload):
+            response = await processor.base_process_llm_request(
+                request=MagicMock(spec=Request),
+                fastapi_response=Response(),
+                user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+                route_type="anthropic_messages",
+                proxy_logging_obj=proxy_logging_obj,
+                general_settings={},
+                proxy_config=MagicMock(spec=ProxyConfig),
+            )
+        collected = await _drain(response)
+
+    assert proxy_logging_obj.post_call_failure_hook.await_args.kwargs["original_exception"].status_code == 529
+    assert collected[0] == TTFT_PING
+    event_line, data_line = collected[-1].decode().strip().split("\n")
+    assert event_line == "event: error"
+    error = json.loads(data_line.removeprefix("data: "))
+    assert error["type"] == "error"
+    assert error["error"]["type"] == "overloaded_error"
+    assert "Bedrock is unable to process your request." in error["error"]["message"]
 
 
 @pytest.mark.asyncio

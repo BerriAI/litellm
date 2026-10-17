@@ -4491,3 +4491,4 @@ def test_anthropic_error_frame_exception_classes_an_overloaded_frame_as_internal
     error: Final = anthropic_error_frame_exception("overloaded_error", "Overloaded", 503, "claude-sonnet-4-5")
 
     assert type(error) is litellm.InternalServerError
+    assert error.provider_status_code == 529

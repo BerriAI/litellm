@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
+import litellm
 from litellm import Router
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
@@ -200,6 +201,120 @@ class TestProxyExceptionAnthropicEnvelope:
         )
         assert fallback.status_code == 500
         assert json.loads(fallback.body)["error"]["type"] == "api_error"
+
+    def test_anthropic_response_answers_a_503_as_529_overloaded_error(self):
+        """LIT-9450: Anthropic's contract has no 503 and Claude Code takes its overload path only on a 529 or an
+        overloaded_error body, so a Bedrock capacity 503 leaves /v1/messages as 529 overloaded_error."""
+        import litellm.proxy.anthropic_endpoints.endpoints as ep
+        from litellm.proxy._types import ProxyException
+
+        request = MagicMock()
+        request.headers = {}
+
+        response = ep._anthropic_error_json_response(
+            ProxyException(
+                message='litellm.ServiceUnavailableError: BedrockException - {"message": "Bedrock is unable to process your request."}',
+                type="service_unavailable_error",
+                param=None,
+                code=503,
+            ),
+            request,
+        )
+
+        assert response.status_code == 529
+        assert json.loads(response.body)["error"]["type"] == "overloaded_error"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "unavailable",
+        [
+            pytest.param(
+                litellm.ServiceUnavailableError(
+                    message='BedrockException - {"message": "Bedrock is unable to process your request."}',
+                    llm_provider="bedrock",
+                    model="global.anthropic.claude-opus-5-5",
+                ),
+                id="bedrock-503",
+            ),
+            pytest.param(
+                litellm.InternalServerError(
+                    message='AnthropicError - {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
+                    llm_provider="anthropic",
+                    model="claude-opus-5-5",
+                    provider_status_code=529,
+                ),
+                id="anthropic-529",
+            ),
+        ],
+    )
+    async def test_anthropic_response_hands_the_failure_hook_the_529_it_answers(self, unavailable):
+        """The failure hook ends the OTel server span and counts the failed request from the exception's status
+        before the route answers, so the route hands it the 529 the client gets, not the deployment's 503 or the
+        500 an Anthropic overload keeps on the OpenAI-shaped routes. The raised exception keeps its own status for
+        the deployment-level recorders that already hold it."""
+        import litellm.proxy.anthropic_endpoints.endpoints as ep
+        import litellm.proxy.proxy_server as proxy_server
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        raised_status = unavailable.status_code
+        request = MagicMock()
+        request.headers = {}
+
+        with (
+            patch.object(
+                ep, "read_request_body", new=AsyncMock(return_value={})
+            ),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
+            patch.object(  # test-quality-ok: the deployment's 503 surfaces deep inside this call; the test targets the endpoint's except block
+                ep.ProxyBaseLLMRequestProcessing,
+                "base_process_llm_request",
+                new=AsyncMock(side_effect=unavailable),
+            ),
+            patch.object(
+                proxy_server, "proxy_logging_obj"
+            ) as mock_logging,  # test-quality-ok: module global imported at call time; no injection seam
+        ):
+            mock_logging.post_call_failure_hook = AsyncMock()
+            response = await ep.anthropic_response(
+                fastapi_response=MagicMock(),
+                request=request,
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+
+        recorded = mock_logging.post_call_failure_hook.await_args.kwargs["original_exception"]
+        assert (type(recorded), recorded.status_code) == (type(unavailable), 529)
+        assert unavailable.status_code == raised_status
+        assert response.status_code == 529
+        assert json.loads(response.body)["error"]["type"] == "overloaded_error"
+
+    @pytest.mark.asyncio
+    async def test_count_tokens_answers_a_503_as_529_overloaded_error(self):
+        import litellm.proxy.anthropic_endpoints.endpoints as ep
+        import litellm.proxy.proxy_server as proxy_server
+        from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+
+        request = MagicMock()
+        request.headers = {}
+        unavailable = ProxyException(
+            message="Bedrock is unable to process your request.", type="service_unavailable_error", param=None, code=503
+        )
+
+        with (
+            patch.object(  # test-quality-ok: endpoint reads the body via a module function; no injection seam
+                ep,
+                "read_request_body",
+                new=AsyncMock(return_value={"model": "claude-sonnet", "messages": [{"role": "user", "content": "hi"}]}),
+            ),
+            patch.object(
+                proxy_server, "count_request_tokens", new=AsyncMock(side_effect=unavailable)
+            ),  # test-quality-ok: module global imported at call time; the test targets the endpoint's except block
+        ):
+            response = await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
+
+        body = json.loads(response.body)
+        assert response.status_code == 529
+        assert body["type"] == "error"
+        assert body["error"]["type"] == "overloaded_error"
+        assert body["error"]["message"] == "Bedrock is unable to process your request."
 
     @staticmethod
     def _call_id_error_response(general_settings, provider_specific_fields=None):
