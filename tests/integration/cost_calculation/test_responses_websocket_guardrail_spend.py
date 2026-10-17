@@ -1,5 +1,6 @@
-"""A native Responses WebSocket runs the proxy's pre_call guardrails on every ``response.create`` frame and bills
-each turn's spend row with the guardrail cost of that turn alone (LIT-9744)"""
+"""A native Responses WebSocket runs the proxy's pre_call guardrails on every ``response.create`` frame, bills each
+turn's spend row with the guardrail cost of that turn alone, and bills a blocked frame's guardrail scan as a failed
+turn (LIT-9744)"""
 
 import asyncio
 import hashlib
@@ -33,18 +34,18 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 class TurnGuardrail(CustomGuardrail):
     async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
         blocks = [block for item in data.get("input") or [] for block in item.get("content") or []]
-        words = 0
-        for block in blocks:
-            if {_BLOCKED_WORD!r} in block["text"]:
-                raise ValueError("turn guardrail blocked the request")
-            words += len(block["text"].split())
-            block["text"] = block["text"] + {_MARKER!r}
+        words = sum(len(block["text"].split()) for block in blocks)
+        blocked = any({_BLOCKED_WORD!r} in block["text"] for block in blocks)
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_json_response={{"words": words}},
             request_data=data,
-            guardrail_status="success",
+            guardrail_status="guardrail_intervened" if blocked else "success",
             tracing_detail={{"guardrail_cost": round({_COST_PER_WORD} * words, 10)}},
         )
+        if blocked:
+            raise ValueError("turn guardrail blocked the request")
+        for block in blocks:
+            block["text"] = block["text"] + {_MARKER!r}
         return data
 """
 
@@ -137,10 +138,10 @@ def test_every_turn_runs_the_pre_call_guardrail_and_bills_only_its_own_guardrail
             f"{text}{_MARKER}" for text in texts if _BLOCKED_WORD not in text
         ], forwarded
 
-        rows: Final = eventually(lambda: _spend_rows(key), lambda values: len(values) == 4, seconds=70)
-        assert [row["status"] for row in rows] == ["success"] * 4, rows
+        rows: Final = eventually(lambda: _spend_rows(key), lambda values: len(values) == 5, seconds=70)
+        assert [row["status"] for row in rows] == ["success", "success", "success", "failure", "success"], rows
         expected: Final = [
-            _llm_cost() + _COST_PER_WORD * len(text.split()) for text in texts if _BLOCKED_WORD not in text
+            (0.0 if _BLOCKED_WORD in text else _llm_cost()) + _COST_PER_WORD * len(text.split()) for text in texts
         ]
         assert [float(row["spend"]) for row in rows] == pytest.approx(expected), rows
         assert eventually(lambda: _key_spend(key), lambda spend: spend > 0, seconds=70) == pytest.approx(sum(expected))

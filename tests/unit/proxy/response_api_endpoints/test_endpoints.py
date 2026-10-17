@@ -480,7 +480,12 @@ def _advertised_cost_split(headers: Mapping[str, str]) -> list[tuple[float, floa
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "background, stored, status, expected_billed_events",
-    [(True, True, "completed", 1), (True, True, "in_progress", 0), (True, False, "completed", 0), (False, True, "completed", 0)],
+    [
+        (True, True, "completed", 1),
+        (True, True, "in_progress", 0),
+        (True, False, "completed", 0),
+        (False, True, "completed", 0),
+    ],
 )
 async def test_reading_a_finished_background_response_bills_it(
     monkeypatch: pytest.MonkeyPatch, background: bool, stored: bool, status: str, expected_billed_events: int
@@ -531,8 +536,12 @@ async def test_reading_a_finished_background_response_bills_it(
     prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(return_value=1)
 
     with (
-        patch("litellm.proxy.proxy_server.prisma_client", prisma_client),  # test-quality-ok: the endpoint reads the proxy singletons at call time
-        patch("litellm.proxy.proxy_server.llm_router", MagicMock()),  # test-quality-ok: the endpoint reads the proxy singletons at call time
+        patch(
+            "litellm.proxy.proxy_server.prisma_client", prisma_client
+        ),  # test-quality-ok: the endpoint reads the proxy singletons at call time
+        patch(
+            "litellm.proxy.proxy_server.llm_router", MagicMock()
+        ),  # test-quality-ok: the endpoint reads the proxy singletons at call time
         patch("litellm.aget_responses", side_effect=AssertionError("billing must not read the provider again")),
     ):
         await _bill_finished_background_response(
@@ -662,9 +671,15 @@ async def _read_twice_on_two_pods(
     router.aget_responses = AsyncMock(side_effect=AssertionError("billing must not read the provider again"))
 
     with (
-        patch("litellm.proxy.proxy_server.prisma_client", prisma_client),  # test-quality-ok: the endpoint reads the proxy singletons at call time
-        patch("litellm.proxy.proxy_server.llm_router", router),  # test-quality-ok: the endpoint reads the proxy singletons at call time
-        patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging),  # test-quality-ok: the endpoint reads the proxy singletons at call time
+        patch(
+            "litellm.proxy.proxy_server.prisma_client", prisma_client
+        ),  # test-quality-ok: the endpoint reads the proxy singletons at call time
+        patch(
+            "litellm.proxy.proxy_server.llm_router", router
+        ),  # test-quality-ok: the endpoint reads the proxy singletons at call time
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging
+        ),  # test-quality-ok: the endpoint reads the proxy singletons at call time
         patch("litellm.aget_responses", side_effect=AssertionError("billing must not read the provider again")),
     ):
         await asyncio.gather(
@@ -702,7 +717,9 @@ async def test_a_finished_response_the_create_could_not_store_is_billed_once_und
         monkeypatch,
         table,
         response_id,
-        UserAPIKeyAuth(api_key="sk-reader", user_id="bob", team_id="team-beta", org_id="org-gamma", end_user_id="customer-42"),
+        UserAPIKeyAuth(
+            api_key="sk-reader", user_id="bob", team_id="team-beta", org_id="org-gamma", end_user_id="customer-42"
+        ),
     )
 
     (billed,) = payloads
@@ -746,7 +763,9 @@ async def test_a_finished_read_never_bills_a_response_already_billed_or_billed_b
     )
     table: Final = _UniqueManagedObjectTable(stored)
 
-    payloads: Final = await _read_twice_on_two_pods(monkeypatch, table, response_id, UserAPIKeyAuth(api_key="sk-reader"))
+    payloads: Final = await _read_twice_on_two_pods(
+        monkeypatch, table, response_id, UserAPIKeyAuth(api_key="sk-reader")
+    )
 
     assert payloads == ()
     assert table.rows == stored
@@ -878,9 +897,15 @@ async def test_a_finished_read_or_cancel_bills_usage_only_the_configured_deploym
             "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing",
             return_value=processor,
         ),
-        patch("litellm.proxy.proxy_server.prisma_client", stored.prisma_client),  # test-quality-ok: the endpoint reads the proxy singletons at call time
-        patch("litellm.proxy.proxy_server.llm_router", router),  # test-quality-ok: the endpoint reads the proxy singletons at call time
-        patch("litellm.proxy.proxy_server.proxy_logging_obj", stored.proxy_logging),  # test-quality-ok: the endpoint reads the proxy singletons at call time
+        patch(
+            "litellm.proxy.proxy_server.prisma_client", stored.prisma_client
+        ),  # test-quality-ok: the endpoint reads the proxy singletons at call time
+        patch(
+            "litellm.proxy.proxy_server.llm_router", router
+        ),  # test-quality-ok: the endpoint reads the proxy singletons at call time
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj", stored.proxy_logging
+        ),  # test-quality-ok: the endpoint reads the proxy singletons at call time
         patch("litellm.aget_responses", side_effect=AssertionError("the configured deployment answers billing reads")),
     ):
         await getattr(endpoints, endpoint_name)(
@@ -941,9 +966,15 @@ async def test_deleting_a_finished_unbilled_background_response_bills_it_before_
             "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing",
             return_value=processor,
         ),
-        patch("litellm.proxy.proxy_server.prisma_client", stored.prisma_client),  # test-quality-ok: the endpoint reads the proxy singletons at call time
-        patch("litellm.proxy.proxy_server.llm_router", router),  # test-quality-ok: the endpoint reads the proxy singletons at call time
-        patch("litellm.proxy.proxy_server.proxy_logging_obj", stored.proxy_logging),  # test-quality-ok: the endpoint reads the proxy singletons at call time
+        patch(
+            "litellm.proxy.proxy_server.prisma_client", stored.prisma_client
+        ),  # test-quality-ok: the endpoint reads the proxy singletons at call time
+        patch(
+            "litellm.proxy.proxy_server.llm_router", router
+        ),  # test-quality-ok: the endpoint reads the proxy singletons at call time
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj", stored.proxy_logging
+        ),  # test-quality-ok: the endpoint reads the proxy singletons at call time
     ):
         result: Final = await delete_response(
             response_id=stored.response_id,
@@ -989,7 +1020,9 @@ async def test_a_delete_the_proxy_refuses_never_fetches_or_bills_the_response(ca
     caller: Final = UserAPIKeyAuth(api_key="sk-caller", user_role=caller_role)
 
     async def pipeline(**_: object) -> DeleteResponseResult:
-        await security.async_pre_call_hook(caller, MagicMock(), {"response_id": stored.response_id}, "adelete_responses")
+        await security.async_pre_call_hook(
+            caller, MagicMock(), {"response_id": stored.response_id}, "adelete_responses"
+        )
         return DeleteResponseResult(id=stored.response_id, object="response", deleted=True)
 
     processor: Final = MagicMock()
@@ -1002,9 +1035,15 @@ async def test_a_delete_the_proxy_refuses_never_fetches_or_bills_the_response(ca
             "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing",
             return_value=processor,
         ),
-        patch("litellm.proxy.proxy_server.prisma_client", stored.prisma_client),  # test-quality-ok: the endpoint reads the proxy singletons at call time
-        patch("litellm.proxy.proxy_server.llm_router", router),  # test-quality-ok: the endpoint reads the proxy singletons at call time
-        patch("litellm.proxy.proxy_server.proxy_logging_obj", stored.proxy_logging),  # test-quality-ok: the endpoint reads the proxy singletons at call time
+        patch(
+            "litellm.proxy.proxy_server.prisma_client", stored.prisma_client
+        ),  # test-quality-ok: the endpoint reads the proxy singletons at call time
+        patch(
+            "litellm.proxy.proxy_server.llm_router", router
+        ),  # test-quality-ok: the endpoint reads the proxy singletons at call time
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj", stored.proxy_logging
+        ),  # test-quality-ok: the endpoint reads the proxy singletons at call time
     ):
         with contextlib.suppress(HTTPException):
             await delete_response(
@@ -1058,9 +1097,15 @@ def _capture_spend_events(monkeypatch: pytest.MonkeyPatch) -> _SpendEvents:
 @contextlib.contextmanager
 def _proxy_over(prisma_client: MagicMock, proxy_logging: MagicMock, router: MagicMock):
     with (
-        patch("litellm.proxy.proxy_server.prisma_client", prisma_client),  # test-quality-ok: the endpoint reads the proxy singletons at call time
-        patch("litellm.proxy.proxy_server.llm_router", router),  # test-quality-ok: the endpoint reads the proxy singletons at call time
-        patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging),  # test-quality-ok: the endpoint reads the proxy singletons at call time
+        patch(
+            "litellm.proxy.proxy_server.prisma_client", prisma_client
+        ),  # test-quality-ok: the endpoint reads the proxy singletons at call time
+        patch(
+            "litellm.proxy.proxy_server.llm_router", router
+        ),  # test-quality-ok: the endpoint reads the proxy singletons at call time
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging
+        ),  # test-quality-ok: the endpoint reads the proxy singletons at call time
     ):
         yield
 
@@ -1211,7 +1256,9 @@ async def test_a_streamed_background_create_is_billed_wherever_it_sets_backgroun
             "litellm.proxy.response_polling.polling_handler.should_use_polling_for_request",
             return_value=False,
         ),
-        patch("litellm.proxy.proxy_server.select_data_generator", provider_events),  # test-quality-ok: the endpoint reads the proxy singletons at call time
+        patch(
+            "litellm.proxy.proxy_server.select_data_generator", provider_events
+        ),  # test-quality-ok: the endpoint reads the proxy singletons at call time
     ):
         await responses_api(
             request=_request_for("POST", "/v1/responses", body),
@@ -1329,7 +1376,12 @@ async def test_background_create_the_provider_confirms_is_stored_under_its_provi
         }
 
     request = Request(
-        {"type": "http", "method": "POST", "path": "/v1/responses", "headers": [(b"content-type", b"application/json")]},
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/responses",
+            "headers": [(b"content-type", b"application/json")],
+        },
         receive,
     )
 
@@ -1955,6 +2007,35 @@ class TestResponsesWSFirstFrameModelAuth:
         assert admitted["litellm_metadata"]["standard_logging_guardrail_information"] == [
             {"guardrail_name": "admission"}
         ]
+
+    @pytest.mark.asyncio
+    async def test_frame_guard_bills_a_rejected_frame_as_a_failed_request(self):
+        from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
+
+        async def pre_call_hook(user_api_key_dict, data, call_type, guardrails_only):
+            data["litellm_metadata"]["standard_logging_guardrail_information"] = [{"guardrail_cost": 0.5}]
+            raise ValueError("blocked")
+
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=pre_call_hook)
+        proxy_logging_obj.post_call_failure_hook = AsyncMock()
+        user_api_key_dict = MagicMock()
+        guard = _responses_ws_frame_guard(
+            {"model": "gpt-4o-mini", "litellm_metadata": {}}, user_api_key_dict, proxy_logging_obj
+        )
+
+        with pytest.raises(ValueError, match="blocked"):
+            await guard(json.dumps({"type": "response.create", "input": "hi"}))
+
+        proxy_logging_obj.post_call_failure_hook.assert_awaited_once()
+        failure = proxy_logging_obj.post_call_failure_hook.await_args.kwargs
+        user_api_key_dict.model_copy.assert_called_once_with(update={"budget_reservation": None})
+        assert failure["user_api_key_dict"] is user_api_key_dict.model_copy.return_value
+        assert str(failure["original_exception"]) == "blocked"
+        assert failure["request_data"]["litellm_metadata"]["standard_logging_guardrail_information"] == [
+            {"guardrail_cost": 0.5}
+        ]
+        assert failure["request_data"]["input"] == "hi"
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("provider_rejected", [True, False])
@@ -3649,16 +3730,18 @@ class TestResponsesInputTokens:
             model_list=[
                 {
                     "model_name": "gpt-5.2",
-                    "litellm_params": {"model": "openai/gpt-5.2", "api_key": "sk-test", "additional_drop_params": ["tools"]},
+                    "litellm_params": {
+                        "model": "openai/gpt-5.2",
+                        "api_key": "sk-test",
+                        "additional_drop_params": ["tools"],
+                    },
                 },
                 {"model_name": "backup", "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "sk-test"}},
             ],
             fallbacks=[{"gpt-5.2": ["backup"]}],
         )
 
-        response, counter = self._post_input_tokens(
-            {"model": "gpt-5.2", "input": "hi", "tools": 5}, llm_router=router
-        )
+        response, counter = self._post_input_tokens({"model": "gpt-5.2", "input": "hi", "tools": 5}, llm_router=router)
 
         assert response.status_code == 200, response.text
         assert counter.await_args.kwargs["request"].tools is None

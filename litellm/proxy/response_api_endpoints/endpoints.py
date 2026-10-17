@@ -1828,6 +1828,14 @@ class _PreCallGuardrailWalk(Protocol):
         guardrails_only: bool,
     ) -> dict[str, object]: ...  # mutable-ok: ProxyLogging.pre_call_hook returns the guardrails' own dict
 
+    async def post_call_failure_hook(
+        self,
+        *,
+        user_api_key_dict: UserAPIKeyAuth,
+        original_exception: Exception,
+        request_data: dict[str, object],  # mutable-ok: ProxyLogging.post_call_failure_hook stamps the failure row on it
+    ) -> object: ...
+
 
 def _responses_ws_frame_guard(
     admitted: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth, proxy_logging_obj: _PreCallGuardrailWalk
@@ -1845,6 +1853,9 @@ def _responses_ws_frame_guard(
     }
     model: Final = admitted.get("model")
 
+    # a blocked frame is billed as its own failed request; only the first turn settles the admission reservation
+    rejected_frame_auth: Final = user_api_key_dict.model_copy(update={"budget_reservation": None})
+
     async def guard(frame: str) -> GuardedResponsesWsFrame:
         frame_obj: Final = _WS_FRAME.validate_json(frame)
         frame_data: Final = {
@@ -1852,25 +1863,32 @@ def _responses_ws_frame_guard(
             "model": model,
             metadata_key: copy.deepcopy(bucket),
         }
-        guarded_data: Final = await proxy_logging_obj.pre_call_hook(
-            user_api_key_dict=user_api_key_dict, data=frame_data, call_type="aresponses", guardrails_only=True
-        )
-        guarded_bucket: Final = guarded_data.get(metadata_key)
-        recorded: Final = (
-            _WS_FRAME.validate_python(guarded_bucket).get(_GUARDRAIL_INFORMATION_KEY)
-            if isinstance(guarded_bucket, dict)
-            else None
-        )
+        try:
+            guarded_data: Final = await proxy_logging_obj.pre_call_hook(
+                user_api_key_dict=user_api_key_dict, data=frame_data, call_type="aresponses", guardrails_only=True
+            )
+        except Exception as e:
+            await proxy_logging_obj.post_call_failure_hook(
+                user_api_key_dict=rejected_frame_auth, original_exception=e, request_data=frame_data
+            )
+            raise
         rewritten: Final = {
             **frame_obj,
             **{key: guarded_data[key] for key in _GUARDED_FRAME_FIELDS if key in guarded_data},
         }
         return GuardedResponsesWsFrame(
             frame=json.dumps(rewritten),
-            guardrail_information=tuple(_GUARDRAIL_INFORMATION.validate_python(recorded)) if recorded else (),
+            guardrail_information=_recorded_guardrail_information(guarded_data.get(metadata_key)),
         )
 
     return guard
+
+
+def _recorded_guardrail_information(bucket: object) -> tuple[dict[str, object], ...]:
+    recorded: Final = (
+        _WS_FRAME.validate_python(bucket).get(_GUARDRAIL_INFORMATION_KEY) if isinstance(bucket, dict) else None
+    )
+    return tuple(_GUARDRAIL_INFORMATION.validate_python(recorded)) if recorded else ()
 
 
 async def _responses_websocket_session(
