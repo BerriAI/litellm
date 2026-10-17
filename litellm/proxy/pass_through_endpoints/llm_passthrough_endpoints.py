@@ -3224,6 +3224,11 @@ async def openai_proxy_route(
     if openai_api_key is None:
         raise Exception("Required 'OPENAI_API_KEY' in environment to make pass-through calls to OpenAI.")
 
+    # Block object-management passthrough for non-admin keys: these paths speak
+    # to the shared provider account the proxy itself is billed on, so no
+    # per-tenant attribution is possible.
+    openai_proxy_gate(user_api_key_dict=user_api_key_dict, endpoint_path=f"/{endpoint}")
+
     return await BaseOpenAIPassThroughHandler.base_openai_pass_through_handler(
         endpoint=endpoint,
         request=request,
@@ -3492,6 +3497,43 @@ async def deepgram_listen_websocket_route(
         endpoint=websocket.url.path,
         accept_websocket=False,
     )
+
+
+_OPENAI_PASSTHROUGH_MANAGEMENT_PREFIXES: Final[tuple[str, ...]] = (
+    "/v1/files",
+    "/v1/batches",
+    "/v1/vector_stores",
+    "/v1/fine_tuning",
+    "/v1/threads",
+    "/v1/assistants",
+    "/v1/models",
+)
+
+
+def openai_proxy_gate(
+    *,
+    user_api_key_dict: UserAPIKeyAuth,
+    endpoint_path: str,
+) -> None:
+    """The /openai passthrough speaks to the shared OpenAI account with
+    the proxy's credentials. Inference paths stay available to granted keys;
+    object-management paths address the shared account with no tenant records,
+    so they are proxy-admin-only."""
+    if is_proxy_admin(user_api_key_dict):
+        return
+    normalized: Final = posixpath.normpath(f"/{endpoint_path.strip('/')}")
+    if normalized.startswith(_OPENAI_PASSTHROUGH_MANAGEMENT_PREFIXES):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": (
+                    "/openai object passthrough targets the proxy's shared provider account "
+                    "and is limited to proxy admin keys. Register files through LiteLLM "
+                    "(use target_model_names) or route your model traffic through the "
+                    "standard LiteLLM endpoints."
+                )
+            },
+        )
 
 
 class BaseOpenAIPassThroughHandler:

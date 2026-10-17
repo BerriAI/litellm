@@ -519,3 +519,52 @@ def test_vertex_pass_through_forwards_a_request_without_betas_despite_a_malforme
 
     assert (response.status_code, response.json()) == (200, _VERTEX_CLAUDE_REPLY)
     assert "anthropic-beta" not in upstream.calls.last.request.headers
+def _openai_proxy_gate_module():
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        openai_proxy_gate,
+    )
+
+    return openai_proxy_gate
+
+
+def test_openai_proxy_gate_blocks_management_paths_for_non_admin():
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    openai_proxy_gate = _openai_proxy_gate_module()
+
+    with pytest.raises(HTTPException) as exc:
+        openai_proxy_gate(
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-team", user_role=None, user_id="u1"),
+            endpoint_path="/v1/files/file-abc123",
+        )
+    assert int(getattr(exc.value, "status_code", 0)) == 403
+
+
+def test_openai_proxy_gate_allows_admin_everywhere():
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+
+    openai_proxy_gate = _openai_proxy_gate_module()
+
+    openai_proxy_gate(
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key="sk-admin", user_role=LitellmUserRoles.PROXY_ADMIN, user_id="u2"
+        ),
+        endpoint_path="/v1/files/file-abc123",
+    )
+
+
+def test_openai_proxy_gate_allows_inference_paths_for_any_key():
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    openai_proxy_gate = _openai_proxy_gate_module()
+
+    openai_proxy_gate(
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-team", user_role=None, user_id="u1"),
+        endpoint_path="/v1/chat/completions",
+    )
+    openai_proxy_gate(
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-team", user_role=None, user_id="u1"),
+        endpoint_path="/v1/responses",
+    )

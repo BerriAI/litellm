@@ -3886,7 +3886,10 @@ class TestOpenAIPassthroughRoute:
         mock_request.url = MagicMock()
         mock_request.url.path = "/v1/assistants"
         mock_response = MagicMock(spec=Response)
+        # assistants object passthrough addresses the shared provider account, so
+        # the openai_proxy_gate admits it only for proxy admin callers.
         mock_user_api_key_dict = MagicMock()
+        mock_user_api_key_dict.user_role = "proxy_admin"
 
         with (
             patch(
@@ -3987,7 +3990,13 @@ def openai_passthrough_client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestC
     monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
-    monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, lambda: UserAPIKeyAuth(api_key="sk-virtual"))
+    # object-management paths (/v1/files, /v1/batches) are proxy-admin only under
+    # the openai_proxy_gate, so the harness authenticates as the admin caller.
+    monkeypatch.setitem(
+        app.dependency_overrides,
+        user_api_key_auth,
+        lambda: UserAPIKeyAuth(api_key="sk-virtual", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
     yield TestClient(app)
 
 
