@@ -219,6 +219,7 @@ from litellm.router_utils.cooldown_handlers import (
     _first_present,  # pyright: ignore[reportPrivateUsage] - shared internal helper across router_utils submodules, matching the other cooldown_handlers imports on this line
     async_get_cooldown_deployments,
     async_get_cooldown_deployments_with_debug_info,
+    get_cooldown_deployment_info,
     get_cooldown_deployments,
     is_advisor_orchestration_failure,
     is_background_response_poll_not_found,
@@ -14284,6 +14285,7 @@ class Router:
                 litellm_router_instance=self,
                 model=model,
                 parent_otel_span=parent_otel_span,
+                route_model_ids=self._deployment_ids(request_deployments),
             )
             raise exception
 
@@ -15477,6 +15479,9 @@ class Router:
                 enable_pre_call_checks=self.enable_pre_call_checks,
                 cooldown_list=_cooldown_list,
                 model_ids=model_ids,
+                cooldown_deployments=get_cooldown_deployment_info(
+                    self, self._deployment_ids(request_deployments), _cooldown_list
+                ),
             )
 
         if strategy == "simple-shuffle":
@@ -15645,6 +15650,9 @@ class Router:
                 enable_pre_call_checks=self.enable_pre_call_checks,
                 cooldown_list=_cooldown_list,
                 model_ids=pass_through_model_ids,
+                cooldown_deployments=get_cooldown_deployment_info(
+                    self, self._deployment_ids(request_deployments), _cooldown_list
+                ),
             )
 
         # 6. Apply load balancing strategy

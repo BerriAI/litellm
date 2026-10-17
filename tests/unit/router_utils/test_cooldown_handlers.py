@@ -15,6 +15,7 @@ from litellm import Router
 from litellm._internal_context import current_service_target
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.litellm_core_utils.litellm_logging import mask_api_base_credentials
 from litellm.router_utils.cooldown_cache import CooldownCache, CooldownCacheValue
 from litellm.router_utils.cooldown_callbacks import router_cooldown_event_callback
 from litellm.router_utils.cooldown_handlers import (
@@ -44,8 +45,9 @@ from litellm.types.router import (
     AllowedFailsPolicy,
     DeploymentTypedDict,
     LiteLLMParamsTypedDict,
+    RouterRateLimitError,
 )
-from litellm.types.utils import CredentialItem
+from litellm.types.utils import CooldownDeploymentInfo, CredentialItem
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 
@@ -3004,3 +3006,178 @@ def test_shared_mode_upstream_429_still_cools_down_the_deployment(single_deploym
         is True
     )
     assert _should_run_cooldown_logic(single_deployment_router, "dep-1", 429, exc) is True
+
+
+REFUSAL_MESSAGES: Final = [{"role": "user", "content": "cooldown"}]
+SECRET_API_BASE: Final = "https://first.example/v1?key=sk-scripted-secret"
+FIRST_REFUSED: Final = CooldownDeploymentInfo(model_id="refused-1", api_base=mask_api_base_credentials(SECRET_API_BASE))
+SECOND_REFUSED: Final = CooldownDeploymentInfo(model_id="refused-2", api_base=None)
+THIRD_REFUSED: Final = CooldownDeploymentInfo(model_id="refused-3", api_base=None)
+OTHER_TEAMS_REFUSED: Final = CooldownDeploymentInfo(model_id="refused-team-b", api_base=None)
+FIRST_WILDCARD: Final = CooldownDeploymentInfo(model_id="wildcard-1", api_base="https://wildcard.example/v1")
+SECOND_WILDCARD: Final = CooldownDeploymentInfo(model_id="wildcard-2", api_base=None)
+ALIAS_TARGET: Final = CooldownDeploymentInfo(model_id="tier-1", api_base="https://tier.example/v1")
+PROVIDER_MODEL: Final = CooldownDeploymentInfo(model_id="friendly-1", api_base=None)
+EVERY_DEPLOYMENT: Final = (
+    "refused-1",
+    "refused-2",
+    "refused-3",
+    "refused-team-b",
+    "neighbour-1",
+    "wildcard-1",
+    "wildcard-2",
+    "tier-1",
+    "friendly-1",
+)
+
+
+def _cooled_router(routing_strategy: str, cooled: tuple[str, ...]) -> Router:
+    router: Final = Router(
+        routing_strategy=routing_strategy,
+        model_group_alias={"entry": "tier", "tier": "refused"},
+        model_list=[
+            {
+                "model_name": "refused",
+                "litellm_params": {"model": "openai/gpt-5.4", "api_base": SECRET_API_BASE, "use_in_pass_through": True},
+                "model_info": {"id": "refused-1"},
+            },
+            {
+                "model_name": "refused",
+                "litellm_params": {"model": "openai/gpt-5.4", "use_in_pass_through": True, "tpm": 1},
+                "model_info": {"id": "refused-2"},
+            },
+            {
+                "model_name": "refused",
+                "litellm_params": {"model": "openai/gpt-5.4", "tpm": 1},
+                "model_info": {"id": "refused-3"},
+            },
+            {
+                "model_name": "refused",
+                "litellm_params": {"model": "openai/gpt-5.4", "use_in_pass_through": True},
+                "model_info": {"id": "refused-team-b", "team_id": "team-b"},
+            },
+            {
+                "model_name": "neighbour",
+                "litellm_params": {"model": "openai/gpt-5.4", "api_base": "https://neighbour.example/v1"},
+                "model_info": {"id": "neighbour-1"},
+            },
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*", "api_base": "https://wildcard.example/v1"},
+                "model_info": {"id": "wildcard-1"},
+            },
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*"},
+                "model_info": {"id": "wildcard-2"},
+            },
+            {
+                "model_name": "tier",
+                "litellm_params": {"model": "openai/gpt-5.4", "api_base": "https://tier.example/v1"},
+                "model_info": {"id": "tier-1"},
+            },
+            {
+                "model_name": "friendly",
+                "litellm_params": {"model": "anthropic/claude-friendly"},
+                "model_info": {"id": "friendly-1"},
+            },
+        ],
+    )
+    for model_id in cooled:
+        router.cooldown_cache.add_deployment_to_cooldown(
+            model_id=model_id,
+            original_exception=litellm.RateLimitError("scripted 429", "openai", "gpt-5.4"),
+            exception_status=429,
+            cooldown_time=60,
+        )
+    return router
+
+
+def _team_request(team_id: str | None) -> dict[str, object]:
+    return {"metadata": {"user_api_key_team_id": team_id} if team_id else {}}
+
+
+def _select(router: Router, entrypoint: str, model: str, request_kwargs: dict[str, object]) -> object:
+    match entrypoint:
+        case "async":
+            return asyncio.run(
+                router.async_get_available_deployment(
+                    model=model, messages=REFUSAL_MESSAGES, request_kwargs=request_kwargs
+                )
+            )
+        case "async-pass-through":
+            return asyncio.run(
+                router.async_get_available_deployment_for_pass_through(model=model, request_kwargs=request_kwargs)
+            )
+        case "pass-through":
+            return router.get_available_deployment_for_pass_through(model=model, request_kwargs=request_kwargs)
+        case _:
+            return router.get_available_deployment(
+                model=model, messages=REFUSAL_MESSAGES, request_kwargs=request_kwargs
+            )
+
+
+ALL_COOLED: Final = (FIRST_REFUSED, SECOND_REFUSED, THIRD_REFUSED)
+STRATEGY_COOLED: Final = ("refused-1", "refused-team-b", "neighbour-1")
+WILDCARD_COOLED: Final = (FIRST_WILDCARD, SECOND_WILDCARD)
+
+
+@pytest.mark.parametrize(
+    ("routing_strategy", "cooled", "entrypoint", "model", "team_id", "expected"),
+    (
+        ("simple-shuffle", EVERY_DEPLOYMENT, "sync", "refused", "team-a", ALL_COOLED),
+        ("simple-shuffle", EVERY_DEPLOYMENT, "async", "refused", "team-a", ALL_COOLED),
+        ("simple-shuffle", EVERY_DEPLOYMENT, "pass-through", "refused", "team-a", (FIRST_REFUSED, SECOND_REFUSED)),
+        ("simple-shuffle", EVERY_DEPLOYMENT, "async-pass-through", "refused", "team-a", ALL_COOLED),
+        ("simple-shuffle", EVERY_DEPLOYMENT, "sync", "refused", "team-b", (*ALL_COOLED, OTHER_TEAMS_REFUSED)),
+        ("simple-shuffle", EVERY_DEPLOYMENT, "async", "refused", None, ALL_COOLED),
+        ("cost-based-routing", STRATEGY_COOLED, "sync", "refused", "team-a", None),
+        ("cost-based-routing", STRATEGY_COOLED, "async", "refused", "team-a", None),
+        ("cost-based-routing", STRATEGY_COOLED, "pass-through", "refused", "team-a", None),
+        ("simple-shuffle", EVERY_DEPLOYMENT, "sync", "openai/gpt-5.4-mini", "team-a", WILDCARD_COOLED),
+        ("simple-shuffle", EVERY_DEPLOYMENT, "async", "openai/gpt-5.4-mini", "team-a", WILDCARD_COOLED),
+        ("simple-shuffle", EVERY_DEPLOYMENT, "sync", "entry", "team-a", (ALIAS_TARGET,)),
+        ("simple-shuffle", EVERY_DEPLOYMENT, "async", "entry", "team-a", (ALIAS_TARGET,)),
+        ("simple-shuffle", EVERY_DEPLOYMENT, "sync", "anthropic/claude-friendly", "team-a", (PROVIDER_MODEL,)),
+        ("simple-shuffle", EVERY_DEPLOYMENT, "async", "anthropic/claude-friendly", "team-a", (PROVIDER_MODEL,)),
+    ),
+    ids=(
+        "all-cooled-sync",
+        "all-cooled-async",
+        "all-cooled-pass-through",
+        "all-cooled-async-pass-through",
+        "all-cooled-owning-team",
+        "all-cooled-async-no-team",
+        "strategy-refused-sync",
+        "strategy-refused-async",
+        "strategy-refused-pass-through",
+        "wildcard-sync",
+        "wildcard-async",
+        "alias-chain-sync",
+        "alias-chain-async",
+        "provider-model-sync",
+        "provider-model-async",
+    ),
+)
+def test_no_deployment_error_names_the_cooled_deployments_the_request_could_route_to(
+    routing_strategy: str,
+    cooled: tuple[str, ...],
+    entrypoint: str,
+    model: str,
+    team_id: str | None,
+    expected: tuple[CooldownDeploymentInfo, ...] | None,
+) -> None:
+    router: Final = _cooled_router(routing_strategy, cooled)
+    with pytest.raises(RouterRateLimitError) as refusal:
+        _select(router, entrypoint, model, _team_request(team_id))
+    assert refusal.value.cooldown_deployments == expected, refusal.value.cooldown_list
+
+
+@pytest.mark.parametrize("entrypoint", ("sync", "async"))
+def test_no_deployment_error_names_only_the_cooled_part_of_a_route_emptied_by_other_filters(entrypoint: str) -> None:
+    router: Final = _cooled_router("simple-shuffle", STRATEGY_COOLED)
+    request_kwargs: Final = {**_team_request("team-a"), "_excluded_deployment_ids": ["refused-2", "refused-3"]}
+    with pytest.raises(RouterRateLimitError) as refusal:
+        _select(router, entrypoint, "refused", request_kwargs)
+    assert refusal.value.cooldown_deployments == (FIRST_REFUSED,), refusal.value.cooldown_list
+    assert "sk-scripted-secret" not in repr(refusal.value.cooldown_deployments)
