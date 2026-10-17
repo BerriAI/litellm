@@ -142,6 +142,8 @@ impl AnthropicUsage {
     }
 }
 
+/// OpenAI's usage, with the fields LiteLLM adds when it translates another provider's:
+/// cache writes by lifetime and server tool counts.
 #[derive(Deserialize)]
 struct OpenAiUsage {
     #[serde(default)]
@@ -149,23 +151,38 @@ struct OpenAiUsage {
     #[serde(default)]
     completion_tokens: u64,
     prompt_tokens_details: Option<OpenAiPromptDetails>,
+    server_tool_use: Option<ServerToolUse>,
 }
 
 #[derive(Deserialize, Default)]
 struct OpenAiPromptDetails {
     cached_tokens: Option<u64>,
     cache_creation_tokens: Option<u64>,
+    cache_creation_token_details: Option<CacheCreation>,
 }
 
 impl OpenAiUsage {
     fn usage(self) -> Usage {
         let details = self.prompt_tokens_details.unwrap_or_default();
-        Usage::from_prompt_counts(
+        let mut usage = Usage::from_prompt_counts(
             self.prompt_tokens,
             self.completion_tokens,
             details.cached_tokens.unwrap_or(0),
             details.cache_creation_tokens.unwrap_or(0),
-        )
+        );
+        if let Some(tokens) = details
+            .cache_creation_token_details
+            .and_then(|cache| cache.ephemeral_1h_input_tokens)
+        {
+            usage.cache_write_1h_tokens = tokens.min(usage.cache_write_tokens);
+        }
+        if let Some(requests) = self
+            .server_tool_use
+            .and_then(|tools| tools.web_search_requests)
+        {
+            usage.web_search_requests = requests;
+        }
+        usage
     }
 }
 
@@ -443,6 +460,18 @@ mod tests {
         assert_eq!(usage, Some(anthropic_usage()));
         assert_eq!(anthropic_usage().prompt_tokens(), 36);
         assert_eq!(anthropic_usage().total_tokens(), 78);
+    }
+
+    #[rstest]
+    fn translated_openai_usage_keeps_cache_lifetimes_and_server_tools() {
+        let usage = Usage::from_openai(&json!({
+            "prompt_tokens": 36,
+            "completion_tokens": 42,
+            "prompt_tokens_details": {"cached_tokens": 20, "cache_creation_tokens": 6,
+                "cache_creation_token_details": {"ephemeral_5m_input_tokens": 2, "ephemeral_1h_input_tokens": 4}},
+            "server_tool_use": {"web_search_requests": 2},
+        }));
+        assert_eq!(usage, Some(anthropic_usage()));
     }
 
     #[rstest]

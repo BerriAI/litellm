@@ -121,6 +121,7 @@ pub(super) fn prepare_provider_request(
         config,
         url,
         body: transformed.body,
+        stream_shape: transformed.stream_shape,
         optional_params: request.optional_params,
         environment,
         secrets,

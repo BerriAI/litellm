@@ -23,14 +23,18 @@ use crate::{
     base_llm::{
         auth::AuthScheme,
         chat::{
-            streaming::StreamShape,
+            streaming::{ChatStream, StreamShape},
             transformation::{
                 BaseConfig, Headers, ProviderChatRequestData, ProviderChatResponseData,
                 Unsupported, ValidatedEnvironment, unsupported_message, unsupported_param,
             },
         },
     },
+    bedrock::chat::invoke_handler::converse_chat_stream,
 };
+
+/// The action a streaming Converse call goes to, in place of [`CONVERSE_PATH`].
+const CONVERSE_STREAM_PATH: &str = "/converse-stream";
 
 /// Converse parameter names, post `map_openai_params`, that the Rust path can
 /// place verbatim in `inferenceConfig`.
@@ -259,6 +263,19 @@ impl BaseConfig for AmazonConverseConfig {
 
     fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
         &[("Content-Type", "application/json")]
+    }
+
+    fn model_response_iterator(&self, shape: StreamShape) -> Option<ChatStream> {
+        Some(converse_chat_stream(shape))
+    }
+
+    /// The same body, sent to the model's `converse-stream` action.
+    fn streaming_request(&self, url: String, body: Value) -> Result<(String, Value), Error> {
+        let url = match url.strip_suffix(CONVERSE_PATH) {
+            Some(base) => format!("{base}{CONVERSE_STREAM_PATH}"),
+            None => url,
+        };
+        Ok((url, body))
     }
 
     fn config_params(&self) -> &'static [&'static str] {
