@@ -1,14 +1,44 @@
+from collections.abc import Mapping
 from typing import Final
 
+import litellm
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items
 from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.llms.databricks.common_utils import (
-    DATABRICKS_AI_GATEWAY_ANTHROPIC_PATH,
+    DATABRICKS_AI_GATEWAY_MESSAGES_PATH,
     DATABRICKS_ANTHROPIC_MESSAGES_PATH,
     DatabricksBase,
 )
 from litellm.types.router import GenericLiteLLMParams
+
+DATABRICKS_UNSUPPORTED_SERVER_TOOL_PREFIXES: Final = ("web_search_", "web_fetch_", "code_execution_")
+
+
+def _is_unsupported_server_tool(tool: object) -> bool:
+    tool_type: Final = (as_str_mapping(tool) or {}).get("type")
+    return isinstance(tool_type, str) and tool_type.startswith(DATABRICKS_UNSUPPORTED_SERVER_TOOL_PREFIXES)
+
+
+def _tool_name(tool: object) -> object:
+    return (as_str_mapping(tool) or {}).get("name")
+
+
+def _without_unsupported_server_tools(params: Mapping[str, object]) -> dict[str, object]:
+    if not isinstance(params.get("tools"), list):
+        return dict(params)
+    sent_tools: Final = tuple(iter_items(params.get("tools")))
+    kept_tools: Final = [tool for tool in sent_tools if not _is_unsupported_server_tool(tool)]
+    dropped_names: Final = frozenset(_tool_name(tool) for tool in sent_tools if _is_unsupported_server_tool(tool))
+    forced_tool: Final = _tool_name(params.get("tool_choice"))
+    keeps_tool_choice: Final = "tool_choice" in params and bool(kept_tools) and forced_tool not in dropped_names
+    remaining: Final = {key: value for key, value in params.items() if key not in ("tools", "tool_choice")}
+    return (
+        remaining
+        | ({"tools": kept_tools} if kept_tools else {})
+        | ({"tool_choice": params["tool_choice"]} if keeps_tool_choice else {})
+    )
 
 
 class DatabricksAnthropicMessagesConfig(DatabricksBase, AnthropicMessagesConfig):
@@ -23,6 +53,9 @@ class DatabricksAnthropicMessagesConfig(DatabricksBase, AnthropicMessagesConfig)
     @property
     def custom_llm_provider(self) -> str | None:
         return "databricks"
+
+    def handles_web_search_natively(self) -> bool:
+        return False
 
     def validate_anthropic_messages_environment(
         self,
@@ -63,11 +96,10 @@ class DatabricksAnthropicMessagesConfig(DatabricksBase, AnthropicMessagesConfig)
         stream: bool | None = None,
     ) -> str:
         resolved_api_base: Final = self._get_api_base(api_base).rstrip("/")
+        if self.uses_ai_gateway(model):
+            return f"{self.workspace_root(resolved_api_base)}{DATABRICKS_AI_GATEWAY_MESSAGES_PATH}"
         if resolved_api_base.endswith(DATABRICKS_ANTHROPIC_MESSAGES_PATH):
             return resolved_api_base
-        if self.uses_ai_gateway(model):
-            gateway_root: Final = f"{self.workspace_root(resolved_api_base)}{DATABRICKS_AI_GATEWAY_ANTHROPIC_PATH}"
-            return f"{gateway_root}/v1/messages"
         return f"{resolved_api_base}{DATABRICKS_ANTHROPIC_MESSAGES_PATH}"
 
     def transform_anthropic_messages_request(
@@ -78,10 +110,16 @@ class DatabricksAnthropicMessagesConfig(DatabricksBase, AnthropicMessagesConfig)
         litellm_params: GenericLiteLLMParams,
         headers: dict[str, str],  # mutable-ok: mirrors the base signature
     ) -> dict[str, object]:  # mutable-ok: mirrors the base signature
+        drops_unsupported_params: Final = litellm.drop_params is True or litellm_params.drop_params is True
+        request_params: Final = (
+            _without_unsupported_server_tools(anthropic_messages_optional_request_params)
+            if drops_unsupported_params
+            else anthropic_messages_optional_request_params
+        )
         anthropic_messages_request: Final[dict[str, object]] = super().transform_anthropic_messages_request(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the shared base returns a bare dict  # mutable-ok: becomes the outbound request body
             model=model,
             messages=messages,
-            anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+            anthropic_messages_optional_request_params=request_params,
             litellm_params=litellm_params,
             headers=headers,
         )

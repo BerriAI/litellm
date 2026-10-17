@@ -148,6 +148,8 @@ def test_validation_then_url_building_appends_the_messages_route_once(api_base: 
         f"{WORKSPACE_URL}/ai-gateway/mlflow/v1",
         f"{WORKSPACE_URL}/ai-gateway/anthropic",
         AI_GATEWAY_MESSAGES_URL,
+        MESSAGES_URL,
+        f"{MESSAGES_URL}/",
     ],
 )
 def test_unity_catalog_claude_names_route_to_the_ai_gateway_messages_route(api_base: str) -> None:
@@ -263,6 +265,78 @@ def _reply(request: httpx.Request, body: dict[str, object]) -> httpx.Response:
         json=body,
         request=request,
     )
+
+
+SERVER_TOOLS: Final = [
+    {"type": "web_search_20250305", "name": "web_search", "max_uses": 8},
+    {"type": "web_fetch_20250910", "name": "web_fetch", "max_uses": 1},
+    {"type": "code_execution_20250825", "name": "code_execution"},
+]
+
+
+async def _workspace_request_body(**request_params: object) -> dict[str, object]:
+    received: Final[list[httpx.Request]] = []  # mutable-ok: the fake workspace records what litellm sent
+
+    def workspace_answers(request: httpx.Request) -> httpx.Response:
+        received.append(request)
+        return _reply(
+            request,
+            {
+                "id": "msg_bdrk_01",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-6",
+                "content": [{"type": "text", "text": "hello"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 12, "output_tokens": 6},
+            },
+        )
+
+    upstream: Final = AsyncHTTPHandler(transport=httpx.MockTransport(workspace_answers))
+    try:
+        await litellm.anthropic.messages.acreate(
+            max_tokens=64,
+            messages=USER_TURN,
+            model=f"databricks/{CLAUDE_MODEL}",
+            api_key=DATABRICKS_API_KEY,
+            api_base=DATABRICKS_API_BASE,
+            client=upstream,
+            **request_params,
+        )
+    finally:
+        await upstream.close()
+    assert len(received) == 1
+    return json.loads(received[0].content)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tools", "tool_choice", "expected_tools", "expected_tool_choice"),
+    [
+        ([*SERVER_TOOLS, BASH_TOOL], {"type": "any"}, [BASH_TOOL], {"type": "any"}),
+        ([*SERVER_TOOLS, BASH_TOOL], {"type": "tool", "name": "web_search"}, [BASH_TOOL], None),
+        (SERVER_TOOLS[:1], {"type": "auto"}, None, None),
+    ],
+)
+async def test_drop_params_drops_the_server_tools_the_workspace_rejects(
+    tools: list[dict[str, object]],
+    tool_choice: dict[str, object],
+    expected_tools: list[dict[str, object]] | None,
+    expected_tool_choice: dict[str, object] | None,
+) -> None:
+    body: Final = await _workspace_request_body(tools=tools, tool_choice=tool_choice, drop_params=True)
+
+    assert body.get("tools") == expected_tools
+    assert body.get("tool_choice") == expected_tool_choice
+
+
+@pytest.mark.asyncio
+async def test_server_tools_reach_the_workspace_as_sent_without_drop_params() -> None:
+    body: Final = await _workspace_request_body(tools=[*SERVER_TOOLS, BASH_TOOL], tool_choice={"type": "any"})
+
+    assert body["tools"] == [*SERVER_TOOLS, BASH_TOOL]
+    assert body["tool_choice"] == {"type": "any"}
 
 
 @pytest.mark.asyncio

@@ -32,10 +32,13 @@ class DatabricksException(BaseLLMException):
 
 DATABRICKS_ANTHROPIC_MESSAGES_PATH: Final = "/anthropic/v1/messages"
 DATABRICKS_AI_GATEWAY_ANTHROPIC_PATH: Final = "/ai-gateway/anthropic"
+DATABRICKS_AI_GATEWAY_MESSAGES_PATH: Final = f"{DATABRICKS_AI_GATEWAY_ANTHROPIC_PATH}/v1/messages"
 DATABRICKS_WORKSPACE_ROUTE_PREFIXES: Final = (
     "/serving-endpoints",
+    f"/serving-endpoints{DATABRICKS_ANTHROPIC_MESSAGES_PATH}",
     "/ai-gateway/mlflow/v1",
     DATABRICKS_AI_GATEWAY_ANTHROPIC_PATH,
+    DATABRICKS_AI_GATEWAY_MESSAGES_PATH,
 )
 DATABRICKS_NATIVE_MESSAGES_MODEL_PREFIXES: Final = ("databricks-claude-", "system.ai.claude-")
 DATABRICKS_ENDPOINT_PATHS: Final = MappingProxyType(
