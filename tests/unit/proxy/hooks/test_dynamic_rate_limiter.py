@@ -555,3 +555,56 @@ async def test_priority_reservation(num_projects, dynamic_rate_limit_handler):
     expected_availability = int(model_usage * litellm.priority_reservation["prod"] / num_projects)
 
     assert availability == expected_availability
+
+
+@pytest.mark.asyncio
+async def test_dynamic_rate_limiter_all_none_fail_closed_raises(monkeypatch):
+    """When check_available_usage returns all None (Redis unreachable), fail-closed raises RateLimitUnverifiableError."""
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import RateLimitUnverifiableError
+
+    monkeypatch.setitem(proxy_server.general_settings, "fail_closed_rate_limit_enforcement", True)
+
+    handler = PROXY_DynamicRateLimitHandler(internal_usage_cache=DualCache())
+    monkeypatch.setattr(handler, "check_available_usage", lambda **kw: _ReturnAllNone())
+
+    auth = UserAPIKeyAuth(api_key="sk-test-all-none", rpm_limit=100, max_parallel_requests=5)
+    exc = None
+    try:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=auth,
+            cache=DualCache(),
+            data={"model": "gpt-4o"},
+            call_type="acompletion",
+        )
+    except RateLimitUnverifiableError as e:
+        exc = e
+    assert exc is not None, "fail-closed should raise RateLimitUnverifiableError when all usage is None"
+
+
+@pytest.mark.asyncio
+async def test_dynamic_rate_limiter_all_none_fail_open_returns_none(monkeypatch):
+    """When check_available_usage returns all None (Redis unreachable), fail-open returns None."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    monkeypatch.setitem(proxy_server.general_settings, "fail_closed_rate_limit_enforcement", False)
+
+    handler = PROXY_DynamicRateLimitHandler(internal_usage_cache=DualCache())
+    monkeypatch.setattr(handler, "check_available_usage", lambda **kw: _ReturnAllNone())
+
+    auth = UserAPIKeyAuth(api_key="sk-test-fail-open", rpm_limit=100, max_parallel_requests=5)
+    result = await handler.async_pre_call_hook(
+        user_api_key_dict=auth,
+        cache=DualCache(),
+        data={"model": "gpt-4o"},
+        call_type="acompletion",
+    )
+    assert result is None
+
+
+class _ReturnAllNone:
+    """Mock helper that awaits and returns all None values."""
+    def __await__(self):
+        async def _impl():
+            return (None, None, None, None, None)
+        return _impl().__await__()

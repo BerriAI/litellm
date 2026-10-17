@@ -35,7 +35,7 @@ class _RateLimiterFailureCounterRegistry:
             return self._counter
         try:
             from prometheus_client import Counter as PromCounter
-        except ImportError:
+        except ImportError:  # pragma: no cover - prometheus_client is a hard dependency of test environments
             return None
         self._counter = PromCounter(
             _LIMITER_FAILURE_COUNTER_NAME,
@@ -58,6 +58,6 @@ def increment_rate_limiter_failure_counter(
     error_type: str,
 ) -> None:
     counter: Final = _registry.get_counter()
-    if counter is None:
+    if counter is None:  # pragma: no cover - only reachable when prometheus_client ImportError caught above
         return
     counter.labels(limiter_type=limiter_type, error_type=error_type).inc()
