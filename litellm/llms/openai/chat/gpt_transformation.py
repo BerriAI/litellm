@@ -690,7 +690,11 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                 json_mode_content_str: str | None = str(new_tool_calls[0]["function"].get("arguments", "")) or None
                 if json_mode_content_str is not None:
                     translated_message = Message(content=json_mode_content_str)
-                    finish_reason = "stop"
+                    finish_reason = (
+                        "stop"
+                        if choice["finish_reason"] in ("tool_calls", "function_call")
+                        else choice["finish_reason"]
+                    )
 
             if translated_message is None:
                 ## get the reasoning content
@@ -719,7 +723,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             )
 
             translated_choice.finish_reason = map_finish_reason(
-                self._get_finish_reason(translated_message, choice["finish_reason"])
+                self._get_finish_reason(translated_message, finish_reason)
             )
             transformed_choices.append(translated_choice)
 
