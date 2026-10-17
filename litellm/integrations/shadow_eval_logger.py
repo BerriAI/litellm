@@ -14,7 +14,7 @@ import hashlib
 import json
 import random
 import traceback
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence, Sized
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from itertools import groupby
@@ -862,6 +862,19 @@ def _as_active_job(record: object, attempts: int, spend: float) -> ActiveShadowE
 
 _jobs_cache: Final = InMemoryCache(max_size_in_memory=4, default_ttl=_JOBS_CACHE_TTL_SECONDS)
 _JOBS_CACHE_KEY: Final = "shadow_eval:active_jobs"
+
+
+class _JobsCacheReader(Protocol):
+    def get_cache(self, key: str) -> object: ...
+
+
+def shadow_eval_snapshot_needed(jobs_cache: _JobsCacheReader = _jobs_cache) -> bool:
+    """Whether pre-call must capture a guardrail snapshot: only a jobs cache proving that no
+    shadow-eval job is active lets the copy be skipped; an unfilled cache fails open."""
+    cached: Final = jobs_cache.get_cache(_JOBS_CACHE_KEY)
+    if cached is None or not isinstance(cached, Sized):
+        return True
+    return len(cached) > 0
 
 
 class ShadowEvalLogger(CustomLogger):
