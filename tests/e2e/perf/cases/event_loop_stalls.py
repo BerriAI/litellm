@@ -7,7 +7,9 @@ that stops yielding (the 46925 fix), a provider handler that re-walks a 1M-token
 new hook that deep-copies the request inline all land here as a new row. Runs on its own stack: the gateway needs
 `PYTHONASYNCIODEBUG=1` and `LITELLM_EVENT_LOOP=asyncio` (uvloop reports nothing and crashed under debug locally),
 and the runner `E2E_PERF_EVENT_LOOP=1`, so the nightly build, which sets neither, skips it. The allowlist counts
-are the worst run of the local before/after legs for 46925 and 46967 (120 requests, same mix), rounded up. The
+are twice the highest count any of ten back-to-back local runs showed on that row (rows that showed nothing in
+those ten but did in the earlier before/after legs for 46925 and 46967 get 2), so each run sits at or under half
+of every cap and a listed location doubling in frequency is a failure, not a flake. The
 `garbage collection` bucket is the gen-2 passes the collector logs in debug mode (0.6 to 0.7 s each, one every
 minute or two of this traffic, plus the ramp while the heap fills on a local whole-file run), which asyncio would
 otherwise charge to a random task; its count is the signal for a change that makes much more garbage."""
@@ -28,16 +30,16 @@ CASE: Final = replace(
     limits=(),
     event_loop=EventLoopStalls(
         allowlist=(
-            KnownStall("garbage collection", max_count=12),
-            KnownStall("LifespanOn.main", max_count=3),
-            KnownStall("RequestResponseCycle.run_asgi", max_count=12),
-            KnownStall("with_proxy_compaction_executor", max_count=6),
-            KnownStall("Logging.async_success_handler", max_count=4),
-            KnownStall("Logging.dispatch_success_handlers", max_count=3),
+            KnownStall("garbage collection", max_count=4),
+            KnownStall("LifespanOn.main", max_count=4),
+            KnownStall("RequestResponseCycle.run_asgi", max_count=6),
+            KnownStall("with_proxy_compaction_executor", max_count=2),
+            KnownStall("Logging.async_success_handler", max_count=2),
+            KnownStall("Logging.dispatch_success_handlers", max_count=2),
             KnownStall("_TrackedPrismaEngine", max_count=2),
             KnownStall("prisma/actions.py", max_count=2),
             KnownStall("SpendCounterReseed", max_count=2),
-            KnownStall("Subscriber._run", max_count=3),
+            KnownStall("Subscriber._run", max_count=2),
             KnownStall("RedisBatch.flush", max_count=2),
             KnownStall("run_coroutine_job", max_count=2),
             KnownStall("user_api_key_auth.py", max_count=2),
