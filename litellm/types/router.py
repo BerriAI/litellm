@@ -1282,6 +1282,13 @@ class ConsumedRequestTagsStamp:
     tags: tuple[str, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class BaggageMappedTagsStamp:
+    """Request tags added by baggage mappings, which classify spend and budgets but never select deployments."""
+
+    tags: tuple[str, ...]
+
+
 @runtime_checkable
 class PreRoutingStrategy(Protocol):
     """Structural interface shared by the auto / complexity / adaptive / quality routers."""

@@ -214,6 +214,9 @@ async def _json_request_body(request: Request) -> Mapping[str, object]:
     return await request.json()
 
 
+_METADATA_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
+
 def get_passthrough_router_request_metadata(
     user_api_key_dict: UserAPIKeyAuth, request: Request | None = None
 ) -> Mapping[str, object]:
@@ -247,7 +250,7 @@ def get_passthrough_router_request_metadata(
     )
     if request is not None:
         LiteLLMProxyRequestSetup.apply_authenticated_baggage_tags(request, request_data)
-    return TypeAdapter(Mapping[str, object]).validate_python(request_data["litellm_metadata"])
+    return _METADATA_ADAPTER.validate_python(request_data["litellm_metadata"])
 
 
 async def llm_passthrough_factory_proxy_route(

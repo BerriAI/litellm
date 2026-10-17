@@ -2104,20 +2104,14 @@ async def test_jwt_path_skips_user_model_budget_only_for_zero_spend_mcp_methods(
     assert user_model_budget_check.await_count == (1 if expect_user_model_budget_check else 0)
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("close_on_auth_error", [True, False])
-async def test_websocket_inference_is_denied_when_baggage_mappings_are_configured(close_on_auth_error):
-    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_websocket_for_model
-
-    messages = []
-
+def _qa_websocket(messages):
     async def receive():
         return {"type": "websocket.connect"}
 
     async def send(message):
         messages.append(message)
 
-    websocket = WebSocket(
+    return WebSocket(
         {
             "type": "websocket",
             "path": "/v1/responses",
@@ -2129,11 +2123,47 @@ async def test_websocket_inference_is_denied_when_baggage_mappings_are_configure
         receive=receive,
         send=send,
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("close_on_auth_error", [True, False])
+async def test_websocket_inference_is_denied_when_a_required_baggage_mapping_is_configured(close_on_auth_error):
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_websocket_for_model
+
+    messages = []
     with patch.dict(
         litellm.proxy.proxy_server.general_settings,
-        {"request_tag_mappings": [{"key": "entrypoint", "tag_prefix": "usecase:"}]},
+        {
+            "request_tag_mappings": [
+                {"key": "region", "tag_prefix": "region:"},
+                {"key": "entrypoint", "tag_prefix": "usecase:", "required": True},
+            ]
+        },
     ):
         with pytest.raises(HTTPException, match="WebSocket inference is disabled") as error:
-            await user_api_key_auth_websocket_for_model(websocket, "qa-model", close_on_auth_error=close_on_auth_error)
+            await user_api_key_auth_websocket_for_model(
+                _qa_websocket(messages), "qa-model", close_on_auth_error=close_on_auth_error
+            )
     assert error.value.status_code == 403
     assert messages == ([{"type": "websocket.close", "code": 1008, "reason": ""}] if close_on_auth_error else [])
+
+
+@pytest.mark.asyncio
+async def test_websocket_inference_is_allowed_when_no_baggage_mapping_is_required():
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_websocket_for_model
+
+    messages = []
+    authorized = UserAPIKeyAuth(api_key="qa-key")
+    with (
+        patch.dict(
+            litellm.proxy.proxy_server.general_settings,
+            {"request_tag_mappings": [{"key": "entrypoint", "tag_prefix": "usecase:", "require_budgeted_tag": True}]},
+        ),
+        patch(
+            "litellm.proxy.auth.user_api_key_auth.user_api_key_auth", new=AsyncMock(return_value=authorized)
+        ) as http_auth,
+    ):
+        result = await user_api_key_auth_websocket_for_model(_qa_websocket(messages), "qa-model")
+    assert result is authorized
+    assert http_auth.await_args.kwargs["api_key"] == "Bearer qa-key"
+    assert messages == []

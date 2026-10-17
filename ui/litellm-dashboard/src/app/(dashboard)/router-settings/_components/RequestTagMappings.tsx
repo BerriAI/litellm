@@ -25,31 +25,55 @@ const isMapping = (value: unknown): value is RequestTagMapping => {
   return "key" in value && typeof value.key === "string";
 };
 
+const MODES = [
+  { value: "exact", label: "Exact value" },
+  { value: "any", label: "Any value" },
+];
+
+const BAGGAGE_KEY_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+
+const isExact = (rule: RequestTagMapping) => rule.value !== undefined && rule.value !== null;
+
+export const mappingProblem = (rule: RequestTagMapping): string | null => {
+  if (!rule.key) return "Enter a baggage key";
+  if (!BAGGAGE_KEY_PATTERN.test(rule.key)) return "Use only letters, digits, and !#$%&'*+-.^_`|~ in the baggage key";
+  if (isExact(rule)) {
+    if (!rule.value) return "Enter a match value";
+    return rule.tag ? null : "Enter a tag";
+  }
+  return rule.tag_prefix ? null : "Enter a tag prefix";
+};
+
+export const requestTagMappingsAreValid = (value: unknown) =>
+  Array.isArray(value) && value.every((rule) => isMapping(rule) && mappingProblem(rule) === null);
+
 export function RequestTagMappingsEditor({ value, onChange, disabled = false }: Props) {
   const rules = Array.isArray(value) ? value.filter(isMapping) : [];
   const update = (index: number, patch: Partial<RequestTagMapping>) =>
     onChange(rules.map((rule, position) => (position === index ? { ...rule, ...patch } : rule)));
 
   return (
-    <div className="min-w-80 space-y-4">
+    <div className="min-w-80 space-y-4 whitespace-normal">
       <p className="text-xs text-muted-foreground">
         Exact value mappings take priority over any-value rules for the same key.
       </p>
       {rules.map((rule, index) => {
-        const exact = rule.value !== undefined && rule.value !== null;
+        const exact = isExact(rule);
+        const problem = mappingProblem(rule);
         const label = `Mapping ${index + 1}`;
         return (
           <fieldset key={index} disabled={disabled} className="space-y-3 rounded-lg border p-3 disabled:opacity-60">
             <legend className="px-1 text-xs font-medium">{label}</legend>
             <div className="flex items-center gap-2">
               <Select
+                items={MODES}
                 value={exact ? "exact" : "any"}
                 onValueChange={(mode) =>
                   update(
                     index,
                     mode === "exact"
                       ? { value: "", tag: "", tag_prefix: undefined }
-                      : { value: undefined, tag: undefined, tag_prefix: "usecase:" },
+                      : { value: undefined, tag: undefined, tag_prefix: "" },
                   )
                 }
               >
@@ -57,8 +81,11 @@ export function RequestTagMappingsEditor({ value, onChange, disabled = false }: 
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="exact">Exact value</SelectItem>
-                  <SelectItem value="any">Any value</SelectItem>
+                  {MODES.map((mode) => (
+                    <SelectItem key={mode.value} value={mode.value}>
+                      {mode.label}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
               <Button
@@ -71,17 +98,18 @@ export function RequestTagMappingsEditor({ value, onChange, disabled = false }: 
                 <Trash2 className="h-4 w-4" />
               </Button>
             </div>
-            <label className="block text-xs">
+            <label className="flex flex-col gap-1 text-xs">
               Baggage key
               <Input
                 aria-label={`${label} baggage key`}
+                placeholder="entrypoint"
                 value={rule.key}
                 onChange={(event) => update(index, { key: event.target.value })}
               />
             </label>
             {exact ? (
               <>
-                <label className="block text-xs">
+                <label className="flex flex-col gap-1 text-xs">
                   Match value
                   <Input
                     aria-label={`${label} match value`}
@@ -89,7 +117,7 @@ export function RequestTagMappingsEditor({ value, onChange, disabled = false }: 
                     onChange={(event) => update(index, { value: event.target.value })}
                   />
                 </label>
-                <label className="block text-xs">
+                <label className="flex flex-col gap-1 text-xs">
                   Tag
                   <Input
                     aria-label={`${label} tag`}
@@ -103,10 +131,11 @@ export function RequestTagMappingsEditor({ value, onChange, disabled = false }: 
               </>
             ) : (
               <>
-                <label className="block text-xs">
+                <label className="flex flex-col gap-1 text-xs">
                   Tag prefix
                   <Input
                     aria-label={`${label} tag prefix`}
+                    placeholder="usecase:"
                     value={rule.tag_prefix ?? ""}
                     onChange={(event) => update(index, { tag_prefix: event.target.value })}
                   />
@@ -116,6 +145,7 @@ export function RequestTagMappingsEditor({ value, onChange, disabled = false }: 
                 </p>
               </>
             )}
+            {problem ? <p className="text-xs text-destructive">{problem}</p> : null}
             <label className="flex items-center justify-between gap-3 text-xs">
               Require a mapped value
               <Switch
@@ -142,7 +172,7 @@ export function RequestTagMappingsEditor({ value, onChange, disabled = false }: 
         disabled={disabled}
         type="button"
         variant="outline"
-        onClick={() => onChange([...rules, { header: "baggage", key: "entrypoint", value: "", tag: "" }])}
+        onClick={() => onChange([...rules, { header: "baggage", key: "", value: "", tag: "" }])}
       >
         Add mapping
       </Button>

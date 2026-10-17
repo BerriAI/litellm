@@ -1995,6 +1995,9 @@ def _apply_key_team_project_controls(
     )
 
 
+_METADATA_ADAPTER: Final = TypeAdapter(dict[str, object])
+
+
 def _update_metadata_with_tags_in_header(request: Request, metadata: dict) -> dict:
     """
     If tags are in the request headers, add them to the metadata
@@ -2020,7 +2023,7 @@ def _update_metadata_with_tags_in_header(request: Request, metadata: dict) -> di
             tags_to_add=tags_to_add,
         )
 
-    restored_metadata: Final = TypeAdapter(dict[str, object]).validate_python(metadata)
+    restored_metadata: Final = _METADATA_ADAPTER.validate_python(metadata)
     request_data: Final[dict[str, object]] = {  # mutable-ok: legacy enrichment writes this wrapper
         "metadata": restored_metadata
     }

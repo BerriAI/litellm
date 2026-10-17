@@ -14,7 +14,7 @@ import { StatusBadge } from "@/components/shared/table_cells";
 import RouterSettings from "@/components/router_settings";
 import Fallbacks from "@/components/Settings/RouterSettings/Fallbacks/Fallbacks";
 import RoutingGroups from "@/components/routing_groups";
-import { RequestTagMappingsEditor } from "./RequestTagMappings";
+import { RequestTagMappingsEditor, requestTagMappingsAreValid } from "./RequestTagMappings";
 
 const PROMPT_CACHING_TAB = "prompt_caching";
 const ENABLE_ANTHROPIC_PROMPT_CACHING = "enable_anthropic_prompt_caching";
@@ -366,7 +366,10 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
                         </TableCell>
                         <TableCell>
                           <Button
-                            disabled={value.field_name === "request_tag_mappings" && value.editable === false}
+                            disabled={
+                              value.field_name === "request_tag_mappings" &&
+                              (value.editable === false || !requestTagMappingsAreValid(value.field_value))
+                            }
                             onClick={() => handleUpdateField(value.field_name)}
                           >
                             Update

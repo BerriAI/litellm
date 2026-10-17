@@ -18,6 +18,7 @@ from typing import Final, NamedTuple, Protocol, Union, cast
 import fastapi
 from fastapi import HTTPException, Request, WebSocket, status
 from fastapi.security.api_key import APIKeyHeader
+from pydantic import TypeAdapter
 from starlette.exceptions import WebSocketException
 
 import litellm
@@ -268,6 +269,7 @@ _CLAUDE_MODEL_ROUTES: Final = frozenset(
     f"/{prefix}{endpoint}" for prefix in ("", "v1/") for endpoint in ("messages", "chat/completions", "responses")
 )
 _CLAUDE_MODEL_NORMALIZED: Final = "litellm.claude_model_normalized"
+_GENERAL_SETTINGS_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 
 async def _normalize_claude_model(
@@ -1240,13 +1242,18 @@ async def user_api_key_auth_websocket_for_model(
     # Call user_api_key_auth with the extracted API key
     # Note: You'll need to modify this to work with WebSocket context if needed
     try:
-        from pydantic import TypeAdapter
-
         from litellm.proxy import proxy_server
 
-        mapper_settings: Final = TypeAdapter(dict[str, object]).validate_python(proxy_server.general_settings)
-        if mapper_settings.get("request_tag_mappings"):
-            raise HTTPException(403, "Baggage tag mappings require HTTP inference, WebSocket inference is disabled")
+        raw_mappings: Final = _GENERAL_SETTINGS_ADAPTER.validate_python(proxy_server.general_settings).get(
+            "request_tag_mappings"
+        )
+        if raw_mappings:
+            from litellm.proxy.common_utils.request_tag_mappings import REQUEST_TAG_MAPPINGS_ADAPTER
+
+            if any(rule.required for rule in REQUEST_TAG_MAPPINGS_ADAPTER.validate_python(raw_mappings)):
+                raise HTTPException(
+                    403, "Required baggage tag mappings need HTTP inference, WebSocket inference is disabled"
+                )
         return await user_api_key_auth(request=request, api_key=f"Bearer {api_key}")
     except Exception as e:
         if not close_on_auth_error:
@@ -4060,25 +4067,20 @@ async def _authorize_authenticated_request(
                 billable=request_data.get("method")
                 in (None, "message/send", "message/stream", "SendMessage", "SendStreamingMessage"),
             )
-        if (
-            "request_tag_mappings" in general_settings
-            and request.method == "POST"
-            and RouteChecks.is_llm_api_route(route)
-        ):
-            from pydantic import TypeAdapter
-
+        if "request_tag_mappings" in general_settings and request.method == "POST":
+            from litellm.proxy.common_utils.request_tag_mappings import is_baggage_mapped_route
             from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
 
-            typed_settings: Final = TypeAdapter(dict[str, object]).validate_python(general_settings)
-            LiteLLMProxyRequestSetup.pre_seed_litellm_metadata_for_route(request_data=authorized_data, route=route)
-            await LiteLLMProxyRequestSetup.apply_baggage_tag_mappings_pre_auth(
-                request=request,
-                request_data=authorized_data,
-                general_settings=typed_settings,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                proxy_logging_obj=proxy_logging_obj,
-            )
+            if is_baggage_mapped_route(route):
+                LiteLLMProxyRequestSetup.pre_seed_litellm_metadata_for_route(request_data=authorized_data, route=route)
+                await LiteLLMProxyRequestSetup.apply_baggage_tag_mappings_pre_auth(
+                    request=request,
+                    request_data=authorized_data,
+                    general_settings=_GENERAL_SETTINGS_ADAPTER.validate_python(general_settings),
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
         await run_centralized_common_checks(
             user_api_key_auth_obj=user_api_key_auth_obj,
             request=request,

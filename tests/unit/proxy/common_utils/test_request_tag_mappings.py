@@ -4,12 +4,15 @@ from typing import cast
 from unittest.mock import MagicMock
 
 import pytest
-from fastapi import HTTPException, Request
+from fastapi import Request
 from pydantic import ValidationError
 
-from litellm.proxy._types import ConfigGeneralSettings
+from litellm.models.budget import LiteLLM_BudgetTable
+from litellm.models.tag import LiteLLM_TagTable
+from litellm.proxy._types import ConfigGeneralSettings, ProxyException
 from litellm.proxy.common_utils.http_parsing_utils import read_request_body
-from litellm.proxy.common_utils.request_tag_mappings import resolve_baggage_tag_mappings
+from litellm.proxy.common_utils.request_tag_mappings import is_baggage_mapped_route, resolve_baggage_tag_mappings
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, tag_cache_key
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, add_litellm_data_to_request
 from litellm.types.proxy.request_tag_mappings import RequestTagMapping
 
@@ -29,7 +32,7 @@ async def test_mapping_rejection_keeps_string_metadata_safe_for_auth_failure_log
 
     request = Request({"type": "http", "headers": [(b"baggage", header)]})
     data = {"metadata": client_metadata}
-    with pytest.raises(HTTPException) as error:
+    with pytest.raises(ProxyException) as error:
         await LiteLLMProxyRequestSetup.apply_baggage_tag_mappings_pre_auth(
             request,
             data,
@@ -38,7 +41,7 @@ async def test_mapping_rejection_keeps_string_metadata_safe_for_auth_failure_log
             MagicMock(),
             MagicMock(),
         )
-    assert error.value.status_code == 400
+    assert error.value.code == "400"
     assert get_request_guardrails(data) == (["qa-guard"] if client_metadata is not None else [])
 
 
@@ -77,7 +80,12 @@ async def test_invalid_mapper_metadata_rejects_without_breaking_failure_logging_
 
 
 @pytest.mark.parametrize(
-    "header,value", [("entrypoint=a", "a"), ("region=sg, entrypoint=customer%20support;version=1", "customer support")]
+    "header,value",
+    [
+        ("entrypoint=a", "a"),
+        ("entrypoint = a", "a"),
+        ("region=sg, entrypoint=customer%20support;version=1", "customer support"),
+    ],
 )
 def test_variable_mapper_uses_decoded_baggage_value(header, value):
     rule = RequestTagMapping(key="entrypoint", tag_prefix="usecase:")
@@ -107,9 +115,9 @@ def test_exact_rules_work_without_a_variable_rule():
 @pytest.mark.parametrize("header", ["", "region=sg", "entrypoint=", "entrypoint=a,entrypoint=b", "entrypoint=x"])
 def test_required_mapping_rejects_missing_ambiguous_or_unmapped_values(header):
     rule = RequestTagMapping(key="entrypoint", value="a", tag="usecase:a", required=True)
-    with pytest.raises(HTTPException) as error:
+    with pytest.raises(ProxyException) as error:
         resolve_baggage_tag_mappings(header, [rule])
-    assert error.value.status_code == 400
+    assert error.value.code == "400"
 
 
 @pytest.mark.parametrize(
@@ -162,11 +170,76 @@ async def test_mapped_tag_merges_with_existing_tags_in_the_budget_metadata_slot(
 async def test_budgeted_mapper_requires_a_database():
     request = Request({"type": "http", "headers": [(b"baggage", b"entrypoint=a")]})
     config = {"request_tag_mappings": [{"key": "entrypoint", "tag_prefix": "usecase:", "require_budgeted_tag": True}]}
-    with pytest.raises(HTTPException) as error:
+    with pytest.raises(ProxyException) as error:
         await LiteLLMProxyRequestSetup.apply_baggage_tag_mappings_pre_auth(
             request, {}, config, None, MagicMock(), MagicMock()
         )
-    assert error.value.status_code == 503
+    assert error.value.code == "503"
+
+
+async def _cache_with_tag(tag: LiteLLM_TagTable) -> UserApiKeyCache:
+    cache = UserApiKeyCache()
+    await cache.async_set_cache(key=tag_cache_key(tag.tag_name), value=tag, model_type=LiteLLM_TagTable)
+    return cache
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "budget_table",
+    [None, LiteLLM_BudgetTable(budget_id="qa-budget", max_budget=None, tpm_limit=10)],
+)
+async def test_budgeted_mapper_rejects_a_tag_without_a_max_budget(budget_table):
+    request = Request({"type": "http", "headers": [(b"baggage", b"entrypoint=a")]})
+    data = {"metadata": {}}
+    cache = await _cache_with_tag(LiteLLM_TagTable(tag_name="usecase:a", litellm_budget_table=budget_table))
+    config = {"request_tag_mappings": [{"key": "entrypoint", "tag_prefix": "usecase:", "require_budgeted_tag": True}]}
+    with pytest.raises(ProxyException, match="usecase:a requires an existing tag budget") as error:
+        await LiteLLMProxyRequestSetup.apply_baggage_tag_mappings_pre_auth(
+            request, data, config, MagicMock(), cache, MagicMock()
+        )
+    assert error.value.code == "400"
+    assert data == {"metadata": {}}
+
+
+@pytest.mark.asyncio
+async def test_budgeted_mapper_admits_a_tag_with_a_max_budget_and_unbudgeted_rules_need_none():
+    request = Request({"type": "http", "headers": [(b"baggage", b"entrypoint=a,region=sg")]})
+    data = {"metadata": {}}
+    cache = await _cache_with_tag(
+        LiteLLM_TagTable(
+            tag_name="usecase:a", litellm_budget_table=LiteLLM_BudgetTable(budget_id="qa-budget", max_budget=1.0)
+        )
+    )
+    config = {
+        "request_tag_mappings": [
+            {"key": "entrypoint", "tag_prefix": "usecase:", "require_budgeted_tag": True},
+            {"key": "region", "tag_prefix": "region:"},
+        ]
+    }
+    await LiteLLMProxyRequestSetup.apply_baggage_tag_mappings_pre_auth(
+        request, data, config, MagicMock(), cache, MagicMock()
+    )
+    assert data["metadata"]["tags"] == ["usecase:a", "region:sg"]
+
+
+@pytest.mark.parametrize("route", ["/v1/chat/completions", "/chat/completions", "/v1/messages", "/v1/responses"])
+def test_inference_routes_take_baggage_mappings(route):
+    assert is_baggage_mapped_route(route)
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/utils/token_counter",
+        "/v1/messages/count_tokens",
+        "/v1/responses/input_tokens",
+        "/v1beta/models/gemini-pro:countTokens",
+        "/mcp",
+        "/a2a/qa-agent/message/send",
+    ],
+)
+def test_unbilled_mcp_and_agent_routes_skip_baggage_mappings(route):
+    assert not is_baggage_mapped_route(route)
 
 
 @pytest.mark.asyncio
