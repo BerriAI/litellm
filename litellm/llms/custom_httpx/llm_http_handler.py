@@ -2239,24 +2239,25 @@ class BaseLLMHTTPHandler:
         stream: bool,
         custom_llm_provider: str,
     ) -> float | httpx.Timeout | None:
-        from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
+        from litellm.litellm_core_utils.completion_timeout import CompletionTimeout, StreamKind
         from litellm.litellm_core_utils.request_timeout_resolver import (
             get_configured_request_timeout,
         )
         from litellm.utils import supports_httpx_timeout
 
         stream_timeout: Final = litellm_params.get("stream_timeout") if stream else None
-        model_timeout: Final = stream_timeout if stream_timeout is not None else litellm_params.get("timeout")
+        model_timeout: Final = litellm_params.get("timeout")
         request_timeout: Final = litellm_params.get("request_timeout")
         global_timeout: Final = get_configured_request_timeout()
-        if model_timeout is None and request_timeout is None and global_timeout is None:
+        if stream_timeout is None and model_timeout is None and request_timeout is None and global_timeout is None:
             return None
         return CompletionTimeout.resolve(
             model_timeout,
-            {"request_timeout": request_timeout},
+            {"stream_timeout": stream_timeout, "request_timeout": request_timeout},
             custom_llm_provider,
             global_timeout=global_timeout,
             supports_httpx_timeout=supports_httpx_timeout,
+            stream_kind=StreamKind.LIVE if stream else StreamKind.NOT_STREAMED,
         )
 
     async def async_anthropic_messages_handler(
@@ -2410,6 +2411,13 @@ class BaseLLMHTTPHandler:
             },
         )
 
+        applied_timeout: Final = self._resolve_anthropic_messages_timeout(
+            litellm_params=litellm_params,
+            stream=stream or False,
+            custom_llm_provider=custom_llm_provider,
+        )
+        if applied_timeout is not None:
+            logging_obj.record_applied_timeout(applied_timeout)
         response: Final = await self._async_post_anthropic_messages_with_http_error_retry(
             async_httpx_client=async_httpx_client,
             request_url=request_url,
@@ -2422,11 +2430,7 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             api_key=api_key,
             model=model,
-            timeout=self._resolve_anthropic_messages_timeout(
-                litellm_params=litellm_params,
-                stream=stream or False,
-                custom_llm_provider=custom_llm_provider,
-            ),
+            timeout=applied_timeout,
         )
 
         # used for logging + cost tracking

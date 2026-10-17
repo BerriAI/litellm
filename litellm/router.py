@@ -81,6 +81,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.otel.routing import routing_decision_attributes
 from litellm.integrations.otel.runtime import phase_attributes, phase_event, phase_span
 from litellm.litellm_core_utils.asyncify import run_async_function
+from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
 from litellm.litellm_core_utils.core_helpers import (
     coerce_token_limit,
     get_litellm_metadata_from_kwargs,
@@ -346,6 +347,7 @@ from litellm.types.router import (
     DiscoveredDeploymentModelInfo,
     FallbackAccessCheck,
     FallbackBudgetCheck,
+    GenericLiteLLMParams,
     GuardrailTypedDict,
     LiteLLM_Params,
     LiteLLMParamsTypedDict,
@@ -510,6 +512,7 @@ _CLAUDE_CODE_SESSION_ROUTER_TTL_SECONDS: Final = 3600
 CLAUDE_CODE_SESSION_ROUTER_BINDING_TARGET: Final = "claude_code_session_router_binding"
 
 _PRE_CALL_CHECK_FILTERED_PARAMS: Final = frozenset({"response_format"})
+_STREAM_TIMEOUT_AWARE_GENERIC_HANDLERS: Final = frozenset({"anthropic_messages", "aresponses", "responses"})
 _RUNTIME_TOGGLEABLE_PRE_CALL_CHECKS: Final[Mapping[str, type[CustomLogger]]] = MappingProxyType(
     {
         "prompt_caching": PromptCachingDeploymentCheck,
@@ -548,6 +551,10 @@ _SILENT_MODEL_ADAPTER: Final = TypeAdapter(str | list[str])
 _RESOLVED_RETRY_POLICY_ADAPTER: Final = TypeAdapter(RetryPolicy | None)
 _ROUTING_KWARGS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 _FALLBACK_HOP_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_DEPLOYMENT_PARAMS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | GenericLiteLLMParams]] = TypeAdapter(
+    Mapping[str, object] | GenericLiteLLMParams
+)
 _OPAQUE_VALUE_ADAPTER: Final = TypeAdapter(object)
 _DEPLOYMENT_SELECTED_EVENT: Final = "litellm.request.deployment_selected"
 _CONTENT_BLOCKS_ADAPTER: Final = TypeAdapter(list[dict[str, object]])
@@ -2945,7 +2952,7 @@ class Router:
                 ).start()
 
             kwargs.setdefault("messages", messages)
-            self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
+            self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs, splits_stream_timeout=True)
             kwargs.pop("silent_model", None)  # Ensure it's not in kwargs either
             model_name = litellm_params["model"]
             potential_model_client: Final = self._get_client(deployment=deployment, kwargs=kwargs)
@@ -4288,7 +4295,7 @@ class Router:
                 )
 
             kwargs.setdefault("messages", messages)
-            self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
+            self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs, splits_stream_timeout=True)
             kwargs.pop("silent_model", None)  # Ensure it's not in kwargs either
 
             model_name = litellm_params["model"]
@@ -4553,6 +4560,7 @@ class Router:
         deployment: dict,
         kwargs: dict,
         function_name: str | None = None,
+        splits_stream_timeout: bool = False,
     ) -> None:
         """
         4 jobs:
@@ -4670,14 +4678,35 @@ class Router:
                 if self.request_timeout is not None
                 else self.default_litellm_params.get("stream_timeout")
             )
-            kwargs["timeout"] = resolve_llm_passthrough_timeout(
-                kwargs=kwargs,
+            passthrough_timeout: Final = partial(
+                resolve_llm_passthrough_timeout,
                 litellm_params=deployment["litellm_params"],
                 router_timeout=_router_timeout,
                 router_stream_timeout=_router_stream_timeout,
             )
+            kwargs.update(
+                CompletionTimeout.stream_request_kwargs(
+                    passthrough_timeout(kwargs={**kwargs, "stream": False}), passthrough_timeout(kwargs=kwargs)
+                )
+                if splits_stream_timeout and kwargs.get("stream")
+                else {"timeout": passthrough_timeout(kwargs=kwargs)}
+            )
+        elif splits_stream_timeout:
+            request_kwargs: Final = _REQUEST_KWARGS_ADAPTER.validate_python(kwargs)
+            deployment_params: Final = _DEPLOYMENT_PARAMS_ADAPTER.validate_python(deployment["litellm_params"])
+            kwargs.update(
+                CompletionTimeout.stream_request_kwargs(
+                    self._get_non_stream_timeout(kwargs=request_kwargs, data=deployment_params),
+                    self._get_stream_timeout(kwargs=request_kwargs, data=deployment_params)
+                    if request_kwargs.get("stream")
+                    else None,
+                )
+            )
         else:
-            kwargs["timeout"] = self._get_timeout(kwargs=kwargs, data=deployment["litellm_params"])
+            kwargs["timeout"] = self._get_timeout(
+                kwargs=_REQUEST_KWARGS_ADAPTER.validate_python(kwargs),
+                data=_DEPLOYMENT_PARAMS_ADAPTER.validate_python(deployment["litellm_params"]),
+            )
 
         self._update_kwargs_with_default_litellm_params(kwargs=kwargs, metadata_variable_name=metadata_variable_name)
         hop_kwargs: Final = _FALLBACK_HOP_ADAPTER.validate_python(kwargs)
@@ -4714,7 +4743,9 @@ class Router:
 
         return model_client
 
-    def _get_stream_timeout(self, kwargs: dict, data: dict) -> float | int | None:
+    def _get_stream_timeout(
+        self, kwargs: Mapping[str, object], data: Mapping[str, object] | GenericLiteLLMParams
+    ) -> object:
         """Helper to get stream timeout from kwargs or deployment params"""
         return (
             kwargs.get("stream_timeout", None)  # the params dynamically set by user
@@ -4724,9 +4755,11 @@ class Router:
             or self.default_litellm_params.get("stream_timeout", None)
         )
 
-    def _get_non_stream_timeout(self, kwargs: dict, data: dict) -> float | int | None:
+    def _get_non_stream_timeout(
+        self, kwargs: Mapping[str, object], data: Mapping[str, object] | GenericLiteLLMParams
+    ) -> object:
         """Helper to get non-stream timeout from kwargs or deployment params"""
-        timeout: Final = (
+        return (
             kwargs.get("timeout", None)  # the params dynamically set by user
             or kwargs.get("request_timeout", None)  # the params dynamically set by user
             or data.get("timeout", None)  # timeout set on litellm_params for this deployment
@@ -4735,18 +4768,11 @@ class Router:
             or self.timeout  # timeout set on router (router_settings.timeout)
             or self.default_litellm_params.get("timeout", None)
         )
-        return timeout
 
-    def _get_timeout(self, kwargs: dict, data: dict) -> float | int | None:
+    def _get_timeout(self, kwargs: Mapping[str, object], data: Mapping[str, object] | GenericLiteLLMParams) -> object:
         """Helper to get timeout from kwargs or deployment params"""
-        timeout: float | int | None = None
-        if kwargs.get("stream", False):
-            timeout = self._get_stream_timeout(kwargs=kwargs, data=data)
-        if timeout is None:
-            timeout = self._get_non_stream_timeout(
-                kwargs=kwargs, data=data
-            )  # default to this if no stream specific timeout set
-        return timeout
+        stream_timeout: Final = self._get_stream_timeout(kwargs=kwargs, data=data) if kwargs.get("stream") else None
+        return stream_timeout if stream_timeout is not None else self._get_non_stream_timeout(kwargs=kwargs, data=data)
 
     async def abatch_completion(
         self,
@@ -5088,6 +5114,8 @@ class Router:
                 }
             )
         litellm_logging_object = cast(LiteLLMLogging, litellm_logging_object)
+        caller_timeout: Final = kwargs.get("timeout") or kwargs.get("request_timeout")
+        caller_stream_timeout: Final = kwargs.get("stream_timeout")
         specific_deployment: Final = kwargs.pop("specific_deployment", None)
         prompt_management_deployment: Final = await self.async_get_available_deployment(
             model=model,
@@ -5096,7 +5124,9 @@ class Router:
             request_kwargs=kwargs,
         )
 
-        self._update_kwargs_with_deployment(deployment=prompt_management_deployment, kwargs=kwargs)
+        self._update_kwargs_with_deployment(
+            deployment=prompt_management_deployment, kwargs=kwargs, splits_stream_timeout=True
+        )
         data: Final = prompt_management_deployment["litellm_params"].copy()
 
         litellm_model: Final = data.get("model", None)
@@ -5158,7 +5188,21 @@ class Router:
             kwargs.pop("original_function")
             return await litellm.acompletion(**kwargs)
 
-        return await self.async_function_with_fallbacks(**kwargs)
+        target_group_timeouts: Final = {
+            key: value
+            for key, value in (
+                ("timeout", caller_timeout if caller_timeout is not None else filtered_data.get("timeout")),
+                (
+                    "stream_timeout",
+                    caller_stream_timeout if caller_stream_timeout is not None else filtered_data.get("stream_timeout"),
+                ),
+            )
+            if value is not None
+        }
+        return await self.async_function_with_fallbacks(
+            **{key: value for key, value in kwargs.items() if key not in ("timeout", "stream_timeout")},
+            **target_group_timeouts,
+        )
 
     def image_generation(self, prompt: str, model: str, **kwargs):
         try:
@@ -5595,7 +5639,7 @@ class Router:
                 specific_deployment=kwargs.pop("specific_deployment", None),
                 request_kwargs=kwargs,
             )
-            self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
+            self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs, splits_stream_timeout=True)
 
             data: Final = deployment["litellm_params"].copy()
             model_name: Final = data["model"]
@@ -5665,7 +5709,7 @@ class Router:
                 specific_deployment=kwargs.pop("specific_deployment", None),
                 request_kwargs=kwargs,
             )
-            self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
+            self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs, splits_stream_timeout=True)
 
             data: Final = deployment["litellm_params"].copy()
             model_name: Final = data["model"]
@@ -5900,7 +5944,13 @@ class Router:
                     return await original_generic_function(model=model, **kwargs)
                 raise e
 
-            self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs, function_name=function_name)
+            self._update_kwargs_with_deployment(
+                deployment=deployment,
+                kwargs=kwargs,
+                function_name=function_name,
+                splits_stream_timeout=getattr(original_generic_function, "__name__", None)
+                in _STREAM_TIMEOUT_AWARE_GENERIC_HANDLERS,
+            )
 
             data: Final = deployment["litellm_params"].copy()
             model_name: Final = data["model"]
@@ -6612,7 +6662,12 @@ class Router:
                 specific_deployment=kwargs.pop("specific_deployment", None),
                 request_kwargs=kwargs,
             )
-            self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs, function_name="generic_api_call")
+            self._update_kwargs_with_deployment(
+                deployment=deployment,
+                kwargs=kwargs,
+                function_name="generic_api_call",
+                splits_stream_timeout=handler_name in _STREAM_TIMEOUT_AWARE_GENERIC_HANDLERS,
+            )
 
             data: Final = deployment["litellm_params"].copy()
             model_name: Final = data["model"]
