@@ -1213,9 +1213,70 @@ def test_a_tool_config_cache_point_takes_one_of_claudes_four_only_when_converse_
             _EPHEMERAL,
             id="sent-after-a-bedrock-tool-spec-passed-through-after-the-marked-tool",
         ),
+        pytest.param(
+            [
+                {
+                    "type": "web_fetch_20250910",
+                    "name": "web_fetch",
+                    "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "1h"},
+                }
+            ],
+            _ONE_HOUR,
+            id="left-out-when-converse-drops-every-tool",
+        ),
+        pytest.param(
+            [
+                {
+                    "type": "function",
+                    "function": {"name": "t"},
+                    "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "1h"},
+                },
+                {"systemTool": {"name": "bash"}},
+            ],
+            _EPHEMERAL,
+            id="sent-after-a-bedrock-system-tool-listed-after-the-marked-tool",
+        ),
+        pytest.param(
+            [
+                {"systemTool": {"name": "bash"}},
+                {
+                    "type": "function",
+                    "function": {"name": "t"},
+                    "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "1h"},
+                },
+            ],
+            _EPHEMERAL,
+            id="sent-after-a-bedrock-system-tool-converse-moves-after-the-marked-tool",
+        ),
+        pytest.param(
+            [
+                {"type": "function", "function": {"name": "t"}},
+                {
+                    "toolSpec": {"name": "u", "inputSchema": {"json": {"type": "object"}}},
+                    "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "1h"},
+                },
+            ],
+            _EPHEMERAL,
+            id="sent-after-a-bedrock-tool-spec-whose-own-mark-converse-never-sends",
+        ),
+        pytest.param(
+            [{"type": "function", "function": {"name": "t"}}, {"cachePoint": {"type": "default", "ttl": "1h"}}],
+            _ONE_HOUR,
+            id="left-out-after-a-bedrock-cache-point-with-an-hour",
+        ),
+        pytest.param(
+            [{"type": "function", "function": {"name": "t"}}, {"cachePoint": {"type": "default"}}],
+            _EPHEMERAL,
+            id="sent-after-a-bedrock-cache-point-without-a-ttl",
+        ),
+        pytest.param(
+            [{"type": "function", "function": {"name": "t"}}, {"cachePoint": {"type": "default", "ttl": "5m"}}],
+            _EPHEMERAL,
+            id="left-out-after-a-bedrock-cache-point-with-five-minutes",
+        ),
     ],
 )
-def test_a_five_minute_tool_config_cache_point_keeps_later_breakpoints_one_hour_only_when_converse_leaves_it_out(
+def test_later_one_hour_breakpoints_are_shortened_only_when_converses_tool_config_ends_in_a_five_minute_cache_point(
     tools: list[object], sent_later_mark: dict[str, object]
 ):
     result: Final = _resolved(

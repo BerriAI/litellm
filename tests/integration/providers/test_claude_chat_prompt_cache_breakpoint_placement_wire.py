@@ -803,6 +803,97 @@ def test_a_five_minute_tool_config_cache_point_sent_after_the_function_tool_when
     assert marks == (Mark(_TOOL_LABEL, "5m"), Mark(_label(SYSTEM), None), Mark(_label(final_text(marker)), None))
 
 
+_BASH_SYSTEM_TOOL: Final[dict[str, JsonValue]] = {
+    "systemTool": {"name": "bash", "additionalToolConfiguration": {"type": "bash_20250124"}}
+}
+_MARKED_TOOL: Final[dict[str, JsonValue]] = {**TOOL, "prompt_cache_breakpoint": _ONE_HOUR_BREAKPOINT}
+
+
+@pytest.mark.parametrize(
+    ("tools", "drop_params", "tool_marks", "later_ttl"),
+    (
+        pytest.param(
+            [{"type": "web_fetch_20250910", "name": "web_fetch", "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
+            False,
+            (),
+            "1h",
+            id="converse-drops-every-tool",
+        ),
+        pytest.param(
+            [{"type": "web_fetch_20250910", "name": "web_fetch", "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
+            True,
+            (),
+            "1h",
+            id="converse-drops-every-tool-under-drop_params",
+        ),
+        pytest.param(
+            [_BASH_SYSTEM_TOOL, _MARKED_TOOL],
+            True,
+            (Mark(_TOOL_LABEL, "1h"), Mark("other", "5m")),
+            None,
+            id="system-tool-listed-before-the-marked-tool",
+        ),
+        pytest.param(
+            [_MARKED_TOOL, _BASH_SYSTEM_TOOL],
+            True,
+            (Mark(_TOOL_LABEL, "1h"), Mark("other", "5m")),
+            None,
+            id="system-tool-listed-after-the-marked-tool",
+        ),
+        pytest.param(
+            [
+                TOOL,
+                {
+                    "toolSpec": {"name": "get_time", "inputSchema": {"json": {"type": "object"}}},
+                    "prompt_cache_breakpoint": _ONE_HOUR_BREAKPOINT,
+                },
+            ],
+            True,
+            (Mark("tool:get_time", "5m"),),
+            None,
+            id="tool-spec-with-its-own-mark-listed-last",
+        ),
+        pytest.param(
+            [TOOL, {"cachePoint": {"type": "default", "ttl": "1h"}}],
+            True,
+            (Mark(_TOOL_LABEL, "1h"),),
+            "1h",
+            id="cache-point-with-an-hour-listed-last",
+        ),
+        pytest.param(
+            [TOOL, {"cachePoint": {"type": "default", "ttl": "5m"}}],
+            True,
+            (Mark(_TOOL_LABEL, "5m"),),
+            None,
+            id="cache-point-with-five-minutes-listed-last",
+        ),
+    ),
+)
+def test_a_five_minute_tool_config_cache_point_shortens_later_breakpoints_only_when_converse_sends_it(
+    gateway: Gateway,
+    tools: list[JsonValue],
+    drop_params: bool,
+    tool_marks: tuple[Mark, ...],
+    later_ttl: str | None,
+) -> None:
+    marker: Final = new_marker()
+    turns: Final[list[JsonValue]] = [
+        {"role": "system", "content": [_text(SYSTEM, prompt_cache_breakpoint=_EXPLICIT)]},
+        _final(marker, prompt_cache_breakpoint=_ONE_HOUR_BREAKPOINT),
+    ]
+    marks: Final = _marks_sent(
+        gateway,
+        "bedrock_converse",
+        lambda model: chat_body(model, turns, tools=tools, drop_params=drop_params),
+        cache_control_injection_points=[{"location": "tool_config", "control": {"type": "ephemeral", "ttl": "5m"}}],
+    )
+    assert marks == (
+        *tool_marks,
+        Mark(_label(SYSTEM), later_ttl),
+        Mark(_label(final_text(marker)), later_ttl),
+    )
+
+
 @pytest.mark.parametrize(
     ("deployment_drops", "expected"),
     (
