@@ -10,12 +10,12 @@ import pytest
 import litellm
 from litellm.integrations.custom_secret_manager import CustomSecretManager
 from litellm.llms.anthropic.pass_through.messages.handler import anthropic_messages
-from litellm.rust_bridge import settings
+from litellm.rust_bridge.host import settings
 from litellm.rust_bridge.messages.entrypoints import NATIVE_AMESSAGES, NATIVE_MESSAGES
 from litellm.rust_bridge.public_call import NativeCall
 from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
+from tests.test_litellm_rust.messages.data import MESSAGES, MESSAGES_MODEL, MESSAGES_RESPONSE
 from tests.test_litellm_rust.support.recording_server import ResponseSpec, recording_service
-from tests.test_litellm_rust.support.requests import MESSAGES, MESSAGES_MODEL, MESSAGES_RESPONSE
 
 pytest.importorskip("litellm.rust_bridge._native")
 
@@ -53,7 +53,7 @@ def _native_request() -> NativeCall:
     return NativeCall(
         args=(),
         kwargs=supplied,
-        bound={
+        base={
             "model": MESSAGES_MODEL,
             "messages": MESSAGES,
             "max_tokens": 8,

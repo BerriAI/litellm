@@ -28,9 +28,10 @@ from litellm.proxy._types import (
     ProxyException,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_checks import (
-    _virtual_key_max_budget_check,
+from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module exports
+    _virtual_key_max_budget_check,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     can_key_call_resolved_model,
+    virtual_key_max_budget_check,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.autorouter_session_rollup import (
@@ -57,6 +58,10 @@ from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import VerificationTokenRepository
 from litellm.router_strategy.complexity_router import ComplexityRouter
+from litellm.router_strategy.complexity_router.request_models import (
+    AutoRouterRoutingTestRequest,
+    RequestComplexityRouterConfig,
+)
 from litellm.router_utils.auto_router_model_naming import (
     StrategyRouterDependencyRole,
     classify_strategy_router_model,
@@ -72,12 +77,10 @@ from litellm.types.management_endpoints.auto_router_endpoints import (
     AutoRouterBenchmarkTotals,
     AutoRouterCacheBucket,
     AutoRouterCacheStats,
-    AutoRouterRoutingTestRequest,
     AutoRouterRoutingTestResponse,
     AutoRouterSessionResponse,
     ComplexityRouterConfigValidationRequest,
     ComplexityRouterConfigValidationResponse,
-    RequestComplexityRouterConfig,
     ShadowEvalDirection,
     ShadowEvalJobResponse,
     ShadowEvalJobTargetResponse,
@@ -340,7 +343,7 @@ async def _authorize_models_this_test_can_call(
         )
 
     try:
-        await _virtual_key_max_budget_check(
+        await virtual_key_max_budget_check(
             valid_token=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
         )
@@ -558,10 +561,10 @@ async def preview_auto_router_routing(
 
     if member_team is not None and _models_this_test_can_call(resolved.complexity_router_config):
         from litellm.proxy.auth.user_api_key_auth import (
-            _run_centralized_common_checks,  # pyright: ignore[reportPrivateUsage]  # reuse the serving admission policy
+            run_centralized_common_checks,  # pyright: ignore[reportPrivateUsage]  # reuse the serving admission policy
         )
 
-        await _run_centralized_common_checks(
+        await run_centralized_common_checks(
             user_api_key_auth_obj=actor,
             request=http_request,
             request_data=request_data,

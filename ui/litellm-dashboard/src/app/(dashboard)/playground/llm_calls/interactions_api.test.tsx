@@ -3,6 +3,7 @@ import { makeInteractionsRequest } from "./interactions_api";
 
 vi.mock("@/components/networking", () => ({
   getProxyBaseUrl: vi.fn(() => "https://example.com"),
+  getGatewayBaseUrl: vi.fn(() => "https://gateway.example.com"),
   getGlobalLitellmHeaderName: vi.fn(() => "Authorization"),
 }));
 
@@ -49,7 +50,7 @@ describe("interactions_api", () => {
     await makeInteractionsRequest("hi", mockUpdateUI, "gemini-flash", "token");
 
     expect(mockFetch).toHaveBeenCalledTimes(1);
-    expect(mockFetch.mock.calls[0][0]).toBe("https://example.com/v1beta/interactions");
+    expect(mockFetch.mock.calls[0][0]).toBe("https://gateway.example.com/v1beta/interactions");
     expect(mockUpdateUI).toHaveBeenCalledTimes(2);
     expect(mockUpdateUI).toHaveBeenNthCalledWith(1, "Hello", "gemini-3-flash");
     expect(mockUpdateUI).toHaveBeenNthCalledWith(2, " world", "gemini-3-flash");
@@ -70,7 +71,7 @@ describe("interactions_api", () => {
     await makeInteractionsRequest("hi", mockUpdateUI, "gpt-mini", "token");
 
     expect(mockFetch).toHaveBeenCalledTimes(1);
-    expect(mockFetch.mock.calls[0][0]).toBe("https://example.com/v1beta/interactions");
+    expect(mockFetch.mock.calls[0][0]).toBe("https://gateway.example.com/v1beta/interactions");
     expect(mockUpdateUI).toHaveBeenCalledTimes(1);
     expect(mockUpdateUI).toHaveBeenCalledWith("Hi", "gpt-5.4");
   });

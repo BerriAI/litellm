@@ -1,19 +1,26 @@
 import json
+from collections.abc import Callable
 from copy import deepcopy
 from typing import Final
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
+import respx
 
 import litellm
+from litellm.constants import AZURE_DEFAULT_RESPONSES_API_VERSION
 from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.azure.responses.o_series_transformation import (
     AzureOpenAIOSeriesResponsesAPIConfig,
 )
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
+from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.utils import LlmProviders
+from litellm.utils import ProviderConfigManager
 
 
 @pytest.mark.serial
@@ -279,15 +286,24 @@ class TestAzureResponsesAPIConfig:
             == "https://litellm8397336933.openai.azure.com/openai/v1/responses?api-version=latest"
         )
 
-        # Test with date-based version - should use openai/responses
-        result_date = self.config.get_complete_url(
+        result_dated_preview = self.config.get_complete_url(
             api_base=base_url,
-            litellm_params={"api_version": "2025-01-01"},
+            litellm_params={"api_version": "2025-04-01-preview"},
         )
         assert (
-            result_date
-            == "https://litellm8397336933.openai.azure.com/openai/responses?api-version=2025-01-01"
+            result_dated_preview
+            == "https://litellm8397336933.openai.azure.com/openai/responses?api-version=2025-04-01-preview"
         )
+
+    @pytest.mark.parametrize("api_version", ["2024-10-21", "2024-06-01", "2025-01-01"])
+    def test_dated_ga_api_version_routes_responses_like_an_unset_one(self, api_version: str):
+        base_url: Final = "https://litellm8397336933.openai.azure.com"
+
+        dated: Final = self.config.get_complete_url(api_base=base_url, litellm_params={"api_version": api_version})
+        unset: Final = self.config.get_complete_url(api_base=base_url, litellm_params={})
+
+        assert dated == unset
+        assert httpx.URL(dated).params["api-version"] == AZURE_DEFAULT_RESPONSES_API_VERSION
 
     def test_azure_get_complete_url_with_default_api_version(self):
         """Test Azure get_complete_url uses default API version when none is provided"""
@@ -316,6 +332,64 @@ class TestAzureResponsesAPIConfig:
             litellm_params={"api_version": None},
         )
         assert result_none_version == expected_url
+
+    @pytest.mark.parametrize(
+        ("api_version", "responses_api_version", "expected_path"),
+        [
+            ("2024-10-21", "2025-04-01-preview", "/openai/responses?api-version=2025-04-01-preview"),
+            ("2025-04-01-preview", "v1", "/openai/v1/responses?api-version=v1"),
+            (None, "2025-04-01-preview", "/openai/responses?api-version=2025-04-01-preview"),
+        ],
+    )
+    def test_responses_api_version_wins_over_api_version(
+        self, api_version: str | None, responses_api_version: str, expected_path: str
+    ):
+        base_url: Final = "https://litellm8397336933.openai.azure.com"
+
+        url: Final = self.config.get_complete_url(
+            api_base=base_url,
+            litellm_params={"api_version": api_version, "responses_api_version": responses_api_version},
+        )
+
+        assert url == f"{base_url}{expected_path}"
+
+    @pytest.mark.parametrize("responses_api_version", [None, "v1"])
+    def test_api_version_in_api_base_query_wins_over_a_dated_ga_api_version(self, responses_api_version: str | None):
+        api_base: Final = "https://litellm8397336933.openai.azure.com/openai/responses?api-version=2025-04-01-preview"
+
+        url: Final = self.config.get_complete_url(
+            api_base=api_base,
+            litellm_params={"api_version": "2024-10-21", "responses_api_version": responses_api_version},
+        )
+
+        assert url == api_base
+
+    def test_api_version_in_env_api_base_query_wins_over_a_dated_ga_api_version(self, monkeypatch: pytest.MonkeyPatch):
+        env_api_base: Final = (
+            "https://litellm8397336933.openai.azure.com/openai/responses?api-version=2025-04-01-preview"
+        )
+        monkeypatch.setattr(litellm, "api_base", None)
+        monkeypatch.setenv("AZURE_API_BASE", env_api_base)
+
+        url: Final = self.config.get_complete_url(api_base=None, litellm_params={"api_version": "2024-10-21"})
+
+        assert url == env_api_base
+
+    @pytest.mark.parametrize(
+        ("api_base", "expected_path"),
+        [
+            ("https://apim.example.com/openai-gw/team", "/openai-gw/team/openai/v1/responses"),
+            ("https://apim.example.com/openai/team-a", "/openai/team-a/openai/v1/responses"),
+        ],
+    )
+    @pytest.mark.parametrize("litellm_params", [{"api_version": "2024-10-21"}, {"responses_api_version": "v1"}])
+    def test_v1_route_only_rewrites_the_responses_route_segment_of_a_gateway_api_base(
+        self, api_base: str, expected_path: str, litellm_params: dict[str, str]
+    ):
+        url: Final = httpx.URL(self.config.get_complete_url(api_base=api_base, litellm_params=litellm_params))
+
+        assert url.host == "apim.example.com"
+        assert url.path == expected_path
 
     def test_azure_cancel_response_api_request(self):
         """Test Azure cancel response API request transformation"""
@@ -681,6 +755,207 @@ def test_azure_responses_gpt6_astra_rejects_temperature_while_reasoning(local_mo
         )
 
 
+_COMPLETED_RESPONSE: Final = {
+    "id": "resp_dated_chat_deployment",
+    "object": "response",
+    "created_at": 1734366691,
+    "status": "completed",
+    "model": "gpt-5.4-nano",
+    "output": [
+        {
+            "type": "message",
+            "id": "msg_1",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "Done.", "annotations": []}],
+        }
+    ],
+    "parallel_tool_calls": True,
+    "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+    "error": None,
+    "incomplete_details": None,
+    "instructions": None,
+    "metadata": None,
+    "temperature": None,
+    "tool_choice": "auto",
+    "tools": [],
+    "top_p": None,
+    "max_output_tokens": None,
+    "previous_response_id": None,
+    "reasoning": None,
+    "truncation": None,
+    "user": None,
+}
+
+
+_AZURE_RESOURCE: Final = "https://example-resource.openai.azure.com"
+
+
+def _unset_api_version_responses_url() -> httpx.URL:
+    return httpx.URL(AzureOpenAIResponsesAPIConfig().get_complete_url(api_base=_AZURE_RESOURCE, litellm_params={}))
+
+
+def _azure_responses_create(api_version: str) -> str | None:
+    response: Final = litellm.responses(
+        model="azure/gpt-5.4-nano",
+        input="hi",
+        api_base=_AZURE_RESOURCE,
+        api_key="azure-test-key",
+        api_version=api_version,
+    )
+    return response.output[0].content[0].text
+
+
+def _azure_chat_bridged_to_responses(api_version: str) -> str | None:
+    response: Final = litellm.completion(
+        model="azure/responses/gpt-5.4-nano",
+        messages=[{"role": "user", "content": "hi"}],
+        api_base=_AZURE_RESOURCE,
+        api_key="azure-test-key",
+        api_version=api_version,
+    )
+    return response.choices[0].message.content
+
+
+@pytest.mark.parametrize("call_responses", [_azure_responses_create, _azure_chat_bridged_to_responses])
+def test_dated_ga_api_version_sends_responses_to_the_unset_api_version_url(
+    respx_mock: respx.MockRouter, call_responses: Callable[[str], str | None]
+) -> None:
+    route: Final = respx_mock.post(host="example-resource.openai.azure.com").mock(
+        return_value=httpx.Response(200, json=_COMPLETED_RESPONSE)
+    )
+
+    text: Final = call_responses("2024-10-21")
+
+    assert text == "Done."
+    assert route.call_count == 1
+    assert route.calls[0].request.url == _unset_api_version_responses_url()
+
+
+_LIFECYCLE_BODIES: Final = {
+    "get": _COMPLETED_RESPONSE,
+    "delete": {"id": "resp_dated", "object": "response", "deleted": True},
+    "cancel": {**_COMPLETED_RESPONSE, "status": "cancelled"},
+    "input_items": {"object": "list", "data": [], "first_id": None, "last_id": None, "has_more": False},
+}
+
+
+def _call_lifecycle(operation: str) -> object:
+    kwargs: Final = {
+        "response_id": "resp_dated",
+        "custom_llm_provider": "azure",
+        "api_base": _AZURE_RESOURCE,
+        "api_key": "azure-test-key",
+        "api_version": "2024-10-21",
+    }
+    match operation:
+        case "get":
+            return litellm.get_responses(**kwargs)
+        case "delete":
+            return litellm.delete_responses(**kwargs)
+        case "cancel":
+            return litellm.cancel_responses(**kwargs)
+        case _:
+            return litellm.list_input_items(**kwargs)
+
+
+@pytest.mark.parametrize(
+    ("operation", "path_suffix"),
+    [("get", ""), ("delete", ""), ("cancel", "/cancel"), ("input_items", "/input_items")],
+)
+def test_dated_ga_api_version_sends_response_lifecycle_calls_to_the_unset_api_version_route(
+    respx_mock: respx.MockRouter, operation: str, path_suffix: str
+) -> None:
+    route: Final = respx_mock.route(host="example-resource.openai.azure.com").mock(
+        return_value=httpx.Response(200, json=_LIFECYCLE_BODIES[operation])
+    )
+
+    _call_lifecycle(operation)
+
+    unset_url: Final = _unset_api_version_responses_url()
+    sent_url: Final = route.calls[0].request.url
+    assert route.call_count == 1
+    assert sent_url.path == f"{unset_url.path}/resp_dated{path_suffix}"
+    assert sent_url.params["api-version"] == unset_url.params["api-version"]
+
+
+def test_chat_completion_keeps_the_dated_ga_api_version(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(
+        f"{_AZURE_RESOURCE}/openai/deployments/gpt-5.4-nano/chat/completions", params={"api-version": "2024-10-21"}
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-dated",
+                "object": "chat.completion",
+                "created": 1734366691,
+                "model": "gpt-5.4-nano",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "Done."}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 9, "completion_tokens": 1, "total_tokens": 10},
+            },
+        )
+    )
+
+    response: Final = litellm.completion(
+        model="azure/gpt-5.4-nano",
+        messages=[{"role": "user", "content": "hi"}],
+        api_base=_AZURE_RESOURCE,
+        api_key="azure-test-key",
+        api_version="2024-10-21",
+    )
+
+    assert response.choices[0].message.content == "Done."
+    assert route.call_count == 1
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_responses_api_version_routes_a_dated_chat_deployment_to_its_own_responses_version(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(
+        "https://example-resource.openai.azure.com/openai/responses", params={"api-version": "2025-04-01-preview"}
+    ).mock(return_value=httpx.Response(200, json=_COMPLETED_RESPONSE))
+
+    response: Final = litellm.responses(
+        model="azure/gpt-5.4-nano",
+        input="hi",
+        api_base="https://example-resource.openai.azure.com",
+        api_key="azure-test-key",
+        api_version="2024-10-21",
+        responses_api_version="2025-04-01-preview",
+    )
+    request_body: Final = json.loads(route.calls[0].request.content)
+
+    assert route.call_count == 1
+    assert response.output[0].content[0].text == "Done."
+    assert request_body["model"] == "gpt-5.4-nano"
+    assert "responses_api_version" not in request_body
+    assert "api_version" not in request_body
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_responses_api_version_reaches_the_url_when_chat_completion_bridges_to_responses(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(
+        "https://example-resource.openai.azure.com/openai/v1/responses", params={"api-version": "v1"}
+    ).mock(return_value=httpx.Response(200, json=_COMPLETED_RESPONSE))
+
+    response: Final = litellm.completion(
+        model="azure/responses/gpt-5.4-nano",
+        messages=[{"role": "user", "content": "hi"}],
+        api_base="https://example-resource.openai.azure.com",
+        api_key="azure-test-key",
+        api_version="2024-10-21",
+        responses_api_version="v1",
+    )
+    request_body: Final = json.loads(route.calls[0].request.content)
+
+    assert route.call_count == 1
+    assert response.choices[0].message.content == "Done."
+    assert "responses_api_version" not in request_body
+
+
 def test_azure_responses_sends_the_deployment_name_when_azure_ai_prefix_survives_provider_remap():
     request = AzureOpenAIResponsesAPIConfig().transform_responses_api_request(
         model="azure_ai/gpt-5.4-nano",
@@ -920,3 +1195,25 @@ async def test_azure_responses_api_headers_with_llm_provider_prefix():
     # Also verify openai-compatible headers are included
     assert "x-ratelimit-limit-tokens" in headers
     assert "x-ratelimit-remaining-tokens" in headers
+
+
+@pytest.mark.parametrize(
+    "model", ["gpt-5", "gpt-5-turbo", "GPT-5", "azure/gpt-5", "gpt-3.5-turbo", "gpt-4", "gpt-4-turbo", "gpt-4o"]
+)
+def test_azure_gpt_models_resolve_to_responses_config_with_temperature(model: str) -> None:
+    config: Final = ProviderConfigManager.get_provider_responses_api_config(provider=LlmProviders.AZURE, model=model)
+    assert type(config) is AzureOpenAIResponsesAPIConfig
+    assert "temperature" in config.get_supported_openai_params(model)
+
+
+@pytest.mark.parametrize("model", ["o1", "o3"])
+def test_azure_o_series_resolves_to_o_series_config_without_temperature(model: str) -> None:
+    config: Final = ProviderConfigManager.get_provider_responses_api_config(provider=LlmProviders.AZURE, model=model)
+    assert type(config) is AzureOpenAIOSeriesResponsesAPIConfig
+    assert "temperature" not in config.get_supported_openai_params(model)
+
+
+def test_openai_gpt5_resolves_to_responses_config_with_temperature() -> None:
+    config: Final = ProviderConfigManager.get_provider_responses_api_config(provider=LlmProviders.OPENAI, model="gpt-5")
+    assert type(config) is OpenAIResponsesAPIConfig
+    assert "temperature" in config.get_supported_openai_params("gpt-5")

@@ -2,12 +2,19 @@
 Test case normalization in LitellmParams for all guardrail types
 """
 
-from typing import Literal
+import logging
+from typing import Final, Literal
 
 import pytest
 from pydantic import ValidationError
 
-from litellm.types.guardrails import BaseLitellmParams, LitellmParams
+from litellm.types.guardrails import (
+    BaseLitellmParams,
+    LitellmParams,
+    runtime_stream_scope,
+    stored_stream_scope,
+    with_tolerated_stream_scope,
+)
 
 
 class TestLitellmParamsCaseNormalization:
@@ -184,3 +191,80 @@ class TestSensitiveDataRoutingValidation:
             on_sensitive_data="BLOCK",
         )
         assert params.on_sensitive_data == "block"
+
+
+class TestStreamScopeValidation:
+    def test_scalar_is_case_normalized(self):
+        params = LitellmParams(guardrail="bedrock", mode="post_call", stream_scope="Streaming")
+        assert params.stream_scope == "streaming"
+
+    def test_map_keys_and_values_are_normalized(self):
+        params = LitellmParams(
+            guardrail="bedrock",
+            mode=["pre_call", "post_call"],
+            stream_scope={"Pre_Call": "Both", "POST_CALL": "Non_Streaming"},
+        )
+        assert params.stream_scope == {"pre_call": "both", "post_call": "non_streaming"}
+
+    def test_invalid_scalar_is_rejected(self):
+        with pytest.raises(ValidationError, match="stream_scope must be one of"):
+            LitellmParams(guardrail="bedrock", mode="post_call", stream_scope="chunks")
+
+    def test_invalid_map_key_is_rejected(self):
+        with pytest.raises(ValidationError, match="stream_scope keys must be guardrail modes"):
+            LitellmParams(guardrail="bedrock", mode="post_call", stream_scope={"not_a_mode": "both"})
+
+    def test_invalid_map_value_is_rejected(self):
+        with pytest.raises(ValidationError, match="stream_scope must be one of"):
+            LitellmParams(guardrail="bedrock", mode="post_call", stream_scope={"post_call": "sometimes"})
+
+    def test_runtime_stream_scope_normalizes_direct_constructor_maps(self):
+        default, by_hook = runtime_stream_scope({"Pre_Call": "streaming"})
+        assert default == "both"
+        assert dict(by_hook) == {"pre_call": "streaming"}
+
+    def test_runtime_stream_scope_rejects_invalid_direct_input(self):
+        with pytest.raises(ValueError, match="stream_scope must be one of"):
+            runtime_stream_scope("chunks")
+
+    @pytest.mark.parametrize(
+        "value, expected",
+        [
+            ("streaming", "streaming"),
+            ("non_streaming", "non_streaming"),
+            ("both", "both"),
+            ({"pre_call": "streaming"}, {"pre_call": "streaming"}),
+            ("sometimes", None),
+            ({"pre_call": "sometimes"}, None),
+        ],
+    )
+    def test_stored_stream_scope_tolerates_invalid_values(
+        self,
+        value: object,
+        expected: object,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        caplog.set_level(logging.WARNING)
+
+        result: Final = stored_stream_scope(value)
+
+        assert result == expected
+        if expected is None:
+            assert f"Ignoring invalid stored stream_scope value of type {type(value).__name__}" in caplog.text
+            assert "sometimes" not in caplog.text
+
+    def test_tolerated_stream_scope_rewrites_only_the_scope_field(self) -> None:
+        params: Final = {
+            "guardrail": "generic_guardrail_api",
+            "mode": "pre_call",
+            "stream_scope": "sometimes",
+        }
+
+        tolerated: Final = with_tolerated_stream_scope(params)
+
+        assert tolerated == {
+            "guardrail": "generic_guardrail_api",
+            "mode": "pre_call",
+            "stream_scope": None,
+        }
+        assert params["stream_scope"] == "sometimes"

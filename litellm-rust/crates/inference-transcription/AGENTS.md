@@ -1,3 +1,3 @@
 - Shared base and layering rules: [`../inference/AGENTS.md`](../inference/AGENTS.md)
-- This crate owns audio transcription call orchestration; transformations belong in `llms/src/base_llm/audio_transcription` and `llms/src/<provider>/audio_transcription`
-- `AudioTranscriptionRoute::execute` returns the completed response directly; there is no hosted route machine or response cache for transcription yet
+- This crate owns audio transcription call orchestration. Transformations belong in `llms/src/base_llm/audio_transcription` and `llms/src/<provider>/audio_transcription`
+- `AudioTranscriptionRoute::execute` returns the completed response directly. There is no hosted route machine or response cache for transcription yet

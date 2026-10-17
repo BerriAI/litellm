@@ -1184,7 +1184,7 @@ async def test_output_file_content_fetches_and_parses(monkeypatch):
         return type("R", (), {"content": b'{"a": 1}\n{"b": 2}'})()
 
     monkeypatch.setattr(files_main, "afile_content", fake_afile_content)
-    monkeypatch.setattr(cu, "_is_base64_encoded_unified_file_id", lambda fid: False)
+    monkeypatch.setattr(cu, "is_base64_encoded_unified_file_id", lambda fid: False)
 
     result = await bu._fetch_batch_output_file_content(
         _batch("file-out"),
@@ -1217,7 +1217,7 @@ async def test_output_file_content_unified_file_id_extraction(monkeypatch):
     monkeypatch.setattr(files_main, "afile_content", fake_afile_content)
     monkeypatch.setattr(
         cu,
-        "_is_base64_encoded_unified_file_id",
+        "is_base64_encoded_unified_file_id",
         lambda fid: "litellm_proxy;llm_output_file_id,real-file-99;rest",
     )
 
@@ -1981,6 +1981,20 @@ def test_total_cost_bills_cached_tokens_per_line_at_the_batch_cached_rate():
     long_line = 1_000 * 2e-6 + 299_000 * 1e-6 + 10 * 6e-6
     short_line = 40 * 1e-6 + 60 * 5e-7 + 10 * 4e-6
     assert result.cost == pytest.approx(long_line + short_line)
+
+
+def test_extract_credentials_keeps_openai_workload_identity_params():
+    params = {
+        "openai_identity_provider_id": "idp_deployment",
+        "openai_service_account_id": "user-deployment",
+        "openai_identity_token_file": "/var/run/secrets/token",
+        "model": "gpt-4o",
+    }
+    assert bu._extract_file_access_credentials(params) == {
+        "openai_identity_provider_id": "idp_deployment",
+        "openai_service_account_id": "user-deployment",
+        "openai_identity_token_file": "/var/run/secrets/token",
+    }
 
 
 # --------------------------------------------------------------------------- #

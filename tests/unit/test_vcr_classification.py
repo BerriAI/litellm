@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import socket
 from types import SimpleNamespace
 from typing import Optional
 
@@ -545,3 +546,34 @@ def test_should_skip_live_probe_when_vcr_active(vcr_enabled):
     fake_cassette = SimpleNamespace(play_count=0, dirty=False)
     probe = install_live_call_probe(request, fake_cassette)
     assert probe is None
+
+
+def test_live_call_probe_records_known_llm_hosts(vcr_enabled, monkeypatch):
+    def refuse_connection(address, *args, **kwargs):
+        raise ConnectionRefusedError(f"unit tests do not open sockets: {address}")
+
+    monkeypatch.setattr(socket, "create_connection", refuse_connection)
+    finalizers = []
+
+    class _Node:
+        pass
+
+    request = SimpleNamespace(node=_Node(), addfinalizer=lambda fn: finalizers.append(fn))
+    probe = install_live_call_probe(request, None)
+    assert probe is not None
+
+    try:
+        socket.create_connection(("api.openai.com", 443), timeout=0.001)
+    except Exception:
+        pass
+    try:
+        socket.create_connection(("127.0.0.1", 6379), timeout=0.001)
+    except Exception:
+        pass
+
+    for fn in finalizers:
+        fn()
+
+    hosts = getattr(request.node, "vcr_live_call_hosts", [])
+    assert "api.openai.com" in hosts
+    assert "127.0.0.1" not in hosts
