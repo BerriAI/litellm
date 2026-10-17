@@ -25,6 +25,7 @@ _TRANSIENT_DB_UNAVAILABLE_MESSAGE: Final = (
 )
 
 _DATABASE_ERROR_META: Final = TypeAdapter(dict[str, object])
+_GENERAL_SETTINGS_ADAPTER: Final = TypeAdapter(dict[str, object])
 _BATCH_POSTGRES_ERROR_CODE: Final = re.compile(r'PostgresError \{ code: "([0-9A-Z]{5})"')
 _CONNECTION_CAPACITY_PHRASES: Final = (
     "too many clients already",
@@ -111,10 +112,19 @@ class PrismaDBExceptionHandler:
         # Read ``general_settings`` through ``sys.modules``: importing
         # ``proxy_server`` here could fail or recurse while it is still
         # being imported, and a proxy server that has not been imported
-        # yet has not configured a database through it either.
+        # yet has not configured a database through it either. The raw
+        # value is ``object`` until validated into a typed dict, because
+        # ``general_settings`` is declared as a bare ``dict`` and reading
+        # it directly surfaces as partially unknown to basedpyright.
         proxy_server_module: Final = sys.modules.get("litellm.proxy.proxy_server")
-        general_settings: Final = getattr(proxy_server_module, "general_settings", None)
-        return isinstance(general_settings, dict) and bool(general_settings.get("database_url"))
+        raw_settings: Final[object] = getattr(proxy_server_module, "general_settings", None)
+        if not isinstance(raw_settings, dict):
+            return False
+        try:
+            settings: Final = _GENERAL_SETTINGS_ADAPTER.validate_python(raw_settings)
+        except ValidationError:
+            return False
+        return bool(settings.get("database_url"))
 
     @staticmethod
     def is_database_connection_error(e: Exception) -> bool:
