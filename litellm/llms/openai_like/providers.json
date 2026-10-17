@@ -239,5 +239,10 @@
       "/v1/responses",
       "/v1/messages"
     ]
+  },
+  "raindragon": {
+    "base_url": "https://inference.raindragon.ai/v1",
+    "api_key_env": "RAINDRAGON_API_KEY",
+    "api_base_env": "RAINDRAGON_API_BASE"
   }
 }
