@@ -952,6 +952,223 @@ class TestCohereMessageAdaptationEdgeCases:
         result = extract_text_content(12345)
         assert result == "12345"
 
+    def test_cohere_multi_turn_tool_results_transform_request(self):
+        """In multi-turn tool calling, when the conversation ends with a tool message,
+        transform_request pops trailing tool results into top-level toolResults and sets message=''.
+        This prevents OCI 400 'cannot specify message if the last entry in chat history contains tool results'.
+        See issue #46157.
+        """
+        config = OCIChatConfig()
+        messages = [
+            {"role": "user", "content": "How is support ticket priority decided?"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "lookup_policy",
+                            "arguments": json.dumps({"topic": "ticket priority"}),
+                        },
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": "P1 for an outage, P2 for degraded service, P3 for questions.",
+            },
+        ]
+        optional_params = {
+            "oci_compartment_id": TEST_COMPARTMENT_ID,
+        }
+
+        transformed_request = config.transform_request(
+            model="cohere.command-a-03-2025",
+            messages=messages,  # type: ignore
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+
+        chat_request = transformed_request["chatRequest"]
+        assert chat_request["apiFormat"] == "COHERE"
+        assert chat_request["message"] == ""
+        assert "toolResults" in chat_request
+        assert len(chat_request["toolResults"]) == 1
+        result = chat_request["toolResults"][0]
+        assert result["call"]["name"] == "lookup_policy"
+        assert result["call"]["parameters"] == {"topic": "ticket priority"}
+        assert result["outputs"] == [{"output": "P1 for an outage, P2 for degraded service, P3 for questions."}]
+
+        # chatHistory must only contain the assistant turn, NOT the trailing tool result
+        assert len(chat_request["chatHistory"]) == 1
+        assert chat_request["chatHistory"][0]["role"] == "CHATBOT"
+        assert chat_request["chatHistory"][0]["toolCalls"][0]["name"] == "lookup_policy"
+
+    def test_cohere_multi_turn_parallel_tool_results_transform_request(self):
+        """Parallel tool results trailing the conversation must all be collected into top-level toolResults."""
+        config = OCIChatConfig()
+        messages = [
+            {"role": "user", "content": "Compare weather in Paris and London"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": json.dumps({"location": "Paris"}),
+                        },
+                    },
+                    {
+                        "id": "call_2",
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": json.dumps({"location": "London"}),
+                        },
+                    },
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": "Paris: 18C",
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_2",
+                "content": "London: 15C",
+            },
+        ]
+        optional_params = {
+            "oci_compartment_id": TEST_COMPARTMENT_ID,
+        }
+
+        transformed_request = config.transform_request(
+            model="cohere.command-rplus",
+            messages=messages,  # type: ignore
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+
+        chat_request = transformed_request["chatRequest"]
+        assert chat_request["message"] == ""
+        assert "toolResults" in chat_request
+        assert len(chat_request["toolResults"]) == 2
+        assert chat_request["toolResults"][0]["call"]["name"] == "get_weather"
+        assert chat_request["toolResults"][0]["call"]["parameters"] == {"location": "Paris"}
+        assert chat_request["toolResults"][1]["call"]["parameters"] == {"location": "London"}
+        assert len(chat_request["chatHistory"]) == 1
+
+    def test_cohere_citation_document_ids_alias_and_field_name(self):
+        """CohereCitation parses OCI's camelCase documentIds alias as well as snake_case document_ids.
+        See issue #46157.
+        """
+        from litellm.types.llms.oci import CohereCitation, CohereChatResult
+
+        # 1. Direct validation using camelCase documentIds (OCI wire format)
+        citation_from_alias = CohereCitation.model_validate({
+            "start": 0,
+            "end": 10,
+            "text": "sample text",
+            "documentIds": ["doc_1", "doc_2"],
+        })
+        assert citation_from_alias.document_ids == ["doc_1", "doc_2"]
+
+        # 2. Direct validation using snake_case document_ids
+        citation_from_name = CohereCitation.model_validate({
+            "start": 0,
+            "end": 10,
+            "text": "sample text",
+            "document_ids": ["doc_3"],
+        })
+        assert citation_from_name.document_ids == ["doc_3"]
+
+        # 3. Validation inside full CohereChatResult
+        full_response_payload = {
+            "modelId": "cohere.command-a-03-2025",
+            "modelVersion": "1.0",
+            "chatResponse": {
+                "apiFormat": "COHERE",
+                "text": "Priority is decided based on outage level.",
+                "finishReason": "COMPLETE",
+                "citations": [
+                    {
+                        "start": 0,
+                        "end": 20,
+                        "text": "Priority is decided",
+                        "documentIds": ["lookup_policy:0:1:0"],
+                    }
+                ],
+                "usage": {
+                    "promptTokens": 15,
+                    "completionTokens": 10,
+                    "totalTokens": 25,
+                },
+            },
+        }
+        chat_result = CohereChatResult.model_validate(full_response_payload)
+        assert chat_result.chatResponse.citations is not None
+        assert len(chat_result.chatResponse.citations) == 1
+        assert chat_result.chatResponse.citations[0].document_ids == ["lookup_policy:0:1:0"]
+
+    def test_cohere_transform_response_with_citations(self):
+        """transform_response parses responses containing citations with documentIds without raising.
+        See issue #46157.
+        """
+        config = OCIChatConfig()
+        mock_response = {
+            "modelId": "cohere.command-a-03-2025",
+            "modelVersion": "1.0",
+            "chatResponse": {
+                "apiFormat": "COHERE",
+                "text": "P1 is for an outage.",
+                "finishReason": "COMPLETE",
+                "citations": [
+                    {
+                        "start": 0,
+                        "end": 20,
+                        "text": "P1 is for an outage.",
+                        "documentIds": ["lookup_policy:0:1:0"],
+                    }
+                ],
+                "usage": {
+                    "promptTokens": 20,
+                    "completionTokens": 8,
+                    "totalTokens": 28,
+                },
+            },
+        }
+
+        response = httpx.Response(
+            status_code=200,
+            json=mock_response,
+            headers={"Content-Type": "application/json"},
+        )
+
+        result = config.transform_response(
+            model="cohere.command-a-03-2025",
+            raw_response=response,
+            model_response=ModelResponse(),
+            logging_obj={},  # type: ignore
+            request_data={},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding={},
+        )
+
+        assert isinstance(result, ModelResponse)
+        assert result.choices[0].message.content == "P1 is for an outage."
+        assert result.choices[0].finish_reason == "stop"
+
 
 class TestOCICohereStreaming:
     """Test Cohere streaming functionality"""
