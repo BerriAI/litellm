@@ -510,6 +510,7 @@ from litellm.proxy.common_utils.scheduled_job_stagger import (
     parse_stagger_settings,
     stagger_trigger,
 )
+from litellm.proxy.common_utils.slow_gc_logger import log_slow_gc_passes
 from litellm.proxy.common_utils.swagger_utils import ERROR_RESPONSES
 from litellm.proxy.common_utils.timezone_utils import (
     get_budget_reset_settings,
@@ -1378,6 +1379,10 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
     import json
 
     init_verbose_loggers()
+
+    running_loop: Final = asyncio.get_running_loop()
+    if isinstance(running_loop, asyncio.BaseEventLoop) and running_loop.get_debug():
+        log_slow_gc_passes(threshold_seconds=running_loop.slow_callback_duration, log=verbose_proxy_logger.warning)
 
     prometheus_multiproc_dir: Final = os.environ.get("PROMETHEUS_MULTIPROC_DIR")
     if prometheus_multiproc_dir:

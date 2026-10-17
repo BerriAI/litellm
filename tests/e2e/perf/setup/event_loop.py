@@ -7,14 +7,17 @@ is not on its allowlist of known holds or shows up more often than the allowlist
 not the frame that held the loop, so every request handler lands under `RequestResponseCycle.run_asgi`; the
 allowlist caps how often a known location may appear instead of ignoring it. The log comes from the gateway pods
 (`pods/log` with the runner's service account, pods picked by `E2E_PERF_GATEWAY_POD_SELECTOR`) or, on a local run,
-from the whole file named by `E2E_PERF_GATEWAY_LOG_FILE` (no time window, so startup holds are in it too)."""
+from the whole file named by `E2E_PERF_GATEWAY_LOG_FILE` (no time window, so startup holds are in it too).
+A garbage collection pass pauses the loop too, and asyncio charges it to whatever task was running, so the gateway
+logs every pass over the same threshold (`Garbage collection gen=2 collected=N took X seconds`, debug mode only);
+a hold that such a pass accounts for is reported under `garbage collection` instead of the task it landed on."""
 
 from __future__ import annotations
 
 import os
 import re
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from itertools import groupby
 from pathlib import Path
@@ -32,6 +35,10 @@ _API: Final = "https://kubernetes.default.svc/api/v1/namespaces"
 _LINE: Final = re.compile(r"Executing <(?P<desc>.*?)> took (?P<seconds>[0-9.]+) seconds")
 _CORO: Final = re.compile(r"coro=<(?P<name>[^ ]+)")
 _AT: Final = re.compile(r" at (?P<where>[^ >]+:\d+)")
+_GC_LINE: Final = re.compile(
+    r"Garbage collection gen=(?P<generation>\d+) collected=\d+ took (?P<seconds>[0-9.]+) seconds"
+)
+GC_BUCKET: Final = "garbage collection"
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,10 +57,18 @@ class EventLoopStalls:
 
 
 @dataclass(frozen=True, slots=True)
+class GcPass:
+    generation: int
+    seconds: float
+
+
+@dataclass(frozen=True, slots=True)
 class Stall:
     coroutine: str
     where: str
     seconds: float
+    gc_seconds: float = 0.0
+    gc_generation: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,8 +107,41 @@ def _parse_line(line: str) -> Stall | None:
     )
 
 
+def _parse_event(line: str) -> Stall | GcPass | None:
+    match: Final = _GC_LINE.search(line)
+    if match is None:
+        return _parse_line(line)
+    return GcPass(generation=int(match.group("generation")), seconds=float(match.group("seconds")))
+
+
+def _with_passes(stall: Stall, passes: tuple[GcPass, ...]) -> Stall:
+    if not passes:
+        return stall
+    return replace(
+        stall,
+        gc_seconds=sum(gc_pass.seconds for gc_pass in passes),
+        gc_generation=max(gc_pass.generation for gc_pass in passes),
+    )
+
+
 def parse_stalls(lines: Iterable[str]) -> tuple[Stall, ...]:
-    return tuple(stall for stall in map(_parse_line, lines) if stall is not None)
+    """Holds in log order, each carrying the collector passes logged since the previous hold: a pass runs inside the
+    task asyncio then blames and is only logged when it is itself over the threshold, so its hold line follows it."""
+    events: Final = tuple(event for event in map(_parse_event, lines) if event is not None)
+    holds: Final = tuple((index, event) for index, event in enumerate(events) if isinstance(event, Stall))
+    return tuple(
+        _with_passes(stall, tuple(event for event in events[previous + 1 : index] if isinstance(event, GcPass)))
+        for previous, (index, stall) in zip((-1, *(index for index, _ in holds)), holds)
+    )
+
+
+def _reported(spec: EventLoopStalls, stall: Stall) -> Stall:
+    """A hold the collector accounts for, what is left under the threshold, is the collector's, not the task's."""
+    if stall.gc_generation is None or stall.gc_seconds > stall.seconds:
+        return stall
+    if stall.seconds - stall.gc_seconds >= spec.max_hold_seconds:
+        return stall
+    return Stall(coroutine=GC_BUCKET, where=f"gen={stall.gc_generation}", seconds=stall.seconds)
 
 
 def _allowed_by(spec: EventLoopStalls, coroutine: str, where: str) -> KnownStall | None:
@@ -102,8 +150,9 @@ def _allowed_by(spec: EventLoopStalls, coroutine: str, where: str) -> KnownStall
 
 def summarize(spec: EventLoopStalls, stalls: Iterable[Stall]) -> tuple[StallRow, ...]:
     """One row per (coroutine, location) over the hold threshold, worst total first."""
+    reported: Final = tuple(_reported(spec, stall) for stall in stalls)
     over: Final = sorted(
-        (stall for stall in stalls if stall.seconds >= spec.max_hold_seconds), key=lambda s: (s.coroutine, s.where)
+        (stall for stall in reported if stall.seconds >= spec.max_hold_seconds), key=lambda s: (s.coroutine, s.where)
     )
     rows: Final = tuple(
         StallRow(
