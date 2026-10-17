@@ -3016,6 +3016,8 @@ THIRD_REFUSED: Final = CooldownDeploymentInfo(model_id="refused-3", api_base=Non
 OTHER_TEAMS_REFUSED: Final = CooldownDeploymentInfo(model_id="refused-team-b", api_base=None)
 FIRST_WILDCARD: Final = CooldownDeploymentInfo(model_id="wildcard-1", api_base="https://wildcard.example/v1")
 SECOND_WILDCARD: Final = CooldownDeploymentInfo(model_id="wildcard-2", api_base=None)
+ALIAS_TARGET: Final = CooldownDeploymentInfo(model_id="tier-1", api_base="https://tier.example/v1")
+PROVIDER_MODEL: Final = CooldownDeploymentInfo(model_id="friendly-1", api_base=None)
 EVERY_DEPLOYMENT: Final = (
     "refused-1",
     "refused-2",
@@ -3024,12 +3026,15 @@ EVERY_DEPLOYMENT: Final = (
     "neighbour-1",
     "wildcard-1",
     "wildcard-2",
+    "tier-1",
+    "friendly-1",
 )
 
 
 def _cooled_router(routing_strategy: str, cooled: tuple[str, ...]) -> Router:
     router: Final = Router(
         routing_strategy=routing_strategy,
+        model_group_alias={"entry": "tier", "tier": "refused"},
         model_list=[
             {
                 "model_name": "refused",
@@ -3066,6 +3071,16 @@ def _cooled_router(routing_strategy: str, cooled: tuple[str, ...]) -> Router:
                 "litellm_params": {"model": "openai/*"},
                 "model_info": {"id": "wildcard-2"},
             },
+            {
+                "model_name": "tier",
+                "litellm_params": {"model": "openai/gpt-5.4", "api_base": "https://tier.example/v1"},
+                "model_info": {"id": "tier-1"},
+            },
+            {
+                "model_name": "friendly",
+                "litellm_params": {"model": "anthropic/claude-friendly"},
+                "model_info": {"id": "friendly-1"},
+            },
         ],
     )
     for model_id in cooled:
@@ -3078,8 +3093,11 @@ def _cooled_router(routing_strategy: str, cooled: tuple[str, ...]) -> Router:
     return router
 
 
-def _select(router: Router, entrypoint: str, model: str, team_id: str) -> object:
-    request_kwargs: Final = {"metadata": {"user_api_key_team_id": team_id}}
+def _team_request(team_id: str | None) -> dict[str, object]:
+    return {"metadata": {"user_api_key_team_id": team_id} if team_id else {}}
+
+
+def _select(router: Router, entrypoint: str, model: str, request_kwargs: dict[str, object]) -> object:
     match entrypoint:
         case "async":
             return asyncio.run(
@@ -3109,15 +3127,19 @@ WILDCARD_COOLED: Final = (FIRST_WILDCARD, SECOND_WILDCARD)
     (
         ("simple-shuffle", EVERY_DEPLOYMENT, "sync", "refused", "team-a", ALL_COOLED),
         ("simple-shuffle", EVERY_DEPLOYMENT, "async", "refused", "team-a", ALL_COOLED),
-        ("simple-shuffle", EVERY_DEPLOYMENT, "pass-through", "refused", "team-a", ALL_COOLED),
+        ("simple-shuffle", EVERY_DEPLOYMENT, "pass-through", "refused", "team-a", (FIRST_REFUSED, SECOND_REFUSED)),
         ("simple-shuffle", EVERY_DEPLOYMENT, "async-pass-through", "refused", "team-a", ALL_COOLED),
         ("simple-shuffle", EVERY_DEPLOYMENT, "sync", "refused", "team-b", (*ALL_COOLED, OTHER_TEAMS_REFUSED)),
-        ("cost-based-routing", STRATEGY_COOLED, "sync", "refused", "team-a", (FIRST_REFUSED,)),
-        ("cost-based-routing", STRATEGY_COOLED, "async", "refused", "team-a", (FIRST_REFUSED,)),
-        ("cost-based-routing", STRATEGY_COOLED, "pass-through", "refused", "team-a", (FIRST_REFUSED,)),
-        ("cost-based-routing", ("neighbour-1",), "sync", "refused", "team-a", ()),
+        ("simple-shuffle", EVERY_DEPLOYMENT, "async", "refused", None, ALL_COOLED),
+        ("cost-based-routing", STRATEGY_COOLED, "sync", "refused", "team-a", None),
+        ("cost-based-routing", STRATEGY_COOLED, "async", "refused", "team-a", None),
+        ("cost-based-routing", STRATEGY_COOLED, "pass-through", "refused", "team-a", None),
         ("simple-shuffle", EVERY_DEPLOYMENT, "sync", "openai/gpt-5.4-mini", "team-a", WILDCARD_COOLED),
         ("simple-shuffle", EVERY_DEPLOYMENT, "async", "openai/gpt-5.4-mini", "team-a", WILDCARD_COOLED),
+        ("simple-shuffle", EVERY_DEPLOYMENT, "sync", "entry", "team-a", (ALIAS_TARGET,)),
+        ("simple-shuffle", EVERY_DEPLOYMENT, "async", "entry", "team-a", (ALIAS_TARGET,)),
+        ("simple-shuffle", EVERY_DEPLOYMENT, "sync", "anthropic/claude-friendly", "team-a", (PROVIDER_MODEL,)),
+        ("simple-shuffle", EVERY_DEPLOYMENT, "async", "anthropic/claude-friendly", "team-a", (PROVIDER_MODEL,)),
     ),
     ids=(
         "all-cooled-sync",
@@ -3125,12 +3147,16 @@ WILDCARD_COOLED: Final = (FIRST_WILDCARD, SECOND_WILDCARD)
         "all-cooled-pass-through",
         "all-cooled-async-pass-through",
         "all-cooled-owning-team",
+        "all-cooled-async-no-team",
         "strategy-refused-sync",
         "strategy-refused-async",
         "strategy-refused-pass-through",
-        "strategy-refused-none-cooled",
         "wildcard-sync",
         "wildcard-async",
+        "alias-chain-sync",
+        "alias-chain-async",
+        "provider-model-sync",
+        "provider-model-async",
     ),
 )
 def test_no_deployment_error_names_the_cooled_deployments_the_request_could_route_to(
@@ -3138,13 +3164,20 @@ def test_no_deployment_error_names_the_cooled_deployments_the_request_could_rout
     cooled: tuple[str, ...],
     entrypoint: str,
     model: str,
-    team_id: str,
-    expected: tuple[CooldownDeploymentInfo, ...],
+    team_id: str | None,
+    expected: tuple[CooldownDeploymentInfo, ...] | None,
 ) -> None:
     router: Final = _cooled_router(routing_strategy, cooled)
     with pytest.raises(RouterRateLimitError) as refusal:
-        _select(router, entrypoint, model, team_id)
-    assert sorted(refusal.value.cooldown_deployments, key=lambda info: info["model_id"]) == sorted(
-        expected, key=lambda info: info["model_id"]
-    ), refusal.value.cooldown_list
+        _select(router, entrypoint, model, _team_request(team_id))
+    assert refusal.value.cooldown_deployments == expected, refusal.value.cooldown_list
+
+
+@pytest.mark.parametrize("entrypoint", ("sync", "async"))
+def test_no_deployment_error_names_only_the_cooled_part_of_a_route_emptied_by_other_filters(entrypoint: str) -> None:
+    router: Final = _cooled_router("simple-shuffle", STRATEGY_COOLED)
+    request_kwargs: Final = {**_team_request("team-a"), "_excluded_deployment_ids": ["refused-2", "refused-3"]}
+    with pytest.raises(RouterRateLimitError) as refusal:
+        _select(router, entrypoint, "refused", request_kwargs)
+    assert refusal.value.cooldown_deployments == (FIRST_REFUSED,), refusal.value.cooldown_list
     assert "sk-scripted-secret" not in repr(refusal.value.cooldown_deployments)

@@ -8,7 +8,7 @@ Router cooldown handlers
 
 import asyncio
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
@@ -28,7 +28,6 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import mask_api_base_credentials
-from litellm.router_utils.common_utils import get_request_team_id
 from litellm.router_utils.cooldown_cache import ROUTER_COOLDOWNS_TARGET, CooldownCacheValue
 from litellm.router_utils.cooldown_callbacks import router_cooldown_event_callback
 from litellm.types.router import Deployment
@@ -653,21 +652,16 @@ def _deployment_api_base(litellm_router_instance: LitellmRouter, model_id: str) 
 
 
 def get_cooldown_deployment_info(
-    litellm_router_instance: LitellmRouter,
-    model: str,
-    request_kwargs: Mapping[str, object] | None,
-    cooldown_list: Sequence[str],
+    litellm_router_instance: LitellmRouter, route_model_ids: Collection[str], cooldown_list: Sequence[str]
 ) -> tuple[CooldownDeploymentInfo, ...]:
     """
-    The deployments `model` routes to for the caller's team that are in `cooldown_list`, each with its masked api_base
+    The deployments the router resolved for this request (`route_model_ids`) that are in `cooldown_list`, each
+    with its masked api_base
     """
-    candidates: Final = litellm_router_instance.get_candidate_model_ids_for_route(
-        model, get_request_team_id(request_kwargs)
-    )
     return tuple(
         CooldownDeploymentInfo(model_id=model_id, api_base=_deployment_api_base(litellm_router_instance, model_id))
         for model_id in cooldown_list
-        if model_id in candidates
+        if model_id in route_model_ids
     )
 
 

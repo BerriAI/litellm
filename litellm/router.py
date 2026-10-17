@@ -14285,7 +14285,7 @@ class Router:
                 litellm_router_instance=self,
                 model=model,
                 parent_otel_span=parent_otel_span,
-                request_kwargs=_ROUTING_KWARGS_ADAPTER.validate_python(request_kwargs),
+                route_model_ids=self._deployment_ids(request_deployments),
             )
             raise exception
 
@@ -14544,7 +14544,6 @@ class Router:
                     litellm_router_instance=self,
                     model=model,
                     parent_otel_span=parent_otel_span,
-                    request_kwargs=_ROUTING_KWARGS_ADAPTER.validate_python(request_kwargs),
                 )
                 raise exception
             await self._async_override_selector_pre_call_check(
@@ -14710,7 +14709,6 @@ class Router:
                     litellm_router_instance=self,
                     model=model,
                     parent_otel_span=parent_otel_span,
-                    request_kwargs=_ROUTING_KWARGS_ADAPTER.validate_python(request_kwargs),
                 )
                 raise exception
             await self._async_override_selector_pre_call_check(
@@ -15481,7 +15479,9 @@ class Router:
                 enable_pre_call_checks=self.enable_pre_call_checks,
                 cooldown_list=_cooldown_list,
                 model_ids=model_ids,
-                cooldown_deployments=get_cooldown_deployment_info(self, model, routing_kwargs, _cooldown_list),
+                cooldown_deployments=get_cooldown_deployment_info(
+                    self, self._deployment_ids(request_deployments), _cooldown_list
+                ),
             )
 
         if strategy == "simple-shuffle":
@@ -15518,7 +15518,6 @@ class Router:
                 enable_pre_call_checks=self.enable_pre_call_checks,
                 cooldown_list=_cooldown_list,
                 model_ids=model_ids,
-                cooldown_deployments=get_cooldown_deployment_info(self, model, routing_kwargs, _cooldown_list),
             )
         self._override_selector_pre_call_check(strategy, strategy_selector, deployment)
         verbose_router_logger.info(
@@ -15652,7 +15651,7 @@ class Router:
                 cooldown_list=_cooldown_list,
                 model_ids=pass_through_model_ids,
                 cooldown_deployments=get_cooldown_deployment_info(
-                    self, model, _ROUTING_KWARGS_ADAPTER.validate_python(request_kwargs), _cooldown_list
+                    self, self._deployment_ids(request_deployments), _cooldown_list
                 ),
             )
 
@@ -15689,9 +15688,6 @@ class Router:
                 enable_pre_call_checks=self.enable_pre_call_checks,
                 cooldown_list=_cooldown_list,
                 model_ids=model_ids,
-                cooldown_deployments=get_cooldown_deployment_info(
-                    self, model, _ROUTING_KWARGS_ADAPTER.validate_python(request_kwargs), _cooldown_list
-                ),
             )
         self._override_selector_pre_call_check(strategy, strategy_selector, deployment)
 
