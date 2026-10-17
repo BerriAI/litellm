@@ -1087,6 +1087,16 @@ def _guardrail_refusal_status(error: Exception) -> int | None:
             return None
 
 
+def _aws_error_type(error: Exception, handled: ProxyException) -> str | None:
+    """The AWS error type to answer the handled error with: ValidationException for a guardrail block, else the type
+    the error carried, as LiteLLM's own Bedrock request checks set it. None when the shared handler changed the
+    guardrail block's status."""
+    refusal_status: Final = _guardrail_refusal_status(error)
+    if refusal_status is not None:
+        return "ValidationException" if str(refusal_status) == handled.code else None
+    return httpx.Headers(handled.headers).get(AWS_ERROR_TYPE_HEADER)
+
+
 def _bedrock_error_response(error: Exception, handled: HTTPException) -> Response | None:
     """Bedrock's own error response, for an error Bedrock answered the passthrough request with an AWS error
     type."""
@@ -1111,9 +1121,9 @@ async def bedrock_passthrough_error_response(
     user_api_key_dict: UserAPIKeyAuth,
     proxy_logging_obj: ProxyLoggingType,
 ) -> Response:
-    """Run the shared error handling for a Bedrock passthrough request, then answer a guardrail block or an error
-    Bedrock returned the way Bedrock does, so an AWS SDK reads its code and message. Anything else is raised as the
-    shared handler raises it."""
+    """Run the shared error handling for a Bedrock passthrough request, then answer a guardrail block, an error
+    Bedrock returned, or an error carrying an AWS error type the way Bedrock does, so an AWS SDK reads its code and
+    message. Anything else is raised as the shared handler raises it."""
     try:
         await processor.handle_llm_api_exception(
             e=error,
@@ -1126,9 +1136,9 @@ async def bedrock_passthrough_error_response(
             raise
         return response
     except ProxyException as handled:
-        refusal_status: Final = _guardrail_refusal_status(error)
-        if refusal_status is not None and str(refusal_status) == handled.code:
-            raise AwsErrorTypeProxyException(handled, "ValidationException") from handled
+        aws_error_type: Final = _aws_error_type(error, handled)
+        if aws_error_type is not None:
+            raise AwsErrorTypeProxyException(handled, aws_error_type) from handled
         raise
 
 

@@ -128,6 +128,18 @@ def test_identity_survives_a_caller_filling_every_slot(
     )
 
 
+def test_a_key_sent_twice_keeps_the_caller_value_and_uses_one_slot(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", ALL_FIELDS)
+    caller = {f"client_{index:02d}": "caller" for index in range(BEDROCK_REQUEST_METADATA_MAX_PAIRS - len(IDENTITY) - 1)}
+    spend_logs = {**{key: "spend" for key in caller}, "extra": "spend"}
+
+    resolved = resolve_bedrock_request_metadata(
+        litellm_params("metadata", spend_logs_metadata=spend_logs, **IDENTITY), caller_metadata=caller
+    )
+
+    assert resolved == {**IDENTITY, **caller, "extra": "spend"}
+
+
 @pytest.mark.parametrize(
     "field_order",
     [
@@ -208,6 +220,35 @@ def test_caller_supplied_violation_still_raises_bad_request(monkeypatch: pytest.
         converse_body(
             litellm_params("metadata", **IDENTITY),
             {"requestMetadata": {"team": "O'Brien's team"}},
+        )
+
+
+@pytest.mark.parametrize("driver", CONVERSE_DRIVERS)
+@pytest.mark.parametrize("drop_globally", [True, False])
+def test_caller_violations_are_dropped_like_the_passthrough_routes_when_params_are_dropped(
+    driver, drop_globally, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", ALL_FIELDS)
+    monkeypatch.setattr(litellm, "drop_params", drop_globally)
+    params = {**litellm_params("metadata", **IDENTITY), **({} if drop_globally else {"drop_params": True})}
+
+    body = driver(params, {"requestMetadata": {"team": "O'Brien's team", "ticket": "T-42"}})
+
+    assert body["requestMetadata"] == {**IDENTITY, "ticket": "T-42"}
+
+
+def test_mapped_caller_violations_are_dropped_when_params_are_dropped(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", ALL_FIELDS)
+    caller = {"team": "O'Brien's team", "ticket": "T-42"}
+
+    mapped = AmazonConverseConfig().map_openai_params(
+        non_default_params={"requestMetadata": caller}, optional_params={}, model=MODEL, drop_params=True
+    )
+
+    assert mapped["requestMetadata"] == caller
+    with pytest.raises(litellm.exceptions.BadRequestError):
+        AmazonConverseConfig().map_openai_params(
+            non_default_params={"requestMetadata": caller}, optional_params={}, model=MODEL, drop_params=False
         )
 
 

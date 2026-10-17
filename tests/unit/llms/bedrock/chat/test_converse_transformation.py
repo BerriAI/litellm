@@ -4240,6 +4240,18 @@ def test_request_metadata_value_constraints():
     )
 
 
+@pytest.mark.parametrize("metadata", [{"ticket": "a\u00a0b"}, {"a\u2003b": "ticket"}])
+def test_request_metadata_rejects_whitespace_outside_ascii(metadata):
+    with pytest.raises(litellm.exceptions.BadRequestError, match="invalid characters"):
+        AmazonConverseConfig()._transform_request(
+            model="anthropic.claude-haiku-4-5-20251001-v1:0",
+            messages=[{"role": "user", "content": "Hello!"}],
+            optional_params={"requestMetadata": metadata},
+            litellm_params={},
+            headers={},
+        )
+
+
 def test_request_metadata_character_pattern():
     """Test character pattern validation for keys and values."""
     config = AmazonConverseConfig()

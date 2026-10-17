@@ -33,6 +33,7 @@ from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException, 
 from litellm.proxy._types import AwsErrorTypeProxyException, ProxyException
 from litellm.proxy.utils import ProxyLogging
 from litellm.passthrough.main import raise_for_provider_status
+from litellm.llms.bedrock.common_utils import BedrockError
 from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
 from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
@@ -2137,6 +2138,35 @@ class TestBedrockPassthroughAwsErrors:
         assert exc_info.value.aws_error_type == "ValidationException"
         assert (exc_info.value.error.message, exc_info.value.error.code) == (message, status_code)
 
+
+    @pytest.mark.asyncio
+    async def test_bedrock_request_check_is_raised_with_the_aws_error_type_it_carries(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "callbacks", [])
+        error: Final = BedrockError(
+            status_code=400,
+            message="requestMetadata can contain a maximum of 16 items",
+            headers={"x-amzn-errortype": "ValidationException"},
+        )
+
+        with pytest.raises(AwsErrorTypeProxyException) as exc_info:
+            await self._answer(error)
+
+        assert exc_info.value.aws_error_type == "ValidationException"
+        assert "requestMetadata can contain a maximum of 16 items" in exc_info.value.error.message
+        assert exc_info.value.error.code == "400"
+
+    @pytest.mark.asyncio
+    async def test_bedrock_error_without_an_aws_error_type_keeps_the_proxy_shape(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "callbacks", [])
+
+        with pytest.raises(ProxyException) as exc_info:
+            await self._answer(BedrockError(status_code=400, message="bad request"))
+
+        assert exc_info.value.code == "400"
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("error", "message", "code"),

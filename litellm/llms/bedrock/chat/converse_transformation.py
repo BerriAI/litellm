@@ -59,6 +59,7 @@ from litellm.llms.bedrock.common_utils import bedrock_model_supports_regex_looka
 from litellm.llms.bedrock.request_metadata import (
     bedrock_request_metadata_headers,
     bedrock_request_metadata_is_owned,
+    caller_request_metadata_violations_are_dropped,
     merge_bedrock_invoke_headers,
     resolve_bedrock_request_metadata,
 )
@@ -371,8 +372,8 @@ class AmazonConverseConfig(BaseConfig):
                 llm_provider="bedrock",
             )
 
-        key_pattern: Final = re.compile(r"^[a-zA-Z0-9\s:_@$#=/+,.-]{1,256}$")
-        value_pattern: Final = re.compile(r"^[a-zA-Z0-9\s:_@$#=/+,.-]{0,256}$")
+        key_pattern: Final = re.compile(r"^[a-zA-Z0-9\s:_@$#=/+,.-]{1,256}$", re.ASCII)
+        value_pattern: Final = re.compile(r"^[a-zA-Z0-9\s:_@$#=/+,.-]{0,256}$", re.ASCII)
 
         for key, value in metadata.items():
             if not isinstance(key, str):
@@ -1199,7 +1200,7 @@ class AmazonConverseConfig(BaseConfig):
             elif param == "context_management" and isinstance(value, (dict, list)):
                 self._map_context_management_param(value, optional_params)
             if param == "requestMetadata":
-                self._map_request_metadata_param(value, optional_params)
+                self._map_request_metadata_param(value, optional_params, drop_params)
             if param == "service_tier" and isinstance(value, str):
                 self._map_service_tier_param(value, optional_params)
 
@@ -1232,9 +1233,10 @@ class AmazonConverseConfig(BaseConfig):
 
         return optional_params
 
-    def _map_request_metadata_param(self, value: object, optional_params: dict) -> None:
+    def _map_request_metadata_param(self, value: object, optional_params: dict, drop_params: bool) -> None:
         if value is not None and isinstance(value, dict):
-            self._validate_request_metadata(value)
+            if not caller_request_metadata_violations_are_dropped(drop_params):
+                self._validate_request_metadata(value)
             optional_params["requestMetadata"] = value
 
     def _map_context_management_param(self, value: dict | list, optional_params: dict) -> None:
@@ -1677,7 +1679,7 @@ class AmazonConverseConfig(BaseConfig):
 
         # Extract requestMetadata before processing other parameters
         request_metadata: Final = inference_params.pop("requestMetadata", None)
-        if request_metadata is not None:
+        if request_metadata is not None and not caller_request_metadata_violations_are_dropped(drop_params):
             self._validate_request_metadata(request_metadata)
 
         output_config: OutputConfigBlock | None = inference_params.pop("outputConfig", None)

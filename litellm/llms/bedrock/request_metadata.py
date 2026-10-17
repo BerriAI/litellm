@@ -101,11 +101,8 @@ def _client_pairs(
         for key, value in (*_text_pairs(caller_metadata), *spend_logs_pairs)
         if not key.startswith(BEDROCK_REQUEST_METADATA_IDENTITY_PREFIX) and _is_forwardable(key, value)
     )
-    return tuple(
-        pair
-        for index, pair in enumerate(candidates)
-        if pair[0] not in tuple(earlier for earlier, _ in candidates[:index])
-    )[:budget]
+    first_index: Final = {key: index for index, (key, _) in reversed(tuple(enumerate(candidates)))}
+    return tuple(pair for index, pair in enumerate(candidates) if first_index[pair[0]] == index)[:budget]
 
 
 def resolve_bedrock_request_metadata(
@@ -165,13 +162,17 @@ def bedrock_request_metadata_is_owned() -> bool:
     return bool(_allowed_fields())
 
 
+def caller_request_metadata_violations_are_dropped(drop_params: bool) -> bool:
+    return bedrock_request_metadata_is_owned() and (drop_params or litellm.drop_params is True)
+
+
 def bedrock_request_metadata_headers(
     litellm_params: Mapping[str, object] | None,
     caller_metadata: object = None,
 ) -> tuple[frozenset[str], tuple[tuple[str, str], ...]]:
     """
-    The signed ``X-Amzn-Bedrock-Request-Metadata`` header for the Invoke paths, which have no
-    body field for request metadata.
+    The signed ``X-Amzn-Bedrock-Request-Metadata`` header for an Invoke request whose body carries
+    no ``requestMetadata`` of its own.
 
     Returns the header names the proxy OWNS and, separately, the pairs to send. Ownership is
     reported whenever forwarding is enabled, including when nothing resolves, because a caller
