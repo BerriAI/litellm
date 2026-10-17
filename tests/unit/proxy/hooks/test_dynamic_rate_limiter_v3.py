@@ -1825,3 +1825,160 @@ async def test_post_call_success_hook_priority_header_is_always_http_encodable(t
     http_response = Response(headers={key: str(value) for key, value in additional_headers.items()})
     assert http_response.headers.get("x-litellm-priority") == expected_priority_header
     assert http_response.headers["x-litellm-rate-limiter-version"] == "v3"
+
+
+@pytest.mark.asyncio
+async def test_v3_saturation_error_fail_closed_raises(monkeypatch):
+    """_check_model_saturation error + fail-closed propagates the exception."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    monkeypatch.setitem(proxy_server.general_settings, "fail_closed_rate_limit_enforcement", True)
+
+    handler = DynamicRateLimitHandler(internal_usage_cache=DualCache())
+
+    async def _boom(*args, **kwargs):
+        raise RuntimeError("Redis saturation check failed")
+
+    monkeypatch.setattr(handler, "_get_saturation_value_from_cache", _boom)
+
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o-mini",
+                "litellm_params": {
+                    "model": "gpt-4o-mini",
+                    "api_key": "test-key",
+                    "api_base": "test-base",
+                    "tpm": 1000,
+                    "rpm": 100,
+                },
+            }
+        ]
+    )
+    handler.update_variables(llm_router=llm_router)
+    model_group_info = llm_router.get_model_group_info(model_group="gpt-4o-mini")
+
+    try:
+        await handler._check_model_saturation(model="gpt-4o-mini", model_group_info=model_group_info)
+        assert False, "Expected RuntimeError"
+    except RuntimeError as e:
+        assert "Redis saturation check failed" in str(e)
+
+
+@pytest.mark.asyncio
+async def test_v3_saturation_error_fail_open_returns_zero(monkeypatch):
+    """_check_model_saturation error + fail-open returns 0.0."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    monkeypatch.setitem(proxy_server.general_settings, "fail_closed_rate_limit_enforcement", False)
+
+    handler = DynamicRateLimitHandler(internal_usage_cache=DualCache())
+
+    async def _boom(*args, **kwargs):
+        raise RuntimeError("Redis saturation check failed")
+
+    monkeypatch.setattr(handler, "_get_saturation_value_from_cache", _boom)
+
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o-mini",
+                "litellm_params": {
+                    "model": "gpt-4o-mini",
+                    "api_key": "test-key",
+                    "api_base": "test-base",
+                    "tpm": 1000,
+                    "rpm": 100,
+                },
+            }
+        ]
+    )
+    handler.update_variables(llm_router=llm_router)
+    model_group_info = llm_router.get_model_group_info(model_group="gpt-4o-mini")
+
+    saturation = await handler._check_model_saturation(model="gpt-4o-mini", model_group_info=model_group_info)
+    assert saturation == 0.0
+
+
+@pytest.mark.asyncio
+async def test_v3_pre_call_hook_error_fail_closed_raises_unverifiable(monkeypatch):
+    """async_pre_call_hook inner exception + fail-closed raises RateLimitUnverifiableError."""
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import RateLimitUnverifiableError
+
+    monkeypatch.setitem(proxy_server.general_settings, "fail_closed_rate_limit_enforcement", True)
+
+    handler = DynamicRateLimitHandler(internal_usage_cache=DualCache())
+
+    async def _boom(*args, **kwargs):
+        raise RuntimeError("Inner check failed")
+
+    monkeypatch.setattr(handler, "_check_rate_limits", _boom)
+
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o-mini",
+                "litellm_params": {
+                    "model": "gpt-4o-mini",
+                    "api_key": "test-key",
+                    "api_base": "test-base",
+                    "tpm": 1000,
+                    "rpm": 100,
+                },
+            }
+        ]
+    )
+    handler.update_variables(llm_router=llm_router)
+
+    auth = UserAPIKeyAuth(api_key="sk-v3-fail-closed", rpm_limit=100, max_parallel_requests=5)
+    try:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=auth,
+            cache=DualCache(),
+            data={"model": "gpt-4o-mini"},
+            call_type="acompletion",
+        )
+        assert False, "Expected RateLimitUnverifiableError"
+    except RateLimitUnverifiableError:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_v3_pre_call_hook_error_fail_open_returns_none(monkeypatch):
+    """async_pre_call_hook inner exception + fail-open returns None."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    monkeypatch.setitem(proxy_server.general_settings, "fail_closed_rate_limit_enforcement", False)
+
+    handler = DynamicRateLimitHandler(internal_usage_cache=DualCache())
+
+    async def _boom(*args, **kwargs):
+        raise RuntimeError("Inner check failed")
+
+    monkeypatch.setattr(handler, "_check_rate_limits", _boom)
+
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o-mini",
+                "litellm_params": {
+                    "model": "gpt-4o-mini",
+                    "api_key": "test-key",
+                    "api_base": "test-base",
+                    "tpm": 1000,
+                    "rpm": 100,
+                },
+            }
+        ]
+    )
+    handler.update_variables(llm_router=llm_router)
+
+    auth = UserAPIKeyAuth(api_key="sk-v3-fail-open", rpm_limit=100, max_parallel_requests=5)
+    result = await handler.async_pre_call_hook(
+        user_api_key_dict=auth,
+        cache=DualCache(),
+        data={"model": "gpt-4o-mini"},
+        call_type="acompletion",
+    )
+    assert result is None
