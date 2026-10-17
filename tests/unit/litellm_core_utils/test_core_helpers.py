@@ -2,6 +2,7 @@
 
 import logging
 import threading
+from collections.abc import Iterator, Mapping
 from typing import Final
 
 import httpx
@@ -615,3 +616,29 @@ def test_spend_metadata_merge_survives_the_logging_thread_inserting_into_the_req
 
     assert "hidden_params" in metadata
     assert merged == {"user_api_key_alias": "alias", "user_api_key_hash": "hash", "model_group": "claude"}
+
+
+def test_spend_metadata_merge_reads_request_metadata_that_is_a_read_only_mapping() -> None:
+    class ReadOnlyMetadata(Mapping[str, object]):
+        def __init__(self, values: dict[str, object]) -> None:
+            self._values: Final = values
+
+        def __getitem__(self, key: str) -> object:
+            return self._values[key]
+
+        def __iter__(self) -> Iterator[str]:
+            return iter(self._values)
+
+        def __len__(self) -> int:
+            return len(self._values)
+
+    merged: Final = get_litellm_metadata_from_kwargs(
+        {
+            "litellm_params": {
+                "metadata": ReadOnlyMetadata({"user_api_key_hash": "hash", "requester_ip_address": "10.0.0.1"}),
+                "litellm_metadata": {"model_group": "claude"},
+            }
+        }
+    )
+
+    assert merged == {"user_api_key_hash": "hash", "model_group": "claude"}
