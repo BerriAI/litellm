@@ -13,9 +13,9 @@ describe("ValidationStatus", () => {
     render(
       <ValidationStatus
         validation={validation([
-          { path: "state", message: "Required", severity: "error" },
-          { path: "model", message: "Required", severity: "error" },
-          { path: "questions.a", message: "Long question", severity: "warning" },
+          { path: "state", label: "Input", message: "Required", severity: "error" },
+          { path: "model", label: "Model", message: "Required", severity: "error" },
+          { path: "questions.a", label: "questions.a", message: "Long question", severity: "warning" },
         ])}
       />,
     );
@@ -23,7 +23,9 @@ describe("ValidationStatus", () => {
   });
 
   it("reports a valid payload when only warnings remain", () => {
-    render(<ValidationStatus validation={validation([{ path: "q", message: "Long", severity: "warning" }])} />);
+    render(
+      <ValidationStatus validation={validation([{ path: "q", label: "q", message: "Long", severity: "warning" }])} />,
+    );
     expect(screen.getByText("Valid payload")).toBeInTheDocument();
   });
 });
@@ -31,7 +33,10 @@ describe("ValidationStatus", () => {
 describe("IssueList", () => {
   it("lists every issue under its field label and renders nothing when there are none", () => {
     const { rerender } = render(
-      <IssueList id="issues" validation={validation([{ path: "state", message: "Required", severity: "error" }])} />,
+      <IssueList
+        id="issues"
+        validation={validation([{ path: "state", label: "Input", message: "Required", severity: "error" }])}
+      />,
     );
     expect(screen.getByRole("list", { name: "Payload validation issues" })).toHaveTextContent("InputRequired");
     rerender(<IssueList id="issues" validation={validation([])} />);
@@ -46,8 +51,8 @@ describe("ValidationSummary", () => {
     rerender(
       <ValidationSummary
         validation={validation([
-          { path: "state", message: "Required", severity: "error" },
-          { path: "q", message: "Long", severity: "warning" },
+          { path: "state", label: "Input", message: "Required", severity: "error" },
+          { path: "q", label: "q", message: "Long", severity: "warning" },
         ])}
       />,
     );

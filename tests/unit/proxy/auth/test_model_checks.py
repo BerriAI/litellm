@@ -932,6 +932,26 @@ def test_add_known_models_refreshes_models_by_provider_for_wildcard_expansion():
     assert fake_model not in litellm.models_by_provider["vertex_ai"]
 
 
+def test_wildcard_lists_a_model_once_when_registered_both_bare_and_provider_prefixed():
+    import litellm
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+
+    bare: Final = "gpt-dedupe-regression"
+    entry: Final = {"litellm_provider": "openai", "mode": "chat"}
+    try:
+        litellm.register_model({bare: entry, f"openai/{bare}": entry}, persist_across_reloads=False)
+
+        listed: Final = get_known_models_from_wildcard("openai/*")
+
+        assert listed.count(f"openai/{bare}") == 1
+    finally:
+        litellm.model_cost.pop(bare, None)
+        litellm.model_cost.pop(f"openai/{bare}", None)
+        litellm.open_ai_chat_completion_models.discard(bare)
+        litellm.open_ai_chat_completion_models.discard(f"openai/{bare}")
+        litellm.add_known_models(model_cost_map={})
+
+
 def test_get_complete_model_list_drops_no_default_models_sentinel():
     from litellm.proxy.auth.model_checks import get_complete_model_list
 
@@ -1178,65 +1198,77 @@ def test_custom_prefix_that_starts_a_discovered_id_still_prefixes_every_listed_m
     ]
 
 
-def _expand_wildcard(wildcard_model: str, model: str) -> list[str]:
+@pytest.mark.parametrize(
+    ("wildcard", "deployment_model", "catalog", "expected"),
+    [
+        pytest.param(
+            "cloudflare/@cf/partial-wildcard-org/*",
+            "cloudflare/@cf/partial-wildcard-org/*",
+            ("cloudflare/@cf/partial-wildcard-org/model-a", "cloudflare/@hf/partial-wildcard-org/model-b"),
+            ["cloudflare/@cf/partial-wildcard-org/model-a"],
+            id="prefixed-catalog-with-deployment",
+        ),
+        pytest.param(
+            "cloudflare/@cf/partial-wildcard-org/*",
+            None,
+            ("cloudflare/@cf/partial-wildcard-org/model-a", "cloudflare/@hf/partial-wildcard-org/model-b"),
+            ["cloudflare/@cf/partial-wildcard-org/model-a"],
+            id="prefixed-catalog-without-deployment",
+        ),
+        pytest.param(
+            "gemini/gemini-partial-wildcard-9*",
+            "gemini/gemini-partial-wildcard-9*",
+            (
+                "gemini-partial-wildcard-9-flash",
+                "gemini/gemini-partial-wildcard-9-pro",
+                "gemini/gemini-other-partial-wildcard-9",
+            ),
+            ["gemini/gemini-partial-wildcard-9-flash", "gemini/gemini-partial-wildcard-9-pro"],
+            id="mixed-bare-and-prefixed-catalog",
+        ),
+    ],
+)
+def test_partial_wildcard_lists_catalog_ids_stored_with_the_provider_prefix(
+    wildcard: str, deployment_model: str | None, catalog: tuple[str, ...], expected: list[str]
+) -> None:
+    import litellm
     from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
     from litellm.types.router import LiteLLM_Params
 
-    return get_known_models_from_wildcard(wildcard_model=wildcard_model, litellm_params=LiteLLM_Params(model=model))
+    provider: Final = wildcard.split("/", 1)[0]
+    deployment: Final = None if deployment_model is None else LiteLLM_Params(model=deployment_model)
+    try:
+        litellm.register_model(
+            {model: {"litellm_provider": provider, "mode": "chat"} for model in catalog},
+            persist_across_reloads=False,
+        )
+
+        listed: Final = get_known_models_from_wildcard(wildcard, deployment)
+
+        assert sorted(listed) == expected
+    finally:
+        for model in catalog:
+            litellm.model_cost.pop(model, None)
+            litellm.models_by_provider[provider].discard(model)
+        litellm.add_known_models(model_cost_map={})
 
 
-def _fake_provider_models(monkeypatch: pytest.MonkeyPatch, models: list[str]) -> None:
-    from litellm.proxy.auth import model_checks
+def test_alias_wildcard_prepends_its_prefix_to_catalog_ids_without_their_provider_prefix() -> None:
+    import litellm
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
     from litellm.types.router import LiteLLM_Params
 
-    def _fake(provider: str, litellm_params: LiteLLM_Params | None = None) -> list[str]:
-        return list(models)
+    catalog_id: Final = "cloudflare/@cf/partial-alias-org/model-a"
+    try:
+        litellm.register_model(
+            {catalog_id: {"litellm_provider": "cloudflare", "mode": "chat"}}, persist_across_reloads=False
+        )
 
-    monkeypatch.setattr(model_checks, "get_provider_models", _fake)
+        listed: Final = get_known_models_from_wildcard("cloudflare/team-*", LiteLLM_Params(model="cloudflare/*"))
 
-
-def test_partial_wildcard_filters_provider_prefixed_ids(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Partial wildcards must match cost-map ids that carry the provider prefix (issue #46384)."""
-    _fake_provider_models(
-        monkeypatch,
-        [
-            "cloudflare/@cf/meta/llama-3.3-70b-instruct-fp8-fast",
-            "cloudflare/@cf/cloudflare/clef",
-            "cloudflare/@hf/thebloke/codellama-7b-instruct-awq",
-            "cloudflare/clef",
-        ],
-    )
-    assert _expand_wildcard("cloudflare/@cf/*", "cloudflare/@cf/*") == [
-        "cloudflare/@cf/meta/llama-3.3-70b-instruct-fp8-fast",
-        "cloudflare/@cf/cloudflare/clef",
-    ]
-
-
-def test_partial_wildcard_matches_bare_and_prefixed_ids(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Mixed bare/prefixed cost-map keys both match a partial wildcard (issue #46384)."""
-    _fake_provider_models(
-        monkeypatch,
-        ["gemini-2.5-flash-preview-tts", "gemini/gemini-2.5-flash", "gemini/gemini-2.0-flash"],
-    )
-    assert _expand_wildcard("gemini/gemini-2.5*", "gemini/gemini-2.5*") == [
-        "gemini/gemini-2.5-flash-preview-tts",
-        "gemini/gemini-2.5-flash",
-    ]
-
-
-def test_wildcard_lists_bare_and_prefixed_duplicate_once(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A model keyed both bare and prefixed is listed once (issue #46384)."""
-    _fake_provider_models(monkeypatch, ["gemini-2.5-flash", "gemini/gemini-2.5-flash"])
-    assert _expand_wildcard("gemini/*", "gemini/*") == ["gemini/gemini-2.5-flash"]
-
-
-def test_custom_alias_namespace_still_prepends_provider_models(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Unchanged #13116 behavior: a custom alias namespace prepends the listed ids."""
-    _fake_provider_models(monkeypatch, ["gpt-4o", "gpt-4o-mini"])
-    assert _expand_wildcard("genai/test/*", "openai/*") == ["genai/test/gpt-4o", "genai/test/gpt-4o-mini"]
-
-
-def test_custom_prefix_still_replaces_provider_prefix(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Unchanged behavior: a custom wildcard prefix replaces a known provider prefix."""
-    _fake_provider_models(monkeypatch, ["ollama_chat/gemma3:1b"])
-    assert _expand_wildcard("ollama_server1/*", "ollama_chat/*") == ["ollama_server1/gemma3:1b"]
+        assert "cloudflare/team-@cf/partial-alias-org/model-a" in listed
+        assert [model for model in listed if model.startswith("cloudflare/team-cloudflare/")] == []
+    finally:
+        litellm.model_cost.pop(catalog_id, None)
+        litellm.models_by_provider["cloudflare"].discard(catalog_id)
+        litellm.add_known_models(model_cost_map={})

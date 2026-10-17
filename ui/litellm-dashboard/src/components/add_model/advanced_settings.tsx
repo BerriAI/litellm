@@ -49,6 +49,7 @@ const USAGE_COST_FIELDS = [
   "output_cost_per_token",
   "cache_read_input_token_cost",
   "cache_creation_input_token_cost",
+  "cache_creation_input_token_cost_above_1hr",
   "input_cost_per_second",
 ];
 
@@ -390,6 +391,25 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                           onChange={control.onChange}
                           onBlur={control.onBlur}
                           placeholder="Defaults to Input Cost if blank"
+                        />
+                      )}
+                    </MountedFormField>
+                    <MountedFormField
+                      name="cache_creation_input_token_cost_above_1hr"
+                      label={labelWithHint(
+                        "Cache Write Cost (1 hour, per 1M tokens)",
+                        "Rate for prompt cache writes with a 1 hour TTL (Anthropic's cache_control ttl 1h). If left blank, known models use their cost map 1 hour rate, otherwise Cache Write Cost.",
+                      )}
+                      rules={usageCostRules}
+                      className="mb-4"
+                    >
+                      {(control) => (
+                        <Input
+                          id={control.id}
+                          value={(control.value as string | undefined) ?? ""}
+                          onChange={control.onChange}
+                          onBlur={control.onBlur}
+                          placeholder="Defaults to the cost map 1 hour rate, else Cache Write Cost"
                         />
                       )}
                     </MountedFormField>

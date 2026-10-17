@@ -5,7 +5,7 @@ import uuid
 from collections.abc import AsyncGenerator, AsyncIterable, Iterator, Mapping, Sequence
 from typing import (
     TYPE_CHECKING,
-    Any,  # noqa: TID251  # **kwargs forwards verbatim to CustomGuardrail.__init__
+    Any,  # noqa: TID251  # the streaming hook and the flush copy pass provider chunks through untyped
     ClassVar,
     Final,
     Literal,
@@ -15,6 +15,7 @@ from typing import (
 
 import httpx
 from pydantic import TypeAdapter
+from typing_extensions import TypedDict, Unpack
 
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import GuardrailRaisedException
@@ -22,6 +23,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.litellm_core_utils.core_helpers import attribute_items
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -93,6 +95,10 @@ def _string_tool_arguments(calls: Sequence[object]) -> Iterator[tuple[object, st
             yield function, arguments
 
 
+class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
+    pass
+
+
 class _ContentDelta(Protocol):
     content: object
 
@@ -123,7 +129,7 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
         guardrail_name: str = GUARDRAIL_NAME,
         api_base: str | None = None,
         api_key: str | None = None,
-        **kwargs: Any,  # noqa: LIT008  # kwargs-ok: forwarded verbatim to CustomGuardrail.__init__
+        **kwargs: Unpack[_CustomGuardrailOptions],  # noqa: LIT008  # kwargs-ok: forwarded verbatim to CustomGuardrail.__init__
     ) -> None:
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
         env_base: Final = os.environ.get("LLM_SHIELD_PROXY_API_BASE")
@@ -366,13 +372,11 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
         if response_slots:
             return await self._restore_responses_api_response(response, response_slots, data)
 
-        choices: Final = getattr(response, "choices", None)
+        choices: Final = attribute_items(response, "choices")
         if not choices:
             return response
 
         pending: Final[SlotSink] = []
-        choice: object
-        tool_call: object
         for choice in choices:
             message: object = getattr(choice, "message", None)
             if message is None:
@@ -383,7 +387,7 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
             content = getattr(message, "content", None)
             if isinstance(content, str) and content:
                 pending.append((content, functools.partial(setattr, message, "content")))
-            for tool_call in getattr(message, "tool_calls", None) or ():
+            for tool_call in attribute_items(message, "tool_calls"):
                 function: object = getattr(tool_call, "function", None)
                 arguments = getattr(function, "arguments", None) if function is not None else None
                 if isinstance(arguments, str) and arguments:
@@ -450,8 +454,7 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
         function_call_output holds `output` -- so the two directions stay symmetric.
         """
         slots: Final[SlotSink] = []
-        item: object
-        for item in getattr(response, "output", None) or ():
+        for item in attribute_items(response, "output"):
             collect_response_item(item, slots)
         return tuple(slots)
 
@@ -504,8 +507,7 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
                 continue
             restored_chunk = detached(chunk)
             last_chunk = restored_chunk
-            choice: object
-            for choice in getattr(restored_chunk, "choices", None) or ():
+            for choice in attribute_items(restored_chunk, "choices"):
                 await self._restore_choice(choice, carries, session_id)
             yield restored_chunk
 
@@ -536,8 +538,7 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
 
         await self._restore_content_window(delta, (index, None), carries, session_id, is_final)
 
-        tool_call: object
-        for tool_call in getattr(delta, "tool_calls", None) or ():
+        for tool_call in attribute_items(delta, "tool_calls"):
             await self._restore_tool_call_window(tool_call, index, carries, session_id)
 
         if is_final:

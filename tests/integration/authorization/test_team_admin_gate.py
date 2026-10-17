@@ -76,6 +76,11 @@ class TeamScenario:
     def member(self) -> str:
         return self.scenario.member(self.team_id)
 
+    def proxy_admin_member(self) -> str:
+        user_id: Final = self.scenario.user(user_role="proxy_admin")
+        self.gateway.post("/team/member_add", {"team_id": self.team_id, "member": {"role": "user", "user_id": user_id}})
+        return user_id
+
     def member_key(self) -> str:
         created: Final = self.gateway.post("/key/generate", {"user_id": self.member(), "team_id": self.team_id})
         return string_value(created["key"])
@@ -252,6 +257,18 @@ ROUTES: Final[tuple[Route, ...]] = (
     Route("key_generate_team",
           lambda s: Call("POST", "/key/generate", {"team_id": s.team_id}),
           team_admin=200, others=400, member=401, cleanup=_delete_key),
+    Route("key_generate_for_member",
+          lambda s: Call("POST", "/key/generate", {"team_id": s.team_id, "user_id": s.member()}),
+          team_admin=403, others=400, member=401, cleanup=_delete_key),
+    Route("key_generate_for_member_permitted",
+          lambda s: Call("POST", "/key/generate", {"team_id": s.team_id, "user_id": s.member()}),
+          team_admin=200, others=400, member=401, permission=("create_member_keys",), cleanup=_delete_key),
+    Route("key_generate_for_proxy_admin_member_permitted",
+          lambda s: Call("POST", "/key/generate", {"team_id": s.team_id, "user_id": s.proxy_admin_member()}),
+          team_admin=403, others=400, member=401, permission=("create_member_keys",), cleanup=_delete_key),
+    Route("key_generate_management_key_for_member_permitted",
+          lambda s: Call("POST", "/key/generate", {"team_id": s.team_id, "user_id": s.member(), "key_type": "management"}),
+          team_admin=403, others=400, member=401, permission=("create_member_keys",), cleanup=_delete_key),
     Route("service_account_generate",
           lambda s: Call("POST", "/key/service-account/generate", {"team_id": s.team_id, "key_alias": f"matrix-{uuid.uuid4().hex}"}),
           team_admin=200, others=400, member=401, cleanup=_delete_key),
@@ -450,6 +467,29 @@ def test_status_code(shared: TeamScenario, org_team: TeamScenario, route: Route,
             ]
         if response.status_code == 200 and route.cleanup is not None:
             route.cleanup(s, object_value(response.json()))
+
+
+def test_member_key_created_by_a_team_admin_reaches_llm_routes_only(shared: TeamScenario) -> None:
+    """The team admin holds the secret of a key that authenticates as the member, so it must not carry the
+    member's management access."""
+    with shared.gateway.scenario() as scenario:
+        s: Final = replace(shared, scenario=scenario)
+        scenario.cleanups.enter_context(team_admin_permissions(s.gateway, ("create_member_keys",)))
+        member: Final = s.member()
+        created: Final = s.gateway.post(
+            "/key/generate", {"team_id": s.team_id, "user_id": member}, key=s.keys["team_admin"]
+        )
+        token: Final = string_value(created["key"])
+        scenario.cleanups.callback(delete_key_if_present, s.gateway, token)
+        own_key: Final = scenario.key(user_id=member, team_id=s.team_id)
+
+        assert read_rows(
+            'SELECT user_id, team_id, allowed_routes FROM "LiteLLM_VerificationToken" WHERE token = %s',
+            (string_value(created["token"]),),
+        ) == [{"user_id": member, "team_id": s.team_id, "allowed_routes": ["llm_api_routes"]}]
+        s.gateway.chat(s.model(), key=token)
+        assert s.gateway.request("GET", "/user/info", key=own_key).status_code == 200
+        assert s.gateway.request("GET", "/user/info", key=token).status_code == 403
 
 
 ADMIN_ONLY_CALLERS: Final[tuple[tuple[str, Caller], ...]] = (
@@ -771,6 +811,7 @@ def test_only_proxy_admin_reads_or_changes_credentials(
         assert credential_for_model.status_code == 200, credential_for_model.text
         assert credential_for_model.json() == {
             "credential_name": f"{model_name}-credential-{model_id}",
+            "display_name": None,
             "credential_values": {"api_base": f"{s.gateway.upstream_url}/v1"},
             "credential_info": {},
         }, credential_for_model.text

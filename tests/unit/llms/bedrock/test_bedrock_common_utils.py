@@ -659,8 +659,14 @@ def test_apply_structured_output_prefers_legacy_output_format(local_model_cost_m
         apply_bedrock_invoke_structured_output,
     )
 
-    legacy = {"type": "json_schema", "schema": {"type": "object", "properties": {"a": {"type": "string"}}}}
-    newer = {"type": "json_schema", "schema": {"type": "object", "properties": {"b": {"type": "string"}}}}
+    legacy = {
+        "type": "json_schema",
+        "schema": {"type": "object", "properties": {"a": {"type": "string"}}, "additionalProperties": False},
+    }
+    newer = {
+        "type": "json_schema",
+        "schema": {"type": "object", "properties": {"b": {"type": "string"}}, "additionalProperties": False},
+    }
     body = {
         "messages": [{"role": "user", "content": "hi"}],
         "output_format": legacy,
@@ -2025,3 +2031,26 @@ def test_event_decoder_reports_only_missing_aws_dependency(missing):
         assert error.value.__cause__ is failure
     else:
         assert error.value is failure
+
+
+@pytest.mark.parametrize(
+    ("model", "base_model", "expected"),
+    [
+        (
+            "arn:aws:bedrock:us-east-1:000000000000:application-inference-profile/profile-id",
+            "bedrock/us.anthropic.claude-opus-4-8",
+            "us.anthropic.claude-opus-4-8",
+        ),
+        (
+            "arn:aws:bedrock:us-east-1:000000000000:application-inference-profile/profile-id",
+            None,
+            "arn:aws:bedrock:us-east-1:000000000000:application-inference-profile/profile-id",
+        ),
+        ("us.anthropic.claude-opus-4-8", "anthropic.claude-sonnet-4-5", "us.anthropic.claude-opus-4-8"),
+    ],
+    ids=["profile-arn-with-base-model", "profile-arn-without-base-model", "named-model-keeps-its-name"],
+)
+def test_bedrock_capability_model_reads_base_model_only_for_application_profile_arns(model, base_model, expected):
+    from litellm.llms.bedrock.common_utils import bedrock_capability_model
+
+    assert bedrock_capability_model(model, base_model) == expected

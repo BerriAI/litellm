@@ -2,22 +2,52 @@
 OpenAI Token Counter implementation using the Responses API /input_tokens endpoint.
 """
 
-import os
+from collections.abc import Mapping, Sequence
 from typing import Any, Final
 
+import openai
+from pydantic import JsonValue
+from typing_extensions import assert_never
+
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.asyncify import asyncify
+from litellm.llms.anthropic.pass_through.convertible_blocks import unconvertible_blocks_error
+from litellm.llms.anthropic.pass_through.responses_adapters.transformation import (
+    LiteLLMAnthropicToResponsesAPIAdapter,
+)
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
-from litellm.llms.openai.common_utils import OpenAIError
+from litellm.llms.openai.common_utils import OpenAIError, get_openai_credentials
 from litellm.llms.openai.responses.count_tokens.handler import (
     OpenAICountTokensHandler,
 )
 from litellm.llms.openai.responses.count_tokens.transformation import (
     OpenAICountTokensConfig,
+    ResponsesCountRequestParts,
 )
-from litellm.types.utils import LlmProviders, TokenCountResponse
+from litellm.llms.openai.workload_identity import (
+    OpenAIWorkloadIdentityConfig,
+    get_workload_identity_bearer_token,
+    openai_static_api_key,
+    resolve_openai_workload_identity_config,
+)
+from litellm.types.utils import CountContextManagement, LlmProviders, TokenCountMessagesFormat, TokenCountResponse
 
 # Global handler instance - reuse across all token counting requests
 openai_count_tokens_handler: Final = OpenAICountTokensHandler()
+
+
+def _workload_identity_config(
+    litellm_params: Mapping[str, object],
+) -> OpenAIWorkloadIdentityConfig | OpenAIError | None:
+    api_base: Final = litellm_params.get("api_base")
+    try:
+        return resolve_openai_workload_identity_config(
+            api_key=None,
+            api_base=api_base if isinstance(api_base, str) else None,
+            litellm_params=litellm_params,
+        )
+    except OpenAIError as e:
+        return e
 
 
 class OpenAITokenCounter(BaseTokenCounter):
@@ -29,6 +59,37 @@ class OpenAITokenCounter(BaseTokenCounter):
     ) -> bool:
         return custom_llm_provider == LlmProviders.OPENAI.value
 
+    @staticmethod
+    def _system_instructions(system: object) -> str | None:
+        if system is None or isinstance(system, str):
+            return system
+        return LiteLLMAnthropicToResponsesAPIAdapter.system_blocks_to_instructions(system) or None
+
+    @staticmethod
+    def _responses_request_parts(
+        model_to_use: str,
+        messages: Sequence[Mapping[str, object]],
+        tools: Sequence[Mapping[str, object]] | None,
+        system: object,
+        messages_format: TokenCountMessagesFormat,
+        output_format: JsonValue,
+    ) -> ResponsesCountRequestParts:
+        match messages_format:
+            case "anthropic":
+                return OpenAICountTokensConfig.anthropic_messages_to_responses_input(
+                    model=model_to_use, messages=messages, system=system, tools=tools, output_format=output_format
+                )
+            case "openai":
+                input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(
+                    [dict(message) for message in messages]
+                )
+                fallback_instructions: Final = OpenAITokenCounter._system_instructions(system)
+                return OpenAICountTokensConfig.count_request_parts(
+                    input_items, instructions if instructions is not None else fallback_instructions, tools
+                )
+            case _:
+                assert_never(messages_format)
+
     async def count_tokens(
         self,
         model_to_use: str,
@@ -38,6 +99,9 @@ class OpenAITokenCounter(BaseTokenCounter):
         request_model: str = "",
         tools: list[dict[str, object]] | None = None,
         system: object = None,
+        messages_format: TokenCountMessagesFormat = "openai",
+        output_format: JsonValue = None,
+        context_management: CountContextManagement | None = None,
     ) -> TokenCountResponse | None:
         """
         Count tokens using OpenAI's Responses API /input_tokens endpoint.
@@ -45,39 +109,86 @@ class OpenAITokenCounter(BaseTokenCounter):
         if not messages:
             return None
 
+        malformed_error: Final = (
+            OpenAICountTokensConfig.malformed_anthropic_messages_error(messages)
+            if messages_format == "anthropic"
+            else None
+        )
+        request_error: Final = malformed_error or unconvertible_blocks_error(messages, messages_format)
+        if request_error is not None:
+            return TokenCountResponse(
+                total_tokens=0,
+                request_model=request_model,
+                model_used=model_to_use,
+                tokenizer_type="openai_api",
+                error=True,
+                error_message=request_error,
+                status_code=400,
+            )
+
         deployment = deployment or {}
         litellm_params: Final = deployment.get("litellm_params", {})
 
-        # Get OpenAI API key from deployment config or environment
-        api_key = litellm_params.get("api_key")
-        if not api_key:
-            api_key = os.getenv("OPENAI_API_KEY")
+        credentials: Final = get_openai_credentials(
+            api_base=litellm_params.get("api_base"), api_key=litellm_params.get("api_key")
+        )
+        credential: Final = openai_static_api_key(credentials.api_key) or _workload_identity_config(litellm_params)
 
-        if not api_key:
-            verbose_logger.warning("No OpenAI API key found for token counting")
-            return None
+        if isinstance(credential, OpenAIError):
+            return TokenCountResponse(
+                total_tokens=0,
+                request_model=request_model,
+                model_used=model_to_use,
+                tokenizer_type="openai_api",
+                error=True,
+                error_message=credential.message,
+                status_code=credential.status_code,
+            )
 
-        api_base: Final = litellm_params.get("api_base")
+        if credential is None:
+            return TokenCountResponse(
+                total_tokens=0,
+                request_model=request_model,
+                model_used=model_to_use,
+                tokenizer_type="openai_api",
+                error=True,
+                error_message=(
+                    f"No OpenAI API key is set for model {request_model or model_to_use}, so tokens can't be "
+                    "counted. Set api_key or workload identity on the deployment, or OPENAI_API_KEY in the proxy "
+                    "environment."
+                ),
+                status_code=401,
+            )
 
-        # Convert chat messages to Responses API input format
-        input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(messages)
+        api_base: Final = credentials.api_base
 
-        # Use system param if instructions not extracted from messages
-        if instructions is None and system is not None:
-            instructions = system if isinstance(system, str) else str(system)
+        input_items, instructions, counted_tools, text = self._responses_request_parts(
+            model_to_use=model_to_use,
+            messages=messages,
+            tools=tools,
+            system=system,
+            messages_format=messages_format,
+            output_format=output_format,
+        )
 
         # If no input items were produced (e.g., system-only messages), fall back to local counting
         if not input_items:
             return None
 
         try:
+            api_key: Final = (
+                credential
+                if isinstance(credential, str)
+                else await asyncify(get_workload_identity_bearer_token)(credential)
+            )
             result: Final = await openai_count_tokens_handler.handle_count_tokens_request(
                 model=model_to_use,
-                input=input_items if input_items is not None else [],
+                input=input_items,
                 api_key=api_key,
                 api_base=api_base,
-                tools=tools,
+                tools=counted_tools,
                 instructions=instructions,
+                text=text,
             )
 
             if result is not None:
@@ -100,6 +211,17 @@ class OpenAITokenCounter(BaseTokenCounter):
                 error=True,
                 error_message=e.message,
                 status_code=e.status_code,
+            )
+        except openai.AuthenticationError as e:
+            verbose_logger.warning("OpenAI workload identity token exchange failed: %s", e.message)
+            return TokenCountResponse(
+                total_tokens=0,
+                request_model=request_model,
+                model_used=model_to_use,
+                tokenizer_type="openai_api",
+                error=True,
+                error_message=e.message,
+                status_code=401,
             )
         except Exception as e:
             verbose_logger.warning("Error calling OpenAI CountTokens API: %s", e)

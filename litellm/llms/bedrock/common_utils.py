@@ -29,6 +29,7 @@ import litellm
 from litellm import verbose_logger
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import
+from litellm.litellm_core_utils.prompt_templates.common_utils import schema_property_count
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
@@ -249,15 +250,99 @@ def convert_bedrock_invoke_output_format_to_inline_schema(
     request_body["messages"] = new_messages
 
 
-def _bedrock_model_supports(model: str, key: str) -> bool:
+def _bedrock_model_supports(model: str, key: str, custom_llm_provider: str = "bedrock") -> bool:
     from litellm.utils import supports_factory
 
-    return supports_factory(model=model, custom_llm_provider="bedrock", key=key)
+    return supports_factory(model=model, custom_llm_provider=custom_llm_provider, key=key)
+
+
+_DEPLOYMENT_MODEL_INFO: Final = TypeAdapter(dict[str, object])
+
+
+def deployment_model_info(litellm_params: Mapping[str, object] | None) -> Mapping[str, object]:
+    model_info: Final = (litellm_params or {}).get("model_info")
+    return _DEPLOYMENT_MODEL_INFO.validate_python(model_info) if isinstance(model_info, Mapping) else {}
+
+
+def _bedrock_native_output_opt_in(
+    model: str, custom_llm_provider: str, model_info: Mapping[str, object] | None
+) -> bool:
+    deployment_flag: Final = (model_info or {}).get("supports_bedrock_native_structured_output")
+    if isinstance(deployment_flag, bool):
+        return deployment_flag
+    return _bedrock_model_supports(model, "supports_bedrock_native_structured_output", custom_llm_provider)
+
+
+def bedrock_supports_native_structured_output(
+    model: str, custom_llm_provider: str = "bedrock", model_info: Mapping[str, object] | None = None
+) -> bool:
+    return _bedrock_model_supports(
+        model, "supports_native_structured_output", custom_llm_provider
+    ) or _bedrock_native_output_opt_in(model, custom_llm_provider, model_info)
+
+
+def bedrock_chat_uses_native_structured_output(
+    model: str,
+    thinking_requested: bool,
+    custom_llm_provider: str = "bedrock",
+    model_info: Mapping[str, object] | None = None,
+) -> bool:
+    return _bedrock_model_supports(model, "supports_native_structured_output", custom_llm_provider) or (
+        thinking_requested and _bedrock_native_output_opt_in(model, custom_llm_provider, model_info)
+    )
+
+
+BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES: Final = 64
+
+
+def bedrock_cleaned_output_schema(
+    model: str, schema: Mapping[str, object], custom_llm_provider: str = "bedrock"
+) -> Mapping[str, object] | None:
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+    if (
+        not _bedrock_model_supports(model, "supports_native_structured_output", custom_llm_provider)
+        and schema_property_count(schema) > BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES
+    ):
+        return None
+    return AnthropicConfig.native_output_schema(schema)
+
+
+def bedrock_native_output_schema(
+    model: str,
+    schema: Mapping[str, object],
+    custom_llm_provider: str = "bedrock",
+    model_info: Mapping[str, object] | None = None,
+) -> Mapping[str, object] | None:
+    native_schema: Final = bedrock_cleaned_output_schema(model, schema, custom_llm_provider)
+    if _bedrock_model_supports(model, "supports_native_structured_output", custom_llm_provider):
+        return schema if native_schema is None else native_schema
+    if _bedrock_native_output_opt_in(model, custom_llm_provider, model_info):
+        return native_schema
+    return None
+
+
+def bedrock_native_output_format(
+    model: str,
+    output_format: Mapping[str, object],
+    custom_llm_provider: str = "bedrock",
+    model_info: Mapping[str, object] | None = None,
+) -> Mapping[str, object] | None:
+    schema: Final = output_format.get("schema")
+    if not isinstance(schema, Mapping):
+        return (
+            output_format if bedrock_supports_native_structured_output(model, custom_llm_provider, model_info) else None
+        )
+    native_schema: Final = bedrock_native_output_schema(model, schema, custom_llm_provider, model_info)
+    if native_schema is None:
+        return None
+    return {**output_format, "schema": native_schema}
 
 
 def apply_bedrock_invoke_structured_output(
     model: str,
     request_body: dict[str, object],  # mutable-ok: edited in place like siblings
+    model_info: Mapping[str, object] | None = None,
 ) -> None:
     """
     Route Anthropic structured-output params to what the Bedrock model supports.
@@ -277,17 +362,18 @@ def apply_bedrock_invoke_structured_output(
     if schema_format is None:
         return
 
-    if _bedrock_model_supports(model, "supports_native_structured_output"):
+    native_format: Final = bedrock_native_output_format(model, schema_format, model_info=model_info)
+    if native_format is not None:
         existing_output_config: Final = request_body.get("output_config")
         if isinstance(existing_output_config, dict):
-            existing_output_config["format"] = schema_format
+            existing_output_config["format"] = native_format
         else:
-            request_body["output_config"] = {"format": schema_format}  # rebind-ok: out-param
+            request_body["output_config"] = {"format": native_format}  # rebind-ok: out-param
         return
 
     verbose_logger.warning(
-        "Bedrock Invoke: model=%s does not advertise `supports_native_structured_output` "
-        "in model_prices_and_context_window.json, so the JSON schema was inlined into "
+        "Bedrock Invoke: model=%s does not take native structured output for this schema "
+        "per model_prices_and_context_window.json, so the JSON schema was inlined into "
         "the last user message and is NOT enforced by the model.",
         model,
     )
@@ -812,6 +898,14 @@ def is_bedrock_application_inference_profile_arn(model: str) -> bool:
     return ":application-inference-profile/" in model
 
 
+def bedrock_capability_model(model: str, base_model: object) -> str:
+    """The model id to look capabilities up by: the deployment's ``base_model`` for an
+    application inference profile ARN, since the ARN names no model, else ``model``."""
+    if isinstance(base_model, str) and base_model and is_bedrock_application_inference_profile_arn(model):
+        return strip_bedrock_routing_prefix(base_model)
+    return model
+
+
 def strip_bedrock_routing_prefix(model: str) -> str:
     """Strip LiteLLM routing prefixes from model name."""
     for prefix in ["bedrock/", "chat_completions/", "converse/", "invoke/", "openai/", "mantle/", "nova-2/", "nova/"]:
@@ -1164,6 +1258,24 @@ def get_bedrock_base_model(model: str) -> str:
     return model
 
 
+def bedrock_converse_accepts_redacted_thinking(model: str, base_model: str | None) -> bool:
+    """
+    Whether ``reasoningContent.redactedContent`` may be replayed to this Converse target.
+
+    Only Claude takes it back. Nova, Llama, DeepSeek and gpt-oss 400 on it (checked live in us-west-2 on
+    2026-10-14), so every other target keeps dropping the block. A model id that names its model decides on
+    its own. An ARN that hides its model, like an application inference profile, falls back to the
+    deployment's ``base_model`` and counts as non-Claude without one.
+    """
+    if base_model is None or "." in get_bedrock_base_model(model):
+        return _is_claude(model)
+    return _is_claude(base_model)
+
+
+def _is_claude(model: str) -> bool:
+    return get_bedrock_base_model(model).startswith(("anthropic", "claude"))
+
+
 def bedrock_converse_supports_parallel_tool_use_config(model: str) -> bool:
     return any(
         (litellm.model_cost.get(candidate) or {}).get("supports_parallel_tool_use_config") is True
@@ -1171,7 +1283,7 @@ def bedrock_converse_supports_parallel_tool_use_config(model: str) -> bool:
     )
 
 
-def bedrock_model_accepts_cache_points(model: str | None) -> bool:
+def bedrock_model_accepts_cache_points(model: str | None, deployment_model: str | None = None) -> bool:
     """
     Whether Converse ``cachePoint`` blocks may be sent to this model.
 
@@ -1189,10 +1301,21 @@ def bedrock_model_accepts_cache_points(model: str | None) -> bool:
     inference profile ARN or a model newer than the map, while only the map decides whether
     a model is known: absent a map entry the model keeps emitting so existing caching setups
     never silently degrade. ``litellm.utils.supports_prompt_caching`` is not reusable here:
-    it returns False for unmapped models, the opposite polarity.
+    it returns False for unmapped models, the opposite polarity. ``deployment_model`` is the
+    model as configured when ``model`` is its ``base_model``: its own declaration wins.
     """
     if model is None:
         return True
+    deployment_declared: Final = (
+        None if deployment_model is None else bedrock_declared_cache_point_support(deployment_model)
+    )
+    declared: Final = (
+        deployment_declared if deployment_declared is not None else bedrock_declared_cache_point_support(model)
+    )
+    return declared is not False
+
+
+def bedrock_declared_cache_point_support(model: str) -> bool | None:
     if _OPENAI_FAMILY_MODEL_RE.search(model):
         return False
     map_keys: Final = (model, get_bedrock_base_model(model))
@@ -1209,7 +1332,7 @@ def bedrock_model_accepts_cache_points(model: str | None) -> bool:
     if explicit_marker_support is not None:
         return explicit_marker_support
     if not any(key in litellm.model_cost for key in map_keys):
-        return True
+        return None
     return any(
         entry.get("supports_prompt_caching") is True
         for key in map_keys
@@ -1243,6 +1366,12 @@ def supports_bedrock_prompt_cache_ttl(model: str) -> bool:
     )
 
 
+def bedrock_cache_point_ttl_supported(model: str | None, deployment_model: str | None = None) -> bool:
+    return any(
+        supports_bedrock_prompt_cache_ttl(candidate) for candidate in (model, deployment_model) if candidate is not None
+    )
+
+
 def is_claude_4_5_on_bedrock(model: str) -> bool:
     warnings.warn(
         "is_claude_4_5_on_bedrock is deprecated, use supports_bedrock_prompt_cache_ttl",
@@ -1253,7 +1382,6 @@ def is_claude_4_5_on_bedrock(model: str) -> bool:
 
 
 _BEDROCK_MODEL_VERSION_SUFFIX_RE: Final = re.compile(r"-v\d+(?::\d+)?$")
-_DEPLOYMENT_MODEL_INFO: Final = TypeAdapter(dict[str, object])
 
 
 def bedrock_converse_supports_strict_tools(model: str) -> bool:
@@ -1284,8 +1412,7 @@ def bedrock_model_supports_regex_lookaround(model: str, litellm_params: Mapping[
     entry of ``model`` itself. A model nobody flagged keeps its schema as sent.
     """
     params: Final = litellm_params or {}
-    model_info: Final = _DEPLOYMENT_MODEL_INFO.validate_python(params.get("model_info") or {})
-    deployment_flag: Final = model_info.get("supports_regex_lookaround")
+    deployment_flag: Final = deployment_model_info(params).get("supports_regex_lookaround")
     if isinstance(deployment_flag, bool):
         return deployment_flag
     base_model: Final = params.get("base_model")
@@ -1870,13 +1997,18 @@ def bedrock_event_stream_header(headers: Mapping[str, object], name: str) -> str
     return value if isinstance(value, str) else None
 
 
-def build_bedrock_stream_event_error(event_type: str, status_code: int, body: bytes) -> BedrockError:
-    return BedrockError(status_code=status_code, message=f"{event_type} {body.decode(errors='replace')}")
+def build_bedrock_stream_event_error(
+    event_type: str, status_code: int, body: bytes, headers: httpx.Headers | None = None
+) -> BedrockError:
+    return BedrockError(
+        status_code=status_code, message=f"{event_type} {body.decode(errors='replace')}", headers=headers
+    )
 
 
 def build_bedrock_stream_error(
     response_dict: BedrockEventStreamResponseDict,
     response_stream_shape: Shape | None,
+    headers: httpx.Headers | None = None,
 ) -> BedrockError:
     """Build a BedrockError for a non-200 event-stream error event.
 
@@ -1886,12 +2018,14 @@ def build_bedrock_stream_error(
     """
     exception_type: Final = bedrock_event_stream_header(response_dict["headers"], ":exception-type")
     if exception_type is None:
-        return BedrockError(status_code=response_dict["status_code"], message=response_dict["body"].decode())
+        return BedrockError(
+            status_code=response_dict["status_code"], message=response_dict["body"].decode(), headers=headers
+        )
 
     member: Final = _structure_members(response_stream_shape).get(exception_type)
     modeled_status: Final = None if member is None else _modeled_error_status(member)
     status_code: Final = response_dict["status_code"] if modeled_status is None else modeled_status
-    return build_bedrock_stream_event_error(exception_type, status_code, response_dict["body"])
+    return build_bedrock_stream_event_error(exception_type, status_code, response_dict["body"], headers=headers)
 
 
 class BedrockEventStreamDecoderBase:

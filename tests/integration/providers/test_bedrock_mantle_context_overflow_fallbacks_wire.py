@@ -402,12 +402,11 @@ def test_context_window_fallback_fires_for_the_overflow_on_responses(cwf_rig: Ri
     _assert_fell_back(cwf_rig, "overflow", prompt, response.text)
 
 
-def test_context_window_fallback_does_not_fire_on_streamed_chat_completions(cwf_rig: Rig) -> None:
+def test_context_window_fallback_fires_for_the_overflow_on_streamed_chat_completions(cwf_rig: Rig) -> None:
     prompt: Final = _prompt("cwf chat stream")
     response, text = _consumed(cwf_rig.gateway, "/v1/chat/completions", _chat(cwf_rig.models["cwf"], prompt, True))
-    assert response.status_code == 400, text
-    assert _GENERIC in text, text
-    _assert_no_fallback(cwf_rig, "overflow", prompt)
+    assert response.status_code == 200, text
+    _assert_fell_back(cwf_rig, "overflow", prompt, text)
 
 
 def test_context_window_fallback_is_not_consulted_on_streamed_messages(cwf_rig: Rig) -> None:
@@ -449,12 +448,11 @@ def test_plain_fallback_fires_for_the_overflow_on_responses(fb_rig: Rig) -> None
     _assert_fell_back(fb_rig, "overflow", prompt, response.text)
 
 
-def test_plain_fallback_does_not_fire_on_streamed_chat_completions(fb_rig: Rig) -> None:
+def test_plain_fallback_fires_for_the_overflow_on_streamed_chat_completions(fb_rig: Rig) -> None:
     prompt: Final = _prompt("fb chat stream")
     response, text = _consumed(fb_rig.gateway, "/v1/chat/completions", _chat(fb_rig.models["fb"], prompt, True))
-    assert response.status_code == 400, text
-    assert _GENERIC in text, text
-    _assert_no_fallback(fb_rig, "overflow", prompt)
+    assert response.status_code == 200, text
+    _assert_fell_back(fb_rig, "overflow", prompt, text)
 
 
 def test_streamed_messages_overflow_on_a_plain_fallback_deployment_returns_400_without_falling_back(
@@ -521,10 +519,12 @@ def test_killing_one_worker_leaves_the_sibling_serving_the_fallback(fb_rig: Rig)
     workers: Final = eventually(fb_rig.owned.worker_pids, lambda pids: len(pids) >= 2, seconds=30)
     with fb_rig.owned.replacing_worker(min(workers)) as kill:
         kill()
-        responses: Final = tuple(
-            fb_rig.gateway.request("POST", "/v1/chat/completions", _chat(fb_rig.models["fb"], _prompt("after kill")))
-            for _ in range(3)
-        )
+        with httpx.Client(base_url=fb_rig.gateway.client.base_url, timeout=15, trust_env=False) as fresh:
+            survivor: Final = Gateway(fresh, fb_rig.gateway.key, fb_rig.gateway.upstream_url)
+            responses: Final = tuple(
+                survivor.request("POST", "/v1/chat/completions", _chat(fb_rig.models["fb"], _prompt("after kill")))
+                for _ in range(3)
+            )
     for response in responses:
         assert response.status_code == 200, response.text
         assert _FALLBACK_TEXT in response.text, response.text
