@@ -1179,10 +1179,17 @@ _PROXY_ONLY_LLM_API_ERRORS: Final = (HTTPException, ProxyException, GuardrailRai
 _LOG_DB_METRICS_CALL_TYPES: Final = frozenset(("get_data", "insert_data", "update_data", "delete_data"))
 
 
-def _exception_chain(exception: BaseException | None, seen: frozenset[int] = frozenset()) -> tuple[BaseException, ...]:
-    if exception is None or id(exception) in seen:
-        return ()
-    return (exception, *_exception_chain(exception.__cause__ or exception.__context__, seen | {id(exception)}))
+_EXCEPTION_CHAIN_MAX_DEPTH: Final = 16
+
+
+def _exception_chain(exception: BaseException) -> tuple[BaseException, ...]:
+    chain: Final[list[BaseException]] = [exception]  # mutable-ok: built once, returned frozen
+    for _ in range(_EXCEPTION_CHAIN_MAX_DEPTH):
+        following = chain[-1].__cause__ or chain[-1].__context__
+        if following is None or following in chain:
+            break
+        chain.append(following)
+    return tuple(chain)
 
 
 def _timed_out_reading_from_provider(exception: Exception) -> bool:
