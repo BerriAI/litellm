@@ -349,7 +349,7 @@ from litellm.litellm_core_utils.sensitive_data_masker import (
 from litellm.llms.anthropic.pass_through.convertible_blocks import (
     deployment_drops_params,
     drop_non_string_tool_result_texts,
-    malformed_tool_result_text_error,
+    malformed_tool_result_count_error,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.openai.live import parse_live_session_start
@@ -14484,16 +14484,6 @@ def _counted_request_messages(
     return list(drop_non_string_tool_result_texts(messages, deployment_drops_params(deployment)))
 
 
-def _local_count_tool_result_error(
-    messages: Sequence[Mapping[str, object]] | None,
-    messages_format: TokenCountMessagesFormat,
-    deployment: Mapping[str, object] | None,
-) -> str | None:
-    if messages_format != "anthropic" or deployment_drops_params(deployment):
-        return None
-    return malformed_tool_result_text_error(messages or ())
-
-
 async def _try_provider_token_count(
     provider_counter: "BaseTokenCounter",
     custom_llm_provider: str | None,
@@ -14692,7 +14682,7 @@ async def count_request_tokens(
         if result is not None:
             return result
 
-    local_count_error: Final = _local_count_tool_result_error(request_messages, messages_format, count_deployment)
+    local_count_error: Final = malformed_tool_result_count_error(request_messages, messages_format, count_deployment)
     if local_count_error is not None:
         raise ProxyException(message=local_count_error, type="token_counting_error", param="messages", code=400)
 

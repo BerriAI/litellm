@@ -1,6 +1,7 @@
 import json
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from functools import partial
 from itertools import chain, groupby
 from operator import itemgetter
 from types import MappingProxyType
@@ -119,14 +120,28 @@ def _list_items(value: object) -> tuple[object, ...]:
     return _OBJECTS.validate_python(value) if isinstance(value, list) else ()
 
 
-def _has_non_string_text(block: object) -> bool:
-    match block:
+@dataclass(frozen=True, slots=True)
+class _KeptPart:
+    block: object
+    scanned_text: str
+
+
+_KeptParts: TypeAlias = Mapping[int, _KeptPart]
+_NO_KEPT_PARTS: Final[_KeptParts] = MappingProxyType({})
+
+
+def _scannable_text(text: object) -> str:
+    return json.dumps(text, default=str, ensure_ascii=False)
+
+
+def _non_str_text(block: object) -> _KeptPart | None:
+    match as_str_mapping(block):
         case {"type": "text", "text": str()}:
-            return False
-        case {"type": "text", "text": object()}:
-            return True
+            return None
+        case {"type": "text", "text": text}:
+            return _KeptPart(block=block, scanned_text=_scannable_text(text))
         case _:
-            return False
+            return None
 
 
 def tool_result_text_part(block: object) -> str | None:
@@ -154,11 +169,19 @@ def _user_content_blocks(message: object) -> tuple[object, ...]:
             return ()
 
 
+def _with_user_blocks(message: object, transform: Callable[[object], object]) -> object:
+    match as_str_mapping(message):
+        case {"role": "user", "content": list()} as user_message:
+            return {**user_message, "content": [transform(block) for block in _user_content_blocks(user_message)]}
+        case _:
+            return message
+
+
 def _non_string_text_errors(label: str, content: object) -> Iterator[str]:
     return (
         f"{label} content.{index}.text: Input should be a valid string"
         for index, text_block in enumerate(_list_items(content))
-        if _has_non_string_text(text_block)
+        if _non_str_text(text_block) is not None
     )
 
 
@@ -177,18 +200,14 @@ def malformed_tool_result_text_error(messages: Iterable[object]) -> str | None:
     return next(chain.from_iterable(map(_tool_result_text_errors, blocks)), None)
 
 
-@dataclass(frozen=True, slots=True)
-class _KeptPart:
-    block: object
-    scanned_text: str
-
-
-_KeptParts: TypeAlias = Mapping[int, _KeptPart]
-_NO_KEPT_PARTS: Final[_KeptParts] = MappingProxyType({})
-
-
-def _scannable_text(text: object) -> str:
-    return json.dumps(text, default=str, ensure_ascii=False)
+def malformed_tool_result_count_error(
+    messages: Iterable[Mapping[str, object]] | None,
+    messages_format: TokenCountMessagesFormat,
+    deployment: Mapping[str, object] | None,
+) -> str | None:
+    if messages_format != "anthropic" or deployment_drops_params(deployment):
+        return None
+    return malformed_tool_result_text_error(messages or ())
 
 
 def _scannable_part(part: object) -> object:
@@ -212,20 +231,9 @@ def _scannable_block(block: object) -> object:
             return block
 
 
-def _scannable_message(message: object) -> object:
-    match as_str_mapping(message):
-        case {"role": "user", "content": list()} as user_message:
-            return {
-                **user_message,
-                "content": [_scannable_block(block) for block in _user_content_blocks(user_message)],
-            }
-        case _:
-            return message
-
-
 def _scannable_messages(messages: object) -> object:
     items: Final = _list_items(messages)
-    return [_scannable_message(message) for message in items] if items else messages
+    return [_with_user_blocks(message, _scannable_block) for message in items] if items else messages
 
 
 def scannable_tool_result_request(request: object) -> object:
@@ -238,19 +246,9 @@ def scannable_tool_result_request(request: object) -> object:
             return {**request_fields}
 
 
-def _kept_part(block: object) -> _KeptPart | None:
-    match as_str_mapping(block):
-        case {"type": "text", "text": str()}:
-            return None
-        case {"type": "text", "text": text}:
-            return _KeptPart(block=block, scanned_text=_scannable_text(text))
-        case _:
-            return None
-
-
 def _non_string_text_parts(content: object) -> _KeptParts:
     return MappingProxyType(
-        {index: part for index, block in enumerate(_list_items(content)) if (part := _kept_part(block)) is not None}
+        {index: part for index, block in enumerate(_list_items(content)) if (part := _non_str_text(block)) is not None}
     )
 
 
@@ -270,26 +268,15 @@ def _content_blocks(content: object) -> tuple[object, ...]:
             return _list_items(content)
 
 
-def _text_of(block: object) -> str | None:
-    match as_str_mapping(block):
-        case {"type": "text", "text": str(text)}:
-            return text
-        case _:
-            return None
-
-
 def _restored_part(block: object, kept: _KeptPart | None) -> object:
-    return kept.block if kept is not None and _text_of(block) == kept.scanned_text else block
-
-
-def _merged_content(blocks: tuple[object, ...], kept: _KeptParts) -> tuple[object, ...]:
-    return tuple(_restored_part(block, kept.get(index)) for index, block in enumerate(blocks))
+    return kept.block if kept is not None and tool_result_text_part(block) == kept.scanned_text else block
 
 
 def _with_kept_parts(block: object, tool_result: Mapping[str, object], parts: _KeptParts) -> object:
     if not parts:
         return block
-    return {**tool_result, "content": list(_merged_content(_content_blocks(tool_result.get("content")), parts))}
+    blocks: Final = _content_blocks(tool_result.get("content"))
+    return {**tool_result, "content": [_restored_part(part, parts.get(index)) for index, part in enumerate(blocks)]}
 
 
 def _restored_block(block: object, kept: Mapping[str, Iterator[_KeptParts]]) -> object:
@@ -304,15 +291,6 @@ def _restored_block(block: object, kept: Mapping[str, Iterator[_KeptParts]]) -> 
             return block
 
 
-def _restored_message(message: object, kept: Mapping[str, Iterator[_KeptParts]]) -> object:
-    match as_str_mapping(message):
-        case {"role": "user", "content": list()} as user_message:
-            blocks: Final = _list_items(user_message.get("content"))
-            return {**user_message, "content": [_restored_block(block, kept) for block in blocks]}
-        case _:
-            return message
-
-
 def keep_non_string_tool_result_texts(rewritten: Sequence[object], original: object) -> Sequence[object]:
     blocks: Final = chain.from_iterable(map(_user_content_blocks, _list_items(original)))
     by_id: Final = tuple(sorted(chain.from_iterable(map(_tool_result_non_string_texts, blocks)), key=itemgetter(0)))
@@ -324,14 +302,14 @@ def keep_non_string_tool_result_texts(rewritten: Sequence[object], original: obj
             for tool_use_id, group in groupby(by_id, key=itemgetter(0))
         }
     )
-    return [_restored_message(message, kept_in_order) for message in rewritten]
+    return [_with_user_blocks(message, partial(_restored_block, kept=kept_in_order)) for message in rewritten]
 
 
 def _without_non_string_text(block: object) -> object:
     match as_str_mapping(block):
         case {"type": "tool_result", "content": list()} as tool_result:
             parts: Final = _list_items(tool_result.get("content"))
-            return {**tool_result, "content": [part for part in parts if not _has_non_string_text(part)]}
+            return {**tool_result, "content": [part for part in parts if _non_str_text(part) is None]}
         case _:
             return block
 

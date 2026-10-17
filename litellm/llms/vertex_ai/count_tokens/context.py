@@ -157,14 +157,9 @@ def malformed_tool_result_text_count_error(
     messages_format: TokenCountMessagesFormat,
     deployment: Mapping[str, object] | None,
 ) -> VertexGeminiCountContextError | None:
-    from litellm.llms.anthropic.pass_through.convertible_blocks import (
-        deployment_drops_params,
-        malformed_tool_result_text_error,
-    )
+    from litellm.llms.anthropic.pass_through.convertible_blocks import malformed_tool_result_count_error
 
-    if messages_format != "anthropic" or deployment_drops_params(deployment):
-        return None
-    error_message: Final = malformed_tool_result_text_error(messages or ())
+    error_message: Final = malformed_tool_result_count_error(messages, messages_format, deployment)
     return None if error_message is None else VertexGeminiCountContextError(error_message=error_message)
 
 
