@@ -6168,8 +6168,9 @@ def resolve_structured_messages(
     return None
 
 
-def _is_responses_function_tool(tool: Mapping[str, object]) -> bool:
-    return tool.get("type") == "function" and "function" not in tool and "input_schema" not in tool
+def is_flat_responses_tool(tool: Mapping[str, object]) -> bool:
+    tool_type: Final = tool.get("type")
+    return tool_type in ("function", "custom") and tool_type not in tool and "input_schema" not in tool
 
 
 def chat_completion_tools_for(tool: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
@@ -6178,9 +6179,9 @@ def chat_completion_tools_for(tool: Mapping[str, object]) -> tuple[Mapping[str, 
         LiteLLMCompletionResponsesConfig,
     )
 
-    if _is_responses_function_tool(tool):
+    if is_flat_responses_tool(tool):
         chat_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-            [dict(tool)]  # pyright: ignore[reportArgumentType]  # a JSON dict in the Responses function tool shape
+            [dict(tool)]  # pyright: ignore[reportArgumentType]  # a JSON dict in a flat Responses tool shape
         )
         return tuple(chat_tools)
     anthropic_tools, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_tools_to_openai(

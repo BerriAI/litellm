@@ -24,6 +24,7 @@ from litellm.llms.bedrock.count_tokens.kimi_k3 import (
     kimi_k3_tokens,
     load_kimi_k3_encoding,
 )
+from litellm.responses.litellm_completion_transformation.transformation import LiteLLMCompletionResponsesConfig
 
 MODEL: Final = "us.moonshotai.kimi-k3"
 _CONTROL: Final = re.compile(r"<\|(?:open|close|sep|end_of_msg)\|>")
@@ -266,11 +267,6 @@ def test_long_text_counts_what_the_tokenizer_counts_for_the_whole_text(pair_enco
             [_WEATHER],
             id="tool_result_without_its_call",
         ),
-        pytest.param(
-            [{"role": "user", "content": "What is new?"}],
-            [{"type": "web_search_20250305", "name": "web_search"}],
-            id="tool_the_converse_body_cannot_carry",
-        ),
     ],
 )
 def test_request_the_template_cannot_render_is_not_counted(
@@ -310,6 +306,49 @@ def test_tool_in_another_api_shape_counts_like_the_same_chat_completions_tool(
 
     assert counted is not None
     assert counted == kimi_k3_tokens(pair_encoding, MODEL, messages, [_WEATHER])
+
+
+@pytest.mark.parametrize(
+    "tool",
+    [
+        pytest.param({"type": "web_search_20250305", "name": "web_search"}, id="anthropic_web_search"),
+        pytest.param({"type": "web_search"}, id="responses_web_search"),
+        pytest.param(
+            {
+                "type": "mcp",
+                "server_label": "docs",
+                "server_url": "https://mcp.example/mcp",
+                "require_approval": "never",
+            },
+            id="mcp",
+        ),
+    ],
+)
+def test_tool_bedrock_inference_drops_counts_like_the_function_tools_alone(
+    pair_encoding: tiktoken.Encoding, tool: dict[str, object]
+):
+    messages: Final = [{"role": "user", "content": "Weather in Paris?"}]
+
+    counted: Final = kimi_k3_tokens(pair_encoding, MODEL, messages, [_WEATHER, tool])
+
+    assert counted is not None
+    assert counted == kimi_k3_tokens(pair_encoding, MODEL, messages, [_WEATHER])
+
+
+def test_responses_custom_tool_counts_like_the_function_tool_inference_sends(pair_encoding: tiktoken.Encoding):
+    messages: Final = [{"role": "user", "content": "Weather in Paris?"}]
+    custom_tool: Final = {"type": "custom", "name": "grammar", "description": "Free-form SQL"}
+    sent_to_inference, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+        [dict(custom_tool)]
+    )
+
+    without_it: Final = kimi_k3_tokens(pair_encoding, MODEL, messages, [_WEATHER])
+
+    counted: Final = kimi_k3_tokens(pair_encoding, MODEL, messages, [_WEATHER, custom_tool])
+
+    assert counted is not None and without_it is not None
+    assert counted > without_it
+    assert counted == kimi_k3_tokens(pair_encoding, MODEL, messages, [_WEATHER, *sent_to_inference])
 
 
 def test_counting_a_request_with_an_image_url_never_downloads_the_image(

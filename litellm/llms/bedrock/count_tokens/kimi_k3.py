@@ -27,7 +27,10 @@ from typing_extensions import Self
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.prompt_templates.factory import chat_completion_tools_for
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    chat_completion_tools_for,
+    is_flat_responses_tool,
+)
 from litellm.llms.anthropic.pass_through.adapters.transformation import LiteLLMAnthropicMessagesAdapter
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 
@@ -263,10 +266,6 @@ class _ConverseRequest(BaseModel):
     system: tuple[_Text | _CachePoint, ...] = ()
     tool_config: _ToolConfig | None = Field(default=None, alias="toolConfig")
 
-    def tool_specs(self) -> int:
-        blocks: Final = () if self.tool_config is None else self.tool_config.tools
-        return sum(isinstance(block, _ToolSpecBlock) for block in blocks)
-
     @model_validator(mode="after")
     def _results_answer_the_previous_calls(self) -> Self:
         pairs: Final = zip((None, *self.messages), self.messages, strict=False)
@@ -443,6 +442,10 @@ def _text_only(message: AllMessageValues) -> bool:
     return True
 
 
+def _as_converse_input(tool: ChatCompletionToolParam) -> tuple[Mapping[str, object], ...]:
+    return chat_completion_tools_for(tool) if is_flat_responses_tool(tool) else (tool,)
+
+
 def _converse_request(
     model: str, messages: Sequence[AllMessageValues], tools: Sequence[ChatCompletionToolParam] | None
 ) -> _ConverseRequest | None:
@@ -450,9 +453,9 @@ def _converse_request(
         return None
     try:
         chat_tools: Final = tuple(
-            chat_tool for tool in tools or () for chat_tool in chat_completion_tools_for(tool)
+            chat_tool for tool in tools or () for chat_tool in _as_converse_input(tool)
         )  # comprehension-ok: flattens each tool's translation
-        request: Final = _ConverseRequest.model_validate(
+        return _ConverseRequest.model_validate(
             litellm.AmazonConverseConfig().transform_request(
                 model=model,
                 messages=copy.deepcopy(list(messages)),
@@ -463,7 +466,6 @@ def _converse_request(
         )
     except Exception:  # noqa: BLE001  # a body litellm cannot send to Bedrock, or cannot render, falls back to the estimate
         return None
-    return request if request.tool_specs() == len(chat_tools) else None
 
 
 def kimi_k3_tokens(
