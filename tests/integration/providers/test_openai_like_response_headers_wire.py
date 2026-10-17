@@ -37,11 +37,15 @@ _RATE_LIMIT_HEADERS: Final[Mapping[str, str]] = MappingProxyType(
     {"x-ratelimit-remaining-requests": "12.5", "x-ratelimit-remaining-tokens": "856, abc"}
 )
 _METERED_WORKERS: Final = 2
-_METERED_CALLS: Final[tuple[tuple[str, bool], ...]] = (
-    ("groq", False),
-    ("groq", True),
-    ("openai", False),
-    ("openai", True),
+_METERED_CALLS: Final[tuple[tuple[Endpoint, str, bool], ...]] = (
+    ("chat", "groq", False),
+    ("chat", "groq", True),
+    ("chat", "openai", False),
+    ("chat", "openai", True),
+    ("responses", "groq", False),
+    ("responses", "groq", True),
+    ("messages", "groq", False),
+    ("messages", "groq", True),
 )
 _LATIN1_CALLS: Final[tuple[tuple[Endpoint, str, bool], ...]] = (
     ("chat", "bedrock_mantle", False),
@@ -420,16 +424,20 @@ def test_rate_limit_headers_set_the_remaining_gauges_and_keep_the_deployment_met
         metered.scenario() as scenario,
     ):
         calls: Final = {
-            f"{member}-{'stream' if stream else 'whole'}": (_MEMBERS[member](metered, scenario, wire), stream)
-            for member, stream in _METERED_CALLS
+            f"{endpoint}-{member}-{'stream' if stream else 'whole'}": (
+                endpoint,
+                _MEMBERS[member](metered, scenario, wire),
+                stream,
+            )
+            for endpoint, member, stream in _METERED_CALLS
         }
-        models: Final = {call: model for call, (model, _) in calls.items()}
+        models: Final = {call: model for call, (_, model, _) in calls.items()}
         for model in models.values():
             wait_for_worker_readiness(metered, model, 1, _METERED_WORKERS)
         key: Final = scenario.key(models=list(models.values()))
         statuses: Final = {
-            call: _send(metered, "chat", model, key, stream=stream).status_code
-            for call, (model, stream) in calls.items()
+            call: _send(metered, endpoint, model, key, stream=stream).status_code
+            for call, (endpoint, model, stream) in calls.items()
         }
         assert statuses == dict.fromkeys(calls, 200)
         observed: Final = eventually(
