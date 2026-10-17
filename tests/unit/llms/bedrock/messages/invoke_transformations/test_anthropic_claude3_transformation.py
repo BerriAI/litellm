@@ -1050,6 +1050,7 @@ def test_bedrock_messages_forwards_output_config_with_output_format():
         "schema": {
             "type": "object",
             "properties": {"answer": {"type": "string"}},
+            "additionalProperties": False,
         },
     }
     optional_params = {
@@ -1098,7 +1099,7 @@ def test_bedrock_messages_converts_output_config_format_to_inline_schema():
 
     with patch(
         "litellm.llms.bedrock.common_utils._bedrock_model_supports",
-        side_effect=lambda _model, key: key == "supports_output_config",
+        side_effect=lambda _model, key, *_: key == "supports_output_config",
     ):
         result = cfg.transform_anthropic_messages_request(
             model="anthropic.claude-opus-4-7",
@@ -1170,7 +1171,7 @@ def test_bedrock_messages_does_not_mutate_callers_messages_when_embedding_schema
 
     with patch(
         "litellm.llms.bedrock.common_utils._bedrock_model_supports",
-        side_effect=lambda _model, key: key == "supports_output_config",
+        side_effect=lambda _model, key, *_: key == "supports_output_config",
     ):
         result = cfg.transform_anthropic_messages_request(
             model="anthropic.claude-opus-4-7",
@@ -1675,6 +1676,65 @@ def test_bedrock_messages_does_not_add_dangerous_tool_use_beta_without_safeguard
 
     assert "safeguards" not in result
     assert "dangerous-tool-use-2026-09-03" not in result.get("anthropic_beta", [])
+
+
+_NAME_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"name": {"type": "string"}},
+    "required": ["name"],
+    "additionalProperties": False,
+}
+
+
+@pytest.mark.parametrize(
+    "request_params",
+    [
+        {},
+        {"output_config": {"format": {"type": "json_schema", "schema": _NAME_SCHEMA}}},
+        {"tools": [{"name": "get_name", "strict": True, "input_schema": _NAME_SCHEMA}]},
+    ],
+    ids=["plain", "output_config_format", "strict_tool"],
+)
+def test_bedrock_messages_drops_client_dangerous_tool_use_beta_without_safeguards(
+    local_model_cost_map: None, local_beta_headers_config: None, request_params: dict[str, object]
+) -> None:
+    from litellm.types.router import GenericLiteLLMParams
+
+    result: Final = AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
+        model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "Name a color."}]}],
+        anthropic_messages_optional_request_params={"max_tokens": 64, **request_params},
+        litellm_params=GenericLiteLLMParams(),
+        headers={"anthropic-beta": "dangerous-tool-use-2026-09-03"},
+    )
+
+    assert all(result.get(key) == value for key, value in request_params.items())
+    assert "dangerous-tool-use-2026-09-03" not in result.get("anthropic_beta", [])
+
+
+def test_bedrock_messages_keeps_client_dangerous_tool_use_beta_with_safeguards_and_structured_outputs(
+    local_model_cost_map: None, local_beta_headers_config: None
+) -> None:
+    from litellm.types.router import GenericLiteLLMParams
+
+    safeguards: Final = [{"type": "dangerous_tool_use", "classifier_context": {"v": 1, "permission_mode": "auto"}}]
+    strict_tool: Final = {"name": "get_name", "strict": True, "input_schema": _NAME_SCHEMA}
+
+    result: Final = AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
+        model="us.anthropic.claude-sonnet-5",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "Name a color."}]}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 64,
+            "safeguards": safeguards,
+            "tools": [strict_tool],
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={"anthropic-beta": "dangerous-tool-use-2026-09-03"},
+    )
+
+    assert result["safeguards"] == safeguards
+    assert result["tools"] == [strict_tool]
+    assert result["anthropic_beta"].count("dangerous-tool-use-2026-09-03") == 1
 
 
 def test_bedrock_messages_stream_decoder_keeps_safeguard_results():
@@ -3162,11 +3222,12 @@ def test_bedrock_messages_forwards_output_config_format_natively(local_model_cos
     assert "zebra_count" not in json.dumps(result["messages"])
 
 
-def test_bedrock_messages_inlines_schema_for_claude_5(local_model_cost_map):
-    """Bedrock rejects ``output_config.format`` for the Claude 5 family, so the
-    schema falls back to the inline-text path instead of a deterministic 400."""
+def test_bedrock_messages_inlines_schema_for_a_profile_without_native_output(set_native_structured_output):
+    """On a profile without native structured output the schema falls back to the
+    inline-text path instead of a deterministic 400."""
     from litellm.types.router import GenericLiteLLMParams
 
+    set_native_structured_output("us.anthropic.claude-sonnet-5", None)
     cfg = AmazonAnthropicClaudeMessagesConfig()
     schema = {
         "type": "object",
@@ -3189,6 +3250,115 @@ def test_bedrock_messages_inlines_schema_for_claude_5(local_model_cost_map):
     assert json.loads(last_content[-1]["text"]) == schema
 
 
+def _bedrock_messages_request_with_schema(model: str, schema: Mapping[str, object]) -> Mapping[str, object]:
+    from litellm.types.router import GenericLiteLLMParams
+
+    return AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
+        model=model,
+        messages=[{"role": "user", "content": [{"type": "text", "text": "say hello"}]}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 100,
+            "output_config": {"format": {"type": "json_schema", "schema": schema}},
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+
+def test_bedrock_messages_native_output_drops_schema_keywords_bedrock_rejects(set_native_structured_output):
+    model: Final = "us.anthropic.claude-sonnet-5"
+    set_native_structured_output(model, "bedrock")
+    schema: Final = {
+        "type": "object",
+        "properties": {
+            "count": {"type": "integer", "minimum": 1},
+            "ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": True},
+        },
+        "required": ["count", "ids"],
+    }
+
+    result: Final = _bedrock_messages_request_with_schema(model, schema)
+
+    sent: Final = result["output_config"]["format"]["schema"]
+    assert "minimum" not in sent["properties"]["count"]
+    assert "uniqueItems" not in sent["properties"]["ids"]
+    assert sent["additionalProperties"] is False
+
+
+@pytest.mark.parametrize("native_key", ["legacy", "bedrock"])
+def test_bedrock_messages_shared_defs_reach_native_output_once_instead_of_inlined_per_use(
+    set_native_structured_output, native_key
+):
+    model: Final = "us.anthropic.claude-sonnet-5"
+    set_native_structured_output(model, native_key)
+    party_ref: Final = {"$ref": "#/$defs/Party"}
+    schema: Final = {
+        "type": "object",
+        "properties": {"buyer": party_ref, "seller": party_ref},
+        "required": ["buyer", "seller"],
+        "additionalProperties": False,
+        "$defs": {
+            "Party": {
+                "type": "object",
+                "properties": {"email": {"anyOf": [{"type": "string"}, {"type": "null"}]}},
+                "required": ["email"],
+                "additionalProperties": False,
+            }
+        },
+    }
+
+    result: Final = _bedrock_messages_request_with_schema(model, schema)
+
+    sent: Final = result["output_config"]["format"]["schema"]
+    assert sent["properties"]["buyer"] == party_ref
+    assert json.dumps(sent).count('"anyOf"') == 1
+
+
+MESSAGES_TREE_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"root": {"$ref": "#/$defs/Node"}},
+    "$defs": {
+        "Node": {
+            "type": "object",
+            "properties": {"children": {"type": "array", "items": {"$ref": "#/$defs/Node"}}},
+        }
+    },
+}
+MESSAGES_OPEN_OBJECT_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"counts": {"type": "object", "additionalProperties": {"type": "integer"}}},
+}
+
+
+@pytest.mark.parametrize(
+    "schema", [MESSAGES_TREE_SCHEMA, MESSAGES_OPEN_OBJECT_SCHEMA], ids=["recursive", "open-object"]
+)
+def test_bedrock_messages_schema_native_output_cannot_hold_is_inlined_on_a_bedrock_native_profile(
+    set_native_structured_output, schema
+):
+    model: Final = "us.anthropic.claude-sonnet-5"
+    set_native_structured_output(model, "bedrock")
+
+    result: Final = _bedrock_messages_request_with_schema(model, schema)
+
+    assert "output_config" not in result
+    assert json.loads(result["messages"][-1]["content"][-1]["text"]) == schema
+
+
+@pytest.mark.parametrize(
+    "schema", [MESSAGES_TREE_SCHEMA, MESSAGES_OPEN_OBJECT_SCHEMA], ids=["recursive", "open-object"]
+)
+def test_bedrock_messages_schema_native_output_cannot_hold_is_forwarded_on_a_legacy_native_profile(
+    set_native_structured_output, schema
+):
+    model: Final = "us.anthropic.claude-sonnet-4-6"
+    set_native_structured_output(model, "legacy")
+
+    result: Final = _bedrock_messages_request_with_schema(model, schema)
+
+    assert result["output_config"]["format"]["schema"] == schema
+
+
 def test_bedrock_messages_legacy_output_format_wins_over_output_config_format(local_model_cost_map):
     """When a request carries both schema forms, the legacy top-level
     ``output_format`` keeps winning, matching the pre-existing precedence."""
@@ -3197,7 +3367,11 @@ def test_bedrock_messages_legacy_output_format_wins_over_output_config_format(lo
     cfg = AmazonAnthropicClaudeMessagesConfig()
     legacy_format = {
         "type": "json_schema",
-        "schema": {"type": "object", "properties": {"legacy_field": {"type": "string"}}},
+        "schema": {
+            "type": "object",
+            "properties": {"legacy_field": {"type": "string"}},
+            "additionalProperties": False,
+        },
     }
     newer_format = {
         "type": "json_schema",
@@ -3231,7 +3405,7 @@ def test_bedrock_messages_drop_params_keeps_native_output_config_format(local_mo
     cfg = AmazonAnthropicClaudeMessagesConfig()
     schema_format = {
         "type": "json_schema",
-        "schema": {"type": "object", "properties": {"zebra_count": {"type": "integer"}}},
+        "schema": {"type": "object", "properties": {"zebra_count": {"type": "integer"}}, "additionalProperties": False},
     }
 
     result = cfg.transform_anthropic_messages_request(
@@ -3256,7 +3430,7 @@ def test_bedrock_messages_strips_effort_but_keeps_format_for_sonnet_4_5(local_mo
     cfg = AmazonAnthropicClaudeMessagesConfig()
     schema_format = {
         "type": "json_schema",
-        "schema": {"type": "object", "properties": {"zebra_count": {"type": "integer"}}},
+        "schema": {"type": "object", "properties": {"zebra_count": {"type": "integer"}}, "additionalProperties": False},
     }
 
     result = cfg.transform_anthropic_messages_request(

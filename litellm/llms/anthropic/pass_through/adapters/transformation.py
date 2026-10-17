@@ -1637,7 +1637,7 @@ class LiteLLMAnthropicMessagesAdapter:
     def translate_streaming_openai_chunk_to_anthropic_content_block(
         self, choices: list[OpenAIStreamingChoice | StreamingChoices]
     ) -> tuple[
-        Literal["text", "tool_use", "thinking"],
+        Literal["text", "tool_use", "thinking", "redacted_thinking"],
         "ContentBlockContentBlockDict",
     ]:
         from litellm._uuid import uuid
@@ -1674,6 +1674,10 @@ class LiteLLMAnthropicMessagesAdapter:
                 thinking_blocks = choice.delta.thinking_blocks or []
                 if len(thinking_blocks) > 0:
                     thinking_block = thinking_blocks[0]
+                    if thinking_block["type"] == "redacted_thinking":
+                        return "redacted_thinking", ChatCompletionRedactedThinkingBlock(
+                            type="redacted_thinking", data=thinking_block.get("data") or ""
+                        )
                     if thinking_block["type"] == "thinking":
                         thinking = thinking_block.get("thinking") or ""
                         signature = thinking_block.get("signature") or ""
@@ -1682,7 +1686,7 @@ class LiteLLMAnthropicMessagesAdapter:
                         assert isinstance(signature, str)
 
                         return "thinking", ChatCompletionThinkingBlock(
-                            type="thinking", thinking=thinking, signature=signature
+                            type="thinking", thinking=thinking if signature else "", signature=signature
                         )
             # OpenAI-compatible reasoning backends (e.g. vLLM/SGLang reasoning
             # parsers) populate ``reasoning_content`` without ``thinking_blocks``.

@@ -1641,9 +1641,10 @@ class TestMCPServerManager:
         assert server.oauth2_flow is None
 
     @pytest.mark.asyncio
-    async def test_load_servers_from_config_warns_for_id_jag_with_google_sso(self, monkeypatch, caplog):
+    async def test_load_servers_from_config_is_silent_for_id_jag_with_saml_sso(self, monkeypatch, caplog):
+        """A SAML login retains the signed assertion as the saml2 subject token, so SAML is not a gap."""
         self._clear_sso_env(monkeypatch)
-        monkeypatch.setenv("GOOGLE_CLIENT_ID", "google-cid")
+        monkeypatch.setenv("SAML_IDP_METADATA_URL", "https://idp.example.com/metadata")
         manager = MCPServerManager()
         with (
             patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)),
@@ -1652,10 +1653,25 @@ class TestMCPServerManager:
         ):
             await manager.load_servers_from_config(self._id_jag_config())
 
-        warnings = [message for message in caplog.messages if "oauth2_id_jag" in message]
-        assert len(warnings) == 1
-        assert "idjag_server" in warnings[0]
-        assert "GENERIC_CLIENT_ID" in warnings[0]
+        assert [message for message in caplog.messages if "oauth2_id_jag" in message] == []
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("client_id_env", ["GOOGLE_CLIENT_ID", "MICROSOFT_CLIENT_ID", "GENERIC_CLIENT_ID"])
+    async def test_load_servers_from_config_is_silent_for_id_jag_under_oidc_logins(
+        self, monkeypatch, caplog, client_id_env
+    ):
+        """Every OIDC login captures the IdP id_token an id_jag server spends, so none of them is a gap."""
+        self._clear_sso_env(monkeypatch)
+        monkeypatch.setenv(client_id_env, "cid")
+        manager = MCPServerManager()
+        with (
+            patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)),
+            patch.object(manager, "hydrate_config_servers_dcr_clients", new=AsyncMock()),
+            caplog.at_level(logging.WARNING, logger="LiteLLM"),
+        ):
+            await manager.load_servers_from_config(self._id_jag_config())
+
+        assert not any("oauth2_id_jag" in message for message in caplog.messages)
 
     @pytest.mark.asyncio
     async def test_load_servers_from_config_does_not_warn_for_id_jag_without_sso(self, monkeypatch, caplog):
@@ -15616,6 +15632,73 @@ def _mcp_upstream(respond):
         )
     ):
         yield
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("responder", "expects_exchange", "expected_fragments"),
+    (
+        pytest.param(
+            AsyncMock(return_value=httpx2.Response(500, json={"error": "health-check-boom"})),
+            True,
+            (
+                "MCP health check failed for",
+                "upstream exchange:",
+                "-> HTTP 500",
+                '"method":"initialize"',
+                "health-check-boom",
+            ),
+            id="upstream-http-500",
+        ),
+        pytest.param(
+            AsyncMock(side_effect=httpx2.ConnectError("connection failed")),
+            False,
+            ("MCP health check failed for",),
+            id="connect-error",
+        ),
+    ),
+)
+async def test_health_check_logs_upstream_exchange_only_for_http_failures(
+    caplog: pytest.LogCaptureFixture,
+    responder: AsyncMock,
+    expects_exchange: bool,
+    expected_fragments: tuple[str, ...],
+) -> None:
+    manager: Final = MCPServerManager(upstream_transport=httpx2.MockTransport(responder))
+    token: Final = "health-check-secret-0123456789"
+    server: Final = MCPServer(
+        server_id="health-check-upstream",
+        name="health_check_upstream",
+        url="https://upstream.example/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.bearer_token,
+        authentication_token=token,
+    )
+    manager.registry[server.server_id] = server
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        result: Final = await manager.health_check_server(server.server_id)
+
+    assert result.status == "unhealthy"
+    warning_messages: Final = tuple(
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "LiteLLM"
+        and record.levelno == logging.WARNING
+        and "MCP health check failed for" in record.getMessage()
+    )
+    assert len(warning_messages) == 1
+    warning: Final = warning_messages[0]
+    assert all(fragment in warning for fragment in expected_fragments)
+    assert ("upstream exchange:" in warning) is expects_exchange
+    assert not any(
+        record.name == "LiteLLM"
+        and record.levelno == logging.WARNING
+        and "run_with_session failed" in record.getMessage()
+        for record in caplog.records
+    )
+    assert token not in caplog.text
+    assert responder.await_args_list[0].args[0].headers["Authorization"] == f"Bearer {token}"
 
 
 class _DiscoveryUpstream:

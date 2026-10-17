@@ -207,7 +207,7 @@ _async_failure_callback: List[Union[str, Callable[..., object], "CustomLogger"]]
     []
 )  # internal variable - async custom callbacks are routed here.
 pre_call_rules: List[Callable] = []
-post_call_rules: List[Callable] = []
+post_call_rules: List[Callable[..., object]] = []
 turn_off_message_logging: Optional[bool] = False
 standard_logging_payload_excluded_fields: Optional[List[str]] = (
     None  # Fields to exclude from StandardLoggingPayload before callbacks receive it
@@ -1178,7 +1178,9 @@ def _build_models_by_provider() -> dict:
         "edenai": edenai_models,
         "datarobot": datarobot_models,
         "vertex_ai": vertex_chat_models
+        | vertex_code_chat_models
         | vertex_text_models
+        | vertex_code_text_models
         | vertex_anthropic_models
         | vertex_vision_models
         | vertex_language_models
@@ -1186,7 +1188,7 @@ def _build_models_by_provider() -> dict:
         | vertex_minimax_models
         | vertex_moonshot_models
         | vertex_zai_models,
-        "ai21": ai21_models,
+        "ai21": ai21_models | ai21_chat_models,
         "bedrock": bedrock_models | bedrock_converse_models,
         "petals": petals_models,
         "ollama": ollama_models,
@@ -1417,6 +1419,7 @@ from .exceptions import (
     InvalidRequestError,
     BadRequestError,
     ImageFetchError,
+    MalformedRequestFieldError as MalformedRequestFieldError,
     VectorStoreSearchError,
     NotFoundError,
     PermissionDeniedError,
@@ -1691,6 +1694,9 @@ if TYPE_CHECKING:
     )
     from .llms.perplexity.decisions.transformation import (
         PerplexityDecisionsConfig as PerplexityDecisionsConfig,
+    )
+    from .llms.nace.decisions.transformation import (
+        NaceDecisionsConfig as NaceDecisionsConfig,
     )
     from .llms.typesafe.decisions.transformation import (
         TypeSafeDecisionsConfig as TypeSafeDecisionsConfig,
