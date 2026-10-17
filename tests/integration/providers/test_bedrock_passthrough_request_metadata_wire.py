@@ -1,13 +1,13 @@
 import base64
 import json
 import uuid
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Final
 
 import boto3
 import pytest
 import yaml
-from botocore.awsrequest import AWSPreparedRequest
 from botocore.config import Config
 from integration._support.client import Gateway
 from integration._support.process import owned_proxy
@@ -18,19 +18,19 @@ from pydantic import JsonValue
 _MODEL_ID: Final = "anthropic.claude-sonnet-5-v1:0"
 _EVENT_STREAM: Final = "application/vnd.amazon.eventstream"
 _METADATA_HEADER: Final = "x-amzn-bedrock-request-metadata"
-_MESSAGES: Final[list[JsonValue]] = [{"role": "user", "content": [{"text": "who is calling"}]}]
-_INVOKE_BODY: Final[dict[str, JsonValue]] = {
+_MESSAGES: Final[Sequence[JsonValue]] = [{"role": "user", "content": [{"text": "who is calling"}]}]
+_INVOKE_BODY: Final[Mapping[str, JsonValue]] = {
     "anthropic_version": "bedrock-2023-05-31",
     "max_tokens": 16,
     "messages": [{"role": "user", "content": "who is calling"}],
 }
-_CONVERSE_REPLY: Final[dict[str, JsonValue]] = {
+_CONVERSE_REPLY: Final[Mapping[str, JsonValue]] = {
     "output": {"message": {"role": "assistant", "content": [{"text": "ok"}]}},
     "stopReason": "end_turn",
     "usage": {"inputTokens": 5, "outputTokens": 1, "totalTokens": 6},
     "metrics": {"latencyMs": 3},
 }
-_INVOKE_REPLY: Final[dict[str, JsonValue]] = {
+_INVOKE_REPLY: Final[Mapping[str, JsonValue]] = {
     "id": "msg_bedrock",
     "type": "message",
     "role": "assistant",
@@ -58,21 +58,13 @@ def _bedrock_peer(request: Request) -> Reply:
     return Reply(body=json.dumps(_INVOKE_REPLY).encode())
 
 
-def _boto3_runtime(gateway: Gateway, key: str):  # noqa: ANN202 - boto3 clients are untyped
-    client: Final = boto3.client(
+def _boto3_runtime(gateway: Gateway):  # noqa: ANN202  # boto3 clients are untyped
+    return boto3.client(
         "bedrock-runtime",
         endpoint_url=f"{str(gateway.client.base_url).rstrip('/')}/bedrock",
         region_name="us-east-1",
-        aws_access_key_id="AKIACALLERSIDE",
-        aws_secret_access_key="caller-side-secret",
         config=Config(retries={"max_attempts": 1}),
     )
-
-    def bearer(request: AWSPreparedRequest, **_: object) -> None:
-        request.headers["Authorization"] = f"Bearer {key}"
-
-    client.meta.events.register("before-send.bedrock-runtime.*", bearer)
-    return client
 
 
 def _signed_header_names(request: Request) -> frozenset[str]:
@@ -80,7 +72,7 @@ def _signed_header_names(request: Request) -> frozenset[str]:
 
 
 def test_boto3_passthrough_calls_carry_the_key_identity_in_signed_request_metadata(
-    gateway: Gateway, tmp_path: Path
+    gateway: Gateway, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     suffix: Final = uuid.uuid4().hex[:12]
     router_name: Final = f"bedrock-metadata-{suffix}"
@@ -131,7 +123,8 @@ def test_boto3_passthrough_calls_carry_the_key_identity_in_signed_request_metada
                 "agent": "triage-bot",
             }
             forged: Final = {"user_api_key_team_alias": "forged", "ticket": "T-42", "bad!": "x"}
-            runtime: Final = _boto3_runtime(candidate, key)
+            monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", key)
+            runtime: Final = _boto3_runtime(candidate)
 
             converse: Final = runtime.converse(modelId=router_name, messages=_MESSAGES, requestMetadata=forged)
             converse_stream: Final = [
