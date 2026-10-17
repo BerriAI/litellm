@@ -553,3 +553,83 @@ def test_client_cache_control_changes_nothing_for_a_deployment_that_does_not_rea
     )
 
     assert marked == unmarked
+
+
+REASONING_MODEL: Final = "gpt-bridge-reasoning-cost"
+REASONING_RATES: Final = {
+    "input_cost_per_token": 2e-06,
+    "output_cost_per_token": 1e-05,
+    "output_cost_per_reasoning_token": 3e-05,
+}
+REASONING_RESPONSE: Final = {
+    "id": "resp_bridge_reasoning",
+    "object": "response",
+    "created_at": 1,
+    "status": "completed",
+    "model": REASONING_MODEL,
+    "output": [
+        {"type": "reasoning", "id": "rs_1", "status": "completed", "summary": []},
+        {
+            "type": "message",
+            "id": "msg_1",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "answer", "annotations": []}],
+        },
+    ],
+    "parallel_tool_calls": True,
+    "tool_choice": "auto",
+    "tools": [],
+    "usage": {
+        "input_tokens": 1240,
+        "output_tokens": 4040,
+        "total_tokens": 5280,
+        "input_tokens_details": {"cached_tokens": 0},
+        "output_tokens_details": {"reasoning_tokens": 3480},
+    },
+}
+
+
+@pytest.mark.asyncio
+async def test_recomputed_cost_of_a_served_bridge_response_prices_the_reasoning_tokens(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-bridge-reasoning-test")
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    monkeypatch.setitem(
+        litellm.model_cost, REASONING_MODEL, {"litellm_provider": "openai", "mode": "responses", **REASONING_RATES}
+    )
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    respx_mock.post("https://api.openai.com/v1/responses").respond(status_code=200, json=REASONING_RESPONSE)
+    logging_obj: Final = Logging(
+        model=REASONING_MODEL,
+        messages=MESSAGES,
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=datetime.datetime.now(datetime.timezone.utc),
+        litellm_call_id="bridge-reasoning-0000-4000-8000-000000000001",
+        function_id="1234",
+    )
+
+    served: Final = await LiteLLMMessagesToResponsesAPIHandler.async_anthropic_messages_handler(
+        max_tokens=412,
+        messages=MESSAGES,
+        model=f"openai/{REASONING_MODEL}",
+        custom_llm_provider="openai",
+        litellm_logging_obj=logging_obj,
+    )
+    assert isinstance(served, dict) and "reasoning" not in json.dumps(served["usage"])
+
+    cost: Final = ProxyBaseLLMRequestProcessing._response_cost_from_logging_obj(
+        response=dict(served), logging_obj=logging_obj
+    )
+
+    expected_reasoning: Final = 3480 * REASONING_RATES["output_cost_per_reasoning_token"]
+    expected_output: Final = expected_reasoning + (4040 - 3480) * REASONING_RATES["output_cost_per_token"]
+    assert cost == pytest.approx(1240 * REASONING_RATES["input_cost_per_token"] + expected_output)
+    assert logging_obj.cost_breakdown is not None
+    assert logging_obj.cost_breakdown["output_cost"] == pytest.approx(expected_output)
+    assert logging_obj.cost_breakdown["reasoning_cost"] == pytest.approx(expected_reasoning)

@@ -67,6 +67,7 @@ class ProviderConnection:
     api_key: str | None = None
     api_base: str | None = None
     api_version: str | None = None
+    responses_api_version: str | None = None
     region_name: str | None = None
     headers: Mapping[str, str] | None = None
     provider_specific_header: "ProviderSpecificHeader | Sequence[ProviderSpecificHeader] | None" = None

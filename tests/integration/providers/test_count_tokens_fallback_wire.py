@@ -1,8 +1,10 @@
 import json
 import re
 from collections.abc import Callable, Iterator, Mapping
+from itertools import chain
 from pathlib import Path
 from typing import Final
+from uuid import uuid4
 
 import anthropic
 import httpx
@@ -628,19 +630,45 @@ def test_shipped_framing_never_answers_a_500_for_a_body_the_local_count_cannot_r
 
 
 _GEMINI_MODEL: Final = "gemini-4-argon"
+_GEMINI_FALLBACK_MODEL: Final = "gemini-3.8-flash"
 _VERTEX_PROJECT: Final = "scripted-project"
-_UNCOUNTABLE_TOOL: Final[dict[str, JsonValue]] = {"name": "lookup", "input_schema": "not-a-schema"}
+_COMPACT_UNDER_THE_MINIMUM_TRIGGER: Final[dict[str, JsonValue]] = {
+    "edits": [{"type": "compact_20260112", "trigger": {"type": "input_tokens", "value": 1000}}]
+}
+_CLEAR_OLDER_TOOL_RESULTS: Final[dict[str, JsonValue]] = {
+    "edits": [
+        {
+            "type": "clear_tool_uses_20250919",
+            "trigger": {"type": "input_tokens", "value": 500},
+            "keep": {"type": "tool_uses", "value": 1},
+        }
+    ]
+}
+_READ_FILE_TOOL: Final[dict[str, JsonValue]] = {
+    "name": "read_file",
+    "description": "Read a file",
+    "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}},
+}
+_FILE_TEXT: Final = "line of a long file that the agent read earlier. " * 180
+_FILES: Final = 3
 
 
 def _google_cannot_count(_request: Request) -> Reply:
     return _json_reply(400, {"error": {"code": 400, "message": "scripted count 400", "status": "INVALID_ARGUMENT"}})
 
 
-def _google_deployment(gateway: Gateway, scenario: Scenario, wire: Wire, provider: str) -> str:
-    framing: Final[dict[str, JsonValue]] = {"token_count_framing": _FRAMING}
+def _google_counts_only_the_fallback_model(request: Request) -> Reply:
+    if request.target.endswith(f"/{_GEMINI_FALLBACK_MODEL}:countTokens"):
+        return _json_reply(200, {"totalTokens": _FALLBACK_COUNT})
+    return _google_cannot_count(request)
+
+
+def _google_deployment(
+    gateway: Gateway, scenario: Scenario, wire: Wire, provider: str, model_info: dict[str, JsonValue]
+) -> str:
     if provider == "gemini":
         return scenario.model(
-            model=f"gemini/{_GEMINI_MODEL}", api_base=wire.url, api_key="scripted-gemini-key", model_info=framing
+            model=f"gemini/{_GEMINI_MODEL}", api_base=wire.url, api_key="scripted-gemini-key", model_info=model_info
         )
     return scenario.model(
         model=f"vertex_ai/{_GEMINI_MODEL}",
@@ -649,7 +677,7 @@ def _google_deployment(gateway: Gateway, scenario: Scenario, wire: Wire, provide
         vertex_project=_VERTEX_PROJECT,
         vertex_location="us-east5",
         vertex_credentials=service_account_json(_VERTEX_PROJECT, gateway.upstream_url.rstrip("/")),
-        model_info=framing,
+        model_info=model_info,
     )
 
 
@@ -657,22 +685,89 @@ def _google_count_targets(wire: Wire) -> tuple[bool, ...]:
     return tuple(request.target.endswith(":countTokens") for request in wire.drain())
 
 
+def _read_file_round(marker: str, index: int) -> tuple[JsonValue, ...]:
+    return (
+        {"role": "user", "content": f"Read file {index}."},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "tool_use", "id": f"toolu_{index}", "name": "read_file", "input": {"path": f"{index}.txt"}}
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": f"toolu_{index}",
+                    "content": f"<file {marker}-{index}>{_FILE_TEXT}",
+                }
+            ],
+        },
+    )
+
+
+def _agent_messages(marker: str) -> list[JsonValue]:
+    rounds: Final = tuple(chain.from_iterable(_read_file_round(marker, index) for index in range(_FILES)))
+    return [*rounds, {"role": "user", "content": "Summarize what you read."}]
+
+
+def _counted_files(request: Request, marker: str) -> tuple[bool, tuple[bool, ...]]:
+    sent: Final = json.dumps(_JSON_OBJECT.validate_json(request.body))
+    return (
+        request.target.endswith(f"/{_GEMINI_FALLBACK_MODEL}:countTokens"),
+        tuple(f"<file {marker}-{index}>" in sent for index in range(_FILES)),
+    )
+
+
 @pytest.mark.parametrize("provider", ["gemini", "vertex_ai"])
-def test_framing_keeps_the_400_for_tools_the_gemini_count_rejects_before_calling_google(
+def test_framing_keeps_the_400_for_a_context_edit_the_gemini_count_rejects_before_calling_google(
     counting_proxy: OwnedProxy, provider: str
 ) -> None:
     gateway: Final = counting_proxy.gateway
     hello: Final[list[JsonValue]] = [{"role": "user", "content": "hello"}]
     with wire_server(_google_cannot_count) as google, gateway.scenario() as scenario:
-        model: Final = _google_deployment(gateway, scenario, google, provider)
+        model: Final = _google_deployment(gateway, scenario, google, provider, {"token_count_framing": _FRAMING})
         rejected: Final = gateway.request(
-            "POST", "/v1/messages/count_tokens", {"model": model, "messages": hello, "tools": [_UNCOUNTABLE_TOOL]}
+            "POST",
+            "/v1/messages/count_tokens",
+            {"model": model, "messages": hello, "context_management": _COMPACT_UNDER_THE_MINIMUM_TRIGGER},
         )
         assert rejected.status_code == 400, rejected.text
-        error: Final = _JSON_OBJECT.validate_json(rejected.content)["error"]
-        assert isinstance(error, dict) and "JSON object schema" in str(error.get("message")), error
         assert _google_count_targets(google) == ()
         estimated: Final = gateway.request("POST", "/v1/messages/count_tokens", {"model": model, "messages": hello})
         assert estimated.status_code == 200, estimated.text
         assert _JSON_OBJECT.validate_json(estimated.content).get("litellm_count_source") == "local_estimate"
         assert _google_count_targets(google) == (True,)
+
+
+@pytest.mark.parametrize("provider", ["gemini", "vertex_ai"])
+def test_fallback_model_counts_the_body_left_after_the_context_management_edits(
+    counting_proxy: OwnedProxy, provider: str
+) -> None:
+    gateway: Final = counting_proxy.gateway
+    marker: Final = uuid4().hex
+    with wire_server(_google_counts_only_the_fallback_model) as google, gateway.scenario() as scenario:
+        model: Final = _google_deployment(
+            gateway, scenario, google, provider, {"token_count_fallback_model": _GEMINI_FALLBACK_MODEL}
+        )
+        counted: Final = gateway.request(
+            "POST",
+            "/v1/messages/count_tokens",
+            {
+                "model": model,
+                "tools": [_READ_FILE_TOOL],
+                "messages": _agent_messages(marker),
+                "context_management": _CLEAR_OLDER_TOOL_RESULTS,
+            },
+        )
+        assert counted.status_code == 200, counted.text
+        assert _JSON_OBJECT.validate_json(counted.content) == {
+            "input_tokens": _FALLBACK_COUNT,
+            "litellm_count_source": "fallback_model",
+            "litellm_count_fallback_model": _GEMINI_FALLBACK_MODEL,
+        }
+        assert tuple(_counted_files(request, marker) for request in google.drain()) == (
+            (False, (False, False, True)),
+            (True, (False, False, True)),
+        )

@@ -26992,6 +26992,12 @@ export interface components {
              */
             fail_on_error: boolean | null;
             /**
+             * Forward Messages As Sent
+             * @description Only honored by guardrail='generic_guardrail_api'. When True, structured_messages reaches the guardrail exactly as the client sent it, so rows can carry provider-native content blocks and keys the OpenAI chat types do not declare. Default False sends OpenAI-format chat rows with undeclared keys removed.
+             * @default false
+             */
+            forward_messages_as_sent: boolean | null;
+            /**
              * Guard Name
              * @description Name of the guardrail in guardrails.ai
              */
@@ -35319,6 +35325,8 @@ export interface components {
             regional_processing_uplift_multiplier_eu?: number | null;
             /** Regional Processing Uplift Multiplier Us */
             regional_processing_uplift_multiplier_us?: number | null;
+            /** Responses Api Version */
+            responses_api_version?: string | null;
             /** Rpm */
             rpm?: number | null;
             /** S3 Access Key Id */
@@ -36471,6 +36479,12 @@ export interface components {
              * @description HTTP timeout in seconds for checking attached files. Default: 10.
              */
             file_guardrail_timeout?: number | null;
+            /**
+             * Forward Messages As Sent
+             * @description Only honored by guardrail='generic_guardrail_api'. When True, structured_messages reaches the guardrail exactly as the client sent it, so rows can carry provider-native content blocks and keys the OpenAI chat types do not declare. Default False sends OpenAI-format chat rows with undeclared keys removed.
+             * @default false
+             */
+            forward_messages_as_sent: boolean | null;
             /**
              * Gateway Name
              * @description noma_v2 only: name of this gateway, used as the gateway_host label on Noma scans
@@ -50548,6 +50562,8 @@ export interface components {
             regional_processing_uplift_multiplier_eu?: number | null;
             /** Regional Processing Uplift Multiplier Us */
             regional_processing_uplift_multiplier_us?: number | null;
+            /** Responses Api Version */
+            responses_api_version?: string | null;
             /** Rpm */
             rpm?: number | null;
             /** S3 Access Key Id */
