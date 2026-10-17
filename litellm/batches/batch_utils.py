@@ -802,8 +802,9 @@ def _batch_response_was_successful(
         if envelope is not None:
             verbose_logger.warning("batch output %s must be an object, treating the line as unsuccessful", envelope_key)
         return False
+    response: Final = cast(Mapping[object, object], envelope)  # cast-ok: mapping shape validated above
     return (
-        envelope.get("type") == "succeeded"
+        response.get("type") == "succeeded"
         if custom_llm_provider == "anthropic"
-        else envelope.get("status_code") == 200
+        else response.get("status_code") == 200
     )
