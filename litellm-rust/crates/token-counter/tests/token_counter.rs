@@ -96,6 +96,26 @@ mod json {
         assert_eq!(count.input_tokens, expected);
     }
 
+    fn assert_inline_base64_payload_is_not_counted_as_text(load: JsonLoader, prefix: &str) {
+        let counter = counter(load);
+        let count = |image_url: &str| {
+            let body = serde_json::json!({
+                "model": "m",
+                "input": [{"role": "user", "content": [
+                    {"type": "input_text", "text": "What is in this screenshot?"},
+                    {"type": "input_image", "image_url": image_url}]}, image_url]
+            })
+            .to_string();
+            counter
+                .count_request(&CountableRequest::parse(body.as_bytes()).expect("parses"))
+                .expect("counts")
+                .input_tokens
+        };
+        let with_payload = count(&format!("{prefix}{}", "iVBORw0KGgo".repeat(100_000)));
+        assert_eq!(with_payload, count(prefix));
+        assert!(with_payload < 100, "{with_payload}");
+    }
+
     fn assert_shapes_outside_the_mirror_are_declined_at_count(load: JsonLoader, body: &[u8]) {
         let request = CountableRequest::parse(body).expect("shape parses");
         assert!(matches!(
@@ -171,6 +191,13 @@ mod json {
             #[case::null_prompt_counts_zero(r#"{"model":"m","prompt":null}"#, 0)]
             fn key_presence_follows_python(#[case] body: &str, #[case] expected: usize) {
                 super::assert_key_presence_follows_python($loader, body, expected);
+            }
+
+            #[rstest]
+            #[case::png("data:image/png;base64,")]
+            #[case::pdf("data:application/pdf;base64,")]
+            fn inline_base64_payload_is_not_counted_as_text(#[case] prefix: &str) {
+                super::assert_inline_base64_payload_is_not_counted_as_text($loader, prefix);
             }
 
             #[rstest]

@@ -291,6 +291,19 @@ PARITY_REQUESTS: Final[tuple[dict[str, object], ...]] = (
             {"role": "assistant", "content": "Sure."},
         ],
     },
+    {
+        "model": MODEL,
+        "input": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "What is in this screenshot?"},
+                    {"type": "input_image", "image_url": "data:image/png;base64," + "iVBORw0KGgo" * 1_000},
+                ],
+            },
+            "data:application/pdf;base64,JVBERi0xLjQK",
+        ],
+    },
     {"model": MODEL, "input": "a single embedding string"},
     {"model": MODEL, "input": [[101, 2023, 5], [7]], "encoding_format": "float"},
     {"model": MODEL, "query": "best harbour", "documents": ["doc one", {"text": "doc two", "title": "T", "n": 3}]},
