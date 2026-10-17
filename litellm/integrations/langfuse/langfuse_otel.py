@@ -13,6 +13,9 @@ from litellm.integrations.langfuse.langfuse_otel_attributes import (
     LangfuseLLMObsOTELAttributes,
 )
 from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
+from litellm.integrations.otel.mappers.langfuse import TRACE_IDENTITY_FIELDS
+from litellm.integrations.otel.model.metadata import exported_request_metadata
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.types.integrations.langfuse_otel import (
     LangfuseSpanAttributes,
@@ -135,11 +138,6 @@ class LangfuseOtelLogger(OpenTelemetry):
         span: Span,
         kwargs: dict[str, object],  # mutable-ok: required callback signature accepts kwargs as a dict
     ) -> None:
-        from litellm.integrations.arize._utils import safe_set_attribute
-        from litellm.integrations.otel.mappers.langfuse import TRACE_IDENTITY_FIELDS
-        from litellm.integrations.otel.model.metadata import exported_request_metadata
-        from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-
         raw_standard_logging_object: Final = kwargs.get("standard_logging_object")
         if not isinstance(raw_standard_logging_object, dict):
             return
@@ -148,7 +146,7 @@ class LangfuseOtelLogger(OpenTelemetry):
             return
         observation_metadata: Final = exported_request_metadata(standard_logging_object)
         if observation_metadata:
-            safe_set_attribute(
+            _utils.safe_set_attribute(
                 span,
                 LangfuseSpanAttributes.OBSERVATION_METADATA.value,
                 safe_dumps(dict(observation_metadata)),
@@ -156,7 +154,7 @@ class LangfuseOtelLogger(OpenTelemetry):
         trace_prefix: Final = LangfuseSpanAttributes.TRACE_METADATA.value
         for field in TRACE_IDENTITY_FIELDS:
             if value := observation_metadata.get(field):
-                safe_set_attribute(span, f"{trace_prefix}.{field}", value)
+                _utils.safe_set_attribute(span, f"{trace_prefix}.{field}", value)
 
     @staticmethod
     def _set_observation_output(span: Span, response_obj):

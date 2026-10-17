@@ -60,6 +60,7 @@ if TYPE_CHECKING:
 _INTERNAL_CALL_ORIGINS: Final[frozenset[str]] = frozenset(get_args(InternalCallOrigin))
 _AUTH_ATTRIBUTE: Final = TypeAdapter(object)
 _REQUEST_METADATA_MAPPING_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+_NESTED_METADATA_MAPPING_ADAPTER: Final[TypeAdapter[Mapping[object, object]]] = TypeAdapter(Mapping[object, object])
 _PROMPT_MANAGEMENT_CONTENT_FIELDS: Final[frozenset[str]] = frozenset({"prompt_variables"})
 _MCP_TOOL_CALL_CONTENT_FIELDS: Final[frozenset[str]] = frozenset({"arguments", "result"})
 _VECTOR_STORE_CONTENT_FIELDS: Final[frozenset[str]] = frozenset({"query", "vector_store_search_response"})
@@ -494,7 +495,7 @@ def exported_request_metadata(payload: Mapping[str, object]) -> Mapping[str, obj
 def _without_mapping_content_fields(value: object, content_fields: frozenset[str]) -> object:
     if not isinstance(value, dict):
         return value
-    mapping: Final = _REQUEST_METADATA_MAPPING_ADAPTER.validate_python(value)
+    mapping: Final = _NESTED_METADATA_MAPPING_ADAPTER.validate_python(value)
     return {key: item for key, item in mapping.items() if key not in content_fields}
 
 

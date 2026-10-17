@@ -644,6 +644,31 @@ class TestLangfuseOtelIntegration:
             assert [key for key in actual if key.startswith("langfuse.trace.metadata")] == ["langfuse.trace.metadata"]
             assert "langfuse.observation.metadata" not in actual
 
+    @pytest.mark.parametrize(
+        "unexpected_shape",
+        [
+            {"prompt_management_metadata": {1: "one", "prompt_id": "prompt-1"}},
+            {"mcp_tool_call_metadata": {1: "one", "name": "lookup_weather"}},
+            {"vector_store_request_metadata": [{1: "one", "vector_store_id": "vs-1"}]},
+        ],
+    )
+    def test_request_metadata_of_unexpected_shape_keeps_the_observation_output(
+        self, unexpected_shape: dict[str, object]
+    ) -> None:
+        kwargs: Final[dict[str, object]] = {
+            "litellm_params": {"metadata": {}},
+            "standard_logging_object": {"metadata": {**unexpected_shape, "spend_logs_metadata": {"env": "prod"}}},
+        }
+        response_obj: Final = {"choices": [{"message": {"role": "assistant", "content": "hello"}}]}
+
+        with patch("litellm.integrations.arize._utils.safe_set_attribute") as mock_safe_set_attribute:
+            LangfuseOtelLogger._set_langfuse_specific_attributes(MagicMock(), kwargs, response_obj)
+
+            actual: Final = {call.args[1]: call.args[2] for call in mock_safe_set_attribute.call_args_list}
+
+            assert json.loads(actual["langfuse.observation.metadata"])["spend_logs_metadata"] == {"env": "prod"}
+            assert json.loads(actual["langfuse.observation.output"]) == {"role": "assistant", "content": "hello"}
+
 
 class TestLangfuseOtelKeyDynamicConfig:
     """Key/team-scoped Langfuse credentials must define the full export target

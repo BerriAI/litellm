@@ -919,3 +919,24 @@ def test_langfuse_mapper_omits_observation_metadata_without_payload_metadata():
     attrs: Final = LangfuseMapper().map(LLMCallSpanData.from_standard_logging_payload(payload))
 
     assert json.loads(attrs["langfuse.observation.metadata"]) == {"requester_metadata": {}}
+
+
+@pytest.mark.parametrize(
+    "unexpected_shape",
+    [
+        {"prompt_management_metadata": {1: "one", "prompt_id": "prompt-1"}},
+        {"mcp_tool_call_metadata": {1: "one", "name": "lookup_weather"}},
+        {"vector_store_request_metadata": [{1: "one", "vector_store_id": "vs-1"}]},
+    ],
+)
+def test_span_data_builds_from_request_metadata_of_unexpected_shape(unexpected_shape: dict[str, object]) -> None:
+    payload: Final[dict[str, object]] = {
+        "call_type": "acompletion",
+        "custom_llm_provider": "openai",
+        "model": "gpt-4o",
+        "metadata": {**unexpected_shape, "spend_logs_metadata": {"ticket": "LIT-8283"}},
+        "response": {},
+    }
+    attrs: Final = LangfuseMapper().map(LLMCallSpanData.from_standard_logging_payload(payload))
+
+    assert json.loads(attrs["langfuse.observation.metadata"])["spend_logs_metadata"] == {"ticket": "LIT-8283"}
