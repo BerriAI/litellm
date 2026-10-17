@@ -36,10 +36,39 @@ from litellm.types.utils import ModelInfo, PromptTokensDetailsWrapper, Usage
 
 
 class SavingsSpend(NamedTuple):
-    compression: float
-    prompt_caching: float
+    """Dollar savings for one request, split by optimization driver.
+
+    ``compression``, ``prompt_caching`` and ``gateway_injected_caching`` carry
+    ``None`` when the request's savings could not be priced: an unmapped model,
+    a model with no input rate, or a usage record that never parsed. Such a
+    request has no dollar figure, and a flat ``0.0`` would read as a measured
+    zero -- the cost-map removals turned every ``openrouter/*`` deployment into
+    exactly that misreport. ``None`` reaches the daily tables as NULL, which the
+    readers already treat as "not priced" rather than as "saved nothing".
+    ``autorouter`` stays a plain ``float``: an un-routed request genuinely has
+    no auto-router savings, and unknown estimates are already kept apart by
+    ``recorded_estimated_autorouter_savings``.
+    """
+
+    compression: float | None
+    prompt_caching: float | None
     autorouter: float = 0.0
-    gateway_injected_caching: float = 0.0
+    gateway_injected_caching: float | None = 0.0
+
+
+def _priced_tokens(tokens: int, rate: float | None) -> float | None:
+    """Dollar cost of ``tokens`` at ``rate``, or ``None`` when no rate resolves.
+
+    Zero tokens are a priced zero whatever the rate -- nothing was saved, so
+    there is nothing to price -- while tokens saved against a request the cost
+    map cannot price stay ``None`` so the write layer records them as unpriced
+    instead of a flat ``$0.00``.
+    """
+    if tokens <= 0:
+        return 0.0
+    if rate is None:
+        return None
+    return max(tokens, 0) * rate
 
 
 def _coerce_billed_at(value: datetime | str | None) -> datetime | None:
@@ -617,6 +646,16 @@ def compute_savings_spend(
     Savings stay signed: a write-only request can lose money, and daily rollups net
     those losses against read savings.
 
+    Savings the request's pricing cannot resolve report ``None``, not ``0.0``:
+    since the OpenRouter rows left the cost map, an ``openrouter/*`` deployment
+    still records the tokens it saved, and a flat zero dollar value alongside
+    them reads as "saved nothing" where the truth is "could not price". ``None``
+    is what the daily tables store as NULL, so the dashboard keeps its visible
+    totals (readers sum the priced dollars) while the row stops claiming a
+    measurement it never made. Deployment-configured rates still price it, as
+    before, and a priced request whose usage record is missing keeps reporting
+    ``0.0``: that zero is about the usage, not the price.
+
     Caching is reported twice. ``prompt_caching`` is every net dollar caching saved,
     whoever caused it, which is what a customer means by "what did caching save me".
     ``gateway_injected_caching`` is the subset the gateway can claim credit for, carrying
@@ -654,9 +693,13 @@ def compute_savings_spend(
     request_pricing: Final = _request_savings_pricing(model, custom_llm_provider, model_id, llm_router)
     provider: Final = request_pricing[0]
     pricing: Final = request_pricing[1]
-    input_cost: Final = (get_cost_per_unit(pricing, "input_cost_per_token") or 0.0) if pricing else 0.0
-    compression: Final = max(compression_saved_tokens, 0) * input_cost
-    prompt_caching: Final = _prompt_caching_savings(pricing, provider, usage_object, cost_breakdown, billed_at) or 0.0
+    input_cost: Final = get_cost_per_unit(pricing, "input_cost_per_token", default_value=None) if pricing else None
+    compression: Final = _priced_tokens(compression_saved_tokens, input_cost)
+    prompt_caching: Final = (
+        None
+        if pricing is None
+        else (_prompt_caching_savings(pricing, provider, usage_object, cost_breakdown, billed_at) or 0.0)
+    )
     gateway_injected_caching: Final = prompt_caching if gateway_injected_cache else 0.0
 
     # The figure the logging path recorded wins, before the usage gate on purpose: a row

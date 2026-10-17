@@ -592,3 +592,98 @@ async def test_optional_metric_missing_from_an_older_payload_still_aggregates(
     assert updates[0][test_key]["autorouter_savings_spend"] == pytest.approx(0.25)
     assert updates[0][test_key]["total_response_time_ms"] == 900
     assert updates[0][test_key]["timed_requests"] == 1
+
+def test_get_aggregated_daily_spend_update_transactions_unpriced_savings_stay_none():
+    """#46677: two requests whose savings could not be priced aggregate to an
+    unpriced row, not to a measured $0.00."""
+    test_key = "user1_2026-10-15_key123_openrouter-model_openrouter"
+    unpriced = {
+        "spend": 10.0,
+        "prompt_tokens": 100,
+        "completion_tokens": 50,
+        "api_requests": 1,
+        "successful_requests": 1,
+        "failed_requests": 0,
+        "compression_savings_spend": None,
+        "prompt_caching_savings_spend": None,
+        "gateway_injected_caching_savings_spend": None,
+    }
+    result = DailySpendUpdateQueue.get_aggregated_daily_spend_update_transactions(
+        [{test_key: dict(unpriced)}, {test_key: dict(unpriced)}]
+    )
+    assert len(result) == 1
+    merged = result[test_key]
+    assert merged["compression_savings_spend"] is None
+    assert merged["prompt_caching_savings_spend"] is None
+    assert merged["gateway_injected_caching_savings_spend"] is None
+
+
+@pytest.mark.parametrize("order", ["priced_first", "unpriced_first"])
+def test_get_aggregated_daily_spend_update_transactions_unpriced_keeps_priced_dollars(order):
+    """An unpriced request landing on a priced row contributes no dollars and
+    never dilutes the figure the priced requests already earned."""
+    test_key = "user1_2026-10-15_key123_model_provider"
+    priced = {
+        "spend": 10.0,
+        "prompt_tokens": 100,
+        "completion_tokens": 50,
+        "api_requests": 1,
+        "successful_requests": 1,
+        "failed_requests": 0,
+        "compression_savings_spend": 0.11,
+        "prompt_caching_savings_spend": 0.22,
+        "gateway_injected_caching_savings_spend": 0.33,
+    }
+    unpriced = {
+        "spend": 5.0,
+        "prompt_tokens": 200,
+        "completion_tokens": 30,
+        "api_requests": 1,
+        "successful_requests": 1,
+        "failed_requests": 0,
+        "compression_savings_spend": None,
+        "prompt_caching_savings_spend": None,
+        "gateway_injected_caching_savings_spend": None,
+    }
+    updates = (
+        [{test_key: dict(priced)}, {test_key: dict(unpriced)}]
+        if order == "priced_first"
+        else [{test_key: dict(unpriced)}, {test_key: dict(priced)}]
+    )
+    result = DailySpendUpdateQueue.get_aggregated_daily_spend_update_transactions(updates)
+    merged = result[test_key]
+    assert merged["compression_savings_spend"] == pytest.approx(0.11)
+    assert merged["prompt_caching_savings_spend"] == pytest.approx(0.22)
+    assert merged["gateway_injected_caching_savings_spend"] == pytest.approx(0.33)
+    assert merged["spend"] == pytest.approx(15.0)
+
+
+def test_get_aggregated_daily_spend_update_transactions_missing_savings_key_stays_zero():
+    """A transaction that carries no savings keys keeps its old zero semantics."""
+    test_key = "user1_2023-01-01_key123_gpt-4_openai"
+    bare = {
+        "spend": 10.0,
+        "prompt_tokens": 100,
+        "completion_tokens": 50,
+        "api_requests": 1,
+        "successful_requests": 1,
+        "failed_requests": 0,
+    }
+    unpriced = {
+        "spend": 5.0,
+        "prompt_tokens": 200,
+        "completion_tokens": 30,
+        "api_requests": 1,
+        "successful_requests": 1,
+        "failed_requests": 0,
+        "compression_savings_spend": None,
+        "prompt_caching_savings_spend": None,
+        "gateway_injected_caching_savings_spend": None,
+    }
+    result = DailySpendUpdateQueue.get_aggregated_daily_spend_update_transactions(
+        [{test_key: dict(bare)}, {test_key: dict(unpriced)}]
+    )
+    merged = result[test_key]
+    assert merged["compression_savings_spend"] == 0.0
+    assert merged["prompt_caching_savings_spend"] == 0.0
+    assert merged["gateway_injected_caching_savings_spend"] == 0.0

@@ -5147,3 +5147,57 @@ def test_record_request_error_feeds_the_failure_rollup_with_the_logged_status() 
             status_code=503,
         ): 1
     }
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.asyncio
+async def test_add_spend_log_transaction_to_daily_user_transaction_leaves_unpriced_savings_null():
+    """#46677: an openrouter/* deployment's compression savings cannot be priced
+    (the cost map no longer carries its rows), so the queued row must record the
+    dollars as unpriced (None -> NULL), never as a measured $0.00."""
+    writer = DBSpendUpdateWriter()
+    mock_prisma = MagicMock()
+    mock_prisma.get_request_status = MagicMock(return_value="success")
+
+    payload = {
+        "request_id": "req-unpriced",
+        "user": "test-user",
+        "startTime": "2026-10-15T00:00:00",
+        "api_key": "test-key",
+        "model": "openrouter/z-ai/glm-5.3-flash",
+        "custom_llm_provider": "openrouter",
+        "model_group": "openrouter/z-ai/glm-5.3-flash",
+        "prompt_tokens": 100,
+        "completion_tokens": 10,
+        "spend": 0.02,
+        "metadata": json.dumps(
+            {
+                "compression_savings": {"tokens_saved": 5000},
+                "usage_object": {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 10,
+                    "total_tokens": 110,
+                    "prompt_tokens_details": {"cached_tokens": 80, "text_tokens": 20},
+                },
+            }
+        ),
+    }
+
+    writer.daily_spend_update_queue.add_update = AsyncMock()
+
+    await writer.add_spend_log_transaction_to_daily_user_transaction(
+        payload=payload,
+        prisma_client=mock_prisma,
+    )
+
+    writer.daily_spend_update_queue.add_update.assert_called_once()
+    update_dict = writer.daily_spend_update_queue.add_update.call_args[1]["update"]
+    assert len(update_dict) == 1
+    for key, transaction in update_dict.items():
+        # the tokens still count...
+        assert transaction["compression_saved_tokens"] == 5000
+        # ...but their dollars are unpriced, not a fabricated zero
+        assert transaction["compression_savings_spend"] is None
+        assert transaction["prompt_caching_savings_spend"] is None
+        # no gateway injection: the attributed figure stays a priced zero
+        assert transaction["gateway_injected_caching_savings_spend"] == 0.0
+        assert transaction["spend"] == pytest.approx(0.02)

@@ -208,3 +208,103 @@ async def test_writer_survives_a_transaction_whose_key_columns_are_null():
     _, params = prisma_client.db.statements[0]
     assert None not in params[:9]
     assert transactions == {}
+
+def test_unpriced_savings_survive_the_conflict_merge_as_none():
+    """#46677: a row whose request saved tokens the cost map cannot price must
+    not come out of the merge as a measured $0.00."""
+    merged = merge_by_conflict_key(
+        TAG_TABLE,
+        (
+            tag_txn(
+                compression_savings_spend=None,
+                prompt_caching_savings_spend=None,
+                gateway_injected_caching_savings_spend=None,
+            ),
+        ),
+    )
+    _, folded = merged[0]
+    assert folded["compression_savings_spend"] is None
+    assert folded["prompt_caching_savings_spend"] is None
+    assert folded["gateway_injected_caching_savings_spend"] is None
+
+
+@pytest.mark.parametrize("order", ["priced_first", "unpriced_first"])
+def test_unpriced_savings_contribute_no_dollars_to_a_priced_row(order):
+    """An unpriced contribution must not dilute, wipe, or zero a priced figure."""
+    unpriced = tag_txn(
+        compression_savings_spend=None,
+        prompt_caching_savings_spend=None,
+        gateway_injected_caching_savings_spend=None,
+    )
+    priced = tag_txn(
+        compression_savings_spend=0.11,
+        prompt_caching_savings_spend=0.22,
+        gateway_injected_caching_savings_spend=0.33,
+    )
+    transactions = (priced, unpriced) if order == "priced_first" else (unpriced, priced)
+    merged = merge_by_conflict_key(TAG_TABLE, transactions)
+    _, folded = merged[0]
+    assert folded["compression_savings_spend"] == pytest.approx(0.11)
+    assert folded["prompt_caching_savings_spend"] == pytest.approx(0.22)
+    assert folded["gateway_injected_caching_savings_spend"] == pytest.approx(0.33)
+
+
+def test_two_unpriced_rows_stay_unpriced_not_zero():
+    merged = merge_by_conflict_key(
+        TAG_TABLE,
+        (
+            tag_txn(compression_savings_spend=None, prompt_caching_savings_spend=None, gateway_injected_caching_savings_spend=None),
+            tag_txn(compression_savings_spend=None, prompt_caching_savings_spend=None, gateway_injected_caching_savings_spend=None),
+        ),
+    )
+    _, folded = merged[0]
+    assert folded["compression_savings_spend"] is None
+    assert folded["prompt_caching_savings_spend"] is None
+    assert folded["gateway_injected_caching_savings_spend"] is None
+
+
+def test_rows_without_savings_keys_still_merge_to_zero():
+    """Rows that never carried the savings keys keep their old measured zero."""
+    merged = merge_by_conflict_key(TAG_TABLE, (tag_txn(), tag_txn()))
+    _, folded = merged[0]
+    assert folded["compression_savings_spend"] == 0.0
+    assert folded["prompt_caching_savings_spend"] == 0.0
+    assert folded["gateway_injected_caching_savings_spend"] == 0.0
+
+
+def test_unpriced_savings_bind_as_null_and_merge_null_aware():
+    """NULL must bind for an unpriced row, and the increment must be NULL-aware:
+    NULL + x reads x on either side, so an unpriced request neither wipes a
+    priced row nor turns an all-unpriced row into a measured zero."""
+    sql, params = build_bulk_upsert(
+        TAG_TABLE,
+        merge_by_conflict_key(
+            TAG_TABLE,
+            (tag_txn(compression_savings_spend=None, prompt_caching_savings_spend=None, gateway_injected_caching_savings_spend=None),),
+        ),
+    )
+    for column in (
+        "compression_savings_spend",
+        "prompt_caching_savings_spend",
+        "gateway_injected_caching_savings_spend",
+    ):
+        assert (
+            f'"{column}" = COALESCE("LiteLLM_DailyTagSpend"."{column}" + EXCLUDED."{column}", '
+            f'"LiteLLM_DailyTagSpend"."{column}", EXCLUDED."{column}")' in sql
+        )
+    assert '"spend" = "LiteLLM_DailyTagSpend"."spend" + EXCLUDED."spend"' in sql
+    assert params.count(None) == 3
+
+
+def test_priced_savings_still_bind_dollars():
+    sql, params = build_bulk_upsert(
+        TAG_TABLE,
+        merge_by_conflict_key(
+            TAG_TABLE,
+            (tag_txn(compression_savings_spend=0.11, prompt_caching_savings_spend=0.22, gateway_injected_caching_savings_spend=0.33),),
+        ),
+    )
+    assert None not in params
+    assert 0.11 in params
+    assert 0.22 in params
+    assert 0.33 in params
