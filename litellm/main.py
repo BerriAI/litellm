@@ -111,6 +111,7 @@ from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_h
 from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
 )
+from litellm.litellm_core_utils.thinking_param_translation import str_keyed_mapping_or_none
 from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 from litellm.llms.base_llm import BaseConfig, BaseImageGenerationConfig
 from litellm.llms.base_llm.base_model_iterator import (
@@ -5695,7 +5696,9 @@ def completion(
             and provider_config.accepts_reasoning_summary_in_reasoning_effort,
         )
         optional_params = get_optional_params(
-            **{**optional_param_args, "reasoning_effort": provider_reasoning_effort}, **non_default_params
+            **{**optional_param_args, "reasoning_effort": provider_reasoning_effort},
+            **non_default_params,
+            model_info=str_keyed_mapping_or_none(model_info),
         )
         processed_non_default_params: Final = pre_process_non_default_params(
             model=model,
