@@ -4243,6 +4243,16 @@ def _converse_native_output_fallback(
     return None if AmazonConverseConfig.sends_native_text_format(fallback.optional_params) else fallback
 
 
+def _native_output_attempt_timeout(
+    ctx: CompletionDispatchContext, fallback: NativeOutputFallback | None
+) -> float | str | httpx.Timeout | None:
+    if fallback is None:
+        return ctx.timeout
+    retry_timeout: Final = ctx.timeout_for_optional_params(fallback.optional_params)
+    ctx.logging.record_applied_timeout(retry_timeout)
+    return retry_timeout
+
+
 def _complete_bedrock(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base: Final = ctx.api_base
@@ -4328,7 +4338,7 @@ def _complete_bedrock(ctx: CompletionDispatchContext) -> _CompletionDispatchResu
                 encoding=_get_encoding(),
                 logging_obj=logging,
                 extra_headers=headers,  # Use merged headers instead of original extra_headers
-                timeout=timeout,
+                timeout=_native_output_attempt_timeout(ctx, fallback),
                 acompletion=acompletion,
                 client=client,
                 api_base=api_base,
@@ -4377,7 +4387,7 @@ def _complete_bedrock(ctx: CompletionDispatchContext) -> _CompletionDispatchResu
                 optional_params=optional_params if fallback is None else dict(fallback.optional_params),
                 litellm_params=litellm_params if fallback is None else dict(fallback.litellm_params),
                 custom_llm_provider="bedrock",
-                timeout=timeout,
+                timeout=_native_output_attempt_timeout(ctx, fallback),
                 headers=headers,
                 encoding=_get_encoding(),
                 api_key=api_key,
@@ -5833,32 +5843,31 @@ def completion(
         optional_params = optional_params_for_model_info(
             _MODEL_INFO_ADAPTER.validate_python(model_info) if isinstance(model_info, dict) else None
         )
-        stream_kind: Final = (
-            (
-                StreamKind.FAKED
-                if _completion_fakes_stream(
-                    model,
-                    custom_llm_provider,
-                    provider_config,
-                    optional_params,
-                    base_model=base_model if isinstance(base_model, str) else None,
-                    bridges_to_responses_api=bridges_to_responses_api is True,
-                )
-                else StreamKind.LIVE
-            )
-            if stream is True
-            else StreamKind.NOT_STREAMED
+        fakes_stream: Final = partial(
+            _completion_fakes_stream,
+            model,
+            custom_llm_provider,
+            provider_config,
+            base_model=base_model if isinstance(base_model, str) else None,
+            bridges_to_responses_api=bridges_to_responses_api is True,
         )
-
-        ### TIMEOUT LOGIC ###
-        timeout = CompletionTimeout.resolve(
+        resolve_timeout: Final = partial(
+            CompletionTimeout.resolve,
             timeout,
             kwargs,
             custom_llm_provider,
             global_timeout=get_configured_request_timeout(),
             supports_httpx_timeout=supports_httpx_timeout,
-            stream_kind=stream_kind,
         )
+        streams: Final = stream is True
+
+        def timeout_for_optional_params(attempt_params: Mapping[str, object]) -> float | httpx.Timeout:
+            if not streams:
+                return resolve_timeout(stream_kind=StreamKind.NOT_STREAMED)
+            return resolve_timeout(stream_kind=StreamKind.FAKED if fakes_stream(attempt_params) else StreamKind.LIVE)
+
+        ### TIMEOUT LOGIC ###
+        timeout = timeout_for_optional_params(optional_params)
         logging.record_applied_timeout(timeout)
         processed_non_default_params: Final = pre_process_non_default_params(
             model=model,
@@ -6107,6 +6116,7 @@ def completion(
             temperature=temperature,
             text_completion=text_completion,
             timeout=timeout,
+            timeout_for_optional_params=timeout_for_optional_params,
             top_p=top_p,
         )
         if custom_llm_provider == "azure":

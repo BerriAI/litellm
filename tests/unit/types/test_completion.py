@@ -188,6 +188,7 @@ def _build_dispatch_context() -> CompletionDispatchContext:
         temperature=None,
         text_completion=False,
         timeout=None,
+        timeout_for_optional_params=lambda optional_params: 600.0,
         top_p=None,
     )
 
