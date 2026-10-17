@@ -34,6 +34,7 @@ from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.internal_call_metadata import is_background_response, requests_background
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+from litellm.litellm_core_utils.tool_fields import first_validation_error
 from litellm.llms.openai.responses.guardrail_translation.handler import (
     OpenAIResponsesHandler,
     build_blocked_response,
@@ -45,7 +46,12 @@ from litellm.proxy.auth.user_api_key_auth import (
     user_api_key_auth,
     user_api_key_auth_websocket,
 )
-from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing, cost_headers, create_response
+from litellm.proxy.common_request_processing import (
+    ProxyBaseLLMRequestProcessing,
+    cost_headers,
+    create_response,
+    resolve_counted_tool_fields,
+)
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
     _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _safe_set_request_parsed_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -58,6 +64,7 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attributio
 )
 from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
 from litellm.proxy.utils import handle_exception_on_proxy
+from litellm.router import Router
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     REASONING_EFFORT,
@@ -70,7 +77,6 @@ from litellm.types.utils import TokenCountResponse
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy.utils import ProxyLogging
-    from litellm.router import Router
 
 router: Final = APIRouter()
 _RESPONSES_WS_CONFIG_VALUE_ADAPTER: Final[TypeAdapter[object | None]] = TypeAdapter(object | None)
@@ -1377,6 +1383,15 @@ def _proxy_token_counter() -> _TokenCounter:
 _token_counter_dep: Final = Depends(_proxy_token_counter)
 
 
+def _proxy_llm_router() -> Router | None:
+    from litellm.proxy.proxy_server import llm_router
+
+    return llm_router
+
+
+_llm_router_dep: Final = Depends(_proxy_llm_router)
+
+
 def _responses_invalid_request_response(message: str, param: str | None, code: str | None) -> JSONResponse:
     body: Final[_ResponsesApiErrorBody] = {
         "error": {
@@ -1433,6 +1448,8 @@ def _responses_input_as_token_count_messages(
 async def responses_input_tokens(
     request: Request,
     token_counter: _TokenCounter = _token_counter_dep,
+    llm_router: Router | None = _llm_router_dep,
+    user_api_key_dict: UserAPIKeyAuth = _user_api_key_auth_dep,
 ):
     """
     Count the input tokens of a Responses API request without calling the model.
@@ -1465,6 +1482,13 @@ async def responses_input_tokens(
             code="missing_required_parameter",
         )
 
+    counted_fields: Final = {
+        name: data[name] for name in ("model", "tools", "drop_params", "additional_drop_params") if name in data
+    }
+    token_fields: Final = resolve_counted_tool_fields(counted_fields, llm_router, user_api_key_dict.team_id)
+    if isinstance(token_fields, ProxyException):
+        return _responses_invalid_request_response(message=token_fields.message, param=token_fields.param, code=None)
+
     try:
         payload: Final[_TokenCountPayload] = {
             "model": model_name,
@@ -1472,9 +1496,13 @@ async def responses_input_tokens(
                 input_value=input_value,
                 instructions=data.get("instructions"),
             ),
-            "tools": data.get("tools"),
+            "tools": token_fields.get("tools"),
         }
         token_request: Final = TokenCountRequest.model_validate(payload)
+    except ValidationError as e:
+        return _responses_invalid_request_response(
+            message=first_validation_error(e), param=str(e.errors(include_url=False)[0]["loc"][0]), code=None
+        )
     except Exception as e:
         return _responses_invalid_request_response(
             message=f"Invalid request for token counting: {e}", param=None, code=None
