@@ -4198,7 +4198,7 @@ def test_request_metadata_key_constraints():
     # Test empty key
     invalid_metadata = {"": "value"}
 
-    with pytest.raises(Exception, match=r"(?i)key length|empty"):
+    with pytest.raises(Exception, match=r"key '' must be 1-256 characters"):
         config._transform_request(
             model="anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=messages,
@@ -4242,7 +4242,7 @@ def test_request_metadata_value_constraints():
 
 @pytest.mark.parametrize("metadata", [{"ticket": "a\u00a0b"}, {"a\u2003b": "ticket"}])
 def test_request_metadata_rejects_whitespace_outside_ascii(metadata):
-    with pytest.raises(litellm.exceptions.BadRequestError, match="invalid characters"):
+    with pytest.raises(litellm.exceptions.BadRequestError, match=r"must be [01]-256 characters of"):
         AmazonConverseConfig()._transform_request(
             model="anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=[{"role": "user", "content": "Hello!"}],

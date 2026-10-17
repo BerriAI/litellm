@@ -4,7 +4,7 @@ from collections.abc import Callable, Mapping
 from typing import Final
 
 import pytest
-
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
@@ -20,6 +20,7 @@ from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_tran
 )
 from litellm.llms.bedrock.request_metadata import (
     BEDROCK_REQUEST_METADATA_HEADER,
+    BEDROCK_REQUEST_METADATA_HEADER_MAX_CHARS,
     BEDROCK_REQUEST_METADATA_MAX_PAIRS,
     resolve_bedrock_request_metadata,
 )
@@ -236,22 +237,28 @@ def test_caller_supplied_violation_still_raises_bad_request(monkeypatch: pytest.
 
 @pytest.mark.parametrize("driver", CONVERSE_DRIVERS)
 @pytest.mark.parametrize("drop_globally", [True, False])
+@pytest.mark.parametrize(("fields", "forwarded_identity"), [(ALL_FIELDS, IDENTITY), (None, {})])
 def test_caller_violations_are_dropped_like_the_passthrough_routes_when_params_are_dropped(
     driver: Callable[[Mapping[str, object], Mapping[str, object]], Mapping[str, object]],
     drop_globally: bool,
+    fields: list[str] | None,
+    forwarded_identity: Mapping[str, str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", ALL_FIELDS)
+    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", fields)
     monkeypatch.setattr(litellm, "drop_params", drop_globally)
     params: Final = {**litellm_params("metadata", **IDENTITY), **({} if drop_globally else {"drop_params": True})}
 
     body: Final = driver(params, {"requestMetadata": {"team": "O'Brien's team", "ticket": "T-42"}})
 
-    assert body["requestMetadata"] == {**IDENTITY, "ticket": "T-42"}
+    assert body["requestMetadata"] == {**forwarded_identity, "ticket": "T-42"}
 
 
-def test_mapped_caller_violations_are_dropped_when_params_are_dropped(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", ALL_FIELDS)
+@pytest.mark.parametrize("fields", [ALL_FIELDS, None])
+def test_mapped_caller_violations_are_dropped_when_params_are_dropped(
+    fields: list[str] | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", fields)
     caller: Final = {"team": "O'Brien's team", "ticket": "T-42"}
 
     mapped: Final = AmazonConverseConfig().map_openai_params(
@@ -375,6 +382,27 @@ HEADER_DRIVERS = [invoke_headers, messages_headers, openai_invoke_headers, conve
 
 def metadata_header_values(headers):
     return [value for name, value in headers.items() if name.lower() == BEDROCK_REQUEST_METADATA_HEADER.lower()]
+
+
+@pytest.mark.parametrize("driver", HEADER_DRIVERS)
+def test_the_metadata_header_keeps_the_leading_pairs_that_fit_bedrocks_header_limit(
+    driver: Callable[[Mapping[str, str], Mapping[str, object]], Mapping[str, str]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", ALL_FIELDS)
+    long_pairs: Final = {f"{index:02d}".ljust(256, "k"): "\n" * 256 for index in range(12)}
+    params: Final = litellm_params("metadata", spend_logs_metadata=long_pairs, **IDENTITY)
+    resolved: Final = tuple((resolve_bedrock_request_metadata(params) or {}).items())
+
+    headers: Final = driver({}, params)
+    (header,) = (value for name, value in headers.items() if name.lower() == BEDROCK_REQUEST_METADATA_HEADER.lower())
+    sent: Final = TypeAdapter(dict[str, str]).validate_json(header)
+    one_more_pair: Final = json.dumps(dict(resolved[: len(sent) + 1]), separators=(",", ":"))
+
+    assert len(header) <= BEDROCK_REQUEST_METADATA_HEADER_MAX_CHARS
+    assert tuple(sent.items()) == resolved[: len(sent)]
+    assert IDENTITY.items() <= sent.items()
+    assert len(one_more_pair) > BEDROCK_REQUEST_METADATA_HEADER_MAX_CHARS
 
 
 def test_converse_still_sets_the_bearer_authorization_header(monkeypatch: pytest.MonkeyPatch):

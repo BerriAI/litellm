@@ -11,8 +11,10 @@ whole ``user_api_key_`` prefix is reserved so a caller cannot write a proxy-auth
 looking key. Identity and ``spend_logs_metadata`` values that break Bedrock's constraints are
 dropped rather than sanitised or rejected, because an operator flipping this setting on must not
 turn a working request into a 400 and a silently rewritten attribution key is worse than an
-absent one. A caller's own malformed ``requestMetadata`` is rejected with a 400 unless
-``drop_params`` is set, in which case its bad pairs are dropped the same way.
+absent one. For the same reason an Invoke header that would pass Bedrock's 8,500-character limit
+keeps only the leading pairs that fit. A caller's own malformed ``requestMetadata`` is rejected with
+a 400 unless ``drop_params`` is set, in which case its bad pairs are dropped the same way, with or
+without the setting.
 """
 
 from __future__ import annotations
@@ -120,22 +122,29 @@ def _client_pairs(
     return tuple(pair for index, pair in enumerate(candidates) if first_index[pair[0]] == index)[:budget]
 
 
+def _forwardable_caller_pairs(caller_metadata: object) -> tuple[tuple[str, str], ...]:
+    return tuple(pair for pair in _text_pairs(caller_metadata) if _is_forwardable(*pair))[
+        :BEDROCK_REQUEST_METADATA_MAX_PAIRS
+    ]
+
+
 def resolve_bedrock_request_metadata(
     litellm_params: Mapping[str, object] | None,
     caller_metadata: object = None,
 ) -> dict[str, str] | None:
     """
-    Resolve the ``requestMetadata`` pairs to send to Bedrock, or ``None`` when the feature is
-    off or nothing survives Bedrock's constraints. The result is a plain dict because it is
-    written straight onto the Converse body, which Bedrock types as ``dict[str, str]``.
+    Resolve the ``requestMetadata`` pairs to send to Bedrock, or ``None`` when nothing survives
+    Bedrock's constraints. The result is a plain dict because it is written straight onto the
+    Converse body, which Bedrock types as ``dict[str, str]``.
 
     ``caller_metadata`` is any ``requestMetadata`` the caller passed explicitly. Callers reject a
     malformed one with a 400 unless ``drop_params`` is set, so here its pairs are only filtered for
-    Bedrock's rules, the reserved identity prefix, and the remaining slot budget.
+    Bedrock's rules, the reserved identity prefix, and the remaining slot budget. With the feature
+    off only Bedrock's rules apply, since no identity is written for a caller to forge.
     """
     allowed_fields: Final = _allowed_fields()
     if not allowed_fields:
-        return None
+        return dict(_forwardable_caller_pairs(caller_metadata)) or None
     sources: Final = _metadata_sources(litellm_params)
     identity: Final = _identity_pairs(sources, allowed_fields)
     client: Final = _client_pairs(
@@ -192,7 +201,32 @@ def bedrock_request_metadata_is_owned() -> bool:
 
 
 def caller_request_metadata_violations_are_dropped(drop_params: bool) -> bool:
-    return bedrock_request_metadata_is_owned() and (drop_params or litellm.drop_params is True)
+    return drop_params or litellm.drop_params is True
+
+
+def bedrock_request_metadata_is_rewritten(drop_params: bool) -> bool:
+    return bedrock_request_metadata_is_owned() or caller_request_metadata_violations_are_dropped(drop_params)
+
+
+def _header_value(pairs: Mapping[str, str]) -> str:
+    return json.dumps(pairs, separators=(",", ":"))
+
+
+def _fits_header(pairs: Mapping[str, str]) -> bool:
+    return len(_header_value(pairs)) <= BEDROCK_REQUEST_METADATA_HEADER_MAX_CHARS
+
+
+def _longest_fitting_prefix(resolved: Mapping[str, str]) -> dict[str, str]:
+    pairs: Final = tuple(resolved.items())
+    return next(
+        (dict(pairs[:count]) for count in range(len(pairs), 0, -1) if _fits_header(dict(pairs[:count]))),
+        {},
+    )
+
+
+def bedrock_request_metadata_fits_header(litellm_params: Mapping[str, object] | None) -> bool:
+    resolved: Final = resolve_bedrock_request_metadata(litellm_params)
+    return resolved is None or _fits_header(resolved)
 
 
 def bedrock_request_metadata_headers(
@@ -207,14 +241,16 @@ def bedrock_request_metadata_headers(
     reported whenever forwarding is enabled, including when nothing resolves, because a caller
     can suppress the resolver (omit the allow-listed fields, or send values that all fail
     Bedrock's rules) and an owned-but-empty result must still evict the caller's header rather
-    than fall back to it.
+    than fall back to it. Only the leading pairs that fit Bedrock's header limit are sent, so
+    identity always survives and long ``spend_logs_metadata`` pairs drop off the end.
     """
     if not bedrock_request_metadata_is_owned():
         return frozenset(), ()
     resolved: Final = resolve_bedrock_request_metadata(litellm_params, caller_metadata)
-    if resolved is None:
+    fitting: Final = {} if resolved is None else _longest_fitting_prefix(resolved)
+    if not fitting:
         return _OWNED_HEADER_NAMES, ()
-    return _OWNED_HEADER_NAMES, ((BEDROCK_REQUEST_METADATA_HEADER, json.dumps(resolved, separators=(",", ":"))),)
+    return _OWNED_HEADER_NAMES, ((BEDROCK_REQUEST_METADATA_HEADER, _header_value(fitting)),)
 
 
 def merge_bedrock_invoke_headers(

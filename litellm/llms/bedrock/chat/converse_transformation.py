@@ -58,7 +58,8 @@ from litellm.llms.bedrock.chat.tool_result_images import place_tool_result_image
 from litellm.llms.bedrock.common_utils import bedrock_model_supports_regex_lookaround, bedrock_supports_tool_search
 from litellm.llms.bedrock.request_metadata import (
     bedrock_request_metadata_headers,
-    bedrock_request_metadata_is_owned,
+    bedrock_request_metadata_is_rewritten,
+    bedrock_request_metadata_violation,
     caller_request_metadata_violations_are_dropped,
     merge_bedrock_invoke_headers,
     resolve_bedrock_request_metadata,
@@ -347,76 +348,14 @@ class AmazonConverseConfig(BaseConfig):
             and v is not None
         }
 
-    def _validate_request_metadata(self, metadata: dict) -> None:
-        """
-        Validate requestMetadata according to AWS Bedrock Converse API constraints.
-
-        Constraints:
-        - Maximum of 16 items
-        - Keys: 1-256 characters, pattern [a-zA-Z0-9\\s:_@$#=/+,-.]{1,256}
-        - Values: 0-256 characters, pattern [a-zA-Z0-9\\s:_@$#=/+,-.]{0,256}
-        """
-        import re
-
-        if not isinstance(metadata, dict):
+    def _validate_request_metadata(self, metadata: object) -> None:
+        violation: Final = bedrock_request_metadata_violation(metadata)
+        if violation is not None:
             raise litellm.exceptions.BadRequestError(
-                message="requestMetadata must be a dictionary",
+                message=violation.message,
                 model="bedrock",
                 llm_provider="bedrock",
             )
-
-        if len(metadata) > 16:
-            raise litellm.exceptions.BadRequestError(
-                message="requestMetadata can contain a maximum of 16 items",
-                model="bedrock",
-                llm_provider="bedrock",
-            )
-
-        key_pattern: Final = re.compile(r"^[a-zA-Z0-9\s:_@$#=/+,.-]{1,256}$", re.ASCII)
-        value_pattern: Final = re.compile(r"^[a-zA-Z0-9\s:_@$#=/+,.-]{0,256}$", re.ASCII)
-
-        for key, value in metadata.items():
-            if not isinstance(key, str):
-                raise litellm.exceptions.BadRequestError(
-                    message="requestMetadata keys must be strings",
-                    model="bedrock",
-                    llm_provider="bedrock",
-                )
-
-            if not isinstance(value, str):
-                raise litellm.exceptions.BadRequestError(
-                    message="requestMetadata values must be strings",
-                    model="bedrock",
-                    llm_provider="bedrock",
-                )
-
-            if len(key) == 0 or len(key) > 256:
-                raise litellm.exceptions.BadRequestError(
-                    message="requestMetadata key length must be 1-256 characters",
-                    model="bedrock",
-                    llm_provider="bedrock",
-                )
-
-            if len(value) > 256:
-                raise litellm.exceptions.BadRequestError(
-                    message="requestMetadata value length must be 0-256 characters",
-                    model="bedrock",
-                    llm_provider="bedrock",
-                )
-
-            if not key_pattern.match(key):
-                raise litellm.exceptions.BadRequestError(
-                    message=f"requestMetadata key '{key}' contains invalid characters. Allowed: [a-zA-Z0-9\\s:_@$#=/+,.-]",
-                    model="bedrock",
-                    llm_provider="bedrock",
-                )
-
-            if not value_pattern.match(value):
-                raise litellm.exceptions.BadRequestError(
-                    message=f"requestMetadata value '{value}' contains invalid characters. Allowed: [a-zA-Z0-9\\s:_@$#=/+,.-]",
-                    model="bedrock",
-                    llm_provider="bedrock",
-                )
 
     @staticmethod
     def _is_openai_gpt_reasoning_model(model: str) -> bool:
@@ -2111,7 +2050,7 @@ class AmazonConverseConfig(BaseConfig):
         request_metadata: Final = resolve_bedrock_request_metadata(
             litellm_params=litellm_params, caller_metadata=_data.get("requestMetadata")
         )
-        if bedrock_request_metadata_is_owned():
+        if bedrock_request_metadata_is_rewritten(litellm_params.get("drop_params") is True):
             _data.pop("requestMetadata", None)
             if request_metadata is not None:
                 _data["requestMetadata"] = request_metadata
@@ -2191,7 +2130,7 @@ class AmazonConverseConfig(BaseConfig):
         request_metadata: Final = resolve_bedrock_request_metadata(
             litellm_params=litellm_params, caller_metadata=_data.get("requestMetadata")
         )
-        if bedrock_request_metadata_is_owned():
+        if bedrock_request_metadata_is_rewritten(litellm_params.get("drop_params") is True):
             _data.pop("requestMetadata", None)
             if request_metadata is not None:
                 _data["requestMetadata"] = request_metadata

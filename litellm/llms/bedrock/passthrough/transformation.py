@@ -16,10 +16,11 @@ from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import BedrockError, BedrockEventStreamDecoderBase, BedrockModelInfo
 from ..request_metadata import (
     BEDROCK_REQUEST_METADATA_HEADER,
-    BEDROCK_REQUEST_METADATA_HEADER_MAX_CHARS,
     BedrockRequestMetadataViolation,
+    bedrock_request_metadata_fits_header,
     bedrock_request_metadata_headers,
     bedrock_request_metadata_is_owned,
+    bedrock_request_metadata_is_rewritten,
     bedrock_request_metadata_violation,
     caller_request_metadata_violations_are_dropped,
     merge_bedrock_invoke_headers,
@@ -87,7 +88,9 @@ def _with_body_request_metadata(
     return without_caller if resolved is None else {**without_caller, "requestMetadata": resolved}
 
 
-def _without_request_metadata_header(headers: Mapping[str, str]) -> Mapping[str, str]:
+def _without_owned_request_metadata_header(headers: Mapping[str, str]) -> Mapping[str, str]:
+    if not bedrock_request_metadata_is_owned():
+        return headers
     return {name: value for name, value in headers.items() if name.lower() != BEDROCK_REQUEST_METADATA_HEADER.lower()}
 
 
@@ -100,7 +103,9 @@ def _with_request_metadata(
     if action in _BEDROCK_CONVERSE_ACTIONS:
         return headers, _with_body_request_metadata(action, body, litellm_params)
     if action in _BEDROCK_INVOKE_ACTIONS and "requestMetadata" in body:
-        return _without_request_metadata_header(headers), _with_body_request_metadata(action, body, litellm_params)
+        return _without_owned_request_metadata_header(headers), _with_body_request_metadata(
+            action, body, litellm_params
+        )
     if action in _BEDROCK_INVOKE_ACTIONS:
         return _with_invoke_request_metadata(action, headers, body, litellm_params)
     return headers, body
@@ -112,9 +117,11 @@ def _with_invoke_request_metadata(
     body: Mapping[str, object],
     litellm_params: Mapping[str, object],
 ) -> tuple[Mapping[str, str], Mapping[str, object]]:
+    if not bedrock_request_metadata_fits_header(litellm_params):
+        return _without_owned_request_metadata_header(headers), _with_body_request_metadata(
+            action, body, litellm_params
+        )
     owned_names, metadata_headers = bedrock_request_metadata_headers(litellm_params)
-    if any(len(value) > BEDROCK_REQUEST_METADATA_HEADER_MAX_CHARS for _, value in metadata_headers):
-        return _without_request_metadata_header(headers), _with_body_request_metadata(action, body, litellm_params)
     return merge_bedrock_invoke_headers(dict(headers), (), metadata_headers, owned_names), body
 
 
@@ -319,7 +326,11 @@ class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamD
     ) -> tuple[dict, bytes | None]:
         optional_params: Final = litellm_params.copy()
         signed_headers, signed_body = _with_request_metadata(
-            action=_bedrock_endpoint_action(api_base) if bedrock_request_metadata_is_owned() else None,
+            action=(
+                _bedrock_endpoint_action(api_base)
+                if bedrock_request_metadata_is_rewritten(litellm_params.get("drop_params") is True)
+                else None
+            ),
             headers=headers,
             body=request_data or {},
             litellm_params=litellm_params,
