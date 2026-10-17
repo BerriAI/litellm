@@ -202,10 +202,19 @@ def _caller_vector_store_options(
     )
 
 
+def _is_blank(value: object) -> bool:
+    return value is None or (isinstance(value, str) and not value.strip())
+
+
 def _without_blank_credentials(config: Mapping[str, object]) -> Mapping[str, object]:
     return MappingProxyType(
-        {key: value for key, value in config.items() if key not in EXPLICIT_CREDENTIAL_KEYS or value}
+        {key: value for key, value in config.items() if key not in EXPLICIT_CREDENTIAL_KEYS or not _is_blank(value)}
     )
+
+
+def _store_provider(config: Mapping[str, object]) -> object:
+    provider: Final = config.get("custom_llm_provider")
+    return _TEAM_CREDENTIAL_PROVIDER if provider is None else provider
 
 
 def _managed_store_overrides(managed_store: LiteLLM_ManagedVectorStore | None) -> Mapping[str, object]:
@@ -218,7 +227,7 @@ def _managed_store_overrides(managed_store: LiteLLM_ManagedVectorStore | None) -
 def _forwarded_store_credentials(
     vector_store_config: Mapping[str, object], request_data: Mapping[str, object]
 ) -> Mapping[str, object]:
-    if vector_store_config.get("custom_llm_provider", _TEAM_CREDENTIAL_PROVIDER) != _TEAM_CREDENTIAL_PROVIDER:
+    if _store_provider(vector_store_config) != _TEAM_CREDENTIAL_PROVIDER:
         return _EMPTY_TEAM_PROVIDER_CREDENTIALS
     return explicit_request_credentials(request_data)
 
@@ -258,7 +267,7 @@ def _team_provider_credentials(
     if not EXPLICIT_CREDENTIAL_KEYS.isdisjoint(effective_config):
         return _EMPTY_TEAM_PROVIDER_CREDENTIALS
 
-    if effective_config.get("custom_llm_provider", _TEAM_CREDENTIAL_PROVIDER) != _TEAM_CREDENTIAL_PROVIDER:
+    if _store_provider(effective_config) != _TEAM_CREDENTIAL_PROVIDER:
         return _EMPTY_TEAM_PROVIDER_CREDENTIALS
 
     validated_credentials: Final = _TEAM_PROVIDER_CREDENTIALS_ADAPTER.validate_python(

@@ -613,7 +613,7 @@ def test_rag_ingest_managed_store_without_credentials_uses_team_provider_credent
     assert forwarded["api_key"] == _TEAM_PROVIDER_KEY
 
 
-@pytest.mark.parametrize("blank_credential_name", [None, ""])
+@pytest.mark.parametrize("blank_credential_name", [None, "", "   "])
 def test_rag_ingest_blank_caller_credential_name_uses_team_provider_credentials(client_team_a, blank_credential_name):
     aingest_patch, registry_patch = _patched_ingest_boundary(
         None,
@@ -670,7 +670,13 @@ def test_rag_ingest_failed_upstream_status_is_returned_without_persisting_store(
 @pytest.mark.usefixtures("httpx_transport")
 @pytest.mark.parametrize(
     "caller_fields",
-    [{}, {"api_key": None}, {"api_base": None}, {"api_key": "sk-caller-key-the-search-never-uses"}],
+    [
+        {},
+        {"api_key": None},
+        {"api_base": None},
+        {"api_key": "sk-caller-key-the-search-never-uses"},
+        {"custom_llm_provider": None},
+    ],
 )
 def test_rag_query_forwards_team_provider_credentials_to_unmanaged_search(
     client_team_a: TestClient, respx_mock: respx.MockRouter, caller_fields: Mapping[str, object]
@@ -737,8 +743,9 @@ def test_rag_query_managed_store_without_credentials_uses_team_provider_credenti
 
 
 @pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.parametrize("blank_key", ["", "   "])
 def test_rag_query_managed_store_with_an_empty_key_uses_team_provider_credentials(
-    client_team_a: TestClient, respx_mock: respx.MockRouter
+    client_team_a: TestClient, respx_mock: respx.MockRouter, blank_key: str
 ) -> None:
     search: Final = respx_mock.post(f"{_TEAM_OPENAI_BASE}/vector_stores/registry-store-blank-key/search").respond(
         json=_OPENAI_SEARCH_PAGE
@@ -747,7 +754,7 @@ def test_rag_query_managed_store_with_an_empty_key_uses_team_provider_credential
     response: Final = _post_rag_query(
         client_team_a,
         retrieval_config={"vector_store_id": "registry-store-blank-key"},
-        managed_stores=(_managed_openai_store("registry-store-blank-key", {"api_key": ""}),),
+        managed_stores=(_managed_openai_store("registry-store-blank-key", {"api_key": blank_key}),),
         router=_team_provider_router(),
     )
 
