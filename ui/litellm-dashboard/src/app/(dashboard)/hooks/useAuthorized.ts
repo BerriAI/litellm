@@ -19,7 +19,7 @@ const useAuthorized = () => {
     data: currentUser,
     isLoading: isCurrentUserLoading,
     isError: isCurrentUserError,
-  } = useCurrentUser(isTokenValid && !isUIConfigLoading ? decoded?.key ?? null : null, decoded?.auth_header_name);
+  } = useCurrentUser(isTokenValid ? decoded?.key ?? null : null, decoded?.auth_header_name, !isUIConfigLoading);
   const serverRole = currentUser?.user_role ?? "";
   const isLoading = isUIConfigLoading || isCurrentUserLoading;
   const isAuthorized = isTokenValid && !uiConfig?.admin_ui_disabled && !isCurrentUserError;

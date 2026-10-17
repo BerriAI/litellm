@@ -16,10 +16,11 @@ const getCurrentUser = async (accessToken: string, authHeaderName: string): Prom
   return data;
 };
 
-export const useCurrentUser = (accessToken: string | null, authHeaderName?: string) => {
+export const useCurrentUser = (accessToken: string | null, authHeaderName?: string, canFetch = true) => {
   const options: UseQueryOptions<CurrentUser> = {
     queryKey: currentUserKeys.detail(accessToken ?? ""),
-    queryFn: accessToken ? () => getCurrentUser(accessToken, authHeaderName ?? getAuthHeaderName()) : skipToken,
+    queryFn:
+      accessToken && canFetch ? () => getCurrentUser(accessToken, authHeaderName ?? getAuthHeaderName()) : skipToken,
     staleTime: Infinity,
     retry: 1,
   };

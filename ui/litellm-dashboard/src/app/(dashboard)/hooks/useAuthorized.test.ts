@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import useAuthorized from "./useAuthorized";
 import { useUIConfig } from "./uiConfig/useUIConfig";
+import { useCurrentUser } from "./currentUser/useCurrentUser";
 
 // Unmock useAuthorized to test the actual implementation
 vi.unmock("@/app/(dashboard)/hooks/useAuthorized");
@@ -458,6 +459,24 @@ describe("useAuthorized", () => {
       await waitFor(() => expect(result.current.userId).toBe("u-9"));
       expect(currentUserRequests()).toHaveLength(1);
       expect(replaceMock).not.toHaveBeenCalled();
+    });
+
+    it("keeps an identity the page already loaded while backend discovery reruns", async () => {
+      getUiConfigMock.mockReturnValue(new Promise(() => {}));
+      setSessionCookie({ key: "cached-key", user_id: "u-7", user_role: "proxy_admin" });
+      serveCurrentUser({ user_id: "u-7", user_email: null, user_role: "internal_user" });
+      const queryClient = createQueryClient();
+      const sharedWrapper = ({ children }: { children: React.ReactNode }) =>
+        React.createElement(QueryClientProvider, { client: queryClient }, children);
+
+      const { result: layoutLookup } = renderHook(() => useCurrentUser("cached-key"), { wrapper: sharedWrapper });
+      await waitFor(() => expect(layoutLookup.current.isSuccess).toBe(true));
+
+      const { result } = renderHook(() => useAuthorized(), { wrapper: sharedWrapper });
+
+      expect(result.current.userId).toBe("u-7");
+      expect(result.current.userRole).toBe("Internal User");
+      expect(currentUserRequests()).toHaveLength(1);
     });
 
     it("clears the cookie and redirects to login when the current user cannot be loaded", async () => {
