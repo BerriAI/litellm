@@ -1906,7 +1906,7 @@ async def _bill_rejected_frame(
     alerting) belong to the live connection, which stays open."""
     for callback in litellm.callbacks:
         if isinstance(callback, ProxyDBLogger):
-            await callback.async_post_call_failure_hook(
+            await callback.async_post_call_failure_hook(  # pyright: ignore[reportUnknownMemberType]  # takes a bare dict
                 request_data=frame_data, original_exception=exception, user_api_key_dict=user_api_key_dict
             )
 
