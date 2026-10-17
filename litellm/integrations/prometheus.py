@@ -260,7 +260,7 @@ _POSITIVE_SERIES_TTL: Final[TypeAdapter[float]] = TypeAdapter(Annotated[float, F
 _SERIES_CLEANUP_INTERVAL: Final[TypeAdapter[float]] = TypeAdapter(Annotated[float, Field(ge=0)])
 _DEFAULT_SERIES_CLEANUP_INTERVAL_SECONDS: Final = 60.0
 _REMAINING_USAGE: Final[TypeAdapter[float]] = TypeAdapter(Annotated[float, Field(allow_inf_nan=False)])
-_ADDITIONAL_HEADERS: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+_ADDITIONAL_HEADERS: Final[TypeAdapter[Mapping[object, object]]] = TypeAdapter(Mapping[object, object])
 
 
 def _number_or_none(value: object, limit: TypeAdapter[_SeriesLimitT]) -> _SeriesLimitT | None:

@@ -34,8 +34,9 @@ _PATHS: Final[Mapping[Endpoint, str]] = MappingProxyType(
     {"chat": "/v1/chat/completions", "responses": "/v1/responses", "messages": "/v1/messages"}
 )
 _RATE_LIMIT_HEADERS: Final[Mapping[str, str]] = MappingProxyType(
-    {"x-ratelimit-remaining-requests": "0", "x-ratelimit-remaining-tokens": "856, abc"}
+    {"x-ratelimit-remaining-requests": "12.5", "x-ratelimit-remaining-tokens": "856, abc"}
 )
+_ROUTER_TPM: Final = 1000
 _METERED_WORKERS: Final = 2
 _METERED_CALLS: Final[tuple[tuple[str, bool], ...]] = (
     ("groq", False),
@@ -82,6 +83,12 @@ _MEMBERS: Final[Mapping[str, Deploy]] = MappingProxyType(
         "watsonx": _keyed("watsonx/ibm/granite-3-8b-instruct", zen_api_key="synthetic-zen-key", project_id=_PROJECT),
         "vertex_model_garden": _vertex("xai/grok-4.20-non-reasoning", "global"),
         "maritalk": _keyed("maritalk/sabia-3"),
+    }
+)
+_METERED_MEMBERS: Final[Mapping[str, Deploy]] = MappingProxyType(
+    {
+        "groq": _keyed("groq/openai/gpt-oss-20b", tpm=_ROUTER_TPM),
+        "openai": _keyed("openai/gpt-5.4-mini", tpm=_ROUTER_TPM),
     }
 )
 
@@ -403,7 +410,9 @@ def test_provider_header_outside_latin1_does_not_fail_the_call(gateway: Gateway,
 
 
 @pytest.mark.timeout(2 * graceful_stop_seconds() + 2 * PROXY_CONFIG_RELOAD_INTERVAL_SECONDS + 120)
-def test_an_unparseable_rate_limit_header_keeps_the_deployment_metrics(gateway: Gateway, tmp_path: Path) -> None:
+def test_rate_limit_headers_set_the_remaining_gauges_and_keep_the_deployment_metrics(
+    gateway: Gateway, tmp_path: Path
+) -> None:
     multiproc_dir: Final = tmp_path / "prometheus"
     multiproc_dir.mkdir()
     with (
@@ -418,7 +427,7 @@ def test_an_unparseable_rate_limit_header_keeps_the_deployment_metrics(gateway: 
         metered.scenario() as scenario,
     ):
         calls: Final = {
-            f"{member}-{'stream' if stream else 'whole'}": (_MEMBERS[member](metered, scenario, wire), stream)
+            f"{member}-{'stream' if stream else 'whole'}": (_METERED_MEMBERS[member](metered, scenario, wire), stream)
             for member, stream in _METERED_CALLS
         }
         models: Final = {call: model for call, (model, _) in calls.items()}
@@ -432,9 +441,15 @@ def test_an_unparseable_rate_limit_header_keeps_the_deployment_metrics(gateway: 
         assert statuses == dict.fromkeys(calls, 200)
         observed: Final = eventually(
             lambda: _deployment_metrics(scrape(metered), models),
-            lambda metrics: all(successes >= 1 for successes, _, _ in metrics.values()),
+            lambda metrics: all(successes >= 1 and tokens for successes, _, tokens in metrics.values()),
             30,
             return_last_on_timeout=True,
         )
-        assert observed == dict.fromkeys(calls, (1.0, (0.0,), ())), observed
+        assert {call: (successes, requests) for call, (successes, requests, _) in observed.items()} == (
+            dict.fromkeys(calls, (1.0, (12.5,)))
+        ), observed
+        router_filled_tokens: Final = {
+            call: tuple(0 < value <= _ROUTER_TPM for value in tokens) for call, (_, _, tokens) in observed.items()
+        }
+        assert router_filled_tokens == dict.fromkeys(calls, (True,)), observed
         assert len(wire.drain()) == len(calls)

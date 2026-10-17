@@ -30,6 +30,7 @@ from prometheus_client import REGISTRY
 from prometheus_client.samples import Sample
 
 
+from litellm import Router
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.types.integrations.prometheus import UserAPIKeyLabelValues
 
@@ -338,14 +339,21 @@ def test_unparseable_provider_ratelimit_header_skips_only_its_own_gauge(
     assert _sample_values("litellm_deployment_success_responses_total") == (1.0,)
 
 
-def test_decimal_provider_ratelimit_headers_set_both_gauges(prometheus_logger: PrometheusLogger):
+@pytest.mark.parametrize(
+    "additional_headers",
+    [
+        {"x_ratelimit_remaining_requests": "12.5", "x_ratelimit_remaining_tokens": "856.5"},
+        {1: "non-string key", "x_ratelimit_remaining_requests": "12.5", "x_ratelimit_remaining_tokens": "856.5"},
+    ],
+    ids=["decimal", "decimal-with-a-non-string-key"],
+)
+def test_decimal_provider_ratelimit_headers_set_both_gauges(
+    prometheus_logger: PrometheusLogger, additional_headers: dict[object, object]
+):
     payload: Final = _build_payload(
         model_group="groq-group",
         custom_llm_provider="groq",
-        additional_headers={
-            "x_ratelimit_remaining_requests": "12.0",
-            "x_ratelimit_remaining_tokens": "856.5",
-        },
+        additional_headers=additional_headers,
     )
 
     prometheus_logger.set_llm_deployment_success_metrics(
@@ -360,30 +368,48 @@ def test_decimal_provider_ratelimit_headers_set_both_gauges(prometheus_logger: P
         output_tokens=2.0,
     )
 
-    assert _sample_values("litellm_remaining_requests_metric") == (12.0,)
+    assert _sample_values("litellm_remaining_requests_metric") == (12.5,)
     assert _sample_values("litellm_remaining_tokens_metric") == (856.5,)
+    assert _sample_values("litellm_deployment_success_responses_total") == (1.0,)
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("remaining_requests", "remaining_tokens", "expected_requests", "expected_tokens"),
+    [
+        (7, "856, abc", (), (555.0,)),
+        (7, "inf", (), (555.0,)),
+        (7, "nan", (), (555.0,)),
+        ("12 left", 856, (999.0,), ()),
+    ],
+)
 async def test_router_fills_the_gauge_an_unparseable_provider_header_could_not_set(
     prometheus_logger: PrometheusLogger,
+    remaining_requests: object,
+    remaining_tokens: object,
+    expected_requests: tuple[float, ...],
+    expected_tokens: tuple[float, ...],
 ):
     payload: Final = _build_payload(
         additional_headers={
-            "x_ratelimit_remaining_requests": 7,
-            "x_ratelimit_remaining_tokens": "856, abc",
+            "x_ratelimit_remaining_requests": remaining_requests,
+            "x_ratelimit_remaining_tokens": remaining_tokens,
         }
     )
-    fake_router: Final = MagicMock()
-    fake_router.get_remaining_model_group_usage = AsyncMock(
-        return_value={"x-ratelimit-remaining-tokens": 555, "x-ratelimit-remaining-requests": 999}
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "bedrock-claude-group",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test", "tpm": 555, "rpm": 999},
+            }
+        ]
     )
 
-    with patch("litellm.proxy.proxy_server.llm_router", fake_router, create=True):
+    with patch("litellm.proxy.proxy_server.llm_router", router, create=True):
         await prometheus_logger._async_set_router_remaining_metrics(
             standard_logging_payload=payload,
             enum_values=_enum_values(),
         )
 
-    assert _sample_values("litellm_remaining_tokens_metric") == (555.0,)
-    assert _sample_values("litellm_remaining_requests_metric") == ()
+    assert _sample_values("litellm_remaining_tokens_metric") == expected_tokens
+    assert _sample_values("litellm_remaining_requests_metric") == expected_requests
