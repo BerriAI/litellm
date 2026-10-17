@@ -3059,7 +3059,7 @@ class Logging(LiteLLMLoggingBaseClass):
             complete_streaming_response: (
                 ModelResponse | TextCompletionResponse | ResponsesAPIResponse | InteractionsAPIResponse | None
             ) = None
-            if "complete_streaming_response" in self.model_call_details:
+            if "complete_streaming_response" in self.model_call_details and not for_async_request:
                 return  # break out of this.
             complete_streaming_response = self._get_assembled_streaming_response(
                 result=result,
