@@ -154,6 +154,26 @@ def _positions_of(
     )
 
 
+def _jsonable_message(message: AllMessageValues) -> tuple[Mapping[str, JsonValue], ...]:
+    try:
+        jsonable: Final = to_jsonable_python(
+            truncate_base64_in_messages([message]), serialize_unknown=True, bytes_mode="base64"
+        )
+    except ValueError:
+        return ()
+    return _PREFIX_ADAPTER.validate_python(jsonable)
+
+
+def _readable_prefix(messages: Sequence[AllMessageValues]) -> tuple[Mapping[str, JsonValue], ...]:
+    prefix: Final = PromptCachingCache.extract_cacheable_prefix(list(messages))
+    jsonables: Final = tuple(map(_jsonable_message, prefix))
+    readable_count: Final = next((index for index, jsonable in enumerate(jsonables) if not jsonable), len(prefix))
+    if readable_count == len(prefix):
+        return tuple(chain.from_iterable(jsonables))
+    readable_prefix: Final = PromptCachingCache.extract_cacheable_prefix(prefix[:readable_count])
+    return tuple(chain.from_iterable(map(_jsonable_message, readable_prefix)))
+
+
 def _lookback_keys(positions: tuple[PrefixPosition, ...]) -> tuple[str, ...]:
     if not positions:
         return ()
@@ -292,16 +312,7 @@ class PromptCachingCache:
         """
         if not messages:
             return ()
-        return _positions_of(
-            _PREFIX_ADAPTER.validate_python(
-                to_jsonable_python(
-                    truncate_base64_in_messages(PromptCachingCache.extract_cacheable_prefix(messages)),
-                    serialize_unknown=True,
-                    bytes_mode="base64",
-                )
-            ),
-            tools,
-        )
+        return _positions_of(_readable_prefix(messages), tools)
 
     @staticmethod
     async def async_prefix_positions(
@@ -319,11 +330,7 @@ class PromptCachingCache:
     ) -> int:
         if not messages:
             return PROMPT_CACHE_PIN_TTL_SECONDS
-        prefix: Final = _PREFIX_ADAPTER.validate_python(
-            to_jsonable_python(
-                PromptCachingCache.extract_cacheable_prefix(list(messages)), serialize_unknown=True, bytes_mode="base64"
-            )
-        )
+        prefix: Final = _readable_prefix(messages)
         tool_carriers: Final = _TOOLS_ADAPTER.validate_python(
             to_jsonable_python(tools or (), serialize_unknown=True, bytes_mode="base64")
         )
