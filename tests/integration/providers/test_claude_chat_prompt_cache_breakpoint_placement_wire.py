@@ -867,6 +867,13 @@ _MARKED_TOOL: Final[dict[str, JsonValue]] = {**TOOL, "prompt_cache_breakpoint": 
             None,
             id="cache-point-with-five-minutes-listed-last",
         ),
+        pytest.param(
+            [_MARKED_TOOL, {"cachePoint": {"type": "default"}}],
+            True,
+            (Mark(_TOOL_LABEL, "1h"), Mark("other", None)),
+            "1h",
+            id="cache-point-without-a-ttl-right-after-the-marked-tool",
+        ),
     ),
 )
 def test_a_five_minute_tool_config_cache_point_shortens_later_breakpoints_only_when_converse_sends_it(

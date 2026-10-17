@@ -1274,6 +1274,18 @@ def test_a_tool_config_cache_point_takes_one_of_claudes_four_only_when_converse_
             _EPHEMERAL,
             id="left-out-after-a-bedrock-cache-point-with-five-minutes",
         ),
+        pytest.param(
+            [
+                {
+                    "type": "function",
+                    "function": {"name": "t"},
+                    "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "1h"},
+                },
+                {"cachePoint": {"type": "default"}},
+            ],
+            _ONE_HOUR,
+            id="left-out-after-a-bedrock-cache-point-without-a-ttl-right-after-the-marked-tool",
+        ),
     ],
 )
 def test_later_one_hour_breakpoints_are_shortened_only_when_converses_tool_config_ends_in_a_five_minute_cache_point(

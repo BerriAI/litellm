@@ -8,7 +8,7 @@ import re
 import time
 import types
 from collections.abc import Mapping, Sequence
-from itertools import chain
+from itertools import chain, takewhile
 from typing import TYPE_CHECKING, Final, Literal, cast, overload
 
 import httpx
@@ -1547,9 +1547,13 @@ class AmazonConverseConfig(BaseConfig):
         return cache_point
 
     @staticmethod
-    def _repeats_the_last_tool_ttl(cache_point: CachePointBlock, bedrock_tools: Sequence[ToolBlock]) -> bool:
-        """Bedrock rejects two adjacent cachePoints that both set a ttl, and both would cache the same tools."""
-        return "ttl" in cache_point and message_field(bedrock_tools[-1].get("cachePoint"), "ttl") is not None
+    def _joins_cache_points_with_a_ttl(cache_point: CachePointBlock, bedrock_tools: Sequence[ToolBlock]) -> bool:
+        """Bedrock rejects a run of adjacent cachePoints in which more than one sets a ttl, and they would all cache the
+        same tools."""
+        return "ttl" in cache_point and any(
+            message_field(block.get("cachePoint"), "ttl") is not None
+            for block in takewhile(lambda block: "cachePoint" in block, reversed(bedrock_tools))
+        )
 
     @staticmethod
     def _assistant_has_tool_calls(message: object) -> bool:
@@ -2137,7 +2141,7 @@ class AmazonConverseConfig(BaseConfig):
             and bedrock_model_accepts_cache_points(model, deployment_model)
             else None
         )
-        if tool_config_cache_point is not None and not self._repeats_the_last_tool_ttl(
+        if tool_config_cache_point is not None and not self._joins_cache_points_with_a_ttl(
             tool_config_cache_point, bedrock_tools
         ):
             bedrock_tools.append(ToolBlock(cachePoint=tool_config_cache_point))

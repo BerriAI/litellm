@@ -1335,6 +1335,34 @@ def test_a_five_minute_tool_config_cache_point_converse_sends_after_a_bedrock_sy
     )
 
 
+def test_a_five_minute_tool_config_cache_point_is_not_sent_after_a_passed_through_cache_point_behind_a_one_hour_tool(
+    respx_mock: respx.MockRouter,
+):
+    route: Final = respx_mock.post(url__regex=_CONVERSE_ROUTE).respond(json=_CONVERSE_REPLY)
+
+    litellm.completion(
+        model="bedrock/converse/us.anthropic.claude-opus-5-5",
+        messages=[
+            {"role": "system", "content": [{"type": "text", "text": "sys", "prompt_cache_breakpoint": _BREAKPOINT}]},
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "hi", "prompt_cache_breakpoint": _ONE_HOUR_BREAKPOINT}],
+            },
+        ],
+        tools=[{**_WEATHER_TOOL, "prompt_cache_breakpoint": _ONE_HOUR_BREAKPOINT}, {"cachePoint": {"type": "default"}}],
+        cache_control_injection_points=_FIVE_MINUTE_TOOL_CONFIG,
+        drop_params=True,
+        **_FAKE_AWS,
+    )
+
+    assert _converse_cache_point_places(json.loads(route.calls.last.request.content)) == (
+        ("tool", "1h"),
+        ("tool", None),
+        ("system", "1h"),
+        ("message", "1h"),
+    )
+
+
 def test_a_tool_config_cache_point_after_a_tool_mark_without_a_ttl_still_shortens_a_later_one_hour_breakpoint(
     respx_mock: respx.MockRouter,
 ):

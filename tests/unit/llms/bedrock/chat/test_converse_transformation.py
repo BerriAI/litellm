@@ -6482,6 +6482,35 @@ def test_a_tool_config_cache_point_with_a_ttl_is_not_sent_after_a_last_tool_mark
     assert bucket.get("litellm_gateway_injected_cache") == credited
 
 
+def test_a_tool_config_cache_point_with_a_ttl_is_not_sent_after_a_passed_through_cache_point_that_follows_a_ttl():
+    bucket: Final[dict[str, str]] = {}
+    result: Final = AmazonConverseConfig()._transform_request_helper(
+        model="us.anthropic.claude-opus-5-5",
+        system_content_blocks=[],
+        optional_params={
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {"name": "get_weather", "parameters": {"type": "object"}},
+                    "cache_control": {"type": "ephemeral", "ttl": "1h"},
+                },
+                {"cachePoint": {"type": "default"}},
+            ],
+            "cache_control_injection_points": [
+                {"location": "tool_config", "control": {"type": "ephemeral", "ttl": "5m"}}
+            ],
+        },
+        messages=[{"role": "user", "content": "What is the weather?"}],
+        litellm_params={"metadata": bucket, "litellm_metadata": None, "model_info": {"id": "dep-bedrock"}},
+    )
+
+    assert [tool["cachePoint"] for tool in result["toolConfig"]["tools"] if "cachePoint" in tool] == [
+        {"type": "default", "ttl": "1h"},
+        {"type": "default"},
+    ]
+    assert bucket.get("litellm_gateway_injected_cache") is None
+
+
 def test_cache_control_injection_tool_config_honors_ttl_for_supported_model(monkeypatch):
     """
     Regression test: cache_control_injection_points with location=tool_config

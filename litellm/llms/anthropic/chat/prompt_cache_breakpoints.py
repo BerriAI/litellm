@@ -3,7 +3,7 @@
 from bisect import bisect_left
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
-from itertools import accumulate, chain
+from itertools import accumulate, chain, takewhile
 from types import MappingProxyType
 from typing import Final, Literal, NoReturn, TypeAlias, cast  # noqa: TID251  # isinstance-checked hot-path JSON
 
@@ -686,35 +686,46 @@ def _planned_cache_control(plan: _Plan, path: _Path, cache_control: object) -> o
     return None if path in plan.dropped else plan.replacements.get(path, cache_control)
 
 
-def _tail_cache_control(plan: _Plan, tail: _Path, tail_fields: _Fields) -> object:
-    if "cachePoint" in tail_fields:
-        return tail_fields.get("cachePoint")
-    if not _converse_sends_tool_mark(tail_fields):
-        return None
-    return _planned_cache_control(plan, tail, tail_fields.get("cache_control"))
+@dataclass(frozen=True, slots=True)
+class _ToolConfigTail:
+    tool: _Path | None
+    cache_points: tuple[object, ...]
+
+
+def _tool_config_tail(tools: Sequence[object], order: Sequence[int]) -> _ToolConfigTail:
+    """The run of cachePoints that ends Converse's tool config: the ones the request passes through last, and the
+    mark of the tool just before them."""
+    cache_points: Final = tuple(takewhile(lambda index: "cachePoint" in (_fields(tools[index]) or {}), reversed(order)))
+    before: Final = order[: len(order) - len(cache_points)]
+    return _ToolConfigTail(
+        ("tools", before[-1]) if before and _converse_sends_tool_mark(_fields(tools[before[-1]]) or {}) else None,
+        tuple((_fields(tools[index]) or {}).get("cachePoint") for index in cache_points),
+    )
 
 
 def _route_plan(
     marks: Sequence[_Placed],
     tools: Sequence[object],
-    tail: _Path | None,
+    tail: _ToolConfigTail,
     tool_config_cache_control: ChatCompletionCachedContent | None,
     drop_params: bool,
 ) -> _Plan:
-    """Converse leaves out a ``tool_config`` cachePoint with a ttl that would follow the ``tail`` of its tool config,
-    the last tool's mark or a cachePoint the request passes through, when that sets a ttl too. That request is
-    planned again with the tail's ttl kept in its place."""
+    """Converse leaves out a ``tool_config`` cachePoint with a ttl that would join the ``tail`` of its tool config when
+    a cachePoint there sets a ttl too. That request is planned again with the tail's ttl kept in its place."""
     plan: Final = _planned(marks, drop_params)
-    if tail is None:
-        return plan
-    tail_fields: Final = _fields(tools[int(tail[1])]) or {}
-    tail_cache_control: Final = _tail_cache_control(plan, tail, tail_fields)
+    tool_mark: Final = (
+        None
+        if tail.tool is None
+        else _planned_cache_control(plan, tail.tool, (_fields(tools[int(tail.tool[1])]) or {}).get("cache_control"))
+    )
+    passed_through: Final = next(filter(_sets_a_ttl, tail.cache_points), None)
+    tail_cache_control: Final = tool_mark if passed_through is None else passed_through
     if not (
         _sets_a_ttl(tail_cache_control)
         and _sets_a_ttl(_planned_cache_control(plan, _TOOL_CONFIG, tool_config_cache_control))
     ):
         return plan
-    pinned: Final = _TOOL_CONFIG if "cachePoint" in tail_fields else tail
+    pinned: Final = _TOOL_CONFIG if passed_through is not None else tail.tool
     replanned: Final = _planned(
         tuple(
             replace(mark, ttl=_ttl(tail_cache_control), kind="written") if mark.path == pinned else mark
@@ -723,13 +734,13 @@ def _route_plan(
         ),
         drop_params,
     )
-    tail_replacement: Final = plan.replacements.get(tail)
+    tool_replacement: Final = None if tail.tool is None else plan.replacements.get(tail.tool)
     return _Plan(
         replanned.dropped,
         MappingProxyType(
             {
                 **replanned.replacements,
-                **({} if tail_replacement is None else {tail: tail_replacement}),
+                **({} if tail.tool is None or tool_replacement is None else {tail.tool: tool_replacement}),
             }
         ),
     )
@@ -819,7 +830,7 @@ def claude_prompt_cache(
     plan: Final = _route_plan(
         marks,
         renamed_tools,
-        ("tools", tool_config_order[-1]) if tool_config_order else None,
+        _tool_config_tail(renamed_tools, tool_config_order),
         sent_tool_config_cache_control,
         drop_params,
     )
