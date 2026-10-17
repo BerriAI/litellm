@@ -239,5 +239,12 @@
       "/v1/responses",
       "/v1/messages"
     ]
+  },
+  "tsubasa": {
+    "base_url": "https://api.tsubasa.sh/v1",
+    "api_key_env": "TSUBASA_API_KEY",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    }
   }
 }

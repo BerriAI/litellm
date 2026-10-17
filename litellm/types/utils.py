@@ -4391,6 +4391,7 @@ class LlmProviders(str, Enum):
     PRISM = "prism"
     INFERENCEAPIS = "inferenceapis"
     DARKBLOOM = "darkbloom"
+    TSUBASA = "tsubasa"
     META = "meta"
     SAIL = "sail"
     REKA = "reka"
