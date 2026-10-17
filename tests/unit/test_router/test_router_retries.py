@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
 from typing import Final
 from unittest.mock import AsyncMock
 
@@ -12,6 +13,7 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm import Router
+from litellm.constants import JITTER
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.router import AllowedFailsPolicy, RetryPolicy
 import os
@@ -931,6 +933,102 @@ async def test_router_retry_num_retries_single_retry():
                 assert (
                     e.max_retries == 1
                 ), f"Expected max_retries to be 1, got {e.max_retries}"
+
+
+_MODULE_LEVEL_FALLBACKS: Final = (
+    "default_fallbacks",
+    "fallbacks",
+    "context_window_fallbacks",
+    "content_policy_fallbacks",
+)
+
+
+def _single_deployment_router(num_retries: int, monkeypatch: pytest.MonkeyPatch) -> Router:
+    for name in _MODULE_LEVEL_FALLBACKS:
+        monkeypatch.setattr(litellm, name, None)
+    return Router(
+        model_list=[
+            {
+                "model_name": "retry-test-model",
+                "litellm_params": {"model": "openai/retry-test-model", "api_key": "test-key"},
+            }
+        ],
+        num_retries=num_retries,
+    )
+
+
+def _script_attempts(
+    router: Router, monkeypatch: pytest.MonkeyPatch, outcomes: Sequence[litellm.APIError | None]
+) -> AsyncMock:
+    remaining: Final = iter(outcomes)
+
+    async def make_call(*args: object, **kwargs: object) -> litellm.ModelResponse:
+        outcome: Final = next(remaining)
+        if outcome is not None:
+            raise outcome
+        return litellm.ModelResponse()
+
+    attempt: Final = AsyncMock(side_effect=make_call)
+    monkeypatch.setattr(router, "make_call", attempt)
+    return attempt
+
+
+def _rate_limited(retry_after_seconds: int) -> litellm.RateLimitError:
+    error: Final = litellm.RateLimitError(message="rate limited", model="retry-test-model", llm_provider="openai")
+    error.litellm_response_headers = httpx.Headers({"retry-after": str(retry_after_seconds)})
+    return error
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("num_retries", "failed_attempts", "expected_sleeps"),
+    [
+        pytest.param(3, 4, 3, id="every-attempt-fails"),
+        pytest.param(1, 2, 1, id="the-only-retry-fails"),
+        pytest.param(3, 3, 3, id="the-last-retry-succeeds"),
+        pytest.param(3, 1, 1, id="the-first-retry-succeeds"),
+        pytest.param(3, 0, 0, id="the-first-attempt-succeeds"),
+        pytest.param(0, 1, 0, id="retries-are-disabled"),
+    ],
+)
+async def test_router_sleeps_only_before_a_retry_that_will_happen(
+    num_retries: int, failed_attempts: int, expected_sleeps: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sleep: Final = _patch_asyncio_sleep(monkeypatch)
+    router: Final = _single_deployment_router(num_retries, monkeypatch)
+    error: Final = litellm.InternalServerError(message="boom", model="retry-test-model", llm_provider="openai")
+    attempts_exhausted: Final = failed_attempts > num_retries
+    attempt: Final = _script_attempts(
+        router, monkeypatch, [error] * failed_attempts + ([] if attempts_exhausted else [None])
+    )
+
+    call: Final = router.acompletion(model="retry-test-model", messages=[{"role": "user", "content": "hi"}])
+    if attempts_exhausted:
+        with pytest.raises(litellm.InternalServerError):
+            await call
+    else:
+        assert isinstance(await call, litellm.ModelResponse)
+
+    assert attempt.await_count == (num_retries if attempts_exhausted else failed_attempts) + 1
+    assert sleep.await_count == expected_sleeps
+
+
+@pytest.mark.asyncio
+async def test_router_honours_retry_after_for_each_retry_but_not_after_the_last_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sleep: Final = _patch_asyncio_sleep(monkeypatch)
+    router: Final = _single_deployment_router(num_retries=3, monkeypatch=monkeypatch)
+    retry_afters: Final = (10, 20, 30, 40)
+    _script_attempts(router, monkeypatch, [_rate_limited(seconds) for seconds in retry_afters])
+
+    with pytest.raises(litellm.RateLimitError):
+        await router.acompletion(model="retry-test-model", messages=[{"role": "user", "content": "hi"}])
+
+    slept: Final = [call.args[0] for call in sleep.await_args_list]
+    assert len(slept) == len(retry_afters) - 1
+    for seconds, retry_after in zip(slept, retry_afters):
+        assert retry_after <= seconds <= retry_after + JITTER
 
 
 class MyCustomHandler(CustomLogger):

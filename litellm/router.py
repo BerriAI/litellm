@@ -8662,7 +8662,8 @@ class Router:
                         healthy_deployments=_healthy_deployments,
                         all_deployments=_all_deployments,
                     )
-                    await asyncio.sleep(_timeout)
+                    if remaining_retries > 0:
+                        await asyncio.sleep(_timeout)
 
             if type(original_exception) in litellm.LITELLM_EXCEPTION_TYPES:
                 setattr(original_exception, "max_retries", num_retries)
