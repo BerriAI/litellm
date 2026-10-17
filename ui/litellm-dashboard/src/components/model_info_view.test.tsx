@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import ModelInfoView from "./model_info_view";
 import { toast } from "@/lib/toast";
 import * as networking from "./networking";
+import { useUserLookup } from "@/app/(dashboard)/hooks/users/useUsers";
 vi.mock(
   "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults",
   async () => await import("../../tests/mocks/complexityScorerDefaults"),
@@ -45,6 +46,16 @@ vi.mock("@/app/(dashboard)/hooks/models/useModelCostMap", () => ({
 const mockUseTeams = vi.fn();
 vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
   useTeams: () => mockUseTeams(),
+}));
+
+vi.mock("@/app/(dashboard)/hooks/users/useUsers", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/app/(dashboard)/hooks/users/useUsers")>();
+  return { ...actual, useUserLookup: vi.fn() };
+});
+
+vi.mock("next/navigation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/navigation")>()),
+  useRouter: () => ({ push: vi.fn() }),
 }));
 
 const mockUsePtuCostAttributionEnabled = vi.fn();
@@ -106,6 +117,7 @@ describe("ModelInfoView", () => {
       },
     });
     vi.clearAllMocks();
+    vi.mocked(useUserLookup).mockReturnValue({ data: null } as ReturnType<typeof useUserLookup>);
     mockUsePtuCostAttributionEnabled.mockReturnValue(false);
     mockUseTeams.mockReturnValue({ data: undefined, isLoading: false, error: null });
 
@@ -1369,6 +1381,18 @@ describe("ModelInfoView", () => {
       expect(screen.getByText(/Created At/)).toBeInTheDocument();
       expect(screen.getByText(/Created By/)).toBeInTheDocument();
     });
+  });
+
+  it("shows the creator alias as a link to the user page", async () => {
+    vi.mocked(useUserLookup).mockReturnValue({
+      data: { user_alias: "Alice", user_email: "alice@example.com" },
+    } as ReturnType<typeof useUserLookup>);
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    expect(await screen.findByRole("link", { name: "Alice" })).toHaveAttribute(
+      "href",
+      expect.stringContaining("/users?user=123"),
+    );
   });
 
   describe("team alias", () => {

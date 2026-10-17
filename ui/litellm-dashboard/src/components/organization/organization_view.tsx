@@ -5,6 +5,7 @@ import { useUrlTab } from "@/hooks/useUrlTab";
 import { useVisitedTabs } from "@/hooks/useVisitedTabs";
 import { MoneyCell } from "@/components/shared/table_cells";
 import CopyButton from "@/components/shared/CopyButton";
+import { UserReference } from "@/components/shared/UserReference";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -186,7 +187,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                 <div className="mt-2 text-sm text-foreground">
                   <p>Created: {new Date(orgData.created_at).toLocaleDateString()}</p>
                   <p>Updated: {new Date(orgData.updated_at).toLocaleDateString()}</p>
-                  <p>Created By: {orgData.created_by}</p>
+                  <p>Created By: {orgData.created_by && <UserReference userId={orgData.created_by} />}</p>
                 </div>
               </CardContent>
             </Card>

@@ -7,6 +7,7 @@ import { vi, test, expect, beforeEach, describe, type Mock } from "vitest";
 import { renderWithProviders, testQueryClient } from "../../../tests/test-utils";
 import OrganizationInfoView from "./organization_view";
 import { useOrganization } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
+import { useUserLookup } from "@/app/(dashboard)/hooks/users/useUsers";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn() }),
@@ -37,7 +38,13 @@ vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
   },
 }));
 
+vi.mock("@/app/(dashboard)/hooks/users/useUsers", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/app/(dashboard)/hooks/users/useUsers")>();
+  return { ...actual, useUserLookup: vi.fn() };
+});
+
 const mockUseOrganization = vi.mocked(useOrganization);
+const mockUseUserLookup = vi.mocked(useUserLookup);
 
 // Mock noisy/heavy child components to keep this test focused on render
 vi.mock("../object_permissions_view", () => ({
@@ -103,6 +110,7 @@ const mockOrg = {
 
 beforeEach(() => {
   mockUseOrganization.mockReset();
+  mockUseUserLookup.mockReturnValue({ data: null } as ReturnType<typeof useUserLookup>);
 });
 
 test("renders organization view after loading data", async () => {
@@ -121,6 +129,32 @@ test("renders organization view after loading data", async () => {
 
   const [orgName] = await screen.findAllByText("Acme Corp");
   expect(orgName).toBeInTheDocument();
+});
+
+test("shows the creator alias as a link to the user page", async () => {
+  mockUseOrganization.mockReturnValue({
+    data: { ...mockOrg, created_by: "org-user-1" },
+    isLoading: false,
+  } as unknown as ReturnType<typeof useOrganization>);
+  mockUseUserLookup.mockReturnValue({
+    data: { user_alias: "Alice", user_email: "alice@example.com" },
+  } as ReturnType<typeof useUserLookup>);
+
+  renderWithProviders(
+    <OrganizationInfoView
+      organizationId="org_123"
+      onClose={() => {}}
+      accessToken="test-token"
+      is_org_admin={false}
+      is_proxy_admin={false}
+      userModels={[]}
+    />,
+  );
+
+  expect(await screen.findByRole("link", { name: "Alice" })).toHaveAttribute(
+    "href",
+    expect.stringContaining("/users?user=org-user-1"),
+  );
 });
 
 test("should display empty state when organization has no members", async () => {

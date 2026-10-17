@@ -14,6 +14,7 @@ import {
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { ArrowLeft, CheckIcon, CopyIcon, Pencil, Trash2 } from "lucide-react";
 import { toast } from "@/lib/toast";
+import { UserReference } from "@/components/shared/UserReference";
 import PromptCodeSnippets from "./prompt_editor_view/PromptCodeSnippets";
 import { extractModel, extractTemplateVariables, getBasePromptId, getCurrentVersion } from "./prompt_utils";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -329,7 +330,9 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({
               <Card className="block p-6">
                 <p>Created By</p>
                 <div className="mt-2">
-                  <h3 className="text-sm font-medium">{promptData.created_by || "-"}</h3>
+                  <h3 className="text-sm font-medium">
+                    {promptData.created_by ? <UserReference userId={promptData.created_by} /> : "-"}
+                  </h3>
                 </div>
               </Card>
 
