@@ -3753,6 +3753,9 @@ def test_stream_chunk_builder_text_completion_combines_text_and_usage():
             model="gpt-3.5-turbo-instruct",
             choices=[{"text": " world", "index": 0, "logprobs": None, "finish_reason": "stop"}],
         ),
+        TextCompletionResponse(
+            id="cmpl-1", object="text_completion", created=1, model="gpt-3.5-turbo-instruct", choices=[]
+        ),
     ]
 
     response = stream_chunk_builder_text_completion(chunks=chunks, messages=[{"role": "user", "content": "say hello"}])

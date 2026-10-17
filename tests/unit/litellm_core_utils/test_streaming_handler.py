@@ -591,18 +591,22 @@ async def test_streaming_handler_with_usage(
     assert chunk_has_usage
 
 
+@pytest.mark.parametrize("plain_iterator", [False, True])
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
-async def test_include_usage_chunk_has_empty_choices(sync_mode: bool):
+async def test_include_usage_chunk_has_empty_choices(sync_mode: bool, plain_iterator: bool):
     """OpenAI streams the include_usage chunk with choices: [] after every choice has finished."""
     usage: Final = Usage(prompt_tokens=5, completion_tokens=1, total_tokens=6)
     provider_chunks: Final = [
         ModelResponseStream(id="c1", choices=[StreamingChoices(index=0, delta=Delta(role="assistant", content="ok"))]),
         ModelResponseStream(id="c1", choices=[StreamingChoices(index=0, delta=Delta(), finish_reason="stop")]),
+        ModelResponseStream(id="c1", choices=[], provider_specific_fields={"citations": ["a"]}),
         ModelResponseStream(id="c1", choices=[], usage=usage),
     ]
     wrapper: Final = CustomStreamWrapper(
-        completion_stream=ModelResponseListIterator(model_responses=provider_chunks),
+        completion_stream=(
+            iter(provider_chunks) if plain_iterator else ModelResponseListIterator(model_responses=provider_chunks)
+        ),
         model="hosted_vllm/m",
         custom_llm_provider="hosted_vllm",
         logging_obj=Logging(
@@ -619,8 +623,9 @@ async def test_include_usage_chunk_has_empty_choices(sync_mode: bool):
 
     chunks: Final = list(wrapper) if sync_mode else [chunk async for chunk in wrapper]
 
-    assert [len(chunk.choices) for chunk in chunks] == [1, 1, 0]
-    assert chunks[-1].usage is not None
+    assert [len(chunk.choices) for chunk in chunks] == [1, 1, 0, 0]
+    assert chunks[2].provider_specific_fields == {"citations": ["a"]}
+    assert [getattr(chunk, "usage", None) is not None for chunk in chunks] == [False, False, False, True]
     assert chunks[-1].usage.total_tokens == 6
 
 
