@@ -1,18 +1,29 @@
+import asyncio
 import json
 import logging
-from collections.abc import Mapping, Sequence
-from types import MappingProxyType
+import sys
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager, nullcontext
+from datetime import datetime
+from types import MappingProxyType, SimpleNamespace
+from typing import Any, Final, List, cast
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 import respx
+from mcp.types import CallToolResult, ListToolsResult, TextContent
 from mcp.types import Tool as MCPTool
-from typing import Final, List, Any, cast
-from unittest.mock import AsyncMock, patch
 
 
 # Import required modules
 import litellm
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.langfuse.langfuse import langfuse_trace_id, langfuse_trace_metadata
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.proxy._experimental.mcp_server import mcp_server_manager
+from litellm.proxy._experimental.mcp_server.faults.list_outcomes import ServerListOk
+from litellm.proxy.utils import _failure_fields_to_lift
 from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
 from litellm.types.llms.openai import (
     ResponsesAPIResponse,
@@ -20,6 +31,7 @@ from litellm.types.llms.openai import (
     OpenAIMcpServerTool,
     ToolParam,
 )
+from litellm.types.utils import StandardLoggingPayload, Usage
 
 
 class MockUserAPIKeyAuth:
@@ -1284,6 +1296,67 @@ async def test_no_duplicate_mcp_tools_in_streaming_e2e():
         }
 
 
+_ROUND_ONE_BODY: Final = MappingProxyType(
+    {
+        "id": "resp_round_one",
+        "object": "response",
+        "created_at": 1,
+        "status": "completed",
+        "model": "gpt-5.6",
+        "output": (
+            MappingProxyType(
+                {
+                    "type": "function_call",
+                    "id": "fc_round_one",
+                    "call_id": "call_echo",
+                    "name": "echo",
+                    "arguments": '{"value": "PING"}',
+                    "status": "completed",
+                }
+            ),
+        ),
+        "usage": MappingProxyType(
+            {
+                "input_tokens": 71,
+                "input_tokens_details": MappingProxyType({"cached_tokens": 32}),
+                "output_tokens": 19,
+                "output_tokens_details": MappingProxyType({"reasoning_tokens": 0}),
+                "total_tokens": 90,
+            }
+        ),
+    }
+)
+_ROUND_TWO_BODY: Final = MappingProxyType(
+    {
+        "id": "resp_round_two",
+        "object": "response",
+        "created_at": 2,
+        "status": "completed",
+        "model": "gpt-5.6",
+        "output": (
+            MappingProxyType(
+                {
+                    "type": "message",
+                    "id": "msg_round_two",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": (MappingProxyType({"type": "output_text", "text": "PING", "annotations": ()}),),
+                }
+            ),
+        ),
+        "usage": MappingProxyType(
+            {
+                "input_tokens": 149,
+                "input_tokens_details": MappingProxyType({"cached_tokens": 64}),
+                "output_tokens": 5,
+                "output_tokens_details": MappingProxyType({"reasoning_tokens": 0}),
+                "total_tokens": 154,
+            }
+        ),
+    }
+)
+
+
 WEATHER_TOOL: Final = MCPTool(
     name="get_weather",
     description="Get weather for a city",
@@ -1396,6 +1469,769 @@ SCRIPTED_PROVIDERS: Final = MappingProxyType(
         ),
     }
 )
+
+
+def _round_cost(body: Mapping[str, object]) -> float:
+    return litellm.completion_cost(
+        completion_response=ResponsesAPIResponse.model_validate(body),
+        model="gpt-5.6",
+        custom_llm_provider="openai",
+        call_type="aresponses",
+    )
+
+
+class _RoundRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged: tuple[StandardLoggingPayload, ...] = ()
+        self.failed: tuple[StandardLoggingPayload, ...] = ()
+        self.hooked: tuple[object, ...] = ()
+
+    async def async_log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.logged = (*self.logged, cast(StandardLoggingPayload, kwargs["standard_logging_object"]))
+
+    async def async_log_failure_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.failed = (*self.failed, cast(StandardLoggingPayload, kwargs["standard_logging_object"]))
+
+    def logging_hook(self, kwargs: dict, result: Any, call_type: str) -> tuple[dict, Any]:
+        self.hooked = (*self.hooked, result)
+        return kwargs, result
+
+
+def _no_op_sync_callback(
+    kwargs: Mapping[str, object], completion_response: object, start_time: datetime, end_time: datetime
+) -> None:
+    return None
+
+
+async def _settle(condition: Callable[[], bool]) -> None:
+    for _ in range(200):
+        if condition():
+            break
+        await asyncio.sleep(0.01)
+    await asyncio.sleep(0.2)
+
+
+_ECHO_MCP_TOOL: Final = MappingProxyType(
+    {"type": "mcp", "server_url": "litellm_proxy/mcp/demo", "require_approval": "never"}
+)
+
+
+def _serve_responses(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, responses: Sequence[httpx.Response]
+) -> respx.Route:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    return respx_mock.post(url__regex=r"https://mcp-rounds\.example\.com/.*responses").mock(side_effect=list(responses))
+
+
+def _serve_rounds(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, bodies: Sequence[Mapping[str, object]]
+) -> respx.Route:
+    return _serve_responses(
+        respx_mock, monkeypatch, tuple(httpx.Response(200, content=json.dumps(body, default=dict)) for body in bodies)
+    )
+
+
+@contextmanager
+def _echo_tool_served(tool_result: str) -> Iterator[None]:
+    echo_tool: Final = MCPTool.model_validate(
+        {"name": "echo", "inputSchema": {"type": "object", "properties": {"value": {"type": "string"}}}},
+        by_name=False,
+    )
+    with (
+        patch.object(
+            LiteLLM_Proxy_MCP_Handler,
+            "process_mcp_tools_without_openai_transform",
+            AsyncMock(return_value=([echo_tool], {"echo": "demo"})),
+        ),
+        patch.object(
+            LiteLLM_Proxy_MCP_Handler,
+            "execute_tool_calls",
+            AsyncMock(return_value=[{"tool_call_id": "call_echo", "result": tool_result, "name": "echo"}]),
+        ),
+    ):
+        yield
+
+
+async def _auto_execute(
+    logging_obj: Logging, mcp_tool: Mapping[str, object], tool_result: str
+) -> ResponsesAPIResponse:
+    with _echo_tool_served(tool_result):
+        response: Final = await litellm.aresponses(
+            model="openai/gpt-5.6",
+            input="Call echo with PING",
+            tools=[dict(mcp_tool)],
+            api_key="sk-mcp-rounds",
+            api_base="https://mcp-rounds.example.com/v1",
+            litellm_logging_obj=logging_obj,
+        )
+    assert isinstance(response, ResponsesAPIResponse)
+    return response
+
+
+async def _auto_execute_echo(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, logging_obj: Logging
+) -> ResponsesAPIResponse:
+    _serve_rounds(respx_mock, monkeypatch, (_ROUND_ONE_BODY, _ROUND_TWO_BODY))
+    return await _auto_execute(logging_obj, _ECHO_MCP_TOOL, "PING")
+
+
+async def _auto_execute_through_mcp_server(
+    monkeypatch: pytest.MonkeyPatch, call_tool: AsyncMock, logging_obj: Logging
+) -> None:
+    monkeypatch.setitem(
+        sys.modules, "litellm.proxy.proxy_server", SimpleNamespace(proxy_logging_obj=None, prisma_client=None)
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        SimpleNamespace(
+            catalog=SimpleNamespace(operation=nullcontext),
+            get_registry=MagicMock(return_value={}),
+            call_tool=call_tool,
+            get_mcp_server_from_tool_name=MagicMock(return_value=None),
+            get_mcp_server_by_name=MagicMock(return_value=None),
+        ),
+    )
+    echo_tool: Final = MCPTool.model_validate(
+        {"name": "echo", "inputSchema": {"type": "object", "properties": {"value": {"type": "string"}}}},
+        by_name=False,
+    )
+    with patch.object(
+        LiteLLM_Proxy_MCP_Handler,
+        "process_mcp_tools_without_openai_transform",
+        AsyncMock(return_value=([echo_tool], {"echo": "demo"})),
+    ):
+        await litellm.aresponses(
+            model="openai/gpt-5.6",
+            input="Call echo with PING",
+            tools=[dict(_ECHO_MCP_TOOL)],
+            api_key="sk-mcp-rounds",
+            api_base="https://mcp-rounds.example.com/v1",
+            litellm_call_id=logging_obj.litellm_call_id,
+            litellm_logging_obj=logging_obj,
+        )
+
+
+def _rounds_logging_obj(recorder: _RoundRecorder, call_id: str) -> Logging:
+    return Logging(
+        model="openai/gpt-5.6",
+        messages=[{"role": "user", "content": "Call echo with PING"}],
+        stream=False,
+        call_type="aresponses",
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id=call_id,
+        function_id=call_id,
+        dynamic_async_success_callbacks=[recorder],
+        dynamic_success_callbacks=[recorder, _no_op_sync_callback],
+        dynamic_async_failure_callbacks=[recorder],
+    )
+
+
+def _output_types(output: Sequence[object]) -> tuple[object, ...]:
+    return tuple(item.get("type") if isinstance(item, Mapping) else getattr(item, "type", None) for item in output)
+
+
+def _assert_one_row_bills_both_rounds(logged: tuple[StandardLoggingPayload, ...], client: ResponsesAPIResponse) -> None:
+    assert len(logged) == 1
+    row: Final = logged[0]
+    both_rounds: Final = _round_cost(_ROUND_ONE_BODY) + _round_cost(_ROUND_TWO_BODY)
+    assert row["id"] == client.id
+    assert _output_types(row["response"]["output"]) == _output_types(client.output)
+    assert "message" in _output_types(client.output)
+    assert "function_call" not in _output_types(client.output)
+    assert (row["prompt_tokens"], row["completion_tokens"]) == (71 + 149, 19 + 5)
+    assert row["metadata"]["usage_object"]["prompt_tokens_details"]["cached_tokens"] == 32 + 64
+    assert row["response_cost"] == pytest.approx(both_rounds)
+    assert row["cost_breakdown"]["total_cost"] == pytest.approx(both_rounds)
+    assert client.hidden_params["response_cost"] == pytest.approx(both_rounds)
+    assert client.usage is not None
+    assert (client.usage.input_tokens, client.usage.output_tokens) == (71 + 149, 19 + 5)
+
+
+@pytest.mark.asyncio
+async def test_non_stream_auto_execute_logs_the_client_response_billed_for_both_rounds(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    recorder: Final = _RoundRecorder()
+    response: Final = await _auto_execute_echo(
+        respx_mock, monkeypatch, _rounds_logging_obj(recorder, "mcp-rounds-immediate")
+    )
+
+    await _settle(lambda: len(recorder.logged) > 0)
+
+    _assert_one_row_bills_both_rounds(recorder.logged, response)
+
+
+@pytest.mark.asyncio
+async def test_non_stream_auto_execute_deferred_for_a_post_call_guardrail_logs_both_rounds_once(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    recorder: Final = _RoundRecorder()
+    logging_obj: Final = _rounds_logging_obj(recorder, "mcp-rounds-deferred")
+    logging_obj.defer_async_logging = True
+    response: Final = await _auto_execute_echo(respx_mock, monkeypatch, logging_obj)
+
+    enqueue_deferred: Final = logging_obj.enqueue_deferred_logging
+    assert enqueue_deferred is not None
+    enqueue_deferred()
+    await _settle(lambda: len(recorder.logged) > 0)
+
+    _assert_one_row_bills_both_rounds(recorder.logged, response)
+
+
+@pytest.mark.asyncio
+async def test_non_stream_auto_execute_hands_sync_callbacks_the_client_response(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    recorder: Final = _RoundRecorder()
+    response: Final = await _auto_execute_echo(respx_mock, monkeypatch, _rounds_logging_obj(recorder, "mcp-rounds-sync"))
+
+    await _settle(lambda: len(recorder.hooked) > 0)
+
+    assert len(recorder.hooked) == 1
+    hooked: Final = recorder.hooked[0]
+    assert isinstance(hooked, ResponsesAPIResponse)
+    assert hooked.id == response.id
+    assert _output_types(hooked.output) == _output_types(response.output)
+    assert hooked.usage is not None
+    assert (hooked.usage.model_dump().get("prompt_tokens"), hooked.usage.model_dump().get("completion_tokens")) == (
+        71 + 149,
+        19 + 5,
+    )
+
+
+@pytest.mark.asyncio
+async def test_non_stream_auto_execute_bills_the_paid_first_round_when_the_follow_up_fails(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    context_window_error: Final = {
+        "error": {
+            "message": "Your input exceeds the context window of this model.",
+            "type": "invalid_request_error",
+            "param": "input",
+            "code": "context_length_exceeded",
+        }
+    }
+    _serve_responses(
+        respx_mock,
+        monkeypatch,
+        (
+            httpx.Response(200, content=json.dumps(_ROUND_ONE_BODY, default=dict)),
+            httpx.Response(400, json=context_window_error),
+        ),
+    )
+    call_tool: Final = AsyncMock(return_value=CallToolResult(content=[TextContent(type="text", text="PING")]))
+    recorder: Final = _RoundRecorder()
+
+    with pytest.raises(litellm.BadRequestError):
+        await _auto_execute_through_mcp_server(
+            monkeypatch, call_tool, _rounds_logging_obj(recorder, "mcp-rounds-follow-up-fails")
+        )
+    await _settle(lambda: len(recorder.failed) > 0)
+
+    assert recorder.logged == ()
+    assert len(recorder.failed) == 1
+    assert (recorder.failed[0]["prompt_tokens"], recorder.failed[0]["completion_tokens"]) == (71, 19)
+    assert recorder.failed[0]["response_cost"] == pytest.approx(_round_cost(_ROUND_ONE_BODY))
+    assert recorder.failed[0]["response_cost"] > 0
+    assert call_tool.await_count == 1
+    assert call_tool.await_args is not None
+    tool_logging_obj: Final = call_tool.await_args.kwargs["litellm_logging_obj"]
+    assert tool_logging_obj.litellm_call_id == f"{recorder.failed[0]['id']}_call_echo"
+    assert tool_logging_obj.litellm_trace_id == recorder.failed[0]["trace_id"]
+
+
+_RETRIED_ROUND_ONE: Final = MappingProxyType(
+    {
+        **_ROUND_ONE_BODY,
+        "id": "resp_retried_round_one",
+        "usage": {
+            "input_tokens": 500,
+            "input_tokens_details": {"cached_tokens": 0},
+            "output_tokens": 40,
+            "output_tokens_details": {"reasoning_tokens": 0},
+            "total_tokens": 540,
+        },
+    }
+)
+_SERVER_ERROR: Final = MappingProxyType(
+    {"error": {"message": "upstream overloaded", "type": "server_error", "code": "server_error"}}
+)
+
+
+def _ok(body: Mapping[str, object]) -> httpx.Response:
+    return httpx.Response(200, content=json.dumps(body, default=dict))
+
+
+def _server_error() -> httpx.Response:
+    return httpx.Response(500, content=json.dumps(_SERVER_ERROR, default=dict))
+
+
+def _router_retrying_once() -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-5.6",
+                "litellm_params": {
+                    "model": "openai/gpt-5.6",
+                    "api_key": "sk-mcp-rounds",
+                    "api_base": "https://mcp-rounds.example.com/v1",
+                },
+            }
+        ],
+        num_retries=1,
+        retry_after=0,
+    )
+
+
+@pytest.mark.asyncio
+async def test_non_stream_auto_execute_retried_after_a_failed_follow_up_bills_each_attempt_its_own_rounds(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    _serve_responses(
+        respx_mock,
+        monkeypatch,
+        (_ok(_ROUND_ONE_BODY), _server_error(), _ok(_RETRIED_ROUND_ONE), _ok(_ROUND_TWO_BODY)),
+    )
+    recorder: Final = _RoundRecorder()
+
+    with _echo_tool_served("PING"):
+        response: Final = await _router_retrying_once().aresponses(
+            model="gpt-5.6",
+            input="Call echo with PING",
+            tools=[dict(_ECHO_MCP_TOOL)],
+            litellm_logging_obj=_rounds_logging_obj(recorder, "mcp-rounds-retried"),
+        )
+    await _settle(lambda: len(recorder.logged) > 0)
+
+    assert isinstance(response, ResponsesAPIResponse)
+    assert response.usage is not None
+    assert len(recorder.failed) == 1
+    assert (recorder.failed[0]["prompt_tokens"], recorder.failed[0]["completion_tokens"]) == (71, 19)
+    assert recorder.failed[0]["response_cost"] == pytest.approx(_round_cost(_ROUND_ONE_BODY))
+    assert len(recorder.logged) == 1
+    row: Final = recorder.logged[0]
+    assert row["id"] == response.id
+    assert (row["prompt_tokens"], row["completion_tokens"]) == (500 + 149, 40 + 5)
+    assert (row["prompt_tokens"], row["completion_tokens"]) == (response.usage.input_tokens, response.usage.output_tokens)
+    assert row["response_cost"] == pytest.approx(_round_cost(_RETRIED_ROUND_ONE) + _round_cost(_ROUND_TWO_BODY))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("retried_first_rounds", "billed_tokens"),
+    [
+        pytest.param((), (71, 19), id="the retry fails its first call"),
+        pytest.param((_RETRIED_ROUND_ONE,), (71 + 500, 19 + 40), id="the retry fails its follow-up"),
+    ],
+)
+async def test_non_stream_auto_execute_failing_every_retry_bills_each_paid_first_round_once_on_the_request_failure(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    retried_first_rounds: tuple[Mapping[str, object], ...],
+    billed_tokens: tuple[int, int],
+):
+    _serve_responses(
+        respx_mock,
+        monkeypatch,
+        (_ok(_ROUND_ONE_BODY), _server_error(), *(_ok(body) for body in retried_first_rounds), _server_error()),
+    )
+    logging_obj: Final = _rounds_logging_obj(_RoundRecorder(), "mcp-rounds-every-retry-fails")
+
+    with _echo_tool_served("PING"), pytest.raises(litellm.InternalServerError):
+        await _router_retrying_once().aresponses(
+            model="gpt-5.6",
+            input="Call echo with PING",
+            tools=[dict(_ECHO_MCP_TOOL)],
+            litellm_logging_obj=logging_obj,
+        )
+
+    failure_row_fields: Final = _failure_fields_to_lift(MappingProxyType({"litellm_logging_obj": logging_obj}))
+    billed_usage: Final = failure_row_fields["combined_usage_object"]
+    assert isinstance(billed_usage, Usage)
+    assert (billed_usage.prompt_tokens, billed_usage.completion_tokens) == billed_tokens
+    assert failure_row_fields["response_cost"] == pytest.approx(
+        _round_cost(_ROUND_ONE_BODY) + sum(_round_cost(body) for body in retried_first_rounds)
+    )
+
+
+@pytest.mark.asyncio
+async def test_non_stream_auto_execute_tool_log_continues_the_request_trace_without_renaming_it(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    _serve_rounds(respx_mock, monkeypatch, (_ROUND_ONE_BODY, _ROUND_TWO_BODY))
+    call_tool: Final = AsyncMock(return_value=CallToolResult(content=[TextContent(type="text", text="PING")]))
+    recorder: Final = _RoundRecorder()
+
+    await _auto_execute_through_mcp_server(monkeypatch, call_tool, _rounds_logging_obj(recorder, "mcp-rounds-trace"))
+    await _settle(lambda: len(recorder.logged) > 0)
+
+    assert call_tool.await_args is not None
+    tool_metadata: Final = call_tool.await_args.kwargs["litellm_logging_obj"].litellm_params["metadata"]
+    assert tool_metadata["existing_trace_id"] == recorder.logged[0]["trace_id"]
+
+
+class _ListingRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.listings: tuple[Mapping[str, object], ...] = ()
+
+    async def async_log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        if kwargs.get("call_type") == "list_mcp_tools":
+            self.listings = (*self.listings, kwargs)
+
+
+def _serve_the_demo_mcp_listing(monkeypatch: pytest.MonkeyPatch) -> _ListingRecorder:
+    echo_tool: Final = MCPTool.model_validate(
+        {"name": "echo", "inputSchema": {"type": "object", "properties": {"value": {"type": "string"}}}},
+        by_name=False,
+    )
+    demo_server: Final = SimpleNamespace(
+        server_id="demo", name="demo", alias="demo", server_name="demo", auth_type=None, extra_headers=None
+    )
+    monkeypatch.setitem(
+        sys.modules, "litellm.proxy.proxy_server", SimpleNamespace(proxy_logging_obj=None, prisma_client=None)
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        SimpleNamespace(
+            catalog=SimpleNamespace(operation=nullcontext),
+            get_registry=MagicMock(return_value={}),
+            call_tool=AsyncMock(return_value=CallToolResult(content=[TextContent(type="text", text="PING")])),
+            get_mcp_server_from_tool_name=MagicMock(return_value=None),
+            get_mcp_server_by_name=MagicMock(return_value=None),
+            get_allowed_mcp_servers=AsyncMock(return_value=["demo"]),
+            get_mcp_servers_from_ids=MagicMock(return_value=[demo_server]),
+        ),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.operations._get_allowed_mcp_servers",
+        AsyncMock(return_value=[demo_server]),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.catalog.get_filtered_server_tools",
+        AsyncMock(return_value=(ListToolsResult(tools=[echo_tool]), ServerListOk(tool_count=1))),
+    )
+    listing_recorder: Final = _ListingRecorder()
+    monkeypatch.setattr(litellm, "_async_success_callback", [listing_recorder])
+    return listing_recorder
+
+
+async def _assert_the_listing_logs_in_the_request_trace(
+    listing_recorder: _ListingRecorder, request_recorder: _RoundRecorder
+) -> None:
+    await _settle(lambda: len(request_recorder.logged) > 0 and len(listing_recorder.listings) > 0)
+    request_trace_id: Final = request_recorder.logged[0]["trace_id"]
+    assert len(listing_recorder.listings) == 1
+    listing: Final = listing_recorder.listings[0]
+    listing_row: Final = cast(StandardLoggingPayload, listing["standard_logging_object"])
+    assert listing_row["trace_id"] == request_trace_id
+    assert cast(Mapping[str, Mapping[str, object]], listing["litellm_params"])["metadata"][
+        "existing_trace_id"
+    ] == request_trace_id
+
+
+@pytest.mark.asyncio
+async def test_non_stream_auto_execute_tool_listing_log_continues_the_request_trace(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    _serve_rounds(respx_mock, monkeypatch, (_ROUND_ONE_BODY, _ROUND_TWO_BODY))
+    listing_recorder: Final = _serve_the_demo_mcp_listing(monkeypatch)
+    request_recorder: Final = _RoundRecorder()
+
+    await litellm.aresponses(
+        model="openai/gpt-5.6",
+        input="Call echo with PING",
+        tools=[dict(_ECHO_MCP_TOOL)],
+        api_key="sk-mcp-rounds",
+        api_base="https://mcp-rounds.example.com/v1",
+        litellm_call_id="mcp-listing-trace",
+        litellm_trace_id="router-trace",
+        litellm_logging_obj=_rounds_logging_obj(request_recorder, "mcp-listing-trace"),
+    )
+
+    await _assert_the_listing_logs_in_the_request_trace(listing_recorder, request_recorder)
+
+
+@pytest.mark.asyncio
+async def test_bridged_auto_execute_tool_listing_log_continues_the_request_trace(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    respx_mock.post("https://mcp-rounds.example.com/v1/messages").mock(
+        side_effect=[
+            httpx.Response(
+                200,
+                json=_anthropic_message(
+                    "msg_tool_round",
+                    ({"type": "tool_use", "id": "toolu_echo", "name": "echo", "input": {"value": "PING"}},),
+                    "tool_use",
+                ),
+            ),
+            httpx.Response(200, json=_anthropic_message("msg_answer", ({"type": "text", "text": "PING"},), "end_turn")),
+        ]
+    )
+    listing_recorder: Final = _serve_the_demo_mcp_listing(monkeypatch)
+    request_recorder: Final = _RoundRecorder()
+
+    await litellm.aresponses(
+        model="anthropic/claude-haiku-4-5",
+        input="Call echo with PING",
+        tools=[dict(_ECHO_MCP_TOOL)],
+        api_key="sk-mcp-rounds",
+        api_base="https://mcp-rounds.example.com",
+        litellm_call_id="mcp-bridged-listing-trace",
+        litellm_trace_id="router-trace",
+        litellm_logging_obj=_rounds_logging_obj(request_recorder, "mcp-bridged-listing-trace"),
+    )
+
+    await _assert_the_listing_logs_in_the_request_trace(listing_recorder, request_recorder)
+
+
+class _CallRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged: tuple[Mapping[str, object], ...] = ()
+
+    async def async_log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.logged = (*self.logged, kwargs)
+
+    def of(self, call_type: str) -> tuple[Mapping[str, object], ...]:
+        return tuple(kwargs for kwargs in self.logged if kwargs.get("call_type") == call_type)
+
+
+def _langfuse_trace_of(logged: Mapping[str, object]) -> object:
+    litellm_params: Final = cast(Mapping[str, object], logged["litellm_params"])
+    return langfuse_trace_id(
+        metadata=langfuse_trace_metadata(litellm_params["metadata"], litellm_params.get("proxy_server_request")),
+        standard_trace_id=cast(StandardLoggingPayload, logged["standard_logging_object"])["trace_id"],
+        litellm_trace_id=logged.get("litellm_trace_id"),
+        litellm_call_id=logged.get("litellm_call_id"),
+        proxy_server_request=litellm_params.get("proxy_server_request"),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body_metadata",
+    [None, {"trace_id": "client-trace", "session_id": "client-session"}],
+    ids=["no_body_metadata", "body_metadata_with_its_own_trace_and_session"],
+)
+async def test_auto_execute_mcp_logs_join_the_langfuse_trace_of_a_session_header_request(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, body_metadata: dict[str, str] | None
+):
+    _serve_rounds(respx_mock, monkeypatch, (_ROUND_ONE_BODY, _ROUND_TWO_BODY))
+    listing_recorder: Final = _serve_the_demo_mcp_listing(monkeypatch)
+    call_recorder: Final = _CallRecorder()
+    monkeypatch.setattr(litellm, "_async_success_callback", [listing_recorder, call_recorder])
+    session_id: Final = "sess-abc12345"
+
+    await litellm.aresponses(
+        model="openai/gpt-5.6",
+        input="Call echo with PING",
+        tools=[dict(_ECHO_MCP_TOOL)],
+        api_key="sk-mcp-rounds",
+        api_base="https://mcp-rounds.example.com/v1",
+        litellm_call_id="mcp-session-trace",
+        litellm_trace_id=session_id,
+        litellm_session_id=session_id,
+        metadata=body_metadata,
+        litellm_metadata={"trace_id": session_id, "session_id": session_id},
+        proxy_server_request={"headers": {"x-litellm-session-id": session_id}},
+    )
+    await _settle(lambda: len(call_recorder.of("aresponses")) > 0 and len(listing_recorder.listings) > 0)
+
+    parent_trace_id: Final = _langfuse_trace_of(call_recorder.of("aresponses")[0])
+    call_tool: Final = cast(AsyncMock, mcp_server_manager.global_mcp_server_manager.call_tool)
+    assert call_tool.await_args is not None
+    tool_logging_obj: Final = cast(Logging, call_tool.await_args.kwargs["litellm_logging_obj"])
+    mcp_log_traces: Final = (
+        cast(Mapping[str, Mapping[str, object]], listing_recorder.listings[0]["litellm_params"])["metadata"][
+            "existing_trace_id"
+        ],
+        cast(Mapping[str, Mapping[str, object]], tool_logging_obj.model_call_details["litellm_params"])["metadata"][
+            "existing_trace_id"
+        ],
+    )
+    assert parent_trace_id == "mcp-session-trace"
+    assert mcp_log_traces == (parent_trace_id, parent_trace_id)
+
+
+@pytest.mark.asyncio
+async def test_non_stream_auto_execute_bills_the_paid_first_round_when_the_client_disconnects_during_a_tool_call(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    _serve_rounds(respx_mock, monkeypatch, (_ROUND_ONE_BODY,))
+    logging_obj: Final = _rounds_logging_obj(_RoundRecorder(), "mcp-rounds-disconnect")
+
+    with pytest.raises(asyncio.CancelledError):
+        await _auto_execute_through_mcp_server(
+            monkeypatch, AsyncMock(side_effect=asyncio.CancelledError()), logging_obj
+        )
+
+    failure_row_fields: Final = _failure_fields_to_lift(MappingProxyType({"litellm_logging_obj": logging_obj}))
+    billed_usage: Final = failure_row_fields["combined_usage_object"]
+    assert isinstance(billed_usage, Usage)
+    assert (billed_usage.prompt_tokens, billed_usage.completion_tokens) == (71, 19)
+    assert failure_row_fields["response_cost"] == pytest.approx(_round_cost(_ROUND_ONE_BODY))
+
+
+@pytest.mark.asyncio
+async def test_non_stream_auto_execute_bills_nothing_for_rounds_served_from_the_response_cache(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    """A cached final round hands back the id of the turn that cached it, so that turn's row is logged under a
+    unique id prefixed by the client's, and as a cache hit only when no round was paid."""
+    monkeypatch.setattr(litellm, "cache", litellm.Cache(type="local"))
+    provider: Final = _serve_rounds(respx_mock, monkeypatch, (_ROUND_ONE_BODY, _ROUND_TWO_BODY, _ROUND_TWO_BODY))
+    warm: Final = _RoundRecorder()
+    await _auto_execute(_rounds_logging_obj(warm, "mcp-cache-warm"), _ECHO_MCP_TOOL, "PING")
+    await _settle(lambda: len(warm.logged) > 0)
+
+    first_cached: Final = _RoundRecorder()
+    first_cached_response: Final = await _auto_execute(
+        _rounds_logging_obj(first_cached, "mcp-cache-first-round"),
+        {**_ECHO_MCP_TOOL, "server_description": "echo server"},
+        "PONG",
+    )
+    all_cached: Final = _RoundRecorder()
+    all_cached_response: Final = await _auto_execute(
+        _rounds_logging_obj(all_cached, "mcp-cache-every-round"),
+        {**_ECHO_MCP_TOOL, "server_description": "echo server, same tools"},
+        "PONG",
+    )
+    await _settle(lambda: len(first_cached.logged) > 0 and len(all_cached.logged) > 0)
+
+    assert provider.call_count == 3
+    for logged, client in ((first_cached.logged, first_cached_response), (all_cached.logged, all_cached_response)):
+        assert len(logged) == 1
+        assert logged[0]["id"].startswith(client.id)
+        assert _output_types(logged[0]["response"]["output"]) == _output_types(client.output)
+        assert "function_call" not in _output_types(client.output)
+        assert (logged[0]["prompt_tokens"], logged[0]["completion_tokens"]) == (71 + 149, 19 + 5)
+    assert first_cached.logged[0]["response_cost"] == pytest.approx(_round_cost(_ROUND_TWO_BODY))
+    assert first_cached.logged[0]["cost_breakdown"]["total_cost"] == pytest.approx(_round_cost(_ROUND_TWO_BODY))
+    assert first_cached_response.hidden_params["response_cost"] == pytest.approx(_round_cost(_ROUND_TWO_BODY))
+    assert all_cached.logged[0]["response_cost"] == 0.0
+    assert all_cached_response.hidden_params["response_cost"] == 0.0
+    assert first_cached.logged[0]["id"] == first_cached_response.id
+    assert first_cached.logged[0]["cache_hit"] is None
+    assert all_cached.logged[0]["id"].startswith(f"{all_cached_response.id}_cache_hit")
+    assert all_cached.logged[0]["cache_hit"] is True
+
+
+_PRIOR_TURN: Final = MappingProxyType(
+    {
+        "request_id": "chatcmpl-prior-turn",
+        "session_id": "prior-session",
+        "proxy_server_request": {"input": "My favorite color is teal."},
+        "response": {
+            "id": "chatcmpl-prior-turn",
+            "object": "chat.completion",
+            "created": 1767225600,
+            "model": "claude-haiku-4-5",
+            "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "Noted."}}],
+        },
+    }
+)
+
+
+def _anthropic_message(message_id: str, content: Sequence[Mapping[str, object]], stop: str) -> dict[str, object]:
+    return {
+        "id": message_id,
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-haiku-4-5",
+        "content": [dict(block) for block in content],
+        "stop_reason": stop,
+        "usage": {"input_tokens": 50, "output_tokens": 10},
+    }
+
+
+class _SpendLogs:
+    def __init__(self, rows: Sequence[Mapping[str, object]]) -> None:
+        self.rows: Final = tuple(rows)
+        self.asked: tuple[frozenset[str], ...] = ()
+
+    async def query_raw(self, query: str, request_ids: Sequence[str]) -> list[dict[str, object]]:
+        self.asked = (*self.asked, frozenset(request_ids))
+        return [dict(row) for row in self.rows if row["request_id"] in request_ids]
+
+
+@pytest.mark.asyncio
+async def test_bridged_auto_execute_follow_up_continues_the_client_conversation_in_its_session(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    spend_logs: Final = _SpendLogs((_PRIOR_TURN,))
+    monkeypatch.setitem(
+        sys.modules,
+        "litellm.proxy.proxy_server",
+        SimpleNamespace(proxy_logging_obj=None, prisma_client=SimpleNamespace(db=spend_logs), disable_spend_logs=False),
+    )
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    thinking: Final = {"type": "thinking", "thinking": "Echo PING back.", "signature": "sig-round-one"}
+    provider: Final = respx_mock.post("https://mcp-rounds.example.com/v1/messages").mock(
+        side_effect=[
+            httpx.Response(
+                200,
+                json=_anthropic_message(
+                    "msg_tool_round",
+                    (thinking, {"type": "tool_use", "id": "toolu_echo", "name": "echo", "input": {"value": "PING"}}),
+                    "tool_use",
+                ),
+            ),
+            httpx.Response(200, json=_anthropic_message("msg_answer", ({"type": "text", "text": "PING"},), "end_turn")),
+        ]
+    )
+    echo_tool: Final = MCPTool.model_validate(
+        {"name": "echo", "inputSchema": {"type": "object", "properties": {"value": {"type": "string"}}}},
+        by_name=False,
+    )
+    execute: Final = AsyncMock(return_value=[{"tool_call_id": "toolu_echo", "result": "PING", "name": "echo"}])
+    recorder: Final = _RoundRecorder()
+
+    with (
+        patch.object(
+            LiteLLM_Proxy_MCP_Handler,
+            "process_mcp_tools_without_openai_transform",
+            AsyncMock(return_value=([echo_tool], {"echo": "demo"})),
+        ),
+        patch.object(LiteLLM_Proxy_MCP_Handler, "execute_tool_calls", execute),
+    ):
+        await litellm.aresponses(
+            model="anthropic/claude-haiku-4-5",
+            input="Call echo with PING",
+            previous_response_id="chatcmpl-prior-turn",
+            tools=[dict(_ECHO_MCP_TOOL)],
+            api_key="sk-mcp-rounds",
+            api_base="https://mcp-rounds.example.com",
+            litellm_logging_obj=_rounds_logging_obj(recorder, "mcp-rounds-bridged"),
+        )
+    await _settle(lambda: len(recorder.logged) > 0)
+
+    follow_up: Final = json.loads(provider.calls[1].request.content)["messages"]
+    assert spend_logs.asked == (frozenset({"chatcmpl-prior-turn"}),) * 2
+    assert [message["role"] for message in follow_up] == ["user", "assistant", "user", "assistant", "user"]
+    assert json.dumps(follow_up).count("My favorite color is teal.") == 1
+    assert [block["type"] for block in follow_up[3]["content"]] == ["thinking", "tool_use"]
+    assert follow_up[3]["content"][0]["signature"] == "sig-round-one"
+    assert execute.await_args is not None
+    assert execute.await_args.kwargs["litellm_trace_id"] == "prior-session"
+    assert recorder.logged[0]["trace_id"] == "prior-session"
 
 
 def _event_type(event: object) -> str:

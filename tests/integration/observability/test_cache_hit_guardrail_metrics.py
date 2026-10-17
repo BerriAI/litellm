@@ -577,7 +577,6 @@ def test_two_identical_cache_hit_rejects_increment_populated_series(gateway: Gat
 
 def test_two_identical_cache_hit_rejects_write_matching_spend_rows(gateway: Gateway, tmp_path: Path) -> None:
     """E1b: both cache-hit rejects land a failure spend row."""
-    pytest.skip("BUG: roughly one in four back-to-back cache-hit rejects never lands its LiteLLM_SpendLogs row")
     marker: Final = uuid.uuid4().hex
     with _rig(gateway, tmp_path, marker) as rig:
         text: Final = "cache hit control e1b " + marker

@@ -171,6 +171,7 @@ from litellm.router_utils.routing_groups import parse_routing_groups
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.utils import (
     PRICING_OVERRIDES_KEY,
+    CountContextManagement,
     ModelResponse,
     ModelResponseStream,
     StreamingChoices,
@@ -10012,6 +10013,7 @@ def _pop_complete_sse_frame(buffer: str) -> tuple[str | None, str]:
 _STREAM_KEEPALIVE: Final = object()
 
 _KEEPALIVE_MIN_SECONDS: Final = 1.0
+_STREAM_LOOP_HOLD_SECONDS: Final = 0.05
 _KEEPALIVE_MAX_SECONDS: Final = 300.0
 _EMPTY_MAPPING: Final[Mapping[str, object]] = MappingProxyType({})
 _EMPTY_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
@@ -10287,7 +10289,14 @@ async def async_data_generator(
             else stream_iterator
         )
 
+        loop_released_at = time.monotonic()  # rebind-ok: last time this stream let other tasks run
         async for item in stream_source:
+            # Unblock the event loop: a stream whose chunks are already buffered never awaits
+            # between chunks, so without this yield one long stream holds the loop for its whole body.
+            # A real await in between may already have released the loop; this only guarantees it
+            if time.monotonic() - loop_released_at >= _STREAM_LOOP_HOLD_SECONDS:
+                await asyncio.sleep(0)
+                loop_released_at = time.monotonic()
             if item is _STREAM_KEEPALIVE:
                 yield ": ping\n\n"
                 continue
@@ -14456,6 +14465,7 @@ async def _try_provider_token_count(
     system: str | None = None,
     messages_format: TokenCountMessagesFormat = "openai",
     output_format: JsonValue = None,
+    context_management: CountContextManagement | None = None,
 ) -> Optional["TokenCountResponse"]:
     """Attempt provider-specific token counting. Returns result on success, None to fall through to local counting."""
     if not provider_counter.should_use_token_counting_api(custom_llm_provider=custom_llm_provider):
@@ -14471,6 +14481,7 @@ async def _try_provider_token_count(
             system=system,
             messages_format=messages_format,
             output_format=output_format,
+            context_management=context_management,
         )
     except httpx.HTTPStatusError as e:
         error_message: Final = getattr(e, "message", None) or str(e)
@@ -14499,6 +14510,39 @@ _PROVIDERS_COUNTING_WITHOUT_MESSAGES: Final = frozenset(
 def _drops_params(deployment: Mapping[str, object] | None) -> bool:
     litellm_params: Final = as_str_mapping(None if deployment is None else deployment.get("litellm_params"))
     return litellm.drop_params is True or (litellm_params is not None and litellm_params.get("drop_params") is True)
+
+
+def _router_default_litellm_params(router: Router) -> Mapping[str, object]:
+    defaults: Final[Mapping[str, object] | None] = getattr(router, "default_litellm_params", None)
+    if defaults is None:
+        return {}
+    return {key: value for key, value in defaults.items() if value is not None}
+
+
+def _count_context_management(
+    context_management: JsonValue, model: str, request_litellm_params: Mapping[str, JsonValue]
+) -> CountContextManagement | None:
+    from litellm.llms.anthropic.pass_through.adapters.handler import context_management_explicitly_dropped
+
+    if context_management is None or llm_router is None:
+        return None
+    inference_model: Final = resolve_inference_model(
+        model, general_settings_view(), user_model if isinstance(user_model, str) else None
+    )
+    router_defaults: Final = _router_default_litellm_params(llm_router)
+    sent_params: Final = tuple(
+        {**deployment["litellm_params"], **router_defaults, **request_litellm_params}
+        for deployment in llm_router.get_routable_deployments(
+            inference_model if isinstance(inference_model, str) else model
+        )
+    )
+    if any(context_management_explicitly_dropped(params.get("additional_drop_params")) for params in sent_params):
+        return None
+    return CountContextManagement(
+        spec=context_management,
+        drop_invalid_edits=litellm.drop_params is True
+        or any(params.get("drop_params") is True for params in sent_params),
+    )
 
 
 def _system_message(system: object) -> ChatCompletionSystemMessage | None:
@@ -14531,6 +14575,8 @@ async def count_request_tokens(
     call_endpoint: bool = False,
     messages_format: TokenCountMessagesFormat = "openai",
     output_format: JsonValue = None,
+    context_management: JsonValue = None,
+    request_litellm_params: Mapping[str, JsonValue] = MappingProxyType({}),
 ) -> TokenCountResponse:
     prompt: Final = request.prompt
     messages: Final = request.messages
@@ -14602,6 +14648,7 @@ async def count_request_tokens(
             system=system,
             messages_format=messages_format,
             output_format=output_format,
+            context_management=_count_context_management(context_management, request.model, request_litellm_params),
         )
         if result is not None:
             return result
@@ -19698,6 +19745,26 @@ async def delete_config_general_settings(
     return response
 
 
+def _configured_callback_names(value: object) -> tuple[JsonValue, ...]:
+    if isinstance(value, str):
+        return (value,)
+    if isinstance(value, list):
+        return tuple(cast(Iterable[JsonValue], value))  # cast-ok: config.yaml values are untyped
+    return ()
+
+
+def _is_callback_name(entry: object, callback_name: str) -> bool:
+    return isinstance(entry, str) and entry.lower() == callback_name
+
+
+def _callback_lists_to_rewrite(
+    matching_keys: tuple[str, ...], owned_by_config: Callable[[str], bool]
+) -> tuple[str, ...]:
+    """The matching lists the database owns, or all of them when the config file owns every one."""
+    database_owned: Final = tuple(key for key in matching_keys if not owned_by_config(key))
+    return database_owned or matching_keys
+
+
 @router.post(
     "/config/callback/delete",
     tags=["config.yaml"],
@@ -19733,24 +19800,42 @@ async def delete_callback(
 
     try:
         # Get current configuration
-        config: Final = await proxy_config.get_config()
+        config: Final = cast(  # cast-ok: get_config returns an untyped config dict
+            dict[str, object],
+            await proxy_config.get_config(),
+        )
         callback_name: Final = data.callback_name.lower()
 
         # Check if callback exists in current configuration
-        litellm_settings: Final = config.get("litellm_settings", {})
-        success_callbacks: Final = litellm_settings.get("success_callback", [])
+        litellm_settings: Final[Mapping[str, object]] = cast(  # cast-ok: the config dict's values are untyped
+            Mapping[str, object],
+            config.get("litellm_settings", {}),
+        )
+        configured_lists: Final = {
+            key: _configured_callback_names(litellm_settings.get(key)) for key in _DB_CONFIG_CALLBACK_EVENT_TYPES
+        }
+        matching_keys: Final = tuple(
+            key
+            for key, names in configured_lists.items()
+            if any(_is_callback_name(entry, callback_name) for entry in names)
+        )
 
-        if callback_name not in success_callbacks:
+        if not matching_keys:
             raise HTTPException(
                 status_code=404,
                 detail={"error": f"Callback '{callback_name}' not found in active configuration"},
             )
 
-        before_success_callbacks: Final = list(success_callbacks)
-
-        # Remove callback from success_callback list
-        success_callbacks.remove(callback_name)
-        config.setdefault("litellm_settings", {})["success_callback"] = success_callbacks
+        rewritten_keys: Final = _callback_lists_to_rewrite(matching_keys, proxy_config.litellm_settings.owned_by_config)
+        remaining_lists: Final = MappingProxyType(
+            {
+                key: tuple(entry for entry in configured_lists[key] if not _is_callback_name(entry, callback_name))
+                for key in rewritten_keys
+            }
+        )
+        before_callbacks: Final[JsonValue] = {key: list(configured_lists[key]) for key in rewritten_keys}
+        after_callbacks: Final[JsonValue] = {key: list(names) for key, names in remaining_lists.items()}
+        config["litellm_settings"] = {**litellm_settings, **after_callbacks}
 
         # Save the updated configuration
         await proxy_config.save_config(new_config=config)
@@ -19759,8 +19844,8 @@ async def delete_callback(
             create_config_audit_log(
                 "litellm_settings",
                 "deleted",
-                {"success_callback": before_success_callbacks},
-                {"success_callback": success_callbacks},
+                before_callbacks,
+                after_callbacks,
                 user_api_key_dict,
             )
         )
@@ -19771,7 +19856,7 @@ async def delete_callback(
         return {
             "message": f"Successfully deleted callback: {callback_name}",
             "removed_callback": callback_name,
-            "remaining_callbacks": success_callbacks,
+            "remaining_callbacks": tuple(chain.from_iterable(remaining_lists.values())),
             "deleted_at": datetime.now().isoformat(),
         }
 
