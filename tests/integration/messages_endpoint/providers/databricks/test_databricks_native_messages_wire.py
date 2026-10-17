@@ -1,5 +1,6 @@
 """/v1/messages on Databricks Claude names reaches the workspace's native Anthropic route with the caller's
-``safeguards``, while every other Databricks name and api_base keeps the chat completions bridge."""
+``safeguards``, while every other Databricks name and api_base keeps the merge base's chat completions bridge or
+opted-in passthrough."""
 
 from __future__ import annotations
 
@@ -24,6 +25,7 @@ from integration._support.safeguards_rig import (
     deployment,
     flagged,
     json_body,
+    messages_body,
     native_backend,
     native_message,
     native_stream_frames,
@@ -51,6 +53,7 @@ ENVIRONMENT_MODEL: Final = "safeguards-databricks-environment"
 GPT_MODEL: Final = "safeguards-databricks-gpt"
 CUSTOM_CLAUDE_MODEL: Final = "safeguards-databricks-custom-claude"
 GATEWAY_MODEL: Final = "safeguards-databricks-behind-gateway"
+OPTED_IN_GATEWAY_MODEL: Final = "safeguards-databricks-opted-in-gateway"
 AZURE_MODEL: Final = "safeguards-azure-claude"
 EDENAI_MODEL: Final = "safeguards-edenai"
 
@@ -61,6 +64,7 @@ SDK_TARGET: Final = "/dbxsdk/serving-endpoints/anthropic/v1/messages"
 ENVIRONMENT_TARGET: Final = "/dbxenv/serving-endpoints/anthropic/v1/messages"
 SERVING_CHAT_TARGET: Final = "/dbx/serving-endpoints/chat/completions"
 GATEWAY_CHAT_TARGET: Final = "/gw/dbx/chat/completions"
+OPTED_IN_GATEWAY_TARGET: Final = "/gw/optin/v1/messages"
 AZURE_TARGET: Final = "/azure/anthropic/v1/messages"
 DATABRICKS_KEY: Final = "synthetic-databricks-key"
 ENVIRONMENT_KEY: Final = "synthetic-databricks-environment-key"
@@ -115,6 +119,10 @@ def extra_models(wire_url: str) -> Sequence[Mapping[str, JsonValue]]:
         databricks(GPT_MODEL, "databricks-gpt-oss-120b", f"{wire_url}/dbx/serving-endpoints"),
         databricks(CUSTOM_CLAUDE_MODEL, "my-claude-endpoint", f"{wire_url}/dbx/serving-endpoints"),
         databricks(GATEWAY_MODEL, "databricks-claude-sonnet-4-6", f"{wire_url}/gw/dbx"),
+        {
+            **databricks(OPTED_IN_GATEWAY_MODEL, "databricks-claude-sonnet-4-6", f"{wire_url}/gw/optin"),
+            "model_info": {"supported_endpoints": ["/v1/messages"]},
+        },
         deployment(AZURE_MODEL, "azure_ai/claude-sonnet-4-6", f"{wire_url}/azure"),
     )
 
@@ -328,6 +336,38 @@ def test_other_names_and_api_bases_keep_the_chat_completions_bridge(
     assert "safeguards" not in request_json(backend_calls[0]), backend_calls[0].body
     assert "anthropic-beta" not in backend_calls[0].headers, backend_calls[0].headers
     assert "anthropic-version" not in backend_calls[0].headers, backend_calls[0].headers
+
+
+def gateway_rejecting_the_prompt_caching_scope_beta(message: Mapping[str, JsonValue]) -> Callable[[Request], Reply]:
+    def respond(request: Request) -> Reply:
+        if "prompt-caching-scope-2026-01-05" not in beta_values(request):
+            return Reply(body=json.dumps(message).encode())
+        rejection: Final = "Unexpected value(s) `prompt-caching-scope-2026-01-05` for the `anthropic-beta` header."
+        return Reply(status=400, body=json.dumps({"error_code": "BAD_REQUEST", "message": rejection}).encode())
+
+    return respond
+
+
+def test_opted_in_passthrough_api_base_gets_no_client_anthropic_beta(databricks_rig: Rig) -> None:
+    request_nonce: Final = nonce()
+    message: Final = native_message(
+        tool_id(request_nonce),
+        content=(text_block("Done."),),
+        stop_reason="end_turn",
+        model="databricks-claude-sonnet-4-6",
+    )
+    databricks_rig.register(request_nonce, gateway_rejecting_the_prompt_caching_scope_beta(message))
+    body: Final = json_body(
+        databricks_rig.post(
+            messages_body(OPTED_IN_GATEWAY_MODEL, request_nonce),
+            beta="prompt-caching-scope-2026-01-05,context-1m-2025-08-07",
+            headers={"anthropic-version": "2023-06-01"},
+        )
+    )
+    assert body["id"] == message["id"] and body["content"] == message["content"], body
+    sent: Final = only_backend_call(databricks_rig, request_nonce)
+    assert sent.target == OPTED_IN_GATEWAY_TARGET, sent.target
+    assert "anthropic-beta" not in sent.headers, sent.headers
 
 
 def test_chat_completions_on_a_databricks_model_carries_no_client_anthropic_headers(databricks_rig: Rig) -> None:
