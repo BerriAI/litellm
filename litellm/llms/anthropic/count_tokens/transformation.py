@@ -6,7 +6,10 @@ This module handles the transformation of requests to Anthropic's CountTokens AP
 
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import Final
+from typing import (
+    Final,
+    cast,  # noqa: TID251  # validating as AllMessageValues turns Iterable content into a one-shot iterator
+)
 
 from pydantic import JsonValue, TypeAdapter
 
@@ -17,10 +20,10 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
 )
 from litellm.llms.anthropic.common_utils import merge_anthropic_beta_headers
 from litellm.llms.anthropic.wif import resolve_anthropic_base
-from litellm.types.llms.openai import ChatCompletionImageObject
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionImageObject
 
 _COUNT_REQUEST: Final = TypeAdapter(dict[str, JsonValue])
-_SYSTEM_BLOCKS: Final = TypeAdapter(list[JsonValue])
+_JSON_LIST: Final = TypeAdapter(list[JsonValue])
 _IMAGE_BLOCK: Final = TypeAdapter(ChatCompletionImageObject)
 COUNT_TOKEN_OPTION_NAMES: Final = ("thinking", "tool_choice", "output_config")
 
@@ -53,6 +56,31 @@ def _count_content(content: JsonValue) -> JsonValue:
     return [_count_block(block) for block in content] if isinstance(content, list) else content
 
 
+def _count_messages(model: str, messages: Sequence[Mapping[str, JsonValue]]) -> JsonValue:
+    if not any("tool_calls" in message for message in messages):
+        return [{**message, "content": _count_content(message["content"])} for message in messages]
+    from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
+
+    return _JSON_LIST.validate_python(
+        anthropic_messages_pt(
+            messages=cast(  # cast-ok: validating as AllMessageValues turns Iterable content into a one-shot iterator
+                list[AllMessageValues], [dict(message) for message in messages]
+            ),
+            model=model,
+            llm_provider="anthropic",
+        )
+    )
+
+
+def _count_tool(tool: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
+    if "function" not in tool:
+        return tool
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+    [anthropic_tool], _ = AnthropicConfig().map_tools([dict[str, object](tool)])
+    return _COUNT_REQUEST.validate_python(anthropic_tool)
+
+
 def _lift_leading_system(
     messages: Sequence[Mapping[str, JsonValue]], system: JsonValue
 ) -> tuple[tuple[Mapping[str, JsonValue], ...], JsonValue]:
@@ -66,7 +94,7 @@ def _lift_leading_system(
     leading, conversation = split_leading_system_run(messages)
     if not leading or not (system is None or isinstance(system, (str, list))):
         return tuple(messages), system
-    lifted: Final = _SYSTEM_BLOCKS.validate_python(list(anthropic_system_blocks(leading)))
+    lifted: Final = _JSON_LIST.validate_python(list(anthropic_system_blocks(leading)))
     if isinstance(system, list):
         return conversation, [*system, *lifted]
     if isinstance(system, str) and system:
@@ -112,7 +140,8 @@ class AnthropicCountTokensConfig:
         Transform request to Anthropic CountTokens format.
 
         Includes optional system and tools fields for accurate token counting; a leading run of
-        system-role messages is counted through ``system``, the only place count_tokens accepts it.
+        system-role messages is counted through ``system``, the only place count_tokens accepts it,
+        and chat tool turns and ``function`` tools get the chat path's Anthropic translation.
         """
         options: Final[Mapping[str, JsonValue]] = optional_params or MappingProxyType({})
         counted_messages, counted_system = _lift_leading_system(messages, system)
@@ -120,13 +149,14 @@ class AnthropicCountTokensConfig:
             MappingProxyType(
                 {
                     "model": model,
-                    "messages": [
-                        {**message, "content": _count_content(message["content"])} for message in counted_messages
-                    ],
+                    "messages": _count_messages(model, counted_messages),
                     **MappingProxyType(
                         {
                             key: value
-                            for key, value in (("system", counted_system), ("tools", tools))
+                            for key, value in (
+                                ("system", counted_system),
+                                ("tools", None if tools is None else [_count_tool(tool) for tool in tools]),
+                            )
                             if value is not None
                         }
                     ),
@@ -185,5 +215,5 @@ class AnthropicCountTokensConfig:
             if "role" not in message:
                 raise ValueError(f"Message {i} must have a 'role' field")
 
-            if "content" not in message:
+            if "content" not in message and "tool_calls" not in message:
                 raise ValueError(f"Message {i} must have a 'content' field")
