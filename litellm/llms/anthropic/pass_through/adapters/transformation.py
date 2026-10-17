@@ -120,7 +120,6 @@ from openai.types.chat.chat_completion_chunk import Choice as OpenAIStreamingCho
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     anthropic_image_source_to_openai_url,
-    anthropic_inline_document,
     parse_tool_call_arguments,
     reasoning_content_from_thinking_blocks,
     with_prompt_cache_breakpoint,
@@ -183,8 +182,6 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
     ChatCompletionAssistantToolCall,
-    ChatCompletionFileObject,
-    ChatCompletionFileObjectFile,
     ChatCompletionImageObject,
     ChatCompletionImageUrlObject,
     ChatCompletionRedactedThinkingBlock,
@@ -489,9 +486,7 @@ class LiteLLMAnthropicMessagesAdapter:
         for m in ordered_messages:
             user_message: ChatCompletionUserMessage | None = None
             tool_message_list: list[ChatCompletionToolMessage] = []
-            new_user_content_list: list[
-                ChatCompletionTextObject | ChatCompletionImageObject | ChatCompletionFileObject
-            ] = []
+            new_user_content_list: list[ChatCompletionTextObject | ChatCompletionImageObject] = []
             if m["role"] == "system":
                 system_message = self._translate_midturn_system_message_to_openai(m, model)
                 if system_message is not None:
@@ -524,8 +519,13 @@ class LiteLLMAnthropicMessagesAdapter:
                                     self._add_prompt_cache_breakpoint_if_present(content, image_obj)
                                 )
                         elif content.get("type") == "document":
-                            doc_obj = self._translate_anthropic_document_to_openai(content)
-                            if doc_obj is not None:
+                            # Convert Anthropic document format (PDF, etc.) to OpenAI format
+                            source = content.get("source", {})
+                            openai_image_url = self._translate_anthropic_image_to_openai(cast(dict, source))
+
+                            if openai_image_url:
+                                image_url_obj = ChatCompletionImageUrlObject(url=openai_image_url)
+                                doc_obj = ChatCompletionImageObject(type="image_url", image_url=image_url_obj)
                                 self._add_cache_control_if_applicable(content, doc_obj, model)
                                 new_user_content_list.append(doc_obj)
                         elif content.get("type") == "tool_result":
@@ -1331,7 +1331,7 @@ class LiteLLMAnthropicMessagesAdapter:
             case "text":
                 return ChatCompletionTextObject(type="text", text=str(block.get("text") or ""))
             case "image" | "document":
-                return self._source_image_url_part(block.get("source"))
+                return self._tool_result_image_part(block.get("source"))
             case "tool_reference":
                 return ChatCompletionToolReferenceObject(
                     type="tool_reference", tool_name=str(block.get("tool_name") or "")
@@ -1339,18 +1339,7 @@ class LiteLLMAnthropicMessagesAdapter:
             case _:
                 return None
 
-    def _translate_anthropic_document_to_openai(
-        self, document: Mapping[str, object]
-    ) -> ChatCompletionFileObject | ChatCompletionImageObject | None:
-        inline_document: Final = anthropic_inline_document(document)
-        if inline_document is None:
-            return self._source_image_url_part(document.get("source"))
-        return ChatCompletionFileObject(
-            type="file",
-            file=ChatCompletionFileObjectFile(filename=inline_document.filename, file_data=inline_document.file_data),
-        )
-
-    def _source_image_url_part(self, image_source: object) -> ChatCompletionImageObject | None:
+    def _tool_result_image_part(self, image_source: object) -> ChatCompletionImageObject | None:
         if not isinstance(image_source, dict):
             return None
         openai_image_url = self._translate_anthropic_image_to_openai(image_source)
