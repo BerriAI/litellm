@@ -234,6 +234,7 @@ TOOL_CALLS_CACHE: Final = InMemoryCache()
 _ANY_KEY_DICT_ADAPTER: Final = TypeAdapter(dict[object, object])
 _STR_KEY_DICT_ADAPTER: Final = TypeAdapter(dict[str, object])
 _OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
+_MessageT = TypeVar("_MessageT")
 _CACHED_CONTENT_ADAPTER: Final = TypeAdapter(ChatCompletionCachedContent)
 _DICT_ITEMS_LIST_ADAPTER: Final = TypeAdapter(list[dict[object, object]])
 _TEXT_ADAPTER: Final = TypeAdapter(str)
@@ -324,8 +325,77 @@ def _instruction_messages(messages: Sequence[SessionMessage]) -> tuple[SessionMe
     )
 
 
+def _message_field(message: object, key: str) -> object:
+    if isinstance(message, Mapping):
+        return _STR_KEY_DICT_ADAPTER.validate_python(message).get(key)
+    return getattr(message, key, None)
+
+
+def _str_field(message: object, key: str) -> str | None:
+    value: Final = _message_field(message, key)
+    return value if isinstance(value, str) else None
+
+
+def _tool_output_call_id(message: object) -> str | None:
+    return _str_field(message, "tool_call_id") if _message_field(message, "role") == "tool" else None
+
+
+def _assistant_tool_calls(message: object) -> tuple[object, ...]:
+    if _message_field(message, "role") != "assistant":
+        return ()
+    return tuple(_OBJECT_LIST_ADAPTER.validate_python(_message_field(message, "tool_calls") or []))
+
+
+def _answered_tool_call_ids(messages: Sequence[object]) -> frozenset[str]:
+    called: Final = frozenset(
+        _str_field(call, "id") for call in chain.from_iterable(map(_assistant_tool_calls, messages))
+    )
+    return frozenset(
+        call_id for call_id in map(_tool_output_call_id, messages) if call_id is not None and call_id not in called
+    )
+
+
+def _stored_turn_with_calls(message: SessionMessage, call_ids: frozenset[str]) -> SessionMessage | None:
+    calls: Final = [call for call in _assistant_tool_calls(message) if _str_field(call, "id") in call_ids]
+    if not calls:
+        return None
+    if isinstance(message, Message):
+        return message.model_copy(
+            update={"tool_calls": calls, "provider_specific_fields": _provider_fields_without_compaction(message)}
+        )
+    return cast(  # cast-ok: the stored assistant turn keeps every field but the calls the new input leaves unanswered
+        SessionMessage, {**_STR_KEY_DICT_ADAPTER.validate_python(message), "tool_calls": calls}
+    )
+
+
+def _with_stored_calls_the_input_answers(
+    new_messages: Sequence[_MessageT], session_history: Sequence[SessionMessage]
+) -> tuple[_MessageT | SessionMessage, ...]:
+    answered: Final = _answered_tool_call_ids(new_messages)
+    stored_calls: Final = tuple(
+        turn for turn in (_stored_turn_with_calls(message, answered) for message in session_history) if turn is not None
+    )
+    if not stored_calls:
+        return tuple(new_messages)
+    first_output: Final = next(
+        index for index, message in enumerate(new_messages) if _tool_output_call_id(message) in answered
+    )
+    return (*new_messages[:first_output], *stored_calls, *new_messages[first_output:])
+
+
 def _stored_compaction_summary(message: SessionMessage) -> str | None:
     return provider_compaction_summary(message.provider_specific_fields) if isinstance(message, Message) else None
+
+
+def _provider_fields_without_compaction(message: Message) -> Mapping[str, object] | None:
+    if not message.provider_specific_fields:
+        return None
+    other_fields: Final = {
+        key: value
+        for key, value in _STR_KEY_DICT_ADAPTER.validate_python(message.provider_specific_fields).items()
+        if key != "compaction_blocks"
+    }
+    return other_fields or None
 
 
 def _with_stored_compaction_as_summary(message: SessionMessage) -> tuple[SessionMessage, ...]:
@@ -334,12 +404,9 @@ def _with_stored_compaction_as_summary(message: SessionMessage) -> tuple[Session
     summary: Final = provider_compaction_summary(message.provider_specific_fields)
     if summary is None:
         return (message,)
-    other_fields: Final = {
-        key: value
-        for key, value in _STR_KEY_DICT_ADAPTER.validate_python(message.provider_specific_fields).items()
-        if key != "compaction_blocks"
-    }
-    answer: Final = message.model_copy(update={"provider_specific_fields": other_fields or None})
+    answer: Final = message.model_copy(
+        update={"provider_specific_fields": _provider_fields_without_compaction(message)}
+    )
     summary_message: Final = ChatCompletionUserMessage(role="user", content=summary)
     return (summary_message, answer) if answer.content or answer.tool_calls else (summary_message,)
 
@@ -482,9 +549,6 @@ def _block_with_cache_control(block: object, rewrite: _CacheControlRewrite) -> o
     if not isinstance(block, dict):
         return block
     return _fields_with_cache_control(_STR_KEY_DICT_ADAPTER.validate_python(block), rewrite)
-
-
-_MessageT = TypeVar("_MessageT")
 
 
 def _with_cache_control(message: _MessageT, rewrite: _CacheControlRewrite) -> _MessageT:
@@ -1162,11 +1226,16 @@ class LiteLLMCompletionResponsesConfig:
         # Store original _messages before combining for safety check
         original_new_messages: Final = _messages.copy() if _messages else []
 
-        combined_messages = [*leading_system_messages, *session_messages, *_messages[instructions_end:]]
+        new_messages: Final = (
+            _with_stored_calls_the_input_answers(_messages[instructions_end:], session_history)
+            if input_replaces_history
+            else _messages[instructions_end:]
+        )
+        combined_messages = [*leading_system_messages, *session_messages, *new_messages]
 
         # Fix: Ensure tool_results have corresponding tool_calls in previous assistant message
         # Pass tools parameter to help reconstruct tool_calls if not in cache
-        tools: Final = litellm_completion_request.get("tools") or []
+        tools: Final = _OBJECT_LIST_ADAPTER.validate_python(litellm_completion_request.get("tools") or [])
         combined_messages = LiteLLMCompletionResponsesConfig._ensure_tool_results_have_corresponding_tool_calls(
             messages=combined_messages, tools=tools
         )
