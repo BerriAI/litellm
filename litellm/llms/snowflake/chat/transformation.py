@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, Final, Protocol, TypedDict
 import httpx
 from typing_extensions import ReadOnly
 
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.prompt_templates.factory import (
     anthropic_process_openai_file_message,
     convert_to_anthropic_tool_result,
@@ -184,10 +185,11 @@ def _signed_thinking_blocks(msg: object) -> list[dict[str, object]]:  # mutable-
     blocks: Final = msg.get("thinking_blocks") if isinstance(msg, dict) else getattr(msg, "thinking_blocks", None)
     if not isinstance(blocks, list):
         return []
+    mappings: Final = tuple(filter(None, map(as_str_mapping, blocks)))
     return [
-        dict(block)
-        for block in blocks
-        if isinstance(block, Mapping) and (block.get("signature") or block.get("type") == "redacted_thinking")
+        {key: value for key, value in block.items() if key != "index"}
+        for block in mappings
+        if block.get("signature") or block.get("type") == "redacted_thinking"
     ]
 
 

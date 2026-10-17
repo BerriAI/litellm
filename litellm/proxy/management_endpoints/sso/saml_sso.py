@@ -27,6 +27,7 @@ import hashlib
 import os
 import secrets
 import time
+from collections.abc import Mapping
 from typing import Final, cast
 from urllib.parse import parse_qsl
 
@@ -37,6 +38,10 @@ from pydantic import ValidationError
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
+from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (
+    SSOIdentityAssertion,
+    assertion_from_saml_login,
+)
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.management_endpoints.sso_helper_utils import SSO_SESSIONS_TARGET
 from litellm.proxy.management_endpoints.types import CustomOpenID, get_litellm_user_role
@@ -212,7 +217,7 @@ class SAMLAuthHandler:
         return OneLogin_Saml2_IdPMetadataParser.merge_settings(sp_settings, idp_settings)
 
     @staticmethod
-    def _prepare_request_data(request: Request, post_data: dict[str, str] | None = None) -> dict[str, object]:
+    def _prepare_request_data(request: Request, post_data: Mapping[str, str] | None = None) -> dict[str, object]:
         base: Final = SAMLAuthHandler._base_url(request)
         scheme, _, host_part = base.partition("://")
         host: Final = host_part.split("/", 1)[0]
@@ -228,7 +233,7 @@ class SAMLAuthHandler:
     async def _build_auth(
         request: Request,
         cache: DualCache,
-        post_data: dict[str, str] | None = None,
+        post_data: Mapping[str, str] | None = None,
     ) -> "OneLogin_Saml2_Auth":
         if not SAML_AVAILABLE:
             raise _saml_unavailable_error()
@@ -310,7 +315,9 @@ class SAMLAuthHandler:
         return dict(parse_qsl(body.decode("utf-8", "replace")))
 
     @staticmethod
-    async def handle_acs(request: Request, cache: DualCache, post_data: dict[str, str]) -> CustomOpenID:
+    async def handle_acs(
+        request: Request, cache: DualCache, post_data: Mapping[str, str]
+    ) -> tuple[CustomOpenID, SSOIdentityAssertion | None]:
         auth: Final = await SAMLAuthHandler._build_auth(request, cache, post_data=post_data)
         browser_request_id: Final = request.cookies.get(_SAML_AUTHN_STATE_COOKIE)
         try:
@@ -330,7 +337,50 @@ class SAMLAuthHandler:
             )
 
         await SAMLAuthHandler._enforce_response_binding(auth, cache, browser_request_id)
-        return SAMLAuthHandler._result_from_auth(auth)
+        return SAMLAuthHandler._result_from_auth(auth), SAMLAuthHandler._retained_assertion(auth)
+
+    @staticmethod
+    def _retained_assertion(auth: "OneLogin_Saml2_Auth") -> SSOIdentityAssertion | None:
+        """The one signed ``<saml:Assertion>`` the validated response carried, serialized on its own
+        so its enveloped signature still verifies at the IdP's token endpoint. Retention is optional
+        egress material, so a failure here is logged and the validated login goes on without it."""
+        try:
+            return SAMLAuthHandler._parse_retained_assertion(auth)
+        except Exception as e:  # noqa: BLE001 - lxml and python3-saml expose no common base; capture must not block login
+            verbose_proxy_logger.warning(
+                "SAML login validated but its assertion could not be retained for oauth2_id_jag MCP servers: %s", e
+            )
+            return None
+
+    @staticmethod
+    def _parse_retained_assertion(auth: "OneLogin_Saml2_Auth") -> SSOIdentityAssertion | None:
+        xml: Final = cast(bytes | None, auth.get_last_response_xml())  # cast-ok: untyped python3-saml
+        if not xml:
+            verbose_proxy_logger.warning(
+                "SAML login validated but the response XML was not retained, so this user has no identity "
+                "assertion for oauth2_id_jag MCP servers."
+            )
+            return None
+        root: Final = OneLogin_Saml2_XML.to_etree(xml)
+        assertions: Final = OneLogin_Saml2_XML.query(root, "//saml:Assertion")
+        if len(assertions) != 1:
+            encrypted: Final = OneLogin_Saml2_XML.query(root, "//saml:EncryptedAssertion")
+            verbose_proxy_logger.warning(
+                "SAML login validated but the response carried %d plaintext saml:Assertion elements and %d "
+                "saml:EncryptedAssertion elements, so no identity assertion was retained for oauth2_id_jag MCP "
+                "servers. Those servers need exactly one signed, unencrypted assertion from the IdP.",
+                len(assertions),
+                len(encrypted),
+            )
+            return None
+        issuers: Final = OneLogin_Saml2_XML.query(assertions[0], "./saml:Issuer")
+        issuer: Final = cast(str | None, issuers[0].text) if issuers else None  # cast-ok: untyped python3-saml
+        not_on_or_after: Final = auth.get_last_assertion_not_on_or_after()
+        return assertion_from_saml_login(
+            assertion_xml=cast(bytes, OneLogin_Saml2_XML.to_string(assertions[0], encoding="utf-8")),  # cast-ok: saml
+            not_on_or_after=not_on_or_after if isinstance(not_on_or_after, int) else None,
+            issuer=issuer,
+        )
 
     @staticmethod
     def _replay_guard_ttl(auth: "OneLogin_Saml2_Auth") -> int:
