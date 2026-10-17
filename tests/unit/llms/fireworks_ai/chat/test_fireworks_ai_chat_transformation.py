@@ -831,10 +831,36 @@ def _run_transform_response(response_body: dict) -> ModelResponse:
     )
 
 
-@pytest.mark.parametrize("body", [{}, {"error": {"message": "upstream broke"}}, {"choices": None}])
+@pytest.mark.parametrize(
+    "body",
+    [
+        {},
+        {"error": {"message": "upstream broke"}},
+        {"choices": None},
+        {"choices": []},
+        {"choices": [{}]},
+        {"choices": [{"message": {}}]},
+    ],
+)
 def test_transform_response_rejects_payload_without_completion_choices(body: dict):
     with pytest.raises(FireworksAIException):
         _run_transform_response(body)
+
+
+def test_transform_response_accepts_empty_completion_content():
+    body = {
+        **_BASE_CHAT_COMPLETION_RESPONSE,
+        "choices": [
+            {
+                **_BASE_CHAT_COMPLETION_RESPONSE["choices"][0],
+                "message": {"role": "assistant", "content": ""},
+            }
+        ],
+    }
+
+    result = _run_transform_response(body)
+
+    assert result.choices[0].message.content == ""
 
 
 _REASONING_MODEL = "fireworks_ai/accounts/fireworks/models/glm-5p1"
@@ -2084,6 +2110,15 @@ def _complete_against_reply(reply: object) -> ModelResponse:
             )
         ),
     )
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [pytest.param({}, id="missing-choices"), pytest.param({"choices": [{}]}, id="malformed-choice")],
+)
+def test_completion_with_invalid_success_reply_raises_api_error(reply: object) -> None:
+    with pytest.raises(litellm.APIError):
+        _complete_against_reply(reply)
 
 
 def test_completion_keeps_unmodelled_reply_fields_and_nested_fireworks_metrics() -> None:
