@@ -112,6 +112,14 @@ def separate_cached_messages(
     """
     Returns separated cached and non-cached messages.
 
+    Vertex reads cachedContent as a prefix of contents, so context caching is only
+    used when the cached block is a true prefix of the conversation. Leading system
+    messages are folded into the cached block (they are preserved as the cache's
+    system_instruction downstream). If any other message sits before the cached
+    block, or a system message sits after it, no caching is applied: earlier
+    messages would be re-sent after the cached block, reordering the conversation,
+    and a system message outside the cache is dropped alongside cachedContent.
+
     Args:
         messages: List of messages to be separated.
 
@@ -136,8 +144,18 @@ def separate_cached_messages(
         first_cached_idx: Final = filtered_messages[0][0]
         last_cached_idx: Final = filtered_messages[last_continuous_block_idx][0]
 
-        cached_messages = messages[first_cached_idx : last_cached_idx + 1]
-        non_cached_messages = messages[:first_cached_idx] + messages[last_cached_idx + 1 :]
+        prefix_messages: Final = messages[:first_cached_idx]
+        suffix_messages: Final = messages[last_cached_idx + 1 :]
+
+        if any(m.get("role") != "system" for m in prefix_messages) or any(
+            m.get("role") == "system" for m in suffix_messages
+        ):
+            # Not a true prefix: send the conversation uncached so nothing is
+            # reordered and no system message is silently dropped.
+            return [], list(messages)
+
+        cached_messages = list(prefix_messages) + messages[first_cached_idx : last_cached_idx + 1]
+        non_cached_messages = list(suffix_messages)
     else:
         non_cached_messages = messages
 
