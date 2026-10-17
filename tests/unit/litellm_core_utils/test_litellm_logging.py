@@ -7778,6 +7778,7 @@ async def test_sync_only_logger_keeps_the_async_payload_when_its_result_builds_n
         ("helicone", "heliconeLogger"),
         ("greenscale", "greenscaleLogger"),
         ("s3", "s3Logger"),
+        ("traceloop", "traceloopLogger"),
     ],
 )
 async def test_sync_only_logger_gets_its_own_payload_for_async_requests(
@@ -7804,7 +7805,7 @@ async def test_sync_only_logger_gets_its_own_payload_for_async_requests(
 
     monkeypatch.setattr(litellm, "_async_success_callback", [])
     monkeypatch.setattr(litellm, "success_callback", [callback_name])
-    monkeypatch.setattr(litellm_logging, logger_global, LegacyLoggerRecorder())
+    monkeypatch.setattr(litellm_logging, logger_global, LegacyLoggerRecorder(), raising=False)
     response: Final = ModelResponse(id="chatcmpl-sync-only")
     logging_obj: Final = _async_request_logging_obj("sync-only-logger", [AsyncRecorder()], stream=stream)
     now: Final = datetime.datetime.now()
@@ -7825,6 +7826,36 @@ async def test_sync_only_logger_gets_its_own_payload_for_async_requests(
     assert sync_payload["id"] == async_payload["id"]
     assert sync_payload is not async_payload
     assert logging_obj.model_call_details["standard_logging_object"] is async_payload
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+async def test_supabase_logs_the_request_messages_and_response_for_async_requests(
+    monkeypatch: pytest.MonkeyPatch, stream: bool
+) -> None:
+    supabase_logged: Final = threading.Event()
+    supabase_calls: Final[list[tuple[object, object]]] = []
+
+    class SupabaseRecorder:
+        def log_event(self, **call: object) -> None:
+            supabase_calls.append((call["messages"], call["response_obj"]))
+            supabase_logged.set()
+
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "success_callback", ["supabase"])
+    monkeypatch.setattr(litellm_logging, "supabaseClient", SupabaseRecorder())
+    response: Final = ModelResponse(id="chatcmpl-supabase")
+    logging_obj: Final = _async_request_logging_obj("supabase-logger", [], stream=stream)
+    now: Final = datetime.datetime.now()
+
+    await logging_obj.dispatch_success_handlers(result=response, start_time=now, end_time=now)
+
+    assert supabase_logged.wait(timeout=10)
+    assert len(supabase_calls) == 1
+    messages, response_obj = supabase_calls[0]
+    assert messages == [{"role": "user", "content": "hi"}]
+    assert isinstance(response_obj, ModelResponse)
+    assert response_obj.id == "chatcmpl-supabase"
 
 
 def _resolve(custom_llm_provider, litellm_params, optional_params, model):
