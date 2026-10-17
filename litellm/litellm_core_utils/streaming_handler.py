@@ -1,9 +1,12 @@
 import asyncio
+import atexit
 import collections.abc
 import datetime
+import functools
 import inspect
 import json
 import logging
+import os
 import threading
 import time
 import traceback
@@ -99,6 +102,30 @@ def is_async_iterable(obj: object) -> bool:
         bool: True if the object is async iterable, False otherwise
     """
     return isinstance(obj, collections.abc.AsyncIterable)
+
+
+_background_logging_loop_lock: Final = threading.Lock()
+
+
+def _stop_background_logging_loop(loop: asyncio.AbstractEventLoop, thread: threading.Thread) -> None:
+    loop.call_soon_threadsafe(loop.stop)
+    thread.join()
+    loop.close()
+
+
+@functools.cache
+def _start_background_logging_loop(pid: int) -> asyncio.AbstractEventLoop:
+    loop: Final = asyncio.new_event_loop()
+    thread: Final = threading.Thread(target=loop.run_forever, name=f"litellm-stream-logging-{pid}", daemon=True)
+    thread.start()
+    atexit.register(_stop_background_logging_loop, loop, thread)
+    return loop
+
+
+def _background_logging_loop() -> asyncio.AbstractEventLoop:
+    """The process's loop for sync-stream async logging, keyed by pid so a forked child starts its own."""
+    with _background_logging_loop_lock:
+        return _start_background_logging_loop(os.getpid())
 
 
 def print_verbose(print_statement: object):
@@ -291,7 +318,7 @@ class CustomStreamWrapper:
         self.response_id: str | None = None
         self._ollama_response_ids = OllamaResponseIdNormalizer()
         self.received_model_id: str | None = None
-        self.logging_loop = None
+        self.logging_loop: asyncio.AbstractEventLoop | None = None
         self.rules = Rules()
         self.stream_options = stream_options or getattr(logging_obj, "stream_options", None)
         self.messages = getattr(logging_obj, "messages", None)
@@ -1750,15 +1777,12 @@ class CustomStreamWrapper:
             """
             return
         ## ASYNC LOGGING
-        # Create an event loop for the new thread
-        if self.logging_loop is not None:
-            future: Final = asyncio.run_coroutine_threadsafe(
-                self.logging_obj.async_success_handler(processed_chunk, None, None, cache_hit),
-                loop=self.logging_loop,
-            )
-            future.result()
-        else:
-            asyncio.run(self.logging_obj.async_success_handler(processed_chunk, None, None, cache_hit))
+        loop: Final = self.logging_loop if self.logging_loop is not None else _background_logging_loop()
+        future: Final = asyncio.run_coroutine_threadsafe(
+            self.logging_obj.async_success_handler(processed_chunk, None, None, cache_hit),
+            loop=loop,
+        )
+        future.result()
         ## SYNC LOGGING — only for sync SDK entrypoints; async proxy paths export via async_success_handler
         litellm_params: Final = self.logging_obj.model_call_details.get("litellm_params", {})
         if self.logging_obj.is_sync_litellm_request(litellm_params):
