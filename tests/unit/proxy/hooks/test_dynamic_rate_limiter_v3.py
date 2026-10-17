@@ -12,7 +12,6 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-
 import litellm
 from litellm import DualCache, Router
 from litellm.proxy._types import UserAPIKeyAuth
@@ -1830,7 +1829,7 @@ async def test_post_call_success_hook_priority_header_is_always_http_encodable(t
 @pytest.mark.asyncio
 async def test_v3_saturation_error_fail_closed_raises(monkeypatch):
     """_check_model_saturation error + fail-closed propagates the exception."""
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
 
     monkeypatch.setitem(proxy_server.general_settings, "fail_closed_rate_limit_enforcement", True)
 
@@ -1858,17 +1857,14 @@ async def test_v3_saturation_error_fail_closed_raises(monkeypatch):
     handler.update_variables(llm_router=llm_router)
     model_group_info = llm_router.get_model_group_info(model_group="gpt-4o-mini")
 
-    try:
+    with pytest.raises(RuntimeError, match="Redis saturation check failed"):
         await handler._check_model_saturation(model="gpt-4o-mini", model_group_info=model_group_info)
-        assert False, "Expected RuntimeError"
-    except RuntimeError as e:
-        assert "Redis saturation check failed" in str(e)
 
 
 @pytest.mark.asyncio
 async def test_v3_saturation_error_fail_open_returns_zero(monkeypatch):
     """_check_model_saturation error + fail-open returns 0.0."""
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
 
     monkeypatch.setitem(proxy_server.general_settings, "fail_closed_rate_limit_enforcement", False)
 
@@ -1903,7 +1899,7 @@ async def test_v3_saturation_error_fail_open_returns_zero(monkeypatch):
 @pytest.mark.asyncio
 async def test_v3_pre_call_hook_error_fail_closed_raises_unverifiable(monkeypatch):
     """async_pre_call_hook inner exception + fail-closed raises RateLimitUnverifiableError."""
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
     from litellm.proxy.hooks.parallel_request_limiter_v3 import RateLimitUnverifiableError
 
     monkeypatch.setitem(proxy_server.general_settings, "fail_closed_rate_limit_enforcement", True)
@@ -1932,22 +1928,19 @@ async def test_v3_pre_call_hook_error_fail_closed_raises_unverifiable(monkeypatc
     handler.update_variables(llm_router=llm_router)
 
     auth = UserAPIKeyAuth(api_key="sk-v3-fail-closed", rpm_limit=100, max_parallel_requests=5)
-    try:
+    with pytest.raises(RateLimitUnverifiableError):
         await handler.async_pre_call_hook(
             user_api_key_dict=auth,
             cache=DualCache(),
             data={"model": "gpt-4o-mini"},
             call_type="acompletion",
         )
-        assert False, "Expected RateLimitUnverifiableError"
-    except RateLimitUnverifiableError:
-        pass
 
 
 @pytest.mark.asyncio
 async def test_v3_pre_call_hook_error_fail_open_returns_none(monkeypatch):
     """async_pre_call_hook inner exception + fail-open returns None."""
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
 
     monkeypatch.setitem(proxy_server.general_settings, "fail_closed_rate_limit_enforcement", False)
 

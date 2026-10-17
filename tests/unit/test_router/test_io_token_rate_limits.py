@@ -594,7 +594,7 @@ class TestModelRateLimitingCheckIOTokens:
 
     @pytest.mark.asyncio
     async def test_otpm_reservation_error_rolls_back_itpm_fail_open(self, monkeypatch):
-        import litellm.proxy.proxy_server as proxy_server
+        from litellm.proxy import proxy_server
         from litellm.utils import get_utc_datetime
 
         monkeypatch.setitem(proxy_server.general_settings, "fail_closed_rate_limit_enforcement", False)
@@ -632,7 +632,7 @@ class TestModelRateLimitingCheckIOTokens:
 
     @pytest.mark.asyncio
     async def test_otpm_reservation_error_rolls_back_itpm_fail_closed(self, monkeypatch):
-        import litellm.proxy.proxy_server as proxy_server
+        from litellm.proxy import proxy_server
         from litellm.proxy.hooks.parallel_request_limiter_v3 import RateLimitUnverifiableError
         from litellm.utils import get_utc_datetime
 
@@ -1085,9 +1085,12 @@ class TestContextSlotRetention:
 @pytest.mark.asyncio
 async def test_sync_io_token_pre_call_check_fail_closed_raises(monkeypatch):
     """sync io_token_pre_call_check + fail-closed on cache error raises RateLimitUnverifiableError."""
-    import litellm.proxy.proxy_server as proxy_server
-    from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import io_token_pre_call_check, set_io_token_rate_limit_request_kwargs
+    from litellm.proxy import proxy_server
     from litellm.proxy.hooks.parallel_request_limiter_v3 import RateLimitUnverifiableError
+    from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
+        io_token_pre_call_check,
+        set_io_token_rate_limit_request_kwargs,
+    )
 
     monkeypatch.setitem(proxy_server.general_settings, "fail_closed_rate_limit_enforcement", True)
     set_io_token_rate_limit_request_kwargs({"messages": [{"role": "user", "content": "hello"}], "metadata": {}})
@@ -1109,8 +1112,11 @@ async def test_sync_io_token_pre_call_check_fail_closed_raises(monkeypatch):
 @pytest.mark.asyncio
 async def test_sync_io_token_pre_call_check_fail_open_returns_deployment(monkeypatch):
     """sync io_token_pre_call_check + fail-open on cache error returns deployment."""
-    import litellm.proxy.proxy_server as proxy_server
-    from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import io_token_pre_call_check, set_io_token_rate_limit_request_kwargs
+    from litellm.proxy import proxy_server
+    from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
+        io_token_pre_call_check,
+        set_io_token_rate_limit_request_kwargs,
+    )
 
     monkeypatch.setitem(proxy_server.general_settings, "fail_closed_rate_limit_enforcement", False)
     set_io_token_rate_limit_request_kwargs({"messages": [{"role": "user", "content": "hello"}], "metadata": {}})
@@ -1132,7 +1138,7 @@ async def test_sync_io_token_pre_call_check_fail_open_returns_deployment(monkeyp
 @pytest.mark.asyncio
 async def test_model_rate_limit_check_fail_open_returns_deployment(monkeypatch):
     """ModelRateLimitingCheck.async_pre_call_check fail-open returns deployment on error."""
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
     from litellm.router_utils.pre_call_checks.model_rate_limit_check import ModelRateLimitingCheck
 
     monkeypatch.setitem(proxy_server.general_settings, "fail_closed_rate_limit_enforcement", False)
@@ -1156,7 +1162,7 @@ async def test_model_rate_limit_check_fail_open_returns_deployment(monkeypatch):
 @pytest.mark.asyncio
 async def test_model_rate_limit_check_sync_fail_open_returns_deployment(monkeypatch):
     """ModelRateLimitingCheck.pre_call_check (sync) fail-open returns deployment on error."""
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
     from litellm.router_utils.pre_call_checks.model_rate_limit_check import ModelRateLimitingCheck
 
     monkeypatch.setitem(proxy_server.general_settings, "fail_closed_rate_limit_enforcement", False)

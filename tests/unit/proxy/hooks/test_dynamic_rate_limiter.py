@@ -1,22 +1,28 @@
+import asyncio
+import importlib
+import os
 from datetime import datetime, timezone
-from typing import Final
+from typing import Final, Optional
 
-import asyncio, importlib, litellm, os, pytest
+import pytest
 
+import litellm
+from litellm import DualCache as DualCache_dynamic_rate
+from litellm import Router
+from litellm._uuid import uuid
 from litellm.caching.caching import DualCache
-from litellm.proxy.hooks.dynamic_rate_limiter import(
-    PROXY_DynamicRateLimitHandler as DynamicRateLimitHandler,
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.hooks.dynamic_rate_limiter import (
     DynamicRateLimiterCache,
     PROXY_DynamicRateLimitHandler,
 )
+from litellm.proxy.hooks.dynamic_rate_limiter import (
+    PROXY_DynamicRateLimitHandler as DynamicRateLimitHandler,
+)
 from litellm.types.utils import HiddenParams, ModelResponse
-from litellm import DualCache as DualCache_dynamic_rate, Router
-from litellm._uuid import uuid
-from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.proxy._types import UserAPIKeyAuth
 from litellm.utils import _invalidate_model_cost_lowercase_map
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from typing import Optional
 
 
 @pytest.mark.asyncio
@@ -89,6 +95,7 @@ def _vcr_outcome_gate(request, vcr):
     yield
     record_vcr_outcome(request, vcr)
 
+
 @pytest.fixture(scope="function")
 def isolate_litellm_state():
     """
@@ -141,6 +148,7 @@ def isolate_litellm_state():
             setattr(litellm, attr, original_value)
     _invalidate_model_cost_lowercase_map()
 
+
 _SCALAR_DEFAULTS = {
     "num_retries": getattr(litellm, "num_retries", None),
     "num_retries_per_request": getattr(litellm, "num_retries_per_request", None),
@@ -160,6 +168,7 @@ _SCALAR_DEFAULTS = {
     "api_base": getattr(litellm, "api_base", None),
     "api_key": getattr(litellm, "api_key", None),
 }
+
 
 @pytest.fixture(scope="module")
 def setup_and_teardown():
@@ -183,9 +192,11 @@ def setup_and_teardown():
             litellm.in_memory_llm_clients_cache.flush_cache()
     yield
 
+
 @pytest.fixture
 def _pr4_dynamic_rate_limit_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LITELLM_LICENSE", "pr4-test-license")
+
 
 """
 Basic test cases:
@@ -194,11 +205,13 @@ Basic test cases:
 - If 2 'active' projects => divide tpm in 2
 """
 
+
 @pytest.fixture
 def dynamic_rate_limit_handler() -> DynamicRateLimitHandler:
     internal_cache = DualCache_dynamic_rate()
     frozen_now = datetime(2024, 1, 1, 10, 30, 0, tzinfo=timezone.utc)
     return DynamicRateLimitHandler(internal_usage_cache=internal_cache, time_fn=lambda: frozen_now)
+
 
 @pytest.fixture
 def mock_response() -> litellm.ModelResponse:
@@ -233,9 +246,11 @@ def mock_response() -> litellm.ModelResponse:
         }
     )
 
+
 @pytest.fixture
 def user_api_key_auth() -> UserAPIKeyAuth:
     return UserAPIKeyAuth()
+
 
 @pytest.mark.usefixtures(
     "_pr4_dynamic_rate_limit_env",
@@ -279,6 +294,7 @@ async def test_available_tpm(num_projects, dynamic_rate_limit_handler):
 
     assert availability == expected_availability
 
+
 @pytest.mark.usefixtures(
     "_pr4_dynamic_rate_limit_env",
     "_vcr_outcome_gate",
@@ -320,6 +336,7 @@ async def test_available_rpm(num_projects, dynamic_rate_limit_handler):
     expected_availability = int(model_rpm / num_projects)
 
     assert availability == expected_availability
+
 
 @pytest.mark.usefixtures(
     "_pr4_dynamic_rate_limit_env",
@@ -381,6 +398,7 @@ async def test_rate_limit_raised(dynamic_rate_limit_handler, user_api_key_auth, 
         )
     e = exc_info.value
     assert e.status_code == 429  # check if rate limit error raised
+
 
 @pytest.mark.usefixtures(
     "_pr4_dynamic_rate_limit_env",
@@ -453,6 +471,7 @@ async def test_base_case(dynamic_rate_limit_handler, mock_response):
             else:
                 raise
 
+
 @pytest.mark.usefixtures(
     "_pr4_dynamic_rate_limit_env",
     "_vcr_outcome_gate",
@@ -507,6 +526,7 @@ async def test_update_cache(dynamic_rate_limit_handler, mock_response, user_api_
 
     assert active_projects == 1
 
+
 @pytest.mark.usefixtures(
     "_pr4_dynamic_rate_limit_env",
     "_vcr_outcome_gate",
@@ -560,7 +580,7 @@ async def test_priority_reservation(num_projects, dynamic_rate_limit_handler):
 @pytest.mark.asyncio
 async def test_dynamic_rate_limiter_all_none_fail_closed_raises(monkeypatch):
     """When check_available_usage returns all None (Redis unreachable), fail-closed raises RateLimitUnverifiableError."""
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
     from litellm.proxy.hooks.parallel_request_limiter_v3 import RateLimitUnverifiableError
 
     monkeypatch.setitem(proxy_server.general_settings, "fail_closed_rate_limit_enforcement", True)
@@ -585,7 +605,7 @@ async def test_dynamic_rate_limiter_all_none_fail_closed_raises(monkeypatch):
 @pytest.mark.asyncio
 async def test_dynamic_rate_limiter_all_none_fail_open_returns_none(monkeypatch):
     """When check_available_usage returns all None (Redis unreachable), fail-open returns None."""
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
 
     monkeypatch.setitem(proxy_server.general_settings, "fail_closed_rate_limit_enforcement", False)
 
@@ -604,7 +624,9 @@ async def test_dynamic_rate_limiter_all_none_fail_open_returns_none(monkeypatch)
 
 class _ReturnAllNone:
     """Mock helper that awaits and returns all None values."""
+
     def __await__(self):
         async def _impl():
             return (None, None, None, None, None)
+
         return _impl().__await__()
