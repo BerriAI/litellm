@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, cast
 
 import litellm
 from litellm._logging import verbose_logger
@@ -27,6 +27,8 @@ DEFAULT_DRY_RUN_LIMIT: Final = 500
 
 class FocusLogger(CustomLogger):
     """Coordinates Focus export jobs across transformer/serializer/destination layers."""
+
+    export_job_name: ClassVar[str] = FOCUS_USAGE_DATA_JOB_NAME
 
     def __init__(
         self,
@@ -115,19 +117,19 @@ class FocusLogger(CustomLogger):
 
         pod_lock_manager: PodLockManager | None = None
         if proxy_logging_obj is not None:
-            writer: Final = getattr(proxy_logging_obj, "db_spend_update_writer", None)
+            writer: Final[object] = getattr(proxy_logging_obj, "db_spend_update_writer", None)
             if writer is not None:
                 pod_lock_manager = getattr(writer, "pod_lock_manager", None)
 
         if pod_lock_manager and pod_lock_manager.redis_cache:
-            acquired: Final = await pod_lock_manager.acquire_lock(cronjob_id=FOCUS_USAGE_DATA_JOB_NAME)
+            acquired: Final = await pod_lock_manager.acquire_lock(cronjob_id=self.export_job_name)
             if not acquired:
                 verbose_logger.debug("Focus export: unable to acquire pod lock")
                 return
             try:
                 await self._run_scheduled_export()
             finally:
-                await pod_lock_manager.release_lock(cronjob_id=FOCUS_USAGE_DATA_JOB_NAME)
+                await pod_lock_manager.release_lock(cronjob_id=self.export_job_name)
         else:
             await self._run_scheduled_export()
 

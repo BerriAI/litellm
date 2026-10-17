@@ -2,7 +2,7 @@
 Tests for GigaChat LiteLLM Provider
 
 Tests message transformation, parameter handling, and response transformation.
-Run with: pytest tests/llm_translation/test_gigachat.py -v
+Run with: pytest tests/unit/llms/gigachat/chat/test_transformation.py -v
 """
 
 import asyncio

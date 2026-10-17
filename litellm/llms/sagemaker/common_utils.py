@@ -4,7 +4,8 @@ from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import Final
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, RootModel, TypeAdapter, ValidationError, with_config
+from typing_extensions import ReadOnly, Required, TypedDict
 
 import litellm
 from litellm import verbose_logger
@@ -12,7 +13,39 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.utils import GenericStreamingChunk as GChunk
 from litellm.types.utils import StreamingChatCompletionChunk
 
-_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+STR_KEYED_MAPPING: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _SageMakerToken(TypedDict, total=False):
+    text: ReadOnly[str | None]
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _SageMakerChunkData(TypedDict, total=False):
+    token: ReadOnly[_SageMakerToken | None]
+    index: ReadOnly[int | None]
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _SageMakerMessagesChunkData(TypedDict, total=False):
+    choices: ReadOnly[Required[list[Mapping[str, object]]]]
+
+
+class _SageMakerChunkDataRoot(RootModel[_SageMakerChunkData]):
+    model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
+
+
+class _SageMakerMessagesChunkDataRoot(RootModel[_SageMakerMessagesChunkData]):
+    model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
+
+
+def _parse_sagemaker_chunk_data(data: str) -> _SageMakerChunkData:
+    return _SageMakerChunkDataRoot.model_validate(json.loads(data)).root
+
+
+def _parse_sagemaker_messages_chunk_data(data: str) -> _SageMakerMessagesChunkData:
+    return _SageMakerMessagesChunkDataRoot.model_validate(json.loads(data)).root
 
 
 def _load_sagemaker_response_stream_shape():
@@ -21,7 +54,9 @@ def _load_sagemaker_response_stream_shape():
         from botocore.model import ServiceModel
 
         loader: Final = Loader()
-        service_dict: Final = _JSON_OBJECT.validate_python(loader.load_service_model("sagemaker-runtime", "service-2"))
+        service_dict: Final = STR_KEYED_MAPPING.validate_python(
+            loader.load_service_model("sagemaker-runtime", "service-2")
+        )
         return ServiceModel(service_dict).shape_for("InvokeEndpointWithResponseStreamOutput")
     except Exception as e:
         verbose_logger.warning(
@@ -43,6 +78,38 @@ def get_sagemaker_response_stream_shape():
     return _load_sagemaker_response_stream_shape()
 
 
+def with_inference_component_hint(error_message: str) -> str:
+    if "Inference Component Name header is required" in error_message:
+        return f"{error_message}\n pass in via `litellm.embedding(..., model_id={{InferenceComponentName}})`"
+    if "Inference Component Name header is not allowed" in error_message:
+        return f"{error_message}\n remove `model_id` from this deployment, the endpoint has no inference components"
+    return error_message
+
+
+class _ClientErrorBody(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+    message: str | None = Field(default=None, alias="Message")
+
+
+class _ClientErrorMetadata(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+    http_status_code: int = Field(default=500, alias="HTTPStatusCode")
+
+
+class _ClientErrorResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+    error: _ClientErrorBody = Field(default_factory=_ClientErrorBody, alias="Error")
+    response_metadata: _ClientErrorMetadata = Field(default_factory=_ClientErrorMetadata, alias="ResponseMetadata")
+
+
+def client_error_details(error: Exception) -> tuple[int, str]:
+    try:
+        response: Final = _ClientErrorResponse.model_validate(getattr(error, "response", None))
+    except ValidationError:
+        return 500, str(error)
+    return response.response_metadata.http_status_code, response.error.message or str(error)
+
+
 class SagemakerError(BaseLLMException):
     def __init__(
         self,
@@ -62,12 +129,12 @@ class AWSEventStreamDecoder:
         self.content_blocks: list = []
         self.is_messages_api = is_messages_api
 
-    def _chunk_parser_messages_api(self, chunk_data: dict) -> StreamingChatCompletionChunk:
+    def _chunk_parser_messages_api(self, chunk_data: _SageMakerMessagesChunkData) -> StreamingChatCompletionChunk:
         openai_chunk: Final = StreamingChatCompletionChunk(**{"model": self.model, **chunk_data})
 
         return openai_chunk
 
-    def _chunk_parser(self, chunk_data: dict) -> GChunk:
+    def _chunk_parser(self, chunk_data: _SageMakerChunkData) -> GChunk:
         verbose_logger.debug("in sagemaker chunk parser, chunk_data %s", chunk_data)
         _token: Final = chunk_data.get("token", {}) or {}
         _index: Final = chunk_data.get("index", None) or 0
@@ -113,11 +180,12 @@ class AWSEventStreamDecoder:
 
                     # Try to parse the accumulated JSON
                     try:
-                        _data = json.loads(accumulated_json)
                         if self.is_messages_api:
-                            yield self._chunk_parser_messages_api(chunk_data=_data)
+                            yield self._chunk_parser_messages_api(
+                                chunk_data=_parse_sagemaker_messages_chunk_data(accumulated_json)
+                            )
                         else:
-                            yield self._chunk_parser(chunk_data=_data)
+                            yield self._chunk_parser(chunk_data=_parse_sagemaker_chunk_data(accumulated_json))
                         # Reset accumulated_json after successful parsing
                         accumulated_json = ""
                     except json.JSONDecodeError:
@@ -127,11 +195,12 @@ class AWSEventStreamDecoder:
         # Handle any remaining data after the iterator is exhausted
         if accumulated_json:
             try:
-                _data = json.loads(accumulated_json)
                 if self.is_messages_api:
-                    yield self._chunk_parser_messages_api(chunk_data=_data)
+                    yield self._chunk_parser_messages_api(
+                        chunk_data=_parse_sagemaker_messages_chunk_data(accumulated_json)
+                    )
                 else:
-                    yield self._chunk_parser(chunk_data=_data)
+                    yield self._chunk_parser(chunk_data=_parse_sagemaker_chunk_data(accumulated_json))
             except json.JSONDecodeError:
                 # Handle or log any unparseable data at the end
                 verbose_logger.error("Warning: Unparseable JSON data remained: %s", accumulated_json)
@@ -161,11 +230,12 @@ class AWSEventStreamDecoder:
                         accumulated_json += message
 
                         # Try to parse the accumulated JSON
-                        _data = json.loads(accumulated_json)
                         if self.is_messages_api:
-                            yield self._chunk_parser_messages_api(chunk_data=_data)
+                            yield self._chunk_parser_messages_api(
+                                chunk_data=_parse_sagemaker_messages_chunk_data(accumulated_json)
+                            )
                         else:
-                            yield self._chunk_parser(chunk_data=_data)
+                            yield self._chunk_parser(chunk_data=_parse_sagemaker_chunk_data(accumulated_json))
                         # Reset accumulated_json after successful parsing
                         accumulated_json = ""
                 except json.JSONDecodeError:
@@ -181,11 +251,12 @@ class AWSEventStreamDecoder:
         # Handle any remaining data after the iterator is exhausted
         if accumulated_json:
             try:
-                _data = json.loads(accumulated_json)
                 if self.is_messages_api:
-                    yield self._chunk_parser_messages_api(chunk_data=_data)
+                    yield self._chunk_parser_messages_api(
+                        chunk_data=_parse_sagemaker_messages_chunk_data(accumulated_json)
+                    )
                 else:
-                    yield self._chunk_parser(chunk_data=_data)
+                    yield self._chunk_parser(chunk_data=_parse_sagemaker_chunk_data(accumulated_json))
             except json.JSONDecodeError:
                 # Handle or log any unparseable data at the end
                 verbose_logger.error("Warning: Unparseable JSON data remained: %s", accumulated_json)
