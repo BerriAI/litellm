@@ -304,7 +304,7 @@ TOKEN_COUNT_ENTRY: Final = MappingProxyType(
         "litellm_provider": "bedrock_converse",
         "mode": "chat",
         "token_count_framing": 78,
-        "token_count_fallback_model": "us.anthropic.claude-opus-5-5",
+        "token_count_model": {"model": "us.anthropic.claude-opus-5-5", "region": "us-east-1"},
     }
 )
 
@@ -322,8 +322,10 @@ def test_generator_classifies_token_count_settings(framing: int):
         {"token_count_framing": -1},
         {"token_count_framing": "78"},
         {"token_count_framing": 1.5},
-        {"token_count_fallback_model": ""},
-        {"token_count_fallback_model": 5},
+        {"token_count_model": {"model": ""}},
+        {"token_count_model": {"region": "us-east-1"}},
+        {"token_count_model": "us.anthropic.claude-opus-5-5"},
+        {"token_count_model": {"model": "us.anthropic.claude-opus-5-5", "zone": "us-east-1"}},
     ],
 )
 def test_generated_token_count_schema_rejects_malformed_settings(setting: dict):
