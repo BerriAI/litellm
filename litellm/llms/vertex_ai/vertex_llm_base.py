@@ -108,20 +108,6 @@ class VertexBase:
         # re-acquire it without deadlocking the current thread.
         self._sync_refresh_lock = threading.RLock()
 
-    @staticmethod
-    def _is_default_credentials_error(e: Exception) -> bool:
-        if type(e).__name__ == "DefaultCredentialsError":
-            return True
-        try:
-            from google.auth.exceptions import DefaultCredentialsError
-
-            if isinstance(e, DefaultCredentialsError):
-                return True
-        except ImportError:
-            pass
-        error_msg: Final = str(e)
-        return "DefaultCredentialsError" in error_msg or "Could not automatically determine credentials" in error_msg
-
     def _should_bypass_adc(
         self,
         custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"] | str | None,
@@ -131,8 +117,7 @@ class VertexBase:
     ) -> bool:
         if custom_llm_provider == "gemini":
             return True
-        effective_key: Final = api_key or get_api_key_from_env() or litellm.api_key
-        return bool(effective_key is not None and not credentials and not project_id)
+        return bool(api_key is not None and not credentials and not project_id)
 
     @staticmethod
     def get_vertex_region(vertex_region: str | None, model: str) -> str:
@@ -763,9 +748,13 @@ class VertexBase:
         Returns
             token, url
         """
-        effective_gemini_key: Final = gemini_api_key or get_api_key_from_env() or litellm.api_key
         is_gemini_target: Final = custom_llm_provider == "gemini" or (
-            effective_gemini_key is not None and not vertex_credentials and not vertex_project
+            gemini_api_key is not None and not vertex_credentials and not vertex_project
+        )
+        effective_gemini_key: Final = (
+            gemini_api_key
+            or (get_api_key_from_env() if custom_llm_provider == "gemini" else None)
+            or (litellm.api_key if custom_llm_provider == "gemini" else None)
         )
         resolved_provider: Final[Literal["vertex_ai", "vertex_ai_beta", "gemini"]] = (
             "gemini" if is_gemini_target else custom_llm_provider
