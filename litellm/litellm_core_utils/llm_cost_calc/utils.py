@@ -1953,6 +1953,7 @@ class CostCalculatorUtils:
         call_type: str | None = None,
         model_info: ModelInfo | None = None,
         vertex_location: str | None = None,
+        data_residency: str | None = None,
     ) -> float:
         """
         Route the image generation cost calculator based on the custom_llm_provider
@@ -2104,6 +2105,8 @@ class CostCalculatorUtils:
                     image_response=completion_response,
                     custom_llm_provider=custom_llm_provider,
                     model_info=pricing,
+                    data_residency=data_residency,
+                    optional_params=optional_params,
                 )
             # Fall through to default for DALL-E models
             return default_image_cost_calculator(
