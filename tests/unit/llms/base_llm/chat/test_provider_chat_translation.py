@@ -1338,7 +1338,7 @@ def test_json_response_format_stream(case: _Case, respx_mock: MockRouter) -> Non
             "response_format": {"type": "json_object"},
         },
     )
-    content: Final = "".join(chunk.choices[0].delta.content or "" for chunk in response)
+    content: Final = "".join(chunk.choices[0].delta.content or "" for chunk in response if chunk.choices)
     assert content == canned
     body: Final = _request_body(route)
     if case["shape"] in ("openai", "anthropic") and not case["id"].startswith("groq"):
