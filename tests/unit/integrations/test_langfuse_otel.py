@@ -576,7 +576,7 @@ class TestLangfuseOtelKeyDynamicConfig:
 
         with self._clean_env():
             logger = LangfuseOtelLogger()
-            assert logger.OTEL_EXPORTER == "console"
+            assert logger.OTEL_EXPORTER == "none"
 
             tracer = logger.get_tracer_to_use_for_request(
                 {"standard_callback_dynamic_params": self._dynamic_params()}
