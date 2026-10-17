@@ -219,6 +219,7 @@ from .litellm_core_utils.streaming_chunk_builder_utils import (
 from .llms.anthropic.chat import AnthropicChatCompletion
 from .llms.anthropic.chat.prompt_cache_breakpoints import (
     ClaudeRoute,
+    carries_prompt_cache_breakpoint,
     claude_prompt_cache,
     resolved_claude_prompt_cache,
 )
@@ -4179,6 +4180,9 @@ _ADDITIONAL_DROP_PARAMS_ADAPTER: Final = TypeAdapter(list[str])
 _OPTIONAL_PARAMS_ADAPTER: Final = TypeAdapter(dict[str, object])
 _REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_map_request_params: Final = cast(  # cast-ok: takes the same untyped request params as completion()'s real mapping
+    Callable[..., Mapping[str, object]], get_optional_params
+)
 _PROVIDER_ROUTING_HINTS: Final = TypeAdapter(ProviderRoutingHints)
 _BASE_URL_HINT: Final = TypeAdapter(BaseUrlRoutingHint)
 
@@ -5695,56 +5699,9 @@ def completion(
             ),
             kwargs.get("additional_drop_params"),
         )
-        converse_may_send_tools: Final = reaches_converse and AmazonConverseConfig.may_send_tools(
-            tools=request_tools,
-            functions=cast(object, functions),  # cast-ok: completion types functions as a bare List
-            response_format=cast(object, response_format),  # cast-ok: completion types response_format as a bare dict
-            web_search_options=web_search_options,
-            messages=routed_messages,
+        validated_model_info: Final = (
+            _MODEL_INFO_ADAPTER.validate_python(model_info) if isinstance(model_info, dict) else None
         )
-        claude_cache: Final = (
-            resolved_claude_prompt_cache(
-                claude_prompt_cache(
-                    routed_messages,
-                    request_tools,
-                    non_default_params,
-                    drop_params=claude_drop_params,
-                    tool_history_as_text=reaches_converse
-                    and AmazonConverseConfig.sends_tool_history_as_text(converse_may_send_tools),
-                    tool_config_cache_control=(
-                        AmazonConverseConfig.tool_config_cache_control(
-                            non_default_params.get("cache_control_injection_points")
-                        )
-                        if converse_may_send_tools
-                        else None
-                    ),
-                    route=_claude_route(provider_config, reaches_converse),
-                    pairs_unanswered_tool_calls=litellm.modify_params is True,
-                ),
-                model=model,
-                llm_provider=custom_llm_provider,
-            )
-            if claude_cache_target
-            else None
-        )
-        provider_messages: Final = cast(  # cast-ok: completion() only renames marks and drops tool_search calls
-            list[AllMessageValues], routed_messages if claude_cache is None else list(claude_cache.messages)
-        )
-        if provider_config is not None:
-            messages = (  # rebind-ok: completion() rewrites messages step by step for the provider
-                provider_config.translate_developer_role_to_system_role(messages=provider_messages)
-            )
-
-        if (
-            supports_system_message is not None
-            and isinstance(supports_system_message, bool)
-            and supports_system_message is False
-        ):
-            messages = map_system_message_pt(messages=messages)
-
-        if dynamic_api_key is not None:
-            api_key = dynamic_api_key
-        # check if user passed in any of the OpenAI optional params
         bridges_to_responses_api: Final = (
             responses_api_model_info.get("mode") == "responses" and not skip_responses_api_bridge
         )
@@ -5753,7 +5710,7 @@ def completion(
             if bridges_to_responses_api
             else kwargs.get("allowed_openai_params")
         )
-        optional_param_args: Final = {
+        request_param_args: Final = {
             "functions": functions,
             "function_call": function_call,
             "temperature": temperature,
@@ -5776,7 +5733,7 @@ def completion(
             "custom_llm_provider": custom_llm_provider,
             "response_format": response_format,
             "seed": seed,
-            "tools": tools if claude_cache is None or claude_cache.tools is None else list(claude_cache.tools),
+            "tools": tools,
             "tool_choice": tool_choice,
             "max_retries": max_retries,
             "logprobs": logprobs,
@@ -5806,9 +5763,68 @@ def completion(
             accepts_summary=provider_config is not None
             and provider_config.accepts_reasoning_summary_in_reasoning_effort,
         )
+        converse_sends_tools: Final = (
+            reaches_converse
+            and carries_prompt_cache_breakpoint(routed_messages, request_tools)
+            and AmazonConverseConfig.sends_tools(
+                _map_request_params(
+                    **{**request_param_args, "reasoning_effort": provider_reasoning_effort},
+                    model_info=validated_model_info,
+                    **non_default_params,
+                ),
+                routed_messages,
+            )
+        )
+        claude_cache: Final = (
+            resolved_claude_prompt_cache(
+                claude_prompt_cache(
+                    routed_messages,
+                    request_tools,
+                    non_default_params,
+                    drop_params=claude_drop_params,
+                    tool_history_as_text=reaches_converse
+                    and AmazonConverseConfig.sends_tool_history_as_text(converse_sends_tools),
+                    tool_config_cache_control=(
+                        AmazonConverseConfig.tool_config_cache_control(
+                            non_default_params.get("cache_control_injection_points")
+                        )
+                        if converse_sends_tools
+                        else None
+                    ),
+                    route=_claude_route(provider_config, reaches_converse),
+                    pairs_unanswered_tool_calls=litellm.modify_params is True,
+                ),
+                model=model,
+                llm_provider=custom_llm_provider,
+            )
+            if claude_cache_target
+            else None
+        )
+        provider_messages: Final = cast(  # cast-ok: completion() only renames marks and drops tool_search calls
+            list[AllMessageValues], routed_messages if claude_cache is None else list(claude_cache.messages)
+        )
+        if provider_config is not None:
+            messages = (  # rebind-ok: completion() rewrites messages step by step for the provider
+                provider_config.translate_developer_role_to_system_role(messages=provider_messages)
+            )
+
+        if (
+            supports_system_message is not None
+            and isinstance(supports_system_message, bool)
+            and supports_system_message is False
+        ):
+            messages = map_system_message_pt(messages=messages)
+
+        if dynamic_api_key is not None:
+            api_key = dynamic_api_key
+        optional_param_args: Final = {
+            **request_param_args,
+            "tools": tools if claude_cache is None or claude_cache.tools is None else list(claude_cache.tools),
+            "messages": messages,
+        }
         optional_params = get_optional_params(
             **{**optional_param_args, "reasoning_effort": provider_reasoning_effort},
-            model_info=_MODEL_INFO_ADAPTER.validate_python(model_info) if isinstance(model_info, dict) else None,
+            model_info=validated_model_info,
             **non_default_params,
         )
         processed_non_default_params: Final = pre_process_non_default_params(

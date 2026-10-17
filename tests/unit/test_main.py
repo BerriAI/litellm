@@ -24,6 +24,7 @@ import respx
 from openai import APITimeoutError, AsyncOpenAI
 from openai._legacy_response import LegacyAPIResponse
 from openai.types.chat.chat_completion import ChatCompletion
+from pydantic import BaseModel
 
 import litellm
 from litellm import (
@@ -866,8 +867,87 @@ def test_a_breakpoint_on_a_tool_search_call_modify_params_answers_takes_a_slot_u
 _WEATHER_TOOL: Final = {"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}
 
 
+class _Forecast(BaseModel):
+    summary: str
+
+
+_NATIVE_JSON_SCHEMA: Final = {
+    "response_format": {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "forecast",
+            "schema": {"type": "object", "properties": {"summary": {"type": "string"}}},
+        },
+    },
+    "thinking": {"type": "enabled", "budget_tokens": 1024},
+    "model_info": {"supports_bedrock_native_structured_output": True},
+}
+_RESPONSE_FORMATS_CONVERSE_SENDS_AS_A_TOOL: Final = [
+    pytest.param(
+        {"response_format": {"type": "json_schema", "json_schema": {"name": "forecast", "schema": {"type": "object"}}}},
+        id="dict",
+    ),
+    pytest.param({"response_format": _Forecast}, id="pydantic"),
+    pytest.param({**_NATIVE_JSON_SCHEMA, "additional_drop_params": ["thinking"]}, id="deployment-drops-thinking"),
+    pytest.param(
+        {
+            **_NATIVE_JSON_SCHEMA,
+            "model": "bedrock/converse/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123",
+            "base_model": "anthropic.claude-sonnet-5-5",
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "forecast", "schema": {"type": "object", "additionalProperties": True}},
+            },
+        },
+        id="profile-arn-open-schema",
+    ),
+]
+
+
+@pytest.mark.parametrize("response_format_args", _RESPONSE_FORMATS_CONVERSE_SENDS_AS_A_TOOL)
 def test_breakpoints_on_converse_tool_history_beside_a_json_schema_response_format_keep_to_four_under_drop_params(
-    respx_mock: respx.MockRouter,
+    respx_mock: respx.MockRouter, response_format_args: Mapping[str, object]
+):
+    route: Final = respx_mock.post(url__regex=_CONVERSE_ROUTE).respond(json=_CONVERSE_REPLY)
+
+    litellm.completion(
+        **{
+            "model": "bedrock/converse/us.anthropic.claude-opus-5-5",
+            "drop_params": True,
+            **_FAKE_AWS,
+            **response_format_args,
+        },
+        messages=[
+            {"role": "system", "content": [{"type": "text", "text": "sys", "prompt_cache_breakpoint": _BREAKPOINT}]},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": str(index), "prompt_cache_breakpoint": _BREAKPOINT} for index in range(3)
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{**_LOADED_FUNCTION_CALL, "prompt_cache_breakpoint": _BREAKPOINT}],
+            },
+            {**_WEATHER_RESULT, "prompt_cache_breakpoint": _BREAKPOINT},
+            {"role": "user", "content": "And tomorrow?"},
+        ],
+    )
+
+    assert _converse_cache_points(json.loads(route.calls.last.request.content)) == ("message",) * 4
+
+
+_RESPONSE_FORMATS_CONVERSE_SENDS_WITHOUT_A_TOOL: Final = [
+    pytest.param({"response_format": {"type": "json_object"}}, id="json-object"),
+    pytest.param({"response_format": {"type": "text"}}, id="text"),
+    pytest.param(_NATIVE_JSON_SCHEMA, id="native-json-schema"),
+]
+
+
+@pytest.mark.parametrize("response_format_args", _RESPONSE_FORMATS_CONVERSE_SENDS_WITHOUT_A_TOOL)
+def test_breakpoints_on_converse_tool_history_sent_as_text_beside_a_toolless_response_format_take_no_slot(
+    respx_mock: respx.MockRouter, response_format_args: Mapping[str, object]
 ):
     route: Final = respx_mock.post(url__regex=_CONVERSE_ROUTE).respond(json=_CONVERSE_REPLY)
 
@@ -889,12 +969,12 @@ def test_breakpoints_on_converse_tool_history_beside_a_json_schema_response_form
             {**_WEATHER_RESULT, "prompt_cache_breakpoint": _BREAKPOINT},
             {"role": "user", "content": "And tomorrow?"},
         ],
-        response_format={"type": "json_schema", "json_schema": {"name": "forecast", "schema": {"type": "object"}}},
         drop_params=True,
+        **response_format_args,
         **_FAKE_AWS,
     )
 
-    assert _converse_cache_points(json.loads(route.calls.last.request.content)) == ("message",) * 4
+    assert _converse_cache_points(json.loads(route.calls.last.request.content)) == ("system", *("message",) * 3)
 
 
 def test_breakpoints_on_one_tool_results_parts_reach_claude_as_one_mark_on_the_result(respx_mock: respx.MockRouter):
@@ -988,6 +1068,95 @@ def test_a_one_hour_breakpoint_after_a_five_minute_tool_config_cache_point_reach
     )
 
     assert _converse_cache_point_ttls(json.loads(route.calls.last.request.content)) == ("5m", None)
+
+
+@pytest.mark.parametrize("response_format_args", _RESPONSE_FORMATS_CONVERSE_SENDS_WITHOUT_A_TOOL)
+def test_a_one_hour_breakpoint_beside_a_toolless_response_format_ignores_the_unsent_tool_config_cache_point(
+    respx_mock: respx.MockRouter, response_format_args: Mapping[str, object]
+):
+    route: Final = respx_mock.post(url__regex=_CONVERSE_ROUTE).respond(json=_CONVERSE_REPLY)
+
+    litellm.completion(
+        model="bedrock/converse/us.anthropic.claude-opus-5-5",
+        messages=[
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "hi", "prompt_cache_breakpoint": _ONE_HOUR_BREAKPOINT}],
+            }
+        ],
+        cache_control_injection_points=_FIVE_MINUTE_TOOL_CONFIG,
+        drop_params=True,
+        **response_format_args,
+        **_FAKE_AWS,
+    )
+
+    assert _converse_cache_point_ttls(json.loads(route.calls.last.request.content)) == ("1h",)
+
+
+@pytest.mark.parametrize("response_format_args", _RESPONSE_FORMATS_CONVERSE_SENDS_AS_A_TOOL)
+def test_a_one_hour_breakpoint_beside_a_response_format_converse_sends_as_a_tool_reaches_converse_as_five_minutes(
+    respx_mock: respx.MockRouter, response_format_args: Mapping[str, object]
+):
+    route: Final = respx_mock.post(url__regex=_CONVERSE_ROUTE).respond(json=_CONVERSE_REPLY)
+
+    litellm.completion(
+        **{
+            "model": "bedrock/converse/us.anthropic.claude-opus-5-5",
+            "drop_params": True,
+            **_FAKE_AWS,
+            **response_format_args,
+        },
+        messages=[
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "hi", "prompt_cache_breakpoint": _ONE_HOUR_BREAKPOINT}],
+            }
+        ],
+        cache_control_injection_points=_FIVE_MINUTE_TOOL_CONFIG,
+    )
+
+    assert _converse_cache_point_ttls(json.loads(route.calls.last.request.content)) == ("5m", None)
+
+
+@pytest.mark.parametrize(
+    "response_format",
+    [
+        pytest.param("json_object", id="string"),
+        pytest.param([{"type": "json_object"}], id="list"),
+        pytest.param({"type": "json_schema", "json_schema": "forecast"}, id="string-json-schema"),
+        pytest.param({"type": "json_schema", "json_schema": {"name": "forecast"}}, id="json-schema-without-schema"),
+    ],
+)
+def test_a_malformed_response_format_the_deployment_drops_reaches_converse_beside_a_breakpoint(
+    respx_mock: respx.MockRouter, response_format: object
+):
+    route: Final = respx_mock.post(url__regex=_CONVERSE_ROUTE).respond(json=_CONVERSE_REPLY)
+
+    litellm.completion(
+        model="bedrock/converse/us.anthropic.claude-opus-5-5",
+        messages=[
+            {"role": "system", "content": [{"type": "text", "text": "sys", "prompt_cache_breakpoint": _BREAKPOINT}]},
+            _USER_TURN,
+        ],
+        response_format=response_format,
+        additional_drop_params=["response_format"],
+        **_FAKE_AWS,
+    )
+
+    assert _converse_cache_points(json.loads(route.calls.last.request.content)) == ("system",)
+
+
+def test_an_unsupported_param_beside_a_malformed_response_format_and_a_breakpoint_is_reported_as_unsupported():
+    with pytest.raises(litellm.UnsupportedParamsError, match="frequency_penalty"):
+        litellm.completion(
+            model="bedrock/converse/us.anthropic.claude-opus-5-5",
+            messages=[
+                {"role": "user", "content": [{"type": "text", "text": "hi", "prompt_cache_breakpoint": _BREAKPOINT}]}
+            ],
+            response_format={"type": "json_schema", "json_schema": {"name": "forecast"}},
+            frequency_penalty=0.5,
+            **_FAKE_AWS,
+        )
 
 
 def test_a_one_hour_breakpoint_after_the_dummy_tools_five_minute_cache_point_reaches_converse_as_five_minutes(

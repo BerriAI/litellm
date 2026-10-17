@@ -259,20 +259,9 @@ class AmazonConverseConfig(BaseConfig):
         )
 
     @staticmethod
-    def may_send_tools(
-        *,
-        tools: object,
-        functions: object,
-        response_format: object,
-        web_search_options: object,
-        messages: Sequence[object],
-    ) -> bool:
-        """Converse builds tools from ``functions``, a ``response_format`` or ``web_search_options`` too, and adds a
-        dummy tool for tool calls in the history under ``modify_params``."""
-        return (
-            bool(tools)
-            or any(value is not None for value in (functions, response_format, web_search_options))
-            or AmazonConverseConfig._adds_a_dummy_tool(messages)
+    def sends_tools(optional_params: Mapping[str, object], messages: Sequence[object]) -> bool:
+        return bool(optional_params.get("tools")) or (
+            "tools" not in optional_params and AmazonConverseConfig._adds_a_dummy_tool(messages)
         )
 
     @staticmethod
@@ -284,8 +273,8 @@ class AmazonConverseConfig(BaseConfig):
         )
 
     @staticmethod
-    def sends_tool_history_as_text(may_send_tools: bool) -> bool:
-        return litellm.bedrock_neutralize_orphaned_tool_blocks and not may_send_tools
+    def sends_tool_history_as_text(sends_tools: bool) -> bool:
+        return litellm.bedrock_neutralize_orphaned_tool_blocks and not sends_tools
 
     @staticmethod
     def tool_config_cache_control(injection_points: object) -> ChatCompletionCachedContent | None:

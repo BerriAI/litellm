@@ -634,6 +634,10 @@ def _droppable(mark: _Placed) -> bool:
     return mark.kind != "written" and mark.path != _TOOL_CONFIG
 
 
+def carries_prompt_cache_breakpoint(messages: Sequence[object], tools: Sequence[object] | None) -> bool:
+    return any(map(_message_carries_breakpoint, messages)) or any(map(_tool_carries_breakpoint, tools or ()))
+
+
 def claude_prompt_cache(
     messages: Sequence[object],
     tools: Sequence[object] | None,
@@ -653,9 +657,9 @@ def claude_prompt_cache(
     a tool's ``function`` on Converse, and marks on a tool_search call nobody answered, unless the route
     ``pairs_unanswered_tool_calls`` with a placeholder result, take none. A ``cache_control`` on a ``namespace`` tool's
     member takes one off Converse and is never changed. A request carrying no breakpoint is returned as written."""
-    listed_tools: Final = tools or ()
-    if not any(map(_message_carries_breakpoint, messages)) and not any(map(_tool_carries_breakpoint, listed_tools)):
+    if not carries_prompt_cache_breakpoint(messages, tools):
         return ClaudePromptCache(tuple(messages), None if tools is None else tuple(tools))
+    listed_tools: Final = tools or ()
     hoists: Final = (*map(_hoisted_message, messages), *map(_hoisted_tool, listed_tools))
     hoisted_messages: Final = tuple(hoist.value for hoist in hoists[: len(messages)])
     hoisted_tools: Final = tuple(hoist.value for hoist in hoists[len(messages) :])
