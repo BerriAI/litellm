@@ -17,6 +17,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.auth_checks import _is_api_route_allowed
 from litellm.proxy.auth.auth_checks_organization import user_is_org_admin
+from litellm.proxy.auth.login_utils import PASSWORD_RESET_ALLOWED_ROUTES
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import router as llm_passthrough_router
 
@@ -3992,18 +3993,34 @@ def _password_reset_session_token() -> UserAPIKeyAuth:
     `password_reset_required`."""
     return UserAPIKeyAuth(
         user_id="flagged_user",
-        allowed_routes=["/user/password/change"],
+        allowed_routes=list(PASSWORD_RESET_ALLOWED_ROUTES),
         metadata={"password_reset_required": True},
     )
 
 
-def test_password_reset_session_can_reach_change_password():
+@pytest.mark.parametrize("route", ["/user/password/change", "/management/v1/users/me"])
+def test_password_reset_session_can_reach_change_password_and_its_own_identity(route):
     result = RouteChecks.is_virtual_key_allowed_to_call_route(
-        route="/user/password/change",
+        route=route,
         valid_token=_password_reset_session_token(),
     )
 
     assert result is True
+
+
+@pytest.mark.parametrize(
+    "role",
+    [LitellmUserRoles.INTERNAL_USER.value, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value],
+)
+def test_non_admin_user_can_read_its_own_identity(role):
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=LiteLLM_UserTable(user_id="test_user", user_role=role),
+        _user_role=role,
+        route="/management/v1/users/me",
+        request=MagicMock(spec=Request, query_params={}),
+        valid_token=UserAPIKeyAuth(user_id="test_user", user_role=role),
+        request_data={},
+    )
 
 
 @pytest.mark.parametrize(

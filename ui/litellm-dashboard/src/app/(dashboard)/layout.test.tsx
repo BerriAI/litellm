@@ -5,7 +5,7 @@ import { AuthProvider } from "@/contexts/AuthContext";
 import { recordUiEvent } from "@/lib/telemetry/uiEvents";
 import Layout from "./layout";
 
-const { replaceMock } = vi.hoisted(() => ({ replaceMock: vi.fn() }));
+const { replaceMock, apiGetMock } = vi.hoisted(() => ({ replaceMock: vi.fn(), apiGetMock: vi.fn() }));
 
 let searchParamsValue = new URLSearchParams();
 
@@ -70,6 +70,7 @@ vi.mock("@/components/networking", async (importOriginal) => {
     ...actual,
     getUiConfig: vi.fn(() => pendingUiConfig.promise),
     setGlobalLitellmHeaderName: vi.fn(),
+    apiClient: { ...actual.apiClient, get: apiGetMock },
   };
 });
 
@@ -79,6 +80,7 @@ describe("(dashboard) Layout", () => {
     pendingUiConfig = createDeferred();
     searchParamsValue = new URLSearchParams();
     vi.mocked(usePathname).mockReturnValue("/ui/guardrails");
+    apiGetMock.mockResolvedValue({ user_id: "normal-user", user_role: "internal_user", user_email: null });
   });
 
   it("starts mobile navigation closed, opens a modal drawer and closes it after choosing a page", async () => {
@@ -263,6 +265,33 @@ describe("(dashboard) Layout", () => {
 
       expect(await screen.findByTestId("page-content")).toBeInTheDocument();
       expect(replaceMock).not.toHaveBeenCalled();
+    });
+
+    it("shows the loading screen instead of the shell until the current user resolves", async () => {
+      let resolveCurrentUser!: (user: object) => void;
+      apiGetMock.mockReturnValue(new Promise((resolve) => (resolveCurrentUser = resolve)));
+      document.cookie = `token=${sessionCookie({ user_id: "normal-user", key: "sk-pending-session", user_role: "proxy_admin" })}; Path=/`;
+
+      render(
+        <AuthProvider>
+          <Layout>
+            <div data-testid="page-content" />
+          </Layout>
+        </AuthProvider>,
+      );
+      pendingUiConfig.resolve();
+
+      await waitFor(() =>
+        expect(apiGetMock).toHaveBeenCalledWith("/management/v1/users/me", { accessToken: "sk-pending-session" }),
+      );
+      expect(screen.getByTestId("loading-screen")).toBeInTheDocument();
+      expect(screen.queryByTestId("sidebar")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("page-content")).not.toBeInTheDocument();
+
+      resolveCurrentUser({ user_id: "normal-user", user_role: "internal_user", user_email: null });
+
+      expect(await screen.findByTestId("page-content")).toBeInTheDocument();
+      expect(screen.getByTestId("sidebar")).toBeInTheDocument();
     });
   });
 });

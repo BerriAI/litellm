@@ -7,6 +7,8 @@ import Navbar from "@/components/navbar";
 import LoadingScreen from "@/components/common_components/LoadingScreen";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import { useAuth } from "@/contexts/AuthContext";
+import { useCurrentUser } from "@/app/(dashboard)/hooks/currentUser/useCurrentUser";
+import { decodeToken } from "@/utils/jwtUtils";
 import SidebarProvider from "@/app/(dashboard)/components/SidebarProvider";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
@@ -218,7 +220,8 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const pathname = usePathname();
-  const { accessToken, authLoading, passwordResetRequired } = useAuth();
+  const { accessToken, token, authLoading, passwordResetRequired } = useAuth();
+  const { isLoading: currentUserLoading } = useCurrentUser(decodeToken(token)?.key ?? null);
   const isInvitationFlow = Boolean(searchParams.get("invitation_id"));
 
   // Legacy invitation links point at /ui/?invitation_id=; the onboarding form now lives at its own
@@ -237,7 +240,7 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
     }
   }, [authLoading, passwordResetRequired, pathname, router]);
 
-  if (authLoading || isInvitationFlow) {
+  if (authLoading || currentUserLoading || isInvitationFlow) {
     return <LoadingScreen />;
   }
 

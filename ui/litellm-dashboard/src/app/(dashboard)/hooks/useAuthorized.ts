@@ -6,6 +6,7 @@ import { checkTokenValidity, decodeToken } from "@/utils/jwtUtils";
 import { buildLoginUrlWithReturn, getLoginUrl, storeReturnUrl } from "@/utils/returnUrlUtils";
 import { useCallback, useEffect, useMemo } from "react";
 import { effectiveSessionRole, formatUserRole, isViewOnlySessionRole } from "@/utils/roles";
+import { useCurrentUser } from "./currentUser/useCurrentUser";
 import { useUIConfig } from "./uiConfig/useUIConfig";
 
 const useAuthorized = () => {
@@ -15,8 +16,14 @@ const useAuthorized = () => {
 
   const decoded = useMemo(() => decodeToken(token), [token]);
   const isTokenValid = useMemo(() => checkTokenValidity(token), [token]);
-  const isLoading = isUIConfigLoading;
-  const isAuthorized = isTokenValid && !uiConfig?.admin_ui_disabled;
+  const {
+    data: currentUser,
+    isLoading: isCurrentUserLoading,
+    isError: isCurrentUserError,
+  } = useCurrentUser(isTokenValid ? decoded?.key ?? null : null);
+  const serverRole = currentUser?.user_role ?? "";
+  const isLoading = isUIConfigLoading || isCurrentUserLoading;
+  const isAuthorized = isTokenValid && !uiConfig?.admin_ui_disabled && !isCurrentUserError;
 
   // Helper function to redirect to login while preserving the current URL
   const redirectToLogin = useCallback(() => {
@@ -43,11 +50,11 @@ const useAuthorized = () => {
     isAuthorized,
     token: isAuthorized ? token : null,
     accessToken: decoded?.key ?? null,
-    userId: decoded?.user_id ?? null,
-    userEmail: decoded?.user_email ?? null,
-    userRole: effectiveSessionRole(decoded?.user_role),
-    userRoleLabel: formatUserRole(decoded?.user_role),
-    isViewOnly: isViewOnlySessionRole(decoded?.user_role),
+    userId: currentUser?.user_id ?? null,
+    userEmail: currentUser?.user_email ?? null,
+    userRole: effectiveSessionRole(serverRole),
+    userRoleLabel: formatUserRole(serverRole),
+    isViewOnly: isViewOnlySessionRole(serverRole),
     premiumUser: decoded?.premium_user ?? null,
     disabledPersonalKeyCreation: decoded?.disabled_non_admin_personal_key_creation ?? null,
     loginMethod: decoded?.login_method ?? null,

@@ -1,9 +1,10 @@
 /* @vitest-environment jsdom */
 import React from "react";
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import useAuthorized from "./useAuthorized";
+import { useUIConfig } from "./uiConfig/useUIConfig";
 
 // Unmock useAuthorized to test the actual implementation
 vi.unmock("@/app/(dashboard)/hooks/useAuthorized");
@@ -16,6 +17,7 @@ const {
   decodeTokenMock,
   checkTokenValidityMock,
   buildLoginUrlWithReturnMock,
+  apiGetMock,
 } = vi.hoisted(() => ({
   replaceMock: vi.fn(),
   clearTokenCookiesMock: vi.fn(),
@@ -24,6 +26,7 @@ const {
   decodeTokenMock: vi.fn(),
   checkTokenValidityMock: vi.fn(),
   buildLoginUrlWithReturnMock: vi.fn((baseUrl: string) => baseUrl),
+  apiGetMock: vi.fn(),
 }));
 
 vi.mock("@/components/networking", async (importOriginal) => {
@@ -32,6 +35,7 @@ vi.mock("@/components/networking", async (importOriginal) => {
     ...actual,
     getProxyBaseUrl: getProxyBaseUrlMock,
     getUiConfig: getUiConfigMock,
+    apiClient: { ...actual.apiClient, get: apiGetMock },
   };
 });
 
@@ -114,10 +118,11 @@ describe("useAuthorized", () => {
     decodeTokenMock.mockReset();
     checkTokenValidityMock.mockReset();
     buildLoginUrlWithReturnMock.mockClear();
+    apiGetMock.mockReset();
     clearCookie();
   });
 
-  it("should decode the token and expose user details", async () => {
+  it("should take user details from the server and the rest from the token", async () => {
     getUiConfigMock.mockResolvedValue({
       server_root_path: "/",
       proxy_base_url: null,
@@ -138,6 +143,7 @@ describe("useAuthorized", () => {
 
     decodeTokenMock.mockReturnValue(decodedPayload);
     checkTokenValidityMock.mockReturnValue(true);
+    apiGetMock.mockResolvedValue({ user_id: "user-1", user_email: "user@example.com", user_role: "proxy_admin" });
 
     const token = createJwt(decodedPayload);
     document.cookie = `token=${token}; path=/;`;
@@ -145,9 +151,11 @@ describe("useAuthorized", () => {
     const { result } = renderHook(() => useAuthorized(), { wrapper });
 
     await waitFor(() => {
-      expect(result.current.token).toBe(token);
+      expect(result.current.userId).toBe("user-1");
     });
 
+    expect(apiGetMock).toHaveBeenCalledWith("/management/v1/users/me", { accessToken: "api-key-123" });
+    expect(result.current.token).toBe(token);
     expect(result.current.accessToken).toBe("api-key-123");
     expect(result.current.userId).toBe("user-1");
     expect(result.current.userEmail).toBe("user@example.com");
@@ -182,6 +190,11 @@ describe("useAuthorized", () => {
 
     decodeTokenMock.mockReturnValue(decodedPayload);
     checkTokenValidityMock.mockReturnValue(true);
+    apiGetMock.mockResolvedValue({
+      user_id: "user-2",
+      user_email: "viewer@example.com",
+      user_role: "proxy_admin_viewer",
+    });
 
     const token = createJwt(decodedPayload);
     document.cookie = `token=${token}; path=/;`;
@@ -189,7 +202,7 @@ describe("useAuthorized", () => {
     const { result } = renderHook(() => useAuthorized(), { wrapper });
 
     await waitFor(() => {
-      expect(result.current.token).toBe(token);
+      expect(result.current.userId).toBe("user-2");
     });
 
     expect(result.current.userRole).toBe("Admin");
@@ -222,6 +235,7 @@ describe("useAuthorized", () => {
     expect(replaceMock).toHaveBeenCalledWith("http://proxy.example/ui/login/");
     expect(result.current.accessToken).toBeNull();
     expect(result.current.userRole).toBe("Undefined Role");
+    expect(apiGetMock).not.toHaveBeenCalled();
   });
 
   it("should redirect even with valid token if admin_ui_disabled is true", async () => {
@@ -245,6 +259,7 @@ describe("useAuthorized", () => {
 
     decodeTokenMock.mockReturnValue(decodedPayload);
     checkTokenValidityMock.mockReturnValue(true);
+    apiGetMock.mockResolvedValue({ user_id: "user-1", user_email: "user@example.com", user_role: "proxy_admin" });
 
     const token = createJwt(decodedPayload);
     document.cookie = `token=${token}; path=/;`;
@@ -256,8 +271,6 @@ describe("useAuthorized", () => {
     });
 
     expect(result.current.accessToken).toBe("api-key-123");
-    expect(result.current.userId).toBe("user-1");
-    expect(result.current.userEmail).toBe("user@example.com");
   });
 
   it("should redirect when token is missing", async () => {
@@ -313,5 +326,119 @@ describe("useAuthorized", () => {
 
     expect(replaceMock).toHaveBeenCalledWith("http://proxy.example/ui/login/");
     expect(checkTokenValidityMock).toHaveBeenCalledWith(token);
+  });
+
+  describe("identity from the server", () => {
+    const uiConfig = {
+      server_root_path: "/",
+      proxy_base_url: null,
+      auto_redirect_to_sso: false,
+      admin_ui_disabled: false,
+      sso_configured: false,
+    };
+
+    const setSessionCookie = (claims: Record<string, unknown>) => {
+      decodeTokenMock.mockReturnValue(claims);
+      checkTokenValidityMock.mockReturnValue(true);
+      const token = createJwt(claims);
+      document.cookie = `token=${token}; path=/;`;
+      return token;
+    };
+
+    it("uses the role the server resolved, not the role claimed in the cookie", async () => {
+      getUiConfigMock.mockResolvedValue(uiConfig);
+      setSessionCookie({ key: "internal-key", user_id: "internal-1", user_role: "proxy_admin" });
+      apiGetMock.mockResolvedValue({
+        user_id: "internal-1",
+        user_email: "internal@example.com",
+        user_role: "internal_user",
+      });
+
+      const { result } = renderHook(() => useAuthorized(), { wrapper });
+
+      await waitFor(() => {
+        expect(result.current.userRole).toBe("Internal User");
+      });
+      expect(result.current.userRoleLabel).toBe("Internal User");
+      expect(result.current.isViewOnly).toBe(false);
+      expect(result.current.userEmail).toBe("internal@example.com");
+      expect(replaceMock).not.toHaveBeenCalled();
+    });
+
+    it("stays loading with no role until the server answers", async () => {
+      getUiConfigMock.mockResolvedValue(uiConfig);
+      setSessionCookie({ key: "admin-claim-key", user_id: "u-1", user_role: "proxy_admin" });
+      apiGetMock.mockReturnValue(new Promise(() => {}));
+
+      const { result } = renderHook(() => ({ auth: useAuthorized(), uiConfig: useUIConfig() }), { wrapper });
+
+      await waitFor(() => {
+        expect(result.current.uiConfig.isSuccess).toBe(true);
+      });
+      expect(result.current.auth.isLoading).toBe(true);
+      expect(result.current.auth.userRole).toBe("Undefined Role");
+      expect(replaceMock).not.toHaveBeenCalled();
+    });
+
+    it("clears the cookie and redirects to login when the current user cannot be loaded", async () => {
+      getUiConfigMock.mockResolvedValue(uiConfig);
+      setSessionCookie({ key: "orphan-key", user_id: "u-1", user_role: "internal_user" });
+      apiGetMock.mockRejectedValue(new Error("404"));
+
+      renderHook(() => useAuthorized(), { wrapper });
+
+      await waitFor(
+        () => {
+          expect(replaceMock).toHaveBeenCalledWith("http://proxy.example/ui/login/");
+        },
+        { timeout: 4000 },
+      );
+      expect(clearTokenCookiesMock).toHaveBeenCalled();
+      expect(apiGetMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("refetches the identity when a different session key logs in", async () => {
+      getUiConfigMock.mockResolvedValue(uiConfig);
+      apiGetMock.mockImplementation(async (_path: string, { accessToken }: { accessToken: string }) =>
+        accessToken === "first-key"
+          ? { user_id: "first", user_email: null, user_role: "proxy_admin" }
+          : { user_id: "second", user_email: null, user_role: "internal_user" },
+      );
+      const queryClient = createQueryClient();
+      const sharedClientWrapper = ({ children }: { children: React.ReactNode }) =>
+        React.createElement(QueryClientProvider, { client: queryClient }, children);
+      setSessionCookie({ key: "first-key", user_id: "first" });
+
+      const { result, rerender } = renderHook(() => useAuthorized(), { wrapper: sharedClientWrapper });
+      await waitFor(() => {
+        expect(result.current.userId).toBe("first");
+      });
+
+      setSessionCookie({ key: "second-key", user_id: "second" });
+      act(() => rerender());
+
+      await waitFor(() => {
+        expect(result.current.userId).toBe("second");
+      });
+      expect(result.current.userRole).toBe("Internal User");
+    });
+
+    it("fetches the identity once for many consumers on the page", async () => {
+      getUiConfigMock.mockResolvedValue(uiConfig);
+      setSessionCookie({ key: "shared-key", user_id: "u-1" });
+      apiGetMock.mockResolvedValue({ user_id: "u-1", user_email: null, user_role: "internal_user" });
+      const queryClient = createQueryClient();
+      const sharedClientWrapper = ({ children }: { children: React.ReactNode }) =>
+        React.createElement(QueryClientProvider, { client: queryClient }, children);
+
+      const { result } = renderHook(() => [useAuthorized(), useAuthorized(), useAuthorized()], {
+        wrapper: sharedClientWrapper,
+      });
+
+      await waitFor(() => {
+        expect(result.current.map((auth) => auth.userId)).toEqual(["u-1", "u-1", "u-1"]);
+      });
+      expect(apiGetMock).toHaveBeenCalledTimes(1);
+    });
   });
 });
