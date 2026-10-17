@@ -1,7 +1,13 @@
 import codecs
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from dataclasses import dataclass, replace
+from functools import reduce
+from itertools import groupby
+from types import MappingProxyType
 from typing import Final
+
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -49,22 +55,11 @@ def build_complete_streaming_response(
     model: str,
     speed: str | None = None,
 ) -> ModelResponse | TextCompletionResponse | None:
-    """
-    Builds complete response from raw Anthropic chunks.
+    """Build a logged response while preserving native usage and finish reasons.
 
-    Fast path: for the dominant case of a pure-text streaming response
-    (no tool_use / thinking / non-text content blocks), the long run of
-    ``content_block_delta`` text deltas is collapsed into a single
-    equivalent SSE event before conversion. ``chunk_parser`` and
-    ``stream_chunk_builder`` remain the single source of truth for chunk
-    shape, usage math and finish-reason mapping, so the rebuilt response
-    (and therefore the logged/billed payload) is identical -- this is
-    asserted by a parity test. Anything non-trivial falls back to the
-    unchanged legacy reconstruction.
-
-    Per-event Pydantic ``ModelResponseStream`` construction dominated
-    event-loop CPU under concurrent streaming; collapsing the homogeneous
-    text run removes O(num_output_tokens) of it.
+    Pure-text streams keep their existing fast path. Complete mixed streams collapse
+    adjacent text, signed thinking and tool argument deltas before native conversion.
+    Incomplete or unfamiliar mixed streams retain the original reconstruction.
     """
     collapsed: Final = collapse_pure_text_chunks(all_chunks)
     if collapsed is not None:
@@ -74,8 +69,9 @@ def build_complete_streaming_response(
             model=model,
             speed=speed,
         )
+    compacted: Final = compact_content_block_deltas(all_chunks)
     return build_complete_streaming_response_legacy(
-        all_chunks=all_chunks,
+        all_chunks=all_chunks if compacted is None else compacted,
         litellm_logging_obj=litellm_logging_obj,
         model=model,
         speed=speed,
@@ -201,6 +197,159 @@ def collapse_pure_text_chunks(
     if not saw_any_text_delta:
         return None
     return out
+
+
+_DELTA_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
+    {"text_delta": "text", "thinking_delta": "thinking", "input_json_delta": "partial_json"}
+)
+_BLOCK_DELTAS: Final[Mapping[str, str]] = MappingProxyType(
+    {"text": "text_delta", "thinking": "thinking_delta", "tool_use": "input_json_delta"}
+)
+_SSE_OBJECT: Final = TypeAdapter(Mapping[str, object])
+
+
+@dataclass(frozen=True, slots=True)
+class _CompactionEvent:
+    raw: str
+    data: Mapping[str, object]
+    delta: tuple[int, str, str] | None
+
+
+@dataclass(frozen=True, slots=True)
+class _CompactionState:
+    active: tuple[int, str] | None = None
+    signed_thinking: bool = False
+    started: bool = False
+    stopped: bool = False
+
+
+def _compaction_event(raw: str) -> _CompactionEvent | None:
+    lines: Final = tuple(line.strip() for line in raw.splitlines() if line.strip())
+    payloads: Final = tuple(line[5:].strip() for line in lines if line.startswith("data:"))
+    if len(payloads) != 1 or any(not line.startswith(("event:", "data:")) for line in lines):
+        return None
+    data: Final = _SSE_OBJECT.validate_json(payloads[0])
+    kind: Final = data.get("type")
+    if any(line.startswith("event:") and line[6:].strip() != kind for line in lines):
+        return None
+    delta: Final = data.get("delta")
+    if kind != "content_block_delta" or not isinstance(delta, Mapping):
+        return _CompactionEvent(raw, data, None)
+    fields: Final = _SSE_OBJECT.validate_python(delta)
+    delta_type: Final = fields.get("type")
+    index: Final = data.get("index")
+    if not isinstance(delta_type, str) or delta_type not in _DELTA_FIELDS:
+        return _CompactionEvent(raw, data, None)
+    field: Final = _DELTA_FIELDS[delta_type]
+    part: Final = fields.get(field)
+    if (
+        type(index) is not int
+        or index < 0
+        or set(data) != {"type", "index", "delta"}
+        or set(fields) != {"type", field}
+        or not isinstance(part, str)
+    ):
+        return None
+    return _CompactionEvent(raw, data, (index, delta_type, part))
+
+
+def _start_compaction_block(state: _CompactionState, event: _CompactionEvent) -> _CompactionState | None:
+    block: Final = event.data.get("content_block")
+    index: Final = event.data.get("index")
+    if state.active is not None or not isinstance(block, Mapping) or type(index) is not int or index < 0:
+        return None
+    block_fields: Final = _SSE_OBJECT.validate_python(block)
+    block_type: Final = block_fields.get("type")
+    if not isinstance(block_type, str) or block_type not in _BLOCK_DELTAS:
+        return None
+    return replace(state, active=(index, _BLOCK_DELTAS[block_type]), signed_thinking=False)
+
+
+def _advance_compaction_delta(state: _CompactionState, event: _CompactionEvent) -> _CompactionState | None:
+    if state.active is None or event.data.get("index") != state.active[0]:
+        return None
+    if event.delta is not None:
+        return state if not state.signed_thinking and event.delta[1] == state.active[1] else None
+    delta: Final = event.data.get("delta")
+    if not isinstance(delta, Mapping) or state.active[1] != "thinking_delta":
+        return None
+    delta_fields: Final = _SSE_OBJECT.validate_python(delta)
+    signature: Final = delta_fields.get("signature")
+    if delta_fields.get("type") != "signature_delta" or not isinstance(signature, str) or not signature:
+        return None
+    return replace(state, signed_thinking=True)
+
+
+def _stop_compaction_block(state: _CompactionState, event: _CompactionEvent) -> _CompactionState | None:
+    if state.active is None or event.data.get("index") != state.active[0]:
+        return None
+    if state.active[1] == "thinking_delta" and not state.signed_thinking:
+        return None
+    return replace(state, active=None)
+
+
+def _state_after_event(state: _CompactionState | None, event: _CompactionEvent) -> _CompactionState | None:
+    if state is None or state.stopped:
+        return None
+    kind: Final = event.data.get("type")
+    if not state.started:
+        return replace(state, started=True) if kind == "message_start" else None
+    if kind == "message_start":
+        return None
+    if kind == "content_block_start":
+        return _start_compaction_block(state, event)
+    if kind == "content_block_delta":
+        return _advance_compaction_delta(state, event)
+    if kind == "content_block_stop":
+        return _stop_compaction_block(state, event)
+    if kind == "message_stop":
+        return replace(state, stopped=True) if state.active is None else None
+    if kind in ("message_delta", "ping"):
+        return state if kind == "ping" or state.active is None else None
+    return None
+
+
+def _raw_sse_events(all_chunks: Sequence[str | bytes]) -> Iterator[str]:
+    for raw in all_chunks:
+        yield from split_sse_chunk_into_events(raw)
+
+
+def _delta_key(event: _CompactionEvent) -> tuple[int, str] | None:
+    return None if event.delta is None else event.delta[:2]
+
+
+def _compact_event_run(run: tuple[_CompactionEvent, ...]) -> Iterator[str]:
+    first: Final = run[0]
+    if len(run) == 1 or first.delta is None:
+        yield from (event.raw for event in run)
+        return
+    index, delta_type, _ = first.delta
+    field: Final = _DELTA_FIELDS[delta_type]
+    content: Final = "".join(event.delta[2] for event in run if event.delta is not None)
+    payload: Final = {"type": "content_block_delta", "index": index, "delta": {"type": delta_type, field: content}}
+    yield "event: content_block_delta\ndata: " + json.dumps(payload, ensure_ascii=False) + "\n\n"
+
+
+def _compacted_events(events: tuple[_CompactionEvent, ...]) -> Iterator[str]:
+    for _, run in groupby(events, key=_delta_key):
+        yield from _compact_event_run(tuple(run))
+
+
+def compact_content_block_deltas(all_chunks: Sequence[str | bytes]) -> tuple[str, ...] | None:
+    """Collapse adjacent deltas without changing signed blocks or usage events."""
+    try:
+        parsed: Final = tuple(_compaction_event(event) for event in _raw_sse_events(all_chunks))
+    except (ValueError, TypeError, UnicodeError, AttributeError):
+        return None
+    if any(event is None for event in parsed):
+        return None
+    events: Final = tuple(event for event in parsed if event is not None)
+    initial: Final[_CompactionState | None] = _CompactionState()
+    state: Final = reduce(_state_after_event, events, initial)
+    if state is None or not state.stopped or state.active is not None:
+        return None
+    compacted: Final = tuple(_compacted_events(events))
+    return compacted if len(compacted) < len(events) else None
 
 
 def build_complete_streaming_response_legacy(
