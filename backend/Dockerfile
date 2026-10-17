@@ -4,6 +4,33 @@ ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.11.7@sha256:240fb85ab0f263ef12f492d8476aa3a2
 
 FROM $UV_IMAGE AS uvbin
 
+# ---------- Rust extension ----------
+# Copies only the native build's inputs, so the fat-LTO compile stays cached across Python-only changes
+FROM $LITELLM_BUILD_IMAGE AS rust-native
+
+WORKDIR /app
+USER root
+
+COPY --from=uvbin /uv /uvx /usr/local/bin/
+
+RUN for i in 1 2 3; do \
+      apk add --no-cache bash gcc python-3.13 python-3.13-dev openssl openssl-dev && break; \
+      [ $i = 3 ] && { echo "apk add failed after 3 retries" >&2; exit 1; }; \
+      sleep 5; \
+    done
+
+ENV UV_PYTHON_DOWNLOADS=0
+
+COPY pyproject.toml README.md rust-toolchain.toml ./
+COPY .cargo ./.cargo
+COPY litellm-rust ./litellm-rust
+
+RUN --mount=type=cache,target=/root/.cache/uv \
+    mkdir -p litellm/rust_bridge /wheels && \
+    touch litellm/__init__.py litellm/rust_bridge/__init__.py && \
+    uvx --python python3.13 --from maturin==1.15.0 --with puccinialin==0.1.14 \
+        python -c "import maturin; maturin.build_wheel('/wheels')"
+
 # ---------- Builder ----------
 FROM $LITELLM_BUILD_IMAGE AS builder
 
@@ -44,6 +71,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-install-project --no-install-workspace --no-default-groups --no-editable \
         --extra proxy \
         --extra proxy-runtime \
+        --group admin-mcp \
         --extra extra_proxy \
         --extra semantic-router \
         --extra saml \
@@ -53,13 +81,17 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 COPY . .
 
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-default-groups --no-editable \
+    uv sync --frozen --no-install-project --no-default-groups --no-editable \
         --extra proxy \
         --extra proxy-runtime \
+        --group admin-mcp \
         --extra extra_proxy \
         --extra semantic-router \
         --extra saml \
         --python python3.13
+
+RUN --mount=type=bind,from=rust-native,source=/wheels,target=/wheels \
+    uv pip install --python /app/.venv/bin/python --no-deps /wheels/litellm-*.whl
 
 RUN cp "$(python -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"/litellm/rust_bridge/_native*.so litellm/rust_bridge/
 
@@ -71,6 +103,8 @@ RUN sed -i 's/\r$//' docker/component_entrypoint.sh && chmod +x docker/component
 
 # ---------- Runtime ----------
 FROM $LITELLM_RUNTIME_IMAGE AS runtime
+ARG LITELLM_RELEASE_TAG=""
+ENV LITELLM_RELEASE_TAG=${LITELLM_RELEASE_TAG}
 
 USER root
 

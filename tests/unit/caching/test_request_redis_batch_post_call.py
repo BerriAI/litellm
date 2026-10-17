@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import litellm
+from litellm._internal_context import current_service_target
 from litellm.caching.caching import Cache
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
@@ -27,12 +28,13 @@ from litellm.caching.redis_batch import (
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
+from litellm.proxy.auth.auth_object_prefetch import AUTH_OBJECTS_TARGET
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PARALLEL_RELEASE_SCRIPT,
     TOKEN_INCREMENT_SCRIPT,
     ParallelSlotAcquisition,
     RequestRateLimiterStash,
-    _PROXY_MaxParallelRequestsHandler_v3,
+    PROXY_MaxParallelRequestsHandler_v3,
 )
 from litellm.proxy.spend_tracking.spend_counter_batch import PendingSpendIncrement
 from litellm.proxy.utils import InternalUsageCache
@@ -97,10 +99,10 @@ def _names(client: FakeClient, index: int = 0) -> list[str]:
     return [command[0] for command in client.pipelines[index].commands]
 
 
-def _limiter(redis_cache: FakeRedisCache) -> _PROXY_MaxParallelRequestsHandler_v3:
+def _limiter(redis_cache: FakeRedisCache) -> PROXY_MaxParallelRequestsHandler_v3:
     dual_cache = DualCache()
     dual_cache.attach_redis_cache(redis_cache)
-    return _PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(dual_cache=dual_cache))
+    return PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(dual_cache=dual_cache))
 
 
 def _slot_stash(slot_id: str, *counter_keys: str) -> RequestRateLimiterStash:
@@ -539,6 +541,31 @@ async def test_the_update_cache_read_armed_before_accounting_rides_the_pipeline_
     assert values == {"user-1": {"spend": 1.0}, "team_id:t1": {"spend": 1.0}}
     assert redis_cache.alone == []
     assert active_request_redis_batches() is None
+
+
+@pytest.mark.asyncio
+async def test_the_armed_update_cache_read_is_declared_under_the_auth_objects_family():
+    """The user, team and tag rows the accounting reads are auth objects, so the pipeline that carries
+    the armed read renders ``redis.pipeline auth_objects``, not a bare ``redis.pipeline``."""
+    from litellm.proxy.proxy_server import _read_update_cache_values, arm_update_cache_read
+
+    client = FakeClient(_ok_replies)
+    redis_cache = PostCallFakeRedisCache(client)
+    cache = DualCache()
+    cache.attach_redis_cache(redis_cache)
+    pipeline_targets: list[str | None] = []  # mutable-ok: filled by the recording hook
+
+    async def record(**kwargs: object) -> None:
+        pipeline_targets.append(current_service_target())
+
+    redis_cache.service_logger_obj.async_service_success_hook = record  # pyright: ignore[reportAttributeAccessIssue]  # fake, records the hook call
+
+    with request_redis_batch_scope():
+        await arm_update_cache_read(["user-1", "team_id:t1"], cache=cache)
+        await _read_update_cache_values(["user-1", "team_id:t1"], None, cache=cache)
+    await asyncio.gather(*(t for t in asyncio.all_tasks() if t is not asyncio.current_task()))
+
+    assert pipeline_targets == [AUTH_OBJECTS_TARGET]
 
 
 @pytest.mark.asyncio

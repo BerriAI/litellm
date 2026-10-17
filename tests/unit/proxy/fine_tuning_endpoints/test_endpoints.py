@@ -13,9 +13,12 @@ seam stayed untouched, so a guard that raises after the provider call would stil
 import base64
 from contextlib import ExitStack
 from dataclasses import dataclass
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+import respx
 
 
 from fastapi import Response
@@ -44,6 +47,11 @@ def _unified_file_id() -> str:
 def _unified_job_id() -> str:
     unified = SpecialEnums.LITELLM_MANAGED_GENERIC_RESPONSE_COMPLETE_STR.value.format("gpt-4o-mini-id", RAW_JOB_ID)
     return base64.urlsafe_b64encode(unified.encode()).decode().rstrip("=")
+
+
+def _decode_unified_id(encoded_id: str) -> str:
+    padding: Final = "=" * (-len(encoded_id) % 4)
+    return base64.urlsafe_b64decode(f"{encoded_id}{padding}").decode()
 
 
 def _job() -> LiteLLMFineTuningJob:
@@ -208,11 +216,13 @@ async def test_create__raw_validation_file_rejected_when_managed_files_required(
 @pytest.mark.asyncio
 async def test_create__unified_training_file_allowed_when_managed_files_required(seams):
     seams.logging.get_proxy_hook.return_value = ManagedResourceAccessCheckerStub()
+    unified_file_id: Final = _unified_file_id()
 
     with patch.object(litellm, "require_managed_files", True):
-        await _create(_unified_file_id())
+        response: Final = await _create(unified_file_id)
 
     assert seams.router.acreate_fine_tuning_job.call_count == 1
+    assert response.hidden_params["unified_file_id"] == _decode_unified_id(unified_file_id)
 
 
 @pytest.mark.asyncio
@@ -248,11 +258,13 @@ async def test_retrieve__raw_job_id_rejected_when_managed_files_required(seams):
 @pytest.mark.asyncio
 async def test_retrieve__unified_job_id_allowed_when_managed_files_required(seams):
     seams.logging.get_proxy_hook.return_value = ManagedResourceAccessCheckerStub()
+    unified_job_id: Final = _unified_job_id()
 
     with patch.object(litellm, "require_managed_files", True):
-        await _retrieve(_unified_job_id())
+        response: Final = await _retrieve(unified_job_id)
 
     assert seams.router.aretrieve_fine_tuning_job.call_count == 1
+    assert response.hidden_params["unified_finetuning_job_id"] == _decode_unified_id(unified_job_id)
 
 
 @pytest.mark.asyncio
@@ -268,8 +280,75 @@ async def test_cancel__raw_job_id_rejected_when_managed_files_required(seams):
 @pytest.mark.asyncio
 async def test_cancel__unified_job_id_allowed_when_managed_files_required(seams):
     seams.logging.get_proxy_hook.return_value = ManagedResourceAccessCheckerStub()
+    unified_job_id: Final = _unified_job_id()
 
     with patch.object(litellm, "require_managed_files", True):
-        await _cancel(_unified_job_id())
+        response: Final = await _cancel(unified_job_id)
 
     assert seams.router.acancel_fine_tuning_job.call_count == 1
+    assert response.hidden_params["unified_finetuning_job_id"] == _decode_unified_id(unified_job_id)
+
+
+FINE_TUNING_API_BASE: Final = "https://fine-tuning.test/v1"
+PROVIDER_JOBS_PAGE: Final = {
+    "object": "list",
+    "data": [
+        {
+            "id": RAW_JOB_ID,
+            "created_at": 1234567890,
+            "fine_tuned_model": None,
+            "finished_at": None,
+            "hyperparameters": {"n_epochs": 1},
+            "model": "gpt-4o-mini",
+            "object": "fine_tuning.job",
+            "organization_id": "org-test",
+            "result_files": [],
+            "seed": 0,
+            "status": "running",
+            "trained_tokens": None,
+            "training_file": RAW_FILE_ID,
+            "validation_file": None,
+        }
+    ],
+    "has_more": False,
+}
+
+
+async def _list(custom_llm_provider: str | None):
+    return await endpoints.list_fine_tuning_jobs(
+        request=FakeRequest(),
+        fastapi_response=Response(),
+        custom_llm_provider=custom_llm_provider,
+        target_model_names=None,
+        after=None,
+        limit=None,
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+    )
+
+
+@pytest.mark.asyncio
+async def test_list__rejected_when_neither_a_provider_nor_a_target_model_is_named(seams):
+    with pytest.raises(ProxyException) as exc:
+        await _list(custom_llm_provider=None)
+
+    assert exc.value.code == "400"
+    assert exc.value.message == "Invalid request, No litellm managed file id or custom_llm_provider provided."
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list__returns_the_jobs_the_configured_provider_lists(seams):
+    respx.get(f"{FINE_TUNING_API_BASE}/fine_tuning/jobs").mock(
+        return_value=httpx.Response(200, json=PROVIDER_JOBS_PAGE)
+    )
+    provider_config: Final = {
+        "custom_llm_provider": "openai",
+        "api_key": "sk-provider",
+        "api_base": FINE_TUNING_API_BASE,
+    }
+
+    with patch.object(endpoints, "fine_tuning_config", [provider_config]):
+        page: Final = await _list(custom_llm_provider="openai")
+
+    assert [job.id for job in page.data] == [RAW_JOB_ID]
+    assert page.has_more is False

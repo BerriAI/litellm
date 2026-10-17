@@ -166,6 +166,7 @@ impl Error {
                 | Self::Params(_)
                 | Self::Headers(_)
                 | Self::Http(_)
+                | Self::Auth(litellm_auth::Error::MissingParam { .. })
         )
     }
 

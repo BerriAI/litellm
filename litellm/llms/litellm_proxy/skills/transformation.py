@@ -21,7 +21,8 @@ from litellm.types.utils import LlmProviders
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.proxy._types import LiteLLM_SkillsTable, UserAPIKeyAuth
+    from litellm.models.skills import LiteLLM_SkillsTable
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 
 class LiteLLMSkillsTransformationHandler:
@@ -136,7 +137,7 @@ class LiteLLMSkillsTransformationHandler:
         """Async implementation of create_skill."""
         # Lazy import to avoid SDK dependency on proxy
         from litellm.llms.litellm_proxy.skills.handler import LiteLLMSkillsHandler
-        from litellm.proxy._types import NewSkillRequest
+        from litellm.models.skills import NewSkillRequest
 
         skill_request: Final = NewSkillRequest(
             display_title=display_title,

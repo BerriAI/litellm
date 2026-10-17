@@ -387,3 +387,59 @@ async def test_agent_activity_non_admin_no_access_returns_empty_page():
 
     assert result.results == []
     fake_get_daily.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("owned_tokens", "requested_api_key"),
+    [
+        ([], None),
+        (["alice-key-1"], "bob-key-1"),
+    ],
+)
+async def test_team_activity_member_without_matching_keys_queries_nothing(
+    owned_tokens: list[str], requested_api_key: str | None
+) -> None:
+    """A member without full team view whose key list is empty, or who asks for
+    a key they do not own, must reach the repository with an empty key filter,
+    never with no filter at all."""
+    from litellm.proxy.management_endpoints import common_daily_activity, team_endpoints
+    from litellm.repositories.daily_activity_sql import build_where_clause
+    from litellm.types.repositories.daily_activity import DailyRowsPage
+
+    user = UserAPIKeyAuth(user_id="alice", user_role=LitellmUserRoles.INTERNAL_USER.value)
+    prisma = MagicMock()
+    prisma.db.litellm_teamtable.find_many = AsyncMock(return_value=[_make_team("team-B", admin_user_ids=["bob"])])
+    prisma.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[MagicMock(token=token) for token in owned_tokens]
+    )
+    user_info = MagicMock()
+    user_info.teams = ["team-B"]
+    repository = MagicMock()
+    repository.daily_rows = AsyncMock(return_value=DailyRowsPage(total_count=0, rows=()))
+
+    with (
+        patch.object(team_endpoints, "prisma_client", prisma, create=True),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints.get_user_object",
+            new=AsyncMock(return_value=user_info),
+        ),
+        patch.object(common_daily_activity, "daily_activity_repository", return_value=repository),
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+    ):
+        response = await team_endpoints.get_team_daily_activity(
+            team_ids="team-B",
+            start_date="2026-01-01",
+            end_date="2026-01-02",
+            api_key=requested_api_key,
+            user_api_key_dict=user,
+        )
+
+    scope = repository.daily_rows.await_args.args[0]
+    assert scope.api_keys == ()
+    sql, _params = build_where_clause(scope)
+    assert sql.endswith(" AND FALSE")
+    assert response.results == []
+    assert response.metadata.total_spend == 0

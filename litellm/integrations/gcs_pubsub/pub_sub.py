@@ -44,9 +44,9 @@ class GcsPubSubLogger(CustomBatchLogger):
             topic_id (str): Pub/Sub topic ID
             credentials_path (str, optional): Path to Google Cloud credentials JSON file
         """
-        from litellm.proxy.utils import _premium_user_check
+        from litellm.proxy.utils import premium_user_check
 
-        _premium_user_check()
+        premium_user_check()
 
         self.async_httpx_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
 
@@ -69,13 +69,13 @@ class GcsPubSubLogger(CustomBatchLogger):
         (
             _auth_header,
             vertex_project,
-        ) = await vertex_chat_completion._ensure_access_token_async(
+        ) = await vertex_chat_completion.ensure_access_token_async(
             credentials=self.path_service_account_json,
             project_id=self.project_id,
             custom_llm_provider="vertex_ai",
         )
 
-        auth_header, _ = vertex_chat_completion._get_token_and_url(
+        auth_header, _ = vertex_chat_completion.get_token_and_url(
             model="pub-sub",
             auth_header=_auth_header,
             vertex_credentials=self.path_service_account_json,
@@ -107,9 +107,9 @@ class GcsPubSubLogger(CustomBatchLogger):
         from litellm.proxy.spend_tracking.spend_tracking_utils import (
             get_logging_payload,
         )
-        from litellm.proxy.utils import _premium_user_check
+        from litellm.proxy.utils import premium_user_check
 
-        _premium_user_check()
+        premium_user_check()
 
         try:
             verbose_logger.debug("PubSub: Logging - Enters logging function for model %s", kwargs)

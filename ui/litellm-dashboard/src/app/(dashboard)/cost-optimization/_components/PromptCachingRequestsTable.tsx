@@ -11,7 +11,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { LOG_ID_QUERY_PARAM } from "@/components/view_logs/logDetailRouting";
+import { LOG_ID_QUERY_PARAM } from "@/components/logs/request/logDetailRouting";
 import type { paths } from "@/lib/http/schema";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { uiHref } from "@/utils/uiHref";
