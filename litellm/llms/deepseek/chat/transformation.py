@@ -121,10 +121,12 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         DeepSeek vision models accept image_url content blocks in user
         messages (https://api-docs.deepseek.com/guides/vision), so those
         content lists are forwarded as-is, with any search_results text
-        appended as a trailing text block. Every other message keeps the
-        historical string collapse (which also folds search_results text
-        into string content); a list with no extractable text stays
-        unchanged, matching what DeepSeek historically received.
+        appended as a trailing text block. Tool message image lists are kept
+        too, so the parent transform can move their images into a user
+        message. Every other message keeps the historical string collapse
+        (which also folds search_results text into string content); a list
+        with no extractable text stays unchanged, matching what DeepSeek
+        historically received.
         """
         forward_images: Final = any(
             isinstance(message.get("content"), list) for message in messages
@@ -160,13 +162,13 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
 
     def _is_vision_forwardable_content(self, message: AllMessageValues, content: Sequence[object]) -> bool:
         """
-        True only for a user message whose content list holds well-formed
+        True only for a user or tool message whose content list holds well-formed
         text and image_url blocks with at least one image; a block missing
         its payload falls back to the string collapse instead of crashing
         or reaching the wire malformed. The model capability gate lives in
         the caller.
         """
-        if message.get("role") != "user":
+        if message.get("role") not in ("user", "tool"):
             return False
         if not all(self._is_forwardable_block(block) for block in content):
             return False
