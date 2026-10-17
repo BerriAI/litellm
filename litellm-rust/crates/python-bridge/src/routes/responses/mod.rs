@@ -5,10 +5,11 @@ use std::sync::Arc;
 
 use host::ResponsesPythonHost;
 use litellm_auth::AuthServices;
-use litellm_cache_response::{CachePolicy, ScopedCache};
+use litellm_cache_response::ScopedCache;
 use litellm_callbacks_legacy_python::LoggingOperation;
-use litellm_host::{call::HostedMachine, protocol::Protocol};
-use litellm_inference_responses::{ResponsesRoute, route::Responses};
+use litellm_host::{call::OutputOf, machine::ChannelInterceptors};
+use litellm_inference::{CallOptions, RouteError};
+use litellm_inference_responses::{ResponsesRoute, route::Responses, types::ResponsesCall};
 use litellm_secrets::source::SecretSource;
 use pyo3::prelude::*;
 pub(crate) use websocket::ResponsesWebSocketConnection;
@@ -17,6 +18,7 @@ use super::{
     NativeCall,
     inference::{InferenceHost, InferenceRoute, run_inference},
 };
+use crate::cache::Cached;
 
 const ROUTE_HOST_MODULE: &str = "litellm.rust_bridge.host.routes.responses";
 
@@ -53,11 +55,12 @@ impl InferenceRoute for ResponsesRoute {
         self.with_cache(cache)
     }
 
-    fn machine(
+    async fn call(
         self,
-        call: <Responses as Protocol>::Request,
-        policy: CachePolicy,
-    ) -> HostedMachine<Responses> {
-        self.machine(call, policy)
+        request: ResponsesCall,
+        interceptors: ChannelInterceptors<Cached<Responses>>,
+        options: CallOptions,
+    ) -> Result<OutputOf<Responses>, RouteError> {
+        self.execute(request, &interceptors, options).await
     }
 }

@@ -71,6 +71,12 @@ pub(super) trait ChainHooks: PythonOwned {
         py: Python<'_>,
         result: PyResult<Py<PyAny>>,
     ) -> PyResult<ChainStep<Box<WireRequest>>>;
+    fn reviews_provider_results(&mut self, py: Python<'_>) -> PyResult<bool>;
+    fn provider_result(
+        &mut self,
+        py: Python<'_>,
+        response: Py<PyAny>,
+    ) -> PyResult<ChainStep<Py<PyAny>>>;
     fn transform_response(
         &mut self,
         py: Python<'_>,
@@ -136,6 +142,19 @@ impl<H: PythonCallHooks> ChainHooks for HookAdapter<H> {
         };
         let step = resume(&mut self.hooks, py, result)?;
         Ok(self.step(step, Continuation::Wire))
+    }
+
+    fn reviews_provider_results(&mut self, py: Python<'_>) -> PyResult<bool> {
+        self.hooks.reviews_provider_results(py)
+    }
+
+    fn provider_result(
+        &mut self,
+        py: Python<'_>,
+        response: Py<PyAny>,
+    ) -> PyResult<ChainStep<Py<PyAny>>> {
+        let step = self.hooks.provider_result(py, response)?;
+        Ok(self.step(step, Continuation::Response))
     }
 
     fn transform_response(

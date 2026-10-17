@@ -294,6 +294,30 @@ where
                 reply.send(*wire);
                 Ok(())
             }
+            HostRequest::Intercept(InterceptRequest::ProviderResult { response, reply }) => {
+                let step = {
+                    let mut parts = self.parts();
+                    let Parts { binding, hooks, .. } = &mut *parts;
+                    Python::attach(|py| {
+                        if !hooks.reviews_provider_results(py)? {
+                            return Ok(None);
+                        }
+                        let public = binding.public_response(py, &response)?;
+                        hooks.provider_result(py, public).map(Some)
+                    })?
+                };
+                let Some(step) = step else {
+                    reply.send(response);
+                    return Ok(());
+                };
+                let public = self.settle(step).await?;
+                let reviewed = {
+                    let mut parts = self.parts();
+                    Python::attach(|py| parts.binding.response_value(py, public.bind(py)))?
+                };
+                reply.send(reviewed);
+                Ok(())
+            }
             HostRequest::Intercept(InterceptRequest::ResultReady { facts, reply }) => {
                 self.notify(PythonCallEvent::Execution(ExecutionEvent::ResultReady {
                     facts,

@@ -70,6 +70,11 @@ async fn drive_until(
                     .map(|()| reply.send(()))
                     .map_err(HostFailure::Error)
             }
+            HostRequest::Intercept(other) => {
+                ops.push("provider_result");
+                other.pass_through();
+                Ok(())
+            }
         };
         if let Err(failure) = answer {
             break machine.interrupt(failure).await.map(completed);
@@ -90,6 +95,7 @@ async fn drive_until_notified(machine: &mut OcrMachine, host: &LocalOcrHost, sto
                         MachineStep::Suspended(HostRequest::HostCall(op)) => host.handle_host_call(op).await.unwrap(),
                         MachineStep::Suspended(HostRequest::Intercept(InterceptRequest::BeforeProviderRequest { wire, reply, .. })) => reply.send(*wire),
                         MachineStep::Suspended(HostRequest::Intercept(InterceptRequest::AfterProviderResponse { reply, .. })) => reply.send(()),
+                        MachineStep::Suspended(HostRequest::Intercept(other)) => other.pass_through(),
                         MachineStep::Suspended(HostRequest::Stream(stream)) => match stream {
                             litellm_host::protocol::StreamDelivery::Open(head, _) => match head {},
                             litellm_host::protocol::StreamDelivery::Chunk(chunk, _) => match chunk {},
@@ -117,7 +123,7 @@ async fn a_hand_driven_machine_performs_the_same_call() {
 
     assert_eq!(outcome.unwrap().pages[0].markdown, "native");
     assert_eq!(received(&upstream).await.len(), 1);
-    assert_eq!(ops, ["BeforeSend", "response"]);
+    assert_eq!(ops, ["BeforeSend", "response", "provider_result"]);
     assert!(matches!(
         machine.resume().await,
         Err(Error::InvalidRequest(_))
@@ -146,7 +152,7 @@ async fn a_path_document_is_read_by_core_without_a_host_operation() {
     std::fs::remove_dir_all(&dir).unwrap();
 
     assert_eq!(response.unwrap().pages[0].markdown, "path");
-    assert_eq!(ops, ["BeforeSend", "response"]);
+    assert_eq!(ops, ["BeforeSend", "response", "provider_result"]);
     assert_eq!(
         only_request(&upstream).await.json()["document"]["image_url"],
         "data:image/png;base64,YWJj"

@@ -3886,6 +3886,7 @@ dependencies = [
  "litellm-auth",
  "litellm-coroutine",
  "rstest",
+ "serde",
  "serde_json",
  "tokio",
 ]

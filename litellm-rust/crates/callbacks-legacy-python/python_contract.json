@@ -77,6 +77,7 @@
     "kwargs",
     "call_type"
   ],
+  "reviews_deployment_success": [],
   "after_deployment_success": [
     "kwargs",
     "response",

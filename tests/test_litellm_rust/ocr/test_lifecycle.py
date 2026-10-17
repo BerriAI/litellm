@@ -444,7 +444,7 @@ async def test_empty_callbacks_run_deployment_hooks_and_defer_like_the_python_cl
         assert response._hidden_params["response_cost"] is not None
         assert response._hidden_params["_response_ms"] > 0
     assert trace_id_var.get() == "callback-free-parent"
-    assert probe.deployments == 2
+    assert probe.deployments == (2 if failure else 1)
     assert probe.submissions == probe.enqueues == 0
     assert len(created_loggers) == 1
     logger: Final = created_loggers[0]

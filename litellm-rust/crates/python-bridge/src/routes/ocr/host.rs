@@ -118,6 +118,22 @@ impl PythonBinding for OcrPythonHost {
         public_response(py, "litellm.rust_bridge.host.routes.ocr", &response)
     }
 
+    fn public_response(
+        &mut self,
+        py: Python<'_>,
+        response: &serde_json::Value,
+    ) -> PyResult<Py<PyAny>> {
+        public_response(py, "litellm.rust_bridge.host.routes.ocr", response)
+    }
+
+    fn response_value(
+        &mut self,
+        _: Python<'_>,
+        public: &Bound<'_, PyAny>,
+    ) -> PyResult<serde_json::Value> {
+        crate::marshal::response_value(public)
+    }
+
     fn encode_stream_head(
         &mut self,
         _: Python<'_>,

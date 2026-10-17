@@ -24,7 +24,7 @@ use rstest::rstest;
 use support::{
     HookScript, Interpreter, Log, MachineFactory, OpScript, Synthetic, binding, call_options,
     failing_machine, handed, hooks, interpreter, lifecycle_module, open_stream, read_all,
-    run_composed, run_scripted, settled, success_machine,
+    reviewed_machine, run_composed, run_scripted, settled, success_machine,
 };
 
 fn observed(capacity: usize) -> (CallOptions, impl FnMut() -> Vec<CallEvent>) {
@@ -322,6 +322,34 @@ fn success_runs_every_step_in_order_and_returns_the_public_response(
                 "host.close",
             ]
         );
+    });
+}
+
+#[rstest]
+#[case::reviewed(HookScript::ReviewResult, "reviewed", &["provider_result:provider"])]
+#[case::not_reviewed(HookScript::Plain, "provider", &[])]
+fn a_provider_result_keeps_what_the_reviewing_hooks_answer(
+    #[from(interpreter)] _python: Interpreter,
+    #[values(false, true)] asynchronous: bool,
+    #[case] script: HookScript,
+    #[case] kept: &str,
+    #[case] reviewed: &[&str],
+) {
+    Python::attach(|py| {
+        let (result, log) = run_scripted(
+            py,
+            reviewed_machine(),
+            OpScript::Answer,
+            script,
+            asynchronous,
+        );
+        let seen: Vec<_> = log
+            .iter()
+            .filter(|entry| entry.starts_with("provider_result:"))
+            .cloned()
+            .collect();
+        assert_eq!(result.unwrap().extract::<String>(py).unwrap(), kept);
+        assert_eq!(seen, reviewed);
     });
 }
 

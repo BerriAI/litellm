@@ -65,6 +65,8 @@ pub(crate) enum Logging {
 pub(crate) enum DeploymentHooks {
     #[strum(serialize = "before_deployment_call")]
     BeforeDeploymentCall,
+    #[strum(serialize = "reviews_deployment_success")]
+    ReviewsSuccess,
     #[strum(serialize = "after_deployment_success")]
     AfterDeploymentSuccess,
     #[strum(serialize = "after_deployment_failure")]

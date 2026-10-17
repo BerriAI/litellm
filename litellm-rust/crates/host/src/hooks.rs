@@ -44,6 +44,21 @@ pub trait CallHooks<R: HookRuntime>: Sized {
         Ok(R::ready(wire))
     }
 
+    /// Whether `provider_result` would do anything, so a host can skip encoding the response.
+    fn reviews_provider_results(&mut self, _runtime: R::Context<'_>) -> Result<bool, R::Error> {
+        Ok(false)
+    }
+
+    /// A complete provider response before it is cached or delivered. What this returns
+    /// replaces it. Never offered a cache hit.
+    fn provider_result(
+        &mut self,
+        _runtime: R::Context<'_>,
+        response: R::Response,
+    ) -> Result<R::Step<Self, R::Response>, R::Error> {
+        Ok(R::ready(response))
+    }
+
     fn transform_response(
         &mut self,
         _runtime: R::Context<'_>,

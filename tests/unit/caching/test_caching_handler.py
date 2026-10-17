@@ -3231,3 +3231,20 @@ async def test_a_cache_hit_inside_an_internal_sub_call_is_free_and_fires_no_call
     assert async_logging.async_success_handler.called is not internal
     assert async_logging.handle_sync_success_callbacks_for_async_calls.called is not internal
     assert sync_logging.handle_sync_cache_hit_success_callbacks.called is not internal
+
+
+def _reply(response: object) -> object:
+    assert isinstance(response, litellm.ModelResponse)
+    return response.choices[0].message.content  # pyright: ignore[reportAttributeAccessIssue]  # non-streaming choice
+
+
+@pytest.mark.asyncio
+async def test_a_non_string_cache_key_reads_back_the_entry_it_wrote(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+    messages: Final = [{"role": "user", "content": "non-string cache key"}]
+
+    await litellm.acompletion(model="gpt-4o", messages=messages, mock_response="first", cache_key=123)
+    await asyncio.gather(*tuple(_PENDING_CACHE_WRITES))
+    second: Final = await litellm.acompletion(model="gpt-4o", messages=messages, mock_response="second", cache_key=123)
+
+    assert _reply(second) == "first"

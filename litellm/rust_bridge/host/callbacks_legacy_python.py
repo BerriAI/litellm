@@ -322,6 +322,12 @@ def before_deployment_call(kwargs: dict[str, object], call_type: str) -> Awaitab
     return hook(kwargs, call_type)
 
 
+def reviews_deployment_success() -> bool:
+    from litellm.rust_bridge.detectors import deployment_success_hook
+
+    return deployment_success_hook()
+
+
 def after_deployment_success(kwargs: dict[str, object], response: object, call_type: str) -> Awaitable[object]:
     from litellm import utils
     from litellm.types.utils import CallTypes

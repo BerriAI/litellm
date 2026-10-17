@@ -11,7 +11,7 @@ use std::{
 
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_response::{
-    CacheOptions, CacheScope, ResponseCache, ResponseCacheConfig, ResponseCacheService, ScopedCache,
+    CacheScope, ResponseCache, ResponseCacheConfig, ResponseCacheService, ScopedCache,
 };
 use litellm_host::interceptors::{
     Cost, ExecutionFacts, Interceptors, ProviderIdentity, RawResponse, RequestContext,
@@ -58,22 +58,22 @@ async fn messages_cache_identity_includes_provider_native_parameters(
     for (value, expected_call) in [(original.clone(), 0), (changed, 1), (original, 0)] {
         let response =
             execute_unary::<Messages, _, _>(
-                CacheRequest::from_wire(
+                CacheRequest::from_wire::<Messages>(
                     ProviderIdentity {
                         model: "test".into(),
                         provider: "anthropic".into(),
                     },
-                    Some(&WireRequest {
+                    &WireRequest {
                         url: "https://example.test/v1/messages".into(),
                         headers: vec![],
                         body: json!({
                             "model":"test", "messages":[{"role":"user","content":"hello"}],
                             "max_tokens":32, (field):value
                         }),
-                    }),
+                    },
+                    Some(&ScopedCache::new(cache.clone(), CacheScope::Shared)),
+                    None,
                 ),
-                Some(cache.clone()),
-                Some(CacheOptions::new(CacheScope::Shared)),
                 &(),
                 None,
                 || async {
@@ -148,6 +148,7 @@ impl Interceptors<RouteError> for ChangingHooks {
             InterceptRequest::ResultReady { facts, reply } => {
                 reply.send(self.result_ready(facts).await?);
             }
+            other => other.pass_through(),
         }
         Ok(())
     }

@@ -106,6 +106,12 @@ impl MessagesRoute {
                     source: source.clone(),
                 })
                 .await?;
+            let output = litellm_inference::caching::provider_result::<route::Messages>(
+                output,
+                &source,
+                context.interceptors,
+            )
+            .await?;
             Ok(cache.finish(output, &source).await)
         })
         .await
