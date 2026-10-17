@@ -3,12 +3,10 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Itera
 from types import MappingProxyType
 from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding selects a sync result or an async awaitable
 
-from litellm.exceptions import BadRequestError
-from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.anthropic.pass_through.messages import handler as main
 from litellm.llms.anthropic.pass_through.messages.interceptors import get_messages_interceptors
 from litellm.llms.anthropic.pass_through.safeguards import native_route_classifies
-from litellm.rust_bridge import detectors
+from litellm.rust_bridge import detectors, provider
 from litellm.rust_bridge.catalog import Feature, Route, RouteContext, Target
 from litellm.rust_bridge.dispatch import PublicDispatch
 from litellm.rust_bridge.messages.entrypoints import (
@@ -23,7 +21,6 @@ from litellm.rust_bridge.public_call import (
     native_call_hook,
     optional_mapping,
     optional_sequence,
-    optional_str,
     signature,
 )
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
@@ -70,16 +67,6 @@ def _public_request(
     return native_call(legacy, args, kwargs)
 
 
-def _resolved(request: NativeCall) -> tuple[str, str | None]:
-    model: Final = str(request.resolved["model"])
-    provider: Final = optional_str(request.resolved.get("custom_llm_provider"))
-    try:
-        resolved_model, resolved_provider, _, _ = get_llm_provider(model, provider)
-    except BadRequestError:
-        return model, provider
-    return resolved_model, resolved_provider
-
-
 def _target(request: NativeCall, model: str, provider: str | None) -> Target:
     requested_model: Final = str(request.resolved["model"])
     if main._native_messages_config(model, provider, request.resolved.get("model_info")) is not None:  # pyright: ignore[reportPrivateUsage]  # the handler's own passthrough lookup
@@ -90,12 +77,11 @@ def _target(request: NativeCall, model: str, provider: str | None) -> Target:
     return Target.CHAT_COMPLETIONS
 
 
-def _intercepted(request: NativeCall) -> bool:
+def _intercepted(request: NativeCall, provider: str | None) -> bool:
     tools: Final = optional_sequence(request.resolved.get("tools"))
     if not tools:
         return False
     mappings: Final = tuple(mapping for mapping in map(optional_mapping, tools) if mapping is not None)
-    provider: Final = _resolved(request)[1]
     return any(interceptor.can_handle(mappings, provider) for interceptor in get_messages_interceptors())
 
 
@@ -107,7 +93,6 @@ _FEATURES: Final[detectors.Detectors] = MappingProxyType(
         ),
         Feature.PRE_REQUEST_HOOK: detectors.pre_request_hook,
         Feature.WEBSEARCH_INTERCEPTION: detectors.websearch_interception,
-        Feature.MESSAGES_INTERCEPTOR: _intercepted,
         Feature.RESPONSE_CACHE: detectors.response_cache,
         Feature.MODIFY_PARAMS: detectors.modify_params,
         Feature.WORKLOAD_IDENTITY: detectors.anthropic_workload_identity,
@@ -118,16 +103,28 @@ _FEATURES: Final[detectors.Detectors] = MappingProxyType(
 )
 
 
+def _features(request: NativeCall, provider: str | None) -> frozenset[Feature]:
+    detected: Final = detectors.detected(_FEATURES, request)
+    intercepted: Final[frozenset[Feature]] = (
+        frozenset({Feature.MESSAGES_INTERCEPTOR}) if _intercepted(request, provider) else frozenset()
+    )
+    return detected | intercepted
+
+
 def _context(request: NativeCall) -> RouteContext:
     requested_model: Final = str(request.resolved["model"])
-    model, provider = _resolved(request)
-    return RouteContext(
-        Route.MESSAGES,
-        provider=provider,
-        model=requested_model,
-        target=_target(request, model, provider),
-        features=detectors.detected(_FEATURES, request),
-    )
+    resolution: Final = provider.resolve(request)
+    match resolution:
+        case provider.Resolved(model=resolved_model, provider=resolved_provider):
+            return RouteContext(
+                Route.MESSAGES,
+                provider=resolved_provider,
+                model=requested_model,
+                target=_target(request, resolved_model, resolved_provider),
+                features=_features(request, resolved_provider),
+            )
+        case provider.Unresolved():
+            return RouteContext(Route.MESSAGES, model=requested_model, features=_features(request, None))
 
 
 _DISPATCH: Final = PublicDispatch(
