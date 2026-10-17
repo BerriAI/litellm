@@ -12596,3 +12596,40 @@ def test_a_websocket_turn_row_is_keyed_by_the_response_id_or_else_its_call_id(
     )
     assert payload is not None
     assert payload["id"] == expected_row_id
+
+
+@pytest.mark.parametrize("for_async_request, expected_s3_writes", [(True, 1), (False, 0)])
+def test_legacy_s3_logs_a_streamed_anthropic_messages_call_handed_off_from_the_async_side(
+    logging_obj: LitellmLogging, monkeypatch: pytest.MonkeyPatch, for_async_request: bool, expected_s3_writes: int
+) -> None:
+    """LIT-9834: the /v1/messages stream handler stores ``complete_streaming_response`` before any logger runs.
+
+    The one hand-off from the async side (``for_async_request=True``) must still reach the legacy ``s3`` writer,
+    while the chunk-by-chunk sync path (``for_async_request=False``) keeps treating a stored response as logged."""
+    complete_response: Final = ModelResponse(
+        id="msg_fake_stream_001",
+        model="claude-sonnet-4-5",
+        choices=[
+            {
+                "message": {"role": "assistant", "content": "Hello from the fake upstream"},
+                "finish_reason": "stop",
+                "index": 0,
+            }
+        ],
+        usage={"prompt_tokens": 8, "completion_tokens": 6, "total_tokens": 14},
+    )
+    logging_obj.stream = True
+    logging_obj.call_type = "anthropic_messages"
+    logging_obj.model_call_details["litellm_params"] = {"aanthropic_messages": True}
+    logging_obj.litellm_params = logging_obj.model_call_details["litellm_params"]
+    logging_obj.model_call_details["complete_streaming_response"] = complete_response
+    s3_writer: Final = MagicMock()
+    monkeypatch.setattr(litellm_logging, "s3Logger", s3_writer)
+    monkeypatch.setattr(litellm, "success_callback", ["s3"])
+    now: Final = datetime_unit_test(2026, 1, 1, 12, 0, 0)
+
+    logging_obj.success_handler(complete_response, start_time=now, end_time=now, for_async_request=for_async_request)
+
+    assert s3_writer.log_event.call_count == expected_s3_writes
+    if expected_s3_writes:
+        assert s3_writer.log_event.call_args.kwargs["response_obj"] is complete_response
