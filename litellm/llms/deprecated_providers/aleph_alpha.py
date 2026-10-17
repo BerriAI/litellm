@@ -5,9 +5,25 @@ from collections.abc import Callable, Mapping
 from typing import Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.utils import Choices, Message, ModelResponse, Usage
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _AlephAlphaCompletion(TypedDict):
+    completion: ReadOnly[str]
+    finish_reason: ReadOnly[str | None]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _AlephAlphaResponse(TypedDict):
+    completions: ReadOnly[list[_AlephAlphaCompletion]]
+
+
+_ALEPH_ALPHA_RESPONSE: Final = TypeAdapter(_AlephAlphaResponse)
 
 
 class AlephAlphaError(Exception):
@@ -257,8 +273,9 @@ def completion(
             )
         else:
             try:
+                validated_response: Final = _ALEPH_ALPHA_RESPONSE.validate_python(completion_response)
                 choices_list: Final = []
-                for idx, item in enumerate(completion_response["completions"]):
+                for idx, item in enumerate(validated_response["completions"]):
                     if len(item["completion"]) > 0:
                         message_obj = Message(content=item["completion"])
                     else:

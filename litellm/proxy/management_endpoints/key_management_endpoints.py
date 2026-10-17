@@ -26,8 +26,8 @@ from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, TypeVar, c
 import fastapi
 import yaml
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
-from pydantic import TypeAdapter
-from typing_extensions import ReadOnly, TypedDict
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._internal_context import service_target, with_service_target
@@ -199,6 +199,21 @@ if TYPE_CHECKING:
     from prisma import models as prisma_models
 
 _RepositoryModelT = TypeVar("_RepositoryModelT", bound=BaseModel)
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _KeyAliasCountRow(TypedDict):
+    count: ReadOnly[int | float | str]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _KeyAliasRow(TypedDict):
+    key_alias: NotRequired[ReadOnly[str | None]]
+
+
+_KEY_ALIAS_COUNT_ROWS: Final = TypeAdapter(list[_KeyAliasCountRow])
+_KEY_ALIAS_ROWS: Final = TypeAdapter(list[_KeyAliasRow])
+_KEY_TOKEN_HASH: Final = TypeAdapter[str | None](str | None, config=ConfigDict(strict=True, hide_input_in_errors=True))
 
 
 class _UserRowLike(Protocol):
@@ -4740,7 +4755,7 @@ async def info_key_fn(
             )
         ## REMOVE HASHED TOKEN INFO BEFORE RETURNING ##
         key_info_dict: Final = key_info.model_dump()
-        key_token_hash: Final[str | None] = key_info_dict.pop("token")
+        key_token_hash: Final[str | None] = _KEY_TOKEN_HASH.validate_python(key_info_dict.pop("token"))
         key_info_dict["status"] = (
             "deleted" if live_key_info is None else _derive_key_status(key_info_dict, now=datetime.now(timezone.utc))
         )
@@ -7134,7 +7149,9 @@ async def key_aliases(
         where_sql: Final = " AND ".join(where_parts)
 
         count_sql: Final = f'SELECT COUNT(*) AS count FROM "LiteLLM_VerificationToken" WHERE {where_sql}'
-        count_rows: Final[Sequence[Mapping[str, int]]] = await prisma_client.db.query_raw(count_sql, *query_params)
+        count_rows: Final = _KEY_ALIAS_COUNT_ROWS.validate_python(
+            await prisma_client.db.query_raw(count_sql, *query_params)
+        )
         total_count: Final = int(count_rows[0]["count"]) if count_rows else 0
 
         aliases_params: Final = query_params + [size, (page - 1) * size]
@@ -7147,8 +7164,10 @@ async def key_aliases(
             f" ORDER BY key_alias ASC"
             f" LIMIT ${limit_idx} OFFSET ${offset_idx}"
         )
-        alias_rows: Final[Sequence[Mapping[str, str]]] = await prisma_client.db.query_raw(aliases_sql, *aliases_params)
-        aliases: Final[list[str]] = [row["key_alias"] for row in alias_rows if row.get("key_alias")]
+        alias_rows: Final = _KEY_ALIAS_ROWS.validate_python(
+            await prisma_client.db.query_raw(aliases_sql, *aliases_params)
+        )
+        aliases: Final[list[str]] = [alias for row in alias_rows if (alias := row.get("key_alias"))]
 
         total_pages: Final = -(-total_count // size) if total_count > 0 else 0
         verbose_proxy_logger.debug(

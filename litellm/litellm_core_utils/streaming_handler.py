@@ -15,8 +15,8 @@ from typing import Any, Final, NoReturn, Protocol, TypeVar, cast
 import anyio
 import httpx
 from openai.types.chat import ChatCompletionChunk
-from pydantic import BaseModel, ValidationError
-from typing_extensions import NotRequired, TypedDict
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm import verbose_logger
@@ -129,12 +129,26 @@ class _PredibaseStreamData(TypedDict):
     error: str | None
 
 
+@with_config(ConfigDict(extra="allow", strict=True))
 class _NlpCloudStreamData(TypedDict):
-    generated_text: str
+    generated_text: ReadOnly[str]
 
 
 class _AlephAlphaStreamData(TypedDict):
     completions: Sequence[Mapping[str, str]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _TritonStreamData(TypedDict):
+    text_output: NotRequired[ReadOnly[object]]
+    stop_reason: NotRequired[ReadOnly[object]]
+    is_finished: NotRequired[ReadOnly[object]]
+    input_token_count: NotRequired[ReadOnly[object]]
+    generated_token_count: NotRequired[ReadOnly[object]]
+
+
+_NLP_CLOUD_STREAM_DATA: Final = TypeAdapter(_NlpCloudStreamData)
+_TRITON_STREAM_DATA: Final = TypeAdapter(_TritonStreamData)
 
 
 class _DeltaDumpDict(TypedDict):
@@ -607,7 +621,7 @@ class CustomStreamWrapper:
             if self.model and "dolphin" in self.model:
                 chunk = self.process_chunk(chunk=chunk)
             else:
-                data_json: Final[_NlpCloudStreamData] = json.loads(chunk)
+                data_json: Final = _NLP_CLOUD_STREAM_DATA.validate_python(json.loads(chunk), strict=True)
                 chunk = data_json["generated_text"]
             text = chunk
             if "[DONE]" in text:
@@ -746,14 +760,14 @@ class CustomStreamWrapper:
     def handle_triton_stream(self, chunk):
         try:
             if isinstance(chunk, dict):
-                parsed_response = chunk
+                parsed_response = _TRITON_STREAM_DATA.validate_python(chunk, strict=True)
             elif isinstance(chunk, (str, bytes)):
                 if isinstance(chunk, bytes):
                     chunk = chunk.decode("utf-8")
                 if "text_output" in chunk:
                     response = CustomStreamWrapper.strip_sse_data_from_chunk(chunk) or ""
                     response = response.strip()
-                    parsed_response = json.loads(response)
+                    parsed_response = _TRITON_STREAM_DATA.validate_python(json.loads(response), strict=True)
                 else:
                     return {
                         "text": "",

@@ -1267,7 +1267,10 @@ async def resolve_input_file_id_to_unified(response, prisma_client) -> None:
             pass
 
 
-async def resolve_output_file_ids_to_unified(response, prisma_client) -> None:
+async def resolve_output_file_ids_to_unified(
+    response: "LiteLLMBatch",
+    prisma_client: "PrismaClient | None",
+) -> None:
     """
     If the batch response contains raw provider output_file_id or error_file_id
     (not already unified IDs), look up the corresponding unified file IDs from
@@ -1276,7 +1279,9 @@ async def resolve_output_file_ids_to_unified(response, prisma_client) -> None:
     if not prisma_client:
         return
     for attr in ("output_file_id", "error_file_id"):
-        raw_id = getattr(response, attr, None)
+        if not hasattr(response, attr):
+            continue
+        raw_id = response.output_file_id if attr == "output_file_id" else response.error_file_id
         if not raw_id or is_base64_encoded_unified_file_id(raw_id):
             continue
         try:

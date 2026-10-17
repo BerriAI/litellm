@@ -3,7 +3,7 @@ import contextvars
 import importlib
 from collections.abc import Coroutine
 from functools import partial
-from typing import TYPE_CHECKING, Final, Literal, Optional, cast, overload
+from typing import TYPE_CHECKING, Final, Literal, cast, overload
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -70,10 +70,10 @@ from litellm.utils import (
 _PROVIDER_ROUTING_HINTS: Final = TypeAdapter(ProviderRoutingHints)
 
 # Cache for ImageEditRequestUtils to avoid repeated __getattr__ calls
-_ImageEditRequestUtils_cache: Optional["ImageEditRequestUtils"] = None
+_ImageEditRequestUtils_cache: type["ImageEditRequestUtils"] | None = None
 
 
-def _get_ImageEditRequestUtils() -> "ImageEditRequestUtils":
+def _get_ImageEditRequestUtils() -> type["ImageEditRequestUtils"]:
     """Get ImageEditRequestUtils, loading it lazily if needed."""
     global _ImageEditRequestUtils_cache
     if _ImageEditRequestUtils_cache is None:

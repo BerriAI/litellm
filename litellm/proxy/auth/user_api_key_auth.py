@@ -2158,18 +2158,22 @@ async def user_api_key_auth_builder(
                 api_key = response
                 custom_auth_api_key = True
         elif user_custom_auth is not None:
-            response = await user_custom_auth(request=request, api_key=api_key)
-            validated = UserAPIKeyAuth.model_validate(response)
-            if getattr(litellm, "enable_post_custom_auth_checks", False):
-                validated = await _run_post_custom_auth_checks(
-                    valid_token=validated,
+            validated_user_custom_auth: Final = UserAPIKeyAuth.model_validate(
+                await user_custom_auth(request=request, api_key=api_key)
+            )
+            validated_token: Final = (
+                await _run_post_custom_auth_checks(
+                    valid_token=validated_user_custom_auth,
                     request=request,
                     request_data=request_data,
                     route=route,
                     parent_otel_span=parent_otel_span,
                 )
-            validated.authenticated_by_custom_auth = True
-            return validated
+                if getattr(litellm, "enable_post_custom_auth_checks", False)
+                else validated_user_custom_auth
+            )
+            validated_token.authenticated_by_custom_auth = True
+            return validated_token
 
         ### LITELLM-DEFINED AUTH FUNCTION ###
         #### IF JWT ####

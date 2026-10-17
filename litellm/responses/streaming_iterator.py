@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, Protocol, cast,
 
 import httpx
 from openai._streaming import SSEDecoder
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import TypeIs
 
 import litellm
@@ -150,6 +150,7 @@ def _typed_gets_litellm_params(fn: _GetsLitellmParams) -> _GetsLitellmParams:
 
 _SHOULD_STORE_RESULT_IN_CACHE_ATTR: Final = "_should_store_result_in_cache"
 _UNMASK_PII_TEXT_ATTR: Final = "_unmask_pii_text"
+_JSON_VALUE: Final = TypeAdapter(object, config=ConfigDict(strict=True, hide_input_in_errors=True))
 
 
 def _load_json_object(payload: str | bytes) -> dict[str, object]:
@@ -159,7 +160,7 @@ def _load_json_object(payload: str | bytes) -> dict[str, object]:
 
 def _load_json_value(payload: str | bytes) -> object:
     """Parse a JSON payload whose top-level shape the caller narrows itself."""
-    return json.loads(payload)
+    return _JSON_VALUE.validate_python(json.loads(payload))
 
 
 def _model_id_from_metadata(litellm_metadata: Mapping[str, object] | None) -> str | None:

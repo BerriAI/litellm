@@ -27,7 +27,7 @@ import httpx
 from httpx import USE_CLIENT_DEFAULT
 from httpx._types import FileContent
 from openai.types.file_deleted import FileDeleted
-from pydantic import TypeAdapter
+from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import ReadOnly
 
 import litellm
@@ -467,6 +467,9 @@ async def _aiter_bytes_then_close(response: httpx.Response, *, chunk_size: int) 
 
 _DECODED_BODY_STALE_HEADERS: Final[frozenset[str]] = frozenset({"content-encoding", "content-length"})
 _OPTIONAL_PARAMS: Final = TypeAdapter(Mapping[str, object])
+_PREFETCHED_SOURCE_DATA: Final = TypeAdapter(
+    dict[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True)
+)
 
 
 def _decoded_body_headers(response: httpx.Response) -> httpx.Headers:
@@ -8438,7 +8441,7 @@ class BaseLLMHTTPHandler:
                 prefetch_resp.raise_for_status()
             except Exception as e:
                 raise self._handle_error(e=e, provider_config=video_provider_config)
-            prefetched_source_data = prefetch_resp.json()
+            prefetched_source_data = _PREFETCHED_SOURCE_DATA.validate_python(prefetch_resp.json())
 
         try:
             url, data, files = video_provider_config.transform_video_edit_request(
@@ -8536,7 +8539,7 @@ class BaseLLMHTTPHandler:
                 prefetch_resp.raise_for_status()
             except Exception as e:
                 raise self._handle_error(e=e, provider_config=video_provider_config)
-            prefetched_source_data = prefetch_resp.json()
+            prefetched_source_data = _PREFETCHED_SOURCE_DATA.validate_python(prefetch_resp.json())
 
         try:
             url, data, files = video_provider_config.transform_video_edit_request(

@@ -1,6 +1,8 @@
 from typing import Final
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -10,6 +12,14 @@ from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.caching import CachePingResponse, HealthCheckCacheParams
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _CacheDeleteRequest(TypedDict):
+    keys: ReadOnly[NotRequired[list[str] | None]]
+
+
+_CACHE_DELETE_REQUEST: Final = TypeAdapter(_CacheDeleteRequest)
 
 masker: Final = SensitiveDataMasker()
 
@@ -144,8 +154,8 @@ async def cache_delete(request: Request):
         if litellm.cache is None:
             raise HTTPException(status_code=503, detail="Cache not initialized. litellm.cache is None")
 
-        request_data: Final = await request.json()
-        keys: Final = request_data.get("keys", None)
+        request_data: Final = _CACHE_DELETE_REQUEST.validate_python(await request.json())
+        keys: Final = request_data.get("keys")
 
         if litellm.cache.type == "redis":
             await litellm.cache.delete_cache_keys(keys=keys)
