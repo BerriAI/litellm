@@ -526,6 +526,12 @@ class TestProxyInitializationHelpers:
         with patch("sys.platform", "linux"):
             assert ProxyInitializationHelpers._get_loop_type() == "uvloop"
 
+    @pytest.mark.parametrize(("env_value", "expected"), [("asyncio", "asyncio"), ("uvloop", "uvloop"), ("", "uvloop")])
+    def test_get_loop_type_honors_litellm_event_loop_env(self, env_value: str, expected: str, monkeypatch) -> None:
+        monkeypatch.setattr("sys.platform", "linux")
+        monkeypatch.setenv("LITELLM_EVENT_LOOP", env_value)
+        assert ProxyInitializationHelpers._get_loop_type() == expected
+
     def test_selected_loop_factory_imports_on_this_interpreter(self):
         loop_type = ProxyInitializationHelpers._get_loop_type()
         if loop_type is None:

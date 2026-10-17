@@ -514,7 +514,7 @@ class LLMCachingHandler:
                     if not is_internal_call.get() and not _should_defer_streaming_cache_hit_callbacks(
                         cached_result=cached_result
                     ):
-                        logging_obj.handle_sync_success_callbacks_for_async_calls(
+                        logging_obj.handle_sync_cache_hit_success_callbacks(
                             result=cached_result,
                             start_time=start_time,
                             end_time=end_time,

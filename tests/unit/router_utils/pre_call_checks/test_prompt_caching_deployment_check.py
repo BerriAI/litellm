@@ -15,10 +15,12 @@ from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheCont
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import (
     PromptCachingDeploymentCheck,
+    _honors_one_hour_cache_ttl,
     _get_min_token_count_for_deployments,
 )
 from litellm.router_utils.prompt_caching_cache import PROMPT_CACHE_PIN_TTL_SECONDS, PromptCachingCache
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import StandardLoggingPayload
 from litellm.utils import get_prompt_cache_min_tokens, is_prompt_caching_valid_prompt, token_counter
 
 MODEL_GROUP_ALIAS = "my-claude-group"
@@ -124,6 +126,21 @@ def test_write_gate_is_what_prevents_a_pin_below_the_model_minimum():
 def test_get_min_token_count_for_deployments_falls_back_to_default_for_empty_group():
     """An empty group has no member minimum to read, so it must fall back rather than crash."""
     assert _get_min_token_count_for_deployments([]) == DEFAULT_MINIMUM_PROMPT_CACHE_TOKEN_COUNT
+
+
+def test_bedrock_application_profile_uses_its_base_model_for_one_hour_ttl() -> None:
+    standard_logging_object: Final = cast(
+        StandardLoggingPayload,
+        {
+            "custom_llm_provider": "bedrock",
+            "model": "bedrock/converse/arn:aws:bedrock:us-east-1:000000000000:application-inference-profile/pinprofile",
+        },
+    )
+
+    assert _honors_one_hour_cache_ttl(
+        standard_logging_object,
+        {"model": None, "base_model": "bedrock/us.anthropic.claude-sonnet-5-5"},
+    ) is True
 
 
 @pytest.mark.asyncio
