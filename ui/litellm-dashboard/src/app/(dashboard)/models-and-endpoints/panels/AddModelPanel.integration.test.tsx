@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from "react";
-import { act, renderWithProviders, screen, waitFor } from "../../../../../tests/test-utils";
+import { act, renderWithProviders, screen, waitFor, within } from "../../../../../tests/test-utils";
+import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import AddModelPanel from "./AddModelPanel";
@@ -72,6 +73,13 @@ vi.mock("@/app/(dashboard)/hooks/providers/useProviderFields", () => ({
         default_model_placeholder: "claude-3-opus",
         credential_fields: [{ key: "api_key", label: "API Key", field_type: "password", required: false }],
       },
+      {
+        provider: "TypeSafe",
+        provider_display_name: "TypeSafe",
+        litellm_provider: "typesafe",
+        default_model_placeholder: "jev-latest",
+        credential_fields: [{ key: "api_key", label: "API Key", field_type: "password", required: false }],
+      },
     ],
     isLoading: false,
     error: null,
@@ -133,9 +141,9 @@ const baseModelInfo = { access_groups: undefined, mode: undefined };
 
 const { api_base: _omitted, ...ALWAYS_MOUNTED_WITHOUT_API_BASE } = alwaysMounted;
 
-const setup = async () => {
+const setup = async (searchParams?: string, onUrlUpdate?: OnUrlUpdateFunction) => {
   const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
-  renderWithProviders(<AddModelPanel />);
+  renderWithProviders(<AddModelPanel />, { searchParams, onUrlUpdate });
   await screen.findByText("Provider");
 
   const openAdvanced = async () => {
@@ -534,6 +542,131 @@ describe("AddModelPanel behaviours the removed Advanced Settings form instance n
         input_cost_per_token: 0.000003,
         cache_read_input_token_cost: 0.000003,
       },
+      model_info: { ...baseModelInfo },
+    });
+  });
+});
+
+describe("AddModelPanel decision models", () => {
+  const DECISION_COST_MAP = {
+    "typesafe/jev-latest": { litellm_provider: "typesafe", mode: "evaluation" },
+    "gpt-4o-2024-08-06": { litellm_provider: "openai", mode: "chat" },
+    "gpt-6-luna": { litellm_provider: "openai", mode: "chat", supported_endpoints: ["/v1/decisions"] },
+    "claude-sonnet-4-5": { litellm_provider: "anthropic", mode: "chat" },
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUseModelCostMap.mockReturnValue({ data: DECISION_COST_MAP });
+    mockPtuEnabled.mockReturnValue(false);
+    mockAuthorized.mockReturnValue(PROXY_ADMIN);
+  });
+
+  const decisionNotice = () => screen.queryByRole("note", { name: "Decision model notice" });
+
+  it("points a decision-only provider at the decision routes, the docs, and the playground", async () => {
+    const { user } = await setup();
+    await user.type(screen.getByRole("combobox", { name: /provider/i }), "TypeSafe");
+    await user.click(await screen.findByRole("option", { name: /TypeSafe/ }));
+
+    const note = await screen.findByRole("note", { name: "Decision model notice" });
+    expect(note).toHaveTextContent("/v1/decisions");
+    expect(within(note).getByRole("link", { name: "How to call decision models" })).toHaveAttribute(
+      "href",
+      "https://docs.litellm.ai/docs/decisions",
+    );
+    expect(within(note).getByRole("link", { name: "test it in the Decisions playground" })).toHaveAttribute(
+      "href",
+      "/ui/playground?tab=system-one",
+    );
+  });
+
+  it("shows the notice on a chat provider only once one of its decision models is picked", async () => {
+    const { user } = await setup();
+    await user.click(screen.getByRole("combobox", { name: /provider/i }));
+    await user.click(await screen.findByRole("option", { name: /OpenAI/ }));
+    await user.click(await screen.findByPlaceholderText("Select models"));
+    await user.click(await screen.findByText("gpt-4o-2024-08-06"));
+    expect(decisionNotice()).not.toBeInTheDocument();
+
+    await user.click(await screen.findByText("gpt-6-luna"));
+
+    const note = await screen.findByRole("note", { name: "Decision model notice" });
+    expect(note).toHaveTextContent("/v1/decisions");
+    expect(note).not.toHaveTextContent("/chat/completions");
+  });
+});
+
+describe("AddModelPanel prefill from the URL", () => {
+  const COST_MAP = {
+    "typesafe/jev-latest": { litellm_provider: "typesafe", mode: "evaluation" },
+    "gpt-4o-2024-08-06": { litellm_provider: "openai", mode: "chat" },
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUseModelCostMap.mockReturnValue({ data: COST_MAP });
+    mockPtuEnabled.mockReturnValue(false);
+    mockAuthorized.mockReturnValue(PROXY_ADMIN);
+  });
+
+  it("preselects the provider and model named in the URL and submits that model", async () => {
+    const { submit } = await setup("?provider=typesafe&litellm_model=typesafe%2Fjev-latest");
+
+    await waitFor(() => expect(screen.getByRole("combobox", { name: /provider/i })).toHaveValue("TypeSafe"));
+    expect(screen.getByRole("combobox", { name: "Select models" })).toBeInTheDocument();
+    expect(screen.getByDisplayValue("typesafe/jev-latest")).toBeInTheDocument();
+    expect(await screen.findByRole("note", { name: "Decision model notice" })).toBeInTheDocument();
+
+    await submit();
+
+    expect(lastCreatedModel()).toStrictEqual({
+      model_name: "typesafe/jev-latest",
+      litellm_params: { api_key: undefined, custom_llm_provider: "typesafe", model: "typesafe/jev-latest" },
+      model_info: { ...baseModelInfo },
+    });
+  });
+
+  it("drops the prefill params from the URL once the prefilled model is added", async () => {
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    const { submit } = await setup("?provider=typesafe&litellm_model=typesafe%2Fjev-latest", onUrlUpdate);
+    await waitFor(() => expect(screen.getByRole("combobox", { name: /provider/i })).toHaveValue("TypeSafe"));
+
+    await submit();
+
+    await waitFor(() => {
+      const params = onUrlUpdate.mock.calls.at(-1)?.[0].searchParams;
+      expect(params?.has("provider")).toBe(false);
+      expect(params?.has("litellm_model")).toBe(false);
+    });
+  });
+
+  it("leaves the form on its defaults when the provider slug matches no provider, model included", async () => {
+    const { submitExpectingRejection } = await setup("?provider=unknownslug&litellm_model=typesafe%2Fjev-latest");
+
+    expect(screen.getByRole("combobox", { name: /provider/i })).toHaveValue("");
+    expect(screen.queryByDisplayValue("typesafe/jev-latest")).not.toBeInTheDocument();
+
+    await submitExpectingRejection("Required");
+
+    expect(modelCreateCall).not.toHaveBeenCalled();
+  });
+
+  it("keeps a provider the user picks after the prefill instead of re-applying the URL", async () => {
+    const { user, submit } = await setup("?provider=typesafe&litellm_model=typesafe%2Fjev-latest");
+    await waitFor(() => expect(screen.getByRole("combobox", { name: /provider/i })).toHaveValue("TypeSafe"));
+
+    const provider = screen.getByRole("combobox", { name: /provider/i });
+    await user.clear(provider);
+    await user.type(provider, "OpenAI");
+    await user.click(await screen.findByRole("option", { name: /OpenAI/ }));
+    await user.click(await screen.findByPlaceholderText("Select models"));
+    await user.click(await screen.findByText("gpt-4o-2024-08-06"));
+    await submit();
+
+    expect(lastCreatedModel()).toStrictEqual({
+      model_name: "gpt-4o-2024-08-06",
+      litellm_params: { ...alwaysMounted, model: "gpt-4o-2024-08-06" },
       model_info: { ...baseModelInfo },
     });
   });

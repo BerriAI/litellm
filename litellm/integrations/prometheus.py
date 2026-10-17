@@ -21,11 +21,13 @@ import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import print_verbose, verbose_logger
 from litellm.constants import (
+    AUTH_OBJECTS_TARGET,
     PROMETHEUS_OVERFLOW_SERIES_LABEL_VALUE,
     PROXY_LLM_PROVIDER_FALLBACK,
     PROXY_REJECTED_BEFORE_ROUTING_KEY,
 )
 from litellm.exceptions import (
+    MalformedRequestFieldError,
     validate_rate_limit_category,
     validate_rate_limit_type,
 )
@@ -49,13 +51,9 @@ from litellm.litellm_core_utils.service_tier_utils import (
     get_service_tier_from_standard_logging_payload,
 )
 from litellm.models.end_user import LiteLLM_EndUserTable
-from litellm.proxy._types import (
-    LiteLLM_DeletedVerificationToken,
-    LiteLLM_TeamTable,
-    LiteLLM_UserTable,
-    UserAPIKeyAuth,
-)
-from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET
+from litellm.models.team import LiteLLM_TeamTable
+from litellm.models.user import LiteLLM_UserTable
+from litellm.models.verification_token import LiteLLM_DeletedVerificationToken
 from litellm.repositories.base_repository import BaseRepository
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.organization_repository import OrganizationRepository
@@ -69,6 +67,7 @@ from litellm.types.integrations.prometheus import (
     sanitize_prometheus_label_value,
     validate_prometheus_deployment_and_latency_caller_identity,
 )
+from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.types.proxy.carried_budget_state import (
     KeyBudgetSnapshot,
     OrgBudgetSnapshot,
@@ -3100,13 +3099,17 @@ class PrometheusLogger(CustomLogger):
             if exception is not None:
                 exception_status = str(getattr(exception, "status_code", None))
                 if exception_status == "None" or not exception_status:
-                    code: Final = getattr(exception, "code", None)
+                    code: Final[object] = getattr(exception, "code", None)
                     if code is not None:
                         exception_status = str(code)
 
             # On LiteLLM-side rejects (no deployment picked), route request_kwargs["model"]
             # into requested_model and leave deployment-scoped labels empty.
-            deployment_selected: Final = bool(model_id) and not _litellm_params.get(PROXY_REJECTED_BEFORE_ROUTING_KEY)
+            deployment_selected: Final = (
+                bool(model_id)
+                and not _litellm_params.get(PROXY_REJECTED_BEFORE_ROUTING_KEY)
+                and not isinstance(exception, MalformedRequestFieldError)
+            )
             if deployment_selected:
                 label_litellm_model_name = litellm_model_name
                 label_model_id = model_id
@@ -3370,7 +3373,7 @@ class PrometheusLogger(CustomLogger):
                 label_context=label_context,
             )
 
-            if remaining_requests:
+            if isinstance(remaining_requests, int):
                 """
                 "model_group",
                 "api_provider",
@@ -3384,7 +3387,7 @@ class PrometheusLogger(CustomLogger):
                 )
                 self.litellm_remaining_requests_metric.labels(**_labels).set(remaining_requests)
 
-            if remaining_tokens:
+            if isinstance(remaining_tokens, int):
                 _labels = prometheus_label_factory(
                     supported_enum_labels=self.get_labels_for_metric(metric_name="litellm_remaining_tokens_metric"),
                     enum_values=enum_values,

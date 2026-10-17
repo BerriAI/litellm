@@ -1,4 +1,4 @@
-"""Ordered rollout policy for routes and loggers.
+"""Ordered rollout policy for routes.
 
 The first matching rule wins; unmatched contexts stay on Python. Native
 admission separately decides whether the selected implementation can execute.
@@ -39,38 +39,21 @@ class RouteRule:
     providers: frozenset[str] | None = None
     models: frozenset[str] | None = None
 
-    def matches(self, context: Context) -> bool:
+    def matches(self, context: RouteContext) -> bool:
         return (
-            isinstance(context, RouteContext)
-            and context.route is self.route
+            context.route is self.route
             and (self.providers is None or context.provider in self.providers)
             and (self.models is None or context.model in self.models)
         )
 
 
-@dataclass(frozen=True, slots=True)
-class LoggerContext:
-    pass
-
-
-@dataclass(frozen=True, slots=True)
-class LoggerRule:
-    rollout: Rollout
-
-    def matches(self, context: Context) -> bool:
-        return isinstance(context, LoggerContext)
-
-
-Context: TypeAlias = RouteContext | LoggerContext
-Rule: TypeAlias = RouteRule | LoggerRule
-Rules: TypeAlias = tuple[Rule, ...]
+Rules: TypeAlias = tuple[RouteRule, ...]
 
 RULES: Final[Rules] = (
-    LoggerRule(Rollout.RUST_OPT_IN),
     RouteRule(Route.CHAT_COMPLETIONS, Rollout.PYTHON_ONLY),
     RouteRule(Route.EMBEDDINGS, Rollout.PYTHON_ONLY),
     RouteRule(Route.OCR, Rollout.RUST_REQUIRED),
-    RouteRule(Route.MESSAGES, Rollout.RUST_OPT_IN, providers=frozenset({"anthropic"})),
+    RouteRule(Route.MESSAGES, Rollout.RUST_OPT_IN, providers=frozenset({"anthropic", "deepseek", "vertex_ai"})),
     RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY),
     RouteRule(Route.RESPONSES, Rollout.PYTHON_ONLY),
     RouteRule(Route.TOKEN_COUNTER, Rollout.PYTHON_ONLY),
@@ -79,10 +62,10 @@ RULES: Final[Rules] = (
 )
 
 
-def rollout(context: Context, rules: Rules | None = None) -> Rollout:
+def rollout(context: RouteContext, rules: Rules | None = None) -> Rollout:
     selected_rules: Final = RULES if rules is None else rules
     return next((rule.rollout for rule in selected_rules if rule.matches(context)), Rollout.PYTHON_ONLY)
 
 
-def decision(context: Context, rules: Rules | None = None) -> Decision:
+def decision(context: RouteContext, rules: Rules | None = None) -> Decision:
     return _decision(rollout(context, rules))

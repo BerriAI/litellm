@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 
 from typing_extensions import ReadOnly, TypedDict
 
-from litellm.integrations.otel.model.metadata import RequestContext, RequestIdentity
+from litellm.integrations.otel.model.metadata import RequestContext, RequestIdentity, allowlisted_metadata
 from litellm.integrations.otel.model.semconv import (
     GenAIOperation,
     GenAIOutputType,
@@ -60,6 +60,8 @@ if TYPE_CHECKING:
         StandardLoggingGuardrailInformation,
         StandardLoggingPayload,
     )
+
+_EMPTY_METADATA: Final[Mapping[str, str]] = MappingProxyType({})
 
 
 # --- typed sub-structures ---------------------------------------------------- #
@@ -214,6 +216,9 @@ class LLMCost:
             margin_percent=as_float(b.get("margin_percent")),
             margin_total_amount=as_float(b.get("margin_total_amount")),
         )
+
+
+_CACHE_HIT_COST: Final = LLMCost(input=0.0, output=0.0, tool_usage=0.0)
 
 
 @dataclass(frozen=True)
@@ -437,6 +442,7 @@ class LLMCallSpanData:
     trace: TraceControls = field(default_factory=TraceControls)
     session_id: str | None = None
     embedding_output: EmbeddingOutput | None = None
+    promoted_metadata: Mapping[str, str] = field(default_factory=lambda: _EMPTY_METADATA)
     routing_attributes: Mapping[str, RoutingAttributeValue] = field(default_factory=lambda: MappingProxyType({}))
     cache_hit: bool | None = None
     saved_cache_cost: float | None = None
@@ -451,8 +457,12 @@ class LLMCallSpanData:
         request_purpose: str | None = None,
         trace: TraceControls | None = None,
         session_id: str | None = None,
+        *,
+        metadata_keys: tuple[str, ...] = (),
     ) -> LLMCallSpanData:
         params: Final = cast(Mapping[str, object], payload.get("model_parameters") or {})
+        cache_hit: Final = as_bool(payload.get("cache_hit")) is True  # pyright: ignore[reportUnknownMemberType]  # TypedDict .get on a str key is partially unknown
+        cost_breakdown: Final = cast("Mapping[str, object] | None", payload.get("cost_breakdown"))
         # The single parse of the request's metadata — the request-vs-provider
         # model split, the response model, api base, and identity all come from
         # here rather than being re-derived from the raw payload dicts.
@@ -486,9 +496,10 @@ class LLMCallSpanData:
             finish_reasons=finish_reasons,
             error=_parse_error(payload),
             response_cost=as_float(payload.get("response_cost")),
-            cost=LLMCost.from_breakdown(cast("Mapping[str, object] | None", payload.get("cost_breakdown"))),
+            cost=LLMCost.from_breakdown(cost_breakdown) if cost_breakdown or not cache_hit else _CACHE_HIT_COST,
             server=ServerInfo.from_api_base(context.api_base),
             identity=context.identity,
+            promoted_metadata=allowlisted_metadata(context.identity.metadata, metadata_keys),
             is_streaming=as_bool(payload.get("stream")),
             tools=_extract_tools(params),
             messages_in=_dicts(payload.get("messages")) if capture_content else (),
@@ -503,8 +514,8 @@ class LLMCallSpanData:
             session_id=session_id or None,
             embedding_output=embedding_output if capture_content else None,
             routing_attributes=routing_decision_attributes(decision),
-            cache_hit=as_bool(payload.get("cache_hit")),  # pyright: ignore[reportUnknownMemberType]  # TypedDict .get on a str key is partially unknown
-            saved_cache_cost=as_float(payload.get("saved_cache_cost")),  # pyright: ignore[reportUnknownMemberType]  # TypedDict .get on a str key is partially unknown
+            cache_hit=True if cache_hit else None,
+            saved_cache_cost=as_float(payload.get("saved_cache_cost")) if cache_hit else None,  # pyright: ignore[reportUnknownMemberType]  # TypedDict .get on a str key is partially unknown
         )
 
 

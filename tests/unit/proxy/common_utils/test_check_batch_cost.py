@@ -8,7 +8,9 @@ ARN unified_object_id) batches with no managed unified id.
 
 import asyncio
 import json
+import logging
 from contextlib import contextmanager
+from hashlib import sha256
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -21,6 +23,32 @@ if TYPE_CHECKING:
 _IS_B64 = "litellm.proxy.openai_files_endpoints.common_utils._is_base64_encoded_unified_file_id"
 _CLAIM_UNIFIED_BATCH_ID = "dW5pZmllZF9iYXRjaF9pZA=="
 _CLAIM_OUTPUT_FILE_ID = "file-output-123"
+
+
+def test_batch_output_file_object_derives_metadata():
+    from litellm_enterprise.proxy.hooks.managed_files import _batch_output_file_object
+
+    output_file = _batch_output_file_object(
+        unified_file_id="unified-output",
+        raw_file_id="s3://bucket/path/to/output.jsonl.out",
+        size_bytes=4321,
+        fallback=False,
+    )
+    provider_file = _batch_output_file_object(
+        unified_file_id="unified-provider",
+        raw_file_id="file-abc",
+        size_bytes=0,
+        fallback=False,
+    )
+
+    assert output_file.id == "unified-output"
+    assert output_file.object == "file"
+    assert output_file.purpose == "batch_output"
+    assert output_file.filename == "output.jsonl.out"
+    assert output_file.bytes == 4321
+    assert output_file.status == "processed"
+    assert provider_file.filename == "file-abc"
+    assert provider_file.bytes == 0
 
 
 def _batch_cost_result(
@@ -1015,9 +1043,11 @@ class TestCheckBatchCost:
         )
         mock_llm_router.aretrieve_batch = AsyncMock(return_value=response)
 
-        mock_hook = MagicMock()
+        from litellm.proxy.openai_files_endpoints.common_utils import ManagedBatchOutputFileWriter
+
+        mock_hook = MagicMock(spec=ManagedBatchOutputFileWriter)
         mock_hook.get_unified_output_file_id.side_effect = [unified_error_file_id]
-        mock_hook.store_unified_file_id = AsyncMock()
+        mock_hook.store_batch_output_file = AsyncMock()
         check_batch_cost_instance.proxy_logging_obj.get_proxy_hook.return_value = mock_hook
 
         await check_batch_cost_instance.check_batch_cost()
@@ -1027,14 +1057,19 @@ class TestCheckBatchCost:
             model_id="model-123",
             model_name="gpt-5-batch",
         )
-        stored = {
-            next(iter(c.kwargs["model_mappings"].values())): c.kwargs["file_id"]
-            for c in mock_hook.store_unified_file_id.call_args_list
-        }
-        assert stored == {raw_error_file_id: unified_error_file_id}
-        for store_call in mock_hook.store_unified_file_id.call_args_list:
-            assert store_call.kwargs["user_api_key_dict"].user_id == "user-1"
-            assert store_call.kwargs["user_api_key_dict"].team_id == "team-1"
+        mock_hook.store_batch_output_file.assert_awaited_once_with(
+            unified_file_id=unified_error_file_id,
+            provider_file_id=raw_error_file_id,
+            model_id="model-123",
+            model_name="gpt-5-batch",
+            owner=mock_hook.store_batch_output_file.await_args.kwargs["owner"],
+            litellm_parent_otel_span=None,
+            size_bytes=None,
+            fetch_provider_details=True,
+        )
+        owner = mock_hook.store_batch_output_file.await_args.kwargs["owner"]
+        assert owner.user_id == "user-1"
+        assert owner.team_id == "team-1"
 
         assert mock_prisma_client.db.litellm_managedobjecttable.update.call_count == 1
         update_call = mock_prisma_client.db.litellm_managedobjecttable.update.call_args
@@ -1506,6 +1541,8 @@ class TestCheckBatchCost:
         Without this, GET /batches/{id} returns a raw file ID that cannot be routed
         through the proxy, causing API_KEY errors when clients call GET /files/{id}/content.
         """
+        from litellm.proxy.openai_files_endpoints.common_utils import ManagedBatchOutputFileWriter
+
         mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(return_value=1)
         mock_prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
         mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
@@ -1540,12 +1577,12 @@ class TestCheckBatchCost:
         mock_deployment.model_info.model_dump.return_value = {}
         mock_llm_router.get_deployment = MagicMock(return_value=mock_deployment)
 
-        mock_hook = MagicMock()
+        mock_hook = MagicMock(spec=ManagedBatchOutputFileWriter)
         mock_hook.get_unified_output_file_id.side_effect = [
             fake_managed_output_id,
             fake_managed_error_id,
         ]
-        mock_hook.store_unified_file_id = AsyncMock()
+        mock_hook.store_batch_output_file = AsyncMock()
         check_batch_cost_instance.proxy_logging_obj.get_proxy_hook.return_value = mock_hook
 
         mock_file_content = MagicMock()
@@ -1608,16 +1645,25 @@ class TestCheckBatchCost:
             model_id="model-123",
             model_name="gpt-5-batch",
         )
-        assert mock_hook.store_unified_file_id.await_count == 2
-        # {raw_file_id: managed_file_id} for each store call
+        assert mock_hook.store_batch_output_file.await_count == 2
+        assert {
+            call.kwargs["model_name"]
+            for call in mock_hook.store_batch_output_file.await_args_list
+        } == {"gpt-5-batch"}
         stored = {
-            next(iter(c[1]["model_mappings"].values())): c[1]["file_id"]
-            for c in mock_hook.store_unified_file_id.call_args_list
+            c.kwargs["provider_file_id"]: c.kwargs["unified_file_id"]
+            for c in mock_hook.store_batch_output_file.call_args_list
         }
         assert stored == {
             raw_output_file_id: fake_managed_output_id,
             raw_error_file_id: fake_managed_error_id,
         }
+        stored_sizes = {
+            c.kwargs["provider_file_id"]: c.kwargs["size_bytes"]
+            for c in mock_hook.store_batch_output_file.call_args_list
+        }
+        assert stored_sizes[raw_output_file_id] == len(mock_file_content.content)
+        assert stored_sizes[raw_error_file_id] is None
         assert mock_response.output_file_id == fake_managed_output_id
         assert mock_response.error_file_id == fake_managed_error_id
 
@@ -2192,10 +2238,10 @@ class TestManagedOutputFileIdEncodesPublicModelGroup:
         from litellm_enterprise.proxy.common_utils.check_batch_cost import (
             CheckBatchCost,
         )
+
+        from enterprise.litellm_enterprise.proxy.hooks.managed_files import PROXY_LiteLLMManagedFiles
+        from litellm.proxy.openai_files_endpoints.common_utils import ManagedBatchOutputFileWriter
         from litellm.types.utils import LiteLLMBatch
-        from enterprise.litellm_enterprise.proxy.hooks.managed_files import (
-            PROXY_LiteLLMManagedFiles,
-        )
 
         router = MagicMock()
         router.get_deployment_credentials_with_provider = MagicMock(return_value={"api_key": "sk-test"})
@@ -2206,13 +2252,13 @@ class TestManagedOutputFileIdEncodesPublicModelGroup:
         deployment.model_info.model_dump.return_value = {}
         router.get_deployment = MagicMock(return_value=deployment)
 
-        hook = MagicMock()
+        hook = MagicMock(spec=ManagedBatchOutputFileWriter)
         hook.get_unified_output_file_id = lambda output_file_id, model_id, model_name: (
             PROXY_LiteLLMManagedFiles.get_unified_output_file_id(
                 None, output_file_id=output_file_id, model_id=model_id, model_name=model_name
             )
         )
-        hook.store_unified_file_id = AsyncMock()
+        hook.store_batch_output_file = AsyncMock()
         proxy_logging_obj = MagicMock()
         proxy_logging_obj.get_proxy_hook.return_value = hook
 
@@ -2322,17 +2368,21 @@ class TestBatchCostAttribution:
     """CheckBatchCost rebuilds the creator's spend metadata from the managed-object row so
     the batch-cost log is attributed like a non-batch request."""
 
-    def _instance(self, key_row=None, team_row=None, user_row=None):
-        from litellm_enterprise.proxy.common_utils.check_batch_cost import CheckBatchCost
-
+    def _prisma(self, key_row=None, team_row=None, user_row=None):
         prisma = MagicMock()
         prisma.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=key_row)
         prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
         prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=user_row)
-        return CheckBatchCost(
-            proxy_logging_obj=MagicMock(),
-            prisma_client=prisma,
-            llm_router=MagicMock(),
+        return prisma
+
+    def _instance(self, key_row=None, team_row=None, user_row=None, prisma=None):
+        from litellm_enterprise.proxy.common_utils.managed_object_attribution import (
+            ManagedObjectCreatorAttribution,
+        )
+
+        return ManagedObjectCreatorAttribution(
+            prisma_client=prisma if prisma is not None else self._prisma(key_row, team_row, user_row),
+            poller_name="CheckBatchCost",
         )
 
     def _job(self, **overrides):
@@ -2358,7 +2408,7 @@ class TestBatchCostAttribution:
             user_row=SimpleNamespace(user_email="alice@example.com", user_alias=None),
         )
 
-        metadata = await instance._build_creator_attribution_metadata(self._job(), "batch-1")
+        metadata = await instance.batch_metadata(self._job(), "batch-1")
 
         assert metadata["user_api_key"] == "hash-alice"
         assert metadata["user_api_key_hash"] == "hash-alice"
@@ -2375,7 +2425,7 @@ class TestBatchCostAttribution:
         instance = self._instance()
         job = self._job(api_key=None, request_tags=None)
 
-        metadata = await instance._build_creator_attribution_metadata(job, "batch-1")
+        metadata = await instance.batch_metadata(job, "batch-1")
 
         assert metadata["user_api_key"] is None
         assert metadata["user_api_key_user_id"] == "alice"
@@ -2388,15 +2438,32 @@ class TestBatchCostAttribution:
         a None user_id) and the key hash still drives key-level attribution."""
         from types import SimpleNamespace
 
-        instance = self._instance(key_row=SimpleNamespace(key_alias="svc-key"))
+        prisma = self._prisma(key_row=SimpleNamespace(key_alias="svc-key"))
+        instance = self._instance(prisma=prisma)
         job = self._job(created_by=None)
 
-        metadata = await instance._build_creator_attribution_metadata(job, "batch-1")
+        metadata = await instance.batch_metadata(job, "batch-1")
 
         assert metadata["user_api_key"] == "hash-alice"
         assert metadata["user_api_key_user_id"] is None
         assert metadata["user_api_key_alias"] == "svc-key"
-        instance.prisma_client.db.litellm_usertable.find_unique.assert_not_called()
+        prisma.db.litellm_usertable.find_unique.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_batch_metadata_keeps_the_creator_column_and_adds_no_budgets(self):
+        """The batch cost event keeps the user id and fields the batch poll has always written,
+        even though background responses read budgets and drop key-scoped creators off the same rows."""
+        from types import SimpleNamespace
+
+        instance = self._instance(
+            key_row=SimpleNamespace(key_alias="svc-key", spend=4.0, max_budget=5.0),
+            team_row=SimpleNamespace(team_alias="Team Alpha", organization_id=None, spend=40.0, max_budget=50.0),
+        )
+
+        metadata = await instance.batch_metadata(self._job(created_by="key:hash-alice"), "batch-1")
+
+        assert metadata["user_api_key_user_id"] == "key:hash-alice"
+        assert [field for field in metadata if field.endswith(("_spend", "_max_budget"))] == []
 
     @pytest.mark.asyncio
     async def test_metadata_drops_non_string_tags(self):
@@ -2405,7 +2472,7 @@ class TestBatchCostAttribution:
         instance = self._instance()
         job = self._job(request_tags=["env:prod", 7, None, "team:ml"])
 
-        metadata = await instance._build_creator_attribution_metadata(job, "batch-1")
+        metadata = await instance.batch_metadata(job, "batch-1")
 
         assert metadata["tags"] == ["env:prod", "team:ml"]
 
@@ -2413,10 +2480,11 @@ class TestBatchCostAttribution:
     async def test_key_alias_lookup_failure_does_not_break_attribution(self):
         """An alias lookup failure must not lose the spend row; the key hash and team still
         attribute it."""
-        instance = self._instance()
-        instance.prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(side_effect=Exception("db down"))
+        prisma = self._prisma()
+        prisma.db.litellm_verificationtoken.find_unique = AsyncMock(side_effect=Exception("db down"))
+        instance = self._instance(prisma=prisma)
 
-        metadata = await instance._build_creator_attribution_metadata(self._job(), "batch-1")
+        metadata = await instance.batch_metadata(self._job(), "batch-1")
 
         assert metadata["user_api_key"] == "hash-alice"
         assert metadata.get("user_api_key_alias") is None
@@ -2425,7 +2493,7 @@ class TestBatchCostAttribution:
     async def test_cli_session_batch_keeps_its_alias_without_a_key_row(self):
         instance = self._instance(key_row=None)
 
-        metadata = await instance._build_creator_attribution_metadata(self._job(api_key="cli-session-alice"), "batch-1")
+        metadata = await instance.batch_metadata(self._job(api_key="cli-session-alice"), "batch-1")
 
         assert metadata["user_api_key"] == "cli-session-alice"
         assert metadata["user_api_key_alias"] == "cli-session-alice"
@@ -2434,7 +2502,7 @@ class TestBatchCostAttribution:
     async def test_raw_cli_session_token_on_a_legacy_batch_row_is_not_treated_as_the_alias(self):
         instance = self._instance(key_row=None)
 
-        metadata = await instance._build_creator_attribution_metadata(
+        metadata = await instance.batch_metadata(
             self._job(api_key="cli-session-Qm7xJ2kP9sLw4vT1nR8yAa"), "batch-1"
         )
 
@@ -2452,7 +2520,7 @@ class TestBatchCostAttribution:
             user_row=SimpleNamespace(user_email="alice@example.com", user_alias="Alice Chen"),
         )
 
-        metadata = await instance._build_creator_attribution_metadata(self._job(), "batch-1")
+        metadata = await instance.batch_metadata(self._job(), "batch-1")
 
         assert metadata["user_api_key_alias"] == "Alice Chen"
         assert metadata["user_api_key"] == "hash-alice"
@@ -2468,7 +2536,7 @@ class TestBatchCostAttribution:
             user_row=SimpleNamespace(user_email="alice@example.com", user_alias="Alice Chen"),
         )
 
-        metadata = await instance._build_creator_attribution_metadata(self._job(), "batch-1")
+        metadata = await instance.batch_metadata(self._job(), "batch-1")
 
         assert metadata["user_api_key_alias"] == "Alice Chen"
 
@@ -2483,7 +2551,7 @@ class TestBatchCostAttribution:
             user_row=SimpleNamespace(user_email="alice@example.com", user_alias="Alice Chen"),
         )
 
-        metadata = await instance._build_creator_attribution_metadata(self._job(), "batch-1")
+        metadata = await instance.batch_metadata(self._job(), "batch-1")
 
         assert metadata["user_api_key_alias"] == "prod-key"
 
@@ -2498,7 +2566,7 @@ class TestBatchCostAttribution:
             team_row=SimpleNamespace(team_alias="Team Alpha", organization_id="org-team"),
         )
 
-        metadata = await instance._build_creator_attribution_metadata(self._job(org_id="org-at-creation"), "batch-1")
+        metadata = await instance.batch_metadata(self._job(org_id="org-at-creation"), "batch-1")
 
         assert metadata["user_api_key_org_id"] == "org-at-creation"
 
@@ -2513,7 +2581,7 @@ class TestBatchCostAttribution:
             team_row=SimpleNamespace(team_alias="Team Alpha", organization_id="org-team"),
         )
 
-        metadata = await instance._build_creator_attribution_metadata(self._job(), "batch-1")
+        metadata = await instance.batch_metadata(self._job(), "batch-1")
 
         assert metadata["user_api_key_org_id"] == "org-42"
 
@@ -2528,7 +2596,7 @@ class TestBatchCostAttribution:
             team_row=SimpleNamespace(team_alias="Team Alpha", organization_id="org-team"),
         )
 
-        metadata = await instance._build_creator_attribution_metadata(self._job(), "batch-1")
+        metadata = await instance.batch_metadata(self._job(), "batch-1")
 
         assert metadata["user_api_key_org_id"] == "org-team"
 
@@ -2538,12 +2606,11 @@ class TestBatchCostAttribution:
         organization: the two lookups fail independently, so org spend still lands."""
         from types import SimpleNamespace
 
-        instance = self._instance(
-            team_row=SimpleNamespace(team_alias="Team Alpha", organization_id="org-team"),
-        )
-        instance.prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(side_effect=Exception("db down"))
+        prisma = self._prisma(team_row=SimpleNamespace(team_alias="Team Alpha", organization_id="org-team"))
+        prisma.db.litellm_verificationtoken.find_unique = AsyncMock(side_effect=Exception("db down"))
+        instance = self._instance(prisma=prisma)
 
-        metadata = await instance._build_creator_attribution_metadata(self._job(), "batch-1")
+        metadata = await instance.batch_metadata(self._job(), "batch-1")
 
         assert metadata["user_api_key_org_id"] == "org-team"
 
@@ -2558,7 +2625,7 @@ class TestBatchCostAttribution:
             team_row=SimpleNamespace(team_alias="Team Alpha", organization_id=None),
         )
 
-        metadata = await instance._build_creator_attribution_metadata(self._job(), "batch-1")
+        metadata = await instance.batch_metadata(self._job(), "batch-1")
 
         assert "user_api_key_org_id" not in metadata
 
@@ -2581,7 +2648,7 @@ class TestBatchCostAttribution:
             key_row=SimpleNamespace(key_alias="prod-key"),
             user_row=SimpleNamespace(user_email="alice@example.com", user_alias=None),
         )
-        metadata = await instance._build_creator_attribution_metadata(self._job(api_key=token_hash), "batch-1")
+        metadata = await instance.batch_metadata(self._job(api_key=token_hash), "batch-1")
 
         assert metadata["user_api_key"] == token_hash
         assert metadata["user_api_key_hash"] == token_hash
@@ -3177,3 +3244,703 @@ class TestMultiPodBatchCostClaim:
         assert self._claim_calls(prisma) == []
         assert journal == ["fetch", "bill", "finalize"]
         logging_obj.async_success_handler.assert_awaited_once()
+
+
+class TestBatchLineItemsFromThePoller:
+    """When batch_line_item_callbacks is set, the poller hands every line of a finished batch to those loggers
+    once the batch is billed and retired, in the background, so a slow, hung or failing sink never unbills, re-polls
+    or holds up a batch."""
+
+    _INPUT = b'{"custom_id":"ok-1","body":{"messages":[{"role":"user","content":"hi"}]}}\n'
+    _OUTPUT = (
+        b'{"custom_id":"ok-1","response":{"status_code":200,"body":{"model":"gpt-4",'
+        b'"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}}}\n'
+    )
+    _ERROR = b'{"custom_id":"ok-1","response":{"status_code":400,"body":{"error":{"message":"expired"}}}}\n'
+
+    @staticmethod
+    def _recording_logger(journal: list, error: Exception | None = None):
+        from litellm.integrations.custom_logger import CustomLogger
+
+        class _Recorder(CustomLogger):
+            def __init__(self):
+                super().__init__()
+                self.payloads = []
+
+            async def async_log_batch_line_items(self, payload):
+                journal.append("lines")
+                self.payloads.append(payload)
+                if error is not None:
+                    raise error
+
+        return _Recorder()
+
+    @staticmethod
+    def _setup(journal: list, *, status="completed", output_file_id=_CLAIM_OUTPUT_FILE_ID, error_file_id=None):
+        row = _FakeManagedObjectRow()
+        prisma = TestMultiPodBatchCostClaim._prisma(row, journal)
+        router = TestMultiPodBatchCostClaim._router()
+        response = router.aretrieve_batch.return_value
+        response.status = status
+        response.output_file_id = output_file_id
+        response.error_file_id = error_file_id
+        response.input_file_id = "file-input-1"
+        return row, TestMultiPodBatchCostClaim._instance(prisma, router)
+
+    @staticmethod
+    async def _stored(instance) -> None:
+        """Wait for the line items the poll handed to the background."""
+        await asyncio.gather(*instance._line_item_stores)
+
+    @classmethod
+    @contextmanager
+    def _provider(cls, journal: list):
+        """The provider's batch files by id, and a spend-log writer that journals each write."""
+        files = {"file-input-1": cls._INPUT, _CLAIM_OUTPUT_FILE_ID: cls._OUTPUT, "file-err-1": cls._ERROR}
+
+        async def _afile_content(**kwargs):
+            journal.append(f"read {kwargs['file_id']}")
+            if kwargs["file_id"] not in files:
+                from litellm.exceptions import NotFoundError
+
+                raise NotFoundError(
+                    message=f"No file found with id '{kwargs['file_id']}'.", model="gpt-4", llm_provider="openai"
+                )
+            content = MagicMock()
+            content.content = files[kwargs["file_id"]]
+            return content
+
+        def _is_b64(file_id):
+            if file_id == _CLAIM_UNIFIED_BATCH_ID:
+                return "llm_model_id,model-123;llm_batch_id,batch-456;"
+            return False
+
+        logging_obj = MagicMock()
+        logging_obj.async_success_handler = AsyncMock(side_effect=lambda **kwargs: journal.append("bill"))
+        with (
+            patch(_IS_B64, side_effect=_is_b64),
+            patch(
+                "litellm.proxy.openai_files_endpoints.common_utils.get_model_id_from_unified_batch_id",
+                return_value="model-123",
+            ),
+            patch(
+                "litellm.proxy.openai_files_endpoints.common_utils.get_batch_id_from_unified_batch_id",
+                return_value="batch-456",
+            ),
+            patch("litellm.files.main.afile_content", new=AsyncMock(side_effect=_afile_content)),
+            patch("litellm.litellm_core_utils.litellm_logging.Logging", return_value=logging_obj),
+        ):
+            yield
+
+    @pytest.mark.asyncio
+    async def test_lines_reach_the_callbacks_after_the_claimed_batch_is_billed_and_retired(self, monkeypatch):
+        import litellm
+
+        journal: list = []
+        row, instance = self._setup(journal)
+        logger = self._recording_logger(journal)
+        monkeypatch.setattr(litellm, "batch_line_item_callbacks", (logger,))
+
+        with self._provider(journal):
+            await instance.check_batch_cost()
+            await self._stored(instance)
+
+        assert journal == [
+            f"read {_CLAIM_OUTPUT_FILE_ID}",
+            "claim",
+            "bill",
+            "finalize",
+            f"read {_CLAIM_OUTPUT_FILE_ID}",
+            "read file-input-1",
+            "lines",
+        ]
+        (payload,) = logger.payloads
+        assert payload["batch_id"] == _CLAIM_UNIFIED_BATCH_ID
+        assert payload["finished_at"] == 2
+        assert payload["part"] == 0
+        (line,) = payload["lines"]
+        assert (line["custom_id"], line["status"]) == ("ok-1", "success")
+        assert line["usage"] == {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+        assert line["metadata"]["user_api_key_user_id"] == "user-1"
+        assert row.batch_processed is True
+
+    @pytest.mark.asyncio
+    async def test_the_lines_are_priced_off_the_event_loop(self, monkeypatch):
+        import threading
+
+        import litellm
+        from litellm.batches import batch_line_items
+
+        journal: list = []
+        row, instance = self._setup(journal)
+        monkeypatch.setattr(litellm, "batch_line_item_callbacks", (self._recording_logger(journal),))
+        price = batch_line_items._line_item
+        threads = []
+
+        def _price(*args):
+            threads.append(threading.current_thread())
+            return price(*args)
+
+        monkeypatch.setattr(batch_line_items, "_line_item", _price)
+        with self._provider(journal):
+            await instance.check_batch_cost()
+            await self._stored(instance)
+
+        assert journal[-1] == "lines"
+        (thread,) = threads
+        assert thread is not threading.main_thread()
+
+    @pytest.mark.asyncio
+    async def test_a_creator_that_cannot_be_looked_up_gets_lines_without_bodies(self, monkeypatch):
+        import litellm
+
+        journal: list = []
+        row, instance = self._setup(journal)
+        row.api_key = sha256(b"sk-deleted-key").hexdigest()
+        logger = self._recording_logger(journal)
+        monkeypatch.setattr(litellm, "batch_line_item_callbacks", (logger,))
+
+        with self._provider(journal):
+            await instance.check_batch_cost()
+            await self._stored(instance)
+
+        (payload,) = logger.payloads
+        assert [(line["request"], line["response"]) for line in payload["lines"]] == [(None, None)]
+        assert "read file-input-1" not in journal
+
+    @pytest.mark.asyncio
+    async def test_a_creator_with_logging_on_gets_the_request_and_response(self, monkeypatch):
+        import litellm
+
+        journal: list = []
+        row, instance = self._setup(journal)
+        row.api_key = "cli-session-user-1"
+        logger = self._recording_logger(journal)
+        monkeypatch.setattr(litellm, "batch_line_item_callbacks", (logger,))
+        monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+
+        with self._provider(journal):
+            await instance.check_batch_cost()
+            await self._stored(instance)
+
+        assert journal[-4:] == ["finalize", f"read {_CLAIM_OUTPUT_FILE_ID}", "read file-input-1", "lines"]
+        ((line,),) = [payload["lines"] for payload in logger.payloads]
+        assert line["request"] == json.loads(self._INPUT)
+        assert line["response"] == json.loads(self._OUTPUT)
+
+    @pytest.mark.asyncio
+    async def test_a_failing_sink_leaves_the_batch_billed_and_retired(self, monkeypatch):
+        import litellm
+
+        journal: list = []
+        row, instance = self._setup(journal)
+        monkeypatch.setattr(
+            litellm, "batch_line_item_callbacks", (self._recording_logger(journal, RuntimeError("bucket gone")),)
+        )
+
+        with self._provider(journal):
+            await instance.check_batch_cost()
+            await self._stored(instance)
+
+        assert [step for step in journal if not step.startswith("read")] == ["claim", "bill", "finalize", "lines"]
+        assert row.batch_processed is True
+        assert row.status == "complete"
+
+    @pytest.mark.asyncio
+    async def test_without_callbacks_only_the_output_file_is_read(self, monkeypatch):
+        import litellm
+
+        journal: list = []
+        _, instance = self._setup(journal)
+        monkeypatch.setattr(litellm, "batch_line_item_callbacks", ())
+
+        with self._provider(journal):
+            await instance.check_batch_cost()
+            await self._stored(instance)
+
+        assert journal == [f"read {_CLAIM_OUTPUT_FILE_ID}", "claim", "bill", "finalize"]
+
+    @pytest.mark.asyncio
+    async def test_a_batch_where_every_line_failed_sends_its_error_lines_after_it_is_retired(self, monkeypatch):
+        import litellm
+
+        journal: list = []
+        row, instance = self._setup(journal, status="expired", output_file_id=None, error_file_id="file-err-1")
+        logger = self._recording_logger(journal)
+        monkeypatch.setattr(litellm, "batch_line_item_callbacks", (logger,))
+
+        with self._provider(journal):
+            await instance.check_batch_cost()
+            await self._stored(instance)
+
+        assert journal == ["finalize", "read file-err-1", "read file-input-1", "lines"]
+        (payload,) = logger.payloads
+        assert [(line["custom_id"], line["status"], line["response_cost"]) for line in payload["lines"]] == [
+            ("ok-1", "failure", 0.0)
+        ]
+        assert row.batch_processed is True
+
+    @pytest.mark.asyncio
+    async def test_a_batch_retired_with_nothing_billable_reads_its_input_file_by_the_id_the_provider_reported(
+        self, monkeypatch
+    ):
+        import litellm
+
+        journal: list = []
+        _, instance = self._setup(journal, status="expired", output_file_id=None, error_file_id="file-err-1")
+        logger = self._recording_logger(journal)
+        monkeypatch.setattr(litellm, "batch_line_item_callbacks", (logger,))
+
+        async def _persist_managed_ids(*, response, **_):
+            response.input_file_id = "managed-id-of-the-copy-on-another-deployment"
+
+        with (
+            self._provider(journal),
+            patch(
+                "litellm.proxy.openai_files_endpoints.common_utils.ensure_batch_response_managed_file_ids",
+                new=AsyncMock(side_effect=_persist_managed_ids),
+            ),
+        ):
+            await instance.check_batch_cost()
+            await self._stored(instance)
+
+        assert journal == ["finalize", "read file-err-1", "read file-input-1", "lines"]
+        ((line,),) = [payload["lines"] for payload in logger.payloads]
+        assert line["request"] == json.loads(self._INPUT)
+
+    @pytest.mark.asyncio
+    async def test_a_batch_whose_files_hold_no_readable_line_sends_no_lines(self, monkeypatch):
+        import litellm
+
+        journal: list = []
+        _, instance = self._setup(journal, status="expired", output_file_id=None, error_file_id="file-err-1")
+        logger = self._recording_logger(journal)
+        monkeypatch.setattr(litellm, "batch_line_item_callbacks", (logger,))
+        monkeypatch.setattr(type(self), "_ERROR", b"not json\n")
+
+        with self._provider(journal):
+            await instance.check_batch_cost()
+            await self._stored(instance)
+
+        assert journal == ["finalize", "read file-err-1", "read file-input-1"]
+        assert logger.payloads == []
+
+    @pytest.mark.asyncio
+    async def test_a_batch_that_could_not_be_retired_sends_no_lines_until_it_is(self, monkeypatch):
+        import litellm
+
+        journal: list = []
+        row, instance = self._setup(journal, status="expired", output_file_id=None, error_file_id="file-err-1")
+        instance.prisma_client.db.litellm_managedobjecttable.update = AsyncMock(side_effect=RuntimeError("db down"))
+        logger = self._recording_logger(journal)
+        monkeypatch.setattr(litellm, "batch_line_item_callbacks", (logger,))
+
+        with self._provider(journal):
+            await instance.check_batch_cost()
+            await self._stored(instance)
+
+        assert journal == []
+        assert logger.payloads == []
+        assert row.batch_processed is False
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("has_batch_processed_column, stored", [(True, 1), (False, 0)])
+    async def test_a_billed_batch_that_could_not_be_marked_complete_sends_lines_only_if_its_claim_retired_it(
+        self, monkeypatch, has_batch_processed_column, stored
+    ):
+        import litellm
+
+        journal: list = []
+        row, instance = self._setup(journal)
+        instance._has_batch_processed_column = has_batch_processed_column
+        instance.prisma_client.db.litellm_managedobjecttable.update = AsyncMock(side_effect=RuntimeError("db down"))
+        logger = self._recording_logger(journal)
+        monkeypatch.setattr(litellm, "batch_line_item_callbacks", (logger,))
+
+        with self._provider(journal):
+            await instance.check_batch_cost()
+            await self._stored(instance)
+
+        assert journal.count("bill") == 1
+        assert len(logger.payloads) == stored
+
+    @pytest.mark.asyncio
+    async def test_a_batch_whose_output_file_is_gone_still_sends_its_error_lines_after_it_is_retired(
+        self, monkeypatch
+    ):
+        import litellm
+
+        journal: list = []
+        row, instance = self._setup(journal, output_file_id="file-out-deleted", error_file_id="file-err-1")
+        logger = self._recording_logger(journal)
+        monkeypatch.setattr(litellm, "batch_line_item_callbacks", (logger,))
+
+        with self._provider(journal):
+            await instance.check_batch_cost()
+            await self._stored(instance)
+
+        assert journal == ["read file-out-deleted", "finalize", "read file-err-1", "read file-input-1", "lines"]
+        (payload,) = logger.payloads
+        assert [(line["custom_id"], line["status"]) for line in payload["lines"]] == [("ok-1", "failure")]
+        assert row.batch_processed is True
+
+    @pytest.mark.asyncio
+    async def test_a_terminal_batch_with_no_lines_sends_nothing(self, monkeypatch):
+        import litellm
+
+        journal: list = []
+        _, instance = self._setup(journal, status="failed", output_file_id=None, error_file_id=None)
+        logger = self._recording_logger(journal)
+        monkeypatch.setattr(litellm, "batch_line_item_callbacks", (logger,))
+
+        with self._provider(journal):
+            await instance.check_batch_cost()
+            await self._stored(instance)
+
+        assert journal == ["finalize"]
+        assert logger.payloads == []
+
+    @pytest.mark.asyncio
+    async def test_a_hung_sink_never_holds_up_billing_and_retiring_the_batch(self, monkeypatch):
+        import litellm
+        from litellm.integrations.custom_logger import CustomLogger
+
+        journal: list = []
+        row, instance = self._setup(journal)
+        released = asyncio.Event()
+
+        class _HungSink(CustomLogger):
+            async def async_log_batch_line_items(self, payload):
+                journal.append("lines started")
+                await released.wait()
+                journal.append("lines")
+
+        monkeypatch.setattr(litellm, "batch_line_item_callbacks", (_HungSink(),))
+
+        async def _sink_started():
+            while "lines started" not in journal:
+                await asyncio.sleep(0)
+
+        with self._provider(journal):
+            await asyncio.wait_for(instance.check_batch_cost(), timeout=5)
+            await asyncio.wait_for(_sink_started(), timeout=5)
+            billed_while_hung = (row.batch_processed, row.status, list(journal))
+            released.set()
+            await self._stored(instance)
+
+        assert billed_while_hung == (
+            True,
+            "complete",
+            [
+                f"read {_CLAIM_OUTPUT_FILE_ID}",
+                "claim",
+                "bill",
+                "finalize",
+                f"read {_CLAIM_OUTPUT_FILE_ID}",
+                "read file-input-1",
+                "lines started",
+            ],
+        )
+        assert journal[-1] == "lines"
+
+    @pytest.mark.asyncio
+    async def test_lines_are_dropped_with_an_error_while_a_poll_cycle_of_batches_is_still_waiting(
+        self, monkeypatch, caplog
+    ):
+        import litellm
+        from litellm.constants import MAX_OBJECTS_PER_POLL_CYCLE
+
+        journal: list = []
+        row, instance = self._setup(journal)
+        logger = self._recording_logger(journal)
+        monkeypatch.setattr(litellm, "batch_line_item_callbacks", (logger,))
+        waiting = [asyncio.create_task(asyncio.sleep(3600)) for _ in range(MAX_OBJECTS_PER_POLL_CYCLE)]
+        instance._line_item_stores.update(waiting)
+
+        try:
+            with self._provider(journal), caplog.at_level(logging.ERROR):
+                await instance.check_batch_cost()
+        finally:
+            for task in waiting:
+                task.cancel()
+
+        assert logger.payloads == []
+        assert row.batch_processed is True
+        assert f"so the line items of batch batch-456 (job {row.id}) were not stored" in caplog.text
+
+
+    @pytest.mark.asyncio
+    async def test_batches_store_their_lines_one_at_a_time_in_the_order_they_were_retired(self, monkeypatch):
+        import litellm
+
+        journal: list = []
+        _, instance = self._setup(journal)
+        monkeypatch.setattr(litellm, "batch_line_item_callbacks", (self._recording_logger(journal),))
+        running: list = []
+
+        async def _store(job, response, model_id, batch_id, *, billed):
+            running.append(batch_id)
+            journal.append(f"start {batch_id} with {len(running)} running")
+            await asyncio.sleep(0.01)
+            running.remove(batch_id)
+
+        monkeypatch.setattr(instance, "_store_batch_line_items", _store)
+        for batch_id in ("batch-a", "batch-b", "batch-c"):
+            instance._store_batch_line_items_in_background(MagicMock(), MagicMock(), "model-123", batch_id, billed=True)
+        await self._stored(instance)
+
+        assert journal == [f"start batch-{name} with 1 running" for name in "abc"]
+
+    @pytest.mark.asyncio
+    async def test_lines_are_stored_only_once_the_poll_has_billed_and_retired_every_batch_it_found(self, monkeypatch):
+        import litellm
+
+        journal: list = []
+        _, instance = self._setup(journal)
+        monkeypatch.setattr(litellm, "batch_line_item_callbacks", (self._recording_logger(journal),))
+
+        async def _an_earlier_batch_waits_to_store_its_lines():
+            instance._store_batch_line_items_in_background(
+                MagicMock(), MagicMock(), "model-123", "batch-earlier", billed=True
+            )
+            await asyncio.sleep(0.01)
+
+        async def _store(job, response, model_id, batch_id, *, billed):
+            journal.append(f"store {batch_id}")
+
+        monkeypatch.setattr(instance, "_cleanup_stale_managed_objects", _an_earlier_batch_waits_to_store_its_lines)
+        monkeypatch.setattr(instance, "_store_batch_line_items", _store)
+        with self._provider(journal):
+            await instance.check_batch_cost()
+            await self._stored(instance)
+
+        assert journal == [
+            f"read {_CLAIM_OUTPUT_FILE_ID}",
+            "claim",
+            "bill",
+            "finalize",
+            "store batch-earlier",
+            "store batch-456",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_an_output_file_that_cannot_be_read_again_leaves_the_batch_billed_and_stores_nothing(
+        self, monkeypatch, caplog
+    ):
+        import litellm
+        from litellm.batches import batch_utils
+        from litellm.exceptions import NotFoundError
+
+        journal: list = []
+        row, instance = self._setup(journal)
+        logger = self._recording_logger(journal)
+        monkeypatch.setattr(litellm, "batch_line_item_callbacks", (logger,))
+        fetch = batch_utils.fetch_batch_managed_file_content
+
+        async def _output_gone_after_billing(file_id, **kwargs):
+            if file_id == _CLAIM_OUTPUT_FILE_ID:
+                raise NotFoundError(message="No file found.", model="gpt-4", llm_provider="openai")
+            return await fetch(file_id, **kwargs)
+
+        monkeypatch.setattr(batch_utils, "fetch_batch_managed_file_content", _output_gone_after_billing)
+        with self._provider(journal), caplog.at_level(logging.ERROR):
+            await instance.check_batch_cost()
+            await self._stored(instance)
+
+        assert journal == [f"read {_CLAIM_OUTPUT_FILE_ID}", "claim", "bill", "finalize"]
+        assert logger.payloads == []
+        assert (row.batch_processed, row.status) == (True, "complete")
+        assert f"the line items of batch batch-456 (job {row.id}) were not stored" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_a_deployment_removed_before_the_lines_are_stored_leaves_the_batch_billed_and_logs_an_error(
+        self, monkeypatch, caplog
+    ):
+        import litellm
+
+        journal: list = []
+        row, instance = self._setup(journal)
+        logger = self._recording_logger(journal)
+        monkeypatch.setattr(litellm, "batch_line_item_callbacks", (logger,))
+        deployment = instance.llm_router.get_deployment.return_value
+        instance.llm_router.get_deployment = MagicMock(
+            side_effect=lambda **_: None if instance._poll_idle.is_set() else deployment
+        )
+
+        with self._provider(journal), caplog.at_level(logging.ERROR):
+            await instance.check_batch_cost()
+            await self._stored(instance)
+
+        assert journal == [f"read {_CLAIM_OUTPUT_FILE_ID}", "claim", "bill", "finalize"]
+        assert logger.payloads == []
+        assert (row.batch_processed, row.status) == (True, "complete")
+        assert f"the line items of batch batch-456 (job {row.id}) were not stored" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_a_batch_bigger_than_one_part_reaches_the_callbacks_as_numbered_parts(self, monkeypatch):
+        import litellm
+        from litellm_enterprise.proxy.common_utils import check_batch_cost
+
+        journal: list = []
+        _, instance = self._setup(journal)
+        logger = self._recording_logger(journal)
+        monkeypatch.setattr(litellm, "batch_line_item_callbacks", (logger,))
+        monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+        monkeypatch.setattr(check_batch_cost, "BATCH_LINE_ITEMS_MAX_PART_BYTES", 1)
+        monkeypatch.setattr(type(self), "_INPUT", self._INPUT + self._INPUT.replace(b"ok-1", b"ok-2"))
+        monkeypatch.setattr(type(self), "_OUTPUT", self._OUTPUT + self._OUTPUT.replace(b"ok-1", b"ok-2"))
+
+        with self._provider(journal):
+            await instance.check_batch_cost()
+            await self._stored(instance)
+
+        assert [(payload["part"], [line["custom_id"] for line in payload["lines"]]) for payload in logger.payloads] == [
+            (0, ["ok-1"]),
+            (1, ["ok-2"]),
+        ]
+        assert [payload["lines"][0]["request"]["custom_id"] for payload in logger.payloads] == ["ok-1", "ok-2"]
+
+    @pytest.mark.asyncio
+    async def test_an_oauth2_creators_token_reaches_the_callbacks_only_as_its_hash(self, monkeypatch):
+        import litellm
+
+        journal: list = []
+        row, instance = self._setup(journal)
+        row.api_key = "ya29.opaque-oauth2-access-token"
+        logger = self._recording_logger(journal)
+        monkeypatch.setattr(litellm, "batch_line_item_callbacks", (logger,))
+        monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+
+        with self._provider(journal):
+            await instance.check_batch_cost()
+            await self._stored(instance)
+
+        (payload,) = logger.payloads
+        (line,) = payload["lines"]
+        assert line["metadata"]["user_api_key_hash"] == sha256(b"ya29.opaque-oauth2-access-token").hexdigest()
+        assert line["request"] == json.loads(self._INPUT)
+        assert "ya29.opaque-oauth2-access-token" not in json.dumps(payload)
+
+
+class TestCreatorTurnedOffMessageLogging:
+    """Batch line items drop the request and response when the creating key or team turned off message logging,
+    when the proxy did, or when the creator can no longer be read."""
+
+    @staticmethod
+    def _instance(key_row=None, team_row=None, error: Exception | None = None):
+        from litellm_enterprise.proxy.common_utils.check_batch_cost import CheckBatchCost
+
+        prisma = MagicMock()
+        prisma.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=key_row, side_effect=error)
+        prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
+        return CheckBatchCost(proxy_logging_obj=MagicMock(), prisma_client=prisma, llm_router=MagicMock())
+
+    @staticmethod
+    def _job(api_key=sha256(b"sk-alice").hexdigest(), team_id=None, created_by="alice"):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(id="job-1", api_key=api_key, team_id=team_id, created_by=created_by)
+
+    @staticmethod
+    def _logging(value: str) -> dict:
+        return {
+            "logging": [
+                {
+                    "callback_name": "s3_v2",
+                    "callback_type": "success",
+                    "callback_vars": {"turn_off_message_logging": value},
+                }
+            ]
+        }
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("key_value", "proxy_wide", "expected"),
+        [("true", False, True), ("false", True, False), (None, True, True), (None, False, False)],
+    )
+    async def test_the_key_setting_wins_and_the_proxy_setting_fills_in(
+        self, monkeypatch, key_value, proxy_wide, expected
+    ):
+        from types import SimpleNamespace
+
+        import litellm
+
+        monkeypatch.setattr(litellm, "turn_off_message_logging", proxy_wide)
+        metadata = self._logging(key_value) if key_value is not None else {}
+        instance = self._instance(key_row=SimpleNamespace(metadata=metadata))
+
+        assert await instance._creator_turned_off_message_logging(self._job()) is expected
+
+    @pytest.mark.asyncio
+    async def test_a_team_that_turned_off_message_logging_covers_its_keys(self, monkeypatch):
+        from types import SimpleNamespace
+
+        import litellm
+
+        monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+        instance = self._instance(
+            key_row=SimpleNamespace(metadata={}), team_row=SimpleNamespace(metadata=self._logging("true"))
+        )
+
+        assert await instance._creator_turned_off_message_logging(self._job(team_id="team-alpha")) is True
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("job_fields", "key_row", "team_row"),
+        [
+            ({}, None, None),
+            ({"team_id": "team-gone"}, "present", None),
+            ({"api_key": None, "team_id": "team-gone"}, None, None),
+        ],
+        ids=["deleted-key", "deleted-team", "deleted-team-of-a-batch-created-without-a-key"],
+    )
+    async def test_a_creator_that_is_gone_counts_as_turned_off(self, monkeypatch, job_fields, key_row, team_row):
+        from types import SimpleNamespace
+
+        import litellm
+
+        monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+        instance = self._instance(key_row=SimpleNamespace(metadata={}) if key_row else None, team_row=team_row)
+
+        assert await instance._creator_turned_off_message_logging(self._job(**job_fields)) is True
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("api_key", [None, "opaque-oauth2-access-token"], ids=["jwt", "oauth2"])
+    @pytest.mark.parametrize(
+        ("team_value", "proxy_wide", "expected"),
+        [(None, False, False), (None, True, True), ("true", False, True), ("false", True, False)],
+    )
+    async def test_a_batch_created_without_a_virtual_key_follows_its_team_and_the_proxy_setting(
+        self, monkeypatch, api_key, team_value, proxy_wide, expected
+    ):
+        from types import SimpleNamespace
+
+        import litellm
+
+        monkeypatch.setattr(litellm, "turn_off_message_logging", proxy_wide)
+        team_row = SimpleNamespace(metadata=self._logging(team_value)) if team_value is not None else None
+        instance = self._instance(team_row=team_row)
+        job = self._job(api_key=api_key, team_id="team-alpha" if team_row is not None else None, created_by="alice")
+
+        assert await instance._creator_turned_off_message_logging(job) is expected
+        instance.prisma_client.db.litellm_verificationtoken.find_unique.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_a_failed_lookup_counts_as_turned_off(self, monkeypatch):
+        import litellm
+
+        monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+        instance = self._instance(error=Exception("db down"))
+
+        assert await instance._creator_turned_off_message_logging(self._job()) is True
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("api_key", ["litellm_proxy_master_key", "cli-session-alice"])
+    async def test_the_master_key_and_cli_sessions_have_no_key_row_to_read(self, monkeypatch, api_key):
+        import litellm
+
+        monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+        instance = self._instance()
+
+        assert await instance._creator_turned_off_message_logging(self._job(api_key=api_key)) is False
+        instance.prisma_client.db.litellm_verificationtoken.find_unique.assert_not_called()

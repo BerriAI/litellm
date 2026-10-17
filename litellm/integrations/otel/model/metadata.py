@@ -42,6 +42,8 @@ from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, cast, get_args
 
+from pydantic import TypeAdapter
+
 from litellm.constants import (
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
@@ -56,9 +58,20 @@ if TYPE_CHECKING:
     from litellm.types.utils import StandardLoggingPayload
 
 _INTERNAL_CALL_ORIGINS: Final[frozenset[str]] = frozenset(get_args(InternalCallOrigin))
+_AUTH_ATTRIBUTE: Final = TypeAdapter(object)
 
 REQUESTER_METADATA_KEY: Final = "requester_metadata"
 REQUESTER_METADATA_PATH: Final = f"{REQUESTER_METADATA_KEY}."
+
+
+def allowlisted_metadata(metadata: Mapping[str, str], metadata_keys: tuple[str, ...]) -> Mapping[str, str]:
+    return MappingProxyType(
+        {
+            meta_key.removeprefix(REQUESTER_METADATA_PATH): value
+            for meta_key in metadata_keys
+            if (value := metadata.get(meta_key))
+        }
+    )
 
 
 @dataclass(frozen=True)
@@ -119,7 +132,7 @@ class RequestIdentity:
         snapshot) is flattened to dotted keys so ``requester_metadata.<key>``
         resolves too.
         """
-        get: Final[Callable[[str], object]] = lambda name: getattr(auth, name, None)  # noqa: E731
+        get: Final[Callable[[str], object]] = lambda name: _AUTH_ATTRIBUTE.validate_python(getattr(auth, name, None))  # noqa: E731
         auth_meta: Final = tuple(
             (meta_key, str(value))
             for meta_key, attr in (

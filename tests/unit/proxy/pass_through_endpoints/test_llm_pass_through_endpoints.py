@@ -24,10 +24,15 @@ from starlette.datastructures import FormData
 
 import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_logger import CustomLogger
 from tests._master_key import MASTER_KEY as SHARED_MASTER_KEY
 from litellm.caching.caching import DualCache
 from litellm.types.utils import CallTypesLiteral
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException, ModifyResponseException
+from litellm.proxy._types import AwsErrorTypeProxyException, ProxyException
+from litellm.proxy.utils import ProxyLogging
+from litellm.passthrough.main import raise_for_provider_status
 from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
 from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
@@ -40,6 +45,7 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     azure_proxy_route,
     azure_speech_proxy_route,
     bedrock_llm_proxy_route,
+    bedrock_passthrough_error_response,
     bedrock_proxy_route,
     create_pass_through_route,
     cursor_proxy_route,
@@ -1658,17 +1664,7 @@ class TestBedrockLLMProxyRoute:
 
         bedrock_error_message = '{"message":"ContentBlock object at messages.0.content.0 must set one of the following keys: text, image, toolUse, toolResult, document, video."}'
 
-        # Create a mock httpx.Response for the error
-        mock_error_response = Mock(spec=httpx.Response)
-        mock_error_response.status_code = 400
-        mock_error_response.aread = AsyncMock(return_value=bedrock_error_message.encode("utf-8"))
-
-        # Create the HTTPStatusError
-        mock_http_error = httpx.HTTPStatusError(
-            message="Bad Request",
-            request=Mock(spec=httpx.Request),
-            response=mock_error_response,
-        )
+        mock_http_error = _bedrock_status_error(400, bedrock_error_message.encode("utf-8"))
 
         # Create mocks for all required parameters
         mock_request = MagicMock(spec=Request)
@@ -1924,6 +1920,284 @@ class TestBedrockLLMProxyRoute:
 
         assert exc_info.value.status_code == 400
         assert "Blocked by guardrail" in str(exc_info.value.detail)
+
+
+_THROTTLE_TYPE: Final = "ThrottlingException:http://internal.amazon.com/coral/com.amazon.bedrock/"
+_THROTTLE_BODY: Final = b'{"message":"Too many requests, please wait before trying again."}'
+
+
+def _status_error(
+    status_code: int,
+    content: bytes,
+    headers: Mapping[str, str],
+    url: str,
+    raise_for_status: Callable[[httpx.Response], None],
+) -> httpx.HTTPStatusError:
+    request: Final = httpx.Request("POST", url)
+    response: Final = httpx.Response(status_code, headers=dict(headers), content=content, request=request)
+    with pytest.raises(httpx.HTTPStatusError) as raised:
+        raise_for_status(response)
+    return raised.value
+
+
+def _bedrock_status_error(
+    status_code: int,
+    content: bytes,
+    headers: Mapping[str, str] = MappingProxyType({}),
+    url: str = "https://bedrock-runtime.us-east-1.amazonaws.com/model/m/converse",
+) -> httpx.HTTPStatusError:
+    """An error Bedrock answered the passthrough request with."""
+    return _status_error(status_code, content, headers, url, raise_for_provider_status)
+
+
+def _guardrail_service_status_error(
+    status_code: int, content: bytes, headers: Mapping[str, str]
+) -> httpx.HTTPStatusError:
+    """An error a guardrail service's own HTTP call raised, from a URL shaped like a Bedrock model call."""
+    return _status_error(
+        status_code,
+        content,
+        headers,
+        "https://bedrock-runtime.us-east-1.amazonaws.com/model/m/converse",
+        httpx.Response.raise_for_status,
+    )
+
+
+def _guardrail_detail(message: str) -> dict[str, str]:
+    return {"error": message, "guardrail_name": "block-demo"}
+
+
+class _ReplacesFailures(CustomLogger):
+    def __init__(self, replacement: HTTPException) -> None:
+        super().__init__()
+        self.replacement: Final = replacement
+
+    async def async_post_call_failure_hook(
+        self,
+        request_data: dict,
+        original_exception: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
+        traceback_str: str | None = None,
+    ) -> HTTPException | None:
+        return self.replacement
+
+
+class TestBedrockPassthroughAwsErrors:
+    """A guardrail block or an error Bedrock returned reaches an AWS SDK caller with its code and message."""
+
+    @staticmethod
+    async def _answer(error: Exception) -> Response:
+        return await bedrock_passthrough_error_response(
+            ProxyBaseLLMRequestProcessing(data={}),
+            error,
+            UserAPIKeyAuth(api_key="test-key"),
+            ProxyLogging(user_api_key_cache=DualCache()),
+        )
+
+    @pytest.mark.asyncio
+    async def test_bedrock_error_reaches_the_caller_with_bedrocks_status_header_and_body(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "callbacks", [])
+        error: Final = _bedrock_status_error(
+            429,
+            _THROTTLE_BODY,
+            {
+                "x-amzn-errortype": _THROTTLE_TYPE,
+                "x-amzn-requestid": "req-1",
+                "content-type": "application/x-amz-json-1.1",
+            },
+        )
+
+        response: Final = await self._answer(error)
+
+        assert response.status_code == 429
+        assert response.body == _THROTTLE_BODY
+        assert response.headers["x-amzn-errortype"] == _THROTTLE_TYPE
+        assert response.headers["content-type"] == "application/x-amz-json-1.1"
+        assert response.headers["llm_provider-x-amzn-requestid"] == "req-1"
+
+    @pytest.mark.asyncio
+    async def test_arn_model_error_reaches_the_caller_as_bedrock_sent_it(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(litellm, "callbacks", [])
+        error: Final = _bedrock_status_error(
+            429,
+            _THROTTLE_BODY,
+            {"x-amzn-errortype": _THROTTLE_TYPE},
+            url="https://bedrock-runtime.us-east-1.amazonaws.com/model/"
+            "arn%3Aaws%3Abedrock%3Aus-east-1%3A123%3Aapplication-inference-profile%2Fabc123/converse-stream?trace=a/b",
+        )
+
+        response: Final = await self._answer(error)
+
+        assert (response.status_code, response.body) == (429, _THROTTLE_BODY)
+        assert response.headers["x-amzn-errortype"] == _THROTTLE_TYPE
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("error", "status_code", "body"),
+        (
+            pytest.param(
+                _bedrock_status_error(502, b"<html>bad gateway</html>"),
+                502,
+                "<html>bad gateway</html>",
+                id="bedrock-without-error-type",
+            ),
+            pytest.param(
+                _guardrail_service_status_error(429, _THROTTLE_BODY, {"x-amzn-errortype": _THROTTLE_TYPE}),
+                429,
+                _THROTTLE_BODY.decode(),
+                id="guardrail-service-with-error-type",
+            ),
+        ),
+    )
+    async def test_http_error_bedrock_did_not_answer_with_an_aws_error_type_keeps_the_litellm_error(
+        self, monkeypatch: pytest.MonkeyPatch, error: httpx.HTTPStatusError, status_code: int, body: str
+    ) -> None:
+        monkeypatch.setattr(litellm, "callbacks", [])
+
+        with pytest.raises(HTTPException) as exc_info:
+            await self._answer(error)
+
+        assert exc_info.value.status_code == status_code
+        assert exc_info.value.detail == {"error": body}
+        assert "x-amzn-errortype" not in (exc_info.value.headers or {})
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("error", "replacement", "code"),
+        (
+            pytest.param(
+                _bedrock_status_error(429, _THROTTLE_BODY, {"x-amzn-errortype": _THROTTLE_TYPE}),
+                HTTPException(status_code=503, detail={"error": "rewritten by a callback"}),
+                "503",
+                id="bedrock-error",
+            ),
+            pytest.param(
+                HTTPException(status_code=400, detail=_guardrail_detail("Violated guardrail policy")),
+                HTTPException(status_code=429, detail={"error": "rewritten by a callback"}),
+                "429",
+                id="guardrail-block",
+            ),
+        ),
+    )
+    async def test_error_replaced_by_a_failure_hook_keeps_the_replacement(
+        self, monkeypatch: pytest.MonkeyPatch, error: Exception, replacement: HTTPException, code: str
+    ) -> None:
+        monkeypatch.setattr(litellm, "callbacks", [_ReplacesFailures(replacement)])
+
+        with pytest.raises(ProxyException) as exc_info:
+            await self._answer(error)
+
+        assert (exc_info.value.message, exc_info.value.code) == ("rewritten by a callback", code)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("error", "message", "status_code"),
+        (
+            pytest.param(
+                GuardrailRaisedException(
+                    guardrail_name="block-demo",
+                    message="synthetic policy says no",
+                    should_wrap_with_default_message=False,
+                    blocked_content=True,
+                ),
+                "synthetic policy says no",
+                "400",
+                id="guardrail-raised",
+            ),
+            pytest.param(
+                HTTPException(status_code=400, detail=_guardrail_detail("Violated guardrail policy")),
+                "Violated guardrail policy",
+                "400",
+                id="guardrail-http-400",
+            ),
+            pytest.param(
+                HTTPException(status_code=403, detail=_guardrail_detail("blocked by policy")),
+                "blocked by policy",
+                "403",
+                id="guardrail-http-403",
+            ),
+            pytest.param(
+                BlockedPiiEntityError(entity_type="EMAIL_ADDRESS", guardrail_name="pii"),
+                "Blocked entity detected: EMAIL_ADDRESS by Guardrail: pii. This entity is not allowed to be used in this request.",
+                "400",
+                id="blocked-pii",
+            ),
+        ),
+    )
+    async def test_guardrail_block_is_raised_with_its_aws_error_type(
+        self, monkeypatch: pytest.MonkeyPatch, error: Exception, message: str, status_code: str
+    ) -> None:
+        monkeypatch.setattr(litellm, "callbacks", [])
+
+        with pytest.raises(AwsErrorTypeProxyException) as exc_info:
+            await self._answer(error)
+
+        assert exc_info.value.aws_error_type == "ValidationException"
+        assert (exc_info.value.error.message, exc_info.value.error.code) == (message, status_code)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("error", "message", "code"),
+        (
+            pytest.param(
+                HTTPException(status_code=400, detail={"error": "model not found"}),
+                "model not found",
+                "400",
+                id="request-check-400",
+            ),
+            pytest.param(
+                HTTPException(status_code=403, detail="cache control not allowed"),
+                "cache control not allowed",
+                "403",
+                id="request-check-403",
+            ),
+            pytest.param(
+                HTTPException(status_code=429, detail=_guardrail_detail("vendor rate limited")),
+                "vendor rate limited",
+                "429",
+                id="429",
+            ),
+            pytest.param(
+                GuardrailRaisedException(
+                    guardrail_name="fail-closed",
+                    message="guardrail vendor unreachable",
+                    should_wrap_with_default_message=False,
+                ),
+                "guardrail vendor unreachable",
+                "400",
+                id="guardrail-vendor-unreachable-400",
+            ),
+            pytest.param(
+                GuardrailRaisedException(
+                    guardrail_name="fail-closed",
+                    message="guardrail vendor unreachable",
+                    should_wrap_with_default_message=False,
+                    status_code=503,
+                ),
+                "guardrail vendor unreachable",
+                "503",
+                id="guardrail-vendor-unreachable-503",
+            ),
+            pytest.param(
+                ModifyResponseException(message="replaced", model="bedrock-model", request_data={}),
+                "replaced",
+                "500",
+                id="modify-response",
+            ),
+        ),
+    )
+    async def test_errors_that_are_not_guardrail_blocks_keep_the_litellm_error(
+        self, monkeypatch: pytest.MonkeyPatch, error: Exception, message: str, code: str
+    ) -> None:
+        monkeypatch.setattr(litellm, "callbacks", [])
+
+        with pytest.raises(ProxyException) as exc_info:
+            await self._answer(error)
+
+        assert type(exc_info.value) is ProxyException
+        assert (exc_info.value.message, exc_info.value.code) == (message, code)
 
 
 class TestBedrockAgentRuntimePassthroughToggle:
@@ -2282,6 +2556,121 @@ class TestVLLMProxyRoute:
 
         mock_is_router.assert_called_once()
         mock_llm_router.allm_passthrough_route.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    @patch(  # test-quality-ok: patching litellm internal for unit test isolation
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_request_body",
+        return_value={"model": "router-model", "messages": [{"role": "user", "content": "Hi"}], "stream": True},
+    )
+    @patch(  # test-quality-ok: patching litellm internal for unit test isolation
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_passthrough_request_using_router_model",
+        return_value=True,
+    )
+    @patch(
+        "litellm.proxy.proxy_server.general_settings", {}
+    )  # test-quality-ok: the proxy config surface for always_include_stream_usage
+    @patch(
+        "litellm.proxy.proxy_server.llm_router"
+    )  # test-quality-ok: patching litellm internal for unit test isolation
+    async def test_vllm_proxy_route_asks_the_router_model_for_stream_usage_and_hides_it_from_the_client(
+        self, mock_llm_router, mock_is_router, mock_get_body
+    ):
+        chunk = {
+            "id": "chatcmpl-1",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "Qwen/Qwen2.5-0.5B-Instruct",
+        }
+        frames = [
+            {**chunk, "choices": [{"index": 0, "delta": {"content": "Hi"}, "finish_reason": None}]},
+            {**chunk, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+            {
+                **chunk,
+                "choices": [],
+                "usage": {"prompt_tokens": 34, "completion_tokens": 4},
+                "system_fingerprint": "fp-1",
+            },
+        ]
+        upstream_body = (
+            b"".join(b"data: " + json.dumps(frame).encode() + b"\n\n" for frame in frames) + b"data: [DONE]\n\n"
+        )
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "POST"
+        mock_request.headers = {"content-type": "application/json"}
+        mock_request.query_params = {}
+        mock_llm_router.resolved_litellm_models = MagicMock(return_value=("hosted_vllm/Qwen/Qwen2.5-0.5B-Instruct",))
+        mock_llm_router.allm_passthrough_route = AsyncMock(
+            return_value=httpx.Response(200, content=upstream_body, headers={"content-type": "text/event-stream"})
+        )
+
+        result = await vllm_proxy_route(
+            endpoint="/chat/completions",
+            request=mock_request,
+            fastapi_response=MagicMock(spec=Response),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-token"),
+        )
+
+        relayed_body = mock_llm_router.allm_passthrough_route.await_args.kwargs["json"]
+        assert relayed_body["stream_options"] == {"include_usage": True}
+        assert isinstance(result, StreamingResponse)
+        body = b"".join([piece async for piece in result.body_iterator])
+        payloads = [
+            json.loads(line[len("data: ") :]) for line in body.decode().split("\n\n") if line.startswith("data: {")
+        ]
+        assert [payload["choices"] for payload in payloads] == [frames[0]["choices"], frames[1]["choices"]]
+        assert "usage" not in body.decode()
+        assert payloads[1]["system_fingerprint"] == "fp-1"
+        assert body.endswith(b"data: [DONE]\n\n")
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("stream_options", [None, {"include_usage": True}])
+    @patch(  # test-quality-ok: patching litellm internal for unit test isolation
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_passthrough_request_using_router_model",
+        return_value=True,
+    )
+    @patch(
+        "litellm.proxy.proxy_server.general_settings", {}
+    )  # test-quality-ok: the proxy config surface for always_include_stream_usage
+    @patch(
+        "litellm.proxy.proxy_server.llm_router"
+    )  # test-quality-ok: patching litellm internal for unit test isolation
+    async def test_vllm_proxy_route_closes_the_upstream_stream_when_the_client_disconnects(
+        self, mock_llm_router, mock_is_router, stream_options
+    ):
+        closed = []
+
+        class UpstreamStream(httpx.AsyncByteStream):
+            async def __aiter__(self):
+                yield b'data: {"id":"chatcmpl-1","choices":[]}\n\n'
+                yield b"data: [DONE]\n\n"
+
+            async def aclose(self) -> None:
+                closed.append(True)
+
+        body = {"model": "router-model", "messages": [{"role": "user", "content": "Hi"}], "stream": True}
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "POST"
+        mock_request.headers = {"content-type": "application/json"}
+        mock_request.query_params = {}
+        mock_llm_router.resolved_litellm_models = MagicMock(return_value=("hosted_vllm/Qwen/Qwen2.5-0.5B-Instruct",))
+        mock_llm_router.allm_passthrough_route = AsyncMock(
+            return_value=httpx.Response(200, stream=UpstreamStream(), headers={"content-type": "text/event-stream"})
+        )
+
+        with patch(  # test-quality-ok: patching litellm internal for unit test isolation
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_request_body",
+            return_value={**body, **({"stream_options": stream_options} if stream_options else {})},
+        ):
+            result = await vllm_proxy_route(
+                endpoint="/chat/completions",
+                request=mock_request,
+                fastapi_response=MagicMock(spec=Response),
+                user_api_key_dict=UserAPIKeyAuth(api_key="hashed-token"),
+            )
+        await anext(result.body_iterator)
+        await result.body_iterator.aclose()
+
+        assert closed == [True]
 
     @pytest.mark.asyncio
     @patch(  # test-quality-ok: patching litellm internal for unit test isolation
@@ -4472,7 +4861,9 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
                 (b"authorization", f"Bearer {self.MASTER_KEY}".encode()),
                 (b"content-type", b"application/json"),
             ],
-            authenticated=UserAPIKeyAuth(api_key=LITELLM_PROXY_MASTER_KEY_ALIAS, user_role=LitellmUserRoles.PROXY_ADMIN),
+            authenticated=UserAPIKeyAuth(
+                api_key=LITELLM_PROXY_MASTER_KEY_ALIAS, user_role=LitellmUserRoles.PROXY_ADMIN
+            ),
         )
         assert forwarded is None, "the master key must never reach the upstream forwarder"
         assert raised is not None and raised.status_code == 401
@@ -5716,6 +6107,7 @@ class TestVertexAILiveWebsocketPassthrough:
             "wss://aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent"
         )
         assert passthrough_kwargs["custom_headers"]["Authorization"] == "Bearer token-abc"
+        assert passthrough_kwargs["endpoint"] == "/vertex_ai/live"
         rewriter = passthrough_kwargs["setup_model_rewriter"]
         assert rewriter("gemini-live") == (
             "projects/proj-db/locations/global/publishers/google/models/gemini-live-2.5-flash"
@@ -7704,6 +8096,20 @@ class TestTypeSafePassthroughRoute:
             assert sent.headers["authorization"] == "Bearer typesafe-test-key"
             assert json.loads(sent.content or b"{}") == (body or {})
 
+    def test_forwards_only_the_typesafe_danger_zone_headers_upstream(self, client: TestClient) -> None:
+        with respx.mock(assert_all_called=True) as upstream:
+            route = upstream.post("https://typesafe.example/base/v1/systemone").mock(
+                return_value=httpx.Response(200, json={"id": "upstream_123"})
+            )
+            client.post(
+                "/typesafe/v1/systemone",
+                json={"state": "x"},
+                headers={"TypeSafe-Danger-Zone-Images": "true", "X-Unrelated": "1"},
+            )
+
+            sent: Final = route.calls.last.request.headers
+            assert (sent.get("typesafe-danger-zone-images"), sent.get("x-unrelated")) == ("true", None)
+
     @pytest.mark.parametrize(
         "provider, endpoint, is_decision_request",
         (
@@ -7751,13 +8157,17 @@ class TestTypeSafePassthroughRoute:
         monkeypatch.setenv("OPENROUTER_API_BASE", "https://typesafe.example/base")
         monkeypatch.setenv("LAYA_API_BASE", "https://typesafe.example/base")
         monkeypatch.setenv("BESPOKE_API_BASE", "https://typesafe.example/base")
-        model: Final = {"typesafe": "jev-latest", "laya": "english", "bespoke": "nimble-latest"}.get(provider, "test-generative-model")
+        model: Final = {"typesafe": "jev-latest", "laya": "english", "bespoke": "nimble-latest"}.get(
+            provider, "test-generative-model"
+        )
         permission_model: Final = f"{provider}/{model}" if provider in ("laya", "bespoke") else model
         auth: Final = UserAPIKeyAuth(
             api_key="sk-limited",
             tpm_limit=token_limit if quota_scope == "key" else None,
             project_id="test-project" if quota_scope == "project_output" else None,
-            project_metadata={"model_otpm_limit": {permission_model: token_limit}} if quota_scope == "project_output" else {},
+            project_metadata={"model_otpm_limit": {permission_model: token_limit}}
+            if quota_scope == "project_output"
+            else {},
         )
         monkeypatch.setitem(proxy_server.app.dependency_overrides, user_api_key_auth, lambda: auth)
         body: Final = (
@@ -7779,7 +8189,9 @@ class TestTypeSafePassthroughRoute:
             return httpx.Response(200, json={"model": model})
 
         with respx.mock(assert_all_called=False) as upstream:
-            route: Final = upstream.post(f"https://typesafe.example/base/v1/{endpoint}").mock(side_effect=upstream_response)
+            route: Final = upstream.post(f"https://typesafe.example/base/v1/{endpoint}").mock(
+                side_effect=upstream_response
+            )
             response: Final = client.post(f"/{provider}/v1/{endpoint}", json=body)
 
         assert response.status_code == (429 if token_limit == 0 else 200), response.text
@@ -7855,11 +8267,14 @@ class TestOssDecisionPassthroughRoute:
             "questions": {"department": {"type": "choice", "criteria": {"billing": "refunds"}}},
         }
         answer: Final = {
-            "model": "laya-rl-agent" if provider == "laya" else checkpoint, "answers": {},
+            "model": "laya-rl-agent" if provider == "laya" else checkpoint,
+            "answers": {},
             **({"routing": {"model": checkpoint}} if provider == "laya" else {}),
         }
         with respx.mock(assert_all_called=True) as upstream:
-            route: Final = upstream.post(f"http://{provider}.test/base/v1/systemone?trace=yes").respond(200, json=answer)
+            route: Final = upstream.post(f"http://{provider}.test/base/v1/systemone?trace=yes").respond(
+                200, json=answer
+            )
             response: Final = client.post(
                 f"/{provider}/v1/systemone?trace=yes",
                 json=body,
@@ -7881,14 +8296,18 @@ class TestOssDecisionPassthroughRoute:
         assert f"{provider.upper()}_API_BASE" in response.text
         assert len(upstream.calls) == 0
 
-    def test_oss_does_not_forward_unsupported_endpoints(self, client: TestClient, provider: str, checkpoint: str) -> None:
+    def test_oss_does_not_forward_unsupported_endpoints(
+        self, client: TestClient, provider: str, checkpoint: str
+    ) -> None:
         with respx.mock(assert_all_called=False) as upstream:
             response: Final = client.post(f"/{provider}/v1/evaluate", json={"model": checkpoint})
         assert response.status_code == 404
         assert len(upstream.calls) == 0
 
     @pytest.mark.parametrize("model", [None, "auto", "jev-latest"])
-    def test_oss_rejects_implicit_checkpoint_selection(self, client: TestClient, model: str | None, provider: str) -> None:
+    def test_oss_rejects_implicit_checkpoint_selection(
+        self, client: TestClient, model: str | None, provider: str
+    ) -> None:
         with respx.mock(assert_all_called=False) as upstream:
             response: Final = client.post(f"/{provider}/v1/systemone", json={"model": model})
         assert response.status_code == 400
@@ -7907,7 +8326,6 @@ class TestOssDecisionPassthroughRoute:
         assert response.status_code == 400
         assert not route.called
 
-
     @pytest.mark.parametrize("metadata_slot", ["metadata", "litellm_metadata"])
     def test_oss_hooks_enforce_canonical_model_limits_and_keep_native_wire_body(
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch, metadata_slot: str, provider: str, checkpoint: str
@@ -7920,8 +8338,10 @@ class TestOssDecisionPassthroughRoute:
         cache: Final = DualCache()
         limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(cache))
         auth: Final = UserAPIKeyAuth(
-            api_key="oss-native-rpm", metadata={"model_rpm_limit": {f"{provider}/{checkpoint}": 1}},
+            api_key="oss-native-rpm",
+            metadata={"model_rpm_limit": {f"{provider}/{checkpoint}": 1}},
         )
+
         def authenticated_key() -> UserAPIKeyAuth:
             return auth
 
@@ -7929,8 +8349,11 @@ class TestOssDecisionPassthroughRoute:
 
         class LimitHook(CustomLogger):
             async def async_pre_call_hook(
-                self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache,
-                data: dict[str, object], call_type: CallTypesLiteral,
+                self,
+                user_api_key_dict: UserAPIKeyAuth,
+                cache: DualCache,
+                data: dict[str, object],
+                call_type: CallTypesLiteral,
             ) -> dict[str, object]:
                 assert data["model"] == f"{provider}/{checkpoint}"
                 metadata: Final = data.get(metadata_slot)
@@ -7942,9 +8365,11 @@ class TestOssDecisionPassthroughRoute:
 
         monkeypatch.setattr(litellm, "callbacks", [LimitHook()])
         body: Final = {
-            "model": checkpoint, "state": "refund",
+            "model": checkpoint,
+            "state": "refund",
             metadata_slot: {
-                "customer_label": "retained", "model_group": "unbounded-client-choice",
+                "customer_label": "retained",
+                "model_group": "unbounded-client-choice",
                 "standard_logging_guardrail_information": [{"guardrail_cost": 25.0}],
             },
         }
@@ -7966,8 +8391,11 @@ class TestOssDecisionPassthroughRoute:
 
         class CheckpointHook(CustomLogger):
             async def async_pre_call_hook(
-                self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache,
-                data: dict[str, object], call_type: CallTypesLiteral,
+                self,
+                user_api_key_dict: UserAPIKeyAuth,
+                cache: DualCache,
+                data: dict[str, object],
+                call_type: CallTypesLiteral,
             ) -> dict[str, object]:
                 assert data["model"] == f"{provider}/{checkpoint}"
                 return {**data, "model": f"{provider}/{changed_checkpoint}"}

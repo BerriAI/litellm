@@ -53,9 +53,8 @@ from litellm.types.services import ServiceLoggerPayload, ServiceTypes
 from collections.abc import AsyncIterator
 from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import ChatCompletionMessageToolCall, Function
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from tests.logging_callback_tests.base_test import BaseLoggingCallbackTest
 
 exporter = InMemorySpanExporter()
 
@@ -512,6 +511,9 @@ class TestOpenTelemetryCostBreakdown(unittest.TestCase):
 
         mock_span.set_attribute.assert_any_call("litellm.cache_hit", True)
         mock_span.set_attribute.assert_any_call("litellm.saved_cache_cost", 0.003)
+        mock_span.set_attribute.assert_any_call("gen_ai.cost.total_cost", 0.0)
+        mock_span.set_attribute.assert_any_call("gen_ai.cost.input_cost", 0.0)
+        mock_span.set_attribute.assert_any_call("gen_ai.cost.output_cost", 0.0)
 
     def test_non_cache_hit_span_has_no_cache_indicator(self):
         otel = OpenTelemetry()
@@ -542,6 +544,7 @@ class TestOpenTelemetryCostBreakdown(unittest.TestCase):
         call_args_list = [call[0] for call in mock_span.set_attribute.call_args_list]
         assert all(key != "litellm.cache_hit" for key, _value in call_args_list)
         assert all(key != "litellm.saved_cache_cost" for key, _value in call_args_list)
+        assert all(not key.startswith("gen_ai.cost.") for key, _value in call_args_list)
 
 
 class TestOpenTelemetryProviderInitialization(unittest.TestCase):
@@ -7204,9 +7207,20 @@ async def test_arize_phoenix_creates_nested_spans_on_dedicated_provider():
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
-class TestOpentelemetryUnitTests(BaseLoggingCallbackTest):
-    def test_parallel_tool_calls(self, mock_response_obj: ModelResponse):
-        tool_calls = mock_response_obj.choices[0].message.tool_calls
+class TestOpentelemetryUnitTests:
+    def test_parallel_tool_calls(self):
+        tool_calls: Final = [
+            ChatCompletionMessageToolCall(
+                function=Function(arguments='{"city": "New York"}', name="get_weather"),
+                id="call_weather",
+                type="function",
+            ),
+            ChatCompletionMessageToolCall(
+                function=Function(arguments='{"city": "New York"}', name="get_news"),
+                id="call_news",
+                type="function",
+            ),
+        ]
         from litellm.integrations.opentelemetry import OpenTelemetry
         from litellm.proxy._types import SpanAttributes
 

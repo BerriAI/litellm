@@ -6,7 +6,7 @@ import os
 import secrets
 import time
 import traceback
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from typing import Final, Literal, TypedDict
 
@@ -46,6 +46,7 @@ from litellm.proxy.auth.auth_utils import (
 )
 from litellm.proxy.auth.model_checks import get_key_models
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils import http_parsing_utils
 from litellm.proxy.db.db_lookup_gate import db_lookup_stall_tracker
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.db.health_check_latest import (
@@ -78,6 +79,7 @@ from litellm.router_utils.clientside_credential_handler import (
     clientside_credential_keys,
 )
 from litellm.secret_managers.main import get_secret_bool
+from litellm.types.proxy.litellm_pre_call_utils import RedactedDict, SecretFields
 
 #### Health ENDPOINTS ####
 
@@ -135,19 +137,24 @@ def _request_inherits_config_credentials(
     config_params: Mapping[str, object],
     request_params: Mapping[str, object],
     allow_client_side_credentials: bool,
+    *,
+    selected_by_id: bool,
 ) -> bool:
     """Whether the configuration's credentials are this request's to be probed with.
 
     The configuration reached here by matching the request's model string, which
     also matches wildcard routes and unrelated deployments that merely serve the
     same model, so a request naming a stored credential of its own has already
-    said where its credentials come from and does not borrow that one's. A blank
-    name is no name: ``load_credentials_from_list`` resolves nothing from it, so
-    it must not cost the request the credentials it would otherwise be probed
-    with.
+    said where its credentials come from and does not borrow that one's. A request
+    bringing its own ``api_key`` describes its own connection when matched only by
+    model name. A blank name or key is no name or key: ``load_credentials_from_list``
+    resolves nothing from it, so it must not cost the request the credentials it
+    would otherwise be probed with.
     """
     requested_credential: Final = request_params.get("litellm_credential_name")
     if requested_credential and requested_credential != config_params.get("litellm_credential_name"):
+        return False
+    if not selected_by_id and request_params.get("api_key"):
         return False
     if allow_client_side_credentials:
         return True
@@ -158,22 +165,28 @@ def _config_base_for_health_check(
     config_params: Mapping[str, object],
     request_params: Mapping[str, object],
     allow_client_side_credentials: bool = False,
+    *,
+    selected_by_id: bool,
 ) -> dict[str, object]:
     """Return the configured parameters to merge under a connection-test request.
 
-    A request that sets its own connection fields, or names its own stored
-    credential, describes a connection of its own, so the configuration's
-    credentials are not carried into it: they belong to the endpoint the
-    configuration names. Anything the request does not set still comes from the
-    configuration, which is what lets a request name a configured model and test
-    it as configured.
+    A request that sets its own connection fields, brings an ``api_key`` when
+    matched only by model name, or names its own stored credential describes a
+    connection of its own, so the configuration's credentials are not carried
+    into it. Anything the request does not set still comes from the configuration,
+    which is what lets a request name a configured model and test it as configured.
 
     ``litellm_credential_name`` is dropped alongside the literal credential
     fields: it names a stored credential that ``load_credentials_from_list``
     resolves into the same secrets further down the call, so leaving it in place
     would reintroduce them by reference.
     """
-    if _request_inherits_config_credentials(config_params, request_params, allow_client_side_credentials):
+    if _request_inherits_config_credentials(
+        config_params,
+        request_params,
+        allow_client_side_credentials,
+        selected_by_id=selected_by_id,
+    ):
         return dict(config_params)
     return {key: value for key, value in config_params.items() if key not in _CONFIG_CONNECTION_FIELDS}
 
@@ -252,6 +265,63 @@ services = (
 )
 
 
+_SERVICES_WITH_DEDICATED_CHECK: Final = frozenset(
+    (
+        "slack_budget_alerts",
+        "email",
+        "langfuse",
+        "slack",
+        "ms_teams",
+        "webhook",
+        "datadog",
+        "datadog_metrics",
+        "arize",
+        "galileo",
+        "newrelic",
+        "pointfive",
+        "sqs",
+        "aws_sqs",
+    )
+)
+_SERVICES_TESTABLE_ONLY_VIA_SUCCESS_CALLBACK: Final = frozenset(("custom_callback_api",))
+
+
+def _testable_services() -> frozenset[str]:
+    return (
+        _SERVICES_WITH_DEDICATED_CHECK
+        | _SERVICES_TESTABLE_ONLY_VIA_SUCCESS_CALLBACK
+        | frozenset(
+            litellm._known_custom_logger_compatible_callbacks  # pyright: ignore[reportPrivateUsage]  # no public alias for the callback Literal's args
+        )
+    )
+
+
+def _is_testable_service(service: str) -> bool:
+    return service in _testable_services()
+
+
+def _callback_matches(service: str, cb: object) -> bool:
+    callback_name: Final = getattr(cb, "callback_name", None)
+    if service in (cb, callback_name, get_callback_identifier(cb)):
+        return True
+    return (
+        not callback_name
+        and service not in _SERVICES_WITH_DEDICATED_CHECK
+        and service in _unnamed_callback_aliases(type(cb))
+    )
+
+
+def _unnamed_callback_aliases(callback_type: type) -> frozenset[str]:
+    """A logger built from a bare config string carries no name, so its class aliases and its package name stand in."""
+    return frozenset(CustomLoggerRegistry.get_all_callback_strs_from_class_type(callback_type)) | frozenset(
+        callback_type.__module__.split(".")
+    )
+
+
+def _service_configured_in(service: str, callbacks: Sequence[object]) -> bool:
+    return any(_callback_matches(service, cb) for cb in callbacks)
+
+
 class _ServiceTestErrorDetail(TypedDict):
     error: ReadOnly[str]
 
@@ -313,53 +383,24 @@ async def health_services_endpoint(
         if service is None:
             raise HTTPException(status_code=400, detail={"error": "Service must be specified."})
 
-        if service not in [
-            "slack_budget_alerts",
-            "email",
-            "langfuse",
-            "langfuse_otel",
-            "slack",
-            "ms_teams",
-            "openmeter",
-            "webhook",
-            "braintrust",
-            "otel",
-            "custom_callback_api",
-            "langsmith",
-            "datadog",
-            "datadog_metrics",
-            "datadog_llm_observability",
-            "generic_api",
-            "arize",
-            "galileo",
-            "newrelic",
-            "pointfive",
-            "signoz",
-            "sqs",
-        ]:
+        if not _is_testable_service(service):
             raise HTTPException(
                 status_code=400,
-                detail={"error": f"Service must be in list. Service={service} not in {services}"},
+                detail={"error": f"Service must be in list. Service={service} not in {sorted(_testable_services())}"},
             )
 
-        service_in_success_callbacks = False
-        if service in litellm.success_callback:
-            service_in_success_callbacks = True
-        else:
-            for cb in litellm.success_callback:
-                if getattr(cb, "callback_name", None) == service:
-                    service_in_success_callbacks = True
-                    break
-                cb_id = get_callback_identifier(cb)
-                if cb_id == service:
-                    service_in_success_callbacks = True
-                    break
+        service_in_success_callbacks: Final = _service_configured_in(service, litellm.success_callback)
+        logger_without_dedicated_check_configured: Final = (
+            service not in _SERVICES_WITH_DEDICATED_CHECK
+            and _service_configured_in(service, litellm.logging_callback_manager.get_all_callbacks())
+        )
 
         if (
             service == "openmeter"
             or service == "braintrust"
             or service == "generic_api"
-            or (service_in_success_callbacks and service not in ("langfuse", "pointfive"))
+            or (service_in_success_callbacks and service not in ("langfuse", "pointfive", "sqs", "aws_sqs"))
+            or logger_without_dedicated_check_configured
         ):
             _ = await litellm.acompletion(
                 model="openai/litellm-mock-response-model",
@@ -493,7 +534,11 @@ async def health_services_endpoint(
                 type="user_budget",
                 user_info=user_info,
             )
-        elif service == "sqs":
+            return {
+                "status": "success",
+                "message": "Mock Webhook Alert sent, verify Webhook Alert Received",
+            }
+        elif service in ("sqs", "aws_sqs"):
             from litellm.integrations.sqs import SQSLogger
 
             sqs_logger: Final = SQSLogger()
@@ -615,6 +660,13 @@ async def health_services_endpoint(
                 "status": "success",
                 "message": "Mock Email Alert sent, verify Email Alert Received",
             }
+
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Service={service} is not configured as a callback, add it to litellm_settings.callbacks."
+            },
+        )
 
     except Exception as e:
         verbose_proxy_logger.error("litellm.proxy.proxy_server.health_services_endpoint(): Exception occured - %s", e)
@@ -978,11 +1030,10 @@ def _is_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
 
 def _strip_admin_only_fields_from_health_result(result: dict) -> dict:
     """
-    Return a copy of the /health response with the admin-only fields (provider routing plus the
-    workload identity federation params naming the identity a deployment mints as) removed from
-    each healthy/unhealthy endpoint entry. Used to hide those fields from non-admin callers while
-    still showing them which deployments they own and whether each one is
-    healthy. Proxy admins receive the unmodified result.
+    Return a copy of the /health response with the admin-only fields (provider routing plus
+    server-owned federation or OAuth token-exchange params) removed from each healthy/unhealthy
+    endpoint entry. Used to hide those fields from non-admin callers while still showing them which
+    deployments they own and whether each one is healthy. Proxy admins receive the unmodified result.
     """
     out: Final = dict(result)
     drop: Final = set(ADMIN_ONLY_HEALTH_DISPLAY_PARAMS)
@@ -1452,7 +1503,7 @@ async def shared_health_check_status_endpoint(
         )
 
 
-def _read_license_data() -> EnterpriseLicenseData | None:
+def read_license_data() -> EnterpriseLicenseData | None:
     from litellm.proxy.proxy_server import _license_check, premium_user_data
 
     license_data: EnterpriseLicenseData | None = premium_user_data or _license_check.airgapped_license_data
@@ -1497,7 +1548,7 @@ async def health_license_endpoint(
     """Return metadata about the configured LiteLLM license without exposing the key."""
     from litellm.proxy.proxy_server import _license_check, premium_user
 
-    license_data: Final = _read_license_data()
+    license_data: Final = read_license_data()
     has_license: Final = bool(getattr(_license_check, "license_str", None))
     license_type: Final = "enterprise" if premium_user else "community"
 
@@ -1691,9 +1742,9 @@ def callback_name(callback):
 DISABLE_NO_REDIS_WARNING_ENV_VAR: Final = "LITELLM_DISABLE_NO_REDIS_WARNING"
 
 
-async def _show_no_redis_warning() -> bool:
+async def no_redis_on_multiple_workers() -> bool:
     """
-    Whether the UI should warn that no Redis is configured.
+    Whether this proxy runs without Redis on more than one worker.
 
     Redis is what makes rate limits, budgets, router state, and cache
     invalidation consistent across workers, so a proxy running without it is
@@ -1704,22 +1755,34 @@ async def _show_no_redis_warning() -> bool:
     routing on its own. A deployment whose worker-heartbeat census proves it
     is exactly one worker needs no cross-worker coordination, so it never
     warns; when the census is unavailable or shows more than one worker, the
-    warning stands unless LITELLM_DISABLE_NO_REDIS_WARNING=true silences it.
+    warning stands.
     """
-    from litellm.proxy.proxy_server import llm_router, prisma_client, redis_usage_cache
+    from litellm.proxy.proxy_server import prisma_client
 
-    if redis_usage_cache is not None:
-        return False
-    if llm_router is not None and llm_router.cache.redis_cache is not None:
-        return False
-    if get_secret_bool(DISABLE_NO_REDIS_WARNING_ENV_VAR, False) is True:
+    if _redis_configured():
         return False
     if prisma_client is None:
         return True
     return await count_live_proxy_workers(prisma_client) != 1
 
 
-def _show_env_credential_login_warning() -> bool:
+def _redis_configured() -> bool:
+    from litellm.proxy.proxy_server import llm_router, redis_usage_cache
+
+    return redis_usage_cache is not None or (llm_router is not None and llm_router.cache.redis_cache is not None)
+
+
+def no_redis_warning_disabled_by_env() -> bool:
+    return get_secret_bool(DISABLE_NO_REDIS_WARNING_ENV_VAR, False) is True
+
+
+async def _show_no_redis_warning() -> bool:
+    if _redis_configured() or no_redis_warning_disabled_by_env():
+        return False
+    return await no_redis_on_multiple_workers()
+
+
+def env_credential_login_enabled() -> bool:
     from litellm.proxy.auth.login_utils import is_env_credential_login_enabled
     from litellm.proxy.proxy_server import general_settings
 
@@ -1767,7 +1830,7 @@ async def _get_health_readiness_details(
         log_level_name: Final = logging.getLevelName(verbose_logger.getEffectiveLevel())
         is_detailed_debug: Final = verbose_logger.isEnabledFor(logging.DEBUG)
         show_no_redis_warning: Final = await _show_no_redis_warning()
-        show_env_credential_login_warning: Final = _show_env_credential_login_warning()
+        show_env_credential_login_warning: Final = env_credential_login_enabled()
 
         # check DB
         if prisma_client is not None:  # if db passed in, check if it's connected
@@ -2078,6 +2141,8 @@ async def test_model_connection(
         "responses",
         "anthropic_messages",
         "ocr",
+        "evaluation",
+        "decisions",
     ]
     | None = fastapi.Body(
         None,
@@ -2179,6 +2244,7 @@ async def test_model_connection(
         # This gets the litellm_params from proxy config (with resolved env vars)
         config_litellm_params: dict = {}
         loaded_model_info: dict | None = None
+        deployment_by_id: Deployment | None = None
         if llm_router is not None:
             # Prefer disambiguation by deployment id (`model_info.id`) when
             # the caller supplies it. This is required when multiple
@@ -2191,7 +2257,6 @@ async def test_model_connection(
             request_model_info: Final = model_info or {}
             request_model_id: Final = request_model_info.get("id")
             try:
-                deployment_by_id = None
                 if request_model_id:
                     deployment_by_id = llm_router.get_deployment(model_id=request_model_id)
 
@@ -2225,6 +2290,7 @@ async def test_model_connection(
                     "Could not find model %s in router: %s. Proceeding with request params only.", model_name, e
                 )
 
+        selected_by_id: Final = deployment_by_id is not None
         reject_server_owned_wif_params(request_litellm_params)
         # Merge: config params (from proxy config) as base, request params override
         litellm_params = {
@@ -2232,6 +2298,7 @@ async def test_model_connection(
                 config_litellm_params,
                 request_litellm_params,
                 allow_client_side_credentials=general_settings.get("allow_client_side_credentials") is True,
+                selected_by_id=selected_by_id,
             ),
             **request_litellm_params,
         }
@@ -2269,9 +2336,17 @@ async def test_model_connection(
             or resolve_health_check_mode(probe_model_info, _OBJECT_MAPPING.validate_python(litellm_params))
         )
 
+        raw_headers: Final[dict[str, str]] = TypeAdapter(dict[str, str]).validate_python(
+            http_parsing_utils.safe_get_request_headers(request)
+        )
+        health_check_params: Final = {
+            **_OBJECT_MAPPING.validate_python(litellm_params),
+            "secret_fields": SecretFields(raw_headers=RedactedDict(raw_headers)),
+        }
+
         result: Final = await run_with_timeout(
             litellm.ahealth_check(
-                model_params=litellm_params,
+                model_params=health_check_params,
                 mode=probe_mode,
                 prompt="test from litellm",
                 input=["test from litellm"],
@@ -2280,7 +2355,7 @@ async def test_model_connection(
         )
 
         # Clean the result for display
-        cleaned_result: Final = clean_endpoint_data({**litellm_params, **result}, details=True)
+        cleaned_result: Final = clean_endpoint_data({**health_check_params, **result}, details=True)
 
         return {
             "status": "error" if "error" in result else "success",

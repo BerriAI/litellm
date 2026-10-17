@@ -16,10 +16,12 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_endpoints import (
     CreateGuardrailRequest,
+    ListGuardrailsResponse,
     PatchGuardrailRequest,
     RegisterGuardrailRequest,
     TestCustomCodeGuardrailRequest,
     UpdateGuardrailRequest,
+    _get_guardrails_list_response,
     apply_guardrail,
     approve_guardrail_submission,
     create_guardrail,
@@ -39,6 +41,8 @@ from litellm.proxy.guardrails.content_filter_data import DATA_ROOTS
 from litellm.proxy.guardrails.guardrail_endpoints import (
     test_custom_code_guardrail as run_custom_code_test_endpoint,
 )
+from litellm.proxy.guardrails.guardrail_hooks.azure.prompt_shield import AzureContentSafetyPromptShieldGuardrail
+from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import ContentFilterGuardrail
 
 MOCK_ADMIN_USER = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
 from litellm.proxy.guardrails.guardrail_registry import (
@@ -68,6 +72,58 @@ MOCK_DB_GUARDRAIL = {
     "created_at": datetime.now(),
     "updated_at": datetime.now(),
 }
+
+
+def test_get_guardrails_list_response() -> None:
+    sample_config: Final = [
+        {
+            "guardrail_name": "test-guard",
+            "litellm_params": {
+                "guardrail": "test-guard",
+                "mode": "pre_call",
+                "api_key": "test-api-key",
+                "api_base": "test-api-base",
+            },
+            "guardrail_info": {
+                "params": [
+                    {
+                        "name": "toxicity_score",
+                        "type": "float",
+                        "description": "Score between 0-1",
+                    }
+                ]
+            },
+        }
+    ]
+
+    response: Final = _get_guardrails_list_response(sample_config)
+    assert isinstance(response, ListGuardrailsResponse)
+    assert response.guardrails[0].guardrail_name == "test-guard"
+    assert response.guardrails[0].guardrail_info == {
+        "params": [
+            {
+                "name": "toxicity_score",
+                "type": "float",
+                "description": "Score between 0-1",
+            }
+        ]
+    }
+
+    empty_response: Final = _get_guardrails_list_response([])
+    assert isinstance(empty_response, ListGuardrailsResponse)
+    assert empty_response.guardrails == []
+
+    minimal_response: Final = _get_guardrails_list_response(
+        [
+            {
+                "guardrail_name": "minimal-guard",
+                "litellm_params": {"guardrail": "minimal-guard", "mode": "pre_call"},
+            }
+        ]
+    )
+    assert isinstance(minimal_response, ListGuardrailsResponse)
+    assert minimal_response.guardrails[0].guardrail_name == "minimal-guard"
+    assert minimal_response.guardrails[0].guardrail_info is None
 
 _INVALID_SCOPE_LITELLM_PARAMS: Final = MappingProxyType(
     {
@@ -794,6 +850,40 @@ def test_get_guardrails_list_response_tolerates_invalid_config_stream_scope():
     assert response.guardrails[1].litellm_params.stream_scope == "streaming"
 
 
+def test_get_guardrails_list_response_tolerates_invalid_config_logging_only_scope():
+    from litellm.proxy.guardrails.guardrail_endpoints import (
+        _get_guardrails_list_response,
+    )
+
+    response = _get_guardrails_list_response(
+        [
+            {
+                "guardrail_id": "removed-both-scope",
+                "guardrail_name": "removed-both-scope",
+                "litellm_params": {
+                    "guardrail": "generic_guardrail_api",
+                    "mode": "logging_only",
+                    "logging_only_scope": "both",
+                },
+            },
+            {
+                "guardrail_id": "input-scope",
+                "guardrail_name": "input-scope",
+                "litellm_params": {
+                    "guardrail": "generic_guardrail_api",
+                    "mode": "logging_only",
+                    "logging_only_scope": "input",
+                },
+            },
+        ]
+    )
+
+    assert response.guardrails[0].litellm_params is not None
+    assert response.guardrails[0].litellm_params.logging_only_scope is None
+    assert response.guardrails[1].litellm_params is not None
+    assert response.guardrails[1].litellm_params.logging_only_scope == "input"
+
+
 def test_get_provider_specific_params():
     """Test getting provider-specific parameters"""
     from litellm.proxy.guardrails.guardrail_endpoints import _get_fields_from_model
@@ -861,6 +951,17 @@ async def test_provider_specific_params_includes_embedding_toggle():
         field = provider_params[provider]["inspect_embeddings"]
         assert field["type"] == "bool"
         assert field["default_value"] is False
+
+
+@pytest.mark.asyncio
+async def test_provider_specific_params_offers_forward_messages_as_sent_off_by_default():
+    from litellm.proxy.guardrails.guardrail_endpoints import get_provider_specific_params
+
+    provider_params = await get_provider_specific_params()
+
+    field = provider_params["generic_guardrail_api"]["optional_params"]["fields"]["forward_messages_as_sent"]
+    assert field["type"] == "boolean"
+    assert field["default_value"] is False
 
 
 @pytest.mark.asyncio
@@ -1583,6 +1684,31 @@ async def test_patch_guardrail_clears_scope_when_logging_only_mode_is_removed(
 
 
 @pytest.mark.asyncio
+async def test_patch_guardrail_with_blank_value_clears_the_stored_value(mocker, monkeypatch, mock_guardrail_registry):
+    """
+    Regression: blank litellm_params were dropped before validation, so a PATCH that cleared
+    api_base with "" returned 200 but kept the stored value.
+    """
+    handler, stored_guardrail = _setup_patch_scope_guardrail(
+        mocker,
+        monkeypatch,
+        mock_guardrail_registry,
+        _PatchScopeSupportedGuardrail,
+        "patch_blank_value_test",
+        {"mode": "pre_call", "api_base": "https://old.example.com"},
+    )
+    request = PatchGuardrailRequest.model_validate({"litellm_params": {"api_base": ""}})
+
+    try:
+        await patch_guardrail(stored_guardrail["guardrail_id"], request, user_api_key_dict=MOCK_ADMIN_USER)
+
+        persisted_guardrail = mock_guardrail_registry.update_guardrail_in_db.call_args.kwargs["guardrail"]
+        assert persisted_guardrail["litellm_params"].api_base is None
+    finally:
+        handler.delete_in_memory_guardrail(stored_guardrail["guardrail_id"])
+
+
+@pytest.mark.asyncio
 async def test_patch_guardrail_tolerates_stored_unsupported_scope_on_unrelated_update(
     mocker, monkeypatch, mock_guardrail_registry, caplog
 ):
@@ -1671,6 +1797,129 @@ async def test_patch_guardrail_rejects_explicit_unsupported_scope_and_rolls_back
         assert callback.logging_only_scope is None
     finally:
         handler.delete_in_memory_guardrail(stored_guardrail["guardrail_id"])
+
+
+@pytest.mark.asyncio
+async def test_patch_guardrail_rejects_invalid_continue_flag_with_422(mocker, monkeypatch, mock_guardrail_registry):
+    handler, stored_guardrail = _setup_patch_scope_guardrail(
+        mocker,
+        monkeypatch,
+        mock_guardrail_registry,
+        _PatchScopeSupportedGuardrail,
+        "patch_scope_supported_test",
+        {"mode": "pre_call", "default_on": True},
+    )
+    request = PatchGuardrailRequest(
+        litellm_params=BaseLitellmParams(mode="pre_call", logging_only_continue_on_input_failure=True)
+    )
+
+    try:
+        with pytest.raises(HTTPException) as exc_info:
+            await patch_guardrail(
+                stored_guardrail["guardrail_id"],
+                request,
+                user_api_key_dict=MOCK_ADMIN_USER,
+            )
+
+        assert exc_info.value.status_code == 422
+        assert "update rejected" in str(exc_info.value.detail)
+        assert "logging_only_continue_on_input_failure is set, but mode does not include logging_only" in str(
+            exc_info.value.detail
+        )
+        assert mock_guardrail_registry.update_guardrail_in_db.call_count == 2
+        restored_guardrail = mock_guardrail_registry.update_guardrail_in_db.call_args_list[-1].kwargs["guardrail"]
+        assert restored_guardrail["litellm_params"] == stored_guardrail["litellm_params"]
+        callback = handler.guardrail_id_to_custom_guardrail[stored_guardrail["guardrail_id"]]
+        assert callback.logging_only_continue_on_input_failure is False
+    finally:
+        handler.delete_in_memory_guardrail(stored_guardrail["guardrail_id"])
+
+
+@pytest.mark.asyncio
+async def test_patch_guardrail_clears_continue_flag_when_logging_only_mode_is_removed(
+    mocker, monkeypatch, mock_guardrail_registry
+):
+    handler, stored_guardrail = _setup_patch_scope_guardrail(
+        mocker,
+        monkeypatch,
+        mock_guardrail_registry,
+        _PatchScopeSupportedGuardrail,
+        "patch_scope_supported_test",
+        {
+            "mode": ["pre_call", "logging_only"],
+            "logging_only_continue_on_input_failure": True,
+            "default_on": True,
+        },
+    )
+    request = PatchGuardrailRequest(litellm_params=BaseLitellmParams(mode=["pre_call"]))
+
+    try:
+        result = await patch_guardrail(
+            stored_guardrail["guardrail_id"],
+            request,
+            user_api_key_dict=MOCK_ADMIN_USER,
+        )
+
+        assert result["guardrail_id"] == stored_guardrail["guardrail_id"]
+        persisted_guardrail = mock_guardrail_registry.update_guardrail_in_db.call_args.kwargs["guardrail"]
+        assert persisted_guardrail["litellm_params"].logging_only_continue_on_input_failure is None
+        callback = handler.guardrail_id_to_custom_guardrail[stored_guardrail["guardrail_id"]]
+        assert callback.logging_only_continue_on_input_failure is False
+    finally:
+        handler.delete_in_memory_guardrail(stored_guardrail["guardrail_id"])
+
+
+@pytest.mark.asyncio
+async def test_add_guardrail_rejects_continue_flag_outside_logging_only_with_400(
+    mocker, monkeypatch, mock_guardrail_registry
+):
+    import litellm
+    from litellm.proxy.guardrails import guardrail_registry as registry_module
+
+    guardrail_type: Final = "patch_scope_supported_test"
+    litellm_params: Final = {
+        "guardrail": guardrail_type,
+        "mode": "pre_call",
+        "logging_only_continue_on_input_failure": True,
+    }
+    mock_guardrail_registry.add_guardrail_to_db = AsyncMock(
+        return_value={
+            "guardrail_id": "flag-400-test",
+            "guardrail_name": "flag-400-test",
+            "litellm_params": litellm_params,
+            "guardrail_info": {},
+        }
+    )
+    monkeypatch.setitem(
+        registry_module.guardrail_initializer_registry,
+        guardrail_type,
+        _patch_scope_initializer(_PatchScopeSupportedGuardrail),
+    )
+    handler: Final = InMemoryGuardrailHandler()
+    mocker.patch("litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", mock_guardrail_registry)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mocker.Mock())
+    mocker.patch("litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER", handler)
+    delete_row = mocker.patch("litellm.proxy.guardrails.guardrail_endpoints._delete_guardrail_row", AsyncMock())
+
+    with pytest.raises(HTTPException) as exc_info:
+        await create_guardrail(
+            CreateGuardrailRequest(
+                guardrail={
+                    "guardrail_name": "flag-400-test",
+                    "litellm_params": litellm_params,
+                    "guardrail_info": {},
+                }
+            ),
+            user_api_key_dict=MOCK_ADMIN_USER,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "logging_only_continue_on_input_failure is set, but mode does not include logging_only" in str(
+        exc_info.value.detail
+    )
+    assert "flag-400-test" not in handler.guardrail_id_to_custom_guardrail
+    assert all(getattr(callback, "guardrail_name", None) != "flag-400-test" for callback in litellm.callbacks)
+    delete_row.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -2907,7 +3156,36 @@ async def test_ui_settings_map_matches_runtime_supported_event_hooks():
             continue
 
         assert provider in result.supported_modes_by_provider, provider
-        assert result.supported_modes_by_provider[provider] == [hook.value for hook in declared], provider
+        offered = result.supported_modes_by_provider[provider]
+        assert offered[: len(declared)] == [hook.value for hook in declared], provider
+        assert set(offered) - {hook.value for hook in declared} <= {"logging_only"}, provider
+        assert offered.count("logging_only") == (
+            1 if guardrail_class.accepts_logging_only_mode() or GuardrailEventHooks.logging_only in declared else 0
+        ), provider
+
+
+@pytest.mark.asyncio
+async def test_ui_settings_offer_logging_only_where_the_generic_scan_runs():
+    modes_by_provider = (await get_guardrail_ui_settings()).supported_modes_by_provider
+
+    assert modes_by_provider["litellm_content_filter"] == [
+        *(hook.value for hook in ContentFilterGuardrail.get_supported_event_hooks()),
+        "logging_only",
+    ]
+    assert modes_by_provider["akto"].count("logging_only") == 1
+    assert modes_by_provider["azure/prompt_shield"] == [
+        hook.value for hook in AzureContentSafetyPromptShieldGuardrail.get_supported_event_hooks()
+    ]
+    with pytest.raises(ValueError, match="not in the supported event hooks"):
+        AzureContentSafetyPromptShieldGuardrail(
+            guardrail_name="native-logging-only",
+            api_key="k",
+            api_base="https://example.invalid",
+            event_hook="logging_only",
+        )
+    assert (
+        ContentFilterGuardrail(guardrail_name="cf-logging-only", event_hook="logging_only").event_hook == "logging_only"
+    )
 
 
 def test_content_filter_runtime_rejects_unsupported_mcp_hook():

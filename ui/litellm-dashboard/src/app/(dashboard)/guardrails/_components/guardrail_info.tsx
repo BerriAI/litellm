@@ -39,6 +39,7 @@ import {
   getLoggingOnlyScopeUpdate,
   getGuardrailLogoAndName,
   guardrail_provider_map,
+  loggingOnlyContinueFromParams,
   loggingOnlyScopeToChoice,
   skipSystemMessageToChoice,
   skipToolMessageToChoice,
@@ -173,8 +174,8 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
 
         // Only if there are entities configured
         if (Object.keys(piiConfig).length > 0) {
-          const entities: string[] = [];
-          const actions: { [key: string]: string } = {};
+          const entities: string[] = [],
+            actions: { [key: string]: string } = {};
 
           Object.entries(piiConfig).forEach(([entity, action]: [string, any]) => {
             entities.push(entity);
@@ -226,14 +227,13 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
     fetchGuardrailUISettings();
   }, [guardrailId, accessToken]);
 
-  // Reset form when guardrail data or provider params change. Only the names this form actually
-  // binds are seeded: an unbound key would otherwise be submitted as if the user had set it.
   useEffect(() => {
     if (!guardrailData) return;
     form.setValue("guardrail_name", guardrailData.guardrail_name);
     form.setValue("default_on", guardrailData.litellm_params?.default_on);
-    const storedLoggingOnlyScope = guardrailData.litellm_params?.logging_only_scope;
-    form.setValue("logging_only_scope_choice", loggingOnlyScopeToChoice(storedLoggingOnlyScope));
+    const storedParams = guardrailData.litellm_params;
+    form.setValue("logging_only_scope_choice", loggingOnlyScopeToChoice(storedParams?.logging_only_scope));
+    form.setValue("logging_only_continue_on_input_failure", loggingOnlyContinueFromParams(storedParams));
     form.setValue(
       "skip_system_message_choice",
       skipSystemMessageToChoice(guardrailData.litellm_params?.skip_system_message_in_guardrail),
@@ -302,12 +302,11 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
     try {
       if (!accessToken) return;
 
-      // Prepare update data object - only include changed fields
+      const { logging_only_scope_choice: scopeChoice, logging_only_continue_on_input_failure: continueFlag } = values;
       const updateData: any = {
-        litellm_params: getLoggingOnlyScopeUpdate(guardrailData.litellm_params, values.logging_only_scope_choice),
+        litellm_params: getLoggingOnlyScopeUpdate(guardrailData.litellm_params, scopeChoice, continueFlag),
       };
 
-      // Only include guardrail_name if it has changed
       if (values.guardrail_name !== guardrailData.guardrail_name) {
         updateData.guardrail_name = values.guardrail_name;
       }

@@ -117,7 +117,8 @@ class RedisSemanticCache(BaseCache):
                 password = password or os.environ["REDIS_PASSWORD"]
             except KeyError as e:
                 # Raise a more informative exception if any of the required keys are missing
-                missing_var: Final[object] = e.args[0]
+                key_error_args: Final[tuple[object, ...]] = e.args
+                missing_var: Final = key_error_args[0]
                 raise ValueError(
                     f"Missing required Redis configuration: {missing_var}. Provide {missing_var} or redis_url."
                 ) from e
@@ -310,9 +311,9 @@ class RedisSemanticCache(BaseCache):
                         return
             return
 
-        content = getattr(value, "content", None)
-        if content is not None:
-            cls._collect_responses_input_text(content, prompt_parts)
+        attribute_content: Final[object] = getattr(value, "content", None)
+        if attribute_content is not None:
+            cls._collect_responses_input_text(attribute_content, prompt_parts)
             return
 
         for text_key in ("text", "output", "input_text", "output_text"):

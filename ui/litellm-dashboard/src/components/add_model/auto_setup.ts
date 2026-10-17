@@ -1,3 +1,5 @@
+import { activeTierRows } from "./tier_rows";
+import { isForecastClassifier } from "./forecast_classifier_config";
 import { isAutoRouterDeployment, type AutoRouterDeployment } from "@/app/(dashboard)/hooks/models/useModels";
 import type { ModelGroup } from "@/components/llm_calls/fetch_models";
 import { resolveAvailableModel, type AutoRouterPreset, type ModelAvailability } from "@/lib/autorouter_presets";
@@ -91,5 +93,18 @@ export const buildAutomaticRouterConfig = (
     ...(reasoningEffort && {
       tier_model_params: { REASONING: { [selected[3]]: { reasoning_effort: reasoningEffort } } },
     }),
+  };
+};
+
+export const prefillEmptyTiers = (
+  current: ComplexityRouterConfigValue,
+  automatic: ComplexityRouterConfigValue | null,
+): ComplexityRouterConfigValue => {
+  if (!automatic || current.custom_tier_set || isForecastClassifier(current.classifier_type)) return current;
+  if (activeTierRows(current).some((row) => row.models.length > 0)) return current;
+  return {
+    ...current,
+    tiers: { ...current.tiers, ...automatic.tiers },
+    tier_model_params: { ...current.tier_model_params, ...automatic.tier_model_params },
   };
 };

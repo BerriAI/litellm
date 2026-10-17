@@ -3,7 +3,7 @@
 These cover the pure helpers in
 ``litellm.proxy._experimental.mcp_server.utils`` and do not require a DB
 connection. The DB-backed per-user flow is exercised in higher-level
-tests in tests/mcp_tests.
+tests in tests/integration/mcp.
 """
 
 from typing import Final

@@ -1,5 +1,6 @@
 import json
 from collections.abc import Callable, Mapping, Sequence
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Optional, cast
 
 import httpx
@@ -39,7 +40,8 @@ def _plain_text_delta(chunk: ModelResponseStream) -> str | None:
     choice: Final = chunk.choices[0]
     if choice.finish_reason or choice.logprobs is not None:
         return None
-    populated: Final = frozenset(key for key, value in choice.delta.model_dump().items() if value is not None)
+    delta_fields: Final[Mapping[str, object]] = MappingProxyType(choice.delta.model_dump())
+    populated: Final = frozenset(key for key, value in delta_fields.items() if value is not None)
     if not populated <= _TEXT_ONLY_DELTA_FIELDS:
         return None
     content: Final = choice.delta.get("content")
@@ -92,7 +94,7 @@ def _translate_message(decoder: "AWSEventStreamDecoder", message: str) -> ModelR
 def _build_logged_response(
     chunks: Sequence[ModelResponseStream], litellm_logging_obj: "LiteLLMLoggingObj"
 ) -> Optional["CostResponseTypes"]:
-    from litellm.main import stream_chunk_builder
+    from litellm.litellm_core_utils.streaming_chunk_builder_utils import stream_chunk_builder
 
     if len(chunks) == 0:
         return None

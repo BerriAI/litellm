@@ -163,3 +163,23 @@ async def test_completion_sagemaker_messages_api(sync_mode):
                 assert json_data["max_tokens"] == 80
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
+def test_missing_botocore_keeps_dependency_identity():
+    import pytest
+
+    with patch.dict("sys.modules", {"botocore": None}):
+        with pytest.raises(ModuleNotFoundError, match="pip install boto3") as caught:
+            SagemakerChatHandler()._load_credentials({})
+    assert caught.value.name == "botocore"
+
+
+def test_installed_botocore_signs_the_chat_request():
+    from botocore.credentials import Credentials
+
+    request = SagemakerChatHandler()._prepare_request(
+        credentials=Credentials("test-key", "test-secret"), model="test-endpoint", data={"inputs": "ping"},
+        optional_params={}, aws_region_name="us-west-2",
+    )
+    assert request.body == b'{"inputs": "ping"}'
+    assert "/us-west-2/sagemaker/aws4_request" in request.headers["Authorization"]

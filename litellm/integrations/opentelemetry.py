@@ -9,6 +9,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, TypedDict, cast
 
 from pydantic import ConfigDict, TypeAdapter
+from typing_extensions import ReadOnly
 
 import litellm
 from litellm._logging import verbose_logger
@@ -105,6 +106,18 @@ _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_i
 
 # Cap on credential-scoped providers held at once; each one owns an exporter thread.
 _MAX_DYNAMIC_TRACER_PROVIDERS: Final = 256
+
+
+class _CacheHitView(TypedDict, total=False):
+    cache_hit: ReadOnly[object]
+    saved_cache_cost: ReadOnly[object]
+
+
+_CACHE_HIT_VIEW: Final = TypeAdapter(_CacheHitView)
+
+_CACHE_HIT_COST_BREAKDOWN: Final = MappingProxyType(
+    {"input_cost": 0.0, "output_cost": 0.0, "total_cost": 0.0, "tool_usage_cost": 0.0}
+)
 
 # Dedicated so a slow exporter shutdown cannot starve the shared logging executor.
 _PROVIDER_SHUTDOWN_EXECUTOR: Final = ThreadPoolExecutor(max_workers=4, thread_name_prefix="OtelProviderShutdown")
@@ -2434,6 +2447,8 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 litellm_params=litellm_params,
             )
             # Cost breakdown tracking
+            cache_view: Final = _CACHE_HIT_VIEW.validate_python(standard_logging_payload)
+            cache_hit: Final = cache_view.get("cache_hit") is True
             cost_breakdown: Final[CostBreakdown | None] = standard_logging_payload.get("cost_breakdown")
             if cost_breakdown:
                 for key, value in cost_breakdown.items():
@@ -2443,19 +2458,14 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                             key=f"gen_ai.cost.{key}",
                             value=value,
                         )
-            if standard_logging_payload.get("cache_hit") is True:
-                self.safe_set_attribute(
-                    span=span,
-                    key="litellm.cache_hit",
-                    value=True,
-                )
-                saved_cache_cost: Final = standard_logging_payload.get("saved_cache_cost")
+            elif cache_hit:
+                for zero_cost_key, zero_cost in _CACHE_HIT_COST_BREAKDOWN.items():
+                    self.safe_set_attribute(span=span, key=f"gen_ai.cost.{zero_cost_key}", value=zero_cost)
+            if cache_hit:
+                self.safe_set_attribute(span=span, key=LiteLLM.CACHE_HIT, value=True)
+                saved_cache_cost: Final = cache_view.get("saved_cache_cost")
                 if isinstance(saved_cache_cost, (int, float)):
-                    self.safe_set_attribute(
-                        span=span,
-                        key="litellm.saved_cache_cost",
-                        value=saved_cache_cost,
-                    )
+                    self.safe_set_attribute(span=span, key=LiteLLM.SAVED_CACHE_COST, value=saved_cache_cost)
             #############################################
             ########## LLM Request Attributes ###########
             #############################################
