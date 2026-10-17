@@ -393,7 +393,11 @@ def resolve_chat_reasoning(
     if not provider_reads_thinking(
         thinking, model=model, custom_llm_provider=custom_llm_provider, drop_params=drop_params
     ):
-        return ChatReasoning(effort=explicit, thinking=None, output_config=output)
+        return ChatReasoning(
+            effort=explicit if explicit_kept else resolve(_requested_level(output)),
+            thinking=None,
+            output_config=output,
+        )
     if _requested_level(reasoning_effort if explicit_kept else output_config) != _DEFAULT_EFFORT:
         return ChatReasoning(effort=explicit, thinking=thinking, output_config=output)
     return ChatReasoning(

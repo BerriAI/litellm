@@ -354,6 +354,14 @@ CELLS: Final[Mapping[str, Cell]] = MappingProxyType(
             _openai_compatible("max"),
             _AZURE_AI_CHAT,
         ),
+        "chat-azure_ai-output-config-beside-budget-sends-its-effort": Cell(
+            CHAT,
+            "azure_ai",
+            _KIMI_INFO,
+            {"output_config": {"effort": "minimal"}, "thinking": _BUDGET},
+            _with_output_config(_openai_compatible("low"), {"effort": "low"}),
+            _AZURE_AI_CHAT,
+        ),
         "chat-azure_ai-explicit-effort-wins-over-string-budget-thinking": Cell(
             CHAT,
             "azure_ai",
@@ -486,6 +494,14 @@ CELLS: Final[Mapping[str, Cell]] = MappingProxyType(
             _KIMI_INFO,
             {"reasoning_effort": "minimal", "thinking": _BUDGET},
             _openai_compatible("low"),
+            _VLLM_CHAT,
+        ),
+        "chat-vllm-output-config-beside-budget-sends-its-effort": Cell(
+            CHAT,
+            "hosted_vllm",
+            _KIMI_INFO,
+            {"output_config": {"effort": "minimal"}, "thinking": _BUDGET},
+            _with_output_config(_openai_compatible("low"), {"effort": "low"}),
             _VLLM_CHAT,
         ),
         "chat-vllm-deployment-rounds-down": Cell(

@@ -8895,19 +8895,39 @@ def test_drop_params_drops_a_non_numeric_thinking_budget_on_adaptive_claude(
     assert dropped == adaptive_alone
 
 
+@pytest.mark.parametrize("model", ["azure_ai/my-kimi", "hosted_vllm/my-kimi"])
+@pytest.mark.parametrize("drop_params", [False, True])
 def test_an_output_config_effort_replaces_a_thinking_budget_the_provider_cannot_read(
-    respx_mock: respx.MockRouter,
+    respx_mock: respx.MockRouter, model: str, drop_params: bool
 ) -> None:
     sent: Final = _chat_body_sent(
         respx_mock,
-        "azure_ai/my-kimi",
+        model,
         None,
         _KIMI_DEPLOYMENT,
         thinking={"type": "enabled", "budget_tokens": 2048},
-        output_config={"effort": "medium"},
+        output_config={"effort": "minimal"},
+        drop_params=drop_params,
     )
 
-    assert sent["output_config"] == {"effort": "high"}
+    assert sent["reasoning_effort"] == "low"
+    assert sent["output_config"] == {"effort": "low"}
+    assert "thinking" not in sent
+
+
+@pytest.mark.parametrize("model", ["azure_ai/my-kimi", "hosted_vllm/my-kimi"])
+def test_a_default_output_config_effort_beside_a_thinking_budget_sends_no_effort_where_thinking_is_unread(
+    respx_mock: respx.MockRouter, model: str
+) -> None:
+    sent: Final = _chat_body_sent(
+        respx_mock,
+        model,
+        None,
+        _KIMI_DEPLOYMENT,
+        thinking={"type": "enabled", "budget_tokens": 2048},
+        output_config={"effort": "default"},
+    )
+
     assert "reasoning_effort" not in sent
     assert "thinking" not in sent
 
