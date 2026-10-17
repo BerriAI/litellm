@@ -1365,6 +1365,16 @@ jobs:
       pull-requests: read
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    services:
+      redis:
+        image: redis:7.2.16@sha256:0637954999d01b7c9ce9167db2da50656e2590d3b884f1c600c5f63bb6e6773c
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     strategy:
       fail-fast: false
       matrix:
@@ -1452,6 +1462,19 @@ jobs:
             tests/unit/caching/test_evicted_client_closer.py \
             --tb=short -vv -rs -p no:rerunfailures -p no:pytest-retry --timeout=120 --durations=20 \
             --cov=./litellm --cov-report=xml:coverage.xml
+
+      - name: Run shared Redis SDK regressions
+        if: steps.changes.outputs.decision != 'skip'
+        timeout-minutes: 5
+        env:
+          REDIS_HOST: "127.0.0.1"
+          REDIS_PORT: "6379"
+          PYTHONPATH: ".:tests"
+          COVERAGE_CORE: sysmon
+        run: |
+          uv run --no-sync pytest tests/integration/sdk/test_dual_cache_redis.py \
+            --tb=short -vv -rs -p no:rerunfailures -p no:pytest-retry --timeout=120 \
+            --cov=./litellm --cov-append --cov-report=xml:coverage.xml
 
       - name: Upload redis-py ${{ matrix.redis-py }} coverage to Codecov
         if: always() && steps.changes.outputs.decision != 'skip' && matrix.redis-py == '5.3.1'
