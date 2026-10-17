@@ -3693,7 +3693,9 @@ class TestBatchLineItemsFromThePoller:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("database_error", [False, True])
-    async def test_a_batch_that_could_not_be_retired_sends_no_lines_until_it_is(self, monkeypatch, database_error):
+    async def test_a_batch_that_could_not_be_retired_sends_no_lines_until_it_is(
+        self, monkeypatch: pytest.MonkeyPatch, database_error: bool
+    ) -> None:
         import litellm
 
         journal: list = []
