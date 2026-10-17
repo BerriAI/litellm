@@ -24,6 +24,30 @@ from litellm.utils import ProviderConfigManager
 
 
 @pytest.mark.serial
+def test_get_stripped_model_name_strips_gpt5_series_route():
+    """The gpt5_series/ routing marker must not be sent to Azure as part of the deployment name."""
+    config = AzureOpenAIResponsesAPIConfig()
+
+    assert (
+        config.get_stripped_model_name("azure/gpt5_series/my-gpt5-deployment")
+        == "azure/my-gpt5-deployment"
+    )
+    assert (
+        config.get_stripped_model_name("azure/responses/gpt5_series/my-gpt5-deployment")
+        == "azure/my-gpt5-deployment"
+    )
+    # existing markers still strip, and plain deployments pass through untouched
+    assert (
+        config.get_stripped_model_name("azure/o_series/my-o3-deployment")
+        == "azure/my-o3-deployment"
+    )
+    assert (
+        config.get_stripped_model_name("azure/my-gpt5-deployment")
+        == "azure/my-gpt5-deployment"
+    )
+
+
+@pytest.mark.serial
 def test_validate_environment_api_key_within_litellm_params():
     azure_openai_responses_apiconfig = AzureOpenAIResponsesAPIConfig()
     litellm_params = GenericLiteLLMParams(api_key="test-api-key")
