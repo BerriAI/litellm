@@ -186,6 +186,7 @@ impl ModelResponseIterator {
                 provider_specific_fields: None,
             },
             index: self.tool_index,
+            provider_specific_fields: None,
         }
     }
 
