@@ -851,11 +851,18 @@ _NON_TOKEN_RATE_FIELDS: Final = frozenset(
         "tiered_pricing",
     }
 )
+# Count only when picking a deployment's own entry: speech bills per character, realtime bills per token
+_PER_CHARACTER_RATE_FIELDS: Final = frozenset({"input_cost_per_character", "output_cost_per_character"})
 
 
-def _cost_map_entry_prices_anything(entry: Mapping[str, object]) -> bool:
+def _cost_map_entry_prices_anything(
+    entry: Mapping[str, object], extra_rate_fields: frozenset[str] = frozenset()
+) -> bool:
     return any(
-        value is not None and (field in _NON_TOKEN_RATE_FIELDS or ("cost_per" in field and "token" in field))
+        value is not None
+        and (
+            field in _NON_TOKEN_RATE_FIELDS or field in extra_rate_fields or ("cost_per" in field and "token" in field)
+        )
         for field, value in entry.items()
     )
 
@@ -924,7 +931,7 @@ def select_model_name_for_cost_calc(
     if custom_pricing is True:
         if router_model_id is not None and router_model_id in litellm.model_cost:
             entry: Final = litellm.model_cost[router_model_id]
-            if _cost_map_entry_prices_anything(entry):
+            if _cost_map_entry_prices_anything(entry, extra_rate_fields=_PER_CHARACTER_RATE_FIELDS):
                 return_model = router_model_id
             else:
                 return_model = model
