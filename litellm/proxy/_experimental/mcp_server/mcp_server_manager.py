@@ -1853,6 +1853,17 @@ def _listing_task_was_cancelled(error: asyncio.CancelledError) -> bool:
     return error.args != (SESSION_CLEANUP_TIMEOUT_MESSAGE,)
 
 
+def is_anonymous_mcp_caller(user_api_key_auth: UserAPIKeyAuth | None) -> bool:
+    return not (
+        user_api_key_auth
+        and (
+            getattr(user_api_key_auth, "user_id", None)
+            or getattr(user_api_key_auth, "user_role", None)
+            or getattr(user_api_key_auth, "api_key", None)
+        )
+    )
+
+
 class MCPServerManager:
     _STDIO_ENV_TEMPLATE_PATTERN = re.compile(r"^\$\{(X-[^}]+)\}$")
 
@@ -3714,14 +3725,7 @@ class MCPServerManager:
                 )
             )
 
-            is_anonymous: Final = not (
-                user_api_key_auth
-                and (
-                    getattr(user_api_key_auth, "user_id", None)
-                    or getattr(user_api_key_auth, "user_role", None)
-                    or getattr(user_api_key_auth, "api_key", None)
-                )
-            )
+            is_anonymous: Final = is_anonymous_mcp_caller(user_api_key_auth)
             if is_anonymous:
                 passthrough_server_ids: Final = [
                     server.server_id

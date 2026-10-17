@@ -578,6 +578,7 @@ if MCP_AVAILABLE:
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         MCPServerManager,
         global_mcp_server_manager,
+        is_anonymous_mcp_caller,
     )
 
     ######################################################
@@ -1828,6 +1829,15 @@ if MCP_AVAILABLE:
             return allowed_ids
         return allowed_ids & frozenset(toolset_allowed_server_ids)
 
+    def _challenge_server_ids(
+        user_api_key_auth: UserAPIKeyAuth | None,
+        allowed_servers: Sequence[MCPServer],
+        toolset_allowed_server_ids: Set[str] | None,
+    ) -> frozenset[str] | None:
+        if is_anonymous_mcp_caller(user_api_key_auth):
+            return None if toolset_allowed_server_ids is None else frozenset(toolset_allowed_server_ids)
+        return _narrow_allowed_server_ids(allowed_servers, toolset_allowed_server_ids)
+
     _apply_toolset_scope: Final = apply_toolset_scope
 
     async def _toolset_server_ids(toolset_id: str) -> set[str]:
@@ -1854,7 +1864,8 @@ if MCP_AVAILABLE:
         (points clients at the upstream resource-metadata via our well-known).
 
         ``allowed_server_ids`` is the set of servers the caller's key may
-        reach, narrowed further by any active toolset scope; servers not in
+        reach, narrowed further by any active toolset scope; anonymous
+        cold-start callers are not narrowed by a key allowlist. Servers not in
         that set are skipped so a client is not pushed into an OAuth flow
         for a server it will be 403'd on immediately after authentication.
         """
@@ -2331,7 +2342,9 @@ if MCP_AVAILABLE:
                 ),
                 user_api_key_auth=user_api_key_auth,
                 client_ip=client_ip,
-                allowed_server_ids=_narrow_allowed_server_ids(allowed_servers, toolset_allowed_server_ids),
+                allowed_server_ids=_challenge_server_ids(
+                    user_api_key_auth, allowed_servers, toolset_allowed_server_ids
+                ),
                 raw_headers=raw_headers,
             )
             # Pre-flight auth check for pass-through servers.  Must run after
@@ -2835,7 +2848,9 @@ if MCP_AVAILABLE:
                 mcp_server_auth_headers=mcp_server_auth_headers,
                 user_api_key_auth=user_api_key_auth,
                 client_ip=_sse_client_ip,
-                allowed_server_ids=_narrow_allowed_server_ids(allowed_servers, toolset_allowed_server_ids),
+                allowed_server_ids=_challenge_server_ids(
+                    user_api_key_auth, allowed_servers, toolset_allowed_server_ids
+                ),
                 raw_headers=raw_headers,
             )
 

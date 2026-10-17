@@ -10291,6 +10291,7 @@ class TestPreemptive401GatedByKeyAllowlist:
         allowed_servers: list[MCPServer],
         handle_target: StreamableHTTPSessionManager | None,
         toolset_auth: UserAPIKeyAuth | None = None,
+        request_auth: UserAPIKeyAuth | None = None,
         mcp_servers: list[str] | None = None,
         oauth2_headers: dict[str, str] | None = None,
         raw_headers: dict[str, str] | None = None,
@@ -10316,7 +10317,7 @@ class TestPreemptive401GatedByKeyAllowlist:
                         "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
                         new_callable=AsyncMock,
                         return_value=(
-                            self._auth(),
+                            request_auth if request_auth is not None else self._auth(),
                             None,
                             mcp_servers if mcp_servers is not None else [server.alias],
                             None,
@@ -10423,6 +10424,90 @@ class TestPreemptive401GatedByKeyAllowlist:
         handle_request.assert_not_awaited()
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("server_kind", "transport"),
+        [("pt", "streamable"), ("pt", "sse"), ("dl", "streamable"), ("dl", "sse")],
+    )
+    async def test_keyless_cold_start_still_gets_oauth_challenge(self, server_kind: str, transport: str) -> None:
+        from litellm.proxy._experimental.mcp_server import server as server_module
+
+        server: Final = MCPServer(
+            server_id=f"id-{server_kind}",
+            name=server_kind,
+            alias=server_kind,
+            server_name=server_kind,
+            url=None,
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none if server_kind == "pt" else MCPAuth.oauth2,
+            extra_headers=["Authorization"] if server_kind == "pt" else [],
+            oauth_passthrough=server_kind == "pt",
+            delegate_auth_to_upstream=server_kind == "dl",
+            oauth2_flow="authorization_code" if server_kind == "dl" else None,
+            authorization_url="https://idp.test/authorize" if server_kind == "dl" else None,
+            token_url="https://idp.test/token" if server_kind == "dl" else None,
+            mcp_info={"server_name": server_kind},
+        )
+        body: Final = (
+            b'{"jsonrpc":"2.0","id":1,"method":"initialize","params":'
+            b'{"protocolVersion":"2024-11-05","capabilities":{},'
+            b'"clientInfo":{"name":"test","version":"0"}}}'
+        )
+        scope: Final = {
+            "type": "http",
+            "method": "POST" if transport == "streamable" else "GET",
+            "path": f"/mcp/{server_kind}",
+            "scheme": "http",
+            "server": ("127.0.0.1", 4000),
+            "root_path": "",
+            "query_string": b"",
+            "headers": [
+                (b"host", b"127.0.0.1:4000"),
+                (b"accept", b"application/json, text/event-stream"),
+                (b"content-type", b"application/json"),
+            ],
+        }
+        receive: Final = AsyncMock(return_value={"type": "http.request", "body": body, "more_body": False})
+        registry: Final = mcp_operations.global_mcp_server_manager.registry
+        expected_challenge: Final = (
+            f'Bearer resource_metadata="http://127.0.0.1:4000/.well-known/oauth-protected-resource/mcp/{server_kind}"'
+        )
+
+        with (
+            patch.dict(registry, {server.server_id: server}),
+            patch(  # test-quality-ok: force the admitted anonymous cold-start auth context without DB or network
+                "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+                new_callable=AsyncMock,
+                return_value=(UserAPIKeyAuth(), None, [server.alias], None, None, None),
+            ),
+            patch(  # test-quality-ok: module-level startup flag gates the transport, with no injectable seam
+                "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED", True
+            ),
+        ):
+            if transport == "streamable":
+                handle_request: Final = AsyncMock()
+                with (
+                    patch.object(
+                        server_module.session_manager_stateful,
+                        "handle_request",
+                        new=handle_request,
+                    ),  # test-quality-ok: rejected requests must not dispatch to the session manager
+                    pytest.raises(HTTPException) as exc,
+                ):
+                    await server_module.handle_streamable_http_mcp(scope, receive, AsyncMock())
+                handle_request.assert_not_awaited()
+            else:
+                with (
+                    patch.object(server_module.sse, "connect_sse") as connect_sse,
+                    pytest.raises(HTTPException) as exc,
+                ):
+                    await server_module.handle_sse_mcp(scope, receive, AsyncMock())
+                connect_sse.assert_not_called()
+
+        assert exc.value.status_code == 401
+        assert exc.value.headers is not None
+        assert exc.value.headers["www-authenticate"] == expected_challenge
+
+    @pytest.mark.asyncio
     async def test_streamable_probe_reuses_allowed_servers(  # test-quality-ok: one lookup per request is the contract
         self, monkeypatch: pytest.MonkeyPatch
     ):
@@ -10510,7 +10595,15 @@ class TestPreemptive401GatedByKeyAllowlist:
         from litellm.proxy._types import LiteLLM_ObjectPermissionTable
 
         server: Final = _make_oauth2_server("restricted")
-        scoped_auth: Final = self._auth().model_copy(
+        key_auth: Final = self._auth().model_copy(
+            update={
+                "object_permission": LiteLLM_ObjectPermissionTable(
+                    object_permission_id="key-scope",
+                    mcp_servers=[server.server_id],
+                )
+            }
+        )
+        scoped_auth: Final = key_auth.model_copy(
             update={
                 "object_permission": LiteLLM_ObjectPermissionTable(
                     object_permission_id="toolset-scope",
@@ -10527,6 +10620,7 @@ class TestPreemptive401GatedByKeyAllowlist:
                     allowed_servers=[server],
                     handle_target=server_module.session_manager_stateful,
                     toolset_auth=scoped_auth,
+                    request_auth=key_auth,
                 ) as (_, handle_request),
                 pytest.raises(HTTPException) as exc,
             ):
