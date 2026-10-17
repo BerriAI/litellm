@@ -30188,11 +30188,6 @@ export interface components {
              */
             store_prompts_in_spend_logs?: boolean | null;
             /**
-             * Store User Email In Spend Logs
-             * @description If True, spend log metadata stores the email of the user who owns the key as user_api_key_user_email, so the Admin UI request logs can show it. Default is False, which stores it as null.
-             */
-            store_user_email_in_spend_logs?: boolean | null;
-            /**
              * Supported Db Objects
              * @description Fine-grained control over which object types to load from the database when store_model_in_db is True. Available types: 'models', 'mcp', 'guardrails', 'vector_stores', 'pass_through_endpoints', 'prompts', 'model_cost_map', 'tools', 'config_overrides'. If not set, all objects are loaded (default behavior).
              */

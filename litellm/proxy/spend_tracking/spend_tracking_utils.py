@@ -179,7 +179,6 @@ _STAMPED_METADATA_KEYS: Final = frozenset(
         "autorouter_baseline_observation",
         "used_client_oauth_token",
         "litellm_roi_estimator",
-        "user_api_key_user_email",
     )
 )
 
@@ -267,7 +266,6 @@ def _get_spend_logs_metadata(
         azure_spillover=azure_spillover,
         used_client_oauth_token=used_client_oauth_token,
         litellm_roi_estimator=metadata.get("litellm_roi_estimator") is True,
-        user_api_key_user_email=_user_email_for_spend_logs(metadata),
     )
     _raw_key: Final = clean_metadata.get("user_api_key")
     _trusted_hash: Final = metadata.get("user_api_key_hash")
@@ -1964,25 +1962,6 @@ def requester_ip_address_logging_disabled() -> bool:
         )
     except ValidationError:
         return False
-
-
-def user_email_spend_logging_enabled() -> bool:
-    from litellm.proxy.proxy_server import general_settings_view
-
-    try:
-        return (
-            _OPTIONAL_BOOL_ADAPTER.validate_python(general_settings_view().get("store_user_email_in_spend_logs"))
-            is True
-        )
-    except ValidationError:
-        return False
-
-
-def _user_email_for_spend_logs(metadata: Mapping[str, object]) -> str | None:
-    email: Final = metadata.get("user_api_key_user_email")
-    if not isinstance(email, str) or not user_email_spend_logging_enabled():
-        return None
-    return email
 
 
 def spend_log_row_with_retained_metadata(
