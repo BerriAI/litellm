@@ -16,6 +16,7 @@ from litellm.llms.ollama.chat.transformation import (
     OllamaChatCompletionResponseIterator,
 )
 
+from litellm.llms.ollama.common_utils import OllamaError
 from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import get_llm_provider, get_optional_params
 
@@ -656,6 +657,88 @@ class TestOllamaFinishReasonLength:
         assert (
             done_result.choices[0].finish_reason == "tool_calls"
         ), f"Expected 'tool_calls' when tool_calls were streamed earlier, got '{done_result.choices[0].finish_reason}'"
+
+
+OLLAMA_TOOL_CALL_PARSE_ERROR: Final = (
+    "error parsing tool call: raw='{\"command\":\"grep -n flag\"]}', err=invalid character ']' after object key:value pair"
+)
+
+
+class TestOllamaStructuredErrorPayload:
+    def _transform(self, ollama_response: dict[str, object]) -> ModelResponse:
+        mock_response: Final = MagicMock()
+        mock_response.json.return_value = ollama_response
+        mock_response.text = json.dumps(ollama_response)
+
+        model_response: Final = ModelResponse()
+        model_response.choices = [Choices(message=Message(content=""), index=0)]
+
+        return OllamaChatConfig().transform_response(
+            model="gpt-oss:120b",
+            raw_response=mock_response,
+            model_response=model_response,
+            logging_obj=MagicMock(),
+            request_data={},
+            messages=[{"role": "user", "content": "grep for flag"}],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+            api_key=None,
+            json_mode=False,
+        )
+
+    def test_streaming_error_chunk_surfaces_ollama_message(self):
+        iterator: Final = OllamaChatCompletionResponseIterator(streaming_response=iter([]), sync_stream=True)
+
+        with pytest.raises(OllamaError) as exc_info:
+            iterator.chunk_parser({"error": OLLAMA_TOOL_CALL_PARSE_ERROR})
+
+        assert exc_info.value.message == OLLAMA_TOOL_CALL_PARSE_ERROR
+        assert exc_info.value.status_code == 400
+
+    def test_non_streaming_error_payload_surfaces_ollama_message(self):
+        with pytest.raises(OllamaError) as exc_info:
+            self._transform({"error": OLLAMA_TOOL_CALL_PARSE_ERROR})
+
+        assert exc_info.value.message == OLLAMA_TOOL_CALL_PARSE_ERROR
+        assert exc_info.value.status_code == 400
+
+    def test_streaming_error_chunk_does_not_mask_earlier_tool_call_state(self):
+        iterator: Final = OllamaChatCompletionResponseIterator(streaming_response=iter([]), sync_stream=True)
+        tool_chunk: Final = {
+            "model": "gpt-oss:120b",
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"function": {"name": "shell", "arguments": {"command": "ls"}}}],
+            },
+            "done": False,
+        }
+        iterator.chunk_parser(tool_chunk)
+
+        with pytest.raises(OllamaError) as exc_info:
+            iterator.chunk_parser({"error": "llama runner process has terminated: exit status 2"})
+
+        assert exc_info.value.message == "llama runner process has terminated: exit status 2"
+
+    def test_usage_uses_eval_count_when_message_has_no_content(self):
+        result: Final = self._transform(
+            {
+                "model": "gpt-oss:120b",
+                "message": {
+                    "role": "assistant",
+                    "tool_calls": [{"function": {"name": "shell", "arguments": {"command": "ls"}}}],
+                },
+                "done": True,
+                "done_reason": "stop",
+                "prompt_eval_count": 11,
+                "eval_count": 7,
+            }
+        )
+
+        assert result.usage.prompt_tokens == 11
+        assert result.usage.completion_tokens == 7
+        assert result.usage.total_tokens == 18
 
 
 class TestOllamaReasoningContentStreaming:
