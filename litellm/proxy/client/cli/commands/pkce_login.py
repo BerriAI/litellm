@@ -128,6 +128,7 @@ class LoopbackServer(HTTPServer):
         self.expected_state: Final = expected_state
         self.connection_timeout_seconds: Final = connection_timeout_seconds
         self.outcome: CallbackOutcome | None = None
+        self.launch_failure: PkceFailure | None = None
         self.timeout = 1
 
     @property
@@ -139,11 +140,18 @@ class LoopbackServer(HTTPServer):
         accepted[0].settimeout(self.connection_timeout_seconds)
         return accepted
 
+    def launch_browser(self, open_browser: Callable[[str], object], url: str) -> None:
+        opened: Final = open_browser(url)
+        if isinstance(opened, PkceFailure):
+            self.launch_failure = opened
+
     def wait(
         self, timeout_seconds: float, clock: Callable[[], float] = time.monotonic
     ) -> CallbackOutcome | PkceFailure:
         deadline: Final = clock() + timeout_seconds
         while self.outcome is None:
+            if self.launch_failure is not None:
+                return self.launch_failure
             if clock() >= deadline:
                 return PkceFailure("timed out waiting for the browser sign-in to finish")
             self.handle_request()
@@ -454,7 +462,9 @@ def run_pkce_login(
         url: Final = authorize_url(contract, client_id, server.redirect_uri, state, challenge)
         echo(f"Opening browser to: {url}")
         echo("Approve the sign-in in your browser. Waiting...")
-        threading.Thread(target=open_browser, args=(url,), name="lite-login-browser", daemon=True).start()
+        threading.Thread(
+            target=server.launch_browser, args=(open_browser, url), name="lite-login-browser", daemon=True
+        ).start()
         outcome: Final = server.wait(timeout_seconds)
     match outcome:
         case PkceFailure():
