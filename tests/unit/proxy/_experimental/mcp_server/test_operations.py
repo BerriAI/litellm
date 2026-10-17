@@ -1035,12 +1035,12 @@ async def test_tool_operation_lets_the_parent_otel_span_own_the_trace_beside_ses
             isError=False,
         )
 
-    context = prepare_context(
+    context: Final = prepare_context(
         user_api_key_auth=UserAPIKeyAuth(api_key="hashed-key", parent_otel_span=span),
         raw_headers={"x-session-affinity": affinity},
     )
     with patch.object(operations, "call_mcp_tool", echo_ids):
-        result = await GatewayOperations().execute(
+        result: Final = await GatewayOperations().execute(
             CallToolRequest(params=CallToolRequestParams(name="catalog-tool", arguments={})), context
         )
     assert isinstance(result.content[0], TextContent)

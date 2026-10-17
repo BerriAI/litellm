@@ -3748,7 +3748,7 @@ def _apply_session_sources(
 
 
 def _session_from_affinity_only(data: dict[str, object] | None = None) -> object:
-    payload = data if data is not None else {"metadata": {}}
+    payload: Final = data if data is not None else {"metadata": {}}
     _apply_session_sources({"x-session-affinity": PI_AI_SESSION_ID}, payload)
     return payload.get("litellm_session_id")
 
@@ -3763,7 +3763,7 @@ def _session_from_affinity_only(data: dict[str, object] | None = None) -> object
     ],
 )
 def test_add_litellm_metadata_session_affinity_alone_sets_session_and_trace(session_affinity: str):
-    data = _apply_session_sources({"X-Session-Affinity": session_affinity}, {"metadata": {}})
+    data: Final = _apply_session_sources({"X-Session-Affinity": session_affinity}, {"metadata": {}})
 
     assert data["litellm_session_id"] == session_affinity
     assert data["litellm_trace_id"] == session_affinity
@@ -3778,7 +3778,7 @@ def test_add_litellm_metadata_session_affinity_alone_sets_session_and_trace(sess
 def test_session_affinity_rejects_junk_values(value: str):
     from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
 
-    data = _apply_session_sources({"x-session-affinity": value}, {"metadata": {}})
+    data: Final = _apply_session_sources({"x-session-affinity": value}, {"metadata": {}})
 
     assert get_chain_id_from_headers({"x-session-affinity": value}) is None
     assert "litellm_session_id" not in data
@@ -3807,8 +3807,8 @@ def test_session_affinity_accepts_colons_at_both_length_bounds(value: str):
 def test_every_session_header_beats_session_affinity_everywhere(winning_headers: dict[str, str]):
     from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
 
-    headers = {**winning_headers, "x-session-affinity": PI_AI_SESSION_ID}
-    data = _apply_session_sources(headers, {"metadata": {}})
+    headers: Final = {**winning_headers, "x-session-affinity": PI_AI_SESSION_ID}
+    data: Final = _apply_session_sources(headers, {"metadata": {}})
 
     assert get_chain_id_from_headers(headers) == "other-session-1234"
     assert data["litellm_session_id"] == "other-session-1234"
@@ -3819,7 +3819,7 @@ def test_every_session_header_beats_session_affinity_everywhere(winning_headers:
 
 
 def test_anthropic_metadata_session_beats_session_affinity():
-    data = _apply_session_sources(
+    data: Final = _apply_session_sources(
         {"x-session-affinity": PI_AI_SESSION_ID},
         {"metadata": {"user_id": "user_abc123_account__session_e96634a3-fa28-4083-b354-55542e2dca01"}},
     )
@@ -3833,8 +3833,8 @@ def test_anthropic_metadata_session_beats_session_affinity():
 def test_baggage_session_beats_session_affinity():
     from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
 
-    headers = {"baggage": "session.id=baggage-session-42", "x-session-affinity": PI_AI_SESSION_ID}
-    data = _apply_session_sources(headers, {"metadata": {}})
+    headers: Final = {"baggage": "session.id=baggage-session-42", "x-session-affinity": PI_AI_SESSION_ID}
+    data: Final = _apply_session_sources(headers, {"metadata": {}})
 
     assert data["litellm_session_id"] == "baggage-session-42"
     assert data["metadata"]["session_id"] == "baggage-session-42"
@@ -3847,11 +3847,11 @@ def test_baggage_session_beats_session_affinity():
 def test_traceparent_keeps_trace_id_while_session_affinity_fills_session_id():
     from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
 
-    headers = {
+    headers: Final = {
         "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
         "x-session-affinity": PI_AI_SESSION_ID,
     }
-    data = _apply_session_sources(headers, {"metadata": {}})
+    data: Final = _apply_session_sources(headers, {"metadata": {}})
 
     assert data["litellm_trace_id"] == "4bf92f3577b34da6a3ce929d0e0e4736"
     assert data["metadata"]["trace_id"] == "4bf92f3577b34da6a3ce929d0e0e4736"
@@ -3862,8 +3862,8 @@ def test_traceparent_keeps_trace_id_while_session_affinity_fills_session_id():
 
 
 def test_parent_otel_span_trace_beats_session_affinity():
-    span = NonRecordingSpan(SpanContext(trace_id=0xABCDEF0123456789ABCDEF0123456789, span_id=0x1, is_remote=True))
-    data = _apply_session_sources({"x-session-affinity": PI_AI_SESSION_ID}, {"metadata": {}}, parent_otel_span=span)
+    span: Final = NonRecordingSpan(SpanContext(trace_id=0xABCDEF0123456789ABCDEF0123456789, span_id=0x1, is_remote=True))
+    data: Final = _apply_session_sources({"x-session-affinity": PI_AI_SESSION_ID}, {"metadata": {}}, parent_otel_span=span)
 
     assert data["litellm_trace_id"] == "abcdef0123456789abcdef0123456789"
     assert data["metadata"]["trace_id"] == "abcdef0123456789abcdef0123456789"
@@ -3873,7 +3873,7 @@ def test_parent_otel_span_trace_beats_session_affinity():
 
 
 def test_mcp_prestamped_session_affinity_still_fills_metadata():
-    data = _apply_session_sources(
+    data: Final = _apply_session_sources(
         {"x-session-affinity": PI_AI_SESSION_ID},
         {"metadata": {}, "litellm_trace_id": PI_AI_SESSION_ID, "litellm_session_id": PI_AI_SESSION_ID},
     )
@@ -3890,7 +3890,7 @@ def test_mcp_prestamped_session_affinity_still_fills_metadata():
     ],
 )
 def test_caller_body_session_beats_session_affinity(body: dict[str, object]):
-    data = _apply_session_sources({"x-session-affinity": PI_AI_SESSION_ID}, copy.deepcopy(body))
+    data: Final = _apply_session_sources({"x-session-affinity": PI_AI_SESSION_ID}, copy.deepcopy(body))
 
     assert data == body
     assert _session_from_affinity_only() == PI_AI_SESSION_ID
@@ -8756,10 +8756,10 @@ async def test_session_affinity_header_groups_spend_log_session_on_every_llm_rou
 ):
     """Two turns of a pi-ai session carrying only x-session-affinity must land in SpendLogs under
     that id on every LLM route, instead of one random session per request."""
-    request = _request_for(path)
+    request: Final = _request_for(path)
     request.headers = {"x-session-affinity": PI_AI_SESSION_ID}
 
-    turns = [
+    turns: Final = [
         await add_litellm_data_to_request(
             data=copy.deepcopy(client_body),
             request=request,

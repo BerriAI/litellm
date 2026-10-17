@@ -1902,7 +1902,7 @@ def test_every_proxy_session_header_shape_is_classified_as_a_session_alias():
     for headers in session_shapes:
         expected: Final = next(iter(headers.values()))
         assert get_chain_id_from_headers(dict(headers)) == expected, headers
-        data = {"metadata": {}}
+        data: Final = {"metadata": {}}
         LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
             headers=dict(headers), data=data, _metadata_variable_name="metadata"
         )
@@ -1911,20 +1911,20 @@ def test_every_proxy_session_header_shape_is_classified_as_a_session_alias():
         assert _is_session_header_trace({}, "other-trace-9f8e7d6c", {"headers": dict(headers)}) is False, headers
 
     explicit_trace: Final = {"x-litellm-trace-id": session, "x-litellm-session-id": session}
-    data = {"metadata": {}}
+    explicit_data: Final = {"metadata": {}}
     LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
-        headers=explicit_trace, data=data, _metadata_variable_name="metadata"
+        headers=explicit_trace, data=explicit_data, _metadata_variable_name="metadata"
     )
-    assert data["metadata"][TRACE_ID_SOURCE_METADATA_KEY] == "trace_header"
-    assert _is_session_header_trace(data["metadata"], session, {"headers": explicit_trace}) is False
+    assert explicit_data["metadata"][TRACE_ID_SOURCE_METADATA_KEY] == "trace_header"
+    assert _is_session_header_trace(explicit_data["metadata"], session, {"headers": explicit_trace}) is False
     assert _is_session_header_trace({}, session, {"headers": explicit_trace}) is False
 
     named_trace: Final = {"x-litellm-session-id": session, "langfuse_trace_id": "explicit-trace"}
-    data = {"metadata": {}}
+    named_data: Final = {"metadata": {}}
     LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
-        headers=named_trace, data=data, _metadata_variable_name="metadata"
+        headers=named_trace, data=named_data, _metadata_variable_name="metadata"
     )
-    assert _is_session_header_trace(data["metadata"], session, {"headers": named_trace}) is False
+    assert _is_session_header_trace(named_data["metadata"], session, {"headers": named_trace}) is False
 
 
 def test_session_affinity_beside_traceparent_keeps_the_real_trace():
