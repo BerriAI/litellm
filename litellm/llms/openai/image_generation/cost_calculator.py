@@ -21,8 +21,13 @@ def cost_calculator(
     image_response: ImageResponse,
     custom_llm_provider: str | None = None,
     model_info: ModelInfo | None = None,
+    data_residency: str | None = None,
 ) -> float:
-    """Calculate cost for OpenAI gpt-image models (token-based pricing)."""
+    """Calculate cost for OpenAI gpt-image models (token-based pricing).
+
+    ``data_residency`` carries the OpenAI regional-processing region (e.g. "eu",
+    "us") so the per-model uplift multiplier applies exactly like the chat path.
+    """
     provider: Final = custom_llm_provider or "openai"
     price_table: Final = (
         None
@@ -38,7 +43,11 @@ def cost_calculator(
     # A chat Usage with an explicit output breakdown: cost via generic_cost_per_token.
     if isinstance(usage, Usage) and usage.completion_tokens_details is not None:
         prompt_cost, completion_cost = generic_cost_per_token(
-            model=model, usage=usage, custom_llm_provider=provider, model_info=price_table
+            model=model,
+            usage=usage,
+            custom_llm_provider=provider,
+            model_info=price_table,
+            data_residency=data_residency,
         )
         return prompt_cost + completion_cost
 
@@ -48,7 +57,11 @@ def cost_calculator(
     # does not itemize output and splitting text/image when it does.
     if getattr(usage, "input_tokens", None) is not None:
         token_based_cost: Final = calculate_image_response_cost_from_usage(
-            model=model, image_response=image_response, custom_llm_provider=provider, model_info=price_table
+            model=model,
+            image_response=image_response,
+            custom_llm_provider=provider,
+            model_info=price_table,
+            data_residency=data_residency,
         )
         if token_based_cost is not None:
             return token_based_cost
@@ -57,7 +70,11 @@ def cost_calculator(
     # cost via generic_cost_per_token (text rate) instead of returning 0.0.
     if isinstance(usage, Usage):
         prompt_cost, completion_cost = generic_cost_per_token(
-            model=model, usage=usage, custom_llm_provider=provider, model_info=price_table
+            model=model,
+            usage=usage,
+            custom_llm_provider=provider,
+            model_info=price_table,
+            data_residency=data_residency,
         )
         return prompt_cost + completion_cost
 
