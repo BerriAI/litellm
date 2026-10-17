@@ -330,6 +330,33 @@ def _get_provider_request_id(original_exception: Exception) -> str | None:
 # Cache custom pricing keys as frozenset for O(1) lookups instead of looping through 49 keys
 _CUSTOM_PRICING_KEYS: Final[frozenset[str]] = frozenset(CustomPricingLiteLLMParams.model_fields.keys())
 _MODEL_INFO_CUSTOM_PRICING_KEYS: Final[frozenset[str]] = _CUSTOM_PRICING_KEYS | DEPLOYMENT_SCOPED_PRICING_FIELDS
+
+
+def _metadata_field(metadata: object, key: str) -> object:
+    if not isinstance(metadata, Mapping):
+        return None
+    return cast(Mapping[str, object], metadata).get(key)  # cast-ok: request metadata is a JSON object
+
+
+def _metadata_tags(metadata: object) -> tuple[object, ...]:
+    tags: Final = _metadata_field(metadata, "tags")
+    return tuple(cast(Iterable[object], tags)) if isinstance(tags, list) else ()  # cast-ok: tags are caller JSON
+
+
+def _combined_request_tags(metadata: object, litellm_metadata: object) -> tuple[object, ...]:
+    tags: Final = (*_metadata_tags(metadata), *_metadata_tags(litellm_metadata))
+    return tuple(tag for index, tag in enumerate(tags) if tag not in tags[:index])
+
+
+def _metadata_spend_logs_metadata(metadata: object) -> Mapping[str, object]:
+    value: Final = _metadata_field(metadata, "spend_logs_metadata")
+    return cast(Mapping[str, object], value) if isinstance(value, dict) else {}  # cast-ok: caller JSON object
+
+
+def _combined_spend_logs_metadata(metadata: object, litellm_metadata: object) -> Mapping[str, object]:
+    return {**_metadata_spend_logs_metadata(metadata), **_metadata_spend_logs_metadata(litellm_metadata)}
+
+
 _UNSERIALIZABLE_METADATA_KEYS: Final[frozenset[str]] = frozenset(
     ("user_api_key_auth", "user_api_key_budget_reservation")
 )
@@ -6013,6 +6040,8 @@ class StandardLoggingPayloadSetup:
         """
         metadata: Final = litellm_params.get("metadata")
         litellm_metadata: Final = litellm_params.get("litellm_metadata")
+        tags: Final = _combined_request_tags(metadata, litellm_metadata)
+        spend_logs_metadata: Final = _combined_spend_logs_metadata(metadata, litellm_metadata)
         user_metadata: Final = MappingProxyType(
             {
                 key: value
@@ -6027,7 +6056,12 @@ class StandardLoggingPayloadSetup:
                 if key not in user_metadata
             }
         )
-        return {**user_metadata, **model_metadata}
+        return {
+            **user_metadata,
+            **model_metadata,
+            **({"tags": list(tags)} if tags else {}),
+            **({"spend_logs_metadata": dict(spend_logs_metadata)} if spend_logs_metadata else {}),
+        }
 
     @staticmethod
     def get_standard_logging_metadata(
@@ -6627,25 +6661,13 @@ class StandardLoggingPayloadSetup:
         litellm_params: dict[str, object],
         proxy_server_request: Mapping[str, object],
     ) -> list[str]:
-        metadata: Final = cast(  # cast-ok: request metadata is caller-provided
-            Mapping[str, object], litellm_params.get("metadata") or {}
+        request_tags: Final = cast(  # cast-ok: tags are caller-provided
+            tuple[str, ...],
+            _combined_request_tags(litellm_params.get("metadata"), litellm_params.get("litellm_metadata")),
         )
-        litellm_metadata: Final = cast(  # cast-ok: request metadata is caller-provided
-            Mapping[str, object], litellm_params.get("litellm_metadata") or {}
-        )
-        if metadata.get("tags", []):
-            request_tags = cast(list[str], metadata.get("tags", [])).copy()  # cast-ok: tags are caller-provided
-        elif litellm_metadata.get("tags", []):
-            request_tags = cast(list[str], litellm_metadata.get("tags", [])).copy()  # cast-ok: tags are caller-provided
-        else:
-            request_tags = []
         user_agent_tags: Final = StandardLoggingPayloadSetup._get_user_agent_tags(proxy_server_request)
         additional_header_tags: Final = StandardLoggingPayloadSetup._get_extra_header_tags(proxy_server_request)
-        if user_agent_tags is not None:
-            request_tags.extend(user_agent_tags)
-        if additional_header_tags is not None:
-            request_tags.extend(additional_header_tags)
-        return request_tags
+        return [*request_tags, *(user_agent_tags or ()), *(additional_header_tags or ())]
 
     _get_request_tags = get_request_tags
 

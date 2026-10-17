@@ -24,6 +24,7 @@ from typing import (
     Protocol,
     TypeAlias,
     TypedDict,
+    cast,
 )
 
 from fastapi import HTTPException
@@ -128,6 +129,13 @@ class RateLimitedModel:
             return None
         requested_limit: Final = limits.get(self.requested)
         return requested_limit if requested_limit is not None else limits.get(self.group)
+
+
+def _metadata_agent_id(metadata: object) -> str | None:
+    if not isinstance(metadata, Mapping):
+        return None
+    agent_id: Final = cast(Mapping[str, object], metadata).get("agent_id")  # cast-ok: request metadata is a JSON object
+    return agent_id if isinstance(agent_id, str) and agent_id else None
 
 
 def _resolve_model_group_alias_via_proxy_router(model: str) -> str | None:
@@ -3192,8 +3200,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         key_agent_id: Final[str | None] = getattr(user_api_key_dict, "agent_id", None)
         if key_agent_id:
             return key_agent_id
-        metadata: Final = data.get("metadata") or {}
-        return metadata.get("agent_id")
+        request: Final = cast(Mapping[str, object], data)  # cast-ok: request body is a JSON object
+        return _metadata_agent_id(request.get("litellm_metadata")) or _metadata_agent_id(request.get("metadata"))
 
     def _get_session_id_from_data(self, data: dict) -> str | None:
         """Extract session_id from request metadata or litellm_session_id."""
