@@ -1913,14 +1913,17 @@ _THRESHOLD_TEST_TOOLS: Final = [
 ]
 
 
-def test_messages_reach_token_count_agrees_with_token_counter_at_every_threshold() -> None:
+@pytest.mark.parametrize(
+    "model", ["claude-3-5-sonnet-20240620", "DeepSeek-V4-Flash-0731", "databricks-qwen35-122b-a10b"]
+)
+def test_messages_reach_token_count_agrees_with_token_counter_at_every_threshold(model: str) -> None:
     """The threshold check is the same arithmetic as token_counter(...) >= threshold, including the
     tools and system-message adjustments, so the boundary values must agree exactly."""
     from litellm.litellm_core_utils.token_counter import messages_reach_token_count
 
     messages = _threshold_test_messages(turns=12)
     total = token_counter_new(
-        model="claude-3-5-sonnet-20240620",
+        model=model,
         messages=messages,
         tools=_THRESHOLD_TEST_TOOLS,
         use_default_image_token_count=True,
@@ -1928,7 +1931,7 @@ def test_messages_reach_token_count_agrees_with_token_counter_at_every_threshold
     assert total > 100
     for threshold in (0, 1, total - 1, total, total + 1, 10 * total):
         assert messages_reach_token_count(
-            model="claude-3-5-sonnet-20240620",
+            model=model,
             messages=messages,
             threshold=threshold,
             tools=_THRESHOLD_TEST_TOOLS,
