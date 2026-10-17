@@ -1380,6 +1380,51 @@ class TestToolPermissionGuardrailAnthropicMessages:
         assert message_start["model"] == "claude-sonnet-4-5", "the rewritten stream reports the model the upstream served"
 
     @pytest.mark.asyncio
+    async def test_rewrite_mode_keeps_the_allowed_tool_use_verdict_with_its_explanation(self):
+        """Claude Code auto mode reads the classifier verdict from message_delta. The rewrite changes
+        no text the explanation could repeat, so the allowed call keeps its verdict whole."""
+        bash_verdict = {"type": "evaluated", "outcome": "flagged", "explanation": "lists the home directory"}
+        safeguard_results = [
+            {
+                "type": "dangerous_tool_use",
+                "status": {
+                    "type": "available",
+                    "tool_uses": {"tu_ok": bash_verdict, "tu_bad": {"type": "evaluated", "outcome": "not_flagged"}},
+                },
+            }
+        ]
+        bash_chunks = self._sse_chunks("Bash", "tu_ok")
+        read_chunks = self._sse_chunks("Read", "tu_bad")
+        read_tool_use = [
+            chunk.replace(b'"index": 1', b'"index": 2') for chunk in read_chunks[4:7]
+        ]
+        message_delta = {
+            "type": "message_delta",
+            "delta": {"stop_reason": "tool_use", "safeguard_results": safeguard_results},
+            "usage": {"output_tokens": 5},
+        }
+        chunks = [
+            *bash_chunks[:7],
+            *read_tool_use,
+            f"event: message_delta\ndata: {json.dumps(message_delta)}\n\n".encode(),
+            bash_chunks[-1],
+        ]
+
+        with patch.object(self.rewriting, "should_run_guardrail", return_value=True):
+            out = await self._drain(self.rewriting, chunks)
+
+        body = b"".join(out).decode()
+        delta = next(
+            json.loads(line[6:])["delta"]
+            for line in body.splitlines()
+            if line.startswith("data: ") and json.loads(line[6:]).get("type") == "message_delta"
+        )
+        assert "Permission denied" in body
+        assert delta["safeguard_results"] == [
+            {"type": "dangerous_tool_use", "status": {"type": "available", "tool_uses": {"tu_ok": bash_verdict}}}
+        ]
+
+    @pytest.mark.asyncio
     async def test_message_start_without_a_dict_message_fails_closed(self):
         """Malformed SSE must not be forwarded unscanned.
 

@@ -1,10 +1,12 @@
 import json
+from collections.abc import Iterable, Mapping
+from typing import Final
 
 from litellm.llms.anthropic.pass_through.messages.fake_stream_iterator import (
     FakeAnthropicMessagesStreamIterator,
 )
 
-_CLAUDE_CODE_SAFEGUARD_RESULTS = [
+_CLAUDE_CODE_SAFEGUARD_RESULTS: Final = [
     {
         "type": "dangerous_tool_use",
         "status": {
@@ -17,20 +19,21 @@ _CLAUDE_CODE_SAFEGUARD_RESULTS = [
 ]
 
 
-def _decode_sse_chunks(chunks: list[bytes]) -> list[tuple[str, dict]]:
-    decoded = []
-    for chunk in chunks:
-        assert isinstance(chunk, bytes)
-        lines = chunk.decode().split("\n")
-        assert lines[0].startswith("event: ")
-        decoded.append((lines[0].removeprefix("event: "), json.loads(lines[1].removeprefix("data: "))))
-    return decoded
+def _decoded_event(chunk: object) -> tuple[str, dict[str, object]]:
+    assert isinstance(chunk, bytes)
+    event_line, data_line = chunk.decode().split("\n")[:2]
+    assert event_line.startswith("event: ")
+    return event_line.removeprefix("event: "), json.loads(data_line.removeprefix("data: "))
 
 
-def _message_delta(response: dict) -> dict:
-    decoded = _decode_sse_chunks(list(FakeAnthropicMessagesStreamIterator(response=response)))
-    assert [event_type for event_type, _ in decoded][-2:] == ["message_delta", "message_stop"]
-    deltas = [payload["delta"] for event_type, payload in decoded if event_type == "message_delta"]
+def _decoded_events(chunks: Iterable[object]) -> tuple[tuple[str, dict[str, object]], ...]:
+    return tuple(_decoded_event(chunk) for chunk in chunks)
+
+
+def _message_delta(response: Mapping[str, object]) -> object:
+    decoded: Final = _decoded_events(FakeAnthropicMessagesStreamIterator(response=response))
+    assert tuple(event_type for event_type, _ in decoded)[-2:] == ("message_delta", "message_stop")
+    deltas: Final = tuple(payload["delta"] for event_type, payload in decoded if event_type == "message_delta")
     assert len(deltas) == 1
     return deltas[0]
 
@@ -42,7 +45,7 @@ def test_message_delta_carries_safeguard_results():
     tests/unit/proxy/guardrails/test_anthropic_sse.py covers); a Claude Code
     auto-mode client reads the classifier verdict from message_delta.delta,
     where a real Anthropic stream puts it."""
-    response = {
+    response: Final = {
         "id": "msg_1",
         "model": "claude-sonnet-4-6",
         "role": "assistant",
@@ -62,8 +65,8 @@ def test_message_delta_carries_safeguard_results():
 
 
 def test_message_delta_carries_refusal_stop_details():
-    stop_details = {"type": "refusal", "category": "cyber", "explanation": "declined"}
-    response = {
+    stop_details: Final = {"type": "refusal", "category": "cyber", "explanation": "declined"}
+    response: Final = {
         "id": "msg_2",
         "content": [],
         "stop_reason": "refusal",
@@ -79,7 +82,7 @@ def test_message_delta_carries_refusal_stop_details():
 
 
 def test_message_delta_omits_absent_optional_fields():
-    response = {
+    response: Final = {
         "id": "msg_3",
         "content": [{"type": "text", "text": "hello"}],
         "stop_reason": "end_turn",

@@ -1557,7 +1557,7 @@ async def test_relay_teardown_dispatches_deferred_billing_when_sentinel_never_co
     assert deferred_fired.is_set()
 
 
-_CLAUDE_CODE_SAFEGUARD_RESULTS = [
+_CLAUDE_CODE_SAFEGUARD_RESULTS: Final = [
     {
         "type": "dangerous_tool_use",
         "status": {
@@ -1570,9 +1570,9 @@ _CLAUDE_CODE_SAFEGUARD_RESULTS = [
 ]
 
 
-def _sse_events_message_delta(response: dict) -> dict:
-    decoded = _decode_sse_events(anthropic_messages_response_as_sse_events(response))
-    deltas = [payload["delta"] for event_type, payload in decoded if event_type == "message_delta"]
+def _sse_events_message_delta(response: Mapping[str, object]) -> object:
+    decoded: Final = _decode_sse_events(anthropic_messages_response_as_sse_events(response))
+    deltas: Final = tuple(payload["delta"] for event_type, payload in decoded if event_type == "message_delta")
     assert len(deltas) == 1
     return deltas[0]
 

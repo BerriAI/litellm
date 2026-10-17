@@ -4,11 +4,9 @@ from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Final
 
-from pydantic import TypeAdapter, ValidationError
-
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.chat.handler import (
     ModelResponseIterator as AnthropicModelResponseIterator,
@@ -451,16 +449,6 @@ def _anthropic_message_start(sse_stream: str) -> Mapping[str, object] | None:
     )
 
 
-_MAPPING_ADAPTER: Final = TypeAdapter(Mapping[str, object])
-
-
-def _mapping_or_none(value: object) -> Mapping[str, object] | None:
-    try:
-        return _MAPPING_ADAPTER.validate_python(value)
-    except ValidationError:
-        return None
-
-
 def anthropic_message_delta_fields(all_chunks: Sequence[object]) -> Mapping[str, object]:
     """The ``stop_details`` and ``safeguard_results`` of the stream's ``message_delta``.
 
@@ -474,7 +462,7 @@ def anthropic_message_delta_fields(all_chunks: Sequence[object]) -> Mapping[str,
     message_delta: Final = next(
         (event for event in reversed(_parsed_sse_events(sse_stream)) if event.get("type") == "message_delta"), None
     )
-    delta: Final = _mapping_or_none(message_delta.get("delta")) if message_delta is not None else None
+    delta: Final = as_str_mapping(message_delta.get("delta")) if message_delta is not None else None
     if delta is None:
         return MappingProxyType({})
     return MappingProxyType(

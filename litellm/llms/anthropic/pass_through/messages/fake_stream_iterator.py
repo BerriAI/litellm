@@ -10,7 +10,6 @@ the LLM doesn't make a tool call, and we need to return a stream to the user.
 
 import json
 from collections.abc import Mapping
-from types import MappingProxyType
 from typing import Any, Final, cast
 
 from litellm.llms.anthropic.pass_through.messages.utils import anthropic_message_delta
@@ -39,7 +38,7 @@ class FakeAnthropicMessagesStreamIterator:
     def __init__(
         self,
         response: AnthropicMessagesResponse,
-        message_delta_fields: Mapping[str, object] = MappingProxyType({}),
+        message_delta_fields: Mapping[str, object] | None = None,
     ):
         self.response = response
         self.message_delta_fields = message_delta_fields
@@ -184,7 +183,7 @@ class FakeAnthropicMessagesStreamIterator:
                 delta_usage["cache_read_input_tokens"] = cache_read_input_tokens
         message_delta: Final = {
             "type": "message_delta",
-            "delta": {**anthropic_message_delta(response_dict), **self.message_delta_fields},
+            "delta": anthropic_message_delta(response_dict, self.message_delta_fields),
             "usage": delta_usage,
         }
         chunks.append(f"event: message_delta\ndata: {json.dumps(message_delta)}\n\n".encode())

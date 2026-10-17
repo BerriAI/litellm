@@ -1,4 +1,5 @@
 import json
+from collections.abc import Callable
 from itertools import chain
 from typing import Final
 
@@ -8,20 +9,40 @@ from litellm.proxy.guardrails.anthropic_sse import (
     anthropic_sse_chunks_from_response,
     assemble_anthropic_sse_stream,
 )
-from litellm.types.utils import Choices
+from litellm.types.utils import Choices, ModelResponse
 
 
 def _frame(event: str, data: dict[str, object]) -> bytes:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n".encode()
 
 
-def _decode(chunks: tuple[bytes, ...]) -> list[tuple[str, dict[str, object]]]:
-    decoded = []
-    for chunk in chunks:
-        lines = chunk.decode().split("\n")
-        assert lines[0].startswith("event: ")
-        decoded.append((lines[0].removeprefix("event: "), json.loads(lines[1].removeprefix("data: "))))
-    return decoded
+def _decoded_event(chunk: bytes) -> tuple[str, dict[str, object]]:
+    event_line, data_line = chunk.decode().split("\n")[:2]
+    assert event_line.startswith("event: ")
+    return event_line.removeprefix("event: "), json.loads(data_line.removeprefix("data: "))
+
+
+def _decode(chunks: tuple[bytes, ...]) -> tuple[tuple[str, dict[str, object]], ...]:
+    return tuple(_decoded_event(chunk) for chunk in chunks)
+
+
+def _rewritten_delta(
+    upstream: tuple[bytes, ...], rewrite: Callable[[ModelResponse], None], keep_explanations: bool = False
+) -> object:
+    assembled: Final = assemble_anthropic_sse_stream(upstream, restore_identity=True)
+    assert assembled is not None
+    rewrite(assembled)
+    rewritten: Final = anthropic_sse_chunks_from_response(assembled, upstream, keep_explanations=keep_explanations)
+    return next(payload["delta"] for event, payload in _decode(rewritten) if event == "message_delta")
+
+
+def _set_text(text: str) -> Callable[[ModelResponse], None]:
+    def rewrite(assembled: ModelResponse) -> None:
+        choice: Final = assembled.choices[0]
+        assert isinstance(choice, Choices)
+        choice.message.content = text
+
+    return rewrite
 
 
 def _tool_use_frames(index: int, tool_use_id: str, name: str) -> tuple[bytes, ...]:
@@ -197,3 +218,71 @@ def test_rewritten_stream_keeps_only_the_verdicts_of_tool_uses_it_still_delivers
 
     assert delivered_tool_use_ids == ["toolu_bash"]
     assert message_delta["delta"]["safeguard_results"] == _safeguard_results({"toolu_bash": kept_verdict})
+
+
+def test_rewritten_refusal_gets_no_stop_details_the_upstream_did_not_send():
+    """The OpenAI round trip sets ``stop_details`` on every refusal, and the repo reads a refusal
+    carrying one as a safeguard refusal, so a plain refusal must not come back as one."""
+    upstream_delta: Final = {"stop_reason": "refusal", "stop_sequence": None}
+
+    assert _rewritten_delta(_upstream_stream(upstream_delta), _set_text("call <PHONE>")) == upstream_delta
+
+
+def test_rewritten_stream_keeps_safeguard_shapes_it_does_not_know():
+    upstream_delta: Final = {
+        "stop_reason": "tool_use",
+        "stop_sequence": None,
+        "stop_details": {"type": "pause_turn", "category": None, "explanation": None, "policy_url": "https://x.test"},
+        "safeguard_results": [
+            {
+                "type": "dangerous_tool_use",
+                "status": {
+                    "type": "available",
+                    "tool_uses": {"toolu_bash": {"type": "unavailable", "reason": "overloaded"}},
+                },
+                "classifier_version": "2026-10",
+            },
+            {"type": "prompt_injection", "status": {"type": "skipped"}},
+        ],
+    }
+    upstream: Final = _upstream_stream(upstream_delta, tool_uses=(("toolu_bash", "Bash"),))
+
+    assert _rewritten_delta(upstream, _set_text("call <PHONE>")) == upstream_delta
+
+
+def test_rewrite_that_changes_no_text_keeps_the_upstream_explanations():
+    upstream_delta: Final = {
+        "stop_reason": "tool_use",
+        "stop_sequence": None,
+        "safeguard_results": _safeguard_results(
+            {"toolu_bash": {"type": "evaluated", "outcome": "flagged", "explanation": "lists the home directory"}}
+        ),
+    }
+    upstream: Final = _upstream_stream(upstream_delta, tool_uses=(("toolu_bash", "Bash"),))
+
+    assert _rewritten_delta(upstream, _set_text("Permission denied"), keep_explanations=True) == upstream_delta
+
+
+def test_rewritten_stream_drops_the_verdict_of_a_tool_use_whose_input_the_guardrail_changed():
+    """A verdict scored on the upstream input must not vouch for the input the client runs."""
+    verdict: Final = {"type": "evaluated", "outcome": "not_flagged"}
+    upstream: Final = _upstream_stream(
+        {
+            "stop_reason": "tool_use",
+            "stop_sequence": None,
+            "safeguard_results": _safeguard_results({"toolu_masked": verdict, "toolu_untouched": verdict}),
+        },
+        tool_uses=(("toolu_masked", "Bash"), ("toolu_untouched", "Bash")),
+    )
+
+    def mask_first_tool_input(assembled: ModelResponse) -> None:
+        choice: Final = assembled.choices[0]
+        assert isinstance(choice, Choices)
+        tool_calls: Final = choice.message.tool_calls or []
+        assert [call.id for call in tool_calls] == ["toolu_masked", "toolu_untouched"]
+        tool_calls[0].function.arguments = '{"command": "<REDACTED>"}'
+
+    rewritten_delta: Final = _rewritten_delta(upstream, mask_first_tool_input)
+
+    assert isinstance(rewritten_delta, dict)
+    assert rewritten_delta["safeguard_results"] == _safeguard_results({"toolu_untouched": verdict})
