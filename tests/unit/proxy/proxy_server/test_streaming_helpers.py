@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock
 
@@ -1008,8 +1008,9 @@ async def test_guardrail_block_mid_stream_on_a_gemini_stream_sends_no_openai_err
     assert '"error"' not in (first if isinstance(first, str) else bytes(first).decode())
 
 
-async def _upstream_fails_after_one_chunk() -> AsyncIterator[ModelResponseStream]:
-    yield _simple_chunk(content="partial")
+async def _upstream_fails_after(chunks: int) -> AsyncIterator[ModelResponseStream]:
+    for _ in range(chunks):
+        yield _simple_chunk(content="partial")
     raise RuntimeError("upstream reset")
 
 
@@ -1024,7 +1025,7 @@ async def _upstream_fails_after_one_chunk() -> AsyncIterator[ModelResponseStream
 async def test_upstream_failure_mid_stream_ends_with_an_error_event(
     request_data: dict[str, object], closing_frames: tuple[str, ...]
 ) -> None:
-    status_code, _, frames = await _served(_upstream_fails_after_one_chunk(), request_data)
+    status_code, _, frames = await _served(_upstream_fails_after(1), request_data)
 
     assert status_code == 200
     assert _error_of(frames[1])["message"] == "upstream reset"
@@ -1044,21 +1045,28 @@ class _ReplacesClientErrors(CustomLogger):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "chunks_before_block,expected_status",
+    "upstream,original_message,expected_status",
     [
-        pytest.param(0, 403, id="before_the_first_chunk"),
-        pytest.param(1, 200, id="mid_stream"),
+        pytest.param(
+            lambda: _blocked_after(0, {"error": _BLOCK_MESSAGE}), _BLOCK_MESSAGE, 403, id="block_before_the_first_chunk"
+        ),
+        pytest.param(lambda: _blocked_after(1, {"error": _BLOCK_MESSAGE}), _BLOCK_MESSAGE, 200, id="block_mid_stream"),
+        pytest.param(lambda: _upstream_fails_after(0), "upstream reset", 403, id="failure_before_the_first_chunk"),
+        pytest.param(lambda: _upstream_fails_after(1), "upstream reset", 200, id="failure_mid_stream"),
     ],
 )
-async def test_guardrail_block_sends_the_failure_hook_replacement(
-    monkeypatch: pytest.MonkeyPatch, chunks_before_block: int, expected_status: int
+async def test_stream_error_sends_the_failure_hook_replacement(
+    monkeypatch: pytest.MonkeyPatch,
+    upstream: Callable[[], AsyncIterator[ModelResponseStream]],
+    original_message: str,
+    expected_status: int,
 ) -> None:
     monkeypatch.setattr(litellm, "callbacks", [_ReplacesClientErrors()])
 
-    status_code, _, frames = await _served(_blocked_after(chunks_before_block, {"error": _BLOCK_MESSAGE}))
+    status_code, _, frames = await _served(upstream())
 
     assert status_code == expected_status
-    assert _BLOCK_MESSAGE not in "".join(frames)
+    assert original_message not in "".join(frames)
     assert _error_of(frames[-2]) == {
         "message": "Request blocked by policy",
         "type": "permission_error",
@@ -1066,6 +1074,34 @@ async def test_guardrail_block_sends_the_failure_hook_replacement(
         "code": "403",
     }
     assert frames[-1] == "data: [DONE]"
+
+
+@pytest.mark.asyncio
+async def test_responses_stream_failure_sends_the_failure_hook_replacement(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [_ReplacesClientErrors()])
+    response: Final = ResponsesAPIResponse(id="resp_visible", created_at=1, model="gpt-6-astra", output=[])
+
+    async def upstream() -> AsyncIterator[BaseModel]:
+        yield ResponseCreatedEvent.model_validate({"type": "response.created", "sequence_number": 0, "response": response})
+        raise HTTPException(status_code=400, detail={"error": _BLOCK_MESSAGE})
+
+    frames: Final = tuple(
+        [
+            frame.decode() if isinstance(frame, bytes) else frame
+            async for frame in select_data_generator(
+                response=upstream(), user_api_key_dict=_user_auth(), request_data={}, responses_stream_errors=True
+            )
+        ]
+    )
+    failure: Final = ResponseFailedEvent.model_validate_json(
+        next(line.removeprefix("data: ") for line in frames[-2].splitlines() if line.startswith("data: "))
+    )
+
+    assert _BLOCK_MESSAGE not in "".join(frames)
+    assert failure.response.error is not None
+    assert failure.response.error["code"] == "permission_error"
+    assert "Request blocked by policy" in failure.response.error["message"]
+    assert frames[-1] == "data: [DONE]\n\n"
 
 
 @pytest.mark.asyncio

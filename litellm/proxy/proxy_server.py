@@ -10451,13 +10451,15 @@ async def async_data_generator(
 
         if error_state is not None:
             stream_completed = True
-            error_frame: Final = error_state.format_failure(e)
+            error_frame: Final = error_state.format_failure(client_error)
             if error_frame is not None:
                 yield error_frame
             if ends_with_openai_done:
                 yield _OPENAI_STREAM_DONE_FRAME
             return
-        if isinstance(e, HTTPException) and (not stream_started or not ends_with_openai_done):
+        if isinstance(client_error, HTTPException) and not stream_started:
+            raise client_error
+        if isinstance(e, HTTPException) and not ends_with_openai_done:
             raise client_error
         error_returned: Final = json.dumps(
             {
