@@ -37,6 +37,7 @@ from litellm.llms.anthropic.pass_through.utils import (
     proxy_sub_call_logging_kwargs,
     proxy_sub_call_trace_id,
 )
+from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
@@ -79,6 +80,18 @@ def _messages_have_compaction_block(messages: _AnthropicMessages) -> bool:
             if isinstance(block, dict) and block.get("type") == "compaction":
                 return True
     return False
+
+
+def _record_bridged_response_cost(completion_response: ModelResponse, logging_obj: LiteLLMLoggingObject | None) -> None:
+    """
+    The Anthropic-shaped response can no longer be priced correctly (its usage drops the image token breakdown),
+    and the success handlers that store this cost run on another thread, so the proxy's x-litellm-response-cost
+    header could read the logging object before they did
+    """
+    response_cost: Final = get_hidden_params_dict(completion_response).get("response_cost")
+    if logging_obj is None or not isinstance(response_cost, (int, float)):
+        return
+    logging_obj.model_call_details["response_cost"] = response_cost  # rebind-ok: the record spend logging reads
 
 
 def _proxy_router_fallback() -> "Router | None":
@@ -793,9 +806,11 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 return transformed_stream
             raise ValueError("Failed to transform streaming response")
         else:
-            _record_bridged_model_response(logging_obj, completion_response)
+            bridged_response: Final = cast(ModelResponse, completion_response)
+            _record_bridged_model_response(logging_obj, bridged_response)
+            _record_bridged_response_cost(bridged_response, logging_obj)
             anthropic_response: Final = ANTHROPIC_ADAPTER.translate_completion_output_params(
-                cast(ModelResponse, completion_response),
+                bridged_response,
                 tool_name_mapping=tool_name_mapping,
                 polyfill_result=polyfill_result,
             )
@@ -937,9 +952,11 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 return transformed_stream
             raise ValueError("Failed to transform streaming response")
         else:
-            _record_bridged_model_response(logging_obj, completion_response)
+            bridged_response: Final = cast(ModelResponse, completion_response)
+            _record_bridged_model_response(logging_obj, bridged_response)
+            _record_bridged_response_cost(bridged_response, logging_obj)
             anthropic_response: Final = ANTHROPIC_ADAPTER.translate_completion_output_params(
-                cast(ModelResponse, completion_response),
+                bridged_response,
                 tool_name_mapping=tool_name_mapping,
                 polyfill_result=polyfill_result,
             )
