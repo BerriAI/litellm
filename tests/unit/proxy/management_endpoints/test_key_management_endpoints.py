@@ -19718,6 +19718,70 @@ async def test_default_key_generate_params_allowed_routes_skips_team_service_acc
 
 
 @pytest.mark.asyncio
+async def test_default_key_generate_params_allowed_routes_skips_full_access_keys(monkeypatch):
+    monkeypatch.setattr(
+        litellm,
+        "default_key_generate_params",
+        {"allowed_routes": ["llm_api_routes", "/key/spend/report"]},
+    )
+    mock_insert_data = _wire_key_generation_prisma(monkeypatch)
+
+    key_row = await _generate_key_and_get_persisted_row(
+        GenerateKeyRequest(key_type=LiteLLMKeyType.DEFAULT),
+        mock_insert_data,
+    )
+
+    assert not key_row.get("allowed_routes")
+
+
+def _owner_route_update_status(existing: list[str], incoming: list[str]) -> int | None:
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _enforce_allowed_routes_update_permission,
+    )
+
+    try:
+        _enforce_allowed_routes_update_permission(
+            data=UpdateKeyRequest(key="sk-owned", allowed_routes=incoming),
+            existing_key_row=LiteLLM_VerificationToken(
+                token="hashed-owned", user_id="internal-user", allowed_routes=existing
+            ),
+            user_api_key_dict=UserAPIKeyAuth(user_id="internal-user", user_role=LitellmUserRoles.INTERNAL_USER),
+        )
+    except HTTPException as exc:
+        return exc.status_code
+    return None
+
+
+@pytest.mark.parametrize(
+    ("existing", "incoming", "expected_status"),
+    [
+        (["/key/spend/report", "llm_api_routes"], [], None),
+        (["/key/spend/report", "llm_api_routes"], ["llm_api_routes"], None),
+        (["/key/spend/report", "llm_api_routes"], ["info_routes"], None),
+        (["llm_api_routes", "/key/spend/report", "/global/spend/report"], [], 403),
+        (["llm_api_routes", "/key/spend/report"], ["/global/spend/report"], 403),
+    ],
+    ids=[
+        "full_access",
+        "ai_apis",
+        "read_only",
+        "admin_set_routes_beyond_the_default",
+        "widening_to_a_non_preset_route",
+    ],
+)
+def test_owner_route_update_on_a_key_created_with_the_default_allowed_routes(
+    monkeypatch, existing, incoming, expected_status
+):
+    monkeypatch.setattr(
+        litellm,
+        "default_key_generate_params",
+        {"allowed_routes": ["llm_api_routes", "/key/spend/report"]},
+    )
+
+    assert _owner_route_update_status(existing, incoming) == expected_status
+
+
+@pytest.mark.asyncio
 async def test_default_key_generate_params_allowed_routes_empty_list_treated_as_unset(monkeypatch):
     monkeypatch.setattr(
         litellm,
@@ -22740,6 +22804,23 @@ async def test_team_admin_creates_an_llm_api_key_owned_by_an_internal_user_teamm
     saved: Final = generate_key.await_args.kwargs
     assert (saved["user_id"], saved["team_id"]) == ("member-1", "team-1")
     assert (saved["key_type"], saved["allowed_routes"]) == ("llm_api", ["llm_api_routes"])
+
+
+@pytest.mark.asyncio
+async def test_custom_key_policy_sees_the_routes_a_member_key_is_saved_with(monkeypatch):
+    monkeypatch.setattr(litellm, "default_key_generate_params", {"allowed_routes": ["/chat/completions"]})
+    received: list[CustomKeyPolicyRequest] = []
+    generate_key: Final = AsyncMock(return_value={"key": "sk-member", "user_id": "member-1", "team_id": "team-1"})
+
+    with patch(  # test-quality-ok: inject policy hook
+        "litellm.proxy.proxy_server.user_custom_key_policy", _seven_day_policy(received)
+    ):
+        await _team_admin_generates_member_key(
+            AsyncMock(return_value=MagicMock(user_role=LitellmUserRoles.INTERNAL_USER.value)), generate_key
+        )
+
+    assert received[0].effective_key.allowed_routes == ["llm_api_routes"]
+    assert received[0].effective_key.allowed_routes == generate_key.await_args.kwargs["allowed_routes"]
 
 
 @pytest.mark.asyncio

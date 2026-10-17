@@ -939,17 +939,23 @@ def _creates_team_service_account(request: GenerateKeyRequest) -> bool:
     )
 
 
-def _default_allowed_routes_for(request: GenerateKeyRequest, key_routes: object) -> tuple[object, ...] | None:
+def _configured_default_allowed_routes() -> tuple[object, ...] | None:
     default_routes: Final[object] = (litellm.default_key_generate_params or {}).get("allowed_routes")
-    if not isinstance(default_routes, list) or _creates_team_service_account(request):
+    return tuple(default_routes) if isinstance(default_routes, list) and default_routes else None
+
+
+def _default_allowed_routes_for(request: GenerateKeyRequest, key_routes: object) -> tuple[object, ...] | None:
+    configured_routes: Final = _configured_default_allowed_routes()
+    if configured_routes is None or _creates_team_service_account(request):
         return None
-    configured_routes: Final[tuple[object, ...]] = tuple(default_routes)
-    default_covers_llm_api_preset: Final = request.key_type == LiteLLMKeyType.LLM_API and all(
-        route in configured_routes for route in _KEY_TYPE_PRESET_ROUTES[LiteLLMKeyType.LLM_API]
-    )
-    if key_routes and not default_covers_llm_api_preset:
-        return None
-    return configured_routes
+    if "key_type" not in request.model_fields_set or request.key_type is None:
+        return None if key_routes else configured_routes
+    match request.key_type:
+        case LiteLLMKeyType.LLM_API:
+            llm_api_routes: Final = _KEY_TYPE_PRESET_ROUTES[LiteLLMKeyType.LLM_API]
+            return configured_routes if all(route in configured_routes for route in llm_api_routes) else None
+        case _:
+            return None
 
 
 _NON_ADMIN_SAFE_ALLOWED_ROUTES_PRESETS: Final = frozenset({"llm_api_routes", "info_routes"})
@@ -1056,12 +1062,17 @@ def _is_safe_preset_route_transition(
     (empty = full access, which non-admins already get from a default
     `/key/generate`), with one carve-out: a read-only (`info_routes`) key
     stays read-only, so widening it needs an admin. Requiring the existing
-    side to be a safe preset keeps an owner from clearing an admin-set
-    custom route restriction (LIT-4139).
+    side to be a safe preset, or the `default_key_generate_params` routes a
+    key was created with, keeps an owner from clearing an admin-set custom
+    route restriction (LIT-4139).
     """
     incoming: Final = frozenset(incoming_allowed_routes or ())
     existing: Final = frozenset(existing_allowed_routes or ())
-    if not (incoming | existing) <= _NON_ADMIN_SAFE_ALLOWED_ROUTES_PRESETS:
+    configured_default: Final = _configured_default_allowed_routes()
+    existing_is_configured_default: Final = configured_default is not None and existing == frozenset(configured_default)
+    if not incoming <= _NON_ADMIN_SAFE_ALLOWED_ROUTES_PRESETS:
+        return False
+    if not (existing <= _NON_ADMIN_SAFE_ALLOWED_ROUTES_PRESETS or existing_is_configured_default):
         return False
     return existing != _READ_ONLY_ALLOWED_ROUTES_PRESET or incoming == existing
 
@@ -1481,7 +1492,9 @@ async def _common_key_generation_helper(
         build_policy_request=lambda: CustomKeyPolicyRequest(
             operation="generate",
             existing_key=None,
-            effective_key=_effective_key_for_generate(data=data, now=datetime.now(timezone.utc)),
+            effective_key=_effective_key_for_generate(
+                data=_member_key_request(data, acting_as_team_admin), now=datetime.now(timezone.utc)
+            ),
             request=data,
         ),
     )
