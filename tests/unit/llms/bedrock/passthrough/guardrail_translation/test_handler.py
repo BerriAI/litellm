@@ -2087,7 +2087,6 @@ _FLAT_TEXT_READERS: tuple[Callable[[], CustomGuardrail], ...] = (
     ),
     _conduct_with_its_plugin,
     lambda: AiriaGuardrail(guardrail_name="airia", api_key="airia-test", api_base="http://127.0.0.1:9"),
-    lambda: HeadroomGuardrail(api_base="http://127.0.0.1:9", guardrail_name="headroom"),
 )
 
 
@@ -2124,7 +2123,6 @@ class _FlatTextsOnlyGuardrail(_ScriptedGuardrail):
 
 
 class TestConverseGuardrailsThatReadFlatTextsOnly:
-    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "make_guardrail",
         _FLAT_TEXT_READERS,
@@ -2143,24 +2141,31 @@ class TestConverseGuardrailsThatReadFlatTextsOnly:
             "qualifire",
             "conduct",
             "airia",
-            "headroom",
         ],
     )
-    async def test_guardrail_gets_main_flat_texts_and_its_mask_reaches_every_turn(self, make_guardrail, monkeypatch):
-        guardrail = make_guardrail()
-        received: list[GenericGuardrailAPIInputs] = []
+    def test_guardrail_opts_out_of_converse_rows_and_tools(self, make_guardrail):
+        assert make_guardrail().supports_structured_messages() is False
 
-        async def mask_texts(inputs, request_data, input_type, logging_obj=None):
-            received.append(copy.deepcopy(inputs))
-            return {"texts": _masked_texts(inputs)}
+    @pytest.mark.asyncio
+    async def test_headroom_gets_no_rows_so_it_never_calls_its_service(self):
+        data = _card_in_every_turn_data()
+        sent = copy.deepcopy(data["data"])
 
-        monkeypatch.setattr(guardrail, "apply_guardrail", mask_texts)
+        result = await BedrockPassthroughGuardrailHandler().process_input_messages(
+            data, HeadroomGuardrail(api_base="http://127.0.0.1:9", guardrail_name="headroom")
+        )
+
+        assert result["data"] == sent
+
+    @pytest.mark.asyncio
+    async def test_flat_texts_only_guardrail_gets_main_flat_texts_and_its_mask_reaches_every_turn(self):
+        guardrail = _FlatTextsOnlyGuardrail(lambda inputs: {"texts": _masked_texts(inputs)})
 
         result = await BedrockPassthroughGuardrailHandler().process_input_messages(
             _card_in_every_turn_data(), guardrail
         )
 
-        assert received[-1] == {
+        assert guardrail.received[-1] == {
             "texts": [
                 "Billing card 4111 1111 1111 1111.",
                 "My card is 4111 1111 1111 1111.",
