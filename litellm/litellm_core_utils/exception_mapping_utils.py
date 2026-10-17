@@ -16,6 +16,7 @@ from litellm.litellm_core_utils.bug_report import (
     build_bug_report,
     should_report_bug,
 )
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.secret_redaction import redact_string as redact_secret_string
 from litellm.types.utils import LlmProviders
 
@@ -185,12 +186,20 @@ def get_error_message(error_obj) -> str | None:
 
 
 ####### EXCEPTION MAPPING ################
+_DECODED_ERROR_BODY: Final = TypeAdapter(object)
+
+
 def _get_body_error_code(error_str: str) -> int | None:
     """Return error.code from a JSON error body, or None if not parseable."""
     try:
-        body: Final = json.loads(error_str)
-        code: Final = body.get("error", {}).get("code")
-        return int(code) if code is not None else None
+        body: Final = as_str_mapping(_DECODED_ERROR_BODY.validate_python(json.loads(error_str)))
+        if body is None:
+            return None
+        error: Final = as_str_mapping(body.get("error", {}))
+        if error is None:
+            return None
+        code: Final = error.get("code")
+        return int(code) if isinstance(code, (str, int, float)) else None
     except Exception:
         return None
 
@@ -2404,6 +2413,35 @@ def _map_exception_by_status(
             )
 
 
+_NO_LITELLM_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
+_URL_SCHEME: Final = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*")
+_HOST_WITH_OPTIONAL_PORT: Final = re.compile(
+    r"(?:(?:[A-Za-z0-9-]+\.)+[A-Za-z0-9-]+|localhost|\[[0-9A-Fa-f:.]+\])(?::\d+)?"
+)
+
+
+def with_deployment_api_base(litellm_params: object) -> Mapping[str, object]:
+    params: Final = as_str_mapping(litellm_params) or _NO_LITELLM_PARAMS
+    metadata: Final = as_str_mapping(params.get("metadata"))
+    deployment_api_base: Final = None if metadata is None else metadata.get("api_base")
+    if not isinstance(deployment_api_base, str) or not deployment_api_base:
+        return params
+    return MappingProxyType({**params, "api_base": deployment_api_base})
+
+
+def _api_base_without_credentials(api_base: str) -> str:
+    scheme, separator, _ = api_base.partition("://")
+    scheme_prefix: Final = scheme + separator if separator and _URL_SCHEME.fullmatch(scheme) else ""
+    authority_and_rest: Final = api_base[len(scheme_prefix) :]
+    authority: Final = re.split(r"[/?#]", authority_and_rest, maxsplit=1)[0]
+    after_authority: Final = authority_and_rest[len(authority) :]
+    host: Final = authority.rpartition("@")[2]
+    if "@" in after_authority and _HOST_WITH_OPTIONAL_PORT.fullmatch(host) is None:
+        return ""
+    path: Final = re.split(r"[?#]", after_authority, maxsplit=1)[0]
+    return f"{scheme_prefix}{host}{path}"
+
+
 def _is_guardrail_block(original_exception: Exception) -> bool:
     from litellm.integrations.custom_guardrail import is_guardrail_intervention
 
@@ -2474,8 +2512,9 @@ def exception_type(
                 if isinstance(custom_llm_provider, str) and len(custom_llm_provider) > 0:
                     exception_provider = custom_llm_provider[0].upper() + custom_llm_provider[1:] + "Exception"
 
-                if _api_base:
-                    extra_information += f"\nAPI Base: `{_api_base}`"
+                shown_api_base: Final = _api_base_without_credentials(_api_base) if _api_base else ""
+                if shown_api_base:
+                    extra_information += f"\nAPI Base: `{shown_api_base}`"
                 if messages and len(messages) > 0 and litellm.redact_messages_in_exceptions is False:
                     extra_information += f"\nMessages: `{messages}`"
 

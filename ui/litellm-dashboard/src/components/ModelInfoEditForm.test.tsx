@@ -1,10 +1,10 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import type { CredentialItem } from "@/components/networking";
 
-import ModelInfoEditForm from "./ModelInfoEditForm";
+import ModelInfoEditForm, { perMillionToPerToken } from "./ModelInfoEditForm";
 
 vi.mock("@/components/networking", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/components/networking")>();
@@ -54,6 +54,69 @@ const renderForm = ({
       teams={[]}
     />,
   );
+
+describe("perMillionToPerToken", () => {
+  it.each([
+    ["2.5", 0.0000025],
+    [3, 0.000003],
+    ["0", 0],
+    ["", null],
+    ["  ", null],
+    [null, null],
+    [undefined, null],
+  ])("parses %j into %j per token", (perMillion, perToken) => {
+    expect(perMillionToPerToken.parse(perMillion)).toBe(perToken);
+  });
+
+  it.each(["abc", "-1", -0.5, "Infinity", Number.NaN])("rejects %j", (perMillion) => {
+    expect(perMillionToPerToken.safeParse(perMillion).success).toBe(false);
+  });
+});
+
+describe("ModelInfoEditForm pricing fields", () => {
+  const storedPrices = {
+    model: "gpt-4o",
+    input_cost_per_token: 0.000003,
+    output_cost_per_token: 0.000015,
+    cache_read_input_token_cost: 0.0000003,
+  };
+
+  it("hands the submit handler per-token prices, with null for a cleared field", async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+    renderForm({ onSubmit, litellmParams: storedPrices });
+
+    expect(screen.getByPlaceholderText("Enter input cost")).toHaveValue(3);
+    fireEvent.change(screen.getByPlaceholderText("Enter input cost"), { target: { value: "2.5" } });
+    fireEvent.change(screen.getByPlaceholderText("Enter output cost"), { target: { value: "" } });
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await vi.waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    const [values, isFieldTouched] = onSubmit.mock.calls[0];
+    const expectedPrices = {
+      input_cost: 0.0000025,
+      output_cost: null,
+      cache_read_cost: 0.0000003,
+      cache_write_cost: null,
+    };
+    expect(values).toMatchObject(expectedPrices);
+    expect(isFieldTouched("input_cost")).toBe(true);
+    expect(isFieldTouched("cache_read_cost")).toBe(false);
+  });
+
+  it("shows a field error and does not submit a negative price", async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+    renderForm({ onSubmit, litellmParams: storedPrices });
+
+    fireEvent.change(screen.getByPlaceholderText("Enter output cost"), { target: { value: "-1" } });
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    expect(await screen.findByText("Enter a price of 0 or more")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Enter output cost")).toHaveAttribute("aria-invalid", "true");
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+});
 
 describe("ModelInfoEditForm existing-credentials picker", () => {
   it("shows the display name beside the credential name, searches by it, and submits the name", async () => {

@@ -1592,6 +1592,43 @@ class TestOpenAIPromptCacheBreakpointChatPath:
         assert request["extra_body"] == {"prompt_cache_options": self.EXPLICIT}
         assert "prompt_cache_options" not in request
 
+    @pytest.mark.parametrize(
+        ("model", "drop_params", "sent"),
+        [("gpt-4.1", True, False), ("gpt-4.1", False, True), ("gpt-5.6", True, True)],
+        ids=["unread-dropped", "unread-sent-through", "read-kept"],
+    )
+    def test_drop_params_strips_breakpoints_only_where_the_model_cannot_read_them(
+        self, model: str, drop_params: bool, sent: bool
+    ):
+        marked_part: Final = {"type": "text", "text": "hi", "prompt_cache_breakpoint": self.EXPLICIT}
+        part: Final = {"type": "text", "text": "hi"}
+        call: Final = {"id": "c1", "type": "function", "function": {"name": "f", "arguments": "{}"}}
+        function: Final = {"name": "f", "parameters": {"type": "object"}}
+        marked: Final = {"prompt_cache_breakpoint": self.EXPLICIT}
+
+        request = OpenAIGPTConfig().transform_request(
+            model=model,
+            messages=[
+                {"role": "user", "content": [marked_part]},
+                {"role": "assistant", "content": "ok", **marked, "tool_calls": [{**call, **marked}]},
+                {"role": "tool", "tool_call_id": "c1", "content": "done"},
+            ],
+            optional_params={"tools": [{"type": "function", "function": {**function, **marked}}, {"type": "function", "function": function, **marked}]},
+            litellm_params={"custom_llm_provider": "openai", "drop_params": drop_params},
+            headers={},
+        )
+
+        mark: Final = marked if sent else {}
+        assert request["messages"] == [
+            {"role": "user", "content": [marked_part if sent else part]},
+            {"role": "assistant", "content": "ok", **mark, "tool_calls": [{**call, **mark}]},
+            {"role": "tool", "tool_call_id": "c1", "content": "done"},
+        ]
+        assert request["tools"] == [
+            {"type": "function", "function": {**function, **mark}},
+            {"type": "function", "function": function, **mark},
+        ]
+
 
 _ARTIFACT_FIELD_PATTERN: Final = r'^(?!__.*__$)[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}"\\./[\]]{1,200}$'
 

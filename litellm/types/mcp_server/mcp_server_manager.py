@@ -182,6 +182,7 @@ class MCPServer(LiteLLMBaseModel):
     # posts the ID-JAG assertion to id_jag_resource_token_endpoint.
     id_jag_resource_token_endpoint: str | None = None
     id_jag_resource: str | None = None
+    id_jag_subject_source: str | None = None
     id_jag_resource_client_id: str | None = Field(
         default=None,
         description="OAuth client identifier used at the ID-JAG resource authorization server.",
