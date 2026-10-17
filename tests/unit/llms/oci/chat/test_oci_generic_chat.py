@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 import httpx
 
 from litellm import ModelResponse
+from litellm.constants import DEFAULT_OCI_CHAT_MAX_TOKENS
 from litellm.llms.oci.chat.generic import (
     adapt_messages_to_generic_oci_standard,
     adapt_messages_to_generic_oci_standard_content_message,
@@ -369,6 +370,27 @@ def _register_oci_gpt5_in_catalog():
         litellm.model_cost.pop(key, None)
 
 
+@pytest.fixture
+def _flag_oci_gemini_as_reasoning_in_catalog():
+    """Mark OCI's Gemini models as reasoning models, as the bundled catalog has done since #41902,
+    whichever map ``litellm.model_cost`` was populated from."""
+    import litellm
+
+    keys = ("oci/google.gemini-2.5-pro", "oci/google.gemini-2.5-flash")
+    originals = {key: litellm.model_cost.get(key) for key in keys}
+    for key in keys:
+        litellm.model_cost[key] = {
+            **(originals[key] or {"litellm_provider": "oci", "mode": "chat"}),
+            "supports_reasoning": True,
+        }
+    yield
+    for key, original in originals.items():
+        if original is None:
+            litellm.model_cost.pop(key, None)
+        else:
+            litellm.model_cost[key] = original
+
+
 class TestGpt5MaxCompletionTokens:
     def test_helper_detects_gpt5_family(self, _register_oci_gpt5_in_catalog):
         assert _model_uses_max_completion_tokens("openai.gpt-5") is True
@@ -439,6 +461,18 @@ class TestGpt5MaxCompletionTokens:
             model="meta.llama-3.3-70b-instruct",
         )
         assert out.get("maxTokens") == 64
+        assert "maxCompletionTokens" not in out
+
+    @pytest.mark.parametrize("model", ["google.gemini-2.5-pro", "oci/google.gemini-2.5-flash"])
+    @pytest.mark.parametrize(("params", "expected"), [({"max_tokens": 64}, 64), ({}, DEFAULT_OCI_CHAT_MAX_TOKENS)])
+    def test_gemini_reasoning_models_keep_max_tokens(
+        self, model, params, expected, _flag_oci_gemini_as_reasoning_in_catalog
+    ):
+        """Regression: OCI's Gemini models ignore maxCompletionTokens and fall back to a default of
+        about 4K output tokens (verified against live OCI on 2026-09-28), so a reasoning flag in the
+        catalog must not move the limit off maxTokens."""
+        out = OCIChatConfig()._get_optional_params(OCIVendors.GENERIC, params, model=model)
+        assert out.get("maxTokens") == expected
         assert "maxCompletionTokens" not in out
 
     def test_cohere_reasoning_model_keeps_max_tokens(self):
