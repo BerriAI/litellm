@@ -38,6 +38,7 @@ import httpx2
 from fastapi import HTTPException
 from httpx import HTTPStatusError
 from mcp import ReadResourceResult, Resource
+from mcp.shared.auth import OAuthMetadata
 from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
 from mcp.types import (
     CallToolResult,
@@ -57,7 +58,7 @@ from mcp.types import (
     ResourceTemplate,
 )
 from mcp.types import Tool as MCPTool
-from pydantic import AnyUrl, Field, SecretStr, TypeAdapter
+from pydantic import AnyUrl, Field, SecretStr, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, assert_never
 
 import litellm
@@ -73,6 +74,7 @@ from litellm.constants import (
 )
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 from litellm.experimental_mcp_client.client import (
+    SESSION_CLEANUP_TIMEOUT_MESSAGE,
     MCPClient,
     PersistentMCPSession,
     UpstreamSessionClosedError,
@@ -103,9 +105,10 @@ from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
     ServerListFault,
     raise_classified_list_failure,
     upstream_auth_challenge,
+    upstream_insufficient_scope,
 )
 from litellm.proxy._experimental.mcp_server.interactions import bind_target
-from litellm.proxy._experimental.mcp_server.legacy_callbacks import has_active_mcp_request_context
+from litellm.proxy._experimental.mcp_server.legacy_callbacks import get_scope_response, has_active_mcp_request_context
 from litellm.proxy._experimental.mcp_server.mcp_debug import describe_upstream_http_failure, record_auth_resolution
 from litellm.proxy._experimental.mcp_server.oauth2_token_cache import (
     MCPPerUserTokenCache,
@@ -193,6 +196,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
     normalize_server_name,
     openapi_tool_name,
     parse_admin_env_vars,
+    server_answers_to,
     strip_known_server_prefix,
     validate_mcp_server_name,
 )
@@ -282,6 +286,11 @@ _USER_ENV_VARS_CACHE_MAX_SIZE: Final = 4096  # cap to prevent unbounded growth
 
 _ListedToolsByCaller: TypeAlias = Mapping[str | None, Mapping[str, MCPTool]]
 _LISTED_TOOLS_CALLERS_PER_SERVER: Final = 256
+_UNTYPED_VALUE: Final = TypeAdapter(object)
+
+
+def _www_authenticate_header(headers: Mapping[str, str]) -> str | None:
+    return headers.get("WWW-Authenticate") or headers.get("www-authenticate")
 
 
 @dataclass(frozen=True, slots=True)
@@ -446,6 +455,9 @@ class MCPServerConfig(TypedDict, total=False):
     upstream_token_header: ReadOnly[str]
     id_jag_resource_token_endpoint: str
     id_jag_resource: str
+    id_jag_subject_source: ReadOnly[str]
+    id_jag_resource_client_id: ReadOnly[str]
+    id_jag_resource_client_secret: ReadOnly[str]
     client_private_key: str
     client_private_key_id: str
     client_assertion_signing_alg: str
@@ -895,6 +907,10 @@ def carry_forward_resolved_oauth_endpoints(new_server: MCPServer, previous_serve
         new_server.authorization_response_iss_parameter_supported = (  # rebind-ok: publish on the existing rebuild object
             previous_server.authorization_response_iss_parameter_supported
         )
+    if may_carry and new_server.issuer == previous_server.issuer and new_server.authorization_server_metadata is None:
+        new_server.authorization_server_metadata = (  # rebind-ok: publish capability on the existing rebuild object
+            previous_server.authorization_server_metadata
+        )
     if new_server.authorization_url is None and previous_server.authorization_url:
         new_server.authorization_url = previous_server.authorization_url
     if may_carry and new_server.token_url is None and previous_server.token_url:
@@ -930,7 +946,12 @@ def _restrict_discovery_to_corroborated_authorization_server(
         return metadata
     if _endpoints_corroborate_authorization_url(metadata.authorization_url, manual_authorization_url):
         return metadata
-    if not metadata.token_url and not metadata.registration_url and not metadata.client_id_metadata_document_supported:
+    if (
+        not metadata.token_url
+        and not metadata.registration_url
+        and not metadata.client_id_metadata_document_supported
+        and metadata.authorization_server_metadata is None
+    ):
         return metadata
     bridge_note: Final = (
         " The discovered registration_url is rejected with it, so this dcr_bridge server stays on the"
@@ -949,7 +970,12 @@ def _restrict_discovery_to_corroborated_authorization_server(
         bridge_note,
     )
     return metadata.model_copy(
-        update={"token_url": None, "registration_url": None, "client_id_metadata_document_supported": False}
+        update={
+            "token_url": None,
+            "registration_url": None,
+            "client_id_metadata_document_supported": False,
+            "authorization_server_metadata": None,
+        }
     )
 
 
@@ -1171,6 +1197,8 @@ def should_strip_caller_authorization(
       session token whose ``api_key`` is ``None`` — and must never reach
       the upstream, so it is stripped regardless of the ``api_key`` value.
     """
+    if _authorization_is_admission_jwt(raw_headers, user_api_key_auth):
+        return True
     if mcp_server.auth_type == MCPAuth.oauth2_token_exchange:
         # OBO: the inbound Authorization is the subject token. It is exchanged at the IdP and only the
         # exchanged token is sent upstream, so the raw caller bearer must never be forwarded.
@@ -1228,6 +1256,16 @@ def _authorization_is_litellm_admission_credential(
     if admission_header and authorization:
         return strip_auth_scheme(authorization, "Bearer") == strip_auth_scheme(admission_header, "Bearer")
     return bool(user_api_key_auth and user_api_key_auth.api_key and not admission_header)
+
+
+def _authorization_is_admission_jwt(
+    raw_headers: Mapping[str, str] | None, user_api_key_auth: UserAPIKeyAuth | None
+) -> bool:
+    return bool(
+        user_api_key_auth
+        and user_api_key_auth.jwt_claims
+        and _authorization_is_litellm_admission_credential(raw_headers, user_api_key_auth)
+    )
 
 
 def _server_auth_header_for(
@@ -1488,7 +1526,14 @@ def _consumes_caller_authorization(server: MCPServer) -> bool:
 
 
 _REGISTRY_DUMP_SECRET_FIELDS: Final = frozenset(
-    {"authentication_token", "client_secret", "client_private_key", "aws_secret_access_key", "aws_session_token"}
+    {
+        "authentication_token",
+        "client_secret",
+        "client_private_key",
+        "id_jag_resource_client_secret",
+        "aws_secret_access_key",
+        "aws_session_token",
+    }
 )
 
 
@@ -1683,7 +1728,7 @@ def _deserialize_json_list(data: object) -> list[dict[str, Any]] | None:
         return None
     if isinstance(data, str):
         try:
-            parsed: Final[object] = json.loads(data)
+            parsed: Final = _UNTYPED_VALUE.validate_python(json.loads(data))
         except (json.JSONDecodeError, TypeError):
             return None
         data = parsed
@@ -1799,6 +1844,13 @@ def _mcp_discovery_cache_ttl() -> float:
         verbose_logger.warning("Invalid LITELLM_MCP_DISCOVERY_CACHE_TTL; using 60 seconds")
         return 60.0
     return ttl
+
+
+def _listing_task_was_cancelled(error: asyncio.CancelledError) -> bool:
+    """The MCP client raises its own CancelledError(SESSION_CLEANUP_TIMEOUT_MESSAGE) when a session's
+    teardown outlives its budget while the listing task keeps running. That one is the server's fault,
+    anything else is a real cancellation."""
+    return error.args != (SESSION_CLEANUP_TIMEOUT_MESSAGE,)
 
 
 class MCPServerManager:
@@ -2086,6 +2138,7 @@ class MCPServerManager:
         return server.model_copy(
             update={
                 "scopes": server.scopes or metadata.scopes,
+                "authorization_server_metadata": metadata.authorization_server_metadata,
                 "issuer": server.issuer or discovered_issuer,
                 "client_id_metadata_document_supported": metadata.client_id_metadata_document_supported,
                 "authorization_response_iss_parameter_supported": (
@@ -2678,6 +2731,9 @@ class MCPServerManager:
                 scopes=resolved_scopes,
                 configured_scopes=tuple(configured_scopes) if configured_scopes else None,
                 issuer=effective_issuer,
+                authorization_server_metadata=(
+                    gated_oauth_metadata.authorization_server_metadata if gated_oauth_metadata else None
+                ),
                 client_id_metadata_document_supported=(
                     gated_oauth_metadata.client_id_metadata_document_supported if gated_oauth_metadata else None
                 ),
@@ -2734,6 +2790,9 @@ class MCPServerManager:
                 # ID-JAG fields
                 id_jag_resource_token_endpoint=server_config.get("id_jag_resource_token_endpoint", None),
                 id_jag_resource=server_config.get("id_jag_resource", None),
+                id_jag_subject_source=server_config.get("id_jag_subject_source", None),
+                id_jag_resource_client_id=server_config.get("id_jag_resource_client_id", None),
+                id_jag_resource_client_secret=server_config.get("id_jag_resource_client_secret", None),
                 client_private_key=server_config.get("client_private_key", None),
                 client_private_key_id=server_config.get("client_private_key_id", None),
                 client_assertion_signing_alg=server_config.get("client_assertion_signing_alg", "RS256"),
@@ -2879,7 +2938,7 @@ class MCPServerManager:
             verbose_logger.debug("Processing %s paths from OpenAPI spec", len(paths))
 
             for path, path_item in paths.items():
-                for method in ["get", "post", "put", "delete", "patch"]:
+                for method in ("get", "post", "put", "delete", "patch"):
                     if method not in path_item:
                         continue
 
@@ -3259,6 +3318,9 @@ class MCPServerManager:
             scopes=resolved_scopes,
             configured_scopes=configured_scopes,
             issuer=effective_issuer,
+            authorization_server_metadata=(
+                gated_oauth_metadata.authorization_server_metadata if gated_oauth_metadata else None
+            ),
             client_id_metadata_document_supported=(
                 gated_oauth_metadata.client_id_metadata_document_supported if gated_oauth_metadata else None
             ),
@@ -3320,6 +3382,13 @@ class MCPServerManager:
                 credentials_dict.get("id_jag_resource_token_endpoint") if credentials_dict else None
             ),
             id_jag_resource=(credentials_dict.get("id_jag_resource") if credentials_dict else None),
+            id_jag_subject_source=(credentials_dict.get("id_jag_subject_source") if credentials_dict else None),
+            id_jag_resource_client_id=(credentials_dict.get("id_jag_resource_client_id") if credentials_dict else None),
+            id_jag_resource_client_secret=self._decrypt_credential_field(
+                credentials_dict.get("id_jag_resource_client_secret") if credentials_dict else None,
+                "id_jag_resource_client_secret",
+                credentials_are_encrypted,
+            ),
             client_private_key=self._decrypt_credential_field(
                 credentials_dict.get("client_private_key") if credentials_dict else None,
                 "client_private_key",
@@ -3472,7 +3541,9 @@ class MCPServerManager:
         byom_cache_key: Final = self.get_byom_submitted_servers_cache_key(submitter_user_id)
         submitted_server_ids: list[str] | None = None
         try:
-            cached_submitted_server_ids: Final = await user_api_key_cache.async_get_cache(key=byom_cache_key)
+            cached_submitted_server_ids: Final = _UNTYPED_VALUE.validate_python(
+                await user_api_key_cache.async_get_cache(key=byom_cache_key)
+            )
             if cached_submitted_server_ids is not None:
                 submitted_server_ids = cast(list[str], cached_submitted_server_ids)
         except Exception as e:  # noqa: BLE001
@@ -3549,8 +3620,8 @@ class MCPServerManager:
         return open_ids
 
     @staticmethod
-    def _admitted_session_resource_scope(user_api_key_auth: UserAPIKeyAuth | None) -> str | None:
-        """The single server an admitted session subject's bearer was scoped to at authorize
+    def _admitted_session_resource_scope(user_api_key_auth: UserAPIKeyAuth | None) -> frozenset[str] | None:
+        """The servers an admitted session subject's bearer was scoped to at authorize
         time (RFC 8707 resource), or None for every other principal shape and for unscoped
         sessions. Read at every return path of :meth:`get_allowed_mcp_servers`, including
         the exception fallback, and applied AFTER every union (grants, operator-open,
@@ -3558,7 +3629,8 @@ class MCPServerManager:
         fault therefore never widens a scoped bearer to the allow-all set."""
         if user_api_key_auth is None or not is_mcp_admitted_user_subject(user_api_key_auth):
             return None
-        return user_api_key_auth.mcp_session_resource_server_id
+        resource_server_ids: Final = user_api_key_auth.mcp_session_resource_server_ids
+        return None if resource_server_ids is None else frozenset(resource_server_ids)
 
     async def get_allowed_mcp_servers(
         self,
@@ -3673,7 +3745,7 @@ class MCPServerManager:
             if len(combined_servers) == 0:
                 verbose_logger.debug("No allowed MCP Servers found for user api key auth.")
             scope = MCPServerManager._admitted_session_resource_scope(user_api_key_auth)
-            return [server_id for server_id in combined_servers if scope is None or server_id == scope]
+            return [server_id for server_id in combined_servers if scope is None or server_id in scope]
         except Exception:  # noqa: BLE001
             verbose_logger.exception(
                 "Failed to get allowed MCP servers; team-level object_permission "
@@ -3683,7 +3755,7 @@ class MCPServerManager:
             return [
                 server_id
                 for server_id in dict.fromkeys(allow_all_server_ids + submitted_server_ids)
-                if not explicit_grants_only and (scope is None or server_id == scope)
+                if not explicit_grants_only and (scope is None or server_id in scope)
             ]
 
     @with_service_target(MCP_SERVERS_TARGET)
@@ -3954,10 +4026,12 @@ class MCPServerManager:
     ) -> str | None:
         """The caller's upstream identity token, or ``None`` when the bearer is a LiteLLM key.
 
-        Rejects the key admission validated and, because virtual keys always carry the ``sk-`` prefix,
-        any other LiteLLM key a client puts in ``Authorization`` next to ``x-litellm-api-key``.
+        Validated JWT claims survive virtual-key mapping, so JWT admission still supplies a subject.
+        Virtual keys are rejected even when the auth context carries JWT claims.
         """
-        if _authorization_is_litellm_admission_credential(raw_headers, user_api_key_auth):
+        if _authorization_is_litellm_admission_credential(raw_headers, user_api_key_auth) and not (
+            user_api_key_auth and user_api_key_auth.jwt_claims
+        ):
             return None
         bearer: Final = MCPServerManager._extract_bearer_token(oauth2_headers, raw_headers)
         if bearer is not None and bearer.startswith(LITELLM_VIRTUAL_KEY_PREFIX):
@@ -4205,7 +4279,7 @@ class MCPServerManager:
         subject_token: Final = self.extract_subject_token(oauth2_headers, raw_headers, user_api_key_auth)
         match server.auth_type:
             case MCPAuth.oauth2_token_exchange:
-                if not self._extract_bearer_token(oauth2_headers, None):
+                if not self._extract_bearer_token(oauth2_headers, raw_headers):
                     return
             case MCPAuth.oauth2_id_jag:
                 if subject_token is not None:
@@ -4505,6 +4579,7 @@ class MCPServerManager:
                     status_code=e.status_code,
                     www_authenticate=None if server.is_dcr_bridge else challenge_header,
                     server_name=server.name,
+                    public_detail=e.detail if server.auth_type == MCPAuth.oauth2_token_exchange else None,
                 ) from e
             verbose_logger.warning("Failed to get tools from server %s: %s", server.name, e)
             raise MCPServerListError(ServerListFault(tag="internal", status_code=e.status_code), server.name) from e
@@ -5125,7 +5200,7 @@ class MCPServerManager:
 
         header_value: str | None = None
         if exc.response is not None:
-            header_value = exc.response.headers.get("WWW-Authenticate") or exc.response.headers.get("www-authenticate")
+            header_value = _www_authenticate_header(exc.response.headers)
         status_attempt: Final = (
             f"GET {origin}: HTTP {exc.response.status_code}"
             if exc.response is not None
@@ -5383,7 +5458,16 @@ class MCPServerManager:
                 continue
 
             scopes = self._extract_scopes(data.get("scopes_supported"))
+            try:
+                authorization_metadata = OAuthMetadata.model_validate(data)
+            except ValidationError:
+                authorization_metadata = None
             metadata = MCPOAuthMetadata(
+                authorization_server_metadata=(
+                    TypeAdapter(dict[str, object]).validate_python(authorization_metadata.model_dump(mode="json"))
+                    if authorization_metadata is not None
+                    else None
+                ),
                 scopes=scopes,
                 authorization_url=data.get("authorization_endpoint"),
                 token_url=data.get("token_endpoint"),
@@ -5520,7 +5604,10 @@ class MCPServerManager:
             verbose_logger.warning("Timeout while listing tools from %s", server_name)
             raise MCPServerListError(ServerListFault(tag="timeout"), server_name) from e
         except asyncio.CancelledError as e:
-            verbose_logger.warning("Task cancelled while listing tools from %s", server_name)
+            if _listing_task_was_cancelled(e):
+                verbose_logger.debug("Task cancelled while listing tools from %s", server_name)
+                raise
+            verbose_logger.warning("Listing tools from %s was abandoned by the client session: %s", server_name, e)
             raise MCPServerListError(ServerListFault(tag="internal"), server_name) from e
         except ConnectionError as e:
             verbose_logger.warning("Connection error while listing tools from %s: %s", server_name, e)
@@ -5991,7 +6078,7 @@ class MCPServerManager:
             server=server,
         )
 
-        hook_result: Final[dict[str, Any]] = {}
+        hook_result: Final[dict[str, object]] = {}
         if proxy_logging_obj is None:
             return hook_result
 
@@ -6247,7 +6334,7 @@ class MCPServerManager:
         *,
         client: MCPClient,
         call_tool_params: MCPCallToolRequestParams,
-        host_progress_callback: Callable | None,
+        host_progress_callback: Callable[..., Awaitable[None]] | None,
         mcp_server: MCPServer,
         server_auth_header: str | dict[str, str] | None,
         extra_headers: dict[str, str] | None,
@@ -6314,7 +6401,7 @@ class MCPServerManager:
         oauth2_headers: dict[str, str] | None,
         raw_headers: dict[str, str] | None,
         proxy_logging_obj: ProxyLogging | None,
-        host_progress_callback: Callable | None = None,
+        host_progress_callback: Callable[..., Awaitable[None]] | None = None,
         hook_extra_headers: dict[str, str] | None = None,
         user_api_key_auth: UserAPIKeyAuth | None = None,
         client_ip: str | None = None,
@@ -6491,11 +6578,12 @@ class MCPServerManager:
             # oauth2 + delegate_auth_to_upstream (is_oauth_passthrough) is being removed, so it is not
             # added here even though the list path still relays for it.
             relays_upstream_auth: Final = mcp_server.is_client_forwarded_token
+            managed_per_user: Final = mcp_server.is_gateway_managed_oauth2 and mcp_server.needs_user_oauth_token
             server_label: Final = mcp_server.name or mcp_server.server_name or mcp_server.alias or ""
 
             async def _call_tool_via_client(client, params):
                 async with self._outbound_limit(mcp_server, persistent_session):
-                    if not relays_upstream_auth:
+                    if not relays_upstream_auth and not managed_per_user:
                         return await client.call_tool(
                             params,
                             host_progress_callback=host_progress_callback,
@@ -6520,8 +6608,17 @@ class MCPServerManager:
                             persistent_session=persistent_session,
                         )
                     except Exception as e:
+                        required_scope: Final = upstream_insufficient_scope(e) if managed_per_user else None
+                        if required_scope is not None:
+                            raise MCPUpstreamAuthError(
+                                status_code=403,
+                                www_authenticate=None,
+                                server_name=mcp_server.alias or server_label,
+                                required_scope=required_scope,
+                                server_id=mcp_server.server_id,
+                            ) from e
                         auth_info: Final = _extract_upstream_auth_failure(e)
-                        if auth_info is None or auth_info[0] != 401:
+                        if not relays_upstream_auth or auth_info is None or auth_info[0] != 401:
                             # A genuine (non-auth or 403-forbidden) upstream/transport failure.
                             # raise_on_error demoted the client-layer log to debug, so surface it here at
                             # warning level to keep the outage visible; the caller still gets the graceful
@@ -6781,7 +6878,7 @@ class MCPServerManager:
         proxy_logging_obj: ProxyLogging | None = None,
         oauth2_headers: dict[str, str] | None = None,
         raw_headers: dict[str, str] | None = None,
-        host_progress_callback: Callable | None = None,
+        host_progress_callback: Callable[..., Awaitable[None]] | None = None,
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
         guardrail_context: Mapping[str, object] | None = None,
         client_ip: str | None = None,
@@ -6865,6 +6962,15 @@ class MCPServerManager:
                 guardrail_context=guardrail_context,
             )
             tasks.append(during_hook_task)
+
+        scope_response: Final = get_scope_response()
+        if scope_response is not None and not (
+            mcp_server.is_gateway_managed_oauth2
+            and mcp_server.needs_user_oauth_token
+            and not mcp_server.spec_path
+            and mcp_server.transport in (MCPTransport.http, MCPTransport.sse)
+        ):
+            scope_response.allow()
 
         caller_oauth2_headers: Final = oauth2_headers
         oauth2_headers = await self._resolve_oauth2_headers_for_tool_call(mcp_server, oauth2_headers, user_api_key_auth)
@@ -7227,6 +7333,19 @@ class MCPServerManager:
                     return None
                 return server
         return None
+
+    def get_mcp_server_by_identifier(self, identifier: str, client_ip: str | None = None) -> MCPServer | None:
+        server: Final = self.get_mcp_server_by_name(identifier, client_ip)
+        if server is not None:
+            return server
+        return next(
+            (
+                server
+                for server in self.get_filtered_registry(client_ip).values()
+                if server_answers_to(server, identifier)
+            ),
+            None,
+        )
 
     def get_filtered_registry(self, client_ip: str | None = None) -> Mapping[str, MCPServer]:
         """

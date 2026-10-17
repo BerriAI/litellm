@@ -1,7 +1,7 @@
 import types
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 from httpx._types import FileContent, RequestFiles
@@ -35,9 +35,10 @@ class BaseVideoConfig(ABC):
 
     @classmethod
     def get_config(cls):
+        class_attributes: Final[Mapping[str, object]] = types.MappingProxyType(cls.__dict__)
         return {
             k: v
-            for k, v in cls.__dict__.items()
+            for k, v in class_attributes.items()
             if not k.startswith("__")
             and not k.startswith("_abc")
             and not isinstance(
@@ -145,24 +146,35 @@ class BaseVideoConfig(ABC):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
+        client: "HTTPHandler | None" = None,
     ) -> bytes:
-        pass
+        """
+        Args:
+            raw_response: Raw HTTP response
+            logging_obj: Logging object
+            client: The client that served the request, for providers that download
+                the video from a second URL instead of reading the response body
+        """
 
     async def async_transform_video_content_response(
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
+        client: "AsyncHTTPHandler | None" = None,
     ) -> bytes:
         """
         Async transform video content download response to bytes.
         Optional method - providers can override if they need async transformations
         (e.g., RunwayML for downloading video from CloudFront URL).
 
-        Default implementation falls back to sync transform_video_content_response.
+        Default implementation falls back to sync transform_video_content_response,
+        which takes the sync client, so providers that download through the client
+        have to override this method to receive the async one.
 
         Args:
             raw_response: Raw HTTP response
             logging_obj: Logging object
+            client: The async client that served the request
 
         Returns:
             Video content as bytes

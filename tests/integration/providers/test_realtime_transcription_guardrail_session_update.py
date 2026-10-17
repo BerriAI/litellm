@@ -8,10 +8,10 @@ while a client frame alone never flips a voice session into one. Every row runs 
 which answers the injected and rewritten updates the way the vendors do.
 
 A blocked transcript on a transcription session reaches the client as a ``guardrail_violation`` error and
-nothing else: the ``response.cancel``, the voiced block prompt and the ``response.create`` a voice session gets
-never go to a backend that cannot speak, while ``on_violation: end_session`` and ``end_session_after_n_fails``
-still close the session. A guardrail that raises anything but a block closes the session the way it does on a
-voice session.
+nothing else: the ``response.cancel``, the blocked item's deletion, the voiced block prompt and the
+``response.create`` a voice session gets never go to a backend that cannot speak, while
+``on_violation: end_session`` and ``end_session_after_n_fails`` still close the session. A guardrail that raises
+anything but a block closes the session the way it does on a voice session.
 """
 
 from __future__ import annotations
@@ -51,6 +51,7 @@ from tests.integration._support.database import read_rows
 from tests.integration._support.process import (
     OwnedProxy,
     UpstreamSlot,
+    graceful_stop_seconds,
     owned_proxy_process,
     owned_upstream,
     stop_root_process,
@@ -60,7 +61,7 @@ from tests.integration.cost_calculation.cost_tracking_case import RealtimeRespon
 
 RecordProperty = Callable[[str, object], None]
 
-pytestmark: Final = pytest.mark.timeout(180)
+pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
 
 WORKERS: Final = 2
 BURST: Final = 20
@@ -83,7 +84,7 @@ CREATED_TYPES: Final = frozenset({"session.created", "transcription_session.crea
 TRANSCRIPT_COMPLETED: Final = "conversation.item.input_audio_transcription.completed"
 RESPONSE_DONE: Final = "response.done"
 GUARDRAIL_VIOLATION: Final = ("guardrail_violation", "content_policy_violation")
-MISSING_TURN_DETECTION_TYPE: Final = ("invalid_request_error", "missing_required_parameter")
+SESSION_TYPE_MISMATCH: Final = ("invalid_request_error", "invalid_parameter")
 INVALID_SESSION_VALUE: Final = ("invalid_request_error", "invalid_value")
 FIVE_KB: Final = "x" * 5120
 UNAUTHENTICATED_STATUS: Final = 403
@@ -104,10 +105,9 @@ BETA_TRANSCRIPTION_UPDATE: Final[dict[str, JsonValue]] = {
     "input_audio_transcription": {"model": TRANSCRIBE_MODEL},
 }
 VOICE_UPDATE: Final[dict[str, JsonValue]] = {"type": "realtime", "instructions": "answer briefly"}
-VOICE_UPDATE_FORWARDED: Final[dict[str, JsonValue]] = {
-    "type": "realtime",
-    "instructions": "answer briefly",
-    "audio": {"input": {"turn_detection": {"create_response": False}}},
+VOICE_UPDATE_GATED: Final[dict[str, JsonValue]] = {
+    **VOICE_UPDATE,
+    "audio": {"input": {"turn_detection": {"type": "server_vad", "create_response": False}}},
 }
 RE_ENABLE_UPDATE: Final[dict[str, JsonValue]] = {
     "type": "realtime",
@@ -123,14 +123,32 @@ CLIENT_DECLARED_TRANSCRIPTION: Final[dict[str, JsonValue]] = {
 }
 CLIENT_DECLARED_TRANSCRIPTION_FORWARDED: Final[dict[str, JsonValue]] = {
     "type": "transcription",
-    "audio": {"input": {"turn_detection": {"create_response": False}}},
+    "audio": {"input": {"turn_detection": {"type": "server_vad", "create_response": False}}},
 }
-TURN_DETECTION_TYPE_MISSING: Final = "Missing required parameter: 'session.audio.input.turn_detection.type'."
+REALTIME_UPDATE_REFUSED: Final = "Passing a transcription session update to a realtime session is not allowed."
 GA_INJECTED_UPDATE: Final[dict[str, JsonValue]] = {
     "type": "realtime",
     "audio": {"input": {"turn_detection": {"type": "server_vad", "create_response": False}}},
 }
 BETA_INJECTED_UPDATE: Final[dict[str, JsonValue]] = {"turn_detection": {"type": "server_vad", "create_response": False}}
+XAI_VOICE_MODEL: Final = "grok-voice"
+GEMINI_LIVE_MODEL: Final = "gemini-3.8-live"
+VERTEX_LIVE_LOCATION: Final = "us-central1"
+UNTYPED_GATE: Final[dict[str, JsonValue]] = {"create_response": False}
+SEMANTIC_VAD: Final[dict[str, JsonValue]] = {"type": "semantic_vad", "eagerness": "low"}
+TUNED_SERVER_VAD: Final[dict[str, JsonValue]] = {
+    "type": "server_vad",
+    "prefix_padding_ms": 300,
+    "silence_duration_ms": 500,
+}
+GEMINI_TUNED_DETECTION: Final[dict[str, JsonValue]] = {
+    "disabled": True,
+    "prefixPaddingMs": 300,
+    "silenceDurationMs": 500,
+}
+CLIENT_CANCEL_ID: Final = "client_cancel_1"
+CANCEL_NOT_ACTIVE: Final = ("invalid_request_error", "response_cancel_not_active")
+AUTO_ANSWER_PREFIX: Final = "resp_auto_"
 COMMIT: Final[dict[str, JsonValue]] = {"type": "input_audio_buffer.commit"}
 APPEND: Final[dict[str, JsonValue]] = {"type": "input_audio_buffer.append", "audio": PCM_200MS_24KHZ}
 PUSH_TO_TALK: Final = "PUSH_TO_TALK"
@@ -172,7 +190,13 @@ GUARDRAIL_END_CLOSE: Final = 1000
 PROXY_FAILURE_CLOSE: Final = 1011
 PROXY_FAILURE_REASON: Final = "proxy failed while relaying the upstream websocket"
 TOOL_OUTPUT_BLOCKED: Final = json.dumps({"error": "Tool output blocked by content policy"})
-VOICE_BLOCK_FRAMES: Final = ("response.cancel", "conversation.item.create", "response.create")
+VOICE_BLOCK_FRAMES: Final = (
+    "response.cancel",
+    "conversation.item.delete",
+    "conversation.item.create",
+    "response.create",
+)
+XAI_VOICE_BLOCK_FRAMES: Final = ("response.cancel", "conversation.item.create", "response.create")
 CREATED_SECONDS: Final = 60.0
 STEP_SECONDS: Final = 15.0
 SDK_SECONDS: Final = 45.0
@@ -318,6 +342,30 @@ def _voice_scenario(*transcripts: JsonValue) -> RealtimeResponse:
     return RealtimeResponse(content_type="application/x-realtime", events=tuple(_voice_turns(transcripts)))
 
 
+def _xai_voice_scenario(transcript: str) -> RealtimeResponse:
+    return RealtimeResponse(
+        content_type="application/x-realtime", events=tuple(_voice_turns((transcript,))), dialect="xai"
+    )
+
+
+def _voice_scenario_created_after_the_first_frame(transcript: str) -> RealtimeResponse:
+    return RealtimeResponse(
+        content_type="application/x-realtime", events=tuple(_voice_turns((transcript,))), created_after_first_frame=True
+    )
+
+
+def _live_scenario() -> RealtimeResponse:
+    return RealtimeResponse(content_type="application/x-realtime", events=())
+
+
+def _realtime_update(turn_detection: JsonValue) -> dict[str, JsonValue]:
+    return {"type": "realtime", "audio": {"input": {"turn_detection": turn_detection}}}
+
+
+def _without_auto_response(turn_detection: dict[str, JsonValue]) -> dict[str, JsonValue]:
+    return {**turn_detection, "create_response": False}
+
+
 def _muse_scenario(transcript: str) -> RealtimeResponse:
     return RealtimeResponse(
         content_type="application/x-realtime",
@@ -358,11 +406,44 @@ def _with_transcription_model(update: dict[str, JsonValue], model: str) -> dict[
     return {**update, "audio": {"input": {**audio_input, "transcription": {"model": model}}}}
 
 
-def _muse_deployment(scenario: Scenario, scenario_id: str, api_base: str) -> str:
-    return scenario.model(model=f"meta/{MUSE_MODEL}", api_key=scenario_id, api_base=api_base)
+def _muse_deployment(scenario: Scenario, scenario_id: str, api_base: str, *, drop_params: bool) -> str:
+    return scenario.model(model=f"meta/{MUSE_MODEL}", api_key=scenario_id, api_base=api_base, drop_params=drop_params)
 
 
-def _named_deployment(creator: Gateway, scenario: Scenario, name: str, model: str, scenario_id: str) -> str:
+def _gemini_studio_deployment(scenario: Scenario, scenario_id: str, upstream_url: str) -> str:
+    return scenario.model(
+        model=f"gemini/{GEMINI_LIVE_MODEL}",
+        api_key=scenario_id,
+        api_base=upstream_url.rstrip("/"),
+        model_info={"mode": "realtime"},
+    )
+
+
+def _vertex_credentials(upstream_url: str) -> str:
+    return json.dumps(
+        {
+            "type": "external_account",
+            "audience": "synthetic-vertex-audience",
+            "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+            "token_url": f"{upstream_url}/_oauth/token",
+            "credential_source": {"url": f"{upstream_url}/health"},
+        }
+    )
+
+
+def _vertex_live_deployment(scenario: Scenario, project: str, upstream_url: str) -> str:
+    upstream: Final = upstream_url.rstrip("/")
+    return scenario.model(
+        model=f"vertex_ai/{GEMINI_LIVE_MODEL}",
+        vertex_project=project,
+        vertex_credentials=_vertex_credentials(upstream),
+        vertex_location=VERTEX_LIVE_LOCATION,
+        api_base=upstream,
+        model_info={"mode": "realtime"},
+    )
+
+
+def _named_deployment_id(creator: Gateway, scenario: Scenario, name: str, model: str, scenario_id: str) -> str:
     created: Final = creator.post(
         "/model/new",
         {
@@ -371,8 +452,21 @@ def _named_deployment(creator: Gateway, scenario: Scenario, name: str, model: st
             "model_info": {},
         },
     )
-    scenario.cleanups.callback(scenario.delete_model, string_value(object_value(created["model_info"])["id"]))
+    model_id: Final = string_value(object_value(created["model_info"])["id"])
+    scenario.cleanups.callback(scenario.delete_model, model_id)
+    return model_id
+
+
+def _named_deployment(creator: Gateway, scenario: Scenario, name: str, model: str, scenario_id: str) -> str:
+    _named_deployment_id(creator, scenario, name, model, scenario_id)
     return name
+
+
+def _whisper_default_on_every_worker(owned: OwnedProxy, scenario: Scenario, scenario_id: str) -> None:
+    model_id: Final = _named_deployment_id(
+        owned.gateway, scenario, WHISPER_DEFAULT, f"openai/{WHISPER_DEFAULT}", scenario_id
+    )
+    eventually(lambda: owned.serves_only_on_every_worker(WHISPER_DEFAULT, model_id), lambda served: served, seconds=70)
 
 
 def _close_code(closed: ConnectionClosed) -> int:
@@ -536,6 +630,55 @@ def _transcribe(
     return asyncio.run(_session(ws_base, path, query, key, frames, until=until, headers=headers))
 
 
+async def _received_after_sending(
+    socket: ClientConnection, frames: tuple[dict[str, JsonValue], ...], until: str
+) -> AsyncIterator[dict[str, JsonValue]]:
+    try:
+        for frame in frames:
+            await socket.send(json.dumps(frame))
+        async for event in _until(socket, until, STEP_SECONDS):
+            yield event
+    except ConnectionClosed as closed:
+        yield {"type": "closed", "code": _close_code(closed)}
+
+
+def _is_proxy_answer(event: dict[str, JsonValue]) -> bool:
+    if event.get("type") != RESPONSE_DONE:
+        return False
+    return not string_value(object_value(event["response"])["id"]).startswith(AUTO_ANSWER_PREFIX)
+
+
+async def _until_the_proxy_answer(
+    socket: ClientConnection, frames: tuple[dict[str, JsonValue], ...]
+) -> AsyncIterator[dict[str, JsonValue]]:
+    try:
+        yield JSON_OBJECT.validate_json(await asyncio.wait_for(socket.recv(), CREATED_SECONDS))
+        for frame in frames:
+            await socket.send(json.dumps(frame))
+        deadline: Final = asyncio.get_running_loop().time() + STEP_SECONDS
+        while (event := await _next_event(socket, deadline)) is not None:
+            yield event
+            if _is_proxy_answer(event):
+                return
+        yield {"type": "timeout"}
+    except ConnectionClosed as closed:
+        yield {"type": "closed", "code": _close_code(closed)}
+
+
+async def _talked_until_the_proxy_answer(
+    ws_base: str, query: str, key: str, frames: tuple[dict[str, JsonValue], ...]
+) -> Session:
+    headers: Final = {"Authorization": f"Bearer {key}"}
+    async with websockets.connect(f"{ws_base}/v1/realtime?{query}", additional_headers=headers) as socket:
+        return Session(tuple([event async for event in _until_the_proxy_answer(socket, frames)]), None)
+
+
+async def _talked_at_connect(ws_base: str, query: str, key: str, frames: tuple[dict[str, JsonValue], ...]) -> Session:
+    headers: Final = {"Authorization": f"Bearer {key}"}
+    async with websockets.connect(f"{ws_base}/v1/realtime?{query}", additional_headers=headers) as socket:
+        return Session(tuple([event async for event in _received_after_sending(socket, frames, RESPONSE_DONE)]), None)
+
+
 def _talk(
     ws_base: str,
     query: str,
@@ -604,8 +747,41 @@ def _session_updates(observed: tuple[dict[str, JsonValue], ...]) -> tuple[JsonVa
     return tuple(frame.get("session") for frame in _sent(observed) if frame.get("type") == "session.update")
 
 
+def _assert_voice_updates(observed: tuple[dict[str, JsonValue], ...], *later: dict[str, JsonValue]) -> None:
+    updates: Final = _session_updates(observed)
+    assert updates[0] == GA_INJECTED_UPDATE, updates
+    assert updates[1] == VOICE_UPDATE_GATED, updates
+    assert updates[2:] == later, updates
+
+
 def _query(upgrade: dict[str, JsonValue]) -> JsonValue:
     return upgrade["query"]
+
+
+def _declared_turn_detection(update: JsonValue) -> JsonValue:
+    session: Final = object_value(update)
+    audio_input: Final = object_value(object_value(session.get("audio", {})).get("input", {}))
+    return audio_input["turn_detection"] if "turn_detection" in audio_input else session.get("turn_detection")
+
+
+def _upstream_turn_detections(observed: tuple[dict[str, JsonValue], ...]) -> tuple[JsonValue, ...]:
+    return tuple(_declared_turn_detection(update) for update in _session_updates(observed))
+
+
+def _response_ids(session: Session) -> tuple[str, ...]:
+    done: Final = tuple(object_value(event["response"]) for event in session.events if event["type"] == RESPONSE_DONE)
+    return tuple(string_value(response["id"]) for response in done)
+
+
+def _error_event_ids(session: Session) -> tuple[JsonValue, ...]:
+    errors: Final = tuple(object_value(event["error"]) for event in session.events if event["type"] == "error")
+    return tuple(error.get("event_id") for error in errors)
+
+
+def _setup_detection(observed: tuple[dict[str, JsonValue], ...]) -> JsonValue:
+    setups: Final = tuple(object_value(frame["setup"]) for frame in _sent(observed) if "setup" in frame)
+    assert len(setups) == 1, _sent(observed)
+    return object_value(setups[0].get("realtimeInputConfig", {})).get("automaticActivityDetection")
 
 
 def _spend_rows(key: str, count: int) -> list[dict[str, JsonValue]]:
@@ -691,6 +867,7 @@ def _write_config(directory: Path, ca_bundle: Path) -> Path:
                 "litellm_settings": {
                     "ssl_verify": str(ca_bundle),
                     "enable_redis_auth_cache": True,
+                    "gemini_live_defer_setup": True,
                     "cache": True,
                     "cache_params": {"type": "redis", "host": "os.environ/REDIS_HOST", "port": "os.environ/REDIS_PORT"},
                 },
@@ -868,9 +1045,7 @@ def test_intent_without_model_routes_to_the_whisper_default_without_an_injected_
     with guardrail_proxy.gateway.scenario() as scenario:
         handle: Final = _scripted(scenario, _transcription_scenario(CLEAN_TRANSCRIPT))
         key: Final = scenario.key()
-        _named_deployment(
-            guardrail_proxy.gateway, scenario, WHISPER_DEFAULT, f"openai/{WHISPER_DEFAULT}", handle.scenario_id
-        )
+        _whisper_default_on_every_worker(guardrail_proxy, scenario, handle.scenario_id)
         session: Final = _transcribe(_ws_base(_owned_url(guardrail_proxy)), TRANSCRIPTION_QUERY, key)
         observed: Final = _observed(guardrail_proxy.gateway.upstream_url, handle.scenario_id)
         forwarded: Final = _with_transcription_model(GA_TRANSCRIPTION_UPDATE, WHISPER_DEFAULT)
@@ -907,19 +1082,18 @@ def test_voice_session_keeps_the_injected_update_and_the_clean_transcript_flows(
         assert session.types == (
             "session.created",
             "session.updated",
-            "error",
+            "session.updated",
             TRANSCRIPT_COMPLETED,
             RESPONSE_DONE,
         ), session
-        assert session.errors == (MISSING_TURN_DETECTION_TYPE,), session
-        assert session.error_messages == (TURN_DETECTION_TYPE_MISSING,), session
+        assert session.errors == (), session
         assert _sent_types(observed) == (
             "session.update",
             "session.update",
             "input_audio_buffer.commit",
             "response.create",
         ), _sent(observed)
-        assert _session_updates(observed) == (GA_INJECTED_UPDATE, VOICE_UPDATE_FORWARDED), _session_updates(observed)
+        _assert_voice_updates(observed)
         rows: Final = _spend_rows(key, 1)
         assert rows[0]["call_type"] == "_arealtime", rows
 
@@ -934,17 +1108,15 @@ def test_voice_session_blocked_transcript_is_refused_through_the_backend(guardra
         )
         observed: Final = _observed(guardrail_proxy.gateway.upstream_url, handle.scenario_id)
         assert session.transcripts == (BLOCKED_TRANSCRIPT,), session
-        assert session.errors == (MISSING_TURN_DETECTION_TYPE, GUARDRAIL_VIOLATION), session
+        assert session.errors == (GUARDRAIL_VIOLATION,), session
         assert session.types[-1] == RESPONSE_DONE, session
         assert _sent_types(observed) == (
             "session.update",
             "session.update",
             "input_audio_buffer.commit",
-            "response.cancel",
-            "conversation.item.create",
-            "response.create",
+            *VOICE_BLOCK_FRAMES,
         ), _sent(observed)
-        assert _session_updates(observed) == (GA_INJECTED_UPDATE, VOICE_UPDATE_FORWARDED), _session_updates(observed)
+        _assert_voice_updates(observed)
 
 
 def test_voice_session_cannot_re_enable_auto_response_with_a_later_update(guardrail_proxy: OwnedProxy) -> None:
@@ -956,12 +1128,8 @@ def test_voice_session_cannot_re_enable_auto_response_with_a_later_update(guardr
         session: Final = _talk(_ws_base(_owned_url(guardrail_proxy)), f"model={model}", key, frames)
         observed: Final = _observed(guardrail_proxy.gateway.upstream_url, handle.scenario_id)
         assert session.types[-1] == RESPONSE_DONE, session
-        assert session.errors == (MISSING_TURN_DETECTION_TYPE,), session
-        assert _session_updates(observed) == (
-            GA_INJECTED_UPDATE,
-            VOICE_UPDATE_FORWARDED,
-            RE_ENABLE_FORWARDED,
-        ), _session_updates(observed)
+        assert session.errors == (), session
+        _assert_voice_updates(observed, RE_ENABLE_FORWARDED)
 
 
 def test_client_declared_transcription_type_does_not_bypass_the_voice_guardrail(guardrail_proxy: OwnedProxy) -> None:
@@ -973,16 +1141,14 @@ def test_client_declared_transcription_type_does_not_bypass_the_voice_guardrail(
         session: Final = _talk(_ws_base(_owned_url(guardrail_proxy)), f"model={model}", key, frames, seconds=20)
         observed: Final = _observed(guardrail_proxy.gateway.upstream_url, handle.scenario_id)
         assert session.transcripts == (BLOCKED_TRANSCRIPT,), session
-        assert session.errors == (MISSING_TURN_DETECTION_TYPE, GUARDRAIL_VIOLATION), session
-        assert session.error_messages[0] == TURN_DETECTION_TYPE_MISSING, session
+        assert session.errors == (SESSION_TYPE_MISMATCH, GUARDRAIL_VIOLATION), session
+        assert session.error_messages[0] == REALTIME_UPDATE_REFUSED, session
         assert session.types[-1] == RESPONSE_DONE, session
         assert _sent_types(observed) == (
             "session.update",
             "session.update",
             "input_audio_buffer.commit",
-            "response.cancel",
-            "conversation.item.create",
-            "response.create",
+            *VOICE_BLOCK_FRAMES,
         ), _sent(observed)
         assert _session_updates(observed) == (
             GA_INJECTED_UPDATE,
@@ -1001,6 +1167,202 @@ def test_backend_session_created_typed_transcription_skips_the_injection_on_the_
         observed: Final = _observed(guardrail_proxy.gateway.upstream_url, handle.scenario_id)
         _assert_transcription_left_alone(session, observed, CLEAN_TRANSCRIPT, update=GA_TRANSCRIPTION_UPDATE)
         assert [_query(upgrade) for upgrade in _upgrades(observed)] == [[["model", TRANSCRIBE_MODEL]]]
+
+
+def test_voice_session_typed_turn_detection_keeps_its_type_and_tuning(guardrail_proxy: OwnedProxy) -> None:
+    with guardrail_proxy.gateway.scenario() as scenario:
+        handle: Final = _scripted(scenario, _voice_scenario(CLEAN_TRANSCRIPT))
+        key: Final = scenario.key()
+        model: Final = _openai_deployment(scenario, handle.scenario_id, model=VOICE_MODEL)
+        frames: Final = _voice_frames(_realtime_update(SEMANTIC_VAD))
+        session: Final = _talk(_ws_base(_owned_url(guardrail_proxy)), f"model={model}", key, frames)
+        observed: Final = _observed(guardrail_proxy.gateway.upstream_url, handle.scenario_id)
+        assert session.errors == (), session
+        assert session.types[-1] == RESPONSE_DONE, session
+        assert _session_updates(observed) == (
+            GA_INJECTED_UPDATE,
+            _realtime_update(_without_auto_response(SEMANTIC_VAD)),
+        ), _session_updates(observed)
+
+
+@dataclass(frozen=True, slots=True)
+class LaterUpdateCase:
+    headers: Mapping[str, str]
+    first: dict[str, JsonValue]
+    later: dict[str, JsonValue]
+    forwarded: tuple[dict[str, JsonValue], ...]
+
+
+LATER_UPDATE_CASES: Final = (
+    pytest.param(
+        LaterUpdateCase(
+            {},
+            VOICE_UPDATE,
+            {"type": "realtime", "instructions": "later"},
+            (GA_INJECTED_UPDATE, VOICE_UPDATE_GATED),
+        ),
+        id="ga",
+    ),
+    pytest.param(
+        LaterUpdateCase(
+            BETA_HEADERS,
+            {"turn_detection": {"type": "server_vad"}},
+            {"instructions": "later"},
+            (BETA_INJECTED_UPDATE, BETA_INJECTED_UPDATE),
+        ),
+        id="beta",
+    ),
+)
+
+
+@pytest.mark.parametrize("case", LATER_UPDATE_CASES)
+def test_later_update_without_turn_detection_is_forwarded_verbatim(
+    guardrail_proxy: OwnedProxy, case: LaterUpdateCase
+) -> None:
+    with guardrail_proxy.gateway.scenario() as scenario:
+        handle: Final = _scripted(scenario, _voice_scenario(CLEAN_TRANSCRIPT))
+        key: Final = scenario.key()
+        model: Final = _openai_deployment(scenario, handle.scenario_id, model=VOICE_MODEL)
+        session: Final = _drive(
+            _ws_base(_owned_url(guardrail_proxy)),
+            f"model={model}",
+            key,
+            (_step(_update_frame(case.first), _update_frame(case.later), COMMIT, until=RESPONSE_DONE),),
+            headers=case.headers,
+        )
+        observed: Final = _observed(guardrail_proxy.gateway.upstream_url, handle.scenario_id)
+        assert session.errors == (), session
+        assert session.types[-1] == RESPONSE_DONE, session
+        assert _session_updates(observed) == (*case.forwarded, case.later), _session_updates(observed)
+
+
+def test_session_update_sent_before_session_created_follows_the_gate(guardrail_proxy: OwnedProxy) -> None:
+    with guardrail_proxy.gateway.scenario() as scenario:
+        handle: Final = _scripted(scenario, _voice_scenario_created_after_the_first_frame(CLEAN_TRANSCRIPT))
+        key: Final = scenario.key()
+        model: Final = _openai_deployment(scenario, handle.scenario_id, model=VOICE_MODEL)
+        frames: Final = _voice_frames(_realtime_update(TUNED_SERVER_VAD))
+        session: Final = asyncio.run(
+            _talked_at_connect(_ws_base(_owned_url(guardrail_proxy)), f"model={model}", key, frames)
+        )
+        observed: Final = _observed(guardrail_proxy.gateway.upstream_url, handle.scenario_id)
+        assert session.types == (
+            "session.created",
+            "session.updated",
+            "session.updated",
+            TRANSCRIPT_COMPLETED,
+            RESPONSE_DONE,
+        ), session
+        assert session.errors == (), session
+        assert _session_updates(observed) == (
+            GA_INJECTED_UPDATE,
+            _realtime_update(_without_auto_response(TUNED_SERVER_VAD)),
+        ), _session_updates(observed)
+
+
+def test_client_response_cancel_error_still_reaches_the_client(guardrail_proxy: OwnedProxy) -> None:
+    with guardrail_proxy.gateway.scenario() as scenario:
+        handle: Final = _scripted(scenario, _voice_scenario(CLEAN_TRANSCRIPT))
+        key: Final = scenario.key()
+        model: Final = _openai_deployment(scenario, handle.scenario_id, model=VOICE_MODEL)
+        cancel: Final[dict[str, JsonValue]] = {"type": "response.cancel", "event_id": CLIENT_CANCEL_ID}
+        session: Final = _drive(
+            _ws_base(_owned_url(guardrail_proxy)), f"model={model}", key, (_step(cancel, until="error"),)
+        )
+        assert session.errors == (CANCEL_NOT_ACTIVE,), session
+        assert _error_event_ids(session) == (CLIENT_CANCEL_ID,), session
+
+
+def _xai_blocked_session(
+    guardrail_proxy: OwnedProxy, scenario: Scenario
+) -> tuple[Session, tuple[dict[str, JsonValue], ...]]:
+    handle: Final = _scripted(scenario, _xai_voice_scenario(BLOCKED_TRANSCRIPT))
+    key: Final = scenario.key()
+    model: Final = scenario.model(model=f"xai/{XAI_VOICE_MODEL}", api_key=handle.scenario_id)
+    frames: Final = _voice_frames(_realtime_update(TUNED_SERVER_VAD))
+    session: Final = asyncio.run(
+        _talked_until_the_proxy_answer(_ws_base(_owned_url(guardrail_proxy)), f"model={model}", key, frames)
+    )
+    return session, _observed(guardrail_proxy.gateway.upstream_url, handle.scenario_id)
+
+
+def test_xai_voice_session_gets_untyped_gates_and_no_unguarded_answer(guardrail_proxy: OwnedProxy) -> None:
+    with guardrail_proxy.gateway.scenario() as scenario:
+        session, observed = _xai_blocked_session(guardrail_proxy, scenario)
+        turn_detections: Final = _upstream_turn_detections(observed)
+        assert turn_detections == (UNTYPED_GATE, UNTYPED_GATE), turn_detections
+        assert session.transcripts == (BLOCKED_TRANSCRIPT,), session
+        assert GUARDRAIL_VIOLATION in session.errors, session
+        assert not any(response.startswith(AUTO_ANSWER_PREFIX) for response in _response_ids(session)), session
+
+
+def test_xai_voice_session_block_sends_xai_no_item_delete(guardrail_proxy: OwnedProxy) -> None:
+    with guardrail_proxy.gateway.scenario() as scenario:
+        session, observed = _xai_blocked_session(guardrail_proxy, scenario)
+        assert session.transcripts == (BLOCKED_TRANSCRIPT,), session
+        assert _sent_types(observed) == (
+            "session.update",
+            "session.update",
+            "input_audio_buffer.commit",
+            *XAI_VOICE_BLOCK_FRAMES,
+        ), _sent(observed)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason=(
+        "xAI answers the guardrail's response.cancel with an error carrying its own event_id, so the proxy cannot "
+        "tell it apart from an error for a client event and forwards it, as the merge base does"
+    ),
+)
+def test_xai_guardrail_cancel_error_does_not_reach_the_client(guardrail_proxy: OwnedProxy) -> None:
+    with guardrail_proxy.gateway.scenario() as scenario:
+        session, _ = _xai_blocked_session(guardrail_proxy, scenario)
+        assert session.errors == (GUARDRAIL_VIOLATION,), session
+
+
+TUNED_VOICE_UPDATES: Final = (
+    pytest.param(_realtime_update(TUNED_SERVER_VAD), id="nested"),
+    pytest.param({"turn_detection": TUNED_SERVER_VAD}, id="flat"),
+)
+
+
+@pytest.mark.parametrize("update", TUNED_VOICE_UPDATES)
+def test_gemini_ai_studio_voice_session_with_vad_tuning_connects_under_the_guardrail(
+    guardrail_proxy: OwnedProxy, update: dict[str, JsonValue]
+) -> None:
+    with guardrail_proxy.gateway.scenario() as scenario:
+        handle: Final = _scripted(scenario, _live_scenario())
+        key: Final = scenario.key()
+        upstream_url: Final = guardrail_proxy.gateway.upstream_url
+        model: Final = _gemini_studio_deployment(scenario, handle.scenario_id, upstream_url)
+        session: Final = _drive(
+            _ws_base(_owned_url(guardrail_proxy)),
+            f"model={model}",
+            key,
+            (_step(_update_frame(update), until="session.updated"),),
+        )
+        observed: Final = _observed(upstream_url, handle.scenario_id)
+        assert session.types == ("session.created", "session.updated"), session
+        assert _setup_detection(observed) == {"disabled": True}, _sent(observed)
+
+
+def test_vertex_live_voice_session_keeps_vad_tuning_under_the_guardrail(guardrail_proxy: OwnedProxy) -> None:
+    with guardrail_proxy.gateway.scenario() as scenario:
+        handle: Final = _scripted(scenario, _live_scenario())
+        key: Final = scenario.key()
+        upstream_url: Final = guardrail_proxy.gateway.upstream_url
+        model: Final = _vertex_live_deployment(scenario, handle.scenario_id, upstream_url)
+        session: Final = _drive(
+            _ws_base(_owned_url(guardrail_proxy)),
+            f"model={model}",
+            key,
+            (_step(_update_frame(_realtime_update(TUNED_SERVER_VAD)), until="session.updated"),),
+        )
+        observed: Final = _observed(upstream_url, handle.scenario_id)
+        assert session.types == ("session.created", "session.updated"), session
+        assert _setup_detection(observed) == GEMINI_TUNED_DETECTION, _sent(observed)
 
 
 MUSE_PUSH_TO_TALK_FRAMES: Final[tuple[dict[str, JsonValue], ...]] = (
@@ -1030,10 +1392,11 @@ def _muse_session(
     turn_detection: JsonValue,
     *,
     until: str | None = None,
+    drop_params: bool = False,
 ) -> tuple[Session, tuple[dict[str, JsonValue], ...]]:
     handle: Final = _scripted(scenario, _muse_scenario(transcript), control_url=tls_upstream)
     key: Final = scenario.key()
-    model: Final = _muse_deployment(scenario, handle.scenario_id, tls_upstream)
+    model: Final = _muse_deployment(scenario, handle.scenario_id, tls_upstream, drop_params=drop_params)
     verdict: Final = TRANSCRIPT_COMPLETED if BLOCKED_WORD not in transcript else "error"
     session: Final = _talk(
         _ws_base(_owned_url(guardrail_proxy)),
@@ -1107,6 +1470,40 @@ def test_muse_server_vad_transcription_session_keeps_endpointing(
             {"binary_bytes": MUSE_PACKET_BYTES},
             {"binary_bytes": MUSE_REMAINDER_BYTES},
         ), _muse_audio_frames(observed)
+
+
+def test_muse_semantic_vad_under_drop_params_falls_back_to_endpointing(
+    guardrail_proxy: OwnedProxy, tls_upstream: str
+) -> None:
+    with guardrail_proxy.gateway.scenario() as scenario:
+        session, observed = _muse_session(
+            guardrail_proxy,
+            scenario,
+            tls_upstream,
+            CLEAN_TRANSCRIPT,
+            f"&{TRANSCRIPTION_QUERY}",
+            {"type": "semantic_vad"},
+            drop_params=True,
+        )
+        assert session.transcripts == (CLEAN_TRANSCRIPT,), session
+        assert session.errors == (), session
+        assert _muse_handshake(observed)["mode"] == ENDPOINTING, _muse_handshake(observed)
+
+
+def test_muse_semantic_vad_without_drop_params_is_refused(guardrail_proxy: OwnedProxy, tls_upstream: str) -> None:
+    with guardrail_proxy.gateway.scenario() as scenario:
+        session, observed = _muse_session(
+            guardrail_proxy,
+            scenario,
+            tls_upstream,
+            CLEAN_TRANSCRIPT,
+            "",
+            {"type": "semantic_vad"},
+            until=TRANSCRIPT_COMPLETED,
+        )
+        assert session.types[-1] == "closed", session
+        assert session.transcripts == (), session
+        assert _upgrades(observed) == (), observed
 
 
 @pytest.mark.xfail(
@@ -1218,8 +1615,8 @@ def test_opt_in_guardrail_gates_a_voice_session_on_an_opted_out_key(guardrail_pr
         )
         observed: Final = _observed(guardrail_proxy.gateway.upstream_url, handle.scenario_id)
         assert session.transcripts == (BLOCKED_TRANSCRIPT,), session
-        assert session.errors == (MISSING_TURN_DETECTION_TYPE, GUARDRAIL_VIOLATION), session
-        assert _session_updates(observed) == (GA_INJECTED_UPDATE, VOICE_UPDATE_FORWARDED), _session_updates(observed)
+        assert session.errors == (GUARDRAIL_VIOLATION,), session
+        _assert_voice_updates(observed)
 
 
 def test_opt_in_guardrail_leaves_a_transcription_session_alone_on_an_opted_out_key(guardrail_proxy: OwnedProxy) -> None:
@@ -1458,9 +1855,7 @@ def test_intent_without_model_blocked_transcript_reports_a_violation_on_the_whis
     with guardrail_proxy.gateway.scenario() as scenario:
         handle: Final = _scripted(scenario, _transcription_scenario(BLOCKED_TRANSCRIPT))
         key: Final = scenario.key()
-        _named_deployment(
-            guardrail_proxy.gateway, scenario, WHISPER_DEFAULT, f"openai/{WHISPER_DEFAULT}", handle.scenario_id
-        )
+        _whisper_default_on_every_worker(guardrail_proxy, scenario, handle.scenario_id)
         session: Final = _transcribe_blocked(_ws_base(_owned_url(guardrail_proxy)), TRANSCRIPTION_QUERY, key)
         observed: Final = _observed(guardrail_proxy.gateway.upstream_url, handle.scenario_id)
         forwarded: Final = _with_transcription_model(GA_TRANSCRIPTION_UPDATE, WHISPER_DEFAULT)
@@ -1708,12 +2103,11 @@ def test_voice_session_guardrail_raising_runtime_error_closes_with_the_same_prox
         assert session.types == (
             "session.created",
             "session.updated",
-            "error",
+            "session.updated",
             TRANSCRIPT_COMPLETED,
             "error",
             "closed",
         ), session
-        assert session.errors[0] == MISSING_TURN_DETECTION_TYPE, session
         _assert_closed_by_a_proxy_failure(session)
         assert _sent_types(observed) == ("session.update", "session.update", "input_audio_buffer.commit"), _sent(
             observed
@@ -1731,8 +2125,8 @@ def test_voice_session_guardrail_raising_value_error_is_voiced_through_the_backe
             (_step(VOICE_UPDATE_FRAME, COMMIT, until=RESPONSE_DONE),),
         )
         assert session.transcripts == (blocked,), session
-        assert session.errors == (MISSING_TURN_DETECTION_TYPE, GUARDRAIL_VIOLATION), session
-        assert session.error_messages[1] == f"{VALUE_ERROR_WORD} is not allowed", session
+        assert session.errors == (GUARDRAIL_VIOLATION,), session
+        assert session.error_messages == (f"{VALUE_ERROR_WORD} is not allowed",), session
         assert session.types[-1] == RESPONSE_DONE, session
         assert _sent_types(observed) == (
             "session.update",
@@ -1755,7 +2149,7 @@ def test_voice_session_second_violation_under_end_session_after_n_fails_closes_a
             (_step(VOICE_UPDATE_FRAME, COMMIT, until=RESPONSE_DONE), _step(COMMIT, until="closed")),
         )
         assert session.transcripts == (blocked, blocked), session
-        assert session.errors == (MISSING_TURN_DETECTION_TYPE, GUARDRAIL_VIOLATION, GUARDRAIL_VIOLATION), session
+        assert session.errors == (GUARDRAIL_VIOLATION, GUARDRAIL_VIOLATION), session
         assert session.types[-1] == "closed", session
         assert session.close_code == GUARDRAIL_END_CLOSE, session
         assert _sent_types(observed) == (
@@ -1939,7 +2333,7 @@ def test_non_string_transcript_field_closes_a_voice_session_with_the_same_proxy_
         assert session.types == (
             "session.created",
             "session.updated",
-            "error",
+            "session.updated",
             TRANSCRIPT_COMPLETED,
             "error",
             "closed",
