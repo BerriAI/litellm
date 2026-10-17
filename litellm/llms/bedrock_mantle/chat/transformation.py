@@ -10,19 +10,21 @@ Auth: Bearer token (litellm_params.api_key, BEDROCK_MANTLE_API_KEY, or the
       BedrockMantleAuthMixin in common_utils.
 """
 
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 import httpx
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.exceptions import UnsupportedParamsError
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock_mantle.common_utils import (
     BEDROCK_MANTLE_DEFAULT_REGION,
     BedrockMantleAuthMixin,
 )
-from litellm.llms.openai.chat.gpt_5_transformation import is_gpt_reasoning_series_name
+from litellm.llms.openai.chat.gpt_5_transformation import get_effort_level, is_gpt_reasoning_series_name
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
@@ -36,6 +38,51 @@ from ..common_utils import mantle_base_segment, split_mantle_region_prefix
 if TYPE_CHECKING:
     from litellm.llms.openai.chat.gpt_transformation import (
         OpenAIChatCompletionStreamingHandler,
+    )
+
+
+def _with_chat_reasoning_effort(non_default_params: Mapping[str, object]) -> Mapping[str, object]:
+    """Chat Completions takes ``reasoning_effort`` as a level, so a Responses-shaped ``{"effort", "summary"}``
+    passes only its effort, the way the OpenAI GPT-5 chat config reads it."""
+    reasoning_effort: Final = non_default_params.get("reasoning_effort")
+    if not isinstance(reasoning_effort, dict):
+        return non_default_params
+    effort: Final = get_effort_level(reasoning_effort)
+    rest: Final = {key: value for key, value in non_default_params.items() if key != "reasoning_effort"}
+    return rest if effort is None else {**rest, "reasoning_effort": effort}
+
+
+def _unsupported_chat_values(non_default_params: Mapping[str, object]) -> tuple[str, ...]:
+    n: Final = non_default_params.get("n")
+    reasoning_effort: Final = non_default_params.get("reasoning_effort")
+    summary: Final = reasoning_effort.get("summary") if isinstance(reasoning_effort, Mapping) else None
+    return tuple(
+        value
+        for value, unsupported in (
+            (f"n={n}", isinstance(n, int) and n > 1),
+            (f"reasoning summary {summary}", summary is not None),
+        )
+        if unsupported
+    )
+
+
+def _drops_params(litellm_params: Mapping[str, object]) -> bool:
+    return litellm.drop_params is True or litellm_params.get("drop_params") is True
+
+
+def _chat_request_params(optional_params: Mapping[str, object], drop_params: bool) -> Mapping[str, object]:
+    unsupported: Final = _unsupported_chat_values(optional_params)
+    if unsupported and not drop_params:
+        raise UnsupportedParamsError(
+            message=f"Bedrock Mantle Chat Completions does not support {', '.join(unsupported)}. To drop unsupported "
+            "openai params from the call, set `litellm.drop_params = True`",
+            llm_provider="bedrock_mantle",
+            status_code=400,
+        )
+    servable: Final = _with_chat_reasoning_effort(optional_params)
+    n: Final = servable.get("n")
+    return MappingProxyType(
+        {key: value for key, value in servable.items() if not (key == "n" and isinstance(n, int) and n > 1)}
     )
 
 
@@ -157,6 +204,28 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
             for param, value in (("max_completion_tokens", mapped_params["max_tokens"]), *mapped_params.items())
             if param != "max_tokens"
         }
+
+    def transform_request(
+        self,
+        model: str,
+        messages: list[AllMessageValues],  # mutable-ok: OpenAIGPTConfig.transform_request signature
+        optional_params: dict[str, object],  # mutable-ok: OpenAIGPTConfig.transform_request signature
+        litellm_params: dict[str, object],  # mutable-ok: OpenAIGPTConfig.transform_request signature
+        headers: dict[str, str],  # mutable-ok: OpenAIGPTConfig.transform_request signature
+    ) -> dict[str, object]:  # mutable-ok: OpenAIGPTConfig.transform_request signature
+        request_params: Final = dict(_chat_request_params(optional_params, _drops_params(litellm_params)))
+        return super().transform_request(model, messages, request_params, litellm_params, headers)
+
+    def transform_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        request: Mapping[str, object],
+        model: str,
+        litellm_params: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        return _chat_request_params(
+            super().transform_extra_body(extra_body, request, model, litellm_params), _drops_params(litellm_params)
+        )
 
     def _supports_reasoning(self, model: str) -> bool:
         try:

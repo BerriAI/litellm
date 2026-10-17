@@ -625,6 +625,38 @@ class TestBedrockMantleReasoningSummary:
         )
         assert params["reasoning"] == {"effort": "medium", "summary": "auto"}
 
+    def test_auto_summary_on_still_drops_a_client_detailed_summary(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_REASONING_AUTO_SUMMARY", "true")
+        cfg = BedrockMantleResponsesAPIConfig()
+        params = cfg.map_openai_params(
+            response_api_optional_params={"reasoning": {"effort": "medium", "summary": "detailed"}},
+            model="openai.gpt-5.6-sol",
+            drop_params=True,
+        )
+        assert params["reasoning"] == {"effort": "medium"}
+
+    def test_auto_summary_on_still_rejects_a_client_detailed_summary_without_drop_params(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_REASONING_AUTO_SUMMARY", "true")
+        cfg = BedrockMantleResponsesAPIConfig()
+        with pytest.raises(litellm.UnsupportedParamsError):
+            cfg.map_openai_params(
+                response_api_optional_params={"reasoning": {"effort": "medium", "summary": "detailed"}},
+                model="openai.gpt-5.6-sol",
+                drop_params=False,
+            )
+
+    @pytest.mark.parametrize("use_openai_path, expected", [(True, "auto"), (False, "detailed")])
+    def test_auto_reasoning_summary_is_a_level_the_path_accepts(self, use_openai_path, expected):
+        cfg = BedrockMantleResponsesAPIConfig(use_openai_path=use_openai_path)
+        summary = cfg.auto_reasoning_summary()
+        assert summary == expected
+        params = cfg.map_openai_params(
+            response_api_optional_params={"reasoning": {"effort": "medium", "summary": summary}},
+            model="openai.gpt-5.6-sol" if use_openai_path else "openai.gpt-oss-120b",
+            drop_params=False,
+        )
+        assert params["reasoning"] == {"effort": "medium", "summary": summary}
+
     def test_reasoning_summary_kept_on_standard_path(self):
         cfg = BedrockMantleResponsesAPIConfig(use_openai_path=False)
         params = cfg.map_openai_params(

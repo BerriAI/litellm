@@ -501,7 +501,11 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             return None
         if resolved_provider == "litellm_proxy":
             return None
-        from litellm.responses.bridge_check import chat_target_accepts_reasoning_summary, responses_api_bridge_check
+        from litellm.responses.bridge_check import (
+            chat_target_accepts_reasoning_summary,
+            responses_api_bridge_check,
+            str_keyed_mapping,
+        )
 
         if requested_summary is not None and chat_target_accepts_reasoning_summary(local_model, resolved_provider):
             return _ChatTargetReasoning(effort=effort, summary=requested_summary)
@@ -510,6 +514,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
 
         web_search_options: Final = completion_kwargs.get("web_search_options")
         tools: Final = completion_kwargs.get("tools")
+        client_summary: Final = thinking.get("summary")
         model_info, _ = responses_api_bridge_check(
             model=local_model,
             custom_llm_provider=resolved_provider,
@@ -517,8 +522,9 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 cast(OpenAIWebSearchOptions, web_search_options) if isinstance(web_search_options, dict) else None
             ),
             tools=cast("list[dict[str, object]]", tools) if isinstance(tools, list) else None,
-            reasoning_effort=reasoning_effort,
+            reasoning_effort=effort if client_summary is None else {"effort": effort, "summary": client_summary},
             api_base=resolved_api_base,
+            deployment_model_info=str_keyed_mapping(completion_kwargs.get("model_info")),
         )
         return None if model_info.get("mode") == "responses" else _ChatTargetReasoning(effort=effort)
 

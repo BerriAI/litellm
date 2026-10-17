@@ -139,6 +139,7 @@ from litellm.llms.openai_like.model_info import (
     MODEL_INFO_REFRESH_SECONDS,
     get_openai_compatible_model_info,
 )
+from litellm.responses.bridge_check import keep_registered_mode
 from litellm.router_strategy.base_routing_strategy import BaseRoutingStrategy
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 from litellm.router_strategy.complexity_router.context_compaction import (
@@ -11010,7 +11011,6 @@ class Router:
 
         ## OLD MODEL REGISTRATION ## Kept to prevent breaking changes
         backend_keys: Final = Router._backend_cost_map_keys(model=model, custom_llm_provider=custom_llm_provider)
-        backend_key: Final = backend_keys[0]
 
         # For the shared backend key, keep only cost-map schema fields
         # (minus custom pricing) so that one deployment's pricing overrides
@@ -11019,34 +11019,8 @@ class Router:
         # name. Each deployment's full model_info is already stored under
         # its unique model_id above.
         shared_model_info: Final = shared_backend_model_info(model_info)
-        existing_shared_mode: Final = (cast(dict | None, litellm.model_cost.get(backend_key, {})) or {}).get("mode")
-        deployment_mode: Final = shared_model_info.get("mode")
-        # Keep the built-in bridge mode stable for shared backend keys.
-        # Multiple aliases can point at the same provider/model backend,
-        # but their deployment-level overrides should not downgrade the
-        # backend from responses -> chat via last-write-wins registration.
-        # Only preserve in that specific direction so legitimate upgrades
-        # (e.g. chat -> responses) and unrelated mode changes still apply,
-        # and so a missing deployment mode does not silently clear the
-        # existing shared backend mode.
-        is_responses_to_chat_downgrade: Final = existing_shared_mode == "responses" and deployment_mode == "chat"
-        would_clear_existing_mode: Final = existing_shared_mode is not None and deployment_mode is None
-        if is_responses_to_chat_downgrade or would_clear_existing_mode:
-            if deployment_mode is not None:
-                verbose_router_logger.warning(
-                    "Router: preserving existing mode=%s for shared backend "
-                    "key %s instead of the deployment-specified mode=%s "
-                    "(prevents alias registration from downgrading the "
-                    "shared backend mode).",
-                    existing_shared_mode,
-                    backend_key,
-                    deployment_mode,
-                )
-            shared_model_info["mode"] = existing_shared_mode
-
-        # Always register the (possibly mode-preserved) shared backend info.
         litellm.register_model(
-            model_cost={_key: shared_model_info for _key in backend_keys},
+            model_cost={_key: keep_registered_mode(_key, shared_model_info) for _key in backend_keys},
             persist_across_reloads=False,
         )
 

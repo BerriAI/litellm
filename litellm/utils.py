@@ -3520,19 +3520,33 @@ def _get_builtin_model_info_for_registration(model: str, custom_llm_provider: st
     )
 
 
+def _skips_builtin_registration_lookup(key: str, provider: object) -> bool:
+    return provider in PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO or any(
+        key.startswith(f"{p}/") for p in PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class _RegistrationWrite:
     key: str
     entry: Mapping[str, object]
 
 
+def model_cost_registration_row(key: str, provider: object) -> Mapping[str, object]:
+    """The row a ``register_model`` write of a ``key`` entry with this ``litellm_provider`` merges onto: the
+    ``litellm.model_cost`` row it resolves to (``openai/o3-pro`` lands on ``o3-pro``), else the row it seeds ``key``
+    with from the built-in entry it falls back to (an OpenAI fine-tune takes its base model's row)."""
+    base: Final = _registration_base(
+        key, {"litellm_provider": provider}, custom_llm_provider=None, warning_display_name=None
+    )
+    return _builtin_cost_map().get(base.key) or base.entry
+
+
 def _registration_base(
     key: str, value: Mapping[str, object], custom_llm_provider: str | None, warning_display_name: str | None
 ) -> _RegistrationWrite:
     provider: Final = str(value.get("litellm_provider") or "")
-    if provider in PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO or any(
-        key.startswith(f"{p}/") for p in PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO
-    ):
+    if _skips_builtin_registration_lookup(key, provider):
         return _RegistrationWrite(key=key, entry=dict(_builtin_cost_map().get(key, {})))
     builtin_model_info: Final = _get_builtin_model_info_for_registration(
         model=key, custom_llm_provider=custom_llm_provider
