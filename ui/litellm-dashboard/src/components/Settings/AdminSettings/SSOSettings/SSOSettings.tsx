@@ -130,6 +130,10 @@ export default function SSOSettings() {
           render: (values: SSOSettingsValues) => <EndpointValue value={values.generic_userinfo_endpoint} />,
         },
         { label: "Scopes", render: (values: SSOSettingsValues) => renderSimpleValue(values.generic_scope) },
+        {
+          label: "Extra Authorization Params",
+          render: (values: SSOSettingsValues) => renderSimpleValue(values.generic_authorization_params),
+        },
         { label: "Proxy Base URL", render: (values: SSOSettingsValues) => renderSimpleValue(values.proxy_base_url) },
         isTeamMappingsEnabled
           ? { label: "Team IDs JWT Field", render: (values: SSOSettingsValues) => renderTeamMappingsField(values) }
@@ -160,6 +164,10 @@ export default function SSOSettings() {
           render: (values: SSOSettingsValues) => <EndpointValue value={values.generic_userinfo_endpoint} />,
         },
         { label: "Scopes", render: (values: SSOSettingsValues) => renderSimpleValue(values.generic_scope) },
+        {
+          label: "Extra Authorization Params",
+          render: (values: SSOSettingsValues) => renderSimpleValue(values.generic_authorization_params),
+        },
         { label: "Proxy Base URL", render: (values: SSOSettingsValues) => renderSimpleValue(values.proxy_base_url) },
         isTeamMappingsEnabled
           ? { label: "Team IDs JWT Field", render: (values: SSOSettingsValues) => renderTeamMappingsField(values) }

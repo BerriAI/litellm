@@ -27,6 +27,7 @@ export interface SSOSettingsFormValues {
   generic_token_endpoint?: string;
   generic_userinfo_endpoint?: string;
   generic_scope?: string;
+  generic_authorization_params?: string;
   saml_idp_metadata_url?: string;
   saml_idp_metadata_xml?: string;
   saml_sp_entity_id?: string;
@@ -91,6 +92,7 @@ export const ssoProviderConfigs: Record<string, SSOProviderConfig> = {
       generic_token_endpoint: "GENERIC_TOKEN_ENDPOINT",
       generic_userinfo_endpoint: "GENERIC_USERINFO_ENDPOINT",
       generic_scope: "GENERIC_SCOPE",
+      generic_authorization_params: "GENERIC_AUTHORIZATION_PARAMS",
     },
     fields: [
       { label: "Generic Client ID", name: "generic_client_id" },
@@ -107,6 +109,12 @@ export const ssoProviderConfigs: Record<string, SSOProviderConfig> = {
         placeholder: "https://your-domain/userinfo",
       },
       { label: "Scopes", name: "generic_scope", placeholder: "openid email profile", required: false },
+      {
+        label: "Extra Authorization Params",
+        name: "generic_authorization_params",
+        placeholder: "resource=https://your-api-identifier",
+        required: false,
+      },
     ],
   },
   generic: {
@@ -117,6 +125,7 @@ export const ssoProviderConfigs: Record<string, SSOProviderConfig> = {
       generic_token_endpoint: "GENERIC_TOKEN_ENDPOINT",
       generic_userinfo_endpoint: "GENERIC_USERINFO_ENDPOINT",
       generic_scope: "GENERIC_SCOPE",
+      generic_authorization_params: "GENERIC_AUTHORIZATION_PARAMS",
     },
     fields: [
       { label: "Generic Client ID", name: "generic_client_id" },
@@ -125,6 +134,12 @@ export const ssoProviderConfigs: Record<string, SSOProviderConfig> = {
       { label: "Token Endpoint", name: "generic_token_endpoint" },
       { label: "Userinfo Endpoint", name: "generic_userinfo_endpoint" },
       { label: "Scopes", name: "generic_scope", placeholder: "openid email profile", required: false },
+      {
+        label: "Extra Authorization Params",
+        name: "generic_authorization_params",
+        placeholder: "resource=https://your-api-identifier",
+        required: false,
+      },
     ],
   },
   saml: {

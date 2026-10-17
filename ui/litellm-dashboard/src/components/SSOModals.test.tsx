@@ -531,6 +531,7 @@ describe("SSOModals", () => {
         saml_sp_entity_id: null,
         saml_allow_unsolicited: null,
         generic_scope: null,
+        generic_authorization_params: null,
         proxy_base_url: null,
         user_email: null,
         sso_provider: null,
