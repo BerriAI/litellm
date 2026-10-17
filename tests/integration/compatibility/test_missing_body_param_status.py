@@ -1695,15 +1695,19 @@ def test_upstream_pause_and_worker_kill_preserve_required_body_status(
             record_property("chaos_spend_row_counts", str(tuple(len(rows) for rows in spend_rows)))
             with owned.replacing_worker(min(workers)) as kill:
                 kill()
-                post_kill: Final = tuple(
-                    _post(candidate, path, body) for path, body, _expected, _identity in missing_calls[:5]
-                )
-                assert all(
-                    response.status_code == 400 and response.json() == expected
-                    for response, (_path, _body, expected, _identity) in zip(post_kill, missing_calls[:5])
-                ), [response.text for response in post_kill]
-                recovered: Final = _post(candidate, "/v1/chat/completions", _chat_body(chat_model, "recovered", True))
-                assert recovered.status_code == 200, recovered.text
+                with httpx.Client(base_url=candidate.client.base_url, timeout=15, trust_env=False) as fresh:
+                    survivor: Final = Gateway(fresh, candidate.key, candidate.upstream_url)
+                    post_kill: Final = tuple(
+                        _post(survivor, path, body) for path, body, _expected, _identity in missing_calls[:5]
+                    )
+                    assert all(
+                        response.status_code == 400 and response.json() == expected
+                        for response, (_path, _body, expected, _identity) in zip(post_kill, missing_calls[:5])
+                    ), [response.text for response in post_kill]
+                    recovered: Final = _post(
+                        survivor, "/v1/chat/completions", _chat_body(chat_model, "recovered", True)
+                    )
+                    assert recovered.status_code == 200, recovered.text
 
 
 def test_eval_create_and_run_forward_client_metadata(gateway: Gateway) -> None:
