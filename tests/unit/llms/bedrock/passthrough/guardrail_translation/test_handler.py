@@ -13,10 +13,11 @@ import copy
 import importlib.util
 import json
 import sys
+import time
 import types
 from collections.abc import Callable, Mapping
 from datetime import datetime
-from typing import Literal
+from typing import ClassVar, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -2035,6 +2036,84 @@ class TestConverseToolListRewrites:
                 },
             ]
         }
+
+    @pytest.mark.asyncio
+    async def test_returned_tool_named_by_a_non_string_fails_closed_without_mutation(self):
+        data = _tool_config_data()
+        original = copy.deepcopy(data["data"])
+
+        def misnamed(inputs: GenericGuardrailAPIInputs) -> Mapping[str, object]:
+            first, *rest = inputs["tools"]
+            renamed = {**first, "function": {**first["function"], "name": ["lookup"]}}
+            return {"texts": inputs["texts"], "tools": [renamed, *rest]}
+
+        with pytest.raises(UnappliableRequestRewrite):
+            await BedrockPassthroughGuardrailHandler().process_input_messages(data, _ScriptedGuardrail(misnamed))
+
+        assert data["data"] == original
+
+
+class _CountingName(str):
+    """A tool name that records every equality check made on it."""
+
+    checks: ClassVar[list[str]] = []
+    __hash__ = str.__hash__
+
+    def __eq__(self, other: object) -> bool:
+        self.checks.append(str(self))
+        return str.__eq__(self, other)
+
+
+def _counted_names(inputs: GenericGuardrailAPIInputs) -> Mapping[str, object]:
+    tools = [
+        {**tool, "function": {**tool["function"], "name": _CountingName(tool["function"]["name"])}}
+        for tool in inputs["tools"]
+    ]
+    return {"texts": inputs["texts"], "tools": tools}
+
+
+class TestConverseRewritesOfWideRequests:
+    @pytest.mark.asyncio
+    async def test_each_returned_tool_is_matched_to_its_original_by_one_lookup(self):
+        tools = [
+            {"toolSpec": {"name": f"tool_{index}", "inputSchema": {"json": {"type": "object"}}}}
+            for index in range(2_000)
+        ]
+        data = _converse_request(
+            {"messages": [{"role": "user", "content": [{"text": "hi"}]}], "toolConfig": {"tools": tools}}
+        )
+        sent = copy.deepcopy(data["data"])
+        _CountingName.checks.clear()
+
+        result = await BedrockPassthroughGuardrailHandler().process_input_messages(
+            data, _ScriptedGuardrail(_counted_names)
+        )
+
+        assert result["data"] == sent
+        assert len(_CountingName.checks) <= 4 * len(tools)
+
+    @pytest.mark.asyncio
+    async def test_row_masks_in_thirty_thousand_request_fields_are_all_written_back(self):
+        data = _converse_request(
+            {
+                "messages": [{"role": "user", "content": [{"text": "hi"}]}],
+                "additionalModelRequestFields": {f"field_{index}": "card 4111" for index in range(30_000)},
+            }
+        )
+        guardrail = _ScriptedGuardrail(
+            lambda inputs: {"texts": inputs["texts"], "structured_messages": _card_rows_masked(inputs)}
+        )
+        handler = BedrockPassthroughGuardrailHandler()
+        await handler.process_input_messages(_card_on_file_data(), guardrail)
+
+        started = time.perf_counter()
+        result = await handler.process_input_messages(data, guardrail)
+        elapsed = time.perf_counter() - started
+
+        assert result["data"]["additionalModelRequestFields"] == {
+            f"field_{index}": "card ****" for index in range(30_000)
+        }
+        assert elapsed < 10
 
 
 class _ConductPluginGuard(CustomGuardrail):

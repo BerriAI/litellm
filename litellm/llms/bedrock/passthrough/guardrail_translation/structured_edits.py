@@ -280,8 +280,9 @@ def _tool_name(tool: object) -> object:
     return None if function is None else function.get("name")
 
 
-def _named(tools: Sequence[ConverseTool], returned: object) -> ConverseTool | None:
-    return next((tool for tool in tools if tool.param["function"]["name"] == _tool_name(returned)), None)
+def _named(first_by_name: Mapping[str, ConverseTool], returned: object) -> ConverseTool | None:
+    name: Final = _tool_name(returned)
+    return first_by_name.get(name) if isinstance(name, str) else None
 
 
 def _bedrock_blocks(returned: object, model: str | None) -> tuple[BedrockToolBlock, ...] | None:
@@ -311,7 +312,8 @@ def tool_edits(tools: Sequence[ConverseTool], returned: object, model: str | Non
     returned_tools: Final = as_json_array(returned)
     if returned_tools is None:
         return None
-    planned: Final = tuple(_returned_tool(_named(tools, item), item, model) for item in returned_tools)
+    first_by_name: Final = {tool.param["function"]["name"]: tool for tool in reversed(tools)}
+    planned: Final = tuple(_returned_tool(_named(first_by_name, item), item, model) for item in returned_tools)
     placed: Final = tuple(plan for plan in planned if plan is not None)
     if len(placed) != len(planned):
         return None

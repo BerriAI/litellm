@@ -106,6 +106,8 @@ _Write: TypeAlias = _Assign | _DropToolConfig
 _ContentHolder: TypeAlias = tuple[object, str]
 _BlankDrop: TypeAlias = tuple[_ContentHolder, frozenset[int]]
 _BODY_BY_REFERENCE: Final = TypeAdapter(InstanceOf[dict[str, object]])
+_OBJECT_BY_REFERENCE: Final = TypeAdapter(InstanceOf[Mapping[str, object]])
+_ARRAY_BY_REFERENCE: Final = TypeAdapter(InstanceOf[list[object]])
 
 
 def _collect_strings(node: object, holders: list[_StringHolder]) -> None:
@@ -252,13 +254,15 @@ def _texts_follow_rows(
 
 
 def _child(node: object, key: str | int) -> object:
-    match key:
-        case str():
-            fields: Final = as_json_object(node)
-            return None if fields is None else fields.get(key)
-        case int():
-            items: Final = as_json_array(node)
-            return items[key] if items is not None and 0 <= key < len(items) else None
+    try:
+        match key:
+            case str():
+                return _OBJECT_BY_REFERENCE.validate_python(node).get(key)
+            case int():
+                items: Final = _ARRAY_BY_REFERENCE.validate_python(node)
+                return items[key] if 0 <= key < len(items) else None
+    except ValidationError:
+        return None
 
 
 def _holder(body: object, path: JsonPath) -> _StringHolder | None:
