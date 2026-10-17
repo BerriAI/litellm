@@ -130,7 +130,7 @@ class RemoteTraceStore:
         response.raise_for_status()
 
     async def list_traces(
-        self, scope: TraceScope, start_ms: int, end_ms: int, cursor: str | None, limit: int
+        self, scope: TraceScope, start_ms: int, end_ms: int, cursor: str | None, limit: int, agent: str | None = None
     ) -> JsonValue:
         return await self._read(
             {
@@ -140,6 +140,7 @@ class RemoteTraceStore:
                 "end_ms": end_ms,
                 "cursor": cursor,
                 "limit": limit,
+                **({"agent": agent} if agent else {}),
             }
         )
 

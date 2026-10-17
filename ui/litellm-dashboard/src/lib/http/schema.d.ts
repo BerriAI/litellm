@@ -81452,6 +81452,7 @@ export interface operations {
                 cursor?: string | null;
                 /** @description Window end, unix ms. Default: now */
                 end_ms?: number | null;
+                agent?: string | null;
                 /** @description Window start, unix ms. Default: 24h ago */
                 start_ms?: number | null;
             };

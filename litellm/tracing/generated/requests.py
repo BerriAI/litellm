@@ -35,6 +35,7 @@ class TraceListRequest(LiteLLMBaseModel):
 
     cursor: str | None = Field(None, max_length=512)
     end_ms: int | None = Field(None, description="Window end, unix ms. Default: now")
+    agent: str | None = Field(None, max_length=256)
     start_ms: int | None = Field(None, description="Window start, unix ms. Default: 24h ago")
 
 

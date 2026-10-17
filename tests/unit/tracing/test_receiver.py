@@ -1,13 +1,17 @@
+import asyncio
+import json
 from datetime import datetime, timezone
 from typing import Final, cast
 
+import httpx
 import pytest
 
-from litellm.constants import AGENT_TRACING_AGENT_LIST_LIMIT
+from litellm.constants import AGENT_TRACING_AGENT_LIST_LIMIT, AGENT_TRACING_LIST_PAGE_SIZE
+from litellm.tracing import TraceReceiver
 from litellm.tracing.generated.models import TraceAgentRow, TraceAgentsParams
 from litellm.tracing.generated.types import TraceScope
+from litellm.tracing.remote import RemoteTraceStore
 from litellm.tracing.storage import LensTraceStorage
-from litellm.tracing import TraceReceiver
 from litellm.tracing.types import TraceAgent
 
 
@@ -69,3 +73,30 @@ async def test_list_agents_queries_the_reader_scope_and_shapes_rows(
             last_seen=datetime(1970, 1, 1, tzinfo=timezone.utc),
         ),
     )
+
+
+@pytest.mark.asyncio
+async def test_list_traces_forwards_agent_filter_to_lens() -> None:
+    requests: Final = asyncio.Queue[httpx.Request]()
+
+    def accept(request: httpx.Request) -> httpx.Response:
+        requests.put_nowait(request)
+        return httpx.Response(200, json={"data": [], "next_cursor": None})
+
+    scope: Final = TraceScope(all_teams=0, user_id="owner", team_ids=("team",))
+    async with httpx.AsyncClient(base_url="http://lens", transport=httpx.MockTransport(accept)) as client:
+        receiver: Final = TraceReceiver(LensTraceStorage(RemoteTraceStore(client)))
+        page: Final = await receiver.list_traces(scope, start_ms=10, end_ms=20, agent="research-agent")
+
+    request: Final = requests.get_nowait()
+    assert request.url.path == "/internal/read"
+    assert json.loads(request.content) == {
+        "operation": "list",
+        "scope": {"all_teams": 0, "user_id": "owner", "team_ids": ["team"]},
+        "start_ms": 10,
+        "end_ms": 20,
+        "cursor": None,
+        "limit": AGENT_TRACING_LIST_PAGE_SIZE,
+        "agent": "research-agent",
+    }
+    assert page == {"data": (), "next_cursor": None}
