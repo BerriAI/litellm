@@ -119,3 +119,14 @@ class TestPrismaMigration:
             prisma_migration.prisma_package_is_writable(find_spec=lambda _name: None, is_writable=lambda _path: True)
             is False
         )
+
+    def test_prisma_package_is_writable_checks_the_real_filesystem_by_default(self, tmp_path: Path) -> None:
+        missing_dir: Path = tmp_path / "missing"
+
+        def spec_at(location: Path) -> ModuleSpec:
+            spec = ModuleSpec("prisma", None, is_package=True)
+            spec.submodule_search_locations = [str(location)]
+            return spec
+
+        assert prisma_migration.prisma_package_is_writable(find_spec=lambda _name: spec_at(tmp_path)) is True
+        assert prisma_migration.prisma_package_is_writable(find_spec=lambda _name: spec_at(missing_dir)) is False
