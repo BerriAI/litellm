@@ -219,6 +219,7 @@ from litellm.router_utils.cooldown_handlers import (
     _first_present,  # pyright: ignore[reportPrivateUsage] - shared internal helper across router_utils submodules, matching the other cooldown_handlers imports on this line
     async_get_cooldown_deployments,
     async_get_cooldown_deployments_with_debug_info,
+    get_cooldown_deployment_info,
     get_cooldown_deployments,
     is_advisor_orchestration_failure,
     is_background_response_poll_not_found,
@@ -14284,6 +14285,7 @@ class Router:
                 litellm_router_instance=self,
                 model=model,
                 parent_otel_span=parent_otel_span,
+                request_kwargs=_ROUTING_KWARGS_ADAPTER.validate_python(request_kwargs),
             )
             raise exception
 
@@ -14542,6 +14544,7 @@ class Router:
                     litellm_router_instance=self,
                     model=model,
                     parent_otel_span=parent_otel_span,
+                    request_kwargs=_ROUTING_KWARGS_ADAPTER.validate_python(request_kwargs),
                 )
                 raise exception
             await self._async_override_selector_pre_call_check(
@@ -14707,6 +14710,7 @@ class Router:
                     litellm_router_instance=self,
                     model=model,
                     parent_otel_span=parent_otel_span,
+                    request_kwargs=_ROUTING_KWARGS_ADAPTER.validate_python(request_kwargs),
                 )
                 raise exception
             await self._async_override_selector_pre_call_check(
@@ -15477,6 +15481,7 @@ class Router:
                 enable_pre_call_checks=self.enable_pre_call_checks,
                 cooldown_list=_cooldown_list,
                 model_ids=model_ids,
+                cooldown_deployments=get_cooldown_deployment_info(self, model, routing_kwargs, _cooldown_list),
             )
 
         if strategy == "simple-shuffle":
@@ -15513,6 +15518,7 @@ class Router:
                 enable_pre_call_checks=self.enable_pre_call_checks,
                 cooldown_list=_cooldown_list,
                 model_ids=model_ids,
+                cooldown_deployments=get_cooldown_deployment_info(self, model, routing_kwargs, _cooldown_list),
             )
         self._override_selector_pre_call_check(strategy, strategy_selector, deployment)
         verbose_router_logger.info(
@@ -15645,6 +15651,9 @@ class Router:
                 enable_pre_call_checks=self.enable_pre_call_checks,
                 cooldown_list=_cooldown_list,
                 model_ids=pass_through_model_ids,
+                cooldown_deployments=get_cooldown_deployment_info(
+                    self, model, _ROUTING_KWARGS_ADAPTER.validate_python(request_kwargs), _cooldown_list
+                ),
             )
 
         # 6. Apply load balancing strategy
@@ -15680,6 +15689,9 @@ class Router:
                 enable_pre_call_checks=self.enable_pre_call_checks,
                 cooldown_list=_cooldown_list,
                 model_ids=model_ids,
+                cooldown_deployments=get_cooldown_deployment_info(
+                    self, model, _ROUTING_KWARGS_ADAPTER.validate_python(request_kwargs), _cooldown_list
+                ),
             )
         self._override_selector_pre_call_check(strategy, strategy_selector, deployment)
 

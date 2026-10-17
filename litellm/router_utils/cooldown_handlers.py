@@ -8,7 +8,7 @@ Router cooldown handlers
 
 import asyncio
 import math
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
@@ -27,12 +27,15 @@ from litellm.constants import (
     SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD,
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+from litellm.litellm_core_utils.litellm_logging import mask_api_base_credentials
+from litellm.router_utils.common_utils import get_request_team_id
 from litellm.router_utils.cooldown_cache import ROUTER_COOLDOWNS_TARGET, CooldownCacheValue
 from litellm.router_utils.cooldown_callbacks import router_cooldown_event_callback
 from litellm.types.router import Deployment
 from litellm.types.utils import (
     BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
     BACKGROUND_RESPONSE_STATUS_POLL_CALL_ORIGIN,
+    CooldownDeploymentInfo,
     InternalCallOrigin,
 )
 
@@ -641,6 +644,31 @@ def get_cooldown_deployments(litellm_router_instance: LitellmRouter, parent_otel
 
 
 _get_cooldown_deployments = get_cooldown_deployments
+
+
+def _deployment_api_base(litellm_router_instance: LitellmRouter, model_id: str) -> str | None:
+    deployment: Final = litellm_router_instance.get_deployment(model_id=model_id)
+    api_base: Final = deployment.litellm_params.api_base if deployment else None
+    return None if api_base is None else mask_api_base_credentials(api_base)
+
+
+def get_cooldown_deployment_info(
+    litellm_router_instance: LitellmRouter,
+    model: str,
+    request_kwargs: Mapping[str, object] | None,
+    cooldown_list: Sequence[str],
+) -> tuple[CooldownDeploymentInfo, ...]:
+    """
+    The deployments `model` routes to for the caller's team that are in `cooldown_list`, each with its masked api_base
+    """
+    candidates: Final = litellm_router_instance.get_candidate_model_ids_for_route(
+        model, get_request_team_id(request_kwargs)
+    )
+    return tuple(
+        CooldownDeploymentInfo(model_id=model_id, api_base=_deployment_api_base(litellm_router_instance, model_id))
+        for model_id in cooldown_list
+        if model_id in candidates
+    )
 
 
 def should_cooldown_based_on_allowed_fails_policy(
