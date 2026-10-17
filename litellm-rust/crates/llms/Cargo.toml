@@ -9,6 +9,7 @@ repository.workspace = true
 test-support = ["litellm-http/test-support"]
 
 [dependencies]
+uuid.workspace = true
 litellm-llms-types.workspace = true
 litellm-core-utils.workspace = true
 litellm-auth = { workspace = true, features = ["aws", "azure", "gcp"] }

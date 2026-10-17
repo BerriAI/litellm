@@ -5,6 +5,7 @@ use serde_json::{Map, Value};
 
 use litellm_auth::{CredentialPlacement, SecretValue};
 
+use super::request::{self, ItemValidation};
 use crate::{
     Error,
     base_llm::{
@@ -165,7 +166,7 @@ impl BaseResponsesApiConfig for OpenAiResponsesApiConfig {
         input: Value,
         params: Map<String, Value>,
     ) -> Result<Value, Error> {
-        responses_request(model, input, params)
+        responses_request(model, input, params, ItemValidation::OpenAi)
     }
 
     fn transform_response_api_response(&self, body: Value) -> Result<ResponsesApiResponse, Error> {
@@ -178,6 +179,7 @@ pub fn responses_request(
     model: &str,
     input: Value,
     params: Map<String, Value>,
+    validation: ItemValidation,
 ) -> Result<Value, Error> {
     if !input.is_string() && !input.is_array() {
         return Err(Error::InvalidRequest(
@@ -190,6 +192,7 @@ pub fn responses_request(
     {
         return Err(Error::InvalidRequest("stream must be a boolean".into()));
     }
+    let (input, params) = request::shape(input, params, validation)?;
     Ok(Value::Object(
         params
             .into_iter()
