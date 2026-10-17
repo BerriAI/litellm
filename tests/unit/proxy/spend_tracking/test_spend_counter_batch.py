@@ -41,6 +41,7 @@ class CountingRedis(RedisCache):
         self.store: dict[str, object] = dict(store or {})
         self.fail = fail
         self.commands: list[str] = []
+        self.namespace = None
 
     async def async_get_cache(self, key: str, **kwargs: object) -> object:
         if self.fail:
@@ -351,7 +352,9 @@ async def test_reseed_treats_a_batched_clean_miss_as_authoritative_and_seeds_fro
 
     assert value == 2.25
     assert [c for c in redis.commands if c.startswith("GET")] == []
-    redis.async_set_cache.assert_awaited_once_with(key="spend:key:hashed", value=2.25, nx=True)
+    redis.async_set_cache.assert_awaited_once_with(
+        key="spend:key:hashed", value=2.25, nx=True, ttl=ps.spend_counter_redis_ttl()
+    )
 
 
 @pytest.mark.asyncio
@@ -404,7 +407,9 @@ async def test_post_call_cold_counters_seed_from_the_mget_miss_without_a_second_
     await ps.increment_spend_counters(token="hashed", team_id="team", user_id=None, response_cost=0.5)
 
     assert [c.split()[0] for c in redis.commands] == ["MGET", "PIPELINE"], redis.commands
-    redis.async_set_cache.assert_awaited_once_with(key="spend:team:team", value=4.0, nx=True)
+    redis.async_set_cache.assert_awaited_once_with(
+        key="spend:team:team", value=4.0, nx=True, ttl=ps.spend_counter_redis_ttl()
+    )
     assert redis.store["spend:key:hashed"] == 1.5
 
 

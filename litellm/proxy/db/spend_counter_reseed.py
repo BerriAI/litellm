@@ -137,7 +137,7 @@ class SpendCounterReseed:
         # Per-window key/team counters share prefixes with primary counters
         # but don't correspond to a DB row. Do not reject arbitrary entity IDs
         # or tag names that merely contain ":window:".
-        if SpendCounterReseed._is_key_or_team_window_counter(counter_key):
+        if SpendCounterReseed.is_key_or_team_window_counter(counter_key):
             return None
         try:
             row: Final = await bounded_db_lookup(
@@ -199,7 +199,7 @@ class SpendCounterReseed:
         return float(row.spend or 0.0)
 
     @staticmethod
-    def _is_key_or_team_window_counter(counter_key: str) -> bool:
+    def is_key_or_team_window_counter(counter_key: str) -> bool:
         for prefix in ("spend:key:", "spend:team:"):
             if not counter_key.startswith(prefix):
                 continue
@@ -267,10 +267,13 @@ class SpendCounterReseed:
             current_value: float = float(db_spend)
             try:
                 if spend_counter_cache.redis_cache is not None:
+                    from litellm.proxy.proxy_server import spend_counter_redis_ttl
+
                     seeded: Final = await spend_counter_cache.redis_cache.async_set_cache(
                         key=counter_key,
                         value=db_spend,
                         nx=True,
+                        ttl=spend_counter_redis_ttl(),
                     )
                     if seeded:
                         current_value = float(db_spend)
@@ -462,10 +465,13 @@ class SpendCounterReseed:
                 return None
             try:
                 if spend_counter_cache.redis_cache is not None:
+                    from litellm.proxy.proxy_server import spend_counter_redis_ttl
+
                     seeded: Final = await spend_counter_cache.redis_cache.async_set_cache(
                         key=counter_key,
                         value=window_spend,
                         nx=True,
+                        ttl=spend_counter_redis_ttl(),
                     )
                     if seeded:
                         current_value = window_spend
@@ -475,6 +481,7 @@ class SpendCounterReseed:
                             current_value = await spend_counter_cache.redis_cache.async_increment(
                                 key=counter_key,
                                 value=window_spend,
+                                ttl=spend_counter_redis_ttl(),
                             )
                         else:
                             current_value = float(current_cached_value)

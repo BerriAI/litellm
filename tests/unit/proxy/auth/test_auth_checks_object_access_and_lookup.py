@@ -10064,6 +10064,7 @@ async def test_invalidate_team_member_spend_state_sets_new_spend_instead_of_dele
     caller passing new_spend must match that precedent, not merely delete the counter."""
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.proxy_server import spend_counter_redis_ttl
 
     real_cache = UserApiKeyCache()
     real_spend_counter_cache = DualCache()
@@ -10082,7 +10083,9 @@ async def test_invalidate_team_member_spend_state_sets_new_spend_instead_of_dele
         )
 
     assert real_spend_counter_cache.in_memory_cache.get_cache(key="spend:team_member:user-1:team-1") == 2.5
-    fake_redis_cache.async_set_cache.assert_awaited_once_with(key="spend:team_member:user-1:team-1", value=2.5, ttl=60)
+    fake_redis_cache.async_set_cache.assert_awaited_once_with(
+        key="spend:team_member:user-1:team-1", value=2.5, ttl=spend_counter_redis_ttl()
+    )
 
 
 @pytest.mark.asyncio
@@ -10213,6 +10216,7 @@ async def test_invalidate_team_member_spend_state_broadcasts_the_spend_counter_t
         redis_cache=_FakeRedisCache(),
         user_api_key_cache=remote_user_api_key_cache,
         additional_in_memory_caches=(remote_spend_counter_in_memory_cache,),
+        counter_cache=remote_spend_counter_in_memory_cache,
     )
     for cache_key in ("spend:team_member:user-1:team-1", "spend_db_floor:spend:team_member:user-1:team-1"):
         remote_subscriber._apply_message(  # pyright: ignore[reportPrivateUsage]  # exercising the real cross-worker message handler, not a public API
