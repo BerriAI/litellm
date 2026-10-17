@@ -49,6 +49,7 @@ from litellm.types.utils import (
     Function,
     LLMResponseTypes,
     StandardCallbackDynamicParams,
+    StandardLoggingMetadata,
     StandardLoggingPayload,
 )
 
@@ -102,6 +103,13 @@ class _ResponseWithUsageView(TypedDict, total=False):
 
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+
+# Metadata keys dropped from spans when `litellm.redact_user_api_key_info` is set.
+_USER_API_KEY_METADATA_KEYS: Final = frozenset(
+    key
+    for key in StandardLoggingMetadata.__required_keys__ | StandardLoggingMetadata.__optional_keys__
+    if key.startswith("user_api_key")
+)
 
 # Cap on credential-scoped providers held at once; each one owns an exporter thread.
 _MAX_DYNAMIC_TRACER_PROVIDERS: Final = 256
@@ -1516,6 +1524,8 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         in ``standard_logging_object.metadata``; propagating that to every
         span only adds noise that makes traces look mis-instrumented.
         """
+        if litellm.redact_user_api_key_info is True:
+            return
         if team_id:
             self.safe_set_attribute(
                 span=span,
@@ -2412,7 +2422,10 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             ############ LLM CALL METADATA ##############
             #############################################
             metadata: Final = standard_logging_payload["metadata"]
+            redact_user_api_key_info: Final = litellm.redact_user_api_key_info is True
             for key, value in metadata.items():
+                if redact_user_api_key_info and key in _USER_API_KEY_METADATA_KEYS:
+                    continue
                 self.safe_set_attribute(span=span, key=f"metadata.{key}", value=value)
             decision: Final = metadata.get("routing_decision")
             span.set_attributes(routing_decision_attributes(decision))
