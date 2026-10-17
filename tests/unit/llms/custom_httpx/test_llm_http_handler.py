@@ -1,6 +1,5 @@
 import asyncio
 import base64
-import http.server
 import inspect
 import json
 import logging
@@ -16,7 +15,6 @@ import pytest
 from botocore.credentials import RefreshableCredentials
 
 import litellm
-from litellm import anthropic_beta_headers_manager
 from litellm._logging import verbose_logger
 from litellm.integrations.code_interpreter_interception.handler import (
     CodeInterpreterInterceptionLogger,
@@ -5357,81 +5355,3 @@ async def test_anthropic_messages_dropped_safeguards_send_neither_the_field_nor_
     sent: Final = received[0]
     assert "safeguards" not in json.loads(sent.content)
     assert "dangerous-tool-use-2026-09-03" not in sent.headers.get("anthropic-beta", ""), dict(sent.headers)
-
-
-@pytest.mark.asyncio
-async def test_anthropic_messages_load_the_beta_map_without_blocking_the_event_loop(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    beta_map: Final = json.dumps(
-        anthropic_beta_headers_manager.GetAnthropicBetaHeadersConfig.load_local_beta_headers_config()
-    ).encode()
-    served: Final[list[str]] = []
-
-    class SlowBetaMap(http.server.BaseHTTPRequestHandler):
-        def do_GET(self) -> None:
-            served.append(self.path)
-            time.sleep(0.5)
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(beta_map)
-
-    beta_map_server: Final = http.server.ThreadingHTTPServer(("127.0.0.1", 0), SlowBetaMap)
-    threading.Thread(target=beta_map_server.serve_forever, daemon=True).start()
-    monkeypatch.delenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", raising=False)
-    monkeypatch.setattr(
-        litellm, "anthropic_beta_headers_url", f"http://127.0.0.1:{beta_map_server.server_port}/beta.json"
-    )
-    monkeypatch.setattr(anthropic_beta_headers_manager, "_BETA_HEADERS_CONFIG", None)
-
-    received: Final[list[httpx.Request]] = []
-
-    def anthropic_answers(request: httpx.Request) -> httpx.Response:
-        received.append(request)
-        return httpx.Response(
-            status_code=200,
-            json={
-                "id": "msg_beta_map_off_loop",
-                "type": "message",
-                "role": "assistant",
-                "model": "claude-sonnet-4-6",
-                "content": [{"type": "text", "text": "hi"}],
-                "stop_reason": "end_turn",
-                "stop_sequence": None,
-                "usage": {"input_tokens": 5, "output_tokens": 1},
-            },
-            request=request,
-        )
-
-    ticks: Final[list[float]] = []
-
-    async def record_ticks() -> None:
-        while True:
-            ticks.append(time.monotonic())
-            await asyncio.sleep(0.01)
-
-    upstream: Final = AsyncHTTPHandler(transport=httpx.MockTransport(anthropic_answers))
-    ticker: Final = asyncio.create_task(record_ticks())
-    try:
-        await asyncio.sleep(0.05)
-        await litellm.anthropic.messages.acreate(
-            max_tokens=16,
-            messages=[{"role": "user", "content": "hi"}],
-            model="anthropic/claude-sonnet-4-6",
-            api_key="sk-ant-test",
-            safeguards=({"type": "dangerous_tool_use"},),
-            client=upstream,
-        )
-        await asyncio.sleep(0.05)
-    finally:
-        ticker.cancel()
-        await upstream.close()
-        beta_map_server.shutdown()
-        beta_map_server.server_close()
-
-    longest_stall: Final = max(later - earlier for earlier, later in zip(ticks, ticks[1:]))
-    assert served == ["/beta.json"], served
-    assert longest_stall < 0.25, longest_stall
-    assert len(received) == 1, received
-    assert "dangerous-tool-use-2026-09-03" in received[0].headers.get("anthropic-beta", ""), dict(received[0].headers)

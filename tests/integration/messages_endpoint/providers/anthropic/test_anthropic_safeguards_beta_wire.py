@@ -16,6 +16,7 @@ import pytest
 from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy
+from integration._support.vertex import service_account_json
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
@@ -52,7 +53,7 @@ class _Omitted:
     pass
 
 
-_OMITTED: Final = _Omitted()
+OMITTED: Final = _Omitted()
 
 
 @dataclass(frozen=True, slots=True)
@@ -277,8 +278,8 @@ _ANTHROPIC_SHAPES: Final = MappingProxyType(
             SAFEGUARDS, SAFEGUARDS, _CLIENT_BETAS, _MERGED_BETAS
         ),
         "D4_empty_safeguards": _ShapeCase([], [], None, BETA),
-        "D5_null_safeguards": _ShapeCase(None, _OMITTED, None, None),
-        "D6_missing_safeguards": _ShapeCase(_OMITTED, _OMITTED, None, None),
+        "D5_null_safeguards": _ShapeCase(None, OMITTED, None, None),
+        "D6_missing_safeguards": _ShapeCase(OMITTED, OMITTED, None, None),
     }
 )
 _FOUNDRY_SHAPES: Final = MappingProxyType(
@@ -287,9 +288,9 @@ _FOUNDRY_SHAPES: Final = MappingProxyType(
             SAFEGUARDS, SAFEGUARDS, _CLIENT_BETAS_WITH_DANGEROUS, BETA, stream=True
         ),
         "D11_empty_safeguards": _ShapeCase([], [], None, BETA),
-        "D12_null_safeguards": _ShapeCase(None, _OMITTED, None, None),
+        "D12_null_safeguards": _ShapeCase(None, OMITTED, None, None),
         "D13_missing_safeguards_with_claude_code_header_lacking_the_beta": _ShapeCase(
-            _OMITTED, _OMITTED, _CLIENT_BETAS, None
+            OMITTED, OMITTED, _CLIENT_BETAS, None
         ),
     }
 )
@@ -315,25 +316,70 @@ def test_anthropic_messages_derive_the_dangerous_tool_use_beta_from_safeguards(g
         _spend_row(f"msg_{marker}")
 
 
-@pytest.mark.parametrize(
-    ("deployment", "target", "auth"),
-    [
-        ((f"anthropic/{ANTHROPIC_MODEL}", ANTHROPIC_KEY), "/v1/messages", ("x-api-key", ANTHROPIC_KEY)),
-        ((_FOUNDRY_MODEL, _FOUNDRY_KEY), _FOUNDRY_TARGET, ("x-api-key", _FOUNDRY_KEY)),
-    ],
-    ids=("anthropic", "azure_ai"),
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _DropCase:
+    deployment: Callable[[Gateway], Mapping[str, JsonValue]]
+    target: str
+    auth: tuple[str, str] | None
+    keys: frozenset[str] = _MESSAGES_KEYS
+
+
+_VERTEX_PROJECT: Final = "scripted-project"
+_VERTEX_LOCATION: Final = "us-east5"
+_VERTEX_MODEL: Final = "claude-opus-5-5"
+
+_DROP_CASES: Final = MappingProxyType(
+    {
+        "anthropic": _DropCase(
+            deployment=lambda _: {"model": f"anthropic/{ANTHROPIC_MODEL}", "api_key": ANTHROPIC_KEY},
+            target="/v1/messages",
+            auth=("x-api-key", ANTHROPIC_KEY),
+        ),
+        "azure_ai": _DropCase(
+            deployment=lambda _: {"model": _FOUNDRY_MODEL, "api_key": _FOUNDRY_KEY},
+            target=_FOUNDRY_TARGET,
+            auth=("x-api-key", _FOUNDRY_KEY),
+        ),
+        "bedrock_claude_platform": _DropCase(
+            deployment=lambda _: {
+                "model": f"bedrock/claude_platform/{ANTHROPIC_MODEL}",
+                "api_key": "synthetic-platform-key",
+                "workspace_id": "ws-synthetic",
+                "aws_region_name": "us-east-1",
+            },
+            target="/v1/messages",
+            auth=("x-api-key", "synthetic-platform-key"),
+        ),
+        "vertex_ai": _DropCase(
+            deployment=lambda gateway: {
+                "model": f"vertex_ai/{_VERTEX_MODEL}",
+                "api_key": None,
+                "vertex_project": _VERTEX_PROJECT,
+                "vertex_location": _VERTEX_LOCATION,
+                "vertex_credentials": service_account_json(_VERTEX_PROJECT, gateway.upstream_url.rstrip("/")),
+            },
+            target=(
+                f"/v1/projects/{_VERTEX_PROJECT}/locations/{_VERTEX_LOCATION}"
+                f"/publishers/anthropic/models/{_VERTEX_MODEL}:rawPredict"
+            ),
+            auth=None,
+            keys=frozenset({"anthropic_version", "max_tokens", "messages", "stream"}),
+        ),
+    }
 )
-def test_a_deployment_dropping_safeguards_sends_neither_the_field_nor_the_beta(
-    gateway: Gateway, deployment: tuple[str, str], target: str, auth: tuple[str, str]
-) -> None:
+
+
+@pytest.mark.parametrize("row", tuple(_DROP_CASES))
+def test_a_deployment_dropping_safeguards_sends_neither_the_field_nor_the_beta(gateway: Gateway, row: str) -> None:
+    case: Final = _DROP_CASES[row]
     marker: Final = uuid.uuid4().hex
     with wire_server(anthropic_peer) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(
-            model=deployment[0], api_base=wire.url, api_key=deployment[1], additional_drop_params=["safeguards"]
+            api_base=wire.url, additional_drop_params=["safeguards"], **case.deployment(gateway)
         )
         response: Final = _post(gateway, messages_body(model, marker))
         _assert_answered(response, marker)
-        _expect_messages(_only(wire), target=target, auth=auth, beta=None, safeguards=_OMITTED)
+        _expect_messages(_only(wire), target=case.target, auth=case.auth, beta=None, safeguards=OMITTED, keys=case.keys)
         _spend_row(f"msg_{marker}")
 
 
@@ -347,13 +393,13 @@ def test_a_deployment_dropping_context_management_sends_neither_the_field_nor_it
             additional_drop_params=["context_management"],
         )
         body: Final = {
-            **messages_body(model, marker, safeguards=_OMITTED),
+            **messages_body(model, marker, safeguards=OMITTED),
             "context_management": {"edits": [{"type": "clear_tool_uses_20250919"}]},
         }
         response: Final = _post(gateway, body)
         _assert_answered(response, marker)
         _expect_messages(
-            _only(wire), target="/v1/messages", auth=("x-api-key", ANTHROPIC_KEY), beta=None, safeguards=_OMITTED
+            _only(wire), target="/v1/messages", auth=("x-api-key", ANTHROPIC_KEY), beta=None, safeguards=OMITTED
         )
         _spend_row(f"msg_{marker}")
 
@@ -685,7 +731,7 @@ def test_duplicate_safeguards_keys_resolve_to_the_last_value(gateway: Gateway) -
         )
         _assert_answered(response, marker)
         _expect_messages(
-            _only(wire), target=_FOUNDRY_TARGET, auth=("x-api-key", _FOUNDRY_KEY), beta=None, safeguards=_OMITTED
+            _only(wire), target=_FOUNDRY_TARGET, auth=("x-api-key", _FOUNDRY_KEY), beta=None, safeguards=OMITTED
         )
         _spend_row(f"msg_{marker}")
 

@@ -22,6 +22,7 @@ from integration.messages_endpoint.providers.anthropic.test_anthropic_safeguards
     ANTHROPIC_KEY,
     ANTHROPIC_MODEL,
     BETA,
+    OMITTED,
     anthropic_peer,
     marker_of,
     messages_body,
@@ -42,6 +43,7 @@ _MODEL_LIST: Final = json.dumps(
 class _Call:
     stream: bool
     marker: str
+    safeguards: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,8 +53,8 @@ class _Served:
     text: str
 
 
-def _calls(count: int, stream: bool) -> tuple[_Call, ...]:
-    return tuple(_Call(stream=stream, marker=uuid.uuid4().hex) for _ in range(count))
+def _calls(count: int, stream: bool, safeguards: bool = True) -> tuple[_Call, ...]:
+    return tuple(_Call(stream=stream, marker=uuid.uuid4().hex, safeguards=safeguards) for _ in range(count))
 
 
 def _streamed_reply(marker: str, abort_after: int | None = None, pause: float = 0) -> Reply:
@@ -68,7 +70,11 @@ async def _send(client: httpx.AsyncClient, key: str, model: str, call: _Call) ->
     async with client.stream(
         "POST",
         "/v1/messages",
-        json=messages_body(model, call.marker, stream=call.stream),
+        json=(
+            messages_body(model, call.marker, stream=call.stream)
+            if call.safeguards
+            else messages_body(model, call.marker, stream=call.stream, safeguards=OMITTED)
+        ),
         headers={"Authorization": f"Bearer {key}", "anthropic-version": "2023-06-01"},
     ) as response:
         raw: Final = await response.aread()
@@ -229,3 +235,60 @@ async def test_worker_sigkill_mid_burst_leaves_the_sibling_sending_the_beta(gate
             ]
             assert set(probes) <= {("GET", "/v1/models")}, probes
             _assert_every_request_carried_the_beta(posts, frozenset(call.marker for call in (*calls, follow_up)))
+
+
+def _beta_map_gets(received: tuple[Request, ...]) -> int:
+    return sum(1 for request in received if (request.method, request.target) == ("GET", "/beta.json"))
+
+
+@pytest.mark.timeout(180)
+async def test_cold_workers_fetch_the_beta_map_only_for_safeguards_once_per_worker_off_the_event_loop(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    beta_map: Final = Path("litellm/anthropic_beta_headers_config.json").read_bytes()
+    release: Final = threading.Event()
+
+    def held_beta_map(_: Request) -> Reply:
+        assert release.wait(timeout=120), "The beta map was never released"
+        return Reply(body=beta_map)
+
+    def upstream(request: Request) -> Reply:
+        if (request.method, request.target) == ("GET", "/v1/models"):
+            return Reply(body=_MODEL_LIST)
+        return anthropic_peer(request)
+
+    plain: Final = _calls(8, stream=False, safeguards=False)
+    guarded: Final = _calls(16, stream=False)
+    plain_while_held: Final = _calls(4, stream=False, safeguards=False)
+    with wire_server(held_beta_map) as beta_map_wire, wire_server(upstream) as wire:
+        path: Final = _chaos_config(wire, tmp_path)
+        with owned_proxy_process(
+            gateway,
+            tmp_path,
+            {"LITELLM_ANTHROPIC_BETA_HEADERS_URL": f"{beta_map_wire.url}/beta.json"},
+            remove_environment=("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS",),
+            config=path,
+            workers=2,
+        ) as owned:
+            base_url: Final = str(owned.gateway.client.base_url)
+            for served_plain in await _burst(base_url, owned.gateway.key, _CONFIG_MODEL, plain):
+                _assert_answered_with_its_own_marker(served_plain)
+            assert beta_map_wire.received.qsize() == 0, "a request without safeguards fetched the beta map"
+
+            burst: Final = asyncio.create_task(_burst(base_url, owned.gateway.key, _CONFIG_MODEL, guarded))
+            await asyncio.to_thread(eventually, beta_map_wire.received.qsize, lambda size: size >= 1, 60)
+            for served_while_held in await _burst(base_url, owned.gateway.key, _CONFIG_MODEL, plain_while_held):
+                _assert_answered_with_its_own_marker(served_while_held)
+            assert not burst.done(), "safeguards requests were answered before the beta map loaded"
+            release.set()
+            for served_guarded in await burst:
+                _assert_answered_with_its_own_marker(served_guarded)
+
+        received: Final = tuple(request for request in wire.drain() if request.method == "POST")
+        beta_by_marker: Final = MappingProxyType(
+            {marker_of(request): request.headers.get("anthropic-beta") for request in received}
+        )
+        assert {beta_by_marker[call.marker] for call in guarded} == {BETA}, beta_by_marker
+        assert {beta_by_marker[call.marker] for call in (*plain, *plain_while_held)} == {None}, beta_by_marker
+        fetches: Final = _beta_map_gets(beta_map_wire.drain())
+        assert 1 <= fetches <= 2, fetches

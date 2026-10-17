@@ -25,6 +25,7 @@ Environment Variables:
 import asyncio
 import json
 import os
+import threading
 from importlib.resources import files
 from typing import Final
 
@@ -34,6 +35,7 @@ from litellm._logging import verbose_logger
 
 # Cache for the loaded configuration
 _BETA_HEADERS_CONFIG: dict | None = None
+_BETA_HEADERS_CONFIG_LOCK: Final = threading.Lock()
 
 
 class GetAnthropicBetaHeadersConfig:
@@ -175,13 +177,17 @@ def _load_beta_headers_config() -> dict:
     if _BETA_HEADERS_CONFIG is not None:
         return _BETA_HEADERS_CONFIG
 
-    # Get the URL from environment or use default
-    from litellm import anthropic_beta_headers_url
+    with _BETA_HEADERS_CONFIG_LOCK:
+        if _BETA_HEADERS_CONFIG is not None:
+            return _BETA_HEADERS_CONFIG
 
-    _BETA_HEADERS_CONFIG = get_beta_headers_config(url=anthropic_beta_headers_url)
-    verbose_logger.debug("Loaded and cached beta headers config")
+        # Get the URL from environment or use default
+        from litellm import anthropic_beta_headers_url
 
-    return _BETA_HEADERS_CONFIG
+        _BETA_HEADERS_CONFIG = get_beta_headers_config(url=anthropic_beta_headers_url)
+        verbose_logger.debug("Loaded and cached beta headers config")
+
+        return _BETA_HEADERS_CONFIG
 
 
 async def aload_beta_headers_config() -> None:

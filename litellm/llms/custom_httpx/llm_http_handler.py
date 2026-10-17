@@ -2251,7 +2251,8 @@ class BaseLLMHTTPHandler:
             litellm_params.get("additional_drop_params") or (),
             anthropic_messages_optional_request_params,
         )
-        await aload_beta_headers_config()
+        if request_params.get("safeguards") is not None:
+            await aload_beta_headers_config()
         (
             headers,
             api_base,
