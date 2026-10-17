@@ -1819,6 +1819,15 @@ if MCP_AVAILABLE:
             )
         return acting.model_copy(update={"object_permission": updated_op, "mcp_toolset_id": toolset_id})
 
+    def _narrow_allowed_server_ids(
+        allowed_servers: Sequence[MCPServer],
+        toolset_allowed_server_ids: Set[str] | None,
+    ) -> frozenset[str]:
+        allowed_ids: Final = frozenset(srv.server_id for srv in allowed_servers)
+        if toolset_allowed_server_ids is None:
+            return allowed_ids
+        return allowed_ids & frozenset(toolset_allowed_server_ids)
+
     _apply_toolset_scope: Final = apply_toolset_scope
 
     async def _toolset_server_ids(toolset_id: str) -> set[str]:
@@ -1836,7 +1845,7 @@ if MCP_AVAILABLE:
         mcp_server_auth_headers: dict[str, dict[str, str]] | None,
         user_api_key_auth: UserAPIKeyAuth | None,
         client_ip: str | None,
-        allowed_server_ids: set[str] | None = None,
+        allowed_server_ids: Set[str] | None = None,
         raw_headers: Mapping[str, str] | None = None,
     ) -> None:
         """Fail fast with HTTP 401 for MCP servers that need user auth but
@@ -1844,11 +1853,10 @@ if MCP_AVAILABLE:
         (points clients at the gateway AS metadata) and pass-through OAuth
         (points clients at the upstream resource-metadata via our well-known).
 
-        ``allowed_server_ids`` may be passed by callers that have already
-        narrowed the authorized server set (e.g. toolset scoping); servers
-        not in that set are skipped so a client targeting a toolset that
-        excludes a passthrough server is not pushed into an OAuth flow for
-        a server it will be 403'd on immediately after authentication.
+        ``allowed_server_ids`` is the set of servers the caller's key may
+        reach, narrowed further by any active toolset scope; servers not in
+        that set are skipped so a client is not pushed into an OAuth flow
+        for a server it will be 403'd on immediately after authentication.
         """
         for server_name in mcp_servers or []:
             server = operations.global_mcp_server_manager.get_mcp_server_by_name(server_name, client_ip=client_ip)
@@ -2146,8 +2154,7 @@ if MCP_AVAILABLE:
     async def _check_passthrough_upstream_auth(
         scope: Scope,
         user_api_key_auth: UserAPIKeyAuth | None,
-        mcp_servers: list[str] | None,
-        client_ip: str | None,
+        allowed_servers: Sequence[MCPServer],
         *,
         oauth2_headers: Mapping[str, str] | None,
         mcp_server_auth_headers: dict[str, dict[str, str]] | None,
@@ -2155,9 +2162,8 @@ if MCP_AVAILABLE:
     ) -> None:
         """Probe pass-through upstream servers in parallel before the MCP session starts.
 
-        Only servers the caller's key is already authorized to reach are probed —
-        the list is derived from _get_allowed_mcp_servers so that a user cannot
-        trigger an upstream probe against a server their key is not permitted for.
+        The caller passes the already-resolved allowed-server set so a user cannot
+        trigger a probe against a server their key is not permitted for.
 
         The MCP SDK commits HTTP 200 headers before invoking handlers, so a 401
         can only be returned before that point. This function raises HTTPException(401)
@@ -2169,13 +2175,6 @@ if MCP_AVAILABLE:
         if not oauth2_headers and not mcp_server_auth_headers:
             return
 
-        # Use the authorized server set, not the raw user-supplied names, so that
-        # a caller cannot force a probe to a server their key is not allowed to use.
-        allowed_servers: Final = await operations._get_allowed_mcp_servers(
-            user_api_key_auth=user_api_key_auth,
-            mcp_servers=mcp_servers,
-            client_ip=client_ip,
-        )
         prepared_headers: Final = tuple(
             (
                 srv,
@@ -2294,8 +2293,7 @@ if MCP_AVAILABLE:
         await _check_passthrough_upstream_auth(
             scope,
             context.user_api_key_auth,
-            authorized_names,
-            context.client_ip,
+            allowed,
             oauth2_headers=context.oauth2_headers,
             mcp_server_auth_headers={key: dict(value) for key, value in context.mcp_server_auth_headers.items()}
             if context.mcp_server_auth_headers is not None
@@ -2313,10 +2311,15 @@ if MCP_AVAILABLE:
         mcp_server_auth_headers: Mapping[str, Mapping[str, str]] | None,
         user_api_key_auth: UserAPIKeyAuth | None,
         client_ip: str | None,
-        allowed_server_ids: Set[str] | None,
+        toolset_allowed_server_ids: Set[str] | None,
         raw_headers: Mapping[str, str] | None,
     ) -> None:
         if not defer_upstream_probes and not targets_disabled_capability:
+            allowed_servers: Final = await operations._get_allowed_mcp_servers(
+                user_api_key_auth=user_api_key_auth,
+                mcp_servers=list(mcp_servers) if mcp_servers is not None else None,
+                client_ip=client_ip,
+            )
             await _raise_preemptive_401_for_unauthenticated_servers(
                 scope=scope,
                 mcp_servers=list(mcp_servers) if mcp_servers is not None else None,
@@ -2328,7 +2331,7 @@ if MCP_AVAILABLE:
                 ),
                 user_api_key_auth=user_api_key_auth,
                 client_ip=client_ip,
-                allowed_server_ids=set(allowed_server_ids) if allowed_server_ids is not None else None,
+                allowed_server_ids=_narrow_allowed_server_ids(allowed_servers, toolset_allowed_server_ids),
                 raw_headers=raw_headers,
             )
             # Pre-flight auth check for pass-through servers.  Must run after
@@ -2337,8 +2340,7 @@ if MCP_AVAILABLE:
             await _check_passthrough_upstream_auth(
                 scope,
                 user_api_key_auth,
-                list(mcp_servers) if mcp_servers is not None else None,
-                client_ip,
+                allowed_servers,
                 oauth2_headers=oauth2_headers,
                 mcp_server_auth_headers=(
                     {name: dict(headers) for name, headers in mcp_server_auth_headers.items()}
@@ -2455,9 +2457,10 @@ if MCP_AVAILABLE:
 
             # https://datatracker.ietf.org/doc/html/rfc9728#name-www-authenticate-response
             # Must run after toolset scoping so the challenge set is derived
-            # from the fully-authorized server set: a passthrough server that
-            # the active toolset excludes should not trigger an OAuth flow
-            # for a server the caller will be 403'd on after authentication.
+            # from the fully-authorized server set (the key's allowed servers,
+            # narrowed by any active toolset scope): a server the key cannot
+            # reach should not trigger an OAuth flow for a server the caller
+            # will be 403'd on after authentication.
             await _preflight_streamable_http_upstream_auth(
                 defer_upstream_probes=defer_upstream_probes,
                 targets_disabled_capability=targets_disabled_capability,
@@ -2467,7 +2470,7 @@ if MCP_AVAILABLE:
                 mcp_server_auth_headers=mcp_server_auth_headers,
                 user_api_key_auth=user_api_key_auth,
                 client_ip=_client_ip,
-                allowed_server_ids=toolset_allowed_server_ids,
+                toolset_allowed_server_ids=toolset_allowed_server_ids,
                 raw_headers=raw_headers,
             )
 
@@ -2816,9 +2819,15 @@ if MCP_AVAILABLE:
 
             # https://datatracker.ietf.org/doc/html/rfc9728#name-www-authenticate-response
             # Must run after toolset scoping so the challenge set is derived
-            # from the fully-authorized server set: a passthrough server that
-            # the active toolset excludes should not trigger an OAuth flow
-            # for a server the caller will be 403'd on after authentication.
+            # from the fully-authorized server set (the key's allowed servers,
+            # narrowed by any active toolset scope): a server the key cannot
+            # reach should not trigger an OAuth flow for a server the caller
+            # will be 403'd on after authentication.
+            allowed_servers: Final = await operations._get_allowed_mcp_servers(
+                user_api_key_auth=user_api_key_auth,
+                mcp_servers=mcp_servers,
+                client_ip=_sse_client_ip,
+            )
             await _raise_preemptive_401_for_unauthenticated_servers(
                 scope=scope,
                 mcp_servers=mcp_servers,
@@ -2826,7 +2835,7 @@ if MCP_AVAILABLE:
                 mcp_server_auth_headers=mcp_server_auth_headers,
                 user_api_key_auth=user_api_key_auth,
                 client_ip=_sse_client_ip,
-                allowed_server_ids=toolset_allowed_server_ids,
+                allowed_server_ids=_narrow_allowed_server_ids(allowed_servers, toolset_allowed_server_ids),
                 raw_headers=raw_headers,
             )
 
@@ -2839,8 +2848,7 @@ if MCP_AVAILABLE:
             await _check_passthrough_upstream_auth(
                 scope,
                 user_api_key_auth,
-                mcp_servers,
-                _sse_client_ip,
+                allowed_servers,
                 oauth2_headers=oauth2_headers,
                 mcp_server_auth_headers=mcp_server_auth_headers,
                 raw_headers=raw_headers,
