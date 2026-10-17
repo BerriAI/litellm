@@ -73,7 +73,8 @@ client = TestClient(app)
         ("object_permission", {"mcp_servers": ["s1"]}, frozenset({"object_permission"}), True),
         ("metadata", ["m1"], frozenset(), True),
         ("models", ["m1"], frozenset(), True),
-        ("max_budget", 0, frozenset({"max_budget"}), False),
+        ("max_budget", 0, frozenset({"max_budget"}), True),
+        ("max_budget", 0, frozenset(), False),
         ("max_budget", 5.0, frozenset(), True),
         ("alias", "a", frozenset(), True),
     ),
@@ -89,6 +90,7 @@ client = TestClient(app)
         "nonempty-list-other-field",
         "nonempty-models",
         "zero-budget",
+        "omitted-zero-budget",
         "nonzero-budget",
         "alias",
     ),
@@ -2088,11 +2090,12 @@ def test_customer_budget_update_rejects_shared_references_without_partial_writes
     assert database.locked_budget_ids == {budget.budget_id}
 
 
+@pytest.mark.parametrize("new_max_budget", (100, 0))
 @pytest.mark.parametrize(
     "route", ("/customer/update", "/end_user/update", "/customer/bulk_update", "/end_user/bulk_update")
 )
 def test_customer_budget_update_allows_own_budget_with_unrelated_shared_references(
-    mock_prisma_client: MagicMock, mock_user_api_key_auth: None, route: str
+    mock_prisma_client: MagicMock, mock_user_api_key_auth: None, route: str, new_max_budget: int
 ) -> None:
     own_budget: Final = LiteLLM_BudgetTable(budget_id="own-budget", max_budget=50)
     other_budget: Final = LiteLLM_BudgetTable(budget_id="other-budget", max_budget=75)
@@ -2112,13 +2115,13 @@ def test_customer_budget_update_allows_own_budget_with_unrelated_shared_referenc
         (own_customer, other), budgets=(own_budget, other_budget), budget_references=references
     )
     database.attach(mock_prisma_client)
-    update: Final = {"user_id": own_customer.user_id, "max_budget": 100}
+    update: Final = {"user_id": own_customer.user_id, "max_budget": new_max_budget}
     payload: Final = {"customers": [update]} if route.endswith("bulk_update") else update
     with patch("litellm.max_end_user_budget_id", "other-budget"):
         response: Final = client.post(route, json=payload, headers={"Authorization": "Bearer test-key"})
 
     assert response.status_code == 200, response.text
-    assert database.budgets[own_budget.budget_id].max_budget == 100
+    assert database.budgets[own_budget.budget_id].max_budget == new_max_budget
     assert database.budgets[other_budget.budget_id] == other_budget
     assert database.customers[own_customer.user_id].budget_id == own_budget.budget_id
     assert database.locked_budget_ids == {own_budget.budget_id}
