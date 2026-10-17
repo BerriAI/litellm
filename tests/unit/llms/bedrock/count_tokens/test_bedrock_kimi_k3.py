@@ -4,13 +4,14 @@ import json
 import logging
 import re
 import threading
-from collections.abc import Iterable, Iterator
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from collections.abc import Iterable
 from itertools import product
 from pathlib import Path
 from typing import Final
 
+import httpx
 import pytest
+import respx
 import tiktoken
 
 import litellm
@@ -272,42 +273,23 @@ def test_request_the_template_cannot_render_is_not_counted(
     assert kimi_k3_tokens(pair_encoding, MODEL, messages, tools) is None
 
 
-@pytest.fixture
-def image_host() -> Iterator[tuple[str, list[str]]]:
-    requested: Final[list[str]] = []
-
-    class _Recorder(BaseHTTPRequestHandler):
-        def do_GET(self) -> None:
-            requested.append(self.path)
-            self.send_response(404)
-            self.end_headers()
-
-    server: Final = ThreadingHTTPServer(("127.0.0.1", 0), _Recorder)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    try:
-        yield f"http://127.0.0.1:{server.server_address[1]}", requested
-    finally:
-        server.shutdown()
-        server.server_close()
-
-
 def test_counting_a_request_with_an_image_url_never_downloads_the_image(
-    pair_encoding: tiktoken.Encoding, image_host: tuple[str, list[str]], monkeypatch: pytest.MonkeyPatch
+    pair_encoding: tiktoken.Encoding, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ):
-    host, requested = image_host
-    monkeypatch.setattr(litellm, "user_url_allowed_hosts", ["127.0.0.1"])
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    image: Final = respx_mock.get("https://images.example/cat.png").mock(return_value=httpx.Response(200))
     messages: Final = [
         {
             "role": "user",
             "content": [
                 {"type": "text", "text": "What is this?"},
-                {"type": "image_url", "image_url": {"url": f"{host}/cat.png"}},
+                {"type": "image_url", "image_url": {"url": "https://images.example/cat.png"}},
             ],
         }
     ]
 
     assert kimi_k3_tokens(pair_encoding, MODEL, messages, None) is None
-    assert requested == []
+    assert not image.called
 
 
 def test_anthropic_request_counts_like_the_same_openai_request(pair_encoding: tiktoken.Encoding):
