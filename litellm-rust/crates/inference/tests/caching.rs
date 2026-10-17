@@ -61,19 +61,57 @@ impl StreamCachable for TestRoute {
     }
 }
 
-fn cache_request(input: Value) -> CacheRequest {
-    CacheRequest {
-        identity: ProviderIdentity {
+fn cache_request<P: litellm_inference::caching::Cachable>(
+    input: Value,
+    cache: Option<Arc<dyn ResponseCacheService>>,
+    options: Option<CacheOptions>,
+) -> CacheRequest {
+    CacheRequest::prepare::<P>(
+        ProviderIdentity {
             model: "test-model".into(),
             provider: "test-provider".into(),
         },
-        input,
-    }
+        cache,
+        options,
+        &|_| input.clone(),
+    )
 }
 
 #[fixture]
 fn cache() -> Arc<dyn ResponseCacheService> {
     cache_with_limit(4096)
+}
+
+#[rstest]
+#[case::no_service(false, true, CachePolicy::default())]
+#[case::no_options(true, false, CachePolicy::default())]
+#[case::off(true, true, CachePolicy { caching: Some(false), ..CachePolicy::default() })]
+#[case::no_io(true, true, CachePolicy { no_cache: true, no_store: true, ..CachePolicy::default() })]
+#[tokio::test]
+async fn disabled_caching_does_not_prepare_identity(
+    cache: Arc<dyn ResponseCacheService>,
+    #[case] configured: bool,
+    #[case] options_present: bool,
+    #[case] policy: CachePolicy,
+) {
+    let request = CacheRequest::prepare::<TestRoute>(
+        ProviderIdentity {
+            model: "test".into(),
+            provider: "test".into(),
+        },
+        configured.then_some(cache),
+        options_present.then_some(CacheOptions {
+            policy,
+            scope: CacheScope::Shared,
+        }),
+        &|_| panic!("disabled cache must not prepare identity"),
+    );
+    let response = execute_unary::<TestRoute, _, _>(request, &(), None, || async {
+        Ok(json!({"source": "provider"}))
+    })
+    .await
+    .unwrap();
+    assert_eq!(response, json!({"source": "provider"}));
 }
 
 fn cache_with_limit(max_entry_bytes: usize) -> Arc<dyn ResponseCacheService> {
@@ -96,9 +134,7 @@ async fn call(
     request: Value,
 ) -> Value {
     let output = execute_streaming::<TestRoute, _, _>(
-        cache_request(request),
-        Some(cache.clone()),
-        options,
+        cache_request::<TestRoute>(request, Some(cache.clone()), options),
         &(),
         None,
         || async {
@@ -193,9 +229,11 @@ async fn streamed(
     fail: bool,
 ) -> OutputOf<TestRoute> {
     execute_streaming::<TestRoute, _, _>(
-        cache_request(json!({"stream":true})),
-        Some(cache.clone()),
-        Some(CacheOptions::new(CacheScope::Shared)),
+        cache_request::<TestRoute>(
+            json!({"stream":true}),
+            Some(cache.clone()),
+            Some(CacheOptions::new(CacheScope::Shared)),
+        ),
         &(),
         None,
         || async {
@@ -309,9 +347,11 @@ async fn oversized_streams_are_delivered_without_being_stored() {
 async fn a_provider_failure_never_populates_the_cache(cache: Arc<dyn ResponseCacheService>) {
     let calls = AtomicUsize::new(0);
     let first = execute_streaming::<TestRoute, _, _>(
-        cache_request(json!({})),
-        Some(cache.clone()),
-        Some(CacheOptions::new(CacheScope::Shared)),
+        cache_request::<TestRoute>(
+            json!({}),
+            Some(cache.clone()),
+            Some(CacheOptions::new(CacheScope::Shared)),
+        ),
         &(),
         None,
         || async {
@@ -345,31 +385,55 @@ struct InvalidEntryCache(
 );
 
 impl ResponseCacheService for InvalidEntryCache {
-    fn config(&self) -> &ResponseCacheConfig {
-        self.0.config()
+    fn prepare(
+        self: Arc<Self>,
+        options: CacheOptions,
+        surface: &str,
+        input: &dyn Fn() -> Value,
+    ) -> litellm_cache_response::PreparedCache {
+        litellm_cache_response::PreparedCache {
+            policy: options.policy,
+            max_entry_bytes: self.0.config().max_entry_bytes,
+            call: Arc::new(InvalidEntryCall {
+                request: options.request(&self.0.config().namespace, surface, input()),
+                service: self,
+            }),
+        }
     }
+}
 
+struct InvalidEntryCall {
+    service: Arc<InvalidEntryCache>,
+    request: litellm_cache_response::ResponseCacheRequest,
+}
+
+impl litellm_cache_response::ResponseCacheCall for InvalidEntryCall {
     fn lookup<'a>(
         &'a self,
-        request: &'a litellm_cache_response::ResponseCacheRequest,
         now: Duration,
-    ) -> futures_util::future::BoxFuture<'a, Result<Option<Value>, litellm_cache::Error>> {
+    ) -> futures_util::future::BoxFuture<
+        'a,
+        Result<Option<litellm_cache_response::CacheHit>, litellm_cache::Error>,
+    > {
         Box::pin(async move {
-            Ok(self
-                .0
-                .async_lookup(request, now)
-                .await?
-                .or_else(|| Some(self.1.clone())))
+            Ok(Some(litellm_cache_response::CacheHit {
+                value: self
+                    .service
+                    .0
+                    .async_lookup(&self.request, now)
+                    .await?
+                    .unwrap_or_else(|| self.service.1.clone()),
+                key: litellm_cache_response::cache_key(&self.request.key),
+            }))
         })
     }
 
     fn store<'a>(
         &'a self,
-        request: &'a litellm_cache_response::ResponseCacheRequest,
         response: Value,
         now: Duration,
     ) -> futures_util::future::BoxFuture<'a, Result<(), litellm_cache::Error>> {
-        Box::pin(self.0.async_store(request, response, now))
+        Box::pin(self.service.0.async_store(&self.request, response, now))
     }
 }
 
@@ -565,9 +629,11 @@ async fn cache_hits_notify_accounting_once_and_propagate_its_failure(
     };
     let result = if streaming_route {
         match execute_streaming::<TestRoute, _, _>(
-            cache_request(request),
-            Some(cache),
-            Some(CacheOptions::new(CacheScope::Shared)),
+            cache_request::<TestRoute>(
+                request,
+                Some(cache),
+                Some(CacheOptions::new(CacheScope::Shared)),
+            ),
             &accounting,
             Some(&observer),
             || async { panic!("a cache hit must not call the provider") },
@@ -579,9 +645,11 @@ async fn cache_hits_notify_accounting_once_and_propagate_its_failure(
         }
     } else {
         execute_unary::<UnaryTestRoute, _, _>(
-            cache_request(request),
-            Some(cache),
-            Some(CacheOptions::new(CacheScope::Shared)),
+            cache_request::<UnaryTestRoute>(
+                request,
+                Some(cache),
+                Some(CacheOptions::new(CacheScope::Shared)),
+            ),
             &accounting,
             Some(&observer),
             || async { panic!("a cache hit must not call the provider") },
@@ -627,9 +695,7 @@ async fn unary_call(
     request: Value,
 ) -> Value {
     execute_unary::<UnaryTestRoute, _, _>(
-        cache_request(request),
-        Some(cache.clone()),
-        options,
+        cache_request::<UnaryTestRoute>(request, Some(cache.clone()), options),
         &(),
         None,
         || async { Ok(json!({"call":calls.fetch_add(1, Ordering::SeqCst)})) },

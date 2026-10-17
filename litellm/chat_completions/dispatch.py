@@ -70,7 +70,6 @@ _FEATURES: Final[detectors.Detectors] = MappingProxyType(
         **detectors.COMMON,
         Feature.MOCK_RESPONSE: detectors.chat_mock_response,
         Feature.AGENTIC_LOOP_HOOK: detectors.chat_agentic_loop_hook,
-        Feature.RESPONSE_CACHE: detectors.response_cache,
         Feature.STREAMING: detectors.streaming,
         Feature.DROP_PARAMS: detectors.drop_params,
         Feature.MODIFY_PARAMS: detectors.modify_params,

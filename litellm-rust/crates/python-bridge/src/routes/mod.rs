@@ -41,6 +41,15 @@ impl<'py> NativeCall<'py> {
         effective_py_args(&self.base, &self.kwargs)
     }
 
+    /// The positional arguments by name, which the legacy cache folds into its key input.
+    fn positional(&self) -> PyResult<Bound<'py, PyDict>> {
+        let named = PyDict::new(self.base.py());
+        for (name, value) in self.base.iter().take(self.args.len()) {
+            named.set_item(name, value)?;
+        }
+        Ok(named)
+    }
+
     /// The view a route host reads its arguments from.
     fn view(&self) -> PyResult<RequestView> {
         RequestView::new(&self.base, &self.kwargs)

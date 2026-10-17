@@ -1,13 +1,16 @@
 use std::sync::Arc;
 
 use litellm_auth::AuthServices;
-use litellm_cache_response::{CachePolicy, CacheScope, ScopedCache};
 use litellm_callbacks_legacy_python::LoggingOperation;
 use litellm_core_utils::get_llm_provider_logic::get_custom_llm_provider;
-use litellm_host::{call::HostedMachine, protocol::Protocol};
-use litellm_host_python::{PythonBinding, PythonHostCalls, from_py};
+use litellm_host::{
+    call::{OutputOf, hosted_call},
+    machine::ChannelInterceptors,
+    protocol::Protocol,
+};
+use litellm_host_python::{PythonBinding, from_py};
 use litellm_http::transport::Error as TransportError;
-use litellm_inference::RouteError;
+use litellm_inference::{CallOptions, RouteError};
 use litellm_secrets::source::SecretSource;
 use pyo3::{
     exceptions::PyValueError,
@@ -20,6 +23,7 @@ use serde_json::{Map, Value};
 
 use super::{NativeCall, RequestView};
 use crate::{
+    cache::{CachedBinding, CachedStream},
     errors::{RustUpstreamError, route_error_to_pyerr},
     marshal::{RouteOptions, optional_timeout, public_response, python_timeout_seconds},
 };
@@ -143,8 +147,8 @@ impl InferenceHost {
     }
 }
 
-pub(super) trait InferenceRoute: Sized + 'static {
-    type Protocol: Protocol<Error = RouteError>;
+pub(super) trait InferenceRoute: Sized + Send + 'static {
+    type Protocol: CachedStream + Protocol<Error = RouteError, HostCall = std::convert::Infallible>;
     const OPERATION: LoggingOperation;
     const SYNC_CALL_TYPE: &'static str;
     const ASYNC_CALL_TYPE: &'static str;
@@ -154,12 +158,12 @@ pub(super) trait InferenceRoute: Sized + 'static {
         auth: Arc<AuthServices>,
         secrets: Arc<dyn SecretSource>,
     ) -> Self;
-    fn with_cache(self, cache: ScopedCache) -> Self;
-    fn machine(
+    fn call(
         self,
-        call: <Self::Protocol as Protocol>::Request,
-        policy: CachePolicy,
-    ) -> HostedMachine<Self::Protocol>;
+        request: <Self::Protocol as Protocol>::Request,
+        interceptors: ChannelInterceptors<Self::Protocol>,
+        options: CallOptions,
+    ) -> impl Future<Output = Result<OutputOf<Self::Protocol>, RouteError>> + Send;
 }
 
 pub(super) fn run_inference<R, H>(
@@ -170,13 +174,14 @@ pub(super) fn run_inference<R, H>(
 ) -> PyResult<Py<PyAny>>
 where
     R: InferenceRoute,
-    H: PythonBinding<Protocol = R::Protocol> + PythonHostCalls<R::Protocol> + 'static,
+    H: PythonBinding<Protocol = R::Protocol> + 'static,
 {
     let call_type = if asynchronous {
         R::ASYNC_CALL_TYPE
     } else {
         R::SYNC_CALL_TYPE
     };
+    let positional = call.positional()?.unbind();
     let (arguments, hooks) = super::call_hooks(py, R::OPERATION, &call, asynchronous)?;
     super::run_public_call(
         py,
@@ -188,14 +193,24 @@ where
                 crate::http::resources().auth.clone(),
                 crate::secrets::source(py)?,
             );
-            let (cache, cache_options) = crate::cache::configured_native(py, arguments, call_type)?;
-            let route = match cache {
-                Some(cache) => route.with_cache(ScopedCache::new(cache, CacheScope::Shared)),
-                None => route,
-            };
-            Ok(route.machine(request, cache_options.policy))
+            Ok(hosted_call(
+                request,
+                None,
+                move |call, _, interceptors, observers| async move {
+                    route
+                        .call(
+                            call,
+                            interceptors,
+                            CallOptions {
+                                cache: None,
+                                observers,
+                            },
+                        )
+                        .await
+                },
+            ))
         },
-        host,
+        CachedBinding::new(host, call_type, asynchronous, positional),
         hooks,
         asynchronous,
     )

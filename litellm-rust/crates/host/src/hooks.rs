@@ -44,6 +44,16 @@ pub trait CallHooks<R: HookRuntime>: Sized {
         Ok(R::ready(wire))
     }
 
+    /// A complete provider response before the host caches or delivers it. What this returns
+    /// replaces it. Never offered a cache hit.
+    fn provider_result(
+        &mut self,
+        _runtime: R::Context<'_>,
+        response: R::Response,
+    ) -> Result<R::Step<Self, R::Response>, R::Error> {
+        Ok(R::ready(response))
+    }
+
     fn transform_response(
         &mut self,
         _runtime: R::Context<'_>,
