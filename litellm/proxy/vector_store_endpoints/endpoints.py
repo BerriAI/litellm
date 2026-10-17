@@ -23,6 +23,7 @@ from litellm.proxy.vector_store_endpoints.utils import (
 )
 from litellm.repositories.table_repositories import ManagedVectorStoreIndexRepository
 from litellm.types.vector_stores import IndexCreateRequest, IndexListResponse
+from litellm.vector_stores.utils import CALLER_METADATA_KWARG, VectorStoreWriteBody, callers_metadata_snapshot
 from litellm.vector_stores.vector_store_registry import VectorStoreIndexRegistry
 
 router: Final = APIRouter()
@@ -213,6 +214,7 @@ async def vector_store_create(
     )
 
     data: Final = await read_request_body(request=request)
+    data[CALLER_METADATA_KWARG] = callers_metadata_snapshot(VectorStoreWriteBody.model_validate(data))
 
     # Check for target_model_names parameter
     target_model_names: Final = data.pop("target_model_names", None)
@@ -448,6 +450,7 @@ async def vector_store_update(
     data = await read_request_body(request=request)  # rebind-ok: pre-existing rebinding on a rename-only line
     if "vector_store_id" not in data:
         data["vector_store_id"] = vector_store_id
+    data[CALLER_METADATA_KWARG] = callers_metadata_snapshot(VectorStoreWriteBody.model_validate(data))
 
     data = await _update_request_data_with_litellm_managed_vector_store_registry(
         data=data, vector_store_id=vector_store_id, user_api_key_dict=user_api_key_dict

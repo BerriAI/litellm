@@ -1,5 +1,8 @@
+import copy
 from collections.abc import Container, Mapping
 from typing import Final, cast, get_type_hints
+
+from pydantic import BaseModel, ConfigDict
 
 from litellm.constants import ROUTING_REQUEST_TAGS_METADATA_KEY
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
@@ -7,6 +10,8 @@ from litellm.types.vector_stores import (
     VectorStoreCreateOptionalRequestParams,
     VectorStoreSearchOptionalRequestParams,
 )
+
+CALLER_METADATA_KWARG: Final = "litellm_vector_store_caller_metadata"
 
 LITELLM_WRITTEN_METADATA_KEYS: Final = frozenset(
     {
@@ -42,6 +47,28 @@ def _sent_by_proxy_or_router(params: Mapping[str, object], metadata: Container[o
 
 def _callers_metadata(metadata: Mapping[object, object]) -> Mapping[object, object]:
     return {key: value for key, value in metadata.items() if _is_callers_key(key)}
+
+
+class VectorStoreWriteBody(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    metadata: object = None
+
+
+def callers_metadata_snapshot(request_body: VectorStoreWriteBody) -> object:
+    return copy.deepcopy(request_body.metadata)
+
+
+def _metadata_for_provider(params: Mapping[str, object]) -> object:
+    if CALLER_METADATA_KWARG in params:
+        return params[CALLER_METADATA_KWARG]
+    metadata: Final = params.get("metadata")
+    if not isinstance(metadata, Mapping):
+        return metadata
+    request_metadata: Final = cast(Mapping[object, object], metadata)  # cast-ok: request metadata is a JSON object
+    if not _sent_by_proxy_or_router(params, request_metadata):
+        return request_metadata
+    return _callers_metadata(request_metadata)
 
 
 class VectorStoreRequestUtils:
@@ -85,17 +112,11 @@ class VectorStoreRequestUtils:
         Returns:
             VectorStoreCreateOptionalRequestParams instance with only the valid parameters
         """
-        valid_keys: Final = get_type_hints(VectorStoreCreateOptionalRequestParams).keys()
+        valid_keys: Final = get_type_hints(VectorStoreCreateOptionalRequestParams).keys() - {"metadata"}
         filtered_params: Final = {k: v for k, v in params.items() if k in valid_keys and v is not None}
-        metadata: Final = filtered_params.get("metadata")
-        if not isinstance(metadata, Mapping):
+        metadata: Final = _metadata_for_provider(params)
+        if metadata is None:
             return cast(VectorStoreCreateOptionalRequestParams, filtered_params)
-        request_metadata: Final = cast(Mapping[object, object], metadata)  # cast-ok: request metadata is a JSON object
-        sent_metadata: Final = (
-            _callers_metadata(request_metadata)
-            if _sent_by_proxy_or_router(params, request_metadata)
-            else request_metadata
-        )
-        return cast(  # cast-ok: same params as above with the caller's metadata only
-            VectorStoreCreateOptionalRequestParams, {**filtered_params, "metadata": sent_metadata}
+        return cast(  # cast-ok: same params as above plus the metadata the provider should store
+            VectorStoreCreateOptionalRequestParams, {**filtered_params, "metadata": metadata}
         )

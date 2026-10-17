@@ -3256,3 +3256,74 @@ class TestConfigOwnedVectorStores:
         assert response["status"] == "success", response
         prisma.db.litellm_managedvectorstorestable.delete.assert_awaited_once_with(where={"vector_store_id": self.DB_ID})
         assert registry.get_litellm_managed_vector_store_from_registry(self.DB_ID) is None
+
+
+@pytest.mark.parametrize("operation", ["create", "update"])
+@pytest.mark.parametrize("model", [None, "gpt-5"])
+@pytest.mark.parametrize(
+    "callers_metadata",
+    [{"team": "llmproxy", "endpoint": "ingest", "trace_id": "callers-trace"}, {}, None],
+)
+def test_proxy_vector_store_writes_send_the_provider_exactly_the_callers_metadata(
+    monkeypatch, operation, model, callers_metadata
+):
+    import httpx
+    import respx
+    from fastapi.testclient import TestClient
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.proxy_server import app
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        litellm.Router(
+            model_list=[{"model_name": "gpt-5", "litellm_params": {"model": "openai/gpt-5", "api_key": "sk-test"}}]
+        ),
+    )
+    sent_bodies = []
+
+    def echo(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        sent_bodies.append(body)
+        return httpx.Response(
+            200,
+            json={
+                "id": "vs_1",
+                "object": "vector_store",
+                "created_at": 0,
+                "name": "x",
+                "usage_bytes": 0,
+                "file_counts": {"in_progress": 0, "completed": 0, "failed": 0, "cancelled": 0, "total": 0},
+                "status": "completed",
+                "metadata": body.get("metadata"),
+            },
+        )
+
+    mock_auth = UserAPIKeyAuth(
+        api_key="hashed-key", user_id="user-1", team_id="team-1", key_alias="alias", team_alias="team-alias"
+    )
+    original_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+    path = "/v1/vector_stores" if operation == "create" else "/v1/vector_stores/vs_1"
+    routing = {} if model is None else {"model": model}
+    metadata_field = {} if callers_metadata is None else {"metadata": callers_metadata}
+    body = {"name": "x", **routing, **metadata_field}
+    try:
+        with respx.mock(assert_all_called=False) as upstream:
+            upstream.post(url__regex=r"https://api\.openai\.com/v1/vector_stores.*").mock(side_effect=echo)
+            response = TestClient(app).post(
+                path,
+                json=body,
+                headers={"x-litellm-trace-id": "header-trace", "x-litellm-session-id": "header-session"},
+            )
+    finally:
+        app.dependency_overrides = original_overrides
+
+    assert response.status_code == 200, response.text
+    assert len(sent_bodies) == 1
+    assert sent_bodies[0].get("metadata") == callers_metadata
