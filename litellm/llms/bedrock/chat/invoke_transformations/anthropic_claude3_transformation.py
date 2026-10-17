@@ -22,6 +22,7 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
     AmazonInvokeConfig,
 )
 from litellm.llms.bedrock.common_utils import (
+    BedrockModelInfo,
     apply_bedrock_invoke_structured_output,
     bedrock_chat_uses_native_structured_output,
     bedrock_cleaned_output_schema,
@@ -240,13 +241,21 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
                 model=model,
                 output_config=filtered_params["output_config"],
             )
-        filtered_params = self._normalize_bedrock_tool_search_tools(filtered_params)
+        normalized_params: Final = self._normalize_bedrock_tool_search_tools(filtered_params)
+        request_params: Final = (
+            normalized_params
+            if "max_tokens" in normalized_params
+            else {
+                **normalized_params,
+                "max_tokens": AnthropicConfig.get_config(model=BedrockModelInfo.get_base_model(model))["max_tokens"],
+            }
+        )
 
         anthropic_request: Final = AnthropicConfig.transform_request(
             self,
             model=model,
             messages=messages,
-            optional_params=filtered_params,
+            optional_params=request_params,
             litellm_params=litellm_params,
             headers=headers,
         )
@@ -361,7 +370,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
                     "data": image_chunk["data"],
                 }
 
-    def _normalize_bedrock_tool_search_tools(self, optional_params: dict) -> dict:
+    def _normalize_bedrock_tool_search_tools(self, optional_params: dict) -> dict[str, object]:
         """
         Convert tool search entries to the format supported by the Bedrock Invoke API.
         """
