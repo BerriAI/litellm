@@ -659,8 +659,14 @@ def test_apply_structured_output_prefers_legacy_output_format(local_model_cost_m
         apply_bedrock_invoke_structured_output,
     )
 
-    legacy = {"type": "json_schema", "schema": {"type": "object", "properties": {"a": {"type": "string"}}}}
-    newer = {"type": "json_schema", "schema": {"type": "object", "properties": {"b": {"type": "string"}}}}
+    legacy = {
+        "type": "json_schema",
+        "schema": {"type": "object", "properties": {"a": {"type": "string"}}, "additionalProperties": False},
+    }
+    newer = {
+        "type": "json_schema",
+        "schema": {"type": "object", "properties": {"b": {"type": "string"}}, "additionalProperties": False},
+    }
     body = {
         "messages": [{"role": "user", "content": "hi"}],
         "output_format": legacy,
