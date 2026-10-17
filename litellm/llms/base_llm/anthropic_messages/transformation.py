@@ -180,11 +180,7 @@ class BaseAnthropicMessagesConfig(ABC):
         return 2
 
     def should_retry_anthropic_messages_on_http_error(
-        self,
-        e: httpx.HTTPStatusError,
-        litellm_params: Mapping[str, object],
-        request_body: object = None,
-        model: str | None = None,
+        self, e: httpx.HTTPStatusError, litellm_params: Mapping[str, object], request_body: object = None
     ) -> bool:
         """
         When True, async_anthropic_messages_handler will transform the request body
@@ -220,3 +216,16 @@ class BaseAnthropicMessagesConfig(ABC):
         if e.response.status_code == 400 and is_anthropic_invalid_thinking_block_error(e.response.text):
             strip_thinking_blocks_from_anthropic_messages_request_dict(request_data)
         return request_data
+
+    def native_output_fallback_litellm_params(
+        self,
+        model: str,
+        anthropic_messages_optional_request_params: Mapping[str, object],
+        litellm_params: GenericLiteLLMParams,
+    ) -> GenericLiteLLMParams | None:
+        return None
+
+    def should_retry_anthropic_messages_without_native_output(
+        self, e: httpx.HTTPStatusError, request_body: Mapping[str, object], model: str
+    ) -> bool:
+        return False

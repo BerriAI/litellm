@@ -1,9 +1,12 @@
 from collections.abc import Callable, Coroutine
 from typing import Final, TypeAlias
 
+import httpx
+
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.bedrock.common_utils import (
     NativeOutputFallback,
+    error_response_text,
     is_bedrock_native_output_rejection,
     warn_bedrock_native_output_rejected,
 )
@@ -13,10 +16,15 @@ from litellm.utils import CustomStreamWrapper
 NativeOutputResponse: TypeAlias = ModelResponse | CustomStreamWrapper
 NativeOutputAttemptResult: TypeAlias = NativeOutputResponse | Coroutine[object, object, NativeOutputResponse]
 NativeOutputAttempt: TypeAlias = Callable[[NativeOutputFallback | None], NativeOutputAttemptResult]
+NativeOutputError: TypeAlias = BaseLLMException | httpx.HTTPStatusError
 
 
-def _is_native_output_rejection(error: BaseLLMException) -> bool:
-    return is_bedrock_native_output_rejection(error.status_code, error.message)
+def _is_native_output_rejection(error: NativeOutputError) -> bool:
+    match error:
+        case httpx.HTTPStatusError(response=response):
+            return is_bedrock_native_output_rejection(response.status_code, error_response_text(response))
+        case BaseLLMException(status_code=status_code, message=message):
+            return is_bedrock_native_output_rejection(status_code, message)
 
 
 async def _await_with_native_output_fallback(
@@ -27,7 +35,7 @@ async def _await_with_native_output_fallback(
 ) -> NativeOutputResponse:
     try:
         return await first_attempt
-    except BaseLLMException as error:
+    except (BaseLLMException, httpx.HTTPStatusError) as error:
         if not _is_native_output_rejection(error):
             raise
     warn_bedrock_native_output_rejected(model)
@@ -44,7 +52,7 @@ def call_with_native_output_fallback(
         return attempt(None)
     try:
         first_attempt: Final = attempt(None)
-    except BaseLLMException as error:
+    except (BaseLLMException, httpx.HTTPStatusError) as error:
         if not _is_native_output_rejection(error):
             raise
         warn_bedrock_native_output_rejected(model)

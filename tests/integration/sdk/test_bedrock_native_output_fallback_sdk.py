@@ -231,31 +231,59 @@ def test_the_retry_sends_what_a_deployment_without_native_output_sends(
     assert retried == opted_out
 
 
+_MAX_LENGTH_ONE_OF_SCHEMA: Final = {
+    "type": "object",
+    "properties": {
+        "city": {"type": "string", "maxLength": 20},
+        "code": {"oneOf": [{"type": "string"}, {"type": "integer"}]},
+    },
+    "required": ["city", "code"],
+    "additionalProperties": False,
+}
+
+
+def _messages_bedrock_without_native_output(request: Request) -> Reply:
+    if not _is_invoke(request) or _native(_JSON.validate_json(request.body), invoke=True):
+        return _bedrock_without_native_output(request)
+    message: Final = {
+        "id": "msg_scripted",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-scripted",
+        "content": [{"type": "text", "text": '{"city": "Paris"}'}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 11, "output_tokens": 7},
+    }
+    return Reply(body=json.dumps(message).encode())
+
+
 async def _messages_bodies(
-    marker_hex: str, model_info: Mapping[str, object] | None
+    route: str, marker_hex: str, model_info: Mapping[str, object] | None
 ) -> tuple[Mapping[str, JsonValue], ...]:
-    with wire_server(_bedrock_without_native_output) as wire:
+    with wire_server(_messages_bedrock_without_native_output) as wire:
         await litellm.anthropic_messages(
-            model=f"bedrock/converse/{_OPUS_4_8}",
+            model=f"bedrock/{route}/{_OPUS_4_8}",
             messages=[{"role": "user", "content": f"Name a city. probe {marker_hex}"}],
             api_base=wire.url,
             api_key="synthetic-bedrock-bearer",
             aws_region_name="us-east-1",
             max_tokens=2048,
             thinking={"type": "adaptive"},
-            output_config={"effort": "low", "format": {"type": "json_schema", "schema": _SCHEMA}},
+            output_config={"effort": "low", "format": {"type": "json_schema", "schema": _MAX_LENGTH_ONE_OF_SCHEMA}},
             **({} if model_info is None else {"model_info": model_info}),
         )
         return tuple(_JSON.validate_json(sent.body) for sent in wire.drain())
 
 
-async def test_a_messages_retry_to_converse_sends_what_a_deployment_without_native_output_sends(
-    marker_hex: str,
+@pytest.mark.parametrize("route", ["converse", "invoke"])
+async def test_a_messages_retry_sends_what_a_deployment_without_native_output_sends(
+    route: str, marker_hex: str
 ) -> None:
-    rejected, retried = await _messages_bodies(marker_hex, None)
-    (opted_out,) = await _messages_bodies(marker_hex, {"supports_bedrock_native_structured_output": False})
+    rejected, retried = await _messages_bodies(route, marker_hex, None)
+    (opted_out,) = await _messages_bodies(route, marker_hex, {"supports_bedrock_native_structured_output": False})
 
-    assert _native(rejected, invoke=False), rejected
+    assert _native(rejected, invoke=route == "invoke"), rejected
     assert retried == opted_out
 
 

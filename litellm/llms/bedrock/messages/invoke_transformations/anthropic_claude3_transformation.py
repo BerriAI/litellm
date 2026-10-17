@@ -37,16 +37,15 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
 from litellm.llms.bedrock.common_utils import (
     BedrockError,
     apply_bedrock_invoke_structured_output,
-    bedrock_native_output_is_opt_in,
     bedrock_supports_tool_search,
-    convert_bedrock_invoke_output_format_to_inline_schema,
     ensure_bedrock_anthropic_messages_tool_names,
     get_anthropic_beta_from_headers,
     is_bedrock_native_output_rejection,
     normalize_bedrock_opus_output_config_effort,
     normalize_custom_field_on_tools,
     normalize_tool_input_schema_types_for_bedrock_invoke,
-    pop_bedrock_invoke_output_config_format,
+    requests_opt_in_native_output,
+    requests_output_config_format,
     strip_unsupported_bedrock_invoke_output_config_keys,
     supports_bedrock_prompt_cache_ttl,
     tools_without_eager_input_streaming,
@@ -116,43 +115,28 @@ class AmazonAnthropicClaudeMessagesConfig(
         BaseAnthropicMessagesConfig.__init__(self, **kwargs)
         AmazonInvokeConfig.__init__(self, **kwargs)
 
-    @property
-    def max_retry_on_anthropic_messages_http_error(self) -> int:
-        return 3
-
-    def should_retry_anthropic_messages_on_http_error(
+    def native_output_fallback_litellm_params(
         self,
-        e: httpx.HTTPStatusError,
-        litellm_params: Mapping[str, object],
-        request_body: object = None,
-        model: str | None = None,
+        model: str,
+        anthropic_messages_optional_request_params: Mapping[str, object],
+        litellm_params: GenericLiteLLMParams,
+    ) -> GenericLiteLLMParams | None:
+        model_info: Final = _MODEL_INFO.validate_python(litellm_params.model_info)
+        if not requests_opt_in_native_output(model, anthropic_messages_optional_request_params, model_info):
+            return None
+        return litellm_params.model_copy(
+            update={"model_info": {**(model_info or {}), "supports_bedrock_native_structured_output": False}}
+        )
+
+    def should_retry_anthropic_messages_without_native_output(
+        self, e: httpx.HTTPStatusError, request_body: Mapping[str, object], model: str
     ) -> bool:
-        match request_body:
-            case {"output_config": {"format": dict()}} if (
-                model is not None
-                and is_bedrock_native_output_rejection(e.response.status_code, e.response.text)
-                and bedrock_native_output_is_opt_in(
-                    model, model_info=_MODEL_INFO.validate_python(litellm_params.get("model_info"))
-                )
-            ):
-                warn_bedrock_native_output_rejected(model)
-                return True
-            case _:
-                return super().should_retry_anthropic_messages_on_http_error(e, litellm_params, request_body, model)
-
-    def transform_anthropic_messages_request_on_http_error(
-        self,
-        e: httpx.HTTPStatusError,
-        request_data: dict[str, object],  # mutable-ok: mirrors override contract
-    ) -> dict[str, object]:  # mutable-ok: mirrors override contract
-        if not is_bedrock_native_output_rejection(e.response.status_code, e.response.text):
-            return super().transform_anthropic_messages_request_on_http_error(e, request_data)
-        output_format: Final = pop_bedrock_invoke_output_config_format(request_data)
-        if output_format is not None:
-            convert_bedrock_invoke_output_format_to_inline_schema(
-                output_format=output_format, request_body=request_data
-            )
-        return request_data
+        if not requests_output_config_format(request_body) or not is_bedrock_native_output_rejection(
+            e.response.status_code, e.response.text
+        ):
+            return False
+        warn_bedrock_native_output_rejected(model)
+        return True
 
     def validate_anthropic_messages_environment(
         self,
