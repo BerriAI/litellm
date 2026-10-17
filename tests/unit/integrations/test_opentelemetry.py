@@ -11,7 +11,7 @@ import unittest
 import weakref
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from types import MappingProxyType
+from types import MappingProxyType, SimpleNamespace
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -46,6 +46,9 @@ from litellm.integrations.opentelemetry import (
     RAW_REQUEST_SPAN_NAME,
     _normalize_team_metadata_keys,
 )
+from litellm.integrations.otel import logger as otel_logger
+from litellm.integrations.otel.logger import OpenTelemetryV2
+from litellm.integrations.otel.plumbing.context import set_request_root_span
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy import proxy_server
 from litellm.proxy._types import SpanAttributes
@@ -385,6 +388,47 @@ def test_v1_malformed_routing_metadata_preserves_inference_attributes(decision: 
     (finished,) = exporter.get_finished_spans()
     assert finished.attributes["gen_ai.request.model"] == "answer"
     assert not any(key.startswith("litellm.routing.") for key in finished.attributes)
+
+
+def test_safe_set_attribute_skips_ended_and_non_recording_spans() -> None:
+    provider: Final = TracerProvider()
+    tracer: Final = provider.get_tracer(__name__)
+    otel: Final = OpenTelemetry(tracer_provider=provider)
+
+    with tracer.start_as_current_span("recording") as recording_span:
+        otel.safe_set_attribute(recording_span, "litellm.test", "recorded")
+        assert recording_span.attributes["litellm.test"] == "recorded"
+
+    ended_attributes: Final = dict(recording_span.attributes)
+    assert not recording_span.is_recording()
+    with tracer.start_as_current_span("non-recording") as non_recording_span:
+        pass
+    assert not non_recording_span.is_recording()
+
+    otel.safe_set_attribute(recording_span, "litellm.test", "skipped")
+    otel.safe_set_attribute(non_recording_span, "litellm.test", "skipped")
+
+    assert dict(recording_span.attributes) == ended_attributes
+
+
+def test_seed_request_identity_preserves_recording_span_and_ignores_ended_span() -> None:
+    exporter: Final = InMemorySpanExporter()
+    provider: Final = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    logger: Final = OpenTelemetryV2(tracer_provider=provider)
+    auth = SimpleNamespace(team_id="qa-team", api_key="qa-key")
+
+    with provider.get_tracer(__name__).start_as_current_span("server") as server_span:
+        set_request_root_span(server_span)
+        logger.seed_request_identity(auth, model="qa-model")
+        assert server_span.is_recording()
+        assert server_span.attributes["litellm.team.id"] == "qa-team"
+
+    (finished,) = exporter.get_finished_spans()
+    attributes_before = dict(finished.attributes)
+    assert not server_span.is_recording()
+    logger.seed_request_identity(auth, model="qa-model")
+    assert dict(finished.attributes) == attributes_before
 
 
 class TestOpenTelemetryCostBreakdown(unittest.TestCase):
