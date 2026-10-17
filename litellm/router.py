@@ -561,6 +561,39 @@ def _configured_model_info(deployment: Mapping[str, object]) -> Mapping[str, obj
     return _MODEL_INFO_ADAPTER.validate_python(deployment.get("model_info") or {})
 
 
+def _team_deployment_public_name(deployment: DeploymentTypedDict, team_id: str) -> str | None:
+    model_info: Final = _configured_model_info(deployment)
+    if model_info.get("team_id") != team_id:
+        return None
+    team_public_model_name: Final = model_info.get("team_public_model_name")
+    return (
+        team_public_model_name
+        if isinstance(team_public_model_name, str) and team_public_model_name
+        else deployment["model_name"]
+    )
+
+
+def _team_deployment_for_provider(
+    models: Sequence[DeploymentTypedDict],
+    deployment: DeploymentTypedDict,
+    team_id: str,
+    custom_llm_provider: str,
+) -> str | None:
+    public_name: Final = _team_deployment_public_name(deployment, team_id)
+    if public_name is None:
+        return None
+    same_public_name_deployments: Final = tuple(
+        candidate for candidate in models if _team_deployment_public_name(candidate, team_id) == public_name
+    )
+    if all(
+        provider_for_generic_call(candidate["litellm_params"]) == custom_llm_provider
+        for candidate in same_public_name_deployments
+    ):
+        return public_name
+    deployment_id: Final = _configured_model_info(deployment).get("id")
+    return deployment_id if isinstance(deployment_id, str) else None
+
+
 def _as_retry_skipped_deployment_ids(value: object) -> tuple[str, ...]:
     return tuple(item for item in value if isinstance(item, str)) if isinstance(value, tuple) else ()
 
@@ -12266,23 +12299,11 @@ class Router:
         self, team_model_name: str | None, team_id: str, custom_llm_provider: str | None = None
     ) -> str | None:
         """
-        Check if team_model_name resolves to team-specific deployments.
+        Resolve explicit team models or select a deployment for model-less calls.
 
-        Returns the public model name (unchanged) so the router can find all
-        sibling deployments via team_id filtering, instead of collapsing to a
-        single internal model_name.
-
-        When team_model_name is None (e.g. vector store / file endpoints that
-        don't include a model in their request), returns a team deployment's
-        team_public_model_name so the router can inject BYOK credentials from
-        the team-scoped deployment. With custom_llm_provider set, only a team
-        deployment serving that provider qualifies (a langgraph team model must
-        not receive a Bedrock vector store search); without it, the first team
-        deployment is used.
-
-        Returns:
-        - str: the team_model_name if team deployments exist for this team
-        - None: if no team-specific model is found, or none serves custom_llm_provider
+        Model-less calls with no provider use the first team deployment. With a provider, they
+        use the first team deployment of that provider, pinned by ID when its public name also
+        covers another provider.
         """
         models: Final = self.get_model_list(model_name=team_model_name, team_id=team_id)
         if not models:
@@ -12298,6 +12319,8 @@ class Router:
                         and provider_for_generic_call(model["litellm_params"]) != custom_llm_provider
                     ):
                         continue
+                    if custom_llm_provider is not None:
+                        return _team_deployment_for_provider(models, model, team_id, custom_llm_provider)
                     return model.get("model_info", {}).get("team_public_model_name") or model.get("model_name")
                 return team_model_name
 
