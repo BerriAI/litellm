@@ -33,7 +33,11 @@ class ProviderSpecificHeaderUtils:
 
         matched_headers: Final = {}
         for scoped_header in scoped_headers:
-            if scoped_header.get("native_anthropic_messages_only", False) and not native_anthropic_messages:
+            if (
+                "native_anthropic_messages_only" in scoped_header
+                and scoped_header["native_anthropic_messages_only"]
+                and not native_anthropic_messages
+            ):
                 continue
             stored_providers = scoped_header.get("custom_llm_provider", "")
             provider_list = [p.strip() for p in stored_providers.split(",")]

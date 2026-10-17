@@ -281,8 +281,9 @@ def test_anthropic_messages_preserves_cli_beta_safeguards_and_result(gateway: Ga
     def respond(request: Request) -> Reply:
         assert request.method == "POST" and request.target == "/v1/messages", request.target
         assert request.headers["x-api-key"] == "synthetic-anthropic-key", request.headers
-        expected_beta: Final = sorted({*beta.split(","), DANGEROUS_TOOL_USE_BETA})
-        assert sorted(request.headers["anthropic-beta"].split(",")) == expected_beta, request.headers
+        assert sorted(request.headers["anthropic-beta"].split(",")) == sorted(
+            (*beta.split(","), DANGEROUS_TOOL_USE_BETA)
+        ), request.headers
         expected_body: Final = {
             "model": "claude-sonnet-4-6",
             "max_tokens": 32,
