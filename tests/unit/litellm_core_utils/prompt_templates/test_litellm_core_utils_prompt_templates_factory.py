@@ -22,6 +22,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     BedrockConverseMessagesProcessor,
     BedrockImageProcessor,
     _bedrock_converse_messages_pt,
+    _place_assistant_cache_points_before_tools,
     _bedrock_tools_pt,
     _rename_duplicate_bedrock_document_names,
     _convert_to_bedrock_tool_call_invoke,
@@ -69,8 +70,10 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_completion_messages,
 )
 from litellm.llms.vertex_ai.gemini.transformation import gemini_convert_messages_with_history
-from litellm.types.llms.bedrock import BedrockConverseReasoningContentBlock
+from litellm.types.llms.bedrock import BedrockConverseReasoningContentBlock, ContentBlock
 from litellm.types.llms.openai import AllMessageValues
+
+
 from litellm.litellm_core_utils.prompt_templates.factory import response_schema_prompt
 from litellm.llms.anthropic.completion.transformation import AnthropicTextConfig
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import AmazonInvokeConfig
@@ -82,6 +85,135 @@ from litellm.llms.sagemaker.completion.transformation import SagemakerConfig
 from litellm.llms.vllm.completion import handler as vllm_handler
 from litellm.llms.watsonx.common_utils import _convert_watsonx_messages_core
 from litellm.types.utils import ModelResponse, TextCompletionResponse
+
+
+_GLM_CACHE_CONTROL: Final = {"type": "ephemeral"}
+_GLM_CACHED_TOOL_CALL: Final = {
+    "id": "read_1",
+    "type": "function",
+    "function": {"name": "read_table", "arguments": '{"cache_control":"keep"}'},
+    "cache_control": _GLM_CACHE_CONTROL,
+}
+_GLM_TOOL_USE: Final = {"toolUse": {"toolUseId": "read_1", "name": "read_table", "input": {"cache_control": "keep"}}}
+_GLM_CACHE_POINT: Final = {"cachePoint": {"type": "default"}}
+
+
+@pytest.mark.parametrize(
+    "assistant_messages, expected_content",
+    [
+        pytest.param(
+            [{"role": "assistant", "content": "Read it.", "tool_calls": [_GLM_CACHED_TOOL_CALL]}],
+            [{"text": "Read it."}, _GLM_CACHE_POINT, _GLM_TOOL_USE],
+            id="tool-call-marker",
+        ),
+        pytest.param(
+            [{"role": "assistant", "content": None, "tool_calls": [_GLM_CACHED_TOOL_CALL]}],
+            [_GLM_TOOL_USE],
+            id="tool-only",
+        ),
+        pytest.param(
+            [{"role": "assistant", "content": "", "tool_calls": [_GLM_CACHED_TOOL_CALL]}],
+            [_GLM_TOOL_USE],
+            id="empty-text",
+        ),
+        pytest.param(
+            [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "Read it.", "cache_control": _GLM_CACHE_CONTROL},
+                        {"type": "text", "text": "", "cache_control": _GLM_CACHE_CONTROL},
+                    ],
+                    "tool_calls": [_GLM_CACHED_TOOL_CALL],
+                }
+            ],
+            [{"text": "Read it."}, _GLM_CACHE_POINT, _GLM_TOOL_USE],
+            id="empty-final-block",
+        ),
+        pytest.param(
+            [
+                {"role": "assistant", "content": "First.", "cache_control": _GLM_CACHE_CONTROL},
+                {
+                    "role": "assistant",
+                    "content": "Second.",
+                    "cache_control": _GLM_CACHE_CONTROL,
+                    "tool_calls": [_GLM_CACHED_TOOL_CALL],
+                },
+            ],
+            [{"text": "First."}, {"text": "Second."}, _GLM_CACHE_POINT, _GLM_TOOL_USE],
+            id="consecutive-assistant-markers",
+        ),
+        pytest.param(
+            [
+                {"role": "assistant", "content": None, "tool_calls": [_GLM_CACHED_TOOL_CALL]},
+                {"role": "assistant", "content": "Read it.", "cache_control": _GLM_CACHE_CONTROL},
+            ],
+            [{"text": "Read it."}, _GLM_CACHE_POINT, _GLM_TOOL_USE],
+            id="text-after-tool-only-assistant",
+        ),
+        pytest.param(
+            [
+                {
+                    "role": "assistant",
+                    "content": "Read it.",
+                    "tool_calls": [
+                        {
+                            "id": "read_1",
+                            "type": "function",
+                            "function": {"name": "read_table", "arguments": '{"cache_control":"keep"}'},
+                        }
+                    ],
+                }
+            ],
+            [{"text": "Read it."}, _GLM_TOOL_USE],
+            id="no-marker",
+        ),
+    ],
+)
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_glm_assistant_cache_points_precede_tool_calls(
+    assistant_messages: list[AllMessageValues], expected_content: list[ContentBlock], sync_mode: bool
+) -> None:
+    messages: Final[list[AllMessageValues]] = [
+        {"role": "user", "content": "Read the table."},
+        *assistant_messages,
+        {"role": "tool", "tool_call_id": "read_1", "content": "The table is normal."},
+    ]
+    expected: Final = [
+        {"role": "user", "content": [{"text": "Read the table."}]},
+        {"role": "assistant", "content": expected_content},
+        {
+            "role": "user",
+            "content": [
+                {
+                    "toolResult": {
+                        "toolUseId": "read_1",
+                        "content": [{"text": "The table is normal."}],
+                    }
+                }
+            ],
+        },
+    ]
+
+    result: Final = (
+        _bedrock_converse_messages_pt(messages=messages, model="global.zai.glm-5.3", llm_provider="bedrock_converse")
+        if sync_mode
+        else await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages, model="global.zai.glm-5.3", llm_provider="bedrock_converse"
+        )
+    )
+    assert result == expected
+
+
+@pytest.mark.parametrize("model", ["global.zai.glm-5.3", "anthropic.claude-sonnet-5"])
+def test_assistant_cache_point_placement_preserves_settings_and_other_models(model: str) -> None:
+    first: Final[ContentBlock] = {"cachePoint": {"type": "default", "ttl": "5m"}}
+    second: Final[ContentBlock] = {"cachePoint": {"type": "default", "ttl": "1h"}}
+    blocks: Final[tuple[ContentBlock, ...]] = ({"text": "Read it."}, _GLM_TOOL_USE, first, second)
+    expected: Final = ({"text": "Read it."}, first, _GLM_TOOL_USE) if model == "global.zai.glm-5.3" else blocks
+
+    assert tuple(_place_assistant_cache_points_before_tools(blocks, model)) == expected
 
 
 READ_FILE: Final[list[object]] = [{"name": "read_file", "description": "Read the contents of a file."}]
