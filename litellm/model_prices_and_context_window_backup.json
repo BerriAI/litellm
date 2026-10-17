@@ -24746,6 +24746,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "eu.meta.llama3-2-1b-instruct-v1:0": {
+        "deprecation_date": "2026-07-07",
         "input_cost_per_token": 1.3e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 128000,
@@ -24753,10 +24754,12 @@
         "max_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 1.3e-07,
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-3-2-1b-instruct.md",
         "supports_function_calling": true,
         "supports_tool_choice": false
     },
     "eu.meta.llama3-2-3b-instruct-v1:0": {
+        "deprecation_date": "2026-07-07",
         "input_cost_per_token": 1.9e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 128000,
@@ -24764,6 +24767,7 @@
         "max_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 1.9e-07,
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-3-2-3b-instruct.md",
         "supports_function_calling": true,
         "supports_tool_choice": false
     },
@@ -40517,6 +40521,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "meta.llama3-1-405b-instruct-v1:0": {
+        "deprecation_date": "2026-07-07",
         "input_cost_per_token": 2.4e-06,
         "litellm_provider": "bedrock",
         "max_input_tokens": 128000,
@@ -40559,6 +40564,7 @@
         "supports_tool_choice": false
     },
     "meta.llama3-2-11b-instruct-v1:0": {
+        "deprecation_date": "2026-07-07",
         "input_cost_per_token": 1.6e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 128000,
@@ -40572,6 +40578,7 @@
         "supports_vision": true
     },
     "meta.llama3-2-1b-instruct-v1:0": {
+        "deprecation_date": "2026-07-07",
         "input_cost_per_token": 1e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 128000,
@@ -40579,10 +40586,12 @@
         "max_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 1e-07,
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-3-2-1b-instruct.md",
         "supports_function_calling": true,
         "supports_tool_choice": false
     },
     "meta.llama3-2-3b-instruct-v1:0": {
+        "deprecation_date": "2026-07-07",
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 128000,
@@ -40590,10 +40599,12 @@
         "max_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 1.5e-07,
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-3-2-3b-instruct.md",
         "supports_function_calling": true,
         "supports_tool_choice": false
     },
     "meta.llama3-2-90b-instruct-v1:0": {
+        "deprecation_date": "2026-07-07",
         "input_cost_per_token": 7.2e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 128000,
@@ -48982,6 +48993,7 @@
         "supports_vision": false
     },
     "us.meta.llama3-1-405b-instruct-v1:0": {
+        "deprecation_date": "2026-07-07",
         "input_cost_per_token": 2.4e-06,
         "litellm_provider": "bedrock",
         "max_input_tokens": 128000,
@@ -49024,6 +49036,7 @@
         "supports_tool_choice": false
     },
     "us.meta.llama3-2-11b-instruct-v1:0": {
+        "deprecation_date": "2026-07-07",
         "input_cost_per_token": 1.6e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 128000,
@@ -49037,6 +49050,7 @@
         "supports_vision": true
     },
     "us.meta.llama3-2-1b-instruct-v1:0": {
+        "deprecation_date": "2026-07-07",
         "input_cost_per_token": 1e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 128000,
@@ -49044,10 +49058,12 @@
         "max_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 1e-07,
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-3-2-1b-instruct.md",
         "supports_function_calling": true,
         "supports_tool_choice": false
     },
     "us.meta.llama3-2-3b-instruct-v1:0": {
+        "deprecation_date": "2026-07-07",
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 128000,
@@ -49055,10 +49071,12 @@
         "max_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 1.5e-07,
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-3-2-3b-instruct.md",
         "supports_function_calling": true,
         "supports_tool_choice": false
     },
     "us.meta.llama3-2-90b-instruct-v1:0": {
+        "deprecation_date": "2026-07-07",
         "input_cost_per_token": 7.2e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 128000,
