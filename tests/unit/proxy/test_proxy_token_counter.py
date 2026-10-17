@@ -1537,6 +1537,10 @@ async def test_framing_keeps_the_400_for_blocks_the_provider_counter_cannot_conv
             },
             id="array_schema_without_items",
         ),
+        pytest.param(
+            {"messages": [], "contents": [{"role": "user", "parts": [{"text": "What is new?"}]}]},
+            id="google_contents",
+        ),
     ],
 )
 async def test_framed_estimate_that_cannot_read_the_body_answers_the_provider_error(
