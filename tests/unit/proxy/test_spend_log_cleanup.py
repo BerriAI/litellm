@@ -8,6 +8,7 @@ import math
 import time
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
@@ -28,6 +29,14 @@ from litellm.proxy.db.db_transaction_queue.spend_log_cleanup_metrics import (
     SpendLogCleanupMetrics,
 )
 from tests.unit.proxy.db.fake_prisma_engine import engine_call
+
+
+@dataclass(slots=True)
+class _ManualClock:
+    now: float = 0.0
+
+    def __call__(self) -> float:
+        return self.now
 
 
 def _far_deadline() -> float:
@@ -1022,10 +1031,15 @@ async def test_run_budget_is_shared_across_tables_not_granted_per_table():
 @pytest.mark.asyncio
 async def test_cleanup_groups_share_budget_so_health_checks_still_get_a_delete():
     mock_prisma_client = MagicMock()
-    _wire_tx(mock_prisma_client.db)
     mock_db = MagicMock()
     _wire_tx(mock_db)
-    mock_db.execute_raw = AsyncMock(return_value=1000)
+    clock: Final = _ManualClock()
+
+    async def _delete_batch(_query: str, *_args: object) -> int:
+        clock.now += 0.1
+        return 1000
+
+    mock_db.execute_raw = AsyncMock(side_effect=_delete_batch)
     mock_prisma_client.db = mock_db
 
     cleaner = SpendLogCleanup(
@@ -1034,7 +1048,8 @@ async def test_cleanup_groups_share_budget_so_health_checks_still_get_a_delete()
             "maximum_health_check_retention_period": "30d",
             "maximum_spend_logs_cleanup_max_batches": 50,
             "maximum_spend_logs_cleanup_run_budget": "1s",
-        }
+        },
+        clock=clock,
     )
     cleaner.pod_lock_manager = None
 
