@@ -1,5 +1,5 @@
 import types
-from typing import Final, Literal, cast
+from typing import Final, Literal, cast  # noqa: TID251  # untyped Vertex statistics payload; names the known dict shape
 
 from litellm.litellm_core_utils.hidden_params import set_hidden_param
 from litellm.llms.vertex_ai.common_utils import pop_vertex_request_labels
