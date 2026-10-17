@@ -19,6 +19,7 @@ use litellm_gateway_hooks::{
     Admission, DeploymentFacts, Facts, KeyFacts, Outcome, Pipeline, RequestFacts, Route,
     StreamFormat, StreamUsage, Usage,
 };
+use litellm_inference_chat::stream::ReportedUsage;
 use litellm_router::Attempt;
 use serde_json::{Map, Value};
 
@@ -223,6 +224,7 @@ impl Tracking {
                 headers.insert(name.clone(), value.clone());
             }
         }
+        let reported = response.extensions().get::<ReportedUsage>().cloned();
         let streaming = response
             .headers()
             .get(CONTENT_TYPE)
@@ -246,6 +248,7 @@ impl Tracking {
             upstream_started_at,
             status: response.status().as_u16(),
             meter,
+            reported,
             started,
             first_byte: None,
             ended: false,
@@ -286,6 +289,8 @@ struct Finish {
     upstream_started_at: Option<SystemTime>,
     status: u16,
     meter: Meter,
+    /// The usage a translated chat stream ended with, sent to the client or not.
+    reported: Option<ReportedUsage>,
     body: Option<Vec<Bytes>>,
     started: Instant,
     first_byte: Option<Duration>,
@@ -313,7 +318,10 @@ impl Finish {
             && self.route == Route::ChatCompletions;
         let (usage, model) = match &self.meter {
             Meter::Off => (None, None),
-            Meter::Stream(meter) => (meter.usage(), meter.model().map(str::to_owned)),
+            Meter::Stream(meter) => match self.reported.as_ref().and_then(reported_usage) {
+                Some(usage) => (Some(usage), None),
+                None => (meter.usage(), meter.model().map(str::to_owned)),
+            },
             Meter::Body(chunks) => {
                 let body = chunks.concat();
                 let model = by_model.then(|| body_model(&body)).flatten();
@@ -351,6 +359,10 @@ impl Drop for Finish {
         let body = self.body.take().map(|chunks| Bytes::from(chunks.concat()));
         self.pipeline.finish(admission, outcome, body);
     }
+}
+
+fn reported_usage(reported: &ReportedUsage) -> Option<Usage> {
+    Usage::from_openai(&serde_json::to_value(reported.get()?).ok()?)
 }
 
 /// The `usage` object of a complete JSON response. Only that object is parsed: it is found by

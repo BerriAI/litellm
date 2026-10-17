@@ -12,6 +12,7 @@ use litellm_host_http::Sse;
 use litellm_inference_chat::{
     ChatCompletionsRoute,
     openai::{OpenAiChatCall, OpenAiChatCompletions},
+    stream::{ChatCompletionsStream, ChatStreamCall, ReportedUsage},
     types::ChatCompletionsCall,
 };
 use serde_json::{Map, Value};
@@ -135,6 +136,7 @@ async fn handle(
                         return openai(gateway, deployment, body, extra_headers.clone()).await;
                     }
                     let (messages, optional_params) = split(body);
+                    let stream = ChatCompletionsRoute::is_stream(&optional_params);
                     let call = ChatCompletionsCall {
                         model: deployment.model.clone(),
                         messages,
@@ -145,6 +147,9 @@ async fn handle(
                         extra_headers: extra_headers.clone(),
                         timeout: deployment.timeout,
                     };
+                    if stream {
+                        return translated_stream(route, call, name).await;
+                    }
                     Ok(litellm_host_http::serve_unary(
                         route.machine(call, cache_options.policy),
                         (),
@@ -223,4 +228,30 @@ async fn openai(
         |error| Bytes::from(Error::from(error).openai_sse_frame()),
     );
     Ok(litellm_host_http::serve(machine, (), (), encoder, None).await?)
+}
+
+/// A stream from a provider chat translates (Anthropic, Bedrock), sent as OpenAI chunks. The
+/// usage it ends with rides on the response for the hooks, even when the client did not ask
+/// to see it.
+async fn translated_stream(
+    route: ChatCompletionsRoute,
+    call: ChatCompletionsCall,
+    model: &str,
+) -> Result<Response, Error> {
+    let usage = ReportedUsage::default();
+    let machine = route.stream_machine(
+        ChatStreamCall {
+            call,
+            response_model: model.to_owned(),
+            usage: usage.clone(),
+        },
+        None,
+    );
+    let encoder = Sse::<ChatCompletionsStream, _, _>::new(
+        |body: Bytes| ([(CONTENT_TYPE, "application/json")], body),
+        |error| Bytes::from(Error::from(error).openai_sse_frame()),
+    );
+    let mut response = litellm_host_http::serve(machine, (), (), encoder, None).await?;
+    response.extensions_mut().insert(usage);
+    Ok(response)
 }

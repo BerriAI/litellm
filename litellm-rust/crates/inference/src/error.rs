@@ -85,6 +85,9 @@ impl From<LlmError> for RouteError {
             LlmError::InvalidResponse(message) => Self::InvalidResponse(message),
             LlmError::Unsupported(reason) => Self::Unsupported(reason),
             LlmError::Auth(error) => Self::Auth(error),
+            LlmError::Provider { status, body } => {
+                Self::Transport(TransportError::Http { status, body })
+            }
         }
     }
 }
