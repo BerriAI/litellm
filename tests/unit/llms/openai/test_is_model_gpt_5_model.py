@@ -73,6 +73,17 @@ GPT5_MODELS = [
 ]
 
 # Models that must NOT be classified as GPT-5 (regular chat path)
+# Non-reasoning models routed under groups/gateways whose PATH contains a gpt-5/gpt-6
+# marker. Regression: the marker check must run against the normalized model name
+# (after the last "/"), not the raw route, or these get reasoning transformations
+# (temperature=1 enforcement, max_completion_tokens swap) and 400 from upstream.
+ROUTED_NON_REASONING_MODELS = [
+    "gpt-5-gateway/claude-3-5-sonnet",
+    "gpt-5-team/llama-3.3-70b",
+    "gpt-6-proxy/mistral-large",
+    "my-gpt-5-org/gemini-2.0-flash",
+]
+
 NON_GPT5_MODELS = [
     "gpt-5-chat",  # gpt-5-chat family — regular chat path
     "gpt-5-chat-latest",  # gpt-5-chat family with alias suffix
@@ -108,6 +119,12 @@ class TestOpenAIGPT5ConfigIsModelGpt5Model:
         assert not OpenAIGPT5Config.is_model_gpt_5_model(
             model
         ), f"Expected '{model}' NOT to be classified as a GPT-5 model"
+
+    @pytest.mark.parametrize("model", ROUTED_NON_REASONING_MODELS)
+    def test_routed_non_reasoning_models_are_not_classified_as_gpt5(self, model: str):
+        assert not OpenAIGPT5Config.is_model_gpt_5_model(
+            model
+        ), f"Route prefix in '{model}' must not trigger the GPT-5 reasoning path"
 
     def test_versioned_chat_models_are_not_excluded_by_prefix(self):
         """Core regression guard: gpt-5-chat prefix must not match versioned models."""
