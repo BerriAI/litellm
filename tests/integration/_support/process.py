@@ -391,6 +391,7 @@ def isolated_gateway(directory: Path, environment: "pytest.MonkeyPatch") -> Iter
         environment.delenv("INTEGRATION_PROXY_READ_REPLICA_URL", raising=False)
         environment.delenv("DATABASE_URL_READ_REPLICA", raising=False)
         with owned_proxy(shared, directory, {}) as owned:
+            owned.post("/config/update", {"router_settings": {"num_retries": 0}})
             yield owned
 
 
