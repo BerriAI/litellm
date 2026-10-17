@@ -192,6 +192,9 @@ class AWSEventStreamDecoder:
                         # If it's not valid JSON yet, continue to the next event
                         continue
 
+        # remove custom sagemaker [DONE] message in stream
+        accumulated_json = accumulated_json.removesuffix("[DONE]")
+
         # Handle any remaining data after the iterator is exhausted
         if accumulated_json:
             try:
@@ -247,6 +250,9 @@ class AWSEventStreamDecoder:
                 except Exception as e:
                     verbose_logger.error("Error parsing message: %s. Attempting to combine with next event.", e)
                     continue
+
+        # remove custom sagemaker [DONE] message in stream
+        accumulated_json = accumulated_json.removesuffix("[DONE]")
 
         # Handle any remaining data after the iterator is exhausted
         if accumulated_json:
