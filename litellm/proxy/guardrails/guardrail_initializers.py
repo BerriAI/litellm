@@ -282,6 +282,7 @@ def initialize_panw_prisma_airs(litellm_params, guardrail):
         mask_on_block=getattr(litellm_params, "mask_on_block", False),
         mask_request_content=getattr(litellm_params, "mask_request_content", False),
         mask_response_content=getattr(litellm_params, "mask_response_content", False),
+        include_masked_response_on_block=getattr(litellm_params, "include_masked_response_on_block", False),  # pyright: ignore[reportUnknownArgumentType]  # litellm_params is untyped in this function; pydantic extras require getattr
         app_name=getattr(litellm_params, "app_name", None),
         fallback_on_error=getattr(litellm_params, "fallback_on_error", "block"),
         # `timeout` is now declared on BaseLitellmParams (Optional[float] = None),
