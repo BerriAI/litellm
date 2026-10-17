@@ -101,6 +101,16 @@ def test_s3_v2_sink_outage_mid_mixed_burst_recovers_every_response_id(gateway: G
     assert len(payloads) == 48, "a stored id was overwritten or duplicated"
 
 
+def cached_surfaces(cache: Redis, marker: str) -> frozenset[str]:
+    """The surfaces whose warm-up response is stored: litellm keeps a cached response as its JSON under the
+    request's cache key, and surface_reply echoes each call's marker back as that response's id."""
+    keys: Final = tuple(cache.scan_iter(count=500))
+    stored: Final = b"\n".join(value for value in cache.mget(keys) if value is not None) if keys else b""
+    return frozenset(
+        surface for surface in SURFACES if re.search(rf"{re.escape(marker)}-{surface}(?![0-9a-z_])".encode(), stored)
+    )
+
+
 def test_s3_v2_cache_hit_twins_log_one_object_per_request(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = "s3cache" + uuid.uuid4().hex[:8]
     sink: Final = RecordingS3Sink(delay_seconds=0.1)
@@ -116,12 +126,11 @@ def test_s3_v2_cache_hit_twins_log_one_object_per_request(gateway: Gateway, tmp_
             )
             key: Final = scenario.key(models=[openai_model, anthropic_model])
             cache: Final = Redis(host=os.environ["REDIS_HOST"], port=int(os.environ["REDIS_PORT"]))
-            keys_before: Final = cache.dbsize()
             warmed: Final = tuple(
                 call_surface(candidate, surface, openai_model, anthropic_model, key, f"{marker}-{surface}")
                 for surface in SURFACES
             )
-            eventually(cache.dbsize, lambda size: size >= keys_before + len(SURFACES), seconds=30)
+            eventually(lambda: cached_surfaces(cache, marker), lambda cached: cached == frozenset(SURFACES), seconds=30)
             repeated: Final = tuple(
                 call_surface(candidate, surface, openai_model, anthropic_model, key, f"{marker}-{surface}", False)
                 for surface in SURFACES
