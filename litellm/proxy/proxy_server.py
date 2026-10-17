@@ -6554,7 +6554,7 @@ class ProxyConfig:
                 if isinstance(value, str) and value.startswith("os.environ/"):
                     resolved_secret_string: str | None = get_secret_str(secret_name=value)
                     if resolved_secret_string is not None:
-                        os.environ[key] = resolved_secret_string
+                        self._set_config_environment_variable(key=key, value=resolved_secret_string)
                 else:
                     #########################################################
                     # handles this scenario:
@@ -6563,12 +6563,20 @@ class ProxyConfig:
                     #     ARIZE_ENDPOINT: https://otlp.arize.com/v1
                     # ```
                     #########################################################
-                    os.environ[key] = str(value)
+                    self._set_config_environment_variable(key=key, value=str(value))
 
             # check if litellm_license in general_settings
             if "LITELLM_LICENSE" in environment_variables:
                 _license_check.license_str = os.getenv("LITELLM_LICENSE", None)
                 premium_user = _license_check.is_premium()
+
+    def _set_config_environment_variable(self, key: str, value: str) -> None:
+        if key in os.environ and os.environ[key] != value:
+            verbose_proxy_logger.warning(
+                "environment_variables.%s from the config file replaces the value already set in the process environment",
+                key,
+            )
+        os.environ[key] = value
 
     def _warn_on_misplaced_jwt_keys(self, config: dict) -> tuple[str, ...]:
         misplaced_jwt_keys = tuple(key for key in ("enable_jwt_auth", "litellm_jwtauth") if key in config)
