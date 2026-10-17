@@ -12,7 +12,7 @@ import { uiHref } from "@/utils/uiHref";
 
 // The nuqs Next adapter uses useSearchParams, so keep the chat tree behind Suspense.
 function ChatLayoutContent({ children }: { children: React.ReactNode }) {
-  const { accessToken, userRole, userId, userEmail, premiumUser } = useAuthorized();
+  const { accessToken, userRole, userId, userEmail, premiumUser, isLoading: isIdentityLoading } = useAuthorized();
   const { data: uiSettings, isLoading: isUISettingsLoading } = useUISettings();
   const router = useRouter();
 
@@ -23,7 +23,7 @@ function ChatLayoutContent({ children }: { children: React.ReactNode }) {
     if (blocked) router.replace(uiHref(""));
   }, [blocked, router]);
 
-  if (isUISettingsLoading || blocked) return null;
+  if (isIdentityLoading || isUISettingsLoading || blocked) return null;
 
   return (
     <ThemeProvider accessToken={accessToken}>

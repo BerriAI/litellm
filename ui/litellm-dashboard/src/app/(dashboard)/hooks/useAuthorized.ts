@@ -1,12 +1,11 @@
 "use client";
 
-import { getProxyBaseUrl, getUiPageUrl } from "@/components/networking";
 import { clearTokenCookies, getCookie } from "@/utils/cookieUtils";
 import { checkTokenValidity, decodeToken } from "@/utils/jwtUtils";
-import { buildLoginUrlWithReturn, getLoginUrl, storeReturnUrl } from "@/utils/returnUrlUtils";
-import { useCallback, useEffect, useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { effectiveSessionRole, formatUserRole, isViewOnlySessionRole } from "@/utils/roles";
 import { useCurrentUser } from "./currentUser/useCurrentUser";
+import { redirectToLogin } from "./redirectToLogin";
 import { useUIConfig } from "./uiConfig/useUIConfig";
 
 const useAuthorized = () => {
@@ -25,14 +24,6 @@ const useAuthorized = () => {
   const isLoading = isUIConfigLoading || isCurrentUserLoading;
   const isAuthorized = isTokenValid && !uiConfig?.admin_ui_disabled && !isCurrentUserError;
 
-  // Helper function to redirect to login while preserving the current URL
-  const redirectToLogin = useCallback(() => {
-    storeReturnUrl();
-    const baseLoginUrl = getUiPageUrl(getLoginUrl(getProxyBaseUrl()));
-    const loginUrlWithReturn = buildLoginUrlWithReturn(baseLoginUrl);
-    window.location.replace(loginUrlWithReturn);
-  }, []);
-
   // Single useEffect for all redirect logic
   useEffect(() => {
     if (isLoading) return;
@@ -43,7 +34,7 @@ const useAuthorized = () => {
       }
       redirectToLogin();
     }
-  }, [isLoading, isAuthorized, token, redirectToLogin]);
+  }, [isLoading, isAuthorized, token]);
 
   return {
     isLoading,

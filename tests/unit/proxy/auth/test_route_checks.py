@@ -4013,7 +4013,7 @@ def test_password_reset_session_can_reach_change_password_and_its_own_identity(r
     [LitellmUserRoles.INTERNAL_USER.value, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value],
 )
 def test_non_admin_user_can_read_its_own_identity(role):
-    RouteChecks.non_proxy_admin_allowed_routes_check(
+    allowed = RouteChecks.non_proxy_admin_allowed_routes_check(
         user_obj=LiteLLM_UserTable(user_id="test_user", user_role=role),
         _user_role=role,
         route="/management/v1/users/me",
@@ -4021,6 +4021,8 @@ def test_non_admin_user_can_read_its_own_identity(role):
         valid_token=UserAPIKeyAuth(user_id="test_user", user_role=role),
         request_data={},
     )
+
+    assert allowed is None
 
 
 @pytest.mark.parametrize(

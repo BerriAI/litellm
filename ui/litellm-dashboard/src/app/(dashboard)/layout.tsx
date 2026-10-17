@@ -8,6 +8,8 @@ import LoadingScreen from "@/components/common_components/LoadingScreen";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/currentUser/useCurrentUser";
+import { redirectToLogin } from "@/app/(dashboard)/hooks/redirectToLogin";
+import { clearTokenCookies } from "@/utils/cookieUtils";
 import { decodeToken } from "@/utils/jwtUtils";
 import SidebarProvider from "@/app/(dashboard)/components/SidebarProvider";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
@@ -221,8 +223,9 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
   const searchParams = useSearchParams();
   const pathname = usePathname();
   const { accessToken, token, authLoading, passwordResetRequired } = useAuth();
-  const { isLoading: currentUserLoading } = useCurrentUser(decodeToken(token)?.key ?? null);
+  const { isLoading: currentUserLoading, isError: currentUserFailed } = useCurrentUser(decodeToken(token)?.key ?? null);
   const isInvitationFlow = Boolean(searchParams.get("invitation_id"));
+  const identityPending = currentUserLoading || currentUserFailed;
 
   // Legacy invitation links point at /ui/?invitation_id=; the onboarding form now lives at its own
   // /onboarding route. Redirect once ui-config has loaded so uiHref resolves the SERVER_ROOT_PATH base.
@@ -240,7 +243,13 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
     }
   }, [authLoading, passwordResetRequired, pathname, router]);
 
-  if (authLoading || currentUserLoading || isInvitationFlow) {
+  useEffect(() => {
+    if (!currentUserFailed || isInvitationFlow) return;
+    clearTokenCookies();
+    redirectToLogin();
+  }, [currentUserFailed, isInvitationFlow]);
+
+  if (authLoading || identityPending || isInvitationFlow) {
     return <LoadingScreen />;
   }
 

@@ -1,17 +1,20 @@
-import { apiClient } from "@/components/networking";
 import { skipToken, useQuery, type UseQueryOptions } from "@tanstack/react-query";
+import { fetchClient } from "@/lib/http/api";
+import { getAuthHeaderName } from "@/lib/http/runtime";
+import type { components } from "@/lib/http/schema";
 import { createQueryKeys } from "../common/queryKeysFactory";
 
-export type CurrentUser = {
-  user_id: string;
-  user_role: string | null;
-  user_email: string | null;
-};
+export type CurrentUser = components["schemas"]["CurrentUserResponse"];
 
 const currentUserKeys = createQueryKeys("currentUser");
 
-export const getCurrentUser = (accessToken: string): Promise<CurrentUser> =>
-  apiClient.get<CurrentUser>("/management/v1/users/me", { accessToken });
+const getCurrentUser = async (accessToken: string): Promise<CurrentUser> => {
+  const { data } = await fetchClient.GET("/management/v1/users/me", {
+    headers: { [getAuthHeaderName()]: `Bearer ${accessToken}` },
+  });
+  if (!data) throw new Error("Current user response is empty");
+  return data;
+};
 
 export const useCurrentUser = (accessToken: string | null) => {
   const options: UseQueryOptions<CurrentUser> = {
