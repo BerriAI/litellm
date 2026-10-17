@@ -16,13 +16,17 @@ class EntraIdentityConfig(LiteLLMBaseModel):
     tenant_id: str
     client_id: str
     service_principal_id: str | None = None
+    blueprint_id: str | None = Field(
+        default=None,
+        description="Entra Agent ID blueprint application ID. When set, only tokens issued to an agent identity created from this blueprint are accepted",
+    )
     required_roles: tuple[str, ...] = ()
     required_scopes: tuple[str, ...] = Field(
         default=("user_impersonation",),
         description="Required delegated scopes. An empty list accepts any nonempty scope granted for this gateway.",
     )
 
-    @field_validator("tenant_id", "client_id", "service_principal_id")
+    @field_validator("tenant_id", "client_id", "service_principal_id", "blueprint_id")
     @classmethod
     def normalize_identifier(cls, value: str | None) -> str | None:
         return str(UUID(value)) if value is not None else None
@@ -41,6 +45,7 @@ class AgentIdentityBinding(LiteLLMBaseModel):
     tenant_id: str
     client_id: str
     service_principal_id: str | None = None
+    blueprint_id: str | None = None
     issuer: str
     required_roles: tuple[str, ...] = ()
     required_scopes: tuple[str, ...] = ("user_impersonation",)

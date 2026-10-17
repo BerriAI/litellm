@@ -48,6 +48,7 @@ export const AgentIdentityDetails = ({
           Application (Client) ID: <span className="font-mono">{identity.client_id}</span>
         </p>
         <p className="text-sm">Enterprise application Object ID: {identity.service_principal_id || "Not configured"}</p>
+        <p className="text-sm">Agent ID blueprint: {identity.blueprint_id || "Not required"}</p>
       </>
       <p className="text-sm">
         Execution: {data ? executionLabel : "Loading"} · Mode: {data?.execution_mode ?? "Loading"}
