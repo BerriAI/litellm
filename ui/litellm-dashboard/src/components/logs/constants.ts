@@ -1,3 +1,5 @@
+import type { LogEntry } from "./types";
+
 export const ERROR_CODE_OPTIONS: { label: string; value: string }[] = [
   { label: "400 - Bad Request", value: "400" },
   { label: "401 - Invalid Authentication", value: "401" },
@@ -20,6 +22,12 @@ export const AGENT_CALL_TYPES = ["asend_message"];
 
 /** Call types that represent Batch API operations (creation and retrieval, sync and async). */
 export const BATCH_CALL_TYPES = ["acreate_batch", "create_batch", "aretrieve_batch", "retrieve_batch"];
+
+export const isAgentLog = (log: Pick<LogEntry, "call_type" | "agent_id">): boolean => {
+  if (AGENT_CALL_TYPES.includes(log.call_type)) return true;
+  if (!log.agent_id) return false;
+  return !MCP_CALL_TYPES.includes(log.call_type) && !BATCH_CALL_TYPES.includes(log.call_type);
+};
 
 export const SPAN_TYPE_LABELS: Record<string, string> = {
   llm: "LLM",
