@@ -8,6 +8,7 @@ model_dump() it (the #19550 serialization trap).
 """
 
 import json
+from collections.abc import Mapping
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -142,9 +143,9 @@ PROXY_STAMPED_METADATA: Final = {
 }
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("operation", ["create", "update"])
-async def test_vector_store_writes_send_only_the_callers_metadata_to_the_provider(operation: str):
+async def _metadata_sent_to_provider(
+    operation: str, metadata: Mapping[object, object], **kwargs: object
+) -> list[object]:
     sent_metadata: Final[list[object]] = []
 
     def echo_vector_store(request: httpx.Request) -> httpx.Response:
@@ -166,8 +167,29 @@ async def test_vector_store_writes_send_only_the_callers_metadata_to_the_provide
 
     client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(echo_vector_store))
     if operation == "create":
-        await acreate(name="x", metadata=dict(PROXY_STAMPED_METADATA), api_key="sk-test", client=client)
+        await acreate(name="x", metadata=dict(metadata), api_key="sk-test", client=client, **kwargs)
     else:
-        await aupdate(vector_store_id="vs_1", metadata=dict(PROXY_STAMPED_METADATA), api_key="sk-test", client=client)
+        await aupdate(vector_store_id="vs_1", metadata=dict(metadata), api_key="sk-test", client=client, **kwargs)
+    return sent_metadata
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["create", "update"])
+async def test_proxy_vector_store_writes_send_only_the_callers_metadata_to_the_provider(operation: str):
+    sent_metadata: Final = await _metadata_sent_to_provider(
+        operation,
+        PROXY_STAMPED_METADATA,
+        proxy_server_request={"url": "http://localhost:4000/v1/vector_stores", "method": "POST", "body": {}},
+    )
 
     assert sent_metadata == [{"team": "llmproxy", "user_api_keyboard": "qwerty", "1": "a"}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["create", "update"])
+async def test_direct_sdk_vector_store_writes_keep_caller_keys_that_share_proxy_key_names(operation: str):
+    callers_metadata: Final = {"team": "llmproxy", "endpoint": "ingest", "deployment": "prod", "agent_id": "bot-7"}
+
+    sent_metadata: Final = await _metadata_sent_to_provider(operation, callers_metadata)
+
+    assert sent_metadata == [callers_metadata]
