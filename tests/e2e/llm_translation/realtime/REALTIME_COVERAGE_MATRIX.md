@@ -27,6 +27,13 @@ coarse; raw-ws remains authoritative. Requires `pipecat-ai`.
 Pipecat audio coverage lives in `test_realtime_pipecat_audio_e2e.py` (VAD / audio
 I/O).
 
+Gemini Live Avatar (`avatar` on the session, `output_modalities: ["video"]`,
+`response.output_video.delta` events) has no e2e here: none of the provisioned
+models is avatar-capable, and the only one that is, `vertex_ai/gemini-3.8-live`,
+is served from the Vertex `eu` endpoint. It is covered by the unit tests in
+`tests/unit/llms/gemini/realtime/test_gemini_realtime_transformation.py`
+(`test_gemini_video_*`, `test_gemini_avatar_*`).
+
 ## Provisioning
 
 The suite registers every provider's realtime deployment through `/model/new` at
