@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from enum import Enum
 from functools import partial
+from types import MappingProxyType
 from typing import Final
 
 import httpx
@@ -91,6 +92,23 @@ class CompletionTimeout:
         if isinstance(timeout, (float, int, str)):
             return float(timeout)
         raise TypeError(f"timeout must be a number or an httpx.Timeout, got {type(timeout).__name__}")
+
+    @staticmethod
+    def stream_request_kwargs(non_stream_timeout: object, stream_timeout: object) -> Mapping[str, object]:
+        if stream_timeout is None:
+            return MappingProxyType({"timeout": non_stream_timeout})
+        return MappingProxyType(
+            {
+                "timeout": None
+                if non_stream_timeout is None
+                else CompletionTimeout.for_stream(
+                    StreamKind.FAKED,
+                    CompletionTimeout.as_limit(non_stream_timeout),
+                    CompletionTimeout.as_limit(stream_timeout),
+                ),
+                "stream_timeout": stream_timeout,
+            }
+        )
 
     @staticmethod
     def _coerce(

@@ -277,42 +277,78 @@ async def test_prompt_managed_fake_stream_keeps_the_timeout_its_caller_or_target
 
 class _AnswersStreamsInOnePiece(CustomLogger):
     async def async_pre_call_deployment_hook(self, kwargs: dict, call_type: object) -> dict:
-        return as_converted_stream(kwargs, WEBSEARCH_INTERCEPTION_PREFIX)
+        return as_converted_stream(kwargs, WEBSEARCH_INTERCEPTION_PREFIX) if kwargs.get("stream") else kwargs
+
+
+_INVOKE_ANSWER: Final = json.dumps(
+    {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude",
+        "content": [{"type": "text", "text": "hi"}],
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 1, "output_tokens": 1},
+    }
+).encode()
+
+
+async def _streamed_chat_text(router: Router) -> str:
+    response: Final = await router.acompletion(model="claude", messages=[{"role": "user", "content": "hi"}], stream=True)
+    return "".join([chunk.choices[0].delta.content or "" async for chunk in response])
+
+
+async def _streamed_messages_text(router: Router) -> str:
+    response: Final = await router.aanthropic_messages(
+        model="claude", messages=[{"role": "user", "content": "hi"}], max_tokens=10, stream=True
+    )
+    events: Final = [
+        json.loads(line.removeprefix(b"data: "))
+        for line in b"".join([chunk async for chunk in response]).splitlines()
+        if line.startswith(b"data: ")
+    ]
+    return "".join(event["delta"]["text"] for event in events if event["type"] == "content_block_delta")
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "answer", "streamed_text"),
+    [
+        ("bedrock/converse/anthropic.claude-sonnet-4-5-v1:0", CONVERSE_ANSWER, _streamed_chat_text),
+        ("bedrock/invoke/anthropic.claude-sonnet-4-5-v1:0", _INVOKE_ANSWER, _streamed_messages_text),
+    ],
+    ids=["chat_completions", "anthropic_messages"],
+)
 async def test_stream_a_deployment_hook_answers_in_one_piece_gets_the_longer_limit(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+    model: str,
+    answer: bytes,
+    streamed_text: Callable[[Router], Awaitable[str]],
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setattr(litellm, "callbacks", [_AnswersStreamsInOnePiece()])
     respx_mock.post(url__regex=r"https://bedrock-runtime\.us-east-1\.amazonaws\.com/.*").mock(
-        side_effect=slow_upstream_answer(CONVERSE_ANSWER)
+        side_effect=slow_upstream_answer(answer)
     )
     router: Final = Router(
         model_list=[
             {
                 "model_name": "claude",
                 "litellm_params": {
-                    "model": "bedrock/converse/anthropic.claude-sonnet-4-5-v1:0",
+                    "model": model,
                     "aws_access_key_id": "fake",
                     "aws_secret_access_key": "fake",
                     "aws_region_name": "us-east-1",
+                    "timeout": STREAM_TIMEOUT_SECONDS,
+                    "stream_timeout": UPSTREAM_FIRST_BYTE_SECONDS * 2,
                 },
             }
         ],
-        timeout=STREAM_TIMEOUT_SECONDS,
-        stream_timeout=UPSTREAM_FIRST_BYTE_SECONDS * 2,
         num_retries=0,
     )
 
-    response: Final = await router.acompletion(
-        model="claude",
-        messages=[{"role": "user", "content": "hi"}],
-        stream=True,
-    )
-
-    assert "".join([chunk.choices[0].delta.content or "" async for chunk in response]) == "hi"
+    assert await streamed_text(router) == "hi"
 
 
 class _FailureDetails(CustomLogger):

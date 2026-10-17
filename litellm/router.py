@@ -81,7 +81,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.otel.routing import routing_decision_attributes
 from litellm.integrations.otel.runtime import phase_attributes, phase_event, phase_span
 from litellm.litellm_core_utils.asyncify import run_async_function
-from litellm.litellm_core_utils.completion_timeout import CompletionTimeout, StreamKind
+from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
 from litellm.litellm_core_utils.core_helpers import (
     coerce_token_limit,
     get_litellm_metadata_from_kwargs,
@@ -4685,33 +4685,22 @@ class Router:
                 router_stream_timeout=_router_stream_timeout,
             )
             kwargs.update(
-                {
-                    "timeout": passthrough_timeout(kwargs={**kwargs, "stream": False}),
-                    "stream_timeout": passthrough_timeout(kwargs=kwargs),
-                }
+                CompletionTimeout.stream_request_kwargs(
+                    passthrough_timeout(kwargs={**kwargs, "stream": False}), passthrough_timeout(kwargs=kwargs)
+                )
                 if splits_stream_timeout and kwargs.get("stream")
                 else {"timeout": passthrough_timeout(kwargs=kwargs)}
             )
         elif splits_stream_timeout:
             request_kwargs: Final = _REQUEST_KWARGS_ADAPTER.validate_python(kwargs)
             deployment_params: Final = _DEPLOYMENT_PARAMS_ADAPTER.validate_python(deployment["litellm_params"])
-            non_stream_timeout: Final = self._get_non_stream_timeout(kwargs=request_kwargs, data=deployment_params)
-            stream_timeout: Final = (
-                self._get_stream_timeout(kwargs=request_kwargs, data=deployment_params)
-                if request_kwargs.get("stream")
-                else None
-            )
             kwargs.update(
-                {
-                    "timeout": non_stream_timeout
-                    if stream_timeout is None or non_stream_timeout is None
-                    else CompletionTimeout.for_stream(
-                        StreamKind.FAKED,
-                        CompletionTimeout.as_limit(non_stream_timeout),
-                        CompletionTimeout.as_limit(stream_timeout),
-                    ),
-                    **({"stream_timeout": stream_timeout} if stream_timeout is not None else {}),
-                }
+                CompletionTimeout.stream_request_kwargs(
+                    self._get_non_stream_timeout(kwargs=request_kwargs, data=deployment_params),
+                    self._get_stream_timeout(kwargs=request_kwargs, data=deployment_params)
+                    if request_kwargs.get("stream")
+                    else None,
+                )
             )
         else:
             kwargs["timeout"] = self._get_timeout(
