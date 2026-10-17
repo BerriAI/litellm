@@ -199,7 +199,8 @@ async def test_run_async_fallback_opens_the_hop_without_the_superseded_attempts_
     logging_obj.model_call_details["custom_llm_provider"] = "openai"
     logging_obj.model_call_details["litellm_params"] = {"acompletion": True}
     logging_obj.litellm_params = logging_obj.model_call_details["litellm_params"]
-    logging_obj.record_partial_usage_for_failure(Usage(prompt_tokens=52, completion_tokens=1, total_tokens=53), 0.01)
+    partial_usage: Final = Usage(prompt_tokens=52, completion_tokens=1, total_tokens=53)
+    logging_obj.record_partial_usage_for_failure(partial_usage, 0.01)
 
     await run_async_fallback(
         litellm_router=HopLoggingItsOwnSuccessRouter(),
@@ -213,6 +214,27 @@ async def test_run_async_fallback_opens_the_hop_without_the_superseded_attempts_
 
     assert [tokens for tokens, _ in recorder.logged] == [7]
     assert recorder.logged[0][1] != 0.01
+    assert logging_obj.model_call_details["failed_attempts_usage"] == ((partial_usage, 0.01),)
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_preserves_superseded_usage_when_hop_fails_before_opening() -> None:
+    logging_obj: Final = _request_logging_obj()
+    partial_usage: Final = Usage(prompt_tokens=52, completion_tokens=1, total_tokens=53)
+    logging_obj.record_partial_usage_for_failure(partial_usage, 0.01)
+
+    with pytest.raises(RuntimeError, match="fallback model also failed"):
+        await run_async_fallback(
+            litellm_router=AlwaysFailRouter(),
+            fallback_model_group=["fallback-model"],
+            original_model_group="primary-model",
+            original_exception=RuntimeError("stream dropped before content"),
+            max_fallbacks=3,
+            fallback_depth=0,
+            litellm_logging_obj=logging_obj,
+        )
+
+    assert logging_obj.model_call_details["failed_attempts_usage"] == ((partial_usage, 0.01),)
 
 
 class _RateLimitedHop(Exception):

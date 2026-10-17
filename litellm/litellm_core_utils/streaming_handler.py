@@ -2305,8 +2305,8 @@ class CustomStreamWrapper:
         already delivered. Recover that partial usage from the chunks seen so
         far and stash it, with its cost, on the logging object so the failure
         handler records the real partial spend instead of zero. The router
-        discards the stash right before it opens the next attempt, so a request
-        that later recovers via a fallback logs that hop's own usage.
+        moves it into terminal failure usage before opening the next attempt,
+        so a recovered attempt logs its own usage.
         """
         if self.logging_obj is None or not self.chunks:
             return

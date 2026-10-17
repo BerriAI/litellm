@@ -441,13 +441,11 @@ def mid_stream_retry_kwargs(
     return {key: value for key, value in hop_kwargs.items() if key not in _MID_STREAM_RETRY_STRIPPED_KEYS}
 
 
-def discard_superseded_attempt_usage(kwargs: Mapping[str, object]) -> None:
-    """The next attempt of this request is about to open. A stream the previous attempt dropped stashed the
-    usage it consumed on the request's logging object for its own failure log and for the failure row of a
-    request that runs out of attempts; the next attempt's log must carry its own usage instead."""
+def carry_superseded_attempt_usage(kwargs: Mapping[str, object]) -> None:
+    """Carry the superseded stream's partial usage into billing if the request ultimately fails."""
     logging_obj: Final = kwargs.get("litellm_logging_obj")
     if isinstance(logging_obj, Logging):
-        logging_obj.discard_partial_usage_for_failure()
+        logging_obj.carry_failed_attempt_usage()
 
 
 def _failure_callbacks_blocked_logging_object(kwargs: Mapping[str, object]) -> Logging | None:
@@ -881,7 +879,7 @@ async def run_async_fallback(
             kwargs["attempted_targets"] = attempted
             if include_fallback_errors:
                 kwargs["include_fallback_errors"] = include_fallback_errors
-            discard_superseded_attempt_usage(_FALLBACK_KWARGS_ADAPTER.validate_python(kwargs))
+            carry_superseded_attempt_usage(_FALLBACK_KWARGS_ADAPTER.validate_python(kwargs))
             response = await litellm_router.async_function_with_fallbacks(*args, **kwargs)
             verbose_router_logger.info("Successful fallback b/w models.")
             response = add_fallback_headers_to_response(

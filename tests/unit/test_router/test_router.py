@@ -16096,6 +16096,7 @@ class _AnthropicMessagesFakeByteStream:
         self._hidden_params = {"additional_headers": {"x-amzn-requestid": "req-1"}}
         self.closed = False
         self.closed_as_superseded = False
+        self.close_contexts: list[bool] = []
 
     def __aiter__(self):
         return self
@@ -16106,6 +16107,7 @@ class _AnthropicMessagesFakeByteStream:
         return self._chunks.pop(0)
 
     async def aclose(self) -> None:
+        self.close_contexts.append(closing_superseded_attempt())
         self.closed_as_superseded = self.closed_as_superseded or closing_superseded_attempt()
         self.closed = True
 
@@ -17350,10 +17352,8 @@ async def test_anthropic_messages_stream_dropped_before_content_is_retried_withi
 
 
 @pytest.mark.asyncio
-async def test_anthropic_messages_retry_opens_without_the_superseded_attempts_partial_usage():
-    """The dropped attempt stashes the usage it consumed on the request's logging object, for its own failure
-    log and for the failure row of a request that runs out of retries. The router discards it before the retry
-    opens, so a retry that completes bills its own usage instead of the dropped attempt's."""
+async def test_anthropic_messages_retry_opens_without_the_superseded_attempts_partial_usage() -> None:
+    """The dropped attempt's usage stays available for terminal billing without reaching the retry's success log."""
     router = _anthropic_messages_retry_router(num_retries=1)
     logging_obj = LiteLLMLogging(
         model="glm",
@@ -17364,7 +17364,8 @@ async def test_anthropic_messages_retry_opens_without_the_superseded_attempts_pa
         litellm_call_id="retry-own-usage",
         function_id="retry-own-usage",
     )
-    logging_obj.record_partial_usage_for_failure(Usage(prompt_tokens=52, completion_tokens=1, total_tokens=53), 0.01)
+    partial_usage: Final = Usage(prompt_tokens=52, completion_tokens=1, total_tokens=53)
+    logging_obj.record_partial_usage_for_failure(partial_usage, 0.01)
     stash_when_retry_opened: list[object] = []
 
     def retry_stream():
@@ -17379,6 +17380,7 @@ async def test_anthropic_messages_retry_opens_without_the_superseded_attempts_pa
     assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("pong")]
     assert stash_when_retry_opened == [None]
     assert "response_cost" not in logging_obj.model_call_details
+    assert logging_obj.model_call_details["failed_attempts_usage"] == ((partial_usage, 0.01),)
 
 
 @pytest.mark.asyncio
@@ -17403,6 +17405,7 @@ async def test_anthropic_messages_superseded_stream_is_closed_before_the_retry_o
 
     assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("pong")]
     assert superseded_closed_when_retry_opened == [True]
+    assert superseded.close_contexts[0] is True
 
 
 @pytest.mark.asyncio

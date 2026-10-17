@@ -397,6 +397,8 @@ def test_retry_rejected_before_it_opens_counts_against_the_same_budget(gateway: 
         model: Final = scenario.model(model=f"anthropic/{_MODEL}", api_base=wire.url, api_key=_API_KEY, num_retries=1)
         response: Final = gateway.request("POST", "/v1/messages", _body(model, prompt, "deployment"))
         _assert_rejected_before_content(response, wire, status=500, attempts=2, error="error")
+        rows: Final = eventually(lambda: _request_rows(model), lambda values: len(values) >= 1, seconds=70)
+        assert rows == [{"status": "failure", "prompt_tokens": 5, "completion_tokens": 1}], rows
 
 
 def test_non_stream_messages_rejected_with_500_is_retried_per_the_deployment_budget(gateway: Gateway) -> None:
@@ -508,11 +510,18 @@ def _request_rows(model: str) -> list[dict[str, JsonValue]]:
     )
 
 
-def test_dropped_attempt_and_its_retry_each_log_their_own_usage(gateway: Gateway, tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "failure",
+    (_Failure("drop_after_message_start"), _Failure("error_frame_after_message_start", 500)),
+    ids=("transport-drop", "recoverable-error-frame"),
+)
+def test_superseded_attempt_and_its_retry_each_log_their_own_usage(
+    gateway: Gateway, tmp_path: Path, failure: _Failure
+) -> None:
     prompt: Final = _prompt()
     attempts: Final = Attempts()
     with (
-        wire_server(_upstream(prompt, _Failure("drop_after_message_start"), attempts)) as wire,
+        wire_server(_upstream(prompt, failure, attempts)) as wire,
         wire_server(lambda request: Reply()) as sink,
         _proxy_with_callback_sink(gateway, tmp_path, sink) as candidate,
         candidate.scenario() as scenario,
