@@ -82,6 +82,8 @@ REJECTED_CELLS: Final = (
     "plain-extra-headers",
     "plain-headers",
     "plain-provider-specific-header",
+    "forwarded-provider-header",
+    "forwarded-plain-header",
 )
 GATED_CELLS: Final = ("invalid-key", "missing-key", "expired-key", "blocked-key", "no-model-access")
 HEALTHY_CELLS: Final = (*GATED_CELLS, "healthy", "key-rpm-limit")
@@ -274,6 +276,10 @@ def config(directory: Path, upstream: Wire) -> Path:
         }
     ]
     configuration["litellm_settings"]["callbacks"] = ["prometheus"]
+    configuration["litellm_settings"]["model_group_settings"] = {
+        "forward_client_headers_to_llm_api": [name("forwarded-provider-header"), name("forwarded-plain-header")]
+    }
+    configuration["general_settings"]["forward_llm_provider_auth_headers"] = True
     configuration.setdefault("router_settings", {}).update({"num_retries": 0, "disable_cooldowns": True})
     path: Final = directory / "prometheus-provider-auth-failure.yaml"
     path.write_text(yaml.safe_dump(configuration))
@@ -593,6 +599,43 @@ def test_a_provider_401_on_the_deployments_own_key_counts_when_the_caller_sends_
         (f"Bearer sk-deployment-credential-{cell}", trace)
     ]
     assert_recorded_as_a_deployment_failure(rig, cell, "401")
+
+
+def test_a_provider_401_on_a_provider_credential_header_the_proxy_forwards_stays_out_of_the_deployment_metrics(
+    rig: Rig,
+) -> None:
+    caller_key: Final = f"AIza-forwarded-{uuid.uuid4().hex}"
+    rig.upstream.drain()
+    response: Final = rig.gateway.request(
+        "POST",
+        "/v1/chat/completions",
+        {"model": name("forwarded-provider-header"), "messages": messages("forwarded-provider-header")},
+        headers={"x-goog-api-key": caller_key},
+    )
+    assert response.status_code == 401, response.text
+    assert [request.headers.get("x-goog-api-key") for request in rig.upstream.drain()] == [caller_key]
+    samples: Final = until(rig.gateway, PROXY_FAILED, requested_model=name("forwarded-provider-header"))
+    observed: Final = recorded(samples, model_id=identity("forwarded-provider-header"))
+    assert values(samples, FAILURES, model_id=identity("forwarded-provider-header")) == [], observed
+    assert values(samples, TOTALS, model_id=identity("forwarded-provider-header")) == [], observed
+    assert values(samples, LLM_FAILED, model_id=identity("forwarded-provider-header")) == [], observed
+    assert values(samples, STATE, model_id=identity("forwarded-provider-header")) == [], observed
+
+
+def test_a_provider_401_on_the_deployments_own_key_counts_when_the_proxy_forwards_a_plain_header(rig: Rig) -> None:
+    trace: Final = f"forwarded-plain-header-{uuid.uuid4().hex}"
+    rig.upstream.drain()
+    response: Final = rig.gateway.request(
+        "POST",
+        "/v1/chat/completions",
+        {"model": name("forwarded-plain-header"), "messages": messages("forwarded-plain-header")},
+        headers={"x-caller-trace": trace},
+    )
+    assert response.status_code == 401, response.text
+    assert [
+        (request.headers["authorization"], request.headers.get("x-caller-trace")) for request in rig.upstream.drain()
+    ] == [("Bearer sk-deployment-credential-forwarded-plain-header", trace)]
+    assert_recorded_as_a_deployment_failure(rig, "forwarded-plain-header", "401")
 
 
 def test_a_provider_401_on_an_anthropic_deployments_own_key_is_recorded(rig: Rig) -> None:
