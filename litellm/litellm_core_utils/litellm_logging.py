@@ -2248,7 +2248,7 @@ class Logging(LiteLLMLoggingBaseClass):
         end_time=None,
         cache_hit=None,
         prefer_async_handlers: bool = False,
-        **kwargs,
+        **kwargs: Any,  # kwargs-ok: forwarded to the async and sync success handlers
     ) -> None:
         """Route success logging to async and/or sync handlers for this request.
 
