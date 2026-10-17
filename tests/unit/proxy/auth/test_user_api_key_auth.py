@@ -476,9 +476,10 @@ def test_is_api_route_allowed(route, user_role, expected_result):
 
 
 @pytest.mark.asyncio
-async def test_auth_not_connected_to_db():
+async def test_auth_not_connected_to_db(monkeypatch: pytest.MonkeyPatch):
     """
-    ensure requests don't fail when `prisma_client` = None
+    ensure requests don't fail when `prisma_client` = None but a database
+    IS configured (configured-but-unreachable / transient outage)
     """
     from fastapi import Request
     from starlette.datastructures import URL
@@ -486,6 +487,7 @@ async def test_auth_not_connected_to_db():
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
     from litellm.proxy.proxy_server import hash_token, user_api_key_cache
 
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@localhost:5432/litellm")
     user_key = "sk-98765678"
 
     setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
@@ -504,6 +506,71 @@ async def test_auth_not_connected_to_db():
     print("got valid token", valid_token)
     assert valid_token.key_name == "failed-to-connect-to-db"
     assert valid_token.token == "failed-to-connect-to-db"
+
+
+@pytest.mark.asyncio
+async def test_auth_no_db_configured_rejects_non_master_key(monkeypatch: pytest.MonkeyPatch):
+    """Regression for #47119: with no database configured,
+    `allow_requests_on_db_unavailable` must not accept any API key.
+
+    There is no outage to ride out, so a non-master key is rejected (401)
+    instead of receiving the DB-unavailable fallback token.
+    """
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("DIRECT_URL", raising=False)
+
+    setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
+    setattr(litellm.proxy.proxy_server, "prisma_client", None)
+    setattr(
+        litellm.proxy.proxy_server,
+        "general_settings",
+        {"allow_requests_on_db_unavailable": True},
+    )
+
+    request = Request(scope={"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
+    request._url = URL(url="/chat/completions")
+
+    with pytest.raises(ProxyException) as exc_info:
+        await user_api_key_auth(request=request, api_key="Bearer sk-anything-1234")
+
+    assert str(exc_info.value.code) == "401"
+
+
+@pytest.mark.asyncio
+async def test_auth_no_db_configured_master_key_still_works(monkeypatch: pytest.MonkeyPatch):
+    """With no database configured, the master key still authenticates."""
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("DIRECT_URL", raising=False)
+
+    setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
+    setattr(litellm.proxy.proxy_server, "prisma_client", None)
+    setattr(
+        litellm.proxy.proxy_server,
+        "general_settings",
+        {"allow_requests_on_db_unavailable": True},
+    )
+
+    request = Request(scope={"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
+    request._url = URL(url="/chat/completions")
+
+    valid_token = await user_api_key_auth(request=request, api_key="Bearer " + MASTER_KEY)
+    assert valid_token is not None
+    assert valid_token.key_name != "failed-to-connect-to-db"
 
 
 def _assert_api_key_from_custom_header(headers, custom_header_name, expected_api_key):
