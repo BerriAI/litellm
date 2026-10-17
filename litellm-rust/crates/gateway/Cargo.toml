@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+switchyard = ["litellm-gateway-inference/switchyard"]
+
 [dependencies]
 axum.workspace = true
 envy = "0.4.2"
