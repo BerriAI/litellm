@@ -562,6 +562,7 @@ export interface DiscoverableMCPServer {
   category: string;
   registry_url?: string | null;
   transport: string;
+  auth_type?: "bearer_token" | null;
   url?: string | null;
   command?: string | null;
   args?: string[] | null;

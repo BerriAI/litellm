@@ -131,6 +131,34 @@ describe("MCPDiscovery", () => {
     expect(onSelectServer).toHaveBeenCalledWith(githubServer);
   });
 
+  it.each([
+    ["suno", "Suno by Ace Data Cloud"],
+    ["seedance", "Seedance by Ace Data Cloud"],
+    ["happy horse", "HappyHorse by Ace Data Cloud"],
+    ["gpt image", "GPT Image by Ace Data Cloud"],
+    ["nanobanana", "Nano Banana by Ace Data Cloud"],
+  ])("finds %s from the bundled catalog and selects its authenticated connection", async (query, title) => {
+    const testDirectory = dirname(fileURLToPath(import.meta.url));
+    const registry = JSON.parse(
+      readFileSync(resolve(testDirectory, "../../../../../../../litellm/proxy/mcp_registry.json"), "utf8"),
+    ) as { servers: DiscoverableMCPServer[] };
+    vi.mocked(fetchDiscoverableMCPServers).mockResolvedValue({
+      servers: registry.servers,
+      categories: [...new Set(registry.servers.map((server) => server.category))],
+    });
+    const onSelectServer = vi.fn();
+    renderWithProviders(<MCPDiscovery {...defaultProps} onSelectServer={onSelectServer} />);
+    await screen.findByText(title);
+
+    fireEvent.change(screen.getByPlaceholderText("Search servers..."), { target: { value: query } });
+    await userEvent.click(await screen.findByText(title));
+
+    const server = registry.servers.find((entry) => entry.title === title)!;
+    expect(onSelectServer).toHaveBeenCalledWith(server);
+    expect(server.auth_type).toBe("bearer_token");
+    expect(screen.queryByText("GitHub")).not.toBeInTheDocument();
+  });
+
   it("offers a custom-server escape hatch", async () => {
     const onCustomServer = vi.fn();
     render(<MCPDiscovery {...defaultProps} onCustomServer={onCustomServer} />);

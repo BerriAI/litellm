@@ -428,6 +428,66 @@
         {"name": "SUPABASE_URL", "description": "Supabase Project URL", "secret": false},
         {"name": "SUPABASE_SERVICE_ROLE_KEY", "description": "Supabase Service Role Key", "secret": true}
       ]
+    },
+    {
+      "name": "suno_acedatacloud",
+      "title": "Suno by Ace Data Cloud",
+      "description": "Generate Suno music, lyrics and covers through Ace Data Cloud. Retrieve the same task until final audio is ready. Requires your own Ace API token and service access.",
+      "icon_url": "https://raw.githubusercontent.com/AceDataCloud/MCPs/4a2abb23a6f19ea8460c4883dabb5ad378a428b7/suno/vscode/icon.png",
+      "category": "Media Generation",
+      "registry_url": "https://registry.modelcontextprotocol.io/servers/io.github.AceDataCloud%2Fmcp-suno",
+      "transport": "http",
+      "url": "https://suno.mcp.acedata.cloud/mcp",
+      "auth_type": "bearer_token",
+      "env_vars": []
+    },
+    {
+      "name": "seedance_acedatacloud",
+      "title": "Seedance by Ace Data Cloud",
+      "description": "Generate Seedance videos from text or images through Ace Data Cloud. Query the same task for terminal video results. Requires your own Ace API token and service access.",
+      "icon_url": "https://raw.githubusercontent.com/AceDataCloud/MCPs/4a2abb23a6f19ea8460c4883dabb5ad378a428b7/seedance/vscode/icon.png",
+      "category": "Media Generation",
+      "registry_url": "https://registry.modelcontextprotocol.io/servers/io.github.AceDataCloud%2Fmcp-seedance",
+      "transport": "http",
+      "url": "https://seedance.mcp.acedata.cloud/mcp",
+      "auth_type": "bearer_token",
+      "env_vars": []
+    },
+    {
+      "name": "happyhorse_acedatacloud",
+      "title": "HappyHorse by Ace Data Cloud",
+      "description": "Generate and edit Happy Horse videos through Ace Data Cloud. Query the same task for final video results. Requires your own Ace API token and service access.",
+      "icon_url": "https://cdn.acedata.cloud/e58fce2811.jpg",
+      "category": "Media Generation",
+      "registry_url": "https://registry.modelcontextprotocol.io/servers/io.github.AceDataCloud%2Fmcp-happyhorse",
+      "transport": "http",
+      "url": "https://happyhorse.mcp.acedata.cloud/mcp",
+      "auth_type": "bearer_token",
+      "env_vars": []
+    },
+    {
+      "name": "gpt_image_acedatacloud",
+      "title": "GPT Image by Ace Data Cloud",
+      "description": "Generate and edit GPT Image images through the Ace Data Cloud OpenAI MCP server, which also exposes chat, embeddings and audio tools. Requires your own Ace API token and service access.",
+      "icon_url": "https://raw.githubusercontent.com/AceDataCloud/MCPs/4a2abb23a6f19ea8460c4883dabb5ad378a428b7/openai/vscode/icon.png",
+      "category": "Media Generation",
+      "registry_url": "https://registry.modelcontextprotocol.io/servers/io.github.AceDataCloud%2Fmcp-openai",
+      "transport": "http",
+      "url": "https://openai.mcp.acedata.cloud/mcp",
+      "auth_type": "bearer_token",
+      "env_vars": []
+    },
+    {
+      "name": "nano_banana_acedatacloud",
+      "title": "Nano Banana by Ace Data Cloud",
+      "description": "Generate and edit NanoBanana images through Ace Data Cloud. Retrieve the same task for final images. Requires your own Ace API token and service access.",
+      "icon_url": "https://raw.githubusercontent.com/AceDataCloud/MCPs/4a2abb23a6f19ea8460c4883dabb5ad378a428b7/nanobanana/vscode/icon.png",
+      "category": "Media Generation",
+      "registry_url": "https://registry.modelcontextprotocol.io/servers/io.github.AceDataCloud%2Fmcp-nanobanana-pro",
+      "transport": "http",
+      "url": "https://nanobanana.mcp.acedata.cloud/mcp",
+      "auth_type": "bearer_token",
+      "env_vars": []
     }
   ]
 }

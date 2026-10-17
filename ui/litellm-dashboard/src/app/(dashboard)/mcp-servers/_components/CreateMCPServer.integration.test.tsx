@@ -1932,6 +1932,33 @@ describe("CreateMCPServer", () => {
   });
 
   describe("when prefillData is provided", () => {
+    it("opens the credential field for an authenticated discovery entry without supplying a token", async () => {
+      render(
+        <CreateMCPServer
+          {...defaultProps}
+          prefillData={{
+            name: "suno_acedatacloud",
+            title: "Suno by Ace Data Cloud",
+            description: "Music generation with your own API token",
+            category: "Media Generation",
+            transport: "http",
+            url: "https://suno.mcp.acedata.cloud/mcp",
+            auth_type: "bearer_token",
+          }}
+        />,
+      );
+
+      expect(await screen.findByText("Authentication Value")).toBeInTheDocument();
+      expect(screen.getByRole("combobox", { name: "Authentication", exact: true })).toHaveTextContent("Bearer Token");
+      expect(screen.getByPlaceholderText("https://your-mcp-server.com")).toHaveValue(
+        "https://suno.mcp.acedata.cloud/mcp",
+      );
+      expect(getServerNameInput()).toHaveValue("suno_acedatacloud");
+      expect(screen.getByPlaceholderText("Enter token or secret")).toHaveValue("");
+      expect(screen.getByPlaceholderText("Enter token or secret")).toHaveAttribute("type", "password");
+      expect(networking.createMCPServer).not.toHaveBeenCalled();
+    });
+
     it("should populate form fields from discovery data", async () => {
       const prefillData = {
         name: "github-mcp",
