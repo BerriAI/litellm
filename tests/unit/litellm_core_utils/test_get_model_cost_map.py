@@ -10,7 +10,9 @@ import sys
 import threading
 from typing import Final
 
+import boto3
 import pytest
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.litellm_core_utils.fallback_generalizations import (
     get_fallback_generalization_rules,
@@ -519,6 +521,47 @@ from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outco
 from unittest.mock import MagicMock, patch
 
 
+class _FakeS3Body:
+    def __init__(self, content: bytes) -> None:
+        self.content: Final = content
+
+    def read(self) -> bytes:
+        return self.content
+
+
+class _FakeS3GetObjectResponse(TypedDict):
+    Body: ReadOnly[_FakeS3Body]
+    ETag: NotRequired[ReadOnly[str]]
+
+
+class _FakeS3Client:
+    def __init__(self, content: bytes) -> None:
+        self.content: Final = content
+        self.calls: list[tuple[str, str]] = []
+
+    def get_object(self, *, Bucket: str, Key: str) -> _FakeS3GetObjectResponse:
+        self.calls.append((Bucket, Key))
+        return {"Body": _FakeS3Body(self.content), "ETag": '"fake-etag"'}
+
+
+def test_get_model_cost_map_fetches_s3_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.litellm_core_utils import get_model_cost_map as module
+
+    source_info = module._cost_map_source_info
+    for name in ("source", "url", "is_env_forced", "fallback_reason", "loaded_at", "source_revision", "etag"):
+        monkeypatch.setattr(source_info, name, getattr(source_info, name))
+
+    s3_content: Final = _make_models(GetModelCostMap.get_backup_model_count())
+    s3_client: Final = _FakeS3Client(json.dumps(s3_content).encode())
+    monkeypatch.setattr(boto3, "client", lambda *args, **kwargs: s3_client)
+
+    cost_map: Final = get_model_cost_map("s3://my-bucket/prices/model_prices.json")
+
+    assert cost_map == s3_content
+    assert s3_client.calls == [("my-bucket", "prices/model_prices.json")]
+    assert get_model_cost_map_source_info()["source"] == "remote"
+
+
 class _SyncSleepRecorder:
     """Injected in place of time.sleep so the boot path's waits are asserted without delay."""
 
@@ -954,6 +997,14 @@ class TestGetModelCostMapFallback:
         assert fetches == 1
         assert result.keys() == _backup_keys()
         assert source["source"] == "local"
+
+    def test_should_fallback_when_fetched_json_is_not_object(self, monkeypatch):
+        result, fetches, source = _fetch_with_single_outcome(monkeypatch, httpx.Response(200, content=b"[]"))
+
+        assert fetches == 1
+        assert result.keys() == _backup_keys()
+        assert source["source"] == "local"
+        assert source["fallback_reason"] == f"Remote fetch failed: expected a JSON object from {_URL}, got list"
 
     def test_should_fallback_when_fetched_map_shrinks_dramatically(self, monkeypatch):
         """When upstream returns far fewer models than backup, should fall back."""

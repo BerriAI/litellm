@@ -496,6 +496,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
         def __init__(self, /, **data: object) -> None: ...  # kwargs-ok: provider parameters vary by deployment
 
     custom_llm_provider: str | None = None
+    responses_api_version: str | None = None
     tpm: int | None = None
     rpm: int | None = None
     itpm: int | None = None
@@ -703,6 +704,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     api_key: str | None
     api_base: str | None
     api_version: str | None
+    responses_api_version: ReadOnly[str | None]
     timeout: float | str | httpx.Timeout | SDKTimeout | None  # writable-ok: preserve timeout updates
     stream_timeout: float | str | None
     max_retries: int | None
@@ -1084,6 +1086,8 @@ class RouterRateLimitErrorBasic(ValueError):
     Raise a basic error inside helper functions.
     """
 
+    status_code: Final = 429
+
     def __init__(
         self,
         model: str,
@@ -1099,6 +1103,8 @@ class RouterErrorTypes(str, enum.Enum):
 
 
 class RouterRateLimitError(ValueError):
+    status_code: Final = 429
+
     def __init__(
         self,
         model: str,
@@ -1396,8 +1402,9 @@ def reject_server_owned_wif_params(body: Mapping[str, object]) -> None:
     This lives here rather than under ``litellm.proxy`` so the router can call it on a
     post-authentication merge without core importing from the proxy package.
     """
+    submitted_names: Final = frozenset(key.removesuffix("[]") for key in body)
     for param in _server_owned_wif_litellm_params:
-        if param in body:
+        if param in submitted_names:
             raise ValueError(
                 f"Rejected Request: {param} is a server-owned workload identity federation or OAuth token exchange "
                 "parameter "
