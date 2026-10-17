@@ -4,8 +4,9 @@ Utils used for litellm.transcription() and litellm.atranscription()
 
 import hashlib
 import os
+from collections.abc import Sized
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, Protocol
 
 from litellm.types.files import (
     AUDIO_FILE_TYPES,
@@ -15,6 +16,40 @@ from litellm.types.files import (
     get_file_mime_type_from_extension,
 )
 from litellm.types.utils import FileTypes
+
+# libsndfile uses SF_COUNT_MAX (2**63 - 1) for "unknown length"; no real upload gets near 2**62 frames
+_MAX_PLAUSIBLE_AUDIO_FRAMES: Final = 2**62
+_DECODE_BLOCK_FRAMES: Final = 1 << 16
+
+
+class _ReadableAudio(Protocol):
+    def read(self, frames: int, dtype: str) -> Sized: ...
+
+    def close(self) -> None: ...
+
+
+def _open_forward_only(file_content: bytes) -> _ReadableAudio:
+    import io
+
+    import soundfile as sf
+
+    class _ForwardOnlySoundFile(sf.SoundFile):  # pyright: ignore[reportUntypedBaseClass, reportUnknownMemberType]  # soundfile ships no type stubs
+        # soundfile sizes seekable reads from tell(), which libsndfile can't answer for an
+        # unknown-length stream, so read it front to back instead
+        def seekable(self) -> bool:
+            return False
+
+    return _ForwardOnlySoundFile(io.BytesIO(file_content))
+
+
+def _decoded_frame_count(file_content: bytes) -> int:
+    """Count frames by decoding, for audio whose header carries no length"""
+    audio: Final = _open_forward_only(file_content)
+    try:
+        # iter() stops at the first empty block, i.e. the end of the stream
+        return sum(iter(lambda: len(audio.read(_DECODE_BLOCK_FRAMES, "int16")), 0))
+    finally:
+        audio.close()
 
 
 @dataclass
@@ -323,12 +358,20 @@ def calculate_request_duration(file: FileTypes) -> float | None:
         # Extract duration using soundfile
         file_object: Final = io.BytesIO(file_content)
         with sf.SoundFile(file_object) as audio:
-            duration: Final = len(audio) / audio.samplerate
-            return duration
+            reported_frames: Final[int] = len(audio)
+            samplerate: Final[int] = audio.samplerate
+            # libsndfile reports an unknown length (e.g. a FLAC with no sample count
+            # in STREAMINFO) as SF_COUNT_MAX, which would bill as ~2^63 frames, so
+            # count the real frames by decoding instead of trusting the header
+            frames: Final = (
+                reported_frames if reported_frames < _MAX_PLAUSIBLE_AUDIO_FRAMES else _decoded_frame_count(file_content)
+            )
 
     except Exception:
         # Silently fail if duration extraction fails
         return None
+
+    return frames / samplerate
 
 
 DEFAULT_SPEECH_MEDIA_TYPE: Final = "audio/mpeg"
