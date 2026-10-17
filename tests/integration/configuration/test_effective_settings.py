@@ -1547,6 +1547,8 @@ def test_an_sso_client_removed_from_db_environment_variables_stops_sign_in_on_ev
             "GOOGLE_CLIENT_ID",
             "GOOGLE_CLIENT_SECRET",
             "MICROSOFT_CLIENT_ID",
+            "MICROSOFT_CLIENT_SECRET",
+            "MICROSOFT_TENANT",
             "PROXY_BASE_URL",
         )
         with (
@@ -1565,7 +1567,12 @@ def test_an_sso_client_removed_from_db_environment_variables_stops_sign_in_on_ev
                 response: Final = first.request(
                     "POST",
                     "/config/update",
-                    {"environment_variables": {"GOOGLE_CLIENT_ID": client_id, "GOOGLE_CLIENT_SECRET": secret}},
+                    {
+                        "environment_variables": {
+                            "MICROSOFT_CLIENT_ID": client_id,
+                            "MICROSOFT_CLIENT_SECRET": secret,
+                        }
+                    },
                 )
                 assert response.status_code == 200, response.text
 
@@ -1582,7 +1589,7 @@ def test_an_sso_client_removed_from_db_environment_variables_stops_sign_in_on_ev
             moved: Final = first.request(
                 "PATCH",
                 "/update/sso_settings",
-                {"google_client_id": sso_table_client, "google_client_secret": "sso-table-secret"},
+                {"microsoft_client_id": sso_table_client, "microsoft_client_secret": "sso-table-secret"},
             )
             assert moved.status_code == 200, moved.text
             eventually(sign_in_clients, lambda clients: clients == (sso_table_client,) * 2, seconds=30)
