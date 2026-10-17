@@ -147,9 +147,7 @@ def separate_cached_messages(
         prefix_messages: Final = messages[:first_cached_idx]
         suffix_messages: Final = messages[last_cached_idx + 1 :]
 
-        if any(m.get("role") != "system" for m in prefix_messages) or any(
-            m.get("role") == "system" for m in suffix_messages
-        ):
+        if any(m["role"] != "system" for m in prefix_messages) or any(m["role"] == "system" for m in suffix_messages):
             # Not a true prefix: send the conversation uncached so nothing is
             # reordered and no system message is silently dropped.
             return [], list(messages)
