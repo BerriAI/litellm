@@ -19,6 +19,7 @@ NONNEG_NUMBER: JsonSchema = {"type": "number", "minimum": 0}
 NONNEG_INTEGER: JsonSchema = {"type": "integer", "minimum": 0}
 BOOLEAN: JsonSchema = {"type": "boolean"}
 STRING: JsonSchema = {"type": "string"}
+NON_BLANK_STRING: Final[JsonSchema] = {"type": "string", "pattern": r"\S"}
 TIME_WINDOW: Final[JsonSchema] = {"type": "string", "pattern": r"^([01]\d|2[0-3]):[0-5]\d-([01]\d|2[0-3]):[0-5]\d$"}
 WEEKDAY_PATTERN: Final = (
     r"(?i)^(mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday|sun|sunday)$"
@@ -108,8 +109,8 @@ OBJECT_KEYS: dict[str, JsonSchema] = {
         "required": ["model"],
         "additionalProperties": False,
         "properties": {
-            "model": {"type": "string", "minLength": 1},
-            "region": {"type": "string", "minLength": 1},
+            "model": NON_BLANK_STRING,
+            "region": NON_BLANK_STRING,
         },
         "description": "Model that counts tokens for this one, and the AWS region its count API runs in.",
     },
