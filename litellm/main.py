@@ -78,6 +78,7 @@ from litellm.litellm_core_utils.chat_completion_agentic_loop import (
     maybe_run_chat_completion_agentic_loop,
 )
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_litellm_params import (
     AWS_CREDENTIAL_KWARGS_KEYS,
@@ -162,6 +163,7 @@ from litellm.utils import (
     TextCompletionStreamWrapper,
     TranscriptionResponse,
     Usage,
+    add_openai_metadata,
     add_provider_specific_params_to_optional_params,
     async_mock_completion_streaming_obj,
     convert_to_model_response_object,
@@ -5642,6 +5644,11 @@ def completion(
             if bridges_to_responses_api
             else kwargs.get("allowed_openai_params")
         )
+        metadata_mapping: Final = as_str_mapping(metadata)
+        requester_metadata: Final = (
+            as_str_mapping(metadata_mapping.get("requester_metadata")) if metadata_mapping is not None else None
+        )
+        caller_metadata: Final = add_openai_metadata(requester_metadata)
         optional_param_args: Final = {
             "functions": functions,
             "function_call": function_call,
@@ -5688,6 +5695,7 @@ def completion(
             "prompt_cache_key": prompt_cache_key,
             "allowed_openai_params": allowed_openai_params,
             "base_model": base_model,
+            **({"metadata": caller_metadata} if custom_llm_provider == "sail" else {}),
         }
         provider_reasoning_effort: Final = reasoning_effort_with_summary_alias(
             reasoning_effort,

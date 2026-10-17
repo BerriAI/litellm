@@ -2269,20 +2269,6 @@ class BaseLLMHTTPHandler:
             if explicit_vertex_location
             else MappingProxyType({})
         )
-        logging_obj.update_from_kwargs(
-            kwargs=kwargs,
-            model=model,
-            optional_params=dict(anthropic_messages_optional_request_params),
-            litellm_params={
-                "preset_cache_key": None,
-                "stream_response": {},
-                "model_info": kwargs.get("model_info"),
-                **vertex_location_params,
-                **anthropic_messages_optional_request_params,
-            },
-            custom_llm_provider=custom_llm_provider,
-        )
-
         additional_drop_params: Final[list[str]] = litellm_params.get("additional_drop_params") or []
         if additional_drop_params:
             from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value
@@ -2299,6 +2285,19 @@ class BaseLLMHTTPHandler:
             anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
             litellm_params=litellm_params,
             headers=headers,
+        )
+        logging_obj.update_from_kwargs(
+            kwargs=kwargs,
+            model=model,
+            optional_params=dict(anthropic_messages_optional_request_params),
+            litellm_params={
+                "preset_cache_key": None,
+                "stream_response": {},
+                "model_info": kwargs.get("model_info"),
+                **vertex_location_params,
+                **anthropic_messages_optional_request_params,
+            },
+            custom_llm_provider=custom_llm_provider,
         )
         logging_obj.stream = stream
         logging_obj.model_call_details.update(request_body)
