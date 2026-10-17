@@ -1,6 +1,7 @@
 """Support for OpenAI gpt-5 model family."""
 
 import re
+from collections.abc import Collection
 from typing import Final
 
 import litellm
@@ -270,6 +271,8 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         optional_params: dict,
         model: str,
         drop_params: bool,
+        *,
+        declared_reasoning_efforts: Collection[str] = (),
     ) -> dict:
         if self.is_model_gpt_5_search_model(model):
             if "max_tokens" in non_default_params:
@@ -300,7 +303,9 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
 
         if effective_effort == "xhigh":
             # xhigh is an opt-in capability: only allow if model explicitly supports it.
-            if not self._supports_reasoning_effort_level(model, effective_effort):
+            if effective_effort not in declared_reasoning_efforts and not self._supports_reasoning_effort_level(
+                model, effective_effort
+            ):
                 if litellm.drop_params or drop_params:
                     non_default_params.pop("reasoning_effort", None)
                     optional_params.pop("reasoning_effort", None)
@@ -314,7 +319,10 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
             # the model map explicitly sets supports_{level}_reasoning_effort=false.
             # Example: gpt-5.5-pro only accepts {medium, high, xhigh}, so it sets
             # supports_low_reasoning_effort=false (and supports_minimal=false).
-            if self._is_reasoning_effort_level_explicitly_disabled(model, effective_effort):
+            if (
+                effective_effort not in declared_reasoning_efforts
+                and self._is_reasoning_effort_level_explicitly_disabled(model, effective_effort)
+            ):
                 if litellm.drop_params or drop_params:
                     non_default_params.pop("reasoning_effort", None)
                     optional_params.pop("reasoning_effort", None)

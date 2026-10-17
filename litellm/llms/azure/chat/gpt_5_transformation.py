@@ -1,5 +1,6 @@
 """Support for Azure OpenAI gpt-5 model family."""
 
+from collections.abc import Collection
 from typing import Final
 
 import litellm
@@ -74,13 +75,17 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         model: str,
         drop_params: bool,
         api_version: str = "",
+        *,
+        declared_reasoning_efforts: Collection[str] = (),
     ) -> dict:
         reasoning_effort_value = non_default_params.get("reasoning_effort") or optional_params.get("reasoning_effort")
         effective_effort: Final = get_effort_level(reasoning_effort_value)
 
         # gpt-5.1/5.2/5.4 support reasoning_effort='none', but other gpt-5 models don't
         # See: https://learn.microsoft.com/en-us/azure/ai-foundry/openai/how-to/reasoning
-        supports_none: Final = self._supports_reasoning_effort_level(model, "none")
+        supports_none: Final = "none" in declared_reasoning_efforts or self._supports_reasoning_effort_level(
+            model, "none"
+        )
 
         if effective_effort == "none" and not supports_none:
             if litellm.drop_params is True or (drop_params is not None and drop_params is True):
@@ -107,6 +112,7 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
             optional_params=optional_params,
             model=model,
             drop_params=drop_params,
+            declared_reasoning_efforts=declared_reasoning_efforts,
         )
 
         # Only drop reasoning_effort='none' for models that don't support it

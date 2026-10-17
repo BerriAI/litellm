@@ -1033,7 +1033,7 @@ openai_compatible_endpoints: Final[list[str]] = [
 ]
 
 
-openai_compatible_providers: Final[list] = [
+openai_compatible_providers: Final[list[str]] = [
     "anyscale",
     "groq",
     "nvidia_nim",

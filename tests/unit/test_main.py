@@ -9276,6 +9276,70 @@ def test_drop_params_drops_a_level_the_deployment_does_not_declare(respx_mock: r
     assert _chat_body_sent(respx_mock, model, "turbo", without_none)["reasoning_effort"] == "turbo"
 
 
+_GPT_5_GATEWAY: Final = "https://gpt5-gateway.example.test/v1"
+_AZURE_GPT_5_BASE: Final = "https://gpt5.openai.azure.com"
+
+
+def _gpt_5_chat_body_sent(
+    respx_mock: respx.MockRouter, model: str, reasoning_effort: str, model_info: Mapping[str, object]
+) -> Mapping[str, object]:
+    route: Final = respx_mock.post(url__regex=r"https://gpt5[^/]*/.*chat/completions.*").mock(
+        return_value=_mocked_openai_chat_response(model)
+    )
+    completion(
+        model=model,
+        api_base=_AZURE_GPT_5_BASE if model.startswith("azure/") else _GPT_5_GATEWAY,
+        api_version="2025-04-01-preview",
+        api_key="fake-key",
+        messages=_HELLO,
+        reasoning_effort=reasoning_effort,
+        model_info=model_info,
+    )
+    return json.loads(route.calls.last.request.content) if route.called else {}
+
+
+def _openai_gpt_5_entry_disabling(level: str) -> str:
+    return next(
+        model
+        for model, entry in litellm.model_cost.items()
+        if entry.get("litellm_provider") == "openai" and entry.get(f"supports_{level}_reasoning_effort") is False
+    )
+
+
+@pytest.mark.parametrize(
+    "model, requested, declared, expected",
+    [
+        ("openai/gpt-5-in-house", "high", ["low", "xhigh"], "xhigh"),
+        ("openai/gpt-5-in-house", "xhigh", ["xhigh"], "xhigh"),
+        ("azure/gpt-5-in-house", "none", ["none", "high"], "none"),
+    ],
+)
+def test_a_gpt_5_deployment_receives_a_level_it_declares_that_the_model_map_does_not_list(
+    respx_mock: respx.MockRouter, model: str, requested: str, declared: list[str], expected: str
+) -> None:
+    with pytest.raises(litellm.exceptions.UnsupportedParamsError):
+        _gpt_5_chat_body_sent(respx_mock, model, expected, {"id": "gpt-5-in-house-1"})
+
+    sent: Final = _gpt_5_chat_body_sent(respx_mock, model, requested, {"reasoning_effort_levels": declared})
+
+    assert sent["reasoning_effort"] == expected
+
+
+def test_a_gpt_5_deployment_receives_a_declared_level_the_model_map_disables(
+    local_model_cost_map: None, respx_mock: respx.MockRouter
+) -> None:
+    model: Final = f"openai/{_openai_gpt_5_entry_disabling('low')}"
+    responses: Final = respx_mock.post(f"{_GPT_5_GATEWAY}/responses").mock(
+        return_value=httpx.Response(200, json=_FOUNDRY_RESPONSES_FUNCTION_CALL_BODY)
+    )
+
+    with pytest.raises(litellm.exceptions.UnsupportedParamsError):
+        _gpt_5_chat_body_sent(respx_mock, model, "low", {"id": "gpt-5-pro-1"})
+    _gpt_5_chat_body_sent(respx_mock, model, "low", {"reasoning_effort_levels": ["low", "high"]})
+
+    assert json.loads(responses.calls.last.request.content)["reasoning"]["effort"] == "low"
+
+
 @pytest.mark.asyncio
 async def test_aspeech_routes_a_bare_model_name_to_its_explicit_provider(respx_mock: respx.MockRouter) -> None:
     api_base: Final = "http://localhost:12351/v1"

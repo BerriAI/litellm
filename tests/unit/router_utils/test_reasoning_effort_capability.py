@@ -469,15 +469,15 @@ class TestNearestDeclaredReasoningEffort:
         assert nearest_declared_reasoning_effort("turbo", ("none", "high")) == "turbo"
         assert nearest_declared_reasoning_effort("medium", ()) == "medium"
 
-    def test_rounding_down_takes_the_strongest_declared_level_at_most_as_strong(self):
+    def test_rounding_down_takes_the_strongest_declared_level_at_most_as_strong(self) -> None:
         assert nearest_declared_reasoning_effort("medium", ("low", "high", "max"), "down") == "low"
         assert nearest_declared_reasoning_effort("xhigh", ("low", "high", "max"), "down") == "high"
         assert nearest_declared_reasoning_effort("high", ("low", "high", "max"), "down") == "high"
 
-    def test_rounding_down_below_the_floor_takes_the_weakest_declared_one(self):
+    def test_rounding_down_below_the_floor_takes_the_weakest_declared_one(self) -> None:
         assert nearest_declared_reasoning_effort("minimal", ("none", "low", "high"), "down") == "low"
 
-    def test_rounding_down_leaves_none_and_unknown_levels_alone(self):
+    def test_rounding_down_leaves_none_and_unknown_levels_alone(self) -> None:
         assert nearest_declared_reasoning_effort("none", ("low", "high"), "down") == "none"
         assert nearest_declared_reasoning_effort("turbo", ("low", "high"), "down") == "turbo"
 
@@ -530,16 +530,18 @@ class TestResolveDeploymentReasoningEffort:
             ({"effort": "default"}, None),
         ],
     )
-    def test_a_declaring_deployment_receives_a_level_it_declared(self, requested, expected):
+    def test_a_declaring_deployment_receives_a_level_it_declared(
+        self, requested: RequestedReasoningEffort, expected: RequestedReasoningEffort
+    ) -> None:
         assert _sent(requested) == expected
 
-    def test_a_deployment_that_declares_nothing_gets_the_request_untouched(self, local_model_cost_map):
+    def test_a_deployment_that_declares_nothing_gets_the_request_untouched(self, local_model_cost_map: None) -> None:
         requested: Final = {"effort": "minimal", "summary": "auto"}
 
         assert _sent(requested, {"id": "deployment-1"}) == requested
         assert _sent("default", None) == "default"
 
-    def test_the_deployment_rounding_wins_over_the_global(self, monkeypatch):
+    def test_the_deployment_rounding_wins_over_the_global(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(litellm, "reasoning_effort_rounding", "up")
         assert _sent("medium", {**KIMI_DEPLOYMENT, "reasoning_effort_rounding": "down"}) == "low"
 
@@ -548,19 +550,25 @@ class TestResolveDeploymentReasoningEffort:
         assert _sent("medium") == "low"
 
     @pytest.mark.parametrize("spelling", ["DOWN", " Down "])
-    def test_the_rounding_setting_ignores_case_and_surrounding_spaces(self, monkeypatch, spelling):
+    def test_the_rounding_setting_ignores_case_and_surrounding_spaces(
+        self, monkeypatch: pytest.MonkeyPatch, spelling: str
+    ) -> None:
         monkeypatch.setattr(litellm, "reasoning_effort_rounding", "up")
         assert _sent("medium", {**KIMI_DEPLOYMENT, "reasoning_effort_rounding": spelling}) == "low"
 
     @pytest.mark.parametrize("invalid", ["sideways", 1, None])
-    def test_an_invalid_rounding_falls_back_to_the_next_setting(self, monkeypatch, invalid):
+    def test_an_invalid_rounding_falls_back_to_the_next_setting(
+        self, monkeypatch: pytest.MonkeyPatch, invalid: str | int | None
+    ) -> None:
         monkeypatch.setattr(litellm, "reasoning_effort_rounding", "down")
         assert _sent("medium", {**KIMI_DEPLOYMENT, "reasoning_effort_rounding": invalid}) == "low"
 
         monkeypatch.setattr(litellm, "reasoning_effort_rounding", invalid)
         assert _sent("medium", {**KIMI_DEPLOYMENT, "reasoning_effort_rounding": invalid}) == "high"
 
-    def test_a_misspelled_rounding_is_reported_rather_than_silently_rounding_up(self, monkeypatch, caplog):
+    def test_a_misspelled_rounding_is_reported_rather_than_silently_rounding_up(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
         verbose_logger.addHandler(caplog.handler)
         verbose_logger.propagate = False
         verbose_logger.setLevel(logging.INFO)
@@ -572,14 +580,16 @@ class TestResolveDeploymentReasoningEffort:
             "Ignoring reasoning_effort_rounding=donwforged, expected 'up' or 'down'"
         ]
 
-    def test_only_the_deployment_declaration_rounds_never_the_model_map(self, local_model_cost_map):
+    def test_only_the_deployment_declaration_rounds_never_the_model_map(self, local_model_cost_map: None) -> None:
         assert _sent("xhigh", None, model="kimi-k3", provider="fireworks_ai") == "xhigh"
         assert _sent("xhigh", {"id": "kimi-1"}, model="kimi-k3", provider="fireworks_ai") == "xhigh"
         assert _sent("xhigh", {"reasoning_effort_levels": ["medium"]}, model="kimi-k3", provider="fireworks_ai") == (
             "medium"
         )
 
-    def test_a_model_info_echoing_a_map_key_rounds_nothing_the_deployment_did_not_declare(self, local_model_cost_map):
+    def test_a_model_info_echoing_a_map_key_rounds_nothing_the_deployment_did_not_declare(
+        self, local_model_cost_map: None
+    ) -> None:
         provider, model = _bare_map_model_declaring_fewer_levels()
         echoed: Final = {"key": f"{provider}/{model}", "litellm_provider": provider}
 
@@ -596,14 +606,16 @@ class TestResolveDeploymentReasoningEffort:
             ("medium", "high"),
         ],
     )
-    def test_drop_params_drops_a_level_the_deployment_does_not_declare(self, requested, expected):
+    def test_drop_params_drops_a_level_the_deployment_does_not_declare(
+        self, requested: RequestedReasoningEffort, expected: RequestedReasoningEffort
+    ) -> None:
         assert _sent(requested, drop_params=True) == expected
 
-    def test_drop_params_drops_none_only_where_the_deployment_leaves_it_out(self):
+    def test_drop_params_drops_none_only_where_the_deployment_leaves_it_out(self) -> None:
         assert _sent("none", {"reasoning_effort_levels": ["low", "high"]}, drop_params=True) is None
         assert _sent("none", {"reasoning_effort_levels": ["low", "high"]}) == "none"
 
-    def test_a_dropped_unrecognized_level_is_not_written_to_the_log(self, caplog):
+    def test_a_dropped_unrecognized_level_is_not_written_to_the_log(self, caplog: pytest.LogCaptureFixture) -> None:
         verbose_logger.addHandler(caplog.handler)
         verbose_logger.propagate = False
         verbose_logger.setLevel(logging.INFO)
@@ -615,7 +627,7 @@ class TestResolveDeploymentReasoningEffort:
             "model group kimi-k3, model hosted_vllm/my-kimi"
         ]
 
-    def test_line_breaks_in_logged_names_cannot_forge_a_log_line(self, caplog):
+    def test_line_breaks_in_logged_names_cannot_forge_a_log_line(self, caplog: pytest.LogCaptureFixture) -> None:
         verbose_logger.addHandler(caplog.handler)
         verbose_logger.propagate = False
         verbose_logger.setLevel(logging.INFO)
@@ -632,7 +644,9 @@ class TestResolveDeploymentReasoningEffort:
             "model group kimi-k3forged group, model hosted_vllm/my-kimiforged model"
         ]
 
-    def test_a_remap_logs_one_record_naming_the_deployment_and_both_levels(self, caplog):
+    def test_a_remap_logs_one_record_naming_the_deployment_and_both_levels(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         verbose_logger.addHandler(caplog.handler)
         verbose_logger.propagate = False
         verbose_logger.setLevel(logging.INFO)
@@ -690,7 +704,9 @@ class TestThinkingBudgetEffort:
             ("claude-sonnet-4-6", "anthropic", None),
         ],
     )
-    def test_only_a_provider_that_would_send_an_effort_gets_one(self, model, custom_llm_provider, expected):
+    def test_only_a_provider_that_would_send_an_effort_gets_one(
+        self, model: str, custom_llm_provider: str, expected: str | None
+    ) -> None:
         thinking: Final = {"type": "enabled", "budget_tokens": 2048}
 
         assert thinking_budget_effort(thinking, model=model, custom_llm_provider=custom_llm_provider, drop_params=False) == (
