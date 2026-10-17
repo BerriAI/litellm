@@ -7,10 +7,17 @@ def get_formatted_prompt(
         "acompletion",
         "completion",
         "embedding",
+        "aembedding",
+        "embeddings",
         "image_generation",
+        "aimage_generation",
         "audio_transcription",
+        "transcription",
+        "atranscription",
         "moderation",
+        "amoderation",
         "text_completion",
+        "atext_completion",
     ],
 ) -> str:
     """
@@ -19,32 +26,38 @@ def get_formatted_prompt(
     Returns a string.
     """
     prompt = ""
-    if call_type == "acompletion" or call_type == "completion":
-        for message in data["messages"]:
+    if call_type in ("acompletion", "completion"):
+        for message in data.get("messages", []):
             if message.get("content", None) is not None:
                 content = message.get("content")
                 if isinstance(content, str):
                     prompt += message["content"]
                 elif isinstance(content, list):
                     for c in content:
-                        if c["type"] == "text":
-                            prompt += c["text"]
+                        if isinstance(c, dict) and c.get("type") == "text":
+                            prompt += c.get("text", "")
             if "tool_calls" in message:
                 for tool_call in message["tool_calls"] or ():
                     if "function" in tool_call:
                         function_arguments = tool_call["function"]["arguments"]
                         prompt += function_arguments
-    elif call_type == "text_completion":
-        prompt = data["prompt"]
-    elif call_type == "embedding" or call_type == "moderation":
-        if isinstance(data["input"], str):
+    elif call_type in ("text_completion", "atext_completion"):
+        prompt = data.get("prompt", "")
+    elif call_type in (
+        "embedding",
+        "aembedding",
+        "embeddings",
+        "moderation",
+        "amoderation",
+    ):
+        if isinstance(data.get("input"), str):
             prompt = data["input"]
-        elif isinstance(data["input"], list):
+        elif isinstance(data.get("input"), list):
             for m in data["input"]:
-                prompt += m
-    elif call_type == "image_generation":
-        prompt = data["prompt"]
-    elif call_type == "audio_transcription":
+                prompt += str(m)
+    elif call_type in ("image_generation", "aimage_generation"):
+        prompt = data.get("prompt", "")
+    elif call_type in ("audio_transcription", "transcription", "atranscription"):
         if "prompt" in data:
             prompt = data["prompt"]
     return prompt
