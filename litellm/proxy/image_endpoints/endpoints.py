@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime
 import io
 from collections.abc import Sequence
 from itertools import chain
@@ -131,6 +132,16 @@ async def image_generation(
         # get the actual model name
         if data["model"] in litellm.model_alias_map:
             data["model"] = litellm.model_alias_map[data["model"]]
+
+        ### LOGGING OBJECT SETUP ### - ensures router rejected requests are dispatched to failure callbacks
+        start_time: Final = datetime.now()
+        logging_obj, data = litellm.utils.function_setup(
+            original_function="aimage_generation",
+            rules_obj=litellm.utils.Rules(),
+            start_time=start_time,
+            **data,
+        )
+        data["litellm_logging_obj"] = logging_obj
 
         ### CALL HOOKS ### - modify incoming data / reject request before calling the model
         prompt_value: Final = data.get("prompt")
