@@ -369,16 +369,16 @@ class TestProxyInitializationHelpers:
         assert config_file.resolve() in yielded_paths
 
     def test_dev_env_hot_reload_enabled_reads_flag(self, monkeypatch):
-        import litellm
+        from litellm._process_defaults import _dev_env_hot_reload_enabled
 
         monkeypatch.setenv("LITELLM_DEV_ENV_HOT_RELOAD", "True")
-        assert litellm._dev_env_hot_reload_enabled() is True
+        assert _dev_env_hot_reload_enabled() is True
 
         monkeypatch.setenv("LITELLM_DEV_ENV_HOT_RELOAD", "false")
-        assert litellm._dev_env_hot_reload_enabled() is False
+        assert _dev_env_hot_reload_enabled() is False
 
         monkeypatch.delenv("LITELLM_DEV_ENV_HOT_RELOAD", raising=False)
-        assert litellm._dev_env_hot_reload_enabled() is False
+        assert _dev_env_hot_reload_enabled() is False
 
     @patch("asyncio.run")
     @patch("builtins.print")
