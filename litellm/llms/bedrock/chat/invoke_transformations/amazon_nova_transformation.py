@@ -92,8 +92,11 @@ class AmazonInvokeNovaConfig(AmazonInvokeConfig, AmazonConverseConfig):
         optional_params: dict,
         model: str,
         drop_params: bool,
+        model_info: Mapping[str, object] | None = None,
     ) -> dict:
-        return AmazonConverseConfig.map_openai_params(self, non_default_params, optional_params, model, drop_params)
+        return AmazonConverseConfig.map_openai_params(
+            self, non_default_params, optional_params, model, drop_params, model_info
+        )
 
     def transform_request(
         self,
