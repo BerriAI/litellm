@@ -4926,8 +4926,7 @@ class PrismaClient:
 
     def hash_token(self, token: str):
         # Hash the string using SHA-256 (deterministic, used only for DB key lookup / indexing — not password hashing)
-        # codeql[py/weak-sensitive-data-hashing]=off  # token is an API key identifier, hash is used for deterministic DB lookup
-        hashed_token: Final = hashlib.sha256(token.encode(), usedforsecurity=False).hexdigest()
+        hashed_token: Final = hashlib.sha256(token.encode(), usedforsecurity=False).hexdigest()  # codeql[py/weak-sensitive-data-hashing]=off
 
         return hashed_token
 
@@ -7443,8 +7442,7 @@ def hash_token(token: str):
     import hashlib
 
     # Hash the string using SHA-256 (deterministic, used only for DB key lookup / indexing — not password hashing)
-    # codeql[py/weak-sensitive-data-hashing]=off  # token is an API key identifier, hash is used for deterministic DB lookup
-    hashed_token: Final = hashlib.sha256(token.encode(), usedforsecurity=False).hexdigest()
+    hashed_token: Final = hashlib.sha256(token.encode(), usedforsecurity=False).hexdigest()  # codeql[py/weak-sensitive-data-hashing]=off
 
     return hashed_token
 
