@@ -10,10 +10,11 @@ from litellm.proxy.client.chat import ChatClient
 from litellm.proxy.client.cli.commands.chat import _stream_response
 
 BASE_URL: Final = "http://localhost:8000"
+MESSAGE: Final = "blocked [/pii] :warning: content in [prompt_injection] after 42 tokens"
 PARTIAL_THEN_ERROR: Final = (
     b'data: {"choices": [{"delta": {"content": "Hel"}}]}\n\n'
-    b'data: {"error": {"message": "blocked [/pii] content in [prompt_injection]"}}\n\n'
-    b"data: [DONE]\n\n"
+    + f'data: {{"error": {{"message": "{MESSAGE}"}}}}\n\n'.encode()
+    + b"data: [DONE]\n\n"
 )
 
 
@@ -21,8 +22,9 @@ PARTIAL_THEN_ERROR: Final = (
     "status, body, json_body",
     [
         (200, PARTIAL_THEN_ERROR, None),
-        (400, None, {"error": {"message": "blocked [/pii] content in [prompt_injection]"}}),
+        (400, None, {"error": {"message": MESSAGE}}),
     ],
+    ids=["error frame mid-stream", "json error before the stream"],
 )
 @responses.activate
 def test_stream_response_prints_the_error_message_as_plain_text(
@@ -32,7 +34,7 @@ def test_stream_response_prints_the_error_message_as_plain_text(
     output: Final = io.StringIO()
 
     content: Final = _stream_response(
-        Console(file=output, width=200),
+        Console(file=output, width=200, force_terminal=True, color_system="truecolor"),
         ChatClient(base_url=BASE_URL),
         "gpt-4",
         [{"role": "user", "content": "hi"}],
@@ -41,4 +43,4 @@ def test_stream_response_prints_the_error_message_as_plain_text(
     )
 
     assert content is None
-    assert "blocked [/pii] content in [prompt_injection]" in output.getvalue()
+    assert MESSAGE in output.getvalue()

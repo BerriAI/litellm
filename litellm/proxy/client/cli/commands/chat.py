@@ -410,11 +410,15 @@ def _stream_response(
         try:
             error_body: Final[_ErrorBodyView] = {"body": e.response.json()}
             console.print(
-                error_body["body"].get("error", {}).get("message", "Unknown error"), style="red", markup=False
+                error_body["body"].get("error", {}).get("message", "Unknown error"),
+                style="red",
+                markup=False,
+                highlight=False,
+                emoji=False,
             )
         except json.JSONDecodeError:
-            console.print(e.response.text, style="red", markup=False)
+            console.print(e.response.text, style="red", markup=False, highlight=False, emoji=False)
         return None
     except Exception as e:
-        console.print(f"\nError: {e}", style="red", markup=False)
+        console.print(f"\nError: {e}", style="red", markup=False, highlight=False, emoji=False)
         return None
