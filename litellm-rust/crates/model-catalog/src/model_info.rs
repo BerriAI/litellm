@@ -283,13 +283,25 @@ pub struct ModelInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub litellm_provider: Option<String>,
     /// Maximum prompt/context tokens the model accepts.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "whole_number",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub max_input_tokens: Option<u64>,
     /// Maximum tokens the model can generate in one response.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "whole_number",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub max_output_tokens: Option<u64>,
     /// Legacy field: max output tokens if the provider specifies it, else max input tokens.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "whole_number",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub max_tokens: Option<u64>,
     /// Free-form notes about the entry (e.g. pricing derivation).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -426,10 +438,18 @@ pub struct ModelInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_dbu_cost_per_token: Option<f64>,
     /// Embedding dimension for embedding models.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "whole_number",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub output_vector_size: Option<u64>,
     /// Smallest prefix the provider will actually cache; absent means the provider default applies.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "whole_number",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub prompt_cache_min_tokens: Option<u64>,
     /// Provider-internal routing hints (e.g. bedrock_invocation_schema).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -447,7 +467,11 @@ pub struct ModelInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub regional_processing_uplift_multiplier_us: Option<f64>,
     /// Provider default requests-per-minute limit.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "whole_number",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub rpm: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rules: Option<Vec<Value>>,
@@ -566,7 +590,11 @@ pub struct ModelInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tiered_pricing: Option<Vec<TieredRate>>,
     /// Provider default tokens-per-minute limit.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "whole_number",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub tpm: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub use_openai_responses_path: Option<bool>,
@@ -579,4 +607,43 @@ pub struct ModelInfo {
     /// Whether web search is billed per query or per prompt.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub web_search_billing_unit: Option<WebSearchBillingUnit>,
+}
+
+/// A count the map may write as a whole float (`4096.0`), as Python reads any JSON number.
+fn whole_number<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let Some(number) = Option::<serde_json::Number>::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+    if let Some(count) = number.as_u64() {
+        return Ok(Some(count));
+    }
+    match number.as_f64() {
+        Some(value) if value >= 0.0 && value.fract() == 0.0 && value <= u64::MAX as f64 => {
+            Ok(Some(value as u64))
+        }
+        _ => Err(serde::de::Error::custom(format!(
+            "expected a whole non-negative number, got {number}"
+        ))),
+    }
+}
+
+#[cfg(test)]
+mod whole_number_tests {
+    use super::*;
+
+    #[test]
+    fn counts_written_as_whole_floats_parse() {
+        let info: ModelInfo = serde_json::from_value(serde_json::json!({
+            "prompt_cache_min_tokens": 4096.0,
+            "max_tokens": 8192,
+        }))
+        .unwrap();
+        assert_eq!(info.prompt_cache_min_tokens, Some(4096));
+        assert_eq!(info.max_tokens, Some(8192));
+        assert_eq!(info.max_input_tokens, None);
+        assert!(serde_json::from_value::<ModelInfo>(serde_json::json!({"rpm": 1.5})).is_err());
+    }
 }
