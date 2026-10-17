@@ -327,7 +327,7 @@ async def new_tag(
 
         # Update models with new tag
         if tag.models:
-            tasks: Final[list[Awaitable[object]]] = []
+            tasks: Final[list[Awaitable[object]]] = []  # mutable-ok: local accumulator, awaited before return
             for model in tag.models:
                 deployments = await get_deployments_by_model(model, llm_router)
                 tasks.extend(
@@ -445,14 +445,16 @@ async def _remove_tag_from_deployment(deployment: "Deployment", tag: str) -> Non
         return
 
     raw_params: Final = db_model.litellm_params
-    existing_params: Final = cast(
+    existing_params: Final = cast(  # cast-ok: prisma stores litellm_params as untyped JSON
         "dict[str, object]",
         json.loads(raw_params) if isinstance(raw_params, str) else raw_params,  # pyright: ignore[reportUnnecessaryIsInstance]  # prisma Json stub is str
     )
     if not isinstance(existing_params, dict):  # pyright: ignore[reportUnnecessaryIsInstance]  # prisma Json stub
         return
 
-    tags: Final = cast("list[object]", existing_params.get("tags") or [])
+    tags: Final = cast(  # cast-ok: prisma stores litellm_params as untyped JSON
+        "list[object]", existing_params.get("tags") or []
+    )
     if tag not in tags:
         return
     existing_params["tags"] = [t for t in tags if t != tag]
