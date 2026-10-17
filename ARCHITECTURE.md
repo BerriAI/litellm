@@ -400,10 +400,10 @@ When adding a feature, verify it works across all paths:
 Translations are designed to be unit testable without making API calls:
 
 ```python
-from litellm.llms.bedrock.chat.converse_transformation import BedrockConverseConfig
+from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 
 def test_prompt_caching_transform():
-    config = BedrockConverseConfig()
+    config = AmazonConverseConfig()
     result = config.transform_request(
         model="anthropic.claude-3-opus",
         messages=[{"role": "user", "content": "test", "cache_control": {"type": "ephemeral"}}],
