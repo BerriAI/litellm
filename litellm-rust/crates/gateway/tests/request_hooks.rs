@@ -283,6 +283,7 @@ litellm_settings:
                 usage: None,
                 cost: None,
                 time_to_first_byte: None,
+                upstream_started_at: None,
                 ended_at: std::time::SystemTime::now(),
                 interrupted: false,
             },

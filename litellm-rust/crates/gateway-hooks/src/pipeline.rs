@@ -80,6 +80,7 @@ impl Pipeline {
                         usage: None,
                         cost: None,
                         time_to_first_byte: None,
+                        upstream_started_at: None,
                         ended_at: SystemTime::now(),
                         interrupted: false,
                     };
@@ -185,6 +186,7 @@ mod tests {
             }),
             cost: None,
             time_to_first_byte: None,
+            upstream_started_at: None,
             ended_at: SystemTime::now(),
             interrupted: false,
         }
