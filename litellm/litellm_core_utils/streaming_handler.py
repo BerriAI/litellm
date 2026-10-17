@@ -27,6 +27,7 @@ from litellm.litellm_core_utils.model_response_utils import (
     is_model_response_stream_empty,
 )
 from litellm.litellm_core_utils.redact_messages import LiteLLMLoggingObject
+from litellm.litellm_core_utils.streaming_chunk_builder_utils import delta_content_as_str
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.llms.ollama.common_utils import OllamaResponseIdNormalizer
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -668,7 +669,11 @@ class CustomStreamWrapper:
             usage = None
             if str_line and str_line.choices and len(str_line.choices) > 0:
                 if str_line.choices[0].delta is not None and str_line.choices[0].delta.content is not None:
-                    text = str_line.choices[0].delta.content
+                    delta_content: Final = cast(  # cast-ok: provider delta content is str | list | None
+                        "str | Sequence[Mapping[str, str]] | None",
+                        str_line.choices[0].delta.content,
+                    )
+                    text = delta_content_as_str(delta_content)
                 else:  # function/tool calling chunk - when content is None. in this case we just return the original chunk from openai
                     pass
                 if str_line.choices[0].finish_reason:
@@ -2366,7 +2371,7 @@ class CustomStreamWrapper:
         # text and the disqualifying-content latch stay in step across all three.
         get: Final = getattr(delta, "get", None)
         content: Final = get("content") if callable(get) else None
-        self.response_uptil_now += content if isinstance(content, str) else ""
+        self.response_uptil_now += delta_content_as_str(content)
         if not self._emitted_disqualifying_content and self._delta_disqualifies_continuation(delta):
             self._emitted_disqualifying_content = True
 
