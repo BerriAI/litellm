@@ -90,7 +90,6 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         --extra saml \
         --python python3.13
 
-# The project itself comes from the rust-native wheel instead of a fresh compile.
 RUN --mount=type=bind,from=rust-native,source=/wheels,target=/wheels \
     uv pip install --python /app/.venv/bin/python --no-deps /wheels/litellm-*.whl
 
