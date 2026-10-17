@@ -252,13 +252,29 @@ async def test_proxy_post_call_hook_blocks_on_wingback_verdict(registered: _Wing
 @pytest.mark.asyncio
 @pytest.mark.parametrize("registered", [("pre_call", ALLOWED)], indirect=True)
 async def test_proxy_pre_call_hook_records_one_guardrail_entry_per_check(registered: _Wingback) -> None:
+    """One guardrail entry per check, recorded in the request's metadata bucket.
+
+    Updated for #45543. This read the literal `litellm_metadata` key, which
+    existed only because the old `_ensure_litellm_metadata` created it
+    unconditionally -- and on a chat-completions request, whose bucket is
+    `metadata`, creating that key is the bug: every reader resolves the bucket
+    by presence, so a new key moves them all onto a near-empty dict. The
+    property being protected, one entry per check with its status, is
+    unchanged; it is now asserted on the resolved bucket.
+    """
+    from litellm.litellm_core_utils.core_helpers import (
+        get_metadata_variable_name_from_kwargs,
+    )
+
     data: Final = _chat_request("hello")
 
     await ProxyLogging(user_api_key_cache=DualCache()).pre_call_hook(
         user_api_key_dict=UserAPIKeyAuth(), data=data, call_type="completion"
     )
 
-    entries: Final = data["litellm_metadata"]["standard_logging_guardrail_information"]
+    bucket_name = get_metadata_variable_name_from_kwargs(data)
+    assert bucket_name == "metadata"
+    entries: Final = data[bucket_name]["standard_logging_guardrail_information"]
     assert [(entry["guardrail_name"], entry["guardrail_status"]) for entry in entries] == [
         ("wingback-runtime-security", "success")
     ]
