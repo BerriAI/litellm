@@ -33657,24 +33657,28 @@
         "output_cost_per_token": 1.2e-06
     },
     "baseten/MiniMaxAI/MiniMax-M2.5": {
+        "deprecation_date": "2026-10-16",
         "input_cost_per_token": 3e-07,
         "litellm_provider": "baseten",
         "mode": "chat",
         "output_cost_per_token": 1.2e-06
     },
     "baseten/nvidia/Nemotron-120B-A12B": {
+        "deprecation_date": "2026-10-16",
         "input_cost_per_token": 3e-07,
         "litellm_provider": "baseten",
         "mode": "chat",
         "output_cost_per_token": 7.5e-07
     },
     "baseten/zai-org/GLM-5": {
+        "deprecation_date": "2026-10-16",
         "input_cost_per_token": 9.5e-07,
         "litellm_provider": "baseten",
         "mode": "chat",
         "output_cost_per_token": 3.15e-06
     },
     "baseten/zai-org/GLM-4.7": {
+        "deprecation_date": "2026-10-16",
         "cache_read_input_token_cost": 1.2e-07,
         "input_cost_per_token": 6e-07,
         "litellm_provider": "baseten",
@@ -33692,24 +33696,28 @@
         "supports_vision": false
     },
     "baseten/zai-org/GLM-4.6": {
+        "deprecation_date": "2026-10-16",
         "input_cost_per_token": 6e-07,
         "litellm_provider": "baseten",
         "mode": "chat",
         "output_cost_per_token": 2.2e-06
     },
     "baseten/moonshotai/Kimi-K2.5": {
+        "deprecation_date": "2026-10-16",
         "input_cost_per_token": 6e-07,
         "litellm_provider": "baseten",
         "mode": "chat",
         "output_cost_per_token": 3e-06
     },
     "baseten/moonshotai/Kimi-K2-Thinking": {
+        "deprecation_date": "2026-10-16",
         "input_cost_per_token": 6e-07,
         "litellm_provider": "baseten",
         "mode": "chat",
         "output_cost_per_token": 2.5e-06
     },
     "baseten/moonshotai/Kimi-K2-Instruct-0905": {
+        "deprecation_date": "2026-10-16",
         "input_cost_per_token": 6e-07,
         "litellm_provider": "baseten",
         "mode": "chat",
@@ -33733,12 +33741,14 @@
         "supports_vision": false
     },
     "baseten/deepseek-ai/DeepSeek-V3.1": {
+        "deprecation_date": "2026-10-16",
         "input_cost_per_token": 5e-07,
         "litellm_provider": "baseten",
         "mode": "chat",
         "output_cost_per_token": 1.5e-06
     },
     "baseten/deepseek-ai/DeepSeek-V3-0324": {
+        "deprecation_date": "2026-10-16",
         "input_cost_per_token": 7.7e-07,
         "litellm_provider": "baseten",
         "mode": "chat",
@@ -72005,6 +72015,7 @@
         "supports_vision": true
     },
     "baseten/moonshotai/Kimi-K2.6": {
+        "deprecation_date": "2026-10-16",
         "cache_read_input_token_cost": 1.6e-07,
         "input_cost_per_token": 9.5e-07,
         "litellm_provider": "baseten",
@@ -72022,6 +72033,7 @@
         "supports_vision": true
     },
     "baseten/moonshotai/Kimi-K2.7-Code": {
+        "deprecation_date": "2026-10-16",
         "cache_read_input_token_cost": 1.6e-07,
         "input_cost_per_token": 9.5e-07,
         "litellm_provider": "baseten",
@@ -72073,6 +72085,7 @@
         "supports_vision": false
     },
     "baseten/thinkingmachines/inkling": {
+        "deprecation_date": "2026-10-16",
         "cache_read_input_token_cost": 1.7e-07,
         "input_cost_per_token": 1e-06,
         "litellm_provider": "baseten",
@@ -72090,6 +72103,7 @@
         "supports_vision": true
     },
     "baseten/thinkingmachines/inkling-small": {
+        "deprecation_date": "2026-10-16",
         "cache_read_input_token_cost": 1e-07,
         "input_cost_per_token": 5e-07,
         "litellm_provider": "baseten",
@@ -72158,6 +72172,7 @@
         "supports_vision": false
     },
     "baseten/deepseek-ai/DeepSeek-V4-Pro": {
+        "deprecation_date": "2026-10-16",
         "cache_read_input_token_cost": 1.45e-07,
         "input_cost_per_token": 1.74e-06,
         "litellm_provider": "baseten",
