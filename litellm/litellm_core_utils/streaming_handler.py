@@ -933,6 +933,16 @@ class CustomStreamWrapper:
             model_response.choices[0].delta = Delta(**_initial_delta)
         return model_response
 
+    def _set_role_on_fresh_delta(self, model_response: ModelResponseStream) -> None:
+        delta: Final = model_response.choices[0].delta
+        if self.sent_first_chunk is False:
+            delta.role = "assistant"
+            self.sent_first_chunk = True
+            return
+        delta.role = None
+        if "provider_specific_fields" not in delta.model_fields_set:
+            delta.provider_specific_fields = None
+
     def _has_special_delta_content(self, model_response: ModelResponseStream) -> bool:
         """
         Check if the delta contains special content types (tool_calls, function_call, audio, or image).
@@ -1045,7 +1055,7 @@ class CustomStreamWrapper:
                         original_chunk=original_chunk,
                     )
 
-                    model_response = self.strip_role_from_delta(model_response)
+                    self._set_role_on_fresh_delta(model_response)
                     if verbose_logger.isEnabledFor(logging.DEBUG):
                         verbose_logger.debug(
                             "model_response.choices[0].delta: %s",
