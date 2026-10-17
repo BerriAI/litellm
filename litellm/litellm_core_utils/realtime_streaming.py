@@ -1,10 +1,10 @@
 import asyncio
 import json
 import traceback
-from collections.abc import Coroutine, Mapping, Sequence
+from collections.abc import Coroutine, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
 from enum import Enum, auto
-from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol, TypedDict, cast, runtime_checkable
 
 from pydantic import TypeAdapter
 from typing_extensions import ReadOnly
@@ -12,6 +12,7 @@ from typing_extensions import ReadOnly
 import litellm
 from litellm._logging import redact_internal_details_from_client_message, verbose_logger
 from litellm.constants import (
+    BEDROCK_REALTIME_PENDING_OPENING_MESSAGE_SCOPE_KEY,
     REALTIME_METERED_USAGE_KEY,
     REALTIME_SESSION_FAILURE_LOGGED_KEY,
     REALTIME_SESSION_SUCCESS_LOGGED_KEY,
@@ -98,6 +99,16 @@ class ScopedWebSocket(Protocol):
     def scope(self) -> _ASGIScope: ...
 
 
+@runtime_checkable
+class _ReplayScopeWebSocket(Protocol):
+    @property
+    def scope(self) -> MutableMapping[str, object]: ...
+
+
+def client_websocket_scope(websocket: object) -> MutableMapping[str, object] | None:
+    return websocket.scope if isinstance(websocket, _ReplayScopeWebSocket) else None
+
+
 class _ClientWebSocket(ScopedWebSocket, Protocol):
     async def send_text(self, data: str) -> None: ...
     async def receive_text(self) -> str: ...
@@ -154,6 +165,7 @@ class RealTimeStreaming:
         logging_worker: _LoggingWorker = GLOBAL_LOGGING_WORKER,
     ):
         self.websocket: _ClientWebSocket = websocket
+        self._replay_scope: Final = client_websocket_scope(websocket)
         self.backend_ws = backend_ws
         self.logging_obj = logging_obj
         self._logging_worker = logging_worker
@@ -1346,6 +1358,13 @@ class RealTimeStreaming:
         return item
 
     async def _receive_client_message(self) -> str | None:
+        refused_opening_message: Final = (
+            None
+            if self._replay_scope is None
+            else self._replay_scope.pop(BEDROCK_REALTIME_PENDING_OPENING_MESSAGE_SCOPE_KEY, None)
+        )
+        if isinstance(refused_opening_message, str):
+            return refused_opening_message
         try:
             return await self.websocket.receive_text()
         except Exception as e:  # noqa: BLE001  # whatever the client socket raises, the client is gone
