@@ -73,12 +73,9 @@ COPILOT_USER_CODE: Final = "COPI-LEAK"
 COPILOT_ACCESS: Final = "device-login-github-access"
 COPILOT_REJECTED_ACCESS: Final = "device-login-github-access-rejected"
 COPILOT_FIRST_LOGIN_ACCESS: Final = "device-login-github-access-first-login"
-COPILOT_STORED_KEY: Final = "tid=device-login;stored"
-COPILOT_MINTED_KEY: Final = "tid=device-login;minted"
-COPILOT_REJECTED_KEY: Final = "tid=device-login;rejected"
 CONTROL_KEY: Final = "device-login-control-key"
 ACCEPTED_BEARERS: Final = frozenset(
-    {CHATGPT_STORED, CHATGPT_REFRESHED, CHATGPT_FIRST_LOGIN, COPILOT_STORED_KEY, COPILOT_MINTED_KEY, CONTROL_KEY}
+    {CHATGPT_STORED, CHATGPT_REFRESHED, CHATGPT_FIRST_LOGIN, COPILOT_ACCESS, COPILOT_FIRST_LOGIN_ACCESS, CONTROL_KEY}
 )
 REJECTED_DETAIL: Final = "the scripted provider rejected this bearer token"
 _DEVICE_AUTH_ID: Final = "device-auth-synthetic"
@@ -131,20 +128,11 @@ def _oauth_token(request: Request, grant: threading.Event) -> Reply:
     return _json(400, {"error": "invalid_grant", "error_description": "refresh token was revoked"})
 
 
-def _copilot_api_key(request: Request, api_url: str) -> Reply:
-    if request.headers.get("authorization") not in (f"token {COPILOT_ACCESS}", f"token {COPILOT_FIRST_LOGIN_ACCESS}"):
-        return _json(401, {"message": "Bad credentials"})
-    return _json(
-        200,
-        {"token": COPILOT_MINTED_KEY, "expires_at": int(time.time()) + 1800, "endpoints": {"api": api_url}},
-    )
-
-
 def _switched_off() -> Reply:
     return _json(503, {"error": "device login is switched off in this scenario"})
 
 
-def _auth_hosts(api_url: str, grant: threading.Event) -> Callable[[Request], Reply]:
+def _auth_hosts(grant: threading.Event) -> Callable[[Request], Reply]:
     def respond(request: Request) -> Reply:
         match (request.headers.get("host", ""), request.method, urlsplit(request.target).path):
             case ("auth.openai.com", "POST", "/oauth/token"):
@@ -173,8 +161,6 @@ def _auth_hosts(api_url: str, grant: threading.Event) -> Callable[[Request], Rep
                 )
             case ("github.com", "POST", "/login/oauth/access_token") if grant.is_set():
                 return _json(200, {"access_token": COPILOT_FIRST_LOGIN_ACCESS, "token_type": "bearer"})
-            case ("api.github.com", "GET", "/copilot_internal/v2/token"):
-                return _copilot_api_key(request, api_url)
             case _:
                 return _switched_off()
 
@@ -341,7 +327,7 @@ def device_login_peers(directory: Path) -> Generator[Peers]:
     hangups: Final[SimpleQueue[Hangup]] = SimpleQueue()
     with (
         wire_server(_provider_api(rv.ResponsesVendor())) as api,
-        wire_server(_auth_hosts(api.url, switches.grant), tls=server_context(cert, key)) as auth,
+        wire_server(_auth_hosts(switches.grant), tls=server_context(cert, key)) as auth,
         _tunnel(auth, switches, authorities, hangups) as tunnel,
     ):
         yield Peers(api, auth, tunnel, cert, authorities, hangups, switches)
@@ -365,12 +351,6 @@ def chatgpt_record(
 
 def write_chatgpt(directory: Path, record: Mapping[str, JsonValue]) -> None:
     (directory / "auth.json").write_text(json.dumps(dict(record)))
-
-
-def write_copilot_key(directory: Path, token: str, api_url: str, expires_in: float = 3600) -> None:
-    (directory / "api-key.json").write_text(
-        json.dumps({"token": token, "expires_at": time.time() + expires_in, "endpoints": {"api": api_url}})
-    )
 
 
 def write_copilot_access(directory: Path, access_token: str) -> None:

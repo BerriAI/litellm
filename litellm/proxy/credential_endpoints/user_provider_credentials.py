@@ -149,13 +149,6 @@ async def list_user_provider_credentials(
     return await _table(prisma_client).find_many(where={"user_id": user_id})
 
 
-async def list_user_provider_credentials_for_credential(
-    prisma_client: "PrismaClient",
-    credential_name: str,
-) -> Sequence["prisma_models.LiteLLM_UserProviderCredentials"]:
-    return await _table(prisma_client).find_many(where={"credential_name": credential_name})
-
-
 class _StringKeyCache(Protocol):
     async def async_get_cache(
         self,

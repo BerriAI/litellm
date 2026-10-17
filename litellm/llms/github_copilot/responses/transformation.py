@@ -8,7 +8,6 @@ Implementation based on analysis of the copilot-api project by caozhiyuan:
 https://github.com/caozhiyuan/copilot-api
 """
 
-import os
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -32,8 +31,8 @@ from litellm.utils import cached_get_model_info_helper
 
 from ..authenticator import Authenticator
 from ..common_utils import (
-    DEFAULT_GITHUB_COPILOT_API_BASE,
     GetAPIKeyError,
+    get_copilot_api_base,
     get_copilot_default_headers,
     pin_session_authorization,
 )
@@ -266,19 +265,8 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         user_session: Final = require_github_copilot_user_session(
             cast("dict[str, object]", litellm_params)  # cast-ok: litellm_params arrives as an untyped request dict
         )
-        effective_api_base = (
-            (user_session.api_base if user_session is not None else None)
-            or api_base
-            or self.authenticator.get_api_base()
-            or os.getenv("GITHUB_COPILOT_API_BASE")
-            or DEFAULT_GITHUB_COPILOT_API_BASE
-        )
-
-        # Remove trailing slashes
-        effective_api_base = effective_api_base.rstrip("/")
-
-        # Return the responses endpoint
-        return f"{effective_api_base}/responses"
+        operator_api_base: Final = get_copilot_api_base(api_base if user_session is None else None)
+        return f"{operator_api_base.rstrip('/')}/responses"
 
     def _handle_reasoning_item(self, item: dict[str, object]) -> dict[str, object]:
         """

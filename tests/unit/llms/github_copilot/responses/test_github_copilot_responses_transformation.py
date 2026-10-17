@@ -7,18 +7,22 @@ transformations for the Responses API.
 Source: litellm/llms/github_copilot/responses/transformation.py
 """
 
-from unittest.mock import patch, MagicMock
+import os
+from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+
 import litellm
 from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
-from litellm.types.utils import LlmProviders
-from litellm.utils import ProviderConfigManager
+from litellm.llms.github_copilot.common_utils import DEFAULT_GITHUB_COPILOT_API_BASE
+from litellm.llms.github_copilot.per_user_auth import GithubCopilotUserSession
 from litellm.llms.github_copilot.responses.transformation import (
     GithubCopilotResponsesAPIConfig,
 )
 from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
+from litellm.types.utils import LlmProviders
+from litellm.utils import ProviderConfigManager
 
 
 @pytest.fixture(autouse=True)
@@ -48,52 +52,130 @@ class TestGithubCopilotResponsesAPITransformation:
         )
         assert config.custom_llm_provider == LlmProviders.GITHUB_COPILOT, "custom_llm_provider should be GITHUB_COPILOT"
 
-    @patch("litellm.llms.github_copilot.responses.transformation.Authenticator")
-    def test_github_copilot_responses_endpoint_url(self, mock_authenticator_class):
-        """Test that get_complete_url returns correct GitHub Copilot endpoint"""
-        # Mock authenticator to return default base
-        mock_auth_instance = MagicMock()
-        mock_auth_instance.get_api_base.return_value = "https://api.individual.githubcopilot.com"
-        mock_authenticator_class.return_value = mock_auth_instance
-
+    @pytest.mark.parametrize(
+        ("api_base", "environment_base", "shared_expected_base", "per_user_expected_base"),
+        (
+            (None, "https://copilot-env.example", "https://copilot-env.example", "https://copilot-env.example"),
+            (
+                "http://localhost:8080",
+                "https://copilot-env.example",
+                "http://localhost:8080",
+                "https://copilot-env.example",
+            ),
+            (
+                "https://copilot-deployment.example/",
+                None,
+                "https://copilot-deployment.example",
+                DEFAULT_GITHUB_COPILOT_API_BASE,
+            ),
+            (None, None, DEFAULT_GITHUB_COPILOT_API_BASE, DEFAULT_GITHUB_COPILOT_API_BASE),
+        ),
+    )
+    @pytest.mark.parametrize("per_user", (False, True))
+    def test_github_copilot_responses_endpoint_url(
+        self,
+        api_base: str | None,
+        environment_base: str | None,
+        shared_expected_base: str,
+        per_user_expected_base: str,
+        per_user: bool,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        if environment_base is None:
+            monkeypatch.delenv("GITHUB_COPILOT_API_BASE", raising=False)
+        else:
+            monkeypatch.setenv("GITHUB_COPILOT_API_BASE", environment_base)
         config = GithubCopilotResponsesAPIConfig()
-
-        # Test with default GitHub Copilot API base (from authenticator)
-        url = config.get_complete_url(api_base=None, litellm_params={})
-        assert url == "https://api.individual.githubcopilot.com/responses", (
-            f"Expected GitHub Copilot responses endpoint, got {url}"
+        config.authenticator = MagicMock()
+        url = config.get_complete_url(
+            api_base=api_base,
+            litellm_params=(
+                {"github_copilot_user_session": GithubCopilotUserSession(token="user-github-oauth-token")}
+                if per_user
+                else {}
+            ),
         )
-
-        # Test with custom api_base (overrides authenticator)
-        custom_url = config.get_complete_url(api_base="https://custom.githubcopilot.com", litellm_params={})
-        assert custom_url == "https://custom.githubcopilot.com/responses", f"Expected custom endpoint, got {custom_url}"
-
-        # Test with trailing slash
-        url_with_slash = config.get_complete_url(api_base="https://api.githubcopilot.com/", litellm_params={})
-        assert url_with_slash == "https://api.githubcopilot.com/responses", "Should handle trailing slash"
+        expected_base = per_user_expected_base if per_user else shared_expected_base
+        assert url == f"{expected_base}/responses"
+        config.authenticator.get_api_key.assert_not_called()
 
     @patch("litellm.llms.github_copilot.responses.transformation.Authenticator")
-    def test_validate_environment_default_headers(self, mock_authenticator_class):
-        """Test that validate_environment generates correct default headers"""
-        # Mock the authenticator
+    def test_validate_environment_default_headers(self, mock_authenticator_class, monkeypatch):
+        for environment_variable in (
+            "GITHUB_COPILOT_OPENAI_INTENT",
+            "GITHUB_COPILOT_API_VERSION",
+            "GITHUB_COPILOT_USER_AGENT_LIBRARY_VERSION",
+        ):
+            monkeypatch.delenv(environment_variable, raising=False)
+
         mock_auth_instance = MagicMock()
         mock_auth_instance.get_api_key.return_value = "test-api-key-123"
         mock_authenticator_class.return_value = mock_auth_instance
 
         config = GithubCopilotResponsesAPIConfig()
-
         headers = config.validate_environment(headers={}, model="gpt-5.1-codex", litellm_params={})
 
-        # Check required headers
         assert headers["Authorization"] == "Bearer test-api-key-123"
+        assert headers["accept"] == "application/json"
         assert headers["content-type"] == "application/json"
         assert headers["copilot-integration-id"] == "vscode-chat"
-        assert headers["editor-version"] == "vscode/1.95.0"
+        assert headers["editor-version"] == "vscode/1.115.0"
         assert headers["editor-plugin-version"] == "copilot-chat/0.26.7"
         assert headers["user-agent"] == "GitHubCopilotChat/0.26.7"
-        assert headers["openai-intent"] == "conversation-panel"
-        assert headers["x-github-api-version"] == "2025-04-01"
-        assert "x-request-id" in headers
+        assert "openai-intent" not in headers
+        assert "x-github-api-version" not in headers
+        assert "x-request-id" not in headers
+        assert "x-vscode-user-agent-library-version" not in headers
+
+    @patch(  # test-quality-ok: matches the Authenticator-mocking convention already used throughout this file
+        "litellm.llms.github_copilot.responses.transformation.Authenticator"
+    )
+    def test_validate_environment_headers_from_environment(self, mock_authenticator_class):
+        mock_auth_instance = MagicMock()
+        mock_auth_instance.get_api_key.return_value = "test-api-key-123"
+        mock_authenticator_class.return_value = mock_auth_instance
+        environment = {
+            "GITHUB_COPILOT_ACCEPT": "application/vnd.github+json",
+            "GITHUB_COPILOT_CONTENT_TYPE": "application/custom+json",
+            "GITHUB_COPILOT_INTEGRATION_ID": "custom-integration",
+            "GITHUB_COPILOT_EDITOR_VERSION": "custom-editor/1.0",
+            "GITHUB_COPILOT_EDITOR_PLUGIN_VERSION": "custom-plugin/2.0",
+            "GITHUB_COPILOT_USER_AGENT": "CustomAgent/2.0",
+            "GITHUB_COPILOT_OPENAI_INTENT": "custom-intent",
+            "GITHUB_COPILOT_API_VERSION": "2099-01-01",
+            "GITHUB_COPILOT_USER_AGENT_LIBRARY_VERSION": "custom-library",
+        }
+
+        with patch.dict(os.environ, environment):
+            headers = GithubCopilotResponsesAPIConfig().validate_environment(
+                headers={}, model="gpt-5.1-codex", litellm_params={}
+            )
+
+        assert headers["Authorization"] == "Bearer test-api-key-123"
+        assert headers["accept"] == "application/vnd.github+json"
+        assert headers["content-type"] == "application/custom+json"
+        assert headers["copilot-integration-id"] == "custom-integration"
+        assert headers["editor-version"] == "custom-editor/1.0"
+        assert headers["editor-plugin-version"] == "custom-plugin/2.0"
+        assert headers["user-agent"] == "CustomAgent/2.0"
+        assert headers["openai-intent"] == "custom-intent"
+        assert headers["x-github-api-version"] == "2099-01-01"
+        assert headers["x-vscode-user-agent-library-version"] == "custom-library"
+
+    @patch(  # test-quality-ok: matches the Authenticator-mocking convention already used throughout this file
+        "litellm.llms.github_copilot.responses.transformation.Authenticator"
+    )
+    def test_empty_environment_header_omits_default(self, mock_authenticator_class):
+        mock_auth_instance = MagicMock()
+        mock_auth_instance.get_api_key.return_value = "test-api-key-123"
+        mock_authenticator_class.return_value = mock_auth_instance
+
+        with patch.dict(os.environ, {"GITHUB_COPILOT_USER_AGENT": ""}):
+            headers = GithubCopilotResponsesAPIConfig().validate_environment(
+                headers={}, model="gpt-5.1-codex", litellm_params={}
+            )
+
+        assert "user-agent" not in headers
 
     @patch("litellm.llms.github_copilot.responses.transformation.Authenticator")
     def test_validate_environment_user_headers_override(self, mock_authenticator_class):
@@ -756,37 +838,34 @@ class TestGithubCopilotReasoningStreamItemIdNormalization:
 
 
 def test_validate_environment_uses_per_user_session_and_skips_authenticator():
-    from litellm.llms.github_copilot.per_user_auth import GithubCopilotUserSession
-
     config = GithubCopilotResponsesAPIConfig()
     config.authenticator = MagicMock()
     config.authenticator.get_api_key.side_effect = AssertionError("shared authenticator must not run")
 
-    session = GithubCopilotUserSession(token="user-copilot-token", api_base="https://api.githubcopilot.com")
+    session = GithubCopilotUserSession(token="user-github-oauth-token")
     headers = config.validate_environment(
         headers={},
         model="github_copilot/gpt-5.4",
         litellm_params={"github_copilot_user_session": session},
     )
-    assert headers["Authorization"] == "Bearer user-copilot-token"
+    assert headers["Authorization"] == f"Bearer {session.token}"
     config.authenticator.get_api_key.assert_not_called()
 
 
 def test_per_user_session_token_wins_over_caller_authorization():
     """extra_headers["Authorization"] (any casing) must never displace the per-user
     session token on the outgoing request."""
-    from litellm.llms.github_copilot.per_user_auth import GithubCopilotUserSession
-
     config = GithubCopilotResponsesAPIConfig()
     config.authenticator = MagicMock()
-    session = GithubCopilotUserSession(token="user-copilot-token", api_base="https://api.githubcopilot.com")
+    session = GithubCopilotUserSession(token="user-github-oauth-token")
     headers = config.validate_environment(
         headers={"Authorization": "Bearer caller-token", "authorization": "Bearer caller-token-lower"},
         model="github_copilot/gpt-5.1",
         litellm_params={"github_copilot_user_session": session},
     )
-    assert headers["Authorization"] == "Bearer user-copilot-token"
+    assert headers["Authorization"] == f"Bearer {session.token}"
     assert "authorization" not in headers
+    config.authenticator.get_api_key.assert_not_called()
 
 
 def test_shared_mode_keeps_caller_authorization():

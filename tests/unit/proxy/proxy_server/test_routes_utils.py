@@ -10,7 +10,6 @@ Pins (PR2):
 from __future__ import annotations
 
 import asyncio
-import json
 
 import httpx
 import pytest
@@ -176,15 +175,6 @@ def test_supported_openai_params_never_runs_oauth_for_authenticating_providers(c
     through ``get_llm_provider`` would run the provider's OAuth device flow and block the event loop."""
     monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
     (tmp_path / "access-token").write_text("fake-access-token")
-    (tmp_path / "api-key.json").write_text(
-        json.dumps(
-            {
-                "token": "fake-api-key",
-                "expires_at": 4102444800,
-                "endpoints": {"api": "https://api.githubcopilot.com"},
-            }
-        )
-    )
     router = litellm.Router(
         model_list=[
             {
