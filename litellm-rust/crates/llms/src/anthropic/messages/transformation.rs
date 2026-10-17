@@ -139,10 +139,18 @@ pub(crate) fn transform_messages_request(
         messages: strip_encrypted_reasoning_blocks(messages),
         params: MessagesOptionalParams {
             context_management,
+            extra: without_null_safeguards(request.params.extra),
             ..request.params
         },
         ..request
     })
+}
+
+fn without_null_safeguards(extra: Map<String, Value>) -> Map<String, Value> {
+    extra
+        .into_iter()
+        .filter(|(key, value)| key != "safeguards" || !value.is_null())
+        .collect()
 }
 
 pub(crate) fn update_headers_with_anthropic_beta(

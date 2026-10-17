@@ -164,8 +164,9 @@ def anthropic_peer(request: Request) -> Reply:
         )
     if request.target == DEEPSEEK_TARGET:
         return Reply(body=json.dumps(_message(f"msg_{marker_of(request)}", None)).encode())
-    safeguards: Final = body_of(request).get("safeguards")
-    if safeguards is not None and DANGEROUS_TOOL_USE not in betas_of(request):
+    body: Final = body_of(request)
+    safeguards: Final = body.get("safeguards")
+    if "safeguards" in body and DANGEROUS_TOOL_USE not in betas_of(request):
         return Reply(status=400, body=error_body(400, EXTRA_INPUTS_MESSAGE))
     if safeguards is not None and not isinstance(safeguards, list):
         return Reply(status=400, body=error_body(400, NOT_A_LIST_MESSAGE))

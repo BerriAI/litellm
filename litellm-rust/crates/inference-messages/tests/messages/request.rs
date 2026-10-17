@@ -383,6 +383,39 @@ async fn safeguards_add_the_dangerous_tool_use_beta_only_where_the_beta_map_has_
 
 #[rstest]
 #[tokio::test]
+async fn null_safeguards_are_dropped_instead_of_sent_without_their_beta(
+    call: MessagesCall,
+    #[values("anthropic", "azure_ai", "deepseek", "minimax")] provider: &str,
+) {
+    let upstream = upstream([message_response()]).await;
+
+    run_message(with_fields(
+        MessagesCall {
+            custom_llm_provider: Some(provider.into()),
+            api_key: Some("sk".into()),
+            api_base: Some(upstream.uri()),
+            extra_headers: headers([("Anthropic-Beta", "caller-beta-2025-01-01")]),
+            ..call
+        },
+        json!({"safeguards": null}),
+    ))
+    .await;
+
+    let request = only_request(&upstream).await;
+    assert_eq!(
+        sent_betas(&request),
+        BetaSet::from_iter([AnthropicBeta::Other("caller-beta-2025-01-01".to_string())])
+    );
+    assert!(
+        !request
+            .body_json::<Map<String, Value>>()
+            .unwrap()
+            .contains_key("safeguards")
+    );
+}
+
+#[rstest]
+#[tokio::test]
 async fn an_oauth_key_sends_the_browser_access_header_and_the_oauth_beta(call: MessagesCall) {
     let upstream = upstream([message_response()]).await;
 
