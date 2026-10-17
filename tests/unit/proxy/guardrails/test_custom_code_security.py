@@ -846,3 +846,160 @@ def test_config_without_timeout_uses_the_default():
         _initialize_from_config("custom-code-default-timeout", {}).execution_timeout
         == DEFAULT_EXECUTION_TIMEOUT_SECONDS
     )
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        # Every one of these compiles fine and then raises
+        # "NameError: name '_unpack_sequence_' is not defined" at call time when
+        # the guard is missing from the sandbox globals.
+        ("    a, b = inputs['pair']\n    return a + b\n", 3),
+        ("    a, (b, c) = inputs['nested']\n    return a + b + c\n", 6),
+        ("    a, *rest = inputs['seq']\n    return rest\n", [2, 3]),
+        ("    with inputs['ctx'] as (a, b):\n        return a + b\n", 15),
+    ],
+)
+def test_tuple_unpacking_runs(body: str, expected):
+    """Ordinary tuple unpacking must work inside a guardrail, not NameError."""
+
+    class _Ctx:
+        def __enter__(self):
+            return (7, 8)
+
+        def __exit__(self, *args):
+            return False
+
+    guardrail = _compile("def apply_guardrail(inputs, request_data, input_type):\n" + body)
+    fn = guardrail._compiled_function
+    assert fn is not None
+    inputs = {"pair": (1, 2), "nested": (1, (2, 3)), "seq": [1, 2, 3], "ctx": _Ctx()}
+    assert fn(inputs, {}, "request") == expected
+
+
+def _guard_names(source: str) -> set[str]:
+    """Names of the RestrictedPython guards the compiled bytecode calls."""
+    import types
+
+    from litellm.proxy.guardrails.guardrail_hooks.custom_code.sandbox import (
+        compile_sandboxed,
+    )
+
+    found: set[str] = set()
+    stack = [compile_sandboxed(source)]
+    while stack:
+        code = stack.pop()
+        found |= {n for n in code.co_names + code.co_varnames if n.startswith("_") and n.endswith("_")}
+        stack += [c for c in code.co_consts if isinstance(c, types.CodeType)]
+    return found
+
+
+def test_async_with_gets_the_same_guards_as_with():
+    """`async with` is the async spelling of `with`; it must not enforce less."""
+    sync_guards = _guard_names("def f(x):\n    with x as (a, b):\n        pass\n")
+    async_guards = _guard_names("async def f(x):\n    async with x as (a, b):\n        pass\n")
+
+    assert "_unpack_sequence_" in sync_guards, "precondition: `with` unpacking is guarded"
+    assert sync_guards <= async_guards
+
+
+@pytest.mark.asyncio
+async def test_async_with_still_executes():
+    """Guarding `async with` must not break it."""
+    from litellm.proxy.guardrails.guardrail_hooks.custom_code.sandbox import (
+        build_sandbox_globals,
+        compile_sandboxed,
+    )
+
+    class _ACtx:
+        def __init__(self, value):
+            self.value = value
+
+        async def __aenter__(self):
+            return self.value
+
+        async def __aexit__(self, *args):
+            return False
+
+    sandbox_globals = build_sandbox_globals()
+    exec(  # noqa: S102
+        compile_sandboxed(
+            "async def f(ctx):\n    async with ctx as (a, b):\n        return a + b\n"
+        ),
+        sandbox_globals,
+    )
+    assert await sandbox_globals["f"](_ACtx((5, 6))) == 11
+
+
+def test_async_for_gets_the_same_guards_as_for():
+    """`async for` is the async spelling of `for`; it must not enforce less."""
+    sync_plain = _guard_names("def f(x):\n    for a in x:\n        pass\n")
+    async_plain = _guard_names("async def f(x):\n    async for a in x:\n        pass\n")
+    sync_unpack = _guard_names("def f(x):\n    for a, b in x:\n        pass\n")
+    async_unpack = _guard_names("async def f(x):\n    async for a, b in x:\n        pass\n")
+
+    # Preconditions: the sync forms are guarded at all.
+    assert "_getiter_" in sync_plain
+    assert "_iter_unpack_sequence_" in sync_unpack
+
+    # The async forms are guarded by the async-capable twins, under their own
+    # names — `budgeted_iter` and `_iter_unpack_sequence_` are plain generators
+    # that `async for` cannot consume.
+    assert "_agetiter_" in async_plain
+    assert "_aiter_unpack_sequence_" in async_unpack
+
+    # And neither async form is left with no wrapper at all.
+    assert async_plain & {"_agetiter_", "_aiter_unpack_sequence_"}
+    assert async_unpack & {"_agetiter_", "_aiter_unpack_sequence_"}
+
+
+async def _arange(*values):
+    for v in values:
+        yield v
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("source", "arg", "expected"),
+    [
+        (
+            "async def f(it):\n    total = 0\n    async for a in it:\n        total += a\n    return total\n",
+            (1, 2, 3),
+            6,
+        ),
+        (
+            "async def f(it):\n    total = 0\n    async for a, b in it:\n        total += a * b\n    return total\n",
+            ((1, 2), (3, 4)),
+            14,
+        ),
+    ],
+)
+async def test_async_for_still_executes(source, arg, expected):
+    """Guarding `async for` must not break it, in either target shape."""
+    from litellm.proxy.guardrails.guardrail_hooks.custom_code.sandbox import (
+        build_sandbox_globals,
+        compile_sandboxed,
+    )
+
+    sandbox_globals = build_sandbox_globals()
+    exec(compile_sandboxed(source), sandbox_globals)  # noqa: S102
+    assert await sandbox_globals["f"](_arange(*arg)) == expected
+
+
+@pytest.mark.asyncio
+async def test_async_for_unpacking_still_rejects_a_non_sequence():
+    """The unpack guard is what makes the element shape an error, not a crash."""
+    from litellm.proxy.guardrails.guardrail_hooks.custom_code.sandbox import (
+        build_sandbox_globals,
+        compile_sandboxed,
+    )
+
+    sandbox_globals = build_sandbox_globals()
+    exec(  # noqa: S102
+        compile_sandboxed(
+            "async def f(it):\n    async for a, b in it:\n        pass\n"
+        ),
+        sandbox_globals,
+    )
+    with pytest.raises(TypeError):
+        await sandbox_globals["f"](_arange(1, 2))
