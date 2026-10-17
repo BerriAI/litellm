@@ -252,9 +252,7 @@ def _get_spend_logs_metadata(
             azure_spillover=azure_spillover,
             used_client_oauth_token=used_client_oauth_token,
         )
-    verbose_proxy_logger.debug(
-        "getting payload for SpendLogs, available keys in metadata: " + str(list(metadata.keys()))
-    )
+    verbose_proxy_logger.debug(f"getting payload for SpendLogs, available keys in metadata: {[*metadata]}")
 
     # Filter the metadata dictionary to include only the specified keys
     clean_metadata: Final = SpendLogsMetadata(
