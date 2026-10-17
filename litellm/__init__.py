@@ -1,33 +1,12 @@
-### Hide pydantic namespace conflict warnings globally ###
 from __future__ import annotations
 
-import warnings
+from litellm._process_defaults import apply_process_defaults as _apply_process_defaults
 
-warnings.filterwarnings("ignore", message=".*conflict with protected namespace.*")
-# Suppress Pydantic 2.11+ deprecation warning about accessing model_fields on instances
-# This warning can accumulate during streaming and cause memory leaks
-warnings.filterwarnings("ignore", message=".*Accessing the.*attribute on the instance is deprecated.*")
-# ReadOnly on TypedDict fields is repo-wide static discipline (LIT012); pydantic warns it
-# cannot enforce it at runtime, which floods proxy boot once such a type is schema-walked
-warnings.filterwarnings("ignore", message=".*`ReadOnly` qualifier.*")
+_apply_process_defaults()
+
 ### INIT VARIABLES #########################
 import threading
 import os
-
-# Load .env before any other litellm imports so env vars (e.g. LITELLM_UI_SESSION_DURATION) are available
-import dotenv as _dotenv
-
-
-def _dev_env_hot_reload_enabled() -> bool:
-    """The proxy exports this flag when started with ``--reload``. A reloaded
-    worker is a fresh process that inherits the reloader's environment, so an
-    edited ``.env`` value stays masked by the stale inherited one unless we
-    let the file win; overriding makes the edit take effect on reload."""
-    return os.getenv("LITELLM_DEV_ENV_HOT_RELOAD") == "True"
-
-
-if os.getenv("LITELLM_MODE", "DEV") == "DEV":
-    _dotenv.load_dotenv(override=_dev_env_hot_reload_enabled())
 
 from collections.abc import Mapping, Sequence
 from typing import (
@@ -207,7 +186,7 @@ _async_failure_callback: List[Union[str, Callable[..., object], "CustomLogger"]]
     []
 )  # internal variable - async custom callbacks are routed here.
 pre_call_rules: List[Callable] = []
-post_call_rules: List[Callable] = []
+post_call_rules: List[Callable[..., object]] = []
 turn_off_message_logging: Optional[bool] = False
 standard_logging_payload_excluded_fields: Optional[List[str]] = (
     None  # Fields to exclude from StandardLoggingPayload before callbacks receive it
@@ -393,6 +372,7 @@ key_alias_pattern: str | None = None
 enable_gemini_default_thinking_level_low: bool = (
     False  # opt-in: force thinkingLevel low/minimal for Gemini 3 thinking param mapping
 )
+gemini_include_thoughts_default: bool = True
 ####################
 logging: bool = True
 enable_loadbalancing_on_batch_endpoints: Optional[bool] = None
@@ -762,7 +742,7 @@ def is_openai_finetune_model(key: str) -> bool:
 
 
 def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, object]]) -> None:
-    for key, value in model_cost_map.items():
+    for key, value in tuple(model_cost_map.items()):
         if value.get("litellm_provider") == "openai" and not is_openai_finetune_model(key):
             open_ai_chat_completion_models.add(key)
         elif value.get("litellm_provider") == "text-completion-openai":
@@ -1176,7 +1156,9 @@ def _build_models_by_provider() -> dict:
         "edenai": edenai_models,
         "datarobot": datarobot_models,
         "vertex_ai": vertex_chat_models
+        | vertex_code_chat_models
         | vertex_text_models
+        | vertex_code_text_models
         | vertex_anthropic_models
         | vertex_vision_models
         | vertex_language_models
@@ -1184,7 +1166,7 @@ def _build_models_by_provider() -> dict:
         | vertex_minimax_models
         | vertex_moonshot_models
         | vertex_zai_models,
-        "ai21": ai21_models,
+        "ai21": ai21_models | ai21_chat_models,
         "bedrock": bedrock_models | bedrock_converse_models,
         "petals": petals_models,
         "ollama": ollama_models,
@@ -1415,6 +1397,7 @@ from .exceptions import (
     InvalidRequestError,
     BadRequestError,
     ImageFetchError,
+    MalformedRequestFieldError as MalformedRequestFieldError,
     VectorStoreSearchError,
     NotFoundError,
     PermissionDeniedError,
@@ -1689,6 +1672,9 @@ if TYPE_CHECKING:
     )
     from .llms.perplexity.decisions.transformation import (
         PerplexityDecisionsConfig as PerplexityDecisionsConfig,
+    )
+    from .llms.nace.decisions.transformation import (
+        NaceDecisionsConfig as NaceDecisionsConfig,
     )
     from .llms.typesafe.decisions.transformation import (
         TypeSafeDecisionsConfig as TypeSafeDecisionsConfig,
