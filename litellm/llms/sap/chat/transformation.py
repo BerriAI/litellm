@@ -2,10 +2,10 @@
 Translate from OpenAI's `/v1/chat/completions` to SAP Generative AI Hub's Orchestration Service`v2/completion`
 """
 
+import threading
 import types
 from collections.abc import AsyncIterator, Iterator, Mapping
-from functools import cached_property
-from typing import TYPE_CHECKING, Any, Final, Union
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Union
 
 import httpx
 from pydantic import BaseModel
@@ -180,8 +180,28 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             self.run_env_setup()
         return self._resource_group
 
-    @cached_property
+    # Process-wide cache: the provider map builds a fresh config instance per
+    # call, so an instance-scoped cached_property re-runs the two discovery
+    # GETs on every LLM call. Keyed on (base_url, resource_group) - the inputs
+    # that determine the URL - so a credential change never serves a stale URL.
+    _deployment_url_cache: ClassVar[dict[tuple[str, str], str]] = {}  # mutable-ok: process cache, guarded by the lock
+    _deployment_url_lock: ClassVar[threading.Lock] = threading.Lock()
+
+    @property
     def deployment_url(self) -> str:
+        cache_key: Final = (self.base_url, self.resource_group)
+        cached_url: Final = GenAIHubOrchestrationConfig._deployment_url_cache.get(cache_key)
+        if cached_url is not None:
+            return cached_url
+        with GenAIHubOrchestrationConfig._deployment_url_lock:
+            rechecked_url: Final = GenAIHubOrchestrationConfig._deployment_url_cache.get(cache_key)
+            if rechecked_url is not None:
+                return rechecked_url
+            fetched_url: Final = self._fetch_deployment_url()
+            GenAIHubOrchestrationConfig._deployment_url_cache[cache_key] = fetched_url
+            return fetched_url
+
+    def _fetch_deployment_url(self) -> str:
         # Keep a short, tight client lifecycle here to avoid fd leaks
         client: Final = litellm.module_level_client
         # with httpx.Client(timeout=30) as client:
