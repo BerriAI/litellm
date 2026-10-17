@@ -23,6 +23,7 @@ from urllib.parse import unquote_plus
 
 import jwt
 from fastapi import Request
+from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.models.user import LiteLLM_UserTable
@@ -48,6 +49,7 @@ _INACTIVE_SUBJECT: Final = frozenset(("no_active_key", "unresolvable"))
 _REPLAY_KEY_PREFIX: Final = "mcp_gateway_dcr:id_jag:"
 SCOPE_MCP: Final = "litellm:mcp"
 SCOPE_LLM: Final = "litellm:llm"
+_RESOURCE_CLAIM_ADAPTER: Final = TypeAdapter(list[str])
 SCOPE_ROUTE_GROUPS: Final = MappingProxyType(
     {SCOPE_MCP: ("mcp_inference_routes",), SCOPE_LLM: ("llm_api_routes_without_mcp",)}
 )
@@ -65,9 +67,9 @@ class GrantedScope:
 
 def granted_scope(claim: object, *, mcp_resource: bool) -> GrantedScope | SubjectTokenRefusal:
     """The routes the assertion buys. With ``aud`` the bare origin the ``scope`` claim decides and
-    no claim is the full credential. With ``aud`` the MCP resource (``{base}/mcp``) the identity
-    provider named that resource, so the credential is ceilinged to the MCP routes whatever the
-    claim says: ``litellm:llm`` cannot be granted and is refused."""
+    no claim is the full credential. With the MCP resource (``{base}/mcp``) as ``aud`` or as every
+    ``resource``, the identity provider named that resource, so the credential is ceilinged to the
+    MCP routes whatever the claim says: ``litellm:llm`` cannot be granted and is refused."""
     if claim is not None and not isinstance(claim, str):
         return SubjectTokenRefusal(error="invalid_scope", description=_SCOPE_DESCRIPTION)
     requested: Final = frozenset(claim.split()) if claim else frozenset()
@@ -90,6 +92,32 @@ def names_mcp_resource(aud: object, base_url: str | None) -> bool:
     return base_url is not None and f"{base_url}/mcp" in audiences and base_url not in audiences
 
 
+def _resource_claim_values(claim: object) -> tuple[str, ...] | None:
+    if isinstance(claim, str):
+        return (claim,)
+    if not isinstance(claim, list):
+        return None
+    try:
+        values: Final = _RESOURCE_CLAIM_ADAPTER.validate_python(claim, strict=True)
+    except ValidationError:
+        return None
+    return tuple(values) if values else None
+
+
+def resource_names_mcp(claims: Mapping[str, object], base_url: str | None) -> bool | SubjectTokenRefusal:
+    """The signed RFC 8707 ``resource`` claim (a URI or an array of URIs) restricts the credential like an
+    ``aud`` of ``{base}/mcp`` does."""
+    if "resource" not in claims:
+        return False
+    resources: Final = _resource_claim_values(claims["resource"])
+    if resources is None:
+        return SubjectTokenRefusal(error="invalid_target", description=_RESOURCE_DESCRIPTION)
+    served_resources: Final = frozenset(gateway_audiences(base_url))
+    if any(resource not in served_resources for resource in resources):
+        return SubjectTokenRefusal(error="invalid_target", description=_RESOURCE_DESCRIPTION)
+    return frozenset(resources) == frozenset((f"{base_url}/mcp",))
+
+
 def _route_groups(scopes: Sequence[str]) -> Iterator[str]:
     for scope in scopes:
         yield from SCOPE_ROUTE_GROUPS[scope]
@@ -98,8 +126,10 @@ def _route_groups(scopes: Sequence[str]) -> Iterator[str]:
 _SCOPE_DESCRIPTION: Final = (
     f"scope must be {SCOPE_MCP} (MCP gateway routes), {SCOPE_LLM} (LLM API routes), or both, space separated"
 )
+_RESOURCE_DESCRIPTION: Final = "the assertion's resource claim must name this gateway's origin or its /mcp resource"
 _MCP_RESOURCE_DESCRIPTION: Final = (
-    f"the /mcp audience only grants MCP routes ({SCOPE_MCP}); use the bare origin as audience for LLM routes"
+    f"the /mcp audience or resource only grants MCP routes ({SCOPE_MCP}); use the bare origin as audience and "
+    "resource for LLM routes"
 )
 
 
@@ -450,8 +480,12 @@ async def identity_from_id_jag(
     if isinstance(marker, SubjectTokenRefusal):
         return marker
     replay_key, replay_ttl_seconds = marker
+    mcp_resource: Final = resource_names_mcp(verified, prerequisites.base_url)
+    if isinstance(mcp_resource, SubjectTokenRefusal):
+        return mcp_resource
     scope: Final = granted_scope(
-        verified.get("scope"), mcp_resource=names_mcp_resource(verified.get("aud"), prerequisites.base_url)
+        verified.get("scope"),
+        mcp_resource=mcp_resource or names_mcp_resource(verified.get("aud"), prerequisites.base_url),
     )
     if isinstance(scope, SubjectTokenRefusal):
         return scope

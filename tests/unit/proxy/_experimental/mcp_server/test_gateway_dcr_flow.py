@@ -3384,6 +3384,7 @@ async def test_jwt_bearer_grant_claims_the_jti_before_it_mints():
         ("invalid_client", 401),
         ("invalid_grant", 400),
         ("invalid_request", 400),
+        ("invalid_target", 400),
         ("unsupported_grant_type", 400),
         ("temporarily_unavailable", 503),
     ],

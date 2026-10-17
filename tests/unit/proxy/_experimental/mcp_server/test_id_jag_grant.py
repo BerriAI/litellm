@@ -33,6 +33,7 @@ from litellm.proxy._experimental.mcp_server.id_jag_grant import (
     jwt_bearer_available,
     names_mcp_resource,
     proxy_user_lookup,
+    resource_names_mcp,
     select_team,
     subject_resolver,
 )
@@ -84,6 +85,16 @@ def _assertion(typ: str = ID_JAG_TYP, **claims: object) -> str:
         "unused-by-the-fake-verifier-but-long-enough-for-hs256",
         algorithm="HS256",
         headers={"typ": typ},
+    )
+
+
+def _unscoped_assertion(**claims: object) -> str:
+    unscoped_claims: Final = {key: value for key, value in _claims(**claims).items() if key != "scope"}
+    return jwt.encode(
+        unscoped_claims,
+        "unused-by-the-fake-verifier-but-long-enough-for-hs256",
+        algorithm="HS256",
+        headers={"typ": ID_JAG_TYP},
     )
 
 
@@ -714,6 +725,40 @@ def test_the_mcp_resource_audience_is_the_mcp_path_without_the_bare_origin(aud, 
     assert names_mcp_resource(aud, None) is False
 
 
+@pytest.mark.parametrize(
+    "claims, expected",
+    [
+        ({}, False),
+        ({"resource": f"{GATEWAY}/mcp"}, True),
+        ({"resource": [f"{GATEWAY}/mcp"]}, True),
+        ({"resource": GATEWAY}, False),
+        ({"resource": [GATEWAY, f"{GATEWAY}/mcp"]}, False),
+        ({"resource": "https://other.example"}, None),
+        ({"resource": [f"{GATEWAY}/mcp", "https://other.example"]}, None),
+        ({"resource": f"{GATEWAY}/mcp/"}, None),
+        ({"resource": None}, None),
+        ({"resource": 7}, None),
+        ({"resource": []}, None),
+        ({"resource": [7]}, None),
+    ],
+)
+def test_the_signed_resource_claim_must_name_only_gateway_resources(
+    claims: Mapping[str, object], expected: bool | None
+) -> None:
+    result: Final = resource_names_mcp(claims, GATEWAY)
+    if isinstance(result, bool):
+        assert expected is result
+        return
+    assert expected is None
+    assert result.error == "invalid_target"
+
+
+def test_the_signed_resource_claim_is_refused_without_a_gateway_base_url() -> None:
+    result: Final = resource_names_mcp({"resource": f"{GATEWAY}/mcp"}, None)
+    assert isinstance(result, SubjectTokenRefusal)
+    assert result.error == "invalid_target"
+
+
 @pytest.mark.asyncio
 async def test_redeeming_for_the_mcp_resource_narrows_the_identity_and_refuses_llm_scope():
     """End to end through identity_from_id_jag: the same verified claims, with ``aud`` the MCP
@@ -736,3 +781,33 @@ async def test_redeeming_for_the_mcp_resource_narrows_the_identity_and_refuses_l
     scoped = await _identity(_redemption(_assertion(aud=AUDIENCES[1], scope="litellm:llm")), _Verifier(), _Resolver())
     assert isinstance(scoped, AssertionIdentity)
     assert scoped.scope == "litellm:llm"
+
+
+@pytest.mark.asyncio
+async def test_redeeming_for_the_signed_resource_caps_the_identity_before_subject_lookup() -> None:
+    mcp_claim: Final = _unscoped_assertion(aud=GATEWAY, resource=f"{GATEWAY}/mcp")
+    narrowed: Final = await _identity(_redemption(mcp_claim), _Verifier(), _Resolver())
+    assert isinstance(narrowed, AssertionIdentity)
+    assert (narrowed.scope, narrowed.allowed_routes) == ("litellm:mcp", ("mcp_inference_routes",))
+
+    llm_claim: Final = _assertion(aud=GATEWAY, resource=f"{GATEWAY}/mcp", scope="litellm:llm")
+    refused_scope: Final = await _identity(_redemption(llm_claim), _Verifier(), _Resolver())
+    assert isinstance(refused_scope, SubjectTokenRefusal)
+    assert refused_scope.error == "invalid_scope"
+
+    other_resource: Final = _unscoped_assertion(aud=GATEWAY, resource="https://other.example")
+    resolver: Final = _Resolver()
+    refused_resource: Final = await _identity(_redemption(other_resource), _Verifier(), resolver)
+    assert isinstance(refused_resource, SubjectTokenRefusal)
+    assert refused_resource.error == "invalid_target"
+    assert resolver.calls == ()
+
+    origin_resource: Final = _unscoped_assertion(aud=GATEWAY, resource=GATEWAY)
+    full_resource: Final = await _identity(_redemption(origin_resource), _Verifier(), _Resolver())
+    assert isinstance(full_resource, AssertionIdentity)
+    assert (full_resource.scope, full_resource.allowed_routes) == (None, None)
+
+    no_resource: Final = _unscoped_assertion(aud=GATEWAY)
+    full_control: Final = await _identity(_redemption(no_resource), _Verifier(), _Resolver())
+    assert isinstance(full_control, AssertionIdentity)
+    assert (full_control.scope, full_control.allowed_routes) == (None, None)
