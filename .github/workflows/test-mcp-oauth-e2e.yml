@@ -111,10 +111,10 @@ jobs:
       - uses: ./.github/actions/setup-uv-with-retries
         with:
           version: '0.10.9'
-      - uses: ./.github/actions/cache-cargo-build
+      - uses: ./.github/actions/rust-bridge
       - name: Install the frozen E2E environment
         run: |
-          uv sync --frozen --extra proxy --extra proxy-runtime --extra extra_proxy --group ci --group proxy-dev --group e2e-dev
+          .github/scripts/uv_sync_with_rust_bridge.sh --frozen --extra proxy --extra proxy-runtime --extra extra_proxy --group ci --group proxy-dev --group e2e-dev
           uv run --no-sync python scripts/prisma_generate_if_needed.py
           uv run --no-sync playwright install --with-deps chromium
 
