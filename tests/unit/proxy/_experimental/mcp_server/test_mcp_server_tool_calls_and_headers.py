@@ -10423,7 +10423,9 @@ class TestPreemptive401GatedByKeyAllowlist:
         handle_request.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_streamable_passthrough_reuses_allowed_servers_for_probe(self, monkeypatch: pytest.MonkeyPatch):
+    async def test_streamable_probe_reuses_allowed_servers(  # test-quality-ok: one lookup per request is the contract
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
         from litellm.proxy._experimental.mcp_server import server as server_module
 
         monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"mcp_advertised_versions": ["2026-07-28"]})
