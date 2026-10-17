@@ -5811,8 +5811,6 @@ AZURE_GPT_6_ASTRA_CACHE_WRITE_5M: Final = with_response_usage(
     },
     ExactExpected(spend=0.22375, input_cost=0.2, output_cost=0.02375, prompt_tokens=12928, completion_tokens=380),
 )
-
-
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     AZURE_GPT_6_SOL_MESSAGES_BRIDGED_JSON,
     AZURE_GPT_6_LUNA_MESSAGES_BRIDGED_JSON,
