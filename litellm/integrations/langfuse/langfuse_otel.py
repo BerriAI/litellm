@@ -13,7 +13,7 @@ from litellm.integrations.langfuse.langfuse_otel_attributes import (
     LangfuseLLMObsOTELAttributes,
 )
 from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
-from litellm.integrations.otel.model.trace_controls import caller_trace_controls, langfuse_trace_controls
+from litellm.integrations.otel.model.trace_controls import caller_trace_controls, request_trace_controls
 from litellm.integrations.otel.model.utils import as_str_mapping
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.types.integrations.langfuse_otel import (
@@ -276,7 +276,7 @@ class LangfuseOtelLogger(OpenTelemetry):
         end_user: Final = (
             slp_metadata.get("user_api_key_end_user_id")
             or slp.get("end_user")
-            or langfuse_trace_controls(kwargs).user_id
+            or request_trace_controls(kwargs).user_id
         )
         if end_user:
             safe_set_attribute(span, LangfuseSpanAttributes.TRACE_USER_ID.value, str(end_user))

@@ -18,7 +18,7 @@ _ITEMS: Final = TypeAdapter(tuple[object, ...])
 class TraceControls:
     """The caller's trace-level Langfuse controls: ``metadata.trace_name`` / ``trace_user_id`` / ``session_id`` /
     ``tags`` on the request (SDK or proxy body), with the proxy's ``langfuse_<control>`` headers winning over the
-    body for the scalar ones. ``langfuse_trace_controls`` fills a missing ``user_id`` with the proxy end user. Mutation
+    body for the scalar ones. ``request_trace_controls`` fills a missing ``user_id`` with the proxy end user. Mutation
     controls (``trace_id``, ``existing_trace_id``, ``update_trace_keys``) are deliberately not carried."""
 
     name: str | None = None
@@ -49,7 +49,7 @@ def caller_trace_controls(kwargs: Mapping[str, object]) -> TraceControls:
     )
 
 
-def langfuse_trace_controls(kwargs: Mapping[str, object]) -> TraceControls:
+def request_trace_controls(kwargs: Mapping[str, object]) -> TraceControls:
     controls: Final = caller_trace_controls(kwargs)
     if controls.user_id:
         return controls

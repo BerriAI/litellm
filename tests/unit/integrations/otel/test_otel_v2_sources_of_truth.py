@@ -49,7 +49,7 @@ from litellm.integrations.otel.model.spans import (
 from litellm.integrations.otel.model.trace_controls import (
     TraceControls,
     caller_trace_controls,
-    langfuse_trace_controls,
+    request_trace_controls,
 )
 
 
@@ -1385,8 +1385,8 @@ def test_caller_trace_controls_carry_user_session_and_tags(request_data, expecte
         "empty",
     ],
 )
-def test_langfuse_trace_controls_fall_back_to_the_proxy_end_user(request_data, expected):
-    assert langfuse_trace_controls({"litellm_params": request_data}) == expected
+def test_request_trace_controls_fall_back_to_the_proxy_end_user(request_data, expected):
+    assert request_trace_controls({"litellm_params": request_data}) == expected
     assert LLMCallEvent.from_dict({"litellm_params": request_data}).trace == expected
 
 
