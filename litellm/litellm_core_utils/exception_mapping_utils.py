@@ -38,6 +38,8 @@ from ..exceptions import (
     UnprocessableEntityError,
 )
 
+_DATA_INSPECTION_FAILED: Final = re.compile(r"\bdata_?inspection_?failed\b", re.IGNORECASE)
+
 
 class ExceptionCheckers:
     """
@@ -138,6 +140,10 @@ class ExceptionCheckers:
             if substring in _lower:
                 return True
         return False
+
+    @staticmethod
+    def is_data_inspection_failed_error(error_str: str, status_code: int | None) -> bool:
+        return status_code == 400 and _DATA_INSPECTION_FAILED.search(error_str) is not None
 
 
 def get_error_message(error_obj) -> str | None:
@@ -381,6 +387,9 @@ def _map_openai_exception(
         ("invalid_request_error" in error_str and "content_policy_violation" in error_str)
         or ("Invalid prompt" in error_str and "violating our usage policy" in error_str)
         or ("request was rejected as a result of the safety system" in error_str.lower())
+        or ExceptionCheckers.is_data_inspection_failed_error(
+            error_str, status_code=getattr(original_exception, "status_code", None)
+        )
     ):
         raise ContentPolicyViolationError(
             message=f"ContentPolicyViolationError: {exception_provider} - {message}",

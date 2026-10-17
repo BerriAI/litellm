@@ -1,6 +1,7 @@
 import json
 import traceback
 from collections.abc import Awaitable, Callable
+from types import MappingProxyType
 from typing import Any, Final, Literal, Optional, Union
 from unittest.mock import MagicMock, patch
 
@@ -407,6 +408,115 @@ def test_openai_compatible_429_still_maps_to_rate_limit():
         )
 
     assert excinfo.value.status_code == 429
+
+
+# Alibaba's OpenAI compatible endpoint rejects flagged input with these bodies. The snake_case code was observed on
+# the compatible-mode endpoint in 2026-10, the CamelCase message is the one quoted in BerriAI/litellm#41682 (2026-09)
+_INSPECTION_REJECTION_SNAKE_CASE: Final = (
+    '{"error":{"code":"data_inspection_failed","param":null,'
+    '"message":"Input text data may contain inappropriate content.","type":"data_inspection_failed"}}'
+)
+_INSPECTION_REJECTION_CAMEL_CASE: Final = (
+    '{"error":{"message":"InternalError.Algo.DataInspectionFailed: '
+    'Input text data may contain inappropriate content.",'
+    '"type":"invalid_request_error","code":"invalid_request_error"}}'
+)
+_INSPECTION_REJECTION_BODIES: Final = MappingProxyType(
+    {
+        "snake_case": _INSPECTION_REJECTION_SNAKE_CASE,
+        "snake_case_in_data_frame": f"data: {_INSPECTION_REJECTION_SNAKE_CASE}\n\n",
+        "camel_case": _INSPECTION_REJECTION_CAMEL_CASE,
+        "camel_case_in_data_frame": f"data: {_INSPECTION_REJECTION_CAMEL_CASE}\n\n",
+    }
+)
+_INSPECTION_PROVIDERS: Final = ("dashscope", "qwencloud", "openai")
+
+
+@pytest.mark.parametrize("custom_llm_provider", _INSPECTION_PROVIDERS)
+@pytest.mark.parametrize("body_shape", list(_INSPECTION_REJECTION_BODIES))
+def test_data_inspection_rejection_maps_to_content_policy_violation(body_shape: str, custom_llm_provider: str):
+    body: Final = _INSPECTION_REJECTION_BODIES[body_shape]
+
+    with pytest.raises(litellm.ContentPolicyViolationError) as excinfo:
+        exception_type(
+            model=f"{custom_llm_provider}/qwen-plus",
+            original_exception=OpenAIError(status_code=400, message=body, headers={}),
+            custom_llm_provider=custom_llm_provider,
+        )
+
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.llm_provider == custom_llm_provider
+    assert "inspectionfailed" in str(excinfo.value).lower().replace("_", "")
+
+
+@pytest.mark.parametrize("custom_llm_provider", _INSPECTION_PROVIDERS)
+def test_other_content_policy_violation_still_maps_to_content_policy_violation(custom_llm_provider: str):
+    body: Final = '{"error":{"message":"rejected","type":"invalid_request_error","code":"content_policy_violation"}}'
+
+    with pytest.raises(litellm.ContentPolicyViolationError) as excinfo:
+        exception_type(
+            model=f"{custom_llm_provider}/qwen-plus",
+            original_exception=OpenAIError(status_code=400, message=body, headers={}),
+            custom_llm_provider=custom_llm_provider,
+        )
+
+    assert excinfo.value.status_code == 400
+
+
+@pytest.mark.parametrize("custom_llm_provider", _INSPECTION_PROVIDERS)
+def test_ordinary_400_next_to_the_inspection_mapping_stays_bad_request(custom_llm_provider: str):
+    body: Final = (
+        '{"error":{"message":"Temperature should be in [0.0, 2.0)","type":"invalid_request_error",'
+        '"code":"invalid_parameter_error"}}'
+    )
+
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        exception_type(
+            model=f"{custom_llm_provider}/qwen-plus",
+            original_exception=OpenAIError(status_code=400, message=body, headers={}),
+            custom_llm_provider=custom_llm_provider,
+        )
+
+    assert not isinstance(excinfo.value, litellm.ContentPolicyViolationError)
+    assert excinfo.value.status_code == 400
+
+
+@pytest.mark.parametrize("status_code", [401, 429, 500, 502])
+@pytest.mark.parametrize("custom_llm_provider", _INSPECTION_PROVIDERS)
+def test_data_inspection_marker_under_a_non_400_status_is_not_a_content_policy_violation(
+    custom_llm_provider: str, status_code: int
+):
+    with pytest.raises(openai.APIStatusError) as excinfo:
+        exception_type(
+            model=f"{custom_llm_provider}/qwen-plus",
+            original_exception=OpenAIError(
+                status_code=status_code, message=_INSPECTION_REJECTION_SNAKE_CASE, headers={}
+            ),
+            custom_llm_provider=custom_llm_provider,
+        )
+
+    assert not isinstance(excinfo.value, litellm.ContentPolicyViolationError)
+    assert getattr(excinfo.value, "status_code", None) == status_code
+
+
+@pytest.mark.parametrize(
+    ("error_str", "status_code", "expected"),
+    [
+        ("data_inspection_failed", 400, True),
+        ("DataInspectionFailed", 400, True),
+        ("InternalError.Algo.DataInspectionFailed: blocked", 400, True),
+        ("DATA_INSPECTION_FAILED", 400, True),
+        ("datainspectionfailed", 400, True),
+        ("data_inspection_failed", 500, False),
+        ("data_inspection_failed", None, False),
+        ("metadata_inspection_failed", 400, False),
+        ("data_inspection_failed_again", 400, False),
+        ("data inspection failed", 400, False),
+        ("Temperature should be in [0.0, 2.0)", 400, False),
+    ],
+)
+def test_is_data_inspection_failed_error(error_str: str, status_code: int | None, expected: bool):
+    assert ExceptionCheckers.is_data_inspection_failed_error(error_str, status_code=status_code) is expected
 
 
 @pytest.mark.parametrize(
