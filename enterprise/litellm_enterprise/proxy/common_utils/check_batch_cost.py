@@ -242,7 +242,7 @@ class CheckBatchCost:
         """
         if not self._has_batch_processed_column:
             return True
-        from litellm_enterprise.proxy.hooks.managed_files import _postgres_storable_json
+        from litellm_enterprise.proxy.hooks.managed_files import postgres_storable_json
 
         try:
             claimed: Final = await _managed_object_table(self.prisma_client).update_many(
@@ -250,7 +250,7 @@ class CheckBatchCost:
                 data={
                     "batch_processed": True,
                     "status": response.status if response.status != "completed" else "complete",
-                    "file_object": _postgres_storable_json(response),
+                    "file_object": postgres_storable_json(response),
                 },
             )
         except Exception as db_err:
