@@ -6646,20 +6646,17 @@ class StandardLoggingPayloadSetup:
         litellm_params: dict[str, object],
         proxy_server_request: Mapping[str, object],
     ) -> list[str]:
-        caller_metadata: Final = cast(  # cast-ok: request metadata is caller-provided
+        metadata: Final = cast(  # cast-ok: request metadata is caller-provided
             Mapping[str, object], litellm_params.get("metadata") or {}
         )
         litellm_metadata: Final = cast(  # cast-ok: request metadata is caller-provided
             Mapping[str, object], litellm_params.get("litellm_metadata") or {}
         )
-        metadata: Final = {
-            **caller_metadata,
-            **_proxy_fields_replacing_mistyped_ones(caller_metadata, litellm_metadata),
-        }
-        if metadata.get("tags", []):
+        proxy_tags: Final = litellm_metadata.get("tags")
+        if isinstance(proxy_tags, list) and proxy_tags:
+            request_tags = cast(list[str], proxy_tags).copy()  # cast-ok: tags are caller-provided
+        elif metadata.get("tags", []):
             request_tags = cast(list[str], metadata.get("tags", [])).copy()  # cast-ok: tags are caller-provided
-        elif litellm_metadata.get("tags", []):
-            request_tags = cast(list[str], litellm_metadata.get("tags", [])).copy()  # cast-ok: tags are caller-provided
         else:
             request_tags = []
         user_agent_tags: Final = StandardLoggingPayloadSetup._get_user_agent_tags(proxy_server_request)

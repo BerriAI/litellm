@@ -631,6 +631,41 @@ async def test_add_litellm_data_to_request_keeps_vector_store_metadata_to_the_ca
 
 
 @pytest.mark.asyncio
+async def test_vector_store_request_tags_keep_key_tags_when_caller_sends_metadata_tags():
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "scheme": "http",
+            "server": ("localhost", 4000),
+            "path": "/v1/vector_stores/vs_1/search",
+            "root_path": "",
+            "query_string": b"",
+            "headers": [(b"content-type", b"application/json")],
+            "client": ("127.0.0.1", 1234),
+        }
+    )
+
+    updated: Final = await add_litellm_data_to_request(
+        data={"query": "test", "metadata": {"tags": ["caller-tag"]}},
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key", team_id="real-team", metadata={"tags": ["key-tag"]}),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+    request_tags: Final = StandardLoggingPayloadSetup.get_request_tags(
+        litellm_params={"metadata": updated["metadata"], "litellm_metadata": updated["litellm_metadata"]},
+        proxy_server_request={},
+    )
+
+    assert updated["metadata"] == {"tags": ["caller-tag"]}
+    assert sorted(request_tags) == ["caller-tag", "key-tag"]
+
+
+@pytest.mark.asyncio
 async def test_add_litellm_data_to_request_string_metadata_does_not_crash():
     """Regression: pre-strip code that pre-populated data['metadata'][k]=v
     before the string-to-dict parse would crash on JSON-string metadata.

@@ -3057,7 +3057,7 @@ def test_get_request_tags_from_metadata_and_litellm_metadata():
     Scenarios tested:
     1. Tags in metadata only
     2. Tags in litellm_metadata only
-    3. Tags in both (metadata should take priority)
+    3. Tags in both (litellm_metadata, which the proxy builds from both, takes priority)
     4. No tags in either
     5. None values for metadata/litellm_metadata
     """
@@ -3081,17 +3081,15 @@ def test_get_request_tags_from_metadata_and_litellm_metadata():
     assert "litellm-metadata-tag-2" in tags
     assert len([t for t in tags if not t.startswith("User-Agent:")]) == 2
 
-    # Test case 3: Tags in both - metadata should take priority
+    # Test case 3: Tags in both - litellm_metadata takes priority
     tags = StandardLoggingPayloadSetup.get_request_tags(
         litellm_params={
-            "metadata": {"tags": ["metadata-tag"]},
-            "litellm_metadata": {"tags": ["litellm-metadata-tag"]},
+            "metadata": {"tags": ["caller-tag"]},
+            "litellm_metadata": {"tags": ["key-tag", "caller-tag"]},
         },
         proxy_server_request={},
     )
-    assert "metadata-tag" in tags
-    assert "litellm-metadata-tag" not in tags
-    assert len([t for t in tags if not t.startswith("User-Agent:")]) == 1
+    assert tags == ["key-tag", "caller-tag"]
 
     # Test case 4: No tags in either
     tags = StandardLoggingPayloadSetup.get_request_tags(
