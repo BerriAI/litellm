@@ -1,7 +1,7 @@
 //! Builds the hooks and observers inference requests run through, and the per-deployment prices
 //! observers that read cost need.
 
-use std::{collections::HashSet, sync::Arc};
+use std::{borrow::Cow, collections::HashSet, sync::Arc};
 
 use litellm_config::{Config, Model};
 use litellm_gateway_hooks::{
@@ -239,8 +239,10 @@ impl CostMap {
 }
 
 impl ModelInfo for CostMap {
-    fn entry(&self, model: &str) -> Option<&Map<String, Value>> {
-        self.catalog.lookup(model).map(|found| found.entry.fields())
+    fn entry(&self, model: &str) -> Option<Cow<'_, Map<String, Value>>> {
+        self.catalog
+            .lookup(model)
+            .map(|found| Cow::Borrowed(found.entry.fields()))
     }
 
     fn declares(&self, key: &str) -> bool {

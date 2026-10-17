@@ -369,6 +369,7 @@ impl AzureChatRequest<'_> {
         let model = self.deployment;
         if model.starts_with(RESPONSES_ROUTE)
             || model_info::field(self.info(), &format!("azure/{model}"), "mode")
+                .as_ref()
                 .and_then(Value::as_str)
                 == Some("responses")
         {
@@ -789,7 +790,9 @@ fn openai_gpt_params(model: &str, info: Option<&dyn ModelInfo>) -> Vec<&'static 
         .split_once(RESPONSES_ROUTE)
         .map_or(model, |(_, rest)| rest);
     if matches!(
-        model_info::field(info, catalog_name, "litellm_provider").and_then(Value::as_str),
+        model_info::field(info, catalog_name, "litellm_provider")
+            .as_ref()
+            .and_then(Value::as_str),
         Some("openai" | "text-completion-openai")
     ) {
         params.push("user");
@@ -914,8 +917,8 @@ mod tests {
     }
 
     impl ModelInfo for Entries {
-        fn entry(&self, model: &str) -> Option<&Map<String, Value>> {
-            self.0.get(model)
+        fn entry(&self, model: &str) -> Option<std::borrow::Cow<'_, Map<String, Value>>> {
+            self.0.get(model).map(std::borrow::Cow::Borrowed)
         }
 
         fn declares(&self, key: &str) -> bool {

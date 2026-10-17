@@ -848,8 +848,8 @@ mod tests {
     struct CostMap(StdHashMap<String, Map<String, Value>>);
 
     impl ModelInfo for CostMap {
-        fn entry(&self, model: &str) -> Option<&Map<String, Value>> {
-            self.0.get(model)
+        fn entry(&self, model: &str) -> Option<std::borrow::Cow<'_, Map<String, Value>>> {
+            self.0.get(model).map(std::borrow::Cow::Borrowed)
         }
         fn declares(&self, key: &str) -> bool {
             self.0.values().any(|entry| entry.contains_key(key))

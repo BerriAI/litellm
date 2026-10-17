@@ -22,13 +22,13 @@ _OBJECT: Final = TypeAdapter(dict[str, object])
 async def test_returns_a_model_response_and_logs_success_once(server: RecordingServer, asynchronous: bool) -> None:
     recorder: Final = RecordingLogger()
 
-    result: Final = await call(server, asynchronous=asynchronous, callbacks=[recorder], temperature=0.25)
+    result: Final = await call(server, asynchronous=asynchronous, callbacks=[recorder], temperature=1)
 
     assert_served_natively(server)
     sent: Final = server.requests[0]
     body: Final = _OBJECT.validate_python(sent.body)
     assert sent.path == "/v1/messages"
-    assert body["temperature"] == 0.25
+    assert body["temperature"] == 1
     assert request_body(_OBJECT.validate_python(recorder.wait_for("log_pre_api_call")[0].kwargs)) == body
     assert isinstance(result, ModelResponse)
     assert result.choices[0].message.content == MESSAGES_TEXT
