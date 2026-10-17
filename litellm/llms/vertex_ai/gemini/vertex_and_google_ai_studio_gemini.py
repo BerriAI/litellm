@@ -1238,7 +1238,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 return
 
     @staticmethod
-    def _supports_sampling_params(model: str) -> bool:
+    def supports_sampling_params(model: str) -> bool:
         from litellm.utils import get_bundled_model_cost_map
 
         candidates: Final = (
@@ -1258,9 +1258,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         return val
         return True
 
-    @classmethod
-    def supports_sampling_params(cls, model: str) -> bool:
-        return cls._supports_sampling_params(model)
+    _supports_sampling_params = supports_sampling_params
 
     @staticmethod
     def _apply_sampling_param(
@@ -1270,7 +1268,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         value: object,
         drop_params: bool,
     ) -> None:
-        if VertexGeminiConfig._supports_sampling_params(model):
+        if VertexGeminiConfig.supports_sampling_params(model):
             optional_params[param] = value  # rebind-ok: in-place request params mapping
         elif not (litellm.drop_params or drop_params):
             raise litellm.utils.UnsupportedParamsError(
@@ -1290,37 +1288,47 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     ) -> dict:
         self._apply_include_server_side_tool_invocations(non_default_params, optional_params)
         gemini_sampling_params_warned: bool = False
+        supports_sampling: bool = VertexGeminiConfig.supports_sampling_params(model)
         for param, value in non_default_params.items():
             if param == "temperature":
-                if VertexGeminiConfig._is_gemini_3_or_newer(model):
-                    if value is not None and value < 1.0:
-                        verbose_logger.info(
-                            "Warning: Setting temperature < 1.0 for Gemini 3 models (%s) can cause infinite loops, degraded reasoning performance, and failure on complex tasks. Strongly recommended to use temperature = 1.0 (default).",
-                            model,
-                        )
-                    if not gemini_sampling_params_warned:
+                if not supports_sampling:
+                    self._apply_sampling_param(optional_params, model, "temperature", value, drop_params)
+                else:
+                    if VertexGeminiConfig._is_gemini_3_or_newer(model):
+                        if value is not None and value < 1.0:
+                            verbose_logger.info(
+                                "Warning: Setting temperature < 1.0 for Gemini 3 models (%s) can cause infinite loops, degraded reasoning performance, and failure on complex tasks. Strongly recommended to use temperature = 1.0 (default).",
+                                model,
+                            )
+                        if not gemini_sampling_params_warned:
+                            verbose_logger.warning(
+                                "DeprecationWarning: `temperature`, `top_p`, and `top_k` continue to function for Gemini 3+ (%s) but are planned for removal in a future release. Move sampling guidance into the `system` instructions instead.",
+                                model,
+                            )
+                            gemini_sampling_params_warned = True
+                    self._apply_sampling_param(optional_params, model, "temperature", value, drop_params)
+            elif param == "top_p":
+                if not supports_sampling:
+                    self._apply_sampling_param(optional_params, model, "top_p", value, drop_params)
+                else:
+                    if VertexGeminiConfig._is_gemini_3_or_newer(model) and not gemini_sampling_params_warned:
                         verbose_logger.warning(
                             "DeprecationWarning: `temperature`, `top_p`, and `top_k` continue to function for Gemini 3+ (%s) but are planned for removal in a future release. Move sampling guidance into the `system` instructions instead.",
                             model,
                         )
                         gemini_sampling_params_warned = True
-                self._apply_sampling_param(optional_params, model, "temperature", value, drop_params)
-            elif param == "top_p":
-                if VertexGeminiConfig._is_gemini_3_or_newer(model) and not gemini_sampling_params_warned:
-                    verbose_logger.warning(
-                        "DeprecationWarning: `temperature`, `top_p`, and `top_k` continue to function for Gemini 3+ (%s) but are planned for removal in a future release. Move sampling guidance into the `system` instructions instead.",
-                        model,
-                    )
-                    gemini_sampling_params_warned = True
-                self._apply_sampling_param(optional_params, model, "top_p", value, drop_params)
+                    self._apply_sampling_param(optional_params, model, "top_p", value, drop_params)
             elif param == "top_k":
-                if VertexGeminiConfig._is_gemini_3_or_newer(model) and not gemini_sampling_params_warned:
-                    verbose_logger.warning(
-                        "DeprecationWarning: `temperature`, `top_p`, and `top_k` continue to function for Gemini 3+ (%s) but are planned for removal in a future release. Move sampling guidance into the `system` instructions instead.",
-                        model,
-                    )
-                    gemini_sampling_params_warned = True
-                self._apply_sampling_param(optional_params, model, "top_k", value, drop_params)
+                if not supports_sampling:
+                    self._apply_sampling_param(optional_params, model, "top_k", value, drop_params)
+                else:
+                    if VertexGeminiConfig._is_gemini_3_or_newer(model) and not gemini_sampling_params_warned:
+                        verbose_logger.warning(
+                            "DeprecationWarning: `temperature`, `top_p`, and `top_k` continue to function for Gemini 3+ (%s) but are planned for removal in a future release. Move sampling guidance into the `system` instructions instead.",
+                            model,
+                        )
+                        gemini_sampling_params_warned = True
+                    self._apply_sampling_param(optional_params, model, "top_k", value, drop_params)
             elif (
                 param == "stream" and value is True
             ):  # sending stream = False, can cause it to get passed unchecked and raise issues
