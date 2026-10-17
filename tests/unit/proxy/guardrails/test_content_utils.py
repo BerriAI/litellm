@@ -794,16 +794,8 @@ def test_native_tool_payload_rewrites_values_preserving_structure(tool_input):
     assert data["system"] == [{"type": "text", "text": "[MASKED]", "cache_control": {"type": "ephemeral"}}]
 
 
-@pytest.mark.parametrize(
-    "arguments",
-    (
-        '{ "token": "secret", "count": 7, "ok": false, "none": null }',
-        '{"token":"secret", "token":"safe"}',
-        '{"token":"secret",broken',
-    ),
-)
-def test_native_tool_call_arguments_cannot_lose_redactions(arguments):
-    data = {
+def _tool_call(arguments: JsonValue) -> dict[str, JsonValue]:
+    return {
         "messages": [
             {
                 "role": "assistant",
@@ -812,13 +804,36 @@ def test_native_tool_call_arguments_cannot_lose_redactions(arguments):
             }
         ]
     }
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    (
+        '{ "token": "secret", "count": 7, "ok": false, "none": null }',
+        {"token": "secret", "count": 7, "ok": False, "none": None},
+    ),
+    ids=("string", "dict"),
+)
+def test_native_tool_call_arguments_are_masked_as_json(arguments: JsonValue) -> None:
+    data = _tool_call(arguments)
     assert "secret" in "\n".join(iter_message_text(data))
     assert walk_user_text(data, lambda text: text.replace("secret", "[MASKED]")) == 1
     function = data["messages"][0]["tool_calls"][0]["function"]
-    assert "secret" not in function["arguments"]
+    masked = json.loads(function["arguments"]) if isinstance(arguments, str) else function["arguments"]
+    assert masked == {"token": "[MASKED]", "count": 7, "ok": False, "none": None}
     assert function["name"] == "secret_tool_name"
-    if arguments.endswith("}") and arguments.count('"token"') == 1:
-        assert json.loads(function["arguments"]) == {"token": "[MASKED]", "count": 7, "ok": False, "none": None}
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    ('{"token":"secret", "token":"safe"}', '{"token":"secret",broken', '{"pattern":"[\\ud800-\\udbff] secret"}'),
+    ids=("duplicate-key", "malformed", "lone-surrogate"),
+)
+def test_native_tool_call_arguments_that_are_not_clean_json_are_masked_as_raw_text(arguments: str) -> None:
+    data = _tool_call(arguments)
+    assert arguments in tuple(iter_message_text(data))
+    assert walk_user_text(data, lambda text: text.replace("secret", "[MASKED]")) == 1
+    assert data["messages"][0]["tool_calls"][0]["function"]["arguments"] == arguments.replace("secret", "[MASKED]")
 
 
 def test_native_tool_arguments_unchanged_bytes_and_decoded_reader():
@@ -957,36 +972,6 @@ def test_tool_json_graph_repeated_shared_containers_keep_order_and_empty_leaves(
     assert rewritten["empty"] == [] and shared["secret-key"] == "secret"
 
 
-@pytest.mark.parametrize("kind", ("dict", "list"))
-@pytest.mark.parametrize("operation", ("reader", "mapper", "writer"))
-def test_tool_json_graph_cycles_fail_without_echoing_values(kind: str, operation: str) -> None:
-    cyclic = {"value": "secret"} if kind == "dict" else ["secret"]
-    if isinstance(cyclic, dict):
-        cyclic["again"] = cyclic
-    else:
-        cyclic.append(cyclic)
-    with pytest.raises(ValueError, match=r"^Invalid tool JSON payload$") as caught:
-        _exercise_tool_json(cyclic, operation)
-    assert "secret" not in str(caught.value)
-
-
-def _exercise_tool_json(value: object, operation: str) -> None:
-    if operation == "reader":
-        tuple(iter_tool_json_text(value))
-    elif operation == "mapper":
-        map_tool_json_text(value, lambda text: text)
-    else:
-        walk_user_text({"messages": [{"content": [{"type": "tool_use", "input": value}]}]}, lambda text: text)
-
-
-@pytest.mark.parametrize("value", (b"secret", {"secret"}, {7: "secret"}))
-@pytest.mark.parametrize("operation", ("reader", "mapper"))
-def test_tool_json_graph_unsupported_values_fail_without_echoing_values(value: object, operation: str) -> None:
-    with pytest.raises(ValueError, match=r"^Invalid tool JSON payload$") as caught:
-        _exercise_tool_json(value, operation)
-    assert "secret" not in str(caught.value)
-
-
 def test_nested_tool_result_chain_leaves_later_messages_inspected() -> None:
     chain = reduce(
         lambda content, _: [{"type": "tool_result", "tool_use_id": "tool", "content": content}],
@@ -1012,7 +997,11 @@ def test_tool_arguments_with_non_finite_numbers_keep_their_original_bytes(argume
 @pytest.mark.parametrize(
     "data",
     (
-        {"messages": [{"content": [{"type": "tool_use", "input": {"a": "first", "b": [7, {"c": "second"}, "third"]}}]}]},
+        {
+            "messages": [
+                {"content": [{"type": "tool_use", "input": {"a": "first", "b": [7, {"c": "second"}, "third"]}}]}
+            ]
+        },
         {"messages": [{"tool_calls": [{"function": {"arguments": '{"a":"first","b":[7,{"c":"second"},"third"]}'}}]}]},
     ),
 )

@@ -17,7 +17,6 @@ from integration._support.database import scratch_database
 from integration._support.process import OwnedProxy, owned_proxy_process
 from integration._support.timing import assert_not_delayed_by, timed
 from integration._support.wire import Reply, Request, Wire, wire_server
-from integration.security._license_edge import license_edge
 from pydantic import JsonValue
 
 SECRET: Final = "AKIAIOSFODNN7EXAMPLE"
@@ -97,9 +96,9 @@ def tool_rig(
     configure: Callable[[dict[str, JsonValue]], None] | None = None,
     environment: Mapping[str, str] | None = None,
 ) -> Iterator[Rig]:
+    assert os.environ.get("LITELLM_LICENSE"), "LITELLM_LICENSE must be set: hide-secrets is an enterprise feature"
     product_root: Final = Path(os.environ.get("INTEGRATION_PROXY_ROOT") or Path(__file__).resolve().parents[3])
     with (
-        license_edge(directory) as entitlement,
         wire_server(respond) as wire,
         scratch_database("hide_secrets") as database,
     ):
@@ -161,7 +160,6 @@ def tool_rig(
                 (str(product_root / "enterprise"), str(product_root), os.environ.get("PYTHONPATH", ""))
             ),
             **(environment or {}),
-            **entitlement,
         }
         with httpx.Client() as client:
             seed: Final = Gateway(client, MASTER_KEY, wire.url)

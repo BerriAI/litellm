@@ -194,7 +194,8 @@ def _wire(caller: Caller, marker: str) -> dict[str, JsonValue]:
 
 def _stored(caller: Caller, response_id: str, *, masked: bool = True, cache: bool = False) -> dict[str, JsonValue]:
     query: Final = (
-        'SELECT request_id, status, metadata, cache_hit FROM "LiteLLM_SpendLogs" WHERE request_id=%s OR litellm_call_id=%s'
+        'SELECT request_id, status, metadata, cache_hit FROM "LiteLLM_SpendLogs" '
+        "WHERE request_id=%s OR litellm_call_id=%s"
         if not cache
         else 'SELECT request_id, status, metadata, cache_hit FROM "LiteLLM_SpendLogs" WHERE request_id LIKE %s'
     )

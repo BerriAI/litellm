@@ -21,7 +21,7 @@ from collections.abc import Generator, Iterator, Sequence
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, ClassVar, Final, Literal, Optional
 
-from pydantic import JsonValue
+from pydantic import JsonValue, TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
@@ -452,6 +452,8 @@ _default_detect_secrets_config = {
 
 _CONFIG_SECTION: Final = "litellm-prompt"
 
+_JSON_STRING: Final = TypeAdapter(str)
+
 _ASSIGNMENT_LINE: Final = re.compile(r"[^\s\[#;:=][^:=]*[:=]")
 
 _SHELL_ASSIGNMENT: Final = re.compile(r"(?P<key>[^\s\[#;:=](?:[^:=]*[^\s:=])?)=(?P<value>\S+)")
@@ -535,6 +537,24 @@ def _quoted_assignments(text: str) -> tuple[str, ...]:
     )
 
 
+def _json_unescaped(value: str) -> str:
+    try:
+        return _JSON_STRING.validate_json(f'"{value}"')
+    except ValueError:
+        return value
+
+
+def _json_line(key: str | None, text: str) -> str:
+    value: Final = json.dumps(text, ensure_ascii=False)
+    return value if key is None else f"{json.dumps(key, ensure_ascii=False)}: {value}"
+
+
+def _value_in_texts(value: str, texts: Sequence[str]) -> str | None:
+    """Return the detected value as it appears in ``texts``, decoding it when it came from a JSON-escaped key line."""
+    candidates: Final = (value, _json_unescaped(value))
+    return next((candidate for candidate in candidates if any(candidate in text for text in texts)), None)
+
+
 class _ENTERPRISE_SecretDetection(CustomGuardrail):
     # Keeps proxied traffic on async_pre_call_hook (the unified apply_guardrail
     # path skips should_run_check and never sees data["prompt"]).
@@ -584,17 +604,14 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
         return pattern.sub("[REDACTED]", text)
 
     def redact_tool_payload(self, payload: JsonValue) -> JsonValue:
-        """Redact secrets in a tool payload's string values, scanning each value alone and beside its key."""
+        """Redact secrets in a tool payload's string values, scanning each value alone and as its JSON line."""
         fields: Final = tuple(iter_tool_json_fields(payload))
         texts: Final = tuple(text for _, text in fields)
-        keyed: Final = tuple(
-            f"{json.dumps(key, ensure_ascii=False)}: {json.dumps(text, ensure_ascii=False)}"
-            for key, text in fields
-            if key is not None
-        )
+        keyed: Final = tuple(_json_line(key, text) for key, text in fields)
         detected: Final = tuple(
-            secret for secret in self.scan_message_for_secrets("\n".join((*texts, *keyed)))
-            if any(secret["value"] in text for text in texts)
+            {**secret, "value": value}
+            for secret in self.scan_message_for_secrets("\n".join((*texts, *keyed)))
+            if (value := _value_in_texts(secret["value"], texts)) is not None
         )
         if not detected:
             return payload

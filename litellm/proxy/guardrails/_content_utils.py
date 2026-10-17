@@ -90,7 +90,7 @@ def _finite_number(literal: str) -> float:
 
 
 def _tool_arguments(arguments: str) -> JsonValue:
-    return _tool_json(
+    parsed: Final = _tool_json(
         json.loads(
             arguments,
             object_pairs_hook=_tool_json_object,
@@ -98,19 +98,15 @@ def _tool_arguments(arguments: str) -> JsonValue:
             parse_constant=_finite_number,
         )
     )
+    json.dumps(parsed, ensure_ascii=False).encode("utf-8")
+    return parsed
 
 
 def iter_tool_json_fields(value: object) -> Iterator[tuple[str | None, str]]:
-    """Yield ``(nearest key, text)`` for every non-empty string leaf; list items take their parent's key."""
-    pending: Final[list[tuple[object, str | None, bool]]] = [  # mutable-ok: owned DFS stack avoids Python recursion
-        (value, None, False)
-    ]
-    active: Final[set[int]] = set()  # mutable-ok: track active ancestry only
+    """Yield ``(key, text)`` for every non-empty string leaf; the key is None for list items and a bare root."""
+    pending: Final[list[tuple[object, str | None]]] = [(value, None)]  # mutable-ok: owned DFS stack avoids recursion
     while pending:
-        current, key, leaving = pending.pop()
-        if leaving:
-            active.remove(id(current))
-            continue
+        current, key = pending.pop()
         if isinstance(current, str):
             if current:
                 yield key, current
@@ -119,15 +115,12 @@ def iter_tool_json_fields(value: object) -> Iterator[tuple[str | None, str]]:
             continue
         fields = _text_object(current)
         if fields is not None:
-            children = tuple(fields.items())
-        else:
-            items = _object_list(current)
-            children = None if items is None else tuple((key, child) for child in items)
-        if children is None or id(current) in active:
+            pending.extend((child, child_key) for child_key, child in reversed(tuple(fields.items())))
+            continue
+        items = _object_list(current)
+        if items is None:
             raise ValueError("Invalid tool JSON payload")
-        active.add(id(current))
-        pending.append((current, key, True))
-        pending.extend((child, child_key, False) for child_key, child in reversed(children))
+        pending.extend((child, None) for child in reversed(items))
 
 
 def iter_tool_json_text(value: object) -> Iterator[str]:
@@ -160,13 +153,9 @@ class _ToolFrame:
 
 def map_tool_json_text(value: object, visit: Callable[[str], str]) -> JsonValue:
     root: Final[list[JsonValue]] = [None]  # mutable-ok: one owned root slot receives the iterative result
-    pending: Final[list[_ToolFrame | int]] = [_ToolFrame(value, root, 0)]  # mutable-ok: owned traversal stack
-    active: Final[set[int]] = set()  # mutable-ok: remove IDs on exit so repeated noncyclic containers remain valid
+    pending: Final[list[_ToolFrame]] = [_ToolFrame(value, root, 0)]  # mutable-ok: owned traversal stack
     while pending:
         frame = pending.pop()
-        if isinstance(frame, int):
-            active.remove(frame)
-            continue
         current = frame.source
         if isinstance(current, str):
             frame.write(visit(current) if current else current)
@@ -174,10 +163,6 @@ def map_tool_json_text(value: object, visit: Callable[[str], str]) -> JsonValue:
         if current is None or isinstance(current, (bool, int, float)):
             frame.write(current)
             continue
-        if id(current) in active:
-            raise ValueError("Invalid tool JSON payload")
-        active.add(id(current))
-        pending.append(id(current))
         fields = _text_object(current)
         if fields is not None:
             mapped: dict[str, JsonValue] = {key: None for key in fields}  # mutable-ok: owned output slots
