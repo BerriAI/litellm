@@ -915,7 +915,7 @@ from litellm.proxy.utils import (  # noqa: F401, RUF100  # legacy module exports
     is_projected_spend_over_limit,  # pyright: ignore[reportUnusedImport]  # backwards-compatible package export
     is_valid_team_configs,
     litellm_config_cache,
-    migrate_passwords_to_scrypt_async,
+    migrate_plaintext_passwords_async,
     model_dump_with_preserved_fields,
     prefetch_config_params,
     update_spend,
@@ -1496,7 +1496,7 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
 
         async def _run_pw_migration():
             try:
-                result: Final = await migrate_passwords_to_scrypt_async(prisma_client)
+                result: Final = await migrate_plaintext_passwords_async(prisma_client)
                 verbose_proxy_logger.info("Password migration: %s", result)
             except Exception as e:
                 verbose_proxy_logger.warning("Password migration skipped: %s", e)
@@ -18315,7 +18315,8 @@ async def claim_onboarding_link(data: InvitationClaim, request: Request):
 
     validate_password_policy(data.password, general_settings)
     await validate_password_not_breached(data.password, general_settings)
-    hashed_pw: Final = hash_password(data.password)
+    # PBKDF2 at 600k iterations is CPU-bound (~240ms); hash off the event loop.
+    hashed_pw: Final = await asyncio.to_thread(hash_password, data.password)
     current_time = litellm.utils.get_utc_datetime()
     tx_manager: Final[_InvitationAcceptTxManager] = prisma_client.db.tx()
     async with tx_manager as tx:
