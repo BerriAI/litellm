@@ -5,7 +5,6 @@ import httpx
 from pydantic import TypeAdapter
 
 from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
-from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_anthropic_image_obj,
 )
@@ -23,7 +22,6 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
     AmazonInvokeConfig,
 )
 from litellm.llms.bedrock.common_utils import (
-    NativeOutputFallback,
     apply_bedrock_invoke_structured_output,
     bedrock_chat_uses_native_structured_output,
     bedrock_cleaned_output_schema,
@@ -31,16 +29,12 @@ from litellm.llms.bedrock.common_utils import (
     bedrock_supports_tool_search,
     deployment_model_info,
     get_anthropic_beta_from_headers,
-    json_object_or_none,
     normalize_bedrock_opus_output_config_effort,
     normalize_custom_field_on_tools,
     normalize_tool_input_schema_types_for_bedrock_invoke,
-    requested_tools,
     requests_output_config_format,
     strip_unsupported_bedrock_invoke_output_config_keys,
-    thinking_enabled_after_mapping,
     tools_without_eager_input_streaming,
-    without_bedrock_native_output_opt_in,
 )
 from litellm.types.llms.anthropic import (
     ANTHROPIC_BETA_HEADER_VALUES,
@@ -110,36 +104,14 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             model, self.is_thinking_requested(request_params), model_info=self._deployment_model_info
         ) and (json_schema is None or bedrock_cleaned_output_schema(model, json_schema) is not None)
 
-    def native_output_fallback(
+    def uses_opt_in_native_output(
         self, model: str, optional_params: Mapping[str, object], litellm_params: Mapping[str, object]
-    ) -> NativeOutputFallback | None:
-        output_format: Final = json_object_or_none(optional_params.get("output_format"))
-        if output_format is None and not requests_output_config_format(optional_params):
-            return None
-        if not bedrock_native_output_is_opt_in(model, model_info=deployment_model_info(litellm_params)):
-            return None
-        if output_format is None or optional_params.get("json_mode") is not True:
-            return NativeOutputFallback(
-                optional_params=optional_params,
-                litellm_params=without_bedrock_native_output_opt_in(litellm_params),
-            )
-        schema: Final = json_object_or_none(output_format.get("schema"))
-        json_tool: Final = self._create_json_tool_call_for_response_format(
-            json_schema=None if schema is None else dict(schema)
-        )
-        tool_choice: Final[Mapping[str, object]] = (
-            {"tool_choice": {"name": RESPONSE_FORMAT_TOOL_NAME, "type": "tool"}}
-            if self.forces_response_format_tool_choice(model, thinking_enabled_after_mapping(optional_params))
-            else {}
-        )
-        without_native_output: Final = {key: value for key, value in optional_params.items() if key != "output_format"}
-        return NativeOutputFallback(
-            optional_params={
-                **without_native_output,
-                **tool_choice,
-                "tools": [*requested_tools(optional_params), json_tool],
-            },
-            litellm_params=litellm_params,
+    ) -> bool:
+        native_output_requested: Final = isinstance(
+            optional_params.get("output_format"), Mapping
+        ) or requests_output_config_format(optional_params)
+        return native_output_requested and bedrock_native_output_is_opt_in(
+            model, model_info=deployment_model_info(litellm_params)
         )
 
     def map_openai_params(

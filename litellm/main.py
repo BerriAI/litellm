@@ -121,6 +121,8 @@ from litellm.llms.bedrock.common_utils import (
     BedrockModelInfo,
     NativeOutputFallback,
     bedrock_route_for_request,
+    deployment_model_info,
+    without_bedrock_native_output_opt_in,
     without_bedrock_route_prefix,
 )
 from litellm.llms.bedrock_mantle.chat.claude_transformation import bedrock_mantle_chat_config
@@ -4141,6 +4143,32 @@ _PROVIDER_ROUTING_HINTS: Final = TypeAdapter(ProviderRoutingHints)
 _BASE_URL_HINT: Final = TypeAdapter(BaseUrlRoutingHint)
 
 
+_AWS_BEDROCK_CLIENT_CREDENTIAL_KEYS: Final = (
+    "aws_access_key_id",
+    "aws_secret_access_key",
+    "aws_session_token",
+    "aws_region_name",
+)
+
+
+def _native_output_fallback(
+    ctx: CompletionDispatchContext, first_attempt_params: Mapping[str, object]
+) -> NativeOutputFallback:
+    litellm_params: Final = without_bedrock_native_output_opt_in(ctx.litellm_params)
+    remapped_params: Final = ctx.optional_params_for_model_info(deployment_model_info(litellm_params))
+    return NativeOutputFallback(
+        optional_params={
+            **{key: value for key, value in remapped_params.items() if key != "aws_bedrock_client"},
+            **{
+                key: first_attempt_params[key]
+                for key in _AWS_BEDROCK_CLIENT_CREDENTIAL_KEYS
+                if key in first_attempt_params
+            },
+        },
+        litellm_params=litellm_params,
+    )
+
+
 def _complete_bedrock(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base: Final = ctx.api_base
@@ -4233,10 +4261,13 @@ def _complete_bedrock(ctx: CompletionDispatchContext) -> _CompletionDispatchResu
                 api_key=api_key,
             )
 
+        converse_params: Final = _OPTIONAL_PARAMS_ADAPTER.validate_python(optional_params)
         response = call_with_native_output_fallback(
             converse_attempt,
-            AmazonConverseConfig().native_output_fallback(
-                converse_model, _OPTIONAL_PARAMS_ADAPTER.validate_python(optional_params), litellm_params
+            (
+                partial(_native_output_fallback, ctx, converse_params)
+                if AmazonConverseConfig().uses_opt_in_native_output(converse_model, converse_params, litellm_params)
+                else None
             ),
             converse_model,
         )
@@ -4280,13 +4311,13 @@ def _complete_bedrock(ctx: CompletionDispatchContext) -> _CompletionDispatchResu
                 client=client,
             )
 
+        invoke_params: Final = _OPTIONAL_PARAMS_ADAPTER.validate_python(optional_params)
         response = call_with_native_output_fallback(
             invoke_attempt,
             (
-                provider_config.native_output_fallback(
-                    model, _OPTIONAL_PARAMS_ADAPTER.validate_python(optional_params), litellm_params
-                )
+                partial(_native_output_fallback, ctx, invoke_params)
                 if isinstance(provider_config, AmazonAnthropicClaudeConfig)
+                and provider_config.uses_opt_in_native_output(model, invoke_params, litellm_params)
                 else None
             ),
             model,
@@ -5724,10 +5755,15 @@ def completion(
             accepts_summary=provider_config is not None
             and provider_config.accepts_reasoning_summary_in_reasoning_effort,
         )
-        optional_params = get_optional_params(
-            **{**optional_param_args, "reasoning_effort": provider_reasoning_effort},
-            model_info=_MODEL_INFO_ADAPTER.validate_python(model_info) if isinstance(model_info, dict) else None,
-            **non_default_params,
+
+        mapping_args: Final = MappingProxyType({**optional_param_args, "reasoning_effort": provider_reasoning_effort})
+        mapping_special_params: Final = MappingProxyType(dict(non_default_params))
+
+        def optional_params_for_model_info(deployment_info: Mapping[str, object] | None) -> dict[str, object]:
+            return get_optional_params(**mapping_args, model_info=deployment_info, **mapping_special_params)
+
+        optional_params = optional_params_for_model_info(
+            _MODEL_INFO_ADAPTER.validate_python(model_info) if isinstance(model_info, dict) else None
         )
         processed_non_default_params: Final = pre_process_non_default_params(
             model=model,
@@ -5962,6 +5998,7 @@ def completion(
             model=model,
             model_response=model_response,
             optional_params=optional_params,
+            optional_params_for_model_info=optional_params_for_model_info,
             organization=organization,
             provider_config=provider_config,
             request_params=MappingProxyType(

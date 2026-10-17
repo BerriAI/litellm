@@ -334,29 +334,12 @@ class NativeOutputFallback:
     litellm_params: Mapping[str, object]
 
 
-def thinking_enabled_after_mapping(optional_params: Mapping[str, object]) -> bool:
-    match optional_params:
-        case {"thinking": True | {"type": "enabled"}} | {"output_config": {"effort": object()}}:
-            return True
-        case {"reasoning_effort": reasoning_effort}:
-            return reasoning_effort is not None
-        case _:
-            return False
-
-
 def requests_output_config_format(optional_params: Mapping[str, object]) -> bool:
     match optional_params:
         case {"output_config": {"format": object()}}:
             return True
         case _:
             return False
-
-
-_TOOLS: Final = TypeAdapter(tuple[object, ...])
-
-
-def requested_tools(optional_params: Mapping[str, object]) -> tuple[object, ...]:
-    return _TOOLS.validate_python(optional_params.get("tools") or ())
 
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object])

@@ -48,7 +48,7 @@ def _resolve(result: NativeOutputAttemptResult) -> object:
 
 
 def _call(bedrock: ScriptedBedrock, fallback: NativeOutputFallback | None) -> object:
-    return _resolve(call_with_native_output_fallback(bedrock, fallback, _MODEL))
+    return _resolve(call_with_native_output_fallback(bedrock, None if fallback is None else lambda: fallback, _MODEL))
 
 
 _MODES: Final = pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])

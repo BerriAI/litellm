@@ -10583,26 +10583,26 @@ def _converse_params(
     )
 
 
-@pytest.mark.parametrize("stream", [False, True], ids=["sync", "stream"])
+_OUTPUT_CONFIG_FORMAT: Final = {
+    "output_config": {"format": {"type": "json_schema", "schema": CAPITAL_RESPONSE_FORMAT["json_schema"]["schema"]}}
+}
+
+
 @pytest.mark.parametrize(
-    "thinking_params",
-    [{"thinking": ADAPTIVE_THINKING}, {"reasoning_effort": "low"}, {"thinking": {"type": "enabled", "budget_tokens": 2048}}],
-    ids=["adaptive", "reasoning_effort", "budget"],
+    "request_params",
+    [
+        {"response_format": CAPITAL_RESPONSE_FORMAT, "thinking": ADAPTIVE_THINKING},
+        {"response_format": CAPITAL_RESPONSE_FORMAT, "reasoning_effort": "low"},
+        {"response_format": CAPITAL_RESPONSE_FORMAT, "thinking": {"type": "enabled", "budget_tokens": 2048}},
+        _OUTPUT_CONFIG_FORMAT,
+    ],
+    ids=["adaptive", "reasoning_effort", "budget", "output_config_format"],
 )
 @pytest.mark.parametrize("model", ["us.anthropic.claude-opus-4-8", "global.anthropic.claude-sonnet-5"])
-def test_native_output_fallback_sends_what_a_deployment_without_native_output_sends(
-    local_model_cost_map, model, thinking_params, stream
-):
-    request: Final = {"response_format": CAPITAL_RESPONSE_FORMAT, "stream": stream, **thinking_params}
-    native: Final = _converse_params(model, None, request)
-    opted_out: Final = _converse_params(model, {"supports_bedrock_native_structured_output": False}, request)
+def test_uses_opt_in_native_output_when_the_opt_in_drove_native_output(local_model_cost_map, model, request_params):
+    optional_params: Final = _converse_params(model, None, request_params)
 
-    fallback: Final = AmazonConverseConfig().native_output_fallback(model, native, {"model_info": {"id": "d1"}})
-
-    assert "outputConfig" in native
-    assert fallback is not None
-    assert fallback.optional_params == opted_out
-    assert fallback.litellm_params == {"model_info": {"id": "d1"}}
+    assert AmazonConverseConfig().uses_opt_in_native_output(model, optional_params, {"model_info": {"id": "d1"}})
 
 
 @pytest.mark.parametrize(
@@ -10622,44 +10622,21 @@ def test_native_output_fallback_sends_what_a_deployment_without_native_output_se
     ],
     ids=["no_thinking", "deployment_opt_out", "native_model"],
 )
-def test_native_output_fallback_is_none_when_native_output_did_not_come_from_the_opt_in(
+def test_uses_opt_in_native_output_is_false_when_native_output_did_not_come_from_the_opt_in(
     local_model_cost_map, model, model_info, request_params
 ):
     optional_params: Final = _converse_params(model, model_info, request_params)
 
-    assert AmazonConverseConfig().native_output_fallback(model, optional_params, {"model_info": model_info}) is None
+    assert not AmazonConverseConfig().uses_opt_in_native_output(model, optional_params, {"model_info": model_info})
 
 
-def test_native_output_fallback_for_output_config_format_sends_no_native_output(local_model_cost_map):
-    model: Final = "us.anthropic.claude-opus-4-8"
-    config: Final = AmazonConverseConfig()
-    optional_params: Final = _converse_params(
-        model,
-        None,
-        {"output_config": {"format": {"type": "json_schema", "schema": CAPITAL_RESPONSE_FORMAT["json_schema"]["schema"]}}},
-    )
-
-    def request(call_optional_params: Mapping[str, object], litellm_params: Mapping[str, object]) -> RequestObject:
-        return config._transform_request(
-            model=model,
-            messages=[{"role": "user", "content": "Name the capital of France."}],
-            optional_params=copy.deepcopy(dict(call_optional_params)),
-            litellm_params=dict(litellm_params),
-            headers={},
-        )
-
-    fallback: Final = config.native_output_fallback(model, optional_params, {})
-
-    assert "outputConfig" in request(optional_params, {})
-    assert fallback is not None
-    assert "outputConfig" not in request(fallback.optional_params, fallback.litellm_params)
-
-
-def test_native_output_fallback_reads_the_base_model_of_an_application_inference_profile(local_model_cost_map):
+def test_uses_opt_in_native_output_reads_the_base_model_of_an_application_inference_profile(local_model_cost_map):
     profile: Final = "arn:aws:bedrock:us-east-1:000000000000:application-inference-profile/profile-id"
     litellm_params: Final = {"base_model": "bedrock/us.anthropic.claude-opus-4-8"}
     optional_params: Final = _converse_params(
-        "us.anthropic.claude-opus-4-8", None, {"response_format": CAPITAL_RESPONSE_FORMAT, "thinking": ADAPTIVE_THINKING}
+        "us.anthropic.claude-opus-4-8",
+        None,
+        {"response_format": CAPITAL_RESPONSE_FORMAT, "thinking": ADAPTIVE_THINKING},
     )
 
-    assert AmazonConverseConfig().native_output_fallback(profile, optional_params, litellm_params) is not None
+    assert AmazonConverseConfig().uses_opt_in_native_output(profile, optional_params, litellm_params)

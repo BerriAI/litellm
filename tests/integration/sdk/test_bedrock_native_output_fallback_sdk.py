@@ -4,6 +4,7 @@ import uuid
 from collections.abc import Mapping
 from typing import Final
 
+import boto3
 import pytest
 from integration._support.client import list_value, object_value, string_value
 from integration._support.wire import Reply, Request, Wire, wire_server
@@ -152,3 +153,135 @@ async def test_async_call_retries_a_native_output_rejection_once_with_the_json_t
         )
         assert json.loads(content) == {"city": marker_hex}
         _assert_one_retry_without_native_output(wire, route)
+
+
+_CONSTRAINED_SCHEMA: Final = {
+    "type": "object",
+    "properties": {
+        "city": {"type": "string", "maxLength": 20},
+        "population": {"type": "integer", "minimum": 0},
+        "districts": {"type": "array", "items": {"type": "string"}, "minItems": 2, "uniqueItems": True},
+        "code": {"oneOf": [{"type": "string"}, {"type": "integer"}]},
+    },
+    "required": ["city", "population", "districts", "code"],
+    "additionalProperties": False,
+}
+
+
+def _response_format(schema: Mapping[str, object]) -> Mapping[str, object]:
+    return {"type": "json_schema", "json_schema": {"name": "city", "schema": schema}}
+
+
+def _consume(response: ModelResponse | CustomStreamWrapper) -> None:
+    if isinstance(response, CustomStreamWrapper):
+        tuple(response)
+
+
+def _sent_bodies(
+    route: str,
+    stream: bool,
+    marker_hex: str,
+    request_params: Mapping[str, object],
+    model_info: Mapping[str, object] | None,
+) -> tuple[Mapping[str, JsonValue], ...]:
+    with wire_server(_bedrock_without_native_output) as wire:
+        request: Final = {
+            **_request(route, stream, wire, marker_hex),
+            **{"thinking": None, "response_format": None},
+            **request_params,
+            **({} if model_info is None else {"model_info": model_info}),
+        }
+        _consume(litellm.completion(**{key: value for key, value in request.items() if value is not None}))
+        return tuple(_JSON.validate_json(sent.body) for sent in wire.drain())
+
+
+@_ROUTES
+@pytest.mark.parametrize(
+    "request_params",
+    [
+        {"reasoning_effort": "low", "response_format": _response_format(_SCHEMA)},
+        {"thinking": {"type": "adaptive"}, "response_format": _response_format(_CONSTRAINED_SCHEMA)},
+        {
+            "thinking": {"type": "adaptive"},
+            "response_format": _response_format(_SCHEMA),
+            "output_config": {"format": {"type": "json_schema", "schema": _SCHEMA}},
+        },
+        {
+            "thinking": {"type": "adaptive"},
+            "output_config": {"effort": "low"},
+            "response_format": _response_format(_SCHEMA),
+        },
+    ],
+    ids=[
+        "reasoning_effort",
+        "constrained_schema",
+        "response_format_and_output_config_format",
+        "adaptive_thinking_with_effort",
+    ],
+)
+def test_the_retry_sends_what_a_deployment_without_native_output_sends(
+    route: str, stream: bool, marker_hex: str, request_params: Mapping[str, object]
+) -> None:
+    rejected, retried = _sent_bodies(route, stream, marker_hex, request_params, None)
+    (opted_out,) = _sent_bodies(
+        route, stream, marker_hex, request_params, {"supports_bedrock_native_structured_output": False}
+    )
+
+    assert _native(rejected, route == "invoke"), rejected
+    assert retried == opted_out
+
+
+async def _messages_bodies(
+    marker_hex: str, model_info: Mapping[str, object] | None
+) -> tuple[Mapping[str, JsonValue], ...]:
+    with wire_server(_bedrock_without_native_output) as wire:
+        await litellm.anthropic_messages(
+            model=f"bedrock/converse/{_OPUS_4_8}",
+            messages=[{"role": "user", "content": f"Name a city. probe {marker_hex}"}],
+            api_base=wire.url,
+            api_key="synthetic-bedrock-bearer",
+            aws_region_name="us-east-1",
+            max_tokens=2048,
+            thinking={"type": "adaptive"},
+            output_config={"effort": "low", "format": {"type": "json_schema", "schema": _SCHEMA}},
+            **({} if model_info is None else {"model_info": model_info}),
+        )
+        return tuple(_JSON.validate_json(sent.body) for sent in wire.drain())
+
+
+async def test_a_messages_retry_to_converse_sends_what_a_deployment_without_native_output_sends(
+    marker_hex: str,
+) -> None:
+    rejected, retried = await _messages_bodies(marker_hex, None)
+    (opted_out,) = await _messages_bodies(marker_hex, {"supports_bedrock_native_structured_output": False})
+
+    assert _native(rejected, invoke=False), rejected
+    assert retried == opted_out
+
+
+@_ROUTES
+def test_the_retry_signs_with_the_credentials_of_a_deprecated_aws_bedrock_client(
+    route: str, stream: bool, marker_hex: str
+) -> None:
+    aws_bedrock_client: Final = boto3.client(
+        "bedrock-runtime",
+        region_name="us-west-2",
+        aws_access_key_id="AKIASYNTHETICCLIENT",
+        aws_secret_access_key="synthetic-client-secret",
+        aws_session_token="synthetic-client-session",
+    )
+    with wire_server(_bedrock_without_native_output) as wire:
+        request: Final = {
+            key: value
+            for key, value in _request(route, stream, wire, marker_hex).items()
+            if key not in {"api_key", "aws_region_name"}
+        }
+        _consume(litellm.completion(**request, aws_bedrock_client=aws_bedrock_client))
+        sent: Final = wire.drain()
+
+    assert len(sent) == 2
+    for attempt in sent:
+        headers = {name.lower(): value for name, value in attempt.headers.items()}
+        assert "Credential=AKIASYNTHETICCLIENT/" in headers["authorization"]
+        assert "/us-west-2/bedrock/aws4_request" in headers["authorization"]
+        assert headers["x-amz-security-token"] == "synthetic-client-session"

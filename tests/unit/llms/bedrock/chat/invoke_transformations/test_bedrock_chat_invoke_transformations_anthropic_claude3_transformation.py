@@ -1973,18 +1973,14 @@ def _invoke_chat_params(
     ids=["adaptive", "reasoning_effort"],
 )
 @pytest.mark.parametrize("model", ["us.anthropic.claude-opus-4-8", "global.anthropic.claude-sonnet-5"])
-def test_invoke_native_output_fallback_sends_what_a_deployment_without_native_output_sends(
+def test_invoke_uses_opt_in_native_output_when_the_opt_in_drove_native_output(
     local_model_cost_map, model, thinking_params
 ):
-    request: Final = {"response_format": _CITY_RESPONSE_FORMAT, **thinking_params}
-    native: Final = _invoke_chat_params(model, None, request)
-    opted_out: Final = _invoke_chat_params(model, {"supports_bedrock_native_structured_output": False}, request)
+    optional_params: Final = _invoke_chat_params(
+        model, None, {"response_format": _CITY_RESPONSE_FORMAT, **thinking_params}
+    )
 
-    fallback: Final = AmazonAnthropicClaudeConfig().native_output_fallback(model, native, {})
-
-    assert "output_format" in native
-    assert fallback is not None
-    assert fallback.optional_params == opted_out
+    assert AmazonAnthropicClaudeConfig().uses_opt_in_native_output(model, optional_params, {})
 
 
 @pytest.mark.parametrize(
@@ -2004,13 +2000,11 @@ def test_invoke_native_output_fallback_sends_what_a_deployment_without_native_ou
     ],
     ids=["no_thinking", "deployment_opt_out", "native_model"],
 )
-def test_invoke_native_output_fallback_is_none_when_native_output_did_not_come_from_the_opt_in(
+def test_invoke_uses_opt_in_native_output_is_false_when_native_output_did_not_come_from_the_opt_in(
     local_model_cost_map, model, model_info, request_params
 ):
     optional_params: Final = _invoke_chat_params(model, model_info, request_params)
 
-    fallback: Final = AmazonAnthropicClaudeConfig().native_output_fallback(
+    assert not AmazonAnthropicClaudeConfig().uses_opt_in_native_output(
         model, optional_params, {"model_info": model_info}
     )
-
-    assert fallback is None

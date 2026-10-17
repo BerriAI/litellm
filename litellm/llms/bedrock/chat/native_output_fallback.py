@@ -22,7 +22,7 @@ def _is_native_output_rejection(error: BaseLLMException) -> bool:
 async def _await_with_native_output_fallback(
     first_attempt: Coroutine[object, object, NativeOutputResponse],
     attempt: NativeOutputAttempt,
-    fallback: NativeOutputFallback,
+    fallback: Callable[[], NativeOutputFallback],
     model: str,
 ) -> NativeOutputResponse:
     try:
@@ -31,13 +31,13 @@ async def _await_with_native_output_fallback(
         if not _is_native_output_rejection(error):
             raise
     warn_bedrock_native_output_rejected(model)
-    second_attempt: Final = attempt(fallback)
+    second_attempt: Final = attempt(fallback())
     return await second_attempt if isinstance(second_attempt, Coroutine) else second_attempt
 
 
 def call_with_native_output_fallback(
     attempt: NativeOutputAttempt,
-    fallback: NativeOutputFallback | None,
+    fallback: Callable[[], NativeOutputFallback] | None,
     model: str,
 ) -> NativeOutputAttemptResult:
     if fallback is None:
@@ -48,7 +48,7 @@ def call_with_native_output_fallback(
         if not _is_native_output_rejection(error):
             raise
         warn_bedrock_native_output_rejected(model)
-        return attempt(fallback)
+        return attempt(fallback())
     if isinstance(first_attempt, Coroutine):
         return _await_with_native_output_fallback(first_attempt, attempt, fallback, model)
     return first_attempt
