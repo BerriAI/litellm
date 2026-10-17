@@ -10385,7 +10385,13 @@ def test_standard_logging_payload_reports_the_deployment_entry_the_request_was_b
             litellm_call_id="lit9660",
             function_id="fn",
         )
-        litellm_params: Final = {"metadata": {"model_group": "lit9660-group", "model_info": deployment_model_info}}
+        litellm_params: Final = {
+            "metadata": {
+                "model_group": "lit9660-group",
+                "deployment": "openai/gpt-5.4-nano",
+                "model_info": deployment_model_info,
+            }
+        }
         logging_obj.update_environment_variables(
             model="gpt-5.4-nano", user="", optional_params={}, litellm_params=litellm_params, custom_llm_provider="openai"
         )
@@ -10413,8 +10419,8 @@ def test_standard_logging_payload_reports_the_deployment_entry_the_request_was_b
         assert response_cost == 10 * input_cost_per_token + 6 * output_cost_per_token
         assert payload is not None
         assert payload["model_map_information"] == {
-            "model_map_key": deployment_id,
-            "model_map_value": litellm.get_model_info(model=deployment_id, custom_llm_provider="openai"),
+            "model_map_key": f"openai/{deployment_id}",
+            "model_map_value": litellm.get_model_info(model=f"openai/{deployment_id}", custom_llm_provider="openai"),
         }
         model_map_value: Final = payload["model_map_information"]["model_map_value"]
         assert model_map_value is not None
