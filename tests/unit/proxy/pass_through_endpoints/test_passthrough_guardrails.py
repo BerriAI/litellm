@@ -155,6 +155,44 @@ class TestJsonPathExtractorEvaluate:
         result = JsonPathExtractor.evaluate(data, "messages[*].content")
         assert result == ["You are helpful", "Hello"]
 
+    @pytest.mark.parametrize(
+        ("data", "expr", "expected"),
+        [
+            (
+                {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": "hello"},
+                                {"type": "image", "source": {"data": "aGk="}},
+                                {"type": "text", "text": "world"},
+                            ],
+                        },
+                        {"role": "assistant", "content": "plain string"},
+                        {"role": "user", "content": [{"type": "text", "text": "again"}]},
+                    ]
+                },
+                "messages[*].content[*].text",
+                ["hello", "world", "again"],
+            ),
+            (
+                {"output": [{"content": [{"text": "a"}, {"text": ""}, {"text": "b"}]}, {"content": [{"text": "c"}]}]},
+                "output[*].content[*].text",
+                ["a", "b", "c"],
+            ),
+            (
+                {"a": {"b": [{"c": ["x", "y"]}, {"c": "not a list"}, "not a dict", {"c": ["z"]}]}},
+                "a.b[*].c[*]",
+                ["x", "y", "z"],
+            ),
+            ({"x": [[["a"], "b"], ["c"]]}, "x[*][*]", [["a"], "b", "c"]),
+            ({"messages": [{"role": "user", "content": "plain string"}]}, "messages[*].content[*].text", None),
+        ],
+    )
+    def test_multiple_wildcards_select_every_nested_match(self, data, expr, expected):
+        assert JsonPathExtractor.evaluate(data, expr) == expected
+
     def test_missing_key_returns_none(self):
         """Should return None for missing key."""
         data = {"query": "test"}
@@ -189,6 +227,10 @@ class TestJsonPathExtractorExtractFields:
         result = JsonPathExtractor.extract_fields(data, ["documents[*].text"])
         assert "doc1" in result
         assert "doc2" in result
+
+    def test_nested_wildcard_text_is_sent_to_guardrail(self):
+        data = {"messages": [{"role": "user", "content": [{"type": "text", "text": "a@b.com"}, {"text": "c@d.com"}]}]}
+        assert JsonPathExtractor.extract_fields(data, ["messages[*].content[*].text"]) == "a@b.com\nc@d.com"
 
     def test_handles_missing_fields(self):
         """Should handle missing fields gracefully."""
