@@ -1387,14 +1387,16 @@ def test_responses_websocket_uses_a_chat_fallback_without_calling_the_embedding_
         owned_proxy_process(rig.gateway, tmp_path, {"SSL_CERT_FILE": str(certificate[0])}, workers=2) as owned,
         owned.gateway.scenario() as scenario,
     ):
-        fallback: Final = scenario.model(model=f"openai/{_CHAT_MODEL}", api_base=peer.url, api_key=_PROVIDER_KEY)
-        primary: Final = scenario.model(
-            model=f"openai/{_EMBEDDING_MODEL}", api_base=f"{rig.api_base}/{marker}", model_info=_EMBED_ONLY
+        fallback, fallback_ids = _deploy(scenario, peer.url, "ws-chat", _single({"mode": "chat"}))
+        primary, primary_ids = _deploy(
+            scenario, f"{rig.api_base}/{marker}", "ws-embed", _single(_EMBED_ONLY, f"openai/{_EMBEDDING_MODEL}")
         )
+        _served_by_every_worker(owned.gateway, frozenset((*primary_ids, *fallback_ids)))
         key: Final = scenario.key(router_settings={"fallbacks": [{primary: [fallback]}]})
         (received,) = asyncio.run(
             responses_ws_peer.session(str(owned.gateway.client.base_url), key, primary, (marker,))
         )
+        assert received[-1]["type"] == "response.completed", received
         assert responses_ws_peer.completed(received)["status"] == "completed"
         assert any(event.get("delta") == _SERVED_TEXT for event in received), received
         (forwarded,) = responses_ws_peer.drain(peer.frames)

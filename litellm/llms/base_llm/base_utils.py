@@ -16,7 +16,13 @@ from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallChunk
-from litellm.types.utils import Message, ProviderSpecificModelInfo, TokenCountMessagesFormat, TokenCountResponse
+from litellm.types.utils import (
+    CountContextManagement,
+    Message,
+    ProviderSpecificModelInfo,
+    TokenCountMessagesFormat,
+    TokenCountResponse,
+)
 
 
 class BaseTokenCounter(ABC):
@@ -32,6 +38,7 @@ class BaseTokenCounter(ABC):
         system: Any | None = None,
         messages_format: TokenCountMessagesFormat = "openai",
         output_format: JsonValue = None,
+        context_management: CountContextManagement | None = None,
     ) -> TokenCountResponse | None:
         pass
 

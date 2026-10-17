@@ -1913,13 +1913,18 @@ def bedrock_event_stream_header(headers: Mapping[str, object], name: str) -> str
     return value if isinstance(value, str) else None
 
 
-def build_bedrock_stream_event_error(event_type: str, status_code: int, body: bytes) -> BedrockError:
-    return BedrockError(status_code=status_code, message=f"{event_type} {body.decode(errors='replace')}")
+def build_bedrock_stream_event_error(
+    event_type: str, status_code: int, body: bytes, headers: httpx.Headers | None = None
+) -> BedrockError:
+    return BedrockError(
+        status_code=status_code, message=f"{event_type} {body.decode(errors='replace')}", headers=headers
+    )
 
 
 def build_bedrock_stream_error(
     response_dict: BedrockEventStreamResponseDict,
     response_stream_shape: Shape | None,
+    headers: httpx.Headers | None = None,
 ) -> BedrockError:
     """Build a BedrockError for a non-200 event-stream error event.
 
@@ -1929,12 +1934,14 @@ def build_bedrock_stream_error(
     """
     exception_type: Final = bedrock_event_stream_header(response_dict["headers"], ":exception-type")
     if exception_type is None:
-        return BedrockError(status_code=response_dict["status_code"], message=response_dict["body"].decode())
+        return BedrockError(
+            status_code=response_dict["status_code"], message=response_dict["body"].decode(), headers=headers
+        )
 
     member: Final = _structure_members(response_stream_shape).get(exception_type)
     modeled_status: Final = None if member is None else _modeled_error_status(member)
     status_code: Final = response_dict["status_code"] if modeled_status is None else modeled_status
-    return build_bedrock_stream_event_error(exception_type, status_code, response_dict["body"])
+    return build_bedrock_stream_event_error(exception_type, status_code, response_dict["body"], headers=headers)
 
 
 class BedrockEventStreamDecoderBase:

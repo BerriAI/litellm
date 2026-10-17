@@ -86,6 +86,9 @@ from litellm.llms.openai.cost_calculation import (
 from litellm.llms.openai.cost_calculation import (
     video_output_cost_per_second,
 )
+from litellm.llms.openai.transcriptions.gpt_transformation import (
+    OpenAIGPTAudioTranscriptionConfig,
+)
 from litellm.llms.perplexity.cost_calculator import (
     cost_per_token as perplexity_cost_per_token,
 )
@@ -323,6 +326,15 @@ def _transcription_usage_has_token_details(
             return True
 
     return (prompt_tokens_val > 0) or (completion_tokens_val > 0)
+
+
+def _bills_provider_transcription_seconds(model: str | None, custom_llm_provider: str | None) -> bool:
+    if model is None or custom_llm_provider != LlmProviders.OPENAI.value:
+        return False
+    transcription_config: Final = ProviderConfigManager.get_provider_audio_transcription_config(
+        model=model.removeprefix(f"{LlmProviders.OPENAI.value}/"), provider=LlmProviders.OPENAI
+    )
+    return isinstance(transcription_config, OpenAIGPTAudioTranscriptionConfig)
 
 
 OCRPricingField = Literal["ocr_cost_per_page", "ocr_cost_per_credit", "annotation_cost_per_page"]
@@ -1739,6 +1751,12 @@ def completion_cost(
                     audio_transcription_file_duration = _hidden.get(
                         "audio_transcription_duration",
                         getattr(completion_response, "duration", 0.0),
+                    ) or (
+                        completion_response.usage.seconds
+                        if isinstance(completion_response, TranscriptionResponse)
+                        and isinstance(completion_response.usage, TranscriptionUsageDurationObject)
+                        and _bills_provider_transcription_seconds(requested_model, custom_llm_provider)
+                        else 0.0
                     )
                 elif call_type in _RERANK_CALL_TYPES:
                     if completion_response is not None and isinstance(completion_response, RerankResponse):
@@ -2063,11 +2081,18 @@ def get_response_cost_from_hidden_params(
 
     additional_headers: Final = _hidden_params_dict.get("additional_headers", {})
     if additional_headers and "llm_provider-x-litellm-response-cost" in additional_headers:
-        response_cost: Final = additional_headers["llm_provider-x-litellm-response-cost"]
-        if response_cost is None:
-            return None
-        return float(additional_headers["llm_provider-x-litellm-response-cost"])
+        return _billable_header_cost(additional_headers["llm_provider-x-litellm-response-cost"])
     return None
+
+
+def _billable_header_cost(value: object) -> float | None:
+    if not isinstance(value, (str, int, float)):
+        return None
+    try:
+        cost: Final = float(value)
+    except ValueError:
+        return None
+    return cost if math.isfinite(cost) and cost >= 0 else None
 
 
 def response_cost_calculator(
