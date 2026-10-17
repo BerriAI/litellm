@@ -7,7 +7,7 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime
 from functools import lru_cache
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, cast
 
 from httpx import Response
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
@@ -25,9 +25,6 @@ from litellm.constants import (
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.cost_discount import resolve_cost_discount
 from litellm.litellm_core_utils.decisions_pricing import decisions_pricing_fields, is_decisions_call_type
-from litellm.litellm_core_utils.fallback_generalizations import (
-    match_capability_generalizations,  # pyright: ignore[reportUnknownVariableType]  # legacy return type is bare dict
-)
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
@@ -152,8 +149,8 @@ from litellm.utils import (
     TextCompletionResponse,
     TranscriptionResponse,
     cached_get_model_info_helper,
-    is_generalized_model_info,
     token_counter,
+    unmapped_model_generalization,
 )
 
 if TYPE_CHECKING:
@@ -1567,31 +1564,8 @@ def completion_cost(
             (_get_response_model(completion_response), request_pricing_provider),
             *(((model, request_pricing_provider),) if model is not None else ()),
         )
-        candidate_model_info: Final = (
-            tuple(
-                _cost_map_model_info(candidate, pricing_provider) if candidate is not None else None
-                for candidate, pricing_provider in raw_candidates
-            )
-            if not explicit_pricing
-            else ()
-        )
-        candidate_is_generalized: Final = tuple(
-            _is_unpriced_generalized_model_info(info) for info in candidate_model_info
-        )
-        orderable_candidates: Final = raw_candidates if not explicit_pricing else ()
-        orderable_is_generalized: Final = candidate_is_generalized if not explicit_pricing else ()
-        exact_candidates: Final = tuple(
-            candidate
-            for candidate, is_generalized in zip(orderable_candidates, orderable_is_generalized, strict=True)
-            if not is_generalized
-        )
-        generalized_candidates: Final = tuple(
-            candidate
-            for candidate, is_generalized in zip(orderable_candidates, orderable_is_generalized, strict=True)
-            if is_generalized
-        )
         potential_model_names: Final = (
-            raw_candidates if explicit_pricing else (*exact_candidates, *generalized_candidates)
+            raw_candidates if explicit_pricing else _priced_candidates_before_unpriced_rules(raw_candidates)
         )
 
         for idx, (model, pricing_provider) in enumerate(potential_model_names):
@@ -2315,19 +2289,23 @@ def _cost_map_model_info(model: str, custom_llm_provider: str | None) -> ModelIn
         return None
 
 
-def _is_unpriced_generalized_model_info(model_info: ModelInfo | None) -> bool:
-    if model_info is None or not is_generalized_model_info(model_info):
+_CostCandidate: TypeAlias = tuple[str | None, str | None]
+
+
+def _is_unpriced_generalized_candidate(candidate: _CostCandidate) -> bool:
+    model, pricing_provider = candidate
+    if model is None:
         return False
-    rule_info: Final = cast(  # cast-ok: capability rules are string-keyed model metadata
-        Mapping[str, object] | None, match_capability_generalizations(model_info["key"])
+    rule_info: Final = unmapped_model_generalization(model, pricing_provider)
+    return rule_info is not None and not _cost_map_entry_prices_anything(rule_info)
+
+
+def _priced_candidates_before_unpriced_rules(candidates: tuple[_CostCandidate, ...]) -> tuple[_CostCandidate, ...]:
+    unpriced: Final = tuple(_is_unpriced_generalized_candidate(candidate) for candidate in candidates)
+    return (
+        *(candidate for candidate, is_unpriced in zip(candidates, unpriced, strict=True) if not is_unpriced),
+        *(candidate for candidate, is_unpriced in zip(candidates, unpriced, strict=True) if is_unpriced),
     )
-    if rule_info is None:
-        return False
-    token_rates: Final = (
-        rule_info.get("input_cost_per_token"),
-        rule_info.get("output_cost_per_token"),
-    )
-    return not any(isinstance(rate, (int, float)) and not isinstance(rate, bool) for rate in token_rates)
 
 
 def _raw_cost_map_entry(key: str) -> Mapping[str, object] | None:

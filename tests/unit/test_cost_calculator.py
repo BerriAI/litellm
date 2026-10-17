@@ -257,6 +257,131 @@ def test_completion_cost_keeps_priced_generalization_before_later_exact_candidat
     assert cost == pytest.approx(usage.prompt_tokens * 0.0000321 + usage.completion_tokens * 0.0000765)
 
 
+@pytest.fixture
+def _per_second_priced_claude_family_generalization() -> Iterator[None]:
+    previous_rules: Final = list(get_fallback_generalization_rules())
+    try:
+        set_fallback_generalizations(
+            [
+                {
+                    "name": "claude-family-per-second",
+                    "pattern": r"claude-[a-z]+-\d+(?:[-.]\d+)?(?:-\d{8})?",
+                    "model_info": {"cost_per_second": 0.25},
+                }
+            ]
+        )
+        yield
+    finally:
+        set_fallback_generalizations(previous_rules)
+
+
+def test_completion_cost_keeps_per_second_priced_generalization_before_later_exact_candidate(
+    _local_model_cost_map: None,
+    _per_second_priced_claude_family_generalization: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    priced_model: Final = "bedrock/invoke/anthropic.claude-haiku-4-5-20251001-v1:0"
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            priced_model: {
+                "litellm_provider": "bedrock",
+                "mode": "chat",
+                "input_cost_per_token": 0.0000123,
+                "output_cost_per_token": 0.0000456,
+            }
+        },
+    )
+    response: Final = ModelResponse(
+        model="anthropic.claude-haiku-4-5-20251001-v1:0",
+        choices=[],
+        usage=Usage(prompt_tokens=17, completion_tokens=9, total_tokens=26),
+    )
+
+    cost: Final = completion_cost(
+        completion_response=response,
+        model=priced_model,
+        custom_llm_provider="bedrock",
+        total_time=2000,
+    )
+
+    assert cost == pytest.approx(0.25 * 2)
+
+
+@pytest.fixture
+def _price_free_gpt_family_generalization() -> Iterator[None]:
+    previous_rules: Final = list(get_fallback_generalization_rules())
+    try:
+        set_fallback_generalizations(
+            [
+                {
+                    "name": "gpt-family-baseline",
+                    "pattern": r"gpt-\d+(?:\.\d+)?",
+                    "model_info": {"mode": "chat", "supports_reasoning": True},
+                }
+            ]
+        )
+        yield
+    finally:
+        set_fallback_generalizations(previous_rules)
+
+
+def test_completion_cost_prices_rule_only_response_model_at_the_azure_deployment_rate(
+    _local_model_cost_map: None,
+    _price_free_gpt_family_generalization: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployment_model: Final = "azure/gpt-4o-2024-11-20"
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            deployment_model: {
+                "litellm_provider": "azure",
+                "mode": "chat",
+                "input_cost_per_token": 0.0000111,
+                "output_cost_per_token": 0.0000222,
+            }
+        },
+    )
+    usage: Final = Usage(prompt_tokens=17, completion_tokens=9, total_tokens=26)
+    response: Final = ModelResponse(model="gpt-9.9", choices=[], usage=usage)
+
+    cost: Final = completion_cost(
+        completion_response=response,
+        model=deployment_model,
+        custom_llm_provider="azure",
+    )
+
+    assert cost == pytest.approx(usage.prompt_tokens * 0.0000111 + usage.completion_tokens * 0.0000222)
+
+
+def test_completion_cost_orders_candidates_without_extra_huggingface_config_requests(
+    _local_model_cost_map: None,
+) -> None:
+    model: Final = "lazy-candidate-regression-org/lazy-candidate-model"
+    usage: Final = Usage(prompt_tokens=17, completion_tokens=9, total_tokens=26)
+    response: Final = ModelResponse(
+        model=model,
+        choices=[],
+        usage=usage,
+    )
+
+    with respx.mock(assert_all_called=False) as huggingface:
+        huggingface.get(host="huggingface.co").mock(
+            return_value=httpx.Response(200, json={"max_position_embeddings": 4096})
+        )
+        cost: Final = completion_cost(
+            completion_response=response,
+            model=f"huggingface/{model}",
+            custom_llm_provider="huggingface",
+        )
+
+        assert len(huggingface.calls) == 1
+    assert cost == 0.0
+
+
 def test_completion_cost_skips_huggingface_config_request_with_custom_pricing(
     _local_model_cost_map: None,
 ) -> None:
