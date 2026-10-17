@@ -45,6 +45,7 @@ describe("buildCustomersCsvRows", () => {
         mcp_servers: ["server-1", "server-2"],
         mcp_access_groups: ["group-1"],
         mcp_toolsets: ["toolset-1"],
+        mcp_tool_permissions: { "server-9": ["write", "read"], "server-1": ["list"] },
         agents: [],
         agent_access_groups: [],
         blocked_tools: [],
@@ -72,6 +73,7 @@ describe("buildCustomersCsvRows", () => {
       "MCP Servers": "server-1, server-2",
       "MCP Access Groups": "group-1",
       "MCP Toolsets": "toolset-1",
+      "MCP Tool Permissions": '{"server-1":["list"],"server-9":["read","write"]}',
       "Allowed Model Region": "eu",
       "Default Model": "model-1",
     };
