@@ -18,7 +18,10 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
 )
 from litellm.llms.bedrock.common_utils import (
     apply_bedrock_invoke_structured_output,
+    bedrock_chat_uses_native_structured_output,
+    bedrock_cleaned_output_schema,
     bedrock_supports_tool_search,
+    deployment_model_info,
     get_anthropic_beta_from_headers,
     normalize_bedrock_opus_output_config_effort,
     normalize_custom_field_on_tools,
@@ -42,6 +45,8 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
 
+_LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
+
 
 class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
     """
@@ -63,6 +68,10 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
 
     anthropic_version: str = "bedrock-2023-05-31"
 
+    def __init__(self, model_info: Mapping[str, object] | None = None) -> None:
+        super().__init__()
+        self._deployment_model_info: Final = model_info
+
     @property
     def custom_llm_provider(self) -> str | None:
         return "bedrock"
@@ -72,6 +81,19 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
 
     def get_supported_openai_params(self, model: str) -> list[str]:
         return AnthropicConfig.get_supported_openai_params(self, model)
+
+    def native_output_format_schema(self, json_schema: Mapping[str, object]) -> Mapping[str, object] | None:
+        return AnthropicConfig.native_output_schema(json_schema)
+
+    def uses_native_structured_output_for_schema(
+        self,
+        model: str,
+        json_schema: Mapping[str, object] | None,
+        request_params: Mapping[str, object],
+    ) -> bool:
+        return bedrock_chat_uses_native_structured_output(
+            model, self.is_thinking_requested(request_params), model_info=self._deployment_model_info
+        ) and (json_schema is None or bedrock_cleaned_output_schema(model, json_schema) is not None)
 
     def map_openai_params(
         self,
@@ -230,6 +252,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         apply_bedrock_invoke_structured_output(
             model=model,
             request_body=anthropic_request,
+            model_info=deployment_model_info(_LITELLM_PARAMS.validate_python(litellm_params)),
         )
         strip_unsupported_bedrock_invoke_output_config_keys(
             model=model,

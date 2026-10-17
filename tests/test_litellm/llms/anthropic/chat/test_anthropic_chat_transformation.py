@@ -1311,6 +1311,74 @@ def test_opus_uses_native_structured_output(model_name):
     assert optional_params.get("json_mode") is True
 
 
+@pytest.mark.parametrize(
+    ("field_schema", "native"),
+    [
+        ({"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}, True),
+        ({"type": "object", "additionalProperties": {"type": "integer"}}, False),
+        ({"anyOf": [{"type": "object"}, {"type": "null"}]}, False),
+    ],
+    ids=["closed-object", "dict-field", "nullable-dict-field"],
+)
+def test_dict_fields_take_the_json_tool_on_a_native_structured_output_model(field_schema, native):
+    optional_params: Final = AnthropicConfig().map_openai_params(
+        non_default_params={
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "out",
+                    "schema": {"type": "object", "properties": {"field": field_schema}, "required": ["field"]},
+                },
+            }
+        },
+        optional_params={},
+        model="claude-opus-4-8",
+        drop_params=False,
+    )
+
+    assert ("output_format" in optional_params) is native
+    assert ([tool["name"] for tool in optional_params.get("tools", [])] == ["json_tool_call"]) is not native
+
+
+
+@pytest.mark.parametrize(
+    ("model", "thinking_params"),
+    [
+        ("claude-opus-4-8", {"thinking": {"type": "adaptive"}}),
+        ("claude-opus-4-8", {"reasoning_effort": "low"}),
+        ("claude-opus-4-8", {"reasoning_effort": "none"}),
+        ("claude-sonnet-5-5", {}),
+        (
+            "claude-opus-4-8",
+            {"tools": [{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}]},
+        ),
+    ],
+    ids=["adaptive-thinking", "reasoning-effort", "reasoning-effort-none", "model-without-forced-tools", "caller-tools"],
+)
+def test_dict_fields_keep_native_output_when_the_json_tool_would_not_be_forced(model, thinking_params):
+    optional_params: Final = AnthropicConfig().map_openai_params(
+        non_default_params={
+            **thinking_params,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "out",
+                    "schema": {
+                        "type": "object",
+                        "properties": {"field": {"type": "object", "additionalProperties": {"type": "integer"}}},
+                        "required": ["field"],
+                    },
+                },
+            },
+        },
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert "output_format" in optional_params
+    assert "json_tool_call" not in [tool["name"] for tool in optional_params.get("tools", [])]
+
 def test_native_structured_output_uses_bundled_capability_when_remote_map_lags(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -6451,3 +6519,15 @@ def test_eager_input_streaming_reaches_anthropic_request_tools():
 
     assert result["tools"][0]["eager_input_streaming"] is True
     assert result["tools"][0]["name"] == "write_file"
+
+
+def test_json_mode_keeps_the_thinking_that_preceded_the_json_tool_call():
+    thinking_block: Final = {"type": "thinking", "thinking": "The user wants a greeting.", "signature": "sig-1"}
+    body: Final = _json_mode_message_body("tool_use", None)
+    result: Final = _transform_json_mode_body({**body, "content": [thinking_block, *body["content"]]})
+
+    message: Final = result.choices[0].message
+    assert json.loads(message.content) == {"answer": "Hello"}
+    assert message.reasoning_content == thinking_block["thinking"]
+    assert [block["signature"] for block in message.thinking_blocks] == [thinking_block["signature"]]
+

@@ -653,3 +653,23 @@ def async_only_image_fetch(monkeypatch):
     for module in (image_handling, factory, gemini_chat_transformation):
         monkeypatch.setattr(module, "convert_url_to_base64", forbid_sync_convert)
     return fetch
+
+
+from collections.abc import Callable
+from typing import Final, Literal, TypeAlias
+
+NativeStructuredOutputKey: TypeAlias = Literal["legacy", "bedrock"] | None
+
+
+@pytest.fixture
+def set_native_structured_output(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> Callable[[str, NativeStructuredOutputKey], None]:
+    def set_flags(model_cost_key: str, native_key: NativeStructuredOutputKey) -> None:
+        entry: Final = litellm.model_cost[model_cost_key]
+        monkeypatch.setitem(entry, "supports_native_structured_output", native_key == "legacy")
+        monkeypatch.setitem(entry, "supports_bedrock_native_structured_output", native_key == "bedrock")
+        litellm.get_model_info.cache_clear()
+
+    return set_flags
+
