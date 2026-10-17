@@ -6088,6 +6088,71 @@ US_ANTHROPIC_CLAUDE_HAIKU_5_5_TIERED_CACHE_WRITE_1H_ABOVE_100K: Final = with_usa
     ),
 )
 
+def _us_anthropic_messages_bridge_pairs(
+    input_case: CostTrackingTestCase, stream_case: CostTrackingTestCase
+) -> tuple[BridgeCostParityTestCase, ...]:
+    return tuple(
+        BridgeCostParityTestCase(
+            native=pair.native,
+            bridged=pair.bridged.model_copy(
+                update={
+                    "name": (
+                        f"us.anthropic."
+                        f"{pair.native.name.removeprefix('us.anthropic.').removesuffix('-input_text').removesuffix('-stream')}"
+                        f"-messages_bridged_{'stream' if pair.native.request.get('stream') is True else 'json'}"
+                    )
+                }
+            ),
+        )
+        for pair in bridge_pairs((input_case, stream_case), ("/v1/messages",))
+    )
+
+
+def _us_anthropic_responses_stream_case(
+    json_case: CostTrackingTestCase, stream_case: CostTrackingTestCase, name: str
+) -> CostTrackingTestCase:
+    return json_case.model_copy(
+        update={
+            "name": name,
+            "request": {**json_case.request, "stream": True},
+            "response": stream_case.response,
+        }
+    )
+
+
+US_ANTHROPIC_CLAUDE_FABLE_5_1_RESPONSES_BRIDGED_STREAM: Final = _us_anthropic_responses_stream_case(
+    US_ANTHROPIC_CLAUDE_FABLE_5_1_RESPONSES_BRIDGED_JSON,
+    US_ANTHROPIC_CLAUDE_FABLE_5_1_STREAM,
+    "us.anthropic.claude-fable-5-1-responses_bridged_stream",
+)
+US_ANTHROPIC_CLAUDE_HAIKU_5_5_RESPONSES_BRIDGED_STREAM: Final = _us_anthropic_responses_stream_case(
+    US_ANTHROPIC_CLAUDE_HAIKU_5_5_RESPONSES_BRIDGED_JSON,
+    US_ANTHROPIC_CLAUDE_HAIKU_5_5_STREAM,
+    "us.anthropic.claude-haiku-5-5-responses_bridged_stream",
+)
+US_ANTHROPIC_CLAUDE_OPUS_5_5_RESPONSES_BRIDGED_STREAM: Final = _us_anthropic_responses_stream_case(
+    US_ANTHROPIC_CLAUDE_OPUS_5_5_RESPONSES_BRIDGED_JSON,
+    US_ANTHROPIC_CLAUDE_OPUS_5_5_STREAM,
+    "us.anthropic.claude-opus-5-5-responses_bridged_stream",
+)
+US_ANTHROPIC_CLAUDE_SONNET_5_5_RESPONSES_BRIDGED_STREAM: Final = _us_anthropic_responses_stream_case(
+    US_ANTHROPIC_CLAUDE_SONNET_5_5_RESPONSES_BRIDGED_JSON,
+    US_ANTHROPIC_CLAUDE_SONNET_5_5_STREAM,
+    "us.anthropic.claude-sonnet-5-5-responses_bridged_stream",
+)
+_US_ANTHROPIC_FABLE_5_1_MESSAGES_PAIRS: Final = _us_anthropic_messages_bridge_pairs(
+    US_ANTHROPIC_CLAUDE_FABLE_5_1_INPUT_TEXT, US_ANTHROPIC_CLAUDE_FABLE_5_1_STREAM
+)
+_US_ANTHROPIC_HAIKU_5_5_MESSAGES_PAIRS: Final = _us_anthropic_messages_bridge_pairs(
+    US_ANTHROPIC_CLAUDE_HAIKU_5_5_INPUT_TEXT, US_ANTHROPIC_CLAUDE_HAIKU_5_5_STREAM
+)
+_US_ANTHROPIC_OPUS_5_5_MESSAGES_PAIRS: Final = _us_anthropic_messages_bridge_pairs(
+    US_ANTHROPIC_CLAUDE_OPUS_5_5_INPUT_TEXT, US_ANTHROPIC_CLAUDE_OPUS_5_5_STREAM
+)
+_US_ANTHROPIC_SONNET_5_5_MESSAGES_PAIRS: Final = _us_anthropic_messages_bridge_pairs(
+    US_ANTHROPIC_CLAUDE_SONNET_5_5_INPUT_TEXT, US_ANTHROPIC_CLAUDE_SONNET_5_5_STREAM
+)
+
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     US_ANTHROPIC_CLAUDE_SONNET_5_RESPONSES_BRIDGED_JSON,
     US_ANTHROPIC_CLAUDE_SONNET_5_5_RESPONSES_BRIDGED_JSON,
@@ -6210,6 +6275,14 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     US_ANTHROPIC_CLAUDE_FABLE_5_1_THINKING,
     US_ANTHROPIC_CLAUDE_OPUS_5_5_UPSTREAM_400_ZERO_SPEND,
     US_ANTHROPIC_CLAUDE_OPUS_5_5_INPUT_TEXT_ROLLUPS,
+    US_ANTHROPIC_CLAUDE_FABLE_5_1_RESPONSES_BRIDGED_STREAM,
+    US_ANTHROPIC_CLAUDE_HAIKU_5_5_RESPONSES_BRIDGED_STREAM,
+    US_ANTHROPIC_CLAUDE_OPUS_5_5_RESPONSES_BRIDGED_STREAM,
+    US_ANTHROPIC_CLAUDE_SONNET_5_5_RESPONSES_BRIDGED_STREAM,
+    *tuple(pair.bridged for pair in _US_ANTHROPIC_FABLE_5_1_MESSAGES_PAIRS),
+    *tuple(pair.bridged for pair in _US_ANTHROPIC_HAIKU_5_5_MESSAGES_PAIRS),
+    *tuple(pair.bridged for pair in _US_ANTHROPIC_OPUS_5_5_MESSAGES_PAIRS),
+    *tuple(pair.bridged for pair in _US_ANTHROPIC_SONNET_5_5_MESSAGES_PAIRS),
 )
 
 PARITY: Final[tuple[StreamParityTestCase, ...]] = (
@@ -6235,6 +6308,38 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
     StreamParityTestCase(plain=US_ANTHROPIC_CLAUDE_HAIKU_5_5_INPUT_TEXT, streamed=US_ANTHROPIC_CLAUDE_HAIKU_5_5_STREAM),
     StreamParityTestCase(plain=US_ANTHROPIC_CLAUDE_FABLE_5_INPUT_TEXT, streamed=US_ANTHROPIC_CLAUDE_FABLE_5_STREAM),
     StreamParityTestCase(plain=US_ANTHROPIC_CLAUDE_FABLE_5_1_INPUT_TEXT, streamed=US_ANTHROPIC_CLAUDE_FABLE_5_1_STREAM),
+    StreamParityTestCase(
+        plain=US_ANTHROPIC_CLAUDE_FABLE_5_1_RESPONSES_BRIDGED_JSON,
+        streamed=US_ANTHROPIC_CLAUDE_FABLE_5_1_RESPONSES_BRIDGED_STREAM,
+    ),
+    StreamParityTestCase(
+        plain=US_ANTHROPIC_CLAUDE_HAIKU_5_5_RESPONSES_BRIDGED_JSON,
+        streamed=US_ANTHROPIC_CLAUDE_HAIKU_5_5_RESPONSES_BRIDGED_STREAM,
+    ),
+    StreamParityTestCase(
+        plain=US_ANTHROPIC_CLAUDE_OPUS_5_5_RESPONSES_BRIDGED_JSON,
+        streamed=US_ANTHROPIC_CLAUDE_OPUS_5_5_RESPONSES_BRIDGED_STREAM,
+    ),
+    StreamParityTestCase(
+        plain=US_ANTHROPIC_CLAUDE_SONNET_5_5_RESPONSES_BRIDGED_JSON,
+        streamed=US_ANTHROPIC_CLAUDE_SONNET_5_5_RESPONSES_BRIDGED_STREAM,
+    ),
+    StreamParityTestCase(
+        plain=_US_ANTHROPIC_FABLE_5_1_MESSAGES_PAIRS[0].bridged,
+        streamed=_US_ANTHROPIC_FABLE_5_1_MESSAGES_PAIRS[1].bridged,
+    ),
+    StreamParityTestCase(
+        plain=_US_ANTHROPIC_HAIKU_5_5_MESSAGES_PAIRS[0].bridged,
+        streamed=_US_ANTHROPIC_HAIKU_5_5_MESSAGES_PAIRS[1].bridged,
+    ),
+    StreamParityTestCase(
+        plain=_US_ANTHROPIC_OPUS_5_5_MESSAGES_PAIRS[0].bridged,
+        streamed=_US_ANTHROPIC_OPUS_5_5_MESSAGES_PAIRS[1].bridged,
+    ),
+    StreamParityTestCase(
+        plain=_US_ANTHROPIC_SONNET_5_5_MESSAGES_PAIRS[0].bridged,
+        streamed=_US_ANTHROPIC_SONNET_5_5_MESSAGES_PAIRS[1].bridged,
+    ),
 )
 
 BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
@@ -6267,4 +6372,24 @@ BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
     BridgeCostParityTestCase(
         native=US_ANTHROPIC_CLAUDE_FABLE_5_1_INPUT_TEXT, bridged=US_ANTHROPIC_CLAUDE_FABLE_5_1_RESPONSES_BRIDGED_JSON
     ),
+    BridgeCostParityTestCase(
+        native=US_ANTHROPIC_CLAUDE_FABLE_5_1_STREAM,
+        bridged=US_ANTHROPIC_CLAUDE_FABLE_5_1_RESPONSES_BRIDGED_STREAM,
+    ),
+    BridgeCostParityTestCase(
+        native=US_ANTHROPIC_CLAUDE_HAIKU_5_5_STREAM,
+        bridged=US_ANTHROPIC_CLAUDE_HAIKU_5_5_RESPONSES_BRIDGED_STREAM,
+    ),
+    BridgeCostParityTestCase(
+        native=US_ANTHROPIC_CLAUDE_OPUS_5_5_STREAM,
+        bridged=US_ANTHROPIC_CLAUDE_OPUS_5_5_RESPONSES_BRIDGED_STREAM,
+    ),
+    BridgeCostParityTestCase(
+        native=US_ANTHROPIC_CLAUDE_SONNET_5_5_STREAM,
+        bridged=US_ANTHROPIC_CLAUDE_SONNET_5_5_RESPONSES_BRIDGED_STREAM,
+    ),
+    *_US_ANTHROPIC_FABLE_5_1_MESSAGES_PAIRS,
+    *_US_ANTHROPIC_HAIKU_5_5_MESSAGES_PAIRS,
+    *_US_ANTHROPIC_OPUS_5_5_MESSAGES_PAIRS,
+    *_US_ANTHROPIC_SONNET_5_5_MESSAGES_PAIRS,
 )

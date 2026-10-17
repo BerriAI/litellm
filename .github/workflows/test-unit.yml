@@ -658,6 +658,7 @@ jobs:
           - shard: proxy-extras
             test-path: >-
               tests/unit/litellm_proxy_extras
+              tests/unit/db_scripts
             python-version: "3.12"
             workers: 2
             reruns: 0
@@ -696,7 +697,6 @@ jobs:
               tests/unit/responses/litellm_completion_transformation
               tests/unit/responses/test_additional_tools.py
               tests/unit/responses/test_custom_tool_call.py
-              tests/unit/responses/test_dispatch.py
               tests/unit/responses/test_metadata_codex_callback.py
               tests/unit/responses/test_no_duplicate_spend_logs.py
               tests/unit/responses/test_null_test_fix.py

@@ -2625,6 +2625,13 @@
         "image_variations": true
       }
     },
+    "nace": {
+      "display_name": "Nace (`nace`)",
+      "url": "https://console.nace.ai/docs/drex",
+      "endpoints": {
+        "systemone": true
+      }
+    },
     "typesafe": {
       "display_name": "TypeSafe (`typesafe`)",
       "url": "https://docs.typesafe.ai/models",
@@ -3237,6 +3244,23 @@
       "endpoints": {
         "chat_completions": true,
         "messages": false,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
+      }
+    },
+    "openinfer": {
+      "display_name": "OpenInfer (`openinfer`)",
+      "url": "https://docs.litellm.ai/docs/providers/openinfer",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
         "responses": true,
         "embeddings": false,
         "image_generations": false,
