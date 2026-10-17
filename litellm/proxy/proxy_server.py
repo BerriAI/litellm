@@ -6535,10 +6535,13 @@ class ProxyConfig:
         environment_variables: Final = config.get("environment_variables", None)
         if environment_variables:
             for key, value in environment_variables.items():
+                if not isinstance(key, str):
+                    verbose_proxy_logger.warning("Skipping an environment_variables key that is not a string")
+                    continue
                 if key in self._BLOCKED_ENV_KEYS:
                     verbose_proxy_logger.warning("Skipping blocked environment variable key: %s", key)
                     continue
-                if isinstance(key, str) and is_mcp_stdio_flag_key(key):
+                if is_mcp_stdio_flag_key(key):
                     verbose_proxy_logger.warning(
                         "Ignoring %s set in the config file. Set it in the proxy's environment instead",
                         MCP_STDIO_ENABLED_ENV_VAR,
