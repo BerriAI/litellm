@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { getProviderLogoAndName } from "@/components/provider_info_helpers";
 import { PUBLIC_MODEL_HUB_SORTABLE_FIELDS } from "@/components/publicModelHub/publicModelHubFilters";
 import { displayMode } from "@/lib/decisionModels";
+import type { ModelCustomMetadataValue } from "@/components/AIHub/ModelCustomMetadata";
 
 export interface ModelGroupInfo {
   model_group: string;
@@ -27,6 +28,8 @@ export interface ModelGroupInfo {
   health_response_time?: number;
   health_checked_at?: string;
   description?: string;
+  custom_tags?: string[] | null;
+  custom_metadata?: Record<string, ModelCustomMetadataValue> | null;
   [key: string]: any;
 }
 
@@ -259,6 +262,13 @@ export const getPublicModelHubColumns = ({ onModelClick }: PublicModelHubColumns
           .map(([key]) => formatCapabilityName(key));
         return <OverflowChips items={features} />;
       },
+    },
+    {
+      id: "custom_tags",
+      meta: { title: "Tags", skeleton: "chips" },
+      header: "Tags",
+      size: 140,
+      cell: ({ row }) => <OverflowChips items={row.original.custom_tags ?? []} />,
     },
     {
       id: "health_status",

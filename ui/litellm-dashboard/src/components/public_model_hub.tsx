@@ -53,6 +53,7 @@ import { getProviderLogoAndName } from "./provider_info_helpers";
 import { displayMode, isDecisionMode } from "@/lib/decisionModels";
 import { modelUsageExample } from "@/components/AIHub/modelUsageExample";
 import { filterBySearchTerm, rankBySearchRelevance } from "@/utils/searchUtils";
+import { ModelCustomMetadata } from "@/components/AIHub/ModelCustomMetadata";
 
 interface PublicModelHubProps {
   accessToken?: string | null;
@@ -749,6 +750,10 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                           <p className="mt-1">{selectedModel.description}</p>
                         </div>
                       )}
+                      <ModelCustomMetadata
+                        customTags={selectedModel.custom_tags}
+                        customMetadata={selectedModel.custom_metadata}
+                      />
                     </div>
 
                     {/* Wildcard Routing Note */}
