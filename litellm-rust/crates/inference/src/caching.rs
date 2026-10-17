@@ -9,7 +9,7 @@ use bytes::{Bytes, BytesMut};
 use futures_util::{StreamExt, TryStreamExt, stream};
 use litellm_cache_response::{
     CacheOptions, CachePolicy, ResponseCacheRequest, ResponseCacheService, ResponseEnvelope,
-    ScopedCache, cache_key,
+    ScopedCache,
 };
 use litellm_host::{
     call::{CallOutput, OutputOf},
@@ -88,7 +88,7 @@ impl CacheSession {
         Some(Self { service, request })
     }
 
-    async fn lookup<P: Cachable>(&self) -> Option<CachedOutput<P::Response>>
+    async fn lookup<P: Cachable>(&self) -> Option<(CachedOutput<P::Response>, String)>
     where
         P::Response: DeserializeOwned,
     {
@@ -96,10 +96,11 @@ impl CacheSession {
             return None;
         }
         match self.service.lookup(&self.request, now()).await {
-            Ok(Some(value)) => {
-                serde_json::from_value::<ResponseEnvelope<CachedOutput<P::Response>>>(value)
+            Ok(Some(hit)) => {
+                serde_json::from_value::<ResponseEnvelope<CachedOutput<P::Response>>>(hit.value)
                     .ok()
                     .and_then(|entry| entry.decode(P::SURFACE))
+                    .map(|output| (output, hit.key))
             }
             Ok(None) => None,
             Err(_) => {
@@ -159,10 +160,13 @@ where
     crate::diagnostic::provider(&identity.model, &identity.provider);
     let session = CacheSession::prepare::<P>(cache, options, &request);
     let hit = match &session {
-        Some(session) => session.lookup::<P>().await.and_then(|entry| match entry {
-            CachedOutput::Response(response) => Some((response, cache_key(&session.request.key))),
-            CachedOutput::Stream(_) => None,
-        }),
+        Some(session) => session
+            .lookup::<P>()
+            .await
+            .and_then(|(entry, key)| match entry {
+                CachedOutput::Response(response) => Some((response, key)),
+                CachedOutput::Stream(_) => None,
+            }),
         None => None,
     };
     let (response, source) = match hit {
@@ -264,16 +268,12 @@ impl<P: StreamCachable> CallCache<P> {
         P::Response: DeserializeOwned,
     {
         let session = self.session.as_ref()?;
-        let output = match session.lookup::<P>().await? {
+        let (entry, key) = session.lookup::<P>().await?;
+        let output = match entry {
             CachedOutput::Response(response) => CallOutput::Complete(response),
             CachedOutput::Stream(data) => P::replay(Bytes::from(data))?,
         };
-        Some((
-            output,
-            ResultSource::Cache {
-                key: cache_key(&session.request.key),
-            },
-        ))
+        Some((output, ResultSource::Cache { key }))
     }
 
     pub async fn finish(self, output: OutputOf<P>, source: &ResultSource) -> OutputOf<P>

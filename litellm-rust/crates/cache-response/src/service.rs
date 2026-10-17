@@ -5,6 +5,7 @@ use serde_json::Value;
 
 use crate::{
     CacheControls, CacheEntry, CacheKeyField, CacheKeyInput, ResponseCache, ResponseCacheRequest,
+    cache_key,
 };
 
 type CacheFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, Error>> + Send + 'a>>;
@@ -24,6 +25,12 @@ impl Default for ResponseCacheConfig {
     }
 }
 
+#[derive(Debug, PartialEq)]
+pub struct CacheHit {
+    pub value: Value,
+    pub key: String,
+}
+
 pub trait ResponseCacheService: Send + Sync {
     fn config(&self) -> &ResponseCacheConfig;
 
@@ -31,7 +38,7 @@ pub trait ResponseCacheService: Send + Sync {
         &'a self,
         request: &'a ResponseCacheRequest,
         now: Duration,
-    ) -> CacheFuture<'a, Option<Value>>;
+    ) -> CacheFuture<'a, Option<CacheHit>>;
 
     fn store<'a>(
         &'a self,
@@ -53,8 +60,16 @@ where
         &'a self,
         request: &'a ResponseCacheRequest,
         now: Duration,
-    ) -> CacheFuture<'a, Option<Value>> {
-        Box::pin(self.async_lookup(request, now))
+    ) -> CacheFuture<'a, Option<CacheHit>> {
+        Box::pin(async move {
+            Ok(self
+                .async_lookup(request, now)
+                .await?
+                .map(|value| CacheHit {
+                    value,
+                    key: cache_key(&request.key),
+                }))
+        })
     }
 
     fn store<'a>(

@@ -38,22 +38,42 @@ def access(kwargs: Mapping[str, object], call_type: str) -> CacheAccess | None:
     )
 
 
-def lookup(access: CacheAccess, kwargs: Mapping[str, object]) -> object:
+@dataclass(frozen=True, slots=True)
+class CacheHit:
+    response: object
+    key: str
+
+
+def _request(cache: Cache, kwargs: Mapping[str, object]) -> tuple[str, Mapping[str, object]]:
+    request: Final = {name: value for name, value in kwargs.items() if name != "cache_key"}
+    preset: Final = kwargs.get("cache_key")
+    return (preset if isinstance(preset, str) and preset else cache.get_cache_key(**request), request)
+
+
+def lookup(access: CacheAccess, kwargs: Mapping[str, object]) -> CacheHit | None:
     from litellm.caching.caching_handler import is_response_without_output
 
-    result: Final = access.cache.get_cache(dynamic_cache_object=None, **kwargs)  # pyright: ignore[reportUnknownMemberType]  # Cache.get_cache kwargs are untyped
-    return None if is_response_without_output(result) else result
+    key, request = _request(access.cache, kwargs)
+    result: Final = access.cache.get_cache(dynamic_cache_object=None, cache_key=key, **request)  # pyright: ignore[reportUnknownMemberType]  # Cache.get_cache kwargs are untyped
+    if result is None or is_response_without_output(result):
+        return None
+    return CacheHit(response=result, key=key)
 
 
-async def alookup(access: CacheAccess, kwargs: Mapping[str, object]) -> object:
+async def alookup(access: CacheAccess, kwargs: Mapping[str, object]) -> CacheHit | None:
     from litellm.caching.caching_handler import is_response_without_output
 
-    result: Final = await access.cache.async_get_cache(dynamic_cache_object=access.memory_tier, **kwargs)  # pyright: ignore[reportUnknownMemberType]  # Cache.async_get_cache kwargs are untyped
-    if not is_response_without_output(result):
-        return result
-    if access.memory_tier is not None:
-        access.memory_tier.in_memory_cache.delete_cache(access.cache.get_cache_key(**kwargs))
-    return None
+    key, request = _request(access.cache, kwargs)
+    result: Final = await access.cache.async_get_cache(  # pyright: ignore[reportUnknownMemberType]  # Cache.async_get_cache kwargs are untyped
+        dynamic_cache_object=access.memory_tier, cache_key=key, **request
+    )
+    if result is None:
+        return None
+    if is_response_without_output(result):
+        if access.memory_tier is not None:
+            access.memory_tier.in_memory_cache.delete_cache(key)
+        return None
+    return CacheHit(response=result, key=key)
 
 
 def store(access: CacheAccess, value: object, kwargs: Mapping[str, object]) -> None:

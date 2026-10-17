@@ -33,3 +33,7 @@ def cache_key(response: object) -> object:
         get_hidden_params_dict(response).get("additional_headers", {})
     )
     return headers.get("x-litellm-cache-key")
+
+
+def stored_cache_key(response: object) -> object:
+    return get_hidden_params_dict(response).get("cache_key")

@@ -352,13 +352,19 @@ impl ResponseCacheService for InvalidEntryCache {
         &'a self,
         request: &'a litellm_cache_response::ResponseCacheRequest,
         now: Duration,
-    ) -> futures_util::future::BoxFuture<'a, Result<Option<Value>, litellm_cache::Error>> {
+    ) -> futures_util::future::BoxFuture<
+        'a,
+        Result<Option<litellm_cache_response::CacheHit>, litellm_cache::Error>,
+    > {
         Box::pin(async move {
-            Ok(self
-                .0
-                .async_lookup(request, now)
-                .await?
-                .or_else(|| Some(self.1.clone())))
+            Ok(Some(litellm_cache_response::CacheHit {
+                value: self
+                    .0
+                    .async_lookup(request, now)
+                    .await?
+                    .unwrap_or_else(|| self.1.clone()),
+                key: litellm_cache_response::cache_key(&request.key),
+            }))
         })
     }
 

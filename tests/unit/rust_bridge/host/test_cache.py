@@ -110,14 +110,20 @@ def test_only_a_redis_cache_gets_a_worker_memory_tier(
     assert redis.tiered_writes is tiered
 
 
-def test_lookup_returns_cached_response() -> None:
+@pytest.mark.parametrize("cache_key", (None, "preset-key"), ids=("generated-key", "preset-key"))
+def test_lookup_returns_cached_response_and_key(cache_key: str | None) -> None:
     cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
     cache_access: Final = _cache_access(cache)
     response: Final = {"id": "cached"}
+    request: Final = REQUEST if cache_key is None else {**REQUEST, "cache_key": cache_key}
+    expected_key: Final = cache.get_cache_key(**REQUEST) if cache_key is None else cache_key
 
-    store(cache_access, response, REQUEST)
+    store(cache_access, response, request)
+    hit: Final = lookup(cache_access, request)
 
-    assert lookup(cache_access, REQUEST) == response
+    assert hit is not None
+    assert hit.response == response
+    assert hit.key == expected_key
 
 
 def test_lookup_skips_responses_without_output() -> None:
@@ -142,14 +148,18 @@ async def test_async_lookup_uses_memory_tier_and_discards_empty_responses() -> N
 
     response: Final = {"id": "cached"}
     await cache.async_add_cache(response, dynamic_cache_object=memory_tier, **REQUEST)
+    hit: Final = await alookup(cache_access, REQUEST)
 
-    assert await alookup(cache_access, REQUEST) == response
+    assert hit is not None
+    assert hit.response == response
+    assert hit.key == cache.get_cache_key(**REQUEST)
 
-    empty_request: Final = {**REQUEST, "messages": [{"role": "user", "content": "empty"}]}
+    empty_key: Final = "empty-response"
+    empty_request: Final = {**REQUEST, "cache_key": empty_key}
     await cache.async_add_cache({"choices": []}, dynamic_cache_object=memory_tier, **empty_request)
 
     assert await alookup(cache_access, empty_request) is None
-    assert await memory_tier.in_memory_cache.async_get_cache(cache.get_cache_key(**empty_request)) is None
+    assert await memory_tier.in_memory_cache.async_get_cache(empty_key) is None
 
 
 @pytest.mark.asyncio
@@ -162,8 +172,11 @@ async def test_async_store_routes_writes_and_skips_responses_without_output() ->
     await astore(cache_access, response, REQUEST)
     pending_writes: Final = tuple(_PENDING_CACHE_WRITES)
     await asyncio.gather(*pending_writes)
+    hit: Final = await alookup(cache_access, REQUEST)
 
-    assert await alookup(cache_access, REQUEST) == response
+    assert hit is not None
+    assert hit.response == response
+    assert hit.key == cache.get_cache_key(**REQUEST)
 
     empty_key: Final = "empty-response"
     empty_request: Final = {**REQUEST, "cache_key": empty_key}

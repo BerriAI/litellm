@@ -21,7 +21,7 @@ from tests.test_litellm_rust.support.caching import (
 )
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging, request_body
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
-from tests.test_litellm_rust.support.results import cache_key
+from tests.test_litellm_rust.support.results import cache_key, stored_cache_key
 from tests.test_litellm_rust.support.routing import assert_served_natively
 
 pytestmark = pytest.mark.requires_rust_extension
@@ -395,3 +395,17 @@ async def test_a_stored_response_reaches_the_worker_memory_tier_only_when_read(
 
     assert len(server.requests) == 2
     assert_served_natively(server, count=2)
+
+
+async def test_a_native_hit_reports_the_key_the_entry_is_stored_under(
+    call: Call, server: RecordingServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    backend: Final = InMemoryCache()
+    use_cache(monkeypatch, Cache(_backend=backend))
+
+    await call()
+    hit: Final = await call()
+
+    (stored,) = backend.cache_dict
+    assert cache_key(hit) == stored_cache_key(hit) == stored
+    assert_served_natively(server, count=1)
