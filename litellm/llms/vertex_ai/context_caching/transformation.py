@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Final, Literal
 
+from litellm._logging import verbose_logger
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.llms.vertex_ai import CachedContentRequestBody
 from litellm.utils import is_cached_message
@@ -147,9 +148,20 @@ def separate_cached_messages(
         prefix_messages: Final = messages[:first_cached_idx]
         suffix_messages: Final = messages[last_cached_idx + 1 :]
 
-        if any(m["role"] != "system" for m in prefix_messages) or any(m["role"] == "system" for m in suffix_messages):
+        # Only "system" counts as foldable: the Vertex/Gemini mapping does not
+        # fold "developer" messages into system_instruction, so a developer
+        # message around the block intentionally disables caching.
+        non_system_prefix: Final = any(m["role"] != "system" for m in prefix_messages)
+        trailing_system: Final = any(m["role"] == "system" for m in suffix_messages)
+        if non_system_prefix or trailing_system:
             # Not a true prefix: send the conversation uncached so nothing is
             # reordered and no system message is silently dropped.
+            verbose_logger.debug(
+                "Vertex context caching skipped: cached block is not a true prefix (%s)",
+                "non-system message before the cached block"
+                if non_system_prefix
+                else "system message after the cached block",
+            )
             return [], list(messages)
 
         cached_messages = list(prefix_messages) + messages[first_cached_idx : last_cached_idx + 1]
