@@ -1044,10 +1044,22 @@ def test_masked_tool_arguments_change_only_the_masked_strings(arguments: str, ma
     assert data["messages"][0]["tool_calls"][0]["function"]["arguments"] == masked
 
 
-def test_tool_visitor_that_changes_the_payload_shape_writes_its_payload_as_arguments() -> None:
-    data = {"messages": [{"tool_calls": [{"function": {"arguments": '{ "token": "secret", "note": "keep" }'}}]}]}
-    assert walk_user_text(data, lambda text: text, lambda payload: {"token": "[MASKED]"}) == 1
-    assert data["messages"][0]["tool_calls"][0]["function"]["arguments"] == '{"token": "[MASKED]"}'
+@pytest.mark.parametrize(
+    "rewritten",
+    (
+        {"token": "[MASKED]"},
+        {"token": "[MASKED]", "renamed": "keep", "count": 7},
+        {"token": "[MASKED]", "note": "keep", "count": 8},
+        {"token": "[MASKED]", "note": "keep", "count": True},
+    ),
+    ids=("key-dropped", "key-renamed", "number-changed", "number-retyped"),
+)
+def test_tool_visitor_that_changes_more_than_strings_writes_its_payload_as_arguments(rewritten: JsonValue) -> None:
+    data = {
+        "messages": [{"tool_calls": [{"function": {"arguments": '{ "token": "secret", "note": "keep", "count": 1 }'}}]}]
+    }
+    assert walk_user_text(data, lambda text: text, lambda payload: rewritten) == 1
+    assert data["messages"][0]["tool_calls"][0]["function"]["arguments"] == json.dumps(rewritten)
 
 
 @pytest.mark.parametrize(

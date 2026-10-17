@@ -116,17 +116,17 @@ def _value_string_spans(arguments: str) -> Iterator[tuple[int, int]]:
 
 
 def _respliced(arguments: str, parsed: JsonValue, rewritten: JsonValue) -> str:
-    """Write the string values that differ between ``parsed`` and ``rewritten`` into ``arguments``, keeping its other text."""
-    spans: Final = tuple(_value_string_spans(arguments))
-    before: Final = tuple(iter_tool_json_text(parsed))
-    after: Final = tuple(iter_tool_json_text(rewritten))
-    if not len(spans) == len(before) == len(after):
-        return json.dumps(rewritten, ensure_ascii=False)
-    changed: Final = tuple((span, new) for span, old, new in zip(spans, before, after) if new != old)
+    """Serialize ``rewritten`` by replacing only its changed string values in ``arguments``, when nothing else changed."""
+    serialized: Final = json.dumps(rewritten, ensure_ascii=False)
+    strings: Final = iter(tuple(iter_tool_json_text(rewritten)))
+    if json.dumps(map_tool_json_text(parsed, lambda text: next(strings, text)), ensure_ascii=False) != serialized:
+        return serialized
+    values: Final = zip(_value_string_spans(arguments), iter_tool_json_text(parsed), iter_tool_json_text(rewritten))
+    changed: Final = tuple((span, new) for span, old, new in values if new != old)
     starts: Final = (0, *(end for (_, end), _ in changed))
     ends: Final = (*(start for (start, _), _ in changed), len(arguments))
     replacements: Final = (*(json.dumps(new, ensure_ascii=False) for _, new in changed), "")
-    return "".join(arguments[start:end] + replacement for start, end, replacement in zip(starts, ends, replacements))
+    return "".join(arguments[start:end] + text for start, end, text in zip(starts, ends, replacements))
 
 
 def iter_tool_json_fields(value: object) -> Iterator[tuple[str | None, str]]:
