@@ -1,7 +1,9 @@
 import math
+from collections.abc import Mapping
 from typing import Final
 
 import httpx
+from pydantic import TypeAdapter, ValidationError
 
 from litellm.litellm_core_utils.core_helpers import set_response_cost_in_hidden_params
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
@@ -13,19 +15,39 @@ _SUPPORTED_OPENAI_PARAMS: Final = (
     "frequency_penalty",
     "max_retries",
     "max_tokens",
+    "parallel_tool_calls",
     "presence_penalty",
     "response_format",
+    "service_tier",
     "stream",
     "temperature",
+    "tool_choice",
+    "tools",
     "top_p",
+    "user",
 )
+
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])
+
+
+def _pricing_failed(reported: Mapping[str, object]) -> bool:
+    try:
+        return bool(_JSON_OBJECT.validate_python(reported.get("cost_breakdown")).get("pricing_failed"))
+    except ValidationError:
+        return False
 
 
 def _reported_cost_usd(raw_response: httpx.Response) -> float | None:
     try:
-        cost: Final = raw_response.json()["nadir_metadata"]["cost"]["total_cost_usd"]
+        reported: Final = _JSON_OBJECT.validate_python(raw_response.json()["nadir_metadata"]["cost"])
     except (ValueError, KeyError, TypeError):
         return None
+    # An unpriced call still carries a total (0.0, or the sum of the attempts Nadir could price),
+    # flagged in its breakdown. Logging that total would record a paid call as free or cheaper than it was.
+    if _pricing_failed(reported):
+        return None
+    cost: Final = reported.get("total_cost_usd")
     if isinstance(cost, bool) or not isinstance(cost, (int, float)):
         return None
     if not math.isfinite(cost) or cost < 0:
