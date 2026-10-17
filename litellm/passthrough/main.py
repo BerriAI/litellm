@@ -8,6 +8,7 @@ import asyncio
 import contextvars
 import weakref
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Coroutine, Generator, Iterator
+from datetime import datetime, timezone
 from functools import partial
 from types import TracebackType
 from typing import Final, cast
@@ -81,6 +82,15 @@ class _SpendCollection:
     @property
     def should_flush(self) -> bool:
         return self.chunk_count > 0 and not self._failed
+
+
+def _stamp_first_chunk_if_needed(litellm_logging_obj: LiteLLMLoggingObj, chunk: bytes) -> None:
+    if chunk and litellm_logging_obj.completion_start_time is None:
+        now: Final = datetime.now(timezone.utc)
+        observed: Final = (
+            now if litellm_logging_obj.start_time.tzinfo is not None else now.astimezone().replace(tzinfo=None)
+        )
+        litellm_logging_obj.update_completion_start_time(completion_start_time=observed)
 
 
 class AsyncPassthroughStreamingResponse(AsyncGenerator[bytes, bytes]):
@@ -189,6 +199,7 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[bytes, bytes]):
             await self  # pyright: ignore[reportGeneralTypeIssues]  # structural type check misses __await__
         try:
             chunk: Final = await anext(self._iterator)
+            _stamp_first_chunk_if_needed(self._litellm_logging_obj, chunk)
             self._spend.add(chunk)
         except Exception:  # noqa: BLE001 # Safe catch-all for cleanup logic
             self._start_flush()
@@ -203,7 +214,9 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[bytes, bytes]):
     async def asend(self, value: bytes) -> bytes:
         if not self._initialized:
             await self  # pyright: ignore[reportGeneralTypeIssues]  # structural type check misses __await__
-        return await self._iterator.asend(value)
+        chunk: Final = await self._iterator.asend(value)
+        _stamp_first_chunk_if_needed(self._litellm_logging_obj, chunk)
+        return chunk
 
     async def athrow(
         self,
@@ -264,6 +277,7 @@ class PassthroughStreamingResponse(Generator[bytes, bytes, None]):
     def __next__(self) -> bytes:
         try:
             chunk: Final = next(self._iterator)
+            _stamp_first_chunk_if_needed(self._litellm_logging_obj, chunk)
             self._spend.add(chunk)
         except Exception:  # noqa: BLE001 # Safe catch-all for cleanup logic
             self._start_flush()
@@ -276,7 +290,9 @@ class PassthroughStreamingResponse(Generator[bytes, bytes, None]):
             return chunk
 
     def send(self, value: bytes) -> bytes:
-        return self._iterator.send(value)
+        chunk: Final = self._iterator.send(value)
+        _stamp_first_chunk_if_needed(self._litellm_logging_obj, chunk)
+        return chunk
 
     def throw(
         self,
@@ -578,8 +594,8 @@ def llm_passthrough_route(
         request_data=_streaming_request_data,
     )
 
-    # Update logging object with streaming status
     litellm_logging_obj.stream = is_streaming_request
+    litellm_logging_obj.model_call_details["stream"] = is_streaming_request
 
     ## LOGGING PRE-CALL
     request_data: Final = data if data else json
