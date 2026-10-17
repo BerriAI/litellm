@@ -4378,18 +4378,21 @@ class _RecordedSpeechSuccess:
     spend_metadata: Mapping[str, object]
     response_cost: float | None
     logged_response_cost: float | None
+    logged_tokens: tuple[object, object]
 
 
 def _record_speech_success(payload: dict[str, object]) -> _RecordedSpeechSuccess:
     call_type: Final = payload.get("call_type")
     response_cost: Final = payload.get("response_cost")
     logging_payload: Final = payload.get("standard_logging_object")
-    logged_cost: Final = logging_payload.get("response_cost") if isinstance(logging_payload, dict) else None
+    logged: Final[Mapping[str, object]] = logging_payload if isinstance(logging_payload, dict) else {}
+    logged_cost: Final = logged.get("response_cost")
     return _RecordedSpeechSuccess(
         call_type=call_type if isinstance(call_type, str) else None,
         spend_metadata=get_litellm_metadata_from_kwargs(payload),
         response_cost=response_cost if isinstance(response_cost, float) else None,
         logged_response_cost=logged_cost if isinstance(logged_cost, float) else None,
+        logged_tokens=(logged.get("prompt_tokens"), logged.get("completion_tokens")),
     )
 
 
@@ -4397,6 +4400,11 @@ class _SuccessEventRecorder(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
         self.events: list[_RecordedSpeechSuccess] = []  # mutable-ok: test recorder of success-callback events
+
+    def log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.events.append(_record_speech_success(kwargs))
 
     async def async_log_success_event(
         self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
@@ -4443,7 +4451,7 @@ def _gemini_tts_generate_content_response() -> dict[str, object]:
 
 
 @pytest.mark.asyncio
-async def test_aspeech_gemini_bridge_keeps_proxy_metadata_for_spend_tracking(
+async def test_aspeech_gemini_bridge_bills_one_call_with_proxy_metadata_and_completion_tokens(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
@@ -4463,9 +4471,11 @@ async def test_aspeech_gemini_bridge_keeps_proxy_metadata_for_spend_tracking(
         metadata={"user_api_key": "hashed-virtual-key", "user_api_key_user_id": "user-1"},
     )
 
-    assert mock_route.called
+    assert mock_route.call_count == 1
     assert mock_route.calls.last.request.headers["x-goog-api-key"] == "fake-gemini-key"
     speech_event: Final = await _wait_for_success_event(recorder, call_type="aspeech")
+    assert recorder.events == [speech_event]
+    assert speech_event.logged_tokens == (5, 60)
     assert speech_event.spend_metadata["user_api_key"] == "hashed-virtual-key"
     assert speech_event.spend_metadata["user_api_key_user_id"] == "user-1"
     expected_prompt_cost, expected_completion_cost = litellm.cost_per_token(

@@ -9,7 +9,7 @@ from litellm.constants import OPENAI_CHAT_COMPLETION_PARAMS
 if TYPE_CHECKING:
     from litellm import Logging as LiteLLMLoggingObj
     from litellm.types.llms.openai import ChatCompletionUserMessage, HttpxBinaryResponseContent
-    from litellm.types.utils import ModelResponse
+    from litellm.types.utils import ModelResponse, Usage
 
 
 def _completion_response_cost(model_response: "ModelResponse") -> float | None:
@@ -18,6 +18,13 @@ def _completion_response_cost(model_response: "ModelResponse") -> float | None:
         return None
     response_cost: Final = hidden_params.get("response_cost")
     return response_cost if isinstance(response_cost, float) else None
+
+
+def _completion_usage(model_response: "ModelResponse") -> "Usage | None":
+    from litellm.types.utils import Usage
+
+    usage: Final = getattr(model_response, "usage", None)
+    return usage if isinstance(usage, Usage) else None
 
 
 GEMINI_TTS_CHAT_AUDIO_FORMAT: Final = "pcm16"
@@ -179,6 +186,5 @@ class SpeechToCompletionBridgeTransformationHandler:
         )
         binary_response: Final = HttpxBinaryResponseContent(response)
         binary_response.set_response_cost(_completion_response_cost(model_response))
-        if hasattr(model_response, "usage"):
-            binary_response.usage = getattr(model_response, "usage")
+        binary_response.usage = _completion_usage(model_response)
         return binary_response
