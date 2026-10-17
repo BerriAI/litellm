@@ -5397,6 +5397,11 @@ async def can_key_call_model(
     1. First checks native key-level model permissions (current implementation)
     2. If not allowed natively, falls back to access_group_ids on the key
 
+    An empty native ``models`` list normally means unrestricted access. When the
+    key also has ``access_group_ids``, those groups are the allowlist instead —
+    otherwise the empty-list shortcut would grant every model and the group
+    check would never run.
+
     Returns:
         - True: if token allowed to call model
 
@@ -5404,6 +5409,33 @@ async def can_key_call_model(
         - Exception: If token not allowed to call model
     """
     key_models: Final = _resolve_key_models_for_auth_check(valid_token=valid_token)
+    key_access_group_ids: Final = valid_token.access_group_ids or []
+    # Empty native models + access groups => groups are the sole grant.
+    if len(key_models) == 0 and key_access_group_ids:
+        group_only_models: Final = await get_models_from_access_groups(
+            access_group_ids=key_access_group_ids,
+            prisma_client=prisma_client,
+        )
+        if not group_only_models:
+            raise ModelAccessDeniedProxyException(
+                message=model_access_denied_client_message(model=model),
+                internal_message=(
+                    f"key not allowed to access model. This key's access groups "
+                    f"grant no models. Tried to access {model}"
+                ),
+                type=ProxyErrorTypes.key_model_access_denied,
+                param="model",
+                code=status.HTTP_403_FORBIDDEN,
+            )
+        return can_object_call_model(
+            model=model,
+            llm_router=llm_router,
+            models=list(group_only_models),
+            team_model_aliases=valid_token.team_model_aliases,
+            team_id=valid_token.team_id,
+            key_model_aliases=key_model_aliases_for_auth_check(valid_token),
+            object_type="key",
+        )
     try:
         return can_object_call_model(
             model=model,
@@ -5416,7 +5448,6 @@ async def can_key_call_model(
         )
     except ProxyException:
         # Fallback: check key's access_group_ids
-        key_access_group_ids: Final = valid_token.access_group_ids or []
         if key_access_group_ids:
             models_from_groups: Final = await get_models_from_access_groups(
                 access_group_ids=key_access_group_ids,
@@ -5622,12 +5653,43 @@ async def can_team_access_model(
 
     1. First checks native team-level model permissions (current implementation)
     2. If not allowed natively, falls back to access_group_ids on the team
+
+    An empty native ``models`` list normally means unrestricted access. When the
+    team also has ``access_group_ids``, those groups are the allowlist instead.
     """
+    team_models: Final = list(team_object.models) if team_object else []
+    team_access_group_ids: Final = (team_object.access_group_ids or []) if team_object else []
+    # Empty native models + access groups => groups are the sole grant.
+    if len(team_models) == 0 and team_access_group_ids:
+        group_only_models: Final = await get_models_from_access_groups(
+            access_group_ids=team_access_group_ids,
+            prisma_client=prisma_client,
+        )
+        if not group_only_models:
+            raise ModelAccessDeniedProxyException(
+                message=model_access_denied_client_message(model=model),
+                internal_message=(
+                    f"team not allowed to access model. This team's access groups "
+                    f"grant no models. Tried to access {model}"
+                ),
+                type=ProxyErrorTypes.team_model_access_denied,
+                param="model",
+                code=status.HTTP_403_FORBIDDEN,
+            )
+        return can_object_call_model(
+            model=model,
+            llm_router=llm_router,
+            models=list(group_only_models),
+            team_model_aliases=team_model_aliases,
+            team_id=team_object.team_id if team_object else None,
+            key_model_aliases=key_model_aliases,
+            object_type="team",
+        )
     try:
         return can_object_call_model(
             model=model,
             llm_router=llm_router,
-            models=team_object.models if team_object else [],
+            models=team_models,
             team_model_aliases=team_model_aliases,
             team_id=team_object.team_id if team_object else None,
             key_model_aliases=key_model_aliases,
@@ -5635,7 +5697,6 @@ async def can_team_access_model(
         )
     except ProxyException:
         # Fallback: check team's access_group_ids
-        team_access_group_ids: Final = (team_object.access_group_ids or []) if team_object else []
         if team_access_group_ids:
             models_from_groups: Final = await get_models_from_access_groups(
                 access_group_ids=team_access_group_ids,
@@ -5645,7 +5706,7 @@ async def can_team_access_model(
                 return can_object_call_model(
                     model=model,
                     llm_router=llm_router,
-                    models=list(dict.fromkeys([*(team_object.models if team_object else []), *models_from_groups])),
+                    models=list(dict.fromkeys([*team_models, *models_from_groups])),
                     team_model_aliases=team_model_aliases,
                     team_id=team_object.team_id if team_object else None,
                     key_model_aliases=key_model_aliases,
