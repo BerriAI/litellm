@@ -382,6 +382,7 @@ jobs:
           - shard: root
             test-path: >-
               tests/unit/test_*.py
+              tests/test_model_prices_unique_keys.py
             python-version: "3.12"
             workers: 4
             reruns: 2
