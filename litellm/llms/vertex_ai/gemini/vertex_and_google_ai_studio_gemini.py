@@ -1257,10 +1257,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         # Fallback for Gemini 3.x Flash models if not explicitly set in catalog
         normalized_name: Final[str] = model.lower().replace("vertex_ai/", "").replace("gemini/", "")
-        if "gemini-3." in normalized_name and "flash" in normalized_name:
-            return False
-
-        return True
+        return not ("gemini-3." in normalized_name and "flash" in normalized_name)
 
     @classmethod
     def supports_sampling_params(cls, model: str) -> bool:
