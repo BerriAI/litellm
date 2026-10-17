@@ -27,7 +27,7 @@ litellm-db.workspace = true
 litellm-http = { workspace = true, features = ["mcp"] }
 litellm-llms.workspace = true
 litellm-router.workspace = true
-redis = { version = "1.7.0", default-features = false, features = ["connection-manager", "tokio-comp", "tokio-rustls-comp"] }
+redis = { version = "1.7.0", default-features = false, features = ["connection-manager", "script", "tokio-comp", "tokio-rustls-comp"] }
 litellm-secrets.workspace = true
 litellm-tracing.workspace = true
 serde_json.workspace = true

@@ -466,6 +466,80 @@ async fn replicas_share_the_proxy_counters() {
     assert_eq!(in_flight, 0);
 }
 
+#[rstest]
+#[tokio::test]
+async fn shared_refusals_count_and_hold_as_the_proxy() {
+    let Some(url) = redis_url() else { return };
+    let mut connection = redis::Client::open(url.as_str())
+        .unwrap()
+        .get_multiplexed_async_connection()
+        .await
+        .unwrap();
+
+    // Over the tokens limit: the request still counts, and its in-flight slot is given back.
+    let namespace = format!("rate-limits-{}", uuid::Uuid::new_v4());
+    let limits = KeyLimits {
+        key: Limits {
+            rpm: Some(10),
+            tpm: Some(1),
+        },
+        max_parallel_requests: Some(1),
+        ..KeyLimits::default()
+    };
+    let setup = Setup {
+        redis: Some(redis(&url, &namespace).await),
+        ..Setup::default()
+    };
+    let single = gateway(vec![("sk-key", key(None, limits))], setup).await;
+    let refused = messages(&single.app).await;
+    assert_eq!(refused.status, 429);
+    assert!(
+        refusal_message(&refused, &["error", "message"])
+            .contains("Limit type: tokens. Current limit: 1, Remaining: 1.")
+    );
+    let prefix = format!("{namespace}:{{api_key:{}}}", hash("sk-key").as_str());
+    let requests: Option<String> = redis::cmd("GET")
+        .arg(format!("{prefix}:requests"))
+        .query_async(&mut connection)
+        .await
+        .unwrap();
+    assert_eq!(requests.as_deref(), Some("1"));
+    let in_flight: i64 = redis::cmd("ZCARD")
+        .arg(format!("{prefix}:max_parallel_requests"))
+        .query_async(&mut connection)
+        .await
+        .unwrap();
+    assert_eq!(in_flight, 0);
+
+    // A full gauge on one replica refuses on another.
+    let namespace = format!("rate-limits-{}", uuid::Uuid::new_v4());
+    let limits = KeyLimits {
+        max_parallel_requests: Some(1),
+        ..KeyLimits::default()
+    };
+    let mut replicas = Vec::new();
+    for _ in 0..2 {
+        let setup = Setup {
+            redis: Some(redis(&url, &namespace).await),
+            delay: Duration::from_millis(300),
+            ..Setup::default()
+        };
+        replicas.push(gateway(vec![("sk-key", key(None, limits))], setup).await);
+    }
+    let (first, second) = tokio::join!(messages(&replicas[0].app), async {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        messages(&replicas[1].app).await
+    });
+    assert_eq!(first.status, 200);
+    assert_eq!(second.status, 429);
+    assert!(
+        refusal_message(&second, &["error", "message"])
+            .contains("Limit type: max_parallel_requests. Current limit: 1, Remaining: 0.")
+    );
+    settled().await;
+    assert_eq!(messages(&replicas[1].app).await.status, 200);
+}
+
 #[expect(
     clippy::disallowed_methods,
     reason = "test fixture rows; the lookups under test use the checked macro"

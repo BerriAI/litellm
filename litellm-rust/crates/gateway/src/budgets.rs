@@ -11,7 +11,7 @@
 
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex, OnceLock},
+    sync::{Arc, LazyLock, Mutex, OnceLock},
     time::{Duration, Instant},
 };
 
@@ -116,6 +116,10 @@ for i, key in ipairs(KEYS) do
 end
 return #KEYS
 "#;
+
+/// Sent by hash, loaded once per Redis.
+static ADMIT_SCRIPT: LazyLock<redis::Script> = LazyLock::new(|| redis::Script::new(ADMIT));
+static SETTLE_SCRIPT: LazyLock<redis::Script> = LazyLock::new(|| redis::Script::new(SETTLE));
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct BudgetSettings {
@@ -459,19 +463,15 @@ impl Counters {
     async fn settle(&self, keys: Vec<String>, changes: Vec<Change>, shared: bool) {
         if shared && let Some((mut connection, redis)) = self.connection() {
             let keys: Vec<String> = keys.iter().map(|key| redis.namespaced(key)).collect();
-            let mut command = redis::cmd("EVAL");
-            command
-                .arg(SETTLE)
-                .arg(keys.len())
-                .arg(&keys)
-                .arg(self.ttl.as_secs());
+            let mut command = SETTLE_SCRIPT.prepare_invoke();
+            command.key(&keys).arg(self.ttl.as_secs());
             for change in &changes {
                 command
                     .arg(change.floor.to_string())
                     .arg(change.delta.to_string())
                     .arg(change.fresh.to_string());
             }
-            if let Err(error) = command.query_async::<i64>(&mut connection).await {
+            if let Err(error) = command.invoke_async::<i64>(&mut connection).await {
                 // A counter left half-written would mislead every replica; drop it so the next
                 // read reseeds it from the database, as the proxy does.
                 tracing::warn!(%error, "updating spend counters failed; dropping them");
@@ -518,11 +518,9 @@ async fn admit_redis(
     estimate: f64,
     ttl: Duration,
 ) -> redis::RedisResult<Admitted> {
-    let mut command = redis::cmd("EVAL");
+    let mut command = ADMIT_SCRIPT.prepare_invoke();
     command
-        .arg(ADMIT)
-        .arg(keys.len())
-        .arg(keys)
+        .key(keys)
         .arg(ttl.as_secs())
         .arg(estimate.to_string())
         .arg(
@@ -553,7 +551,7 @@ async fn admit_redis(
                 "0"
             });
     }
-    let reply: Vec<redis::Value> = command.query_async(connection).await?;
+    let reply: Vec<redis::Value> = command.invoke_async(connection).await?;
     let text = |value: &redis::Value| -> Option<String> {
         match value {
             redis::Value::BulkString(bytes) => String::from_utf8(bytes.clone()).ok(),

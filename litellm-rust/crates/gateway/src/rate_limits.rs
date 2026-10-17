@@ -12,7 +12,7 @@
 
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::{Arc, LazyLock, Mutex},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -38,16 +38,35 @@ const MAX_OUTPUT_FLOOR: i64 = 1024;
 const MAX_LOCAL: usize = 100_000;
 const FAIL_CLOSED: &str = "Rate limit enforcement unavailable: request counters could not be verified against Redis, and fail_closed_rate_limit_enforcement is enabled, so the request was rejected to avoid exceeding the configured rate limit. Retry shortly.";
 
-/// Counts a request on every `(window, requests)` pair, starting a window that is missing or
-/// over, and returns each window's start and count. The caller compares; the count always rises.
-const REQUESTS: &str = r#"
-local results = {}
+/// Admits a request in one round trip, with the proxy's semantics for each counter: counts it on
+/// every `(window, requests)` pair, starting a window that is missing or over; unless one is over
+/// its limit, takes an in-flight slot unless the gauge is full; then adds the token estimate to
+/// every `(window, tokens)` pair, or to none (returning the slot) when one would go over.
+///
+/// KEYS: each requests limit's window and counter, the in-flight set when the key caps it, then
+/// each tokens limit's window and counter. ARGV: now, window size, the requests limits' count and
+/// limits, the slot (`1` or `0`, limit, ttl, id), the token increment, then each tokens limit's
+/// limit, ttl and window size.
+///
+/// Replies `{code, request counts..., in_flight, rest...}`: code 0 admitted with each tokens
+/// count, 1 over a requests limit (no in-flight), 2 the gauge was full, 3 over the tokens limit
+/// at `index` holding `current`.
+const ADMIT: &str = r#"
 local now = tonumber(ARGV[1])
 local window_size = tonumber(ARGV[2])
-for i = 1, #KEYS, 2 do
-    local window_key = KEYS[i]
-    local counter_key = KEYS[i + 1]
+local requests = tonumber(ARGV[3])
+local arg = 4
+local key = 1
+local reply = { 0 }
+local over = false
+for i = 1, requests do
+    local limit = tonumber(ARGV[arg])
+    arg = arg + 1
+    local window_key = KEYS[key]
+    local counter_key = KEYS[key + 1]
+    key = key + 2
     local window_start = redis.call('GET', window_key)
+    local counter
     if not window_start or (now - tonumber(window_start)) >= window_size then
         local prefix = string.sub(window_key, 1, -(#':window') - 1)
         redis.call('DEL', prefix .. ':requests', prefix .. ':tokens')
@@ -55,35 +74,62 @@ for i = 1, #KEYS, 2 do
         redis.call('SET', counter_key, 1)
         redis.call('EXPIRE', window_key, window_size)
         redis.call('EXPIRE', counter_key, window_size)
-        table.insert(results, tostring(now))
-        table.insert(results, 1)
+        counter = 1
     else
-        local counter = redis.call('INCR', counter_key)
+        counter = redis.call('INCR', counter_key)
         if redis.call('TTL', counter_key) == -1 then
             redis.call('EXPIRE', counter_key, window_size)
         end
-        table.insert(results, window_start)
-        table.insert(results, counter)
     end
+    if counter > limit then
+        over = true
+    end
+    table.insert(reply, counter)
 end
-return results
-"#;
+if over then
+    reply[1] = 1
+    return reply
+end
 
-/// Adds the increment to every `(window, tokens)` pair, or to none when one would go over its
-/// limit: `{0, count, start, ...}` or `{1, index, current, limit}`.
-const RESERVE: &str = r#"
-local now = tonumber(redis.call('TIME')[1])
-local count = #KEYS / 2
+local slot_key
+local slot_id = ARGV[arg + 3]
+local in_flight = 0
+if ARGV[arg] == '1' then
+    local limit = tonumber(ARGV[arg + 1])
+    local slot_ttl = tonumber(ARGV[arg + 2])
+    slot_key = KEYS[key]
+    key = key + 1
+    local time = tonumber(redis.call('TIME')[1])
+    redis.call('ZREMRANGEBYSCORE', slot_key, '-inf', time - slot_ttl)
+    in_flight = redis.call('ZCARD', slot_key)
+    if in_flight + 1 > limit then
+        reply[1] = 2
+        table.insert(reply, in_flight)
+        return reply
+    end
+    redis.call('ZADD', slot_key, time, slot_id)
+    redis.call('EXPIRE', slot_key, slot_ttl)
+    in_flight = redis.call('ZCARD', slot_key)
+end
+table.insert(reply, in_flight)
+arg = arg + 4
+
+local increment = tonumber(ARGV[arg])
+arg = arg + 1
+local first = key
+local count = (#KEYS - first + 1) / 2
+if count == 0 then
+    return reply
+end
+local time = tonumber(redis.call('TIME')[1])
 local state = {}
 for i = 1, count do
-    local window_key = KEYS[(i - 1) * 2 + 1]
-    local counter_key = KEYS[(i - 1) * 2 + 2]
-    local base = (i - 1) * 4 + 1
-    local limit = tonumber(ARGV[base])
-    local increment = tonumber(ARGV[base + 1])
-    local window_size = tonumber(ARGV[base + 3])
+    local window_key = KEYS[first + (i - 1) * 2]
+    local counter_key = KEYS[first + (i - 1) * 2 + 1]
+    local limit = tonumber(ARGV[arg + (i - 1) * 3])
+    local size = tonumber(ARGV[arg + (i - 1) * 3 + 2])
     local window_start = redis.call('GET', window_key)
-    local expired = (not window_start) or ((now - tonumber(window_start)) >= window_size)
+    local expired = (not window_start) or ((time - tonumber(window_start)) >= size)
     local current = 0
     if not expired then
         current = tonumber(redis.call('GET', counter_key) or 0)
@@ -95,58 +141,44 @@ for i = 1, count do
         blocked = current >= limit
     end
     if blocked then
-        return { 1, i, current, limit }
+        if slot_key then
+            redis.call('ZREM', slot_key, slot_id)
+        end
+        reply[1] = 3
+        table.insert(reply, i)
+        table.insert(reply, current)
+        return reply
     end
-    state[i] = { expired, window_start }
+    state[i] = expired
 end
-local results = { 0 }
 local reset = {}
 for i = 1, count do
-    local window_key = KEYS[(i - 1) * 2 + 1]
-    local counter_key = KEYS[(i - 1) * 2 + 2]
-    local base = (i - 1) * 4 + 1
-    local increment = tonumber(ARGV[base + 1])
-    local ttl = tonumber(ARGV[base + 2])
-    local window_size = tonumber(ARGV[base + 3])
-    if state[i][1] then
+    local window_key = KEYS[first + (i - 1) * 2]
+    local counter_key = KEYS[first + (i - 1) * 2 + 1]
+    local ttl = tonumber(ARGV[arg + (i - 1) * 3 + 1])
+    local size = tonumber(ARGV[arg + (i - 1) * 3 + 2])
+    if state[i] then
         if not reset[window_key] then
             local prefix = string.sub(window_key, 1, -(#':window') - 1)
             redis.call('DEL', prefix .. ':requests', prefix .. ':tokens')
             reset[window_key] = true
         end
-        redis.call('SET', window_key, tostring(now))
+        redis.call('SET', window_key, tostring(time))
         redis.call('SET', counter_key, increment)
-        redis.call('EXPIRE', window_key, window_size)
+        redis.call('EXPIRE', window_key, size)
         if ttl > 0 then
             redis.call('EXPIRE', counter_key, ttl)
         end
-        table.insert(results, increment)
-        table.insert(results, now)
+        table.insert(reply, increment)
     else
         local counter = redis.call('INCRBY', counter_key, increment)
         if redis.call('TTL', counter_key) == -1 and ttl > 0 then
             redis.call('EXPIRE', counter_key, ttl)
         end
-        table.insert(results, counter)
-        table.insert(results, tonumber(state[i][2]))
+        table.insert(reply, counter)
     end
 end
-return results
-"#;
-
-/// Takes an in-flight slot unless the gauge is full: `{0, in_flight}` or `{1, 1, in_flight, limit}`.
-const ACQUIRE: &str = r#"
-local now = tonumber(redis.call('TIME')[1])
-local limit = tonumber(ARGV[1])
-local slot_ttl = tonumber(ARGV[2])
-redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', now - slot_ttl)
-local in_flight = redis.call('ZCARD', KEYS[1])
-if in_flight + 1 > limit then
-    return { 1, 1, in_flight, limit }
-end
-redis.call('ZADD', KEYS[1], now, ARGV[3])
-redis.call('EXPIRE', KEYS[1], slot_ttl)
-return { 0, redis.call('ZCARD', KEYS[1]) }
+return reply
 "#;
 
 /// Adds each token delta, giving a counter without an expiry the window's.
@@ -162,6 +194,10 @@ for i = 1, #KEYS do
 end
 return results
 "#;
+
+/// Sent by hash, loaded once per Redis.
+static ADMIT_SCRIPT: LazyLock<redis::Script> = LazyLock::new(|| redis::Script::new(ADMIT));
+static CHARGE_SCRIPT: LazyLock<redis::Script> = LazyLock::new(|| redis::Script::new(CHARGE));
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct RateLimitSettings {
@@ -413,25 +449,14 @@ impl Store {
         }
     }
 
-    /// Counts the request on each prefix's window and returns the counts.
-    async fn requests(&self, prefixes: &[String]) -> Result<Vec<i64>, Unavailable> {
-        let now = epoch_seconds();
+    /// Counts the request, takes its in-flight slot and reserves its tokens, stopping at the first
+    /// limit it is over: one script with Redis, else this replica's counters.
+    async fn admit(&self, plan: &Plan) -> Result<(Admission, bool), Unavailable> {
         if self.redis.is_some() {
             let error = match self.connection() {
                 Some((mut connection, redis)) => {
-                    let mut command = redis::cmd("EVAL");
-                    command.arg(REQUESTS).arg(prefixes.len() * 2);
-                    for prefix in prefixes {
-                        command
-                            .arg(redis.namespaced(&format!("{prefix}:window")))
-                            .arg(redis.namespaced(&format!("{prefix}:requests")));
-                    }
-                    command.arg(now).arg(self.window);
-                    match integers(command.query_async(&mut connection).await) {
-                        Ok(reply) if reply.len() == prefixes.len() * 2 => {
-                            return Ok(reply.iter().skip(1).step_by(2).copied().collect());
-                        }
-                        Ok(_) => Some(malformed()),
+                    match admit_redis(&mut connection, redis, plan, self.window).await {
+                        Ok(admission) => return Ok((admission, true)),
                         Err(error) => Some(error),
                     }
                 }
@@ -439,43 +464,60 @@ impl Store {
             };
             self.fall_back(error)?;
         }
-        Ok(self.local().requests(prefixes, now, self.window))
+        Ok((self.admit_local(plan), false))
     }
 
-    /// Takes an in-flight slot: the count with it, or the full count without. `true` when the
-    /// slot is in Redis.
-    async fn acquire(
-        &self,
-        prefix: &str,
-        limit: i64,
-        slot: &str,
-    ) -> Result<(Result<i64, i64>, bool), Unavailable> {
-        if self.redis.is_some() {
-            let error = match self.connection() {
-                Some((mut connection, redis)) => {
-                    let reply = redis::cmd("EVAL")
-                        .arg(ACQUIRE)
-                        .arg(1)
-                        .arg(redis.namespaced(&format!("{prefix}:max_parallel_requests")))
-                        .arg(limit)
-                        .arg(SLOT_TTL)
-                        .arg(slot)
-                        .query_async(&mut connection)
-                        .await;
-                    match integers(reply) {
-                        Ok(reply) => match reply.as_slice() {
-                            [0, in_flight] => return Ok((Ok(*in_flight), true)),
-                            [1, _, in_flight, _] => return Ok((Err(*in_flight), true)),
-                            _ => Some(malformed()),
-                        },
-                        Err(error) => Some(error),
-                    }
-                }
-                None => None,
+    fn admit_local(&self, plan: &Plan) -> Admission {
+        let mut local = self.local();
+        let now = epoch_seconds();
+        let prefixes: Vec<String> = plan
+            .requests
+            .iter()
+            .map(|(prefix, _)| prefix.clone())
+            .collect();
+        let requests = local.requests(&prefixes, now, self.window);
+        if plan
+            .requests
+            .iter()
+            .zip(&requests)
+            .any(|((_, limit), count)| count > limit)
+        {
+            return Admission {
+                requests,
+                outcome: Outcome::RequestsOver,
             };
-            self.fall_back(error)?;
         }
-        Ok((self.local().acquire(prefix, limit, slot), false))
+        let in_flight = match &plan.slot {
+            Some(slot) => match local.acquire(&slot.prefix, slot.limit, &slot.id) {
+                Ok(in_flight) => Some(in_flight),
+                Err(in_flight) => {
+                    return Admission {
+                        requests,
+                        outcome: Outcome::SlotFull(in_flight),
+                    };
+                }
+            },
+            None => None,
+        };
+        let tokens = match plan.tokens.is_empty() {
+            true => Vec::new(),
+            false => match local.reserve(&plan.tokens, plan.increment, now, self.window) {
+                Reserved::Counts(counts) => counts,
+                Reserved::Over { index, current } => {
+                    if let Some(slot) = &plan.slot {
+                        local.release(&slot.prefix, &slot.id);
+                    }
+                    return Admission {
+                        requests,
+                        outcome: Outcome::TokensOver { index, current },
+                    };
+                }
+            },
+        };
+        Admission {
+            requests,
+            outcome: Outcome::Admitted { in_flight, tokens },
+        }
     }
 
     async fn release(&self, prefix: &str, slot: &str, shared: bool) {
@@ -494,83 +536,128 @@ impl Store {
         self.local().release(prefix, slot);
     }
 
-    /// Reserves `increment` tokens on every `(prefix, limit)`, or on none. `true` when the
-    /// reservation is in Redis.
-    async fn reserve(
-        &self,
-        scopes: &[(String, i64)],
-        increment: i64,
-    ) -> Result<(Reserved, bool), Unavailable> {
-        if self.redis.is_some() {
-            let error = match self.connection() {
-                Some((mut connection, redis)) => {
-                    let mut command = redis::cmd("EVAL");
-                    command.arg(RESERVE).arg(scopes.len() * 2);
-                    for (prefix, _) in scopes {
-                        command
-                            .arg(redis.namespaced(&format!("{prefix}:window")))
-                            .arg(redis.namespaced(&format!("{prefix}:tokens")));
-                    }
-                    for (_, limit) in scopes {
-                        command
-                            .arg(*limit)
-                            .arg(increment)
-                            .arg(self.window)
-                            .arg(self.window);
-                    }
-                    match integers(command.query_async(&mut connection).await) {
-                        Ok(reply) if reply.first() == Some(&0) => {
-                            return Ok((
-                                Reserved::Counts(
-                                    reply.iter().skip(1).step_by(2).copied().collect(),
-                                ),
-                                true,
-                            ));
-                        }
-                        Ok(reply) => match reply.as_slice() {
-                            [1, index, current, _] if (1..=scopes.len() as i64).contains(index) => {
-                                return Ok((
-                                    Reserved::Over {
-                                        index: (*index - 1) as usize,
-                                        current: *current,
-                                    },
-                                    true,
-                                ));
-                            }
-                            _ => Some(malformed()),
-                        },
-                        Err(error) => Some(error),
-                    }
-                }
-                None => None,
-            };
-            self.fall_back(error)?;
-        }
-        Ok((
-            self.local()
-                .reserve(scopes, increment, epoch_seconds(), self.window),
-            false,
-        ))
-    }
-
     /// Adds each delta to its prefix's tokens.
     async fn charge(&self, deltas: Vec<(String, i64)>, shared: bool) {
         if shared && let Some((mut connection, redis)) = self.connection() {
-            let mut command = redis::cmd("EVAL");
-            command.arg(CHARGE).arg(deltas.len());
+            let mut invocation = CHARGE_SCRIPT.prepare_invoke();
             for (prefix, _) in &deltas {
-                command.arg(redis.namespaced(&format!("{prefix}:tokens")));
+                invocation.key(redis.namespaced(&format!("{prefix}:tokens")));
             }
             for (_, delta) in &deltas {
-                command.arg(*delta).arg(self.window);
+                invocation.arg(*delta).arg(self.window);
             }
-            if let Err(error) = command.query_async::<redis::Value>(&mut connection).await {
+            if let Err(error) = invocation
+                .invoke_async::<redis::Value>(&mut connection)
+                .await
+            {
                 tracing::warn!(%error, "settling reserved tokens failed");
             }
             return;
         }
         self.local().charge(&deltas);
     }
+}
+
+/// What one request asks of the counters, in the proxy's order.
+struct Plan {
+    /// Each requests limit: its prefix and limit.
+    requests: Vec<(String, i64)>,
+    slot: Option<SlotPlan>,
+    /// Each tokens limit: its prefix and limit.
+    tokens: Vec<(String, i64)>,
+    increment: i64,
+}
+
+struct SlotPlan {
+    prefix: String,
+    limit: i64,
+    id: String,
+}
+
+/// Each requests count, then how far the request got.
+#[derive(Debug, PartialEq)]
+struct Admission {
+    requests: Vec<i64>,
+    outcome: Outcome,
+}
+
+#[derive(Debug, PartialEq)]
+enum Outcome {
+    RequestsOver,
+    SlotFull(i64),
+    TokensOver {
+        index: usize,
+        current: i64,
+    },
+    Admitted {
+        in_flight: Option<i64>,
+        tokens: Vec<i64>,
+    },
+}
+
+async fn admit_redis(
+    connection: &mut ConnectionManager,
+    redis: &Coordination,
+    plan: &Plan,
+    window: u64,
+) -> redis::RedisResult<Admission> {
+    let mut invocation = ADMIT_SCRIPT.prepare_invoke();
+    invocation
+        .arg(epoch_seconds())
+        .arg(window)
+        .arg(plan.requests.len());
+    for (prefix, limit) in &plan.requests {
+        invocation
+            .key(redis.namespaced(&format!("{prefix}:window")))
+            .key(redis.namespaced(&format!("{prefix}:requests")))
+            .arg(*limit);
+    }
+    match &plan.slot {
+        Some(slot) => {
+            invocation
+                .key(redis.namespaced(&format!("{}:max_parallel_requests", slot.prefix)))
+                .arg(1)
+                .arg(slot.limit)
+                .arg(SLOT_TTL)
+                .arg(&slot.id);
+        }
+        None => {
+            invocation.arg(0).arg(0).arg(0).arg("");
+        }
+    }
+    invocation.arg(plan.increment);
+    for (prefix, limit) in &plan.tokens {
+        invocation
+            .key(redis.namespaced(&format!("{prefix}:window")))
+            .key(redis.namespaced(&format!("{prefix}:tokens")))
+            .arg(*limit)
+            .arg(window)
+            .arg(window);
+    }
+    let reply = integers(invocation.invoke_async(connection).await)?;
+    let counted = plan.requests.len();
+    let (code, rest) = reply.split_first().ok_or_else(malformed)?;
+    if rest.len() < counted {
+        return Err(malformed());
+    }
+    let (requests, rest) = rest.split_at(counted);
+    let requests = requests.to_vec();
+    let outcome = match (code, rest) {
+        (1, []) => Outcome::RequestsOver,
+        (2, [in_flight]) => Outcome::SlotFull(*in_flight),
+        (3, [_, index, current]) if (1..=plan.tokens.len() as i64).contains(index) => {
+            Outcome::TokensOver {
+                index: (*index - 1) as usize,
+                current: *current,
+            }
+        }
+        (0, [in_flight, tokens @ ..]) if tokens.len() == plan.tokens.len() => Outcome::Admitted {
+            in_flight: plan.slot.as_ref().map(|_| *in_flight),
+            tokens: tokens.to_vec(),
+        },
+        _ => return Err(malformed()),
+    };
+    Ok(Admission { requests, outcome })
 }
 
 fn malformed() -> redis::RedisError {
@@ -871,76 +958,21 @@ impl Hook for RateLimiter {
             if descriptors.is_empty() {
                 return Ok(None);
             }
-            let unavailable = |Unavailable| self.unavailable(request);
-            let mut statuses = Vec::new();
-
-            // Requests per window, counted whether or not the request goes through.
+            // Requests per window (counted whether or not the request goes through), then
+            // requests in flight for the key only, then tokens per window, reserved from an
+            // estimate and settled when the response ends.
             let windowed: Vec<usize> = (0..descriptors.len())
                 .filter(|index| descriptors[*index].limits.rpm.is_some())
                 .collect();
-            if !windowed.is_empty() {
-                let prefixes: Vec<String> = windowed
-                    .iter()
-                    .map(|index| descriptors[*index].prefix())
-                    .collect();
-                let counts = self.store.requests(&prefixes).await.map_err(unavailable)?;
-                for (index, count) in windowed.iter().zip(counts) {
-                    let limit = descriptors[*index].limits.rpm.unwrap_or_default();
-                    statuses.push(Status {
-                        descriptor: *index,
-                        kind: Kind::Requests,
-                        limit,
-                        remaining: limit - count,
-                    });
-                }
-                if let Some(over) = statuses.iter().find(|status| status.remaining < 0) {
-                    return Err(self.refusal(request, &descriptors[over.descriptor], *over));
-                }
-            }
-
-            // Requests in flight, for the key only.
-            let mut slot = None;
-            if let Some(index) = descriptors
+            let parallel = descriptors
                 .iter()
-                .position(|descriptor| descriptor.max_parallel_requests.is_some())
-            {
-                let descriptor = &descriptors[index];
-                let limit = descriptor.max_parallel_requests.unwrap_or_default();
-                let prefix = descriptor.prefix();
-                let id = uuid::Uuid::new_v4().simple().to_string();
-                let (taken, shared) = self
-                    .store
-                    .acquire(&prefix, limit, &id)
-                    .await
-                    .map_err(unavailable)?;
-                let in_flight = match taken {
-                    Ok(in_flight) => in_flight,
-                    Err(in_flight) => {
-                        let status = Status {
-                            descriptor: index,
-                            kind: Kind::Parallel,
-                            limit,
-                            remaining: limit - in_flight,
-                        };
-                        return Err(self.refusal(request, descriptor, status));
-                    }
-                };
-                statuses.push(Status {
-                    descriptor: index,
-                    kind: Kind::Parallel,
-                    limit,
-                    remaining: (limit - in_flight).max(0),
-                });
-                slot = Some(Slot { prefix, id, shared });
-            }
-
-            // Tokens per window, reserved from an estimate and settled when the response ends.
+                .position(|descriptor| descriptor.max_parallel_requests.is_some());
             let limited: Vec<(usize, i64)> = descriptors
                 .iter()
                 .enumerate()
                 .filter_map(|(index, descriptor)| Some((index, descriptor.limits.tpm?)))
                 .collect();
-            let mut tokens = None;
+            let mut increment = 0;
             if let Some(min_tpm) = limited.iter().map(|(_, limit)| *limit).min() {
                 let body: Map<String, Value> =
                     serde_json::from_slice(request.body()).unwrap_or_default();
@@ -953,54 +985,110 @@ impl Hook for RateLimiter {
                 if let Some(max_tokens) = estimate.implicit_max_tokens {
                     edit.set_upstream_body_field("max_tokens", Value::from(max_tokens));
                 }
-                let scopes: Vec<(String, i64)> = limited
+                increment = estimate.tokens;
+            }
+            let plan = Plan {
+                requests: windowed
+                    .iter()
+                    .map(|index| {
+                        let descriptor = &descriptors[*index];
+                        (
+                            descriptor.prefix(),
+                            descriptor.limits.rpm.unwrap_or_default(),
+                        )
+                    })
+                    .collect(),
+                slot: parallel.map(|index| SlotPlan {
+                    prefix: descriptors[index].prefix(),
+                    limit: descriptors[index].max_parallel_requests.unwrap_or_default(),
+                    id: uuid::Uuid::new_v4().simple().to_string(),
+                }),
+                tokens: limited
                     .iter()
                     .map(|(index, limit)| (descriptors[*index].prefix(), *limit))
-                    .collect();
-                let reserved = self.store.reserve(&scopes, estimate.tokens).await;
-                let release = |slot: Option<Slot>| async {
-                    if let Some(slot) = slot {
-                        self.store
-                            .release(&slot.prefix, &slot.id, slot.shared)
-                            .await;
+                    .collect(),
+                increment,
+            };
+            let (admission, shared) = self
+                .store
+                .admit(&plan)
+                .await
+                .map_err(|Unavailable| self.unavailable(request))?;
+
+            let mut statuses: Vec<Status> = windowed
+                .iter()
+                .zip(&admission.requests)
+                .map(|(index, count)| {
+                    let limit = descriptors[*index].limits.rpm.unwrap_or_default();
+                    Status {
+                        descriptor: *index,
+                        kind: Kind::Requests,
+                        limit,
+                        remaining: limit - count,
                     }
-                };
-                let (reserved, shared) = match reserved {
-                    Ok(reserved) => reserved,
-                    Err(Unavailable) => {
-                        release(slot).await;
-                        return Err(self.unavailable(request));
-                    }
-                };
-                match reserved {
-                    Reserved::Counts(counts) => {
-                        for ((index, limit), count) in limited.iter().zip(counts) {
-                            statuses.push(Status {
-                                descriptor: *index,
-                                kind: Kind::Tokens,
-                                limit: *limit,
-                                remaining: (limit - count).max(0),
-                            });
-                        }
-                    }
-                    Reserved::Over { index, current } => {
-                        release(slot).await;
-                        let (descriptor, limit) = limited[index];
-                        let status = Status {
-                            descriptor,
-                            kind: Kind::Tokens,
-                            limit,
-                            remaining: limit - current,
-                        };
-                        return Err(self.refusal(request, &descriptors[descriptor], status));
-                    }
+                })
+                .collect();
+            let (in_flight, counts) = match admission.outcome {
+                Outcome::RequestsOver => {
+                    let over = statuses
+                        .iter()
+                        .find(|status| status.remaining < 0)
+                        .copied()
+                        .unwrap_or(statuses[0]);
+                    return Err(self.refusal(request, &descriptors[over.descriptor], over));
                 }
-                tokens = Some(Tokens {
-                    prefixes: scopes.into_iter().map(|(prefix, _)| prefix).collect(),
-                    reserved: estimate.tokens,
-                    shared,
+                Outcome::SlotFull(in_flight) => {
+                    let (index, slot) = (parallel.unwrap_or_default(), &plan.slot);
+                    let limit = slot.as_ref().map_or(0, |slot| slot.limit);
+                    let status = Status {
+                        descriptor: index,
+                        kind: Kind::Parallel,
+                        limit,
+                        remaining: limit - in_flight,
+                    };
+                    return Err(self.refusal(request, &descriptors[index], status));
+                }
+                Outcome::TokensOver { index, current } => {
+                    let (descriptor, limit) = limited[index];
+                    let status = Status {
+                        descriptor,
+                        kind: Kind::Tokens,
+                        limit,
+                        remaining: limit - current,
+                    };
+                    return Err(self.refusal(request, &descriptors[descriptor], status));
+                }
+                Outcome::Admitted { in_flight, tokens } => (in_flight, tokens),
+            };
+            let slot = match (parallel, plan.slot, in_flight) {
+                (Some(index), Some(slot), Some(in_flight)) => {
+                    statuses.push(Status {
+                        descriptor: index,
+                        kind: Kind::Parallel,
+                        limit: slot.limit,
+                        remaining: (slot.limit - in_flight).max(0),
+                    });
+                    Some(Slot {
+                        prefix: slot.prefix,
+                        id: slot.id,
+                        shared,
+                    })
+                }
+                _ => None,
+            };
+            for ((index, limit), count) in limited.iter().zip(&counts) {
+                statuses.push(Status {
+                    descriptor: *index,
+                    kind: Kind::Tokens,
+                    limit: *limit,
+                    remaining: (limit - count).max(0),
                 });
             }
+            let tokens = (!plan.tokens.is_empty()).then(|| Tokens {
+                prefixes: plan.tokens.into_iter().map(|(prefix, _)| prefix).collect(),
+                reserved: increment,
+                shared,
+            });
 
             // The proxy sends where each limit stands on complete responses only.
             if !request.stream {
