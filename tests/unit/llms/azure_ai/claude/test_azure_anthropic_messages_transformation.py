@@ -7,6 +7,7 @@ sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
 )
 
+from typing import Final
 from unittest.mock import patch
 
 import httpx
@@ -475,11 +476,10 @@ def test_azure_claude_4_8_plus_cost_map_entries_carry_mid_conversation_system_fl
     assert missing == []
 
 
-AUTO_MODE_SAFEGUARDS = [
-    {"type": "dangerous_tool_use", "classifier_context": {"v": 1, "permission_mode": "auto"}}
-]
+AUTO_MODE_SAFEGUARDS: Final = ({"type": "dangerous_tool_use", "classifier_context": {"v": 1, "permission_mode": "auto"}},)
 
 
+@pytest.mark.usefixtures("local_beta_headers_config")
 @pytest.mark.parametrize(
     ("client_headers", "optional_params", "expected_beta"),
     [
@@ -494,8 +494,8 @@ AUTO_MODE_SAFEGUARDS = [
     ],
 )
 def test_safeguards_request_carries_the_dangerous_tool_use_beta_without_the_client_header(
-    client_headers, optional_params, expected_beta
-):
+    client_headers: dict[str, str], optional_params: dict[str, object], expected_beta: str | None
+) -> None:
     headers, _ = AzureAnthropicMessagesConfig().validate_anthropic_messages_environment(
         headers=client_headers,
         model="claude-sonnet-4-6",
@@ -506,34 +506,34 @@ def test_safeguards_request_carries_the_dangerous_tool_use_beta_without_the_clie
     assert headers.get("anthropic-beta") == expected_beta, headers
 
 
-@pytest.mark.asyncio
-async def test_outgoing_azure_request_sends_safeguards_with_the_dangerous_tool_use_beta(monkeypatch):
-    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "True")
-    from litellm import anthropic_beta_headers_manager
+def _foundry_answer(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(
+        status_code=200,
+        headers={"content-type": "application/json"},
+        json={
+            "id": "msg_safeguards",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-4-6",
+            "content": [{"type": "text", "text": "hello from the gateway"}],
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 12, "output_tokens": 6},
+        },
+        request=request,
+    )
 
-    monkeypatch.setattr(anthropic_beta_headers_manager, "_BETA_HEADERS_CONFIG", None)
-    safeguards = [{"type": "dangerous_tool_use", "classifier_context": {"v": 1, "permission_mode": "auto"}}]
-    received: list[httpx.Request] = []
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("local_beta_headers_config")
+async def test_outgoing_azure_request_sends_safeguards_with_the_dangerous_tool_use_beta() -> None:
+    received: Final[list[httpx.Request]] = []
 
     def foundry_answers(request: httpx.Request) -> httpx.Response:
         received.append(request)
-        return httpx.Response(
-            status_code=200,
-            headers={"content-type": "application/json"},
-            json={
-                "id": "msg_safeguards",
-                "type": "message",
-                "role": "assistant",
-                "model": "claude-sonnet-4-6",
-                "content": [{"type": "text", "text": "hello from the gateway"}],
-                "stop_reason": "end_turn",
-                "stop_sequence": None,
-                "usage": {"input_tokens": 12, "output_tokens": 6},
-            },
-            request=request,
-        )
+        return _foundry_answer(request)
 
-    upstream = AsyncHTTPHandler(transport=httpx.MockTransport(foundry_answers))
+    upstream: Final = AsyncHTTPHandler(transport=httpx.MockTransport(foundry_answers))
     try:
         await litellm.anthropic.messages.acreate(
             max_tokens=256,
@@ -541,13 +541,13 @@ async def test_outgoing_azure_request_sends_safeguards_with_the_dangerous_tool_u
             model="azure_ai/claude-sonnet-4-6",
             api_key="test-api-key",
             api_base="https://test-resource.services.ai.azure.com",
-            safeguards=safeguards,
+            safeguards=AUTO_MODE_SAFEGUARDS,
             client=upstream,
         )
     finally:
         await upstream.close()
 
     assert len(received) == 1, received
-    sent = received[0]
+    sent: Final = received[0]
     assert "dangerous-tool-use-2026-09-03" in sent.headers["anthropic-beta"].split(","), dict(sent.headers)
-    assert json.loads(sent.content)["safeguards"] == safeguards
+    assert json.loads(sent.content)["safeguards"] == list(AUTO_MODE_SAFEGUARDS)

@@ -10,6 +10,10 @@ from litellm.llms.github_copilot.common_utils import GetAPIKeyError
 from litellm.llms.github_copilot.messages.transformation import (
     GithubCopilotAnthropicMessagesConfig,
 )
+from litellm.llms.github_copilot.per_user_auth import (
+    GITHUB_COPILOT_USER_SESSION_KWARG_KEY,
+    GithubCopilotUserSession,
+)
 
 
 def test_github_copilot_anthropic_messages_get_complete_url():
@@ -186,21 +190,19 @@ def test_github_copilot_anthropic_messages_validate_environment_injects_context_
     assert "context-management-2025-06-27" in validated_headers["anthropic-beta"]
 
 
-def test_github_copilot_safeguards_do_not_derive_the_dangerous_tool_use_beta():
-    config: Final = GithubCopilotAnthropicMessagesConfig()
-    config.authenticator = MagicMock()
-    config.authenticator.get_api_key.return_value = "gh.test-key"
-    config.authenticator.get_api_base.return_value = None
+@pytest.mark.usefixtures("local_beta_headers_config")
+def test_github_copilot_safeguards_do_not_derive_the_dangerous_tool_use_beta() -> None:
+    session: Final = GithubCopilotUserSession(token="gh.test-key", api_base="https://api.githubcopilot.com")
 
-    validated_headers, _ = config.validate_anthropic_messages_environment(
+    validated_headers, _ = GithubCopilotAnthropicMessagesConfig().validate_anthropic_messages_environment(
         headers={},
         model="github_copilot/claude-haiku-4.5",
         messages=[{"role": "user", "content": "Hello"}],
         optional_params={
-            "safeguards": [{"type": "dangerous_tool_use"}],
-            "context_management": {"edits": [{"type": "clear_tool_uses_20250919"}]},
+            "safeguards": ({"type": "dangerous_tool_use"},),
+            "context_management": {"edits": ({"type": "clear_tool_uses_20250919"},)},
         },
-        litellm_params={},
+        litellm_params={GITHUB_COPILOT_USER_SESSION_KWARG_KEY: session},
         api_key=None,
         api_base=None,
     )

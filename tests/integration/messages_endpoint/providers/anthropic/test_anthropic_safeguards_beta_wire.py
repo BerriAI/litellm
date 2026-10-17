@@ -315,6 +315,28 @@ def test_anthropic_messages_derive_the_dangerous_tool_use_beta_from_safeguards(g
         _spend_row(f"msg_{marker}")
 
 
+@pytest.mark.parametrize(
+    ("deployment", "target", "auth"),
+    [
+        ((f"anthropic/{ANTHROPIC_MODEL}", ANTHROPIC_KEY), "/v1/messages", ("x-api-key", ANTHROPIC_KEY)),
+        ((_FOUNDRY_MODEL, _FOUNDRY_KEY), _FOUNDRY_TARGET, ("x-api-key", _FOUNDRY_KEY)),
+    ],
+    ids=("anthropic", "azure_ai"),
+)
+def test_a_deployment_dropping_safeguards_sends_neither_the_field_nor_the_beta(
+    gateway: Gateway, deployment: tuple[str, str], target: str, auth: tuple[str, str]
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    with wire_server(anthropic_peer) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model=deployment[0], api_base=wire.url, api_key=deployment[1], additional_drop_params=["safeguards"]
+        )
+        response: Final = _post(gateway, messages_body(model, marker))
+        _assert_answered(response, marker)
+        _expect_messages(_only(wire), target=target, auth=auth, beta=None, safeguards=_OMITTED)
+        _spend_row(f"msg_{marker}")
+
+
 @pytest.mark.parametrize("row", tuple(_FOUNDRY_SHAPES))
 def test_azure_ai_messages_derive_the_beta_instead_of_forwarding_the_client_header(gateway: Gateway, row: str) -> None:
     case: Final = _FOUNDRY_SHAPES[row]
@@ -436,18 +458,18 @@ _PROVIDERS: Final = MappingProxyType(
             api_base_suffix="/v1",
             model_info={"supported_endpoints": ["/v1/messages"]},
             auth=("authorization", "Bearer synthetic-openai-like-key"),
-            expected_beta=BETA,
+            expected_beta=None,
         ),
         "D18_sail_with_claude_code_header": _ProviderCase(
             parameters={"model": "sail/sail-claude", "api_key": "synthetic-sail-key"},
             client_beta=_CLIENT_BETAS_WITH_DANGEROUS,
             auth=("authorization", "Bearer synthetic-sail-key"),
-            expected_beta=BETA,
+            expected_beta=None,
         ),
         "D19_edenai": _ProviderCase(
             parameters={"model": "edenai/claude-sonnet-4-5", "api_key": "synthetic-edenai-key"},
             auth=("authorization", "Bearer synthetic-edenai-key"),
-            expected_beta=BETA,
+            expected_beta=None,
         ),
         "D21_bedrock_claude_platform": _ProviderCase(
             parameters={
