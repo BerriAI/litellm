@@ -948,6 +948,27 @@ def test_mixed_thinking_start_body_is_empty_and_thinking_not_doubled_sync():
     assert _text_deltas(events) == ["Answer."]
 
 
+def test_pure_thinking_start_body_is_empty_and_thinking_not_doubled_sync():
+    chunks = [
+        _thinking_chunk("Hello"),
+        _thinking_chunk(" world"),
+        _make_chunk(Delta(content="answer")),
+        _make_chunk(Delta(content=None), finish_reason="stop"),
+    ]
+    wrapper = AnthropicStreamWrapper(completion_stream=iter(chunks), model="claude-x")
+    events = _drain_sync(wrapper)
+
+    accumulated = ""
+    for event in events:
+        if event.get("type") == "content_block_start" and event["content_block"].get("type") == "thinking":
+            assert not event["content_block"].get("thinking"), event["content_block"]
+            accumulated += event["content_block"].get("thinking") or ""
+        if event.get("type") == "content_block_delta" and event["delta"].get("type") == "thinking_delta":
+            accumulated += event["delta"]["thinking"]
+    assert accumulated == "Hello world"
+    assert _text_deltas(events) == ["answer"]
+
+
 def test_mixed_chunk_with_tool_argument_continuation_is_not_split_sync():
     """Streaming providers send a tool call's name only on its first chunk;
     later chunks carry argument fragments with ``name=None``. Splitting a

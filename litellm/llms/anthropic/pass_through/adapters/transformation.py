@@ -1675,6 +1675,9 @@ class LiteLLMAnthropicMessagesAdapter:
                         assert isinstance(thinking, str)
                         assert isinstance(signature, str)
 
+                        # Without a signature the same text arrives again as a
+                        # thinking_delta, so an SSE accumulator seeding from this
+                        # start body would show it twice.
                         return "thinking", ChatCompletionThinkingBlock(
                             type="thinking", thinking=thinking if signature else "", signature=signature
                         )

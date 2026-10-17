@@ -285,6 +285,7 @@ def test_translate_streaming_openai_chunk_to_anthropic_thinking_content_block():
     ) = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_chunk_to_anthropic_content_block(choices=choices)
 
     assert block_type == "thinking"
+    # Unsigned: the text is delivered by the thinking_delta, so the start body stays empty.
     assert content_block_start == {
         "type": "thinking",
         "thinking": "",
