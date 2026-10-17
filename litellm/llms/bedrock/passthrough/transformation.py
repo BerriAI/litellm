@@ -10,6 +10,7 @@ from httpx import Response
 from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
+from litellm.constants import AWS_ERROR_TYPE_HEADER
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig, PassthroughStreamCollector
 from litellm.types.llms.openai import ChatCompletionSystemMessage, ChatCompletionUserMessage
@@ -17,6 +18,16 @@ from litellm.types.utils import ModelResponseStream
 
 from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import BedrockError, BedrockEventStreamDecoderBase, BedrockModelInfo
+from ..request_metadata import (
+    BEDROCK_REQUEST_METADATA_HEADER,
+    BedrockRequestMetadataViolation,
+    bedrock_request_metadata_headers,
+    bedrock_request_metadata_is_owned,
+    bedrock_request_metadata_violation,
+    caller_request_metadata_violations_are_dropped,
+    merge_bedrock_invoke_headers,
+    resolve_bedrock_request_metadata,
+)
 
 if TYPE_CHECKING:
     from botocore.eventstream import EventStreamMessage
@@ -28,10 +39,87 @@ if TYPE_CHECKING:
 
 
 BEDROCK_STREAMING_ACTIONS: Final = frozenset({"invoke-with-response-stream", "converse-stream"})
+_BEDROCK_CONVERSE_ACTIONS: Final = frozenset({"converse", "converse-stream"})
+_BEDROCK_INVOKE_ACTIONS: Final = frozenset({"invoke", "invoke-with-response-stream"})
+
+
+def _bedrock_endpoint_action(endpoint: str) -> str:
+    return endpoint.partition("?")[0].rstrip("/").rsplit("/", 1)[-1]
 
 
 def is_bedrock_streaming_endpoint(endpoint: str) -> bool:
-    return endpoint.partition("?")[0].rstrip("/").rsplit("/", 1)[-1] in BEDROCK_STREAMING_ACTIONS
+    return _bedrock_endpoint_action(endpoint) in BEDROCK_STREAMING_ACTIONS
+
+
+def _caller_request_metadata_violation(
+    action: str, body: Mapping[str, object]
+) -> BedrockRequestMetadataViolation | None:
+    if action in _BEDROCK_INVOKE_ACTIONS and "requestMetadata" in body and body["requestMetadata"] is None:
+        return BedrockRequestMetadataViolation("type", "requestMetadata must be a dictionary")
+    return bedrock_request_metadata_violation(body.get("requestMetadata"))
+
+
+def _aws_error_type(action: str, violation: BedrockRequestMetadataViolation) -> str:
+    if action in _BEDROCK_CONVERSE_ACTIONS and violation.kind == "type":
+        return "SerializationException"
+    return "ValidationException"
+
+
+def _caller_request_metadata(action: str, body: Mapping[str, object], litellm_params: Mapping[str, object]) -> object:
+    violation: Final = (
+        None
+        if caller_request_metadata_violations_are_dropped(litellm_params.get("drop_params") is True)
+        else _caller_request_metadata_violation(action, body)
+    )
+    if violation is not None:
+        raise BedrockError(
+            status_code=400,
+            message=violation.message,
+            headers={AWS_ERROR_TYPE_HEADER: _aws_error_type(action, violation)},
+        )
+    return body.get("requestMetadata")
+
+
+def _with_body_request_metadata(
+    action: str, body: Mapping[str, object], litellm_params: Mapping[str, object]
+) -> Mapping[str, object]:
+    resolved: Final = resolve_bedrock_request_metadata(
+        litellm_params, caller_metadata=_caller_request_metadata(action, body, litellm_params)
+    )
+    without_caller: Final = {key: value for key, value in body.items() if key != "requestMetadata"}
+    return without_caller if resolved is None else {**without_caller, "requestMetadata": resolved}
+
+
+def _without_owned_request_metadata_header(headers: Mapping[str, str]) -> Mapping[str, str]:
+    if not bedrock_request_metadata_is_owned():
+        return headers
+    return {name: value for name, value in headers.items() if name.lower() != BEDROCK_REQUEST_METADATA_HEADER.lower()}
+
+
+def _with_request_metadata(
+    action: str | None,
+    headers: Mapping[str, str],
+    body: Mapping[str, object],
+    litellm_params: Mapping[str, object],
+) -> tuple[Mapping[str, str], Mapping[str, object]]:
+    if action in _BEDROCK_CONVERSE_ACTIONS:
+        return headers, _with_body_request_metadata(action, body, litellm_params)
+    if action in _BEDROCK_INVOKE_ACTIONS and "requestMetadata" in body:
+        return _without_owned_request_metadata_header(headers), _with_body_request_metadata(
+            action, body, litellm_params
+        )
+    if action in _BEDROCK_INVOKE_ACTIONS:
+        return _with_invoke_request_metadata(headers, body, litellm_params)
+    return headers, body
+
+
+def _with_invoke_request_metadata(
+    headers: Mapping[str, str],
+    body: Mapping[str, object],
+    litellm_params: Mapping[str, object],
+) -> tuple[Mapping[str, str], Mapping[str, object]]:
+    owned_names, metadata_headers = bedrock_request_metadata_headers(litellm_params)
+    return merge_bedrock_invoke_headers(dict(headers), (), metadata_headers, owned_names), body
 
 
 _TEXT_ONLY_DELTA_FIELDS: Final = frozenset({"content", "role"})
@@ -284,18 +372,24 @@ class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamD
 
     def sign_request(
         self,
-        headers: dict,
-        litellm_params: dict,
-        request_data: dict | None,
+        headers: dict[str, str],
+        litellm_params: dict[str, object],
+        request_data: dict[str, object] | None,
         api_base: str,
         model: str | None = None,
     ) -> tuple[dict, bytes | None]:
         optional_params: Final = litellm_params.copy()
+        signed_headers, signed_body = _with_request_metadata(
+            action=_bedrock_endpoint_action(api_base) if bedrock_request_metadata_is_owned() else None,
+            headers=headers,
+            body=request_data or {},
+            litellm_params=litellm_params,
+        )
         return self._sign_request(
             service_name="bedrock",
-            headers=headers,
+            headers=dict(signed_headers),
             optional_params=optional_params,
-            request_data=request_data or {},
+            request_data=dict(signed_body),
             api_base=api_base,
             model=model,
             api_key=self.get_bedrock_bearer_token(optional_params),
