@@ -1,7 +1,5 @@
 """Test for Gemini schema handling with empty properties."""
 
-
-
 from litellm.llms.vertex_ai.common_utils import add_object_type
 
 

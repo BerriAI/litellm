@@ -7,14 +7,22 @@ Handles Authentication and generating request urls for Vertex AI and Google AI S
 import asyncio
 import json
 import threading
-from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
+from collections.abc import Mapping, Sequence
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Final,
+    Literal,
+    Protocol,
+    cast,  # noqa: TID251  # type-check compatibility with legacy dict auth_header
+)
 from urllib.parse import urlparse
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.gemini.common_utils import get_api_key_from_env
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES, VertexPartnerProvider
 
@@ -99,6 +107,17 @@ class VertexBase:
         # back into get_access_token while still holding the lock) can
         # re-acquire it without deadlocking the current thread.
         self._sync_refresh_lock = threading.RLock()
+
+    def _should_bypass_adc(
+        self,
+        custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"] | str | None,
+        credentials: VERTEX_CREDENTIALS_TYPES | None,
+        project_id: str | None,
+        api_key: str | None = None,
+    ) -> bool:
+        if custom_llm_provider == "gemini":
+            return True
+        return bool(api_key is not None and not credentials and not project_id)
 
     @staticmethod
     def get_vertex_region(vertex_region: str | None, model: str) -> str:
@@ -266,7 +285,9 @@ class VertexBase:
 
         return google.oauth2.service_account.Credentials.from_service_account_info(json_obj, scopes=scopes)
 
-    def _credentials_from_default_auth(self, scopes) -> tuple[_VertexCredentialsObject, str | None]:
+    def _credentials_from_default_auth(
+        self, scopes: Sequence[str] | None = None
+    ) -> tuple[_VertexCredentialsObject, str | None]:
         try:
             import google.auth as google_auth
         except ImportError:
@@ -603,13 +624,16 @@ class VertexBase:
         """
         Returns auth token and project id
         """
-        if custom_llm_provider == "gemini":
+        if self._should_bypass_adc(
+            custom_llm_provider=custom_llm_provider,
+            credentials=credentials,
+            project_id=project_id,
+        ):
             return "", ""
-        else:
-            return self.get_access_token(
-                credentials=credentials,
-                project_id=project_id,
-            )
+        return self.get_access_token(
+            credentials=credentials,
+            project_id=project_id,
+        )
 
     def ensure_access_token(
         self,
@@ -653,6 +677,11 @@ class VertexBase:
         ## Returns
         - (auth_header, url) - Tuple[Optional[str], str]
         """
+        resolved_auth_header: Final[str | None] = (
+            cast(str, {"x-goog-api-key": gemini_api_key})  # cast-ok: preserves legacy dict-as-auth_header contract
+            if api_base and custom_llm_provider == "gemini" and gemini_api_key is not None
+            else auth_header
+        )
         if api_base:
             if custom_llm_provider == "gemini":
                 # For Gemini (Google AI Studio), construct the full path like other providers
@@ -663,8 +692,6 @@ class VertexBase:
                     raise ValueError(
                         "Missing Gemini API key. Set the GEMINI_API_KEY or GOOGLE_API_KEY environment variable."
                     )
-                if gemini_api_key is not None:
-                    auth_header = {"x-goog-api-key": gemini_api_key}
             else:
                 # For Vertex AI
                 if use_psc_endpoint_format:
@@ -696,7 +723,7 @@ class VertexBase:
                 parsed_stream_url: Final = urlparse(url)
                 stream_query: Final = f"{parsed_stream_url.query}&alt=sse" if parsed_stream_url.query else "alt=sse"
                 url = parsed_stream_url._replace(query=stream_query).geturl()
-        return auth_header, url
+        return resolved_auth_header, url
 
     def _get_token_and_url(
         self,
@@ -721,9 +748,33 @@ class VertexBase:
         Returns
             token, url
         """
+        is_gemini_target: Final = custom_llm_provider == "gemini" or (
+            gemini_api_key is not None and not vertex_credentials and not vertex_project
+        )
+        effective_gemini_key: Final = (
+            gemini_api_key
+            or (get_api_key_from_env() if custom_llm_provider == "gemini" else None)
+            or (litellm.api_key if custom_llm_provider == "gemini" else None)
+        )
+        resolved_provider: Final[Literal["vertex_ai", "vertex_ai_beta", "gemini"]] = (
+            "gemini" if is_gemini_target else custom_llm_provider
+        )
+
+        resolved_location: Final = (
+            vertex_location
+            if resolved_provider == "gemini"
+            else self.get_vertex_region(
+                vertex_region=vertex_location,
+                model=model,
+            )
+        )
+
         version: Literal["v1beta1", "v1"] | None = None
-        if custom_llm_provider == "gemini":
-            if not gemini_api_key:
+        gemini_auth_dict: Final = {"x-goog-api-key": effective_gemini_key or ""}
+        gemini_auth_header: Final[str] = cast(str, gemini_auth_dict)  # cast-ok: preserves legacy dict-as-auth_header
+        resolved_auth_header: Final[str | None] = gemini_auth_header if resolved_provider == "gemini" else auth_header
+        if resolved_provider == "gemini":
+            if not effective_gemini_key:
                 raise ValueError(
                     "Missing Gemini API key. Set the GEMINI_API_KEY or GOOGLE_API_KEY environment variable."
                 )
@@ -732,13 +783,7 @@ class VertexBase:
                 model=model,
                 stream=stream,
             )
-            auth_header = {"x-goog-api-key": gemini_api_key}
         else:
-            vertex_location = self.get_vertex_region(
-                vertex_region=vertex_location,
-                model=model,
-            )
-
             ### SET RUNTIME ENDPOINT ###
             version = "v1beta1" if should_use_v1beta1_features is True else "v1"
             url, endpoint = get_vertex_url(
@@ -746,21 +791,21 @@ class VertexBase:
                 model=model,
                 stream=stream,
                 vertex_project=vertex_project,
-                vertex_location=vertex_location,
+                vertex_location=resolved_location,
                 vertex_api_version=version,
             )
 
         return self._check_custom_proxy(
             api_base=api_base,
-            auth_header=auth_header,
-            custom_llm_provider=custom_llm_provider,
-            gemini_api_key=gemini_api_key,
+            auth_header=resolved_auth_header,
+            custom_llm_provider=resolved_provider,
+            gemini_api_key=effective_gemini_key,
             endpoint=endpoint,
             stream=stream,
             url=url,
             model=model,
             vertex_project=vertex_project,
-            vertex_location=vertex_location,
+            vertex_location=resolved_location,
             vertex_api_version=version,
             use_psc_endpoint_format=use_psc_endpoint_format,
         )
@@ -923,7 +968,6 @@ class VertexBase:
         Returns:
             Tuple of (access_token, project_id)
         """
-
         # Convert dict credentials to string for caching
         cache_credentials: Final = json.dumps(credentials) if isinstance(credentials, dict) else credentials
         credential_cache_key: Final = (cache_credentials, project_id)
@@ -1158,13 +1202,16 @@ class VertexBase:
         """
         Async version of _ensure_access_token
         """
-        if custom_llm_provider == "gemini":
+        if self._should_bypass_adc(
+            custom_llm_provider=custom_llm_provider,
+            credentials=credentials,
+            project_id=project_id,
+        ):
             return "", ""
-        else:
-            return await self.get_access_token_async(
-                credentials=credentials,
-                project_id=project_id,
-            )
+        return await self.get_access_token_async(
+            credentials=credentials,
+            project_id=project_id,
+        )
 
     async def ensure_access_token_async(
         self,

@@ -3723,6 +3723,9 @@ def _complete_vertex_ai(ctx: CompletionDispatchContext) -> _CompletionDispatchRe
     stream: Final = ctx.stream
     timeout: Final = ctx.timeout
 
+    api_key: Final = ctx.api_key
+    gemini_api_key: Final = api_key or get_api_key_from_env() or litellm.api_key
+
     vertex_ai_project: Final = (
         optional_params.pop("vertex_project", None)
         or optional_params.pop("vertex_ai_project", None)
@@ -3780,7 +3783,7 @@ def _complete_vertex_ai(ctx: CompletionDispatchContext) -> _CompletionDispatchRe
             vertex_location=vertex_ai_location,
             vertex_project=vertex_ai_project,
             vertex_credentials=vertex_credentials,
-            gemini_api_key=None,
+            gemini_api_key=gemini_api_key,
             logging_obj=logging,
             acompletion=acompletion,
             timeout=timeout,
