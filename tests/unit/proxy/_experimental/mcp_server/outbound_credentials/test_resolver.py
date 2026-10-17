@@ -32,6 +32,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials import (
     Error,
     IdJagConfig,
     IdJagResourceClient,
+    IdJagSubjectSource,
     NoneConfig,
     NoOpAuth,
     Ok,
@@ -55,8 +56,11 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_r
     SSOClientConfig,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (
+    SAML2_SUBJECT_TOKEN_TYPE,
     AssertionStoreUnavailable,
     SSOIdentityAssertion,
+    assertion_from_saml_login,
+    with_login_refresh_token,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.token_endpoint import (
     ExchangedToken,
@@ -110,6 +114,10 @@ class _FakeAssertionStore:
     def __init__(self, assertions: dict[str, SSOIdentityAssertion] | None = None) -> None:
         self._assertions = dict(assertions or {})
         self.lookups: list[str] = []
+
+    async def fetch_stored(self, user_id: str) -> SSOIdentityAssertion | None:
+
+        return await self.fetch(user_id)
 
     async def fetch(self, user_id: str) -> SSOIdentityAssertion | None:
         self.lookups.append(user_id)
@@ -539,12 +547,8 @@ async def test_id_jag_runs_both_legs_and_returns_the_leg2_bearer():
     assert leg1_client_id == "litellm"
     assert isinstance(endpoint.auths[0], ClientSecretAuth)
     assert endpoint.auths[0].client_secret.get_secret_value() == "s"
-    assert (
-        leg1_params["grant_type"] == "urn:ietf:params:oauth:grant-type:token-exchange"
-    )
-    assert (
-        leg1_params["requested_token_type"] == "urn:ietf:params:oauth:token-type:id-jag"
-    )
+    assert leg1_params["grant_type"] == "urn:ietf:params:oauth:grant-type:token-exchange"
+    assert leg1_params["requested_token_type"] == "urn:ietf:params:oauth:token-type:id-jag"
     assert leg1_params["subject_token"] == "user-id-token"
 
     leg2_endpoint, leg2_client_id, leg2_params = endpoint.calls[1]
@@ -563,9 +567,7 @@ async def test_id_jag_without_inbound_token_or_stored_assertion_is_precondition_
     endpoint = _FakeTokenEndpoint([])
     store = _FakeAssertionStore()
     provider = UpstreamCredentialProvider(token_endpoint=endpoint, sso_assertion_store=store)
-    result = await provider.resolve_credentials(
-        Subject(tenant_id="", subject_id="alice"), _spec(_id_jag_config())
-    )
+    result = await provider.resolve_credentials(Subject(tenant_id="", subject_id="alice"), _spec(_id_jag_config()))
 
     assert isinstance(result, Error)
     assert result.error.tag == "precondition_required"
@@ -581,9 +583,7 @@ async def test_id_jag_exchanges_the_stored_sso_assertion_when_the_caller_present
     store = _FakeAssertionStore({"alice": _assertion("alice-id-token")})
     provider = UpstreamCredentialProvider(token_endpoint=endpoint, sso_assertion_store=store)
 
-    result = await provider.resolve_credentials(
-        Subject(tenant_id="", subject_id="alice"), _spec(_id_jag_config())
-    )
+    result = await provider.resolve_credentials(Subject(tenant_id="", subject_id="alice"), _spec(_id_jag_config()))
 
     assert isinstance(result, Ok)
     assert _emitted(result.ok)["Authorization"] == "Bearer final-access"
@@ -591,6 +591,54 @@ async def test_id_jag_exchanges_the_stored_sso_assertion_when_the_caller_present
     _, _, leg1_params = endpoint.calls[0]
     assert leg1_params["subject_token"] == "alice-id-token"
     assert leg1_params["requested_token_type"] == "urn:ietf:params:oauth:token-type:id-jag"
+
+
+@pytest.mark.asyncio
+async def test_id_jag_declares_a_stored_saml_assertion_as_a_saml2_subject_token():
+    """A SAML login retains the signed assertion, not an id_token, so leg 1 has to tell the IdP what
+    it is being handed even though the server is configured with the id_token default."""
+    endpoint = _FakeTokenEndpoint(_two_leg_ok("final-access"))
+    saml = assertion_from_saml_login(b"<saml:Assertion/>", int(time.time()) + 300, "https://idp.example.com")
+    store = _FakeAssertionStore({"alice": saml})
+    provider = UpstreamCredentialProvider(token_endpoint=endpoint, sso_assertion_store=store)
+
+    result = await provider.resolve_credentials(Subject(tenant_id="", subject_id="alice"), _spec(_id_jag_config()))
+
+    assert isinstance(result, Ok)
+    _, _, leg1_params = endpoint.calls[0]
+    assert leg1_params["subject_token"] == saml.id_token.get_secret_value()
+    assert leg1_params["subject_token_type"] == SAML2_SUBJECT_TOKEN_TYPE
+    assert leg1_params["grant_type"] == "urn:ietf:params:oauth:grant-type:token-exchange"
+    assert leg1_params["requested_token_type"] == "urn:ietf:params:oauth:token-type:id-jag"
+
+
+@pytest.mark.asyncio
+async def test_id_jag_sends_the_configured_type_for_a_stored_oidc_assertion():
+    endpoint = _FakeTokenEndpoint(_two_leg_ok("final-access"))
+    store = _FakeAssertionStore({"alice": _assertion("alice-id-token")})
+    config = _id_jag_config().model_copy(update={"subject_token_type": "urn:ietf:params:oauth:token-type:jwt"})
+    provider = UpstreamCredentialProvider(token_endpoint=endpoint, sso_assertion_store=store)
+
+    result = await provider.resolve_credentials(Subject(tenant_id="", subject_id="alice"), _spec(config))
+
+    assert isinstance(result, Ok)
+    _, _, leg1_params = endpoint.calls[0]
+    assert leg1_params["subject_token_type"] == "urn:ietf:params:oauth:token-type:jwt"
+
+
+@pytest.mark.asyncio
+async def test_id_jag_refuses_a_saml_assertion_past_its_not_on_or_after_without_calling_the_idp():
+    endpoint = _FakeTokenEndpoint([])
+    saml = assertion_from_saml_login(b"<saml:Assertion/>", int(time.time()) - 1, "https://idp.example.com")
+    provider = UpstreamCredentialProvider(
+        token_endpoint=endpoint, sso_assertion_store=_FakeAssertionStore({"alice": saml})
+    )
+
+    result = await provider.resolve_credentials(Subject(tenant_id="", subject_id="alice"), _spec(_id_jag_config()))
+
+    assert isinstance(result, Error)
+    assert result.error.tag == "precondition_required"
+    assert endpoint.calls == []
 
 
 @pytest.mark.asyncio
@@ -613,9 +661,7 @@ async def test_id_jag_refuses_an_expired_stored_assertion_without_calling_the_id
     store = _FakeAssertionStore({"alice": _assertion("stale-id-token", expires_in=-timedelta(seconds=1))})
     provider = UpstreamCredentialProvider(token_endpoint=endpoint, sso_assertion_store=store)
 
-    result = await provider.resolve_credentials(
-        Subject(tenant_id="", subject_id="alice"), _spec(_id_jag_config())
-    )
+    result = await provider.resolve_credentials(Subject(tenant_id="", subject_id="alice"), _spec(_id_jag_config()))
 
     assert isinstance(result, Error)
     assert result.error.tag == "precondition_required"
@@ -646,6 +692,9 @@ async def test_id_jag_renews_an_expired_stored_assertion_instead_of_challenging(
         rows[user_id] = assertion
 
     class _Inner:
+        async def fetch_stored(self, user_id: str) -> SSOIdentityAssertion | None:
+            return await self.fetch(user_id)
+
         async def fetch(self, user_id: str) -> SSOIdentityAssertion | None:
             return await _read(user_id)
 
@@ -672,9 +721,7 @@ async def test_id_jag_renews_an_expired_stored_assertion_instead_of_challenging(
         ),
     )
 
-    result = await provider.resolve_credentials(
-        Subject(tenant_id="", subject_id="alice"), _spec(_id_jag_config())
-    )
+    result = await provider.resolve_credentials(Subject(tenant_id="", subject_id="alice"), _spec(_id_jag_config()))
 
     assert isinstance(result, Ok)
     _, _, leg1_params = endpoint.calls[0]
@@ -686,7 +733,7 @@ def test_the_resolver_defaults_to_the_renewing_assertion_store():
     the plain database reader would strand every agent an id_token lifetime after its user's login."""
     provider = UpstreamCredentialProvider()
 
-    assert isinstance(provider._sso_assertion_store, RefreshingSSOAssertionStore)  # noqa: SLF001  # the wiring is the assertion
+    assert isinstance(provider._sso_assertion_store, RefreshingSSOAssertionStore)  # the wiring is the assertion
 
 
 @pytest.mark.asyncio
@@ -695,9 +742,7 @@ async def test_id_jag_accepts_a_stored_assertion_that_declares_no_expiry():
     store = _FakeAssertionStore({"alice": _assertion("undated-id-token", expires_in=None)})
     provider = UpstreamCredentialProvider(token_endpoint=endpoint, sso_assertion_store=store)
 
-    result = await provider.resolve_credentials(
-        Subject(tenant_id="", subject_id="alice"), _spec(_id_jag_config())
-    )
+    result = await provider.resolve_credentials(Subject(tenant_id="", subject_id="alice"), _spec(_id_jag_config()))
 
     assert isinstance(result, Ok)
     _, _, leg1_params = endpoint.calls[0]
@@ -730,14 +775,10 @@ async def test_id_jag_keeps_store_sourced_bearers_partitioned_per_user():
             Ok(ExchangedToken(access_token="bob-bearer", expires_in=3600)),
         ]
     )
-    store = _FakeAssertionStore(
-        {"alice": _assertion("alice-id-token"), "bob": _assertion("bob-id-token")}
-    )
+    store = _FakeAssertionStore({"alice": _assertion("alice-id-token"), "bob": _assertion("bob-id-token")})
     provider = UpstreamCredentialProvider(token_endpoint=endpoint, sso_assertion_store=store)
 
-    alice = await provider.resolve_credentials(
-        Subject(tenant_id="", subject_id="alice"), _spec(_id_jag_config())
-    )
+    alice = await provider.resolve_credentials(Subject(tenant_id="", subject_id="alice"), _spec(_id_jag_config()))
     bob = await provider.resolve_credentials(Subject(tenant_id="", subject_id="bob"), _spec(_id_jag_config()))
 
     assert isinstance(alice, Ok) and isinstance(bob, Ok)
@@ -754,6 +795,10 @@ class _OutageAssertionStore:
     def __init__(self) -> None:
         self.lookups: list[str] = []
 
+    async def fetch_stored(self, user_id: str) -> SSOIdentityAssertion | None:
+
+        return await self.fetch(user_id)
+
     async def fetch(self, user_id: str) -> SSOIdentityAssertion | None:
         self.lookups.append(user_id)
         raise AssertionStoreUnavailable(_DRIVER_DETAIL)
@@ -766,9 +811,7 @@ async def test_id_jag_maps_an_assertion_store_outage_to_upstream_unavailable():
     endpoint = _FakeTokenEndpoint([])
     provider = UpstreamCredentialProvider(token_endpoint=endpoint, sso_assertion_store=_OutageAssertionStore())
 
-    result = await provider.resolve_credentials(
-        Subject(tenant_id="", subject_id="alice"), _spec(_id_jag_config())
-    )
+    result = await provider.resolve_credentials(Subject(tenant_id="", subject_id="alice"), _spec(_id_jag_config()))
 
     assert isinstance(result, Error)
     assert result.error.tag == "upstream_unavailable"
@@ -784,9 +827,7 @@ async def test_id_jag_store_outage_does_not_leak_driver_detail_to_the_caller(cap
     )
 
     with caplog.at_level(logging.WARNING):
-        result = await provider.resolve_credentials(
-            Subject(tenant_id="", subject_id="alice"), _spec(_id_jag_config())
-        )
+        result = await provider.resolve_credentials(Subject(tenant_id="", subject_id="alice"), _spec(_id_jag_config()))
 
     assert isinstance(result, Error)
     assert _DRIVER_DETAIL not in result.error.summary
@@ -803,9 +844,7 @@ async def test_id_jag_invalidation_survives_an_assertion_store_outage():
         token_endpoint=_FakeTokenEndpoint([]), sso_assertion_store=_OutageAssertionStore()
     )
 
-    await provider.invalidate_credentials(
-        Subject(tenant_id="", subject_id="alice"), _spec(_id_jag_config())
-    )
+    await provider.invalidate_credentials(Subject(tenant_id="", subject_id="alice"), _spec(_id_jag_config()))
 
 
 class _FlakyAssertionStore:
@@ -814,6 +853,10 @@ class _FlakyAssertionStore:
     def __init__(self, assertion: SSOIdentityAssertion) -> None:
         self._assertion = assertion
         self.down = False
+
+    async def fetch_stored(self, user_id: str) -> SSOIdentityAssertion | None:
+
+        return await self.fetch(user_id)
 
     async def fetch(self, user_id: str) -> SSOIdentityAssertion | None:
         if self.down:
@@ -854,6 +897,10 @@ class _SwitchableAssertionStore:
 
     def __init__(self, id_token: str) -> None:
         self.id_token = id_token
+
+    async def fetch_stored(self, user_id: str) -> SSOIdentityAssertion | None:
+
+        return await self.fetch(user_id)
 
     async def fetch(self, user_id: str) -> SSOIdentityAssertion | None:
         return _assertion(self.id_token)
@@ -898,6 +945,10 @@ class _SequentialAssertionStore:
         self.pinned: str | None = None
         self.issued: list[str] = []
         self._n = 0
+
+    async def fetch_stored(self, user_id: str) -> SSOIdentityAssertion | None:
+
+        return await self.fetch(user_id)
 
     async def fetch(self, user_id: str) -> SSOIdentityAssertion | None:
         await asyncio.sleep(0)
@@ -996,14 +1047,10 @@ async def test_id_jag_reads_a_naive_stored_expiry_as_utc():
     comparison would be a TypeError on the egress path, turning a 412 into a 500."""
     endpoint = _FakeTokenEndpoint([])
     naive_past = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=1)
-    store = _FakeAssertionStore(
-        {"alice": SSOIdentityAssertion(id_token=SecretStr("stale"), expires_at=naive_past)}
-    )
+    store = _FakeAssertionStore({"alice": SSOIdentityAssertion(id_token=SecretStr("stale"), expires_at=naive_past)})
     provider = UpstreamCredentialProvider(token_endpoint=endpoint, sso_assertion_store=store)
 
-    result = await provider.resolve_credentials(
-        Subject(tenant_id="", subject_id="alice"), _spec(_id_jag_config())
-    )
+    result = await provider.resolve_credentials(Subject(tenant_id="", subject_id="alice"), _spec(_id_jag_config()))
 
     assert isinstance(result, Error)
     assert result.error.tag == "precondition_required"
@@ -1032,13 +1079,9 @@ async def test_invalidate_evicts_a_store_sourced_id_jag_bearer():
 
 @pytest.mark.asyncio
 async def test_id_jag_propagates_a_leg1_error_without_calling_leg2():
-    endpoint = _FakeTokenEndpoint(
-        [Error(CredError.of_upstream_unavailable("leg1 down"))]
-    )
+    endpoint = _FakeTokenEndpoint([Error(CredError.of_upstream_unavailable("leg1 down"))])
     provider = UpstreamCredentialProvider(token_endpoint=endpoint)
-    result = await provider.resolve_credentials(
-        _with_inbound("user-id-token"), _spec(_id_jag_config())
-    )
+    result = await provider.resolve_credentials(_with_inbound("user-id-token"), _spec(_id_jag_config()))
 
     assert isinstance(result, Error)
     assert result.error.tag == "upstream_unavailable"
@@ -1055,9 +1098,7 @@ async def test_id_jag_propagates_a_leg2_error():
         ]
     )
     provider = UpstreamCredentialProvider(token_endpoint=endpoint)
-    result = await provider.resolve_credentials(
-        _with_inbound("user-id-token"), _spec(_id_jag_config())
-    )
+    result = await provider.resolve_credentials(_with_inbound("user-id-token"), _spec(_id_jag_config()))
 
     assert isinstance(result, Error)
     assert result.error.tag == "upstream_unavailable"
@@ -1065,7 +1106,7 @@ async def test_id_jag_propagates_a_leg2_error():
     assert len(endpoint.calls) == 2
 
 
-def _two_leg_ok(bearer: str) -> list:
+def _two_leg_ok(bearer: str) -> list[Result[ExchangedToken, CredError]]:
     return [
         Ok(ExchangedToken(access_token="the-id-jag", expires_in=300)),
         Ok(ExchangedToken(access_token=bearer, expires_in=3600)),
@@ -1256,8 +1297,18 @@ async def test_passthrough_ignores_the_carrier_and_keeps_the_callers_slot():
         (NoneConfig(), _SUBJECT, "no-auth", None),
         (PassthroughConfig(), _SUBJECT, "no-auth", None),
         (PassthroughConfig(), _with_inbound("Bearer caller-token"), "oauth2-passthrough", "Bearer caller-token"),
-        (ApiKeyConfig(key_source=SharedKey(value=SecretStr("static-key"))), _SUBJECT, "static-token", "Bearer static-key"),
-        (AuthorizationCodeConfig(), Subject(tenant_id="", subject_id="alice"), "stored-user-token", "Bearer stored-alice"),
+        (
+            ApiKeyConfig(key_source=SharedKey(value=SecretStr("static-key"))),
+            _SUBJECT,
+            "static-token",
+            "Bearer static-key",
+        ),
+        (
+            AuthorizationCodeConfig(),
+            Subject(tenant_id="", subject_id="alice"),
+            "stored-user-token",
+            "Bearer stored-alice",
+        ),
     ],
 )
 async def test_resolved_source_matches_the_credential_sent_upstream(
@@ -1279,7 +1330,9 @@ async def test_resolved_source_matches_the_credential_sent_upstream(
 async def test_resolved_source_preserves_missing_user_token_error() -> None:
     from litellm.proxy._experimental.mcp_server.outbound_credentials.resolver import resolve_credentials_with_source
 
-    result = await resolve_credentials_with_source(UpstreamCredentialProvider(), _SUBJECT, _spec(AuthorizationCodeConfig()))
+    result = await resolve_credentials_with_source(
+        UpstreamCredentialProvider(), _SUBJECT, _spec(AuthorizationCodeConfig())
+    )
     assert isinstance(result, Error)
     assert result.error.tag == "unauthorized"
 
@@ -1289,7 +1342,9 @@ async def test_minted_token_sources_match_egress_and_do_not_fetch_twice() -> Non
     from litellm.proxy._experimental.mcp_server.outbound_credentials.resolver import resolve_credentials_with_source
 
     source = _FakeM2MSource(Ok(OAuthToken(access_token="m2m-at")))
-    m2m = await resolve_credentials_with_source(UpstreamCredentialProvider(client_credentials_source=source), _SUBJECT, _spec(_M2M))
+    m2m = await resolve_credentials_with_source(
+        UpstreamCredentialProvider(client_credentials_source=source), _SUBJECT, _spec(_M2M)
+    )
     assert isinstance(m2m, Ok)
     headers, _ = await _emitted_async(m2m.ok.auth)
     assert headers["Authorization"] == "Bearer m2m-at"
@@ -1297,7 +1352,9 @@ async def test_minted_token_sources_match_egress_and_do_not_fetch_twice() -> Non
     assert source.gets == ["s"]
 
     exchanger = _FakeExchanger(Ok(OAuthToken(access_token="exchanged-at")))
-    exchanged = await resolve_credentials_with_source(UpstreamCredentialProvider(token_exchanger=exchanger), _with_inbound("subject"), _spec(_OBO))
+    exchanged = await resolve_credentials_with_source(
+        UpstreamCredentialProvider(token_exchanger=exchanger), _with_inbound("subject"), _spec(_OBO)
+    )
     assert isinstance(exchanged, Ok)
     assert _emitted(exchanged.ok.auth)["Authorization"] == "Bearer exchanged-at"
     assert exchanged.ok.source.value == "token-exchange"
@@ -1321,9 +1378,14 @@ async def test_id_jag_source_describes_final_token_after_both_exchanges() -> Non
 async def test_client_credentials_subscription_identity_preserves_resolved_grant_scopes():
     async def resolve(token):
         source = _FakeM2MSource(Ok(token))
-        result = await UpstreamCredentialProvider(client_credentials_source=source).resolve_credentials(_SUBJECT, _spec(_M2M))
+        result = await UpstreamCredentialProvider(client_credentials_source=source).resolve_credentials(
+            _SUBJECT, _spec(_M2M)
+        )
         assert isinstance(result, Ok)
-        from litellm.proxy._experimental.mcp_server.outbound_credentials.client_credentials import ClientCredentialsBearerAuth
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.client_credentials import (
+            ClientCredentialsBearerAuth,
+        )
+
         assert isinstance(result.ok, ClientCredentialsBearerAuth)
         return result.ok.subscription_identity
 
@@ -1333,3 +1395,175 @@ async def test_client_credentials_subscription_identity_preserves_resolved_grant
     assert original is not None
     assert original == renewed
     assert original != reduced
+
+
+def _login_with_refresh_token(expires_in: int | None) -> SSOIdentityAssertion:
+    saml = assertion_from_saml_login(b"<saml:Assertion/>", int(time.time()) + 300, "https://idp.example.com")
+    return with_login_refresh_token(
+        saml,
+        "rt-from-login",
+        expires_in,
+        datetime.now(timezone.utc),
+        endpoint="https://idp.example.com/token",
+        client_id="litellm",
+    )
+
+
+def _refresh_token_source_config() -> IdJagConfig:
+    return _id_jag_config().model_copy(update={"subject_source": IdJagSubjectSource.refresh_token})
+
+
+@pytest.mark.asyncio
+async def test_id_jag_presents_the_login_refresh_token_when_the_server_asks_for_it():
+    """``id_jag_subject_source: refresh_token`` presents the refresh token the login assertion was
+    exchanged for, typed as one, never the SAML assertion itself."""
+    endpoint = _FakeTokenEndpoint(_two_leg_ok("final-access"))
+    store = _FakeAssertionStore({"alice": _login_with_refresh_token(3600)})
+    provider = UpstreamCredentialProvider(token_endpoint=endpoint, sso_assertion_store=store)
+
+    result = await provider.resolve_credentials(
+        Subject(tenant_id="", subject_id="alice"), _spec(_refresh_token_source_config())
+    )
+
+    assert isinstance(result, Ok)
+    _, _, leg1_params = endpoint.calls[0]
+    assert leg1_params["subject_token"] == "rt-from-login"
+    assert leg1_params["subject_token_type"] == "urn:ietf:params:oauth:token-type:refresh_token"
+    assert leg1_params["requested_token_type"] == "urn:ietf:params:oauth:token-type:id-jag"
+
+
+@pytest.mark.asyncio
+async def test_id_jag_refresh_token_source_never_presents_the_sso_refresh_token():
+    """An OIDC login holds a refresh token for the SSO client. Only the token the ID-JAG client
+    exchanged at login is presented, the SSO one cannot be redeemed there."""
+    endpoint = _FakeTokenEndpoint(_two_leg_ok("final-access"))
+    oidc = SSOIdentityAssertion(id_token=SecretStr("id-token"), refresh_token=SecretStr("sso-rt"))
+    row = with_login_refresh_token(
+        oidc,
+        "rt-from-login",
+        3600,
+        datetime.now(timezone.utc),
+        endpoint="https://idp.example.com/token",
+        client_id="litellm",
+    )
+    provider = UpstreamCredentialProvider(
+        token_endpoint=endpoint, sso_assertion_store=_FakeAssertionStore({"alice": row})
+    )
+
+    result = await provider.resolve_credentials(
+        Subject(tenant_id="", subject_id="alice"), _spec(_refresh_token_source_config())
+    )
+
+    assert isinstance(result, Ok)
+    assert endpoint.calls[0][2]["subject_token"] == "rt-from-login"
+
+
+@pytest.mark.asyncio
+async def test_id_jag_refresh_token_source_refuses_a_token_minted_for_another_idp_client():
+    """A refresh token is bound to the client that received it. One minted for another server's IdP
+    client is never posted to this server's endpoint, the user is told to sign in again instead."""
+    endpoint = _FakeTokenEndpoint(_two_leg_ok("final-access"))
+    row = with_login_refresh_token(
+        _login_with_refresh_token(3600),
+        "rt-for-other",
+        3600,
+        datetime.now(timezone.utc),
+        endpoint="https://other-idp.example.com/token",
+        client_id="other-agent",
+    )
+    provider = UpstreamCredentialProvider(
+        token_endpoint=endpoint, sso_assertion_store=_FakeAssertionStore({"alice": row})
+    )
+
+    result = await provider.resolve_credentials(
+        Subject(tenant_id="", subject_id="alice"), _spec(_refresh_token_source_config())
+    )
+
+    assert isinstance(result, Error)
+    assert result.error.tag == "precondition_required"
+    assert "different IdP client" in str(result.error)
+    assert endpoint.calls == []
+
+
+class _RenewalFailsStore(_FakeAssertionStore):
+    """An SSO renewal that is timing out: ``fetch`` raises the way RefreshingSSOAssertionStore does,
+    while the row itself is still readable."""
+
+    async def fetch_stored(self, user_id: str) -> SSOIdentityAssertion | None:
+        return self._assertions.get(user_id)
+
+    async def fetch(self, user_id: str) -> SSOIdentityAssertion | None:
+        raise AssertionStoreUnavailable("IdP token endpoint timed out")
+
+
+@pytest.mark.asyncio
+async def test_id_jag_refresh_token_source_does_not_wait_on_an_sso_renewal():
+    """The exchanged refresh token has its own lifetime. A failing renewal of the unrelated SSO
+    id_token must not turn into a 503 for a server that never presents that id_token."""
+    endpoint = _FakeTokenEndpoint(_two_leg_ok("final-access"))
+    provider = UpstreamCredentialProvider(
+        token_endpoint=endpoint, sso_assertion_store=_RenewalFailsStore({"alice": _login_with_refresh_token(3600)})
+    )
+
+    result = await provider.resolve_credentials(
+        Subject(tenant_id="", subject_id="alice"), _spec(_refresh_token_source_config())
+    )
+
+    assert isinstance(result, Ok)
+    assert endpoint.calls[0][2]["subject_token"] == "rt-from-login"
+
+
+@pytest.mark.asyncio
+async def test_id_jag_refresh_token_source_outlives_the_saml_assertion():
+    """The SAML assertion is spent minutes after login; the refresh token it bought is what counts."""
+    endpoint = _FakeTokenEndpoint(_two_leg_ok("final-access"))
+    expired_saml = assertion_from_saml_login(b"<saml:Assertion/>", int(time.time()) - 60, "https://idp.example.com")
+    row = with_login_refresh_token(
+        expired_saml,
+        "rt-from-login",
+        3600,
+        datetime.now(timezone.utc),
+        endpoint="https://idp.example.com/token",
+        client_id="litellm",
+    )
+    provider = UpstreamCredentialProvider(
+        token_endpoint=endpoint, sso_assertion_store=_FakeAssertionStore({"alice": row})
+    )
+
+    result = await provider.resolve_credentials(
+        Subject(tenant_id="", subject_id="alice"), _spec(_refresh_token_source_config())
+    )
+
+    assert isinstance(result, Ok)
+    assert endpoint.calls[0][2]["subject_token"] == "rt-from-login"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("row", "expected"),
+    [
+        (
+            assertion_from_saml_login(b"<saml:Assertion/>", int(time.time()) + 300, "https://idp.example.com"),
+            "none is stored",
+        ),
+        (_login_with_refresh_token(-1), "has expired"),
+    ],
+    ids=["no refresh token", "expired refresh token"],
+)
+async def test_id_jag_refresh_token_source_is_a_precondition_without_a_live_refresh_token(
+    row: SSOIdentityAssertion, expected: str
+):
+    endpoint = _FakeTokenEndpoint([])
+    provider = UpstreamCredentialProvider(
+        token_endpoint=endpoint, sso_assertion_store=_FakeAssertionStore({"alice": row})
+    )
+
+    result = await provider.resolve_credentials(
+        Subject(tenant_id="", subject_id="alice"), _spec(_refresh_token_source_config())
+    )
+
+    assert isinstance(result, Error)
+    assert result.error.tag == "precondition_required"
+    assert expected in result.error.summary
+    assert "Sign in through LiteLLM SSO" in result.error.summary
+    assert endpoint.calls == []

@@ -102,9 +102,8 @@ def isolate_global_mcp_registry(monkeypatch):
     restore, entries leak into other test modules sharing the same worker and break
     assertions over the full registry contents.
     """
-    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
-
     from litellm.proxy._experimental.mcp_server.catalog import CatalogSnapshots
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
 
     monkeypatch.setattr(global_mcp_server_manager, "catalog", CatalogSnapshots(global_mcp_server_manager))
     snapshot = dict(global_mcp_server_manager.registry)
@@ -8133,9 +8132,9 @@ async def test_resolve_active_litellm_key_resolves_key_without_user_id(proxy_glo
     blocked and expiry, and the key hash (not the user) is what the mint seals. The per-user token
     store still gets no user for such a key, since there is none to key a stored credential by."""
     from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
-        extract_user_id_from_request,
-        _ResolvedKey,
         _resolve_active_litellm_key,
+        _ResolvedKey,
+        extract_user_id_from_request,
     )
     from litellm.proxy._types import UserAPIKeyAuth, hash_token
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -8417,8 +8416,8 @@ async def test_load_active_user_by_id_serves_a_cached_row_without_a_database_rea
     cached row answers without a database read, and only a caller that asks for the database row pays for
     one."""
     from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
-        reload_active_user_by_id,
         load_active_user_by_id,
+        reload_active_user_by_id,
     )
     from litellm.proxy._types import LiteLLM_UserTable
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -11428,11 +11427,10 @@ async def test_upstream_resource_sent_on_dcr_bridge_relay_authorize():
     """The DCR-bridge relay arm builds its own upstream authorize params, so it needs the resource
     too. Without it the relayed authorize would omit the resource while the gateway's token leg
     still sent one, which is itself an invalid_target."""
-    from litellm.types.mcp import MCPAuth
-
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
         _dcr_bridge_relays_client_registration,
     )
+    from litellm.types.mcp import MCPAuth
 
     server = _resource_server(
         client_id=None,
@@ -11693,7 +11691,7 @@ def _native_client_app(monkeypatch):
     monkeypatch.setattr("litellm.proxy.proxy_server.master_key", _NATIVE_CLIENT_MASTER_KEY, raising=False)
     minted = []
 
-    async def fake_mint(user_id, team_id):
+    async def fake_mint(user_id, team_id, allowed_routes=None):
         minted.append((user_id, team_id))
         return MintedProxyCredential(key=f"sk-cli-{len(minted)}", expires_in=3600, user_id=user_id, team_id=team_id)
 
@@ -12136,7 +12134,9 @@ def test_introspect_route_answers_for_authenticated_caller(monkeypatch):
 async def test_identity_bound_authorization_carries_nonce_and_caller_through_callback(monkeypatch):
     from http.cookies import SimpleCookie
     from urllib.parse import parse_qs, urlparse
+
     from fastapi import Request
+
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
         _oauth_state_cookie_name,
         authorize_with_server,
@@ -12211,6 +12211,7 @@ async def test_identity_bound_authorization_carries_nonce_and_caller_through_cal
 @pytest.mark.asyncio
 async def test_enforced_login_warms_verified_token_readable_without_database_lookup(monkeypatch):
     from types import SimpleNamespace
+
     from litellm.caching.caching import DualCache
     from litellm.proxy import proxy_server
     from litellm.proxy._experimental.mcp_server import db, mcp_server_manager
@@ -12279,8 +12280,9 @@ async def test_enforced_login_warms_verified_token_readable_without_database_loo
 async def test_dcr_refusal_is_actionable_without_upstream_body(
     upstream_status: int, auth_type: MCPAuth, dcr_bridge: bool, flow: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import httpx
     from typing import Final
+
+    import httpx
 
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
         mint_ephemeral_dcr_client,
@@ -12522,8 +12524,8 @@ async def test_oauth_exchange_stores_token_for_validated_jwt_user(
     import litellm
     from litellm.caching.llm_caching_handler import LLMClientCache
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-    from litellm.proxy import proxy_server
     from litellm.models.user import LiteLLM_UserTable
+    from litellm.proxy import proxy_server
     from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
     from litellm.types.llms.custom_http import httpxSpecialProvider
 
@@ -12618,8 +12620,8 @@ async def test_oauth_jwt_identity_rejects_untrusted_or_inactive_owner(
     from litellm.proxy import proxy_server
     from litellm.proxy._experimental.mcp_server import mcp_server_manager
     from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
-        extract_user_id_from_request,
         authorize_oauth_credential_request,
+        extract_user_id_from_request,
     )
 
     allowed_servers: Final = AsyncMock(return_value=["server-a"])
@@ -12688,7 +12690,7 @@ async def test_oauth_jwt_uses_configured_virtual_key_owner(
 ) -> None:
     from litellm.models.user import LiteLLM_UserTable
     from litellm.proxy._experimental.mcp_server.bridge_token_flow import extract_user_id_from_request
-    from litellm.proxy._types import UserAPIKeyAuth, UnregisteredJWTClientBehavior, hash_token
+    from litellm.proxy._types import UnregisteredJWTClientBehavior, UserAPIKeyAuth, hash_token
     from litellm.proxy.auth.auth_checks import jwt_key_mapping_cache_key
 
     handler, signing_key = jwt_oauth_identity
@@ -13069,8 +13071,8 @@ async def test_signed_oauth_callback_honors_credential_write_policy(
     cimd: bool,
 ) -> None:
     import httpx
-    import litellm
 
+    import litellm
     from litellm.caching.llm_caching_handler import LLMClientCache
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
     from litellm.proxy import proxy_server
@@ -13186,17 +13188,16 @@ async def test_identity_bound_authorize_preserves_presented_jwt_permissions(
     allowed: bool,
     credential: str,
 ) -> None:
-    import jwt
     from datetime import datetime, timedelta, timezone
     from urllib.parse import parse_qs, urlparse
 
+    import jwt
+
     from litellm.models.user import LiteLLM_UserTable
     from litellm.proxy import proxy_server
-    from litellm.proxy._types import JWTIssuerConfig, UserAPIKeyAuth, hash_token
-    from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
-
     from litellm.proxy._experimental.mcp_server import discoverable_endpoints, mcp_server_manager
-    from litellm.proxy._types import MCPTransport
+    from litellm.proxy._types import JWTIssuerConfig, MCPTransport, UserAPIKeyAuth, hash_token
+    from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
     from litellm.types.mcp_server.mcp_server_manager import MCPOAuthIdentityBinding, MCPServer
 
     handler, signing_key = jwt_oauth_identity
@@ -13330,8 +13331,9 @@ async def test_identity_bound_authorize_unrelated_bearer_uses_browser_session(
     credential: str,
     cookie_state: str,
 ) -> None:
-    import jwt
     from urllib.parse import parse_qs, urlparse
+
+    import jwt
 
     from litellm.models.user import LiteLLM_UserTable
     from litellm.proxy import proxy_server
@@ -13664,6 +13666,7 @@ def test_persisted_client_is_not_applied_to_another_upstream(issuer, url):
 async def test_registration_does_not_write_client_after_upstream_edit(monkeypatch):
     monkeypatch.setenv("LITELLM_SALT_KEY", "test-mcp-registration-salt")
     from prisma import models
+
     from litellm.proxy import proxy_server
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import _persist_dcr_client_registration
 
@@ -13750,6 +13753,7 @@ async def test_callback_does_not_forward_error_from_another_issuer(monkeypatch):
 @pytest.mark.parametrize("operation", ["authorize", "token"])
 async def test_bound_client_cannot_be_sent_to_a_different_issuer(monkeypatch, operation):
     from fastapi import Request
+
     from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
@@ -13796,6 +13800,7 @@ async def test_bound_client_cannot_be_sent_to_a_different_issuer(monkeypatch, op
 @pytest.mark.asyncio
 async def test_failed_registration_preserves_cached_credentials(monkeypatch):
     from fastapi import Request
+
     from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
 
     server = _dcr_redirect_test_server("old-client").model_copy(
@@ -13819,8 +13824,13 @@ async def test_failed_registration_preserves_cached_credentials(monkeypatch):
     request.headers = {}
     with pytest.raises(HTTPException) as error:
         await endpoints.register_client_with_server(
-            request=request, mcp_server=server, client_name="app", grant_types=["authorization_code"],
-            response_types=["code"], token_endpoint_auth_method="none", replace_stale_client=True,
+            request=request,
+            mcp_server=server,
+            client_name="app",
+            grant_types=["authorization_code"],
+            response_types=["code"],
+            token_endpoint_auth_method="none",
+            replace_stale_client=True,
         )
     assert error.value.status_code == 503
     assert "could not be saved" in error.value.detail
@@ -13835,6 +13845,7 @@ async def test_failed_registration_preserves_cached_credentials(monkeypatch):
 @pytest.mark.asyncio
 async def test_registration_without_database_keeps_client_in_temporary_server(monkeypatch):
     from fastapi import Request
+
     from litellm.proxy import proxy_server
     from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
 
@@ -13850,8 +13861,13 @@ async def test_registration_without_database_keeps_client_in_temporary_server(mo
     request.base_url = "https://gateway.example/"
     request.headers = {}
     response = await endpoints.register_client_with_server(
-        request=request, mcp_server=server, client_name="app", grant_types=["authorization_code"],
-        response_types=["code"], token_endpoint_auth_method="none", replace_stale_client=True,
+        request=request,
+        mcp_server=server,
+        client_name="app",
+        grant_types=["authorization_code"],
+        response_types=["code"],
+        token_endpoint_auth_method="none",
+        replace_stale_client=True,
     )
     assert response.status_code == 200
     assert json.loads(response.body)["client_id"] == "temporary-client"
@@ -13864,9 +13880,10 @@ async def test_registration_without_database_keeps_client_in_temporary_server(mo
 @pytest.mark.asyncio
 @pytest.mark.parametrize("config_store", [False, True])
 async def test_registration_does_not_overwrite_credentials_after_failed_identity_read(monkeypatch, config_store):
-    from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints, db
-    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
     from litellm.proxy import utils
+    from litellm.proxy._experimental.mcp_server import db
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
 
     server = _dcr_redirect_test_server(None)
     monkeypatch.setattr(utils, "get_prisma_client_or_throw", lambda _: MagicMock())
@@ -13895,9 +13912,10 @@ async def test_registration_does_not_overwrite_credentials_after_failed_identity
 @pytest.mark.asyncio
 @pytest.mark.parametrize("winner_available", [False, True])
 async def test_registration_losing_conditional_write_reuses_only_a_matching_winner(monkeypatch, winner_available):
-    from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints, db
-    from litellm.proxy._types import LiteLLM_MCPServerTable
     from litellm.proxy import utils
+    from litellm.proxy._experimental.mcp_server import db
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
+    from litellm.proxy._types import LiteLLM_MCPServerTable
 
     server = _dcr_redirect_test_server(None).model_copy(update={"url": "https://upstream.example/mcp"})
     row = LiteLLM_MCPServerTable.model_validate(server.model_dump(exclude_none=True))
@@ -14503,7 +14521,8 @@ async def test_managed_authorize_retains_the_callers_previous_grant(
     from urllib.parse import parse_qs, urlsplit
 
     from litellm.proxy import proxy_server
-    from litellm.proxy._experimental.mcp_server import db, discoverable_endpoints as endpoints
+    from litellm.proxy._experimental.mcp_server import db
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
 
     _, signing_key = jwt_oauth_identity
@@ -14548,7 +14567,8 @@ async def test_managed_code_exchange_preserves_requested_scope_only_when_omitted
     from urllib.parse import parse_qs, urlsplit
 
     from litellm.proxy import proxy_server
-    from litellm.proxy._experimental.mcp_server import db, discoverable_endpoints as endpoints
+    from litellm.proxy._experimental.mcp_server import db
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
 
     _, signing_key = jwt_oauth_identity
@@ -14692,7 +14712,8 @@ async def test_managed_refresh_retains_only_the_actual_grant(
     from types import SimpleNamespace
 
     from litellm.proxy import proxy_server
-    from litellm.proxy._experimental.mcp_server import db, discoverable_endpoints as endpoints
+    from litellm.proxy._experimental.mcp_server import db
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
 
     _, signing_key = jwt_oauth_identity
@@ -14774,7 +14795,8 @@ async def test_managed_resource_metadata_excludes_refresh_permission(monkeypatch
     ],
 )
 async def test_connect_requires_the_requested_vendor_grant(monkeypatch, granted, required, expected):
-    from litellm.proxy._experimental.mcp_server import db, discoverable_endpoints as endpoints
+    from litellm.proxy._experimental.mcp_server import db
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
 
     credential = {**_stored_grant(), "scopes": granted}
     read = AsyncMock(return_value=credential)
@@ -14836,3 +14858,137 @@ def test_aggregate_protected_resource_advertises_header_server_scopes(
     )
     with patch.object(mcp_server_manager, "global_mcp_server_manager", manager):
         assert _build_aggregate_protected_resource_response(request)["scopes_supported"] == expected
+
+
+@pytest.mark.asyncio
+async def test_token_endpoint_routes_the_jwt_bearer_grant_to_the_aggregate_gateway():
+    """A requesting app presents its identity provider's client_id, never a gateway DCR one, so
+    the aggregate dispatch keys on the grant type for RFC 7523 and hands the assertion to the
+    ID-JAG redeemer. A per-server token endpoint never serves that grant."""
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints
+    from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import JWT_BEARER_GRANT_TYPE
+    from litellm.proxy._experimental.mcp_server.id_jag_grant import IdJagPrerequisites
+
+    request = _mock_callback_request("https://litellm.example.com/")
+    with patch("litellm.proxy.proxy_server.master_key", "sk-test-salt-for-lit9670"):
+        response = await discoverable_endpoints.token_endpoint(
+            request=request,
+            grant_type=JWT_BEARER_GRANT_TYPE,
+            client_id="0oa-requesting-app",
+            client_secret="app-secret",
+            assertion="eyJ.assertion.sig",
+            resource=None,
+        )
+    assert response.status_code == 400
+    refused = json.loads(bytes(response.body))
+    assert refused["error"] == "unsupported_grant_type"
+    unmet = IdJagPrerequisites(
+        jwt_auth_enabled=False,
+        has_database=False,
+        licensed=False,
+        maps_jwts_to_virtual_keys=False,
+        shared_replay_store=False,
+        base_url=None,
+        requesting_apps=(),
+    ).refusal()
+    assert unmet is not None and refused["error_description"] == unmet.description
+    with pytest.raises(HTTPException):
+        await discoverable_endpoints.token_endpoint(
+            request=request,
+            grant_type=JWT_BEARER_GRANT_TYPE,
+            client_id="0oa-requesting-app",
+            assertion="eyJ.assertion.sig",
+            mcp_server_name="no-such-server",
+        )
+
+
+@pytest.mark.asyncio
+async def test_token_endpoint_takes_the_client_id_from_http_basic_when_the_form_leaves_it_out():
+    """RFC 6749 section 2.3.1: a confidential app may authenticate with HTTP Basic alone, so the
+    aggregate dispatch reads client_id from that header. With neither the form field nor the
+    header the request is a 400 invalid_request, not a 422."""
+    from base64 import b64encode
+
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints
+    from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import JWT_BEARER_GRANT_TYPE
+
+    request = _mock_callback_request("https://litellm.example.com/")
+    request.headers = {"authorization": "Basic " + b64encode(b"0oa-requesting-app:app-secret").decode()}
+    with patch("litellm.proxy.proxy_server.master_key", "sk-test-salt-for-lit9670"):
+        response = await discoverable_endpoints.token_endpoint(
+            request=request,
+            grant_type=JWT_BEARER_GRANT_TYPE,
+            client_id=None,
+            assertion="eyJ.assertion.sig",
+            resource=None,
+        )
+    assert response.status_code == 400
+    assert json.loads(bytes(response.body))["error"] == "unsupported_grant_type"
+    request.headers = {}
+    with pytest.raises(HTTPException) as refused:
+        await discoverable_endpoints.token_endpoint(
+            request=request, grant_type=JWT_BEARER_GRANT_TYPE, client_id=None, assertion="eyJ.assertion.sig"
+        )
+    assert refused.value.status_code == 400
+    assert refused.value.detail["error"] == "invalid_request"
+
+
+@pytest.mark.parametrize("available", [True, False])
+def test_root_metadata_is_the_gateways_own_and_lists_the_jwt_bearer_grant_when_it_is_served(available):
+    """With no OAuth2 MCP server resolving at the root, the bare-origin document is the gateway's
+    own authorization server metadata: issuer is the origin an ID-JAG names as ``aud``, the token
+    endpoint is ``{base}/token``, and the jwt-bearer grant (with HTTP Basic client auth) is listed
+    exactly when the gateway serves it, under the same gates as the aggregate ``/mcp`` document."""
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints
+    from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import JWT_BEARER_GRANT_TYPE
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    global_mcp_server_manager.registry.clear()
+    request = MagicMock(spec=Request)
+    request.base_url = "https://llm.example.com/"
+    request.headers = {}
+    with (
+        patch.object(discoverable_endpoints, "jwt_bearer_available", return_value=available),  # test-quality-ok: deployment gate seam
+        patch.object(discoverable_endpoints, "token_exchange_available", return_value=True),  # test-quality-ok: deployment gate seam
+    ):
+        document = discoverable_endpoints._build_oauth_authorization_server_response(request=request, mcp_server_name=None)
+    assert document["issuer"] == "https://llm.example.com"
+    assert document["token_endpoint"] == "https://llm.example.com/token"
+    assert (JWT_BEARER_GRANT_TYPE in document["grant_types_supported"]) is available
+    assert ("client_secret_basic" in document["token_endpoint_auth_methods_supported"]) is available
+    assert ("none" in document["token_endpoint_auth_methods_supported"]) is available
+    assert "urn:ietf:params:oauth:grant-type:token-exchange" in document["grant_types_supported"]
+
+
+def test_root_metadata_owned_by_a_resolved_oauth2_server_never_lists_the_gateways_grant():
+    """When exactly one OAuth2 MCP server resolves at the root, the root document describes that
+    upstream's token endpoint, which cannot redeem an ID-JAG, so the jwt-bearer grant is not
+    advertised there even though the gateway serves it; a requesting app uses the aggregate
+    ``/.well-known/oauth-authorization-server/mcp`` document in that deployment."""
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints
+    from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import JWT_BEARER_GRANT_TYPE
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    server = _create_oauth2_server()
+    global_mcp_server_manager.registry.clear()
+    global_mcp_server_manager.registry[server.server_id] = server
+    request = MagicMock(spec=Request)
+    request.base_url = "https://llm.example.com/"
+    request.headers = {}
+    try:
+        with (
+            patch.object(discoverable_endpoints, "jwt_bearer_available", return_value=True),  # test-quality-ok: deployment gate seam
+            patch.object(discoverable_endpoints, "token_exchange_available", return_value=True),  # test-quality-ok: deployment gate seam
+            patch.object(global_mcp_server_manager, "get_mcp_server_by_name", return_value=server),  # test-quality-ok: resolver seam
+        ):
+            document = discoverable_endpoints._build_oauth_authorization_server_response(request=request, mcp_server_name=None)
+    finally:
+        global_mcp_server_manager.registry.clear()
+    assert document["token_endpoint"] == "https://llm.example.com/test_oauth/token"
+    assert JWT_BEARER_GRANT_TYPE not in document["grant_types_supported"]
+    assert document["grant_types_supported"] == ["authorization_code", "refresh_token"]
+    assert document["token_endpoint_auth_methods_supported"] == ["client_secret_post"]
