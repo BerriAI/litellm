@@ -5,7 +5,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-
 import litellm
 from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
 from litellm.types.llms.gemini import BidiGenerateContentServerMessage
@@ -2235,3 +2234,28 @@ def test_gemini_realtime_response_done_reports_no_grounding_when_none_ran():
 
     assert input_details.get("web_search_requests") is None
     assert input_details.get("google_maps_grounding_requests") is None
+
+
+def test_gemini_interrupted_emits_speech_started_before_response_done():
+    """serverContent.interrupted is the user talking over the model: the client
+    needs input_audio_buffer.speech_started to flush its playback, then the
+    response.done that already closed the response."""
+    config = GeminiRealtimeConfig()
+    result = config.transform_realtime_response(
+        json.dumps({"serverContent": {"interrupted": True}}),
+        "gemini-3.8-live",
+        MagicMock(),
+        realtime_response_transform_input={
+            "session_configuration_request": None,
+            "current_output_item_id": "item_1",
+            "current_response_id": "resp_1",
+            "current_conversation_id": None,
+            "current_delta_chunks": [],
+            "current_item_chunks": [],
+            "current_delta_type": "audio",
+        },
+    )
+    types = [e["type"] for e in result["response"]]
+    assert types.index("input_audio_buffer.speech_started") < types.index("response.done")
+    speech_started = next(e for e in result["response"] if e["type"] == "input_audio_buffer.speech_started")
+    assert speech_started["item_id"] == "item_1"

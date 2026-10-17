@@ -13,6 +13,7 @@ import litellm
 from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.base_llm.realtime.transcription_protocol import new_event_id, speech_event
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
@@ -1277,6 +1278,11 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
 
         server_content: Final = json_message.get("serverContent")
         if isinstance(server_content, dict):
+            # the user talked over the model: clients flush their playback on this event
+            if "interrupted" in server_content:
+                returned_message.append(
+                    speech_event("input_audio_buffer.speech_started", current_output_item_id or f"item_{uuid.uuid4()}"),
+                )
             input_tx: Final = server_content.get("inputTranscription")
             if isinstance(input_tx, dict) and input_tx.get("text"):
                 transcription_usage: Final = self._consume_input_transcription_usage_estimate(model)
@@ -1285,7 +1291,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                         OpenAIRealtimeEvents,
                         {
                             "type": "conversation.item.input_audio_transcription.completed",
-                            "event_id": f"event_{uuid.uuid4()}",
+                            "event_id": new_event_id(),
                             "transcript": input_tx["text"],
                             "item_id": f"item_{uuid.uuid4()}",
                             "content_index": 0,
