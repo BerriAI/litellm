@@ -28,8 +28,8 @@ BEDROCK_REQUEST_METADATA_IDENTITY_PREFIX: Final = "user_api_key_"
 BEDROCK_REQUEST_METADATA_CLIENT_FIELD: Final = "spend_logs_metadata"
 
 _METADATA_PARAM_NAMES: Final[tuple[str, ...]] = ("metadata", "litellm_metadata")
-_KEY_PATTERN: Final = re.compile(r"^[a-zA-Z0-9\s:_@$#=/+,.-]{1,256}$")
-_VALUE_PATTERN: Final = re.compile(r"^[a-zA-Z0-9\s:_@$#=/+,.-]{0,256}$")
+_KEY_PATTERN: Final = re.compile(r"^[a-zA-Z0-9\s:_@$#=/+,.-]{1,256}$", re.ASCII)
+_VALUE_PATTERN: Final = re.compile(r"^[a-zA-Z0-9\s:_@$#=/+,.-]{0,256}$", re.ASCII)
 _OWNED_HEADER_NAMES: Final[frozenset[str]] = frozenset((BEDROCK_REQUEST_METADATA_HEADER.lower(),))
 
 
@@ -167,6 +167,7 @@ def bedrock_request_metadata_is_owned() -> bool:
 
 def bedrock_request_metadata_headers(
     litellm_params: Mapping[str, object] | None,
+    caller_metadata: object = None,
 ) -> tuple[frozenset[str], tuple[tuple[str, str], ...]]:
     """
     The signed ``X-Amzn-Bedrock-Request-Metadata`` header for the Invoke paths, which have no
@@ -180,7 +181,7 @@ def bedrock_request_metadata_headers(
     """
     if not bedrock_request_metadata_is_owned():
         return frozenset(), ()
-    resolved: Final = resolve_bedrock_request_metadata(litellm_params)
+    resolved: Final = resolve_bedrock_request_metadata(litellm_params, caller_metadata)
     if resolved is None:
         return _OWNED_HEADER_NAMES, ()
     return _OWNED_HEADER_NAMES, ((BEDROCK_REQUEST_METADATA_HEADER, json.dumps(resolved, separators=(",", ":"))),)

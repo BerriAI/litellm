@@ -181,14 +181,17 @@ def test_caller_cannot_forge_or_shadow_a_reserved_identity_key(
     assert "attacker-controlled" not in resolved.values()
 
 
-def test_identity_violating_the_character_class_is_dropped_and_the_request_succeeds(monkeypatch: pytest.MonkeyPatch):
+@pytest.mark.parametrize("team_alias", ["O'Brien's team", "platform\u00a0team", "platform\u3000team"])
+def test_identity_violating_the_character_class_is_dropped_and_the_request_succeeds(
+    team_alias, monkeypatch: pytest.MonkeyPatch
+):
     """A team alias with an apostrophe must not turn a working request into a 400 the moment
-    an operator flips the setting on."""
+    an operator flips the setting on. Bedrock also rejects non-ASCII whitespace (checked live 2026-10-16)."""
     monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", ALL_FIELDS)
     params = litellm_params(
         "metadata",
         user_api_key_alias="prod-key",
-        user_api_key_team_alias="O'Brien's team",
+        user_api_key_team_alias=team_alias,
         user_api_key_user_email="x" * 300,
     )
 

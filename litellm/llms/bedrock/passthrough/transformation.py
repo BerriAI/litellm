@@ -48,23 +48,42 @@ def _drops_params(litellm_params: Mapping[str, object]) -> bool:
     return litellm.drop_params is True or litellm_params.get("drop_params") is True
 
 
-def _converse_body_with_request_metadata(
+def _caller_request_metadata(
     body: Mapping[str, object], litellm_params: Mapping[str, object], model: str | None
-) -> Mapping[str, object]:
+) -> object:
     caller_metadata: Final = body.get("requestMetadata")
     violation: Final = None if _drops_params(litellm_params) else bedrock_request_metadata_violation(caller_metadata)
     if violation is not None:
         raise litellm.exceptions.BadRequestError(message=violation, model=model or "bedrock", llm_provider="bedrock")
-    resolved: Final = resolve_bedrock_request_metadata(litellm_params, caller_metadata=caller_metadata)
-    without_caller: Final = {key: value for key, value in body.items() if key != "requestMetadata"}
-    return without_caller if resolved is None else {**without_caller, "requestMetadata": resolved}
+    return caller_metadata
 
 
-def _invoke_headers_with_request_metadata(
-    headers: Mapping[str, str], litellm_params: Mapping[str, object]
-) -> Mapping[str, str]:
-    owned_names, metadata_headers = bedrock_request_metadata_headers(litellm_params)
-    return merge_bedrock_invoke_headers(dict(headers), (), metadata_headers, owned_names)
+def _without_request_metadata(body: Mapping[str, object]) -> Mapping[str, object]:
+    return {key: value for key, value in body.items() if key != "requestMetadata"}
+
+
+def _with_request_metadata(
+    action: str | None,
+    headers: Mapping[str, str],
+    body: Mapping[str, object],
+    litellm_params: Mapping[str, object],
+    model: str | None,
+) -> tuple[Mapping[str, str], Mapping[str, object]]:
+    if action in _BEDROCK_CONVERSE_ACTIONS:
+        resolved: Final = resolve_bedrock_request_metadata(
+            litellm_params, caller_metadata=_caller_request_metadata(body, litellm_params, model)
+        )
+        without_caller: Final = _without_request_metadata(body)
+        return headers, without_caller if resolved is None else {**without_caller, "requestMetadata": resolved}
+    if action in _BEDROCK_INVOKE_ACTIONS:
+        owned_names, metadata_headers = bedrock_request_metadata_headers(
+            litellm_params, _caller_request_metadata(body, litellm_params, model)
+        )
+        return (
+            merge_bedrock_invoke_headers(dict(headers), (), metadata_headers, owned_names),
+            _without_request_metadata(body),
+        )
+    return headers, body
 
 
 _TEXT_ONLY_DELTA_FIELDS: Final = frozenset({"content", "role"})
@@ -267,17 +286,18 @@ class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamD
         model: str | None = None,
     ) -> tuple[dict, bytes | None]:
         optional_params: Final = litellm_params.copy()
-        action: Final = _bedrock_endpoint_action(api_base) if bedrock_request_metadata_is_owned() else None
-        body: Final = request_data or {}
+        signed_headers, signed_body = _with_request_metadata(
+            action=_bedrock_endpoint_action(api_base) if bedrock_request_metadata_is_owned() else None,
+            headers=headers,
+            body=request_data or {},
+            litellm_params=litellm_params,
+            model=model,
+        )
         return self._sign_request(
             service_name="bedrock",
-            headers=dict(_invoke_headers_with_request_metadata(headers, litellm_params))
-            if action in _BEDROCK_INVOKE_ACTIONS
-            else headers,
+            headers=dict(signed_headers),
             optional_params=optional_params,
-            request_data=dict(_converse_body_with_request_metadata(body, litellm_params, model))
-            if action in _BEDROCK_CONVERSE_ACTIONS
-            else body,
+            request_data=dict(signed_body),
             api_base=api_base,
             model=model,
             api_key=self.get_bedrock_bearer_token(optional_params),

@@ -874,14 +874,19 @@ def _signed_header_names(request: httpx.Request) -> frozenset[str]:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("action", ["converse", "converse-stream"])
+@pytest.mark.parametrize(
+    ("action", "query_params"),
+    [("converse", None), ("converse-stream", None), ("converse/", None), ("converse", {"trace": "1"})],
+)
 async def test_converse_passthrough_signs_proxy_identity_into_request_metadata(
-    action: str, monkeypatch: pytest.MonkeyPatch
+    action: str, query_params: dict[str, str] | None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", REQUEST_METADATA_FIELDS)
     caller_body: Final = {**CONVERSE_BODY, "requestMetadata": {"user_api_key_team_alias": "forged", "ticket": "T-42"}}
 
-    request: Final = await _sent_passthrough_request(action, caller_body, PROXY_IDENTITY)
+    request: Final = await _sent_passthrough_request(
+        action, caller_body, PROXY_IDENTITY, request_query_params=query_params
+    )
 
     assert json.loads(request.content) == {
         **CONVERSE_BODY,
@@ -897,10 +902,11 @@ async def test_invoke_passthrough_sends_proxy_identity_as_a_signed_header(
     action: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", REQUEST_METADATA_FIELDS)
+    caller_body: Final = {**INVOKE_BODY, "requestMetadata": {"user_api_key_team_alias": "forged", "ticket": "T-42"}}
 
-    request: Final = await _sent_passthrough_request(action, INVOKE_BODY, PROXY_IDENTITY)
+    request: Final = await _sent_passthrough_request(action, caller_body, PROXY_IDENTITY)
 
-    assert json.loads(request.headers[REQUEST_METADATA_HEADER]) == EXPECTED_REQUEST_METADATA
+    assert json.loads(request.headers[REQUEST_METADATA_HEADER]) == {**EXPECTED_REQUEST_METADATA, "ticket": "T-42"}
     assert REQUEST_METADATA_HEADER in _signed_header_names(request)
     assert json.loads(request.content) == INVOKE_BODY
 
@@ -921,27 +927,43 @@ async def test_passthrough_requests_are_untouched_when_forwarding_is_off(
 
 
 @pytest.mark.asyncio
-async def test_converse_passthrough_drops_reserved_caller_keys_when_nothing_resolves(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(("action", "body"), [("converse", CONVERSE_BODY), ("invoke", INVOKE_BODY)])
+async def test_passthrough_drops_reserved_caller_keys_when_nothing_resolves(
+    action: str, body: dict[str, object], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", REQUEST_METADATA_FIELDS)
-    caller_body: Final = {**CONVERSE_BODY, "requestMetadata": {"user_api_key_team_alias": "forged"}}
+    caller_body: Final = {**body, "requestMetadata": {"user_api_key_team_alias": "forged"}}
 
-    request: Final = await _sent_passthrough_request("converse", caller_body, {})
+    request: Final = await _sent_passthrough_request(action, caller_body, {})
 
-    assert json.loads(request.content) == CONVERSE_BODY
+    assert json.loads(request.content) == body
+    assert REQUEST_METADATA_HEADER not in request.headers
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("drop_globally", [True, False])
 async def test_malformed_caller_request_metadata_is_rejected_unless_params_are_dropped(
-    monkeypatch: pytest.MonkeyPatch,
+    drop_globally: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", REQUEST_METADATA_FIELDS)
     caller_body: Final = {**CONVERSE_BODY, "requestMetadata": {"user_api_key_team_alias": "forged", "bad!": "x"}}
 
     with pytest.raises(BedrockError, match="requestMetadata") as rejected:
         await _sent_passthrough_request("converse", caller_body, PROXY_IDENTITY)
-    dropped: Final = await _sent_passthrough_request("converse", caller_body, PROXY_IDENTITY, drop_params=True)
+    monkeypatch.setattr(litellm, "drop_params", drop_globally)
+    dropped: Final = await _sent_passthrough_request(
+        "converse", caller_body, PROXY_IDENTITY, **({} if drop_globally else {"drop_params": True})
+    )
 
     assert rejected.value.status_code == 400
     assert json.loads(dropped.content) == {**CONVERSE_BODY, "requestMetadata": EXPECTED_REQUEST_METADATA}
+
+
+@pytest.mark.asyncio
+async def test_malformed_caller_request_metadata_on_invoke_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", REQUEST_METADATA_FIELDS)
+
+    with pytest.raises(BedrockError, match="requestMetadata") as rejected:
+        await _sent_passthrough_request("invoke", {**INVOKE_BODY, "requestMetadata": {"a": "bad!"}}, PROXY_IDENTITY)
+
+    assert rejected.value.status_code == 400
