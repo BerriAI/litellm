@@ -39,6 +39,10 @@ def too_many_requests(detail: str) -> ProblemDetail:
     return problem("too-many-requests", "Too Many Requests", 429, detail)
 
 
+def bad_gateway(detail: str) -> ProblemDetail:
+    return problem("bad-gateway", "Bad Gateway", 502, detail)
+
+
 class ControlPlaneException(ManagementProblem):
     """A problem raised from a dependency or handler, rendered by the app-level handler below."""
 
