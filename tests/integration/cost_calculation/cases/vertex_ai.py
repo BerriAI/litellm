@@ -705,7 +705,6 @@ GEMINI_3_1_PRO_SERVICE_TIER_FLEX: Final = CostTrackingTestCase(
                 "candidatesTokenCount": 412,
                 "totalTokenCount": 2252,
                 "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 1840}],
-                "candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 412}],
                 "trafficType": "ON_DEMAND_FLEX",
             },
             "modelVersion": "gemini-3.1-pro",
@@ -816,8 +815,6 @@ GEMINI_3_1_PRO_WEB_SEARCH_MEDIUM: Final = CostTrackingTestCase(
                 "candidatesTokenCount": 412,
                 "totalTokenCount": 2252,
                 "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 1840}],
-                "candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 412}],
-                "trafficType": "ON_DEMAND",
             },
             "modelVersion": "gemini-3.1-pro",
         },
@@ -3396,6 +3393,32 @@ GEMINI_3_1_PRO_PREVIEW_TOOL_CALL: Final = _gemini_case(
     ExactExpected(spend=0.0094864, input_cost=0.004048, output_cost=0.0054384, prompt_tokens=1840, completion_tokens=412)
 )
 
+GEMINI_3_1_PRO_PREVIEW_TIERED_INPUT_ABOVE_200K: Final = _gemini_case(
+    GEMINI_3_1_PRO_TIERED_INPUT_ABOVE_200K,
+    "vertex_ai/gemini-3.1-pro-preview-tiered_input_above_200k",
+    "vertex_ai/gemini-3.1-pro-preview",
+    ExactExpected(
+        spend=0.913396, input_cost=0.90112, output_cost=0.012276, prompt_tokens=204800, completion_tokens=620
+    ),
+    usage_fields={
+        "candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 620}],
+        "trafficType": "ON_DEMAND",
+    },
+)
+GEMINI_3_1_PRO_PREVIEW_TIERED_CACHE_READ_ABOVE_200K: Final = _gemini_case(
+    GEMINI_3_1_PRO_TIERED_CACHE_READ_ABOVE_200K,
+    "vertex_ai/gemini-3.1-pro-preview-tiered_cache_read_above_200k",
+    "vertex_ai/gemini-3.1-pro-preview",
+    ExactExpected(
+        spend=0.11628672, input_cost=0.10678272, output_cost=0.009504, prompt_tokens=205824, completion_tokens=480
+    ),
+    usage_fields={
+        "candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 480}],
+        "trafficType": "ON_DEMAND",
+        "cacheTokensDetails": [{"modality": "TEXT", "tokenCount": 201728}],
+    },
+)
+
 GEMINI_4_ARGON_INPUT_TEXT: Final = GEMINI_3_8_FLASH_INPUT_TEXT.model_copy(
     update={
         "name": "vertex_ai/gemini-4-argon-input_text",
@@ -3650,6 +3673,8 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GEMINI_3_1_PRO_PREVIEW_INPUT_TEXT,
     GEMINI_3_1_PRO_PREVIEW_STREAM,
     GEMINI_3_1_PRO_PREVIEW_CACHE_READ,
+    GEMINI_3_1_PRO_PREVIEW_TIERED_INPUT_ABOVE_200K,
+    GEMINI_3_1_PRO_PREVIEW_TIERED_CACHE_READ_ABOVE_200K,
     GEMINI_3_1_PRO_PREVIEW_REASONING,
     GEMINI_3_1_PRO_PREVIEW_TOOL_CALL,
     GEMINI_4_ARGON_INPUT_TEXT,

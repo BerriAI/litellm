@@ -709,7 +709,6 @@ GEMINI_GEMINI_3_1_PRO_WEB_SEARCH_MEDIUM: Final = CostTrackingTestCase(
                 "candidatesTokenCount": 412,
                 "totalTokenCount": 2252,
                 "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 1840}],
-                "serviceTier": "standard",
             },
             "modelVersion": "gemini-3.1-pro",
         },
@@ -1165,16 +1164,15 @@ GEMINI_GEMINI_3_1_PRO_RESPONSE_MODEL_OVERRIDE: Final = CostTrackingTestCase(
                     "index": 0,
                 }
             ],
-                    "usageMetadata": {
-                        "promptTokenCount": 1840,
-                        "candidatesTokenCount": 412,
-                        "totalTokenCount": 2252,
-                        "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 1840}],
-                        "serviceTier": "standard",
-                    },
-                    "modelVersion": "gemini-3.8-flash",
-                },
-            ),
+            "usageMetadata": {
+                "promptTokenCount": 1840,
+                "candidatesTokenCount": 412,
+                "totalTokenCount": 2252,
+                "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 1840}],
+            },
+            "modelVersion": "gemini-3.8-flash",
+        },
+    ),
     expected=ExactExpected(
         spend=0.002156, input_cost=0.00092, output_cost=0.001236, prompt_tokens=1840, completion_tokens=412
     ),
@@ -1225,15 +1223,14 @@ GEMINI_GEMINI_3_1_PRO_STREAM_RESPONSE_MODEL_OVERRIDE: Final = CostTrackingTestCa
             },
             {
                 "candidates": [],
-                    "usageMetadata": {
-                        "promptTokenCount": 1840,
-                        "candidatesTokenCount": 412,
-                        "totalTokenCount": 2252,
-                        "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 1840}],
-                        "serviceTier": "standard",
-                    },
-                    "modelVersion": "gemini-3.8-flash",
+                "usageMetadata": {
+                    "promptTokenCount": 1840,
+                    "candidatesTokenCount": 412,
+                    "totalTokenCount": 2252,
+                    "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 1840}],
                 },
+                "modelVersion": "gemini-3.8-flash",
+            },
         ),
     ),
     expected=ExactExpected(
@@ -3406,6 +3403,26 @@ GEMINI_GEMINI_3_1_PRO_PREVIEW_TOOL_CALL: Final = _gemini_case(
     "gemini/gemini-3.1-pro-preview", "gemini-3.1-pro-preview",
     ExactExpected(spend=0.0112112, input_cost=0.004784, output_cost=0.0064272, prompt_tokens=1840, completion_tokens=412)
 )
+GEMINI_GEMINI_3_1_PRO_PREVIEW_TIERED_INPUT_ABOVE_200K: Final = _gemini_case(
+    GEMINI_GEMINI_3_1_PRO_TIERED_INPUT_ABOVE_200K,
+    "gemini-gemini-3.1-pro-preview-tiered_input_above_200k",
+    "gemini/gemini-3.1-pro-preview",
+    "gemini-3.1-pro-preview",
+    ExactExpected(
+        spend=1.079468, input_cost=1.06496, output_cost=0.014508, prompt_tokens=204800, completion_tokens=620
+    ),
+    usage_fields={"serviceTier": "standard"},
+)
+GEMINI_GEMINI_3_1_PRO_PREVIEW_TIERED_CACHE_READ_ABOVE_200K: Final = _gemini_case(
+    GEMINI_GEMINI_3_1_PRO_TIERED_CACHE_READ_ABOVE_200K,
+    "gemini-gemini-3.1-pro-preview-tiered_cache_read_above_200k",
+    "gemini/gemini-3.1-pro-preview",
+    "gemini-3.1-pro-preview",
+    ExactExpected(
+        spend=0.13742976, input_cost=0.12619776, output_cost=0.011232, prompt_tokens=205824, completion_tokens=480
+    ),
+    usage_fields={"serviceTier": "standard"},
+)
 GEMINI_GEMINI_4_ARGON_ROUTE_BRIDGES: Final = bridge_pairs(
     (GEMINI_GEMINI_4_ARGON_INPUT_TEXT, GEMINI_GEMINI_4_ARGON_STREAM),
     ("/v1/responses", "/v1/messages"),
@@ -3481,6 +3498,8 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GEMINI_GEMINI_3_1_PRO_PREVIEW_INPUT_TEXT,
     GEMINI_GEMINI_3_1_PRO_PREVIEW_STREAM,
     GEMINI_GEMINI_3_1_PRO_PREVIEW_CACHE_READ,
+    GEMINI_GEMINI_3_1_PRO_PREVIEW_TIERED_INPUT_ABOVE_200K,
+    GEMINI_GEMINI_3_1_PRO_PREVIEW_TIERED_CACHE_READ_ABOVE_200K,
     GEMINI_GEMINI_3_1_PRO_PREVIEW_REASONING,
     GEMINI_GEMINI_3_1_PRO_PREVIEW_TOOL_CALL,
     GEMINI_GEMINI_3_1_PRO_PREVIEW_SERVICE_TIER_PRIORITY,

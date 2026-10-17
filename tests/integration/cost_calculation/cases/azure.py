@@ -5811,6 +5811,33 @@ AZURE_GPT_6_ASTRA_CACHE_WRITE_5M: Final = with_response_usage(
     },
     ExactExpected(spend=0.22375, input_cost=0.2, output_cost=0.02375, prompt_tokens=12928, completion_tokens=380),
 )
+
+AZURE_GPT_5_6_TERRA_TIERED_INPUT_ABOVE_272K: Final = with_usage(
+    AZURE_GPT_5_6_TERRA_INPUT_TEXT,
+    "azure/gpt-5.6-terra-tiered_input_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(
+        spend=1.3281576, input_cost=1.32, output_cost=0.0081576, prompt_tokens=300000, completion_tokens=412
+    ),
+)
+AZURE_GPT_5_6_TERRA_TIERED_CACHE_READ_ABOVE_272K: Final = with_usage(
+    AZURE_GPT_5_6_TERRA_INPUT_TEXT,
+    "azure/gpt-5.6-terra-tiered_cache_read_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 200000},
+    },
+    ExactExpected(
+        spend=0.5361576, input_cost=0.528, output_cost=0.0081576, prompt_tokens=300000, completion_tokens=412
+    ),
+)
+
+
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     AZURE_GPT_6_SOL_MESSAGES_BRIDGED_JSON,
     AZURE_GPT_6_LUNA_MESSAGES_BRIDGED_JSON,
@@ -5901,6 +5928,8 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     AZURE_GPT_6_LUNA_CACHE_WRITE_5M,
     AZURE_GPT_6_ASTRA_CACHE_WRITE_5M,
     AZURE_GPT_5_6_TERRA_INPUT_TEXT,
+    AZURE_GPT_5_6_TERRA_TIERED_INPUT_ABOVE_272K,
+    AZURE_GPT_5_6_TERRA_TIERED_CACHE_READ_ABOVE_272K,
     AZURE_GPT_5_6_TERRA_STREAM,
     AZURE_GPT_5_6_TERRA_SERVICE_TIER_FLEX,
     AZURE_GPT_5_6_TERRA_SERVICE_TIER_PRIORITY,

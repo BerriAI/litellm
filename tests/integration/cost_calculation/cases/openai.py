@@ -11356,6 +11356,31 @@ GPT_5_6_TERRA_TOOL_CALL: Final = GPT_6_LUNA_TOOL_CALL.model_copy(
     }
 )
 
+GPT_5_6_TERRA_TIERED_INPUT_ABOVE_272K: Final = with_usage(
+    GPT_5_6_TERRA_INPUT_TEXT,
+    "gpt-5.6-terra-tiered_input_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(
+        spend=1.5696408, input_cost=1.56, output_cost=0.0096408, prompt_tokens=300000, completion_tokens=412
+    ),
+)
+GPT_5_6_TERRA_TIERED_CACHE_READ_ABOVE_272K: Final = with_usage(
+    GPT_5_6_TERRA_INPUT_TEXT,
+    "gpt-5.6-terra-tiered_cache_read_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 200000},
+    },
+    ExactExpected(
+        spend=0.6336408, input_cost=0.624, output_cost=0.0096408, prompt_tokens=300000, completion_tokens=412
+    ),
+)
+
 
 GPT_5_6_SLASH_ALIAS: Final = GPT_5_6_INPUT_TEXT.model_copy(
     update={"name": "gpt-5.6-slash_alias", "alias": "openai/custom/gpt-5.6-$MARKER"}
@@ -11659,6 +11684,8 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GPT_6_LUNA_CACHE_WRITE_5M,
     GPT_6_ASTRA_CACHE_WRITE_5M,
     GPT_5_6_TERRA_INPUT_TEXT,
+    GPT_5_6_TERRA_TIERED_INPUT_ABOVE_272K,
+    GPT_5_6_TERRA_TIERED_CACHE_READ_ABOVE_272K,
     GPT_5_6_TERRA_STREAM,
     GPT_5_6_TERRA_RESPONSES_NATIVE_JSON,
     GPT_5_6_TERRA_RESPONSES_DEPLOYMENT_JSON,

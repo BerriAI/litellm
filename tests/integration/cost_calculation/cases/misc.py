@@ -19,6 +19,7 @@ from integration.cost_calculation.cost_tracking_case import (
     RecountRates,
     SseResponse,
     WavUpload,
+    with_usage,
 )
 from integration.cost_calculation.stream_parity.case import StreamParityTestCase, sse_frames
 from integration.cost_calculation.bridge_cost_parity.case import BridgeCostParityTestCase, bridge_pairs
@@ -2080,6 +2081,34 @@ AZURE_AI_CLAUDE_HAIKU_5_5_ROUTE_BRIDGES: Final = bridge_pairs(
     (AZURE_AI_CLAUDE_HAIKU_5_5_MESSAGES_INPUT_TEXT, AZURE_AI_CLAUDE_HAIKU_5_5_MESSAGES_STREAM),
     ("/v1/responses",),
 )
+AZURE_AI_CLAUDE_HAIKU_5_5_TIERED_INPUT_ABOVE_100K: Final = with_usage(
+    AZURE_AI_CLAUDE_HAIKU_5_5_INPUT_TEXT,
+    "azure_ai/claude-haiku-5-5-tiered_input_above_100k",
+    {
+        "input_tokens": 150000,
+        "output_tokens": 480,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+    },
+    ExactExpected(
+        spend=0.14478, input_cost=0.1425, output_cost=0.00228, prompt_tokens=150000, completion_tokens=480
+    ),
+)
+AZURE_AI_CLAUDE_HAIKU_5_5_TIERED_CACHE_READ_ABOVE_100K: Final = with_usage(
+    AZURE_AI_CLAUDE_HAIKU_5_5_CACHE_READ,
+    "azure_ai/claude-haiku-5-5-tiered_cache_read_above_100k",
+    {
+        "input_tokens": 4096,
+        "output_tokens": 480,
+        "cache_read_input_tokens": 110592,
+        "cache_creation_input_tokens": 0,
+        "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+    },
+    ExactExpected(
+        spend=0.01667744, input_cost=0.01439744, output_cost=0.00228, prompt_tokens=114688, completion_tokens=480
+    ),
+)
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     PERPLEXITY_SONAR_NEXT_OFF_PEAK,
     NOVA_NEXT_TRANSCRIPTIONS_PER_SECOND,
@@ -2146,6 +2175,8 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     AZURE_AI_CLAUDE_HAIKU_5_5_INPUT_TEXT,
     AZURE_AI_CLAUDE_HAIKU_5_5_STREAM,
     AZURE_AI_CLAUDE_HAIKU_5_5_CACHE_READ,
+    AZURE_AI_CLAUDE_HAIKU_5_5_TIERED_INPUT_ABOVE_100K,
+    AZURE_AI_CLAUDE_HAIKU_5_5_TIERED_CACHE_READ_ABOVE_100K,
     AZURE_AI_CLAUDE_HAIKU_5_5_CACHE_WRITE_5M,
     AZURE_AI_CLAUDE_HAIKU_5_5_CACHE_WRITE_1H,
     AZURE_AI_CLAUDE_HAIKU_5_5_THINKING,
