@@ -1,4 +1,6 @@
 import json
+import os
+import re
 import uuid
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
@@ -15,6 +17,7 @@ from integration._support.otlp_sink import Span, owned_sinks, recorded_spans
 from integration._support.process import owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
+from redis import Redis
 
 INPUT_PRICE: Final = 0.001
 OUTPUT_PRICE: Final = 0.002
@@ -25,6 +28,7 @@ EMBEDDING_PRICE: Final = PROMPT_TOKENS * INPUT_PRICE
 CLIENT: Final = 3
 COST_HEADERS: Final = ("x-litellm-response-cost", "x-litellm-response-cost-input", "x-litellm-response-cost-output")
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
+MARKER: Final = re.compile(rb"cache-hit-cost-[0-9a-f]{32}")
 
 
 def _sse(frames: tuple[Mapping[str, JsonValue], ...]) -> Reply:
@@ -34,9 +38,17 @@ def _sse(frames: tuple[Mapping[str, JsonValue], ...]) -> Reply:
     )
 
 
-def _chat_reply(stream: bool) -> Reply:
+def _answer(marker: str) -> str:
+    return "answer to " + marker
+
+
+def _embedding_value(marker: str) -> float:
+    return float(int(marker[-12:], 16))
+
+
+def _chat_reply(stream: bool, marker: str) -> Reply:
     identity: Final = "chatcmpl-" + uuid.uuid4().hex
-    message: Final = {"role": "assistant", "content": "cached cost"}
+    message: Final = {"role": "assistant", "content": _answer(marker)}
     usage: Final = {
         "prompt_tokens": PROMPT_TOKENS,
         "completion_tokens": COMPLETION_TOKENS,
@@ -65,7 +77,7 @@ def _chat_reply(stream: bool) -> Reply:
     )
 
 
-def _responses_reply() -> Reply:
+def _responses_reply(marker: str) -> Reply:
     identity: Final = "resp_" + uuid.uuid4().hex
     return Reply(
         body=json.dumps(
@@ -81,7 +93,7 @@ def _responses_reply() -> Reply:
                         "type": "message",
                         "role": "assistant",
                         "status": "completed",
-                        "content": [{"type": "output_text", "text": "cached cost", "annotations": []}],
+                        "content": [{"type": "output_text", "text": _answer(marker), "annotations": []}],
                     }
                 ],
                 "usage": {
@@ -94,12 +106,12 @@ def _responses_reply() -> Reply:
     )
 
 
-def _embedding_reply() -> Reply:
+def _embedding_reply(marker: str) -> Reply:
     return Reply(
         body=json.dumps(
             {
                 "object": "list",
-                "data": [{"object": "embedding", "index": 0, "embedding": [0.25, 0.5, 0.75]}],
+                "data": [{"object": "embedding", "index": 0, "embedding": [_embedding_value(marker), 0.5, 0.75]}],
                 "model": "text-embedding-3-small",
                 "usage": {"prompt_tokens": PROMPT_TOKENS, "total_tokens": PROMPT_TOKENS},
             }
@@ -108,11 +120,14 @@ def _embedding_reply() -> Reply:
 
 
 def _provider(request: Request) -> Reply:
+    found: Final = MARKER.search(request.body)
+    assert found is not None, request.body
+    marker: Final = found.group().decode()
     if request.target.endswith("/embeddings"):
-        return _embedding_reply()
+        return _embedding_reply(marker)
     if request.target.endswith("/responses"):
-        return _responses_reply()
-    return _chat_reply(JSON_OBJECT.validate_json(request.body).get("stream") is True)
+        return _responses_reply(marker)
+    return _chat_reply(JSON_OBJECT.validate_json(request.body).get("stream") is True, marker)
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,6 +136,7 @@ class Route:
     stream: bool
     price: float
     body: Callable[[str, str], Mapping[str, JsonValue]]
+    cached: Callable[[str], str] = _answer
 
 
 ROUTES: Final[Mapping[str, Route]] = MappingProxyType(
@@ -150,7 +166,11 @@ ROUTES: Final[Mapping[str, Route]] = MappingProxyType(
         ),
         "responses": Route("/v1/responses", False, CHAT_PRICE, lambda model, marker: {"model": model, "input": marker}),
         "embeddings": Route(
-            "/v1/embeddings", False, EMBEDDING_PRICE, lambda model, marker: {"model": model, "input": marker}
+            "/v1/embeddings",
+            False,
+            EMBEDDING_PRICE,
+            lambda model, marker: {"model": model, "input": marker},
+            lambda marker: repr(_embedding_value(marker)),
         ),
     }
 )
@@ -295,10 +315,19 @@ def _breakdown_total(row: Mapping[str, JsonValue]) -> float:
     return _number(object_value(object_value(row["metadata"])["cost_breakdown"])["total_cost"])
 
 
+def _cache_holds(needle: str) -> bool:
+    with Redis(host=os.environ["REDIS_HOST"], port=int(os.environ["REDIS_PORT"])) as store:
+        return any(needle.encode() in _bytes(store.get(key)) for key in store.scan_iter(count=1000, _type="STRING"))
+
+
+def _bytes(value: object) -> bytes:
+    return value if isinstance(value, bytes) else b""
+
+
 def _miss_then_hit(rig: Rig, route: str) -> tuple[Served, Served]:
     marker: Final = "cache-hit-cost-" + uuid.uuid4().hex
     miss: Final = rig.send(route, marker)
-    _spend_row(miss.call_id)
+    eventually(lambda: _cache_holds(ROUTES[route].cached(marker)), bool, seconds=30)
     hit: Final = rig.send(route, marker)
     assert rig.upstream_calls(marker) == 1
     return miss, hit

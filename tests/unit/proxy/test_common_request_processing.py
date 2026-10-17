@@ -11078,7 +11078,6 @@ class TestResponseCostFromLoggingObjForCacheHits:
     )
     async def test_only_a_cache_hit_sends_zero_cost_headers(
         self,
-        monkeypatch: pytest.MonkeyPatch,
         hidden_params: dict[str, object],
         caching_details: CachingDetails | None,
         expected_header: str | None,
@@ -11087,27 +11086,15 @@ class TestResponseCostFromLoggingObjForCacheHits:
         response._hidden_params = hidden_params
         logging_obj: Final = self._logging_obj()
         logging_obj.caching_details = caching_details
-        fastapi_response: Final = Response()
 
-        async def served() -> litellm.ModelResponse:
-            return response
-
-        async def route_request(**_: object):
-            return served()
-
-        monkeypatch.setattr(litellm.proxy.common_request_processing, "route_request", route_request)
-
-        await ProxyBaseLLMRequestProcessing(
-            data={"model": "gpt-5.4-mini", "litellm_logging_obj": logging_obj}
-        ).base_process_llm_request(
+        headers: Final = await ProxyBaseLLMRequestProcessing.build_litellm_proxy_success_headers_from_llm_response(
+            response=response,
+            request_data={"model": "gpt-5.4-mini"},
             request=Request({"type": "http", "method": "POST", "headers": []}),
-            fastapi_response=fastapi_response,
             user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
-            route_type="acompletion",
+            logging_obj=logging_obj,
+            version=None,
             proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
-            general_settings={},
-            proxy_config=MagicMock(spec=ProxyConfig),
-            skip_pre_call_logic=True,
         )
 
         cost_headers: Final = (
@@ -11116,9 +11103,7 @@ class TestResponseCostFromLoggingObjForCacheHits:
             "x-litellm-response-cost-input",
             "x-litellm-response-cost-output",
         )
-        assert {name: fastapi_response.headers.get(name) for name in cost_headers} == dict.fromkeys(
-            cost_headers, expected_header
-        )
+        assert {name: headers.get(name) for name in cost_headers} == dict.fromkeys(cost_headers, expected_header)
 
     def test_a_fresh_zero_cost_v1_messages_call_still_sends_no_cost_header(self):
         logging_obj = self._logging_obj()

@@ -500,7 +500,7 @@ def test_cache_hit_without_pre_call_emits_zero_cost_span():
     but the completed call's payload still warrants a span, carrying the cache
     attributes rather than being dropped like a gate rejection."""
     logger, exporter = _logger()
-    payload = _payload(
+    payload: Final = _payload(
         cache_hit=True,
         response_cost=0.0,
         saved_cache_cost=0.002,
@@ -530,7 +530,7 @@ def test_cache_miss_without_pre_call_still_emits_no_span():
     """The cache-hit relaxation is not a general loosening: a success callback
     with no ``pre_call`` carrier and no cache hit still emits nothing."""
     logger, exporter = _logger()
-    payload = _payload(cache_hit=False, response_cost=0.002)
+    payload: Final = _payload(cache_hit=False, response_cost=0.002)
     asyncio.run(
         logger.async_log_success_event(_kwargs(payload=payload), None, None, None)
     )

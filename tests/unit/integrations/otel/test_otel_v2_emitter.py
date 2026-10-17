@@ -2,6 +2,7 @@
 legacy dual-emit, hierarchy, error status, and idempotency. Needs the OTel SDK."""
 
 import json
+from typing import Final
 
 import pytest
 
@@ -650,17 +651,17 @@ def test_preset_keys_the_mappers_overwrite_shed_no_message_attribute(monkeypatch
     exactly its mapped attributes keeps every indexed message.
     """
     monkeypatch.setenv("OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT", "1000")
-    full = _conversation_span(["genai", "openinference"], _conversation_payload(6)).attributes
+    full: Final = _conversation_span(["genai", "openinference"], _conversation_payload(6)).attributes
     monkeypatch.setenv("OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT", str(len(full)))
-    cfg = OpenTelemetryV2Config(
+    cfg: Final = OpenTelemetryV2Config(
         exporter="in_memory",
         legacy_compat=False,
         mapper_names=["genai", "openinference"],
         capture_message_content="span_only",
     )
     provider, exporter = providers.in_memory_provider(cfg)
-    engine = SpanEmitter(providers.get_tracer(provider, "litellm-test"), cfg)
-    span = engine.start_span(SpanRole.LLM_CALL, "chat gpt-4o")
+    engine: Final = SpanEmitter(providers.get_tracer(provider, "litellm-test"), cfg)
+    span: Final = engine.start_span(SpanRole.LLM_CALL, "chat gpt-4o")
     span.set_attribute("gen_ai.request.model", "gpt-4o")
     span.set_attribute("llm.input_messages.1.message.role", "stale-role")
     engine.finish_span(
@@ -675,18 +676,18 @@ def test_preset_keys_the_mappers_overwrite_shed_no_message_attribute(monkeypatch
 
 def test_a_preset_message_key_the_fit_sheds_never_overflows_an_exact_limit(monkeypatch):
     monkeypatch.setenv("OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT", "1000")
-    full = _conversation_span(["genai", "openinference"], _conversation_payload(6)).attributes
-    limit = len(full) - 2
+    full: Final = _conversation_span(["genai", "openinference"], _conversation_payload(6)).attributes
+    limit: Final = len(full) - 2
     monkeypatch.setenv("OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT", str(limit))
-    cfg = OpenTelemetryV2Config(
+    cfg: Final = OpenTelemetryV2Config(
         exporter="in_memory",
         legacy_compat=False,
         mapper_names=["genai", "openinference"],
         capture_message_content="span_only",
     )
     provider, exporter = providers.in_memory_provider(cfg)
-    engine = SpanEmitter(providers.get_tracer(provider, "litellm-test"), cfg)
-    span = engine.start_span(SpanRole.LLM_CALL, "chat gpt-4o")
+    engine: Final = SpanEmitter(providers.get_tracer(provider, "litellm-test"), cfg)
+    span: Final = engine.start_span(SpanRole.LLM_CALL, "chat gpt-4o")
     span.set_attribute("llm.input_messages.1.message.role", "stale-role")
     engine.finish_span(
         SpanRole.LLM_CALL,
