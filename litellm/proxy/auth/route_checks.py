@@ -71,7 +71,8 @@ _PROXY_ADMIN_VIEW_ONLY_BLOCKED_ROUTES: Final = frozenset(
 # paths directly because the request route carries the resolved key id.
 _PROXY_ADMIN_VIEW_ONLY_BLOCKED_KEY_SUFFIXES: Final = ("/regenerate", "/reset_spend")
 
-_AUTH_ENFORCED_PASS_THROUGH_ROUTE_GROUPS: Final = frozenset(("openai_routes", "llm_api_routes"))
+_LLM_API_ROUTE_GROUPS: Final = frozenset(("llm_api_routes", "llm_api_routes_without_mcp"))
+_AUTH_ENFORCED_PASS_THROUGH_ROUTE_GROUPS: Final = frozenset(("openai_routes", *_LLM_API_ROUTE_GROUPS))
 
 # Method-scoped because the generic credential CRUD handlers share these paths:
 # the route check cannot admit PATCH/DELETE on a name like "user_connections"
@@ -156,7 +157,7 @@ class RouteChecks:
                     ################################################
                     #  For llm_api_routes, also check registered pass-through endpoints
                     ################################################
-                    if allowed_route == "llm_api_routes":
+                    if allowed_route in _LLM_API_ROUTE_GROUPS:
                         if route == "/auto_router/session" and RouteChecks.get_request_method(request) == "GET":
                             return True
 
@@ -187,7 +188,9 @@ class RouteChecks:
                         # headers, env, credentials). POST/PUT/DELETE on
                         # these paths are admin-only management writes and
                         # are intentionally not covered.
-                        if RouteChecks._is_get_mcp_server_discovery_route(route=route, request=request):
+                        if allowed_route == "llm_api_routes" and RouteChecks._is_get_mcp_server_discovery_route(
+                            route=route, request=request
+                        ):
                             return True
 
                         # Agent registry CRUD moved from llm_api_routes into
@@ -197,7 +200,7 @@ class RouteChecks:
                         # could reach these paths, so keep them reachable here;
                         # the handlers in agent_endpoints/endpoints.py still
                         # enforce proxy-admin on writes and scope reads by role.
-                        if RouteChecks.check_route_access(
+                        if allowed_route == "llm_api_routes" and RouteChecks.check_route_access(
                             route=route,
                             allowed_routes=LiteLLMRoutes.agent_management_routes.value,
                         ):

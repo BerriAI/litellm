@@ -1345,7 +1345,9 @@ class MCPRequestHandler:
         if auth is None:
             return None
         refreshed = auth.model_copy()
-        if auth.mcp_admitted_user_subject and auth.user_id:
+        if (auth.mcp_admitted_user_subject or auth.is_session_token) and auth.user_id:
+            # A session credential (``lite login`` or a redeemed ID-JAG) has no key row, its authority is
+            # sealed in the token: refresh the live user policy and keep the token's team, routes and models.
             current = await MCPRequestHandler.reload_admitted_user(auth.user_id, requires_fresh_policy=True)
             refreshed.object_permission = current.object_permission
             refreshed.object_permission_id = current.object_permission_id
