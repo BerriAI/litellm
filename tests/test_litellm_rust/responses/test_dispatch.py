@@ -5,20 +5,24 @@ from typing import Final, cast  # noqa: TID251  # narrows legacy callable signat
 import pytest
 
 import litellm
+from litellm.caching.caching import Cache
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.responses import dispatch as responses_dispatch
 from litellm.responses import main as python_responses
 from litellm.responses.dispatch import (
     _ADISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch
     _DISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch
 )
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.rust_bridge.bindings import NativeBinding
-from litellm.rust_bridge.catalog import Route, RouteRule
+from litellm.rust_bridge.catalog import Feature, Route, RouteRule
 from litellm.rust_bridge.configuration import Rollout
 from litellm.rust_bridge.public_call import NativeCall
 from litellm.rust_bridge.responses.entrypoints import (
     NativeAresponses,
     NativeResponses,
 )
+from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
 from litellm.types.llms.openai import ResponsesAPIResponse
 
 INPUT: Final = [{"role": "user", "content": "hi"}]
@@ -235,3 +239,134 @@ def test_positional_parameters_remain_available_to_native_projection() -> None:
     assert request.resolved["include"] is include
     assert request.resolved["instructions"] == "Be brief"
     assert request.resolved["max_output_tokens"] == 16
+
+
+class _Agentic(CustomLogger):
+    async def async_should_run_agentic_loop(self, *args: object, **kwargs: object) -> tuple[bool, dict]:  # pyright: ignore[reportIncompatibleMethodOverride, reportMissingTypeArgument]  # test double only needs the override
+        return False, {}
+
+
+ENCODED_ID: Final = ResponsesAPIRequestUtils._build_encrypted_item_id("deployment-1", "rs_1")  # pyright: ignore[reportPrivateUsage]  # the encoder litellm stamps on earlier turns
+
+
+@pytest.mark.parametrize(
+    ("feature", "kwargs", "settings"),
+    (
+        (Feature.MOCK_RESPONSE, {"mock_response": "hi"}, {}),
+        (Feature.PROXY_MCP_TOOLS, {"tools": [{"type": "mcp", "server_label": "g", "server_url": "litellm_proxy"}]}, {}),
+        (Feature.CALLER_CLIENT, {"client": object()}, {}),
+        pytest.param(Feature.CALLER_CLIENT, {"shared_session": object()}, {}, id="shared-session"),
+        pytest.param(Feature.EXTRA_BODY, {"extra_body": {"stream": True}}, {}, id="extra-body-stream"),
+        pytest.param(
+            Feature.PROVIDER_AFFINITY,
+            {"provider_affinity_header": "X-Session-ID", "session_id": "session-1"},
+            {},
+            id="provider-affinity",
+        ),
+        pytest.param(
+            Feature.INPUT_REWRITE,
+            {"input": [{"type": "reasoning", "id": "rs_1", "summary": list[object](), "status": None}]},
+            {},
+            id="input-rewrite",
+        ),
+        (Feature.TIMEOUT_VARIANTS, {"request_timeout": 5}, {}),
+        (Feature.AGENTIC_LOOP_HOOK, {}, {"callbacks": [_Agentic()]}),
+        (Feature.TLS_POLICY, {}, {"ssl_security_level": "DEFAULT@SECLEVEL=1"}),
+        (Feature.DROP_PARAMS, {}, {"drop_params": True}),
+        (Feature.STREAMING, {"stream": True}, {}),
+        (Feature.PROMPT_MANAGEMENT, {"prompt_id": "welcome"}, {}),
+        (Feature.TEXT_FORMAT, {"text_format": dict}, {}),
+        (Feature.CHAT_COMPLETIONS_BRIDGE, {"use_chat_completions_api": True}, {}),
+        (Feature.CHAT_COMPLETIONS_BRIDGE, {"model": "openai/chat_completions/gpt-5"}, {}),
+        (Feature.RETRIES_FALLBACKS, {"num_retries": 2}, {}),
+        (Feature.DEPLOYMENT_RESPONSE_ID, {"litellm_metadata": {"model_info": {"id": "deployment-1"}}}, {}),
+        (Feature.ENCODED_ITEM_IDS, {"input": [{"type": "reasoning", "id": ENCODED_ID, "summary": []}]}, {}),
+        (Feature.MODIFY_PARAMS, {}, {"modify_params": True}),
+        (Feature.RESPONSE_CACHE, {}, {"cache": Cache()}),
+        (
+            Feature.MANAGED_RESOURCE_IDS,
+            {
+                "input": [{"role": "user", "content": [{"type": "input_file", "file_id": "litellm-file"}]}],
+                "model_file_id_mapping": {"litellm-file": {"deployment-1": "file-abc"}},
+                "model_info": {"id": "deployment-1"},
+            },
+            {},
+        ),
+        (Feature.CACHE_CONTROL_MARKS, {"tools": [{"type": "function", "name": "f", "cache_control": {}}]}, {}),
+        (
+            Feature.ANTHROPIC_TOOL_SEARCH,
+            {"tools": [{"type": sorted(ANTHROPIC_TOOL_SEARCH_TOOL_TYPES)[0], "name": "s"}]},
+            {},
+        ),
+        (Feature.TOOL_SCHEMA_REPAIR, {"tools": [{"type": "function", "name": "f", "parameters": "{}"}]}, {}),
+        (Feature.MODEL_PARAM_GATING, {"max_output_tokens": 1}, {}),
+        (
+            Feature.WORKLOAD_IDENTITY,
+            {
+                "openai_identity_provider_id": "idp-1",
+                "openai_service_account_id": "sa-1",
+                "openai_identity_token_file": "/var/run/token",
+            },
+            {},
+        ),
+    ),
+)
+def test_each_detected_feature_reaches_its_rule(
+    monkeypatch: pytest.MonkeyPatch, feature: Feature, kwargs: Mapping[str, object], settings: Mapping[str, object]
+) -> None:
+    rules: Final = (
+        RouteRule(Route.RESPONSES, Rollout.PYTHON_ONLY, features=frozenset({feature})),
+        RouteRule(Route.RESPONSES, Rollout.RUST_REQUIRED),
+    )
+    python_result: Final = _response()
+    native_result: Final = _response()
+
+    def served(call_kwargs: Mapping[str, object]) -> object:
+        return _DISPATCH.run(
+            (),
+            {"model": "gpt-5", "input": INPUT, **call_kwargs},
+            python=lambda *call_args, **python_kwargs: python_result,
+            binding=responses_binding(lambda request: native_result),
+            native=lambda hook, request, call_args, native_kwargs: hook(request),
+            rules=rules,
+        )
+
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setattr(litellm, "modify_params", False)
+    monkeypatch.setattr(litellm, "ssl_security_level", None)
+    monkeypatch.setattr(litellm, "cache", None)
+    for setting in ("api_key", "openai_key", "api_base", "num_retries"):
+        monkeypatch.setattr(litellm, setting, None)
+    for name in ("SSL_SECURITY_LEVEL", "SSL_ECDH_CURVE", "OPENAI_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    assert served({}) is native_result
+    for name, value in settings.items():
+        monkeypatch.setattr(litellm, name, value)
+    assert served(kwargs) is python_result
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "native"),
+    (
+        ({"model": "gpt-5"}, True),
+        ({"model": "openai/gpt-5"}, True),
+        ({"model": "gpt-5", "custom_llm_provider": "openai"}, True),
+        ({"model": "anthropic/claude-sonnet-4-5"}, False),
+        ({"model": "claude-sonnet-4-5"}, False),
+        ({"model": "gpt-5", "custom_llm_provider": "azure"}, False),
+    ),
+)
+def test_provider_rule_sees_the_resolved_provider(kwargs: Mapping[str, object], native: bool) -> None:
+    python_result: Final = _response()
+    native_result: Final = _response()
+
+    result: Final = _DISPATCH.run(
+        (),
+        {"input": INPUT, **kwargs},
+        python=lambda *call_args, **call_kwargs: python_result,
+        binding=responses_binding(lambda request: native_result),
+        native=lambda hook, request, call_args, call_kwargs: hook(request),
+        rules=(RouteRule(Route.RESPONSES, Rollout.RUST_REQUIRED, providers=frozenset({"openai"})),),
+    )
+    assert result is (native_result if native else python_result)
