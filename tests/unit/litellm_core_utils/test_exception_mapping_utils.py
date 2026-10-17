@@ -83,8 +83,24 @@ def _debug_info_for_api_base(configured_api_base: str) -> str:
         ("https://gateway.example/v1#function-secret", "https://gateway.example/v1"),
         ("qa-user:function-secret@gateway.example:8080/v1", "gateway.example:8080/v1"),
         ("https://gateway.example?code=function/secret", "https://gateway.example"),
+        ("https://gateway.example?user=alice@example.org&code=function-secret", "https://gateway.example"),
+        ("https://gateway.example?email=ops@other-host.example", "https://gateway.example"),
+        ("qa-user:function-secret@gateway.example/v1?next=https://other.example/y", "gateway.example/v1"),
+        (
+            "https://qa-user:function-secret@gateway.example/models/claude-opus-5-5@default",
+            "https://gateway.example/models/claude-opus-5-5@default",
+        ),
     ],
-    ids=["userinfo_and_query", "fragment", "no_scheme", "slash_in_query_without_path"],
+    ids=[
+        "userinfo_and_query",
+        "fragment",
+        "no_scheme",
+        "slash_in_query_without_path",
+        "at_sign_in_query_without_path",
+        "at_sign_names_other_host",
+        "no_scheme_with_url_in_query",
+        "userinfo_and_at_sign_in_path",
+    ],
 )
 def test_api_base_line_keeps_credentials_out(configured_api_base: str, shown_api_base: str) -> None:
     debug_info: Final = _debug_info_for_api_base(configured_api_base)
@@ -100,22 +116,41 @@ def test_api_base_line_keeps_credentials_out(configured_api_base: str, shown_api
         "https://qa-user:qa#function-secret@gateway.example/v1",
         "https://qa-user:qa/function-secret@gateway.example/v1",
         "https://qa-user:qa/function?secret@gateway.example/v1",
-        "https://gateway.example?user=alice@example.org&code=function-secret",
-        "https://gateway.example?email=ops@other-host.example",
+        "https://qa.user:qa/function-secret@gateway.example/v1",
+        "https://function-secret/more@gateway.example/v1",
+        "qa-user:qa://function-secret@gateway.example",
     ],
     ids=[
         "question_mark_in_password",
         "hash_in_password",
         "slash_in_password",
         "slash_and_question_mark_in_password",
-        "at_sign_in_query_without_path",
-        "at_sign_names_other_host",
+        "dotted_username_and_slash_in_password",
+        "slash_in_username",
+        "no_scheme_with_scheme_separator_in_password",
     ],
 )
-def test_api_base_line_is_left_out_when_an_at_sign_follows_the_host(configured_api_base: str) -> None:
+def test_api_base_line_is_left_out_when_a_password_breaks_the_url(configured_api_base: str) -> None:
     debug_info: Final = _debug_info_for_api_base(configured_api_base)
     assert "API Base:" not in debug_info
-    assert not any(part in debug_info for part in ("qa-user", "function", "secret", "other-host"))
+    assert not any(part in debug_info for part in ("qa-user", "qa.user", "function", "secret"))
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "https://us-east5-aiplatform.googleapis.com/v1/projects/p/locations/us-east5"
+        "/publishers/anthropic/models/claude-opus-5-5@default:rawPredict",
+        "us-central1-aiplatform.googleapis.com/v1/projects/p/locations/us-central1"
+        "/publishers/mistralai/models/mistral-large@2407:rawPredict",
+        "https://gateway.ai.cloudflare.com/v1/account/gateway/workers-ai/@cf/meta/llama-3.1-8b-instruct",
+        "http://localhost:4000/v1/models/claude@default",
+        "https://[::1]:8080/v1/models/claude@default",
+    ],
+    ids=["vertex_partner_model", "vertex_without_scheme", "workers_ai_path", "localhost", "ipv6"],
+)
+def test_api_base_line_keeps_an_at_sign_in_the_path(api_base: str) -> None:
+    assert f"API Base: `{api_base}`" in _debug_info_for_api_base(api_base)
 
 
 # Test cases for is_error_str_context_window_exceeded

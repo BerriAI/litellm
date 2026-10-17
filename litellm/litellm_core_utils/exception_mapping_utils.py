@@ -2414,6 +2414,10 @@ def _map_exception_by_status(
 
 
 _NO_LITELLM_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
+_URL_SCHEME: Final = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*")
+_HOST_WITH_OPTIONAL_PORT: Final = re.compile(
+    r"(?:(?:[A-Za-z0-9-]+\.)+[A-Za-z0-9-]+|localhost|\[[0-9A-Fa-f:.]+\])(?::\d+)?"
+)
 
 
 def with_deployment_api_base(litellm_params: object) -> Mapping[str, object]:
@@ -2426,14 +2430,16 @@ def with_deployment_api_base(litellm_params: object) -> Mapping[str, object]:
 
 
 def _api_base_without_credentials(api_base: str) -> str:
-    scheme, separator, rest = api_base.partition("://")
-    authority_and_rest: Final = rest if separator else api_base
+    scheme, separator, _ = api_base.partition("://")
+    scheme_prefix: Final = scheme + separator if separator and _URL_SCHEME.fullmatch(scheme) else ""
+    authority_and_rest: Final = api_base[len(scheme_prefix) :]
     authority: Final = re.split(r"[/?#]", authority_and_rest, maxsplit=1)[0]
     after_authority: Final = authority_and_rest[len(authority) :]
-    if "@" in after_authority:
+    host: Final = authority.rpartition("@")[2]
+    if "@" in after_authority and _HOST_WITH_OPTIONAL_PORT.fullmatch(host) is None:
         return ""
     path: Final = re.split(r"[?#]", after_authority, maxsplit=1)[0]
-    return f"{scheme + separator if separator else ''}{authority.rpartition('@')[2]}{path}"
+    return f"{scheme_prefix}{host}{path}"
 
 
 def _is_guardrail_block(original_exception: Exception) -> bool:

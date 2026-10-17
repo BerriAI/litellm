@@ -28,6 +28,7 @@ from integration._support.process import graceful_stop_seconds, owned_proxy
 from integration._support.responses_stream import created, delta, failed, frame
 from integration._support.responses_ws_peer import PROVIDER_MODEL, Script, events, responses_peer, session
 from integration._support.tls import write_self_signed_cert
+from integration._support.vertex import service_account_json
 from integration._support.wire import Reply, Request, Wire, wire_server
 from openai.types.chat import ChatCompletionChunk
 from openai.types.responses import ResponseFailedEvent, ResponseTextDeltaEvent
@@ -42,6 +43,16 @@ PARTIAL_TEXT: Final = "partial answer"
 ALERT_SECONDS: Final = 40
 NO_RETRY_NO_CACHE: Final[Mapping[str, JsonValue]] = MappingProxyType({"num_retries": 0, "cache": {"no-cache": True}})
 EMPTY_MODEL_LIST: Final = Reply(body=b'{"object": "list", "data": []}')
+VERTEX_PROJECT: Final = "alert-vertex-project"
+VERTEX_LOCATION: Final = "us-east5"
+VERTEX_PARTNER_BACKEND: Final = "claude-opus-5-5@default"
+VERTEX_PARTNER_URL: Final = (
+    f"https://{VERTEX_LOCATION}-aiplatform.googleapis.com/v1/projects/{VERTEX_PROJECT}"
+    f"/locations/{VERTEX_LOCATION}/publishers/anthropic/models/{VERTEX_PARTNER_BACKEND}"
+)
+VERTEX_OVERLOADED: Final = Reply(
+    status=500, body=b'{"error": {"code": 500, "message": "vertex partner overloaded", "status": "INTERNAL"}}'
+)
 
 API_BASES: Final[Mapping[str, Callable[[str, str], str]]] = MappingProxyType(
     {
@@ -57,6 +68,7 @@ API_BASES: Final[Mapping[str, Callable[[str, str], str]]] = MappingProxyType(
 class AlertingProxy:
     gateway: Gateway
     alerts: Wire
+    vertex: Wire
     cert: tuple[Path, Path]
 
 
@@ -75,6 +87,10 @@ class Outcome:
 
 def accept_alert(request: Request) -> Reply:
     return Reply(body=b"ok", content_type="text/plain")
+
+
+def overloaded_vertex(request: Request) -> Reply:
+    return VERTEX_OVERLOADED
 
 
 def alerting_config(directory: Path) -> Path:
@@ -96,14 +112,23 @@ def alerting_config(directory: Path) -> Path:
 def alerting(tmp_path_factory: pytest.TempPathFactory) -> Iterator[AlertingProxy]:
     directory: Final = tmp_path_factory.mktemp("stream-error-alerts")
     cert: Final = write_self_signed_cert(directory)
-    with gateway_from_environment() as shared, wire_server(accept_alert) as alerts:
+    with (
+        gateway_from_environment() as shared,
+        wire_server(accept_alert) as alerts,
+        wire_server(overloaded_vertex) as vertex,
+    ):
         with owned_proxy(
             shared,
             directory,
-            {"SLACK_WEBHOOK_URL": alerts.url, "DEFAULT_FLUSH_INTERVAL_SECONDS": "1", "SSL_CERT_FILE": str(cert[0])},
+            {
+                "SLACK_WEBHOOK_URL": alerts.url,
+                "DEFAULT_FLUSH_INTERVAL_SECONDS": "1",
+                "SSL_CERT_FILE": str(cert[0]),
+                "VERTEXAI_API_BASE": vertex.url,
+            },
             config=alerting_config(directory),
         ) as gateway:
-            yield AlertingProxy(gateway, alerts, cert)
+            yield AlertingProxy(gateway, alerts, vertex, cert)
 
 
 def alert_naming(alerts: Wire, marker: str) -> str:
@@ -401,6 +426,28 @@ def test_alert_api_base_line_keeps_a_malformed_password_out(alerting: AlertingPr
         assert seen.failure and not seen.text, seen
         line: Final = api_base_line(alert_naming(alerting.alerts, model)) or ""
         assert not any(part in line for part in ("alice", password_start, password_end)), line
+
+
+def test_alert_api_base_line_names_a_vertex_partner_model_version(alerting: AlertingProxy) -> None:
+    with alerting.gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model=f"vertex_ai/{VERTEX_PARTNER_BACKEND}",
+            api_base=None,
+            api_key=None,
+            vertex_project=VERTEX_PROJECT,
+            vertex_location=VERTEX_LOCATION,
+            vertex_credentials=service_account_json(VERTEX_PROJECT, alerting.gateway.upstream_url.rstrip("/")),
+            num_retries=0,
+        )
+        caller: Final = keyed_caller(scenario)
+        seen: Final = chat_outcome(alerting.gateway, caller.key, model)
+        assert seen.failure and not seen.text, seen
+        assert any(
+            f"/publishers/anthropic/models/{VERTEX_PARTNER_BACKEND}:" in request.target
+            for request in alerting.vertex.drain()
+        )
+        line: Final = api_base_line(alert_naming(alerting.alerts, model)) or ""
+        assert line.startswith(f"API Base: `{VERTEX_PARTNER_URL}:"), line
 
 
 def test_fallback_mid_stream_failure_alert_names_the_fallback_deployment(alerting: AlertingProxy) -> None:
