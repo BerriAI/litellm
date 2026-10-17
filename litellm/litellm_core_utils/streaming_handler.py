@@ -1579,11 +1579,7 @@ class CustomStreamWrapper:
         except Exception as e:
             traceback.format_exc()
             setattr(e, "message", str(e))
-            raise exception_type(
-                model=self.model,
-                custom_llm_provider=self.custom_llm_provider,
-                original_exception=e,
-            )
+            raise self._map_stream_exception(e)
 
     def set_logging_event_loop(self, loop):
         """
@@ -2370,6 +2366,15 @@ class CustomStreamWrapper:
         if not self._emitted_disqualifying_content and self._delta_disqualifies_continuation(delta):
             self._emitted_disqualifying_content = True
 
+    def _map_stream_exception(self, original_exception: Exception) -> Exception:
+        return exception_type(
+            model=self.model,
+            custom_llm_provider=self.custom_llm_provider,
+            original_exception=original_exception,
+            completion_kwargs={"messages": self.messages},
+            extra_kwargs=self.logging_obj.model_call_details.get("litellm_params", {}),
+        )
+
     def _handle_stream_fallback_error(self, e: Exception) -> "NoReturn":
         """
         Common error handling for both __next__ and __anext__.
@@ -2414,13 +2419,7 @@ class CustomStreamWrapper:
             mapped_exception: Exception = e
         else:
             try:
-                mapped_exception = exception_type(
-                    model=self.model,
-                    custom_llm_provider=self.custom_llm_provider,
-                    original_exception=e,
-                    completion_kwargs={},
-                    extra_kwargs={},
-                )
+                mapped_exception = self._map_stream_exception(e)
             except Exception as mapping_error:
                 mapped_exception = mapping_error
         self._restore_consumer_correlation_context()
