@@ -34,6 +34,7 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
     message_field,
     parts_of,
 )
+from litellm.litellm_core_utils.reasoning_effort_utils import non_numeric_thinking_budget_error
 from litellm.llms.anthropic.wif import (
     aget_anthropic_wif_token,
     anthropic_base_without_chat_suffix,
@@ -460,6 +461,17 @@ def _fetch_anthropic_model_ids(
             return collected
         cursor = page.last_id
     raise Exception(f"Anthropic /v1/models did not terminate within {_MODEL_LIST_PAGE_CAP} pages.")
+
+
+def _legacy_budget_tokens(budget_tokens: object, *, drop_params: bool) -> int | None:
+    if not isinstance(budget_tokens, str):
+        return int(budget_tokens) if isinstance(budget_tokens, (int, float)) else 0
+    try:
+        return int(budget_tokens)
+    except ValueError:
+        if drop_params:
+            return None
+        raise non_numeric_thinking_budget_error(budget_tokens) from None
 
 
 class AnthropicModelInfo(BaseLLMModelInfo):
@@ -942,19 +954,19 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         if thinking is None or thinking.get("type") != "enabled":
             return
 
-        budget_tokens: Final = thinking.get("budget_tokens") or 0
-        effort: Final = AnthropicModelInfo._legacy_budget_to_effort(
-            model=model,
-            budget_tokens=int(budget_tokens) if isinstance(budget_tokens, (int, float, str)) else 0,
-            custom_llm_provider=custom_llm_provider,
-        )
-        existing_output_config: Final = optional_params.get("output_config")
+        budget_tokens: Final = _legacy_budget_tokens(thinking.get("budget_tokens") or 0, drop_params=drop_params)
         display: Final = thinking.get("display")
         supported_display: Final = {"display": display} if display in ("summarized", "omitted") else {}
         carried_keys: Final = carried_thinking_keys(
             thinking, rebuilt_keys=frozenset(("type", "budget_tokens", "display")), drop_params=drop_params
         )
         optional_params["thinking"] = {**carried_keys, "type": "adaptive", **supported_display}
+        if budget_tokens is None:
+            return
+        effort: Final = AnthropicModelInfo._legacy_budget_to_effort(
+            model=model, budget_tokens=budget_tokens, custom_llm_provider=custom_llm_provider
+        )
+        existing_output_config: Final = optional_params.get("output_config")
         optional_params["output_config"] = {
             "effort": effort,
             **(existing_output_config if isinstance(existing_output_config, dict) else MappingProxyType({})),

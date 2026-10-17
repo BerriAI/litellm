@@ -13,6 +13,7 @@ from typing_extensions import TypedDict
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import run_async_function
+from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
 from litellm.llms.anthropic.pass_through.adapters.transformation import (
     AnthropicAdapter,
@@ -542,16 +543,25 @@ class LiteLLMMessagesToCompletionTransformationHandler:
 
         model: Final = completion_kwargs.get("model", "")
         custom_llm_provider: Final = completion_kwargs.get("custom_llm_provider")
+        deployment_model_info: Final = completion_kwargs.get("model_info")
 
         if isinstance(reasoning_effort, str):
             normalized = normalize_reasoning_effort_value(
-                reasoning_effort, model=model, custom_llm_provider=custom_llm_provider
+                reasoning_effort,
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                deployment_model_info=deployment_model_info,
             )
             if normalized != reasoning_effort:
                 completion_kwargs["reasoning_effort"] = normalized
         elif isinstance(reasoning_effort, dict) and "effort" in reasoning_effort:
             effort: Final = reasoning_effort["effort"]
-            normalized = normalize_reasoning_effort_value(effort, model=model, custom_llm_provider=custom_llm_provider)
+            normalized = normalize_reasoning_effort_value(
+                effort,
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                deployment_model_info=deployment_model_info,
+            )
             if normalized != effort:
                 completion_kwargs["reasoning_effort"] = {
                     **reasoning_effort,
@@ -632,6 +642,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         ) = ANTHROPIC_ADAPTER.translate_completion_input_params_with_tool_mapping(
             request_data,
             custom_llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else None,
+            drop_params=litellm.drop_params is True or normalize_drop_params(extra_kwargs.get("drop_params")) is True,
         )
 
         if openai_request is None:

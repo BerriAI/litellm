@@ -18,7 +18,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     with_prompt_cache_breakpoint,
 )
 from litellm.litellm_core_utils.reasoning_effort_utils import (
-    reasoning_effort_from_thinking_budget,
+    reasoning_effort_from_thinking,
 )
 from litellm.llms.anthropic.pass_through.messages.utils import (
     refusal_stop_details,
@@ -544,6 +544,8 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
     def translate_thinking_to_reasoning(
         thinking: dict[str, object],
         output_config: dict[str, object] | None = None,
+        *,
+        drop_params: bool = True,
     ) -> dict[str, object] | None:
         """
         Convert Anthropic thinking param to Responses API reasoning param.
@@ -564,9 +566,10 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             if isinstance(output_config, dict) and output_config.get("effort"):
                 effort = output_config["effort"]
         elif thinking_type == "enabled":
-            raw_budget: Final = thinking.get("budget_tokens", 0)
-            budget_tokens: Final = int(raw_budget) if isinstance(raw_budget, (int, float)) else 0
-            effort = reasoning_effort_from_thinking_budget(budget_tokens)
+            budget_effort: Final = reasoning_effort_from_thinking(thinking, drop_params=drop_params)
+            if budget_effort is None:
+                return None
+            effort = budget_effort
         else:
             return None
 
@@ -591,6 +594,8 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         self,
         anthropic_request: AnthropicMessagesRequest,
         include_encrypted_reasoning: bool = True,
+        *,
+        drop_params: bool = True,
     ) -> dict[str, Any]:
         """
         Translate a full Anthropic /v1/messages request dict to
@@ -670,6 +675,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             reasoning: Final = self.translate_thinking_to_reasoning(
                 thinking,
                 output_config=cast(dict[str, Any] | None, output_config),
+                drop_params=drop_params,
             )
             if reasoning:
                 responses_kwargs["reasoning"] = reasoning
