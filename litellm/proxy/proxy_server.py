@@ -2297,7 +2297,9 @@ async def otel_unhandled_exception_handler(request: Request, exc: Exception):
     if isinstance(exc, (ProxyException, HTTPException, RequestValidationError)):
         raise exc
     response: Final = await _unhandled_exception_response(request, exc)
-    response.headers.update(trace_response_headers(getattr(request.state, "parent_otel_span", None)))
+    response.headers.update(
+        {**trace_response_headers(getattr(request.state, "parent_otel_span", None)), "connection": "close"}
+    )
     return response
 
 
