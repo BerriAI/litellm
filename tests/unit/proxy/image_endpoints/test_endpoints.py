@@ -12,7 +12,10 @@ from fastapi.testclient import TestClient
 from starlette.requests import Request
 from starlette.responses import Response
 
+import litellm
+from litellm import Router
 from litellm._logging import verbose_proxy_logger
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.image_endpoints import endpoints
@@ -410,3 +413,78 @@ async def test_failure_before_the_provider_call_bills_the_callers_litellm_call_i
 
     assert raised.value.headers["x-litellm-call-id"] == call_id
     assert [data["litellm_call_id"] for data in hook_request_data] == [call_id]
+
+
+
+@pytest.mark.asyncio
+async def test_a_request_the_router_refuses_reaches_the_failure_callbacks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A deployment over its max_budget is refused by the router before any provider
+    call. The router logs a rejection through the request's logging object, which
+    /v1/chat/completions creates; /v1/images/generations created none, so no failure
+    callback (Langfuse, OTel, a CustomLogger) ever saw a refused image request."""
+    refusals: list[str] = []
+
+    class RecordingLogger(CustomLogger):
+        async def async_log_failure_event(
+            self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+        ) -> None:
+            refusals.append(str(kwargs.get("exception")))
+
+    # Before the Router: it registers its budget limiter on litellm.callbacks.
+    monkeypatch.setattr(litellm, "callbacks", [RecordingLogger()])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    router = Router(
+        model_list=[
+            {
+                "model_name": "budgeted-image-model",
+                "litellm_params": {
+                    "model": "openai/gpt-image-1",
+                    "api_key": "sk-test",
+                    "api_base": "http://127.0.0.1:9/v1",  # never reached: refused first
+                    "max_budget": 1.0,
+                    "budget_duration": "30d",
+                },
+                "model_info": {"id": "budgeted-image-deployment"},
+            }
+        ]
+    )
+    await router.cache.async_set_cache(key="deployment_spend:budgeted-image-deployment:30d", value=2.0)
+
+    async def fake_add_litellm_data_to_request(**kwargs: object) -> object:
+        return kwargs["data"]
+
+    async def fake_pre_call_hook(
+        *, user_api_key_dict: UserAPIKeyAuth, data: dict[str, object], call_type: str
+    ) -> dict[str, object]:
+        return data
+
+    async def fake_post_call_failure_hook(**_: object) -> None:
+        return None
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.add_litellm_data_to_request", fake_add_litellm_data_to_request)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", {})
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.proxy_logging_obj",
+        SimpleNamespace(pre_call_hook=fake_pre_call_hook, post_call_failure_hook=fake_post_call_failure_hook),
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_model", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.version", "test-version")
+
+    body = orjson.dumps({"model": "budgeted-image-model", "prompt": "a lighthouse at dusk"})
+
+    async def receive() -> dict[str, object]:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    request = Request({"type": "http", "method": "POST", "path": "/v1/images/generations", "headers": []}, receive)
+
+    with pytest.raises(ProxyException):
+        await endpoints.image_generation(
+            request=request, fastapi_response=Response(), user_api_key_dict=UserAPIKeyAuth()
+        )
+    await asyncio.sleep(0.5)  # the router dispatches the failure handlers as a task
+
+    assert [r.split(":")[0] for r in refusals] == ["No deployments available - crossed budget"], refusals
