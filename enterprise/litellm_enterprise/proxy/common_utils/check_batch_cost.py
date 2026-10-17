@@ -815,11 +815,14 @@ class CheckBatchCost:
             await self._release_job_claim(job)
             raise
 
-        logging_obj.handle_sync_success_callbacks_for_async_calls(
-            result=response,
-            start_time=logging_obj.start_time,
-            end_time=datetime.now(),
-        )
+        try:
+            logging_obj.handle_sync_success_callbacks_for_async_calls(
+                result=response,
+                start_time=logging_obj.start_time,
+                end_time=datetime.now(),
+            )
+        except RuntimeError:
+            verbose_proxy_logger.exception("CheckBatchCost: could not schedule synchronous success callbacks")
 
         # Record batch duration (completed_at - created_at)
         if prom_logger and response.completed_at and response.created_at:

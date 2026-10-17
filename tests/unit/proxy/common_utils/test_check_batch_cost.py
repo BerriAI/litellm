@@ -4183,13 +4183,10 @@ async def test_batch_cost_reaches_configured_success_callbacks(
         if initialized:
             await litellm.afile_content(file_id="output", **credentials)
             await GLOBAL_LOGGING_WORKER.flush()
+        result: Final = await checker._track_completed_batch_cost(job, response, "deployment", "batch-record", None)
+        assert result == ((model, "openai") if claimed else None)
         if kind == "executor_shutdown" and claimed:
-            with pytest.raises(RuntimeError):
-                await checker._track_completed_batch_cost(job, response, "deployment", "batch-record", None)
             prisma.db.litellm_managedobjecttable.update_many.assert_awaited_once()
-        else:
-            result: Final = await checker._track_completed_batch_cost(job, response, "deployment", "batch-record", None)
-            assert result == ((model, "openai") if claimed else None)
         await GLOBAL_LOGGING_WORKER.flush()
     assert events.qsize() == int(claimed)
     if claimed:
