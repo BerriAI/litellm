@@ -184,7 +184,7 @@ _NO_KEPT_PARTS: Final[_KeptParts] = MappingProxyType({})
 
 
 def _scannable_text(text: object) -> str:
-    return json.dumps(text, default=str)
+    return json.dumps(text, default=str, ensure_ascii=False)
 
 
 def _scannable_part(part: object) -> object:

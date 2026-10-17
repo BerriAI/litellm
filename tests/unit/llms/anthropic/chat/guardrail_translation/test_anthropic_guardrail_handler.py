@@ -158,7 +158,12 @@ class MockStructuredMaskingGuardrail(CustomGuardrail):
 class MockNumberMaskingGuardrail(MockStructuredMaskingGuardrail):
     @staticmethod
     def _mask(text: str) -> str:
-        return text.replace("bob@example.com", "<EMAIL>").replace("5", "<NUMBER>").replace("null", "<NULL>")
+        return (
+            text.replace("bob@example.com", "<EMAIL>")
+            .replace("5", "<NUMBER>")
+            .replace("null", "<NULL>")
+            .replace("山田太郎", "<NAME>")
+        )
 
 
 class TestAnthropicMessagesHandlerStreamingRequestData:
@@ -2578,7 +2583,11 @@ class TestStructuredWriteBackKeepsToolResults:
             [{"type": "text", "text": 5}, {"type": "text", "text": "<EMAIL>"}],
         ]
 
-    @pytest.mark.parametrize(("text", "masked"), [(5, "<NUMBER>"), (None, "<NULL>")], ids=["number", "null"])
+    @pytest.mark.parametrize(
+        ("text", "masked"),
+        [(5, "<NUMBER>"), (None, "<NULL>"), ({"owner": "山田太郎"}, '{"owner": "<NAME>"}')],
+        ids=["number", "null", "non-ascii-object"],
+    )
     async def test_guardrail_scans_and_masks_a_non_string_tool_result_text(self, text, masked):
         tool_result_content = [{"type": "text", "text": text}, {"type": "text", "text": "log for bob@example.com"}]
         data = {"model": "claude-fable-5", "messages": self._claude_code_tool_search_turns(tool_result_content)}
