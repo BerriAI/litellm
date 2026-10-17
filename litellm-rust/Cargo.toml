@@ -28,6 +28,9 @@ litellm-gateway-inference = { path = "crates/gateway-inference" }
 litellm-gateway-auth = { path = "crates/gateway-auth" }
 litellm-gateway-management = { path = "crates/gateway-management" }
 litellm-gateway-ui = { path = "crates/gateway-ui" }
+litellm-gateway-hooks = { path = "crates/gateway-hooks" }
+litellm-cost = { path = "crates/cost" }
+litellm-model-catalog = { path = "crates/model-catalog" }
 litellm-coroutine = { path = "crates/coroutine" }
 litellm-host = { path = "crates/host" }
 litellm-host-http = { path = "crates/host-http" }

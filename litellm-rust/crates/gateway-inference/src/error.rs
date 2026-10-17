@@ -3,6 +3,7 @@ use axum::{
     Json,
     response::{IntoResponse, Response},
 };
+use litellm_gateway_hooks::Refusal;
 use litellm_http::transport::Error as TransportError;
 use litellm_inference::RouteError;
 use litellm_llms::base_llm::ocr::error::Error as OcrError;
@@ -29,6 +30,15 @@ pub enum Error {
     BodyTooLarge,
     #[error("{0}")]
     Internal(String),
+    /// A hook turned the request away.
+    #[error("{}", .0.message)]
+    Refused(Refusal),
+}
+
+impl From<Refusal> for Error {
+    fn from(refusal: Refusal) -> Self {
+        Self::Refused(refusal)
+    }
 }
 
 impl IntoResponse for Error {
@@ -50,6 +60,9 @@ impl Error {
     pub fn status(&self) -> StatusCode {
         match self {
             Self::Auth(error) => error.status(),
+            Self::Refused(refusal) => {
+                StatusCode::from_u16(refusal.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
+            }
             Self::Unsupported(_)
             | Self::Route(RouteError::Unsupported(_))
             | Self::Ocr(OcrError::Unsupported(_)) => StatusCode::NOT_IMPLEMENTED,
@@ -77,10 +90,20 @@ impl Error {
     }
 
     pub fn openai_response(self) -> Response {
-        if let Self::Auth(error) = self {
-            return error.into_response();
+        match self {
+            Self::Auth(error) => error.into_response(),
+            Self::Refused(refusal) => refused(refusal),
+            other => (other.status(), Json(other.openai_body())).into_response(),
         }
-        (self.status(), Json(self.openai_body())).into_response()
+    }
+
+    /// The response for a `/v1/messages` request: Anthropic's error envelope, or the proxy's
+    /// own shape for an error raised before the provider call.
+    pub fn messages_response(self, request_id: Option<&str>) -> Response {
+        match self {
+            Self::Refused(refusal) => refused(refusal),
+            other => (other.status(), Json(other.body(request_id))).into_response(),
+        }
     }
 
     /// An OpenAI error event, for a Chat Completions stream that fails after its headers
@@ -149,6 +172,20 @@ impl Error {
     pub fn sse_frame(&self) -> String {
         format!("event: error\ndata: {}\n\n", self.body(None))
     }
+}
+
+/// A hook's refusal, in the proxy's error shape and with the hook's headers.
+fn refused(refusal: Refusal) -> Response {
+    let status = StatusCode::from_u16(refusal.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let body = json!({"error": {
+        "message": refusal.message,
+        "type": refusal.kind,
+        "param": "None",
+        "code": status.as_u16().to_string(),
+    }});
+    let mut response = (status, Json(body)).into_response();
+    response.headers_mut().extend(refusal.headers);
+    response
 }
 
 fn error_type(status: StatusCode) -> &'static str {

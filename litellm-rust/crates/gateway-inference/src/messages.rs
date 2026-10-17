@@ -15,6 +15,8 @@ use litellm_inference_messages::{MessagesCall, messages_body, route::Messages};
 use litellm_llms_types::headers::{ProviderSpecificHeader, ProviderSpecificHeaders};
 use serde_json::{Map, Value};
 
+use litellm_gateway_hooks::Route;
+
 use crate::{Deployment, Error, Gateway, JsonBody, RequestId, request};
 
 /// Client headers Python forwards to Anthropic-speaking providers on every call.
@@ -37,7 +39,7 @@ pub async fn create(
         Ok(body) => handle(&gateway, &identity, &headers, body).await,
         Err(error) => Err(error),
     };
-    result.map_err(|error| (error.status(), Json(error.body(request_id.as_deref()))))
+    result.map_err(|error| error.messages_response(request_id.as_deref()))
 }
 
 async fn handle(
@@ -49,9 +51,27 @@ async fn handle(
     gateway.check_body(&object)?;
     let group = request::resolve_group(gateway, &object)?;
     let name = request::model_name(&object)?.to_owned();
-    let (body, cache_options) = crate::caching::prepare(identity, object)?;
+    let tracking = crate::hooks::admit(
+        gateway,
+        identity,
+        Route::Messages,
+        headers,
+        &raw,
+        &object,
+        &name,
+    )
+    .await?;
+    let (mut body, cache_options) = crate::caching::prepare(identity, object)?;
+    let edit = |body: &mut Map<String, Value>| {
+        if let Some(tracking) = &tracking {
+            tracking.edit_body(body);
+        }
+    };
+    edit(&mut body);
     let reparse = || -> Result<Map<String, Value>, Error> {
-        Ok(crate::caching::prepare(identity, request::object(&raw)?)?.0)
+        let mut body = crate::caching::prepare(identity, request::object(&raw)?)?.0;
+        edit(&mut body);
+        Ok(body)
     };
     let route = gateway.messages.clone();
     let route = match &gateway.cache {
@@ -77,6 +97,9 @@ async fn handle(
                 let route = route.clone();
                 let cache_headers = cache_headers.clone();
                 let name = name.as_str();
+                if let Some(tracking) = &tracking {
+                    tracking.attempt(name, &attempt);
+                }
                 async move {
                     crate::observe::record(name, attempt.deployment);
                     request::authorize(identity, name, attempt.deployment).await?;
@@ -91,8 +114,13 @@ async fn handle(
             Error::failure,
         )
         .await
-        .ok_or_else(|| Error::UnknownModel(name.clone()))??;
-    Ok(cache_headers.apply(request::hold(routed)))
+        .ok_or_else(|| Error::UnknownModel(name.clone()))
+        .and_then(|routed| routed)
+        .map(|routed| cache_headers.apply(request::hold(routed)));
+    match tracking {
+        Some(tracking) => tracking.finish(routed).await,
+        None => routed,
+    }
 }
 
 fn project(

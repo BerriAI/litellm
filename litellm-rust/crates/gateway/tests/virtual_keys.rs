@@ -53,6 +53,7 @@ fn on_team(team_id: &str) -> KeyStatus {
         },
         allowed_routes: AllowedRoutes::default(),
         team_id: Some(team_id.to_owned()),
+        profile: Default::default(),
     }
 }
 
@@ -77,6 +78,7 @@ fn keys() -> Arc<dyn KeyLookup> {
                 },
                 allowed_routes: AllowedRoutes::default(),
                 team_id: Some("team-1".into()),
+                profile: Default::default(),
             },
         ),
         (
@@ -86,6 +88,7 @@ fn keys() -> Arc<dyn KeyLookup> {
                 models: KeyModels::default(),
                 allowed_routes: AllowedRoutes::new(vec!["openai_routes".to_owned()]),
                 team_id: None,
+                profile: Default::default(),
             },
         ),
         (
@@ -95,6 +98,7 @@ fn keys() -> Arc<dyn KeyLookup> {
                 models: KeyModels::default(),
                 allowed_routes: AllowedRoutes::new(vec!["llm_api_routes".to_owned()]),
                 team_id: None,
+                profile: Default::default(),
             },
         ),
         // The key store passes a key whose stored spend is under its budget.

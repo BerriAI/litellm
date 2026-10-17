@@ -54,6 +54,8 @@ impl Default for Router {
 /// One call to make, on `deployment`. `last` is set when no retry can follow it.
 pub struct Attempt<'a> {
     pub deployment: &'a Deployment,
+    /// The deployment's id: `model_info.id`, or the one the router derives without it.
+    pub id: &'a str,
     pub last: bool,
 }
 
@@ -247,6 +249,7 @@ impl Router {
             let in_flight = InFlight::enter(&member.health);
             let attempt = Attempt {
                 deployment: &member.deployment,
+                id: &member.id,
                 last: tried.len() - skipped >= attempts || tried.len() >= group.len(),
             };
             let last = attempt.last;
