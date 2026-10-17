@@ -104,6 +104,7 @@ from litellm.proxy._experimental.mcp_server.exceptions import (
 from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
     ServerListFault,
     raise_classified_list_failure,
+    retry_upstream_rate_limit,
     upstream_auth_challenge,
     upstream_insufficient_scope,
 )
@@ -4531,7 +4532,11 @@ class MCPServerManager:
                 )
             else:
                 page: Final = (
-                    await client.list_tools_page(params)
+                    await retry_upstream_rate_limit(
+                        lambda: client.list_tools_page(params),
+                        server.name,
+                        deadline_seconds=MCP_TOOL_LISTING_TIMEOUT,
+                    )
                     if params is not None
                     else ListToolsResult(tools=await self._fetch_tools_with_timeout(client, server.name))
                 )
@@ -5600,7 +5605,11 @@ class MCPServerManager:
         """
         try:
             with anyio.fail_after(MCP_TOOL_LISTING_TIMEOUT):
-                tools: Final = await client.list_tools(raise_on_error=True)
+                tools: Final = await retry_upstream_rate_limit(
+                    lambda: client.list_tools(raise_on_error=True),
+                    server_name,
+                    deadline_seconds=MCP_TOOL_LISTING_TIMEOUT,
+                )
                 verbose_logger.debug("Tools from %s: %s", server_name, tools)
                 return tools
         except TimeoutError as e:
