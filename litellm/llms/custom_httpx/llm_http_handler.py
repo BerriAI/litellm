@@ -7126,7 +7126,7 @@ class BaseLLMHTTPHandler:
 
         except Exception as e:
             raise self._handle_error(
-                e=e,
+                e=video_generation_provider_config.classify_create_failure(e),
                 provider_config=video_generation_provider_config,
             )
 
@@ -7241,7 +7241,7 @@ class BaseLLMHTTPHandler:
 
         except Exception as e:
             raise self._handle_error(
-                e=e,
+                e=video_generation_provider_config.classify_create_failure(e),
                 provider_config=video_generation_provider_config,
             )
 

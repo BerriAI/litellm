@@ -363,17 +363,27 @@ class TestWaveSpeedVideoReferenceInputs:
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_async_video_create_is_not_replayed_after_a_connection_reset(monkeypatch):
-    """The create POST starts a paid prediction, so a reset after the request was sent must not re-send it."""
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        httpx.RemoteProtocolError("reset"),
+        httpx.ReadTimeout("read timed out"),
+        httpx.Response(503, text="unavailable"),
+    ],
+    ids=["reset", "read-timeout", "503"],
+)
+async def test_async_video_create_unknown_outcome_is_sent_once_and_non_retryable(monkeypatch, outcome):
+    """The create POST starts a paid prediction: never re-sent, and not retryable by the Router."""
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
     from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    submit = respx.post(f"{API_BASE}/api/v3/{MODEL}").mock(
-        side_effect=[httpx.RemoteProtocolError("reset"), httpx.Response(200, json=prediction("created"))]
+    route = respx.post(f"{API_BASE}/api/v3/{MODEL}")
+    submit = (
+        route.mock(return_value=outcome) if isinstance(outcome, httpx.Response) else route.mock(side_effect=outcome)
     )
 
-    with pytest.raises(Exception, match="reset"):
+    with pytest.raises(WaveSpeedError, match="may already exist") as exc_info:
         await BaseLLMHTTPHandler().async_video_generation_handler(
             model=MODEL,
             prompt="a red panda",
@@ -387,3 +397,32 @@ async def test_async_video_create_is_not_replayed_after_a_connection_reset(monke
         )
 
     assert submit.call_count == 1
+    assert not litellm._should_retry(exc_info.value.status_code)
+
+
+@respx.mock
+def test_sync_video_create_5xx_is_non_retryable_and_4xx_is_unchanged():
+    from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+
+    def create():
+        return BaseLLMHTTPHandler().video_generation_handler(
+            model=MODEL,
+            prompt="a red panda",
+            video_generation_provider_config=WaveSpeedVideoConfig(),
+            video_generation_optional_request_params={},
+            custom_llm_provider="wavespeed",
+            litellm_params=GenericLiteLLMParams(api_key="sk-test"),
+            logging_obj=Mock(),
+            timeout=5.0,
+            _is_async=False,
+        )
+
+    respx.post(f"{API_BASE}/api/v3/{MODEL}").mock(return_value=httpx.Response(502, text="bad gateway"))
+    with pytest.raises(WaveSpeedError, match="may already exist") as exc_info:
+        create()
+    assert not litellm._should_retry(exc_info.value.status_code)
+
+    respx.post(f"{API_BASE}/api/v3/{MODEL}").mock(return_value=httpx.Response(429, text="slow down"))
+    with pytest.raises(WaveSpeedError) as exc_info:
+        create()
+    assert exc_info.value.status_code == 429

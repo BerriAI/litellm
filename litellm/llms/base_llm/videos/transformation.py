@@ -99,6 +99,14 @@ class BaseVideoConfig(ABC):
         """
         return True
 
+    def classify_create_failure(self, error: Exception) -> Exception:
+        """
+        Hook to re-classify a failed create POST before it is mapped to a provider error.
+        Providers whose create call starts a billable task use it to mark an unknown outcome
+        non-retryable. The default leaves the error untouched.
+        """
+        return error
+
     def use_multipart_form_data(self) -> bool:
         """
         Whether video create requests without files must still be sent as

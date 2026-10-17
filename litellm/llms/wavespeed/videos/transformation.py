@@ -45,6 +45,7 @@ from ..common_utils import (
     build_headers,
     build_result_url,
     build_submit_url,
+    classify_submit_failure,
     get_api_base,
     get_outputs,
     map_status_to_openai,
@@ -123,6 +124,9 @@ class WaveSpeedVideoConfig(BaseVideoConfig):
     def replay_create_on_connection_reset(self) -> bool:
         # Every create call starts a billable prediction, so it is never re-sent after a reset.
         return False
+
+    def classify_create_failure(self, error: Exception) -> Exception:
+        return classify_submit_failure(error) or error
 
     def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: base contract returns bare `list`
         return ["model", "prompt", "input_reference", "seconds", "size", "user", "extra_headers"]  # mutable-ok: ditto

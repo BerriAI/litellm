@@ -21,6 +21,7 @@ from typing import Final, Literal, TypedDict
 import httpx
 from typing_extensions import ReadOnly
 
+import litellm
 from litellm._version import version as litellm_version
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -70,6 +71,39 @@ class WaveSpeedPrediction(TypedDict, total=False):
     error: ReadOnly[str]
     created_at: ReadOnly[str]
     has_nsfw_contents: ReadOnly[Sequence[bool]]
+
+
+def classify_submit_failure(error: BaseException) -> "WaveSpeedError | None":
+    """Return a non-retryable error when a failed submit may nonetheless have created a paid task.
+
+    Ambiguous outcomes: the connection dropped or timed out after the request was written, or the
+    server answered 5xx. Definite rejections (4xx, including 429) and failures to connect return
+    ``None`` so they keep their status and retry semantics.
+    """
+    if isinstance(error, litellm.Timeout):
+        cause: Final = error.__cause__ or error.__context__
+        ambiguous = not isinstance(cause, (httpx.ConnectTimeout, httpx.PoolTimeout))
+    elif isinstance(error, (httpx.RemoteProtocolError, httpx.ReadError, httpx.WriteError)):
+        ambiguous = True
+    elif isinstance(error, httpx.HTTPStatusError):
+        ambiguous = error.response.status_code >= 500
+    else:
+        status_code: Final = getattr(error, "status_code", None)
+        ambiguous = isinstance(status_code, int) and status_code >= 500
+    if not ambiguous:
+        return None
+    message: Final = (
+        "WaveSpeed task submit failed with an unknown outcome, so the task may already exist and was not "
+        f"re-sent. Do not retry blindly; check your WaveSpeed task list first. Cause: {error}"
+    )
+    # The response body carries the message too: shared handlers rebuild errors from `response.text`.
+    return WaveSpeedError(
+        status_code=POST_SUBMIT_ERROR_STATUS_CODE,
+        message=message,
+        response=httpx.Response(
+            POST_SUBMIT_ERROR_STATUS_CODE, text=message, request=httpx.Request("POST", "https://api.wavespeed.ai")
+        ),
+    )
 
 
 def to_request_payload(

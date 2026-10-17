@@ -507,12 +507,8 @@ async def test_router_retries_never_resubmit_after_the_task_was_accepted():
     assert submit.call_count == 1
 
 
-@pytest.mark.asyncio
-@respx.mock
-async def test_router_still_retries_a_submit_the_server_rejected():
-    """Errors before the task was accepted keep their retryable status."""
-    submit = respx.post(SUBMIT_URL).mock(return_value=httpx.Response(503, text="unavailable"))
-    router = litellm.Router(
+def _router():
+    return litellm.Router(
         model_list=[
             {
                 "model_name": "ws-image",
@@ -522,7 +518,79 @@ async def test_router_still_retries_a_submit_the_server_rejected():
         num_retries=2,
     )
 
-    with pytest.raises(Exception, match="unavailable"):
-        await router.aimage_generation(model="ws-image", prompt="a red panda")
 
-    assert submit.call_count == 3
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        httpx.Response(503, text="unavailable"),
+        httpx.Response(500, text="boom"),
+        httpx.ReadTimeout("read timed out"),
+        httpx.ReadError("connection lost"),
+        httpx.RemoteProtocolError("server disconnected"),
+    ],
+    ids=["503", "500", "read-timeout", "read-error", "reset"],
+)
+async def test_router_sends_one_submit_when_the_outcome_is_unknown(outcome):
+    """5xx / read timeout / reset after send: the task may exist, so Router retries must not re-POST."""
+    if isinstance(outcome, httpx.Response):
+        submit = respx.post(SUBMIT_URL).mock(return_value=outcome)
+    else:
+        submit = respx.post(SUBMIT_URL).mock(side_effect=outcome)
+
+    with pytest.raises(Exception, match="may already exist"):
+        await _router().aimage_generation(model="ws-image", prompt="a red panda")
+
+    assert submit.call_count == 1
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_sync_submit_5xx_is_non_retryable(generate):
+    respx.post(SUBMIT_URL).mock(return_value=httpx.Response(502, text="bad gateway"))
+
+    with pytest.raises(WaveSpeedError) as exc_info:
+        generate()
+
+    assert exc_info.value.status_code == POST_SUBMIT_ERROR_STATUS_CODE
+    assert "may already exist" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize(
+    ("status", "expected_posts"),
+    [(429, 3), (400, 1), (401, 1), (422, 1)],
+)
+async def test_definite_submit_rejections_keep_their_retry_semantics(status, expected_posts):
+    """A 4xx is a definite rejection: 429 is retried by the Router as before, the rest are not."""
+    submit = respx.post(SUBMIT_URL).mock(return_value=httpx.Response(status, text="rejected"))
+
+    with pytest.raises(Exception, match="rejected") as exc_info:
+        await _router().aimage_generation(model="ws-image", prompt="a red panda")
+
+    assert submit.call_count == expected_posts
+    assert getattr(exc_info.value, "status_code", None) == status
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_connection_never_established_stays_retryable():
+    submit = respx.post(SUBMIT_URL).mock(side_effect=httpx.ConnectError("refused"))
+
+    with pytest.raises(Exception, match="refused"):
+        await _router().aimage_generation(model="ws-image", prompt="a red panda")
+
+    assert submit.call_count > 1
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_connect_timeout_stays_retryable():
+    submit = respx.post(SUBMIT_URL).mock(side_effect=httpx.ConnectTimeout("connect timed out"))
+
+    with pytest.raises(Exception, match="timed out"):
+        await _router().aimage_generation(model="ws-image", prompt="a red panda")
+
+    assert submit.call_count > 1

@@ -39,6 +39,7 @@ from ..common_utils import (
     TRANSIENT_POLL_STATUS_CODES,
     WaveSpeedError,
     build_result_url,
+    classify_submit_failure,
     get_prediction_id,
     poll_outcome,
     to_request_payload,
@@ -94,15 +95,15 @@ class WaveSpeedImageGeneration:
         prepared: Final = self._prepare(model, prompt, resolved, optional_params, extra_headers, logging_obj)
 
         try:
-            submit_response: Final = sync_client.post(
+            submit_response = sync_client.post(
                 url=prepared.submit_url,
                 headers=to_request_payload(prepared.headers),
                 json=to_request_payload(prepared.body),
                 timeout=timeout,
             )
-        except httpx.RemoteProtocolError as e:
-            raise _submit_outcome_unknown_error(e) from e
-        prediction_id: Final = get_prediction_id(unwrap_envelope(submit_response))
+            prediction_id = get_prediction_id(unwrap_envelope(submit_response))
+        except Exception as e:  # noqa: BLE001  # re-raised unchanged unless the submit outcome is unknown
+            raise classify_submit_failure(e) or e
         result_url: Final = build_result_url(resolved.api_base, prediction_id)
         deadline: Final = time.time() + DEFAULT_MAX_POLLING_TIME
         poll_headers: Final = to_request_payload(prepared.headers)
@@ -152,16 +153,16 @@ class WaveSpeedImageGeneration:
         prepared: Final = self._prepare(model, prompt, resolved, optional_params, extra_headers, logging_obj)
 
         try:
-            submit_response: Final = await async_client.post(
+            submit_response = await async_client.post(
                 url=prepared.submit_url,
                 headers=to_request_payload(prepared.headers),
                 json=to_request_payload(prepared.body),
                 timeout=timeout,
                 replay_on_remote_protocol_error=False,
             )
-        except httpx.RemoteProtocolError as e:
-            raise _submit_outcome_unknown_error(e) from e
-        prediction_id: Final = get_prediction_id(unwrap_envelope(submit_response))
+            prediction_id = get_prediction_id(unwrap_envelope(submit_response))
+        except Exception as e:  # noqa: BLE001  # re-raised unchanged unless the submit outcome is unknown
+            raise classify_submit_failure(e) or e
         result_url: Final = build_result_url(resolved.api_base, prediction_id)
         deadline: Final = time.time() + DEFAULT_MAX_POLLING_TIME
         poll_headers: Final = to_request_payload(prepared.headers)
@@ -286,16 +287,6 @@ def _poll_outcome(prediction_id: str, poll_response: httpx.Response) -> Literal[
             headers=e.headers,
         ) from e
     return poll_outcome(prediction)
-
-
-def _submit_outcome_unknown_error(error: Exception) -> WaveSpeedError:
-    return WaveSpeedError(
-        status_code=POST_SUBMIT_ERROR_STATUS_CODE,
-        message=(
-            "WaveSpeed submit connection was reset after the request was sent, so the task may have been "
-            f"created. It was not re-sent to avoid a duplicate paid task: {error}"
-        ),
-    )
 
 
 def _record_poll_failure(consecutive_failures: int, prediction_id: str, error: Exception | str) -> int:
