@@ -17,8 +17,8 @@ from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 
 
-@with_config(ConfigDict(strict=True, hide_input_in_errors=True))
-class _VertexCountTokensRequest(TypedDict, total=False, extra_items=object):
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _VertexCountTokensRequest(TypedDict, total=False):
     model: ReadOnly[NotRequired[str]]
     messages: ReadOnly[NotRequired[object]]
 
