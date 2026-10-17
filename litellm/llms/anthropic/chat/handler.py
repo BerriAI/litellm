@@ -332,6 +332,7 @@ class AnthropicChatCompletion(BaseLLM):
         model: str,
         messages: list,
         api_base: str,
+        custom_llm_provider: str,
         custom_prompt_dict: dict,
         model_response: ModelResponse,
         print_verbose: Callable,
@@ -374,7 +375,7 @@ class AnthropicChatCompletion(BaseLLM):
         streamwrapper: Final = CustomStreamWrapper(
             completion_stream=completion_stream,
             model=model,
-            custom_llm_provider="anthropic",
+            custom_llm_provider=custom_llm_provider,
             logging_obj=logging_obj,
             _response_headers=process_anthropic_headers(headers),
         )
@@ -542,6 +543,7 @@ class AnthropicChatCompletion(BaseLLM):
                     messages=messages,
                     data=data,
                     api_base=api_base,
+                    custom_llm_provider=custom_llm_provider,
                     custom_prompt_dict=custom_prompt_dict,
                     model_response=model_response,
                     print_verbose=print_verbose,
@@ -621,7 +623,7 @@ class AnthropicChatCompletion(BaseLLM):
                 return CustomStreamWrapper(
                     completion_stream=completion_stream,
                     model=model,
-                    custom_llm_provider="anthropic",
+                    custom_llm_provider=custom_llm_provider,
                     logging_obj=logging_obj,
                     _response_headers=process_anthropic_headers(headers),
                 )
