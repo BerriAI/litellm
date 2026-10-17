@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from contextlib import contextmanager
 from dataclasses import dataclass
+from itertools import chain
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
@@ -2859,6 +2860,15 @@ def test_a_fully_read_stream_is_scanned_exactly_once(
         assert len(rig.scans.response_scans(rig.secret())) == 1, rig.scans.seen
 
 
+def _pre_call_progress_config(tmp_path: Path, identity: str, policy_url: str, *, store_prompts: bool) -> Path:
+    path: Final = _post_call_config(tmp_path, identity, policy_url, {**_END_OF_STREAM_ONLY, "mode": "pre_call"}, True)
+    if store_prompts:
+        config: Final = yaml.safe_load(path.read_text())
+        settings: Final = {**config["general_settings"], "store_prompts_in_spend_logs": True}
+        path.write_text(yaml.safe_dump({**config, "general_settings": settings}))
+    return path
+
+
 def _openai_chat_chunks(candidate: Gateway, model: str, prompt: str) -> tuple[ChatCompletionChunk, ...]:
     with OpenAI(
         base_url=str(candidate.client.base_url) + "/v1", api_key=candidate.key, max_retries=0, timeout=30
@@ -2935,11 +2945,7 @@ def test_progress_chunk_without_choice_index_streams_and_logs_served_answer(
         return Reply(content_type="text/event-stream", chunks=frames)
 
     with wire_server(_allowing_guardrail) as policy, wire_server(provider) as upstream:
-        path: Final = _post_call_config(tmp_path, identity, policy.url, _END_OF_STREAM_ONLY, True)
-        config: Final = yaml.safe_load(path.read_text())
-        config["guardrails"][0]["litellm_params"]["mode"] = "pre_call"
-        config["general_settings"]["store_prompts_in_spend_logs"] = True
-        path.write_text(yaml.safe_dump(config))
+        path: Final = _pre_call_progress_config(tmp_path, identity, policy.url, store_prompts=True)
         with (
             owned_proxy_process(gateway, tmp_path, {}, config=path, workers=2) as owned,
             owned.gateway.scenario() as scenario,
@@ -2948,7 +2954,7 @@ def test_progress_chunk_without_choice_index_streams_and_logs_served_answer(
             model: Final = scenario.model(model_info={"id": identity}, api_base=upstream.url + "/v1")
             eventually(lambda: owned.serves_only_on_every_worker(model, identity), bool, seconds=70)
             chunks: Final = read_stream(candidate, model, identity)
-            choices: Final = tuple(choice for chunk in chunks for choice in chunk.choices)
+            choices: Final = tuple(chain.from_iterable(chunk.choices for chunk in chunks))
             actual: Final = "".join(choice.delta.content or "" for choice in choices)
             assert actual == expected, chunks
             assert tuple(choice.index for choice in choices if choice.finish_reason == "stop") == (0,), chunks
@@ -3010,10 +3016,7 @@ def test_progress_chunk_without_choice_index_preserves_upstream_stream_error(
         return Reply(content_type="text/event-stream", chunks=frames)
 
     with wire_server(_allowing_guardrail) as policy, wire_server(provider) as upstream:
-        path: Final = _post_call_config(tmp_path, identity, policy.url, _END_OF_STREAM_ONLY, True)
-        config: Final = yaml.safe_load(path.read_text())
-        config["guardrails"][0]["litellm_params"]["mode"] = "pre_call"
-        path.write_text(yaml.safe_dump(config))
+        path: Final = _pre_call_progress_config(tmp_path, identity, policy.url, store_prompts=False)
         with (
             owned_proxy_process(gateway, tmp_path, {}, config=path, workers=2) as owned,
             owned.gateway.scenario() as scenario,
@@ -3077,11 +3080,7 @@ def test_disconnect_after_progress_without_choice_index_logs_only_the_received_p
         return Reply(content_type="text/event-stream", chunks=frames, gate_after_first=gate)
 
     with wire_server(_allowing_guardrail) as policy, wire_server(provider) as upstream:
-        path: Final = _post_call_config(tmp_path, identity, policy.url, _END_OF_STREAM_ONLY, True)
-        config: Final = yaml.safe_load(path.read_text())
-        config["guardrails"][0]["litellm_params"]["mode"] = "pre_call"
-        config["general_settings"]["store_prompts_in_spend_logs"] = True
-        path.write_text(yaml.safe_dump(config))
+        path: Final = _pre_call_progress_config(tmp_path, identity, policy.url, store_prompts=True)
         with (
             owned_proxy_process(gateway, tmp_path, {}, config=path, workers=2) as owned,
             owned.gateway.scenario() as scenario,
