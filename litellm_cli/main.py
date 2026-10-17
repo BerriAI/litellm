@@ -6,7 +6,8 @@ import the CLI against an uninitialized `litellm` package object instead. CLI co
 `litellm.proxy.client`, and whatever it imports, loads without the SDK whenever it is
 first imported. The first attribute read on the SDK, or the first import of any other
 new code under `litellm`, initializes the SDK in place before that code runs, so code
-that needs the SDK sees it exactly as a plain `import litellm` would leave it.
+that needs the SDK sees it exactly as a plain `import litellm` would leave it. An init that
+raises leaves the SDK uninitialized, so the next use runs it again and raises the same error.
 """
 
 import builtins
@@ -67,9 +68,11 @@ def _initialize(sdk: types.ModuleType) -> None:
         _become(sdk, _SDKInitializing)
         try:
             spec.loader.exec_module(sdk)
-        finally:
-            _become(sdk, types.ModuleType)
-            _restore_interpreter_imports()
+        except BaseException:
+            _become(sdk, _SDKUntilFirstUse)
+            raise
+        _become(sdk, types.ModuleType)
+        _restore_interpreter_imports()
 
 
 def _in_package(target: str, package: str) -> bool:

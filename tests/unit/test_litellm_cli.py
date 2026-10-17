@@ -156,6 +156,34 @@ litellm_proxy_cli = cli
 """,
 }
 
+_SDK_WHOSE_INIT_FAILS: Final = {
+    "litellm/__init__.py": 'raise ImportError("a dependency of the SDK is broken")\n',
+    "litellm/utils.py": "",
+    "litellm/_process_defaults.py": "def apply_process_defaults() -> None: ...\n",
+    "litellm/proxy/__init__.py": "",
+    "litellm/proxy/client/__init__.py": "",
+    "litellm/proxy/client/cli/__init__.py": "",
+    "litellm/proxy/client/cli/main.py": """
+import json
+import litellm
+
+def error_from(use):
+    try:
+        use()
+    except Exception as error:
+        return f"{type(error).__name__}: {error}"
+    return None
+
+def import_sdk_code():
+    import litellm.utils
+
+def cli():
+    print(json.dumps([error_from(lambda: litellm.completion), error_from(lambda: litellm.completion), error_from(import_sdk_code)]))
+
+litellm_proxy_cli = cli
+""",
+}
+
 _RUN_LITE_AGAINST_SDK_AT: Final = """
 import sys
 sys.path.insert(0, sys.argv[1])
@@ -281,13 +309,23 @@ def test_threads_that_use_the_sdk_at_once_all_wait_for_one_initialization(tmp_pa
     assert used == {"seen": [True, True, True, True]}
 
 
+def _write_sdk(root: Path, files: Mapping[str, str]) -> Path:
+    for relative_path, source in files.items():
+        (root / relative_path).parent.mkdir(parents=True, exist_ok=True)
+        (root / relative_path).write_text(source)
+    return root
+
+
 def test_importing_sdk_code_while_another_thread_initializes_the_sdk_does_not_hang(tmp_path: Path):
-    sdk_root: Final = tmp_path / "sdk"
-    for relative_path, source in _SDK_WHOSE_SUBMODULE_READS_IT_WHILE_LOADING.items():
-        (sdk_root / relative_path).parent.mkdir(parents=True, exist_ok=True)
-        (sdk_root / relative_path).write_text(source)
+    sdk_root: Final = _write_sdk(tmp_path / "sdk", _SDK_WHOSE_SUBMODULE_READS_IT_WHILE_LOADING)
 
     assert _run(_RUN_LITE_AGAINST_SDK_AT, (str(sdk_root),), tmp_path) == {"finished": [True, True]}
+
+
+def test_every_use_after_a_failed_sdk_init_raises_the_init_error(tmp_path: Path):
+    sdk_root: Final = _write_sdk(tmp_path / "sdk", _SDK_WHOSE_INIT_FAILS)
+
+    assert _run(_RUN_LITE_AGAINST_SDK_AT, (str(sdk_root),), tmp_path) == ["ImportError: a dependency of the SDK is broken"] * 3
 
 
 def test_lite_keeps_an_sdk_that_was_already_imported(
