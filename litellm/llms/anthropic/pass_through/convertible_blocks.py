@@ -16,7 +16,7 @@ _CONVERTIBLE_BLOCK_TYPES: Final = MappingProxyType(
     }
 )
 _SOURCED_BLOCK_TYPES: Final = frozenset({"image", "document"})
-_TOOL_RESULT_BLOCK_TYPES: Final = frozenset({"text", "image", "document"})
+_TOOL_RESULT_BLOCK_TYPES: Final = frozenset({"text", "image", "document", "search_result"})
 
 
 _JSON_MESSAGES: Final = TypeAdapter(tuple[Mapping[str, JsonValue], ...])

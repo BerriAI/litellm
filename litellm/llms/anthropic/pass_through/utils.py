@@ -224,3 +224,41 @@ def normalize_reasoning_effort_value(
 
     accepted_tiers: Final = tuple(level for level in supported if level != _THINKING_OFF)
     return next((level for level in (*chain, *accepted_tiers) if level in supported), chain[-1])
+
+
+_OBJECT_ITEMS: Final = TypeAdapter(tuple[object, ...])
+
+
+def object_items(value: object) -> tuple[object, ...]:
+    return _OBJECT_ITEMS.validate_python(value) if isinstance(value, list) else ()
+
+
+_OBJECT_FIELDS: Final = TypeAdapter(dict[object, object])
+
+
+def _object_fields(value: object) -> Mapping[object, object]:
+    return _OBJECT_FIELDS.validate_python(value) if isinstance(value, dict) else MappingProxyType({})
+
+
+def search_result_inner_texts(block: object) -> tuple[tuple[int, str], ...]:
+    """Each non-empty text a search_result block carries, with its index in the block's content."""
+    fields: Final = _object_fields(block)
+    if fields.get("type") != "search_result":
+        return ()
+    return tuple(
+        (index, text)
+        for index, item in enumerate(object_items(fields.get("content")))
+        if isinstance(text := _object_fields(item).get("text"), str) and text
+    )
+
+
+def search_result_text(block: Mapping[str, object]) -> str:
+    """A search_result block as plain text: its title and source lines, then its text blocks."""
+    title: Final = block.get("title")
+    source: Final = block.get("source")
+    lines: Final = (
+        *((f"Title: {title}",) if isinstance(title, str) and title else ()),
+        *((f"Source: {source}",) if isinstance(source, str) and source else ()),
+        *(text for _, text in search_result_inner_texts(block)),
+    )
+    return "\n".join(lines)

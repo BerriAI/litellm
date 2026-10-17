@@ -13,6 +13,7 @@ from litellm.llms.anthropic.pass_through.utils import (
     is_reasoning_auto_summary_enabled,
     json_copy_or_original,
     prompt_cache_key_from_user_id,
+    search_result_text,
 )
 
 # OpenAI has a 64-character limit for function/tool names
@@ -1350,33 +1351,8 @@ class LiteLLMAnthropicMessagesAdapter:
         return ChatCompletionImageObject(type="image_url", image_url=ChatCompletionImageUrlObject(url=openai_image_url))
 
     @staticmethod
-    def _search_result_inner_text(item: object) -> str | None:
-        if not isinstance(item, Mapping):
-            return None
-        text: Final = cast(Mapping[str, object], item).get("text")  # cast-ok: untrusted client payload
-        return text if isinstance(text, str) and text else None
-
-    def _tool_result_search_result_part(self, block: Mapping[str, object]) -> ChatCompletionTextObject | None:
-        raw_content: Final = block.get("content")
-        inner_blocks: Final[Sequence[object]] = (
-            cast(Sequence[object], raw_content)  # cast-ok: untrusted client payload
-            if isinstance(raw_content, list)
-            else ()
-        )
-        inner_texts: Final = tuple(
-            text for text in (self._search_result_inner_text(item) for item in inner_blocks) if text is not None
-        )
-        title: Final = block.get("title")
-        source: Final = block.get("source")
-        header: Final = tuple(
-            line
-            for line in (
-                f"Title: {title}" if isinstance(title, str) and title else None,
-                f"Source: {source}" if isinstance(source, str) and source else None,
-            )
-            if line is not None
-        )
-        rendered: Final = "\n".join((*header, *inner_texts))
+    def _tool_result_search_result_part(block: Mapping[str, object]) -> ChatCompletionTextObject | None:
+        rendered: Final = search_result_text(block)
         return ChatCompletionTextObject(type="text", text=rendered) if rendered else None
 
     def _translate_openai_content_to_anthropic(
