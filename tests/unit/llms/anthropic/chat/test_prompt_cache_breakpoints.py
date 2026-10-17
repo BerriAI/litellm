@@ -361,7 +361,10 @@ def test_drop_params_drops_a_breakpoint_read_before_a_later_system_message_first
     result: Final = _resolved(messages, drop_params=True)
 
     assert list(result.messages) == [
-        {"role": "user", "content": [_part("0"), *(_part(str(index), cache_control=_EPHEMERAL) for index in (1, 2, 3))]},
+        {
+            "role": "user",
+            "content": [_part("0"), *(_part(str(index), cache_control=_EPHEMERAL) for index in (1, 2, 3))],
+        },
         {"role": "system", "content": [_part("reminder", cache_control=_EPHEMERAL)]},
     ]
 
@@ -1094,6 +1097,81 @@ def test_a_tool_config_cache_point_settles_after_the_tools_under_drop_params(
     assert list(result.tools or ()) == [{**tool, **sent_tool}]
     assert list(result.messages) == [
         {"role": "user", "content": [_part("ask") if sent_ask is None else _part("ask", cache_control=sent_ask)]}
+    ]
+
+
+@pytest.mark.parametrize(
+    ("tool_fields", "tool_config", "first_ask_marker", "sent_tool_fields", "sent_system", "sent_first_ask"),
+    [
+        pytest.param(
+            {"cache_control": _EPHEMERAL},
+            ChatCompletionCachedContent(type="ephemeral", ttl="5m"),
+            _EXPLICIT,
+            {"cache_control": _EPHEMERAL},
+            None,
+            _EPHEMERAL,
+            id="sent-after-a-tool-mark-without-a-ttl",
+        ),
+        pytest.param(
+            {"cache_control": _ONE_HOUR},
+            ChatCompletionCachedContent(type="ephemeral"),
+            _EXPLICIT,
+            {"cache_control": _ONE_HOUR},
+            None,
+            _EPHEMERAL,
+            id="sent-without-a-ttl-after-a-tool-mark-with-one",
+        ),
+        pytest.param(
+            {"prompt_cache_breakpoint": {"mode": "explicit", "ttl": "1h"}},
+            ChatCompletionCachedContent(type="ephemeral", ttl="5m"),
+            _EXPLICIT,
+            {},
+            _EPHEMERAL,
+            _EPHEMERAL,
+            id="sent-after-a-dropped-tool-mark",
+        ),
+        pytest.param(
+            {"cache_control": _ONE_HOUR},
+            ChatCompletionCachedContent(type="ephemeral"),
+            {"mode": "explicit", "ttl": "1h"},
+            {"cache_control": _ONE_HOUR},
+            _ONE_HOUR,
+            _ONE_HOUR,
+            id="left-out-once-it-settles-to-an-hour-after-a-tool-mark-with-one",
+        ),
+    ],
+)
+def test_a_tool_config_cache_point_takes_one_of_claudes_four_only_when_converse_sends_it(
+    tool_fields: dict[str, object],
+    tool_config: ChatCompletionCachedContent,
+    first_ask_marker: dict[str, object],
+    sent_tool_fields: dict[str, object],
+    sent_system: dict[str, object] | None,
+    sent_first_ask: dict[str, object],
+):
+    tool: Final = {"type": "function", "function": {"name": "t"}}
+
+    result: Final = _resolved(
+        [
+            {"role": "system", "content": [_part("s", prompt_cache_breakpoint=_EXPLICIT)]},
+            {
+                "role": "user",
+                "content": [
+                    _part("0", prompt_cache_breakpoint=first_ask_marker),
+                    _part("1", prompt_cache_breakpoint=_EXPLICIT),
+                ],
+            },
+        ],
+        [{**tool, **tool_fields}],
+        drop_params=True,
+        tool_config_cache_control=tool_config,
+        route="converse",
+    )
+
+    assert list(result.tools or ()) == [{**tool, **sent_tool_fields}]
+    assert list(result.messages) == [
+        {"role": "system", "content": [_part("s") if sent_system is None else _part("s", cache_control=sent_system)]},
+        {"role": "user", "content": [_part("0", cache_control=sent_first_ask), _part("1", cache_control=_EPHEMERAL)]},
     ]
 
 

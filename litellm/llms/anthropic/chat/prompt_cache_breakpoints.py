@@ -64,6 +64,12 @@ class _Placed:
 
 
 @dataclass(frozen=True, slots=True)
+class _Plan:
+    dropped: frozenset[_Path]
+    replacements: Mapping[_Path, ChatCompletionCachedContent]
+
+
+@dataclass(frozen=True, slots=True)
 class _Hoisted:
     value: object
     replaced: tuple[object, ...]
@@ -634,6 +640,87 @@ def _droppable(mark: _Placed) -> bool:
     return mark.kind != "written" and mark.path != _TOOL_CONFIG
 
 
+def _planned(marks: Sequence[_Placed], drop_params: bool) -> _Plan:
+    excess: Final = len(marks) - MAX_CACHE_CONTROL_BLOCKS
+    dropped: Final[frozenset[_Path]] = (
+        frozenset(tuple(mark.path for mark in marks if _droppable(mark))[:excess])
+        if excess > 0 and drop_params
+        else frozenset()
+    )
+    kept: Final = tuple(mark for mark in marks if mark.path not in dropped)
+    return _Plan(
+        dropped,
+        MappingProxyType(
+            {
+                settled.path: (
+                    ChatCompletionCachedContent(type="ephemeral", ttl="1h")
+                    if settled.ttl == "1h"
+                    else ChatCompletionCachedContent(type="ephemeral")
+                )
+                for mark, settled in zip(kept, _settled(kept, drop_params))
+                if settled.ttl != mark.ttl
+            }
+        ),
+    )
+
+
+def _last_listed_tool(tools: Sequence[object], late_tools: frozenset[int]) -> _Path | None:
+    listed: Final = tuple(
+        index
+        for index, tool in enumerate(tools)
+        if index not in late_tools and (_fields(tool) or {}).get("type") not in ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
+    )
+    return ("tools", listed[-1]) if listed else None
+
+
+def _sets_a_ttl(cache_control: object) -> bool:
+    return (_fields(cache_control) or {}).get("ttl") is not None
+
+
+def _planned_cache_control(plan: _Plan, path: _Path, cache_control: object) -> object:
+    return None if path in plan.dropped else plan.replacements.get(path, cache_control)
+
+
+def _route_plan(
+    marks: Sequence[_Placed],
+    tools: Sequence[object],
+    last_tool: _Path | None,
+    tool_config_cache_control: ChatCompletionCachedContent | None,
+    drop_params: bool,
+) -> _Plan:
+    """Converse leaves out a ``tool_config`` cachePoint with a ttl that would follow the last tool's mark with a ttl,
+    so that request is planned again without it, keeping the last tool's mark as first planned."""
+    plan: Final = _planned(marks, drop_params)
+    if last_tool is None:
+        return plan
+    last_tool_mark: Final = _planned_cache_control(
+        plan, last_tool, (_fields(tools[int(last_tool[1])]) or {}).get("cache_control")
+    )
+    if not (
+        _sets_a_ttl(last_tool_mark)
+        and _sets_a_ttl(_planned_cache_control(plan, _TOOL_CONFIG, tool_config_cache_control))
+    ):
+        return plan
+    replanned: Final = _planned(
+        tuple(
+            replace(mark, ttl=_ttl(last_tool_mark), kind="written") if mark.path == last_tool else mark
+            for mark in marks
+            if mark.path != _TOOL_CONFIG
+        ),
+        drop_params,
+    )
+    last_tool_replacement: Final = plan.replacements.get(last_tool)
+    return _Plan(
+        replanned.dropped,
+        MappingProxyType(
+            {
+                **replanned.replacements,
+                **({} if last_tool_replacement is None else {last_tool: last_tool_replacement}),
+            }
+        ),
+    )
+
+
 def carries_prompt_cache_breakpoint(messages: Sequence[object], tools: Sequence[object] | None) -> bool:
     return any(map(_message_carries_breakpoint, messages)) or any(map(_tool_carries_breakpoint, tools or ()))
 
@@ -652,11 +739,12 @@ def claude_prompt_cache(
     """``prompt_cache_breakpoint`` marks renamed to ``cache_control``. A mark Claude cannot honor is reported unless
     ``drop_params``, which keeps what Claude can use and, when the request ends up with more than Claude's four
     breakpoints, drops the earliest translated ones. A request-level ``cache_control`` in ``params`` and the
-    ``tool_config_cache_control`` cachePoint a route appends after the tools each take one of the four, and marks on
-    tool history a ``tool_history_as_text`` route flattens, marks on a tool the ``route`` sends without one or under
-    a tool's ``function`` on Converse, and marks on a tool_search call nobody answered, unless the route
-    ``pairs_unanswered_tool_calls`` with a placeholder result, take none. A ``cache_control`` on a ``namespace`` tool's
-    member takes one off Converse and is never changed. A request carrying no breakpoint is returned as written."""
+    ``tool_config_cache_control`` cachePoint a route appends after the tools each take one of the four, unless Converse
+    leaves that cachePoint out, and marks on tool history a ``tool_history_as_text`` route flattens, marks on a tool the
+    ``route`` sends without one or under a tool's ``function`` on Converse, and marks on a tool_search call nobody
+    answered, unless the route ``pairs_unanswered_tool_calls`` with a placeholder result, take none. A ``cache_control``
+    on a ``namespace`` tool's member takes one off Converse and is never changed. A request carrying no breakpoint is
+    returned as written."""
     if not carries_prompt_cache_breakpoint(messages, tools):
         return ClaudePromptCache(tuple(messages), None if tools is None else tuple(tools))
     listed_tools: Final = tools or ()
@@ -712,28 +800,17 @@ def claude_prompt_cache(
         ),
         key=lambda mark: mark.first_read,
     )
-    excess: Final = len(marks) - MAX_CACHE_CONTROL_BLOCKS
-    dropped: Final[frozenset[_Path]] = (
-        frozenset(tuple(mark.path for mark in marks if _droppable(mark))[:excess])
-        if excess > 0 and drop_params
-        else frozenset()
+    plan: Final = _route_plan(
+        marks,
+        renamed_tools,
+        _last_listed_tool(renamed_tools, late_tools),
+        tool_config_cache_control,
+        drop_params,
     )
-    if dropped:
-        verbose_logger.debug("Claude: dropping the earliest %d prompt_cache_breakpoint marks", len(dropped))
-    kept: Final = tuple(mark for mark in marks if mark.path not in dropped)
-    replacements: Final = MappingProxyType(
-        {
-            settled.path: (
-                ChatCompletionCachedContent(type="ephemeral", ttl="1h")
-                if settled.ttl == "1h"
-                else ChatCompletionCachedContent(type="ephemeral")
-            )
-            for mark, settled in zip(kept, _settled(kept, drop_params))
-            if settled.ttl != mark.ttl
-        }
-    )
+    if plan.dropped:
+        verbose_logger.debug("Claude: dropping the earliest %d prompt_cache_breakpoint marks", len(plan.dropped))
     final_messages, final_tools = _marked_request(
-        renamed_messages, renamed_tools, _settled_marks(dropped, replacements)
+        renamed_messages, renamed_tools, _settled_marks(plan.dropped, plan.replacements)
     )
     return ClaudePromptCache(final_messages, None if tools is None else final_tools)
 

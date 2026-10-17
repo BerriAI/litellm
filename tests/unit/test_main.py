@@ -1016,7 +1016,7 @@ def test_breakpoints_on_one_tool_results_parts_reach_claude_as_one_mark_on_the_r
     ]
 
 
-def test_a_tool_breakpoint_before_a_one_hour_tool_config_cache_point_reaches_converse_as_one_hour(
+def test_tool_breakpoints_before_a_one_hour_tool_config_cache_point_reach_converse_as_one_hour(
     respx_mock: respx.MockRouter,
 ):
     route: Final = respx_mock.post(url__regex=_CONVERSE_ROUTE).respond(json=_CONVERSE_REPLY)
@@ -1024,13 +1024,21 @@ def test_a_tool_breakpoint_before_a_one_hour_tool_config_cache_point_reaches_con
     litellm.completion(
         model="bedrock/converse/us.anthropic.claude-opus-5-5",
         messages=[_USER_TURN],
-        tools=[{**_WEATHER_TOOL, "prompt_cache_breakpoint": _BREAKPOINT}],
+        tools=[
+            {**_WEATHER_TOOL, "prompt_cache_breakpoint": _BREAKPOINT},
+            {"type": "function", "function": {"name": "get_time"}, "prompt_cache_breakpoint": _BREAKPOINT},
+        ],
         cache_control_injection_points=[{"location": "tool_config", "control": {"type": "ephemeral", "ttl": "1h"}}],
         **_FAKE_AWS,
     )
 
     sent_tools: Final = json.loads(route.calls.last.request.content)["toolConfig"]["tools"]
-    assert [tool["cachePoint"] for tool in sent_tools if "cachePoint" in tool] == [{"type": "default", "ttl": "1h"}] * 2
+    assert [tool.get("cachePoint", tool.get("toolSpec", {}).get("name")) for tool in sent_tools] == [
+        "get_weather",
+        {"type": "default", "ttl": "1h"},
+        "get_time",
+        {"type": "default", "ttl": "1h"},
+    ]
 
 
 _ONE_HOUR_BREAKPOINT: Final = {"mode": "explicit", "ttl": "1h"}
@@ -1183,6 +1191,82 @@ def test_a_one_hour_breakpoint_after_the_dummy_tools_five_minute_cache_point_rea
     )
 
     assert _converse_cache_point_ttls(json.loads(route.calls.last.request.content)) == ("5m", None)
+
+
+def _converse_cache_point_places(body: Mapping[str, object]) -> tuple[tuple[str, str | None], ...]:
+    tool_config: Final = body.get("toolConfig")
+    tools: Final = tool_config["tools"] if isinstance(tool_config, dict) else []
+    system: Final = body.get("system", [])
+    messages: Final = body["messages"]
+    assert isinstance(system, list) and isinstance(messages, list)
+    in_messages: Final = tuple(chain.from_iterable(message["content"] for message in messages))
+    blocks: Final = (
+        *(("tool", block) for block in tools),
+        *(("system", block) for block in system),
+        *(("message", block) for block in in_messages),
+    )
+    return tuple((place, block["cachePoint"].get("ttl")) for place, block in blocks if "cachePoint" in block)
+
+
+@pytest.mark.parametrize("drop_params", [False, True])
+@pytest.mark.parametrize(
+    "later_tools",
+    [
+        pytest.param([], id="function-last"),
+        pytest.param([{"type": "bash_20250124", "name": "bash"}], id="bash-sent-outside-the-tool-config"),
+    ],
+)
+def test_a_five_minute_tool_config_cache_point_converse_leaves_out_does_not_shorten_later_one_hour_breakpoints(
+    respx_mock: respx.MockRouter, drop_params: bool, later_tools: list[Mapping[str, str]]
+):
+    route: Final = respx_mock.post(url__regex=_CONVERSE_ROUTE).respond(json=_CONVERSE_REPLY)
+
+    litellm.completion(
+        model="bedrock/converse/us.anthropic.claude-opus-5-5",
+        messages=[
+            {"role": "system", "content": [{"type": "text", "text": "sys", "prompt_cache_breakpoint": _BREAKPOINT}]},
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "hi", "prompt_cache_breakpoint": _ONE_HOUR_BREAKPOINT}],
+            },
+        ],
+        tools=[{**_WEATHER_TOOL, "prompt_cache_breakpoint": _ONE_HOUR_BREAKPOINT}, *later_tools],
+        cache_control_injection_points=_FIVE_MINUTE_TOOL_CONFIG,
+        drop_params=drop_params,
+        **_FAKE_AWS,
+    )
+
+    assert _converse_cache_point_places(json.loads(route.calls.last.request.content)) == (
+        ("tool", "1h"),
+        ("system", "1h"),
+        ("message", "1h"),
+    )
+
+
+def test_a_tool_config_cache_point_after_a_tool_mark_without_a_ttl_still_shortens_a_later_one_hour_breakpoint(
+    respx_mock: respx.MockRouter,
+):
+    route: Final = respx_mock.post(url__regex=_CONVERSE_ROUTE).respond(json=_CONVERSE_REPLY)
+
+    litellm.completion(
+        model="bedrock/converse/us.anthropic.claude-opus-5-5",
+        messages=[
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "hi", "prompt_cache_breakpoint": _ONE_HOUR_BREAKPOINT}],
+            }
+        ],
+        tools=[{**_WEATHER_TOOL, "cache_control": {"type": "ephemeral"}}],
+        cache_control_injection_points=_FIVE_MINUTE_TOOL_CONFIG,
+        drop_params=True,
+        **_FAKE_AWS,
+    )
+
+    assert _converse_cache_point_places(json.loads(route.calls.last.request.content)) == (
+        ("tool", None),
+        ("tool", "5m"),
+        ("message", None),
+    )
 
 
 _INVOKE_ROUTE: Final = r"https://bedrock-runtime\.us-east-1\.amazonaws\.com/model/.*/invoke"
