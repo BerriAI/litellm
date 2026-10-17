@@ -171,14 +171,23 @@ func resourceLiteLLMTeamMemberRead(d *schema.ResourceData, m interface{}) error 
 		d.Set("role", found.Role)
 	}
 
+	// Always reconcile the per-team budget: if the membership row, its budget
+	// table, or max_budget is gone, clear the attribute so out-of-band removals
+	// show up as drift instead of keeping the stale value in state.
+	var maxBudget *float64
 	for _, membership := range info.TeamMemberships {
 		if membership.UserID != userID {
 			continue
 		}
-		if membership.LiteLLMBudgetTable != nil && membership.LiteLLMBudgetTable.MaxBudget != nil {
-			d.Set("max_budget_in_team", *membership.LiteLLMBudgetTable.MaxBudget)
+		if membership.LiteLLMBudgetTable != nil {
+			maxBudget = membership.LiteLLMBudgetTable.MaxBudget
 		}
 		break
+	}
+	if maxBudget != nil {
+		d.Set("max_budget_in_team", *maxBudget)
+	} else {
+		d.Set("max_budget_in_team", nil)
 	}
 
 	d.SetId(fmt.Sprintf("%s:%s", teamID, userID))
@@ -234,10 +243,7 @@ func resourceLiteLLMTeamMemberDelete(d *schema.ResourceData, m interface{}) erro
 	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusBadRequest {
 		body, _ := io.ReadAll(resp.Body)
 		bodyStr := string(body)
-		if resp.StatusCode == http.StatusNotFound ||
-			strings.Contains(bodyStr, "User not found in team") ||
-			strings.Contains(bodyStr, "does not exist") ||
-			strings.Contains(bodyStr, "Team not found") {
+		if isTeamMemberAlreadyGone(resp.StatusCode, bodyStr) {
 			log.Printf("[WARN] Team member already gone (%s): %s", resp.Status, bodyStr)
 			d.SetId("")
 			return nil
@@ -253,4 +259,22 @@ func resourceLiteLLMTeamMemberDelete(d *schema.ResourceData, m interface{}) erro
 
 	d.SetId("")
 	return nil
+}
+
+// isTeamMemberAlreadyGone reports whether a /team/member_delete error means the
+// member or team was already removed outside Terraform. Only 404s and the
+// proxy's concrete "not found" messages qualify, so unrelated 400 validation
+// errors still fail the destroy.
+func isTeamMemberAlreadyGone(statusCode int, body string) bool {
+	if statusCode == http.StatusNotFound {
+		return true
+	}
+	if statusCode != http.StatusBadRequest {
+		return false
+	}
+	if strings.Contains(body, "User not found in team") {
+		return true
+	}
+	// "Team id=<id> does not exist in db"
+	return strings.Contains(body, "Team id=") && strings.Contains(body, "does not exist in db")
 }
