@@ -20,6 +20,7 @@ v2: no imports from v1.
 from __future__ import annotations
 
 import hashlib
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import partial
 from typing import Final
@@ -53,7 +54,10 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_r
 from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (
     AssertionStoreUnavailable,
     SSOAssertionStore,
+    SSOIdentityAssertion,
     assertion_expired,
+    exchanged_refresh_token_issued_for,
+    login_refresh_token_expired,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.token_endpoint import (
     ExchangedToken,
@@ -75,6 +79,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     ClientSecretAuth,
     CredError,
     IdJagConfig,
+    IdJagSubjectSource,
     NoneConfig,
     PassthroughConfig,
     PrivateKeyJwtAuth,
@@ -88,6 +93,15 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
 _TOKEN_EXCHANGE_GRANT_TYPE: Final = "urn:ietf:params:oauth:grant-type:token-exchange"
 _JWT_BEARER_GRANT_TYPE: Final = "urn:ietf:params:oauth:grant-type:jwt-bearer"
 _ID_JAG_REQUESTED_TOKEN_TYPE: Final = "urn:ietf:params:oauth:token-type:id-jag"
+_REFRESH_TOKEN_SUBJECT_TOKEN_TYPE: Final = "urn:ietf:params:oauth:token-type:refresh_token"
+
+
+@dataclass(frozen=True, slots=True)
+class _IdJagSubjectToken:
+    """What ID-JAG leg 1 asserts and the RFC 8693 type it is declared as."""
+
+    value: str
+    token_type: str
 
 
 class _NullOAuthTokenStore:
@@ -200,13 +214,15 @@ class UpstreamCredentialProvider:
     async def _id_jag(
         self, subject: Subject, server: ServerSpec, config: IdJagConfig
     ) -> Result[httpx2.Auth, CredError]:
-        match await self._id_jag_subject_token(subject):
+        match await self._id_jag_subject_token(subject, config):
             case Error(err):
                 return Error(err)
             case Ok(subject_token):
                 return await self._id_jag_exchange(subject, subject_token, server, config)
 
-    async def _id_jag_subject_token(self, subject: Subject) -> Result[str, CredError]:
+    async def _id_jag_subject_token(
+        self, subject: Subject, config: IdJagConfig
+    ) -> Result[_IdJagSubjectToken, CredError]:
         """The identity token ID-JAG leg 1 asserts, from the request or from the SSO login it was captured at.
 
         A caller that presents its own IdP identity token wins: that is the strongest available
@@ -223,7 +239,7 @@ class UpstreamCredentialProvider:
         a raised error so a DB blip cannot 500 the egress or the upstream-401 retry.
         """
         if subject.inbound_token is not None:
-            return Ok(subject.inbound_token.get_secret_value())
+            return Ok(_IdJagSubjectToken(subject.inbound_token.get_secret_value(), config.subject_token_type))
         if not subject.subject_id:
             return Error(
                 CredError.of_precondition_required(
@@ -232,7 +248,11 @@ class UpstreamCredentialProvider:
                 )
             )
         try:
-            assertion: Final = await self._sso_assertion_store.fetch(subject.subject_id)
+            assertion: Final = await (
+                self._sso_assertion_store.fetch_stored(subject.subject_id)
+                if config.subject_source is IdJagSubjectSource.refresh_token
+                else self._sso_assertion_store.fetch(subject.subject_id)
+            )
         except AssertionStoreUnavailable as exc:
             # The driver's message can name hosts, schemas or connection details, and this summary
             # is returned to the caller verbatim as a 503 body. Operators get it from the log.
@@ -253,6 +273,8 @@ class UpstreamCredentialProvider:
                     "Sign in through LiteLLM SSO so the gateway captures one."
                 )
             )
+        if config.subject_source is IdJagSubjectSource.refresh_token:
+            return _login_refresh_token_subject(assertion, config, datetime.now(timezone.utc))
         if assertion_expired(assertion, datetime.now(timezone.utc)):
             return Error(
                 CredError.of_precondition_required(
@@ -260,20 +282,24 @@ class UpstreamCredentialProvider:
                     "LiteLLM SSO again to capture a current one."
                 )
             )
-        return Ok(assertion.id_token.get_secret_value())
+        return Ok(
+            _IdJagSubjectToken(
+                assertion.id_token.get_secret_value(), assertion.subject_token_type or config.subject_token_type
+            )
+        )
 
     async def _id_jag_exchange(
-        self, subject: Subject, token: str, server: ServerSpec, config: IdJagConfig
+        self, subject: Subject, token: _IdJagSubjectToken, server: ServerSpec, config: IdJagConfig
     ) -> Result[httpx2.Auth, CredError]:
         slot: Final = _id_jag_slot_key(subject, server)
-        fingerprint: Final = _id_jag_fingerprint(token, server.server_id, config)
+        fingerprint: Final = _id_jag_fingerprint(token.value, server.server_id, config)
 
         async def _exchange() -> Result[ExchangedToken, CredError]:
             leg1_params: Final = {
                 "grant_type": _TOKEN_EXCHANGE_GRANT_TYPE,
                 "requested_token_type": _ID_JAG_REQUESTED_TOKEN_TYPE,
-                "subject_token": token,
-                "subject_token_type": config.subject_token_type,
+                "subject_token": token.value,
+                "subject_token_type": token.token_type,
                 **({"audience": config.audience} if config.audience else {}),
                 **({"resource": config.resource} if config.resource else {}),
                 **({"scope": " ".join(config.scopes)} if config.scopes else {}),
@@ -327,7 +353,7 @@ class UpstreamCredentialProvider:
         match await self._client_credentials_source.get(server_id, config):
             case Ok(token):
                 refetch: Final = partial(self._client_credentials_source.refetch, server_id, config)
-                return Ok(ClientCredentialsBearerAuth(token.access_token, refetch, config))
+                return Ok(ClientCredentialsBearerAuth(token.access_token, refetch, config, granted_scopes=token.scopes))
             case Error(err):
                 return Error(err)
 
@@ -397,6 +423,41 @@ class UpstreamCredentialProvider:
             return await self._oauth_token_store.fetch(subject.subject_id, server.server_id)
         except TokenStoreUnavailable:
             return None
+
+
+def _login_refresh_token_subject(
+    assertion: SSOIdentityAssertion, config: IdJagConfig, now: datetime
+) -> Result[_IdJagSubjectToken, CredError]:
+    """The subject for a server configured with ``id_jag_subject_source: refresh_token``: the refresh
+    token the ID-JAG client exchanged the login assertion for when the user signed in. Never the SSO
+    refresh token an OIDC login holds, that one is bound to the SSO client. The assertion's own expiry
+    does not apply here, a SAML assertion is spent minutes after login while the refresh token it
+    bought lives as long as the IdP said."""
+    if assertion.exchanged_refresh_token is None:
+        return Error(
+            CredError.of_precondition_required(
+                "This server mints its ID-JAG from a refresh token exchanged at SSO login and none is stored "
+                "for this user. Sign in through LiteLLM SSO again; if the login log shows the IdP refused the "
+                "exchange, the IdP client has to allow a refresh token for this requesting app."
+            )
+        )
+    if not exchanged_refresh_token_issued_for(assertion, config.org_token_endpoint, config.client_id):
+        return Error(
+            CredError.of_precondition_required(
+                "The refresh token exchanged at SSO login was minted for a different IdP client than this server "
+                "uses, so it cannot be presented here. Point every id_jag_subject_source: refresh_token server at "
+                "the same IdP client, then sign in through LiteLLM SSO again."
+            )
+        )
+    if login_refresh_token_expired(assertion, now):
+        return Error(
+            CredError.of_precondition_required(
+                "The refresh token exchanged at SSO login for this user has expired. Sign in through LiteLLM SSO again."
+            )
+        )
+    return Ok(
+        _IdJagSubjectToken(assertion.exchanged_refresh_token.get_secret_value(), _REFRESH_TOKEN_SUBJECT_TOKEN_TYPE)
+    )
 
 
 def _id_jag_slot_key(subject: Subject, server: ServerSpec) -> str:

@@ -1,10 +1,13 @@
 # What is this?
 ## Translates OpenAI call to Anthropic `/v1/messages` format
 import copy
+import itertools
 import json
 import traceback
 from collections import deque
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from dataclasses import dataclass, replace
+from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -21,6 +24,7 @@ from typing_extensions import assert_never
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.exceptions import ContextWindowExceededError, MidStreamFallbackError
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.hidden_params import set_hidden_params
 from litellm.llms.anthropic.pass_through.safeguards import StreamedSafeguardResults
 from litellm.llms.anthropic.pass_through.utils import anthropic_sse_frame
@@ -36,7 +40,8 @@ from litellm.types.llms.anthropic import (
     UsageDelta,
     UsageIteration,
 )
-from litellm.types.utils import AdapterCompletionStreamWrapper, Delta
+from litellm.types.llms.openai import ChatCompletionRedactedThinkingBlock, ChatCompletionThinkingBlock
+from litellm.types.utils import AdapterCompletionStreamWrapper, ChatCompletionDeltaToolCall, Delta, Function
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
@@ -47,6 +52,7 @@ if TYPE_CHECKING:
 
 _STREAMING_DELTA_TYPES: Final = frozenset(get_args(StreamingContentBlockDeltaType))
 _SSE_EVENT: Final = TypeAdapter(Mapping[str, object])
+_THINKING_BLOCK: Final = TypeAdapter(ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock)
 
 
 class _UsageDeltaWithIterations(UsageDelta, total=False):
@@ -103,11 +109,63 @@ def _delta_payload_field(delta_type: StreamingContentBlockDeltaType) -> str:
             assert_never(delta_type)
 
 
+def _first_thinking_block_index(chunk: "ModelResponseStream") -> int | None:
+    delta: Final = _optional_attr(chunk.choices[0], "delta") if chunk.choices else None
+    blocks: Final = _optional_attr_sequence(delta, "thinking_blocks")
+    first_block: Final = as_str_mapping(blocks[0]) if blocks else None
+    index: Final = first_block.get("index") if first_block is not None else None
+    return index if isinstance(index, int) else None
+
+
+def _optional_str_attr(obj: object, name: str) -> str | None:
+    value: Final = _optional_attr(obj, name)
+    return value if isinstance(value, str) else None
+
+
+def _optional_int_attr(obj: object, name: str, *, default: int) -> int:
+    value: Final = _optional_attr(obj, name)
+    return value if isinstance(value, int) else default
+
+
+@dataclass(frozen=True, slots=True)
+class _ToolCallPart:
+    index: int
+    call_id: str | None
+    call_type: str | None
+    name: str | None
+    arguments: str
+
+    @staticmethod
+    def from_entries(index: int, entries: Sequence[object]) -> "_ToolCallPart":
+        functions: Final = tuple(_optional_attr(entry, "function") for entry in entries)
+        return _ToolCallPart(
+            index=index,
+            call_id=next(filter(None, (_optional_str_attr(entry, "id") for entry in entries)), None),
+            call_type=next(filter(None, (_optional_str_attr(entry, "type") for entry in entries)), None),
+            name=next(filter(None, (_optional_str_attr(function, "name") for function in functions)), None),
+            arguments="".join(_optional_str_attr(function, "arguments") or "" for function in functions),
+        )
+
+    def extended(self, parts: "Sequence[_ToolCallPart]") -> "_ToolCallPart":
+        return replace(
+            self, arguments=self.arguments + "".join(part.arguments for part in parts if part.index == self.index)
+        )
+
+    def to_tool_call(self) -> ChatCompletionDeltaToolCall:
+        return ChatCompletionDeltaToolCall(
+            id=self.call_id,
+            type=self.call_type,
+            function=Function(name=self.name, arguments=self.arguments),
+            index=self.index,
+        )
+
+
 class _CombinedChunkSplitter:
     """
     Splits a streaming chunk that carries BOTH response content and a
     ``finish_reason`` into two chunks: a content-only chunk followed by a
-    finish-only chunk.
+    finish-only chunk, and a chunk that carries several tool calls into one chunk
+    per call (see ``_route_tool_calls``).
 
     ``AnthropicStreamWrapper`` (via ``translate_streaming_openai_response_to_anthropic``)
     assumes content and ``finish_reason`` never arrive in the same chunk — true for
@@ -128,6 +186,8 @@ class _CombinedChunkSplitter:
         self._sync_iter: Iterator[ModelResponseStream] | None = None
         self._async_iter: AsyncIterator[ModelResponseStream] | None = None
         self._buffer: deque[ModelResponseStream] = deque()
+        self._held_calls: Mapping[int, tuple[ModelResponseStream, _ToolCallPart]] = MappingProxyType({})
+        self._live_call_index: int | None = None
 
     @property
     def chunks(self) -> "list[ModelResponseStream] | None":
@@ -238,6 +298,70 @@ class _CombinedChunkSplitter:
         return pieces
 
     @staticmethod
+    def _tool_call_parts(tool_calls: Sequence[object]) -> "tuple[_ToolCallPart, ...]":
+        indexed: Final = tuple(
+            (_optional_int_attr(tool_call, "index", default=position), tool_call)
+            for position, tool_call in enumerate(tool_calls)
+        )
+        return tuple(
+            _ToolCallPart.from_entries(index, tuple(entry for entry_index, entry in indexed if entry_index == index))
+            for index in dict.fromkeys(index for index, _ in indexed)
+        )
+
+    @staticmethod
+    def _with_tool_call(
+        chunk: "ModelResponseStream", part: "_ToolCallPart", *, keep_role: bool
+    ) -> "ModelResponseStream":
+        piece: Final = copy.deepcopy(chunk)
+        role: Final = getattr(piece.choices[0].delta, "role", None) if keep_role else None
+        piece.choices[0].delta = Delta(role=role, tool_calls=[part.to_tool_call()])
+        return piece
+
+    def _release_held_calls(self) -> "tuple[ModelResponseStream, ...]":
+        released: Final = tuple(
+            self._with_tool_call(template, part, keep_role=False)
+            for _, (template, part) in sorted(self._held_calls.items())
+        )
+        self._held_calls = MappingProxyType({})
+        self._live_call_index = None
+        return released
+
+    def _route_tool_calls(self, chunk: "ModelResponseStream") -> "tuple[ModelResponseStream, ...]":
+        """Anthropic ``tool_use`` blocks are sequential, so only the first call a chunk opens streams live.
+
+        Later calls are held, gather their fragments by ``index``, and are written whole on the next
+        non-tool chunk or at stream end.
+        """
+        choices: Final = _optional_attr_sequence(chunk, "choices")
+        tool_calls: Final = (
+            _optional_attr_sequence(_optional_attr(choices[0], "delta"), "tool_calls") if len(choices) == 1 else ()
+        )
+        if not tool_calls:
+            return (*self._release_held_calls(), chunk) if choices else (chunk,)
+        parts: Final = self._tool_call_parts(tool_calls)
+        held: Final = self._held_calls
+        if not held and len(parts) == 1:
+            if parts[0].name:
+                self._live_call_index = parts[0].index
+            return (chunk,)
+
+        new_parts: Final = tuple(part for part in parts if part.index not in held)
+        live_index: Final = (
+            self._live_call_index
+            if self._live_call_index is not None
+            else next((part.index for part in new_parts if part.name), None)
+        )
+        self._live_call_index = live_index
+        live: Final = tuple(part for part in new_parts if not part.name or part.index == live_index)
+        self._held_calls = MappingProxyType(
+            {
+                **{index: (template, held_part.extended(parts)) for index, (template, held_part) in held.items()},
+                **{part.index: (chunk, part) for part in new_parts if part.name and part.index != live_index},
+            }
+        )
+        return tuple(self._with_tool_call(chunk, part, keep_role=position == 0) for position, part in enumerate(live))
+
+    @staticmethod
     def _split(chunk: "ModelResponseStream") -> "list[ModelResponseStream]":
         """Return ``[chunk]``, or ``[content_chunk, finish_chunk]`` if combined."""
         if not _CombinedChunkSplitter._is_combined(chunk):
@@ -259,6 +383,45 @@ class _CombinedChunkSplitter:
         if hasattr(finish_delta, "thinking_blocks"):
             finish_delta.thinking_blocks = None
         return [content_chunk, finish_chunk]
+
+    @staticmethod
+    def _with_thinking_block(
+        chunk: "ModelResponseStream",
+        block: ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock,
+        *,
+        keep_role: bool,
+    ) -> "ModelResponseStream":
+        piece: Final = copy.deepcopy(chunk)
+        role: Final = getattr(piece.choices[0].delta, "role", None) if keep_role else None
+        thinking: Final = block.get("thinking") if block["type"] == "thinking" else None
+        piece.choices[0].delta = Delta(role=role, reasoning_content=thinking or None, thinking_blocks=[block])
+        return piece
+
+    @staticmethod
+    def _split_thinking_blocks(chunk: "ModelResponseStream") -> "tuple[ModelResponseStream, ...]":
+        """Anthropic streams one content block per thinking block, so a delta carrying several is split per block."""
+        choices: Final = _optional_attr_sequence(chunk, "choices")
+        if len(choices) != 1:
+            return (chunk,)
+        delta: Final = _optional_attr(choices[0], "delta")
+        blocks: Final = _optional_attr_sequence(delta, "thinking_blocks")
+        if len(blocks) < 2 or _optional_attr(delta, "content") or _optional_attr(delta, "tool_calls"):
+            return (chunk,)
+        return tuple(
+            _CombinedChunkSplitter._with_thinking_block(
+                chunk, _THINKING_BLOCK.validate_python(block), keep_role=position == 0
+            )
+            for position, block in enumerate(blocks)
+        )
+
+    def _expand(self, chunk: "ModelResponseStream") -> "tuple[ModelResponseStream, ...]":
+        split_chunks: Final = tuple(
+            split_chunk
+            for combined_chunk in self._split(chunk)
+            for split_chunk in self._split_by_payload_kind(combined_chunk)  # comprehension-ok: flattens nested splits
+        )
+        block_chunks: Final = tuple(itertools.chain.from_iterable(map(self._split_thinking_blocks, split_chunks)))
+        return tuple(itertools.chain.from_iterable(map(self._route_tool_calls, block_chunks)))
 
     def __iter__(self) -> "Iterator[ModelResponseStream]":
         return self
@@ -289,12 +452,15 @@ class _CombinedChunkSplitter:
             return self._buffer.popleft()
         if self._sync_iter is None:
             self._sync_iter = iter(self._stream)
-        chunk: Final = next(self._sync_iter)  # propagates StopIteration when exhausted
-        self._buffer.extend(
-            split_chunk
-            for combined_chunk in self._split(chunk)
-            for split_chunk in self._split_by_payload_kind(combined_chunk)
-        )
+        while not self._buffer:
+            try:
+                chunk = next(self._sync_iter)
+            except StopIteration:
+                self._buffer.extend(self._release_held_calls())
+                if not self._buffer:
+                    raise
+                break
+            self._buffer.extend(self._expand(chunk))
         return self._buffer.popleft()
 
     def __aiter__(self) -> "AsyncIterator[ModelResponseStream]":
@@ -305,12 +471,15 @@ class _CombinedChunkSplitter:
             return self._buffer.popleft()
         if self._async_iter is None:
             self._async_iter = self._stream.__aiter__()
-        chunk: Final = await self._async_iter.__anext__()  # propagates StopAsyncIteration
-        self._buffer.extend(
-            split_chunk
-            for combined_chunk in self._split(chunk)
-            for split_chunk in self._split_by_payload_kind(combined_chunk)
-        )
+        while not self._buffer:
+            try:
+                chunk = await self._async_iter.__anext__()
+            except StopAsyncIteration:
+                self._buffer.extend(self._release_held_calls())
+                if not self._buffer:
+                    raise
+                break
+            self._buffer.extend(self._expand(chunk))
         return self._buffer.popleft()
 
 
@@ -331,7 +500,8 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
     sent_first_chunk: bool = False
     sent_content_block_start: bool = False
     sent_content_block_finish: bool = False
-    current_content_block_type: Literal["text", "tool_use", "thinking"] = "text"
+    current_content_block_type: Literal["text", "tool_use", "thinking", "redacted_thinking"] = "text"
+    current_thinking_block_index: int | None = None
     sent_last_message: bool = False
     holding_chunk: ContentBlockDelta | None = None
     holding_stop_reason_chunk: MessageBlockDelta | None = None
@@ -1127,13 +1297,14 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         Also gates re-emission after a block transition: when an upstream
         chunk both *triggers* a new content block (its type differs from the
         active block) and *carries* delta content, that content belongs to
-        the new block. The synthesized ``content_block_start`` only ever
-        carries an empty body — see
-        ``_translate_streaming_openai_chunk_to_anthropic_content_block``,
-        which returns an empty ``TextBlock``/``ToolUseBlock``/thinking block —
-        so the trigger chunk's delta must be re-queued or the first token of
-        the new block (the first non-empty text/thinking delta, or bundled
-        tool arguments) is silently dropped.
+        the new block. The synthesized ``content_block_start`` from
+        ``_translate_streaming_openai_chunk_to_anthropic_content_block``
+        carries an empty text, tool-use or unsigned thinking body, and only a
+        signed thinking block's text rides on the start because its delta is
+        a ``signature_delta``. So the trigger chunk's delta must be re-queued
+        or the first token of the new block (the first non-empty text or
+        unsigned thinking delta, or bundled tool arguments) is silently
+        dropped.
 
         Delta types outside ``StreamingContentBlockDeltaType`` — the closed
         set the translate layer can produce — are treated as empty. The
@@ -1225,8 +1396,21 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 original_name: Final = self.tool_name_mapping.get(truncated_name, truncated_name)
                 tool_block["name"] = original_name
 
+        thinking_block_index: Final = _first_thinking_block_index(chunk)
+        previous_thinking_block_index: Final = self.current_thinking_block_index
+        if thinking_block_index is not None or block_type != self.current_content_block_type:
+            self.current_thinking_block_index = thinking_block_index
+
         if block_type != self.current_content_block_type:
             self.current_content_block_type = block_type
+            self.current_content_block_start = content_block_start
+            return True
+
+        if (
+            thinking_block_index is not None
+            and previous_thinking_block_index is not None
+            and thinking_block_index != previous_thinking_block_index
+        ):
             self.current_content_block_start = content_block_start
             return True
 

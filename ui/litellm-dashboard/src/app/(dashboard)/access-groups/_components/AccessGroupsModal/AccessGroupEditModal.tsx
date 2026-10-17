@@ -13,6 +13,7 @@ import {
   AccessGroupBaseForm,
   accessGroupFormSchema,
   AGENTS_TAB,
+  SKILLS_TAB,
   GENERAL_TAB,
   MCP_SERVERS_TAB,
   MODELS_TAB,
@@ -34,6 +35,7 @@ const toFormValues = (accessGroup: AccessGroupResponse): AccessGroupFormValues =
   mcpServerIds: accessGroup.access_mcp_server_ids ?? [],
   mcpToolPermissions: accessGroup.mcp_tool_permissions ?? {},
   agentIds: accessGroup.access_agent_ids ?? [],
+  skillNames: accessGroup.access_skill_names ?? [],
 });
 
 function AccessGroupEditForm({ accessGroup, onCancel, onSuccess }: Omit<AccessGroupEditModalProps, "visible">) {
@@ -57,6 +59,7 @@ function AccessGroupEditForm({ accessGroup, onCancel, onSuccess }: Omit<AccessGr
         access_mcp_server_ids: visitedTabs.has(MCP_SERVERS_TAB) ? values.mcpServerIds : undefined,
         ...(dirtyFields.mcpToolPermissions && { mcp_tool_permissions: values.mcpToolPermissions }),
         access_agent_ids: visitedTabs.has(AGENTS_TAB) ? values.agentIds : undefined,
+        access_skill_names: visitedTabs.has(SKILLS_TAB) ? values.skillNames : undefined,
       };
 
       editMutation.mutate(

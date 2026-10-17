@@ -36,6 +36,7 @@ from litellm.constants import (
     DEFAULT_MAX_RECURSE_DEPTH,
     EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE,
     END_USER_RESTRICTED_REGISTRY_MAX_SIZE,
+    INVALID_API_KEY_ERROR_MESSAGE,
     LITELLM_PROXY_MASTER_KEY_ALIAS,
     MODEL_ACCESS_GROUP_REGISTRY_MAX_SIZE,
     REGISTRY_ERROR_NEGATIVE_CACHE_TTL,
@@ -94,7 +95,12 @@ from litellm.proxy.auth.model_access_denied import (
     model_access_denied_client_message,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import publish_auth_cache_invalidation
+from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+    broadcast_evictions,
+    evict_local,
+    evict_shared,
+    publish_auth_cache_invalidation,
+)
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
     _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -3131,6 +3137,16 @@ async def _invalidate_usage_cache_entry(
         )
 
 
+async def await_inflight_team_membership_load(user_id: str, team_id: str) -> None:
+    """Wait for a membership load already reading the DB, so a load that read the row before a
+    write committed cannot re-cache the old row after the write's eviction."""
+    inflight: Final[object] = _team_membership_inflight.pop(
+        team_membership_reservation_cache_key(user_id=user_id, team_id=team_id), None
+    )
+    if isinstance(inflight, asyncio.Task) and inflight is not asyncio.current_task():
+        await asyncio.wait((inflight,))
+
+
 @with_service_target(SPEND_COUNTERS_TARGET)
 async def invalidate_team_member_spend_state(
     user_id: str,
@@ -3188,11 +3204,7 @@ async def invalidate_team_member_spend_state(
         publish_auth_cache_invalidation,
     )
 
-    inflight: Final[object] = _team_membership_inflight.pop(
-        team_membership_reservation_cache_key(user_id=user_id, team_id=team_id), None
-    )
-    if isinstance(inflight, asyncio.Task) and inflight is not asyncio.current_task():
-        await asyncio.wait((inflight,))
+    await await_inflight_team_membership_load(user_id=user_id, team_id=team_id)
 
     if new_spend is not None:
         from litellm.proxy.proxy_server import SPEND_DB_FLOOR_CACHE_TTL_SECONDS, spend_counter_cache
@@ -3368,26 +3380,19 @@ async def delete_cache_key_objects(
 
     Best-effort per key: the rows are already deleted by the time this runs, so an unreachable
     cache backend must not abort the caller partway through its own cascade.
-    """
-    results: Final = await asyncio.gather(
-        *(
-            delete_cache_key_object(
-                hashed_token=hashed_token,
-                user_api_key_cache=user_api_key_cache,
-                proxy_logging_obj=proxy_logging_obj,
-            )
-            for hashed_token in hashed_tokens
-        ),
-        return_exceptions=True,
-    )
 
-    for hashed_token, result in zip(hashed_tokens, results):
-        if isinstance(result, BaseException):
-            verbose_proxy_logger.warning(
-                "Failed to evict cached key entry for %s; a deleted key may authenticate until its TTL expires: %s",
-                hashed_token,
-                result,
-            )
+    Every token is dropped from this worker's memory first, then from the auth cache and the
+    internal usage cache in one batch each, so a deleted key stops authenticating here the instant
+    its rows are gone instead of refilling from Redis on the next miss. Every other worker then
+    gets the eviction in one pipelined broadcast: a publish per key would pass the publisher's
+    pending cap on a bulk delete, and the dropped keys would keep authenticating there until their
+    TTL.
+    """
+    evict_local(cache_keys=hashed_tokens, user_api_key_cache=user_api_key_cache)
+    await evict_shared(cache_keys=hashed_tokens, cache=user_api_key_cache)
+    if proxy_logging_obj is not None:
+        await evict_shared(cache_keys=hashed_tokens, cache=proxy_logging_obj.internal_usage_cache.dual_cache)
+    await broadcast_evictions(cache_keys=hashed_tokens)
 
 
 class _TeamNotFoundDetail(TypedDict):
@@ -3955,6 +3960,7 @@ class ExperimentalUIJWTToken:
         team_models: Sequence[str] | None = None,
         team_model_aliases: Mapping[str, str] | None = None,
         max_budget: float | None = None,
+        allowed_routes: Sequence[str] | None = None,
     ) -> str:
         """
         Generate a JWT token for CLI authentication with configurable expiration.
@@ -3968,6 +3974,8 @@ class ExperimentalUIJWTToken:
             team_alias: Team alias for the selected team, if available
             team_models: Model allowlist granted by the selected team
             team_model_aliases: Team model aliases for the selected team
+            allowed_routes: Route groups the session may call, enforced like a virtual key's
+                ``allowed_routes`` on every route; None leaves every route the role allows
 
         Returns:
             Encrypted JWT token string
@@ -4012,6 +4020,7 @@ class ExperimentalUIJWTToken:
             max_parallel_requests=None,
             user_role=LitellmUserRoles(user_info.user_role),
             is_session_token=True,
+            allowed_routes=list(allowed_routes) if allowed_routes is not None else None,
         )
 
         return encrypt_bearer_token(valid_token.model_dump_json(exclude_none=True), prefix=LITELLM_SESSION_TOKEN_PREFIX)
@@ -4225,7 +4234,7 @@ async def get_key_object(
 
     if _valid_token is None:
         raise ProxyException(
-            message=f"Authentication Error, Invalid proxy server token passed. key={hashed_token}, not found in db. Create key via `/key/generate` call.",
+            message=INVALID_API_KEY_ERROR_MESSAGE,
             type=ProxyErrorTypes.token_not_found_in_db,
             param="key",
             code=status.HTTP_401_UNAUTHORIZED,
@@ -4550,9 +4559,11 @@ async def get_access_group_tables(
     check_db_only: bool = False,
     *,
     unreadable: Literal["skip", "raise"] = "skip",
+    missing: Literal["skip", "raise"] = "skip",
 ) -> tuple[LiteLLM_AccessGroupTable, ...]:
     """Load unified access groups by id (cache first, then DB). A group that provably does not exist is
-    skipped, it grants nothing. A group that exists but cannot be read is skipped too unless
+    skipped, it grants nothing, unless ``missing`` is ``"raise"`` and the caller wants to see
+    ``AccessGroupNotFoundError`` itself. A group that exists but cannot be read is skipped too unless
     ``check_db_only`` is set or ``unreadable`` is ``"raise"``, in which case the failure propagates so a
     caller enforcing policy can deny instead of shedding a restriction it could not read."""
     if not access_group_ids:
@@ -4580,6 +4591,8 @@ async def get_access_group_tables(
                 check_db_only=check_db_only,
             )
         except AccessGroupNotFoundError:
+            if missing == "raise":
+                raise
             verbose_proxy_logger.debug("One of the requested access groups does not exist, it grants nothing")
             return None
         except Exception:
@@ -4594,19 +4607,24 @@ async def get_access_group_tables(
 
 async def _get_resources_from_access_groups(
     access_group_ids: Sequence[str],
-    resource_field: Literal["access_model_names", "access_mcp_server_ids", "access_agent_ids"],
+    resource_field: Literal["access_model_names", "access_mcp_server_ids", "access_agent_ids", "access_skill_names"],
     prisma_client: DatabaseClient | None = None,
     user_api_key_cache: UserApiKeyCache | None = None,
     proxy_logging_obj: ProxyLogging | None = None,
     check_db_only: bool = False,
+    strict_errors: bool = False,
 ) -> list[str]:
-    """Deduplicated ``resource_field`` values across the resolved access groups."""
+    """Deduplicated ``resource_field`` values across the resolved access groups. With ``strict_errors`` a
+    missing or unreadable group raises instead of being skipped, so policy code never loses a ceiling."""
+    strictness: Final[Literal["skip", "raise"]] = "raise" if strict_errors else "skip"
     groups: Final = await get_access_group_tables(
         access_group_ids=access_group_ids,
         prisma_client=prisma_client,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
         check_db_only=check_db_only,
+        unreadable=strictness,
+        missing=strictness,
     )
     return list(
         {resource for ag in groups for resource in _access_group_field(ag, resource_field)}  # comprehension-ok: flatten
@@ -4615,7 +4633,7 @@ async def _get_resources_from_access_groups(
 
 def _access_group_field(
     group: LiteLLM_AccessGroupTable,
-    resource_field: Literal["access_model_names", "access_mcp_server_ids", "access_agent_ids"],
+    resource_field: Literal["access_model_names", "access_mcp_server_ids", "access_agent_ids", "access_skill_names"],
 ) -> list[str]:
     match resource_field:
         case "access_model_names":
@@ -4624,6 +4642,8 @@ def _access_group_field(
             return group.access_mcp_server_ids
         case "access_agent_ids":
             return group.access_agent_ids
+        case "access_skill_names":
+            return list(group.access_skill_names or ())
 
 
 async def get_models_from_access_groups(
@@ -4694,6 +4714,28 @@ async def get_agent_ids_from_access_groups(
 
 
 _get_agent_ids_from_access_groups: Final = get_agent_ids_from_access_groups
+
+
+async def get_skill_names_from_access_groups(
+    access_group_ids: Sequence[str],
+    prisma_client: PrismaClient | None = None,
+    user_api_key_cache: UserApiKeyCache | None = None,
+    proxy_logging_obj: ProxyLogging | None = None,
+    check_db_only: bool = False,
+    strict_errors: bool = False,
+) -> frozenset[str]:
+    """Claude Code plugin names granted by unified access groups, matched by plugin name."""
+    return frozenset(
+        await _get_resources_from_access_groups(
+            access_group_ids=access_group_ids,
+            resource_field="access_skill_names",
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+            check_db_only=check_db_only,
+            strict_errors=strict_errors,
+        )
+    )
 
 
 def _resolve_all_team_model_sentinel_for_auth_check(
@@ -5615,7 +5657,9 @@ async def can_team_access_model(
 async def get_authorized_resources_from_key_access_groups(
     valid_token: UserAPIKeyAuth | None,
     team_object: LiteLLM_TeamTable | None,
-    resource_field: Literal["access_model_names", "access_mcp_server_ids", "access_agent_ids"],
+    resource_field: Literal["access_model_names", "access_mcp_server_ids", "access_agent_ids", "access_skill_names"],
+    check_db_only: bool = False,
+    strict_errors: bool = False,
 ) -> list[str]:
     """
     For each access_group_id on the key, fetch the LiteLLM_AccessGroupTable row
@@ -5649,8 +5693,15 @@ async def get_authorized_resources_from_key_access_groups(
                 prisma_client=_prisma_client,
                 user_api_key_cache=_user_api_key_cache,
                 proxy_logging_obj=_proxy_logging_obj,
+                check_db_only=check_db_only,
             )
+        except AccessGroupNotFoundError:
+            if check_db_only or strict_errors:
+                raise
+            continue
         except Exception:
+            if check_db_only or strict_errors:
+                raise
             continue
         team_authorized = bool(key_team_id and key_team_id in (ag.assigned_team_ids or []))
         key_authorized = bool(key_token and key_token in (ag.assigned_key_ids or []))

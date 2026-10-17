@@ -14,13 +14,21 @@ from litellm._logging import verbose_logger, verbose_router_logger
 from litellm.constants import ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
-from litellm.types.router import CredentialLiteLLMParams, FallbackSkipReason, SkippedFallbackTarget
-from litellm.types.utils import LlmProviders
+from litellm.types.router import (
+    CredentialLiteLLMParams,
+    Deployment,
+    FallbackSkipReason,
+    LiteLLM_Params,
+    SkippedFallbackTarget,
+)
+from litellm.types.utils import LlmProviders, ProviderSpecificModelInfo
 
 _V = TypeVar("_V")
 
-ROUTER_ONLY_CALL_KWARGS: Final = frozenset({"silent_model", "include_fallback_errors"})
+MID_STREAM_CONTINUATION_KWARG: Final = "_mid_stream_continuation"
+ROUTER_ONLY_CALL_KWARGS: Final = frozenset({"silent_model", "include_fallback_errors", MID_STREAM_CONTINUATION_KWARG})
 _OBJECT_MAPPING_ADAPTER: Final[TypeAdapter[Mapping[object, object]]] = TypeAdapter(Mapping[object, object])
 
 
@@ -28,18 +36,28 @@ def without_router_only_kwargs(kwargs: Mapping[str, _V]) -> dict[str, _V]:
     return {key: value for key, value in kwargs.items() if key not in ROUTER_ONLY_CALL_KWARGS}
 
 
-def is_proxy_admin_request(request_kwargs: Mapping[str, object] | None) -> bool:
-    if request_kwargs is None:
-        return False
+def request_user_api_key_auth(request_kwargs: Mapping[str, object]) -> object:
+    """The caller's auth object, from whichever metadata bucket this surface writes to."""
     metadata_value: Final = request_kwargs.get("metadata")
     litellm_metadata_value: Final = request_kwargs.get("litellm_metadata")
     metadata: Final = metadata_value if isinstance(metadata_value, Mapping) else {}
     litellm_metadata: Final = litellm_metadata_value if isinstance(litellm_metadata_value, Mapping) else {}
-    user_api_key_auth: Final = metadata.get("user_api_key_auth") or litellm_metadata.get("user_api_key_auth")
-    return getattr(user_api_key_auth, "user_role", None) == "proxy_admin"
+    return metadata.get("user_api_key_auth") or litellm_metadata.get("user_api_key_auth")
+
+
+def is_proxy_admin_request(request_kwargs: Mapping[str, object] | None) -> bool:
+    if request_kwargs is None:
+        return False
+    user_role: Final[object] = getattr(request_user_api_key_auth(request_kwargs), "user_role", None)
+    return user_role == "proxy_admin"
 
 
 _is_proxy_admin_request = is_proxy_admin_request
+
+
+def team_may_use_deployment(owner_team_id: object, team_id: str | None) -> bool:
+    """A deployment owned by a team (``model_info.team_id``) serves only that team; one with no owner serves every team."""
+    return owner_team_id is None or owner_team_id == team_id
 
 
 def get_request_team_id(request_kwargs: Mapping[str, object] | None) -> str | None:
@@ -291,6 +309,9 @@ def filter_team_based_models(
     ]
 
 
+_WEB_SEARCH_TOOL_TYPES: Final = frozenset({"web_search", "web_search_preview"})
+
+
 def _deployment_supports_web_search(deployment: dict) -> bool:
     """
     Check if a deployment supports web search.
@@ -325,14 +346,13 @@ def filter_web_search_deployments(
     if isinstance(healthy_deployments, dict):
         return healthy_deployments
 
-    is_web_search_request = False
-    tools: Final = request_kwargs.get("tools") or []
-    for tool in tools:
-        # These are the two websearch tools for OpenAI / Azure.
-        if tool.get("type") == "web_search" or tool.get("type") == "web_search_preview":
-            is_web_search_request = True
-            break
-
+    tools: Final[object] = request_kwargs.get("tools")
+    is_web_search_request: Final = isinstance(tools, (list, tuple)) and any(
+        isinstance(tool, dict)
+        and isinstance(tool_type := tool.get("type"), str)
+        and tool_type in _WEB_SEARCH_TOOL_TYPES
+        for tool in tools
+    )
     if not is_web_search_request:
         return healthy_deployments
 
@@ -396,6 +416,43 @@ def provider_for_generic_call(litellm_params: Mapping[str, object]) -> str | Non
     except BadRequestError:
         return None
     return inferred
+
+
+PROVIDER_SPECIFIC_CAPABILITY_FIELDS: Final = frozenset(ProviderSpecificModelInfo.__annotations__)
+
+
+_LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
+
+def is_model_capability_field(name: str) -> bool:
+    return name in PROVIDER_SPECIFIC_CAPABILITY_FIELDS or (
+        name.startswith("supports_") and name in GetModelCostMap.loaded_model_cost_map_fields()
+    )
+
+
+def without_model_capability_flags(deployment: Deployment) -> Deployment:
+    flags: Final = frozenset(
+        key for key in (deployment.litellm_params.model_extra or {}) if is_model_capability_field(key)
+    )
+    if not flags:
+        return deployment
+    declared_params: Final = _LITELLM_PARAMS_ADAPTER.validate_python(deployment.litellm_params.model_dump())
+    served_params: Final = {key: value for key, value in declared_params.items() if key not in flags}
+    return deployment.model_copy(update={"litellm_params": LiteLLM_Params.model_validate(served_params)})
+
+
+def warn_on_ignored_model_capability_flags(model_name: str, litellm_params: Mapping[str, object]) -> str | None:
+    flags: Final = sorted(
+        key for key, value in litellm_params.items() if value is not None and is_model_capability_field(key)
+    )
+    if not flags:
+        return None
+    warning: Final = (
+        f"Deployment '{model_name}' sets {flags} under litellm_params, where litellm ignores them and never "
+        "sends them to the provider. Move them under model_info for litellm to use them."
+    )
+    verbose_router_logger.warning(warning)
+    return warning
 
 
 def warn_on_provider_credential_mismatch(model_name: str, litellm_params: Mapping[str, object]) -> str | None:

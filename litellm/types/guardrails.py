@@ -156,6 +156,7 @@ class SupportedGuardrailIntegrations(Enum):
     AGENT_365 = "agent_365"
     LLM_SHIELD_PROXY = "llm_shield_proxy"
     CONDUCT = "conduct"
+    AIRIA = "airia"
     WINGBACK = "wingback"
     DECISION_MODEL = "decision_model"
 
@@ -1192,6 +1193,16 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         default=None,
         gt=0,
         description="Maximum decisions calls in flight at once on the guardrail in each proxy worker. Implemented by guardrail='decision_model'.",
+    )
+
+    forward_messages_as_sent: bool | None = Field(
+        default=False,
+        description=(
+            "Only honored by guardrail='generic_guardrail_api'. When True, structured_messages reaches the "
+            "guardrail exactly as the client sent it, so rows can carry provider-native content blocks and "
+            "keys the OpenAI chat types do not declare. Default False sends OpenAI-format chat rows with "
+            "undeclared keys removed."
+        ),
     )
 
     extra_headers: list[str] | None = Field(

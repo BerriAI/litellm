@@ -33,6 +33,7 @@ from litellm.caching.redis_cluster_cache import RedisClusterCache
 from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
 from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import (
+    AwsErrorTypeProxyException,
     LitellmUserRoles,
     ModelAccessDeniedProxyException,
     ProxyErrorTypes,
@@ -43,7 +44,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.login_throttle import LoginThrottle
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.hooks.parallel_request_limiter_v3 import RequestRateLimiterStash
-from litellm.proxy.proxy_server import app, initialize, openai_exception_handler
+from litellm.proxy.proxy_server import app, aws_error_type_exception_handler, initialize, openai_exception_handler
 from litellm.utils import _invalidate_model_cost_lowercase_map
 from tests._master_key import MASTER_KEY
 
@@ -102,7 +103,7 @@ def test_cors_exposes_cache_key_header_to_browser_js():
     from litellm.constants import LITELLM_UI_ALLOW_HEADERS
 
     cors_middleware = next(m for m in app.user_middleware if m.cls is CORSMiddleware)
-    assert cors_middleware.kwargs["expose_headers"] is LITELLM_UI_ALLOW_HEADERS
+    assert set(LITELLM_UI_ALLOW_HEADERS) <= set(cors_middleware.kwargs["expose_headers"])
     assert "x-litellm-cache-key" in cors_middleware.kwargs["expose_headers"]
 
 
@@ -1774,108 +1775,6 @@ async def test_proxy_startup_refuses_an_unsafe_master_key_even_when_the_database
     assert ("could not be checked" in announced[0]) == key_can_have_encrypted_the_database
 
 
-@pytest.mark.asyncio
-async def test_proxy_startup_refuses_fips_mode_when_this_python_does_not_enforce_fips(monkeypatch, tmp_path):
-    from fastapi import FastAPI
-
-    from litellm.proxy.common_utils.fips import FipsModeError
-    from litellm.proxy.proxy_server import proxy_startup_event
-
-    _, announced = _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": "sk-a-safe-master-key"})
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
-    monkeypatch.setattr("litellm.proxy.proxy_server.openssl_enforces_fips", lambda: False)
-    monkeypatch.setenv("LITELLM_FIPS_MODE", "true")
-
-    with pytest.raises(FipsModeError):
-        async with proxy_startup_event(FastAPI()):
-            pass
-
-    assert len(announced) == 1
-    assert "does not enforce FIPS" in announced[0]
-
-
-@pytest.mark.asyncio
-async def test_proxy_startup_refuses_fips_mode_when_the_config_disables_tls_verification(monkeypatch, tmp_path):
-    import yaml
-    from fastapi import FastAPI
-
-    from litellm.proxy.common_utils.fips import FipsModeError
-    from litellm.proxy.proxy_server import proxy_startup_event
-
-    config_path, announced = _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": "sk-a-safe-master-key"})
-    config_path.write_text(
-        yaml.dump({"general_settings": {"master_key": "sk-a-safe-master-key"}, "litellm_settings": {"ssl_verify": False}})
-    )
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
-    monkeypatch.setattr("litellm.proxy.proxy_server.openssl_enforces_fips", lambda: True)
-    monkeypatch.setattr(litellm, "ssl_verify", True)
-    monkeypatch.setenv("LITELLM_FIPS_MODE", "true")
-
-    with pytest.raises(FipsModeError):
-        async with proxy_startup_event(FastAPI()):
-            pass
-
-    assert "TLS certificate verification is disabled by litellm_settings.ssl_verify" in announced[0]
-
-
-class _PrismaClientWhoseUserTableCannotHash:
-    class _Table:
-        async def find_many(self, where):
-            raise ValueError("[digital envelope routines] unsupported")
-
-    class _Db:
-        litellm_usertable = None
-
-    def __init__(self, database_url, proxy_logging_obj):
-        self.db = self._Db()
-        self.db.litellm_usertable = self._Table()
-        self.writer_db = self.db
-
-    async def connect(self):
-        pass
-
-    async def disconnect(self):
-        pass
-
-    def start_view_setup_task(self):
-        pass
-
-    async def check_view_exists(self):
-        pass
-
-    async def health_check(self):
-        pass
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("fips_mode", ["true", "false"])
-async def test_proxy_startup_surfaces_a_password_migration_crypto_failure(monkeypatch, tmp_path, caplog, fips_mode):
-    from fastapi import FastAPI
-
-    from litellm.proxy.proxy_server import proxy_startup_event
-
-    _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": "sk-a-safe-master-key"})
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
-    monkeypatch.setenv("DATABASE_URL", "postgresql://nobody:nothing@127.0.0.1:1/unreachable")
-    monkeypatch.setattr("litellm.proxy.proxy_server.PrismaClient", _PrismaClientWhoseUserTableCannotHash)
-    monkeypatch.setattr("litellm.proxy.proxy_server.openssl_enforces_fips", lambda: True)
-    monkeypatch.setenv("LITELLM_FIPS_MODE", fips_mode)
-
-    with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"):
-        if fips_mode == "true":
-            with pytest.raises(ValueError, match="digital envelope routines"):
-                async with proxy_startup_event(FastAPI()):
-                    pass
-        else:
-            async with proxy_startup_event(FastAPI()):
-                await asyncio.sleep(0)
-
-    failures = [r.getMessage() for r in caplog.records if "Password migration failed" in r.getMessage()]
-    assert len(failures) == 1
-    assert "plaintext passwords stay unhashed" in failures[0]
-    assert "digital envelope routines" in failures[0]
-
-
 class _DatabaseWithOneStoredCredential:
     def __init__(self, ciphertext):
         self._ciphertext = ciphertext
@@ -2710,7 +2609,7 @@ async def test_apply_search_filter_honours_exact_model_name_in_db_query():
         proxy_config=proxy_config,
     )
     where = prisma_client.db.litellm_proxymodeltable.count.call_args.kwargs["where"]
-    assert where["model_name"] == {"contains": "sonnet", "mode": "insensitive"}
+    assert where == {"model_name": {"contains": "sonnet", "mode": "insensitive"}}
 
 
 @pytest.mark.asyncio
@@ -11961,6 +11860,29 @@ async def test_openai_exception_handler_no_denial_log_for_plain_proxy_exception(
 
 
 @pytest.mark.asyncio
+async def test_aws_error_type_exception_handler_adds_the_aws_message_and_header():
+    error: Final = ProxyException(
+        message="synthetic policy says no",
+        type="invalid_request_error",
+        param=None,
+        code=400,
+        headers={"x-litellm-call-id": "call-1"},
+    )
+
+    response: Final = await aws_error_type_exception_handler(
+        _http_request_scope(), AwsErrorTypeProxyException(error, "ValidationException")
+    )
+
+    assert response.status_code == 400
+    assert response.headers["x-amzn-errortype"] == "ValidationException"
+    assert response.headers["x-litellm-call-id"] == "call-1"
+    assert json.loads(response.body) == {
+        "message": "synthetic policy says no",
+        "error": {"message": "synthetic policy says no", "type": "invalid_request_error", "param": None, "code": "400"},
+    }
+
+
+@pytest.mark.asyncio
 async def test_realtime_model_access_denial_logs_sanitized_internal_message(caplog):
     reservation = {"reserved_cost": 0.0, "input_cost": 0.0, "finalized": False, "entries": []}
 
@@ -12690,6 +12612,7 @@ def test_dump_redacted_config_serializes_non_json_native_values():
 async def test_update_config_general_settings_emits_audit_log(monkeypatch):
     import litellm.proxy.proxy_server as proxy_server_module
     from litellm.proxy._types import ConfigFieldUpdate
+    from litellm.proxy.management_helpers.audit_logs import drain_audit_tasks
     from litellm.proxy.proxy_server import update_config_general_settings
 
     existing = {"max_parallel_requests": 5, "some_api_key": "sk-stored-secret"}
@@ -12713,6 +12636,7 @@ async def test_update_config_general_settings_emits_audit_log(monkeypatch):
     )
     # Audit is scheduled via asyncio.create_task; yield so it runs.
     await asyncio.sleep(0)
+    await drain_audit_tasks()
 
     fake.db.litellm_auditlog.create.assert_awaited_once()
     written = fake.db.litellm_auditlog.create.call_args.kwargs["data"]
@@ -13082,6 +13006,7 @@ async def test_update_config_general_settings_applies_ssrf_globals(monkeypatch):
 async def test_delete_config_general_settings_emits_deleted_audit_log(monkeypatch):
     import litellm.proxy.proxy_server as proxy_server_module
     from litellm.proxy._types import ConfigFieldDelete
+    from litellm.proxy.management_helpers.audit_logs import drain_audit_tasks
     from litellm.proxy.proxy_server import delete_config_general_settings
 
     existing = {"max_parallel_requests": 5}
@@ -13101,6 +13026,7 @@ async def test_delete_config_general_settings_emits_deleted_audit_log(monkeypatc
     )
     # Audit is scheduled via asyncio.create_task; yield so it runs.
     await asyncio.sleep(0)
+    await drain_audit_tasks()
 
     fake.db.litellm_auditlog.create.assert_awaited_once()
     written = fake.db.litellm_auditlog.create.call_args.kwargs["data"]

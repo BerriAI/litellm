@@ -761,6 +761,30 @@ def test_bedrock_chat_invoke_tool_based_response_format_still_upgrades_legacy_th
     assert result["output_config"] == {"effort": "high"}
 
 
+def test_bedrock_chat_invoke_adaptive_thinking_keeps_the_forced_response_format_tool(local_model_cost_map):
+    """Anthropic accepts a forced tool_choice next to adaptive thinking, and dropping
+    it lets the model answer in prose instead of the requested JSON."""
+    result = AmazonAnthropicClaudeConfig().map_openai_params(
+        non_default_params={
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "test_schema",
+                    "schema": {"type": "object", "properties": {"result": {"type": "string"}}},
+                },
+            },
+            "thinking": {"type": "adaptive"},
+            "max_tokens": 8192,
+        },
+        optional_params={},
+        model="us.anthropic.claude-opus-5",
+        drop_params=False,
+    )
+
+    assert result["tool_choice"] == {"type": "tool", "name": result["tools"][0]["name"]}
+    assert result["thinking"] == {"type": "adaptive"}
+
+
 def test_bedrock_chat_invoke_response_format_stub_still_upgrades_legacy_thinking(local_model_cost_map):
     """Regression: the tool-based ``response_format`` path swaps in a Claude 3 stub
     model before the shared Anthropic mapping, which hid the adaptive-only model
@@ -975,6 +999,39 @@ def test_bedrock_chat_invoke_preserves_display_when_translating_legacy_thinking(
     assert ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER in result.get("anthropic_beta", [])
 
 
+BLOCK_BINDING: Final = {"prefix_mismatch_behavior": "error"}
+
+
+@pytest.mark.parametrize(
+    "requested_thinking",
+    (
+        {"type": "adaptive", "display": "updates", "block_binding": BLOCK_BINDING},
+        {"type": "enabled", "budget_tokens": 2048, "display": "updates", "block_binding": BLOCK_BINDING},
+    ),
+    ids=("adaptive", "legacy"),
+)
+def test_bedrock_chat_invoke_keeps_block_binding_with_display_updates(
+    local_model_cost_map, local_beta_headers_config, requested_thinking
+) -> None:
+    config: Final = AmazonAnthropicClaudeConfig()
+    model: Final = "us.anthropic.claude-opus-5"
+    optional_params: Final = config.map_openai_params(
+        non_default_params={"max_tokens": 512, "thinking": requested_thinking},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    result: Final = config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "Reply with OK"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert result.get("thinking") == {"type": "adaptive", "display": "updates", "block_binding": BLOCK_BINDING}
+
+
 FINE_GRAINED_TOOL_STREAMING_BETA: Final = "fine-grained-tool-streaming-2025-05-14"
 EAGER_TOOL_SCHEMA: Final = {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}
 
@@ -1028,6 +1085,35 @@ def test_bedrock_chat_invoke_eager_input_streaming_beta_not_duplicated_with_clie
     )
 
     assert result["anthropic_beta"] == [FINE_GRAINED_TOOL_STREAMING_BETA]
+
+
+DANGEROUS_TOOL_USE_BETA: Final = "dangerous-tool-use-2026-09-03"
+
+
+def _chat_invoke_betas(extra_optional_params: dict[str, object]) -> object:
+    config: Final = AmazonAnthropicClaudeConfig()
+    model: Final = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+    optional_params: Final = config.map_openai_params(
+        non_default_params={"max_tokens": 64}, optional_params={}, model=model, drop_params=False
+    )
+    return config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={**optional_params, **extra_optional_params},
+        litellm_params={},
+        headers={"anthropic-beta": f"claude-code-20250219,{DANGEROUS_TOOL_USE_BETA}"},
+    ).get("anthropic_beta")
+
+
+def test_bedrock_chat_invoke_drops_client_dangerous_tool_use_beta_without_safeguards() -> None:
+    assert _chat_invoke_betas({}) == ["claude-code-20250219"]
+
+
+def test_bedrock_chat_invoke_keeps_client_dangerous_tool_use_beta_with_safeguards() -> None:
+    assert _chat_invoke_betas({"safeguards": [{"type": "dangerous_tool_use"}]}) == [
+        "claude-code-20250219",
+        DANGEROUS_TOOL_USE_BETA,
+    ]
 
 
 def _mid_conversation_system_conversation() -> list[dict]:

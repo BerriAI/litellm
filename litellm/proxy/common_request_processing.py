@@ -80,6 +80,7 @@ from litellm.litellm_core_utils.served_output_texts import (
 from litellm.litellm_core_utils.streaming_handler import (
     backfill_missing_cache_usage_fields,
 )
+from litellm.litellm_core_utils.tool_fields import DropPolicy, MalformedField, drop_policy, resolve_tool_fields
 from litellm.proxy._types import LiteLLMRoutes, ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import (
     can_key_call_resolved_model,
@@ -129,6 +130,7 @@ from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
 )
 from litellm.router import Router
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
+from litellm.router_utils.auto_router_model_naming import AUTO_ROUTER_MODEL_PREFIX
 from litellm.router_utils.common_utils import resolve_model_group_alias, resolve_served_model
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.router import RouterRateLimitError
@@ -544,6 +546,8 @@ def stream_usage_tracking_updates(
         if isinstance(stream_options, dict) and "include_usage" not in stream_options:
             return {**scrub, "stream_options": {**stream_options, "include_usage": True}}
         return scrub
+    if always_include is False and route_type == "agenerate_content_stream" and "stream_options" not in data:
+        return {**scrub, "stream_options": {"include_usage": False}}
     if always_include is False or route_type != "acompletion":
         return scrub
     if isinstance(stream_options, dict) and stream_options.get("include_usage") is True:
@@ -629,6 +633,63 @@ def serialize_http_exception_detail(
             return msg, detail
         return json.dumps(detail), detail
     return str(detail), None
+
+
+_REQUEST_FIELDS: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(strict=True))
+_UNSEEN_DEPLOYMENT: Final = DropPolicy(drop_params=True, additional_drop_params=frozenset())
+
+
+def _is_auto_router(params: Mapping[str, object]) -> bool:
+    model: Final = params.get("model")
+    return isinstance(model, str) and model.startswith(AUTO_ROUTER_MODEL_PREFIX)
+
+
+def _named_deployments(llm_router: Router, model: str, team_id: str | None) -> tuple[Mapping[str, object], ...]:
+    by_id: Final = None if model in llm_router.model_names else llm_router.get_deployment(model_id=model)
+    if by_id is not None:
+        return (_REQUEST_FIELDS.validate_python(by_id.litellm_params.model_dump(exclude_none=True)),)
+    group: Final = llm_router.get_model_from_alias(model=model) or model
+    if group not in llm_router.model_names or llm_router.get_model_list_from_routing_groups(model_name=group):
+        return ()
+    deployments: Final = tuple(
+        _REQUEST_FIELDS.validate_python(deployment["litellm_params"])
+        for deployment in llm_router.get_all_deployments(model_name=group, team_id=team_id)
+    )
+    return () if any(_is_auto_router(params) for params in deployments) else deployments
+
+
+def _router_defaults(llm_router: Router | None) -> Mapping[str, object]:
+    configured: Final[object] = getattr(llm_router, "default_litellm_params", None)
+    if configured is None:
+        return {}
+    return {name: value for name, value in _REQUEST_FIELDS.validate_python(configured).items() if value is not None}
+
+
+def _counted_drop_policies(
+    data: Mapping[str, object], llm_router: Router | None, team_id: str | None
+) -> tuple[DropPolicy, ...]:
+    requested: Final = {**_router_defaults(llm_router), **data}
+    model: Final = data.get("model")
+    deployments: Final = (
+        _named_deployments(llm_router, model, team_id) if llm_router is not None and isinstance(model, str) else ()
+    )
+    if not deployments:
+        return (drop_policy(requested), _UNSEEN_DEPLOYMENT)
+    return tuple(drop_policy({**deployment, **requested}) for deployment in deployments)
+
+
+def resolve_counted_tool_fields(
+    data: Mapping[str, object], llm_router: Router | None, team_id: str | None
+) -> Mapping[str, object] | ProxyException:
+    resolved: Final = resolve_tool_fields(data, lambda: _counted_drop_policies(data, llm_router, team_id))
+    if isinstance(resolved, MalformedField):
+        return ProxyException(
+            message=resolved.message,
+            type="invalid_request_error",
+            param=resolved.field,
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+    return resolved
 
 
 def proxy_exception_from_http_exception(exc: HTTPException, headers: dict[str, str]) -> ProxyException:
@@ -747,6 +808,7 @@ async def _resolve_per_request_model_group_alias(
 
 
 _REQUEST_MODEL: Final[TypeAdapter[str | list[str] | None]] = TypeAdapter(str | list[str] | None)
+_DECODED_JSON: Final = TypeAdapter(object)
 _ROUTER_SETTINGS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 
 
@@ -1603,6 +1665,31 @@ def _get_cost_breakdown_from_logging_obj(
     )
 
 
+def _header_value(value: float | None) -> str | None:
+    return str(value) if value is not None else None
+
+
+def cost_headers(
+    response_cost: float | str | None, litellm_logging_obj: LiteLLMLoggingObj | None
+) -> Mapping[str, str | None]:
+    cost_breakdown: Final = _get_cost_breakdown_from_logging_obj(
+        litellm_logging_obj=litellm_logging_obj, response_cost=response_cost
+    )
+    return {
+        "x-litellm-response-cost": str(response_cost),
+        "x-litellm-response-cost-original": _header_value(cost_breakdown.original_cost),
+        "x-litellm-response-cost-discount-amount": _header_value(cost_breakdown.discount_amount),
+        "x-litellm-response-cost-margin-amount": _header_value(cost_breakdown.margin_total_amount),
+        "x-litellm-response-cost-margin-percent": _header_value(cost_breakdown.margin_percent),
+        "x-litellm-response-cost-input": _header_value(cost_breakdown.input_cost),
+        "x-litellm-response-cost-output": _header_value(cost_breakdown.output_cost),
+        "x-litellm-response-cost-cache-read": _header_value(cost_breakdown.cache_read_cost),
+        "x-litellm-response-cost-cache-creation": _header_value(cost_breakdown.cache_creation_cost),
+        "x-litellm-response-cost-reasoning": _header_value(cost_breakdown.reasoning_cost),
+        "x-litellm-response-cost-tool-usage": _header_value(cost_breakdown.tool_usage_cost),
+    }
+
+
 def _classifier_cost_from_request_data(request_data: Mapping[str, object] | None) -> float | None:
     """Cost of the auto-router's LLM classifier call, read from the request's routing_decision.
 
@@ -1807,6 +1894,10 @@ async def _team_member_within_fallback_model_budget(
     return True
 
 
+def _content_text(fields: Mapping[str, object]) -> str:
+    return str(fields.get("content", ""))
+
+
 class ProxyBaseLLMRequestProcessing:
     def __init__(self, data: dict, served_model: str | None = None):
         self.data = data
@@ -1876,10 +1967,6 @@ class ProxyBaseLLMRequestProcessing:
             use_logging_obj=read_timing_from_logging_obj,
         )
 
-        cost_breakdown: Final = _get_cost_breakdown_from_logging_obj(
-            litellm_logging_obj=litellm_logging_obj, response_cost=response_cost
-        )
-
         # Calculate updated spend for header (include current response_cost)
         current_spend: Final = user_api_key_dict.spend or 0.0
         updated_spend = current_spend
@@ -1906,37 +1993,7 @@ class ProxyBaseLLMRequestProcessing:
             ),  # don't include query params, risk of leaking sensitive info
             "x-litellm-version": version,
             "x-litellm-model-region": model_region,
-            "x-litellm-response-cost": str(response_cost),
-            "x-litellm-response-cost-original": (
-                str(cost_breakdown.original_cost) if cost_breakdown.original_cost is not None else None
-            ),
-            "x-litellm-response-cost-discount-amount": (
-                str(cost_breakdown.discount_amount) if cost_breakdown.discount_amount is not None else None
-            ),
-            "x-litellm-response-cost-margin-amount": (
-                str(cost_breakdown.margin_total_amount) if cost_breakdown.margin_total_amount is not None else None
-            ),
-            "x-litellm-response-cost-margin-percent": (
-                str(cost_breakdown.margin_percent) if cost_breakdown.margin_percent is not None else None
-            ),
-            "x-litellm-response-cost-input": (
-                str(cost_breakdown.input_cost) if cost_breakdown.input_cost is not None else None
-            ),
-            "x-litellm-response-cost-output": (
-                str(cost_breakdown.output_cost) if cost_breakdown.output_cost is not None else None
-            ),
-            "x-litellm-response-cost-cache-read": (
-                str(cost_breakdown.cache_read_cost) if cost_breakdown.cache_read_cost is not None else None
-            ),
-            "x-litellm-response-cost-cache-creation": (
-                str(cost_breakdown.cache_creation_cost) if cost_breakdown.cache_creation_cost is not None else None
-            ),
-            "x-litellm-response-cost-reasoning": (
-                str(cost_breakdown.reasoning_cost) if cost_breakdown.reasoning_cost is not None else None
-            ),
-            "x-litellm-response-cost-tool-usage": (
-                str(cost_breakdown.tool_usage_cost) if cost_breakdown.tool_usage_cost is not None else None
-            ),
+            **cost_headers(response_cost, litellm_logging_obj),
             "x-litellm-classifier-cost": (str(classifier_cost) if classifier_cost is not None else None),
             "x-litellm-key-tpm-limit": str(user_api_key_dict.tpm_limit),
             "x-litellm-key-rpm-limit": str(user_api_key_dict.rpm_limit),
@@ -3162,7 +3219,7 @@ class ProxyBaseLLMRequestProcessing:
             )
 
     @staticmethod
-    def _extract_completed_responses_response(stream_response: object) -> object:
+    def extract_completed_responses_response(stream_response: object) -> object:
         """Pull the assembled ``ResponsesAPIResponse`` off a streaming iterator.
 
         ``ResponsesAPIStreamingIterator`` stores the terminal stream event
@@ -3198,9 +3255,7 @@ class ProxyBaseLLMRequestProcessing:
         appears, ahead of the chunk carrying ``response.completed``.
         """
         async for chunk in wrapped_generator:
-            completed_obj = ProxyBaseLLMRequestProcessing._extract_completed_responses_response(
-                original_stream_response
-            )
+            completed_obj = ProxyBaseLLMRequestProcessing.extract_completed_responses_response(original_stream_response)
             if completed_obj is None:
                 yield chunk
                 continue
@@ -3212,7 +3267,7 @@ class ProxyBaseLLMRequestProcessing:
             async for remaining_chunk in wrapped_generator:
                 yield remaining_chunk
             return
-        late_completed_obj: Final = ProxyBaseLLMRequestProcessing._extract_completed_responses_response(
+        late_completed_obj: Final = ProxyBaseLLMRequestProcessing.extract_completed_responses_response(
             original_stream_response
         )
         if late_completed_obj is not None:
@@ -4101,7 +4156,7 @@ class ProxyBaseLLMRequestProcessing:
                         try:
                             d = chunk.model_dump(mode="json", exclude_none=True)
                             if isinstance(d, dict):
-                                str_so_far += str(d.get("content", ""))
+                                str_so_far += _content_text(d)
                         except Exception:
                             pass
                     elif isinstance(chunk, dict):
@@ -4308,7 +4363,7 @@ class ProxyBaseLLMRequestProcessing:
                 if stripped_ln.startswith("data:"):
                     json_part = stripped_ln.split("data:", 1)[1].strip()
                     if json_part and json_part != "[DONE]":
-                        obj: object = json.loads(json_part)
+                        obj: object = _DECODED_JSON.validate_python(json.loads(json_part))
                         if not isinstance(obj, dict):
                             return None
                         maybe_modified = ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(
@@ -4322,24 +4377,18 @@ class ProxyBaseLLMRequestProcessing:
             return None
 
     @staticmethod
-    def _openai_stream_usage_kwargs(usage: Mapping[str, Any]) -> Mapping[str, Any]:
+    def _openai_stream_usage(usage: Mapping[str, Any]) -> Usage:
         prompt_tokens: Final = int(usage.get("prompt_tokens", 0) or 0)
         completion_tokens: Final = int(usage.get("completion_tokens", 0) or 0)
         total_tokens: Final = int(
             usage.get("total_tokens", prompt_tokens + completion_tokens) or (prompt_tokens + completion_tokens)
         )
-        return MappingProxyType(
-            {
-                key: value
-                for key, value in (
-                    ("prompt_tokens", prompt_tokens),
-                    ("completion_tokens", completion_tokens),
-                    ("total_tokens", total_tokens),
-                    ("completion_tokens_details", usage.get("completion_tokens_details")),
-                    ("prompt_tokens_details", usage.get("prompt_tokens_details")),
-                )
-                if value is not None
-            }
+        return Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+            completion_tokens_details=usage.get("completion_tokens_details"),
+            prompt_tokens_details=usage.get("prompt_tokens_details"),
         )
 
     @staticmethod
@@ -4349,7 +4398,7 @@ class ProxyBaseLLMRequestProcessing:
         if obj.get("type") == "message_delta":
             return AnthropicConfig().calculate_usage(usage_object=usage, reasoning_content=None)
         if obj.get("object") == "chat.completion.chunk":
-            return Usage(**ProxyBaseLLMRequestProcessing._openai_stream_usage_kwargs(usage))
+            return ProxyBaseLLMRequestProcessing._openai_stream_usage(usage)
         return None
 
     @staticmethod

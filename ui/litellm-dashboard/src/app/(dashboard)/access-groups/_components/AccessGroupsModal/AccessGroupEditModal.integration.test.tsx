@@ -34,6 +34,17 @@ vi.mock("@/components/ModelSelect/ModelSelect", () => ({
 
 vi.mock("@/components/networking");
 
+vi.mock("@/components/skills/SkillSelector", () => ({
+  default: ({ value, onChange }: { value?: string[]; onChange: (next: string[]) => void }) => (
+    <div>
+      <button type="button" aria-label="skill-select" onClick={() => onChange([...(value ?? []), "private-plugin"])}>
+        {(value ?? []).join(",")}
+      </button>
+      <button type="button" aria-label="skill-clear" onClick={() => onChange([])} />
+    </div>
+  ),
+}));
+
 vi.mock("@/lib/toast", () => ({
   toast: { success: vi.fn(), fromError: vi.fn(), error: vi.fn() },
 }));
@@ -49,6 +60,7 @@ const accessGroup: AccessGroupResponse = {
   access_mcp_server_ids: ["srv-1"],
   mcp_tool_permissions: { "srv-1": ["read_file"] },
   access_agent_ids: ["agent-1"],
+  access_skill_names: ["old-plugin"],
   assigned_team_ids: [],
   assigned_key_ids: [],
   access_mcp_servers: [{ id: "srv-1", name: "Server One" }],
@@ -102,7 +114,35 @@ describe("AccessGroupEditModal submit payload", () => {
       access_model_names: undefined,
       access_mcp_server_ids: undefined,
       access_agent_ids: undefined,
+      access_skill_names: undefined,
     });
+  });
+
+  it("sends the skills picked on the Skills tab", async () => {
+    const user = setup();
+    renderModal();
+    await screen.findByDisplayValue("Engineering");
+
+    await user.click(screen.getByRole("tab", { name: /Skills/ }));
+    await user.click(screen.getByLabelText("skill-select"));
+    await save(user);
+
+    await waitFor(() => expect(mutate).toHaveBeenCalled());
+    expect(variables().params.access_skill_names).toStrictEqual(["old-plugin", "private-plugin"]);
+    expect(variables().params.access_agent_ids).toBeUndefined();
+  });
+
+  it("sends an empty list when every skill is removed on the Skills tab", async () => {
+    const user = setup();
+    renderModal();
+    await screen.findByDisplayValue("Engineering");
+
+    await user.click(screen.getByRole("tab", { name: /Skills/ }));
+    await user.click(screen.getByLabelText("skill-clear"));
+    await save(user);
+
+    await waitFor(() => expect(mutate).toHaveBeenCalled());
+    expect(variables().params.access_skill_names).toStrictEqual([]);
   });
 
   it("sends a tab's field only once that tab has been visited", async () => {
@@ -122,6 +162,7 @@ describe("AccessGroupEditModal submit payload", () => {
       access_model_names: undefined,
       access_mcp_server_ids: ["srv-1"],
       access_agent_ids: ["agent-1"],
+      access_skill_names: undefined,
     });
   });
 

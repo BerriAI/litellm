@@ -2,6 +2,7 @@ import asyncio
 import json
 import re
 from collections.abc import AsyncGenerator, AsyncIterator, Mapping, Sequence
+from contextvars import ContextVar
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, Protocol, runtime_checkable
 
@@ -91,11 +92,14 @@ def is_anthropic_content_delta_chunk(chunk: object) -> bool:
     return False
 
 
+_DECODED_SSE_DATA: Final = TypeAdapter(object)
+
+
 def _decoded_sse_data_line(line: bytes) -> object | None:
     if not line.startswith(b"data:"):
         return None
     try:
-        return json.loads(line[len(b"data:") :].strip())
+        return _DECODED_SSE_DATA.validate_python(json.loads(line[len(b"data:") :].strip()))
     except (ValueError, TypeError):
         return None
 
@@ -347,6 +351,22 @@ class SupportsAclose(Protocol):
 async def aclose_if_supported(stream: object) -> None:
     if isinstance(stream, SupportsAclose):
         await stream.aclose()
+
+
+_CLOSING_SUPERSEDED_ATTEMPT: Final[ContextVar[bool]] = ContextVar("closing_superseded_attempt", default=False)
+
+
+async def aclose_superseded_attempt(stream: object) -> None:
+    """Close an attempt a retry or fallback is taking over, so its end-of-stream logging records a failure."""
+    token: Final = _CLOSING_SUPERSEDED_ATTEMPT.set(True)
+    try:
+        await aclose_if_supported(stream)
+    finally:
+        _CLOSING_SUPERSEDED_ATTEMPT.reset(token)
+
+
+def closing_superseded_attempt() -> bool:
+    return _CLOSING_SUPERSEDED_ATTEMPT.get()
 
 
 _RESPONSE_HEADERS_ADAPTER: Final[TypeAdapter[dict[str, str]]] = TypeAdapter(dict[str, str])
