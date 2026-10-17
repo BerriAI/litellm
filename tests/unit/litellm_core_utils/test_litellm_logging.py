@@ -4383,6 +4383,22 @@ def test_get_error_information_records_the_cooled_deployments_of_a_router_refusa
     assert StandardLoggingPayloadSetup.get_error_information(provider_429)["error_cooldown_deployments"] is None
 
 
+def test_get_error_information_handles_a_router_refusal_subclass_that_skips_its_init():
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+    from litellm.types.router import RouterRateLimitError
+
+    class PluginRefusal(RouterRateLimitError):
+        def __init__(self, message: str) -> None:
+            ValueError.__init__(self, message)
+
+    result: Final = StandardLoggingPayloadSetup.get_error_information(PluginRefusal("plugin refused"))
+    assert (result["error_class"], result["error_code"], result["error_cooldown_deployments"]) == (
+        "PluginRefusal",
+        "429",
+        None,
+    ), result
+
+
 # ──────────────────────────────────────────────────────────────────────
 # Tests for _get_assembled_streaming_response non-streaming early return
 # ──────────────────────────────────────────────────────────────────────
