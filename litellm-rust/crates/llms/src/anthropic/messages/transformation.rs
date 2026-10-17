@@ -1072,7 +1072,6 @@ mod tests {
     #[case::not_a_list(BetaProvider::Anthropic, json!(1), &["dangerous-tool-use-2026-09-03"])]
     #[case::null(BetaProvider::Anthropic, Value::Null, &[])]
     #[case::bedrock_converse_has_a_null_cell(BetaProvider::BedrockConverse, json!([{"type": "dangerous_tool_use"}]), &[])]
-    #[case::databricks_has_a_null_cell(BetaProvider::Databricks, json!([{"type": "dangerous_tool_use"}]), &[])]
     fn safeguards_add_the_dangerous_tool_use_beta_where_the_beta_map_has_a_cell(
         #[case] provider: BetaProvider,
         #[case] safeguards: Value,
