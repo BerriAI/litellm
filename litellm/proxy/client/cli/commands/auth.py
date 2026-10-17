@@ -53,6 +53,7 @@ from .claude_settings import (
     settings_file_owners,
 )
 from .pkce_login import (
+    LOGIN_TIMEOUT_SECONDS,
     Http,
     PkceFailure,
     RevocationUnavailable,
@@ -849,14 +850,14 @@ def _finish_login(base_url: str, api_key: str, config_claude: bool, stored: Secr
     show_commands()
 
 
-def _replace_stored_token(record: CliTokenData, http: Http, vault: SecretVault) -> SecretSave:
+def replace_stored_token(record: CliTokenData, http: Http, vault: SecretVault) -> SecretSave:
     previous: Final = load_token(vault=vault)
     stored: Final = save_token(record, vault=vault)
     if previous is None or isinstance(stored, CredentialNotSaved):
         return stored
     revocation: Final = revoke_stored_credential(previous, http)
     if revocation is not None:
-        click.echo(
+        _warn(
             f"Could not revoke the previous login's refresh token on the proxy ({revocation.reason}); "
             "it expires on its own."
         )
@@ -869,7 +870,7 @@ def _pkce_login(base_url: str, config_claude: bool, vault: SecretVault) -> None:
     if isinstance(credential, PkceFailure):
         click.echo(f"Authentication failed: {credential.reason}")
         return
-    stored: Final = _replace_stored_token(pkce_token_record(base_url, credential), http, vault)
+    stored: Final = replace_stored_token(pkce_token_record(base_url, credential), http, vault)
     _finish_login(base_url, credential.access_token, config_claude, stored)
 
 
@@ -948,7 +949,7 @@ def login(ctx: click.Context, config_claude: bool, pkce: bool) -> None:
 
             # Save token data. base_url is stored so we can verify origin
             # before reusing the key on a subsequent CLI invocation.
-            stored: Final = _replace_stored_token(
+            stored: Final = replace_stored_token(
                 {
                     "base_url": base_url.rstrip("/"),
                     "key": api_key,
@@ -1089,7 +1090,11 @@ def whoami(ctx: click.Context):
     token_data: Final = load_token(vault=vault)
 
     if not token_data:
-        click.echo("Not authenticated. Run 'lite login' to authenticate.")
+        click.echo(
+            "Not authenticated. Run the command you need, such as 'lite keys generate', and lite opens your browser "
+            f"to sign in and waits up to {LOGIN_TIMEOUT_SECONDS // 60} minutes for you to approve it. "
+            "To sign in first from a terminal, run 'lite login --pkce'."
+        )
         return
 
     key_readable: Final = token_data.get("key") is not None
