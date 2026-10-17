@@ -93,6 +93,11 @@ _CREDENTIAL_HEADER_NAMES: Final = SpecialHeaders.litellm_credential_header_names
     {"cookie", "proxy-authorization"}
 )
 _TRANSPORT_ONLY_CREDENTIAL_KEYS: Final = frozenset({"provider_specific_header", "headers", "api_key"})
+_PROVIDER_CREDENTIAL_HEADER_NAMES: Final = frozenset(
+    {"api-key", "authorization", "ocp-apim-subscription-key", "x-api-key", "x-goog-api-key"}
+)
+_REQUEST_FIELDS: Final = TypeAdapter(Mapping[str, object])
+_REQUEST_ENTRIES: Final = TypeAdapter(tuple[object, ...])
 
 # Matches any header of the form x-<something>-session-id (case-insensitive).
 # Excludes the two explicit litellm headers which are handled with higher priority.
@@ -1325,6 +1330,44 @@ def clean_headers(
     return clean_headers
 
 
+def _request_fields(value: object) -> Mapping[str, object]:
+    try:
+        return _REQUEST_FIELDS.validate_python(value)
+    except PydanticValidationError:
+        return MappingProxyType({})
+
+
+def _request_entries(value: object) -> tuple[object, ...]:
+    if value is None:
+        return ()
+    try:
+        return _REQUEST_ENTRIES.validate_python(value)
+    except PydanticValidationError:
+        return (value,)
+
+
+def _names_a_provider_credential_header(headers: object) -> bool:
+    return headers is not None and not _PROVIDER_CREDENTIAL_HEADER_NAMES.isdisjoint(
+        name.lower() for name in _request_fields(headers)
+    )
+
+
+def _caller_credential_fields(data: Mapping[str, object]) -> tuple[str, ...]:
+    """Names of the request fields that carry the caller's own provider credential: ``api_key``, and ``headers``,
+    ``extra_headers`` or a ``provider_specific_header`` entry's ``extra_headers`` that name a provider credential
+    header."""
+    carried: Final = {
+        "api_key": "api_key" in data,
+        "extra_headers": _names_a_provider_credential_header(data.get("extra_headers")),
+        "headers": _names_a_provider_credential_header(data.get("headers")),
+        "provider_specific_header": any(
+            _names_a_provider_credential_header(_request_fields(entry).get("extra_headers"))
+            for entry in _request_entries(data.get("provider_specific_header"))
+        ),
+    }
+    return tuple(name for name, sent in sorted(carried.items()) if sent)
+
+
 def _is_credential_header(header: str) -> bool:
     """Whether `header` carries a caller credential rather than request context."""
     return header.lower() in _CREDENTIAL_HEADER_NAMES
@@ -2294,7 +2337,6 @@ async def add_litellm_data_to_request(
         "method": request.method,
         "headers": _logging_safe_headers,
         "body": None,  # filled in post-strip; see below
-        "credential_fields": tuple(sorted(name for name in _TRANSPORT_ONLY_CREDENTIAL_KEYS if name in data)),
         "arrival_time": arrival_time,  # Track when request arrived at proxy
     }
 
@@ -2380,6 +2422,8 @@ async def add_litellm_data_to_request(
     data[_metadata_variable_name]["used_client_oauth_token"] = add_provider_specific_headers_to_request(
         data=data, headers=_headers
     )
+    credential_fields: Final = _caller_credential_fields(_REQUEST_FIELDS.validate_python(data))
+    data["proxy_server_request"]["credential_fields"] = credential_fields  # rebind-ok: data is an out-param
 
     ## Cache Controls
     cache_control_header: Final = _headers.get("Cache-Control", None)

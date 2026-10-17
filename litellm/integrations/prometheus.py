@@ -14,6 +14,7 @@ from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, Protocol, TypeAlias, TypeVar, cast
 
+import openai
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
@@ -22,11 +23,13 @@ from litellm._internal_context import with_service_target
 from litellm._logging import print_verbose, verbose_logger
 from litellm.constants import (
     AUTH_OBJECTS_TARGET,
+    LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
     PROMETHEUS_OVERFLOW_SERIES_LABEL_VALUE,
     PROXY_LLM_PROVIDER_FALLBACK,
     PROXY_REJECTED_BEFORE_ROUTING_KEY,
 )
 from litellm.exceptions import (
+    CallerCredentialAuthenticationError,
     MalformedRequestFieldError,
     validate_rate_limit_category,
     validate_rate_limit_type,
@@ -50,6 +53,7 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.service_tier_utils import (
     get_service_tier_from_standard_logging_payload,
 )
+from litellm.llms.github_copilot.per_user_auth import github_copilot_user_session_from
 from litellm.models.end_user import LiteLLM_EndUserTable
 from litellm.models.team import LiteLLM_TeamTable
 from litellm.models.user import LiteLLM_UserTable
@@ -333,6 +337,85 @@ def _get_proxy_llm_router() -> Router | None:
     except Exception:
         return None
     return llm_router
+
+
+_LOGGED_FIELDS: Final = TypeAdapter(Mapping[str, object])
+
+
+def _logged_fields(value: object) -> Mapping[str, object]:
+    try:
+        return _LOGGED_FIELDS.validate_python(value)
+    except ValidationError:
+        return MappingProxyType({})
+
+
+_CALLER_CREDENTIAL_FIELDS: Final = frozenset(
+    {
+        "aws_access_key_id",
+        "aws_secret_access_key",
+        "aws_session_token",
+        "aws_web_identity_token",
+        "azure_ad_token",
+        "azure_password",
+        "azure_scope",
+        "azure_username",
+        "client_id",
+        "client_secret",
+        "gigachat_access_token",
+        "oci_fingerprint",
+        "oci_key",
+        "oci_key_file",
+        "oci_tenancy",
+        "oci_user",
+        "tenant_id",
+        "token",
+        "user_config",
+        "vertex_ai_credentials",
+        "vertex_credentials",
+        "watsonx_credentials",
+        "wx_credentials",
+        "zen_api_key",
+    }
+)
+
+
+_CALLER_TRANSPORT_FIELDS: Final = frozenset({"api_key", "extra_headers", "headers", "provider_specific_header"})
+
+
+def _sent_a_provider_credential(caller_body: Mapping[str, object]) -> bool:
+    """True when the caller's request body, or its ``extra_body``, carries a provider credential field."""
+    return not (
+        _CALLER_CREDENTIAL_FIELDS.isdisjoint(caller_body)
+        and _CALLER_CREDENTIAL_FIELDS.isdisjoint(_logged_fields(caller_body.get("extra_body")))
+    )
+
+
+def _used_a_caller_credential(logged_call: Mapping[str, object]) -> bool:
+    """True when the provider was called with a credential that belongs to the caller rather than the
+    deployment: an api_key, credential header or other provider credential field the caller sent with the request,
+    the caller's own Anthropic OAuth token, the caller's own GitHub Copilot connection, or the caller's identity
+    token that a token-exchange deployment trades in on every call."""
+    litellm_params: Final = _logged_fields(logged_call.get("litellm_params"))
+    proxy_server_request: Final = _logged_fields(litellm_params.get("proxy_server_request"))
+    credential_fields: Final = proxy_server_request.get("credential_fields")
+    logged_metadata: Final = _logged_fields(_logged_fields(logged_call.get("standard_logging_object")).get("metadata"))
+    return (
+        (isinstance(credential_fields, tuple) and any(field in credential_fields for field in _CALLER_TRANSPORT_FIELDS))
+        or _sent_a_provider_credential(_logged_fields(proxy_server_request.get("body")))
+        or bool(litellm_params.get("token_exchange_endpoint"))
+        or logged_metadata.get("used_client_oauth_token") is True
+        or github_copilot_user_session_from(litellm_params) is not None
+    )
+
+
+def _is_deployment_failure(exception: openai.APIError, logged_call: Mapping[str, object]) -> bool:
+    """True for an error raised while calling the deployment with its own credential, on a request the proxy
+    did not reject itself."""
+    return not (
+        isinstance(exception, CallerCredentialAuthenticationError)
+        or bool(logged_call.get(LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL))
+        or _used_a_caller_credential(logged_call)
+    )
 
 
 def _bounded_requested_model_label(requested_model: object, router_originated: bool = False) -> str | None:
@@ -2780,6 +2863,8 @@ class PrometheusLogger(CustomLogger):
         information from various callback function signatures and determines if the request
         represents an invalid API key attempt that should be filtered from metrics.
 
+        An error raised while calling the deployment with its own credential is never skipped.
+
         Args:
             kwargs: Dictionary potentially containing exception and other data
             user_api_key_dict: User API key authentication object (currently unused)
@@ -2798,6 +2883,11 @@ class PrometheusLogger(CustomLogger):
 
         if exception is None and kwargs:
             exception = kwargs.get("exception")
+
+        if isinstance(exception, openai.APIError) and _is_deployment_failure(
+            exception, _LOGGED_FIELDS.validate_python(kwargs or {})
+        ):
+            return False
 
         if self._is_invalid_api_key_request(status_code, exception=exception):
             verbose_logger.debug(
