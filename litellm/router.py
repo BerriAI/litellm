@@ -561,39 +561,6 @@ def _configured_model_info(deployment: Mapping[str, object]) -> Mapping[str, obj
     return _MODEL_INFO_ADAPTER.validate_python(deployment.get("model_info") or {})
 
 
-def _team_deployment_public_name(deployment: DeploymentTypedDict, team_id: str) -> str | None:
-    model_info: Final = _configured_model_info(deployment)
-    if model_info.get("team_id") != team_id:
-        return None
-    team_public_model_name: Final = model_info.get("team_public_model_name")
-    return (
-        team_public_model_name
-        if isinstance(team_public_model_name, str) and team_public_model_name
-        else deployment["model_name"]
-    )
-
-
-def _team_deployment_for_provider(
-    models: Sequence[DeploymentTypedDict],
-    deployment: DeploymentTypedDict,
-    team_id: str,
-    custom_llm_provider: str,
-) -> str | None:
-    public_name: Final = _team_deployment_public_name(deployment, team_id)
-    if public_name is None:
-        return None
-    same_public_name_deployments: Final = tuple(
-        candidate for candidate in models if _team_deployment_public_name(candidate, team_id) == public_name
-    )
-    if all(
-        provider_for_generic_call(candidate["litellm_params"]) == custom_llm_provider
-        for candidate in same_public_name_deployments
-    ):
-        return public_name
-    deployment_id: Final = _configured_model_info(deployment).get("id")
-    return deployment_id if isinstance(deployment_id, str) else None
-
-
 def _as_retry_skipped_deployment_ids(value: object) -> tuple[str, ...]:
     return tuple(item for item in value if isinstance(item, str)) if isinstance(value, tuple) else ()
 
@@ -12308,19 +12275,49 @@ class Router:
         models: Final = self.get_model_list(model_name=team_model_name, team_id=team_id)
         if not models:
             return None
+        if team_model_name is None and custom_llm_provider is not None:
+
+            def team_deployment_public_name(deployment: DeploymentTypedDict) -> str | None:
+                model_info: Final = _configured_model_info(deployment)
+                if model_info.get("team_id") != team_id:
+                    return None
+                team_public_model_name: Final = model_info.get("team_public_model_name")
+                return (
+                    team_public_model_name
+                    if isinstance(team_public_model_name, str) and team_public_model_name
+                    else deployment["model_name"]
+                )
+
+            matching_deployment: Final = next(
+                (
+                    model
+                    for model in models
+                    if team_deployment_public_name(model) is not None
+                    and provider_for_generic_call(model["litellm_params"]) == custom_llm_provider
+                ),
+                None,
+            )
+            if matching_deployment is None:
+                return None
+            public_name: Final = team_deployment_public_name(matching_deployment)
+            if public_name is None:
+                return None
+            same_public_name_deployments: Final = tuple(
+                candidate for candidate in models if team_deployment_public_name(candidate) == public_name
+            )
+            if all(
+                provider_for_generic_call(candidate["litellm_params"]) == custom_llm_provider
+                for candidate in same_public_name_deployments
+            ):
+                return public_name
+            deployment_id: Final = _configured_model_info(matching_deployment).get("id")
+            return deployment_id if isinstance(deployment_id, str) else None
         for model in models:
             if model.get("model_info", {}).get("team_id") == team_id:
                 if team_model_name is None:
                     # No model was specified (e.g. vector store endpoints).
                     # Return the deployment's public model name so the router
                     # can route to it and inject the BYOK API key.
-                    if (
-                        custom_llm_provider is not None
-                        and provider_for_generic_call(model["litellm_params"]) != custom_llm_provider
-                    ):
-                        continue
-                    if custom_llm_provider is not None:
-                        return _team_deployment_for_provider(models, model, team_id, custom_llm_provider)
                     return model.get("model_info", {}).get("team_public_model_name") or model.get("model_name")
                 return team_model_name
 
