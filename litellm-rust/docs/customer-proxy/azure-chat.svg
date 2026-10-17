@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="760" viewBox="0 0 980 760" font-family="Helvetica, Arial, sans-serif" font-size="13">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#333"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="980" height="760" fill="#ffffff"/>
+  <text x="20" y="30" font-size="17" font-weight="bold" fill="#111">POST /v1/chat/completions to an azure/ deployment</text>
+
+  <!-- client -->
+  <rect x="20" y="60" width="150" height="56" rx="6" fill="#eef3fb" stroke="#4a6fa5"/>
+  <text x="95" y="84" text-anchor="middle" fill="#111" font-weight="bold">Client</text>
+  <text x="95" y="102" text-anchor="middle" fill="#333">OpenAI SDK body</text>
+
+  <!-- gateway handle -->
+  <rect x="220" y="50" width="300" height="76" rx="6" fill="#f5f5f5" stroke="#666"/>
+  <text x="370" y="72" text-anchor="middle" fill="#111" font-weight="bold">gateway-inference chat_completions</text>
+  <text x="370" y="92" text-anchor="middle" fill="#333">auth, hooks admit, route deployment,</text>
+  <text x="370" y="110" text-anchor="middle" fill="#333">litellm_params + base_model + drop_params</text>
+  <line x1="170" y1="88" x2="218" y2="88" stroke="#333" marker-end="url(#a)"/>
+
+  <!-- decision -->
+  <polygon points="370,150 490,190 370,230 250,190" fill="#fff8e6" stroke="#b8860b"/>
+  <text x="370" y="186" text-anchor="middle" fill="#111">serves_openai?</text>
+  <text x="370" y="202" text-anchor="middle" fill="#111">openai | azure</text>
+  <line x1="370" y1="126" x2="370" y2="148" stroke="#333" marker-end="url(#a)"/>
+
+  <rect x="580" y="50" width="380" height="76" rx="6" fill="#fff8e6" stroke="#b8860b"/>
+  <text x="770" y="72" text-anchor="middle" fill="#111" font-weight="bold">gateway startup (hooks::install)</text>
+  <text x="770" y="92" text-anchor="middle" fill="#333">an azure deployment loads the cost map and</text>
+  <text x="770" y="110" text-anchor="middle" fill="#333">installs it as ModelInfo for the param rules</text>
+
+  <!-- run_openai / prepare_azure -->
+  <rect x="20" y="262" width="560" height="232" rx="6" fill="#eef7ee" stroke="#3c8d3c"/>
+  <text x="300" y="284" text-anchor="middle" fill="#111" font-weight="bold">inference-chat run_openai, prepare_azure</text>
+  <text x="36" y="308" fill="#333">1. resolve os.environ/ refs and AZURE_* env through the secret source</text>
+  <text x="36" y="328" fill="#333">2. api_version: deployment, AZURE_API_VERSION, else 2025-02-01-preview</text>
+  <text x="54" y="346" fill="#333">api_base: deployment, AZURE_API_BASE, AZURE_OPENAI_ENDPOINT</text>
+  <text x="36" y="366" fill="#333">3. AzureChatRequest::transform: family from base_model or deployment</text>
+  <text x="54" y="384" fill="#333">(gpt, o-series, gpt-5), unsupported params refused or dropped</text>
+  <text x="36" y="404" fill="#333">4. url: {base}/openai/deployments/{dep}/chat/completions?api-version=</text>
+  <text x="54" y="422" fill="#333">v1, latest, preview: {base}/openai/v1/chat/completions</text>
+  <text x="36" y="442" fill="#333">5. credential: azure_ad_token, else api-key, else Entra ID token</text>
+  <text x="54" y="460" fill="#333">(client secret, OIDC, AZURE_AD_TOKEN, managed identity)</text>
+  <text x="36" y="482" fill="#555">then the shared interceptors, send and SSE relay of the OpenAI path</text>
+  <line x1="370" y1="230" x2="370" y2="260" stroke="#333" marker-end="url(#a)"/>
+  <text x="382" y="250" fill="#555">yes</text>
+
+  <!-- upstream -->
+  <rect x="680" y="300" width="280" height="110" rx="6" fill="#eef3fb" stroke="#4a6fa5"/>
+  <text x="820" y="326" text-anchor="middle" fill="#111" font-weight="bold">Azure OpenAI</text>
+  <text x="820" y="346" text-anchor="middle" fill="#333">api-key: key (deployment path)</text>
+  <text x="820" y="364" text-anchor="middle" fill="#333">Authorization: Bearer (AD token, v1)</text>
+  <text x="820" y="390" text-anchor="middle" fill="#333">application/json or text/event-stream</text>
+  <line x1="580" y1="340" x2="678" y2="340" stroke="#333" marker-end="url(#a)"/>
+  <line x1="678" y1="380" x2="580" y2="380" stroke="#333" marker-end="url(#a)"/>
+
+  <!-- refusals -->
+  <rect x="580" y="160" width="380" height="76" rx="6" fill="#f5f5f5" stroke="#999" stroke-dasharray="5,4"/>
+  <text x="770" y="182" text-anchor="middle" fill="#111">Refused before the call</text>
+  <text x="770" y="200" text-anchor="middle" fill="#555">unsupported param without drop_params: 400</text>
+  <text x="770" y="218" text-anchor="middle" fill="#555">Responses API bridge cases, Cloudflare bases: 501</text>
+
+  <!-- bottom boxes -->
+  <rect x="20" y="530" width="440" height="210" rx="6" fill="#ffffff" stroke="#b8860b"/>
+  <text x="240" y="552" text-anchor="middle" fill="#111" font-weight="bold">usage and cost (gateway-inference Finish)</text>
+  <text x="36" y="576" fill="#333">usage from the body or the include_usage chunk</text>
+  <text x="36" y="596" fill="#333">config prices on the deployment win</text>
+  <text x="36" y="616" fill="#333">base_model set: cost map azure/{base_model},</text>
+  <text x="54" y="634" fill="#333">then {base_model}</text>
+  <text x="36" y="654" fill="#333">otherwise: azure/{model the response names},</text>
+  <text x="54" y="672" fill="#333">then azure/{deployment}</text>
+  <text x="36" y="696" fill="#555">the bare deployment name is never priced, it names</text>
+  <text x="36" y="714" fill="#555">a resource, not a model</text>
+
+  <rect x="500" y="530" width="460" height="210" rx="6" fill="#ffffff" stroke="#3c8d3c"/>
+  <text x="730" y="552" text-anchor="middle" fill="#111" font-weight="bold">errors</text>
+  <text x="516" y="576" fill="#333">upstream 4xx/5xx: same status, OpenAI error envelope</text>
+  <text x="516" y="596" fill="#333">carrying Azure's error.message</text>
+  <text x="516" y="624" fill="#333">content filter (inner_error with a policy violation):</text>
+  <text x="516" y="644" fill="#333">provider_specific_fields keeps innererror,</text>
+  <text x="516" y="664" fill="#333">inner_error and the whole azure_error</text>
+  <text x="516" y="692" fill="#333">stream cut after headers: a final</text>
+  <text x="516" y="712" fill="#333">data: {"error": ...} event, then close</text>
+  <line x1="240" y1="494" x2="240" y2="528" stroke="#333" marker-end="url(#a)"/>
+  <line x1="500" y1="494" x2="730" y2="528" stroke="#333" marker-end="url(#a)"/>
+</svg>

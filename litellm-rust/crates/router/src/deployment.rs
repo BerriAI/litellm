@@ -21,6 +21,9 @@ pub struct Deployment {
     /// `model_info.id`, which names the deployment in state shared with other replicas and
     /// with Python routers on the same Redis.
     pub id: Option<String>,
+    /// The model a deployment serves under another name, from `litellm_params.base_model` or
+    /// `model_info.base_model`, which Azure's param rules and prices follow.
+    pub base_model: Option<String>,
 }
 
 impl Deployment {
@@ -46,6 +49,12 @@ impl Deployment {
             shaping: MessagesShaping::default(),
             team_id: None,
             id: None,
+            base_model: params
+                .extra
+                .get("base_model")
+                .and_then(|value| value.as_str())
+                .filter(|name| !name.is_empty())
+                .map(str::to_owned),
         })
     }
 

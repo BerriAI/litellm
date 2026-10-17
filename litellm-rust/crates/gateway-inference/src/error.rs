@@ -121,12 +121,18 @@ impl Error {
             }
             _ => self.to_string(),
         };
-        json!({"error": {
+        let mut error = json!({
             "message": message,
             "type": error_type(status),
             "param": null,
             "code": status.as_u16(),
-        }})
+        });
+        if let Self::Route(RouteError::Transport(TransportError::Http { body, .. })) = self
+            && let Some(fields) = azure_content_filter_fields(body)
+        {
+            error["provider_specific_fields"] = fields;
+        }
+        json!({ "error": error })
     }
 
     /// The Anthropic error envelope Python's `AnthropicExceptionMapping` builds: an upstream
@@ -233,6 +239,44 @@ fn openai_error_message(body: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// Python's `AzureOpenAIExceptionMapping` keeps Azure's error and its content filter results
+/// on a content policy violation. Only Azure nests an `inner_error`, which tells its errors
+/// apart from another provider's.
+fn azure_content_filter_fields(body: &str) -> Option<Value> {
+    const POLICY_PHRASES: [&str; 7] = [
+        "content_policy_violation",
+        "responsibleaipolicyviolation",
+        "the response was filtered due to the prompt triggering azure openai's content management",
+        "your task failed as a result of our safety system",
+        "the model produced invalid content",
+        "content_filter_policy",
+        "your request was rejected as a result of our safety system",
+    ];
+    let parsed: Value = serde_json::from_str(body).ok()?;
+    let azure_error = parsed
+        .get("error")
+        .filter(|error| error.is_object())
+        .unwrap_or(&parsed);
+    let inner_error = ["inner_error", "innererror"].into_iter().find_map(|key| {
+        azure_error
+            .get(key)
+            .or_else(|| parsed.get(key))
+            .filter(|inner| !inner.is_null())
+    })?;
+    let lowered = body.to_lowercase();
+    let violation = azure_error.get("code").and_then(Value::as_str)
+        == Some("content_policy_violation")
+        || inner_error.get("code").and_then(Value::as_str) == Some("ResponsibleAIPolicyViolation")
+        || POLICY_PHRASES.iter().any(|phrase| lowered.contains(phrase));
+    violation.then(|| {
+        json!({
+            "innererror": inner_error,
+            "inner_error": inner_error,
+            "azure_error": azure_error,
+        })
+    })
+}
+
 fn provider_message(object: &Map<String, Value>) -> Option<&str> {
     if let Some(detail) = object.get("detail").and_then(Value::as_object) {
         return detail.get("message").and_then(Value::as_str);
@@ -324,6 +368,36 @@ mod tests {
         let frame = error.openai_sse_frame();
         assert_eq!(error.openai_body(), expected);
         assert_eq!(frame, format!("data: {expected}\n\n"));
+    }
+
+    #[rstest]
+    #[case::content_filter(
+        r#"{"error":{"message":"The response was filtered due to the prompt triggering Azure OpenAI's content management policy.","type":null,"param":"prompt","code":"content_filter","status":400,"innererror":{"code":"ResponsibleAIPolicyViolation","content_filter_result":{"hate":{"filtered":true,"severity":"high"}}}}}"#,
+        true,
+    )]
+    #[case::inner_error_spelling(
+        r#"{"error":{"message":"blocked","code":"content_policy_violation","inner_error":{"code":"ResponsibleAIPolicyViolation"}}}"#,
+        true,
+    )]
+    #[case::other_azure_error(
+        r#"{"error":{"message":"bad value","code":"invalid_value","innererror":{"code":"Other"}}}"#,
+        false
+    )]
+    #[case::openai_policy_error(
+        r#"{"error":{"message":"rejected","code":"content_policy_violation","type":"invalid_request_error"}}"#,
+        false,
+    )]
+    fn azure_content_filter_errors_keep_the_azure_error(#[case] body: &str, #[case] kept: bool) {
+        let parsed: Value = serde_json::from_str(body).unwrap();
+        let error = upstream(400, body).openai_body();
+        let fields = &error["error"]["provider_specific_fields"];
+        assert_eq!(!fields.is_null(), kept);
+        if kept {
+            assert_eq!(fields["azure_error"], parsed["error"]);
+            assert_eq!(fields["innererror"], fields["inner_error"]);
+            assert_eq!(fields["innererror"]["code"], "ResponsibleAIPolicyViolation");
+        }
+        assert_eq!(error["error"]["message"], parsed["error"]["message"]);
     }
 
     #[rstest]

@@ -87,6 +87,10 @@ impl Router {
                         timeout: deployment.timeout.or(policy.timeout),
                         team_id: owner_team(model),
                         id: model_id(model),
+                        base_model: deployment
+                            .base_model
+                            .clone()
+                            .or_else(|| info_base_model(model)),
                         ..deployment
                     },
                 ))
@@ -363,6 +367,13 @@ fn owner_team(model: &Model) -> Option<String> {
     }
 }
 
+fn info_base_model(model: &Model) -> Option<String> {
+    match model.model_info.get("base_model")? {
+        litellm_config::Value::String(name) if !name.is_empty() => Some(name.clone()),
+        _ => None,
+    }
+}
+
 impl FromIterator<(String, Deployment)> for Router {
     fn from_iter<I: IntoIterator<Item = (String, Deployment)>>(entries: I) -> Self {
         Self::new(entries, RoutingPolicy::default())
@@ -555,6 +566,31 @@ mod tests {
         let group = router.group("m").unwrap();
         assert_eq!(
             group.deployments().next().unwrap().team_id.as_deref(),
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case::params(
+        "    litellm_params:\n      model: azure/d\n      base_model: gpt-4o\n",
+        Some("gpt-4o")
+    )]
+    #[case::model_info(
+        "    litellm_params:\n      model: azure/d\n    model_info:\n      base_model: gpt-4o\n",
+        Some("gpt-4o")
+    )]
+    #[case::params_win(
+        "    litellm_params:\n      model: azure/d\n      base_model: gpt-4o\n    model_info:\n      base_model: gpt-4\n",
+        Some("gpt-4o")
+    )]
+    #[case::absent("    litellm_params:\n      model: azure/d\n", None)]
+    fn reads_the_base_model(#[case] entry: &str, #[case] expected: Option<&str>) {
+        let config =
+            Config::from_yaml(&format!("model_list:\n  - model_name: m\n{entry}")).unwrap();
+        let router = Router::from_config(&config).unwrap();
+        let group = router.group("m").unwrap();
+        assert_eq!(
+            group.deployments().next().unwrap().base_model.as_deref(),
             expected
         );
     }
