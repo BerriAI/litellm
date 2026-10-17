@@ -2,6 +2,7 @@ import datetime as real_datetime
 import smtplib
 from typing import Final
 
+import httpx
 import pytest
 from fastapi import HTTPException
 
@@ -707,8 +708,14 @@ class TestPostCallFailureHookEstimatesDispatchedInputTokens:
                 user_api_key_dict=UserAPIKeyAuth(),
             )
 
-    def _timeout(self, model: str) -> Exception:
-        return litellm.Timeout("Request timed out.", model=model, llm_provider="openai")
+    def _timeout(self, model: str, cause: Exception) -> Exception:
+        try:
+            try:
+                raise cause
+            except Exception as inner:
+                raise litellm.Timeout("Request timed out.", model=model, llm_provider="openai") from inner
+        except litellm.Timeout as timed_out:
+            return timed_out
 
     def _logging_obj(self, model_call_details):
         logging_obj = MagicMock()
@@ -733,7 +740,9 @@ class TestPostCallFailureHookEstimatesDispatchedInputTokens:
             "metadata": {},
             "response_cost": 123.0,
         }
-        await self._run(request_data, original_exception=self._timeout("gpt-3.5-turbo"))
+        await self._run(
+            request_data, original_exception=self._timeout("gpt-3.5-turbo", httpx.ReadTimeout("no bytes in time"))
+        )
 
         estimated = request_data["combined_usage_object"]
         assert isinstance(estimated, Usage)
@@ -743,6 +752,63 @@ class TestPostCallFailureHookEstimatesDispatchedInputTokens:
         expected_input_cost, _ = litellm.cost_per_token(model="gpt-3.5-turbo", prompt_tokens=estimated.prompt_tokens)
         assert expected_input_cost > 0
         assert request_data["response_cost"] == pytest.approx(expected_input_cost)
+
+    @pytest.mark.asyncio
+    async def test_client_disconnect_after_dispatch_is_priced_at_input_rate(self):
+        from datetime import datetime
+
+        from fastapi import HTTPException
+
+        from litellm.constants import LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED
+        from litellm.types.utils import Usage
+
+        request_data = {
+            "litellm_logging_obj": self._logging_obj(
+                {
+                    "first_api_call_start_time": datetime.now(),
+                    "model": "gpt-3.5-turbo",
+                    "messages": [{"role": "user", "content": "count these input tokens please"}],
+                    "call_type": "acompletion",
+                }
+            ),
+            "metadata": {},
+        }
+        await self._run(
+            request_data,
+            original_exception=HTTPException(
+                status_code=LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED, detail="Client disconnected the request"
+            ),
+        )
+
+        estimated = request_data["combined_usage_object"]
+        assert isinstance(estimated, Usage)
+        expected_input_cost, _ = litellm.cost_per_token(model="gpt-3.5-turbo", prompt_tokens=estimated.prompt_tokens)
+        assert expected_input_cost > 0
+        assert request_data["response_cost"] == pytest.approx(expected_input_cost)
+
+    @pytest.mark.asyncio
+    async def test_connect_timeout_never_reached_the_provider_stays_zero_cost(self):
+        from datetime import datetime
+
+        from litellm.types.utils import Usage
+
+        request_data = {
+            "litellm_logging_obj": self._logging_obj(
+                {
+                    "first_api_call_start_time": datetime.now(),
+                    "model": "gpt-3.5-turbo",
+                    "messages": [{"role": "user", "content": "count these input tokens please"}],
+                    "call_type": "acompletion",
+                }
+            ),
+            "metadata": {},
+        }
+        await self._run(
+            request_data, original_exception=self._timeout("gpt-3.5-turbo", httpx.ConnectTimeout("no route"))
+        )
+
+        assert isinstance(request_data["combined_usage_object"], Usage)
+        assert request_data["response_cost"] == 0.0
 
     @pytest.mark.asyncio
     async def test_dispatched_non_timeout_failure_estimates_input_tokens_with_zero_cost(self):
@@ -1944,7 +2010,7 @@ def test_a_request_that_timed_out_at_a_provider_bills_its_input_at_the_input_rat
         },
         request_body={},
         dispatched=True,
-        timed_out=True,
+        provider_billed=True,
     )
 
     assert lifted is not None

@@ -50,10 +50,12 @@ from typing import (
 )
 
 import anyio
+import httpx
 from typing_extensions import Never, ReadOnly, TypedDict
 
 from litellm import _custom_logger_compatible_callbacks_literal
 from litellm.constants import (
+    LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED,
     DEFAULT_MODEL_CREATED_AT_TIME,
     FILE_USAGE_MAX_TRACKED_COUNTERS,
     LITELLM_CONFIG_CACHE_TTL_SECONDS,
@@ -1013,16 +1015,17 @@ def _failure_usage_to_lift(
     model_call_details: Mapping[str, object],
     request_body: Mapping[str, object],
     dispatched: bool,
-    timed_out: bool = False,
+    provider_billed: bool = False,
 ) -> tuple[object, object] | None:
     """A stream that broke mid-flight still billed the provider for the chunks
     already delivered; the streaming handler stashes that recovered usage and
     cost in model_call_details, so prefer it. Otherwise a request that was
     dispatched to a provider and failed without upstream usage gets an
-    estimated input-side Usage. On a timeout that usage is priced at the
-    model's input rate, since the provider bills the prompt it accepted even
-    though no answer came back; any other post-dispatch failure stays at zero
-    cost. The raw request body backfills
+    estimated input-side Usage. When the failure is one the provider bills
+    anyway (``provider_billed``: a read timeout or a client disconnect, where
+    the provider had the prompt and kept working after LiteLLM hung up) that
+    usage is priced at the model's input rate; any other post-dispatch failure
+    stays at zero cost. The raw request body backfills
     the system prompt when the SDK bridges an endpoint (e.g. /v1/messages on a
     chat-completions provider) without filling optional_params. Returns the
     (combined_usage_object, response_cost) pair to lift, or None."""
@@ -1050,7 +1053,7 @@ def _failure_usage_to_lift(
     )
     if estimated_usage is None:
         return None
-    if not timed_out:
+    if not provider_billed:
         return estimated_usage, 0.0
     estimated_input_cost, _ = litellm.cost_per_token(
         model=str(model_call_details.get("model") or ""),
@@ -1172,7 +1175,33 @@ _PROXY_ONLY_LLM_API_ERRORS: Final = (HTTPException, ProxyException, GuardrailRai
 _LOG_DB_METRICS_CALL_TYPES: Final = frozenset(("get_data", "insert_data", "update_data", "delete_data"))
 
 
-def _failure_fields_to_lift(request_data: Mapping[str, object], timed_out: bool = False) -> Mapping[str, object]:
+def _exception_chain(exception: BaseException) -> Iterator[BaseException]:
+    seen: Final[set[int]] = set()  # mutable-ok: cycle guard while walking __cause__/__context__
+    current: BaseException | None = exception
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        yield current
+        current = current.__cause__ or current.__context__  # rebind-ok: walking the chain
+
+
+def _timed_out_reading_from_provider(exception: Exception) -> bool:
+    """A read timeout means the request was sent and the provider was working on it; a connect
+    timeout (``httpx.ConnectTimeout``) never reached the provider, so it is not billed."""
+    return isinstance(exception, litellm.Timeout) and any(
+        isinstance(cause, httpx.ReadTimeout) for cause in _exception_chain(exception)
+    )
+
+
+def _client_disconnected(exception: Exception) -> bool:
+    """The 499 the proxy raises when the caller hung up while the provider was still working on the request."""
+    return getattr(exception, "status_code", None) == LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED
+
+
+def _provider_billed_the_failure(exception: Exception) -> bool:
+    return _timed_out_reading_from_provider(exception) or _client_disconnected(exception)
+
+
+def _failure_fields_to_lift(request_data: Mapping[str, object], provider_billed: bool = False) -> Mapping[str, object]:
     """Failure-path callbacks run after ``litellm_logging_obj`` is popped from
     request_data (it is not serialisable), so the caller merges these fields
     onto request_data first: the request start and first-handoff instants for
@@ -1188,7 +1217,7 @@ def _failure_fields_to_lift(request_data: Mapping[str, object], timed_out: bool 
         model_call_details=_model_call_details,
         request_body=request_data,
         dispatched=_first_handoff is not None,
-        timed_out=timed_out,
+        provider_billed=provider_billed,
     )
     _entries: Final = (
         ("start_time", _model_call_details.get("start_time")),
@@ -3414,7 +3443,7 @@ class ProxyLogging:
 
         request_data.update(
             await offload_token_count(_failure_fields_to_lift)(
-                request_data, timed_out=isinstance(original_exception, litellm.Timeout)
+                request_data, provider_billed=_provider_billed_the_failure(original_exception)
             )
         )
 
