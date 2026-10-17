@@ -515,6 +515,54 @@ def test_token_counter_skips_non_mapping_tools():
     assert mixed_tokens == valid_tokens
 
 
+_WEATHER_FUNCTION: Final = {
+    "name": "get_weather",
+    "description": "Get the current weather for a city",
+    "parameters": {
+        "type": "object",
+        "properties": {"location": {"type": "string", "description": "City name"}},
+        "required": ["location"],
+    },
+}
+_TIME_FUNCTION: Final = {
+    "name": "get_time",
+    "description": "Get the local time for a city",
+    "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+}
+
+
+def _openai_tool(function: Mapping[str, object]) -> dict[str, object]:
+    return {"type": "function", "function": function}
+
+
+def _anthropic_tool(function: Mapping[str, object]) -> dict[str, object]:
+    return {"name": function["name"], "description": function["description"], "input_schema": function["parameters"]}
+
+
+@pytest.mark.parametrize("tool_shape", [_openai_tool, _anthropic_tool])
+@pytest.mark.parametrize(
+    ("model", "functions", "billed_prompt_tokens"),
+    [
+        # usage.prompt_tokens billed for this request by Azure AI Foundry DeepSeek-V4-Flash-0731
+        # and Databricks databricks-qwen35-122b-a10b on 2026-10-17
+        ("DeepSeek-V4-Flash-0731", (_WEATHER_FUNCTION,), 295),
+        ("DeepSeek-V4-Flash-0731", (_WEATHER_FUNCTION, _TIME_FUNCTION), 348),
+        ("databricks-qwen35-122b-a10b", (_WEATHER_FUNCTION,), 289),
+        ("databricks-qwen35-122b-a10b", (_WEATHER_FUNCTION, _TIME_FUNCTION), 352),
+    ],
+)
+def test_token_counter_tools_match_billed_prompt_for_json_tool_chat_templates(
+    tool_shape, model, functions, billed_prompt_tokens
+):
+    counted: Final = token_counter_new(
+        model=model,
+        messages=[{"role": "user", "content": "What is the weather in Paris today?"}],
+        tools=[tool_shape(function) for function in functions],
+    )
+
+    assert abs(counted - billed_prompt_tokens) <= billed_prompt_tokens * 0.05
+
+
 class NeedsToleranceUpdateError(Exception):
     """Custom exception to mark tests that have improved"""
 
