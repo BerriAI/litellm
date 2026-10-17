@@ -23,7 +23,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
-from fastapi import HTTPException, Response
+from fastapi import HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 from openai import APIError as OpenAIAPIError
 from pydantic import BaseModel
@@ -1044,9 +1044,91 @@ async def test_responses_stream_keeps_tool_deltas_and_only_emits_a_valid_termina
         assert "error" not in payloads[-1]
 
 
+def _http_request(path: str) -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": path,
+            "headers": [],
+            "query_string": b"",
+            "scheme": "http",
+            "server": ("testserver", 80),
+        }
+    )
+
+
+async def _responses_upstream_failing_mid_stream() -> AsyncIterator[BaseModel]:
+    response: Final = ResponsesAPIResponse(id="resp_visible", created_at=1, model="gpt-6-astra", output=[])
+    yield ResponseCreatedEvent.model_validate(
+        {"type": "response.created", "sequence_number": 0, "response": response}
+    )
+    raise litellm.ServiceUnavailableError(
+        message="Our servers are currently overloaded. Please try again later.",
+        llm_provider="openai",
+        model="gpt-6-astra",
+    )
+
+
+async def _frames_for_route(request: Request, **kwargs: object) -> tuple[str, ...]:
+    frames: Final = [
+        frame
+        async for frame in select_data_generator(
+            response=_responses_upstream_failing_mid_stream(),
+            user_api_key_dict=_user_auth(),
+            request_data={},
+            request=request,
+            **kwargs,
+        )
+    ]
+    return tuple(frame.decode() if isinstance(frame, bytes) else frame for frame in frames)
+
+
 # ---------------------------------------------------------------------------
 # select_data_generator
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/v1/responses", "/responses", "/openai/v1/responses"])
+async def test_responses_route_without_explicit_flag_emits_responses_error_frame(path: str) -> None:
+    """issue #45406: a flag-less caller streaming `/<responses route>` must not end
+    the stream with the chat-completions `{"error": ...}` frame. The route in the
+    request selects the Responses terminal event, whose payload carries the typed
+    error (and, unlike the generic frame, a `type` field)."""
+    decoded: Final = await _frames_for_route(_http_request(path))
+
+    assert decoded[-1] == "data: [DONE]\n\n"
+    failure_frame: Final = decoded[-2]
+    assert failure_frame.startswith("event: response.failed\n")
+    failure: Final = ResponseFailedEvent.model_validate(
+        json.loads(next(line[6:] for line in failure_frame.splitlines() if line.startswith("data: ")))
+    )
+    assert failure.response.id == "resp_visible"
+    assert failure.response.status == "failed"
+    assert failure.response.error is not None
+    assert failure.response.error["code"] == "server_error"
+    assert "Our servers are currently overloaded" in failure.response.error["message"]
+    assert not any(frame.startswith('data: {"error"') for frame in decoded)
+
+
+@pytest.mark.asyncio
+async def test_chat_route_without_explicit_flag_keeps_generic_error_frame() -> None:
+    """Only Responses routes change shape: `/v1/chat/completions` streams keep the
+    historical `data: {"error": ...}` frame."""
+    decoded: Final = await _frames_for_route(_http_request("/v1/chat/completions"))
+
+    assert any(frame.startswith('data: {"error"') for frame in decoded)
+    assert not any(frame.startswith("event: response.failed") for frame in decoded)
+
+
+@pytest.mark.asyncio
+async def test_responses_route_explicit_opt_out_keeps_generic_error_frame() -> None:
+    """An explicit `responses_stream_errors=False` wins over route detection."""
+    decoded: Final = await _frames_for_route(_http_request("/v1/responses"), responses_stream_errors=False)
+
+    assert any(frame.startswith('data: {"error"') for frame in decoded)
+    assert not any(frame.startswith("event: response.failed") for frame in decoded)
 
 
 @pytest.mark.asyncio
