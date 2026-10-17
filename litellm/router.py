@@ -38,7 +38,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache, partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Generic, Literal, Optional, TypeAlias, TypeVar, Union, cast
+from typing import TYPE_CHECKING, Any, Final, Generic, Literal, NoReturn, Optional, TypeAlias, TypeVar, Union, cast
 
 import anyio
 import httpx
@@ -68,6 +68,7 @@ from litellm.constants import (
     DEFAULT_HEALTH_CHECK_STALENESS_MULTIPLIER,
     DEFAULT_MAX_LRU_CACHE_SIZE,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
+    MID_STREAM_FAILURE_LOG_WAIT_SECONDS,
     OUTPUT_TOKEN_CEILING_PARAMS,
     PROMPT_CACHE_PIN_CACHE_MAX_SIZE,
     ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY,
@@ -75,7 +76,7 @@ from litellm.constants import (
     RUNTIME_UPDATABLE_ROUTER_SETTINGS,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
 )
-from litellm.integrations.custom_guardrail import is_guardrail_intervention
+from litellm.integrations.custom_guardrail import CustomGuardrail, is_guardrail_intervention
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.otel.routing import routing_decision_attributes
 from litellm.integrations.otel.runtime import phase_attributes, phase_event, phase_span
@@ -122,6 +123,7 @@ from litellm.litellm_core_utils.sensitive_data_masker import (
     mask_sensitive_structure,
 )
 from litellm.litellm_core_utils.token_counter import offload_token_count
+from litellm.litellm_core_utils.tool_fields import TOOL_FIELDS, drop_policy
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo, anthropic_error_frame_exception
 from litellm.llms.base_llm.passthrough.transformation import replace_path_segment
 from litellm.llms.base_llm.vector_store.transformation import (
@@ -194,6 +196,7 @@ from litellm.router_utils.clientside_credential_handler import (
     is_clientside_credential,
 )
 from litellm.router_utils.common_utils import (
+    MID_STREAM_CONTINUATION_KWARG,
     filter_team_based_models,
     filter_web_search_deployments,
     format_fallback_outcome_message,
@@ -233,7 +236,10 @@ from litellm.router_utils.fallback_event_handlers import (
     check_non_standard_fallback_format,
     clear_pre_routing_selection,
     committed_retry_budget_for_request,
+    continuation_fallback_targets,
     fallback_lookup_groups,
+    fallback_target_name,
+    fallback_target_overrides_request_params,
     fallbacks_disabled_for_request,
     get_fallback_model_group_for_lookup_groups,
     get_pre_routing_selection,
@@ -258,6 +264,17 @@ from litellm.router_utils.handle_error import (
     send_llm_exception_alert,
 )
 from litellm.router_utils.health_state_cache import DeploymentHealthCache
+from litellm.router_utils.pre_call_checks.continuation_prefill_check import (
+    MID_STREAM_CONTINUATION_MARKER,
+    ContinuationOutput,
+    ContinuationPrefillDeploymentCheck,
+    ContinuedPartial,
+    constrains_continuation,
+    continuation_deployments,
+    continuation_output_ceilings,
+    continued_text,
+    deployment_can_continue,
+)
 from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
     DeploymentAffinityCheck,
     warn_on_unknown_model_group_affinity_flags,
@@ -303,6 +320,8 @@ from litellm.router_utils.routing_groups import (
 )
 from litellm.router_utils.routing_read_batch import ROUTER_USAGE_TARGET, RoutingPrefetch, RoutingReadBatch
 from litellm.scheduler import FlowItem, Scheduler
+from litellm.secret_managers.main import str_to_bool
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.litellm_params import RoutingStrategyName
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -371,6 +390,7 @@ from litellm.utils import (
     EmbeddingResponse,
     ModelResponse,
     Rules,
+    TextCompletionResponse,
     function_setup,
     get_llm_provider,
     get_non_default_completion_params,
@@ -481,7 +501,9 @@ def model_info_is_active_for_environment(model_info: Mapping[str, object] | None
 _PreRoutingStrategyT = TypeVar("_PreRoutingStrategyT")
 _CallbackT = TypeVar("_CallbackT")
 
-_ALIAS_PARAMS_NEVER_FORWARDED: Final = frozenset({"model", "api_base", "api_key", "api_version"})
+_ALIAS_PARAMS_NEVER_FORWARDED: Final = frozenset(
+    {"model", "api_base", "api_key", "api_version", "responses_api_version"}
+)
 _ALIAS_MARKER_FORWARDED_PARAMS_KWARG: Final = "_alias_marker_forwarded_params"
 _CLAUDE_CODE_SESSION_ID_RE: Final = re.compile(r"^[a-zA-Z0-9_\-]{8,}$")
 _CLAUDE_CODE_SESSION_ROUTER_TTL_SECONDS: Final = 3600
@@ -518,6 +540,7 @@ def _stream_chunks_have_generated_content(chunks: Sequence[ModelResponseStream])
 
 
 _NO_SESSION_KWARGS: Final[Mapping[str, Mapping[str, object]]] = MappingProxyType({})
+_NO_DEFAULT_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
 _SESSION_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
@@ -527,6 +550,15 @@ _ROUTING_KWARGS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeA
 _FALLBACK_HOP_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _OPAQUE_VALUE_ADAPTER: Final = TypeAdapter(object)
 _DEPLOYMENT_SELECTED_EVENT: Final = "litellm.request.deployment_selected"
+_CONTENT_BLOCKS_ADAPTER: Final = TypeAdapter(list[dict[str, object]])
+
+
+def _extend_trailing_text_block(blocks: Sequence[Mapping[str, object]], text: str) -> Sequence[Mapping[str, object]]:
+    """Continue the last text block in place so the prefill reads as the text the caller already received."""
+    last: Final = blocks[-1] if blocks else None
+    if last is not None and last.get("type") == "text" and isinstance(last_text := last.get("text"), str):
+        return [*blocks[:-1], {**last, "text": f"{last_text}{text}"}]
+    return [*blocks, {"type": "text", "text": text}]
 
 
 def _is_fallback_hop(request_kwargs: Mapping[str, object]) -> bool:
@@ -543,6 +575,21 @@ def _deployment_that_just_failed(request_metadata: object) -> str | None:
         return None
     model_id: Final = model_info.get("id")
     return model_id if isinstance(model_id, str) else None
+
+
+def _drops_malformed_request_tools(
+    deployment_params: Mapping[str, object], defaults: Mapping[str, object], request: Mapping[str, object]
+) -> bool:
+    if isinstance(request.get("tools") or [], (list, tuple)) or not deployment_params.get("tools"):
+        return False
+    set_defaults: Final = {name: value for name, value in defaults.items() if value is not None}
+    return drop_policy({**deployment_params, **set_defaults, **request}).drops("tools")
+
+
+def _merged_tools(deployment_tools: Sequence[object], request_tools: object) -> list[object] | None:
+    if not isinstance(request_tools, (list, tuple)):
+        return None
+    return [*deployment_tools, *request_tools] if deployment_tools or request_tools else None
 
 
 def _deployment_pick_attributes(model: str, request_kwargs: Mapping[str, object] | None) -> Mapping[str, str | int]:
@@ -1119,6 +1166,7 @@ class Router:
         health_check_ignore_transient_errors: bool = False,
         background_health_check_model_groups: Sequence[str] | None = None,
         enable_weighted_failover: bool = False,
+        enable_mid_stream_fallback_continuation: bool = False,
         fallback_access_check: FallbackAccessCheck | None = None,
         fallback_budget_check: FallbackBudgetCheck | None = None,
         auto_router_capability_limit: AutoRouterCapabilityLimit | None = None,
@@ -1160,6 +1208,7 @@ class Router:
             deployment_affinity_ttl_seconds (int): TTL for user-key -> deployment affinity mapping. Defaults to 3600.
             ignore_invalid_deployments (bool): Ignores invalid deployments, and continues with other deployments. Default is to raise an error.
             enable_weighted_failover (bool): When True and the routing strategy is "simple-shuffle", a retryable failure on one deployment causes the request to re-pick (weighted) across the other deployments in the same model group before any cross-group fallback runs. Bounded by `max_fallbacks`. Async-only: currently honored by `router.acompletion()` and other async entrypoints. The sync `router.completion()` path falls back to the regular fallback flow. Defaults to False.
+            enable_mid_stream_fallback_continuation (bool): When True, a chat-completions stream that breaks after plain assistant text has been delivered continues on a fallback deployment via assistant prefill instead of surfacing the error. Only deployments whose model supports assistant prefill are eligible, so the partial text is continued, not regenerated; if none is, the original error is surfaced. Streams that emitted tool calls, thinking blocks, audio/images, or constrained (JSON / forced tool_choice) output are never continued. Async-only. Defaults to False.
             fallback_access_check (Optional[FallbackAccessCheck]): Awaited before each cross-model-group fallback attempt on the async path; a fallback target it rejects is skipped. Defaults to None (every configured fallback is attempted).
             fallback_budget_check (Optional[FallbackBudgetCheck]): Awaited before each cross-model-group fallback attempt on the async path; a fallback target it rejects as over budget is skipped. Defaults to None (budget is not re-checked on fallback).
         Returns:
@@ -1355,6 +1404,7 @@ class Router:
         self.fallback_on_unsupported_params = fallback_on_unsupported_params
         self.enable_health_check_routing = enable_health_check_routing
         self.enable_weighted_failover = enable_weighted_failover
+        self.enable_mid_stream_fallback_continuation = self._is_flag_enabled(enable_mid_stream_fallback_continuation)
         self.health_check_ignore_transient_errors = health_check_ignore_transient_errors
         self.background_health_check_model_groups: frozenset[str] | None = (
             frozenset(background_health_check_model_groups)
@@ -1548,6 +1598,14 @@ class Router:
 
         default_pre_call_checks: Final[OptionalPreCallChecks] = []
         self.add_optional_pre_call_checks(default_pre_call_checks)
+
+        if self.enable_mid_stream_fallback_continuation:
+            self._register_continuation_prefill_check()
+
+    @staticmethod
+    def _register_continuation_prefill_check() -> None:
+        # Process-global on purpose: Router.discard() must not drop a filter another router still needs.
+        litellm.logging_callback_manager.add_litellm_callback(ContinuationPrefillDeploymentCheck())
 
     def discard(self):
         """
@@ -3143,14 +3201,52 @@ class Router:
 
         usage: Final = cast(Usage | None, getattr(fallback_item, "usage", None))
         usage_objects: Final = [usage] if usage is not None else []
-        if (
-            complete_response_object_usage is not None
-            and hasattr(complete_response_object_usage, "usage")
-            and complete_response_object_usage.usage is not None
-        ):
+        if complete_response_object_usage is not None:
             usage_objects.append(complete_response_object_usage)
         combined_usage: Final = BaseTokenUsageProcessor.combine_usage_objects(usage_objects=usage_objects)
         setattr(fallback_item, "usage", combined_usage)
+
+    @staticmethod
+    def _price_cut_partial(
+        cut_stream: CustomStreamWrapper,
+        partial_response: ModelResponse | TextCompletionResponse | None,
+    ) -> "ContinuedPartial | None":
+        """Price the cut stream's partial, plus any partial it inherited, before a fallback can reuse its logging."""
+        from litellm.cost_calculator import BaseTokenUsageProcessor
+
+        cut_logging: Final = cut_stream.logging_obj
+        partial_usage: Final = getattr(partial_response, "usage", None)
+        if partial_response is None or not isinstance(partial_usage, Usage):
+            return None
+        inherited_usage: Final = cut_logging.model_call_details.get("continued_partial_usage")
+        inherited_cost: Final = cut_logging.model_call_details.get("continued_partial_cost")
+        inherited_id: Final = cut_logging.model_call_details.get("continued_response_id")
+        priced_partial: Final = partial_response.model_copy(
+            update={"model": cut_stream.model} if cut_stream.model else {}
+        )
+        priced_partial._hidden_params = {  # pyright: ignore[reportPrivateUsage]  # no public accessor
+            key: value for key, value in get_hidden_params_dict(partial_response).items() if key != "response_cost"
+        }
+        return ContinuedPartial(
+            usage=BaseTokenUsageProcessor.combine_usage_objects(
+                usage_objects=[partial_usage, inherited_usage]
+                if isinstance(inherited_usage, Usage)
+                else [partial_usage]
+            ),
+            response_cost=(cut_logging.response_cost_calculator(result=priced_partial) or 0.0)
+            + (inherited_cost if isinstance(inherited_cost, float) else 0.0),
+            response_id=inherited_id if isinstance(inherited_id, str) else partial_response.id,
+        )
+
+    @staticmethod
+    def _carry_partial_spend_to_fallback(fallback_response: object, cut_partial: "ContinuedPartial | None") -> None:
+        """Bill what the cut legs consumed on the continuation's success log."""
+        fallback_logging: Final = getattr(fallback_response, "logging_obj", None)
+        if cut_partial is None or not isinstance(fallback_logging, LiteLLMLogging):
+            return
+        fallback_logging.record_continued_partial(
+            usage=cut_partial.usage, response_cost=cut_partial.response_cost, response_id=cut_partial.response_id
+        )
 
     @staticmethod
     def _prepare_fallback_hidden_params(
@@ -3201,7 +3297,7 @@ class Router:
         self,
         model_response: CustomStreamWrapper,
         messages: list[dict[str, str]],
-        initial_kwargs: dict,
+        initial_kwargs: dict[str, Any],
         deployment_slot: contextlib.AsyncExitStack | None = None,
         first_chunk: _FirstChunk[AsyncIterator[object]] | None = None,
     ) -> CustomStreamWrapper:
@@ -3264,16 +3360,22 @@ class Router:
                 with anyio.CancelScope(shield=True):
                     await close_model_response()
                     await held_slot.aclose()
-                if not e.is_pre_first_chunk and (
-                    e.generated_content or _stream_chunks_have_generated_content(model_response.chunks)
-                ):
-                    if e.original_exception is not None:
-                        raise e.original_exception from e
-                    raise
+                committed: Final = bool(
+                    not e.is_pre_first_chunk
+                    and (e.generated_content or _stream_chunks_have_generated_content(model_response.chunks))
+                )
+                cut_hidden_params: Final = get_hidden_params(model_response) or {}
+                continue_after_content: Final = committed and self._mid_stream_continuation_eligible(
+                    e=e, request_kwargs=initial_kwargs, cut_deployment_id=cut_hidden_params.get("model_id")
+                )
+                if committed and not continue_after_content:
+                    self._raise_original_mid_stream_error(e)
 
                 from litellm.main import stream_chunk_builder
 
-                complete_response_object: Final = stream_chunk_builder(chunks=model_response.chunks)
+                complete_response_object: Final = stream_chunk_builder(
+                    chunks=model_response.chunks, messages=messages if continue_after_content else None
+                )
                 complete_response_object_usage: Final = cast(
                     Usage | None,
                     getattr(complete_response_object, "usage", None),
@@ -3289,7 +3391,41 @@ class Router:
                         "content_policy_fallbacks", self.content_policy_fallbacks
                     )
                     initial_kwargs["original_function"] = self._acompletion
-                    initial_kwargs["messages"] = messages
+                    continuation_messages: Final = (
+                        self._build_completion_continuation_input(messages, e.generated_content)
+                        if continue_after_content
+                        else None
+                    )
+                    continuation_output: Final = (
+                        ContinuationOutput(
+                            e.generated_content,
+                            continuation_messages[-1],
+                            model_group,
+                            complete_response_object,
+                            checks_post_call_rules=initial_kwargs.get(MID_STREAM_CONTINUATION_KWARG)
+                            is not MID_STREAM_CONTINUATION_MARKER,
+                        )
+                        if continuation_messages is not None
+                        else None
+                    )
+                    cut_partial: Final = (
+                        Router._price_cut_partial(model_response, complete_response_object)
+                        if continuation_output is not None
+                        else None
+                    )
+                    if continue_after_content:
+                        emitted_tokens: Final = int(
+                            getattr(complete_response_object_usage, "completion_tokens", 0) or 0
+                        )
+                        reduced_ceilings: Final = continuation_output_ceilings(initial_kwargs, emitted_tokens)
+                        if reduced_ceilings is None or continuation_messages is None:
+                            self._raise_original_mid_stream_error(e)
+                        await model_response.wait_for_failure_logging(timeout=MID_STREAM_FAILURE_LOG_WAIT_SECONDS)
+                        initial_kwargs.update(reduced_ceilings)
+                        initial_kwargs["messages"] = continuation_messages
+                        initial_kwargs[MID_STREAM_CONTINUATION_KWARG] = MID_STREAM_CONTINUATION_MARKER
+                    else:
+                        initial_kwargs["messages"] = messages
                     self._update_kwargs_before_fallbacks(model=model_group, kwargs=initial_kwargs)
                     fallback_response = await self.async_function_with_fallbacks_common_utils(
                         e=e,
@@ -3305,11 +3441,17 @@ class Router:
 
                     # If fallback returns a streaming response, iterate over it
                     if hasattr(fallback_response, "__aiter__"):
+                        Router._carry_partial_spend_to_fallback(fallback_response, cut_partial)
                         prepared_fallback_hidden_params = Router._adopt_fallback_response_headers(
                             wrapper_ref, fallback_response
                         )
                         fallback_headers_are_settled = False
-                        async for fallback_item in fallback_response:
+                        fallback_items: Final = (
+                            continuation_output.splice(fallback_response)
+                            if continuation_output is not None
+                            else fallback_response
+                        )
+                        async for fallback_item in fallback_items:
                             if not fallback_headers_are_settled:
                                 fallback_headers_are_settled = True
                                 # a fallback that failed over again only repoints itself once it yields
@@ -3322,7 +3464,10 @@ class Router:
                                 and isinstance(fallback_item, ModelResponseStream)
                                 and hasattr(fallback_item, "usage")
                             ):
-                                self._combine_fallback_usage(fallback_item, complete_response_object_usage)
+                                self._combine_fallback_usage(
+                                    fallback_item,
+                                    complete_response_object_usage if continuation_output is not None else None,
+                                )
                             yield fallback_item
                     else:
                         # If fallback returns a non-streaming response, yield None
@@ -3478,6 +3623,97 @@ class Router:
             output_tokens=(partial_usage.output_tokens or 0) + (fb.output_tokens or 0),
             total_tokens=(partial_usage.total_tokens or 0) + (fb.total_tokens or 0),
         )
+
+    @staticmethod
+    def _raise_original_mid_stream_error(e: "MidStreamFallbackError") -> NoReturn:
+        """Surface the provider error the stream wrapper carried instead of the internal MidStreamFallbackError."""
+        if e.original_exception is not None:
+            raise e.original_exception from e
+        raise e
+
+    def _params_sent_to_deployment(
+        self, request_kwargs: Mapping[str, object], deployment: Deployment | None
+    ) -> Mapping[str, object]:
+        """The request as the deployment received it, merged in the order _update_kwargs_with_deployment applies."""
+        deployment_params: Final = deployment.litellm_params.model_dump(exclude_none=True) if deployment else {}
+        defaults: Final = {key: value for key, value in self.default_litellm_params.items() if value is not None}
+        deployment_tool_choice: Final = (
+            {"tool_choice": deployment_params["tool_choice"]}
+            if deployment_params.get("tool_choice") is not None
+            else {}
+        )
+        return MappingProxyType({**deployment_params, **defaults, **deployment_tool_choice, **request_kwargs})
+
+    def _names_deployment_that_cannot_continue(self, target: object) -> bool:
+        name: Final = fallback_target_name(target)
+        if name is None or name in self.model_names or not self.has_model_id(name):
+            return False
+        deployment: Final = self.get_deployment(model_id=name)
+        return deployment is not None and not deployment_can_continue(deployment.model_dump(exclude_none=True))
+
+    def _mid_stream_continuation_eligible(
+        self,
+        e: "MidStreamFallbackError",
+        request_kwargs: Mapping[str, object],
+        cut_deployment_id: object = None,
+    ) -> bool:
+        """Whether a stream that broke after plain assistant text may continue via prefill."""
+        if not self.enable_mid_stream_fallback_continuation:
+            return False
+        if not e.generated_content or e.emitted_disqualifying_content:
+            return False
+        if isinstance(e.original_exception, litellm.ContentPolicyViolationError):
+            return False
+        cut_deployment: Final = (
+            self.get_deployment(model_id=cut_deployment_id) if isinstance(cut_deployment_id, str) else None
+        )
+        if isinstance(cut_deployment_id, str) and cut_deployment is None:
+            return False
+        if constrains_continuation(self._params_sent_to_deployment(request_kwargs, cut_deployment)):
+            return False
+        requested_group: Final = request_kwargs.get("model")
+        lookup_groups: Final = fallback_lookup_groups(
+            request_kwargs, requested_group if isinstance(requested_group, str) else None
+        )
+        targets: Final = continuation_fallback_targets(request_kwargs.get("fallbacks", self.fallbacks), lookup_groups)
+        if any(fallback_target_overrides_request_params(target) for target in targets):
+            return False
+        if any(self._names_deployment_that_cannot_continue(target) for target in targets):
+            return False
+        return not any(
+            isinstance(callback, CustomGuardrail)
+            and callback._event_hook_is_event_type(  # pyright: ignore[reportPrivateUsage]  # the only check of a guardrail's hooks
+                GuardrailEventHooks.post_call
+            )
+            for callback in litellm.callbacks
+        )
+
+    @staticmethod
+    def _build_completion_continuation_input(
+        messages: Sequence[Mapping[str, object]],
+        generated_content: str,
+    ) -> Sequence[Mapping[str, object]] | None:
+        """Append the partial output as an assistant prefill, or extend a trailing `prefix: True` assistant turn in
+        place so the request never ends in two assistant messages. None when the request ends in a plain assistant
+        turn, in a prefill turn whose content has a shape this cannot extend, or when the cut came mid-echo of the
+        prefill."""
+        last: Final = messages[-1] if messages else None
+        if last is None or last.get("role") != "assistant":
+            return [*messages, {"role": "assistant", "content": generated_content, "prefix": True}]
+        if last.get("prefix") is not True:
+            return None
+        new_text: Final = continued_text(last, generated_content)
+        if new_text is None:
+            return None
+        content: Final = last.get("content")
+        if content is None or isinstance(content, str):
+            return [*messages[:-1], {**last, "content": f"{content or ''}{new_text}", "prefix": True}]
+        try:
+            blocks: Final = _CONTENT_BLOCKS_ADAPTER.validate_python(content)
+        except ValidationError:
+            return None
+        extended: Final = _extend_trailing_text_block(blocks, new_text)
+        return [*messages[:-1], {**last, "content": extended, "prefix": True}]
 
     @staticmethod
     def _build_responses_continuation_input(
@@ -3880,13 +4116,6 @@ class Router:
                         raise e.original_exception from e
                     raise
 
-                from litellm.main import stream_chunk_builder
-
-                complete_response_object: Final = stream_chunk_builder(chunks=model_response.chunks)
-                complete_response_object_usage: Final = cast(
-                    Usage | None,
-                    getattr(complete_response_object, "usage", None),
-                )
                 try:
                     model_group: Final = cast(str, initial_kwargs.get("model"))
                     fallbacks: Final[list | None] = initial_kwargs.get("fallbacks", router_self.fallbacks)
@@ -3932,7 +4161,7 @@ class Router:
                                 and isinstance(fallback_item, ModelResponseStream)
                                 and hasattr(fallback_item, "usage")
                             ):
-                                router_self._combine_fallback_usage(fallback_item, complete_response_object_usage)
+                                router_self._combine_fallback_usage(fallback_item, None)
                             yield fallback_item
                     else:
                         yield None
@@ -4297,7 +4526,9 @@ class Router:
         return deployment_pydantic_obj
 
     @staticmethod
-    def _merge_tools_from_deployment(deployment: dict, kwargs: dict) -> None:
+    def _merge_tools_from_deployment(
+        deployment: dict, kwargs: dict, defaults: Mapping[str, object] = _NO_DEFAULT_PARAMS
+    ) -> None:
         """
         Merge tools from deployment litellm_params with request kwargs.
         When both have tools, concatenate them (deployment tools first, then request tools).
@@ -4308,11 +4539,12 @@ class Router:
             dep_params = dep_params_raw
         else:
             dep_params = dep_params_raw.model_dump(exclude_none=True)
-        dep_tools: Final = dep_params.get("tools") or []
-        req_tools: Final = kwargs.get("tools") or []
-        if dep_tools or req_tools:
-            merged: Final = list(dep_tools) + list(req_tools)
-            kwargs["tools"] = merged
+        if _drops_malformed_request_tools(dep_params, defaults, kwargs):
+            for name in TOOL_FIELDS:
+                kwargs.pop(name, None)
+        merged_tools: Final = _merged_tools(dep_params.get("tools") or [], kwargs.get("tools") or [])
+        if merged_tools is not None:
+            kwargs["tools"] = merged_tools
         if "tool_choice" not in kwargs and dep_params.get("tool_choice") is not None:
             kwargs["tool_choice"] = dep_params["tool_choice"]
 
@@ -4333,7 +4565,7 @@ class Router:
             deployment=deployment, forwarded_keys=kwargs.pop(_ALIAS_MARKER_FORWARDED_PARAMS_KWARG, ())
         ):
             kwargs.pop(key, None)
-        self._merge_tools_from_deployment(deployment=deployment, kwargs=kwargs)
+        self._merge_tools_from_deployment(deployment=deployment, kwargs=kwargs, defaults=self.default_litellm_params)
 
         model_info = deployment.get("model_info", {}).copy()
         deployment_litellm_model_name = deployment["litellm_params"]["model"]
@@ -5825,6 +6057,7 @@ class Router:
         """
         from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
             aclose_if_supported,
+            aclose_superseded_attempt,
             parse_anthropic_error_event,
             parse_anthropic_refusal_stop_details,
         )
@@ -5833,6 +6066,14 @@ class Router:
         )
 
         source_iterator: Final = response
+
+        async def close_source() -> None:
+            with anyio.CancelScope(shield=True), contextlib.suppress(BaseException):
+                await aclose_if_supported(source_iterator)
+
+        async def close_superseded() -> None:
+            with anyio.CancelScope(shield=True), contextlib.suppress(BaseException):
+                await aclose_superseded_attempt(source_iterator)
 
         async def stream_with_fallbacks() -> AsyncGenerator[bytes, None]:
             from litellm.exceptions import MidStreamFallbackError
@@ -5920,11 +6161,11 @@ class Router:
                     model,
                     initial_kwargs,
                     wrapper,
+                    close_superseded,
                 ):
                     yield item
             finally:
-                with anyio.CancelScope(shield=True), contextlib.suppress(BaseException):
-                    await aclose_if_supported(source_iterator)
+                await close_source()
 
         # Referenced by stream_with_fallbacks via closure - assigned here, before
         # the generator body ever runs, so the reference resolves fine despite
@@ -5940,6 +6181,7 @@ class Router:
         model: str,
         initial_kwargs: dict[str, Any],  # mutable-ok: handed to _aanthropic_messages_fallback_attempt, which mutates it
         wrapper: "FallbackAwareAnthropicMessagesStream",
+        close_superseded: Callable[[], Awaitable[None]],
     ) -> AsyncGenerator[bytes, None]:
         """Turns a source-iterator failure into a fallback attempt or the error reaching the caller."""
         from litellm.exceptions import MidStreamFallbackError
@@ -5959,6 +6201,7 @@ class Router:
         )
         if fallback_error is None:
             raise stream_error
+        await close_superseded()
         outcome: Final = await self._astream_retry_same_group(
             fallback_error,
             initial_kwargs,
@@ -10754,6 +10997,7 @@ class Router:
                 persist_across_reloads=False,
                 warning_display_name=model,
                 custom_llm_provider=custom_llm_provider,
+                add_to_provider_model_sets=False,
             )
 
         ## OLD MODEL REGISTRATION ## Kept to prevent breaking changes
@@ -13004,6 +13248,7 @@ class Router:
             "retry_policy",
             "model_group_alias",
             "enable_weighted_failover",
+            "enable_mid_stream_fallback_continuation",
             "enable_tag_filtering",
             "tag_routing_prefix",
             "fallback_on_unsupported_params",
@@ -13060,12 +13305,10 @@ class Router:
                     rebuild_routing_groups = True
                 elif var == "optional_pre_call_checks":
                     self.set_optional_pre_call_checks(kwargs[var])
+                elif var == "enable_mid_stream_fallback_continuation":
+                    self._set_mid_stream_fallback_continuation(kwargs[var])
                 elif var == "retry_policy":
-                    value = kwargs[var]
-                    if isinstance(value, dict):
-                        value = RetryPolicy(**value)
-                    if value is None or isinstance(value, RetryPolicy):
-                        setattr(self, var, value)
+                    self._set_retry_policy(kwargs[var])
                 else:
                     value = kwargs[var]
                     # only run routing strategy init if it has changed
@@ -13091,6 +13334,20 @@ class Router:
             self._init_routing_groups(routing_groups_input)
             self._routing_groups_input = routing_groups_input
         verbose_router_logger.debug("Updated Router settings: %s", self.get_settings())
+
+    @staticmethod
+    def _is_flag_enabled(value: object) -> bool:
+        return value is True or (isinstance(value, str) and str_to_bool(value) is True)
+
+    def _set_mid_stream_fallback_continuation(self, enabled: object) -> None:
+        self.enable_mid_stream_fallback_continuation = self._is_flag_enabled(enabled)
+        if self.enable_mid_stream_fallback_continuation:
+            self._register_continuation_prefill_check()
+
+    def _set_retry_policy(self, value: object) -> None:
+        policy: Final = RetryPolicy.model_validate(value) if isinstance(value, dict) else value
+        if policy is None or isinstance(policy, RetryPolicy):
+            self.retry_policy = policy
 
     def _get_client(self, deployment, kwargs, client_type=None):
         """
@@ -13503,6 +13760,15 @@ class Router:
         Get the deployment by litellm model.
         """
         return [m for m in self.model_list if m["litellm_params"]["model"] == model]
+
+    def get_routable_deployments(self, model: str) -> tuple[DeploymentTypedDict, ...]:
+        try:
+            _, candidates = self._common_checks_available_deployment(model=model, request_kwargs={})  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # its signature leaves input and the result untyped
+        except (litellm.BadRequestError, ValueError):
+            return ()
+        if isinstance(candidates, dict):
+            return (cast(DeploymentTypedDict, candidates),)  # cast-ok: the router returns one deployment as a dict
+        return tuple(cast(list[DeploymentTypedDict], candidates))  # cast-ok: the router returns deployments as a list
 
     def _try_early_resolve_deployments_for_model_not_in_names(
         self,
@@ -15119,9 +15385,8 @@ class Router:
             request_kwargs=request_kwargs,
         )
         strategy, strategy_selector = self._get_routing_context(model, request_kwargs)
-        pick_attributes: Final = _deployment_pick_attributes(
-            model, _ROUTING_KWARGS_ADAPTER.validate_python(request_kwargs)
-        )
+        routing_kwargs: Final = _ROUTING_KWARGS_ADAPTER.validate_python(request_kwargs)
+        pick_attributes: Final = _deployment_pick_attributes(model, routing_kwargs)
 
         if isinstance(healthy_deployments, dict):
             if (healthy_deployments.get("model_info") or {}).get("blocked") is True:
@@ -15159,7 +15424,9 @@ class Router:
             )
             healthy_deployments = _pre_cooldown_deployments
 
-        healthy_deployments = self._filter_blocked_deployments(healthy_deployments)
+        healthy_deployments = continuation_deployments(
+            self._filter_blocked_deployments(healthy_deployments), routing_kwargs
+        )
 
         # filter pre-call checks
         if self.enable_pre_call_checks and (messages is not None or input is not None):

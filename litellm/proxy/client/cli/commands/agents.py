@@ -22,7 +22,7 @@ from litellm.proxy.common_utils.codex_model_catalog import (
     CodexStockModel,
     codex_models_response_json,
 )
-from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 from .auth import cli_context_obj, context_secret_vault, get_stored_api_key, login
 from .claude_settings import ClaudeSettingsError, install_statusline_script

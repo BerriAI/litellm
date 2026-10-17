@@ -77,6 +77,11 @@ class StatementCalls:
         return "awaited" if verb == "SELECT" and tables[0] in _AWAITED_TABLES else "background"
 
     @property
+    def table(self) -> str:
+        tables: Final = _TABLE.findall(self.query)
+        return tables[0] if tables else ""
+
+    @property
     def summary(self) -> str:
         return re.sub(r"\s+", " ", self.query)[:110]
 

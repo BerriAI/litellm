@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 load_dotenv()
 import asyncio
 import hashlib
+import threading
 import random
 
 import pytest
@@ -52,7 +53,8 @@ import json
 import httpx
 import respx
 from fastapi.testclient import TestClient
-from litellm._internal_context import current_service_target, in_post_response_phase
+from contextlib import nullcontext
+from litellm._internal_context import current_service_target, in_post_response_phase, internal_sub_call
 from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
@@ -62,6 +64,46 @@ def setup_cache():
     cache = Cache(type=LiteLLMCacheType.LOCAL)
     litellm.cache = cache
     return cache
+
+
+@pytest.mark.parametrize(
+    ("call", "request_kwargs"),
+    [
+        (
+            completion,
+            {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}], "mock_response": "x"},
+        ),
+        (embedding, {"model": "text-embedding-3-small", "input": ["hi"], "mock_response": [0.1, 0.2]}),
+        (litellm.text_completion, {"model": "gpt-3.5-turbo-instruct", "prompt": "hi", "mock_response": "x"}),
+    ],
+)
+def test_sync_cache_hits_reach_sync_custom_logger(
+    monkeypatch: pytest.MonkeyPatch, call: Callable[..., object], request_kwargs: dict[str, object]
+) -> None:
+    from litellm.integrations.custom_logger import CustomLogger
+
+    logged_cache_hits: Final[list[object]] = []
+    all_logged: Final = threading.Event()
+
+    class SyncRecorder(CustomLogger):
+        def log_success_event(
+            self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+        ) -> None:
+            logged_cache_hits.append(kwargs.get("cache_hit"))
+            if len(logged_cache_hits) == 3:
+                all_logged.set()
+
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "input_callback", [])
+    monkeypatch.setattr(litellm, "callbacks", [SyncRecorder()])
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+
+    for _ in range(3):
+        call(**request_kwargs)
+
+    assert all_logged.wait(timeout=10)
+    assert logged_cache_hits == [None, True, True]
 
 
 @pytest.fixture
@@ -1071,7 +1113,7 @@ def test_sync_get_cache_does_not_eagerly_log_streaming_responses_hits():
         stream=True,
         start_time=datetime.now(),
     )
-    logging_obj.handle_sync_success_callbacks_for_async_calls = MagicMock()
+    logging_obj.handle_sync_cache_hit_success_callbacks = MagicMock()
 
     kwargs = {
         "model": original_model,
@@ -1095,7 +1137,7 @@ def test_sync_get_cache_does_not_eagerly_log_streaming_responses_hits():
     assert isinstance(
         cached_response.cached_result, CachedResponsesAPIStreamingIterator
     )
-    logging_obj.handle_sync_success_callbacks_for_async_calls.assert_not_called()
+    logging_obj.handle_sync_cache_hit_success_callbacks.assert_not_called()
 
 
 def test_sync_get_cache_defers_streaming_completion_hit_callbacks():
@@ -1115,7 +1157,7 @@ def test_sync_get_cache_defers_streaming_completion_hit_callbacks():
         stream=True,
         start_time=datetime.now(),
     )
-    logging_obj.handle_sync_success_callbacks_for_async_calls = MagicMock()
+    logging_obj.handle_sync_cache_hit_success_callbacks = MagicMock()
 
     kwargs = {
         "model": original_model,
@@ -1136,7 +1178,7 @@ def test_sync_get_cache_defers_streaming_completion_hit_callbacks():
     )
 
     assert cached_response.cached_result is not None
-    logging_obj.handle_sync_success_callbacks_for_async_calls.assert_not_called()
+    logging_obj.handle_sync_cache_hit_success_callbacks.assert_not_called()
 
 
 def test_should_defer_streaming_cache_hit_callbacks_for_any_streaming_request():
@@ -3046,3 +3088,57 @@ async def test_async_get_cache_answers_400_for_a_single_object_embedding_input()
             call_type=CallTypes.aembedding.value,
             kwargs={"model": model, "custom_llm_provider": "gemini", "input": clip_block, "caching": True},
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("internal", [False, True])
+async def test_a_cache_hit_inside_an_internal_sub_call_is_free_and_fires_no_callbacks_of_its_own(
+    monkeypatch: pytest.MonkeyPatch, internal: bool
+):
+    cache: Final = Cache(type="local")
+    monkeypatch.setattr(litellm, "cache", cache)
+    kwargs: Final = {"model": "gpt-5.4", "messages": [{"role": "user", "content": "hello"}], "caching": True}
+    cache.add_cache(
+        result=litellm.ModelResponse(
+            model="gpt-5.4",
+            choices=[litellm.Choices(message=litellm.Message(role="assistant", content="hi"))],
+            usage=litellm.Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500),
+        ),
+        **kwargs,
+    )
+    async_logging: Final = _build_logging_obj(CallTypes.acompletion.value, stream=False)
+    async_logging.async_success_handler = AsyncMock()
+    async_logging.handle_sync_success_callbacks_for_async_calls = MagicMock()
+    sync_logging: Final = _build_logging_obj(CallTypes.completion.value, stream=False)
+    sync_logging.handle_sync_cache_hit_success_callbacks = MagicMock()
+
+    with internal_sub_call() if internal else nullcontext():
+        async_hit: Final = await LLMCachingHandler(
+            original_function=litellm.acompletion, request_kwargs=kwargs, start_time=_FIXED_START
+        ).async_get_cache(
+            model="gpt-5.4",
+            original_function=litellm.acompletion,
+            logging_obj=async_logging,
+            start_time=_FIXED_START,
+            call_type=CallTypes.acompletion.value,
+            kwargs=kwargs,
+            args=(),
+        )
+        sync_hit: Final = LLMCachingHandler(
+            original_function=completion, request_kwargs=kwargs, start_time=_FIXED_START
+        ).sync_get_cache(
+            model="gpt-5.4",
+            original_function=completion,
+            logging_obj=sync_logging,
+            start_time=_FIXED_START,
+            call_type=CallTypes.completion.value,
+            kwargs=kwargs,
+        )
+
+    assert async_hit is not None and async_hit.cached_result is not None
+    assert sync_hit.cached_result is not None
+    assert async_hit.cached_result._hidden_params.get("response_cost") == 0.0
+    assert sync_hit.cached_result._hidden_params.get("response_cost") == 0.0
+    assert async_logging.async_success_handler.called is not internal
+    assert async_logging.handle_sync_success_callbacks_for_async_calls.called is not internal
+    assert sync_logging.handle_sync_cache_hit_success_callbacks.called is not internal

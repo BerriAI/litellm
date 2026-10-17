@@ -10,11 +10,10 @@ from typing_extensions import assert_never
 from litellm.types.llms.anthropic import AnthropicMessagesTextParam
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.llms.vertex_ai import ContentType
-from litellm.types.utils import TokenCountMessagesFormat, TokenCountResponse
+from litellm.types.utils import CountContextManagement, TokenCountMessagesFormat, TokenCountResponse
 
 if TYPE_CHECKING:
     from litellm.exceptions import APIError
-    from litellm.llms.anthropic.pass_through.context_management.result import PolyfillResult
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,6 +25,7 @@ class VertexGeminiCountContext:
 @dataclass(frozen=True, slots=True)
 class VertexGeminiCountContextError:
     error_message: str
+    status_code: int = 400
 
 
 _SYSTEM_BLOCKS: Final = TypeAdapter(tuple[AnthropicMessagesTextParam, ...])
@@ -39,6 +39,11 @@ _VERTEX_TOOL_KEYS: Final = MappingProxyType(
 )
 
 
+_INVALID_SYSTEM: Final = VertexGeminiCountContextError(
+    error_message="Gemini system instructions only support text blocks."
+)
+
+
 def _system_parts(
     system: object | None,
 ) -> tuple[Mapping[str, JsonValue], ...] | VertexGeminiCountContextError:
@@ -49,7 +54,7 @@ def _system_parts(
     try:
         blocks: Final = _SYSTEM_BLOCKS.validate_python(system)
     except ValidationError:
-        return VertexGeminiCountContextError(error_message="Gemini system instructions only support text blocks.")
+        return _INVALID_SYSTEM
     return tuple({"text": block["text"]} for block in blocks)
 
 
@@ -157,7 +162,7 @@ def count_context_error_response(
         tokenizer_type="gemini",
         error=True,
         error_message=error.error_message,
-        status_code=400,
+        status_code=error.status_code,
     )
 
 
@@ -179,36 +184,120 @@ class InferenceRequestView:
     system: object | None
 
 
-def _client_compaction(messages: Sequence[Mapping[str, object]], system: object | None) -> "PolyfillResult | None":
+@dataclass(frozen=True, slots=True)
+class CountContextEdits:
+    spec: JsonValue
+    model: str
+    tools: tuple[Mapping[str, object], ...] | None
+    drop_invalid_edits: bool = False
+
+
+_CONTEXT_MANAGEMENT_SPEC: Final[TypeAdapter[Mapping[str, object] | tuple[Mapping[str, object], ...]]] = TypeAdapter(
+    Mapping[str, object] | tuple[Mapping[str, object], ...]
+)
+
+
+def count_context_edits(
+    context_management: CountContextManagement | None,
+    tools: Sequence[Mapping[str, object]] | None,
+    litellm_params: Mapping[str, object],
+    fallback_model: str,
+) -> CountContextEdits:
+    model: Final = litellm_params.get("model")
+    return CountContextEdits(
+        spec=None if context_management is None else context_management.spec,
+        model=model if isinstance(model, str) else fallback_model,
+        tools=None if tools is None else tuple(tools),
+        drop_invalid_edits=context_management is not None and context_management.drop_invalid_edits,
+    )
+
+
+def _typed_spec(spec: JsonValue) -> Mapping[str, object] | tuple[Mapping[str, object], ...] | None:
+    try:
+        return _CONTEXT_MANAGEMENT_SPEC.validate_python(spec)
+    except ValidationError:
+        return None
+
+
+def _typed_system(
+    system: object | None,
+) -> str | tuple[AnthropicMessagesTextParam, ...] | None | VertexGeminiCountContextError:
+    if system is None or isinstance(system, str):
+        return system
+    try:
+        return _SYSTEM_BLOCKS.validate_python(system)
+    except ValidationError:
+        return _INVALID_SYSTEM
+
+
+def _view_without_edits(
+    messages: Sequence[Mapping[str, object]],
+    system: object | None,
+    typed_system: str | Sequence[Mapping[str, object]] | None,
+) -> InferenceRequestView:
     from litellm.llms.anthropic.pass_through.context_management.editors.compact import (
         apply_client_compaction_block_history,
     )
 
-    chat_messages: Final = [dict(message) for message in messages]
-    if system is None or isinstance(system, str):
-        return apply_client_compaction_block_history(messages=chat_messages, system=system)
-    try:
-        blocks: Final = _SYSTEM_BLOCKS.validate_python(system)
-    except ValidationError:
-        return None
-    return apply_client_compaction_block_history(messages=chat_messages, system=[dict(block) for block in blocks])
+    history: Final = apply_client_compaction_block_history(
+        messages=[dict(message) for message in messages],
+        system=typed_system
+        if typed_system is None or isinstance(typed_system, str)
+        else [dict(block) for block in typed_system],
+    )
+    if history is None:
+        return InferenceRequestView(messages=messages, system=system)
+    return InferenceRequestView(messages=history.messages, system=history.system)
 
 
-def inference_request_view(
-    messages: Sequence[Mapping[str, object]], system: object | None, messages_format: TokenCountMessagesFormat
-) -> InferenceRequestView:
-    """Apply the history rewrites /v1/messages runs before it converts a body for Gemini."""
+async def _anthropic_inference_view(
+    messages: Sequence[Mapping[str, object]], system: object | None, edits: CountContextEdits
+) -> InferenceRequestView | VertexGeminiCountContextError:
+    from litellm.llms.anthropic.pass_through.adapters.handler import prepare_context_managed_request
+    from litellm.llms.anthropic.pass_through.context_management import AnthropicContextManagementError
     from litellm.llms.anthropic.pass_through.messages.utils import normalize_native_messages
 
+    typed_system: Final = _typed_system(system)
+    if isinstance(typed_system, VertexGeminiCountContextError):
+        return typed_system
+    normalized: Final = normalize_native_messages(messages)
+    spec: Final = _typed_spec(edits.spec)
+    try:
+        prepared: Final = await prepare_context_managed_request(
+            model=edits.model,
+            messages=normalized,
+            tools=None if edits.tools is None else [dict(tool) for tool in edits.tools],
+            system=[dict(block) for block in typed_system] if isinstance(typed_system, tuple) else typed_system,
+            context_management_spec=(
+                None if spec is None else dict(spec) if isinstance(spec, Mapping) else [dict(edit) for edit in spec]
+            ),
+            litellm_metadata=None,
+            additional_drop_params=None,
+            llm_router=None,
+            count_only=True,
+            drop_invalid_edits=edits.drop_invalid_edits,
+        )
+    except AnthropicContextManagementError as error:
+        if error.status_code >= 500:
+            return _view_without_edits(normalized, system, typed_system)
+        return VertexGeminiCountContextError(error_message=error.message, status_code=error.status_code)
+    if prepared is None:
+        return InferenceRequestView(messages=normalized, system=system)
+    return InferenceRequestView(messages=prepared.messages, system=prepared.system)
+
+
+async def inference_request_view(
+    messages: Sequence[Mapping[str, object]],
+    system: object | None,
+    messages_format: TokenCountMessagesFormat,
+    edits: CountContextEdits,
+) -> InferenceRequestView | VertexGeminiCountContextError:
+    """Apply the history rewrites and context edits /v1/messages runs before it converts a body for Gemini."""
     match messages_format:
         case "openai":
             return InferenceRequestView(messages=messages, system=system)
         case "anthropic":
-            normalized: Final = normalize_native_messages(messages)
-            compacted: Final = _client_compaction(normalized, system)
-            if compacted is None:
-                return InferenceRequestView(messages=normalized, system=system)
-            return InferenceRequestView(messages=compacted.messages, system=compacted.system)
+            return await _anthropic_inference_view(messages, system, edits)
         case _:
             assert_never(messages_format)
 
