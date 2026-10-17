@@ -1405,9 +1405,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             from opentelemetry.trace import Status, StatusCode
 
             span = None
-            # Only set attributes if the span is still recording (not closed)
-            # Note: parent_span is guaranteed to be not None here
-            if hasattr(parent_span, "set_status"):
+            if parent_span is not None and parent_span.is_recording():
                 parent_span.set_status(Status(StatusCode.OK))
                 self.set_attributes(parent_span, kwargs, response_obj)
             # Raw-request as direct child of parent_span
