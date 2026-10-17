@@ -6725,6 +6725,10 @@ def _stored_request_body(body: Mapping[str, object]) -> dict[str, str]:
         ({"input": [{"role": "user", "content": "q"}, {"type": "function_call_output", "output": "out"}]}, {}),
         ({"messages": [{"role": "user", "content": "q"}, {"role": "assistant", "content": "prefill"}]}, {}),
         (
+            {"messages": [{"role": "user", "content": ["plain part", {"type": "text", "text": "block part"}]}]},
+            {"latest_user_message": "plain part\nblock part"},
+        ),
+        (
             {"messages": [{"role": "user", "content": [{"type": []}, {"type": {}}, {"type": "text", "text": "latest"}]}]},
             {"latest_user_message": "latest"},
         ),
