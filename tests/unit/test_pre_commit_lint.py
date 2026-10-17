@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "pre_commit_lint.sh"
 WHOLE_TREE_RUFF = "run --no-sync ruff check --config ruff-tests.toml tests"
 TEST_TREE_RAN = "ran:     test-tree lint (ruff-tests.toml + test-quality gate)"
+CODE_QUALITY_RAN = "ran:     code-quality checks (scripts/code_quality_checks.py --local)"
 TEST_TREE_SKIPPED = (
     "skipped: test-tree lint (ruff-tests.toml + test-quality gate) "
     "(no tests/ Python files or test-tree lint inputs in scope)"
@@ -84,6 +85,10 @@ case "$*" in
     "run --no-sync ruff check --config ruff-tests.toml"*)
         [ -n "${STUB_ARGS_DIR:-}" ] && echo "$*" >> "$STUB_ARGS_DIR/ruff_tests.args"
         [ "${STUB_FAIL:-}" = "tests-ruff" ] && exit 1
+        ;;
+    "run --no-sync python scripts/code_quality_checks.py"*)
+        [ -n "${STUB_ARGS_DIR:-}" ] && echo "$*" >> "$STUB_ARGS_DIR/code_quality.args"
+        [ "${STUB_FAIL:-}" = "code-quality" ] && exit 1
         ;;
 esac
 exit 0
@@ -404,6 +409,7 @@ def test_interrupt_spares_the_invoking_process(tmp_path: Path) -> None:
         ("make-lint", "Python lint failed"),
         ("eslint", "Dashboard lint failed"),
         ("gen-api", "npm run gen:api failed"),
+        ("code-quality", "Code-quality checks failed"),
     ],
 )
 def test_a_failing_block_fails_the_whole_run(tmp_path: Path, fail: str, message: str) -> None:
@@ -421,27 +427,28 @@ def test_run_ends_with_a_summary_of_ran_and_skipped_blocks(tmp_path: Path) -> No
     assert "ran:     Python lint (make lint)" in proc.stdout
     assert "ran:     dashboard lint (prettier + eslint + lint budgets)" in proc.stdout
     assert "ran:     dashboard API-type sync (npm run gen:api)" in proc.stdout
-    assert "skipped: tests/e2e checks (basedpyright + raw HTTP client ban) (no tests/e2e Python files in scope)" in proc.stdout
+    assert "skipped: tests/e2e basedpyright (no tests/e2e Python files in scope)" in proc.stdout
     assert TEST_TREE_SKIPPED in proc.stdout
+    assert CODE_QUALITY_RAN in proc.stdout
     assert "check: PASS" in proc.stdout
     assert "check: FAIL" not in proc.stdout
 
 
-def test_staged_files_matching_no_check_print_an_explicit_noop_note_and_nonempty_log(tmp_path: Path) -> None:
+def test_staged_files_matching_no_area_check_still_run_the_local_code_quality_checks(tmp_path: Path) -> None:
     repo, bin_dir = _sandbox(tmp_path)
     _commit_all(repo, "base")
-    _stage_file(repo, "scripts/tool.py", "def main() -> None: ...\n")
-    proc = _run(repo, bin_dir, {})
+    args_dir = tmp_path / "args"
+    args_dir.mkdir()
+    _stage_file(repo, "litellm-proxy-extras/migrations/20990101000000_x/migration.sql", "SELECT 1;\n")
+    proc = _run(repo, bin_dir, {"STUB_ARGS_DIR": str(args_dir)})
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert "no gating lint check matches the files in scope, so nothing ran" in proc.stdout
-    assert "scripts/tool.py" in proc.stdout
-    assert "a no-op, not a lint verdict" in proc.stdout
-    assert "check: PASS" in proc.stdout
+    assert _recorded(args_dir, "code_quality.args") == ["run --no-sync python scripts/code_quality_checks.py --local"]
     assert "linting Python" not in proc.stdout
     log = (repo / ".git" / "pre_commit_lint.log").read_text()
-    assert "check: summary" in log
     assert "skipped: Python lint (make lint) (no litellm/ Python files in scope)" in log
     assert TEST_TREE_SKIPPED in log
+    assert CODE_QUALITY_RAN in log
+    assert "check: PASS" in log
 
 
 def _recorded(args_dir: Path, name: str) -> list[str]:
