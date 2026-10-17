@@ -459,7 +459,13 @@ def _effective_key_for_generate(data: GenerateKeyRequest, now: datetime) -> Lite
     )
     metadata: Final = data.metadata or MappingProxyType({})
     folded_metadata: Final = {**metadata, **metadata_fields}
-    columns: Final = handle_key_type(data, {**column_fields})
+    preset_columns: Final = handle_key_type(data, {**column_fields})
+    default_allowed_routes: Final = _default_allowed_routes_for(data, preset_columns.get("allowed_routes"))
+    columns: Final = (
+        preset_columns
+        if default_allowed_routes is None
+        else {**preset_columns, "allowed_routes": list(default_allowed_routes)}
+    )
     expires: Final = (
         now + timedelta(seconds=duration_in_seconds(duration=data.duration)) if data.duration is not None else None
     )
@@ -924,16 +930,24 @@ def handle_key_type(data: GenerateKeyRequest, data_json: _KeyJsonT) -> _KeyJsonT
     return data_json
 
 
-def _default_allowed_routes_for(key_routes: object, key_type: LiteLLMKeyType | None) -> tuple[object, ...] | None:
+def _creates_team_service_account(request: GenerateKeyRequest) -> bool:
+    return (
+        request.user_id is None
+        and request.team_id is not None
+        and request.metadata is not None
+        and request.metadata.get("service_account_id") is not None
+    )
+
+
+def _default_allowed_routes_for(request: GenerateKeyRequest, key_routes: object) -> tuple[object, ...] | None:
     default_routes: Final[object] = (litellm.default_key_generate_params or {}).get("allowed_routes")
-    if not isinstance(default_routes, list):
+    if not isinstance(default_routes, list) or _creates_team_service_account(request):
         return None
     configured_routes: Final[tuple[object, ...]] = tuple(default_routes)
-    preset_routes: Final = _KEY_TYPE_PRESET_ROUTES.get(key_type) if key_type is not None else None
-    default_covers_preset: Final = preset_routes is not None and all(
-        route in configured_routes for route in preset_routes
+    default_covers_llm_api_preset: Final = request.key_type == LiteLLMKeyType.LLM_API and all(
+        route in configured_routes for route in _KEY_TYPE_PRESET_ROUTES[LiteLLMKeyType.LLM_API]
     )
-    if key_routes and not default_covers_preset:
+    if key_routes and not default_covers_llm_api_preset:
         return None
     return configured_routes
 
@@ -1530,9 +1544,7 @@ async def _common_key_generation_helper(
         user_api_key_dict=user_api_key_dict,
         allow_safe_presets=True,
     )
-    default_allowed_routes: Final = _default_allowed_routes_for(
-        data_json.get("allowed_routes"), member_request.key_type
-    )
+    default_allowed_routes: Final = _default_allowed_routes_for(member_request, data_json.get("allowed_routes"))
     if default_allowed_routes is not None:
         data_json["allowed_routes"] = list(default_allowed_routes)
 

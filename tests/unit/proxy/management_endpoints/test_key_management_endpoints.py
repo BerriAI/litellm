@@ -19661,9 +19661,47 @@ async def test_default_key_generate_params_allowed_routes_extends_key_type_prese
 
 
 @pytest.mark.asyncio
-async def test_default_key_generate_params_allowed_routes_keeps_key_type_preset_it_does_not_cover(monkeypatch):
-    from litellm.proxy._types import LiteLLMKeyType
+@pytest.mark.parametrize(
+    ("key_type", "preset_routes"),
+    [("management", ["management_routes"]), ("read_only", ["info_routes"])],
+)
+async def test_default_key_generate_params_allowed_routes_keeps_management_and_read_only_presets(
+    monkeypatch, key_type, preset_routes
+):
+    monkeypatch.setattr(
+        litellm,
+        "default_key_generate_params",
+        {"allowed_routes": ["llm_api_routes", "management_routes", "info_routes", "/key/spend/report"]},
+    )
+    mock_insert_data = _wire_key_generation_prisma(monkeypatch)
 
+    key_row = await _generate_key_and_get_persisted_row(
+        GenerateKeyRequest(key_type=key_type),
+        mock_insert_data,
+    )
+
+    assert key_row["allowed_routes"] == preset_routes
+
+
+@pytest.mark.parametrize(
+    "data",
+    [GenerateKeyRequest(), GenerateKeyRequest(key_type=LiteLLMKeyType.LLM_API)],
+    ids=["unset", "llm_api"],
+)
+def test_effective_key_for_generate_shows_default_allowed_routes_to_the_policy(monkeypatch, data):
+    monkeypatch.setattr(
+        litellm,
+        "default_key_generate_params",
+        {"allowed_routes": ["llm_api_routes", "/key/spend/report"]},
+    )
+
+    effective_key = _effective_key_for_generate(data=data, now=datetime(2026, 1, 1, tzinfo=timezone.utc))
+
+    assert effective_key.allowed_routes == ["llm_api_routes", "/key/spend/report"]
+
+
+@pytest.mark.asyncio
+async def test_default_key_generate_params_allowed_routes_skips_team_service_account_keys(monkeypatch):
     monkeypatch.setattr(
         litellm,
         "default_key_generate_params",
@@ -19672,11 +19710,11 @@ async def test_default_key_generate_params_allowed_routes_keeps_key_type_preset_
     mock_insert_data = _wire_key_generation_prisma(monkeypatch)
 
     key_row = await _generate_key_and_get_persisted_row(
-        GenerateKeyRequest(key_type=LiteLLMKeyType.MANAGEMENT),
+        GenerateKeyRequest(team_id="team-a", metadata={"service_account_id": "sa-1"}),
         mock_insert_data,
     )
 
-    assert key_row["allowed_routes"] == ["management_routes"]
+    assert not key_row.get("allowed_routes")
 
 
 @pytest.mark.asyncio
