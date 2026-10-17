@@ -2,7 +2,7 @@ import copy
 import json
 import os
 from typing import Final
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -784,3 +784,98 @@ def test_vertex_claude_4_8_plus_cost_map_entries_carry_mid_conversation_system_f
         and info.get("supports_mid_conversation_system") is not True
     ]
     assert missing == []
+
+
+@pytest.mark.asyncio
+async def test_avalidate_uses_async_access_token_not_sync():
+    """/v1/messages must not call blocking _ensure_access_token on the event loop.
+
+    AnthropicMessagesConfig.avalidate would otherwise delegate to the Vertex
+    sync validate (which does), freezing the proxy worker on slow GCE metadata.
+    """
+    config = VertexAIPartnerModelsAnthropicMessagesConfig()
+    litellm_params = {
+        "vertex_ai_project": "test-project",
+        "vertex_ai_location": "us-east5",
+        "vertex_credentials": "{}",
+    }
+    optional_params = {"tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 1}]}
+
+    with (
+        patch.object(
+            config,
+            "_ensure_access_token_async",
+            new_callable=AsyncMock,
+            return_value=("async-token", "test-project"),
+        ) as mock_async,
+        patch.object(
+            config,
+            "_ensure_access_token",
+            side_effect=AssertionError("sync _ensure_access_token must not run on async path"),
+        ) as mock_sync,
+        patch.object(config, "get_complete_vertex_url", return_value="https://mock-url") as mock_get_url,
+    ):
+        updated_headers, api_base = await config.avalidate_anthropic_messages_environment(
+            headers={},
+            model="claude-sonnet-4-5",
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            api_base=None,
+        )
+
+    mock_async.assert_awaited_once()
+    mock_sync.assert_not_called()
+    assert mock_async.await_args.kwargs["custom_llm_provider"] == "vertex_ai"
+    assert mock_async.await_args.kwargs["project_id"] == "test-project"
+    assert updated_headers["Authorization"] == "Bearer async-token"
+    assert updated_headers["content-type"] == "application/json"
+    assert "web-search-2025-03-05" in updated_headers["anthropic-beta"]
+    assert api_base == "https://mock-url"
+    assert mock_get_url.call_args.kwargs["vertex_location"] == "us-east5"
+
+
+@pytest.mark.asyncio
+async def test_avalidate_matches_sync_headers_and_url():
+    """Async and sync finalize paths should produce the same headers/api_base."""
+    config = VertexAIPartnerModelsAnthropicMessagesConfig()
+    litellm_params = {
+        "vertex_ai_project": "proj-a",
+        "vertex_ai_location": "europe-west1",
+        "vertex_credentials": "{}",
+    }
+    optional_params = {
+        "context_management": {"edits": [{"type": "clear_thinking_20251015"}]},
+        "tools": [],
+    }
+    messages = [{"role": "user", "content": "hi"}]
+
+    with (
+        patch.object(config, "_ensure_access_token", return_value=("tok", "proj-a")),
+        patch.object(
+            config,
+            "_ensure_access_token_async",
+            new_callable=AsyncMock,
+            return_value=("tok", "proj-a"),
+        ),
+        patch.object(config, "get_complete_vertex_url", return_value="https://eu.mock"),
+    ):
+        sync_headers, sync_base = config.validate_anthropic_messages_environment(
+            headers={"anthropic-beta": "existing-beta"},
+            model="claude-3-sonnet",
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=dict(litellm_params),
+            api_base=None,
+        )
+        async_headers, async_base = await config.avalidate_anthropic_messages_environment(
+            headers={"anthropic-beta": "existing-beta"},
+            model="claude-3-sonnet",
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=dict(litellm_params),
+            api_base=None,
+        )
+
+    assert async_headers == sync_headers
+    assert async_base == sync_base
