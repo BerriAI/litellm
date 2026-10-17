@@ -1991,7 +1991,7 @@ async def _read_request_body_deferring_parse_failure(
         parsed_body: Final = await read_request_body(request=request)
     except ProxyException as parse_exception:
         return {}, parse_exception
-    return populate_request_with_path_params(request_data=dict(parsed_body), request=request), None
+    return populate_request_with_path_params(request_data=parsed_body, request=request), None
 
 
 async def _record_unparsable_body_failure(
@@ -3779,20 +3779,17 @@ async def run_centralized_common_checks(
     # later seed in common_checks pushes key tags and the
     # _tag_max_budget_check read into `litellm_metadata`, hiding header
     # tags from per-tag budget enforcement on LITELLM_METADATA_ROUTES.
-    LiteLLMProxyRequestSetup.pre_seed_litellm_metadata_for_route(
-        request_data=request_data,
-        route=route,
-    )
-
     # Merge x-litellm-tags into request_data BEFORE common_checks runs.
     # _tag_max_budget_check inside common_checks only inspects request_data;
     # without this pre-merge, header-supplied tags bypass tag-budget
     # enforcement.
-    LiteLLMProxyRequestSetup.apply_client_tag_policy_pre_auth(
-        request=request,
-        request_data=request_data,
-        user_api_key_dict=user_api_key_auth_obj,
-    )
+    for tag_target in LiteLLMProxyRequestSetup.pre_auth_tag_merge_targets(request, request_data):
+        LiteLLMProxyRequestSetup.pre_seed_litellm_metadata_for_route(request_data=tag_target, route=route)
+        LiteLLMProxyRequestSetup.apply_client_tag_policy_pre_auth(
+            request=request,
+            request_data=tag_target,
+            user_api_key_dict=user_api_key_auth_obj,
+        )
 
     bind_admission_counter_keys(user_api_key_auth_obj, end_user_id=end_user_id)
     try:

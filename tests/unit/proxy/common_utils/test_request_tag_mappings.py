@@ -393,17 +393,21 @@ async def test_mapped_tags_stay_out_of_requester_metadata(client_metadata):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "headers,body_tags",
-    [([(b"x-litellm-tags", b"usecase:a")], None), ([], ["usecase:a"])],
-    ids=["header", "body"],
+    "headers,body_fields",
+    [
+        ([(b"x-litellm-tags", b"usecase:a")], {}),
+        ([], {"tags": ["usecase:a"]}),
+        ([], {"litellm_metadata": {"tags": ["usecase:a"]}}),
+    ],
+    ids=["header", "body", "litellm_metadata"],
 )
-async def test_client_sent_tag_still_routes_when_baggage_maps_to_it(headers, body_tags):
+async def test_client_sent_tag_still_routes_when_baggage_maps_to_it(headers, body_fields):
     import litellm
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.auth.user_api_key_auth import _read_request_body_deferring_parse_failure
     from litellm.proxy.proxy_server import ProxyConfig
 
-    body = {"model": "gpt-4"} if body_tags is None else {"model": "gpt-4", "tags": body_tags}
+    body = {"model": "gpt-4", **body_fields}
 
     async def receive():
         return {"type": "http.request", "body": json.dumps(body).encode()}

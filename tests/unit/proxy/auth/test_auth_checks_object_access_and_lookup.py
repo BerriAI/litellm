@@ -11311,7 +11311,10 @@ def _client_tag_rejection(route, data, request):
 @pytest.mark.parametrize("route", ["/v1/chat/completions", "/v1/messages", "/v1/responses"])
 @pytest.mark.parametrize("client_tags", [None, [], ["usecase:a"], '{"tags":["usecase:a"]}', "header"])
 @pytest.mark.parametrize("client_slot", ["metadata", "litellm_metadata"])
-async def test_baggage_mapping_rejects_exactly_the_client_tags_rejected_without_it(route, client_tags, client_slot):
+@pytest.mark.parametrize("baggage", [True, False])
+async def test_baggage_mapping_rejects_exactly_the_client_tags_rejected_without_it(
+    route, client_tags, client_slot, baggage
+):
     from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 
     unmapped_request = _client_tag_request(client_tags, baggage=False)
@@ -11319,7 +11322,7 @@ async def test_baggage_mapping_rejects_exactly_the_client_tags_rejected_without_
     LiteLLMProxyRequestSetup.pre_seed_litellm_metadata_for_route(unmapped, route)
     LiteLLMProxyRequestSetup.apply_client_tag_policy_pre_auth(unmapped_request, unmapped, UserAPIKeyAuth(api_key="qa-key"))
 
-    mapped_request = _client_tag_request(client_tags, baggage=True)
+    mapped_request = _client_tag_request(client_tags, baggage=baggage)
     mapped = _client_tag_body(client_tags, client_slot)
     LiteLLMProxyRequestSetup.pre_seed_litellm_metadata_for_route(mapped, route)
     await LiteLLMProxyRequestSetup.apply_baggage_tag_mappings_pre_auth(
@@ -11334,7 +11337,7 @@ async def test_baggage_mapping_rejects_exactly_the_client_tags_rejected_without_
     assert _client_tag_rejection(route, mapped, mapped_request) == _client_tag_rejection(
         route, unmapped, unmapped_request
     )
-    if client_tags is None:
+    if client_tags is None and baggage:
         assert "usecase:a" in mapped["metadata" if "chat/completions" in route else "litellm_metadata"]["tags"]
 
 

@@ -2192,3 +2192,89 @@ async def test_websocket_inference_is_allowed_when_no_baggage_mapping_is_require
     assert result is authorized
     assert http_auth.await_args.kwargs["api_key"] == "Bearer qa-key"
     assert messages == []
+
+
+async def _auth_then_serve_chat(monkeypatch, general_settings, body, headers):
+    import copy
+
+    from fastapi import Request as FastAPIRequest
+    from fastapi import Response
+
+    from litellm.proxy.common_utils.http_parsing_utils import read_request_body
+    from litellm.proxy.proxy_server import chat_completion
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4o", "tags": ["usecase:a"], "mock_response": "hi"},
+                "model_info": {"id": "usecase-deployment"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4o-mini", "tags": ["default"], "mock_response": "hi"},
+                "model_info": {"id": "default-deployment"},
+            },
+        ],
+        enable_tag_filtering=True,
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", None)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", general_settings)
+
+    async def receive():
+        return {"type": "http.request", "body": json.dumps(body).encode()}
+
+    request = FastAPIRequest(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/chat/completions",
+            "scheme": "http",
+            "server": ("localhost", 4000),
+            "query_string": b"",
+            "headers": [(b"content-type", b"application/json"), *headers],
+        },
+        receive,
+    )
+    auth = await user_api_key_auth(request=request, api_key=f"Bearer {MASTER_KEY}")
+    cached_body = copy.deepcopy(await read_request_body(request))
+    response = Response()
+    await chat_completion(request=request, fastapi_response=response, user_api_key_dict=auth)
+    return cached_body, response.headers["x-litellm-model-id"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "general_settings",
+    [{}, {"request_tag_mappings": [{"key": "region", "tag_prefix": "region:"}]}],
+    ids=["no_mappings", "mapped_baggage"],
+)
+async def test_auth_header_tag_merge_keeps_json_string_metadata_tags_routable(monkeypatch, general_settings):
+    body = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "hi"}],
+        "metadata": json.dumps({"tags": ["usecase:a"]}),
+    }
+    cached_body, served_by = await _auth_then_serve_chat(
+        monkeypatch, general_settings, body, [(b"x-litellm-tags", b"other"), (b"baggage", b"region=sg")]
+    )
+    assert served_by == "usecase-deployment"
+    assert cached_body["metadata"] == {"tags": ["usecase:a", "other"]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("client_metadata", ["run-123", 42, ["x"]])
+@pytest.mark.parametrize("baggage", [[], [(b"baggage", b"region=sg")]], ids=["no_baggage", "unmapped_baggage"])
+async def test_request_that_maps_nothing_serves_non_object_metadata_like_unset_mappings(
+    monkeypatch, client_metadata, baggage
+):
+    body = {"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}], "metadata": client_metadata}
+    headers = [(b"x-litellm-tags", b"usecase:a"), *baggage]
+    unset = await _auth_then_serve_chat(monkeypatch, {}, body, headers)
+    mapped = await _auth_then_serve_chat(
+        monkeypatch, {"request_tag_mappings": [{"key": "entrypoint", "tag_prefix": "usecase:"}]}, body, headers
+    )
+    assert mapped == unset
+    assert mapped[1] == "usecase-deployment"

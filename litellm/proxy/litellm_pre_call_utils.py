@@ -5,7 +5,8 @@ import json
 import re
 import time
 from collections import OrderedDict
-from collections.abc import Mapping, MutableMapping, Sequence
+from collections.abc import Iterable, Mapping, MutableMapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from types import MappingProxyType
 from typing import (
@@ -80,6 +81,7 @@ from litellm.proxy.common_utils.callback_utils import (
 )
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
     _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    detach_request_parsed_body,
     safe_get_request_headers,
 )
 from litellm.proxy.spend_tracking.carried_budget_state import carried_budget_metadata
@@ -90,6 +92,7 @@ _SPECIAL_HEADERS_CACHE: Final = frozenset(str(v.value).lower() for v in SpecialH
 
 _REDACTED_HEADER_VALUE: Final = "***REDACTED***"
 _DECODED_JSON: Final = TypeAdapter(object)
+_OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
 _CREDENTIAL_HEADER_NAMES: Final = SpecialHeaders.litellm_credential_header_names() | frozenset(
     {"cookie", "proxy-authorization"}
 )
@@ -598,6 +601,47 @@ def _normalized_metadata_slot(
     normalized: Final[dict[str, object]] = parsed if isinstance(parsed, dict) else {}
     request_data[metadata_variable_name] = normalized
     return normalized
+
+
+def _metadata_object_or_error(field: str, value: object) -> Mapping[str, object] | ProxyException:
+    if value is None:
+        return {}
+    try:
+        return dict(_normalized_metadata_object(field, value))
+    except ProxyException as invalid_type:
+        return invalid_type
+
+
+@dataclass(frozen=True, slots=True)
+class _BaggageClientBody:
+    body: dict[str, object]  # mutable-ok: the client's cached body, which the base tag merges write into
+
+
+def _detach_auth_metadata_from_client_body(
+    request: Request,
+    request_data: MutableMapping[str, object],  # mutable-ok: auth's own copy takes the normalized metadata objects
+) -> ProxyException | None:
+    client_body: Final = detach_request_parsed_body(request, request_data)
+    request.state.litellm_baggage_client_body = _BaggageClientBody(client_body)  # rebind-ok: mirror tag merges
+    slots: Final = tuple(
+        (field, _metadata_object_or_error(field, request_data[field]))
+        for field in ("metadata", "litellm_metadata")
+        if field in request_data
+    )
+    for field, normalized in slots:
+        if isinstance(normalized, ProxyException):
+            _ = request_data.pop(field)
+        else:
+            request_data[field] = normalized  # rebind-ok: auth's copy stops sharing the client's metadata object
+    return next((normalized for _, normalized in slots if isinstance(normalized, ProxyException)), None)
+
+
+def _metadata_string_tags(metadata_objects: Iterable[Mapping[str, object]]) -> tuple[str, ...]:
+    tag_lists: Final = (metadata.get("tags") for metadata in metadata_objects)
+    tags: Final = itertools.chain.from_iterable(
+        _OBJECT_LIST_ADAPTER.validate_python(tag_list) for tag_list in tag_lists if isinstance(tag_list, list)
+    )
+    return tuple(tag for tag in tags if isinstance(tag, str))
 
 
 def _strip_untrusted_request_header_controls(
@@ -2106,6 +2150,16 @@ class LiteLLMProxyRequestSetup:
             request_data.setdefault("litellm_metadata", {})
 
     @staticmethod
+    def pre_auth_tag_merge_targets(
+        request: Request | None,
+        request_data: dict[str, object],  # mutable-ok: auth's request body, which the tag merges write into
+    ) -> tuple[dict[str, object], ...]:  # mutable-ok: every body the base tag merges write into
+        client_body: Final[object] = getattr(getattr(request, "state", None), "litellm_baggage_client_body", None)
+        if not isinstance(client_body, _BaggageClientBody) or client_body.body is request_data:
+            return (request_data,)
+        return (request_data, client_body.body)
+
+    @staticmethod
     async def apply_baggage_tag_mappings_pre_auth(
         request: Request,
         request_data: MutableMapping[str, object],  # mutable-ok: enrich the shared request before budget admission
@@ -2123,28 +2177,19 @@ class LiteLLMProxyRequestSetup:
         raw_rules: Final = general_settings.get("request_tag_mappings")
         if not isinstance(raw_rules, list) or not raw_rules:
             return
-        has_client_metadata: Final = "metadata" in request_data
-        has_alternate_metadata: Final = "litellm_metadata" in request_data
-        client_metadata: Final[object] = request_data.pop("metadata", None)
-        alternate_client_metadata: Final[object] = request_data.pop("litellm_metadata", None)
-        normalized_client_metadata: Final[Mapping[str, object]] = (
-            _normalized_metadata_object("metadata", client_metadata)
-            if client_metadata is not None
-            else MappingProxyType({})
-        )
-        normalized_alternate_metadata: Final[Mapping[str, object]] = (
-            _normalized_metadata_object("litellm_metadata", alternate_client_metadata)
-            if alternate_client_metadata is not None
-            else MappingProxyType({})
-        )
-        if has_client_metadata:
-            # Keep rejection logging safe without changing the cached client body.
-            request_data["metadata"] = dict(normalized_client_metadata)  # rebind-ok: normalize working auth metadata
-        if has_alternate_metadata:
-            request_data["litellm_metadata"] = dict(normalized_alternate_metadata)  # rebind-ok: normalize auth copy
         rules: Final = REQUEST_TAG_MAPPINGS_ADAPTER.validate_python(raw_rules)
         header: Final = ",".join(request.headers.getlist("baggage"))
-        mapped: Final = resolve_baggage_tag_mappings(header, rules)
+        try:
+            mapped: Final = resolve_baggage_tag_mappings(header, rules)
+        except ProxyException:
+            _ = _detach_auth_metadata_from_client_body(request, request_data)
+            raise
+        if not mapped:
+            return
+        client_metadata: Final[object] = request_data.get("metadata")
+        invalid_metadata: Final = _detach_auth_metadata_from_client_body(request, request_data)
+        if invalid_metadata is not None:
+            raise invalid_metadata
         budgeted_tags: Final = tuple(tag for tag, require_budget in mapped if require_budget)
         unbudgeted_tag: Final = (
             await _unbudgeted_mapped_tag(budgeted_tags, prisma_client, user_api_key_cache) if budgeted_tags else None
@@ -2153,15 +2198,14 @@ class LiteLLMProxyRequestSetup:
             raise unbudgeted_tag
         if isinstance(unbudgeted_tag, str):
             raise mapping_rejection(f"Mapped tag {unbudgeted_tag} requires an existing tag budget")
-        if mapped:
-            client_has_tags: Final = (isinstance(client_metadata, dict) and "tags" in client_metadata) or (
-                get_metadata_variable_name_from_kwargs(request_data) == "metadata"
-                and any(member.strip() for member in request.headers.get("x-litellm-tags", "").split(","))
-            )
-            mapped_tags: Final = tuple(tag for tag, _ in mapped)
-            request.state.litellm_baggage_client_metadata_tags = client_has_tags  # rebind-ok: request input flag
-            request.state.litellm_baggage_mapped_tags = mapped_tags  # rebind-ok: per-request immutable mapped tags
-            LiteLLMProxyRequestSetup.apply_authenticated_baggage_tags(request, request_data)
+        client_has_tags: Final = (isinstance(client_metadata, dict) and "tags" in client_metadata) or (
+            get_metadata_variable_name_from_kwargs(request_data) == "metadata"
+            and any(member.strip() for member in request.headers.get("x-litellm-tags", "").split(","))
+        )
+        mapped_tags: Final = tuple(tag for tag, _ in mapped)
+        request.state.litellm_baggage_client_metadata_tags = client_has_tags  # rebind-ok: request input flag
+        request.state.litellm_baggage_mapped_tags = mapped_tags  # rebind-ok: per-request immutable mapped tags
+        LiteLLMProxyRequestSetup.apply_authenticated_baggage_tags(request, request_data)
 
     @staticmethod
     def apply_authenticated_baggage_tags(
@@ -2340,12 +2384,16 @@ async def add_litellm_data_to_request(
         data.pop(_internal_key, None)
     _reject_url_valued_destinations(data)
     _raw_metadata_by_field: Final = {
-        _metadata_field: data.pop(_metadata_field)
+        _metadata_field: _DECODED_JSON.validate_python(data.pop(_metadata_field))
         for _metadata_field in ("metadata", "litellm_metadata")
         if data.get(_metadata_field) is not None
     }
-    for _metadata_field, _raw_metadata in _raw_metadata_by_field.items():
-        data[_metadata_field] = _normalized_metadata_object(_metadata_field, _raw_metadata)
+    _normalized_metadata_by_field: Final = {
+        _metadata_field: _normalized_metadata_object(_metadata_field, _raw_metadata)
+        for _metadata_field, _raw_metadata in _raw_metadata_by_field.items()
+    }
+    data.update(_normalized_metadata_by_field)
+    _client_sent_metadata_tags: Final = _metadata_string_tags(_normalized_metadata_by_field.values())
     # Strip spoofable auth metadata from user-supplied metadata dict
     _user_metadata = data.get("metadata")
     if isinstance(_user_metadata, dict):
@@ -2779,15 +2827,11 @@ async def add_litellm_data_to_request(
             tags_to_add=_caller_body_tags,
         )
 
-    # caller_tags: exactly what this request itself supplied (x-litellm-tags header,
-    # body "tags", or body "metadata.tags" on litellm_metadata routes), never
-    # anything from key/team/project metadata. Read directly from the header and
-    # body values here, the same way inherited_tags above is read directly from
-    # key/team/project metadata -- neither is derived by inspecting the shared
-    # "tags" list, which a pre-auth pass (apply_client_tag_policy_pre_auth) may
-    # have already merged caller header tags into before this function runs.
+    # caller_tags: the tags the request's headers and body carry (x-litellm-tags, body "tags", and body
+    # "metadata.tags" / "litellm_metadata.tags" read before the mapped tags were added back above),
+    # never derived from the shared "tags" list.
     data[_metadata_variable_name]["caller_tags"] = tuple(  # rebind-ok: matches file idiom
-        dict.fromkeys((*(tags or ()), *(_caller_body_tags or ())))
+        dict.fromkeys((*(tags or ()), *_client_sent_metadata_tags))
     )
 
     # Team Callbacks controls
