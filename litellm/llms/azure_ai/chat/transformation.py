@@ -6,11 +6,11 @@ from typing import TYPE_CHECKING, Final, cast
 
 import httpx
 from httpx import Response
+from pydantic import BaseModel, ConfigDict
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    audio_or_image_in_message_content,
     convert_content_list_to_str,
     filter_value_from_dict,
 )
@@ -44,6 +44,27 @@ NON_OPENAI_SPEC_MESSAGE_FIELDS: Final = (
     "provider_specific_fields",
     "cache_control",
 )
+
+LIST_ONLY_CONTENT_PART_TYPES: Final = frozenset({"image_url", "input_audio", "file"})
+
+
+class _ContentPart(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    type: object = None
+
+
+class _MessageContent(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    content: str | tuple[_ContentPart, ...] | None = None
+
+
+def _has_list_only_content_part(message: AllMessageValues) -> bool:
+    content: Final = _MessageContent.model_validate(message).content
+    if content is None or isinstance(content, str):
+        return False
+    return any(part.type in LIST_ONLY_CONTENT_PART_TYPES for part in content)
 
 
 class AzureAIChatCompletionResponseIterator(OpenAIChatCompletionResponseIterator):
@@ -242,7 +263,7 @@ class AzureAIStudioConfig(OpenAIConfig):
                these with "Extra inputs are not permitted", which breaks multi-turn
                Anthropic-format clients that echo thinking blocks back as history.
             2. Transforms list content to a string.
-            3. If message contains an image or audio, send as is (user-intended)
+            3. If message contains an image, audio, or file part, send as is (user-intended)
 
         Operates on a deep copy so the caller's messages keep their thinking blocks
         and provider metadata, which a fallback to another provider still needs.
@@ -253,8 +274,7 @@ class AzureAIStudioConfig(OpenAIConfig):
             for field in NON_OPENAI_SPEC_MESSAGE_FIELDS:
                 filter_value_from_dict(message_dict, field)
 
-            # Do nothing if the message contains an image or audio
-            if audio_or_image_in_message_content(message):
+            if _has_list_only_content_part(message):
                 continue
 
             texts = convert_content_list_to_str(message=message)

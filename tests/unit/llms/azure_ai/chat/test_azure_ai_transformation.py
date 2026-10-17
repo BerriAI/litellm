@@ -1059,3 +1059,21 @@ def test_map_azure_model_group(model_group_header, expected_model):
 
     config = AzureAICohereConfig()
     assert config._map_azure_model_group(model_group_header) == expected_model
+
+
+def test_azure_ai_sends_file_parts_instead_of_flattening_them_to_text():
+    file_part: Final = {
+        "type": "file",
+        "file": {"filename": "document.pdf", "file_data": "data:application/pdf;base64,JVBERi0xLjQK"},
+    }
+    content: Final = [file_part, {"type": "text", "text": "What is the codeword?"}]
+
+    request: Final = AzureAIStudioConfig().transform_request(
+        model="Kimi-K2.6",
+        messages=[{"role": "user", "content": content}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["messages"] == [{"role": "user", "content": content}]
