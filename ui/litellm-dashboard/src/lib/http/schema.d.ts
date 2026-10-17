@@ -27053,6 +27053,11 @@ export interface components {
              */
             model?: string | null;
             /**
+             * Num Retries
+             * @description How many more times to send a guardrail check whose connection timed out waiting for the answer or was dropped after the request went out. Each retry opens a fresh connection and gets the full timeout. Connect failures, HTTP error statuses and BLOCKED verdicts are not retried. Unset or 0 sends each check once, and the most allowed is 5. Implemented by guardrail='generic_guardrail_api', other guardrails ignore it.
+             */
+            num_retries?: number | null;
+            /**
              * On Sensitive Data
              * @description Action to take when sensitive data is detected. 'block' raises an exception (default behavior). 'route' reroutes the request to the model specified in sensitive_data_route_to_model.
              */
@@ -36638,6 +36643,11 @@ export interface components {
              * @description If True, logs violations without blocking. Defaults to False if not provided
              */
             monitor_mode?: boolean | null;
+            /**
+             * Num Retries
+             * @description How many more times to send a guardrail check whose connection timed out waiting for the answer or was dropped after the request went out. Each retry opens a fresh connection and gets the full timeout. Connect failures, HTTP error statuses and BLOCKED verdicts are not retried. Unset or 0 sends each check once, and the most allowed is 5. Implemented by guardrail='generic_guardrail_api', other guardrails ignore it.
+             */
+            num_retries?: number | null;
             /**
              * On Disallowed Action
              * @description Choose whether disallowed tools block the request or get rewritten out of the payload

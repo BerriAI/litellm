@@ -294,11 +294,11 @@ def chat_httpx(target: ProxyTarget, model: str, marker: str) -> Answer:
     )
 
 
-def chat_with_guardrail(target: ProxyTarget, model: str, marker: str) -> Answer:
+def chat_with_guardrail(target: ProxyTarget, model: str, marker: str, guardrail: str = GUARDRAIL) -> Answer:
     return _post(
         target,
         "/v1/chat/completions",
-        {"model": model, "messages": [{"role": "user", "content": marker}], "guardrails": [GUARDRAIL]},
+        {"model": model, "messages": [{"role": "user", "content": marker}], "guardrails": [guardrail]},
         _chat_body,
     )
 
@@ -517,18 +517,21 @@ def pass_through_deployment(_model: str, url: str, _steady: str) -> ConfigPart:
     return ConfigPart(pass_through=({"path": PASS_THROUGH, "target": f"{url}/passthrough"},))
 
 
-def guardrail_deployment(model: str, url: str, steady: str) -> ConfigPart:
+def guardrail_deployment(
+    model: str, url: str, steady: str, guardrail: str = GUARDRAIL, num_retries: int | None = None
+) -> ConfigPart:
     return ConfigPart(
         models=openai_deployment(model, steady, steady).models,
         guardrails=(
             {
-                "guardrail_name": GUARDRAIL,
+                "guardrail_name": guardrail,
                 "litellm_params": {
                     "guardrail": "generic_guardrail_api",
                     "mode": "pre_call",
                     "default_on": False,
                     "api_base": url,
                     "api_key": PROVIDER_KEY,
+                    **({} if num_retries is None else {"num_retries": num_retries}),
                 },
             },
         ),

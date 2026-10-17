@@ -14412,6 +14412,20 @@
               "description": "Optional field if guardrail requires a 'model' parameter",
               "title": "Model"
             },
+            "num_retries": {
+              "anyOf": [
+                {
+                  "maximum": 5.0,
+                  "minimum": 0.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "How many more times to send a guardrail check whose connection timed out waiting for the answer or was dropped after the request went out. Each retry opens a fresh connection and gets the full timeout. Connect failures, HTTP error statuses and BLOCKED verdicts are not retried. Unset or 0 sends each check once, and the most allowed is 5. Implemented by guardrail='generic_guardrail_api', other guardrails ignore it.",
+              "title": "Num Retries"
+            },
             "on_sensitive_data": {
               "anyOf": [
                 {
@@ -17000,6 +17014,20 @@
               ],
               "description": "If True, logs violations without blocking. Defaults to False if not provided",
               "title": "Monitor Mode"
+            },
+            "num_retries": {
+              "anyOf": [
+                {
+                  "maximum": 5.0,
+                  "minimum": 0.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "How many more times to send a guardrail check whose connection timed out waiting for the answer or was dropped after the request went out. Each retry opens a fresh connection and gets the full timeout. Connect failures, HTTP error statuses and BLOCKED verdicts are not retried. Unset or 0 sends each check once, and the most allowed is 5. Implemented by guardrail='generic_guardrail_api', other guardrails ignore it.",
+              "title": "Num Retries"
             },
             "on_disallowed_action": {
               "default": "block",
