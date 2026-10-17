@@ -11038,7 +11038,7 @@ class TestResponseCostFromLoggingObjForCacheHits:
     def _logging_obj():
         from litellm.litellm_core_utils.litellm_logging import Logging
 
-        logging_obj = Logging(
+        logging_obj: Final = Logging(
             model="claude-haiku-5-5",
             messages=[{"role": "user", "content": "hi"}],
             stream=False,
@@ -11051,13 +11051,13 @@ class TestResponseCostFromLoggingObjForCacheHits:
         return logging_obj
 
     def test_a_v1_messages_cache_hit_costs_nothing_though_its_usage_prices_as_a_fresh_call(self):
-        fresh_cost = ProxyBaseLLMRequestProcessing._response_cost_from_logging_obj(
+        fresh_cost: Final = ProxyBaseLLMRequestProcessing._response_cost_from_logging_obj(
             response=dict(self.BODY), logging_obj=self._logging_obj()
         )
-        hit = self._logging_obj()
+        hit: Final = self._logging_obj()
         hit.caching_details = {"cache_hit": True, "cache_duration_ms": 2.0}
 
-        hit_cost = ProxyBaseLLMRequestProcessing._response_cost_from_logging_obj(
+        hit_cost: Final = ProxyBaseLLMRequestProcessing._response_cost_from_logging_obj(
             response=dict(self.BODY), logging_obj=hit
         )
 
@@ -11106,10 +11106,10 @@ class TestResponseCostFromLoggingObjForCacheHits:
         assert {name: headers.get(name) for name in cost_headers} == dict.fromkeys(cost_headers, expected_header)
 
     def test_a_fresh_zero_cost_v1_messages_call_still_sends_no_cost_header(self):
-        logging_obj = self._logging_obj()
+        logging_obj: Final = self._logging_obj()
         logging_obj.model_call_details["response_cost"] = 0.0
 
-        cost = ProxyBaseLLMRequestProcessing._response_cost_from_logging_obj(
+        cost: Final = ProxyBaseLLMRequestProcessing._response_cost_from_logging_obj(
             response=dict(self.BODY), logging_obj=logging_obj
         )
 

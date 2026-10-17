@@ -7408,7 +7408,7 @@ def test_cache_hit_payload_keeps_zero_components_beside_guardrail_cost(logging_o
         total_cost=0.0000429,
         cost_for_built_in_tools_cost_usd_dollar=0.0,
     )
-    payload = _build_success_payload(logging_obj, {**_guardrail_kwargs(response_cost=0.0), "cache_hit": True})
+    payload: Final = _build_success_payload(logging_obj, {**_guardrail_kwargs(response_cost=0.0), "cache_hit": True})
 
     assert payload is not None
     assert payload["response_cost"] == pytest.approx(0.0003)
