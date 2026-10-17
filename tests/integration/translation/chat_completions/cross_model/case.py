@@ -1,9 +1,6 @@
 from typing import Final
 
-from integration.translation.case import (
-    StreamingTranslationTestCase,
-    TranslationTestCase,
-)
+from integration.translation.case import StreamingTranslationTestCase, TranslationTestCase
 from integration.translation.chat_completions.cross_model import (
     anthropic,
     azure,
@@ -105,7 +102,7 @@ MID: Final[tuple[AgentCases, ...]] = (
         anthropic.CLAUDE_OPUS_5_5_AGENT_STREAMING_TEST_CASE,
     ),
     (
-        anthropic.CLAUDE_OPUS_5_TEST_CASE,
+        anthropic.CLAUDE_OPUS_5_AGENT_CROSS_MODEL_TEST_CASE,
         anthropic.CLAUDE_OPUS_5_AGENT_FOLLOWUP_TEST_CASE,
         anthropic.CLAUDE_OPUS_5_AGENT_STREAMING_TEST_CASE,
     ),
@@ -189,7 +186,7 @@ HIGH: Final[tuple[AgentCases, ...]] = (
         anthropic.CLAUDE_FABLE_5_1_AGENT_STREAMING_TEST_CASE,
     ),
     (
-        anthropic.CLAUDE_FABLE_5_TEST_CASE,
+        anthropic.CLAUDE_FABLE_5_AGENT_CROSS_MODEL_TEST_CASE,
         anthropic.CLAUDE_FABLE_5_AGENT_FOLLOWUP_TEST_CASE,
         anthropic.CLAUDE_FABLE_5_AGENT_STREAMING_TEST_CASE,
     ),
