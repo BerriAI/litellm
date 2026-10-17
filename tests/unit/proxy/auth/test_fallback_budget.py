@@ -170,6 +170,35 @@ async def test_load_team_member_budget_populates_token_when_budget_checks_skippe
 
 
 @pytest.mark.asyncio
+async def test_load_team_member_default_budget_zero_treated_as_no_cap():
+    from litellm.proxy.auth.user_api_key_auth import _load_team_member_default_model_budget
+
+    token = _token(user_id="u1", team_id="t1")
+    assert token.max_budget_in_team is None
+
+    mock_team = MagicMock()
+    mock_team.metadata = {"team_member_budget_id": "b-default"}
+
+    mock_default_budget = MagicMock()
+    mock_default_budget.max_budget = 0.0
+
+    with (
+        patch("litellm.proxy.auth.user_api_key_auth.get_team_membership", new=AsyncMock(return_value=None)),
+        patch("litellm.proxy.auth.user_api_key_auth.get_team_member_default_budget", new=AsyncMock(return_value=mock_default_budget)),
+    ):
+        await _load_team_member_default_model_budget(
+            user_api_key_auth_obj=token,
+            team_object=mock_team,
+            prisma_client=MagicMock(),
+            user_api_key_cache=MagicMock(),
+            skip_budget_checks=True,
+            proxy_logging_obj=None,
+        )
+
+    assert token.max_budget_in_team is None
+
+
+@pytest.mark.asyncio
 async def test_team_member_budget_refuses_an_exhausted_paid_target() -> None:
     member_caps: Final = {"paid-model": {"max_budget": 5.0, "budget_duration": "1d"}}
     token: Final = _token(

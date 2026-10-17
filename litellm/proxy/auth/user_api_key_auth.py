@@ -3434,9 +3434,15 @@ async def _load_team_member_default_model_budget(
             user_api_key_auth_obj.max_budget_in_team is None
             and team_member_default_budget is not None
             and team_member_default_budget.max_budget is not None
+            and team_member_default_budget.max_budget > 0
         ):
-            user_api_key_auth_obj.max_budget_in_team = team_member_default_budget.max_budget
-            user_api_key_auth_obj.team_member_max_budget = team_member_default_budget.max_budget
+            default_max: Final = team_member_default_budget.max_budget + (
+                member_budget_row.active_temp_budget_increase(now=datetime.now(timezone.utc))
+                if member_budget_row is not None
+                else 0.0
+            )
+            user_api_key_auth_obj.max_budget_in_team = default_max
+            user_api_key_auth_obj.team_member_max_budget = default_max
     except Exception:
         if not skip_budget_checks:
             raise
