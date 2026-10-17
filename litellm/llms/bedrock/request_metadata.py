@@ -35,8 +35,8 @@ BEDROCK_REQUEST_METADATA_HEADER_MAX_CHARS: Final = 8500
 
 _METADATA_PARAM_NAMES: Final[tuple[str, ...]] = ("metadata", "litellm_metadata")
 _ALLOWED_CHARACTERS: Final = r"[a-zA-Z0-9\s:_@$#=/+,.-]"
-_KEY_PATTERN: Final = re.compile(rf"^{_ALLOWED_CHARACTERS}{{1,256}}$", re.ASCII)
-_VALUE_PATTERN: Final = re.compile(rf"^{_ALLOWED_CHARACTERS}{{0,256}}$", re.ASCII)
+_KEY_PATTERN: Final = re.compile(rf"{_ALLOWED_CHARACTERS}{{1,256}}", re.ASCII)
+_VALUE_PATTERN: Final = re.compile(rf"{_ALLOWED_CHARACTERS}{{0,256}}", re.ASCII)
 _OWNED_HEADER_NAMES: Final[frozenset[str]] = frozenset((BEDROCK_REQUEST_METADATA_HEADER.lower(),))
 
 
@@ -47,7 +47,7 @@ class BedrockRequestMetadataViolation:
 
 
 def _is_forwardable(key: str, value: str) -> bool:
-    return _KEY_PATTERN.match(key) is not None and _VALUE_PATTERN.match(value) is not None
+    return _KEY_PATTERN.fullmatch(key) is not None and _VALUE_PATTERN.fullmatch(value) is not None
 
 
 def _is_reserved(key: str) -> bool:
@@ -158,11 +158,11 @@ def resolve_bedrock_request_metadata(
 
 
 def _pair_violation(key: str, value: str) -> BedrockRequestMetadataViolation | None:
-    if _KEY_PATTERN.match(key) is None:
+    if _KEY_PATTERN.fullmatch(key) is None:
         return BedrockRequestMetadataViolation(
             "constraint", f"requestMetadata key {key!r} must be 1-256 characters of {_ALLOWED_CHARACTERS}"
         )
-    if _VALUE_PATTERN.match(value) is None:
+    if _VALUE_PATTERN.fullmatch(value) is None:
         return BedrockRequestMetadataViolation(
             "constraint", f"requestMetadata value for key {key!r} must be 0-256 characters of {_ALLOWED_CHARACTERS}"
         )

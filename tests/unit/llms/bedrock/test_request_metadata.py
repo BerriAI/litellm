@@ -205,7 +205,11 @@ def test_caller_cannot_forge_or_shadow_a_reserved_identity_key(
     assert "attacker-controlled" not in resolved.values()
 
 
-@pytest.mark.parametrize("team_alias", ["O'Brien's team", "platform\u00a0team", "platform\u3000team"])
+@pytest.mark.parametrize(
+    "team_alias",
+    ["O'Brien's team", "platform\u00a0team", "platform\u3000team", "x" * 256 + "\n"],
+    ids=["apostrophe", "no-break-space", "ideographic-space", "257-chars-ending-in-newline"],
+)
 def test_identity_violating_the_character_class_is_dropped_and_the_request_succeeds(
     team_alias: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -225,14 +229,18 @@ def test_identity_violating_the_character_class_is_dropped_and_the_request_succe
     assert body["messages"]
 
 
-def test_caller_supplied_violation_still_raises_bad_request(monkeypatch: pytest.MonkeyPatch):
+@pytest.mark.parametrize(
+    "caller_metadata",
+    [{"team": "O'Brien's team"}, {"k" * 256 + "\n": "v"}, {"team": "v" * 256 + "\n"}],
+    ids=["bad-character", "257-char-key-ending-in-newline", "257-char-value-ending-in-newline"],
+)
+def test_caller_supplied_violation_still_raises_bad_request(
+    caller_metadata: Mapping[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", ALL_FIELDS)
 
     with pytest.raises(litellm.exceptions.BadRequestError):
-        converse_body(
-            litellm_params("metadata", **IDENTITY),
-            {"requestMetadata": {"team": "O'Brien's team"}},
-        )
+        converse_body(litellm_params("metadata", **IDENTITY), {"requestMetadata": caller_metadata})
 
 
 @pytest.mark.parametrize("driver", CONVERSE_DRIVERS)
