@@ -21,6 +21,7 @@ from integration.routing._reasoning_effort_levels_support import (
     GLM,
     GPT,
     GPT_LEVELS,
+    JSON_OBJECT,
     KIMI,
     KIMI_LEVELS,
     OPENROUTER_KIMI,
@@ -56,6 +57,11 @@ _MISSING_BUDGET: Final[dict[str, JsonValue]] = {"type": "enabled"}
 _DISABLED: Final[dict[str, JsonValue]] = {"type": "disabled"}
 _BUDGET_WITH_UNKNOWN_KEY: Final[dict[str, JsonValue]] = {**_BUDGET, "not_a_thinking_key": True}
 _ADAPTIVE_WITH_UNKNOWN_KEY: Final[dict[str, JsonValue]] = {**_ADAPTIVE, "not_a_thinking_key": True}
+_WORD_BUDGET: Final[dict[str, JsonValue]] = {"type": "enabled", "budget_tokens": "lots"}
+_BUDGET_WITH_DISPLAY_UPDATES: Final[dict[str, JsonValue]] = {**_BUDGET, "display": "updates"}
+_ADAPTIVE_WITH_DISPLAY_UPDATES: Final[dict[str, JsonValue]] = {**_ADAPTIVE, "display": "updates"}
+_DISPLAY_UPDATES_BETA: Final = "thinking-display-updates-2026-08-18"
+_NON_NUMERIC_BUDGET: Final = "thinking.budget_tokens must be a number"
 _GEMINI_HIGH_ONLY: Final[Mapping[str, JsonValue]] = MappingProxyType({"reasoning_effort_levels": ["high"]})
 _KIMI_INFO: Final[Mapping[str, JsonValue]] = MappingProxyType({"reasoning_effort_levels": list(KIMI_LEVELS)})
 _CLAUDE_INFO: Final[Mapping[str, JsonValue]] = MappingProxyType({"reasoning_effort_levels": list(CLAUDE_LEVELS)})
@@ -69,6 +75,15 @@ _JSON_SCHEMA_FORMAT: Final[dict[str, JsonValue]] = {
     "type": "json_schema",
     "schema": {"type": "object", "properties": {"answer": {"type": "string"}}, "required": ["answer"]},
 }
+_NATIVE_OUTPUT_SCHEMA: Final[dict[str, JsonValue]] = {
+    "type": "object",
+    "properties": {"answer": {"type": "string"}},
+    "required": ["answer"],
+    "additionalProperties": False,
+}
+_CLAUDE_INFO_WITH_NATIVE_OUTPUT: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {**_CLAUDE_INFO, "supports_bedrock_native_structured_output": True}
+)
 
 Expected = Callable[[str], dict[str, JsonValue]]
 
@@ -111,6 +126,17 @@ def _anthropic_chat_without_effort(thinking: Mapping[str, JsonValue]) -> Expecte
         "messages": [{"role": "user", "content": [{"type": "text", "text": prompt(marker)}]}],
         "thinking": dict(thinking),
         "max_tokens": 128000,
+    }
+
+
+def _invoke_chat(effort: str, thinking: Mapping[str, JsonValue], betas: tuple[str, ...]) -> Expected:
+    return lambda marker: {
+        "messages": [{"role": "user", "content": [{"type": "text", "text": prompt(marker)}]}],
+        "thinking": dict(thinking),
+        "output_config": {"effort": effort},
+        "max_tokens": 4096,
+        "anthropic_version": "bedrock-2023-05-31",
+        "anthropic_beta": list(betas),
     }
 
 
@@ -773,6 +799,18 @@ CELLS: Final[Mapping[str, Cell]] = MappingProxyType(
             _CLAUDE_INFO,
             {"output_config": {"effort": "turbo", "format": _JSON_SCHEMA_FORMAT}, "drop_params": True},
             _native_messages({"format": _JSON_SCHEMA_FORMAT}, None),
+            _ANTHROPIC,
+        ),
+        "messages-anthropic-drop-params-dropped-effort-beside-budget-keeps-the-budget-effort": Cell(
+            MESSAGES,
+            "anthropic",
+            _CLAUDE_INFO,
+            {
+                "output_config": {"effort": "turbo", "format": _JSON_SCHEMA_FORMAT},
+                "thinking": _BUDGET,
+                "drop_params": True,
+            },
+            _native_messages({"effort": "high", "format": _JSON_SCHEMA_FORMAT}, _ADAPTIVE),
             _ANTHROPIC,
         ),
         "messages-anthropic-default-sends-no-effort": Cell(
@@ -1634,6 +1672,84 @@ CELLS: Final[Mapping[str, Cell]] = MappingProxyType(
             _gemini_chat("high"),
             _GEMINI,
         ),
+        "chat-vllm-output-config-default-beside-budget-sends-no-effort": Cell(
+            CHAT,
+            "hosted_vllm",
+            _KIMI_INFO,
+            {"output_config": {"effort": "default"}, "thinking": _BUDGET},
+            _openai_compatible(None),
+            _VLLM_CHAT,
+        ),
+        "chat-anthropic-output-config-unknown-drop-params-beside-budget-keeps-the-budget-effort": Cell(
+            CHAT,
+            "anthropic",
+            _CLAUDE_INFO,
+            {"output_config": {"effort": "turbo"}, "thinking": _BUDGET, "drop_params": True},
+            _anthropic_chat("high", _ADAPTIVE),
+            _ANTHROPIC,
+        ),
+        "chat-invoke-output-config-beside-budget-keeps-display-updates": Cell(
+            CHAT,
+            "bedrock_invoke",
+            _CLAUDE_INFO,
+            {"output_config": {"effort": "medium"}, "thinking": _BUDGET_WITH_DISPLAY_UPDATES},
+            _invoke_chat("high", _ADAPTIVE_WITH_DISPLAY_UPDATES, (_DISPLAY_UPDATES_BETA,)),
+            _INVOKE,
+        ),
+        "chat-anthropic-undeclared-non-numeric-budget-400": Cell(
+            CHAT,
+            "anthropic",
+            _UNDECLARED,
+            {"thinking": _WORD_BUDGET},
+            None,
+            _ANTHROPIC,
+            status=400,
+            error=_NON_NUMERIC_BUDGET,
+        ),
+        "chat-anthropic-non-numeric-budget-drop-params-sends-adaptive-without-effort": Cell(
+            CHAT,
+            "anthropic",
+            _CLAUDE_INFO,
+            {"thinking": _WORD_BUDGET, "drop_params": True},
+            _anthropic_chat_without_effort(_ADAPTIVE),
+            _ANTHROPIC,
+        ),
+        "messages-anthropic-undeclared-non-numeric-budget-400": Cell(
+            MESSAGES,
+            "anthropic",
+            _UNDECLARED,
+            {"thinking": _WORD_BUDGET},
+            None,
+            _ANTHROPIC,
+            status=400,
+            error=_NON_NUMERIC_BUDGET,
+        ),
+        "messages-anthropic-non-numeric-budget-drop-params-sends-adaptive-without-effort": Cell(
+            MESSAGES,
+            "anthropic",
+            _CLAUDE_INFO,
+            {"thinking": _WORD_BUDGET, "drop_params": True},
+            _native_messages(None, _ADAPTIVE),
+            _ANTHROPIC,
+        ),
+        "responses-anthropic-non-numeric-budget-400": Cell(
+            RESPONSES,
+            "anthropic",
+            _CLAUDE_INFO,
+            {"thinking": _WORD_BUDGET},
+            None,
+            _ANTHROPIC,
+            status=400,
+            error=_NON_NUMERIC_BUDGET,
+        ),
+        "responses-anthropic-non-numeric-budget-drop-params-sends-adaptive-without-effort": Cell(
+            RESPONSES,
+            "anthropic",
+            _CLAUDE_INFO,
+            {"thinking": _WORD_BUDGET, "drop_params": True},
+            _anthropic_chat_without_effort(_ADAPTIVE),
+            _ANTHROPIC,
+        ),
     }
 )
 
@@ -1687,6 +1803,51 @@ def test_reasoning_effort_reaches_a_declaring_deployment_as_one_of_its_levels(ga
     assert [(request.method, request.target) for request in received] == [("POST", cell.target)]
     assert marker_of(received[0]) == marker
     assert body_of(received[0]) == cell.expected(marker)
+
+
+def _bedrock_native_schema(body: Mapping[str, JsonValue], *, invoke: bool) -> JsonValue:
+    if invoke:
+        return object_value(object_value(body.get("output_config") or {}).get("format") or {}).get("schema")
+    text_format: Final = object_value(body.get("outputConfig") or {}).get("textFormat")
+    if text_format is None:
+        return None
+    json_schema: Final = object_value(object_value(object_value(text_format)["structure"])["jsonSchema"])
+    return JSON_OBJECT.validate_json(string_value(json_schema["schema"]))
+
+
+@pytest.mark.parametrize(
+    ("kind", "target", "fields"),
+    [
+        pytest.param("bedrock_converse", _CONVERSE, {"thinking": _BUDGET}, id="converse-budget"),
+        pytest.param(
+            "bedrock_invoke",
+            _INVOKE,
+            {"thinking": _BUDGET, "output_config": {"effort": "medium"}},
+            id="invoke-output-config-beside-budget",
+        ),
+    ],
+)
+def test_a_deployment_opted_into_bedrock_native_output_keeps_it_beside_its_declared_level(
+    gateway: Gateway, kind: str, target: str, fields: Mapping[str, JsonValue]
+) -> None:
+    marker: Final = new_marker()
+    response_format: Final[dict[str, JsonValue]] = {
+        "type": "json_schema",
+        "json_schema": {"name": "answer", "schema": _NATIVE_OUTPUT_SCHEMA},
+    }
+    with wire_server(provider_reply) as wire, gateway.scenario() as scenario:
+        model: Final = deployment(scenario, kind, wire, _CLAUDE_INFO_WITH_NATIVE_OUTPUT)
+        response: Final = gateway.request(
+            "POST", CHAT, chat_request(model, marker, response_format=response_format, **fields)
+        )
+        received: Final = wire.drain()
+    assert response.status_code == 200, response.text[:2000]
+    assert answer(marker) in response.text, response.text[:2000]
+    assert [(request.method, request.target) for request in received] == [("POST", target)]
+    body: Final = body_of(received[0])
+    assert _bedrock_native_schema(body, invoke=target == _INVOKE) == _NATIVE_OUTPUT_SCHEMA, body
+    assert {"toolConfig", "tools"}.isdisjoint(body), body
+    assert sent_effort(received[0]) == "high", body
 
 
 def _single(received: tuple[Request, ...], marker: str) -> Request:

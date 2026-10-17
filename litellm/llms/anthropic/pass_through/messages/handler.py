@@ -27,7 +27,9 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.router_utils.reasoning_effort_capability import (
+    RequestedReasoningEffort,
     deployment_rounds_reasoning_effort,
+    keeps_effort,
     model_group_from_metadata,
     resolve_deployment_reasoning_effort,
     with_adaptive_thinking_as_effort,
@@ -134,6 +136,11 @@ def _deployment_passes_through_anthropic_messages(model_info: object) -> bool:
     return isinstance(supported_endpoints, (list, tuple)) and "/v1/messages" in supported_endpoints
 
 
+def _with_output_config(params: Mapping[str, object], output_config: RequestedReasoningEffort) -> Mapping[str, object]:
+    rest: Final = {key: value for key, value in params.items() if key != "output_config"}
+    return rest if output_config is None else {**rest, "output_config": output_config}
+
+
 def _with_deployment_output_effort(
     params: Mapping[str, object],
     *,
@@ -143,26 +150,32 @@ def _with_deployment_output_effort(
     drop_params: bool,
 ) -> Mapping[str, object]:
     deployment_model_info: Final = kwargs.get("model_info")
-    translated: Final = (
-        with_adaptive_thinking_as_effort(
-            params, model=model, custom_llm_provider=custom_llm_provider, drop_params=drop_params
+
+    def resolve(requested: RequestedReasoningEffort) -> RequestedReasoningEffort:
+        return resolve_deployment_reasoning_effort(
+            requested,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            deployment_model_info=deployment_model_info,
+            model_group=model_group_from_metadata(kwargs.get("litellm_metadata"), kwargs.get("metadata")),
+            drop_params=drop_params,
+        ).value
+
+    def translate(source: Mapping[str, object]) -> Mapping[str, object]:
+        return with_adaptive_thinking_as_effort(
+            source, model=model, custom_llm_provider=custom_llm_provider, drop_params=drop_params
         )
-        if deployment_rounds_reasoning_effort(deployment_model_info)
-        else params
-    )
-    output_config: Final = as_str_mapping(translated.get("output_config"))
-    if output_config is None:
-        return translated
-    resolved: Final = resolve_deployment_reasoning_effort(
-        output_config,
-        model=model,
-        custom_llm_provider=custom_llm_provider,
-        deployment_model_info=deployment_model_info,
-        model_group=model_group_from_metadata(kwargs.get("litellm_metadata"), kwargs.get("metadata")),
-        drop_params=drop_params,
-    ).value
-    rest: Final = {key: value for key, value in translated.items() if key != "output_config"}
-    return rest if resolved is None else {**rest, "output_config": resolved}
+
+    requested_output: Final = as_str_mapping(params.get("output_config"))
+    caller_output: Final = None if requested_output is None else resolve(requested_output)
+    caller_params: Final = params if requested_output is None else _with_output_config(params, caller_output)
+    if not deployment_rounds_reasoning_effort(deployment_model_info):
+        return caller_params
+    if requested_output is not None and keeps_effort(requested_output, caller_output):
+        return _with_output_config(translate(params), caller_output)
+    translated: Final = translate(caller_params)
+    budget_output: Final = as_str_mapping(translated.get("output_config"))
+    return translated if budget_output is None else _with_output_config(translated, resolve(budget_output))
 
 
 def _deployment_supports_cache_control_ttl(model_info: object) -> bool:

@@ -469,7 +469,7 @@ def _legacy_budget_tokens(budget_tokens: object, *, drop_params: bool) -> int | 
     try:
         return int(budget_tokens)
     except ValueError:
-        if drop_params:
+        if drop_params or litellm.drop_params is True:
             return None
         raise non_numeric_thinking_budget_error(budget_tokens) from None
 

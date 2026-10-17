@@ -8921,17 +8921,23 @@ def test_a_non_numeric_thinking_budget_on_adaptive_claude_is_rejected_with_a_400
     assert rejected.value.status_code == 400
 
 
+@pytest.mark.parametrize("drop_globally", [False, True])
 @pytest.mark.parametrize("model_info", [None, _OPUS_DECLARING_LOW_AND_HIGH])
 @pytest.mark.parametrize("body_sent", [_anthropic_chat_body_sent, _bedrock_converse_request_fields_sent])
 def test_drop_params_drops_a_non_numeric_thinking_budget_on_adaptive_claude(
     respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
     body_sent: Callable[..., Mapping[str, object]],
     model_info: Mapping[str, object] | None,
+    drop_globally: bool,
 ) -> None:
+    monkeypatch.setattr(litellm, "drop_params", drop_globally)
+    request_drop: Final = {} if drop_globally else {"drop_params": True}
+
     dropped: Final = body_sent(
-        respx_mock, model_info, thinking={"type": "enabled", "budget_tokens": "lots"}, drop_params=True
+        respx_mock, model_info, thinking={"type": "enabled", "budget_tokens": "lots"}, **request_drop
     )
-    adaptive_alone: Final = body_sent(respx_mock, model_info, thinking={"type": "adaptive"}, drop_params=True)
+    adaptive_alone: Final = body_sent(respx_mock, model_info, thinking={"type": "adaptive"}, **request_drop)
 
     assert "output_config" not in adaptive_alone
     assert dropped == adaptive_alone
@@ -9073,17 +9079,24 @@ def test_an_explicit_reasoning_effort_wins_over_a_non_numeric_thinking_budget(
     assert "thinking" not in sent
 
 
+@pytest.mark.parametrize("drop_globally", [False, True])
 @pytest.mark.parametrize("model_info", [None, _KIMI_DEPLOYMENT])
 def test_drop_params_drops_a_non_numeric_thinking_budget(
-    respx_mock: respx.MockRouter, model_info: Mapping[str, object] | None
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    model_info: Mapping[str, object] | None,
+    drop_globally: bool,
 ) -> None:
+    monkeypatch.setattr(litellm, "drop_params", drop_globally)
+    request_drop: Final = {} if drop_globally else {"drop_params": True}
+
     sent: Final = _chat_body_sent(
         respx_mock,
         "hosted_vllm/my-kimi",
         None,
         model_info,
         thinking={"type": "enabled", "budget_tokens": "2048"},
-        drop_params=True,
+        **request_drop,
     )
 
     assert "reasoning_effort" not in sent

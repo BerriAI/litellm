@@ -660,14 +660,12 @@ async def test_native_messages_drop_an_undeclared_effort_under_drop_params(respx
     assert await _native_output_config_sent(respx_mock, "turbo", declared) == {"effort": "turbo"}
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "model_info, expected_effort",
-    [({"reasoning_effort_levels": ["low", "high"]}, "high"), (None, "medium")],
-)
-async def test_native_messages_round_a_thinking_budget_on_an_adaptive_claude_deployment(
-    respx_mock: respx.MockRouter, model_info: Mapping[str, object] | None, expected_effort: str
-) -> None:
+_DECLARING_LOW_AND_HIGH: Final = {"reasoning_effort_levels": ["low", "high"]}
+
+
+async def _native_opus_body_sent(
+    respx_mock: respx.MockRouter, model_info: Mapping[str, object] | None, **params: object
+) -> Mapping[str, object]:
     route: Final = respx_mock.post(url__regex=_ANTHROPIC_URL).mock(
         return_value=httpx.Response(200, json=_anthropic_body("claude-opus-5-5"))
     )
@@ -676,14 +674,89 @@ async def test_native_messages_round_a_thinking_budget_on_an_adaptive_claude_dep
         "litellm_params": {"model": "anthropic/claude-opus-5-5", "api_key": "fake-key"},
         **({"model_info": model_info} if model_info is not None else {}),
     }
-
     await Router(model_list=[deployment]).aanthropic_messages(
-        messages=[{"role": "user", "content": _PROMPT}],
-        model=_ALIAS,
-        max_tokens=4096,
-        thinking={"type": "enabled", "budget_tokens": 2048, "display": "summarized"},
+        messages=[{"role": "user", "content": _PROMPT}], model=_ALIAS, max_tokens=4096, **params
+    )
+    return json.loads(route.calls.last.request.read())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model_info, expected_effort", [(_DECLARING_LOW_AND_HIGH, "high"), (None, "medium")])
+async def test_native_messages_round_a_thinking_budget_on_an_adaptive_claude_deployment(
+    respx_mock: respx.MockRouter, model_info: Mapping[str, object] | None, expected_effort: str
+) -> None:
+    sent: Final = await _native_opus_body_sent(
+        respx_mock, model_info, thinking={"type": "enabled", "budget_tokens": 2048, "display": "summarized"}
     )
 
-    sent: Final = json.loads(route.calls.last.request.read())
     assert sent["output_config"] == {"effort": expected_effort}
     assert sent["thinking"] == {"type": "adaptive", "display": "summarized"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dropped_effort", ["turbo", "none"])
+async def test_native_messages_drop_params_leave_the_thinking_budget_to_set_the_effort_beside_a_dropped_level(
+    respx_mock: respx.MockRouter, dropped_effort: str
+) -> None:
+    budget: Final = {"type": "enabled", "budget_tokens": 2048}
+
+    dropped: Final = await _native_opus_body_sent(
+        respx_mock,
+        _DECLARING_LOW_AND_HIGH,
+        thinking=budget,
+        output_config={"effort": dropped_effort, "format": {"type": "json_schema", "schema": {"type": "object"}}},
+        drop_params=True,
+    )
+    budget_alone: Final = await _native_opus_body_sent(
+        respx_mock,
+        _DECLARING_LOW_AND_HIGH,
+        thinking=budget,
+        output_config={"format": {"type": "json_schema", "schema": {"type": "object"}}},
+        drop_params=True,
+    )
+
+    assert budget_alone["output_config"] == {
+        "effort": "high",
+        "format": {"type": "json_schema", "schema": {"type": "object"}},
+    }
+    assert dropped == budget_alone
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("drop_params", [False, True])
+async def test_native_messages_send_no_effort_for_a_default_effort_beside_a_thinking_budget(
+    respx_mock: respx.MockRouter, drop_params: bool
+) -> None:
+    sent: Final = await _native_opus_body_sent(
+        respx_mock,
+        _DECLARING_LOW_AND_HIGH,
+        thinking={"type": "enabled", "budget_tokens": 2048},
+        output_config={"effort": "default"},
+        drop_params=drop_params,
+    )
+
+    assert "output_config" not in sent
+    assert sent["thinking"] == {"type": "adaptive"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model_info", [None, _DECLARING_LOW_AND_HIGH])
+@pytest.mark.parametrize("drop_globally", [False, True])
+async def test_native_messages_drop_params_drops_a_non_numeric_thinking_budget_on_adaptive_claude(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    model_info: Mapping[str, object] | None,
+    drop_globally: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", drop_globally)
+    request_drop: Final = {} if drop_globally else {"drop_params": True}
+
+    dropped: Final = await _native_opus_body_sent(
+        respx_mock, model_info, thinking={"type": "enabled", "budget_tokens": "lots"}, **request_drop
+    )
+    adaptive_alone: Final = await _native_opus_body_sent(
+        respx_mock, model_info, thinking={"type": "adaptive"}, **request_drop
+    )
+
+    assert "output_config" not in adaptive_alone
+    assert dropped == adaptive_alone

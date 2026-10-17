@@ -1,5 +1,6 @@
 from typing import Final, Literal
 
+import litellm
 from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
@@ -35,7 +36,7 @@ def reasoning_effort_from_thinking(thinking: object, *, drop_params: bool) -> Op
     budget: Final = fields.get("budget_tokens", 0)
     if isinstance(budget, (int, float)) and not isinstance(budget, bool):
         return reasoning_effort_from_thinking_budget(budget)
-    if drop_params:
+    if drop_params or litellm.drop_params is True:
         return None
     raise non_numeric_thinking_budget_error(budget)
 

@@ -237,7 +237,7 @@ def adaptive_thinking_without_effort(
     return thinking if adaptive is None else adaptive
 
 
-def _keeps_effort(requested: RequestedReasoningEffort, resolved: RequestedReasoningEffort) -> bool:
+def keeps_effort(requested: RequestedReasoningEffort, resolved: RequestedReasoningEffort) -> bool:
     """A level dropped under drop_params counts as never sent, like any dropped param, so a thinking
     budget beside it still decides the effort. default is kept even though it resolves to no level,
     since the caller asked for the provider's own default in place of the budget's."""
@@ -371,8 +371,8 @@ def resolve_chat_reasoning(
     output: Final = resolve(output_config).value
     if thinking is None or not deployment_rounds_thinking_budget(deployment_model_info, custom_llm_provider):
         return ChatReasoning(effort=explicit, thinking=thinking, output_config=output)
-    explicit_kept: Final = _keeps_effort(reasoning_effort, explicit.value)
-    if not explicit_kept and not _keeps_effort(output_config, output):
+    explicit_kept: Final = keeps_effort(reasoning_effort, explicit.value)
+    if not explicit_kept and not keeps_effort(output_config, output):
         budget_level: Final = thinking_budget_effort(
             thinking, model=model, custom_llm_provider=custom_llm_provider, drop_params=drop_params
         )
