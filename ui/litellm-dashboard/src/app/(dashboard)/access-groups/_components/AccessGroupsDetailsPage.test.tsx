@@ -1,5 +1,7 @@
 import { useAccessGroupDetails } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroupDetails";
 import { AccessGroupResponse } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroups";
+import { useUserLookup } from "@/app/(dashboard)/hooks/users/useUsers";
+import { DEFAULT_PROXY_ADMIN_USER_ID } from "@/utils/sentinels";
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -7,6 +9,7 @@ import { renderWithProviders } from "../../../../../tests/test-utils";
 import { AccessGroupDetail } from "./AccessGroupsDetailsPage";
 
 vi.mock("@/app/(dashboard)/hooks/accessGroups/useAccessGroupDetails");
+vi.mock("@/app/(dashboard)/hooks/users/useUsers");
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 vi.mock("./AccessGroupsModal/AccessGroupEditModal", () => ({
   AccessGroupEditModal: ({ visible, onCancel }: { visible: boolean; onCancel: () => void }) =>
@@ -18,6 +21,7 @@ vi.mock("./AccessGroupsModal/AccessGroupEditModal", () => ({
 }));
 
 const mockUseAccessGroupDetails = vi.mocked(useAccessGroupDetails);
+const mockUseUserLookup = vi.mocked(useUserLookup);
 
 const baseMockReturnValue = {
   data: undefined,
@@ -89,6 +93,7 @@ describe("AccessGroupDetail", () => {
       ...baseMockReturnValue,
       data: createMockAccessGroup(),
     } as ReturnType<typeof useAccessGroupDetails>);
+    mockUseUserLookup.mockReturnValue({ data: null } as ReturnType<typeof useUserLookup>);
   });
 
   it("should render the component", () => {
@@ -142,6 +147,52 @@ describe("AccessGroupDetail", () => {
 
     expect(screen.getByText("Group Details")).toBeInTheDocument();
     expect(screen.getByText("A test access group")).toBeInTheDocument();
+  });
+
+  describe("user references", () => {
+    it("shows a user's alias as a linked name and reveals the id in a tooltip", async () => {
+      const user = userEvent.setup();
+      mockUseUserLookup.mockReturnValue({
+        data: { user_alias: "Alice", user_email: "alice@example.com" },
+      } as ReturnType<typeof useUserLookup>);
+      renderWith({ created_by: "user-123" });
+
+      const link = screen.getByRole("link", { name: "Alice" });
+      expect(link).toHaveAttribute("href", expect.stringContaining("/users?user=user-123"));
+      expect(screen.queryByText("user-123")).not.toBeInTheDocument();
+
+      await user.hover(link);
+
+      expect(await screen.findByText("user-123")).toBeInTheDocument();
+    });
+
+    it("shows the email when the user has no alias", () => {
+      mockUseUserLookup.mockReturnValue({
+        data: { user_alias: null, user_email: "alice@example.com" },
+      } as ReturnType<typeof useUserLookup>);
+      renderWith({ updated_by: "user-456" });
+
+      expect(screen.getByRole("link", { name: "alice@example.com" })).toHaveAttribute(
+        "href",
+        expect.stringContaining("/users?user=user-456"),
+      );
+    });
+
+    it("links the user id when lookup has no user details", () => {
+      renderWith({ updated_by: "missing-user" });
+
+      expect(screen.getByRole("link", { name: "missing-user" })).toHaveAttribute(
+        "href",
+        expect.stringContaining("/users?user=missing-user"),
+      );
+    });
+
+    it("shows the default admin badge without looking up its user id", () => {
+      renderWith({ created_by: DEFAULT_PROXY_ADMIN_USER_ID });
+
+      expect(screen.getByText("Default Proxy Admin")).toBeInTheDocument();
+      expect(mockUseUserLookup).toHaveBeenCalledWith(null);
+    });
   });
 
   it("should display em dash when description is empty", () => {
