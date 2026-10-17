@@ -48,18 +48,23 @@ impl ChatCompletionsRoute {
         interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
         options: impl Into<litellm_inference::CallOptions>,
     ) -> Result<ChatCompletionsResponse, Error> {
+        self.execute_call(request.into(), interceptors, options)
+            .await
+    }
+
+    pub async fn execute_call(
+        &self,
+        call: ChatCompletionsCall,
+        interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
+        options: impl Into<litellm_inference::CallOptions>,
+    ) -> Result<ChatCompletionsResponse, Error> {
         let litellm_inference::CallOptions {
             cache: cache_options,
             observers,
         } = options.into();
         litellm_host::lifecycle::observe_unary(
             observers.clone(),
-            self.run(
-                request.into(),
-                cache_options,
-                interceptors,
-                observers.as_ref(),
-            ),
+            self.run(call, cache_options, interceptors, observers.as_ref()),
         )
         .await
     }

@@ -73,10 +73,17 @@ pub fn get_cache_key(input: &CacheKeyInput) -> String {
     cache_key(input)
 }
 
+#[cfg(test)]
+thread_local! {
+    pub(crate) static KEY_DERIVATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 pub fn cache_key(input: &CacheKeyInput) -> String {
     if let Some(preset) = &input.preset {
         return preset.clone();
     }
+    #[cfg(test)]
+    KEY_DERIVATIONS.with(|count| count.set(count.get() + 1));
     let mut digest = Sha256::new();
     for field in &input.fields {
         if (field.api_parameter || (input.include_provider_parameters && !field.internal_parameter))

@@ -1,10 +1,8 @@
 mod native;
 mod python;
-mod selection;
 
 pub(crate) use native::NativeCacheHandle;
-pub(crate) use python::{CacheCall, PythonCache};
-pub(crate) use selection::{Cached, Selection, configure, configured_native};
+pub(crate) use python::{CachedBinding, CachedStream};
 
 use litellm_cache::Error;
 use pyo3::{

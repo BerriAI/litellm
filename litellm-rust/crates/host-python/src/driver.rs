@@ -1,3 +1,4 @@
+use std::ops::ControlFlow;
 use std::pin::pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
@@ -11,6 +12,7 @@ use pyo3::types::PyDict;
 use litellm_coroutine::{Coroutine, CoroutineState};
 use litellm_host::{
     call::HostedCompletion,
+    interceptors::ResultSource,
     lifecycle::{CallEvent, ExecutionEvent, FailureOrigin, Timing, epoch_seconds},
     machine::{HostFailure, Machine, MachineStep},
     observation::ObservationSender,
@@ -22,7 +24,7 @@ use crate::caller::{Answer, PythonCaller, Yielded};
 use crate::handle::{Execution, ExecutionBody, ExecutionStep, StepTypes};
 use crate::hooks::{HookStep, PythonCallEvent, PythonCallHooks};
 use crate::native::{NativeMachine, NativePoll};
-use crate::{Error, InvokeError, PythonBinding};
+use crate::{Error, Hit, HitOutput, InvokeError, Lookup, PythonBinding};
 
 type ProtocolOf<H> = <H as PythonBinding>::Protocol;
 type ErrorOf<H> = <ProtocolOf<H> as Protocol>::Error;
@@ -133,6 +135,7 @@ where
     native: NativeMachine<M>,
     start: Option<StartMachine<ProtocolOf<H>, M>>,
     streaming: bool,
+    cached: bool,
 }
 
 impl<H, M, L> CallBody<H, M, L>
@@ -148,7 +151,8 @@ where
 
     async fn run(mut self) -> PyResult<Py<PyAny>> {
         match self.begin().await {
-            Ok(()) => self.execute().await,
+            Ok(None) => self.execute().await,
+            Ok(Some(hit)) => self.replay(hit).await,
             Err(Setup::Host(error)) => self.failure(error, FailureOrigin::Host).await,
             Err(Setup::Decode(InvokeError::Python(error))) => {
                 self.failure(error, FailureOrigin::Call).await
@@ -157,7 +161,7 @@ where
         }
     }
 
-    async fn begin(&mut self) -> Result<(), Setup<ErrorOf<H>>> {
+    async fn begin(&mut self) -> Result<Option<Hit<ProtocolOf<H>>>, Setup<ErrorOf<H>>> {
         let started_at = epoch_seconds();
         let started = {
             let mut parts = self.parts();
@@ -198,6 +202,9 @@ where
                 decoded.map_err(Setup::Decode)
             })?
         };
+        if let Some(hit) = self.look_up().await.map_err(Setup::Host)? {
+            return Ok(Some(hit));
+        }
         let start = self
             .start
             .take()
@@ -211,7 +218,98 @@ where
             Python::attach(|py| start(py, arguments.bind(py), request)).map_err(Setup::Host)?
         };
         self.native.start(machine);
+        Ok(None)
+    }
+
+    async fn look_up(&self) -> PyResult<Option<Hit<ProtocolOf<H>>>> {
+        let mut lookup = {
+            let mut parts = self.parts();
+            Python::attach(|py| parts.binding.lookup(py))?
+        };
+        loop {
+            let awaitable = match lookup {
+                Lookup::Miss => return Ok(None),
+                Lookup::Hit(hit) => return Ok(Some(hit)),
+                Lookup::Await(awaitable) => awaitable,
+            };
+            let answer = self.caller.await_python(awaitable).await;
+            lookup = {
+                let mut parts = self.parts();
+                Python::attach(|py| parts.binding.resume_lookup(py, answer))?
+            };
+        }
+    }
+
+    /// Delivers a host hit as the call's result, through the same events and hooks a provider
+    /// result takes, minus the ones that review a provider's answer.
+    async fn replay(&mut self, hit: Hit<ProtocolOf<H>>) -> PyResult<Py<PyAny>> {
+        self.cached = true;
+        let ready = PythonCallEvent::Execution(ExecutionEvent::ResultReady { facts: hit.facts });
+        if let Err(error) = self.notify(ready).await {
+            return self.failure(error, FailureOrigin::Call).await;
+        }
+        let (head, chunks) = match hit.output {
+            HitOutput::Response(public) => {
+                self.parts().observation.ended_at = Some(epoch_seconds());
+                return self.deliver(public).await;
+            }
+            HitOutput::Stream { head, chunks } => (head, chunks),
+        };
+        if let Err(error) = self.replay_stream(head, chunks).await {
+            return self.failure(error, FailureOrigin::Call).await;
+        }
+        self.parts().observation.ended_at = Some(epoch_seconds());
+        let none = Python::attach(|py| py.None());
+        self.succeeded(none).await
+    }
+
+    async fn replay_stream(
+        &mut self,
+        head: <ProtocolOf<H> as Protocol>::StreamHead,
+        chunks: Vec<<ProtocolOf<H> as Protocol>::Chunk>,
+    ) -> PyResult<()> {
+        if self.open_stream(head).await?.is_break() {
+            return Ok(());
+        }
+        for chunk in chunks {
+            if self.deliver_chunk(chunk).await?.is_break() {
+                break;
+            }
+        }
         Ok(())
+    }
+
+    async fn open_stream(
+        &mut self,
+        head: <ProtocolOf<H> as Protocol>::StreamHead,
+    ) -> PyResult<ControlFlow<()>> {
+        self.streaming = true;
+        let head = {
+            let mut parts = self.parts();
+            let Parts { binding, hooks, .. } = &mut *parts;
+            Python::attach(|py| {
+                let head = binding.encode_stream_head(py, head)?;
+                hooks.on_stream_open(py, &head)?;
+                Ok::<_, PyErr>(head)
+            })?
+        };
+        Ok(self.caller.open_stream(head).await)
+    }
+
+    async fn deliver_chunk(
+        &mut self,
+        chunk: <ProtocolOf<H> as Protocol>::Chunk,
+    ) -> PyResult<ControlFlow<()>> {
+        let chunk = {
+            let mut parts = self.parts();
+            let Parts { binding, hooks, .. } = &mut *parts;
+            Python::attach(|py| {
+                let chunk = binding.encode_chunk(py, chunk)?;
+                hooks.on_stream_chunk(py, &chunk)?;
+                Ok::<_, PyErr>(chunk)
+            })?
+        };
+        Ok(self.caller.yield_chunk(chunk).await)
     }
 
     /// Runs one hook step to its value, handing each awaitable it produces to the caller.
@@ -295,6 +393,7 @@ where
                 Ok(())
             }
             HostRequest::Intercept(InterceptRequest::ResultReady { facts, reply }) => {
+                self.cached = matches!(facts.source, ResultSource::Cache { .. });
                 self.notify(PythonCallEvent::Execution(ExecutionEvent::ResultReady {
                     facts,
                 }))
@@ -311,30 +410,11 @@ where
                 Ok(())
             }
             HostRequest::Stream(StreamDelivery::Open(head, reply)) => {
-                self.streaming = true;
-                let head = {
-                    let mut parts = self.parts();
-                    let Parts { binding, hooks, .. } = &mut *parts;
-                    Python::attach(|py| {
-                        let head = binding.encode_stream_head(py, head)?;
-                        hooks.on_stream_open(py, &head)?;
-                        Ok::<_, PyErr>(head)
-                    })?
-                };
-                reply.send(self.caller.open_stream(head).await);
+                reply.send(self.open_stream(head).await?);
                 Ok(())
             }
             HostRequest::Stream(StreamDelivery::Chunk(chunk, reply)) => {
-                let chunk = {
-                    let mut parts = self.parts();
-                    let Parts { binding, hooks, .. } = &mut *parts;
-                    Python::attach(|py| {
-                        let chunk = binding.encode_chunk(py, chunk)?;
-                        hooks.on_stream_chunk(py, &chunk)?;
-                        Ok::<_, PyErr>(chunk)
-                    })?
-                };
-                reply.send(self.caller.yield_chunk(chunk).await);
+                reply.send(self.deliver_chunk(chunk).await?);
                 Ok(())
             }
         }
@@ -374,6 +454,17 @@ where
         self.parts().observation.ended_at = Some(epoch_seconds());
         let response = match completion {
             HostedCompletion::Complete(response) => response,
+            HostedCompletion::StreamEnded if !self.cached => {
+                let stored = {
+                    let mut parts = self.parts();
+                    Python::attach(|py| parts.binding.store_stream(py))
+                };
+                if let Err(error) = stored {
+                    return self.failure(error, FailureOrigin::Host).await;
+                }
+                let none = Python::attach(|py| py.None());
+                return self.succeeded(none).await;
+            }
             HostedCompletion::StreamEnded | HostedCompletion::Detached => {
                 let none = Python::attach(|py| py.None());
                 return self.succeeded(none).await;
@@ -390,6 +481,30 @@ where
         if self.streaming {
             return self.succeeded(public).await;
         }
+        if self.cached {
+            return self.deliver(public).await;
+        }
+        let review = {
+            let mut parts = self.parts();
+            Python::attach(|py| parts.hooks.provider_result(py, public))
+        };
+        let reviewed = match review {
+            Ok(step) => self.settle(step).await,
+            Err(error) => Err(error),
+        };
+        let stored = reviewed.and_then(|public| {
+            let mut parts = self.parts();
+            Python::attach(|py| parts.binding.store_response(py, public.bind(py)))?;
+            Ok(public)
+        });
+        match stored {
+            Ok(public) => self.deliver(public).await,
+            Err(error) => self.failure(error, FailureOrigin::Host).await,
+        }
+    }
+
+    /// Hands the caller's public response to the transform hooks and settles the call.
+    async fn deliver(&mut self, public: Py<PyAny>) -> PyResult<Py<PyAny>> {
         let transform = {
             let mut parts = self.parts();
             let timing = parts.observation.timing();
@@ -629,6 +744,7 @@ where
                 native: NativeMachine::new(asynchronous),
                 start: Some(Box::new(start)),
                 streaming: false,
+                cached: false,
             }
             .run()
         }

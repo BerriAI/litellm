@@ -471,11 +471,6 @@ def websearch_interception(_request: NativeCall) -> bool:
     return any(isinstance(callback, WebSearchInterceptionLogger) for callback in litellm.callbacks)
 
 
-def response_cache(request: NativeCall) -> bool:
-    cache: Final = optional_mapping(request.resolved.get("cache")) or {}
-    return litellm.cache is not None and cache.get("no-cache") is not True
-
-
 _NATIVE_ECDH_CURVES: Final = frozenset({"x25519", "prime256v1", "secp256r1", "p-256", "secp384r1", "p-384"})
 
 

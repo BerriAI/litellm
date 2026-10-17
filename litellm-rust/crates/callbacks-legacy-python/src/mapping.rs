@@ -13,6 +13,7 @@ pub enum CallBoundary {
     PrepareArguments,
     BeforeProviderRequest,
     AfterProviderResponse,
+    ProviderResult,
     TransformResponse,
     Succeeded,
     Failed,
@@ -53,6 +54,7 @@ type Prepare = fn(&mut LegacyLogging, Python<'_>, Py<PyDict>, f64) -> Step<Py<Py
 type Before =
     fn(&mut LegacyLogging, Python<'_>, Box<WireRequest>, &RequestContext) -> Step<Box<WireRequest>>;
 type After = fn(&mut LegacyLogging, Python<'_>, &RawResponse) -> Step<()>;
+type ProviderResult = fn(&mut LegacyLogging, Python<'_>, Py<PyAny>) -> Step<Py<PyAny>>;
 type Transform = fn(&mut LegacyLogging, Python<'_>, Py<PyAny>, Timing) -> Step<Py<PyAny>>;
 type Success = fn(&mut LegacyLogging, Python<'_>, Timing, &Py<PyAny>) -> Step<()>;
 type Failure = fn(&mut LegacyLogging, Python<'_>, Timing, FailureOrigin, &PyErr) -> Step<()>;
@@ -77,10 +79,16 @@ const AFTER: Binding<After> = Binding {
     callbacks: &["log_post_api_call"],
 };
 
+const PROVIDER_RESULT: Binding<ProviderResult> = Binding {
+    boundary: CallBoundary::ProviderResult,
+    invoke: LegacyLogging::provider_result,
+    callbacks: &["async_post_call_success_deployment_hook"],
+};
+
 const TRANSFORM: Binding<Transform> = Binding {
     boundary: CallBoundary::TransformResponse,
     invoke: LegacyLogging::transform_public_response,
-    callbacks: &["async_post_call_success_deployment_hook"],
+    callbacks: &[],
 };
 
 const SUCCESS: Binding<Success> = Binding {
@@ -127,6 +135,7 @@ pub fn callback_mappings() -> impl Iterator<Item = CallbackMapping> {
         .mappings()
         .chain(BEFORE.mappings())
         .chain(AFTER.mappings())
+        .chain(PROVIDER_RESULT.mappings())
         .chain(TRANSFORM.mappings())
         .chain(SUCCESS.mappings())
         .chain(FAILURE.mappings())
@@ -157,6 +166,10 @@ impl CallHooks<PythonRuntime> for LegacyLogging {
         context: &RequestContext,
     ) -> Step<Box<WireRequest>> {
         (BEFORE.invoke)(self, py, wire, context)
+    }
+
+    fn provider_result(&mut self, py: Python<'_>, response: Py<PyAny>) -> Step<Py<PyAny>> {
+        (PROVIDER_RESULT.invoke)(self, py, response)
     }
 
     fn transform_response(

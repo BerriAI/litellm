@@ -28,6 +28,7 @@ pub struct HookChain {
 enum Pending {
     Arguments(usize, f64),
     Wire(usize, RequestContext),
+    ProviderResult(usize),
     Response(usize, Timing),
 }
 
@@ -119,6 +120,41 @@ impl Transform for Wire {
     fn resumed(pending: Pending) -> Option<(usize, RequestContext)> {
         match pending {
             Pending::Wire(index, context) => Some((index, context)),
+            _ => None,
+        }
+    }
+}
+
+struct ProviderResult;
+
+impl Transform for ProviderResult {
+    type Value = Py<PyAny>;
+    type Context = ();
+
+    fn call(
+        hooks: &mut dyn ChainHooks,
+        py: Python<'_>,
+        value: Py<PyAny>,
+        _: &(),
+    ) -> PyResult<ChainStep<Py<PyAny>>> {
+        hooks.provider_result(py, value)
+    }
+
+    fn resume(
+        hooks: &mut dyn ChainHooks,
+        py: Python<'_>,
+        result: PyResult<Py<PyAny>>,
+    ) -> PyResult<ChainStep<Py<PyAny>>> {
+        hooks.resume_response(py, result)
+    }
+
+    fn suspend(index: usize, (): ()) -> Pending {
+        Pending::ProviderResult(index)
+    }
+
+    fn resumed(pending: Pending) -> Option<(usize, ())> {
+        match pending {
+            Pending::ProviderResult(index) => Some((index, ())),
             _ => None,
         }
     }
@@ -384,6 +420,14 @@ impl CallHooks<PythonRuntime> for HookChain {
         context: &RequestContext,
     ) -> PyResult<HookStep<Self, Box<WireRequest>>> {
         self.transform_from::<Wire>(py, 0, wire, context.clone())
+    }
+
+    fn provider_result(
+        &mut self,
+        py: Python<'_>,
+        response: Py<PyAny>,
+    ) -> PyResult<HookStep<Self, Py<PyAny>>> {
+        self.transform_from::<ProviderResult>(py, 0, response, ())
     }
 
     fn transform_response(

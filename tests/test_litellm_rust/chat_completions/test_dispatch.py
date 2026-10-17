@@ -4,7 +4,6 @@ from typing import Final, cast  # noqa: TID251  # narrows legacy callable signat
 import pytest
 
 import litellm
-from litellm.caching.caching import Cache
 from litellm.chat_completions import dispatch
 from litellm.chat_completions.dispatch import (
     _ADISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch
@@ -247,7 +246,6 @@ class _ChatAgentic(CustomLogger):
         (Feature.TIMEOUT_VARIANTS, {"request_timeout": 5}, {}),
         (Feature.AGENTIC_LOOP_HOOK, {}, {"callbacks": [_ChatAgentic()]}),
         (Feature.TLS_POLICY, {}, {"ssl_security_level": "DEFAULT@SECLEVEL=1"}),
-        (Feature.RESPONSE_CACHE, {}, {"cache": Cache()}),
         (Feature.STREAMING, {"stream": True}, {}),
         (Feature.DROP_PARAMS, {}, {"drop_params": True}),
         (Feature.MODIFY_PARAMS, {}, {"modify_params": True}),
