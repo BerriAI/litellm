@@ -121,6 +121,7 @@ fn key_facts(hooks: &Hooks, identity: &AuthenticatedRequest) -> Option<Arc<KeyFa
                 metadata: profile.metadata.clone(),
                 team_metadata: profile.team_metadata.clone(),
                 budgets: profile.budgets.clone(),
+                limits: profile.limits,
             }))
         }
         (AuthenticationMethod::MasterKey, _) => Some(Arc::new(KeyFacts {

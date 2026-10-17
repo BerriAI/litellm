@@ -19,6 +19,9 @@ pub struct VerificationToken {
     pub key_alias: Option<String>,
     pub key_name: Option<String>,
     pub metadata: Value,
+    /// The key's `rpm_limit` and `tpm_limit`, else its budget table's.
+    pub limits: RateLimits,
+    pub max_parallel_requests: Option<i64>,
     pub restrictions: Restrictions,
     pub team_id: Option<String>,
     /// `None` when the key has no team or the team row is missing.
@@ -38,7 +41,15 @@ pub struct Team {
     pub spend: f64,
     pub max_budget: Option<f64>,
     pub metadata: Value,
+    pub limits: RateLimits,
     pub restrictions: Restrictions,
+}
+
+/// Requests and tokens per rate limit window.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RateLimits {
+    pub rpm: Option<i64>,
+    pub tpm: Option<i64>,
 }
 
 /// The key's team membership: its spend and budget, and what its budget table sets beyond them.
@@ -50,7 +61,9 @@ pub struct TeamMembership {
     pub max_budget: Option<f64>,
     /// The team's default member budget, `metadata.team_member_budget_id`.
     pub default_max_budget: Option<f64>,
-    /// `rpm_limit`, `tpm_limit`, `tpd_limit` or `max_parallel_requests`.
+    /// The membership budget table's `rpm_limit` and `tpm_limit`.
+    pub limits: RateLimits,
+    /// An `rpm_limit` or `tpm_limit` inside the budget table's `model_max_budget`.
     pub rate_limits: bool,
     /// The member's own model scope; empty inherits the team's.
     pub allowed_models: Vec<String>,
@@ -61,6 +74,7 @@ pub struct User {
     pub spend: f64,
     pub max_budget: Option<f64>,
     pub models: Vec<String>,
+    pub limits: RateLimits,
     pub restrictions: Restrictions,
 }
 
@@ -68,8 +82,8 @@ pub struct User {
 /// `allowed_routes`.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Restrictions {
-    /// `rpm_limit`, `tpm_limit`, `tpd_limit` or `max_parallel_requests`, on the row or on a key's
-    /// budget table, or an `rpm_limit` or `tpm_limit` inside `model_max_budget`.
+    /// Per-model limits: an `rpm_limit` or `tpm_limit` inside `model_max_budget`, on the row or
+    /// on a key's budget table.
     pub rate_limits: bool,
     pub policies: bool,
     /// `aliases`, `router_settings`, or a team's `model_id`.
@@ -98,11 +112,10 @@ pub async fn find_verification_token(
                   v.key_alias,
                   v.key_name,
                   v.metadata,
-                  (v.rpm_limit IS NOT NULL OR v.tpm_limit IS NOT NULL OR v.tpd_limit IS NOT NULL
-                     OR v.max_parallel_requests IS NOT NULL
-                     OR kb.rpm_limit IS NOT NULL OR kb.tpm_limit IS NOT NULL
-                     OR kb.tpd_limit IS NOT NULL OR kb.max_parallel_requests IS NOT NULL
-                     OR COALESCE(jsonb_path_exists(v.model_max_budget,
+                  COALESCE(v.rpm_limit, kb.rpm_limit) AS rpm_limit,
+                  COALESCE(v.tpm_limit, kb.tpm_limit) AS tpm_limit,
+                  v.max_parallel_requests,
+                  (COALESCE(jsonb_path_exists(v.model_max_budget,
                           '$.* ? (@.rpm_limit != null || @.tpm_limit != null)'), false)
                      OR COALESCE(jsonb_path_exists(kb.model_max_budget,
                           '$.* ? (@.rpm_limit != null || @.tpm_limit != null)'), false))
@@ -123,9 +136,9 @@ pub async fn find_verification_token(
                   t.spend AS "team_spend?",
                   t.max_budget AS "team_max_budget?",
                   t.metadata AS "team_metadata?",
-                  (t.rpm_limit IS NOT NULL OR t.tpm_limit IS NOT NULL OR t.tpd_limit IS NOT NULL
-                     OR t.max_parallel_requests IS NOT NULL
-                     OR COALESCE(jsonb_path_exists(t.model_max_budget,
+                  t.rpm_limit AS "team_rpm_limit?",
+                  t.tpm_limit AS "team_tpm_limit?",
+                  (COALESCE(jsonb_path_exists(t.model_max_budget,
                           '$.* ? (@.rpm_limit != null || @.tpm_limit != null)'), false))
                     AS "team_rate_limits!",
                   COALESCE(cardinality(t.policies) > 0, false) AS "team_policies!",
@@ -133,9 +146,9 @@ pub async fn find_verification_token(
                      OR COALESCE(t.router_settings NOT IN ('{}', 'null'), false)) AS "team_model_aliases!",
                   (t.object_permission_id IS NOT NULL) AS "team_object_permissions!",
                   (t.organization_id IS NOT NULL) AS "team_organization!",
-                  (mb.rpm_limit IS NOT NULL OR mb.tpm_limit IS NOT NULL OR mb.tpd_limit IS NOT NULL
-                     OR mb.max_parallel_requests IS NOT NULL
-                     OR COALESCE(jsonb_path_exists(mb.model_max_budget,
+                  mb.rpm_limit AS "member_rpm_limit?",
+                  mb.tpm_limit AS "member_tpm_limit?",
+                  (COALESCE(jsonb_path_exists(mb.model_max_budget,
                           '$.* ? (@.rpm_limit != null || @.tpm_limit != null)'), false))
                     AS "member_rate_limits!",
                   mb.allowed_models AS "member_allowed_models?",
@@ -149,9 +162,9 @@ pub async fn find_verification_token(
                   u.models AS "user_models?",
                   u.spend AS "user_spend?",
                   u.max_budget AS "user_max_budget?",
-                  (u.rpm_limit IS NOT NULL OR u.tpm_limit IS NOT NULL
-                     OR u.max_parallel_requests IS NOT NULL
-                     OR COALESCE(jsonb_path_exists(u.model_max_budget,
+                  u.rpm_limit AS "user_rpm_limit?",
+                  u.tpm_limit AS "user_tpm_limit?",
+                  (COALESCE(jsonb_path_exists(u.model_max_budget,
                           '$.* ? (@.rpm_limit != null || @.tpm_limit != null)'), false))
                     AS "user_rate_limits!",
                   COALESCE(cardinality(u.policies) > 0, false) AS "user_policies!",
@@ -181,6 +194,11 @@ pub async fn find_verification_token(
         key_alias: row.key_alias,
         key_name: row.key_name,
         metadata: row.metadata,
+        limits: RateLimits {
+            rpm: row.rpm_limit,
+            tpm: row.tpm_limit,
+        },
+        max_parallel_requests: row.max_parallel_requests.map(i64::from),
         restrictions: Restrictions {
             rate_limits: row.key_rate_limits,
             policies: row.key_policies,
@@ -199,6 +217,10 @@ pub async fn find_verification_token(
             spend: row.team_spend.unwrap_or(0.0),
             max_budget: row.team_max_budget,
             metadata: row.team_metadata.unwrap_or(Value::Null),
+            limits: RateLimits {
+                rpm: row.team_rpm_limit,
+                tpm: row.team_tpm_limit,
+            },
             restrictions: Restrictions {
                 rate_limits: row.team_rate_limits,
                 policies: row.team_policies,
@@ -214,6 +236,10 @@ pub async fn find_verification_token(
                 .member_max_budget
                 .map(|budget| budget + row.member_budget_increase.unwrap_or(0.0)),
             default_max_budget: row.member_default_budget,
+            limits: RateLimits {
+                rpm: row.member_rpm_limit,
+                tpm: row.member_tpm_limit,
+            },
             rate_limits: row.member_rate_limits,
             allowed_models: row.member_allowed_models.unwrap_or_default(),
         },
@@ -222,6 +248,10 @@ pub async fn find_verification_token(
             spend: row.user_spend.unwrap_or(0.0),
             max_budget: row.user_max_budget,
             models: row.user_models.unwrap_or_default(),
+            limits: RateLimits {
+                rpm: row.user_rpm_limit,
+                tpm: row.user_tpm_limit,
+            },
             restrictions: Restrictions {
                 rate_limits: row.user_rate_limits,
                 policies: row.user_policies,
