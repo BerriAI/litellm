@@ -1631,19 +1631,26 @@ def _totals_to_zero(response_cost: float | str | None) -> bool:
         return False
 
 
+def _is_cache_hit(litellm_logging_obj: LiteLLMLoggingObj) -> bool:
+    caching_details: Final = litellm_logging_obj.caching_details
+    return caching_details is not None and caching_details.get("cache_hit") is True
+
+
 def _get_cost_breakdown_from_logging_obj(
     litellm_logging_obj: LiteLLMLoggingObj | None,
     response_cost: float | str | None = None,
 ) -> CostBreakdownHeaderValues:
     """Extract discount, margin, and per-component cost information from logging object's cost breakdown.
 
-    A non-inference call that priced at zero never records a breakdown, so its components are
-    reported as zero here. Any such call that did price normally (retrieving a background response,
-    and the cost poller's read of one) reports the breakdown it stored, or nothing at all when the
-    breakdown has not landed yet.
+    A cache hit reports every component as zero. A non-inference call that priced at zero never
+    records a breakdown, so its components are reported as zero too. Any such call that did price
+    normally (retrieving a background response, and the cost poller's read of one) reports the
+    breakdown it stored, or nothing at all when the breakdown has not landed yet.
     """
     if not litellm_logging_obj or not hasattr(litellm_logging_obj, "cost_breakdown"):
         return CostBreakdownHeaderValues()
+    if _is_cache_hit(litellm_logging_obj):
+        return _ZERO_COST_BREAKDOWN
 
     cost_breakdown: Final = litellm_logging_obj.cost_breakdown
     if not cost_breakdown:
@@ -2658,8 +2665,7 @@ class ProxyBaseLLMRequestProcessing:
         from the cache costs 0, which the calculator cannot tell from a fresh call, and any
         other zero or unknown cost comes back empty so no cost header is sent.
         """
-        caching_details: Final = logging_obj.caching_details
-        if caching_details is not None and caching_details.get("cache_hit") is True:
+        if _is_cache_hit(logging_obj):
             return 0.0
         stored_cost: Final = logging_obj.model_call_details.get("response_cost")
         if isinstance(stored_cost, (int, float)):

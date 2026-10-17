@@ -13,6 +13,7 @@ import sys
 import time
 import traceback
 from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime as dt_object
 from functools import lru_cache
 from types import MappingProxyType, TracebackType
@@ -555,6 +556,12 @@ def mask_api_base_credentials(api_base: str) -> str:
         return api_base
     key_end: Final = api_base.find("key=") + 4
     return api_base[:key_end] + "*" * 5 + api_base[-4:]
+
+
+@dataclass(frozen=True, slots=True)
+class UncachedPrice:
+    cost: float | None
+    cost_breakdown: CostBreakdown | None
 
 
 def _timestamp_seconds(moment: object) -> float | None:
@@ -2057,13 +2064,14 @@ class Logging(LiteLLMLoggingBaseClass):
 
     _response_cost_calculator = response_cost_calculator
 
-    def uncached_response_cost(self, result: object) -> float | None:
+    def uncached_price(self, result: object) -> UncachedPrice:
         previous_cost_breakdown: Final = self.cost_breakdown
         previous_billed_token_rates: Final = self.billed_token_rates
         debug_key: Final = "response_cost_failure_debug_information"
         had_failure_debug_info: Final = debug_key in self.model_call_details
         try:
-            return self.response_cost_calculator(result=result, cache_hit=False, ignore_stamped_cost=True)
+            cost: Final = self.response_cost_calculator(result=result, cache_hit=False, ignore_stamped_cost=True)
+            return UncachedPrice(cost=cost, cost_breakdown=self.cost_breakdown)
         finally:
             self.cost_breakdown = previous_cost_breakdown
             self.billed_token_rates = previous_billed_token_rates
@@ -6827,7 +6835,7 @@ _CACHE_HIT_ZEROED_AMOUNTS: Final = MappingProxyType(
 
 
 def _cache_hit_cost_breakdown(served: CostBreakdown | None) -> CostBreakdown:
-    """Every amount at 0, keeping the pricing basis and rates the served call recorded, which savings reports read."""
+    """Every amount at 0, keeping the pricing basis and rates a fresh call would have had, which savings reports read."""
     zero_costs: Final = CostBreakdown(input_cost=0.0, output_cost=0.0, total_cost=0.0, tool_usage_cost=0.0)
     if served is None:
         return zero_costs
@@ -6926,11 +6934,10 @@ def get_standard_logging_object_payload(
             "user", None
         )  # maintain backwards compatibility with old request body check
 
-        saved_cache_cost: float = 0.0
         if cache_hit is True or served_from_cache(init_response_obj):
             id = f"{id}_cache_hit{time.time()}"  # do not duplicate the request id
-        if cache_hit is True:
-            saved_cache_cost = logging_obj.uncached_response_cost(result=init_response_obj) or 0.0
+        uncached_price: Final = logging_obj.uncached_price(result=init_response_obj) if cache_hit is True else None
+        saved_cache_cost: Final = (uncached_price.cost if uncached_price is not None else None) or 0.0
 
         ## Get model cost information ##
         base_model = get_base_model_from_metadata(model_call_details=kwargs)
@@ -7011,8 +7018,8 @@ def get_standard_logging_object_payload(
 
         request_cost_breakdown: Final = cost_breakdown_with_guardrail(
             (
-                _cache_hit_cost_breakdown(logging_obj.cost_breakdown)
-                if cache_hit is True
+                _cache_hit_cost_breakdown(uncached_price.cost_breakdown)
+                if uncached_price is not None
                 else logging_obj.cost_breakdown
             ),
             guardrail_cost,

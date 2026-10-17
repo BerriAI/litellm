@@ -52,6 +52,7 @@ from litellm.proxy.utils import InternalUsageCache
 from litellm.types.llms.openai import ResponseAPIUsage, ResponseCompletedEvent, ResponsesAPIResponse
 from litellm.types.utils import (
     CallTypes,
+    CostBreakdown,
     ImageResponse,
     LiteLLMRealtimeStreamLoggingObject,
     ModelResponse,
@@ -10030,7 +10031,7 @@ def _lit8679_priced_logging_obj(deployment_id: str, litellm_call_id: str) -> Lit
     return logging_obj
 
 
-def test_uncached_response_cost_recomputes_price_past_a_zero_stamp():
+def test_uncached_price_recomputes_price_past_a_zero_stamp():
     """A probe for the price a cache-served response would have had ignores the 0.0 stamped on it."""
     deployment_id: Final = "lit8679-uncached-cost-deployment"
     litellm.register_model(
@@ -10059,7 +10060,7 @@ def test_uncached_response_cost_recomputes_price_past_a_zero_stamp():
             usage=litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30),
         )
 
-        cost: Final = logging_obj.uncached_response_cost(result=cached_response)
+        cost: Final = logging_obj.uncached_price(result=cached_response).cost
         uncached_price: Final = oracle_logging_obj._response_cost_calculator(result=fresh_response)
 
         assert cost == uncached_price
@@ -10069,7 +10070,7 @@ def test_uncached_response_cost_recomputes_price_past_a_zero_stamp():
         litellm.model_cost.pop(deployment_id, None)
 
 
-def test_uncached_response_cost_leaves_no_pricing_state_on_the_call():
+def test_uncached_price_leaves_no_pricing_state_on_the_call():
     """The uncached price probe leaves no cost breakdown or billed rates behind on the cache-hit call."""
     deployment_id: Final = "lit8679-probe-state-deployment"
     litellm.register_model(
@@ -10093,12 +10094,19 @@ def test_uncached_response_cost_leaves_no_pricing_state_on_the_call():
         cached_response._hidden_params = {"cache_hit": True, "cache_key": "lit8679-key", "response_cost": 0.0}
         assert (logging_obj.cost_breakdown, logging_obj.billed_token_rates) == (None, None)
 
-        cost: Final = logging_obj.uncached_response_cost(result=cached_response)
+        cost: Final = logging_obj.uncached_price(result=cached_response).cost
 
         assert cost is not None and cost > 0.0
         assert (logging_obj.cost_breakdown, logging_obj.billed_token_rates) == (None, None)
     finally:
         litellm.model_cost.pop(deployment_id, None)
+
+
+def _assert_zeroed_copy(hit_breakdown: CostBreakdown | None, fresh_breakdown: CostBreakdown) -> None:
+    basis_and_rates: Final = ("service_tier", "data_residency", "vertex_location", "discount_percent", "margin_percent")
+    assert hit_breakdown is not None and hit_breakdown.keys() == fresh_breakdown.keys()
+    assert all(hit_breakdown[key] == fresh_breakdown[key] for key in basis_and_rates if key in hit_breakdown)
+    assert all(value == 0.0 for key, value in hit_breakdown.items() if key not in basis_and_rates)
 
 
 def test_payload_saved_cache_cost_keeps_uncached_price_when_result_stamped_zero():
@@ -10151,6 +10159,8 @@ def test_payload_saved_cache_cost_keeps_uncached_price_when_result_stamped_zero(
         assert payload["saved_cache_cost"] > 0.0
         assert payload["response_cost"] == 0.0
         assert logging_obj.cost_breakdown is None
+        assert oracle_logging_obj.cost_breakdown is not None
+        _assert_zeroed_copy(payload["cost_breakdown"], oracle_logging_obj.cost_breakdown)
     finally:
         litellm.model_cost.pop(deployment_id, None)
 
@@ -10202,17 +10212,13 @@ def test_cache_hit_payload_reports_zero_cost_though_the_call_priced_the_response
         assert payload is not None
         assert payload["response_cost"] == 0.0
         assert payload["hidden_params"]["response_cost"] == 0.0
-        hit_breakdown: Final = payload["cost_breakdown"]
-        basis_and_rates: Final = ("service_tier", "data_residency", "vertex_location", "discount_percent", "margin_percent")
-        assert hit_breakdown is not None and hit_breakdown.keys() == logging_obj.cost_breakdown.keys()
-        assert all(hit_breakdown[key] == logging_obj.cost_breakdown[key] for key in basis_and_rates if key in hit_breakdown)
-        assert all(value == 0.0 for key, value in hit_breakdown.items() if key not in basis_and_rates)
+        _assert_zeroed_copy(payload["cost_breakdown"], logging_obj.cost_breakdown)
         assert payload["saved_cache_cost"] == header_price
     finally:
         litellm.model_cost.pop(deployment_id, None)
 
 
-def test_uncached_response_cost_leaves_no_failure_debug_info_for_unpriced_model():
+def test_uncached_price_leaves_no_failure_debug_info_for_unpriced_model():
     """A probe that cannot price the model returns None without stamping the pricing failure on the cache-hit call."""
     logging_obj: Final = LitellmLogging(
         model="lit8679-model-with-no-price",
@@ -10238,7 +10244,7 @@ def test_uncached_response_cost_leaves_no_failure_debug_info_for_unpriced_model(
     cached_response._hidden_params = {"cache_hit": True, "cache_key": "lit8679-key", "response_cost": 0.0}
     assert "response_cost_failure_debug_information" not in logging_obj.model_call_details
 
-    cost: Final = logging_obj.uncached_response_cost(result=cached_response)
+    cost: Final = logging_obj.uncached_price(result=cached_response).cost
 
     assert cost is None
     assert "response_cost_failure_debug_information" not in logging_obj.model_call_details

@@ -25,6 +25,7 @@ from litellm.litellm_core_utils.bug_report import (
     build_bug_report,
 )
 from litellm.types.router import RouterRateLimitError, RouterRateLimitErrorBasic
+from litellm.types.utils import CachingDetails
 from litellm.constants import (
     CLIENT_REQUESTED_MODEL_SCOPE_KEY,
     MAX_LITELLM_CALL_ID_LENGTH,
@@ -11065,14 +11066,27 @@ class TestResponseCostFromLoggingObjForCacheHits:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        ("hidden_params", "expected_header"),
-        (({"cache_hit": True, "response_cost": 0.0}, "0.0"), ({"response_cost": 0.0}, None)),
+        ("hidden_params", "caching_details", "expected_header"),
+        (
+            (
+                {"cache_hit": True, "response_cost": 0.0},
+                CachingDetails(cache_hit=True, cache_duration_ms=2.0),
+                "0.0",
+            ),
+            ({"response_cost": 0.0}, None, None),
+        ),
     )
-    async def test_only_a_cache_hit_sends_a_zero_cost_header(
-        self, monkeypatch: pytest.MonkeyPatch, hidden_params: dict[str, object], expected_header: str | None
+    async def test_only_a_cache_hit_sends_zero_cost_headers(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        hidden_params: dict[str, object],
+        caching_details: CachingDetails | None,
+        expected_header: str | None,
     ):
         response: Final = litellm.ModelResponse()
         response._hidden_params = hidden_params
+        logging_obj: Final = self._logging_obj()
+        logging_obj.caching_details = caching_details
         fastapi_response: Final = Response()
 
         async def served() -> litellm.ModelResponse:
@@ -11084,7 +11098,7 @@ class TestResponseCostFromLoggingObjForCacheHits:
         monkeypatch.setattr(litellm.proxy.common_request_processing, "route_request", route_request)
 
         await ProxyBaseLLMRequestProcessing(
-            data={"model": "gpt-5.4-mini", "litellm_logging_obj": self._logging_obj()}
+            data={"model": "gpt-5.4-mini", "litellm_logging_obj": logging_obj}
         ).base_process_llm_request(
             request=Request({"type": "http", "method": "POST", "headers": []}),
             fastapi_response=fastapi_response,
@@ -11096,7 +11110,15 @@ class TestResponseCostFromLoggingObjForCacheHits:
             skip_pre_call_logic=True,
         )
 
-        assert fastapi_response.headers.get("x-litellm-response-cost") == expected_header
+        cost_headers: Final = (
+            "x-litellm-response-cost",
+            "x-litellm-response-cost-original",
+            "x-litellm-response-cost-input",
+            "x-litellm-response-cost-output",
+        )
+        assert {name: fastapi_response.headers.get(name) for name in cost_headers} == dict.fromkeys(
+            cost_headers, expected_header
+        )
 
     def test_a_fresh_zero_cost_v1_messages_call_still_sends_no_cost_header(self):
         logging_obj = self._logging_obj()

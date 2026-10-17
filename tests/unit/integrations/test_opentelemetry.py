@@ -483,10 +483,10 @@ class TestOpenTelemetryCostBreakdown(unittest.TestCase):
         A cache-hit span reports litellm.cache_hit and litellm.saved_cache_cost so cost
         attribution can tell a cache-served response apart from a billed call.
         """
-        otel = OpenTelemetry()
-        mock_span = MagicMock()
+        otel: Final = OpenTelemetry()
+        mock_span: Final = MagicMock()
 
-        kwargs = {
+        kwargs: Final = {
             "model": "gpt-4",
             "messages": [{"role": "user", "content": "Hello"}],
             "optional_params": {},
@@ -501,7 +501,7 @@ class TestOpenTelemetryCostBreakdown(unittest.TestCase):
             },
         }
 
-        response_obj = {
+        response_obj: Final = {
             "id": "test-response-id",
             "model": "gpt-4",
             "choices": [],
@@ -517,10 +517,10 @@ class TestOpenTelemetryCostBreakdown(unittest.TestCase):
         mock_span.set_attribute.assert_any_call("gen_ai.cost.output_cost", 0.0)
 
     def test_non_cache_hit_span_reports_cache_hit_false(self):
-        otel = OpenTelemetry()
-        mock_span = MagicMock()
+        otel: Final = OpenTelemetry()
+        mock_span: Final = MagicMock()
 
-        kwargs = {
+        kwargs: Final = {
             "model": "gpt-4",
             "messages": [{"role": "user", "content": "Hello"}],
             "optional_params": {},
@@ -533,7 +533,7 @@ class TestOpenTelemetryCostBreakdown(unittest.TestCase):
             },
         }
 
-        response_obj = {
+        response_obj: Final = {
             "id": "test-response-id",
             "model": "gpt-4",
             "choices": [],
@@ -542,7 +542,7 @@ class TestOpenTelemetryCostBreakdown(unittest.TestCase):
 
         otel.set_attributes(span=mock_span, kwargs=kwargs, response_obj=response_obj)
 
-        call_args_list = [call[0] for call in mock_span.set_attribute.call_args_list]
+        call_args_list: Final = [call[0] for call in mock_span.set_attribute.call_args_list]
         assert ("litellm.cache_hit", False) in call_args_list
         assert all(key != "litellm.saved_cache_cost" for key, _value in call_args_list)
         assert all(not key.startswith("gen_ai.cost.") for key, _value in call_args_list)
