@@ -9,10 +9,17 @@ from litellm.types.utils import CredentialItem
 class CredentialAccessor:
     @staticmethod
     def find_credential(credential_name: str) -> CredentialItem | None:
-        return next(
+        exact: Final = next(
             (credential for credential in litellm.credential_list if credential.credential_name == credential_name),
             None,
         )
+        if exact is not None:
+            return exact
+        stripped: Final = credential_name.strip()
+        padded: Final = tuple(
+            credential for credential in litellm.credential_list if credential.credential_name.strip() == stripped
+        )
+        return padded[0] if len(padded) == 1 else None
 
     @staticmethod
     def get_credential_values(

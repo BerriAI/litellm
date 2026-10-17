@@ -544,6 +544,29 @@ describe("teamInfoCall", () => {
   });
 });
 
+describe("credential calls", () => {
+  const credentialName = "a b/c ";
+
+  const requestedPath = (mockFetch: ReturnType<typeof vi.spyOn>): string => {
+    const [url] = mockFetch.mock.calls[0];
+    return url instanceof Request ? new URL(url.url).pathname : new URL(url.toString(), "http://example.com").pathname;
+  };
+
+  it.each([
+    ["delete", () => Networking.credentialDeleteCall("token", credentialName), "/credentials/a%20b%2Fc%20"],
+    ["update", () => Networking.credentialUpdateCall("token", credentialName, {}), "/credentials/a%20b%2Fc%20"],
+    ["get", () => Networking.credentialGetCall("token", credentialName, null), "/credentials/by_name/a%20b%2Fc%20"],
+  ])("%s keeps the trailing space and slash of the credential name in the path", async (_, call, expectedPath) => {
+    const mockFetch = vi.spyOn(global, "fetch").mockResolvedValue(new Response("{}", { status: 200 }));
+    try {
+      await call();
+      expect(requestedPath(mockFetch).endsWith(expectedPath)).toBe(true);
+    } finally {
+      mockFetch.mockRestore();
+    }
+  });
+});
+
 describe("uiSpendLogsCall exclude_internal_health_checks serialization", () => {
   const originalFetch = global.fetch;
 
