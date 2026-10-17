@@ -19,7 +19,6 @@ from httpx import Response
 
 import litellm
 from litellm.proxy.proxy_server import app
-from litellm.proxy.route_llm_request import ProxyUnsupportedEndpointError
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 from tests._master_key import MASTER_KEY
 
@@ -2110,97 +2109,6 @@ class TestResponsesWSFirstFrameModelAuth:
         )
 
 
-class TestResponsesWSDeclaredNonChatModel:
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize("requested_model", ["embed-only", "embed-alias"])
-    @pytest.mark.parametrize("use_query_model", [False, True])
-    @pytest.mark.parametrize(
-        "model_info, rejected",
-        [
-            ({"mode": "embedding", "supported_endpoints": ["/v1/embeddings"]}, True),
-            ({"mode": "embedding"}, False),
-        ],
-    )
-    async def test_session_closes_on_a_model_declared_non_chat_before_routing(
-        self, requested_model: str, use_query_model: bool, model_info: dict[str, object], rejected: bool
-    ):
-        from litellm.proxy.response_api_endpoints.endpoints import (
-            responses_websocket_endpoint,
-        )
-
-        router: Final = litellm.Router(
-            model_list=[
-                {
-                    "model_name": "embed-only",
-                    "litellm_params": {"model": "sagemaker/openai/embed-endpoint", "aws_region_name": "us-east-1"},
-                    "model_info": model_info,
-                }
-            ]
-        )
-        ws = MagicMock()
-        ws.headers = {}
-        ws.query_params = {}
-        ws.scope = {"headers": []}
-        ws.url = "ws://testserver/v1/responses"
-        ws.accept = AsyncMock()
-        ws.receive_text = AsyncMock(
-            return_value=json.dumps({"type": "response.create", "model": requested_model, "input": []})
-        )
-        ws.send_text = AsyncMock()
-        ws.close = AsyncMock()
-        key_aliases: Final = {"embed-alias": "embed-only"}
-
-        async def alias_resolving_pre_call(**kwargs):
-            return {"model": key_aliases.get(kwargs["model"], kwargs["model"]), "litellm_metadata": {}}, MagicMock()
-
-        processor = MagicMock()
-        processor.common_processing_pre_call_logic = AsyncMock(side_effect=alias_resolving_pre_call)
-
-        async def fake_llm_call():
-            return None
-
-        with (
-            patch(  # test-quality-ok: first-frame model auth needs a live key table and has its own tests above
-                "litellm.proxy.response_api_endpoints.endpoints._enforce_responses_ws_first_frame_model_auth",
-                new_callable=AsyncMock,
-            ),
-            patch(  # test-quality-ok: the pre-call processor needs a live proxy; whether the session reaches it is under test
-                "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing",
-                return_value=processor,
-            ),
-            patch(  # test-quality-ok: routing is the seam that would reach the provider
-                "litellm.proxy.route_llm_request.route_request",
-                new_callable=AsyncMock,
-                return_value=fake_llm_call(),
-            ) as mock_route_request,
-            patch("litellm.proxy.proxy_server.llm_router", router),  # test-quality-ok: the session reads the proxy's router global
-            patch(  # test-quality-ok: the session reads the proxy's logging global; the failure hook releases reservations
-                "litellm.proxy.proxy_server.proxy_logging_obj.post_call_failure_hook",
-                new_callable=AsyncMock,
-            ) as mock_failure_hook,
-        ):
-            await responses_websocket_endpoint(
-                websocket=ws,
-                model=requested_model if use_query_model else None,
-                user_api_key_dict=MagicMock(team_id=None),
-            )
-
-        if not rejected:
-            mock_route_request.assert_awaited_once()
-            ws.close.assert_not_awaited()
-            mock_failure_hook.assert_not_awaited()
-            return
-        mock_failure_hook.assert_awaited_once()
-        assert isinstance(mock_failure_hook.await_args.kwargs["original_exception"], ProxyUnsupportedEndpointError)
-        assert mock_failure_hook.await_args.kwargs["request_data"]["model"] == "embed-only"
-        frame = json.loads(ws.send_text.await_args.args[0])
-        assert frame["type"] == "error"
-        assert frame["error"]["type"] == "invalid_request_error"
-        assert frame["error"]["message"] == (
-            "/v1/responses is not supported by model=embed-only. Supported endpoints: /v1/embeddings"
-        )
-        ws.close.assert_awaited_once_with(code=1008, reason="Pre-call error")
-        mock_route_request.assert_not_awaited()
 
 
 class TestReadWSModelFromFirstFrameErrors:

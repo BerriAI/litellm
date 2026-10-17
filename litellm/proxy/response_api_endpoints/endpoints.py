@@ -56,7 +56,8 @@ from litellm.proxy.hooks.responses_id_security import ResponsesIDSecurity, decry
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import (
     request_tags_from_request_data,
 )
-from litellm.proxy.route_llm_request import endpoint_unsupported_by_model, raise_if_required_body_param_missing
+from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
+from litellm.router_utils.endpoint_eligibility import UnsupportedEndpointError
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     REASONING_EFFORT,
@@ -1731,6 +1732,13 @@ def _routing_hints_from_first_ws_frame(first_message: str) -> Mapping[str, objec
 
 
 def _responses_ws_failure_frame(failure: Exception) -> str:
+    if isinstance(failure, UnsupportedEndpointError):
+        return json.dumps(
+            {
+                "type": "error",
+                "error": {"type": "invalid_request_error", "message": failure.message.split("\n\n", 1)[0]},
+            }
+        )
     raw_status: Final = getattr(failure, "status_code", None)
     status: Final = raw_status if isinstance(raw_status, int) and not isinstance(raw_status, bool) else 500
     error_type: Final = (
@@ -1857,20 +1865,8 @@ async def _responses_websocket_session(
             user_api_base=user_api_base,
             model=resolved_model,
             route_type="_aresponses_websocket",
-        )
-        unsupported_endpoint: Final = endpoint_unsupported_by_model(
-            route_type="_aresponses_websocket",
-            data=data,
             llm_router=llm_router,
-            team_id=user_api_key_dict.team_id,
         )
-        if unsupported_endpoint is not None:
-            await proxy_logging_obj.post_call_failure_hook(
-                user_api_key_dict=user_api_key_dict,
-                original_exception=unsupported_endpoint,
-                request_data=data,
-            )
-            raise unsupported_endpoint
     except Exception as e:
         verbose_proxy_logger.exception("Responses WebSocket pre-call error")
         try:
@@ -1917,7 +1913,10 @@ async def _responses_websocket_session(
             original_exception=e,
             request_data=routed_data,
         )
-        await websocket.close(code=1011, reason="Internal server error")
+        await websocket.close(
+            code=1008 if isinstance(e, UnsupportedEndpointError) else 1011,
+            reason="Pre-call error" if isinstance(e, UnsupportedEndpointError) else "Internal server error",
+        )
     finally:
         await proxy_logging_obj.arelease_max_parallel_requests_on_disconnect(user_api_key_dict)
 

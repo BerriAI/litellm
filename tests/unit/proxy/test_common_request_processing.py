@@ -73,7 +73,6 @@ from litellm.proxy.hooks.model_max_budget_limiter import (
     model_budget_spend_cache_key,
     team_member_budget_entity_id,
 )
-from litellm.proxy.route_llm_request import ProxyUnsupportedEndpointError
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
 from litellm.router_utils.add_retry_fallback_headers import prepare_response_for_header_attachment
@@ -713,70 +712,8 @@ class TestProxyBaseLLMRequestProcessing:
         assert returned_data["metadata"]["tags"] == ["existing-tag"]
         tag_budget_check.assert_not_awaited()
 
-    @staticmethod
-    def _router_with_embedding_only_model() -> Router:
-        return Router(
-            model_list=[
-                {
-                    "model_name": "embed-only",
-                    "litellm_params": {"model": "openai/text-embedding-3-small", "api_key": "sk-test"},
-                    "model_info": {"mode": "embedding", "supported_endpoints": ["/v1/embeddings"]},
-                },
-            ]
-        )
 
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        "requested_model, key_aliases",
-        [("embed-only", {}), ("embed-alias", {"embed-alias": "embed-only"})],
-    )
-    async def test_common_processing_pre_call_logic_rejects_chat_on_embedding_only_model_before_pre_call_hooks(
-        self, monkeypatch, requested_model, key_aliases
-    ):
-        processing_obj, mock_request, mock_proxy_logging_obj, mock_proxy_config, _ = self._guardrail_tag_budget_harness(
-            monkeypatch,
-            request_body={"model": requested_model, "messages": [{"role": "user", "content": "hello"}]},
-            guardrail_tags=[],
-        )
 
-        with pytest.raises(ProxyUnsupportedEndpointError) as exc_info:
-            await processing_obj.common_processing_pre_call_logic(
-                request=mock_request,
-                general_settings={},
-                user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test", aliases=key_aliases),
-                proxy_logging_obj=mock_proxy_logging_obj,
-                proxy_config=mock_proxy_config,
-                route_type="acompletion",
-                llm_router=self._router_with_embedding_only_model(),
-            )
-
-        assert exc_info.value.code == "400"
-        assert exc_info.value.message == (
-            "/v1/chat/completions is not supported by model=embed-only. Supported endpoints: /v1/embeddings"
-        )
-        mock_proxy_logging_obj.pre_call_hook.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_common_processing_pre_call_logic_lets_embeddings_through_on_embedding_only_model(self, monkeypatch):
-        processing_obj, mock_request, mock_proxy_logging_obj, mock_proxy_config, _ = self._guardrail_tag_budget_harness(
-            monkeypatch,
-            request_body={"model": "embed-only", "input": ["hello"]},
-            guardrail_tags=[],
-            route="/v1/embeddings",
-        )
-
-        returned_data, _ = await processing_obj.common_processing_pre_call_logic(
-            request=mock_request,
-            general_settings={},
-            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
-            proxy_logging_obj=mock_proxy_logging_obj,
-            proxy_config=mock_proxy_config,
-            route_type="aembedding",
-            llm_router=self._router_with_embedding_only_model(),
-        )
-
-        assert returned_data["model"] == "embed-only"
-        mock_proxy_logging_obj.pre_call_hook.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_common_processing_pre_call_logic_skips_guardrail_tag_budget_check_for_zero_cost_model(
@@ -6846,6 +6783,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
             return processor.data, logging_obj
 
         mock_router = MagicMock()
+        mock_router.endpoint_error_for_request.return_value = None
         mock_router.fallbacks = [{"gpt-4": ["gpt-3.5-turbo"]}]
 
         with patch.object(
@@ -6887,6 +6825,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
             )
 
         mock_router = MagicMock()
+        mock_router.endpoint_error_for_request.return_value = None
         mock_router.fallbacks = None
 
         with patch.object(
@@ -6926,6 +6865,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
             )
 
         mock_router = MagicMock()
+        mock_router.endpoint_error_for_request.return_value = None
         mock_router.fallbacks = [{"gpt-4": ["gpt-3.5-turbo", "claude-3-haiku"]}]
 
         with patch.object(
@@ -6953,56 +6893,6 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
 
         assert processor.data["model"] == "gpt-4"
 
-    @pytest.mark.asyncio
-    async def test_fallback_skips_a_model_that_rejects_the_endpoint(self):
-        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
-        from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
-        from litellm.proxy.route_llm_request import ProxyUnsupportedEndpointError
-
-        processor = ProxyBaseLLMRequestProcessing(data={"model": "chat-rl"})
-        attempted: list[str] = []
-
-        async def mock_pre_call_logic(**kwargs):
-            model = processor.data.get("model")
-            attempted.append(model)
-            if model == "chat-rl":
-                raise ProxyRateLimitError(detail="RPM limit exceeded", headers={"retry-after": "30"})
-            if model == "embed-only":
-                raise ProxyUnsupportedEndpointError(
-                    message="/v1/chat/completions is not supported by model=embed-only",
-                    type="invalid_request_error",
-                    param="model",
-                    code=400,
-                )
-            return processor.data, MagicMock()
-
-        mock_router = MagicMock()
-        mock_router.fallbacks = [{"chat-rl": ["embed-only", "chat-ctl"]}]
-
-        with patch.object(
-            processor,
-            "common_processing_pre_call_logic",
-            side_effect=mock_pre_call_logic,
-        ):
-            await processor._pre_call_with_fallbacks(
-                request=MagicMock(),
-                general_settings={},
-                proxy_logging_obj=MagicMock(),
-                user_api_key_dict=MagicMock(router_settings=None),
-                version=None,
-                proxy_config=MagicMock(),
-                user_model=None,
-                user_temperature=None,
-                user_request_timeout=None,
-                user_max_tokens=None,
-                user_api_base=None,
-                model="chat-rl",
-                route_type="acompletion",
-                llm_router=mock_router,
-            )
-
-        assert attempted == ["chat-rl", "embed-only", "chat-ctl"]
-        assert processor.data["model"] == "chat-ctl"
 
     @pytest.mark.asyncio
     async def test_fallback_uses_key_level_router_settings(self):
@@ -7020,6 +6910,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
             return processor.data, MagicMock()
 
         mock_router = MagicMock()
+        mock_router.endpoint_error_for_request.return_value = None
         mock_router.fallbacks = [{"gpt-4": ["gpt-3.5-turbo"]}]
 
         user_api_key_dict = MagicMock()
@@ -7067,6 +6958,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
             )
 
         mock_router = MagicMock()
+        mock_router.endpoint_error_for_request.return_value = None
         mock_router.fallbacks = [{"gpt-4": ["gpt-3.5-turbo"]}]
 
         with patch.object(
@@ -7111,6 +7003,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
             raise ValueError("unexpected auth failure on fallback")
 
         mock_router = MagicMock()
+        mock_router.endpoint_error_for_request.return_value = None
         mock_router.fallbacks = [{"gpt-4": ["gpt-3.5-turbo"]}]
 
         with patch.object(
@@ -7220,6 +7113,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
             return processor.data, MagicMock()
 
         mock_router = MagicMock()
+        mock_router.endpoint_error_for_request.return_value = None
         mock_router.fallbacks = [{primary_model: [fallback_model]}]
 
         with patch.object(

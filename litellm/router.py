@@ -222,6 +222,11 @@ from litellm.router_utils.cooldown_handlers import (
     is_caller_timeout_408,
     set_cooldown_deployments,
 )
+from litellm.router_utils.endpoint_eligibility import (
+    UnsupportedEndpointError,
+    eligible_deployments,
+    endpoint_selection,
+)
 from litellm.router_utils.fallback_event_handlers import (
     MID_STREAM_FALLBACK_CONTROLS_KEY,
     AttemptedFallbackTargets,
@@ -8391,9 +8396,17 @@ class Router:
         Handler for making a call to the .completion()/.embeddings()/etc. functions.
         """
         model_group: Final = kwargs.get("model")
-        response = original_function(*args, **kwargs)
-        if coroutine_checker.is_async_callable(response) or inspect.isawaitable(response):
-            response = await response
+        endpoint_function: Final = _OPAQUE_VALUE_ADAPTER.validate_python(
+            kwargs.get("original_generic_function") or original_function
+        )
+        with endpoint_selection(
+            getattr(endpoint_function, "__name__", None),
+            getattr(endpoint_function, "__module__", None),
+            model=_OPAQUE_VALUE_ADAPTER.validate_python(model_group),
+        ):
+            response = original_function(*args, **kwargs)
+            if coroutine_checker.is_async_callable(response) or inspect.isawaitable(response):
+                response = await response
         await self.increment_deployment_usage_for_response(response=response, request_kwargs=kwargs)
         ## PROCESS RESPONSE HEADERS
         response = await self.set_response_headers(response=response, model_group=model_group, request_kwargs=kwargs)
@@ -13459,6 +13472,16 @@ class Router:
         deployment_model: Final = litellm_params.get("model")
         return isinstance(deployment_model, str) and classify_strategy_router_model(deployment_model) is not None
 
+    def endpoint_error_for_request(
+        self, model: str, call_type: str, request_kwargs: Mapping[str, object]
+    ) -> UnsupportedEndpointError | None:
+        try:
+            with endpoint_selection(call_type, model=model):
+                self._common_checks_available_deployment(model=model, request_kwargs=request_kwargs)
+        except UnsupportedEndpointError as error:
+            return error
+        return None
+
     def _common_checks_available_deployment(
         self,
         model: str,
@@ -13643,7 +13666,10 @@ class Router:
                 model=model,
                 llm_provider="",
             )
-        return selectable
+        eligible: Final = eligible_deployments(model, selectable)
+        if isinstance(eligible, UnsupportedEndpointError):
+            raise eligible
+        return list(eligible)
 
     def _filter_reserved_deployments(
         self,

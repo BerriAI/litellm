@@ -119,7 +119,6 @@ from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.guardrails.auto_router_compression import arm_pre_call as _arm_auto_router_compression
 from litellm.proxy.native_compaction import with_proxy_compaction_executor
 from litellm.proxy.route_llm_request import (
-    ProxyUnsupportedEndpointError,
     endpoint_unsupported_by_model,
     route_request,
 )
@@ -132,6 +131,7 @@ from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
 from litellm.router import Router
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.router_utils.common_utils import resolve_model_group_alias, resolve_served_model
+from litellm.router_utils.endpoint_eligibility import UnsupportedEndpointError
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.router import RouterRateLimitError
 from litellm.types.router_weights import validate_router_weights
@@ -2301,15 +2301,6 @@ class ProxyBaseLLMRequestProcessing:
 
         self.data["litellm_logging_obj"] = logging_obj
 
-        unsupported_endpoint: Final = endpoint_unsupported_by_model(
-            route_type=route_type,
-            data=self.data,
-            llm_router=llm_router,
-            team_id=user_api_key_dict.team_id,
-        )
-        if unsupported_endpoint is not None:
-            raise unsupported_endpoint
-
         # Merge model-level guardrails before pre_call_hook so DB/UI-configured
         # guardrails actually execute on pre_call. Without this, guardrails set
         # via litellm_params.guardrails are only honored on post_call paths
@@ -2479,6 +2470,11 @@ class ProxyBaseLLMRequestProcessing:
                     self.data = independent_snapshot(pristine)
                     self.data["model"] = fallback_model
                     try:
+                        if (
+                            endpoint_unsupported_by_model(route_type, self.data, llm_router, user_api_key_dict.team_id)
+                            is not None
+                        ):
+                            continue
                         return await self.common_processing_pre_call_logic(
                             request=request,
                             general_settings=general_settings,
@@ -2496,7 +2492,7 @@ class ProxyBaseLLMRequestProcessing:
                             llm_router=llm_router,
                             rate_limited_model=original_model,
                         )
-                    except ProxyUnsupportedEndpointError:
+                    except UnsupportedEndpointError:
                         continue
                     except ProxyRateLimitError as fallback_exc:
                         if is_hard_per_model_limit(fallback_exc):

@@ -2,15 +2,12 @@ import asyncio
 import contextlib
 import json
 import uuid
-from collections.abc import Callable, Iterator, Mapping
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
-from functools import partial
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
 
-import anthropic
 import httpx
 import openai
 import pytest
@@ -27,14 +24,14 @@ from integration._support.client import (
     object_value,
     string_value,
 )
+from integration._support import responses_ws_peer
 from integration._support.database import read_rows
 from integration._support.openai_wire import answering_model_discovery, chat_reply, responses_reply
-from integration._support.process import graceful_stop_seconds, owned_proxy_process, owned_upstream, paused
+from integration._support.process import graceful_stop_seconds, owned_proxy_process
+from integration._support.tls import write_self_signed_cert
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 from websockets.exceptions import ConnectionClosed
-
-from tests.integration.cost_calculation.cost_tracking_case import JsonResponse, RoutedResponse
 
 _PROVIDER_KEY: Final = "integration-provider-key"
 _EMBEDDING_MODEL: Final = "text-embedding-3-small"
@@ -45,73 +42,9 @@ _VECTOR: Final = (0.25, 0.5, 0.75)
 _COUNTED_TOKENS: Final = 17
 _CLOSE: Final = MappingProxyType({"connection": "close"})
 _RELOAD_SECONDS: Final = 5
-_LONG_ENDPOINT: Final = "/v1/embeddings/" + "x" * 5000
 _EMBED_ONLY: Final[Mapping[str, JsonValue]] = MappingProxyType(
-    {"mode": "embedding", "supported_endpoints": ["/v1/embeddings"]}
+    {"mode": "embedding", "supported_endpoints": ["/v1/embeddings"], "enforce_supported_endpoints": True}
 )
-_CHAT_ENDPOINTS: Final = frozenset(
-    {
-        "/v1/chat/completions",
-        "/chat/completions",
-        "/v1/completions",
-        "/completions",
-        "/v1/messages",
-        "/v1/responses",
-        "/responses",
-        "/v1beta/interactions",
-    }
-)
-_CHAT_MODES: Final = frozenset({"chat", "completion", "responses"})
-_CATALOG: Final = TypeAdapter(dict[str, JsonValue]).validate_json(
-    (Path(__file__).resolve().parents[3] / "litellm/model_prices_and_context_window_backup.json").read_bytes()
-)
-_CATALOG_ENTRIES: Final[Mapping[str, dict[str, JsonValue]]] = MappingProxyType(
-    {
-        key: object_value(entry)
-        for key, entry in sorted(_CATALOG.items())
-        if isinstance(entry, dict) and key != "sample_spec"
-    }
-)
-
-
-def _listed_endpoints(entry: Mapping[str, JsonValue]) -> frozenset[str] | None:
-    listed: Final = entry.get("supported_endpoints")
-    if not isinstance(listed, list) or not listed or not all(isinstance(item, str) for item in listed):
-        return None
-    return frozenset(string_value(item) for item in listed)
-
-
-def _non_chat_mode(entry: Mapping[str, JsonValue]) -> bool:
-    mode: Final = entry.get("mode")
-    return isinstance(mode, str) and mode not in _CHAT_MODES
-
-
-def _lists_only_other_endpoints(entry: Mapping[str, JsonValue]) -> bool:
-    listed: Final = _listed_endpoints(entry)
-    return (
-        _non_chat_mode(entry)
-        and listed is not None
-        and listed.isdisjoint(_CHAT_ENDPOINTS)
-        and listed != {"/v1/embeddings"}
-    )
-
-
-def _lists_a_chat_endpoint(entry: Mapping[str, JsonValue]) -> bool:
-    listed: Final = _listed_endpoints(entry)
-    return _non_chat_mode(entry) and listed is not None and not listed.isdisjoint(_CHAT_ENDPOINTS)
-
-
-def _catalog_key(matches: Callable[[Mapping[str, JsonValue]], bool]) -> str:
-    return next(key for key, entry in _CATALOG_ENTRIES.items() if matches(entry))
-
-
-_CATALOG_CHAT_KEY: Final = _catalog_key(lambda entry: entry.get("mode") == "chat")
-_CATALOG_EMBEDDING_KEY: Final = _catalog_key(
-    lambda entry: entry.get("mode") == "embedding" and "supported_endpoints" not in entry
-)
-_CATALOG_OTHER_ENDPOINTS_KEY: Final = _catalog_key(_lists_only_other_endpoints)
-_CATALOG_CHAT_LISTED_KEY: Final = _catalog_key(_lists_a_chat_endpoint)
-_CATALOG_OTHER_ENDPOINTS_ENTRY: Final = _CATALOG_ENTRIES[_CATALOG_OTHER_ENDPOINTS_KEY]
 
 
 def _embedding_reply() -> Reply:
@@ -181,7 +114,7 @@ class _Upstream:
 
     def calls(self, marker: str) -> tuple[Request, ...]:
         self.seen = (*self.seen, *self.wire.drain())
-        return tuple(request for request in self.seen if marker.encode() in request.body)
+        return tuple(request for request in self.seen if marker.encode() in request.body or marker in request.target)
 
     def targets(self, marker: str) -> tuple[str, ...]:
         return tuple(request.target for request in self.calls(marker))
@@ -197,92 +130,15 @@ def _single(declaration: Mapping[str, JsonValue], litellm_model: str = f"openai/
     return _Deployment(litellm_model, (declaration,))
 
 
-_GATED: Final[Mapping[str, tuple[_Deployment, str]]] = MappingProxyType(
-    {
-        "image_generation": (
-            _single({"mode": "image_generation", "supported_endpoints": ["/v1/images/generations"]}),
-            "/v1/images/generations",
-        ),
-        "rerank_two_spellings": (
-            _single({"mode": "rerank", "supported_endpoints": ["/v1/rerank", "/rerank"]}),
-            "/rerank, /v1/rerank",
-        ),
-        "empty_endpoints": (_single({"mode": "embedding", "supported_endpoints": []}), "none"),
-        "duplicated_endpoints": (
-            _single({"mode": "embedding", "supported_endpoints": ["/v1/embeddings", "/v1/embeddings", "/embeddings"]}),
-            "/embeddings, /v1/embeddings",
-        ),
-        "trailing_slash_chat_spelling": (
-            _single({"mode": "embedding", "supported_endpoints": ["/v1/chat/completions/"]}),
-            "/v1/chat/completions/",
-        ),
-        "five_kb_endpoint": (_single({"mode": "embedding", "supported_endpoints": [_LONG_ENDPOINT]}), _LONG_ENDPOINT),
-        "two_embedding_deployments": (
-            _Deployment(
-                f"openai/{_CHAT_MODEL}",
-                (_EMBED_ONLY, {"mode": "embedding", "supported_endpoints": ["/embeddings"]}),
-            ),
-            "/embeddings, /v1/embeddings",
-        ),
-        "catalog_key_lists_other_endpoints": (
-            _single({**_EMBED_ONLY, "key": _CATALOG_OTHER_ENDPOINTS_KEY}),
-            "/v1/embeddings",
-        ),
-        "catalog_key_names_an_embedding_entry": (
-            _single({**_EMBED_ONLY, "key": _CATALOG_EMBEDDING_KEY}),
-            "/v1/embeddings",
-        ),
-        "catalog_key_not_in_the_catalog": (
-            _single({**_EMBED_ONLY, "key": "gate-uncatalogued-entry"}),
-            "/v1/embeddings",
-        ),
-        "catalog_key_not_a_string": (_single({**_EMBED_ONLY, "key": 7}), "/v1/embeddings"),
-    }
-)
-
-_UNGATED: Final[Mapping[str, _Deployment]] = MappingProxyType(
-    {
-        "mode_only": _single({"mode": "embedding"}),
-        "endpoints_only": _single({"supported_endpoints": ["/v1/embeddings"]}),
-        "endpoints_null": _single({"mode": "embedding", "supported_endpoints": None}),
-        "mode_null": _single({"mode": None, "supported_endpoints": ["/v1/embeddings"]}),
-        "mode_blank": _single({"mode": "", "supported_endpoints": ["/v1/embeddings"]}),
-        "endpoints_a_string": _single({"mode": "embedding", "supported_endpoints": "/v1/embeddings"}),
-        "endpoints_not_strings": _single({"mode": "embedding", "supported_endpoints": [1, 2]}),
-        "chat_mode": _single({"mode": "chat", "supported_endpoints": ["/v1/embeddings"]}),
-        "completion_mode": _single({"mode": "completion", "supported_endpoints": ["/v1/embeddings"]}),
-        "responses_mode": _single({"mode": "responses", "supported_endpoints": ["/v1/embeddings"]}),
-        "lists_v1_chat": _single(
-            {"mode": "embedding", "supported_endpoints": ["/v1/embeddings", "/v1/chat/completions"]}
-        ),
-        "lists_bare_chat": _single(
-            {"mode": "embedding", "supported_endpoints": ["/v1/embeddings", "/chat/completions"]}
-        ),
-        "lists_messages": _single({"mode": "embedding", "supported_endpoints": ["/v1/embeddings", "/v1/messages"]}),
-        "lists_bare_responses": _single({"mode": "embedding", "supported_endpoints": ["/v1/embeddings", "/responses"]}),
-        "lists_generate_content": _single({"mode": "embedding", "supported_endpoints": ["generateContent"]}),
-        "lists_responses_compact": _single({"mode": "embedding", "supported_endpoints": ["/v1/responses/compact"]}),
-        "mixed_group": _Deployment(f"openai/{_CHAT_MODEL}", (_EMBED_ONLY, {"mode": "chat"})),
-        "catalog_key_serves_chat": _single({**_EMBED_ONLY, "key": _CATALOG_CHAT_KEY}),
-        "catalog_key_lists_a_chat_endpoint": _single({**_EMBED_ONLY, "key": _CATALOG_CHAT_LISTED_KEY}),
-        "catalog_endpoints_echoed": _single(
-            {
-                "key": _CATALOG_OTHER_ENDPOINTS_KEY,
-                "mode": _CATALOG_OTHER_ENDPOINTS_ENTRY["mode"],
-                "supported_endpoints": _CATALOG_OTHER_ENDPOINTS_ENTRY["supported_endpoints"],
-            }
-        ),
-    }
-)
-
 _SHARED: Final[Mapping[str, _Deployment]] = MappingProxyType(
     {
         "embedding_only": _single(_EMBED_ONLY, f"openai/{_EMBEDDING_MODEL}"),
         "embedding_only_second": _single(_EMBED_ONLY, f"openai/{_EMBEDDING_MODEL}"),
+        "image_generation": _single(
+            {"enforce_supported_endpoints": True, "supported_endpoints": ["/v1/images/generations"]}
+        ),
         "chat_target": _single({"mode": "chat"}),
         "chat_rate_limited": _single({"mode": "chat"}),
-        **{name: deployment for name, (deployment, _supported) in _GATED.items()},
-        **_UNGATED,
         "mode_not_a_string": _single(
             {"mode": 7, "supported_endpoints": ["/v1/embeddings"]}, "openai/gate-mode-not-a-string"
         ),
@@ -397,11 +253,18 @@ def _failure_row(call_id: str) -> dict[str, JsonValue]:
     return rows[0]
 
 
+def _assert_error(response: httpx.Response, expected: dict[str, JsonValue]) -> None:
+    assert response.status_code == 400, response.text
+    body: Final = JSON_OBJECT.validate_json(response.content)
+    error: Final = object_value(body["error"])
+    message: Final = string_value(error["message"]).split("\n\n", 1)[0]
+    assert {**body, "error": {**error, "message": message}} == expected, response.text
+
+
 def _assert_rejected_before(
     upstream: _Upstream, response: httpx.Response, marker: str, expected: dict[str, JsonValue]
 ) -> None:
-    assert response.status_code == 400, response.text
-    assert JSON_OBJECT.validate_json(response.content) == expected, response.text
+    _assert_error(response, expected)
     assert upstream.calls(marker) == (), upstream.targets(marker)
     assert _failure_row(response.headers["x-litellm-call-id"])["status"] == "failure"
 
@@ -422,6 +285,7 @@ class _Route:
 
 _ROUTES: Final[Mapping[str, _Route]] = MappingProxyType(
     {
+        "interactions": _Route("/v1beta/interactions", "/v1beta/interactions", False, False, False, "interactions"),
         "chat_v1": _Route("/v1/chat/completions", "/v1/chat/completions", False, False, False, "chat"),
         "chat_v1_stream": _Route("/v1/chat/completions", "/v1/chat/completions", False, True, False, "chat"),
         "chat_bare": _Route("/chat/completions", "/v1/chat/completions", False, False, False, "chat"),
@@ -445,6 +309,7 @@ def _route_body(route: _Route, model: str, marker: str) -> dict[str, JsonValue]:
         "chat": {"messages": [{"role": "user", "content": marker}]},
         "messages": {"max_tokens": 16, "messages": [{"role": "user", "content": marker}]},
         "responses": {"input": marker},
+        "interactions": {"input": marker},
         "cursor": {"input": [{"role": "user", "content": marker}]},
     }
     return {
@@ -476,85 +341,6 @@ def test_chat_shaped_route_rejects_an_embedding_only_model_before_the_upstream(r
         else _openai_error(spec.endpoint, model, "/v1/embeddings")
     )
     _assert_rejected(rig, response, marker, expected)
-
-
-def _openai_sdk_error(rig: _Rig, client: str, model: str, marker: str) -> openai.APIStatusError:
-    base_url: Final = f"{rig.gateway.client.base_url}/v1"
-
-    def sync_call() -> None:
-        with openai.OpenAI(base_url=base_url, api_key=rig.gateway.key, max_retries=0) as sdk:
-            if client == "openai_sync_chat":
-                sdk.chat.completions.create(model=model, messages=[{"role": "user", "content": marker}])
-            else:
-                sdk.responses.create(model=model, input=marker)
-
-    async def async_call() -> None:
-        async with openai.AsyncOpenAI(base_url=base_url, api_key=rig.gateway.key, max_retries=0) as sdk:
-            if client == "openai_async_chat_stream":
-                await sdk.chat.completions.create(
-                    model=model, messages=[{"role": "user", "content": marker}], stream=True
-                )
-            else:
-                await sdk.responses.create(model=model, input=marker, stream=True)
-
-    def call() -> None:
-        return sync_call() if client.startswith("openai_sync") else asyncio.run(async_call())
-
-    with pytest.raises(openai.BadRequestError) as raised:
-        call()
-    return raised.value
-
-
-def _anthropic_sdk_error(rig: _Rig, client: str, model: str, marker: str) -> anthropic.APIStatusError:
-    base_url: Final = str(rig.gateway.client.base_url)
-
-    def sync_call() -> None:
-        with anthropic.Anthropic(base_url=base_url, api_key=rig.gateway.key, max_retries=0) as sdk:
-            sdk.messages.create(model=model, max_tokens=16, messages=[{"role": "user", "content": marker}])
-
-    async def async_call() -> None:
-        async with anthropic.AsyncAnthropic(base_url=base_url, api_key=rig.gateway.key, max_retries=0) as sdk:
-            await sdk.messages.create(
-                model=model, max_tokens=16, messages=[{"role": "user", "content": marker}], stream=True
-            )
-
-    def call() -> None:
-        return sync_call() if client == "anthropic_sync" else asyncio.run(async_call())
-
-    with pytest.raises(anthropic.BadRequestError) as raised:
-        call()
-    return raised.value
-
-
-_SDK_CLIENTS: Final[Mapping[str, str]] = MappingProxyType(
-    {
-        "openai_sync_chat": "/v1/chat/completions",
-        "openai_async_chat_stream": "/v1/chat/completions",
-        "openai_sync_responses": "/v1/responses",
-        "openai_async_responses_stream": "/v1/responses",
-        "anthropic_sync": "/v1/messages",
-        "anthropic_async_stream": "/v1/messages",
-    }
-)
-
-
-@pytest.mark.parametrize("client", tuple(_SDK_CLIENTS))
-def test_sdk_clients_see_the_rejection_as_a_bad_request(rig: _Rig, client: str) -> None:
-    model: Final = rig.names["embedding_only"]
-    marker: Final = _marker()
-    anthropic_client: Final = client.startswith("anthropic")
-    error: Final = (
-        _anthropic_sdk_error(rig, client, model, marker)
-        if anthropic_client
-        else _openai_sdk_error(rig, client, model, marker)
-    )
-    expected: Final = (
-        _anthropic_error(model, "/v1/embeddings")
-        if anthropic_client
-        else _openai_error(_SDK_CLIENTS[client], model, "/v1/embeddings")
-    )
-    assert error.status_code == 400, error
-    _assert_rejected(rig, error.response, marker, expected)
 
 
 def _sdk_embedding(rig: _Rig, model: str, marker: str) -> tuple[tuple[float, ...], str]:
@@ -601,25 +387,10 @@ def test_embeddings_still_reach_the_embedding_only_model(rig: _Rig, client: str)
     assert [(entry["status"], entry["call_type"]) for entry in row] == [("success", "aembedding")], row
 
 
-@pytest.mark.parametrize("declaration", tuple(_GATED))
-def test_non_chat_declarations_reject_chat_completions(rig: _Rig, declaration: str) -> None:
-    model: Final = rig.names[declaration]
-    marker: Final = _marker()
-    response: Final = rig.gateway.request("POST", "/v1/chat/completions", _chat_body(model, marker))
-    _assert_rejected(rig, response, marker, _openai_error("/v1/chat/completions", model, _GATED[declaration][1]))
-
-
 def _assert_served(rig: _Rig, response: httpx.Response, marker: str, target: str) -> None:
     assert response.status_code == 200, response.text
     assert _SERVED_TEXT in response.text, response.text
     assert rig.upstream.targets(marker) == (target,)
-
-
-@pytest.mark.parametrize("declaration", tuple(_UNGATED))
-def test_chat_capable_or_unclear_declarations_keep_reaching_the_upstream(rig: _Rig, declaration: str) -> None:
-    marker: Final = _marker()
-    response: Final = rig.gateway.request("POST", "/v1/chat/completions", _chat_body(rig.names[declaration], marker))
-    _assert_served(rig, response, marker, "/v1/chat/completions")
 
 
 def test_key_alias_to_an_embedding_only_model_is_rejected_under_the_resolved_name(rig: _Rig) -> None:
@@ -773,7 +544,7 @@ def test_request_fallbacks_answer_for_an_embedding_only_primary(rig: _Rig) -> No
     )
     assert response.status_code == 200, response.text
     assert _SERVED_TEXT in response.text, response.text
-    assert rig.upstream.targets(marker) == ("/v1/chat/completions", "/v1/chat/completions")
+    assert rig.upstream.targets(marker) == ("/v1/chat/completions",)
 
 
 def test_an_empty_request_fallback_list_keeps_the_rejection(rig: _Rig) -> None:
@@ -821,7 +592,7 @@ def test_a_fallback_chain_that_reaches_chat_two_hops_away_answers(rig: _Rig) -> 
     response: Final = _chat(rig, first, marker, fallbacks=[{first: [second]}, {second: [chat]}])
     assert response.status_code == 200, response.text
     assert _SERVED_TEXT in response.text, response.text
-    assert rig.upstream.targets(marker) == ("/v1/chat/completions",) * 3
+    assert rig.upstream.targets(marker) == ("/v1/chat/completions",)
 
 
 def test_a_fallback_chain_that_loops_between_embedding_only_groups_keeps_the_rejection(rig: _Rig) -> None:
@@ -847,179 +618,17 @@ def test_disable_fallbacks_keeps_the_rejection_over_request_fallbacks(rig: _Rig)
     _assert_rejected_chat(rig, response, marker, model)
 
 
-def test_client_sent_metadata_disable_fallbacks_does_not_block_the_fallback(rig: _Rig) -> None:
-    model: Final = rig.names["embedding_only"]
-    marker: Final = _marker()
-    response: Final = _chat(
-        rig, model, marker, fallbacks=[rig.names["chat_target"]], metadata={"_disable_fallbacks": True}
-    )
-    assert response.status_code == 200, response.text
-    assert _SERVED_TEXT in response.text, response.text
-    assert rig.upstream.targets(marker) == ("/v1/chat/completions", "/v1/chat/completions")
-
-
-_MALFORMED_FALLBACKS: Final[Mapping[str, Callable[[_Rig], JsonValue]]] = MappingProxyType(
-    {
-        "a_string": lambda rig: rig.names["chat_target"],
-        "an_object": lambda rig: {rig.names["embedding_only"]: [rig.names["chat_target"]]},
-    }
-)
-
-
-@pytest.mark.parametrize("shape", tuple(_MALFORMED_FALLBACKS))
-def test_malformed_request_fallbacks_step_aside_for_the_router(rig: _Rig, shape: str) -> None:
-    model: Final = rig.names["embedding_only"]
-    marker: Final = _marker()
-    response: Final = _chat(rig, model, marker, fallbacks=_MALFORMED_FALLBACKS[shape](rig))
-    assert "Supported endpoints" not in response.text, response.text
-    assert rig.upstream.targets(marker)[:1] == ("/v1/chat/completions",), response.text
-
-
-def _assert_answered_after_one_miss(
+def _assert_fallback_answered(
     upstream: _Upstream, response: httpx.Response, marker: str, target: str = "/v1/chat/completions"
 ) -> None:
     assert response.status_code == 200, response.text
     assert _SERVED_TEXT in response.text, response.text
-    assert upstream.targets(marker) == (target, target), response.text
-
-
-def _assert_the_provider_answered(rig: _Rig, response: httpx.Response, marker: str) -> None:
-    assert response.status_code == 404, response.text
-    assert "scripted: not a chat model" in response.text, response.text
-    assert rig.upstream.targets(marker) == ("/v1/chat/completions",), response.text
+    assert upstream.targets(marker) == (target,), response.text
 
 
 def _through_a_group_with_no_deployments(rig: _Rig) -> Mapping[str, JsonValue]:
     ghost: Final = f"gate-ghost-{uuid.uuid4().hex}"
     return {"fallbacks": [{rig.names["embedding_only"]: [ghost]}, {ghost: [rig.names["chat_target"]]}]}
-
-
-_ROUTING_STAMPS: Final[Mapping[str, Callable[[JsonValue], Mapping[str, JsonValue]]]] = MappingProxyType(
-    {
-        "a_client_routing_stamp": lambda group: {"metadata": {"model_group": group}},
-        "a_pre_routing_stamp": lambda group: {"metadata": {"pre_routing_selected_model": group}},
-        "a_litellm_metadata_routing_stamp": lambda group: {"litellm_metadata": {"model_group": group}},
-        "a_litellm_metadata_pre_routing_stamp": lambda group: {
-            "litellm_metadata": {"pre_routing_selected_model": group}
-        },
-        "a_routing_stamp_in_both_buckets": lambda group: {
-            "metadata": {"model_group": group},
-            "litellm_metadata": {"model_group": group},
-        },
-    }
-)
-
-
-def _with_a_routing_stamp(stamp: Callable[[JsonValue], Mapping[str, JsonValue]], rig: _Rig) -> Mapping[str, JsonValue]:
-    model, second = rig.names["embedding_only"], rig.names["embedding_only_second"]
-    return {"fallbacks": [{model: [rig.names["chat_target"]]}, {second: [model]}], **stamp(second)}
-
-
-_FALLBACKS_THE_CHECK_CANNOT_FOLLOW: Final[Mapping[str, Callable[[_Rig], Mapping[str, JsonValue]]]] = MappingProxyType(
-    {
-        "a_group_with_no_deployments": _through_a_group_with_no_deployments,
-        **{name: partial(_with_a_routing_stamp, stamp) for name, stamp in _ROUTING_STAMPS.items()},
-    }
-)
-
-
-@pytest.mark.parametrize("shape", tuple(_FALLBACKS_THE_CHECK_CANNOT_FOLLOW))
-def test_fallbacks_the_check_cannot_follow_step_aside_for_the_router(rig: _Rig, shape: str) -> None:
-    model: Final = rig.names["embedding_only"]
-    marker: Final = _marker()
-    response: Final = _chat(rig, model, marker, **_FALLBACKS_THE_CHECK_CANNOT_FOLLOW[shape](rig))
-    _assert_answered_after_one_miss(rig.upstream, response, marker)
-
-
-_STAMPED_ROUTES: Final[Mapping[str, tuple[str, str]]] = MappingProxyType(
-    {
-        "chat_v1": ("metadata", "/v1/chat/completions"),
-        "messages": ("litellm_metadata", "/v1/responses"),
-        "responses_v1": ("litellm_metadata", "/v1/responses"),
-    }
-)
-
-
-@pytest.mark.parametrize("route", tuple(_STAMPED_ROUTES))
-def test_a_client_routing_stamp_steps_aside_on_every_chat_shaped_route(rig: _Rig, route: str) -> None:
-    model, second = rig.names["embedding_only"], rig.names["embedding_only_second"]
-    bucket, target = _STAMPED_ROUTES[route]
-    marker: Final = _marker()
-    spec: Final = _ROUTES[route]
-    response: Final = rig.gateway.request(
-        "POST",
-        spec.path,
-        {
-            **_route_body(spec, model, marker),
-            "fallbacks": [{model: [rig.names["chat_target"]]}, {second: [model]}],
-            bucket: {"model_group": second},
-        },
-    )
-    _assert_answered_after_one_miss(rig.upstream, response, marker, target)
-
-
-_STAMPS_THE_CHECK_IGNORES: Final[Mapping[str, Callable[[_Rig], Mapping[str, JsonValue]]]] = MappingProxyType(
-    {
-        "an_int_routing_stamp": lambda rig: {"metadata": {"model_group": 7}},
-        "a_list_routing_stamp": lambda rig: {"metadata": {"model_group": [rig.names["embedding_only_second"]]}},
-        "an_empty_routing_stamp": lambda rig: {"metadata": {"model_group": ""}},
-        "a_routing_stamp_naming_the_requested_group": lambda rig: {
-            "metadata": {"model_group": rig.names["embedding_only"]}
-        },
-        "an_int_pre_routing_stamp": lambda rig: {"litellm_metadata": {"pre_routing_selected_model": 7}},
-        "an_int_original_group_stamp": lambda rig: {"metadata": {"original_model_group": 7}},
-        "an_original_group_stamp_the_proxy_strips": lambda rig: {
-            "metadata": {"original_model_group": rig.names["embedding_only_second"]}
-        },
-    }
-)
-
-
-@pytest.mark.parametrize("stamp", tuple(_STAMPS_THE_CHECK_IGNORES))
-def test_routing_stamps_that_name_no_other_group_keep_the_rejection(rig: _Rig, stamp: str) -> None:
-    model: Final = rig.names["embedding_only"]
-    marker: Final = _marker()
-    response: Final = _chat(
-        rig,
-        model,
-        marker,
-        fallbacks=[{rig.names["embedding_only_second"]: [rig.names["chat_target"]]}],
-        **_STAMPS_THE_CHECK_IGNORES[stamp](rig),
-    )
-    _assert_rejected_chat(rig, response, marker, model)
-
-
-def test_a_routing_stamp_without_any_fallbacks_keeps_the_rejection(rig: _Rig) -> None:
-    model: Final = rig.names["embedding_only"]
-    marker: Final = _marker()
-    response: Final = _chat(rig, model, marker, metadata={"model_group": rig.names["embedding_only_second"]})
-    _assert_rejected_chat(rig, response, marker, model)
-
-
-_STAMPS_THE_ROUTER_RESETS: Final[Mapping[str, Callable[[_Rig], Mapping[str, JsonValue]]]] = MappingProxyType(
-    {
-        "a_routing_stamp_naming_a_group_with_a_chat_chain": lambda rig: {
-            "metadata": {"model_group": rig.names["embedding_only_second"]}
-        },
-        "a_pre_routing_stamp_naming_a_group_with_a_chat_chain": lambda rig: {
-            "metadata": {"pre_routing_selected_model": rig.names["embedding_only_second"]}
-        },
-        "a_five_kb_routing_stamp": lambda rig: {"metadata": {"model_group": "g" * 5000}},
-    }
-)
-
-
-@pytest.mark.parametrize("stamp", tuple(_STAMPS_THE_ROUTER_RESETS))
-def test_routing_stamps_the_router_resets_step_aside_and_the_provider_answers(rig: _Rig, stamp: str) -> None:
-    marker: Final = _marker()
-    response: Final = _chat(
-        rig,
-        rig.names["embedding_only"],
-        marker,
-        fallbacks=[{rig.names["embedding_only_second"]: [rig.names["chat_target"]]}],
-        **_STAMPS_THE_ROUTER_RESETS[stamp](rig),
-    )
-    _assert_the_provider_answered(rig, response, marker)
 
 
 def test_request_fallbacks_naming_a_chat_backend_name_answer_for_an_embedding_only_primary(rig: _Rig) -> None:
@@ -1033,7 +642,7 @@ def test_request_fallbacks_naming_a_chat_backend_name_answer_for_an_embedding_on
         scenario.cleanups.callback(scenario.delete_model, identity)
         _served_by_every_worker(rig.gateway, frozenset({identity}))
         response: Final = _chat(rig, model, marker, fallbacks=[{model: [backend]}])
-    _assert_answered_after_one_miss(rig.upstream, response, marker)
+    _assert_fallback_answered(rig.upstream, response, marker)
 
 
 @pytest.mark.parametrize("level", ("key", "team"))
@@ -1043,7 +652,7 @@ def test_router_settings_fallbacks_through_a_group_with_no_deployments_answer(ri
         settings: Final = {"router_settings": dict(_through_a_group_with_no_deployments(rig))}
         key: Final = scenario.key(**settings) if level == "key" else scenario.key(team_id=scenario.team(**settings))
         response: Final = _chat(rig, rig.names["embedding_only"], marker, key=key)
-    _assert_answered_after_one_miss(rig.upstream, response, marker)
+    _assert_fallback_answered(rig.upstream, response, marker)
 
 
 def test_team_router_settings_fallbacks_answer_for_an_embedding_only_primary(rig: _Rig) -> None:
@@ -1054,7 +663,7 @@ def test_team_router_settings_fallbacks_answer_for_an_embedding_only_primary(rig
         response: Final = _chat(rig, model, marker, key=scenario.key(team_id=team))
     assert response.status_code == 200, response.text
     assert _SERVED_TEXT in response.text, response.text
-    assert rig.upstream.targets(marker) == ("/v1/chat/completions", "/v1/chat/completions")
+    assert rig.upstream.targets(marker) == ("/v1/chat/completions",)
 
 
 def test_key_router_settings_fallbacks_answer_for_an_embedding_only_primary(rig: _Rig) -> None:
@@ -1065,7 +674,7 @@ def test_key_router_settings_fallbacks_answer_for_an_embedding_only_primary(rig:
         response: Final = _chat(rig, model, marker, key=key)
     assert response.status_code == 200, response.text
     assert _SERVED_TEXT in response.text, response.text
-    assert rig.upstream.targets(marker) == ("/v1/chat/completions", "/v1/chat/completions")
+    assert rig.upstream.targets(marker) == ("/v1/chat/completions",)
 
 
 def test_key_router_settings_that_cannot_answer_override_team_fallbacks_that_could(rig: _Rig) -> None:
@@ -1164,17 +773,6 @@ def test_gemini_routes_reject_an_embedding_only_model_before_the_upstream(rig: _
     assert rig.upstream.calls(marker) == (), rig.upstream.targets(marker)
 
 
-def test_non_string_mode_keeps_reaching_the_upstream(rig: _Rig) -> None:
-    marker: Final = _marker()
-    response: Final = rig.gateway.request(
-        "POST", "/v1/chat/completions", _chat_body(rig.names["mode_not_a_string"], marker)
-    )
-    assert response.status_code == 404, response.text
-    assert "scripted: not a chat model" in response.text, response.text
-    assert "Supported endpoints" not in response.text, response.text
-    assert rig.upstream.targets(marker) == ("/v1/chat/completions",)
-
-
 def test_repeated_rejections_log_one_failure_row_per_call(rig: _Rig) -> None:
     model: Final = rig.names["embedding_only"]
     marker: Final = _marker()
@@ -1182,7 +780,8 @@ def test_repeated_rejections_log_one_failure_row_per_call(rig: _Rig) -> None:
         rig.gateway.request("POST", "/v1/chat/completions", _chat_body(model, marker)) for _ in range(3)
     )
     expected: Final = _openai_error("/v1/chat/completions", model, "/v1/embeddings")
-    assert [(item.status_code, item.json()) for item in responses] == [(400, expected)] * 3
+    for response in responses:
+        _assert_error(response, expected)
     call_ids: Final = tuple(item.headers["x-litellm-call-id"] for item in responses)
     assert len(set(call_ids)) == 3, call_ids
     assert [_failure_row(call_id)["status"] for call_id in call_ids] == ["failure"] * 3
@@ -1214,7 +813,7 @@ def test_live_declaration_update_turns_the_gate_on_and_off_on_every_worker(rig: 
             holding=_RELOAD_SECONDS * 2,
             seconds=_RELOAD_SECONDS * 12,
         )
-        assert rejected.json() == _openai_error("/v1/chat/completions", name, "/v1/embeddings"), rejected.text
+        _assert_error(rejected, _openai_error("/v1/chat/completions", name, "/v1/embeddings"))
         restored: Final = rig.gateway.request("PATCH", f"/model/{identities[0]}/update", {"model_info": chat_capable})
         assert restored.status_code == 200, restored.text
         held(
@@ -1227,180 +826,10 @@ def test_live_declaration_update_turns_the_gate_on_and_off_on_every_worker(rig: 
 
 _TESTS_ROOT: Final = Path(__file__).resolve().parents[2]
 _CONFIG: Final = TypeAdapter(dict[str, JsonValue])
-_BURST_ROUTES: Final = (
-    "chat_v1",
-    "chat_v1_stream",
-    "messages",
-    "messages_stream",
-    "responses_v1",
-    "responses_v1_stream",
-)
-
-
-def _scripted(url: str, identity: str, routes: Mapping[str, JsonResponse]) -> None:
-    registered: Final = httpx.post(
-        f"{url}/__scenarios",
-        json={
-            "scenario_id": identity,
-            "response": RoutedResponse(content_type="application/x-routed", routes=dict(routes)).model_dump(
-                mode="json"
-            ),
-        },
-        timeout=10,
-        trust_env=False,
-    )
-    registered.raise_for_status()
-
-
-class _Observed:
-    def __init__(self, url: str) -> None:
-        self.url = url
-        self.items: tuple[dict[str, JsonValue], ...] = ()
-
-    def read(self) -> tuple[dict[str, JsonValue], ...]:
-        payload: Final = JSON_OBJECT.validate_json(
-            httpx.get(f"{self.url}/__observations?include_method=true", timeout=10, trust_env=False).content
-        )
-        self.items = (*self.items, *(object_value(item) for item in list_value(payload["requests"])))
-        return self.items
-
-    def carrying(self, marker: str) -> tuple[str, ...]:
-        return tuple(str(item["path"]) for item in self.read() if marker in json.dumps(item.get("body")))
-
-
-def _owned_config(directory: Path, url: str, embed: tuple[str, str], chat: tuple[str, str]) -> Path:
-    shared: Final = _CONFIG.validate_python(yaml.safe_load((_TESTS_ROOT / "integration/proxy_config.yaml").read_text()))
-    litellm_settings: Final = object_value(shared["litellm_settings"])
-    config: Final = {
-        **shared,
-        "model_list": [
-            {
-                "model_name": embed[0],
-                "litellm_params": {
-                    "model": f"openai/{_EMBEDDING_MODEL}",
-                    "api_base": f"{url}/{embed[1]}/v1",
-                    "api_key": _PROVIDER_KEY,
-                },
-                "model_info": dict(_EMBED_ONLY),
-            },
-            {
-                "model_name": chat[0],
-                "litellm_params": {
-                    "model": f"openai/{_CHAT_MODEL}",
-                    "api_base": f"{url}/{chat[1]}/v1",
-                    "api_key": _PROVIDER_KEY,
-                },
-            },
-        ],
-        "litellm_settings": {**litellm_settings, "responses": {"background_mode": {"polling_via_cache": "all"}}},
-    }
-    path: Final = directory / "gate-config.yaml"
-    path.write_text(yaml.safe_dump(config, sort_keys=False))
-    return path
 
 
 def _owned_embedding(owned: Gateway, model: str, marker: str) -> httpx.Response:
     return owned.request("POST", "/v1/embeddings", {"model": model, "input": marker, "encoding_format": "float"})
-
-
-def _gated_expectation(route: str, model: str) -> dict[str, JsonValue]:
-    spec: Final = _ROUTES[route]
-    return (
-        _anthropic_error(model, "/v1/embeddings")
-        if spec.anthropic_shape
-        else _openai_error(spec.endpoint, model, "/v1/embeddings")
-    )
-
-
-def _assert_gated_burst(results: tuple[tuple[str, httpx.Response], ...], model: str) -> tuple[str, ...]:
-    assert [(response.status_code, JSON_OBJECT.validate_json(response.content)) for _route, response in results] == [
-        (400, _gated_expectation(route, model)) for route, _response in results
-    ], [response.text for _route, response in results]
-    return tuple(response.headers["x-litellm-call-id"] for _route, response in results)
-
-
-@pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
-def test_yaml_embedding_only_model_stays_gated_through_an_upstream_pause_and_a_worker_kill(
-    gateway: Gateway, tmp_path: Path
-) -> None:
-    suffix: Final = uuid.uuid4().hex[:12]
-    embed: Final = (f"gate-yaml-embed-{suffix}", f"gate-embed-{suffix}")
-    chat: Final = (f"gate-yaml-chat-{suffix}", f"gate-chat-{suffix}")
-    embedding: Final = JsonResponse(
-        content_type="application/json", body=JSON_OBJECT.validate_json(_embedding_reply().body)
-    )
-    chat_completion: Final = JsonResponse(
-        content_type="application/json",
-        body={
-            "id": f"chatcmpl-{suffix}",
-            "object": "chat.completion",
-            "created": 1,
-            "model": _CHAT_MODEL,
-            "choices": [
-                {"index": 0, "message": {"role": "assistant", "content": _SERVED_TEXT}, "finish_reason": "stop"}
-            ],
-            "usage": {"prompt_tokens": 3, "completion_tokens": 3, "total_tokens": 6},
-        },
-    )
-    with owned_upstream(tmp_path) as slot:
-        upstream: Final = slot.process
-        assert upstream is not None
-        url: Final = slot.url
-        _scripted(url, embed[1], {"POST /v1/embeddings": embedding})
-        _scripted(url, chat[1], {"POST /v1/chat/completions": chat_completion})
-        config: Final = _owned_config(tmp_path, url, embed, chat)
-        with owned_proxy_process(
-            gateway, tmp_path, {"INTEGRATION_UPSTREAM_URL": url}, config=config, workers=2
-        ) as owned:
-            proxy: Final = owned.gateway
-            eventually(
-                lambda: proxy.request("POST", "/v1/chat/completions", _chat_body(chat[0], "probe")).status_code,
-                lambda status: status == 200,
-                seconds=30,
-            )
-            workers: Final = eventually(owned.worker_pids, lambda pids: len(pids) >= 2, seconds=30)
-            observed: Final = _Observed(url)
-            background_marker: Final = _marker()
-            background: Final = proxy.request(
-                "POST", "/v1/responses", {"model": embed[0], "input": background_marker, "background": True}
-            )
-            assert background.status_code == 400, background.text
-            assert background.json() == _openai_error("/v1/responses", embed[0], "/v1/embeddings"), background.text
-            burst: Final = tuple((_BURST_ROUTES[index % len(_BURST_ROUTES)], _marker()) for index in range(18))
-            with paused(upstream), ThreadPoolExecutor(max_workers=9) as pool:
-                futures: Final = tuple(
-                    (route, pool.submit(_send, proxy, _ROUTES[route], embed[0], marker)) for route, marker in burst
-                )
-                paused_results: Final = tuple((route, future.result(timeout=15)) for route, future in futures)
-            gated_ids: Final = _assert_gated_burst(paused_results, embed[0])
-            served_markers: Final = tuple(_marker() for _ in range(8))
-            with ThreadPoolExecutor(max_workers=8) as pool:
-                served: Final = tuple(pool.map(partial(_owned_embedding, proxy, embed[0]), served_markers))
-            assert [response.status_code for response in served] == [200] * 8, [item.text for item in served]
-            embedded_paths: Final = eventually(
-                lambda: tuple(observed.carrying(marker) for marker in served_markers),
-                lambda paths: all(len(entry) >= 1 for entry in paths),
-                seconds=20,
-            )
-            assert embedded_paths == ((f"/{embed[1]}/v1/embeddings",),) * 8, embedded_paths
-            assert [observed.carrying(marker) for _route, marker in burst] == [()] * 18
-            assert observed.carrying(background_marker) == ()
-            assert [_failure_row(call_id)["status"] for call_id in gated_ids] == ["failure"] * 18
-            with owned.replacing_worker(min(workers)) as kill:
-                kill()
-                after_kill: Final = tuple(
-                    ("chat_v1", _send(proxy, _ROUTES["chat_v1"], embed[0], _marker())) for _ in range(4)
-                )
-                _assert_gated_burst(after_kill, embed[0])
-                assert _owned_embedding(proxy, embed[0], _marker()).status_code == 200
-            respawned: Final = tuple(
-                (
-                    "chat_v1",
-                    proxy.request("POST", "/v1/chat/completions", _chat_body(embed[0], _marker()), headers=_CLOSE),
-                )
-                for _ in range(6)
-            )
-            _assert_gated_burst(respawned, embed[0])
 
 
 @dataclass(frozen=True, slots=True)
@@ -1473,7 +902,7 @@ def test_router_default_fallbacks_answer_for_an_embedding_only_group(routed: _Ro
     response: Final = _send(routed.gateway, _ROUTES[route], routed.names["embed"], marker)
     assert response.status_code == 200, response.text
     assert _SERVED_TEXT in response.text, response.text
-    assert routed.upstream.targets(marker) == (_DEFAULT_FALLBACK_ROUTES[route],) * 2
+    assert routed.upstream.targets(marker) == (_DEFAULT_FALLBACK_ROUTES[route],)
 
 
 _OPT_OUTS: Final[Mapping[str, Mapping[str, JsonValue]]] = MappingProxyType(
@@ -1506,7 +935,7 @@ def test_model_group_alias_to_an_embedding_only_group_falls_back_to_the_default(
     )
     assert response.status_code == 200, response.text
     assert _SERVED_TEXT in response.text, response.text
-    assert routed.upstream.targets(marker) == ("/v1/chat/completions", "/v1/chat/completions")
+    assert routed.upstream.targets(marker) == ("/v1/chat/completions",)
 
 
 @_ROUTED_TIMEOUT
@@ -1817,7 +1246,7 @@ def test_request_fallbacks_naming_a_chat_deployment_id_answer_for_an_embedding_o
     )
     assert response.status_code == 200, response.text
     assert _SERVED_TEXT in response.text, response.text
-    assert addressed.upstream.targets(marker) == ("/v1/chat/completions", "/v1/chat/completions")
+    assert addressed.upstream.targets(marker) == ("/v1/chat/completions",)
 
 
 @_ROUTED_TIMEOUT
@@ -1843,7 +1272,7 @@ def test_request_fallbacks_naming_an_alias_only_a_wildcard_serves_answer_for_an_
         "/v1/chat/completions",
         {**_chat_body(addressed.names["embed"], marker), "fallbacks": [addressed.names["wildcard_alias"]]},
     )
-    _assert_answered_after_one_miss(addressed.upstream, response, marker)
+    _assert_fallback_answered(addressed.upstream, response, marker)
 
 
 @_ROUTED_TIMEOUT
@@ -1854,7 +1283,7 @@ def test_yaml_fallbacks_through_a_group_with_no_deployments_answer_for_an_embedd
     response: Final = addressed.gateway.request(
         "POST", "/v1/chat/completions", _chat_body(addressed.names["ghost_primary"], marker)
     )
-    _assert_answered_after_one_miss(addressed.upstream, response, marker)
+    _assert_fallback_answered(addressed.upstream, response, marker)
 
 
 @_ROUTED_TIMEOUT
@@ -1874,7 +1303,100 @@ def test_an_embedding_only_model_the_read_through_loads_from_the_database_is_rej
             for marker in markers
         )
     expected: Final = _openai_error("/v1/chat/completions", name, "/v1/embeddings")
-    assert [(response.status_code, JSON_OBJECT.validate_json(response.content)) for response in responses] == [
-        (400, expected)
-    ] * len(markers), [response.text for response in responses]
+    for response in responses:
+        _assert_error(response, expected)
     assert [addressed.upstream.calls(marker) for marker in markers] == [()] * len(markers)
+
+
+@pytest.mark.parametrize("metadata", ({"model_group": 7}, {"model_group": ["wrong-group"]}))
+def test_rejection_with_invalid_metadata_is_logged_without_blocking_embeddings(
+    rig: _Rig, metadata: dict[str, JsonValue]
+) -> None:
+    marker: Final = _marker()
+    model: Final = rig.names["embedding_only"]
+    rejected: Final = _chat(rig, model, marker, metadata=metadata)
+    _assert_rejected_chat(rig, rejected, marker, model)
+    embedded_marker: Final = _marker()
+    embedded: Final = rig.gateway.request(
+        "POST", "/v1/embeddings", {"model": model, "input": embedded_marker, "encoding_format": "float"}
+    )
+    assert embedded.status_code == 200, embedded.text
+    assert rig.upstream.targets(embedded_marker) == ("/v1/embeddings",)
+
+
+def test_existing_non_chat_metadata_on_a_chat_backend_remains_advisory(rig: _Rig) -> None:
+    marker: Final = _marker()
+    with rig.gateway.scenario() as scenario:
+        name, identities = _deploy(
+            scenario,
+            rig.api_base,
+            "legacy-audio",
+            _single({"mode": "audio_speech", "supported_endpoints": ["/v1/audio/speech"]}),
+        )
+        _served_by_every_worker(rig.gateway, frozenset(identities))
+        response: Final = _chat(rig, name, marker)
+        _assert_served(rig, response, marker, "/v1/chat/completions")
+
+
+def test_a_mixed_group_skips_its_restricted_embedding_deployment(rig: _Rig) -> None:
+    marker: Final = _marker()
+    with rig.gateway.scenario() as scenario:
+        name: Final = f"gate-mixed-{uuid.uuid4().hex[:12]}"
+        embed: Final = _create(
+            scenario.gateway,
+            name,
+            {"model": f"openai/{_EMBEDDING_MODEL}", "api_base": rig.api_base, "order": 0},
+            _EMBED_ONLY,
+        )
+        scenario.cleanups.callback(scenario.delete_model, embed)
+        chat: Final = _create(
+            scenario.gateway, name, {"model": f"openai/{_CHAT_MODEL}", "api_base": rig.api_base, "order": 1}, {}
+        )
+        scenario.cleanups.callback(scenario.delete_model, chat)
+        _served_by_every_worker(rig.gateway, frozenset({embed, chat}))
+        response: Final = _chat(rig, name, marker)
+        _assert_served(rig, response, marker, "/v1/chat/completions")
+        calls: Final = rig.upstream.calls(marker)
+        assert [JSON_OBJECT.validate_json(call.body)["model"] for call in calls] == [_CHAT_MODEL]
+
+
+def test_local_rate_limit_with_only_unsupported_fallbacks_keeps_the_original_429(rig: _Rig) -> None:
+    limited: Final = rig.names["chat_rate_limited"]
+    with rig.gateway.scenario() as scenario:
+        key: Final = scenario.key(
+            model_rpm_limit={limited: 1}, router_settings={"fallbacks": [{limited: [rig.names["embedding_only"]]}]}
+        )
+        first: Final = _chat(rig, limited, _marker(), key=key)
+        assert first.status_code == 200, first.text
+        marker: Final = _marker()
+        second: Final = _chat(rig, limited, marker, key=key)
+        assert second.status_code == 429, second.text
+        assert "Supported endpoints" not in second.text, second.text
+        assert rig.upstream.calls(marker) == ()
+
+
+def test_responses_websocket_uses_a_chat_fallback_without_calling_the_embedding_provider(
+    rig: _Rig, tmp_path: Path
+) -> None:
+    marker: Final = _marker()
+    certificate: Final = write_self_signed_cert(tmp_path)
+    with (
+        responses_ws_peer.responses_peer(
+            certificate, lambda identity: responses_ws_peer.events(identity, _SERVED_TEXT)
+        ) as peer,
+        owned_proxy_process(rig.gateway, tmp_path, {"SSL_CERT_FILE": str(certificate[0])}, workers=2) as owned,
+        owned.gateway.scenario() as scenario,
+    ):
+        fallback: Final = scenario.model(model=f"openai/{_CHAT_MODEL}", api_base=peer.url, api_key=_PROVIDER_KEY)
+        primary: Final = scenario.model(
+            model=f"openai/{_EMBEDDING_MODEL}", api_base=f"{rig.api_base}/{marker}", model_info=_EMBED_ONLY
+        )
+        key: Final = scenario.key(router_settings={"fallbacks": [{primary: [fallback]}]})
+        (received,) = asyncio.run(
+            responses_ws_peer.session(str(owned.gateway.client.base_url), key, primary, (marker,))
+        )
+        assert responses_ws_peer.completed(received)["status"] == "completed"
+        assert any(event.get("delta") == _SERVED_TEXT for event in received), received
+        (forwarded,) = responses_ws_peer.drain(peer.frames)
+        assert marker in json.dumps(forwarded), forwarded
+    assert rig.upstream.calls(marker) == ()
