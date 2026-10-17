@@ -137,7 +137,7 @@ class AnthropicResponsesStreamWrapper:
         self._stream_failed = False
         self._chunk_queue: deque[dict[str, object]] = deque()
         self._refusal_text: str = ""
-        self._reasoning_text_parts_seen: frozenset[tuple[str | None, int]] = frozenset()
+        self._reasoning_text_parts_seen: frozenset[tuple[str | None, bool, int]] = frozenset()
         self._sync_responses_iterator: Iterator[object] | None = None
 
     def _make_message_start(self) -> dict[str, object]:
@@ -303,6 +303,10 @@ class AnthropicResponsesStreamWrapper:
 
         if event_type == "response.reasoning_summary_part.added":
             part_item_id: Final = self._field(event, "item_id")
+            if any(
+                item_id == part_item_id and not is_summary for item_id, is_summary, _ in self._reasoning_text_parts_seen
+            ):
+                return
             summary_index: Final = self._field(event, "summary_index")
             part_block_idx: Final = (
                 self._item_id_to_block_index.get(part_item_id, -1) if isinstance(part_item_id, str) else -1
@@ -328,8 +332,14 @@ class AnthropicResponsesStreamWrapper:
         ):
             reasoning_item_id: Final = self._field(event, "item_id")
             reasoning_id: Final = reasoning_item_id if isinstance(reasoning_item_id, str) else None
-            content_index: Final = self._field(event, "content_index")
-            part_key: Final = (reasoning_id, content_index if isinstance(content_index, int) else 0)
+            is_summary: Final = event_type == "response.reasoning_summary_text.delta"
+            if any(
+                item_id == reasoning_id and summary != is_summary
+                for item_id, summary, _ in self._reasoning_text_parts_seen
+            ):
+                return
+            content_index: Final = self._field(event, "summary_index" if is_summary else "content_index")
+            part_key: Final = (reasoning_id, is_summary, content_index if isinstance(content_index, int) else 0)
             if event_type == "response.reasoning_text.done" and part_key in self._reasoning_text_parts_seen:
                 return
             reasoning_text: Final = self._field(
@@ -337,8 +347,13 @@ class AnthropicResponsesStreamWrapper:
             )
             if not isinstance(reasoning_text, str) or not reasoning_text:
                 return
-            if event_type != "response.reasoning_summary_text.delta":
-                self._reasoning_text_parts_seen = self._reasoning_text_parts_seen | frozenset((part_key,))
+            if (
+                not is_summary
+                and part_key not in self._reasoning_text_parts_seen
+                and any(item_id == reasoning_id for item_id, _, _ in self._reasoning_text_parts_seen)
+            ):
+                self._emit_thinking_text(reasoning_id, REASONING_SUMMARY_PART_SEPARATOR)
+            self._reasoning_text_parts_seen = self._reasoning_text_parts_seen | frozenset((part_key,))
             self._emit_thinking_text(reasoning_id, reasoning_text)
             return
 

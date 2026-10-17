@@ -31,8 +31,11 @@ from litellm.types.llms.openai import ResponseFailedEvent, ResponsesAPIResponse
 @pytest.mark.asyncio
 @pytest.mark.parametrize("delivery", ["delta", "done", "item"])
 @pytest.mark.parametrize("encrypted_content", [None, "opaque-reasoning"])
+@pytest.mark.parametrize("summary_order", ["absent", "first", "last"])
 async def test_reasoning_text_reaches_client_and_survives_replay(
-    delivery: Literal["delta", "done", "item"], encrypted_content: str | None
+    delivery: Literal["delta", "done", "item"],
+    encrypted_content: str | None,
+    summary_order: Literal["absent", "first", "last"],
 ) -> None:
     from litellm.llms.anthropic.pass_through.responses_adapters.transformation import (
         LiteLLMAnthropicToResponsesAPIAdapter,
@@ -42,13 +45,24 @@ async def test_reasoning_text_reaches_client_and_survives_replay(
     reasoning: Final = {
         "type": "reasoning",
         "id": "rs_text",
-        "summary": [],
-        "content": [{"type": "reasoning_text", "text": "Use a tool"}],
+        "summary": []
+        if summary_order == "absent"
+        else [{"type": "summary_text", "text": "Tool"}, {"type": "summary_text", "text": "needed"}],
+        "content": [
+            {"type": "reasoning_text", "text": "Use a tool"},
+            {"type": "reasoning_text", "text": "Then answer"},
+        ],
         **({"encrypted_content": encrypted_content} if encrypted_content is not None else {}),
     }
+    summary_events: Final = (
+        {"type": "response.reasoning_summary_text.delta", "item_id": "rs_text", "summary_index": 0, "delta": "Tool"},
+        {"type": "response.reasoning_summary_part.added", "item_id": "rs_text", "summary_index": 1},
+        {"type": "response.reasoning_summary_text.delta", "item_id": "rs_text", "summary_index": 1, "delta": "needed"},
+    )
     events: Final = (
         {"type": "response.created"},
         {"type": "response.output_item.added", "item": {"type": "reasoning", "id": "rs_text"}},
+        *(summary_events if summary_order == "first" and delivery != "item" else ()),
         *(
             (
                 {"type": "response.reasoning_text.delta", "item_id": "rs_text", "content_index": 0, "delta": "Use "},
@@ -58,10 +72,14 @@ async def test_reasoning_text_reaches_client_and_survives_replay(
             else ()
         ),
         *(
-            ({"type": "response.reasoning_text.done", "item_id": "rs_text", "content_index": 0, "text": "Use a tool"},)
+            (
+                {"type": "response.reasoning_text.done", "item_id": "rs_text", "content_index": 0, "text": "Use a tool"},
+                {"type": "response.reasoning_text.done", "item_id": "rs_text", "content_index": 1, "text": "Then answer"},
+            )
             if delivery != "item"
             else ()
         ),
+        *(summary_events if summary_order == "last" and delivery != "item" else ()),
         {"type": "response.output_item.done", "item": reasoning},
         {"type": "response.completed"},
     )
@@ -85,7 +103,9 @@ async def test_reasoning_text_reaches_client_and_survives_replay(
         ],
     )
 
-    assert thinking == "Use a tool"
+    assert thinking == (
+        "Tool\n\nneeded" if summary_order == "first" and delivery != "item" else "Use a tool\n\nThen answer"
+    )
     assert LiteLLMAnthropicToResponsesAPIAdapter().translate_messages_to_responses_input(request["messages"]) == [
         {key: value for key, value in reasoning.items() if key != "id"}
     ]
