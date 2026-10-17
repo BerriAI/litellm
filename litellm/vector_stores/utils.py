@@ -31,8 +31,12 @@ def is_litellm_written_metadata_key(key: str) -> bool:
     return key == "user_api_key" or key.startswith("user_api_key_") or key in LITELLM_WRITTEN_METADATA_KEYS
 
 
-def _callers_metadata(metadata: Mapping[str, object]) -> Mapping[str, object]:
-    return {key: value for key, value in metadata.items() if not is_litellm_written_metadata_key(key)}
+def _is_callers_key(key: object) -> bool:
+    return not isinstance(key, str) or not is_litellm_written_metadata_key(key)
+
+
+def _callers_metadata(metadata: Mapping[object, object]) -> Mapping[object, object]:
+    return {key: value for key, value in metadata.items() if _is_callers_key(key)}
 
 
 class VectorStoreRequestUtils:
@@ -82,7 +86,7 @@ class VectorStoreRequestUtils:
         if not isinstance(metadata, Mapping):
             return cast(VectorStoreCreateOptionalRequestParams, filtered_params)
         callers_metadata: Final = _callers_metadata(
-            cast(Mapping[str, object], metadata)  # cast-ok: request metadata is a JSON object
+            cast(Mapping[object, object], metadata)  # cast-ok: request metadata is a JSON object
         )
         return cast(  # cast-ok: same params as above with the caller's metadata only
             VectorStoreCreateOptionalRequestParams, {**filtered_params, "metadata": callers_metadata}

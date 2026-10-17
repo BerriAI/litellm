@@ -131,6 +131,14 @@ PROXY_STAMPED_METADATA: Final = {
     "deployment_model_name": "gpt-5",
     "api_base": "https://api.openai.com/v1",
     "agent_id": "agent-1",
+    "actor_agent_id": "agent-2",
+    "target_agent_id": "agent-3",
+    "billing_agent_id": "agent-4",
+    "agent_execution_mode": "autonomous",
+    "verified_human_user_id": "user-1",
+    "litellm_caller_session_id": "session-1",
+    "user_api_keyboard": "qwerty",
+    1: "a",
 }
 
 
@@ -162,4 +170,4 @@ async def test_vector_store_writes_send_only_the_callers_metadata_to_the_provide
     else:
         await aupdate(vector_store_id="vs_1", metadata=dict(PROXY_STAMPED_METADATA), api_key="sk-test", client=client)
 
-    assert sent_metadata == [{"team": "llmproxy"}]
+    assert sent_metadata == [{"team": "llmproxy", "user_api_keyboard": "qwerty", "1": "a"}]
