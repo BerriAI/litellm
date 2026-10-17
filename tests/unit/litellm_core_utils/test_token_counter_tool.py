@@ -31,9 +31,7 @@ def test_token_counter_tool_increases(messages):
         conversation.append(message)
         tokens = token_counter(model="gpt-3.5-turbo", messages=conversation, tools=TOOLS)  # type: ignore
         print(f"tokens: {tokens}")
-        assert (
-            tokens > prev_tokens
-        ), f"Token did not increase: {tokens} <= {prev_tokens}"
+        assert tokens > prev_tokens, f"Token did not increase: {tokens} <= {prev_tokens}"
         prev_tokens = tokens
 
 
@@ -76,3 +74,45 @@ def assertGrow(usermessage, tool_call, assertBiggerThanBoth=True):
             f"tokens_usermessage: {tokens_usermessage}, tokens_tool_call: {tokens_tool_call}, "
             + f"tokens_both: {tokens_both} diff: {tokens_usermessage + tokens_tool_call - tokens_both}"
         )
+
+
+def test_token_counter_tool_array_schema_without_items():
+    """Test that tool array schema without 'items' property does not crash token counting (#40344)."""
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "search_data",
+                "description": "Search for data",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "tags": {
+                            "type": "array",
+                            "description": "List of tags",
+                        },
+                    },
+                },
+            },
+        }
+    ]
+    messages = [{"role": "user", "content": "Hello"}]
+    tokens = token_counter(model="gpt-3.5-turbo", messages=messages, tools=tools)
+    assert tokens > 0
+
+
+def test_token_counter_tool_non_dict_property_schema():
+    """Test that malformed string-valued property schemas do not crash token counting (#40344)."""
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "f",
+                "description": "d",
+                "parameters": {"type": "object", "properties": {"s": "string"}},
+            },
+        }
+    ]
+    messages = [{"role": "user", "content": "Hello"}]
+    tokens = token_counter(model="gpt-3.5-turbo", messages=messages, tools=tools)
+    assert tokens > 0
