@@ -78,6 +78,14 @@ jobs:
           patterns: |
             -litellm/llms/oci/common_utils.py:py/weak-sensitive-data-hashing
             -litellm/proxy/auth/password_policy.py:py/weak-sensitive-data-hashing
+            # hash_token() produces a deterministic SHA-256 for DB key lookup /
+            # indexing of API key identifiers — never for password storage.
+            # The call sites are present in three copies: a module-level and a
+            # PrismaClient method in utils.py, plus a module-level function in
+            # user_api_key_auth.py. `usedforsecurity=False` is already set on
+            # every call, matching the pattern above.
+            -litellm/proxy/utils.py:py/weak-sensitive-data-hashing
+            -litellm/types/proxy/auth/user_api_key_auth.py:py/weak-sensitive-data-hashing
           input: sarif-results/python.sarif
           output: sarif-results/python.sarif
 

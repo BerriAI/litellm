@@ -41,7 +41,7 @@ def hash_token(token: str) -> str:
     import hashlib
 
     # Hash the string using SHA-256 (deterministic, used only for DB key lookup / indexing — not password hashing)
-    hashed_token: Final = hashlib.sha256(token.encode(), usedforsecurity=False).hexdigest()  # codeql[py/weak-sensitive-data-hashing]=off
+    hashed_token: Final = hashlib.sha256(token.encode(), usedforsecurity=False).hexdigest()
 
     return hashed_token
 
