@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from pathlib import Path
 from typing import Final
 
 import pytest
@@ -17,6 +18,7 @@ from integration._support.safeguards_rig import (
     DANGEROUS_TOOL_USE_BETA,
     NATIVE_MODEL,
     NATIVE_TARGET,
+    OMITTED,
     OTHER_NATIVE_MODELS,
     SAFEGUARDS,
     Rig,
@@ -39,7 +41,7 @@ from integration._support.safeguards_rig import (
     tool_id,
     tool_use_block,
 )
-from integration._support.wire import Reply, Request
+from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue
 
 pytestmark = pytest.mark.timeout(2 * graceful_stop_seconds() + 240)
@@ -161,6 +163,32 @@ def sdk_rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
         extra_models=sdk_models,
     ) as rig:
         yield rig
+
+
+def beta_map_without_the_databricks_safeguards_beta() -> bytes:
+    beta_map: Final = object_value(json.loads(Path("litellm/anthropic_beta_headers_config.json").read_text()))
+    databricks_column: Final = {**object_value(beta_map["databricks"]), DANGEROUS_TOOL_USE_BETA: None}
+    return json.dumps({**beta_map, "databricks": databricks_column}).encode()
+
+
+def serving_endpoint_model(wire_url: str) -> Sequence[Mapping[str, JsonValue]]:
+    return (databricks(DATABRICKS_MODEL, "databricks-claude-sonnet-4-6", f"{wire_url}/dbx/serving-endpoints"),)
+
+
+@pytest.fixture(scope="module")
+def remote_beta_map_rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[Rig, Wire]]:
+    served_map: Final = beta_map_without_the_databricks_safeguards_beta()
+    with (
+        wire_server(lambda _: Reply(body=served_map)) as beta_map,
+        safeguards_rig(
+            tmp_path_factory.mktemp("databricks-remote-beta-map"),
+            environment=lambda _: {"LITELLM_ANTHROPIC_BETA_HEADERS_URL": f"{beta_map.url}/beta.json"},
+            remove_environment=("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS",),
+            classifier_model=OMITTED,
+            extra_models=serving_endpoint_model,
+        ) as rig,
+    ):
+        yield rig, beta_map
 
 
 def scripted_message(
@@ -524,6 +552,33 @@ def test_safeguards_without_a_client_beta_derive_it_only_where_the_beta_map_allo
     assert [call.target for call in backend_calls] == [target], backend_calls
     assert request_json(backend_calls[0])["safeguards"] == list(SAFEGUARDS), backend_calls[0].body
     assert (DANGEROUS_TOOL_USE_BETA in beta_values(backend_calls[0])) is derives, backend_calls[0].headers
+
+
+def workspace_rejecting_safeguards(message: Mapping[str, JsonValue]) -> Callable[[Request], Reply]:
+    def respond(request: Request) -> Reply:
+        if "safeguards" not in request_json(request) and DANGEROUS_TOOL_USE_BETA not in beta_values(request):
+            return Reply(body=json.dumps(message).encode())
+        rejection: Final = "Unknown field `safeguards` or beta `dangerous-tool-use-2026-09-03` for this workspace."
+        return Reply(status=400, body=json.dumps({"error_code": "BAD_REQUEST", "message": rejection}).encode())
+
+    return respond
+
+
+@pytest.mark.parametrize("beta", (DANGEROUS_TOOL_USE_BETA, None), ids=("client_beta", "no_client_beta"))
+def test_a_loaded_beta_map_without_the_databricks_safeguards_beta_drops_safeguards_and_the_beta(
+    remote_beta_map_rig: tuple[Rig, Wire], beta: str | None
+) -> None:
+    rig, beta_map = remote_beta_map_rig
+    request_nonce: Final = nonce()
+    message: Final = scripted_message(tool_id(request_nonce))
+    rig.register(request_nonce, workspace_rejecting_safeguards(message))
+    body: Final = json_body(rig.post(auto_mode_body(DATABRICKS_MODEL, request_nonce), beta=beta))
+    assert body == {**message, "model": DATABRICKS_MODEL}, body
+    sent: Final = only_backend_call(rig, request_nonce)
+    assert sent.target == SERVING_TARGET, sent.target
+    assert "safeguards" not in request_json(sent), sent.body
+    assert DANGEROUS_TOOL_USE_BETA not in beta_values(sent), sent.headers
+    assert beta_map.received.qsize() >= 1, "the proxy never fetched the served beta map"
 
 
 @pytest.mark.parametrize("beta", (DANGEROUS_TOOL_USE_BETA, None), ids=("client_beta", "no_client_beta"))
