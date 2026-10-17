@@ -4209,6 +4209,37 @@ async def _read_update_cache_values(
     return MappingProxyType({key: value for key, value in zip(keys, values) if value is not None})
 
 
+def _write_back_cache_object_if_unchanged(
+    key: str,
+    value: object,
+    read_values: Mapping[str, object],
+    cache: UserApiKeyCache,
+    ttl: float,
+) -> None:
+    memory: Final = cache.in_memory_cache_for(key)
+    current: Final = (
+        cast(  # cast-ok: [LIT006] InMemoryCache.get_cache is untyped; entries are serialized dicts or models
+            object,
+            memory.get_cache(key),  # pyright: ignore[reportUnknownMemberType]  # untyped
+        )
+    )
+    if current is None or current != read_values.get(key):
+        return
+    memory.set_cache(  # pyright: ignore[reportUnknownMemberType]  # InMemoryCache.set_cache is untyped
+        key, value, ttl=ttl
+    )
+
+
+def _write_back_unchanged_cache_objects(
+    updates: Sequence[tuple[str, object]],
+    read_values: Mapping[str, object],
+    cache: UserApiKeyCache,
+    ttl: float,
+) -> None:
+    for key, value in updates:
+        _write_back_cache_object_if_unchanged(key, value, read_values, cache, ttl)
+
+
 async def update_cache(
     token: str | None,
     user_id: str | None,
@@ -4217,6 +4248,7 @@ async def update_cache(
     response_cost: float | None,
     parent_otel_span: Span | None,
     tags: list[str] | None = None,
+    cache: UserApiKeyCache | None = None,
 ):
     """
     Use this to update the cache with new user spend.
@@ -4224,6 +4256,7 @@ async def update_cache(
     Put any alerting logic in here.
     """
 
+    target: Final = user_api_key_cache if cache is None else cache
     values_to_update_in_cache: Final[list[tuple[str, object]]] = []
     with service_target(AUTH_OBJECTS_TARGET):
         cached_values: Final = await _read_update_cache_values(
@@ -4231,6 +4264,7 @@ async def update_cache(
                 user_id=user_id, end_user_id=end_user_id, team_id=team_id, tags=tags, response_cost=response_cost
             ),
             parent_otel_span=parent_otel_span,
+            cache=target,
         )
 
     ### UPDATE KEY SPEND ###
@@ -4241,7 +4275,7 @@ async def update_cache(
         else:
             hashed_token = token
         verbose_proxy_logger.debug("_update_key_cache: hashed_token=%s", hashed_token)
-        existing_spend_obj = await user_api_key_cache.async_get_cache(key=hashed_token, model_type=UserAPIKeyAuth)
+        existing_spend_obj = await target.async_get_cache(key=hashed_token, model_type=UserAPIKeyAuth)
         verbose_proxy_logger.debug("_update_key_cache: existing_spend_obj=%s", existing_spend_obj)
         if existing_spend_obj is None:
             return
@@ -4494,20 +4528,18 @@ async def update_cache(
 
     if local_object_updates:
         with service_target(AUTH_OBJECTS_TARGET):
-            asyncio.create_task(
-                user_api_key_cache.async_set_cache_pipeline(
-                    cache_list=list(local_object_updates),
-                    ttl=get_management_object_ttl(user_api_key_cache),
-                    litellm_parent_otel_span=parent_otel_span,
-                    local_only=True,
-                )
+            _write_back_unchanged_cache_objects(
+                updates=local_object_updates,
+                read_values=cached_values,
+                cache=target,
+                ttl=get_management_object_ttl(target),
             )
     if shared_scalar_updates:
         with service_target(SPEND_COUNTERS_TARGET):
             asyncio.create_task(
-                user_api_key_cache.async_set_cache_pipeline(
+                target.async_set_cache_pipeline(
                     cache_list=list(shared_scalar_updates),
-                    ttl=get_management_object_ttl(user_api_key_cache),
+                    ttl=get_management_object_ttl(target),
                     litellm_parent_otel_span=parent_otel_span,
                 )
             )
