@@ -9,6 +9,7 @@ from litellm.constants import OPENAI_CHAT_COMPLETION_PARAMS
 from litellm.endpoints.speech.speech_to_completion_bridge.transformation import (
     SpeechToCompletionBridgeTransformationHandler,
 )
+from litellm.llms.gemini.speech_audio import convert_pcm16_to_wav
 from litellm.types.utils import ChatCompletionAudioResponse, Choices, Message, ModelResponse
 
 GEMINI_TTS_MODEL: Final = "gemini-3.1-flash-tts-preview"
@@ -105,6 +106,82 @@ def test_gemini_tts_wav_and_default_responses_wrap_pcm_in_wav(response_format: s
     assert body[8:12] == b"WAVE"
     assert body[44:] == PCM_BYTES
     assert response.response.headers["content-type"] == "audio/wav"
+
+
+def test_gemini_38_tts_speech_does_not_wrap_a_wav_the_provider_already_returned() -> None:
+    from datetime import datetime
+    from unittest.mock import patch
+
+    from litellm.endpoints.speech.speech_to_completion_bridge.handler import (
+        SpeechToCompletionBridgeHandler,
+    )
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+    wav: Final = convert_pcm16_to_wav(PCM_BYTES)
+    model: Final = "gemini-3.8-flash-tts"
+    logging_obj: Final = LiteLLMLoggingObj(
+        model=model,
+        messages="Hello.",
+        stream=False,
+        call_type="aspeech",
+        start_time=datetime.now(),
+        litellm_call_id="call-tts",
+        function_id="speech",
+    )
+
+    with patch("litellm.completion", return_value=_model_response(model, wav)):
+        response = SpeechToCompletionBridgeHandler().speech(
+            model=model,
+            input="Hello.",
+            voice="Kore",
+            optional_params={},
+            litellm_params={},
+            headers={},
+            logging_obj=logging_obj,
+            custom_llm_provider="gemini",
+        )
+
+    body: Final = response.response.content
+    assert body == wav
+    assert body[44:48] != b"RIFF"
+    assert response.response.headers["content-type"] == "audio/wav"
+
+
+def test_gemini_38_tts_pcm_response_strips_a_provider_wav_header() -> None:
+    from datetime import datetime
+    from unittest.mock import patch
+
+    from litellm.endpoints.speech.speech_to_completion_bridge.handler import (
+        SpeechToCompletionBridgeHandler,
+    )
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+    wav: Final = convert_pcm16_to_wav(PCM_BYTES)
+    model: Final = "gemini-3.8-flash-tts"
+    logging_obj: Final = LiteLLMLoggingObj(
+        model=model,
+        messages="Hello.",
+        stream=False,
+        call_type="aspeech",
+        start_time=datetime.now(),
+        litellm_call_id="call-tts-pcm",
+        function_id="speech",
+    )
+
+    with patch("litellm.completion", return_value=_model_response(model, wav)):
+        response = SpeechToCompletionBridgeHandler().speech(
+            model=model,
+            input="Hello.",
+            voice="Kore",
+            optional_params={"response_format": "pcm"},
+            litellm_params={},
+            headers={},
+            logging_obj=logging_obj,
+            custom_llm_provider="gemini",
+        )
+
+    assert response.response.content == PCM_BYTES
+    assert response.response.headers["content-type"] == "audio/pcm"
 
 
 def test_non_gemini_response_keeps_original_bytes_and_mpeg_content_type() -> None:
