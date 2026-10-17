@@ -380,6 +380,24 @@ class GeminiModelInfo(BaseLLMModelInfo):
         return api_base or get_secret_str("GEMINI_API_BASE") or "https://generativelanguage.googleapis.com"
 
     @staticmethod
+    def get_api_base_with_version(api_base: str | None = None, api_version: str = "v1beta") -> str:
+        """
+        Resolve the API base and append the version segment (e.g. ``/v1beta``),
+        unless the base already carries a version segment (``/v1beta``,
+        ``/v1alpha`` or ``/v1``) - in which case it is returned as-is.
+
+        Custom deployments often set ``api_base`` with the version included
+        (e.g. ``https://proxy/v1beta``); unconditionally appending the version
+        produces ``/v1beta/v1beta/...`` and a 404.
+        """
+        resolved = (
+            api_base or get_secret_str("GEMINI_API_BASE") or "https://generativelanguage.googleapis.com"
+        ).rstrip("/")
+        if resolved.endswith((f"/{api_version}", "/v1alpha", "/v1")):
+            return resolved
+        return f"{resolved}/{api_version}"
+
+    @staticmethod
     def get_api_key(api_key: str | None = None) -> str | None:
         return api_key or (get_secret_str("GOOGLE_API_KEY")) or (get_secret_str("GEMINI_API_KEY"))
 
