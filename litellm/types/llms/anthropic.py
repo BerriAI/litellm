@@ -768,7 +768,7 @@ class AnthropicThinkingBlockBinding(TypedDict, total=False):
 
 
 class AnthropicThinkingParam(TypedDict, total=False):
-    type: ReadOnly[Literal["enabled", "adaptive", "disabled"]]
+    type: ReadOnly[Literal["enabled", "adaptive", "disabled", "between_tools"]]
     budget_tokens: int
     display: ReadOnly[Literal["summarized", "omitted", "updates"]]
     block_binding: ReadOnly[AnthropicThinkingBlockBinding]

@@ -15508,6 +15508,7 @@
         "supports_output_config": true,
         "supports_forced_tool_use": false,
         "thinking_always_on": true,
+        "supports_between_tools_thinking": true,
         "prompt_cache_min_tokens": 512,
         "source": "https://platform.claude.com/docs/en/about-claude/pricing",
         "supports_web_search": true
@@ -60589,6 +60590,7 @@
         "supports_parallel_tool_use_config": true,
         "supports_forced_tool_use": false,
         "thinking_always_on": true,
+        "supports_between_tools_thinking": true,
         "prompt_cache_min_tokens": 512,
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
@@ -67778,6 +67780,7 @@
         "output_cost_per_token": 1.2e-05,
         "supports_forced_tool_use": false,
         "thinking_always_on": true,
+        "supports_between_tools_thinking": true,
         "prompt_cache_min_tokens": 512,
         "supports_adaptive_thinking": true,
         "supports_assistant_prefill": false,
@@ -73025,6 +73028,7 @@
         "supports_parallel_tool_use_config": true,
         "supports_forced_tool_use": false,
         "thinking_always_on": true,
+        "supports_between_tools_thinking": true,
         "prompt_cache_min_tokens": 512,
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
@@ -73057,6 +73061,7 @@
         "supports_parallel_tool_use_config": true,
         "supports_forced_tool_use": false,
         "thinking_always_on": true,
+        "supports_between_tools_thinking": true,
         "prompt_cache_min_tokens": 512,
         "cache_creation_input_token_cost_above_1hr": 4.4e-06,
         "cache_creation_input_token_cost": 2.75e-06,
@@ -73104,6 +73109,7 @@
         "supports_parallel_tool_use_config": true,
         "supports_forced_tool_use": false,
         "thinking_always_on": true,
+        "supports_between_tools_thinking": true,
         "prompt_cache_min_tokens": 512,
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
@@ -73140,6 +73146,7 @@
         "supports_max_reasoning_effort": true,
         "supports_forced_tool_use": false,
         "thinking_always_on": true,
+        "supports_between_tools_thinking": true,
         "prompt_cache_min_tokens": 512,
         "source": "https://management.azure.com/subscriptions/c873328e-b572-4770-8dff-aaeb6f1f0e79/providers/Microsoft.CognitiveServices/locations/eastus2/models?api-version=2024-10-01"
     },
@@ -73159,6 +73166,7 @@
         "output_cost_per_token": 1.2e-05,
         "supports_forced_tool_use": false,
         "thinking_always_on": true,
+        "supports_between_tools_thinking": true,
         "prompt_cache_min_tokens": 512,
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json",
         "supports_adaptive_thinking": true,
@@ -73196,6 +73204,7 @@
         "output_cost_per_token": 1.2e-05,
         "supports_forced_tool_use": false,
         "thinking_always_on": true,
+        "supports_between_tools_thinking": true,
         "prompt_cache_min_tokens": 512,
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json",
         "supports_adaptive_thinking": true,
@@ -73256,6 +73265,7 @@
         "supports_parallel_tool_use_config": true,
         "supports_forced_tool_use": false,
         "thinking_always_on": true,
+        "supports_between_tools_thinking": true,
         "prompt_cache_min_tokens": 512,
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
@@ -73298,6 +73308,7 @@
         "supports_parallel_tool_use_config": true,
         "supports_forced_tool_use": false,
         "thinking_always_on": true,
+        "supports_between_tools_thinking": true,
         "prompt_cache_min_tokens": 512,
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
@@ -73340,6 +73351,7 @@
         "supports_parallel_tool_use_config": true,
         "supports_forced_tool_use": false,
         "thinking_always_on": true,
+        "supports_between_tools_thinking": true,
         "prompt_cache_min_tokens": 512,
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
@@ -73447,6 +73459,7 @@
         "output_cost_per_token": 1.2e-05,
         "supports_forced_tool_use": false,
         "thinking_always_on": true,
+        "supports_between_tools_thinking": true,
         "prompt_cache_min_tokens": 512,
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json",
         "supports_adaptive_thinking": true,
@@ -73507,6 +73520,7 @@
         "supports_parallel_tool_use_config": true,
         "supports_forced_tool_use": false,
         "thinking_always_on": true,
+        "supports_between_tools_thinking": true,
         "prompt_cache_min_tokens": 512,
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
@@ -73547,6 +73561,7 @@
         "supports_max_reasoning_effort": true,
         "supports_forced_tool_use": false,
         "thinking_always_on": true,
+        "supports_between_tools_thinking": true,
         "prompt_cache_min_tokens": 512,
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
@@ -73587,6 +73602,7 @@
         "supports_max_reasoning_effort": true,
         "supports_forced_tool_use": false,
         "thinking_always_on": true,
+        "supports_between_tools_thinking": true,
         "prompt_cache_min_tokens": 512,
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
