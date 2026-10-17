@@ -229,6 +229,62 @@ def test_response_cost_calculator_custom_pricing_ignores_upstream_response_cost_
     assert cost == pytest.approx(expected_cost)
 
 
+def _header_cost_chat_response(additional_headers: dict[str, str]) -> ModelResponse:
+    response: Final = ModelResponse(
+        model="cc-header-cost-chat",
+        choices=[Choices(message=Message(content="ok"))],
+        usage=Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30),
+    )
+    response._hidden_params = {"additional_headers": additional_headers}
+    return response
+
+
+def _cost_with_upstream_headers(monkeypatch: pytest.MonkeyPatch, additional_headers: dict[str, str]) -> float:
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    litellm.register_model(
+        model_cost={
+            "cc-header-cost-chat": {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": 0.001,
+                "output_cost_per_token": 0.002,
+            }
+        }
+    )
+    return response_cost_calculator(
+        response_object=_header_cost_chat_response(additional_headers),
+        model="cc-header-cost-chat",
+        custom_llm_provider="openai",
+        call_type="completion",
+        optional_params={},
+    )
+
+
+@pytest.mark.parametrize("header_cost", ("-5", "not-a-number", "nan", "inf"))
+def test_response_cost_calculator_prices_from_the_map_when_upstream_cost_header_is_not_billable(
+    monkeypatch: pytest.MonkeyPatch,
+    header_cost: str,
+) -> None:
+    price_map_cost: Final = _cost_with_upstream_headers(monkeypatch, {})
+
+    cost: Final = _cost_with_upstream_headers(monkeypatch, {"llm_provider-x-litellm-response-cost": header_cost})
+
+    assert price_map_cost > 0
+    assert cost == pytest.approx(price_map_cost)
+
+
+@pytest.mark.parametrize(("header_cost", "expected_cost"), (("0", 0.0), ("0.25", 0.25)))
+def test_response_cost_calculator_bills_a_finite_non_negative_upstream_cost_header(
+    monkeypatch: pytest.MonkeyPatch,
+    header_cost: str,
+    expected_cost: float,
+) -> None:
+    cost: Final = _cost_with_upstream_headers(monkeypatch, {"llm_provider-x-litellm-response-cost": header_cost})
+
+    assert cost == expected_cost
+
+
 def test_response_cost_calculator_keeps_optional_params_out_of_hidden_params():
     class MockResponse(BaseModel):
         pass
@@ -6424,6 +6480,78 @@ def test_whisper_azure():
         5,
     )
     assert round(cost, 5) == round(expected_cost, 5)
+
+
+@pytest.mark.parametrize(
+    ("provider", "requested_model", "response_extras", "expected_seconds"),
+    [
+        ("openai", "openai/gpt-fake-transcribe", {}, 2.0),
+        ("openai", "openai/gpt-fake-transcribe", {"_audio_transcription_duration": 1.35}, 1.35),
+        ("openai", "openai/gpt-fake-transcribe", {"duration": 1.34}, 1.34),
+        ("openai", "openai/whisper-fake", {}, 0.0),
+        ("azure", "gpt-fake-transcribe", {}, 0.0),
+    ],
+    ids=[
+        "undecodable_upload_bills_provider_seconds",
+        "measured_duration_still_wins",
+        "provider_duration_still_wins",
+        "whisper_models_never_bill_provider_seconds",
+        "azure_never_bills_provider_seconds",
+    ],
+)
+def test_transcription_cost_falls_back_to_provider_billed_seconds(
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+    requested_model: str,
+    response_extras: Mapping[str, float],
+    expected_seconds: float,
+) -> None:
+    model: Final = requested_model.removeprefix(f"{provider}/")
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {"input_cost_per_second": 0.01, "litellm_provider": provider, "mode": "audio_transcription"},
+    )
+    transcription: Final = convert_to_model_response_object(
+        response_object={
+            "text": "What is the weather in Paris?",
+            "usage": {"type": "duration", "seconds": 2},
+            **response_extras,
+        },
+        model_response_object=TranscriptionResponse(),
+        hidden_params={"model": model, "custom_llm_provider": provider},
+        response_type="audio_transcription",
+    )
+
+    cost: Final = completion_cost(
+        completion_response=transcription, model=requested_model, call_type="atranscription"
+    )
+
+    assert cost == pytest.approx(0.01 * expected_seconds)
+
+
+def test_custom_priced_transcription_deployment_bills_provider_seconds(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "priced-deployment",
+        {"input_cost_per_second": 0.000075, "litellm_provider": "openai", "mode": "audio_transcription"},
+    )
+    transcription: Final = convert_to_model_response_object(
+        response_object={"text": "What is the weather in Paris?", "usage": {"type": "duration", "seconds": 2}},
+        model_response_object=TranscriptionResponse(),
+        hidden_params={"model": "gpt-fake-transcribe", "custom_llm_provider": "openai"},
+        response_type="audio_transcription",
+    )
+
+    cost: Final = completion_cost(
+        completion_response=transcription,
+        model="openai/gpt-fake-transcribe",
+        call_type="atranscription",
+        custom_pricing=True,
+        router_model_id="priced-deployment",
+    )
+
+    assert cost == pytest.approx(0.000075 * 2)
 
 
 def test_gpt_image_2_azure_cost_tracking():
