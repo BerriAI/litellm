@@ -1,7 +1,7 @@
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { useScopedDailyActivityRange } from "./useDailyActivityRange";
+import { useDailyActivityRange, useScopedDailyActivityRange } from "./useDailyActivityRange";
 
 // The sibling unit test mocks networking, so it pins the positional args array against itself and
 // would still pass if the array and the two networking signatures drifted apart. Nothing else runs
@@ -13,6 +13,38 @@ describe("useScopedDailyActivityRange wiring", () => {
 
   afterEach(() => {
     global.fetch = originalFetch;
+    vi.useRealTimers();
+  });
+
+  it("requests seven days including today on mount and preserves a wider selected range", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-03-09T12:00:00"));
+    const mockFetch = vi.fn<typeof fetch>().mockImplementation(
+      async () =>
+        new Response(JSON.stringify({ results: [], metadata: {} }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    global.fetch = mockFetch;
+    const { result } = renderHook(() => useDailyActivityRange("sk-token", "u1", "proxy_admin"));
+
+    await waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(1));
+    const initialUrl = new URL(String(mockFetch.mock.calls[0][0]));
+    expect(initialUrl.pathname).toBe("/user/daily/activity/aggregated");
+    expect(initialUrl.searchParams.get("start_date")).toBe("2026-03-03");
+    expect(initialUrl.searchParams.get("end_date")).toBe("2026-03-09");
+    expect(initialUrl.searchParams.get("include_current_utc_day")).toBe("true");
+    expect(initialUrl.searchParams.get("timezone")).toBe(String(new Date().getTimezoneOffset()));
+
+    const selectedRange = { from: new Date(2026, 0, 1), to: new Date(2026, 2, 9, 23, 59, 59, 999) };
+    act(() => result.current.onDateChange(selectedRange));
+
+    await waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(2));
+    const selectedUrl = new URL(String(mockFetch.mock.calls[1][0]));
+    expect(selectedUrl.searchParams.get("start_date")).toBe("2026-01-01");
+    expect(selectedUrl.searchParams.get("end_date")).toBe("2026-03-09");
+    expect(result.current.dateValue).toEqual(selectedRange);
   });
 
   it("lands each scope field on its own query param through the real networking callers", async () => {

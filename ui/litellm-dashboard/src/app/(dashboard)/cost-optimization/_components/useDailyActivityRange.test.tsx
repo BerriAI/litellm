@@ -37,6 +37,9 @@ describe("useDailyActivityRange", () => {
 
     expect(result.current.dateValue.from).toBeInstanceOf(Date);
     expect(result.current.dateValue.to).toBeInstanceOf(Date);
+    expect(result.current.dateValue.to!.getTime() - result.current.dateValue.from!.getTime()).toBe(
+      30 * 24 * 60 * 60 * 1000,
+    );
     expect(mockUseAggregatedDailyActivity).not.toHaveBeenCalled();
   });
 
