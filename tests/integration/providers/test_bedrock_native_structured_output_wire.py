@@ -1,3 +1,4 @@
+import base64
 import json
 import re
 import uuid
@@ -8,7 +9,8 @@ from urllib.parse import unquote
 
 import httpx
 import pytest
-from integration._support.client import Gateway, Scenario, list_value, object_value, string_value
+from integration._support.client import Gateway, Scenario, held, list_value, object_value, string_value
+from integration._support.database import read_rows
 from integration._support.upstream import aws_event_stream_frame
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
@@ -39,13 +41,20 @@ _JSON_VALUE: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 _FABLE_REJECTION: Final = (
     "The model returned the following errors: output_config.format: Extra inputs are not permitted"
 )
-_SCHEMA_TOO_COMPLEX: Final = "The model returned the following errors: compilation exceeded limits: Schema is too complex."
+_SCHEMA_TOO_COMPLEX: Final = (
+    "The model returned the following errors: compilation exceeded limits: Schema is too complex."
+)
 _PATTERN_TOO_COMPLEX: Final = (
     "The model returned the following errors: output_config.format.schema: Unsupported regex feature in pattern "
     "field: pattern is too complex for structured output: reduce the {n,m} upper bound, narrow the character class "
     "range, or avoid nesting quantified groups"
 )
-_MAX_TOKENS_400: Final = "The model returned the following errors: max_tokens: 2048 > 1024, the maximum for this request"
+_MAX_TOKENS_400: Final = (
+    "The model returned the following errors: max_tokens: 2048 > 1024, the maximum for this request"
+)
+_SIGNATURE_400: Final = (
+    "The model returned the following errors: messages.1.content.0: Invalid `signature` in `thinking` block"
+)
 _UNSUPPORTED_KEYWORDS: Final = (
     "minimum",
     "maximum",
@@ -335,6 +344,54 @@ def _converse_frames(blocks: tuple[dict[str, JsonValue], ...], stop_reason: str)
     )
 
 
+def _invoke_chunk(event: Mapping[str, JsonValue]) -> bytes:
+    return aws_event_stream_frame(
+        {":event-type": "chunk", ":content-type": "application/json", ":message-type": "event"},
+        json.dumps({"bytes": base64.b64encode(json.dumps(event).encode()).decode()}).encode(),
+    )
+
+
+def _invoke_block_events(index: int, block: Mapping[str, JsonValue]) -> tuple[dict[str, JsonValue], ...]:
+    def start(content_block: dict[str, JsonValue]) -> dict[str, JsonValue]:
+        return {"type": "content_block_start", "index": index, "content_block": content_block}
+
+    def delta(payload: dict[str, JsonValue]) -> dict[str, JsonValue]:
+        return {"type": "content_block_delta", "index": index, "delta": payload}
+
+    stop: Final[dict[str, JsonValue]] = {"type": "content_block_stop", "index": index}
+    match block.get("type"):
+        case "thinking":
+            return (
+                start({"type": "thinking", "thinking": ""}),
+                delta({"type": "thinking_delta", "thinking": block["thinking"]}),
+                delta({"type": "signature_delta", "signature": block["signature"]}),
+                stop,
+            )
+        case "tool_use":
+            return (
+                start({"type": "tool_use", "id": block["id"], "name": block["name"], "input": {}}),
+                delta({"type": "input_json_delta", "partial_json": json.dumps(block["input"])}),
+                stop,
+            )
+        case _:
+            return (start({"type": "text", "text": ""}), delta({"type": "text_delta", "text": block["text"]}), stop)
+
+
+def _invoke_frames(message: Mapping[str, JsonValue]) -> bytes:
+    blocks: Final = tuple(object_value(block) for block in list_value(message["content"]))
+    events: Final[tuple[Mapping[str, JsonValue], ...]] = (
+        {"type": "message_start", "message": {**message, "content": [], "stop_reason": None}},
+        *chain.from_iterable(_invoke_block_events(index, block) for index, block in enumerate(blocks)),
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": message["stop_reason"], "stop_sequence": None},
+            "usage": {"output_tokens": 7},
+        },
+        {"type": "message_stop"},
+    )
+    return b"".join(_invoke_chunk(event) for event in events)
+
+
 def _called_tool(tools: Iterable[str], native: bool) -> str | None:
     names: Final = frozenset(tools)
     if _USER_TOOL in names:
@@ -373,6 +430,8 @@ def _bedrock(request: Request) -> Reply:
             "stop_sequence": None,
             "usage": {"input_tokens": 11, "output_tokens": 7},
         }
+        if _is_stream(request):
+            return Reply(body=_invoke_frames(message), content_type=_EVENT_STREAM)
         return Reply(body=json.dumps(message).encode())
     if _is_stream(request):
         return Reply(body=_converse_frames(blocks, stop_reason), content_type=_EVENT_STREAM)
@@ -452,6 +511,20 @@ def _messages_blocks(response: httpx.Response) -> tuple[dict[str, JsonValue], ..
 def _messages_text(blocks: tuple[dict[str, JsonValue], ...]) -> JsonValue:
     (text,) = tuple(block for block in blocks if block.get("type") == "text")
     return _JSON_VALUE.validate_json(string_value(text["text"]))
+
+
+def _messages_stream_text(response: httpx.Response) -> JsonValue:
+    assert response.status_code == 200, response.text
+    events: Final = tuple(
+        _JSON.validate_json(line.removeprefix("data: "))
+        for line in response.text.splitlines()
+        if line.startswith("data: {")
+    )
+    deltas: Final = tuple(
+        object_value(event["delta"]) for event in events if event.get("type") == "content_block_delta"
+    )
+    text: Final = "".join(string_value(delta["text"]) for delta in deltas if delta.get("type") == "text_delta")
+    return _JSON_VALUE.validate_json(text)
 
 
 def _refs(schema: JsonValue) -> frozenset[str]:
@@ -559,15 +632,18 @@ def test_bedrock_native_model_without_thinking_keeps_the_forced_json_tool(gatewa
 
 
 @pytest.mark.parametrize(
-    ("backend", "model_info"),
-    [(_OPUS, None), (_OPT_IN, {"supports_bedrock_native_structured_output": True})],
-    ids=["neither_key", "deployment_opt_in"],
+    ("backend", "model_info", "native"),
+    [
+        (_OPUS, None, False),
+        (_OPT_IN, {"supports_bedrock_native_structured_output": True}, True),
+        (_OPUS_4_8, {"supports_bedrock_native_structured_output": False}, False),
+    ],
+    ids=["neither_key", "deployment_opt_in", "deployment_opt_out"],
 )
 def test_thinking_request_follows_the_bedrock_native_key_the_model_resolves_to(
-    gateway: Gateway, backend: str, model_info: Mapping[str, JsonValue] | None
+    gateway: Gateway, backend: str, model_info: Mapping[str, JsonValue] | None, native: bool
 ) -> None:
     marker, marker_hex = _marker()
-    native: Final = model_info is not None
     with wire_server(_bedrock) as wire, gateway.scenario() as scenario:
         model: Final = _deployment(scenario, wire, "converse", backend, model_info)
         response: Final = gateway.request(
@@ -838,13 +914,20 @@ def _rejecting_native_output(message: str) -> Callable[[Request], Reply]:
 
 def _fallback_answer(gateway: Gateway, entry: str, model: str, marker: str) -> JsonValue:
     match entry:
-        case "converse_chat_stream":
+        case "converse_chat_stream" | "invoke_chat_stream":
             streamed: Final = _chat_body(
                 model, marker, stream=True, thinking=_ADAPTIVE, response_format=_response_format(_SCHEMA)
             )
             return _content_json(_stream_message(gateway.request("POST", "/v1/chat/completions", streamed)))
+        case "invoke_messages_stream":
+            streamed_messages: Final = _messages_body(
+                model, marker, stream=True, output_config={"format": {"type": "json_schema", "schema": _SCHEMA}}
+            )
+            return _messages_stream_text(gateway.request("POST", "/v1/messages", streamed_messages))
         case "converse_output_config":
-            chat: Final = _chat_body(model, marker, output_config={"format": {"type": "json_schema", "schema": _SCHEMA}})
+            chat: Final = _chat_body(
+                model, marker, output_config={"format": {"type": "json_schema", "schema": _SCHEMA}}
+            )
             return _content_json(_chat_message(gateway.request("POST", "/v1/chat/completions", chat)))
         case _:
             return _opt_in_answer(gateway, entry, model, marker)
@@ -860,7 +943,9 @@ def _fallback_answer(gateway: Gateway, entry: str, model: str, marker: str) -> J
         ("converse_messages", _FABLE_REJECTION),
         ("converse_output_config", _FABLE_REJECTION),
         ("invoke_chat", _FABLE_REJECTION),
+        ("invoke_chat_stream", _FABLE_REJECTION),
         ("invoke_messages", _SCHEMA_TOO_COMPLEX),
+        ("invoke_messages_stream", _FABLE_REJECTION),
     ],
 )
 def test_bedrock_rejecting_opt_in_native_output_gets_one_retry_without_it(
@@ -879,7 +964,7 @@ def test_bedrock_rejecting_opt_in_native_output_gets_one_retry_without_it(
         match entry:
             case "converse_output_config":
                 assert not tools, retried
-            case "invoke_messages":
+            case "invoke_messages" | "invoke_messages_stream":
                 assert not tools, retried
                 prompt: Final = json.dumps(retried["messages"])
                 assert all(name in prompt for name in object_value(_SCHEMA["properties"])), retried
@@ -909,3 +994,107 @@ def test_bedrock_400_is_not_retried_unless_it_rejects_opt_in_native_output(
         _, body = _one_call(wire, marker_hex)
         assert _native_schema(body, route == "invoke") == _SCHEMA, body
 
+
+def _always_rejecting(message: str) -> Callable[[Request], Reply]:
+    def reply(_: Request) -> Reply:
+        return _error_reply(message)
+
+    return reply
+
+
+@pytest.mark.parametrize(
+    ("backend", "rejection"),
+    [(_OPUS_4_8, _MAX_TOKENS_400), (_SONNET, _FABLE_REJECTION)],
+    ids=["other_400", "native_model"],
+)
+def test_messages_400_on_bedrock_invoke_reaches_the_caller_after_one_call_unless_it_rejects_opt_in_native_output(
+    gateway: Gateway, backend: str, rejection: str
+) -> None:
+    marker, marker_hex = _marker()
+    with wire_server(_always_rejecting(rejection)) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire, "invoke", backend)
+        response: Final = gateway.request(
+            "POST",
+            "/v1/messages",
+            _messages_body(model, marker, output_config={"format": {"type": "json_schema", "schema": _SCHEMA}}),
+        )
+        assert response.status_code == 400, response.text
+        assert rejection.split(": ", 1)[1] in response.text, response.text
+        _one_call(wire, marker_hex)
+
+
+def _carries_thinking_block(message: JsonValue) -> bool:
+    content: Final = object_value(message).get("content")
+    return isinstance(content, list) and any(object_value(block).get("type") == "thinking" for block in content)
+
+
+def _replays_thinking(body: Mapping[str, JsonValue]) -> bool:
+    return any(_carries_thinking_block(message) for message in list_value(body["messages"]))
+
+
+def _rejecting_native_output_and_foreign_signatures(signature_first: bool) -> Callable[[Request], Reply]:
+    def reply(request: Request) -> Reply:
+        body: Final = _JSON.validate_json(request.body)
+        checks: Final = (
+            (_replays_thinking(body), _SIGNATURE_400),
+            (_native_schema(body, True) is not None, _FABLE_REJECTION),
+        )
+        failing: Final = tuple(message for failed, message in (checks if signature_first else checks[::-1]) if failed)
+        return _error_reply(failing[0]) if failing else _bedrock(request)
+
+    return reply
+
+
+@pytest.mark.parametrize("signature_first", [False, True], ids=["rejection_first", "signature_first"])
+def test_messages_retry_without_native_output_keeps_the_thinking_signature_fix(
+    gateway: Gateway, signature_first: bool
+) -> None:
+    marker, marker_hex = _marker()
+    history: Final[list[JsonValue]] = [
+        {"role": "user", "content": [{"type": "text", "text": f"first question {marker}"}]},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "from another deployment", "signature": _SIGNATURE},
+                {"type": "text", "text": "first answer"},
+            ],
+        },
+        {"role": "user", "content": [{"type": "text", "text": "second question"}]},
+    ]
+    with (
+        wire_server(_rejecting_native_output_and_foreign_signatures(signature_first)) as wire,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = _deployment(scenario, wire, "invoke", _OPUS_4_8)
+        request: Final = {
+            **_messages_body(
+                model, marker, thinking=_ADAPTIVE, output_config={"format": {"type": "json_schema", "schema": _SCHEMA}}
+            ),
+            "messages": history,
+        }
+        assert _messages_text(_messages_blocks(gateway.request("POST", "/v1/messages", request))) == _payload(
+            marker_hex
+        )
+        sent: Final = tuple(_JSON.validate_json(call.body) for call in wire.drain())
+        assert len(sent) == 3, sent
+        assert _native_schema(sent[0], True) is not None and _replays_thinking(sent[0]), sent[0]
+        assert _native_schema(sent[-1], True) is None and not _replays_thinking(sent[-1]), sent[-1]
+        assert all(name in json.dumps(sent[-1]["messages"]) for name in object_value(_SCHEMA["properties"])), sent[-1]
+
+
+@pytest.mark.parametrize("entry", ["converse_chat", "invoke_messages"])
+def test_a_request_retried_without_native_output_lands_one_success_spend_row(gateway: Gateway, entry: str) -> None:
+    marker, marker_hex = _marker()
+    invoke: Final = entry.startswith("invoke")
+    with wire_server(_rejecting_native_output(_FABLE_REJECTION)) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire, entry.split("_", 1)[0], _OPUS_4_8)
+        assert _fallback_answer(gateway, entry, model, marker) == _payload(marker_hex)
+        sent: Final = tuple(_JSON.validate_json(call.body) for call in wire.drain())
+        assert len(sent) == (1 if _native_schema(sent[0], invoke) is None else 2), sent
+        rows: Final = held(
+            lambda: read_rows('SELECT status FROM "LiteLLM_SpendLogs" WHERE model_group=%s', (model,)),
+            lambda found: len(found) == 1,
+            holding=2,
+            seconds=70,
+        )
+        assert rows[0]["status"] == "success", rows

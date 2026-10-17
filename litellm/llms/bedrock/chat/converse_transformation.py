@@ -12,7 +12,7 @@ from itertools import chain
 from typing import TYPE_CHECKING, Final, Literal, cast, overload
 
 import httpx
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_logger
@@ -174,10 +174,12 @@ _OUTPUT_CONFIG_BLOCK: Final = TypeAdapter(OutputConfigBlock)
 
 
 def _has_native_text_format(output_config: object) -> bool:
-    return (
-        isinstance(output_config, Mapping)
-        and _OUTPUT_CONFIG_BLOCK.validate_python(output_config).get("textFormat") is not None
-    )
+    if not isinstance(output_config, Mapping):
+        return False
+    try:
+        return _OUTPUT_CONFIG_BLOCK.validate_python(output_config).get("textFormat") is not None
+    except ValidationError:
+        return False
 
 
 class AmazonConverseConfig(BaseConfig):

@@ -10640,3 +10640,34 @@ def test_uses_opt_in_native_output_reads_the_base_model_of_an_application_infere
     )
 
     assert AmazonConverseConfig().uses_opt_in_native_output(profile, optional_params, litellm_params)
+
+
+_CALLER_OUTPUT_CONFIG_WITH_A_SCHEMA_OBJECT: Final = {
+    "textFormat": {"type": "json_schema", "structure": {"jsonSchema": {"name": "capital", "schema": {"type": "object"}}}}
+}
+_BEDROCK_SCHEMA_TYPE_ERROR: Final = "outputConfig.textFormat.structure.jsonSchema.schema must be a string"
+
+
+@pytest.mark.parametrize("model", [_OPUS, _LLAMA], ids=["opt_in", "not_opt_in"])
+@pytest.mark.respx(assert_all_called=True)
+def test_a_malformed_caller_output_config_gets_bedrocks_own_400(
+    model: str, respx_mock: respx.Router, local_model_cost_map: None
+) -> None:
+    route: Final = respx_mock.post(url__regex=r"/converse$").mock(
+        return_value=httpx.Response(400, json={"message": _BEDROCK_SCHEMA_TYPE_ERROR})
+    )
+
+    with pytest.raises(litellm.BadRequestError, match=re.escape(_BEDROCK_SCHEMA_TYPE_ERROR)):
+        completion(
+            model=f"bedrock/converse/{model}",
+            messages=[{"role": "user", "content": "What is the capital of France?"}],
+            response_format=CAPITAL_RESPONSE_FORMAT,
+            outputConfig=_CALLER_OUTPUT_CONFIG_WITH_A_SCHEMA_OBJECT,
+            num_retries=0,
+            aws_access_key_id="fake",
+            aws_secret_access_key="fake",
+            aws_region_name="us-east-1",
+            client=HTTPHandler(),
+        )
+
+    assert route.call_count == 1
