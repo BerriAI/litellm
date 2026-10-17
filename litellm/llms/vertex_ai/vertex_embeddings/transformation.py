@@ -1,9 +1,10 @@
 import types
-from typing import Final, Literal
+from collections.abc import Mapping
+from typing import Final, Literal, cast  # noqa: TID251  # payload is raw Vertex JSON
 
 from litellm.llms.vertex_ai.common_utils import pop_vertex_request_labels
 from litellm.types.llms.base import LiteLLMBaseModel
-from litellm.types.utils import EmbeddingResponse, Usage
+from litellm.types.utils import EmbeddingResponse, PromptTokensDetailsWrapper, Usage
 
 from .types import *
 
@@ -244,10 +245,27 @@ class VertexAITextEmbeddingConfig(LiteLLMBaseModel):
             )
             input_tokens += embedding["statistics"]["token_count"]
 
+        vertex_response: Final = cast(Mapping[str, object], response)  # cast-ok: raw Vertex JSON, read-only boundary
+        metadata: Final = vertex_response.get("metadata")
+        billable_character_count: Final = (
+            cast(Mapping[str, object], metadata).get("billableCharacterCount")  # cast-ok: isinstance erases types
+            if isinstance(metadata, Mapping)
+            else None
+        )
+
         model_response.object = "list"
         model_response.data = embedding_response
         model_response.model = model
-        usage: Final = Usage(prompt_tokens=input_tokens, completion_tokens=0, total_tokens=input_tokens)
+        usage: Final = Usage(
+            prompt_tokens=input_tokens,
+            completion_tokens=0,
+            total_tokens=input_tokens,
+            prompt_tokens_details=(
+                PromptTokensDetailsWrapper(character_count=billable_character_count)
+                if isinstance(billable_character_count, int)
+                else None
+            ),
+        )
         setattr(model_response, "usage", usage)
         return model_response
 
