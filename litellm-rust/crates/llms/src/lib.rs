@@ -6,6 +6,7 @@ pub mod base_llm;
 pub mod bedrock;
 pub mod bedrock_mantle;
 pub mod cohere;
+pub mod databricks;
 pub mod deepseek;
 pub mod edenai;
 mod error;
