@@ -6055,6 +6055,9 @@ class Router:
         including pings and provider error frames, is forwarded live and
         verbatim instead.
         """
+        from litellm.llms.anthropic.pass_through.messages.fake_stream_iterator import (
+            FakeAnthropicMessagesStreamIterator,
+        )
         from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
             aclose_if_supported,
             aclose_superseded_attempt,
@@ -6066,6 +6069,7 @@ class Router:
         )
 
         source_iterator: Final = response
+        replays_a_finished_agentic_turn: Final = isinstance(source_iterator, FakeAnthropicMessagesStreamIterator)
 
         async def close_source() -> None:
             with anyio.CancelScope(shield=True), contextlib.suppress(BaseException):
@@ -6126,7 +6130,11 @@ class Router:
                         if not has_generated_content and error_event is None
                         else None
                     )
-                    if refusal_stop_details is not None and self._refusal_fallback_available(model, initial_kwargs):
+                    if (
+                        refusal_stop_details is not None
+                        and not replays_a_finished_agentic_turn
+                        and self._refusal_fallback_available(model, initial_kwargs)
+                    ):
                         refusal_error = safeguard_refusal_error(model=model, stop_details=refusal_stop_details)
                         raise MidStreamFallbackError(
                             message=refusal_error.message,
