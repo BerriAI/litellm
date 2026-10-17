@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 from enum import Enum
 from types import MappingProxyType
@@ -18,6 +19,9 @@ MICROSOFT_365_COPILOT_DEFAULT_TOKEN_EXCHANGE_PROFILE: Final = "jwt_bearer_obo"
 MICROSOFT_365_COPILOT_DEFAULT_TOKEN_EXCHANGE_SCOPE: Final = "https://graph.microsoft.com/.default"
 # Replies depend on the caller's delegated identity, which response-cache keys do not include.
 RESPONSE_CACHE_EXCLUDED_PROVIDERS: Final = frozenset({"microsoft_365_copilot", "databricks_agent"})
+CLAUDE_CODE_PICKER_PATTERN: Final = re.compile(r"claude|anthropic", re.IGNORECASE)
+GATEWAY_CLIENT_HEADER: Final = "x-gateway-client"
+CLAUDE_CODE_CLIENT: Final = "claude-code"
 MICROSOFT_365_COPILOT_DEFAULT_TIME_ZONE: Final = "UTC"
 GITHUB_COPILOT_PER_USER_AUTH_TYPE: Final = "per_user_oauth"
 GITHUB_COPILOT_AUTH_TYPE_KEY: Final = "github_copilot_auth_type"
@@ -1619,6 +1623,7 @@ CLOUDZERO_EXPORT_INTERVAL_MINUTES: Final = get_env_int("CLOUDZERO_EXPORT_INTERVA
 MCP_TOOL_NAME_PREFIX: Final = "mcp_tool"
 MAXIMUM_TRACEBACK_LINES_TO_LOG: Final = get_env_int("MAXIMUM_TRACEBACK_LINES_TO_LOG", 100)
 PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS: Final = 4096
+INTERNAL_CALLBACK_NAMES: Final = frozenset({"cache", "vector_store_pre_call_hook"})
 
 # Headers to control callbacks
 X_LITELLM_DISABLE_CALLBACKS: Final = "x-litellm-disable-callbacks"
