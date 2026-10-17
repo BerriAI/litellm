@@ -2290,7 +2290,10 @@ def test_success_handler_skips_sync_callbacks_for_async_requests(
 
 
 @pytest.mark.parametrize("call_type", ["completion", "responses"])
-def test_success_handler_runs_sync_callbacks_for_sync_requests(logging_obj, call_type):
+@pytest.mark.parametrize("for_async_request", [False, True])
+def test_success_handler_runs_sync_callbacks_for_sync_requests(
+    logging_obj: LitellmLogging, call_type: str, for_async_request: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Ensure sync success callbacks execute when call type is sync (completion/responses)."""
     from litellm.integrations.custom_logger import CustomLogger
 
@@ -2319,12 +2322,11 @@ def test_success_handler_runs_sync_callbacks_for_sync_requests(logging_obj, call
         usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
     )
 
-    with patch.object(
-        logging_obj,
-        "get_combined_callback_list",
-        return_value=[dummy_logger],
-    ):
-        logging_obj.success_handler(result=model_response)
+    logging_obj.dynamic_success_callbacks = [dummy_logger]
+    logging_obj.dynamic_async_success_callbacks = []
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    logging_obj.success_handler(result=model_response, for_async_request=for_async_request)
 
     dummy_logger.log_success_event.assert_called_once()
     dummy_logger.log_stream_event.assert_not_called()
