@@ -1221,11 +1221,11 @@
           "properties": {
             "model": {
               "type": "string",
-              "minLength": 1
+              "pattern": "\\S"
             },
             "region": {
               "type": "string",
-              "minLength": 1
+              "pattern": "\\S"
             }
           },
           "description": "Model that counts tokens for this one, and the AWS region its count API runs in."
