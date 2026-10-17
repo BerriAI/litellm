@@ -726,18 +726,23 @@ def test_cost_tracking_adds_db_and_shadow_eval_callbacks_when_prisma_set(monkeyp
     }
 
 
-def test_cost_tracking_no_op_when_prisma_missing(monkeypatch):
-    """Without a prisma_client cost_tracking is a no-op — not an error."""
+def test_cost_tracking_registers_budget_reconciler_when_prisma_missing(monkeypatch):
+    """Without a prisma_client, still register a success reconciler for in-memory reservations (#45895)."""
     import litellm
+    from litellm.proxy.hooks.budget_reservation_reconcile_logger import (
+        BudgetReservationReconcileLogger,
+    )
 
     monkeypatch.setattr(ps, "prisma_client", None, raising=False)
     monkeypatch.setattr(litellm, "callbacks", [], raising=False)
     monkeypatch.setattr(litellm, "_async_success_callback", [], raising=False)
 
     cost_tracking()
+    cost_tracking()  # dedupe by logger class key
 
     assert litellm.callbacks == []
-    assert litellm._async_success_callback == []
+    assert len(litellm._async_success_callback) == 1
+    assert isinstance(litellm._async_success_callback[0], BudgetReservationReconcileLogger)
 
 
 # ---------------------------------------------------------------------------
