@@ -218,6 +218,68 @@ class TestTransformRequest:
         assert round_tripped["contents"][0]["role"] == "user"
 
 
+class TestSmartModeAndVocabulary:
+    @pytest.mark.parametrize("mode,expected", [("smart", "SMART"), ("SMART", "SMART"), ("verbatim", "VERBATIM")])
+    def test_mode_maps_to_audio_transcription_config_mode(
+        self, config: VertexGeminiAudioTranscriptionConfig, mode: str, expected: str
+    ) -> None:
+        request_data = config.transform_audio_transcription_request(
+            model="gemini-3.5-transcribe-preview",
+            audio_file=AUDIO_BYTES,
+            optional_params={"mode": mode, "language": "en"},
+            litellm_params={},
+        )
+        audio_config = json.loads(json.dumps(request_data.data["generationConfig"]["audioTranscriptionConfig"]))
+        assert audio_config == {"languageCodes": ["en-US"], "mode": expected}
+
+    @pytest.mark.parametrize(
+        "custom_vocabulary",
+        [["LiteLLM", "Kubernetes"], "LiteLLM, Kubernetes"],
+    )
+    def test_custom_vocabulary_accepts_list_or_comma_separated_string(
+        self, config: VertexGeminiAudioTranscriptionConfig, custom_vocabulary: list[str] | str
+    ) -> None:
+        request_data = config.transform_audio_transcription_request(
+            model="gemini-3.5-transcribe-preview",
+            audio_file=AUDIO_BYTES,
+            optional_params={"custom_vocabulary": custom_vocabulary},
+            litellm_params={},
+        )
+        audio_config = json.loads(json.dumps(request_data.data["generationConfig"]["audioTranscriptionConfig"]))
+        assert audio_config == {"customVocabulary": ["LiteLLM", "Kubernetes"]}
+
+    def test_no_mode_leaves_vertex_default(self, config: VertexGeminiAudioTranscriptionConfig) -> None:
+        request_data = config.transform_audio_transcription_request(
+            model="gemini-3.5-transcribe-preview",
+            audio_file=AUDIO_BYTES,
+            optional_params={"language": "en"},
+            litellm_params={},
+        )
+        assert "mode" not in request_data.data["generationConfig"]["audioTranscriptionConfig"]
+
+    def test_unknown_mode_is_rejected(self, config: VertexGeminiAudioTranscriptionConfig) -> None:
+        with pytest.raises(VertexAIError, match="Unsupported transcription mode") as excinfo:
+            config.transform_audio_transcription_request(
+                model="gemini-3.5-transcribe-preview",
+                audio_file=AUDIO_BYTES,
+                optional_params={"mode": "loud"},
+                litellm_params={},
+            )
+        assert excinfo.value.status_code == 400
+
+    def test_mode_and_vocabulary_survive_drop_params(self) -> None:
+        optional_params = get_optional_params_transcription(
+            model="gemini-3.5-transcribe-preview",
+            custom_llm_provider="vertex_ai",
+            language="en",
+            mode="smart",
+            custom_vocabulary="LiteLLM, Kubernetes",
+            drop_params=True,
+        )
+        assert optional_params["mode"] == "smart"
+        assert optional_params["custom_vocabulary"] == "LiteLLM, Kubernetes"
+
+
 class TestTransformResponse:
     def test_generate_content_response(self, config):
         raw_response = httpx.Response(status_code=200, json=GENERATE_CONTENT_RESPONSE)

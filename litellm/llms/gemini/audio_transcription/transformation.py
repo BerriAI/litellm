@@ -6,6 +6,8 @@ from httpx import Headers, Response
 
 from litellm.litellm_core_utils.audio_utils.subtitle_utils import SUBTITLE_RESPONSE_FORMATS
 from litellm.litellm_core_utils.audio_utils.utils import (
+    normalize_custom_vocabulary,
+    normalize_gemini_transcription_mode,
     normalize_transcription_language_to_bcp47,
     process_audio_file,
 )
@@ -42,6 +44,13 @@ class GeminiAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
     Maps OpenAI /v1/audio/transcriptions onto the Gemini Interactions API
     (POST /v1beta/interactions) for transcription models like
     gemini-3.5-transcribe. https://ai.google.dev/gemini-api/docs/transcribe
+
+    Provider-specific params (passed as extra kwargs / form fields):
+    - `mode`: "smart" (disfluency removal, self-corrections, formatting) or
+      "verbatim" (Google's default). Smart mode cannot be combined with word
+      timestamps or subtitle formats.
+    - `custom_vocabulary`: terms to bias recognition towards, as a list or a
+      comma-separated string.
     """
 
     def get_supported_openai_params(
@@ -190,6 +199,8 @@ _WORD_TIMESTAMP_CONFIG: Final[GeminiTranscriptionConfig] = {
         "diarization_mode": "speaker",
     },
 }
+_SMART_MODE_CONFIG: Final[GeminiTranscriptionConfig] = {"mode": {"type": "smart"}}
+_VERBATIM_MODE_CONFIG: Final[GeminiTranscriptionConfig] = {"mode": {"type": "verbatim"}}
 
 
 def _build_interaction_request(
@@ -220,17 +231,53 @@ def _language_config(language: object) -> GeminiTranscriptionConfig:
     return language_config
 
 
-def _timestamp_config(timestamp_granularities: object, response_format: object) -> GeminiTranscriptionConfig:
-    wants_word_timestamps: Final = (
-        isinstance(timestamp_granularities, list) and "word" in timestamp_granularities
-    ) or (isinstance(response_format, str) and response_format in SUBTITLE_RESPONSE_FORMATS)
-    return _WORD_TIMESTAMP_CONFIG if wants_word_timestamps else _EMPTY_TRANSCRIPTION_CONFIG
+def _wants_word_timestamps(timestamp_granularities: object, response_format: object) -> bool:
+    return (isinstance(timestamp_granularities, list) and "word" in timestamp_granularities) or (
+        isinstance(response_format, str) and response_format in SUBTITLE_RESPONSE_FORMATS
+    )
+
+
+def _mode_config(mode: object, wants_word_timestamps: bool) -> GeminiTranscriptionConfig:
+    try:
+        normalized_mode: Final = normalize_gemini_transcription_mode(mode)
+    except (TypeError, ValueError) as error:
+        raise GeminiError(status_code=400, message=str(error)) from error
+    if normalized_mode == "smart":
+        if wants_word_timestamps:
+            raise GeminiError(
+                status_code=400,
+                message=(
+                    "Gemini smart transcription mode cannot be combined with word timestamps "
+                    "(timestamp_granularities=['word'] or a subtitle response_format)."
+                ),
+            )
+        return _SMART_MODE_CONFIG
+    if wants_word_timestamps:
+        return _WORD_TIMESTAMP_CONFIG
+    return _VERBATIM_MODE_CONFIG if normalized_mode == "verbatim" else _EMPTY_TRANSCRIPTION_CONFIG
+
+
+def _vocabulary_config(custom_vocabulary: object) -> GeminiTranscriptionConfig:
+    try:
+        terms: Final = normalize_custom_vocabulary(custom_vocabulary)
+    except (TypeError, ValueError) as error:
+        raise GeminiError(status_code=400, message=str(error)) from error
+    if not terms:
+        return _EMPTY_TRANSCRIPTION_CONFIG
+    vocabulary_config: Final[GeminiTranscriptionConfig] = {"custom_vocabulary": terms}
+    return vocabulary_config
 
 
 def _build_transcription_config(optional_params: Mapping[str, object]) -> GeminiTranscriptionConfig:
     transcription_config: Final[GeminiTranscriptionConfig] = {
         **_language_config(optional_params.get("language")),
-        **_timestamp_config(optional_params.get("timestamp_granularities"), optional_params.get("response_format")),
+        **_mode_config(
+            optional_params.get("mode"),
+            _wants_word_timestamps(
+                optional_params.get("timestamp_granularities"), optional_params.get("response_format")
+            ),
+        ),
+        **_vocabulary_config(optional_params.get("custom_vocabulary")),
     }
     return transcription_config
 

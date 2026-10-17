@@ -7,6 +7,8 @@ from httpx import Headers, Response
 import litellm
 from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.audio_utils.utils import (
+    normalize_custom_vocabulary,
+    normalize_gemini_transcription_mode,
     normalize_transcription_language_to_bcp47,
     process_audio_file,
 )
@@ -47,6 +49,17 @@ AUDIO_MODALITY: Final = "AUDIO"
 
 
 class VertexGeminiAudioTranscriptionConfig(BaseAudioTranscriptionConfig, VertexBase):
+    """
+    Maps OpenAI /v1/audio/transcriptions onto Vertex generateContent for
+    gemini-3.5-transcribe, using `generationConfig.audioTranscriptionConfig`.
+
+    Provider-specific params (passed as extra kwargs / form fields):
+    - `mode`: "smart" (disfluency removal, self-corrections, formatting) or
+      "verbatim" (Google's default), sent as `audioTranscriptionConfig.mode`.
+    - `custom_vocabulary`: terms to bias recognition towards, as a list or a
+      comma-separated string, sent as `audioTranscriptionConfig.customVocabulary`.
+    """
+
     def __init__(self) -> None:
         BaseAudioTranscriptionConfig.__init__(self)
         VertexBase.__init__(self)
@@ -166,7 +179,11 @@ class VertexGeminiAudioTranscriptionConfig(BaseAudioTranscriptionConfig, VertexB
                 ),
             ),
             generationConfig=VertexGeminiTranscriptionGenerationConfig(
-                audioTranscriptionConfig=_audio_transcription_config(optional_params.get("language"))
+                audioTranscriptionConfig=_audio_transcription_config(
+                    language=optional_params.get("language"),
+                    mode=optional_params.get("mode"),
+                    custom_vocabulary=optional_params.get("custom_vocabulary"),
+                )
             ),
         )
         return AudioTranscriptionRequestData(data=dict(request_body))
@@ -210,7 +227,21 @@ class VertexGeminiAudioTranscriptionConfig(BaseAudioTranscriptionConfig, VertexB
         return response
 
 
-def _audio_transcription_config(language: object) -> VertexGeminiTranscriptionAudioConfig:
-    if not isinstance(language, str) or not language:
-        return VertexGeminiTranscriptionAudioConfig()
-    return VertexGeminiTranscriptionAudioConfig(languageCodes=(normalize_transcription_language_to_bcp47(language),))
+def _audio_transcription_config(
+    language: object, mode: object, custom_vocabulary: object
+) -> VertexGeminiTranscriptionAudioConfig:
+    try:
+        normalized_mode: Final = normalize_gemini_transcription_mode(mode)
+        terms: Final = normalize_custom_vocabulary(custom_vocabulary)
+    except (TypeError, ValueError) as error:
+        raise VertexAIError(status_code=400, message=str(error)) from error
+    language_config: Final[VertexGeminiTranscriptionAudioConfig] = (
+        {"languageCodes": (normalize_transcription_language_to_bcp47(language),)}
+        if isinstance(language, str) and language
+        else {}
+    )
+    mode_config: Final[VertexGeminiTranscriptionAudioConfig] = (
+        {"mode": "SMART" if normalized_mode == "smart" else "VERBATIM"} if normalized_mode is not None else {}
+    )
+    vocabulary_config: Final[VertexGeminiTranscriptionAudioConfig] = {"customVocabulary": terms} if terms else {}
+    return VertexGeminiTranscriptionAudioConfig(**language_config, **mode_config, **vocabulary_config)
