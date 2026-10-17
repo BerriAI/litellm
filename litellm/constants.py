@@ -57,6 +57,7 @@ RUNTIME_UPDATABLE_ROUTER_SETTINGS: Final[frozenset[str]] = frozenset(
         "model_group_retry_policy",
         "model_group_alias",
         "enable_weighted_failover",
+        "enable_mid_stream_fallback_continuation",
         "enable_tag_filtering",
         "tag_routing_prefix",
         "optional_pre_call_checks",
@@ -146,6 +147,7 @@ HF_CONFIG_FETCH_TIMEOUT_SECONDS: Final = 10.0
 # Streams exceeding this duration are terminated with a Timeout error.
 # None (default) = no limit.  Set env var to a number of seconds to enable globally.
 LITELLM_MAX_STREAMING_DURATION_SECONDS: Final = get_env_float_or_none("LITELLM_MAX_STREAMING_DURATION_SECONDS")
+MID_STREAM_FAILURE_LOG_WAIT_SECONDS: Final = 1.0
 
 # Maximum number of base64 characters to keep in logging payloads.
 # Data URIs exceeding this are replaced with a size placeholder.
@@ -389,7 +391,7 @@ DEEPGRAM_DEFAULT_API_BASE: Final = "https://api.deepgram.com/v1"
 NADIR_DEFAULT_API_BASE: Final = "https://api.getnadir.com/v1"
 DEEPGRAM_LISTEN_DEFAULT_MODEL: Final = "nova-3"
 
-BEDROCK_REALTIME_PENDING_SESSION_UPDATE_SCOPE_KEY: Final = "litellm.bedrock_realtime.pending_session_update"
+BEDROCK_REALTIME_PENDING_OPENING_MESSAGE_SCOPE_KEY: Final = "litellm.bedrock_realtime.pending_opening_message"
 BEDROCK_REALTIME_SESSION_COMMITTED_SCOPE_KEY: Final = "litellm.bedrock_realtime.session_committed"
 BEDROCK_REALTIME_COMMITTED_FAILURE_SCOPE_KEY: Final = "litellm.bedrock_realtime.committed_failure"
 BEDROCK_REALTIME_SDK_DISTRIBUTION: Final = "aws-sdk-bedrock-runtime"
@@ -1629,6 +1631,7 @@ INTERNAL_CALL_ORIGIN_METADATA_KEY: Final = "internal_call_origin"
 MANAGED_BACKGROUND_RESPONSE_METADATA_KEY: Final = "_managed_background_response"
 SESSION_ID_GENERATED_METADATA_KEY: Final = "litellm_session_id_generated"
 SESSION_ID_OMITTED_METADATA_KEY: Final = "litellm_session_id_omitted"
+CALLER_SESSION_ID_METADATA_KEY: Final = "litellm_caller_session_id"
 LITELLM_TRUNCATED_PAYLOAD_FIELD: Final = "litellm_truncated"
 LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE: Final = (
     "Truncation is a DB storage safeguard. "
@@ -1856,6 +1859,7 @@ SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE: Final = get_env_int("SPEND_COUNTER_RESEED_L
 PROXY_DB_LOOKUP_MAX_CONCURRENCY: Final = max(1, get_env_int("PROXY_DB_LOOKUP_MAX_CONCURRENCY", 25))
 PROXY_DB_LOOKUP_DEADLINE_SECONDS: Final = max(0.1, get_env_float("PROXY_DB_LOOKUP_DEADLINE_SECONDS", 10.0))
 PROXY_DB_LOOKUP_STALL_WINDOW_SECONDS: Final = max(0.0, get_env_float("PROXY_DB_LOOKUP_STALL_WINDOW_SECONDS", 30.0))
+TEAM_DELETE_TRANSACTION_TIMEOUT_SECONDS: Final = 30
 DEFAULT_CRON_JOB_LOCK_TTL_SECONDS: Final = get_env_int("DEFAULT_CRON_JOB_LOCK_TTL_SECONDS", 60)  # 1 minute
 PROXY_BUDGET_RESCHEDULER_MIN_TIME: Final = get_env_int("PROXY_BUDGET_RESCHEDULER_MIN_TIME", 597)
 RESET_BUDGET_JOB_BATCH_SIZE: Final = max(1, get_env_int("RESET_BUDGET_JOB_BATCH_SIZE", 500))

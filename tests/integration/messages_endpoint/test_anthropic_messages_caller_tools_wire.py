@@ -364,7 +364,7 @@ def test_spend_log_keeps_the_tools_the_caller_sent(rig: Rig, model: str, guardra
     assert object_value(rows[0]["proxy_server_request"])["tools"] == [strict_tool()]
 
 
-@pytest.mark.parametrize("tools", [7, "x" * 5000, ["lint"]], ids=["int", "five_kb", "list_of_str"])
+@pytest.mark.parametrize("tools", [7, "x" * 5000, ["lint"], ""], ids=["int", "five_kb", "list_of_str", "empty_string"])
 def test_a_malformed_tools_field_is_answered_with_an_error_and_the_proxy_keeps_serving(
     rig: Rig, tools: JsonValue
 ) -> None:
@@ -377,14 +377,6 @@ def test_a_malformed_tools_field_is_answered_with_an_error_and_the_proxy_keeps_s
     control_nonce: Final = nonce()
     control_status, control_raw = rig.send(messages_body(CLAUDE_MODEL, control_nonce, tools=[strict_tool()]))
     assert reply_text(control_status, control_raw, streaming=False) == f"linted {control_nonce.removeprefix('nonce-')}"
-
-
-def test_an_empty_string_tools_field_reaches_claude_as_sent(rig: Rig) -> None:
-    request_nonce: Final = nonce()
-    status, raw = rig.send(messages_body(CLAUDE_MODEL, request_nonce, tools=""))
-
-    assert reply_text(status, raw, streaming=False) == f"linted {request_nonce.removeprefix('nonce-')}"
-    assert sent_body(rig.received(request_nonce), CLAUDE_TARGET)["tools"] == ""
 
 
 @pytest.mark.parametrize(
