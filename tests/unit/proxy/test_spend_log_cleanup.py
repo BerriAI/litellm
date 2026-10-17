@@ -333,14 +333,13 @@ async def test_cleanup_old_spend_logs_retention_period_cutoff():
     cleaner = SpendLogCleanup(general_settings=test_settings)
     cleaner.pod_lock_manager = mock_pod_lock_manager
     assert cleaner._should_delete_spend_logs() is True
+    before: Final = datetime.now(timezone.utc)
     await cleaner.cleanup_old_spend_logs(mock_prisma_client)
+    after: Final = datetime.now(timezone.utc)
 
     # Verify the cutoff date is correct
-    cutoff_date = mock_db.execute_raw.call_args[0][1]
-    expected_cutoff = datetime.now(timezone.utc) - timedelta(seconds=86400)
-    assert (
-        abs((cutoff_date - expected_cutoff).total_seconds()) < 1
-    )  # Allow 1 second difference for test execution time
+    cutoff_date: Final = mock_db.execute_raw.call_args[0][1]
+    assert before - timedelta(seconds=86400) <= cutoff_date <= after - timedelta(seconds=86400)
 
 
 @pytest.mark.asyncio
