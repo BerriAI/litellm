@@ -1,6 +1,7 @@
 import json
+import logging
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any, Dict, Final, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -2041,6 +2042,179 @@ class TestOpenAIPassthroughEmbeddingsSpendLog:
         assert spend_log_row["model"] == self.MODEL
         assert spend_log_row["custom_llm_provider"] == "openai"
         assert spend_log_row["request_id"] == self.CALL_ID
+
+
+RESPONSES_URL = "https://api.openai.com/v1/responses"
+STORED_RESPONSE_ID = "resp_080b10ff5d740c69006ad3de732e5087"
+RESPONSES_USAGE = {
+    "input_tokens": 11,
+    "input_tokens_details": {"cached_tokens": 0},
+    "output_tokens": 5,
+    "output_tokens_details": {"reasoning_tokens": 0},
+    "total_tokens": 16,
+}
+CREATE_REQUEST = {"model": "gpt-5.4-mini", "input": "Say hi in one word"}
+ASSISTANT_MESSAGE = {
+    "id": "msg_080b10ff5d740c69",
+    "type": "message",
+    "status": "completed",
+    "role": "assistant",
+    "content": [{"type": "output_text", "text": "Hi", "annotations": []}],
+}
+
+
+def _stored_response(status: str, background: bool, usage: dict | None) -> dict:
+    return {
+        "id": STORED_RESPONSE_ID,
+        "object": "response",
+        "created_at": 1792269939,
+        "status": status,
+        "background": background,
+        "error": None,
+        "incomplete_details": None,
+        "instructions": None,
+        "metadata": {},
+        "model": "gpt-5.4-mini-2026-03-17",
+        "output": [ASSISTANT_MESSAGE] if usage else [],
+        "parallel_tool_calls": True,
+        "temperature": 1.0,
+        "tool_choice": "auto",
+        "tools": [],
+        "top_p": 0.98,
+        "usage": usage,
+    }
+
+
+class TestOpenAIPassthroughResponsesSubRouteBilling:
+    def _dispatch(self, method: str, sub_route: str, request_body: dict, response_body: dict) -> dict:
+        url_route: Final = f"{RESPONSES_URL}{sub_route}"
+        now: Final = datetime.now()
+        logging_obj: Final = LiteLLMLoggingObj(
+            model="gpt-5.4-mini",
+            messages=[],
+            stream=False,
+            call_type="pass_through_endpoint",
+            start_time=now,
+            litellm_call_id="6c1f3a52-93d4-4b1e-9f0e-6f2f4f6b9a10",
+            function_id="1234",
+        )
+        return PassThroughEndpointLogging().normalize_llm_passthrough_logging_payload(
+            httpx_response=httpx.Response(200, json=response_body, request=httpx.Request(method, url_route)),
+            response_body=response_body,
+            request_body=request_body,
+            logging_obj=logging_obj,
+            url_route=url_route,
+            result="",
+            start_time=now,
+            end_time=now,
+            cache_hit=False,
+            custom_llm_provider="openai",
+            litellm_params={},
+            call_type="pass_through_endpoint",
+        )
+
+    @pytest.mark.parametrize(
+        ("method", "sub_route", "request_body", "response_body"),
+        [
+            pytest.param("POST", "", CREATE_REQUEST, _stored_response("completed", False, RESPONSES_USAGE), id="create"),
+            pytest.param(
+                "POST",
+                "/compact",
+                {"model": "gpt-5.4-mini", "input": "Remember the number 42."},
+                {
+                    "id": STORED_RESPONSE_ID,
+                    "object": "response.compaction",
+                    "created_at": 1792270025,
+                    "output": [{"id": "cmp_082492f9", "type": "compaction", "encrypted_content": "gAAAA"}],
+                    "usage": RESPONSES_USAGE,
+                },
+                id="compact",
+            ),
+            pytest.param(
+                "GET",
+                f"/{STORED_RESPONSE_ID}",
+                {},
+                _stored_response("completed", True, RESPONSES_USAGE),
+                id="background_retrieve_completed",
+            ),
+            pytest.param(
+                "POST",
+                f"/{STORED_RESPONSE_ID}/cancel",
+                {},
+                _stored_response("cancelled", True, RESPONSES_USAGE),
+                id="background_cancel",
+            ),
+        ],
+    )
+    def test_billed_responses_call_records_cost(
+        self, local_model_cost_map, method: str, sub_route: str, request_body: dict, response_body: dict
+    ):
+        dispatched: Final = self._dispatch(method, sub_route, request_body, response_body)
+
+        assert dispatched["standard_logging_response_object"] is not None
+        assert dispatched["kwargs"]["response_cost"] > 0
+
+    @pytest.mark.parametrize(
+        ("method", "sub_route", "request_body", "response_body"),
+        [
+            pytest.param(
+                "POST",
+                "/input_tokens",
+                {"model": "gpt-5.4-mini", "input": "hi"},
+                {"object": "response.input_tokens", "input_tokens": 7},
+                id="input_tokens",
+            ),
+            pytest.param(
+                "GET",
+                f"/{STORED_RESPONSE_ID}",
+                {},
+                _stored_response("completed", False, RESPONSES_USAGE),
+                id="retrieve",
+            ),
+            pytest.param(
+                "GET",
+                f"/{STORED_RESPONSE_ID}/input_items",
+                {},
+                {
+                    "object": "list",
+                    "data": [
+                        {
+                            "id": "msg_074176e3",
+                            "type": "message",
+                            "status": "completed",
+                            "role": "user",
+                            "content": [{"type": "input_text", "text": "Say hi in one word"}],
+                        }
+                    ],
+                    "first_id": "msg_074176e3",
+                    "last_id": "msg_074176e3",
+                    "has_more": False,
+                },
+                id="input_items",
+            ),
+            pytest.param(
+                "DELETE",
+                f"/{STORED_RESPONSE_ID}",
+                {},
+                {"id": STORED_RESPONSE_ID, "object": "response.deleted", "deleted": True},
+                id="delete",
+            ),
+        ],
+    )
+    def test_unbilled_responses_sub_route_records_no_cost_and_no_error(
+        self,
+        local_model_cost_map,
+        caplog: pytest.LogCaptureFixture,
+        method: str,
+        sub_route: str,
+        request_body: dict,
+        response_body: dict,
+    ):
+        with caplog.at_level(logging.WARNING):
+            dispatched: Final = self._dispatch(method, sub_route, request_body, response_body)
+
+        assert not dispatched["kwargs"].get("response_cost")
+        assert [record.getMessage() for record in caplog.records if record.levelno >= logging.ERROR] == []
 
 
 if __name__ == "__main__":
