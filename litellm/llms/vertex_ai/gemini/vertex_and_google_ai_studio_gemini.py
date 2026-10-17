@@ -1238,7 +1238,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 return
 
     @staticmethod
-    def supports_sampling_params(model: str) -> bool:
+    def _supports_sampling_params(model: str) -> bool:
         from litellm.utils import get_bundled_model_cost_map
 
         candidates: Final = (
@@ -1248,8 +1248,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             model.replace("vertex_ai/", "").replace("gemini/", ""),
         )
         for cost_map in (litellm.model_cost, get_bundled_model_cost_map()):
-            if not isinstance(cost_map, dict):
-                continue
             for cand in candidates:
                 model_entry = cost_map.get(cand)
                 if isinstance(model_entry, dict):
@@ -1258,7 +1256,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         return val
         return True
 
-    _supports_sampling_params = supports_sampling_params
+    @classmethod
+    def supports_sampling_params(cls, model: str) -> bool:
+        return cls._supports_sampling_params(model)
 
     @staticmethod
     def _apply_sampling_param(
@@ -1268,7 +1268,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         value: object,
         drop_params: bool,
     ) -> None:
-        if VertexGeminiConfig.supports_sampling_params(model):
+        if VertexGeminiConfig._supports_sampling_params(model):
             optional_params[param] = value  # rebind-ok: in-place request params mapping
         elif not (litellm.drop_params or drop_params):
             raise litellm.utils.UnsupportedParamsError(
@@ -1288,7 +1288,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     ) -> dict:
         self._apply_include_server_side_tool_invocations(non_default_params, optional_params)
         gemini_sampling_params_warned: bool = False
-        supports_sampling: Final[bool] = VertexGeminiConfig.supports_sampling_params(model)
+        supports_sampling: Final[bool] = VertexGeminiConfig._supports_sampling_params(model)
         for param, value in non_default_params.items():
             if param == "temperature":
                 if not supports_sampling:

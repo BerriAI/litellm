@@ -1197,14 +1197,11 @@ def transform_request_body(
         if not VertexGeminiConfig.supports_sampling_params(model):
             unsupported_sampling: Final = tuple(k for k in ("temperature", "top_p", "top_k") if k in filtered_params)
             if unsupported_sampling:
-                should_drop: Final[bool] = litellm.drop_params is True or (
-                    litellm_params and litellm_params.get("drop_params") is True
-                )
+                should_drop: Final[bool] = (litellm.drop_params is True) or (litellm_params.get("drop_params") is True)
                 if not should_drop:
-                    first_k: Final[str] = unsupported_sampling[0]
                     raise litellm.utils.UnsupportedParamsError(
                         message=(
-                            f"{model} does not support {first_k}={filtered_params[first_k]}. "
+                            f"{model} does not support {unsupported_sampling[0]}. "
                             "To drop unsupported params, set `litellm.drop_params = True`."
                         ),
                         status_code=400,
