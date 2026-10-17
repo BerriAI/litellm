@@ -11,9 +11,6 @@ from litellm import verbose_logger
 from litellm._logging import redact_internal_details_from_client_message
 from litellm._uuid import uuid
 from litellm.exceptions import MidStreamFallbackError
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    encrypted_reasoning_signature,
-)
 from litellm.llms.anthropic.pass_through.messages.utils import (
     INCOMPLETE_STREAM_ERROR_MESSAGE,
     refusal_stop_details,
@@ -140,6 +137,7 @@ class AnthropicResponsesStreamWrapper:
         self._stream_failed = False
         self._chunk_queue: deque[dict[str, object]] = deque()
         self._refusal_text: str = ""
+        self._reasoning_text_parts_seen: frozenset[tuple[str | None, int]] = frozenset()
         self._sync_responses_iterator: Iterator[object] | None = None
 
     def _make_message_start(self) -> dict[str, object]:
@@ -183,13 +181,26 @@ class AnthropicResponsesStreamWrapper:
     def _field(source: object, name: str) -> object:
         return source.get(name) if isinstance(source, dict) else getattr(source, name, None)
 
+    def _emit_thinking_text(self, item_id: str | None, text: str) -> None:
+        existing_index: Final = self._item_id_to_block_index.get(item_id, -1) if item_id else self._current_block_index
+        block_index: Final = (
+            existing_index
+            if existing_index >= 0
+            else self._open_block(item_id, {"type": "thinking", "thinking": "", "signature": ""})
+        )
+        self._chunk_queue.append(
+            {"type": "content_block_delta", "index": block_index, "delta": {"type": "thinking_delta", "thinking": text}}
+        )
+
     def _close_reasoning_item(self, item: object, item_id: str | None) -> None:
+        reasoning_block: Final = LiteLLMAnthropicToResponsesAPIAdapter.thinking_block_from_reasoning_item(item)
+        existing_index: Final = self._item_id_to_block_index.get(item_id, -1) if item_id else self._current_block_index
+        completed_text: Final = reasoning_block.get("thinking") if reasoning_block is not None else None
+        if existing_index < 0 and isinstance(completed_text, str) and completed_text:
+            self._emit_thinking_text(item_id, completed_text)
         block_idx: Final = self._item_id_to_block_index.get(item_id, -1) if item_id else self._current_block_index
-        encrypted_content: Final = self._field(item, "encrypted_content")
         signature: Final = (
-            encrypted_reasoning_signature(encrypted_content)
-            if isinstance(encrypted_content, str) and encrypted_content
-            else None
+            reasoning_block.get("signature", reasoning_block.get("data")) if reasoning_block is not None else None
         )
         if block_idx < 0 and signature is None:
             return
@@ -213,9 +224,7 @@ class AnthropicResponsesStreamWrapper:
 
     def _process_event(self, event: object) -> None:
         """Convert one Responses API event into zero or more Anthropic chunks queued for emission."""
-        event_type = getattr(event, "type", None)
-        if event_type is None and isinstance(event, dict):
-            event_type = event.get("type")
+        event_type: Final = self._field(event, "type")
 
         if event_type is None:
             return
@@ -312,25 +321,25 @@ class AnthropicResponsesStreamWrapper:
             )
             return
 
-        # ---- reasoning summary text delta ----
-        if event_type == "response.reasoning_summary_text.delta":
-            item_id = getattr(event, "item_id", None) or (event.get("item_id") if isinstance(event, dict) else None)
-            delta = getattr(event, "delta", "") or (event.get("delta", "") if isinstance(event, dict) else "")
-            block_idx = self._item_id_to_block_index.get(item_id, -1) if item_id else self._current_block_index
-            if block_idx < 0:
-                if not delta:
-                    return
-                block_idx = self._open_block(
-                    item_id,
-                    {"type": "thinking", "thinking": "", "signature": ""},
-                )
-            self._chunk_queue.append(
-                {
-                    "type": "content_block_delta",
-                    "index": block_idx,
-                    "delta": {"type": "thinking_delta", "thinking": delta},
-                }
+        if event_type in (
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_text.delta",
+            "response.reasoning_text.done",
+        ):
+            reasoning_item_id: Final = self._field(event, "item_id")
+            reasoning_id: Final = reasoning_item_id if isinstance(reasoning_item_id, str) else None
+            content_index: Final = self._field(event, "content_index")
+            part_key: Final = (reasoning_id, content_index if isinstance(content_index, int) else 0)
+            if event_type == "response.reasoning_text.done" and part_key in self._reasoning_text_parts_seen:
+                return
+            reasoning_text: Final = self._field(
+                event, "text" if event_type == "response.reasoning_text.done" else "delta"
             )
+            if not isinstance(reasoning_text, str) or not reasoning_text:
+                return
+            if event_type != "response.reasoning_summary_text.delta":
+                self._reasoning_text_parts_seen = self._reasoning_text_parts_seen | frozenset((part_key,))
+            self._emit_thinking_text(reasoning_id, reasoning_text)
             return
 
         # ---- function call arguments delta ----

@@ -28,6 +28,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     merge_consecutive_system_messages,
     native_redacted_thinking_data,
     parse_tool_call_arguments,
+    reasoning_content_signature,
     responses_reasoning_items_from_thinking_blocks,
     salvage_concatenated_tool_arguments,
     schema_grammar_branch_count,
@@ -1969,6 +1970,35 @@ class TestEncryptedReasoningReplay:
 
     def test_signature_round_trips_the_encrypted_content(self):
         assert encrypted_content_from_signature(encrypted_reasoning_signature("gAAAA_bytes")) == "gAAAA_bytes"
+
+    def test_reasoning_content_signatures_keep_consecutive_items_separate(self) -> None:
+        first_signature: Final = reasoning_content_signature(("Brief summary",), ("First thought",), "opaque")
+        second_signature: Final = reasoning_content_signature((), ("Second thought",), None)
+
+        assert encrypted_content_from_signature(first_signature) == "opaque"
+        assert responses_reasoning_items_from_thinking_blocks(
+            (
+                {"type": "thinking", "thinking": "First thought", "signature": first_signature},
+                {"type": "thinking", "thinking": "Second thought", "signature": second_signature},
+            )
+        ) == (
+            {
+                "type": "reasoning",
+                "summary": [{"type": "summary_text", "text": "Brief summary"}],
+                "content": [{"type": "reasoning_text", "text": "First thought"}],
+                "encrypted_content": "opaque",
+            },
+            {"type": "reasoning", "summary": [], "content": [{"type": "reasoning_text", "text": "Second thought"}]},
+        )
+
+    @pytest.mark.parametrize("payload", ["not-json", '{"summary":[],"content":[1]}'])
+    def test_malformed_reasoning_content_signature_keeps_readable_thinking(self, payload: str) -> None:
+        signature: Final = "litellm_reasoning_content:" + payload
+
+        assert encrypted_content_from_signature(signature) is None
+        assert responses_reasoning_items_from_thinking_blocks(
+            ({"type": "thinking", "thinking": "Keep this thought", "signature": signature},)
+        ) == ({"type": "reasoning", "summary": [{"type": "summary_text", "text": "Keep this thought"}]},)
 
     @pytest.mark.parametrize(
         "signature", [None, "", "ErcBCkgIValidAnthropicSignature", "litellm_encrypted_reasoning:", 7]

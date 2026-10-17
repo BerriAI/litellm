@@ -16,7 +16,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeVar, cast
 
-from pydantic import TypeAdapter
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm import verbose_logger
@@ -28,6 +28,7 @@ from litellm.types.llms.openai import (
     ChatCompletionImageObject,
     ChatCompletionReasoningItem,
     ChatCompletionReasoningSummaryTextBlock,
+    ChatCompletionReasoningTextBlock,
     ChatCompletionRedactedThinkingBlock,
     ChatCompletionResponseMessage,
     ChatCompletionTextObject,
@@ -2256,6 +2257,31 @@ def reasoning_content_from_thinking_blocks(
 
 
 ENCRYPTED_REASONING_SIGNATURE_PREFIX: Final = "litellm_encrypted_reasoning:"
+REASONING_CONTENT_SIGNATURE_PREFIX: Final = "litellm_reasoning_content:"
+
+
+class _ReasoningContentReplay(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    summary: tuple[str, ...]
+    content: tuple[str, ...]
+    encrypted_content: str | None = None
+
+
+def reasoning_content_signature(
+    summary: tuple[str, ...], content: tuple[str, ...], encrypted_content: str | None
+) -> str:
+    payload: Final = _ReasoningContentReplay(summary=summary, content=content, encrypted_content=encrypted_content)
+    return f"{REASONING_CONTENT_SIGNATURE_PREFIX}{payload.model_dump_json()}"
+
+
+def _reasoning_content_from_signature(signature: object) -> _ReasoningContentReplay | None:
+    if not isinstance(signature, str) or not signature.startswith(REASONING_CONTENT_SIGNATURE_PREFIX):
+        return None
+    try:
+        return _ReasoningContentReplay.model_validate_json(signature.removeprefix(REASONING_CONTENT_SIGNATURE_PREFIX))
+    except ValidationError:
+        return None
 
 
 def encrypted_reasoning_signature(encrypted_content: str) -> str:
@@ -2269,11 +2295,16 @@ def encrypted_reasoning_signature(encrypted_content: str) -> str:
 
 
 def _carries_encrypted_reasoning(signature: object) -> bool:
-    return isinstance(signature, str) and signature.startswith(ENCRYPTED_REASONING_SIGNATURE_PREFIX)
+    return isinstance(signature, str) and signature.startswith(
+        (ENCRYPTED_REASONING_SIGNATURE_PREFIX, REASONING_CONTENT_SIGNATURE_PREFIX)
+    )
 
 
 def encrypted_content_from_signature(signature: object) -> str | None:
-    if not isinstance(signature, str) or not _carries_encrypted_reasoning(signature):
+    replay: Final = _reasoning_content_from_signature(signature)
+    if replay is not None:
+        return replay.encrypted_content
+    if not isinstance(signature, str) or not signature.startswith(ENCRYPTED_REASONING_SIGNATURE_PREFIX):
         return None
     return signature.removeprefix(ENCRYPTED_REASONING_SIGNATURE_PREFIX) or None
 
@@ -2404,6 +2435,16 @@ def _reasoning_replay_group_key(indexed_block: tuple[int, Mapping[str, object]])
 
 
 def _reasoning_item_from_block_group(group: tuple[Mapping[str, object], ...]) -> ChatCompletionReasoningItem | None:
+    replay: Final = _reasoning_content_from_signature(_encrypted_reasoning_field(group[0]))
+    if replay is not None:
+        return ChatCompletionReasoningItem(
+            type="reasoning",
+            summary=[
+                ChatCompletionReasoningSummaryTextBlock(type="summary_text", text=text) for text in replay.summary
+            ],
+            content=[ChatCompletionReasoningTextBlock(type="reasoning_text", text=text) for text in replay.content],
+            **({"encrypted_content": replay.encrypted_content} if replay.encrypted_content is not None else {}),
+        )
     summary: Final[list[ChatCompletionReasoningSummaryTextBlock]] = [  # mutable-ok: API message payload
         ChatCompletionReasoningSummaryTextBlock(type="summary_text", text=text)
         for block in group

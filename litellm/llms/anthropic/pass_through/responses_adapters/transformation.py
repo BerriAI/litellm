@@ -10,10 +10,13 @@ from collections.abc import Iterable, Mapping, Sequence
 from itertools import groupby
 from typing import Any, Final, cast
 
+from pydantic import BaseModel, ConfigDict
+
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_BOUNDARY,
     TOOL_RESULT_IMAGE_PLACEHOLDER,
     encrypted_reasoning_signature,
+    reasoning_content_signature,
     responses_reasoning_items_from_thinking_blocks,
     with_prompt_cache_breakpoint,
 )
@@ -52,6 +55,14 @@ from litellm.types.llms.openai import (
 
 REASONING_SUMMARY_PART_SEPARATOR: Final = "\n\n"
 RESPONSES_INCLUDE_ENCRYPTED_REASONING: Final = "reasoning.encrypted_content"
+
+
+class _ReasoningItem(BaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+
+    summary: tuple[object, ...] | None = None
+    content: tuple[object, ...] | None = None
+    encrypted_content: str | None = None
 
 
 class LiteLLMAnthropicToResponsesAPIAdapter:
@@ -246,10 +257,9 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         return str(getattr(part, "text", None) or "")
 
     @classmethod
-    def _thinking_block_from_reasoning_item(
+    def thinking_block_from_reasoning_item(
         cls,
-        summary: Iterable[object],
-        encrypted_content: object,
+        item: object,
     ) -> dict[str, object] | None:  # mutable-ok: API message payload
         """The one Anthropic block for a Responses reasoning item.
 
@@ -258,23 +268,37 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         turn replays the very item OpenAI produced; without it the signature stays empty,
         since only Anthropic can sign a thinking block.
         """
-        text: Final = REASONING_SUMMARY_PART_SEPARATOR.join(
-            part_text for part in summary if (part_text := cls._summary_part_text(part))
+        reasoning: Final = _ReasoningItem.model_validate(item)
+        summary_texts: Final = tuple(
+            part_text for part in reasoning.summary or () if (part_text := cls._summary_part_text(part))
         )
-        if not isinstance(encrypted_content, str) or not encrypted_content:
+        content_texts: Final = tuple(
+            part_text for part in reasoning.content or () if (part_text := cls._summary_part_text(part))
+        )
+        text: Final = REASONING_SUMMARY_PART_SEPARATOR.join(content_texts or summary_texts)
+        if content_texts:
+            content_signature: Final = reasoning_content_signature(
+                summary_texts, content_texts, reasoning.encrypted_content
+            )
+            return AnthropicResponseContentBlockThinking(
+                type="thinking", thinking=text, signature=content_signature
+            ).model_dump()
+        if not reasoning.encrypted_content:
             if not text:
                 return None
             return AnthropicResponseContentBlockThinking(type="thinking", thinking=text, signature=None).model_dump()
-        signature: Final = encrypted_reasoning_signature(encrypted_content)
+        signature: Final = encrypted_reasoning_signature(reasoning.encrypted_content)
         if not text:
             return AnthropicResponseContentBlockRedactedThinking(type="redacted_thinking", data=signature).model_dump()
         return AnthropicResponseContentBlockThinking(type="thinking", thinking=text, signature=signature).model_dump()
 
     @staticmethod
     def _assistant_block_group_key(indexed_block: tuple[int, Mapping[str, object]]) -> str:
-        """Group a run of consecutive thinking blocks together; keep every other block alone."""
         index, block = indexed_block
-        return "thinking" if block.get("type") in ("thinking", "redacted_thinking") else f"block:{index}"
+        block_type: Final = block.get("type")
+        if block_type in ("thinking", "redacted_thinking"):
+            return "thinking"
+        return "text" if block_type == "text" else f"block:{index}"
 
     @classmethod
     def _assistant_group_to_input_items(
@@ -285,6 +309,14 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         if btype in ("thinking", "redacted_thinking"):
             replayed: Final = responses_reasoning_items_from_thinking_blocks(group)
             return tuple(dict(item) for item in replayed)
+        if btype == "text":
+            return (
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": block.get("text", "")} for block in group],
+                },
+            )
         if btype == "tool_use":
             return (
                 {
@@ -451,19 +483,6 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                         for _, group in groupby(enumerate(blocks), key=self._assistant_block_group_key)
                         for item in self._assistant_group_to_input_items(tuple(block for _, block in group))
                     )
-                    asst_parts: list[dict[str, object]] = [  # mutable-ok: API message payload
-                        {"type": "output_text", "text": block.get("text", "")}
-                        for block in blocks
-                        if block.get("type") == "text"
-                    ]
-                    if asst_parts:
-                        input_items.append(
-                            {
-                                "type": "message",
-                                "role": "assistant",
-                                "content": asst_parts,
-                            }
-                        )
 
         return input_items
 
@@ -735,7 +754,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
 
         for item in response.output:
             if isinstance(item, ResponseReasoningItem):
-                reasoning_block = self._thinking_block_from_reasoning_item(item.summary, item.encrypted_content)
+                reasoning_block = self.thinking_block_from_reasoning_item(item)
                 if reasoning_block is not None:
                     content.append(reasoning_block)
 
@@ -787,10 +806,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                                     ).model_dump()
                                 )
                 elif item_type == "reasoning":
-                    reasoning_block = self._thinking_block_from_reasoning_item(
-                        cast(Iterable[object], item.get("summary") or ()),  # cast-ok: untyped provider json
-                        item.get("encrypted_content"),
-                    )
+                    reasoning_block = self.thinking_block_from_reasoning_item(item)
                     if reasoning_block is not None:
                         content.append(reasoning_block)
                 elif item_type == "function_call":

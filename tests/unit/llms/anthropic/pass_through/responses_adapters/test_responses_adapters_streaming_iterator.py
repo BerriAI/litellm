@@ -8,8 +8,11 @@ import json
 import os
 import sys
 from types import SimpleNamespace
+from typing import Final, Literal
 
 import pytest
+from anthropic.types import RawContentBlockDeltaEvent, RawMessageStreamEvent, SignatureDelta, ThinkingDelta
+from pydantic import TypeAdapter
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../..")))
 
@@ -23,6 +26,69 @@ from litellm.llms.anthropic.pass_through.responses_adapters.streaming_iterator i
     AnthropicResponsesStreamWrapper,
 )
 from litellm.types.llms.openai import ResponseFailedEvent, ResponsesAPIResponse
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("delivery", ["delta", "done", "item"])
+@pytest.mark.parametrize("encrypted_content", [None, "opaque-reasoning"])
+async def test_reasoning_text_reaches_client_and_survives_replay(
+    delivery: Literal["delta", "done", "item"], encrypted_content: str | None
+) -> None:
+    from litellm.llms.anthropic.pass_through.responses_adapters.transformation import (
+        LiteLLMAnthropicToResponsesAPIAdapter,
+    )
+    from litellm.types.llms.anthropic import AnthropicMessagesRequest
+
+    reasoning: Final = {
+        "type": "reasoning",
+        "id": "rs_text",
+        "summary": [],
+        "content": [{"type": "reasoning_text", "text": "Use a tool"}],
+        **({"encrypted_content": encrypted_content} if encrypted_content is not None else {}),
+    }
+    events: Final = (
+        {"type": "response.created"},
+        {"type": "response.output_item.added", "item": {"type": "reasoning", "id": "rs_text"}},
+        *(
+            (
+                {"type": "response.reasoning_text.delta", "item_id": "rs_text", "content_index": 0, "delta": "Use "},
+                {"type": "response.reasoning_text.delta", "item_id": "rs_text", "content_index": 0, "delta": "a tool"},
+            )
+            if delivery == "delta"
+            else ()
+        ),
+        *(
+            ({"type": "response.reasoning_text.done", "item_id": "rs_text", "content_index": 0, "text": "Use a tool"},)
+            if delivery != "item"
+            else ()
+        ),
+        {"type": "response.output_item.done", "item": reasoning},
+        {"type": "response.completed"},
+    )
+    wrapper: Final = AnthropicResponsesStreamWrapper(responses_stream=iter(events), model="test-model")
+    chunks: Final = TypeAdapter(tuple[RawMessageStreamEvent, ...]).validate_python(tuple([c async for c in wrapper]))
+    thinking: Final = "".join(
+        event.delta.thinking
+        for event in chunks
+        if isinstance(event, RawContentBlockDeltaEvent) and isinstance(event.delta, ThinkingDelta)
+    )
+    signature: Final = "".join(
+        event.delta.signature
+        for event in chunks
+        if isinstance(event, RawContentBlockDeltaEvent) and isinstance(event.delta, SignatureDelta)
+    )
+    request: Final = AnthropicMessagesRequest(
+        model="test-model",
+        max_tokens=1024,
+        messages=[
+            {"role": "assistant", "content": [{"type": "thinking", "thinking": thinking, "signature": signature}]}
+        ],
+    )
+
+    assert thinking == "Use a tool"
+    assert LiteLLMAnthropicToResponsesAPIAdapter().translate_messages_to_responses_input(request["messages"]) == [
+        {key: value for key, value in reasoning.items() if key != "id"}
+    ]
 
 
 def _process_all(events: list) -> list:
