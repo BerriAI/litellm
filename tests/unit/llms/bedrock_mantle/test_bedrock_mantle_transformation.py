@@ -1094,3 +1094,22 @@ def test_mantle_signing_reports_only_missing_aws_dependency(missing):
         assert error.value.__cause__ is failure
     else:
         assert error.value is failure
+
+
+class TestBedrockMantleChatStripSearchContentTypes:
+    def test_map_openai_params_strips_search_content_types(self):
+        cfg = BedrockMantleChatConfig()
+        mapped = cfg.map_openai_params(
+            non_default_params={
+                "tools": [
+                    {
+                        "type": "web_search_preview",
+                        "search_content_types": ["text"],
+                    }
+                ]
+            },
+            optional_params={},
+            model="openai.gpt-5.5",
+            drop_params=False,
+        )
+        assert mapped["tools"] == [{"type": "web_search_preview"}]

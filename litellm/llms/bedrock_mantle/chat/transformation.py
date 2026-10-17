@@ -21,6 +21,7 @@ from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock_mantle.common_utils import (
     BEDROCK_MANTLE_DEFAULT_REGION,
     BedrockMantleAuthMixin,
+    strip_unsupported_web_search_tool_fields,
 )
 from litellm.llms.openai.chat.gpt_5_transformation import is_gpt_reasoning_series_name
 from litellm.secret_managers.main import get_secret_str
@@ -150,13 +151,19 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
             drop_params,
             replace_max_completion_tokens_with_max_tokens and not gpt_reasoning_model,
         )
-        if not gpt_reasoning_model or "max_tokens" not in mapped_params:
-            return mapped_params
-        return {
-            param: value
-            for param, value in (("max_completion_tokens", mapped_params["max_tokens"]), *mapped_params.items())
-            if param != "max_tokens"
-        }
+        renamed_params: Final = (
+            {
+                param: value
+                for param, value in (("max_completion_tokens", mapped_params["max_tokens"]), *mapped_params.items())
+                if param != "max_tokens"
+            }
+            if gpt_reasoning_model and "max_tokens" in mapped_params
+            else mapped_params
+        )
+        tools: Final = renamed_params.get("tools")
+        if tools is None:
+            return renamed_params
+        return {**renamed_params, "tools": strip_unsupported_web_search_tool_fields(tools)}
 
     def _supports_reasoning(self, model: str) -> bool:
         try:
