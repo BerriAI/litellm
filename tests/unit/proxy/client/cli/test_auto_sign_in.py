@@ -385,6 +385,35 @@ def test_a_failed_sign_in_names_the_reason_and_points_at_lite_login(
     assert get_stored_api_key(BASE_URL, vault=vault) is None
 
 
+@pytest.mark.parametrize(
+    ("discovery_status", "advice"),
+    [
+        (404, "so it is likely older than v1.99.0. Upgrade it, run `lite login` if it uses SSO"),
+        (503, "Run `lite login --pkce` from a terminal on a machine with a browser"),
+    ],
+    ids=["proxy_without_browser_sign_in", "proxy_erroring"],
+)
+def test_a_proxy_without_browser_sign_in_is_named_as_too_old_instead_of_pointing_at_lite_login_pkce(
+    requests_mock: Mocker, secret_vault_factory: type[FakeSecretVault], discovery_status: int, advice: str
+) -> None:
+    requests_mock.post(f"{BASE_URL}/key/generate", status_code=401, json=REJECTED)
+    requests_mock.get(f"{BASE_URL}/.well-known/litellm-cli-auth", status_code=discovery_status)
+
+    def sign_in_with_a_picked_browser(base_url: str, echo: Callable[[str], None]) -> PkceCredential | PkceFailure:
+        return pkce_browser_sign_in(
+            base_url, echo, find_browser=lambda: webbrowser.GenericBrowser("w3m"), environ={"BROWSER": "w3m"}
+        )
+
+    result: Final = CliRunner().invoke(
+        cli,
+        ["--base-url", BASE_URL, "keys", "generate"],
+        obj={"secret_vault": secret_vault_factory(), "browser_sign_in": sign_in_with_a_picked_browser},
+    )
+
+    assert result.exit_code == 1
+    assert advice in result.stderr
+
+
 def test_a_signed_in_key_the_proxy_also_rejects_is_not_followed_by_another_sign_in(
     requests_mock: Mocker, secret_vault_factory: type[FakeSecretVault]
 ) -> None:

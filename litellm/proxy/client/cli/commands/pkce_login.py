@@ -14,6 +14,7 @@ import webbrowser
 from base64 import urlsafe_b64encode
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Protocol
@@ -68,6 +69,7 @@ class _TokenResponse(LiteLLMBaseModel):
 @dataclass(frozen=True, slots=True)
 class PkceFailure:
     reason: str
+    proxy_predates_pkce: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -208,7 +210,8 @@ def discover_cli_auth(base_url: str, http: Http) -> CliAuthContract | PkceFailur
         return PkceFailure(f"could not reach {url}: {exc}")
     if response.status_code != 200:
         return PkceFailure(
-            f"{url} answered {response.status_code}; this proxy version does not support `lite login --pkce`"
+            f"{url} answered {response.status_code}; this proxy version does not support `lite login --pkce`",
+            proxy_predates_pkce=response.status_code == HTTPStatus.NOT_FOUND,
         )
     try:
         contract: Final = CliAuthContract.model_validate(response.json())

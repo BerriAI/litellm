@@ -43,8 +43,14 @@ def _ssh_session_without_a_display(environ: Mapping[str, str]) -> bool:
 _OPEN_URL_IN_BROWSER: Final = "import sys, webbrowser; sys.exit(0 if webbrowser.open(sys.argv[1]) else 1)"
 
 
-def open_browser_off_stdout(url: str) -> PkceFailure | None:
-    launcher: Final = subprocess.run((sys.executable, "-I", "-c", _OPEN_URL_IN_BROWSER, url), stdout=2, check=False)
+def open_browser_detached(url: str) -> PkceFailure | None:
+    launcher: Final = subprocess.run(
+        (sys.executable, "-I", "-c", _OPEN_URL_IN_BROWSER, url),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
     return None if launcher.returncode == 0 else PkceFailure("the web browser did not open")
 
 
@@ -53,7 +59,7 @@ def pkce_browser_sign_in(
     echo: Callable[[str], None],
     find_browser: Callable[[], webbrowser.BaseBrowser] = webbrowser.get,
     environ: Mapping[str, str] = os.environ,
-    open_browser: Callable[[str], object] = open_browser_off_stdout,
+    open_browser: Callable[[str], object] = open_browser_detached,
 ) -> PkceCredential | PkceFailure:
     if _runs_in_ci(environ):
         return PkceFailure("the CI environment variable is set, so lite does not open a browser")
@@ -140,17 +146,26 @@ def _attempt_with_newer_stored_key(
     return _attempt_with_key(run, ctx, stored_key)
 
 
+def _sign_in_failure(base_url: str, failure: PkceFailure) -> str:
+    if failure.proxy_predates_pkce:
+        return (
+            f"The proxy at {base_url} has no browser sign-in for lite, so it is likely older than v1.99.0. "
+            "Upgrade it, run `lite login` if it uses SSO, or set LITELLM_PROXY_API_KEY."
+        )
+    return (
+        f"Could not sign in to {base_url} through the browser: {failure.reason}. "
+        "Run `lite login --pkce` from a terminal on a machine with a browser, `lite login` on one without, "
+        "or set LITELLM_PROXY_API_KEY."
+    )
+
+
 def _sign_in(ctx: click.Context, context: _SignInContext) -> str:
     base_url: Final = context["base_url"]
     _echo_to_stderr(f"The proxy at {base_url} needs a sign-in.")
     sign_in: Final = context.get("browser_sign_in") or pkce_browser_sign_in
     credential: Final = sign_in(base_url, _echo_to_stderr)
     if isinstance(credential, PkceFailure):
-        raise click.ClickException(
-            f"Could not sign in to {base_url} through the browser: {credential.reason}. "
-            "Run `lite login --pkce` from a terminal on a machine with a browser, `lite login` on one without, "
-            "or set LITELLM_PROXY_API_KEY."
-        )
+        raise click.ClickException(_sign_in_failure(base_url, credential))
     stored: Final = replace_stored_token(
         pkce_token_record(base_url, credential), requests.Session(), context_secret_vault(ctx)
     )
