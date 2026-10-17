@@ -7,7 +7,7 @@ import time
 import traceback
 import uuid
 from collections.abc import AsyncIterable, Awaitable, Callable, Coroutine, Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from functools import lru_cache
 from itertools import chain
@@ -1943,7 +1943,7 @@ class GuardedResponsesWsFrame:
 
     frame: str
     guardrail_information: tuple[Mapping[str, object], ...] = ()
-    pii_tokens: Mapping[str, str] = MappingProxyType({})
+    pii_tokens: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
 
 
 ResponsesWsFrameGuard: TypeAlias = Callable[[str], Awaitable[GuardedResponsesWsFrame]]
