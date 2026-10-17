@@ -25,8 +25,8 @@ configured replica; a burst of failing calls leaves a transient bulge of garbage
 gc reclaims within seconds, so each checkpoint samples until no new worker has
 answered for a settle window and keeps the lowest reading per worker. A checkpoint
 runs before the warmup and after every batch, and each batch's settled growth per
-worker rides out as a repeated `rss_batch_growth` JUnit property, so the per-batch
-curve is on record for every run, passing or not. The budget is judged per worker
+worker rides out as a repeated `rss_batch_growth` JUnit property as soon as that
+batch settles, so a run that fails keeps the curve up to the batch it failed in. The budget is judged per worker
 (by replica address, hostname and pid, since pods in their own pid namespaces report
 the same pids) so each worker is compared with itself, and the checkpoints around the
 measured batch must see the same workers: a single load-balanced address reaches the
@@ -68,7 +68,6 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from itertools import pairwise
 from types import MappingProxyType
 from typing import Final
 
@@ -187,37 +186,44 @@ def _settled_rss_per_worker(proxy: ProxyClient) -> Mapping[WorkerKey, RssReading
     )
 
 
-def _settled_rss_after_batch(
-    proxy: ProxyClient, key: str, model: str, override: RouterSettingsOverride, fallback: str
-) -> Mapping[WorkerKey, RssReading]:
+def _record_batch_growth(
+    record_property: Callable[[str, object], None],
+    batch: int,
+    before: Mapping[WorkerKey, RssReading],
+    after: Mapping[WorkerKey, RssReading],
+) -> None:
+    for growth in (WorkerGrowth(before[worker], after[worker]) for worker in before.keys() & after.keys()):
+        record_property(
+            "rss_batch_growth",
+            json.dumps(
+                {
+                    "batch": batch,
+                    "worker": growth.warm.where,
+                    "before_mb": growth.warm.ram_usage_mb,
+                    "after_mb": growth.after.ram_usage_mb,
+                    "growth_mb": round(growth.growth_mb, 2),
+                }
+            ),
+        )
+
+
+def _settled_rss_around_measured_batch(
+    proxy: ProxyClient,
+    key: str,
+    model: str,
+    override: RouterSettingsOverride,
+    fallback: str,
+    record_property: Callable[[str, object], None],
+    before: Mapping[WorkerKey, RssReading],
+    batch: int,
+) -> tuple[Mapping[WorkerKey, RssReading], Mapping[WorkerKey, RssReading]]:
     calls: Final = _fail_many(proxy, key, model, override)
     _assert_every_call_failed_through_fallback(calls, fallback)
-    return _settled_rss_per_worker(proxy)
-
-
-def _common_worker_growth(
-    before: Mapping[WorkerKey, RssReading], after: Mapping[WorkerKey, RssReading]
-) -> tuple[WorkerGrowth, ...]:
-    return tuple(WorkerGrowth(before[worker], after[worker]) for worker in sorted(before.keys() & after.keys()))
-
-
-def _record_batch_growth(
-    record_property: Callable[[str, object], None], checkpoints: Sequence[Mapping[WorkerKey, RssReading]]
-) -> None:
-    for batch, (before, after) in enumerate(pairwise(checkpoints), start=1):
-        for growth in _common_worker_growth(before, after):
-            record_property(
-                "rss_batch_growth",
-                json.dumps(
-                    {
-                        "batch": batch,
-                        "worker": growth.warm.where,
-                        "before_mb": growth.warm.ram_usage_mb,
-                        "after_mb": growth.after.ram_usage_mb,
-                        "growth_mb": round(growth.growth_mb, 2),
-                    }
-                ),
-            )
+    after: Final = _settled_rss_per_worker(proxy)
+    _record_batch_growth(record_property, batch, before, after)
+    if batch == MEASURED_BATCH:
+        return before, after
+    return _settled_rss_around_measured_batch(proxy, key, model, override, fallback, record_property, after, batch + 1)
 
 
 def _heaviest_worker_growth(
@@ -325,16 +331,18 @@ class TestReliabilityMemory:
             f"request into the stored snapshot the way the v1.100.0 ones did"
         )
 
-        checkpoints: Final = (
+        warm, after = _settled_rss_around_measured_batch(
+            client.proxy,
+            scoped_key,
+            primary,
+            override,
+            fallback,
+            record_property,
             _settled_rss_per_worker(client.proxy),
-            *(
-                _settled_rss_after_batch(client.proxy, scoped_key, primary, override, fallback)
-                for _ in range(MEASURED_BATCH)
-            ),
+            1,
         )
-        _record_batch_growth(record_property, checkpoints)
 
-        heaviest: Final = _heaviest_worker_growth(checkpoints[-2], checkpoints[-1])
+        heaviest: Final = _heaviest_worker_growth(warm, after)
         assert heaviest.growth_mb <= MEMORY_RSS_BUDGET_MB, (
             f"proxy RSS grew {heaviest.growth_mb:.1f} MB over measured batch {MEASURED_BATCH} of "
             f"{MEMORY_REQUESTS_PER_PHASE} failing requests ({MEMORY_RETRIES_PER_REQUEST} retries each plus a fallback) "
