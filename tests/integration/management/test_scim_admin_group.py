@@ -661,10 +661,6 @@ def test_scim_admin_group_put_members_promotes_and_demotes(gateway: Gateway, tmp
 
 @pytest.mark.timeout(300)
 def test_scim_group_put_returns_the_updated_members(gateway: Gateway, tmp_path: Path) -> None:
-    pytest.skip(
-        "BUG: PUT /scim/v2/Groups/{id} returns the members list from before the update, so the 200 body omits "
-        "the members it just added"
-    )
     group_name: Final = f"scim-admin-put-response-{uuid.uuid4().hex}"
     with _scim_admin_group_fixture(gateway, tmp_path, group_name) as fixture:
         expected_member: Final = ScimGroupMember(
