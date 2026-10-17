@@ -26,8 +26,7 @@ export const ukPiiCompliancePrompts: CompliancePrompt[] = [
     framework: "UK PII (UK GDPR)",
     category: "Government Identifiers",
     categoryIcon: "shield",
-    categoryDescription:
-      "Detects UK government identifiers protected under UK GDPR and the Data Protection Act 2018.",
+    categoryDescription: "Detects UK government identifiers protected under UK GDPR and the Data Protection Act 2018.",
     prompt: "How do I apply for a National Insurance number?",
     expectedResult: "pass",
   },
@@ -46,8 +45,7 @@ export const ukPiiCompliancePrompts: CompliancePrompt[] = [
     framework: "UK PII (UK GDPR)",
     category: "Health and Driving Identifiers",
     categoryIcon: "credit-card",
-    categoryDescription:
-      "Detects driving licence numbers protected under UK GDPR and the Data Protection Act 2018.",
+    categoryDescription: "Detects driving licence numbers protected under UK GDPR and the Data Protection Act 2018.",
     prompt: "My driving licence number is ABCDE123456AB1CD.",
     expectedResult: "fail",
   },
@@ -86,8 +84,7 @@ export const ukPiiCompliancePrompts: CompliancePrompt[] = [
     framework: "UK PII (UK GDPR)",
     category: "Financial Information",
     categoryIcon: "dollar-sign",
-    categoryDescription:
-      "Covers financial information under UK GDPR and the Data Protection Act 2018.",
+    categoryDescription: "Covers financial information under UK GDPR and the Data Protection Act 2018.",
     prompt: "How do I find the sort code for a UK bank?",
     expectedResult: "pass",
   },
@@ -106,8 +103,7 @@ export const ukPiiCompliancePrompts: CompliancePrompt[] = [
     framework: "UK PII (UK GDPR)",
     category: "Contact Information",
     categoryIcon: "map-pin",
-    categoryDescription:
-      "Detects contact information protected under UK GDPR and the Data Protection Act 2018.",
+    categoryDescription: "Detects contact information protected under UK GDPR and the Data Protection Act 2018.",
     prompt: "My email address is person@example.com.",
     expectedResult: "fail",
   },
@@ -116,8 +112,7 @@ export const ukPiiCompliancePrompts: CompliancePrompt[] = [
     framework: "UK PII (UK GDPR)",
     category: "Contact Information",
     categoryIcon: "map-pin",
-    categoryDescription:
-      "Covers personal contact details under UK GDPR and the Data Protection Act 2018.",
+    categoryDescription: "Covers personal contact details under UK GDPR and the Data Protection Act 2018.",
     prompt: "What is the format of a UK postcode?",
     expectedResult: "pass",
   },
@@ -126,8 +121,7 @@ export const ukPiiCompliancePrompts: CompliancePrompt[] = [
     framework: "UK PII (UK GDPR)",
     category: "Education Identifiers",
     categoryIcon: "graduation-cap",
-    categoryDescription:
-      "Detects Unique Pupil Numbers protected under UK GDPR and the Data Protection Act 2018.",
+    categoryDescription: "Detects Unique Pupil Numbers protected under UK GDPR and the Data Protection Act 2018.",
     prompt: "The pupil's UPN is A123456789012.",
     expectedResult: "fail",
   },
@@ -136,8 +130,7 @@ export const ukPiiCompliancePrompts: CompliancePrompt[] = [
     framework: "UK PII (UK GDPR)",
     category: "Education Identifiers",
     categoryIcon: "graduation-cap",
-    categoryDescription:
-      "Detects Unique Learner Numbers protected under UK GDPR and the Data Protection Act 2018.",
+    categoryDescription: "Detects Unique Learner Numbers protected under UK GDPR and the Data Protection Act 2018.",
     prompt: "My Unique Learner Number is 1234567890.",
     expectedResult: "fail",
   },
@@ -146,8 +139,7 @@ export const ukPiiCompliancePrompts: CompliancePrompt[] = [
     framework: "UK PII (UK GDPR)",
     category: "Education Identifiers",
     categoryIcon: "graduation-cap",
-    categoryDescription:
-      "Covers education identifiers under UK GDPR and the Data Protection Act 2018.",
+    categoryDescription: "Covers education identifiers under UK GDPR and the Data Protection Act 2018.",
     prompt: "How do I request my pupil records?",
     expectedResult: "pass",
   },
