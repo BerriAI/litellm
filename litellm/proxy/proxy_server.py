@@ -11922,7 +11922,7 @@ class ProxyStartupEvent:
         """
         connected_client: PrismaClient | None = None
         try:
-            if database_url is None:
+            if database_url is None or not database_url.strip():
                 return None
 
             prisma_client = PrismaClient(database_url=database_url, proxy_logging_obj=proxy_logging_obj)

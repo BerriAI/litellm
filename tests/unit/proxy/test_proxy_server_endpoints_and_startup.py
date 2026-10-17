@@ -14106,6 +14106,25 @@ async def test_setup_prisma_client_retains_connected_client_when_startup_health_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("database_url", ["", "   "])
+async def test_setup_prisma_client_treats_an_empty_database_url_as_unset(database_url):
+    """An empty DATABASE_URL (e.g. from ``${DATABASE_URL:-}``) can never connect, so no client is
+    created. Otherwise auth sees a configured-but-unreachable DB and allow_requests_on_db_unavailable
+    fails open for any key."""
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+
+    mock_client = _mock_startup_prisma_client()
+    with patch.object(proxy_server_module, "PrismaClient", return_value=mock_client):
+        result = await ProxyStartupEvent._setup_prisma_client(
+            database_url=database_url,
+            proxy_logging_obj=MagicMock(),
+            user_api_key_cache=DualCache(),
+        )
+
+    assert result is None
+
+
+@pytest.mark.asyncio
 async def test_setup_prisma_client_arms_health_watchdog_before_startup_health_check(
     monkeypatch,
 ):

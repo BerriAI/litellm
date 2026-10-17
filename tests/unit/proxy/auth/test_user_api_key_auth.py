@@ -509,12 +509,13 @@ async def test_auth_not_connected_to_db(monkeypatch: pytest.MonkeyPatch):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("allow_requests_on_db_unavailable", [True, False])
+@pytest.mark.parametrize("database_url", [None, "", "   "])
 async def test_auth_no_db_configured_rejects_non_master_key(
-    allow_requests_on_db_unavailable: bool, monkeypatch: pytest.MonkeyPatch
+    allow_requests_on_db_unavailable: bool, database_url: str | None, monkeypatch: pytest.MonkeyPatch
 ):
     """
-    With no database configured, a key that isn't the master key is an auth error (401), and
-    allow_requests_on_db_unavailable must not fail open: there is no outage to ride out.
+    With no database configured (DATABASE_URL unset or empty), a key that isn't the master key is an
+    auth error (401), and allow_requests_on_db_unavailable must not fail open: there is no outage to ride out.
     """
     from fastapi import Request
     from starlette.datastructures import URL
@@ -523,7 +524,10 @@ async def test_auth_no_db_configured_rejects_non_master_key(
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
     from litellm.proxy.proxy_server import user_api_key_cache
 
-    monkeypatch.delenv("DATABASE_URL", raising=False)
+    if database_url is None:
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+    else:
+        monkeypatch.setenv("DATABASE_URL", database_url)
     setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
     setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
     setattr(litellm.proxy.proxy_server, "prisma_client", None)
