@@ -700,7 +700,7 @@ class ChunkProcessor:
                 content = delta.get(delta_key, "")
                 if content is None:
                     continue  # openai v1.0.0 sets content = None for chunks
-                content_list.append(content)
+                content_list.append(delta_content_as_str(content))
 
         # Combine the "content" strings into a single string || combine the 'function' strings into a single string
         combined_content: Final = "".join(content_list)
@@ -1381,12 +1381,28 @@ def _delta_carries_more_than_text(delta: Mapping[str, object]) -> bool:
     return any(delta.get(field) is not None for field in _NON_TEXT_DELTA_FIELDS)
 
 
+def delta_content_as_str(content: object) -> str:
+    """Coerce a streamed delta content value to plain text.
+
+    OpenAI-compatible providers are supposed to stream delta.content as a
+    string, but some stream a list of content parts instead. Join the text
+    parts into one string and map everything else to an empty string, so the
+    running answer text neither loses the content nor raises on a list.
+    """
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    parts: Final = cast("Sequence[Mapping[str, str]]", content)  # cast-ok: json content parts are dicts
+    return "".join(part.get("text", "") for part in parts)
+
+
 def _simple_text_part(choices: Sequence[object]) -> str | None:
     deltas: Final = tuple(_stream_choice_delta(choice) for choice in choices)
     if any(_delta_carries_more_than_text(delta) for delta in deltas):
         return None
     content: Final = deltas[0].get("content")
-    return content if isinstance(content, str) else ""
+    return delta_content_as_str(content)
 
 
 def stream_chunk_builder(

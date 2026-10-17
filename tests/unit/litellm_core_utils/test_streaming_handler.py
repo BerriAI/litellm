@@ -6689,3 +6689,39 @@ async def test_leaving_an_async_with_block_closes_the_provider_stream():
     async with _wrapper_over(stream):
         pass
     assert stream.close_calls == 1
+
+
+def _chunk_with_list_content(text: str, chunk_id: str, created: int) -> ModelResponseStream:
+    return ModelResponseStream(
+        id=chunk_id,
+        object="chat.completion.chunk",
+        created=created,
+        model="gpt-5.6",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(role="assistant", content=[{"type": "text", "text": text}]),
+                finish_reason=None,
+            )
+        ],
+    )
+
+
+def test_streaming_delta_content_list_accumulates_as_str():
+    """A provider streaming delta.content as a content-part list must still accumulate as text."""
+    chunks: Final = [
+        _chunk_with_list_content("hello ", "chunk1", 1741037890),
+        _chunk_with_list_content("world", "chunk2", 1741037891),
+    ]
+
+    response: Final = CustomStreamWrapper(
+        completion_stream=iter(chunks),
+        model="gpt-5.6",
+        logging_obj=MagicMock(),
+        custom_llm_provider="openai",
+    )
+
+    for _ in response:
+        pass
+
+    assert response.response_uptil_now == "hello world"

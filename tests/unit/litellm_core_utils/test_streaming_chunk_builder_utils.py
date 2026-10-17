@@ -2180,3 +2180,39 @@ def test_stream_chunk_builder_keeps_reasoning_items_on_text_only_replies():
     assert response is not None
     assert response.choices[0].message.content == "Hello world"
     assert response.choices[0].message.reasoning_items == reasoning_items
+
+
+def test_stream_chunk_builder_joins_content_part_list_delta():
+    """A provider streaming delta.content as a content-part list must aggregate as text."""
+    chunks = [
+        ModelResponseStream(
+            id="chatcmpl-123",
+            created=1,
+            model="gpt-4.1-mini",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(content=[{"type": "text", "text": "Hello "}], role="assistant"),
+                )
+            ],
+        ),
+        ModelResponseStream(
+            id="chatcmpl-123",
+            created=2,
+            model="gpt-4.1-mini",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    finish_reason="stop",
+                    index=0,
+                    delta=Delta(content=[{"type": "text", "text": "world"}], role=None),
+                )
+            ],
+        ),
+    ]
+
+    response = stream_chunk_builder(chunks=chunks)
+    assert response is not None
+    assert response.choices[0].message.content == "Hello world"
