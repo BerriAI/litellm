@@ -118,8 +118,9 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         map does not list keeps the body field, and the beta goes with it only where that
         platform's config forwards betas unfiltered.
         """
-        return ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value not in get_unsupported_headers(
-            self._resolved_provider
+        return not self.should_filter_anthropic_beta_headers() or (
+            ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value
+            not in get_unsupported_headers(self._resolved_provider)
         )
 
     def _remove_scope_from_cache_control(self, anthropic_messages_request: dict) -> None:

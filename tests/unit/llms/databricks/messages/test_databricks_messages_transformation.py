@@ -41,21 +41,22 @@ BASH_TOOL: Final = {
 USER_TURN: Final = [{"role": "user", "content": "Use the Bash tool to run: echo hello"}]
 
 
-def test_claude_serving_endpoints_dispatch_to_the_native_messages_config() -> None:
+@pytest.mark.parametrize(
+    ("model", "messages_url"),
+    [(CLAUDE_MODEL, MESSAGES_URL), (UNITY_CATALOG_CLAUDE_MODEL, AI_GATEWAY_MESSAGES_URL)],
+)
+def test_foundation_claude_names_dispatch_to_a_native_messages_route(model: str, messages_url: str) -> None:
     config: Final = ProviderConfigManager.get_provider_anthropic_messages_config(
-        model=CLAUDE_MODEL, provider=litellm.LlmProviders.DATABRICKS
+        model=model, provider=litellm.LlmProviders.DATABRICKS
     )
 
-    assert isinstance(config, DatabricksAnthropicMessagesConfig)
-    assert config.custom_llm_provider == "databricks"
-
-
-def test_unity_catalog_claude_names_dispatch_to_the_native_messages_config() -> None:
-    config: Final = ProviderConfigManager.get_provider_anthropic_messages_config(
-        model=UNITY_CATALOG_CLAUDE_MODEL, provider=litellm.LlmProviders.DATABRICKS
+    assert config is not None
+    assert (
+        config.get_complete_url(
+            api_base=DATABRICKS_API_BASE, api_key=None, model=model, optional_params={}, litellm_params={}
+        )
+        == messages_url
     )
-
-    assert isinstance(config, DatabricksAnthropicMessagesConfig)
 
 
 @pytest.mark.parametrize("model", ["databricks-gpt-oss-120b", "my-claude-finetune", "main.default.claude-proxy"])
