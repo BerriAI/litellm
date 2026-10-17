@@ -236,9 +236,8 @@ func resourceLiteLLMTagRead(d *schema.ResourceData, m interface{}) error {
 			d.Set("rpm_limit", *bt.RPMLimit)
 		}
 		d.Set("budget_duration", GetStringValue(bt.BudgetDuration, d.Get("budget_duration").(string)))
-		if encoded, ok := budgetModelMaxBudgetString(bt.ModelMaxBudget); ok {
-			d.Set("model_max_budget", encoded)
-		}
+		modelMaxBudget, _ := budgetModelMaxBudgetString(bt.ModelMaxBudget)
+		d.Set("model_max_budget", modelMaxBudget)
 	}
 
 	log.Printf("[INFO] Successfully read tag with name: %s", d.Id())

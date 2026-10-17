@@ -189,6 +189,27 @@ func TestResourceLiteLLMTagRead_PicksUpModelMaxBudgetChangedOnTheProxy(t *testin
 	}
 }
 
+func TestResourceLiteLLMTag_ModelMaxBudgetClearedOnTheProxyPlansItBack(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"prod": {"name": "prod", "litellm_budget_table": {"budget_id": "bud-1", "model_max_budget": null}}}`))
+	}))
+	defer srv.Close()
+	config := map[string]interface{}{
+		"name":             "prod",
+		"model_max_budget": `{"gpt-4": {"max_budget": 10, "budget_duration": "1d"}}`,
+	}
+	prior := schema.TestResourceDataRaw(t, resourceLiteLLMTag().Schema, config)
+	prior.SetId("prod")
+	if err := resourceLiteLLMTagRead(prior, NewClient(srv.URL, "test-key", true)); err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+
+	attrs := planAttributes(t, prior, config)
+	if attrs["model_max_budget"] == nil || attrs["model_max_budget"].Old != "" {
+		t.Errorf("expected the plan to set model_max_budget again after it was cleared on the proxy, got %+v", attrs["model_max_budget"])
+	}
+}
+
 func TestResourceLiteLLMTag_PlanAfterInlineBudgetCreateKeepsTheProxyBudgetID(t *testing.T) {
 	config := map[string]interface{}{
 		"name":             "prod",
