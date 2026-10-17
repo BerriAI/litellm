@@ -880,7 +880,6 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
         runs: Final = _resolve_overlapping_spans(analyze_results)
 
-        # Replace right to left so the original offsets of earlier runs stay valid
         for seq, run in reversed(tuple(enumerate(runs, start=1))):
             replacement = f"<{run.entity_type}_{seq}>"
             pii_tokens[replacement] = text[run.start : run.end]
