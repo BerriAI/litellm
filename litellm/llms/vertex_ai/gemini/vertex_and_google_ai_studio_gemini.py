@@ -1288,7 +1288,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     ) -> dict:
         self._apply_include_server_side_tool_invocations(non_default_params, optional_params)
         gemini_sampling_params_warned: bool = False
-        supports_sampling: bool = VertexGeminiConfig.supports_sampling_params(model)
+        supports_sampling: Final[bool] = VertexGeminiConfig.supports_sampling_params(model)
         for param, value in non_default_params.items():
             if param == "temperature":
                 if not supports_sampling:
