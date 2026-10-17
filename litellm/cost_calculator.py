@@ -133,7 +133,6 @@ from litellm.types.utils import (
     PromptTokensDetailsWrapper,
     ServiceTier,
     StandardBuiltInToolsParams,
-    StandardLoggingModelInformation,
     TranscriptionUsageDurationObject,
     TranscriptionUsageTokensObject,
     Usage,
@@ -1326,7 +1325,6 @@ def _store_cost_breakdown_in_logging_obj(
     data_residency: str | None = None,
     vertex_location: str | None = None,
     billed_token_rates: BilledTokenRates | None = None,
-    model_map_information: StandardLoggingModelInformation | None = None,
 ) -> None:
     """
     Helper function to store cost breakdown in the logging object.
@@ -1372,7 +1370,6 @@ def _store_cost_breakdown_in_logging_obj(
             data_residency=data_residency,
             vertex_location=vertex_location,
             billed_token_rates=billed_token_rates,
-            model_map_information=model_map_information,
         )
 
     except Exception as breakdown_error:
@@ -2023,22 +2020,14 @@ def completion_cost(
                     _cache_read_cost: float | None = None
                     _cache_creation_cost: float | None = None
                     _billed_token_rates: BilledTokenRates | None = None
-                    _billing_provider: str | None = _pricing_provider_for_cost_candidate(
-                        candidate_provider=pricing_provider,
-                        request_provider=request_pricing_provider,
-                        current_provider=custom_llm_provider,
-                    )
-                    _model_map_information: StandardLoggingModelInformation | None = (
-                        StandardLoggingModelInformation(
-                            model_map_key=model, model_map_value=_cost_map_model_info(model, _billing_provider)
-                        )
-                        if model
-                        else None
-                    )
                     if cost_per_token_usage_object is not None and model:
                         _token_type_breakdown = get_token_type_cost_breakdown(
                             model=model,
-                            custom_llm_provider=_billing_provider,
+                            custom_llm_provider=_pricing_provider_for_cost_candidate(
+                                candidate_provider=pricing_provider,
+                                request_provider=request_pricing_provider,
+                                current_provider=custom_llm_provider,
+                            ),
                             usage=cost_per_token_usage_object,
                             service_tier=service_tier,
                             data_residency=data_residency,
@@ -2069,7 +2058,6 @@ def completion_cost(
                         data_residency=data_residency,
                         vertex_location=vertex_location,
                         billed_token_rates=_billed_token_rates,
-                        model_map_information=_model_map_information,
                     )
 
                 return _final_cost

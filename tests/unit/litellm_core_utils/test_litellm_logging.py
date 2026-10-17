@@ -10339,20 +10339,12 @@ def test_uncached_price_leaves_no_pricing_state_on_the_call():
             usage=litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30),
         )
         cached_response._hidden_params = {"cache_hit": True, "cache_key": "lit8679-key", "response_cost": 0.0}
-        assert (logging_obj.cost_breakdown, logging_obj.billed_token_rates, logging_obj.billed_model_map_information) == (
-            None,
-            None,
-            None,
-        )
+        assert (logging_obj.cost_breakdown, logging_obj.billed_token_rates) == (None, None)
 
         cost: Final = logging_obj.uncached_price(result=cached_response).cost
 
         assert cost is not None and cost > 0.0
-        assert (logging_obj.cost_breakdown, logging_obj.billed_token_rates, logging_obj.billed_model_map_information) == (
-            None,
-            None,
-            None,
-        )
+        assert (logging_obj.cost_breakdown, logging_obj.billed_token_rates) == (None, None)
     finally:
         litellm.model_cost.pop(deployment_id, None)
 
@@ -10421,8 +10413,8 @@ def test_standard_logging_payload_reports_the_deployment_entry_the_request_was_b
         assert response_cost == 10 * input_cost_per_token + 6 * output_cost_per_token
         assert payload is not None
         assert payload["model_map_information"] == {
-            "model_map_key": f"openai/{deployment_id}",
-            "model_map_value": litellm.get_model_info(model=f"openai/{deployment_id}", custom_llm_provider="openai"),
+            "model_map_key": deployment_id,
+            "model_map_value": litellm.get_model_info(model=deployment_id, custom_llm_provider="openai"),
         }
         model_map_value: Final = payload["model_map_information"]["model_map_value"]
         assert model_map_value is not None
