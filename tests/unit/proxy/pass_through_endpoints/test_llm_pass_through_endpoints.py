@@ -6246,6 +6246,115 @@ class TestVertexAILiveWebsocketPassthrough:
         assert "default_vertex_config" in close_kwargs["reason"]
         assert len(close_kwargs["reason"].encode("utf-8")) <= 123
 
+    def _pinned_live_router(self, extra_params: Mapping[str, object]) -> litellm.Router:
+        return litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gemini-live",
+                    "litellm_params": {
+                        "model": "vertex_ai/gemini-live-2.5-flash",
+                        "use_in_pass_through": True,
+                        "vertex_project": "proj-db",
+                        "vertex_location": "global",
+                        "vertex_credentials": '{"type": "service_account"}',
+                        **extra_params,
+                    },
+                }
+            ]
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "query, field",
+        [
+            ({"vertex_location": "us-central1"}, "vertex_location"),
+            ({"vertex_project": "caller-project"}, "vertex_project"),
+            ({"vertex_project": "proj-db", "vertex_location": "us-central1"}, "vertex_location"),
+        ],
+    )
+    async def test_query_overriding_a_pinned_deployment_closes_before_minting_a_token(
+        self, monkeypatch, query: Mapping[str, str], field: str
+    ):
+        from litellm.proxy.pass_through_endpoints import (
+            llm_passthrough_endpoints as passthrough_module,
+        )
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", self._pinned_live_router({}))
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+        monkeypatch.setattr(passthrough_module.passthrough_endpoint_router, "default_vertex_config", None)
+        self._clear_vertex_env(monkeypatch)
+        websocket = self._websocket()
+        ensure_token = AsyncMock(return_value=("token-abc", "proj-db"))
+        ws_passthrough = AsyncMock()
+
+        with (
+            patch.object(passthrough_module.vertex_llm_base, "ensure_access_token_async", ensure_token),
+            patch.object(passthrough_module, "websocket_passthrough_request", ws_passthrough),
+        ):
+            await passthrough_module.vertex_ai_live_websocket_passthrough(
+                websocket=websocket,
+                user_api_key_dict=UserAPIKeyAuth(),
+                **query,
+            )
+
+        close_kwargs = websocket.close.await_args.kwargs
+        assert close_kwargs["code"] == 1008
+        assert field in close_kwargs["reason"]
+        assert len(close_kwargs["reason"].encode("utf-8")) <= 123
+        ensure_token.assert_not_awaited()
+        ws_passthrough.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "extra_params, general_settings, query, expected_location",
+        [
+            ({}, {}, {"vertex_project": "proj-db", "vertex_location": "global"}, "global"),
+            (
+                {"configurable_clientside_auth_params": ["vertex_location"]},
+                {},
+                {"vertex_location": "us-central1"},
+                "us-central1",
+            ),
+            ({}, {"allow_client_side_credentials": True}, {"vertex_location": "us-central1"}, "us-central1"),
+        ],
+        ids=["matches_the_pin", "deployment_opt_in", "proxy_wide_opt_in"],
+    )
+    async def test_query_the_admin_allows_reaches_vertex(
+        self,
+        monkeypatch,
+        extra_params: Mapping[str, object],
+        general_settings: Mapping[str, object],
+        query: Mapping[str, str],
+        expected_location: str,
+    ):
+        from litellm.proxy.pass_through_endpoints import (
+            llm_passthrough_endpoints as passthrough_module,
+        )
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", self._pinned_live_router(extra_params))
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", dict(general_settings))
+        monkeypatch.setattr(passthrough_module.passthrough_endpoint_router, "default_vertex_config", None)
+        self._clear_vertex_env(monkeypatch)
+        websocket = self._websocket()
+        ensure_token = AsyncMock(return_value=("token-abc", "proj-db"))
+        ws_passthrough = AsyncMock()
+
+        with (
+            patch.object(passthrough_module.vertex_llm_base, "ensure_access_token_async", ensure_token),
+            patch.object(passthrough_module, "websocket_passthrough_request", ws_passthrough),
+        ):
+            await passthrough_module.vertex_ai_live_websocket_passthrough(
+                websocket=websocket,
+                user_api_key_dict=UserAPIKeyAuth(),
+                **query,
+            )
+
+        websocket.close.assert_not_awaited()
+        rewriter = ws_passthrough.await_args.kwargs["setup_model_rewriter"]
+        assert rewriter("gemini-live") == (
+            f"projects/proj-db/locations/{expected_location}/publishers/google/models/gemini-live-2.5-flash"
+        )
+
 
 class TestAnthropicProxyRoute:
     """The /anthropic passthrough route: custom auth headers must not clobber the
