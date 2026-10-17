@@ -7,7 +7,7 @@ import pytest
 from cases.small_bodies_5rps import CASE
 from memory_readings import RssCapture, RssReading
 from setup.observe import Observation, evaluate
-from setup.upgrade import MAX_TRAFFIC_SECONDS, UpgradeMonitor, postgres_failures, upgrade_case
+from setup.upgrade import MAX_TRAFFIC_SECONDS, UpgradeMonitor, matched_response_ids, postgres_failures, upgrade_case
 from setup.upgrade_worker import UpgradeState
 from setup.wire import PlanProgress, WireRecord, response_id
 
@@ -33,6 +33,12 @@ def record(seq: int = 0, *, started_at: float = 100) -> WireRecord:
         error=None,
         response_id=f"response-{seq}",
     )
+
+
+def test_spend_logs_match_call_ids_when_response_ids_are_transformed() -> None:
+    records: Final = (record(0), record(1), record(2))
+    rows: Final = (("provider-response-id", "call-0"), ("response-1", "unrelated-call"))
+    assert matched_response_ids(records, rows) == frozenset({"response-0"})
 
 
 def state(phase: str = "schema_ready", *, pending: bool = True) -> UpgradeState:

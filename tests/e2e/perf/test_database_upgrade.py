@@ -48,6 +48,10 @@ def test_database_upgrade(proxy: ProxyClient, idp: Keycloak, resources: Resource
             time.sleep(1)
             _ = monitor.poll(())
         state: Final = read_state(connection)
+        _ = sys.stdout.write(
+            f"successful_requests={monitor.successes} persisted_requests={monitor.persisted_count} "
+            f"unmatched_requests={len(monitor.pending)}\n"
+        )
         monitor.assert_complete(state)
         assert_finished(connection, state)
         rss_after: Final = read_rss_everywhere(proxy)

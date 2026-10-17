@@ -76,16 +76,20 @@ def assert_database_metrics_url(url: str) -> None:
 
 
 def persisted(connection: psycopg.Connection[tuple[object, ...]], records: tuple[WireRecord, ...]) -> frozenset[str]:
-    ids: Final = tuple(record.response_id for record in records if record.response_id)
+    ids: Final = tuple(record.call_id for record in records if record.call_id)
     if not ids:
         return frozenset()
     rows: Final = _ROWS.validate_python(
         connection.execute(
-            'SELECT request_id, litellm_call_id FROM "LiteLLM_SpendLogs" WHERE request_id=ANY(%s)', (list(ids),)
+            'SELECT request_id, litellm_call_id FROM "LiteLLM_SpendLogs" WHERE litellm_call_id=ANY(%s)', (list(ids),)
         ).fetchall()
     )
-    expected: Final = {record.response_id: record.call_id for record in records}
-    return frozenset(identifier for identifier, call_id in rows if expected[identifier] == call_id)
+    return matched_response_ids(records, rows)
+
+
+def matched_response_ids(records: tuple[WireRecord, ...], rows: tuple[tuple[str, str | None], ...]) -> frozenset[str]:
+    call_ids: Final = frozenset(call_id for _, call_id in rows if call_id)
+    return frozenset(record.response_id for record in records if record.response_id and record.call_id in call_ids)
 
 
 def activity(connection: psycopg.Connection[tuple[object, ...]]) -> tuple[list[int], int]:
