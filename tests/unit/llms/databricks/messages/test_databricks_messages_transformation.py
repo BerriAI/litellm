@@ -340,6 +340,18 @@ async def test_server_tools_reach_the_workspace_as_sent_without_drop_params() ->
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("drop_params", [True, False])
+@pytest.mark.parametrize("container", ["cntr_abc", {"id": "cntr_abc"}])
+async def test_container_never_reaches_the_workspace(drop_params: bool, container: object) -> None:
+    body: Final = await _workspace_request_body(
+        container=container, metadata={"user_id": "user-1"}, drop_params=drop_params
+    )
+
+    assert "container" not in body
+    assert body["metadata"] == {"user_id": "user-1"}
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("user_agent_param", ["databricks_user_agent", "user_agent"])
 async def test_per_call_partner_user_agent_reaches_the_workspace_like_the_chat_route(user_agent_param: str) -> None:
     received: Final[list[httpx.Request]] = []  # mutable-ok: the fake workspace records what litellm sent

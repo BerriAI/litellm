@@ -115,7 +115,8 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         The ``safeguards`` body field and the dangerous-tool-use beta travel together: a
         platform whose beta header map column marks the beta unsupported gets neither, so the
         turn stays a 200 without a verdict instead of a 400 on an unknown field. A platform the
-        map does not list gets both exactly as the caller sent them.
+        map does not list keeps the body field, and the beta goes with it only where that
+        platform's config forwards betas unfiltered.
         """
         return ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value not in get_unsupported_headers(
             self._resolved_provider

@@ -14,6 +14,10 @@ from litellm.llms.databricks.common_utils import (
 from litellm.types.router import GenericLiteLLMParams
 
 DATABRICKS_UNSUPPORTED_SERVER_TOOL_PREFIXES: Final = ("web_search_", "web_fetch_", "code_execution_")
+DROP_CONTAINER_WARNING: Final = (
+    "Dropping `container` for model=%s. The Databricks Anthropic Messages route rejects it, "
+    "and the chat completions bridge it replaces never forwarded it."
+)
 
 
 def _is_unsupported_server_tool(tool: object) -> bool:
@@ -110,11 +114,14 @@ class DatabricksAnthropicMessagesConfig(DatabricksBase, AnthropicMessagesConfig)
         litellm_params: GenericLiteLLMParams,
         headers: dict[str, str],  # mutable-ok: mirrors the base signature
     ) -> dict[str, object]:  # mutable-ok: mirrors the base signature
+        if "container" in anthropic_messages_optional_request_params:
+            litellm.verbose_logger.warning(DROP_CONTAINER_WARNING, model)
+        workspace_params: Final = {
+            key: value for key, value in anthropic_messages_optional_request_params.items() if key != "container"
+        }
         drops_unsupported_params: Final = litellm.drop_params is True or litellm_params.drop_params is True
         request_params: Final = (
-            _without_unsupported_server_tools(anthropic_messages_optional_request_params)
-            if drops_unsupported_params
-            else anthropic_messages_optional_request_params
+            _without_unsupported_server_tools(workspace_params) if drops_unsupported_params else workspace_params
         )
         anthropic_messages_request: Final[dict[str, object]] = super().transform_anthropic_messages_request(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the shared base returns a bare dict  # mutable-ok: becomes the outbound request body
             model=model,
