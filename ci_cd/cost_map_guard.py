@@ -4,8 +4,7 @@ Every pull request whose diff against its merge base touches one of the two cost
 checks: the files parse and the backup copy matches the root file. A pull request that leaves both untouched
 skips them, since merging it keeps the base branch's copies and its head tree only carries whatever state the
 branch was cut from. Pull requests from the cost map sync bot (branches named litellm_cost_map_sync_*) always
-get the file checks and additionally may only touch those two files or the legacy schema
-path and may only add or update models.
+get the file checks and additionally may only touch those two files and may only add or update models.
 """
 
 from __future__ import annotations
@@ -21,7 +20,6 @@ from typing import Final
 
 COST_MAP_PATH: Final = "model_prices_and_context_window.json"
 BACKUP_PATH: Final = "litellm/model_prices_and_context_window_backup.json"
-LEGACY_SCHEMA_PATH: Final = "model_prices_and_context_window.schema.json"
 GUARDED_PATHS: Final = (COST_MAP_PATH, BACKUP_PATH)
 BOT_BRANCH_PREFIX: Final = "litellm_cost_map_sync_"
 SPECIAL_ROOT_KEYS: Final = frozenset({"sample_spec", "fallback_generalizations"})
@@ -110,7 +108,7 @@ def _bot_failures(base: Snapshot, head_map: CostMap, changed_files: Sequence[str
         *(
             f"bot PRs may only change the cost map files, not {path}"
             for path in changed_files
-            if path not in GUARDED_PATHS and path != LEGACY_SCHEMA_PATH
+            if path not in GUARDED_PATHS
         ),
         *(f"bot PRs may not remove models: {key}" for key in base_map if key not in head_map),
         *(f"bot PRs may not remove fields: {ref}" for ref in removed_fields),
