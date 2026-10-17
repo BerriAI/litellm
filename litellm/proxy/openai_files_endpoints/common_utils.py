@@ -18,6 +18,7 @@ from typing import (
 )
 
 from pydantic import TypeAdapter
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.batches.batch_utils import batch_cost_is_final
 from litellm.constants import MAX_FILE_LIST_LIMIT
@@ -493,6 +494,11 @@ _CONFIG_FILE_RANK: Final = datetime.min.replace(tzinfo=timezone.utc)
 _UNKNOWN_CREATION_TIME: Final = datetime.max.replace(tzinfo=timezone.utc)
 
 
+class _RouterDeployment(TypedDict):
+    model_name: ReadOnly[NotRequired[str]]
+    model_info: ReadOnly[Mapping[str, object]]
+
+
 def _team_deployment_rank(model_info: Mapping[str, object], deployment_id: str) -> tuple[datetime, str]:
     if model_info.get("db_model") is not True:
         return _CONFIG_FILE_RANK, ""
@@ -580,7 +586,7 @@ def get_team_provider_credentials(
             return {key: value for key, value in credentials.items() if key != "model"}
         return None
 
-    def _usable_team_deployment_order(deployment: dict) -> tuple[tuple[datetime, str], str] | None:
+    def _usable_team_deployment_order(deployment: _RouterDeployment) -> tuple[tuple[datetime, str], str] | None:
         model_info: Final[Mapping[str, object]] = deployment["model_info"]
         if model_info.get("team_id") != team_id:
             return None
