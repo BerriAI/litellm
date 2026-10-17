@@ -889,6 +889,8 @@ from litellm.proxy.utils import (  # noqa: F401, RUF100  # legacy module exports
     PrismaClient,
     ProxyLogging,
     ProxyUpdateSpend,
+    StreamingReasoningState,
+    StreamingToolCallState,
     _cache_user_row,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _get_docs_url,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _get_openapi_url,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -916,6 +918,8 @@ from litellm.proxy.utils import (  # noqa: F401, RUF100  # legacy module exports
     migrate_passwords_to_scrypt_async,
     model_dump_with_preserved_fields,
     prefetch_config_params,
+    streaming_reasoning_with_response,
+    streaming_tool_calls_with_response,
     update_spend,
 )
 from litellm.proxy.video_endpoints.endpoints import router as video_router
@@ -10079,19 +10083,26 @@ async def _apply_streaming_chunk_hooks(
     user_api_key_dict: UserAPIKeyAuth,
     request_data: dict,
     str_so_far: str,
-) -> tuple[object, str]:
+    streaming_tool_calls_so_far: StreamingToolCallState = (),
+    streaming_reasoning_so_far: StreamingReasoningState = (),
+) -> tuple[object, str, StreamingToolCallState, StreamingReasoningState]:
+    stream_chunk: Final = chunk
     chunk = await proxy_logging_obj.async_post_call_streaming_hook(
         user_api_key_dict=user_api_key_dict,
         response=chunk,
         data=request_data,
         str_so_far=str_so_far if str_so_far else None,
+        streaming_tool_calls_so_far=streaming_tool_calls_so_far,
+        streaming_reasoning_so_far=streaming_reasoning_so_far,
     )
 
     if isinstance(chunk, (ModelResponse, ModelResponseStream)):
         response_str: Final = litellm.get_response_string(response_obj=chunk)
         str_so_far += response_str
 
-    return chunk, str_so_far
+    updated_tool_calls: Final = streaming_tool_calls_with_response(streaming_tool_calls_so_far, stream_chunk)
+    updated_reasoning: Final = streaming_reasoning_with_response(streaming_reasoning_so_far, stream_chunk)
+    return chunk, str_so_far, updated_tool_calls, updated_reasoning
 
 
 def _format_streaming_sse_chunk(chunk: object) -> str | bytes:
@@ -10364,6 +10375,8 @@ async def async_data_generator(
         # Previously "".join(str_so_far_parts) was called every chunk, re-joining
         # the entire accumulated response. String += is O(n) amortized total.
         _str_so_far: str = ""
+        _streaming_tool_calls_so_far: StreamingToolCallState = ()  # rebind-ok: accumulated streaming state advances after each chunk
+        _streaming_reasoning_so_far: StreamingReasoningState = ()  # rebind-ok: accumulated streaming state advances after each chunk
         # Separate iterator-level vs per-chunk hook decisions. The iterator
         # wrap is needed when any callback overrides
         # ``async_post_call_streaming_iterator_hook`` or has
@@ -10410,11 +10423,18 @@ async def async_data_generator(
             chunk = item
             if needs_per_chunk_hook:
                 ### CALL HOOKS ### - modify outgoing data
-                chunk, _str_so_far = await _apply_streaming_chunk_hooks(
+                (
+                    chunk,
+                    _str_so_far,
+                    _streaming_tool_calls_so_far,
+                    _streaming_reasoning_so_far,
+                ) = await _apply_streaming_chunk_hooks(
                     chunk=chunk,
                     user_api_key_dict=user_api_key_dict,
                     request_data=request_data,
                     str_so_far=_str_so_far,
+                    streaming_tool_calls_so_far=_streaming_tool_calls_so_far,
+                    streaming_reasoning_so_far=_streaming_reasoning_so_far,
                 )
 
             # Mid-stream fallbacks surface metadata on individual chunks rather than
