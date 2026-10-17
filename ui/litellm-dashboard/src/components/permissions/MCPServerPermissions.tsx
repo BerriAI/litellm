@@ -165,6 +165,7 @@ export function MCPServerPermissions({
           {mergedItems.map((item, index) => {
             const toolsForServer = item.type === "server" ? getToolPermissionsFor(item.value) : undefined;
             const hasToolRestrictions = toolsForServer && toolsForServer.length > 0;
+            const allowsNoTools = toolsForServer?.length === 0;
             const isExpanded = expandedServers.has(item.value);
 
             return (
@@ -197,6 +198,7 @@ export function MCPServerPermissions({
                     )}
                   </div>
 
+                  {allowsNoTools && <span className="shrink-0 text-xs text-muted-foreground">No tools allowed</span>}
                   {hasToolRestrictions && (
                     <div className="flex items-center gap-1 shrink-0 whitespace-nowrap">
                       <span className="text-xs font-medium text-muted-foreground">{toolsForServer.length}</span>

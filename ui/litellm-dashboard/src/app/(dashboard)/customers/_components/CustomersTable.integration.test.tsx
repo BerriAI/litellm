@@ -66,7 +66,7 @@ describe("CustomersTable controls", () => {
     expect(screen.getByRole("combobox", { name: "Budget" })).toHaveTextContent(/^All\b/);
     await chooseSelectOption(user, screen.getByRole("combobox", { name: "Status" }), "Active");
     await chooseSelectOption(user, screen.getByRole("combobox", { name: "Budget" }), "Has budget");
-    await chooseSelectOption(user, screen.getByRole("combobox", { name: "MCP access" }), "Has MCP access");
+    await chooseSelectOption(user, screen.getByRole("combobox", { name: "MCP access" }), "Limited MCP access");
     expect(screen.getByRole("combobox", { name: "Budget" })).toHaveTextContent(/^Has budget\b/);
     await user.click(screen.getByRole("button", { name: "Apply Filters" }));
 
@@ -78,7 +78,7 @@ describe("CustomersTable controls", () => {
     const params = onUrlUpdate.mock.calls.at(-1)?.[0].searchParams;
     expect(params.get("filter_blocked")).toBe("active");
     expect(params.get("filter_max_budget")).toBe("yes");
-    expect(params.get("filter_mcp_access")).toBe("yes");
+    expect(params.get("filter_mcp_access")).toBe("limited");
     await user.click(screen.getByRole("button", { name: /^Filters/ }));
     await user.click(screen.getByRole("button", { name: "Reset" }));
     await user.click(screen.getByRole("button", { name: "Apply Filters" }));

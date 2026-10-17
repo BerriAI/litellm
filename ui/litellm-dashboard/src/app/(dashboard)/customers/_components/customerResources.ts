@@ -30,7 +30,15 @@ export function getCustomerResourceCounts(
   };
 }
 
-export function customerHasMcpAccess(customer: EndUser): boolean {
-  const counts = getCustomerResourceCounts(customer);
-  return counts.servers > 0 || counts.accessGroups > 0 || counts.toolsets > 0;
+export type CustomerMcpScope = "limited" | "denied" | "unrestricted";
+
+export function customerMcpScope(permission: EndUser["object_permission"]): CustomerMcpScope {
+  const servers = permission?.mcp_servers ?? [];
+  if (servers.includes(NO_MCP_SERVERS_SENTINEL)) return "denied";
+  const counts = getCustomerResourceCounts({ object_permission: permission });
+  if (counts.servers > 0 || counts.accessGroups > 0 || counts.toolsets > 0) return "limited";
+  const onlyUnsupportedAll =
+    servers.includes(ALL_PROXY_MCP_SERVERS_SENTINEL) ||
+    Object.hasOwn(permission?.mcp_tool_permissions ?? {}, ALL_PROXY_MCP_SERVERS_SENTINEL);
+  return onlyUnsupportedAll ? "denied" : "unrestricted";
 }

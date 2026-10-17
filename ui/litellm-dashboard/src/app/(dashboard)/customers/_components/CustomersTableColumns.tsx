@@ -22,7 +22,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { cn } from "@/lib/cva.config";
 import { copyToClipboard } from "@/utils/dataUtils";
 
-import { getCustomerResourceCounts } from "./customerResources";
+import { customerMcpScope, getCustomerResourceCounts } from "./customerResources";
 
 export type CustomerTableActions = {
   canModify: boolean;
@@ -102,8 +102,9 @@ export function CustomerBlockAction({
 const countLabel = (count: number, noun: string): string => (count ? `${count} ${noun}${count === 1 ? "" : "s"}` : "");
 
 export function describeMcpGrant(permission: EndUser["object_permission"]): string {
-  const servers = permission?.mcp_servers ?? [];
-  if (servers.includes(NO_MCP_SERVERS_SENTINEL)) return "No MCP access";
+  const scope = customerMcpScope(permission);
+  if (scope === "denied") return "No MCP access";
+  if (scope === "unrestricted") return "No restriction";
   const counts = getCustomerResourceCounts({ object_permission: permission });
   const toolPermissionKeys = Object.keys(permission?.mcp_tool_permissions ?? {}).filter(
     (server) => server !== ALL_PROXY_MCP_SERVERS_SENTINEL && server !== NO_MCP_SERVERS_SENTINEL,
@@ -114,10 +115,7 @@ export function describeMcpGrant(permission: EndUser["object_permission"]): stri
     countLabel(counts.toolsets, "toolset"),
     countLabel(toolPermissionKeys.length, "tool limit"),
   ].filter(Boolean);
-  const hasUnsupportedAll =
-    servers.includes(ALL_PROXY_MCP_SERVERS_SENTINEL) ||
-    Object.hasOwn(permission?.mcp_tool_permissions ?? {}, ALL_PROXY_MCP_SERVERS_SENTINEL);
-  return parts.join(", ") || (hasUnsupportedAll ? "No MCP access" : "No restriction");
+  return parts.join(", ");
 }
 
 const RESOURCE_ITEMS = [

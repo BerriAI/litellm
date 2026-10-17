@@ -2,7 +2,7 @@ import type { FilterFn } from "@tanstack/react-table";
 
 import type { EndUser } from "@/app/(dashboard)/hooks/customers/useCustomers";
 
-import { customerHasMcpAccess } from "./customerResources";
+import { customerMcpScope } from "./customerResources";
 
 export const CUSTOMER_FILTER_FIELDS = [
   {
@@ -25,8 +25,9 @@ export const CUSTOMER_FILTER_FIELDS = [
     id: "mcp_access",
     label: "MCP access",
     options: [
-      { value: "yes", label: "Has MCP access" },
-      { value: "no", label: "No MCP access" },
+      { value: "limited", label: "Limited MCP access" },
+      { value: "denied", label: "No MCP access" },
+      { value: "unrestricted", label: "No MCP restriction" },
     ],
   },
 ] as const;
@@ -40,9 +41,12 @@ export const customerMatchesFilter = (customer: EndUser, columnId: string, value
     if (value === "active") return !customer.blocked;
     return true;
   }
+  if (columnId === "mcp_access") {
+    if (value !== "limited" && value !== "denied" && value !== "unrestricted") return true;
+    return customerMcpScope(customer.object_permission) === value;
+  }
   if (value !== "yes" && value !== "no") return true;
   if (columnId === "max_budget") return (customer.litellm_budget_table?.max_budget != null) === (value === "yes");
-  if (columnId === "mcp_access") return customerHasMcpAccess(customer) === (value === "yes");
   return true;
 };
 
