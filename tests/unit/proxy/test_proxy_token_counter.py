@@ -3,12 +3,12 @@
 
 
 import asyncio
+import itertools
 import json
 import logging
 import threading
-import time
 import traceback
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Coroutine, Mapping
 from functools import partial
 from types import MappingProxyType
 from typing import Final, NoReturn
@@ -1685,10 +1685,30 @@ async def _count_status(model: str = "kimi") -> str:
     return response.count_source or ""
 
 
-async def _timed_count_status(model: str) -> tuple[str, float]:
-    started: Final = time.monotonic()
-    status: Final = await _count_status(model)
-    return status, time.monotonic() - started
+class _SkippableClockLoop(asyncio.SelectorEventLoop):
+    skipped_seconds: float = 0.0
+
+    def time(self) -> float:
+        return super().time() + self.skipped_seconds
+
+    def skip(self, seconds: float) -> None:
+        self.skipped_seconds += seconds
+
+
+def _run_on_skippable_clock(
+    scenario: Callable[[_SkippableClockLoop], Coroutine[object, object, tuple[str, ...]]],
+) -> tuple[str, ...]:
+    loop: Final = _SkippableClockLoop()
+    try:
+        return loop.run_until_complete(scenario(loop))
+    finally:
+        loop.run_until_complete(loop.shutdown_default_executor())
+        loop.close()
+
+
+async def _until_finished(tasks: tuple[asyncio.Future[str], ...], count: int) -> None:
+    for finished in itertools.islice(asyncio.as_completed(tasks), count):
+        await finished
 
 
 def _tokenizer_that_panics_while_encoding() -> SelectTokenizerResponse:
@@ -1701,32 +1721,36 @@ def _tokenizer_that_panics_while_encoding() -> SelectTokenizerResponse:
     )
 
 
-@pytest.mark.asyncio
-async def test_hanging_tokenizer_download_answers_the_provider_error_after_the_wait_with_one_download_while_it_runs(
+def test_hanging_tokenizer_download_answers_the_provider_error_after_the_wait_with_one_download_while_it_runs(
     monkeypatch: pytest.MonkeyPatch,
 ):
     _framed_kimi_with_custom_tokenizer(monkeypatch, "lit-tests/hanging-tokenizer")
+    download_started: Final = threading.Event()
     hub_released: Final = threading.Event()
     downloads: Final[list[str]] = []
 
     def hanging_download(model: str, custom_tokenizer: object = None) -> NoReturn:
         downloads.append(model)
+        download_started.set()
         hub_released.wait(10)
         raise OSError("hub unreachable")
 
     monkeypatch.setattr(litellm.utils, "select_tokenizer", hanging_download)
-    monkeypatch.setattr(litellm.proxy.proxy_server, "TOKENIZER_LOAD_WAIT_SECONDS", 1.0)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "TOKENIZER_LOAD_WAIT_SECONDS", 30)
     monkeypatch.setattr(litellm.proxy.proxy_server, "TOKENIZER_LOAD_REUSE_SECONDS", 1e-9)
-    try:
-        burst: Final = await asyncio.wait_for(asyncio.gather(*(_count_status() for _ in range(60))), 8)
-        later_started: Final = time.monotonic()
-        later: Final = await asyncio.wait_for(_count_status(), 8)
-        later_seconds: Final = time.monotonic() - later_started
-    finally:
-        hub_released.set()
 
-    assert set(burst) == {"400"} and later == "400"
-    assert later_seconds < 0.8
+    async def burst_past_the_wait_then_one_more(loop: _SkippableClockLoop) -> tuple[str, ...]:
+        try:
+            burst: Final = asyncio.gather(*(_count_status() for _ in range(60)))
+            await asyncio.to_thread(download_started.wait, 10)
+            loop.skip(31)
+            answered: Final = await asyncio.wait_for(burst, 8)
+            later: Final = await asyncio.wait_for(_count_status(), 8)
+        finally:
+            hub_released.set()
+        return (*answered, later)
+
+    assert set(_run_on_skippable_clock(burst_past_the_wait_then_one_more)) == {"400"}
     assert len(downloads) == 1
 
 
@@ -1778,22 +1802,32 @@ async def test_failed_tokenizer_download_is_reused_until_the_retry_window_passes
     assert len(downloads) == 2
 
 
-@pytest.mark.asyncio
-async def test_failed_tokenizer_load_is_reused_for_the_window_after_it_fails(monkeypatch: pytest.MonkeyPatch):
+def test_failed_tokenizer_load_is_reused_for_the_window_after_it_fails(monkeypatch: pytest.MonkeyPatch):
     _framed_kimi_with_custom_tokenizer(monkeypatch, "lit-tests/slow-failing-tokenizer")
+    download_started: Final = threading.Event()
+    hub_released: Final = threading.Event()
     downloads: Final[list[str]] = []
 
     def slow_failing_download(model: str, custom_tokenizer: object = None) -> NoReturn:
         downloads.append(model)
-        time.sleep(1.0)
+        download_started.set()
+        hub_released.wait(10)
         raise OSError("hub unreachable")
 
     monkeypatch.setattr(litellm.utils, "select_tokenizer", slow_failing_download)
-    monkeypatch.setattr(litellm.proxy.proxy_server, "TOKENIZER_LOAD_REUSE_SECONDS", 0.5)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "TOKENIZER_LOAD_WAIT_SECONDS", 1000)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "TOKENIZER_LOAD_REUSE_SECONDS", 60)
 
-    statuses: Final = [await _count_status() for _ in range(2)]
+    async def fail_after_longer_than_the_window_then_retry(loop: _SkippableClockLoop) -> tuple[str, ...]:
+        first: Final = asyncio.ensure_future(_count_status())
+        try:
+            await asyncio.to_thread(download_started.wait, 10)
+            loop.skip(120)
+        finally:
+            hub_released.set()
+        return await asyncio.wait_for(first, 8), await asyncio.wait_for(_count_status(), 8)
 
-    assert statuses == ["400", "400"]
+    assert _run_on_skippable_clock(fail_after_longer_than_the_window_then_retry) == ("400", "400")
     assert len(downloads) == 1
 
 
@@ -1833,27 +1867,28 @@ async def test_tokenizer_loads_past_the_cap_answer_the_provider_error_without_st
 ):
     tokenizers: Final = {f"kimi-{n}": (f"lit-tests/unreachable-tokenizer-{n}", "main") for n in range(5)}
     _framed_kimis_with_custom_tokenizers(monkeypatch, tokenizers, burst=len(tokenizers))
+    real_select_tokenizer: Final = litellm.utils.select_tokenizer
     hub_released: Final = threading.Event()
     downloads: Final[list[object]] = []
 
-    def hanging_download(model: str, custom_tokenizer: object = None) -> NoReturn:
+    def held_download(model: str, custom_tokenizer: object = None) -> SelectTokenizerResponse:
         downloads.append(custom_tokenizer)
         hub_released.wait(10)
-        raise OSError("hub unreachable")
+        return real_select_tokenizer(model="gpt-5.4-mini")
 
-    monkeypatch.setattr(litellm.utils, "select_tokenizer", hanging_download)
+    monkeypatch.setattr(litellm.utils, "select_tokenizer", held_download)
     monkeypatch.setattr(litellm.proxy.proxy_server, "TOKENIZER_LOAD_MAX_RUNNING", 2)
-    monkeypatch.setattr(litellm.proxy.proxy_server, "TOKENIZER_LOAD_WAIT_SECONDS", 2.0)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "TOKENIZER_LOAD_WAIT_SECONDS", 30)
     monkeypatch.setattr(anyio.to_thread.current_default_thread_limiter(), "total_tokens", 2)
+    framed: Final = tuple(asyncio.ensure_future(_count_status(name)) for name in tokenizers)
     try:
-        framed: Final = await asyncio.wait_for(asyncio.gather(*(_timed_count_status(name) for name in tokenizers)), 8)
+        await asyncio.wait_for(_until_finished(framed, 3), 8)
         unrelated: Final = await asyncio.wait_for(_count_status("sonnet"), 5)
     finally:
         hub_released.set()
-    await asyncio.sleep(0.3)
+    statuses: Final = await asyncio.wait_for(asyncio.gather(*framed), 8)
 
-    assert [status for status, _ in framed] == ["400"] * 5
-    assert sum(seconds < 1.0 for _, seconds in framed) == 3
+    assert sorted(statuses) == ["400"] * 3 + ["local_estimate"] * 2
     assert unrelated == "provider"
     assert len(downloads) == 2
 
@@ -2074,10 +2109,14 @@ async def test_framing_comes_from_the_row_the_deployment_provider_or_base_model_
 @pytest.mark.asyncio
 async def test_slow_cost_map_lookup_does_not_stall_other_requests_on_the_worker(monkeypatch: pytest.MonkeyPatch):
     real_get_model_info: Final = litellm.get_model_info
+    lookup_started: Final = threading.Event()
+    other_request_ran: Final = threading.Event()
+    released_by_the_other_request: Final[list[bool]] = []
 
     def slow_get_model_info(model: str, *args: object, **kwargs: object):
         if model == "slow-lookup-model":
-            time.sleep(0.5)
+            lookup_started.set()
+            released_by_the_other_request.append(other_request_ran.wait(5))
         return real_get_model_info(model, *args, **kwargs)
 
     monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", None)
@@ -2087,12 +2126,11 @@ async def test_slow_cost_map_lookup_does_not_stall_other_requests_on_the_worker(
             request=TokenCountRequest(model="slow-lookup-model", messages=[{"role": "user", "content": "hi"}])
         )
     )
-    started: Final = time.monotonic()
-    await asyncio.sleep(0.05)
-    other_request_wait: Final = time.monotonic() - started
+    await asyncio.to_thread(lookup_started.wait, 5)
+    other_request_ran.set()
     await counting
 
-    assert other_request_wait < 0.4
+    assert set(released_by_the_other_request) == {True}
 
 
 @pytest.mark.asyncio
