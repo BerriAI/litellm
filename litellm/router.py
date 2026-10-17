@@ -13869,11 +13869,11 @@ class Router:
 
     def endpoint_error_for_request(
         self, model: str, call_type: str, request_kwargs: Mapping[str, object]
-    ) -> UnsupportedEndpointError | None:
+    ) -> litellm.BadRequestError | None:
         try:
             with endpoint_selection(call_type, model=model):
                 self._common_checks_available_deployment(model=model, request_kwargs=request_kwargs)
-        except UnsupportedEndpointError as error:
+        except litellm.BadRequestError as error:
             return error
         return None
 

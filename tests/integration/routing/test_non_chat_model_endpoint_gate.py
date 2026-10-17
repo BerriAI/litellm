@@ -1360,17 +1360,25 @@ def test_a_mixed_group_skips_its_restricted_embedding_deployment(rig: _Rig) -> N
         assert [JSON_OBJECT.validate_json(call.body)["model"] for call in calls] == [_CHAT_MODEL]
 
 
-def test_local_rate_limit_with_only_unsupported_fallbacks_keeps_the_original_429(rig: _Rig) -> None:
+@pytest.mark.parametrize(
+    "fallbacks, expected_status",
+    [(("embedding_only",), 429), (("missing",), 429), (("missing", "chat_target"), 200)],
+)
+def test_local_rate_limit_skips_unusable_fallbacks(rig: _Rig, fallbacks: tuple[str, ...], expected_status: int) -> None:
     limited: Final = rig.names["chat_rate_limited"]
+    targets: Final = tuple(rig.names[name] if name != "missing" else _marker() for name in fallbacks)
     with rig.gateway.scenario() as scenario:
         key: Final = scenario.key(
-            model_rpm_limit={limited: 1}, router_settings={"fallbacks": [{limited: [rig.names["embedding_only"]]}]}
+            model_rpm_limit={limited: 1}, router_settings={"fallbacks": [{limited: list(targets)}]}
         )
         first: Final = _chat(rig, limited, _marker(), key=key)
         assert first.status_code == 200, first.text
         marker: Final = _marker()
         second: Final = _chat(rig, limited, marker, key=key)
-        assert second.status_code == 429, second.text
+        assert second.status_code == expected_status, second.text
+        if expected_status == 200:
+            _assert_served(rig, second, marker, "/v1/chat/completions")
+            return
         assert "Supported endpoints" not in second.text, second.text
         assert rig.upstream.calls(marker) == ()
 

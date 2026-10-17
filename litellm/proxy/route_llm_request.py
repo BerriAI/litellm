@@ -11,7 +11,6 @@ from pydantic import TypeAdapter, ValidationError
 import litellm
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.router_utils.common_utils import is_proxy_admin_request
-from litellm.router_utils.endpoint_eligibility import UnsupportedEndpointError
 
 # Client-supplied params that make the router or the call path fabricate a
 # failure or a delay instead of calling the provider. The ``mock_testing_*``
@@ -362,7 +361,7 @@ def endpoint_unsupported_by_model(
     data: Mapping[str, object],
     llm_router: LitellmRouter | None,
     team_id: str | None,
-) -> UnsupportedEndpointError | None:
+) -> litellm.BadRequestError | None:
     model: Final = data.get("model")
     if not isinstance(model, str) or llm_router is None:
         return None
