@@ -1429,10 +1429,12 @@ def _provider_error_json(raw_message: str) -> str:
 
 
 def _provider_error_message(raw_message: str) -> str:
+    error_json: Final = _provider_error_json(raw_message)
     try:
-        return _NESTED_PROVIDER_ERROR.validate_json(_provider_error_json(raw_message))["error"]["message"]
+        return _NESTED_PROVIDER_ERROR.validate_json(error_json)["error"]["message"]
     except ValidationError:
-        return AnthropicExceptionMapping.extract_error_message(raw_message)
+        flat_message: Final = AnthropicExceptionMapping.extract_error_message(error_json)
+        return raw_message if flat_message == error_json else flat_message
 
 
 def _provider_count_error_body(raw_message: str, status_code: int) -> _ResponsesApiErrorBody:

@@ -3746,6 +3746,28 @@ class TestResponsesInputTokens:
                 id="bedrock_error_message_unwrapped",
             ),
             pytest.param(
+                "BedrockException - " + json.dumps({"message": "The provided model doesn't support counting tokens."}),
+                400,
+                {
+                    "message": "The provided model doesn't support counting tokens.",
+                    "type": "invalid_request_error",
+                    "param": None,
+                    "code": None,
+                },
+                id="prefixed_bedrock_error_message_unwrapped",
+            ),
+            pytest.param(
+                "tool schema {unclosed is invalid",
+                400,
+                {
+                    "message": "tool schema {unclosed is invalid",
+                    "type": "invalid_request_error",
+                    "param": None,
+                    "code": None,
+                },
+                id="plain_text_with_a_brace_kept_whole",
+            ),
+            pytest.param(
                 "upstream count service unavailable",
                 503,
                 {

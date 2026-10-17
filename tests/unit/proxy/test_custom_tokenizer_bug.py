@@ -102,3 +102,36 @@ async def test_model_without_custom_tokenizer_uses_default(monkeypatch):
     assert response.tokenizer_type == "openai_tokenizer"
     assert response.model_used == "gpt-4"
     assert response.total_tokens > 0
+
+
+@pytest.mark.asyncio
+async def test_custom_tokenizer_counts_a_vertex_partner_model_without_a_count_route(monkeypatch):
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": "vertex-glm",
+                "litellm_params": {
+                    "model": "vertex_ai/zai-org/glm-5.2-maas",
+                    "vertex_project": "test-project",
+                    "vertex_location": "global",
+                },
+                "model_info": {
+                    "custom_tokenizer": {"identifier": "zai-org/GLM-5.2", "revision": "main", "auth_token": None},
+                },
+            }
+        ]
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", llm_router)
+
+    with patch.object(litellm.utils, "tokenizer_dispatch") as mock_tokenizer_cls:
+        mock_tokenizer_cls.from_pretrained.return_value = _fake_hf_tokenizer(9)
+
+        response = await token_counter(
+            request=TokenCountRequest(model="vertex-glm", messages=[{"role": "user", "content": "Return exactly OK."}]),
+            call_endpoint=True,
+        )
+
+    mock_tokenizer_cls.from_pretrained.assert_called_once_with("zai-org/GLM-5.2", revision="main", token=None)
+    assert response.error is not True
+    assert response.tokenizer_type == "huggingface_tokenizer"
+    assert response.total_tokens >= 9
