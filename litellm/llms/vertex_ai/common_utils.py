@@ -1298,7 +1298,7 @@ class VertexAITokenCounter(BaseTokenCounter):
             VertexAIPartnerModels.is_vertex_partner_model(model_to_use) and count_tokens_publisher(model_to_use) is None
         )
         model_info: Final[Mapping[str, object]] = deployment.get("model_info") or {}
-        if without_count_route and model_info.get("custom_tokenizer") is not None:
+        if without_count_route and messages and model_info.get("custom_tokenizer") is not None:
             return None
         if without_count_route:
             return TokenCountResponse(
