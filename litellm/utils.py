@@ -1482,15 +1482,16 @@ def _get_wrapper_num_retries(kwargs: dict[str, Any], exception: Exception) -> tu
     return num_retries, kwargs
 
 
-def _get_wrapper_timeout(kwargs: dict[str, object], exception: Exception) -> float | int | httpx.Timeout | None:
-    """
-    Get the timeout from the kwargs
-    Used for the wrapper functions.
-    """
+def _get_wrapper_timeout(kwargs: dict[str, object]) -> object:
+    from litellm.litellm_core_utils.litellm_logging import Logging
 
-    timeout: Final = cast(float | int | httpx.Timeout | None, kwargs.get("timeout", None))
-
-    return timeout
+    if kwargs.get("stream") is not True:
+        return kwargs.get("timeout")
+    logging_obj: Final = kwargs.get("litellm_logging_obj")
+    if isinstance(logging_obj, Logging) and logging_obj.applied_timeout is not None:
+        return logging_obj.applied_timeout
+    stream_timeout: Final = kwargs.get("stream_timeout")
+    return kwargs.get("timeout") if stream_timeout is None else stream_timeout
 
 
 def check_coroutine(value) -> bool:
@@ -2353,7 +2354,7 @@ def client(original_function):
             if deployment_num_retries is not None:
                 setattr(e, "num_retries", deployment_num_retries)
 
-            timeout: Final = _get_wrapper_timeout(kwargs=kwargs, exception=e)
+            timeout: Final = _get_wrapper_timeout(kwargs=kwargs)
             setattr(e, "timeout", timeout)
             raise e
 
@@ -3520,19 +3521,33 @@ def _get_builtin_model_info_for_registration(model: str, custom_llm_provider: st
     )
 
 
+def _skips_builtin_registration_lookup(key: str, provider: object) -> bool:
+    return provider in PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO or any(
+        key.startswith(f"{p}/") for p in PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class _RegistrationWrite:
     key: str
     entry: Mapping[str, object]
 
 
+def model_cost_registration_row(key: str, provider: object) -> Mapping[str, object]:
+    """The row a ``register_model`` write of a ``key`` entry with this ``litellm_provider`` merges onto: the
+    ``litellm.model_cost`` row it resolves to (``openai/o3-pro`` lands on ``o3-pro``), else the row it seeds ``key``
+    with from the built-in entry it falls back to (an OpenAI fine-tune takes its base model's row)."""
+    base: Final = _registration_base(
+        key, {"litellm_provider": provider}, custom_llm_provider=None, warning_display_name=None
+    )
+    return _builtin_cost_map().get(base.key) or base.entry
+
+
 def _registration_base(
     key: str, value: Mapping[str, object], custom_llm_provider: str | None, warning_display_name: str | None
 ) -> _RegistrationWrite:
     provider: Final = str(value.get("litellm_provider") or "")
-    if provider in PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO or any(
-        key.startswith(f"{p}/") for p in PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO
-    ):
+    if _skips_builtin_registration_lookup(key, provider):
         return _RegistrationWrite(key=key, entry=dict(_builtin_cost_map().get(key, {})))
     builtin_model_info: Final = _get_builtin_model_info_for_registration(
         model=key, custom_llm_provider=custom_llm_provider

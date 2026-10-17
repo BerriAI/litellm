@@ -544,6 +544,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
     def translate_thinking_to_reasoning(
         thinking: dict[str, object],
         output_config: dict[str, object] | None = None,
+        auto_summary_level: str = "detailed",
         *,
         drop_params: bool = True,
     ) -> dict[str, object] | None:
@@ -579,7 +580,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         if summary:
             result["summary"] = summary
         elif auto_summary:
-            result["summary"] = "detailed"
+            result["summary"] = auto_summary_level
         return result
 
     @classmethod
@@ -594,6 +595,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         self,
         anthropic_request: AnthropicMessagesRequest,
         include_encrypted_reasoning: bool = True,
+        auto_summary_level: str = "detailed",
         *,
         drop_params: bool = True,
     ) -> dict[str, Any]:
@@ -604,7 +606,8 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         ``include_encrypted_reasoning`` asks the provider for ``reasoning.encrypted_content``
         on every call, so a reasoning model's items can be replayed intact next turn even
         when the client sent no ``thinking`` block; pass False for a provider whose
-        Responses API rejects ``include``.
+        Responses API rejects ``include``. ``auto_summary_level`` is the ``reasoning.summary`` the
+        opt-in auto summary injects when the client sent none.
         """
         model: Final[str] = anthropic_request["model"]
         messages_list: Final = cast(
@@ -675,6 +678,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             reasoning: Final = self.translate_thinking_to_reasoning(
                 thinking,
                 output_config=cast(dict[str, Any] | None, output_config),
+                auto_summary_level=auto_summary_level,
                 drop_params=drop_params,
             )
             if reasoning:

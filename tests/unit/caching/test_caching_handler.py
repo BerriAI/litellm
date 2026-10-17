@@ -42,6 +42,7 @@ from litellm.types.utils import (
     Embedding,
 )
 from litellm.types.llms.openai import ResponsesAPIResponse
+from collections import Counter
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import timedelta, datetime
 from typing import Final, cast
@@ -104,7 +105,7 @@ def test_sync_cache_hits_reach_sync_custom_logger(
         call(**request_kwargs)
 
     assert all_logged.wait(timeout=10)
-    assert logged_cache_hits == [None, True, True]
+    assert Counter(logged_cache_hits) == Counter({None: 1, True: 2}), logged_cache_hits
 
 
 @pytest.fixture

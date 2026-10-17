@@ -706,28 +706,14 @@ class McpInfo(BaseModel):
     logo_url: str | None = None
 
 
-class McpOauthCredentials(BaseModel):
-    upstream_resource: str
-
-
 class McpServerCreateBody(BaseModel):
-    """POST /v1/mcp/server. For a gateway-managed OAuth server, `auth_type` is
-    `oauth2` and `oauth2_flow` is `authorization_code`; the upstream endpoints
-    are discovered and registered via DCR when left unset. `allow_all_keys`
-    false scopes the server to keys granted it through object_permission."""
+    """POST /v1/mcp/server. `allow_all_keys` false scopes the server to keys
+    granted it through object_permission."""
 
     alias: str
     url: str
     transport: str = "http"
     allow_all_keys: bool = True
-    auth_type: str | None = None
-    oauth2_flow: Literal["client_credentials", "authorization_code"] | None = None
-    per_server_oauth_discovery: bool | None = None
-    issuer: str | None = None
-    authorization_url: str | None = None
-    token_url: str | None = None
-    registration_url: str | None = None
-    credentials: McpOauthCredentials | None = Field(default=None, repr=False)
     server_name: str | None = None
     description: str | None = None
     mcp_info: McpInfo | None = None
@@ -765,26 +751,6 @@ class McpServerRow(McpServerInfo):
 
 class McpServerListResponse(RootModel[list[McpServerRow]]):
     """GET /v1/mcp/server answers with a bare array of servers."""
-
-
-class McpServerUserCredentialRow(BaseModel):
-    user_id: str
-    credential_type: Literal["oauth2", "byok"]
-    expires_at: str | None = None
-    connected_at: str | None = None
-    updated_at: str
-
-
-class McpServerUserCredentialListResponse(RootModel[tuple[McpServerUserCredentialRow, ...]]):
-    """GET /v1/mcp/server/{server_id}/user-credentials answers with a bare array."""
-
-
-class McpOauthUserCredentialStatus(BaseModel):
-    server_id: str
-    has_credential: bool
-    expires_at: str | None = None
-    is_expired: bool = False
-    connected_at: str | None = None
 
 
 class ToolsetTool(BaseModel):
