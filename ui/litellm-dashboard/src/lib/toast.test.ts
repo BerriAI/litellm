@@ -37,6 +37,11 @@ describe("toast", () => {
       expect(sonner.success).toHaveBeenCalledWith("saved", { description: "Model x", duration: 1500 });
     });
 
+    it("passes an id through so repeated toasts collapse into one", () => {
+      toast.warning("no access", { id: "denied" });
+      expect(sonner.warning).toHaveBeenCalledWith("no access", expect.objectContaining({ id: "denied" }));
+    });
+
     it("dismiss clears every toast", () => {
       toast.dismiss();
       expect(sonner.dismiss).toHaveBeenCalledWith();

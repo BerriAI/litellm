@@ -1,5 +1,4 @@
 import asyncio
-import socket
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,6 +9,7 @@ import httpx
 import pytest
 from integration._support import bedrock_runtime_peer
 from integration._support.client import Gateway, Scenario, eventually
+from integration._support.ports import allocate_port
 from integration._support.process import graceful_stop_seconds, owned_proxy_process
 from integration._support.prompt_cache_breakpoint import open_upstream_connections, started_worker_pids
 from integration._support.wire import Reply, Request, Wire, wire_server
@@ -146,12 +146,6 @@ def _assert_marked(received: tuple[Request, ...], calls: tuple[_Call, ...]) -> N
         assert bedrock_labels(by_marker[call.marker]) == [_expected_label(call)], call
 
 
-def _reserved_port() -> int:
-    with socket.socket() as reserve:
-        reserve.bind(("127.0.0.1", 0))
-        return reserve.getsockname()[1]
-
-
 async def test_a_mixed_burst_marks_every_request_once(gateway: Gateway) -> None:
     calls: Final = _calls(32)
     with wire_server(bedrock_runtime_peer.respond) as wire, gateway.scenario() as scenario:
@@ -166,7 +160,7 @@ async def test_a_mixed_burst_marks_every_request_once(gateway: Gateway) -> None:
 async def test_an_upstream_outage_mid_burst_reaches_the_caller_and_recovered_requests_are_marked(
     gateway: Gateway,
 ) -> None:
-    port: Final = _reserved_port()
+    port: Final = allocate_port()
     url: Final = str(gateway.client.base_url)
     before_calls, during_calls, after_calls = _calls(8), _calls(8), _calls(8)
     with gateway.scenario() as scenario:

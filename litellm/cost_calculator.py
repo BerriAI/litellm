@@ -86,6 +86,9 @@ from litellm.llms.openai.cost_calculation import (
 from litellm.llms.openai.cost_calculation import (
     video_output_cost_per_second,
 )
+from litellm.llms.openai.transcriptions.gpt_transformation import (
+    OpenAIGPTAudioTranscriptionConfig,
+)
 from litellm.llms.perplexity.cost_calculator import (
     cost_per_token as perplexity_cost_per_token,
 )
@@ -323,6 +326,15 @@ def _transcription_usage_has_token_details(
             return True
 
     return (prompt_tokens_val > 0) or (completion_tokens_val > 0)
+
+
+def _bills_provider_transcription_seconds(model: str | None, custom_llm_provider: str | None) -> bool:
+    if model is None or custom_llm_provider != LlmProviders.OPENAI.value:
+        return False
+    transcription_config: Final = ProviderConfigManager.get_provider_audio_transcription_config(
+        model=model.removeprefix(f"{LlmProviders.OPENAI.value}/"), provider=LlmProviders.OPENAI
+    )
+    return isinstance(transcription_config, OpenAIGPTAudioTranscriptionConfig)
 
 
 OCRPricingField = Literal["ocr_cost_per_page", "ocr_cost_per_credit", "annotation_cost_per_page"]
@@ -1426,32 +1438,15 @@ def completion_cost(
     vertex_location: str | None = None,  # for Vertex AI regional-endpoint uplift (e.g. "us-east5", "global")
 ) -> float:
     """
-    Calculate the cost of a given completion call fot GPT-3.5-turbo, llama2, any litellm supported llm.
+    Return the USD cost of a LiteLLM call.
 
-    Parameters:
-        completion_response (litellm.ModelResponses): [Required] The response received from a LiteLLM completion request.
+    Pass `completion_response` to price a response LiteLLM returned. Without one, pass `model` plus
+    `messages` / `prompt` and `completion`, and token counts are computed from the text. Prices come from
+    `litellm.model_cost` unless `custom_cost_per_token` or `custom_cost_per_second` is given. `total_time`
+    is in milliseconds and only matters for per-second pricing such as Replicate and SageMaker.
 
-        [OPTIONAL PARAMS]
-        model (str): Optional. The name of the language model used in the completion calls
-        prompt (str): Optional. The input prompt passed to the llm
-        completion (str): Optional. The output completion text from the llm
-        total_time (float, int): Optional. (Only used for Replicate LLMs) The total time used for the request in seconds
-        custom_cost_per_token: Optional[CostPerToken]: the cost per input + output token for the llm api call.
-        custom_cost_per_second: Optional[float]: the cost per second for the llm api call.
-
-    Returns:
-        float: The cost in USD dollars for the completion based on the provided parameters.
-
-    Exceptions:
-        Raises exception if model not in the litellm model cost map. Register model, via custom pricing or PR - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json
-
-
-    Note:
-        - If completion_response is provided, the function extracts token information and the model name from it.
-        - If completion_response is not provided, the function calculates token counts based on the model and input text.
-        - The cost is calculated based on the model, prompt tokens, and completion tokens.
-        - For certain models containing "togethercomputer" in the name, prices are based on the model size.
-        - For un-mapped Replicate models, the cost is calculated based on the total time used for the request.
+    Raises if no candidate model name resolves to pricing. Register the model via `litellm.register_model`
+    or add it to model_prices_and_context_window.json.
     """
     try:
         call_type = infer_call_type(call_type, completion_response) or "completion"
@@ -1739,6 +1734,12 @@ def completion_cost(
                     audio_transcription_file_duration = _hidden.get(
                         "audio_transcription_duration",
                         getattr(completion_response, "duration", 0.0),
+                    ) or (
+                        completion_response.usage.seconds
+                        if isinstance(completion_response, TranscriptionResponse)
+                        and isinstance(completion_response.usage, TranscriptionUsageDurationObject)
+                        and _bills_provider_transcription_seconds(requested_model, custom_llm_provider)
+                        else 0.0
                     )
                 elif call_type in _RERANK_CALL_TYPES:
                     if completion_response is not None and isinstance(completion_response, RerankResponse):
@@ -2048,7 +2049,7 @@ def completion_cost(
                 )
                 if idx == len(potential_model_names) - 1:
                     raise e
-        raise Exception(f"Unable to calculat cost for received potential model names - {potential_model_names}")
+        raise Exception(f"Unable to calculate cost for received potential model names - {potential_model_names}")
     except Exception as e:
         raise e
 
@@ -2063,11 +2064,18 @@ def get_response_cost_from_hidden_params(
 
     additional_headers: Final = _hidden_params_dict.get("additional_headers", {})
     if additional_headers and "llm_provider-x-litellm-response-cost" in additional_headers:
-        response_cost: Final = additional_headers["llm_provider-x-litellm-response-cost"]
-        if response_cost is None:
-            return None
-        return float(additional_headers["llm_provider-x-litellm-response-cost"])
+        return _billable_header_cost(additional_headers["llm_provider-x-litellm-response-cost"])
     return None
+
+
+def _billable_header_cost(value: object) -> float | None:
+    if not isinstance(value, (str, int, float)):
+        return None
+    try:
+        cost: Final = float(value)
+    except ValueError:
+        return None
+    return cost if math.isfinite(cost) and cost >= 0 else None
 
 
 def response_cost_calculator(
@@ -3008,6 +3016,7 @@ _RESPONSES_WS_BILLABLE_EVENT_TYPES: Final = frozenset({"response.completed", "re
 
 
 class _ResponsesWsEventResponse(LiteLLMBaseModel):
+    id: str | None = None
     usage: Mapping[str, object] | None = None
     service_tier: str | None = None
 
@@ -3058,6 +3067,23 @@ class ResponsesWebSocketTokenUsageProcessor(BaseTokenUsageProcessor):
             results
         )
         return ResponsesWebSocketTokenUsageProcessor.combine_usage_objects(list(collected_usage_objects))
+
+    @staticmethod
+    def response_id_from_responses_ws_results(results: Sequence[Mapping[str, object]]) -> str | None:
+        response_ids: Final = tuple(
+            response.id for _, response in _billable_responses_ws_events(results) if response.id
+        )
+        return response_ids[-1] if response_ids else None
+
+    @staticmethod
+    def create_logging_object(results: Sequence[Mapping[str, object]]) -> LiteLLMRealtimeStreamLoggingObject:
+        tier_partition: Final = ResponsesWebSocketTokenUsageProcessor.partition_results_by_service_tier(results)
+        return LiteLLMRealtimeStreamLoggingObject(
+            id=ResponsesWebSocketTokenUsageProcessor.response_id_from_responses_ws_results(results),
+            usage=ResponsesWebSocketTokenUsageProcessor.collect_and_combine_usage_from_responses_ws_results(results),
+            results=cast(OpenAIRealtimeStreamList, list(results)),  # cast-ok: raw WS frames, unvalidated field
+            service_tier=next(iter(tier_partition)) if len(tier_partition) == 1 else None,
+        )
 
 
 _TRANSCRIPTION_COMPLETED_EVENT_TYPE: Final = "conversation.item.input_audio_transcription.completed"

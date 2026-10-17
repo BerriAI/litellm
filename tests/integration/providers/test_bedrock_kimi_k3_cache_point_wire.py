@@ -3,7 +3,6 @@ import base64
 import json
 import os
 import re
-import socket
 import threading
 import time
 import uuid
@@ -27,6 +26,7 @@ from integration._support.process import OwnedProxy, owned_proxy_process
 from integration._support.timing import assert_within_factor_of_control, timed
 from integration._support.upstream import _aws_event_frame
 from integration._support.wire import Reply, Request, Wire, wire_server
+from integration._support.ports import allocate_port
 from pydantic import JsonValue, TypeAdapter
 
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with
@@ -1406,17 +1406,11 @@ def _assert_rows_once(served: tuple[_Served, ...]) -> None:
     assert all(row["status"] == "success" for row in rows), rows
 
 
-def _reserved_port() -> int:
-    with socket.socket() as reserve:
-        reserve.bind(("127.0.0.1", 0))
-        return reserve.getsockname()[1]
-
-
 @pytest.mark.timeout(900)
 async def test_c01_a_peer_outage_mid_traffic_fails_cleanly_and_recovery_lands_every_id_once(
     gateway: Gateway, tmp_path: Path
 ) -> None:
-    port: Final = _reserved_port()
+    port: Final = allocate_port()
     prompt: Final = _prompt()
     with wire_server(_peer(), port=port) as first_peer:
         config: Final = _owned_config(first_peer, tmp_path, names=("kimi-us", "claude-control"))

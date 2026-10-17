@@ -33,6 +33,7 @@ from litellm.caching.redis_cluster_cache import RedisClusterCache
 from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
 from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import (
+    AwsErrorTypeProxyException,
     LitellmUserRoles,
     ModelAccessDeniedProxyException,
     ProxyErrorTypes,
@@ -43,7 +44,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.login_throttle import LoginThrottle
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.hooks.parallel_request_limiter_v3 import RequestRateLimiterStash
-from litellm.proxy.proxy_server import app, initialize, openai_exception_handler
+from litellm.proxy.proxy_server import app, aws_error_type_exception_handler, initialize, openai_exception_handler
 from litellm.utils import _invalidate_model_cost_lowercase_map
 from tests._master_key import MASTER_KEY
 
@@ -6690,10 +6691,9 @@ def test_settings_store_uppercases_db_env_vars(monkeypatch):
         monkeypatch.delenv(key, raising=False)
 
     proxy_config = ProxyConfig()
-    db_values = proxy_config._prepared_db_settings_values(
-        "environment_variables", {"dd_api_key": "test-api-key", "dd_site": "us5.datadoghq.com"}
+    proxy_config._apply_db_environment_variables(
+        {"dd_api_key": "test-api-key", "dd_site": "us5.datadoghq.com"}, revision=None, environment_before_db={}, read=1
     )
-    proxy_config.environment_variables.apply_db_row("environment_variables", db_values)
 
     env_vars = proxy_config.environment_variables.resolved()
     assert env_vars["DD_API_KEY"] == "test-api-key"
@@ -9923,10 +9923,22 @@ class _FakeLitellmConfig:
         self.upsert_calls.append((name, value))
 
 
+class _LaggingReplicaLitellmConfig(_FakeLitellmConfig):
+    def __init__(self, replica_rows, writer):
+        super().__init__(initial_rows=replica_rows)
+        self.upsert = writer.upsert
+
+
 class _FakePrismaClient:
-    def __init__(self, initial_rows=None):
+    def __init__(self, initial_rows=None, replica_rows=None):
+        self.writer_db = mock.MagicMock()
+        self.writer_db.litellm_config = _FakeLitellmConfig(initial_rows=initial_rows)
         self.db = mock.MagicMock()
-        self.db.litellm_config = _FakeLitellmConfig(initial_rows=initial_rows)
+        self.db.litellm_config = (
+            self.writer_db.litellm_config
+            if replica_rows is None
+            else _LaggingReplicaLitellmConfig(replica_rows, writer=self.writer_db.litellm_config)
+        )
         self.jsonify_object = lambda obj: obj
 
 
@@ -9936,8 +9948,8 @@ def _update_config_setup(monkeypatch):
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth as auth_dep
 
-    def _install(initial_rows=None, store_model_in_db=True):
-        prisma = _FakePrismaClient(initial_rows=initial_rows)
+    def _install(initial_rows=None, store_model_in_db=True, replica_rows=None):
+        prisma = _FakePrismaClient(initial_rows=initial_rows, replica_rows=replica_rows)
         monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
         monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", store_model_in_db)
         monkeypatch.setattr(
@@ -9987,6 +9999,22 @@ def test_update_config_writes_only_sent_section(_update_config_setup):
         assert written == {"general_settings"}
         assert prisma.db.litellm_config.rows["litellm_settings"] == {"drop_params": True}
         assert prisma.db.litellm_config.rows["environment_variables"] == {"FOO": "enc:bar"}
+    finally:
+        restore()
+
+
+def test_update_config_keeps_an_environment_variable_the_read_replica_has_not_caught_up_on(_update_config_setup):
+    client, prisma, restore = _update_config_setup(
+        initial_rows={"environment_variables": {"SAVED_A_MOMENT_AGO": "enc:new"}},
+        replica_rows={"environment_variables": {}},
+    )
+    try:
+        resp = client.post("/config/update", json={"environment_variables": {"ANOTHER_KEY": "value"}})
+        assert resp.status_code == 200
+        assert prisma.writer_db.litellm_config.rows["environment_variables"] == {
+            "SAVED_A_MOMENT_AGO": "enc:new",
+            "ANOTHER_KEY": "enc:value",
+        }
     finally:
         restore()
 
@@ -11859,6 +11887,29 @@ async def test_openai_exception_handler_no_denial_log_for_plain_proxy_exception(
 
 
 @pytest.mark.asyncio
+async def test_aws_error_type_exception_handler_adds_the_aws_message_and_header():
+    error: Final = ProxyException(
+        message="synthetic policy says no",
+        type="invalid_request_error",
+        param=None,
+        code=400,
+        headers={"x-litellm-call-id": "call-1"},
+    )
+
+    response: Final = await aws_error_type_exception_handler(
+        _http_request_scope(), AwsErrorTypeProxyException(error, "ValidationException")
+    )
+
+    assert response.status_code == 400
+    assert response.headers["x-amzn-errortype"] == "ValidationException"
+    assert response.headers["x-litellm-call-id"] == "call-1"
+    assert json.loads(response.body) == {
+        "message": "synthetic policy says no",
+        "error": {"message": "synthetic policy says no", "type": "invalid_request_error", "param": None, "code": "400"},
+    }
+
+
+@pytest.mark.asyncio
 async def test_realtime_model_access_denial_logs_sanitized_internal_message(caplog):
     reservation = {"reserved_cost": 0.0, "input_cost": 0.0, "finalized": False, "entries": []}
 
@@ -12588,6 +12639,7 @@ def test_dump_redacted_config_serializes_non_json_native_values():
 async def test_update_config_general_settings_emits_audit_log(monkeypatch):
     import litellm.proxy.proxy_server as proxy_server_module
     from litellm.proxy._types import ConfigFieldUpdate
+    from litellm.proxy.management_helpers.audit_logs import drain_audit_tasks
     from litellm.proxy.proxy_server import update_config_general_settings
 
     existing = {"max_parallel_requests": 5, "some_api_key": "sk-stored-secret"}
@@ -12611,6 +12663,7 @@ async def test_update_config_general_settings_emits_audit_log(monkeypatch):
     )
     # Audit is scheduled via asyncio.create_task; yield so it runs.
     await asyncio.sleep(0)
+    await drain_audit_tasks()
 
     fake.db.litellm_auditlog.create.assert_awaited_once()
     written = fake.db.litellm_auditlog.create.call_args.kwargs["data"]
@@ -12980,6 +13033,7 @@ async def test_update_config_general_settings_applies_ssrf_globals(monkeypatch):
 async def test_delete_config_general_settings_emits_deleted_audit_log(monkeypatch):
     import litellm.proxy.proxy_server as proxy_server_module
     from litellm.proxy._types import ConfigFieldDelete
+    from litellm.proxy.management_helpers.audit_logs import drain_audit_tasks
     from litellm.proxy.proxy_server import delete_config_general_settings
 
     existing = {"max_parallel_requests": 5}
@@ -12999,6 +13053,7 @@ async def test_delete_config_general_settings_emits_deleted_audit_log(monkeypatc
     )
     # Audit is scheduled via asyncio.create_task; yield so it runs.
     await asyncio.sleep(0)
+    await drain_audit_tasks()
 
     fake.db.litellm_auditlog.create.assert_awaited_once()
     written = fake.db.litellm_auditlog.create.call_args.kwargs["data"]

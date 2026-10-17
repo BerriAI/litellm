@@ -120,6 +120,7 @@ _PROVIDERS: Final[tuple[tuple[str, str, str, str], ...]] = (
         "pplx-decider-v1-27b",
     ),
     ("typesafe", "typesafe/jev-1.13", "https://api.typesafe.ai/v1/systemone", "jev-1.13"),
+    ("nace", "nace/drex-v2.0", "https://console.nace.ai/v1/systemone", "drex-v2.0"),
     (
         "openrouter",
         "openrouter/typesafe/jev-1.13",
@@ -3345,3 +3346,137 @@ def test_dropping_every_question_answers_400_before_http(respx_mock: respx.MockR
 
     assert caught.value.status_code == 400
     assert not route.called
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("openai_format", (False, True))
+@pytest.mark.parametrize(
+    ("provider", "model", "url", "key_env"),
+    (
+        ("nace", "drex-test-alias", "https://console.nace.ai/v1/systemone", "NACE_API_KEY"),
+        ("openrouter", "nace/drex-test-alias", "https://openrouter.ai/api/alpha/decisions", "OPENROUTER_API_KEY"),
+        (
+            "fireworks_ai",
+            "accounts/test/models/drex-test-alias",
+            "https://api.fireworks.ai/inference/v1/systemone",
+            "FIREWORKS_API_KEY",
+        ),
+    ),
+)
+async def test_decision_hosts_preserve_drex_model_routing_credentials_and_returned_model_pricing(
+    provider: str,
+    model: str,
+    url: str,
+    key_env: str,
+    openai_format: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.setenv(key_env, "host-test-key")
+    monkeypatch.delenv("NACE_API_BASE", raising=False)
+    monkeypatch.delenv("NACE_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_BASE", raising=False)
+    monkeypatch.delenv("FIREWORKS_API_BASE", raising=False)
+    monkeypatch.setitem(
+        litellm.model_cost,
+        f"{provider}/{model}",
+        {
+            "litellm_provider": provider,
+            "mode": "evaluation",
+            "input_cost_per_token": 0.001,
+            "output_cost_per_token": 0,
+        },
+    )
+    monkeypatch.setitem(
+        litellm.model_cost,
+        f"{provider}/drex-test-resolved",
+        {
+            "litellm_provider": provider,
+            "mode": "evaluation",
+            "input_cost_per_token": 0.002,
+            "output_cost_per_token": 0,
+        },
+    )
+    payload: Final = {**_RESPONSE, "model": "drex-test-resolved", "request_id": "request-test"}
+    upstream: Final = respx_mock.post(url).respond(json=payload)
+    if openai_format:
+        response: Final = await litellm.adecisions(
+            model=f"{provider}/{model}",
+            input="damaged order",
+            questions=[{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+        )
+        assert isinstance(response, OpenAIDecisionResponse)
+        assert response.answers[0].model_dump() == {"type": "predicate", "name": "is_defect", "probability": 0.9}
+    else:
+        systemone_response: Final = await litellm.asystemone(
+            model=f"{provider}/{model}",
+            state="damaged order",
+            questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        )
+        assert systemone_response.answers["is_defect"] == NoulAnswer(type="noul", noul=0.9)
+        assert litellm.completion_cost(completion_response=systemone_response, call_type="asystemone") == pytest.approx(
+            _INPUT_TOKENS * 0.002
+        )
+    assert upstream.call_count == 1
+    assert upstream.calls[0].request.headers["authorization"] == "Bearer host-test-key"
+    assert json.loads(upstream.calls[0].request.content) == {
+        "model": model,
+        "state": "damaged order",
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    }
+
+
+@pytest.mark.parametrize("base_env", ("NACE_API_BASE", "NACE_BASE_URL"))
+def test_nace_sync_call_uses_environment_base_and_explicit_credentials(
+    base_env: str,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.setenv(base_env, "https://nace.example/v1/")
+    monkeypatch.setenv("NACE_API_KEY", "environment-key")
+    upstream: Final = respx_mock.post("https://nace.example/v1/systemone").respond(json=_RESPONSE)
+    response: Final = litellm.systemone(
+        model="nace/drex-v2.0",
+        state={"message": "damaged order"},
+        api_key="explicit-key",
+        questions={"is_defect": {"type": "noul", "criteria": {"true": "damaged", "false": "intact"}}},
+    )
+    assert response.answers["is_defect"] == NoulAnswer(type="noul", noul=0.9)
+    assert upstream.calls[0].request.headers["authorization"] == "Bearer explicit-key"
+    assert json.loads(upstream.calls[0].request.content) == {
+        "model": "drex-v2.0",
+        "state": {"message": "damaged order"},
+        "questions": {"is_defect": {"type": "noul", "criteria": {"true": "damaged", "false": "intact"}}},
+    }
+
+
+@pytest.mark.parametrize(
+    ("status", "exception"),
+    (
+        (401, litellm.AuthenticationError),
+        (402, litellm.PaymentRequiredError),
+        (422, litellm.BadRequestError),
+        (429, litellm.RateLimitError),
+        (529, litellm.APIError),
+    ),
+)
+def test_nace_upstream_failures_preserve_status_and_message(
+    status: int,
+    exception: type[Exception],
+    respx_mock: respx.MockRouter,
+) -> None:
+    upstream: Final = respx_mock.post("https://console.nace.ai/v1/systemone").respond(
+        status,
+        json={"error": {"message": "decision rejected"}, "request_id": "request-test"},
+        headers={"retry-after": "1"},
+    )
+    with pytest.raises(exception, match="decision rejected") as error:
+        litellm.systemone(
+            model="nace/drex-v2.0",
+            state="text",
+            api_key="test-key",
+            questions={"a": {"type": "noul", "instructions": "Is it urgent?"}},
+            num_retries=0,
+        )
+    assert getattr(error.value, "status_code") == status
+    assert upstream.call_count == 1

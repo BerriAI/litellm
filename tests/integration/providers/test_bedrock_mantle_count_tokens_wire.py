@@ -1,7 +1,6 @@
 import asyncio
 import json
 import re
-import socket
 import threading
 import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -23,6 +22,7 @@ from integration._support.bedrock_runtime_peer import respond as runtime_generat
 from integration._support.client import Gateway, Scenario, eventually, gateway_from_environment, object_value
 from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
+from integration._support.ports import allocate_port
 from integration.providers._count_tokens_system_lift import (
     ASSISTANT,
     FOLLOW_UP,
@@ -181,19 +181,13 @@ def _mantle_environment(port: int) -> Mapping[str, str]:
 _INHERITED_BEARER: Final = ("AWS_BEARER_TOKEN_BEDROCK",)
 
 
-def _reserved_port() -> int:
-    with socket.socket() as reserve:
-        reserve.bind(("127.0.0.1", 0))
-        return reserve.getsockname()[1]
-
-
 def _closed_port_url() -> str:
-    return f"http://127.0.0.1:{_reserved_port()}"
+    return f"http://127.0.0.1:{allocate_port()}"
 
 
 @pytest.fixture(scope="module")
 def mantle_port() -> int:
-    return _reserved_port()
+    return allocate_port()
 
 
 @pytest.fixture(scope="module")
@@ -1153,8 +1147,8 @@ def test_messages_count_tokens_surfaces_the_mantle_error_for_a_non_text_system(
 
 @pytest.mark.parametrize(
     "tools",
-    ["", "x" * 5120, ["get_weather"]],
-    ids=["empty_string", "5kb_string", "list_of_strings"],
+    [5, "", "x" * 5120, ["get_weather"]],
+    ids=["int", "empty_string", "5kb_string", "list_of_strings"],
 )
 def test_messages_count_tokens_rejects_malformed_tools_without_calling_either_peer(
     counting_proxy: OwnedProxy, mantle_port: int, tools: JsonValue
@@ -1167,8 +1161,8 @@ def test_messages_count_tokens_rejects_malformed_tools_without_calling_either_pe
     ):
         model: Final = _deployment(scenario, runtime.url)
         refused: Final = _count(gateway, {**_bare(model), "tools": tools})
-        assert 400 <= refused.status_code < 600, refused.text
-        assert "input_tokens" not in refused.text, refused.text
+        assert refused.status_code == 400, refused.text
+        assert object_value(_JSON_OBJECT.validate_json(refused.content)["error"])["type"] == "invalid_request_error"
         assert runtime.drain() == () and mantle.drain() == ()
         assert _generated_then_counted(gateway.client, gateway.key, model, _bare(model)) == (200, 200, _MANTLE_COUNT)
         assert _mantle_bodies(mantle) == (_MANTLE_BARE,)
@@ -1191,8 +1185,13 @@ def test_messages_count_tokens_without_messages_is_rejected(
         assert runtime.drain() == () and mantle.drain() == ()
 
 
+@pytest.mark.parametrize(
+    "fields",
+    [{}, {"tools": 5}, {"web_search_options": None}],
+    ids=["well_formed", "int_tools", "null_web_search_options"],
+)
 def test_messages_count_tokens_unauthenticated_request_never_reaches_either_peer(
-    counting_proxy: OwnedProxy, mantle_port: int
+    counting_proxy: OwnedProxy, mantle_port: int, fields: dict[str, JsonValue]
 ) -> None:
     gateway: Final = counting_proxy.gateway
     with (
@@ -1202,7 +1201,7 @@ def test_messages_count_tokens_unauthenticated_request_never_reaches_either_peer
     ):
         model: Final = _deployment(scenario, runtime.url)
         response: Final = gateway.request(
-            "POST", "/v1/messages/count_tokens", _full(model), key="sk-not-a-key-this-proxy-issued"
+            "POST", "/v1/messages/count_tokens", {**_full(model), **fields}, key="sk-not-a-key-this-proxy-issued"
         )
         assert response.status_code == 401, response.text
         assert "input_tokens" not in response.text, response.text

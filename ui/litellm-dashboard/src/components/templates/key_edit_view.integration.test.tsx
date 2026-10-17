@@ -10,6 +10,7 @@ import {
   getPoliciesList,
   getUiSettings,
   getPromptsList,
+  listMCPTools,
   modelAvailableCall,
   vectorStoreListCall,
 } from "../networking";
@@ -1011,6 +1012,179 @@ describe("KeyEditView", () => {
     });
   });
 
+  it("should preserve a budget draft when the same key refreshes before saving", async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    const props = {
+      keyData: MOCK_KEY_DATA,
+      onCancel: vi.fn(),
+      onSubmit,
+      accessToken: "test-token",
+      userID: "test-user",
+      userRole: "admin",
+    };
+    const view = renderWithProviders(<KeyEditView {...props} />);
+
+    fireEvent.change(await screen.findByRole("spinbutton", { name: "Max Budget (USD)" }), {
+      target: { value: "12.5" },
+    });
+    view.rerender(
+      <KeyEditView
+        {...props}
+        keyData={{
+          ...MOCK_KEY_DATA,
+          max_budget: 99,
+          rpm_limit: 75,
+          models: ["gpt-4"],
+          metadata: { note: "new" },
+          object_permission: { ...MOCK_KEY_DATA.object_permission, vector_stores: ["store-new"] },
+        }}
+      />,
+    );
+    await chooseSelectOption(userEvent, screen.getByLabelText("Reset Budget"), "monthly");
+    await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+    const expected = {
+      max_budget: "12.5",
+      budget_duration: "30d",
+      rpm_limit: 75,
+      models: ["gpt-4"],
+      metadata: JSON.stringify({ note: "new" }, null, 2),
+      vector_stores: ["store-new"],
+    };
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining(expected), expect.any(Array)));
+    const [, dirtyFields] = onSubmit.mock.calls[0];
+    expect(dirtyFields).toContain("max_budget");
+    expect(dirtyFields).not.toContain("rpm_limit");
+  });
+
+  const mcpServer = (server_id: string) => ({
+    server_id,
+    server_name: server_id,
+    url: `https://${server_id}.example`,
+    transport: "http",
+    auth_type: "none",
+    created_at: "",
+    created_by: "",
+    updated_at: "",
+    updated_by: "",
+  });
+  const mcpTools = (names: string[]) => ({
+    tools: names.map((name) => ({ name })),
+    error: null,
+    message: null,
+    stack_trace: null,
+  });
+
+  it("should not mark MCP tool defaults as an edit when saving only a budget", async () => {
+    vi.mocked(fetchMCPServers).mockResolvedValue([mcpServer("srv-a")]);
+    vi.mocked(listMCPTools).mockResolvedValue(mcpTools(["read_page", "delete_page"]));
+    testQueryClient.clear();
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    renderWithProviders(
+      <KeyEditView
+        keyData={{ ...MOCK_KEY_DATA, object_permission: { mcp_servers: ["srv-a"] } }}
+        onCancel={vi.fn()}
+        onSubmit={onSubmit}
+        accessToken="test-token"
+        userID="test-user"
+        userRole="admin"
+      />,
+    );
+    await waitFor(() => expect(listMCPTools).toHaveBeenCalledWith("test-token", "srv-a"));
+
+    fireEvent.change(await screen.findByRole("spinbutton", { name: "Max Budget (USD)" }), {
+      target: { value: "12.5" },
+    });
+    await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+    const [values, dirtyFields] = onSubmit.mock.calls[0];
+    expect(values.mcp_tool_permissions).toHaveProperty("srv-a");
+    expect(dirtyFields).toEqual(["max_budget"]);
+    vi.mocked(fetchMCPServers).mockResolvedValue([]);
+    vi.mocked(listMCPTools).mockResolvedValue(mcpTools([]));
+  });
+
+  it("should keep default tool limits for a newly added MCP server when the same key refreshes", async () => {
+    vi.mocked(fetchMCPServers).mockResolvedValue([mcpServer("mcp-1")]);
+    vi.mocked(listMCPTools).mockResolvedValue(mcpTools(["read-page", "delete-page"]));
+    testQueryClient.clear();
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    const props = {
+      keyData: MOCK_KEY_DATA,
+      onCancel: vi.fn(),
+      onSubmit,
+      accessToken: "test-token",
+      userID: "test-user",
+      userRole: "admin",
+    };
+    const view = renderWithProviders(<KeyEditView {...props} />);
+
+    await userEvent.click(await screen.findByTestId("mcp-server-selector"));
+    await waitFor(() => expect(listMCPTools).toHaveBeenCalledWith("test-token", "mcp-1"));
+    view.rerender(<KeyEditView {...props} keyData={{ ...MOCK_KEY_DATA, rpm_limit: 75 }} />);
+    await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({
+      rpm_limit: 75,
+      mcp_tool_permissions: { "mcp-1": ["read-page"] },
+    });
+    vi.mocked(fetchMCPServers).mockResolvedValue([]);
+    vi.mocked(listMCPTools).mockResolvedValue(mcpTools([]));
+  });
+
+  it("should start a fresh budget draft when switching between keys identified only by token_id", async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    const props = {
+      keyData: { ...MOCK_KEY_DATA, token: "", token_id: "key-one" },
+      onCancel: vi.fn(),
+      onSubmit,
+      accessToken: "test-token",
+      userID: "test-user",
+      userRole: "admin",
+    };
+    const view = renderWithProviders(<KeyEditView {...props} />);
+    fireEvent.change(await screen.findByRole("spinbutton", { name: "Max Budget (USD)" }), {
+      target: { value: "12.5" },
+    });
+    view.rerender(
+      <KeyEditView {...props} keyData={{ ...MOCK_KEY_DATA, token: "", token_id: "key-two", max_budget: 25 }} />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() =>
+      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ max_budget: 25 }), expect.any(Array)),
+    );
+  });
+
+  it("should start a fresh budget draft when switching to another key", async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    const props = {
+      keyData: MOCK_KEY_DATA,
+      onCancel: vi.fn(),
+      onSubmit,
+      accessToken: "test-token",
+      userID: "test-user",
+      userRole: "admin",
+    };
+    const view = renderWithProviders(<KeyEditView {...props} />);
+    fireEvent.change(await screen.findByRole("spinbutton", { name: "Max Budget (USD)" }), {
+      target: { value: "12.5" },
+    });
+    view.rerender(
+      <KeyEditView
+        {...props}
+        keyData={{ ...MOCK_KEY_DATA, token: "different-key", token_id: "different-key", max_budget: 25 }}
+      />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() =>
+      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ max_budget: 25 }), expect.any(Array)),
+    );
+  });
+
   it("should persist a canonical budget_duration value, not a word-form the backend cannot parse", async () => {
     const onSubmitMock = vi.fn().mockResolvedValue(undefined);
     renderWithProviders(
@@ -1615,6 +1789,46 @@ describe("KeyEditView", () => {
       });
     });
 
+    it("keeps the team change's cleared MCP grants when the same key refreshes before saving", async () => {
+      const onSubmit = vi.fn().mockResolvedValue(undefined);
+      const keyData = {
+        ...MOCK_KEY_DATA,
+        organization_id: "org-1",
+        team_id: "group-maple",
+        object_permission: { mcp_servers: ["srv-a"], mcp_tool_permissions: { "srv-a": ["read"] } },
+      };
+      const renderEditor = (data: KeyResponse) => (
+        <KeyEditView
+          keyData={data}
+          onCancel={() => {}}
+          onSubmit={onSubmit}
+          accessToken=""
+          userID=""
+          userRole="Admin"
+          premiumUser={false}
+        />
+      );
+      const view = renderWithProviders(renderEditor(keyData));
+
+      await waitFor(() => {
+        expect(screen.getAllByRole("button", { name: "Clear" })).toHaveLength(2);
+      });
+      await userEvent.click(screen.getAllByRole("button", { name: "Clear" })[1]);
+      await waitFor(() => {
+        expect(screen.getByTestId("mcp-server-selector")).toHaveAttribute("data-team-id", "");
+      });
+      view.rerender(renderEditor({ ...keyData, rpm_limit: 75 }));
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmit).toHaveBeenCalled();
+      });
+      expect(onSubmit.mock.calls[0][0]).toMatchObject({
+        mcp_servers_and_groups: { servers: [], accessGroups: [], toolsets: [] },
+        mcp_tool_permissions: {},
+      });
+    });
+
     it("clears the organization and its dependent team in the update payload", async () => {
       const onSubmit = vi.fn().mockResolvedValue(undefined);
       renderWithProviders(
@@ -1649,7 +1863,7 @@ describe("KeyEditView", () => {
       });
     });
 
-    it("should save an explicit project detach while keeping parents locked until the saved key changes", async () => {
+    it("should save an explicit project detach while keeping parents locked until reopening the editor", async () => {
       vi.mocked(getUiSettings).mockResolvedValue({ values: { enable_projects_ui: true } });
       const onSubmit = vi.fn().mockResolvedValue(undefined);
       const onCancel = vi.fn();
@@ -1679,17 +1893,23 @@ describe("KeyEditView", () => {
       await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
       expect(onCancel).toHaveBeenCalledOnce();
       expect(onSubmit).not.toHaveBeenCalled();
+      // KeyInfoView unmounts the editor on cancel and after a successful save.
+      view.rerender(<></>);
       view.rerender(renderEditor({ ...key }));
       await userEvent.click(await screen.findByRole("button", { name: "Detach from project" }));
+      view.rerender(renderEditor({ ...key, spend: 1 }));
+      expect(screen.getByRole("button", { name: "Keep project" })).toBeVisible();
       await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
       const expectedDetach = { project_id: null, organization_id: "org-1", team_id: "group-maple", models: key.models };
       await waitFor(() =>
         expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining(expectedDetach), expect.any(Array)),
       );
       expect(screen.getByRole("combobox", { name: "Team" })).toBeDisabled();
+      view.rerender(<></>);
       view.rerender(renderEditor({ ...key, project_id: null }));
       expect(screen.getByRole("combobox", { name: "Team" })).toBeEnabled();
       expect(screen.queryByRole("button", { name: "Detach from project" })).not.toBeInTheDocument();
+      view.rerender(<></>);
       view.rerender(renderEditor(key, "Internal User"));
       expect(screen.queryByRole("button", { name: "Detach from project" })).not.toBeInTheDocument();
       view.rerender(renderEditor(key, "Org Admin"));
