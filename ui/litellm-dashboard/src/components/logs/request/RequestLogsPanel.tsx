@@ -22,7 +22,7 @@ import {
   type PaginatedResponse,
   useLogFilterLogic,
 } from "./useLogFilterLogic";
-import { useLogDetailRouting } from "./logDetailRouting";
+import { isMultiRequestSession, useLogDetailRouting } from "./logDetailRouting";
 import { LogDetailsDrawer } from "../detail";
 import {
   defaultLogsTimeRange,
@@ -253,7 +253,7 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
   const handleRowClick = useCallback(
     (log: LogEntry) => {
       setSelectedLog(log);
-      if (log.session_id && (log.session_total_count || 1) > 1) {
+      if (isMultiRequestSession(log) && log.session_id) {
         openSession(log.session_id, log.request_id);
       } else {
         openLog(log.request_id);

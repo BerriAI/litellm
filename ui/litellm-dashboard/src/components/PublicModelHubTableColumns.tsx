@@ -162,11 +162,7 @@ function OverflowChips({ items }: { items: string[] }) {
   );
 }
 
-interface PublicModelHubColumnsDeps {
-  onModelClick: (model: ModelGroupInfo) => void;
-}
-
-export const getPublicModelHubColumns = ({ onModelClick }: PublicModelHubColumnsDeps): ColumnDef<ModelGroupInfo>[] => {
+export const getPublicModelHubColumns = (): ColumnDef<ModelGroupInfo>[] => {
   const columns: ColumnDef<ModelGroupInfo>[] = [
     {
       id: "model_group",
@@ -180,7 +176,6 @@ export const getPublicModelHubColumns = ({ onModelClick }: PublicModelHubColumns
           title={row.original.model_group}
           titleClassName="font-mono text-xs font-normal"
           className="max-w-72"
-          onClick={() => onModelClick(row.original)}
         />
       ),
     },
@@ -311,11 +306,7 @@ export const getPublicModelHubColumns = ({ onModelClick }: PublicModelHubColumns
   }));
 };
 
-interface PublicAgentHubColumnsDeps {
-  onAgentClick: (agent: AgentCard) => void;
-}
-
-export const getPublicAgentHubColumns = ({ onAgentClick }: PublicAgentHubColumnsDeps): ColumnDef<AgentCard>[] => [
+export const getPublicAgentHubColumns = (): ColumnDef<AgentCard>[] => [
   {
     id: "name",
     accessorKey: "name",
@@ -325,12 +316,7 @@ export const getPublicAgentHubColumns = ({ onAgentClick }: PublicAgentHubColumns
     enableSorting: true,
     sortingFn: "alphanumeric",
     cell: ({ row }) => (
-      <IdentityCell
-        title={row.original.name}
-        titleClassName="font-mono text-xs font-normal"
-        className="max-w-72"
-        onClick={() => onAgentClick(row.original)}
-      />
+      <IdentityCell title={row.original.name} titleClassName="font-mono text-xs font-normal" className="max-w-72" />
     ),
   },
   {
@@ -403,11 +389,7 @@ export const getPublicAgentHubColumns = ({ onAgentClick }: PublicAgentHubColumns
   },
 ];
 
-interface PublicMCPHubColumnsDeps {
-  onServerClick: (server: MCPServerData) => void;
-}
-
-export const getPublicMCPHubColumns = ({ onServerClick }: PublicMCPHubColumnsDeps): ColumnDef<MCPServerData>[] => [
+export const getPublicMCPHubColumns = (): ColumnDef<MCPServerData>[] => [
   {
     id: "server_name",
     accessorKey: "server_name",
@@ -421,7 +403,6 @@ export const getPublicMCPHubColumns = ({ onServerClick }: PublicMCPHubColumnsDep
         title={row.original.server_name}
         titleClassName="font-mono text-xs font-normal"
         className="max-w-72"
-        onClick={() => onServerClick(row.original)}
       />
     ),
   },

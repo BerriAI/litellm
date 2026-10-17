@@ -351,6 +351,7 @@ export function GuardrailsOverview({
           isLoading={isLoading}
           noDataMessage="No data for this period"
           onRowClick={(row) => onSelectGuardrail(row.id)}
+          getRowLabel={(row) => `Open guardrail ${row.name}`}
           rowClassName={() => "cursor-pointer"}
           sortingMode="server"
           sorting={sorting}

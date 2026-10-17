@@ -51,13 +51,11 @@ function ProjectModelsCell({ project }: { project: ProjectResponse }) {
 }
 
 interface ProjectsTableColumnsDeps {
-  onProjectClick: (projectId: string) => void;
   teamAliasMap: Map<string, string>;
   isTeamsLoading: boolean;
 }
 
 export const getProjectsTableColumns = ({
-  onProjectClick,
   teamAliasMap,
   isTeamsLoading,
 }: ProjectsTableColumnsDeps): ColumnDef<ProjectResponse>[] => [
@@ -68,13 +66,7 @@ export const getProjectsTableColumns = ({
     header: "ID",
     size: 190,
     enableSorting: false,
-    cell: ({ row }) => (
-      <IdentityCell
-        title={row.original.project_id}
-        titleClassName="font-mono text-xs font-normal"
-        onClick={() => onProjectClick(row.original.project_id)}
-      />
-    ),
+    cell: ({ row }) => <IdentityCell title={row.original.project_id} titleClassName="font-mono text-xs font-normal" />,
   },
   {
     id: "project_alias",

@@ -1,5 +1,5 @@
 import type { ColumnDef, ExpandedState, OnChangeFn, PaginationState, VisibilityState } from "@tanstack/react-table";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -118,7 +118,13 @@ const rowClickColumns: ColumnDef<Person, unknown>[] = [
     cell: () => (
       <div>
         <button data-testid="row-button">Act</button>
-        <input data-testid="row-input" aria-label="row input" />
+        <a href="#" data-testid="row-link" onClick={(event) => event.preventDefault()}>
+          Link
+        </a>
+        <input type="checkbox" data-testid="row-checkbox" aria-label="row checkbox" />
+        <div data-row-click-exempt data-testid="row-click-exempt">
+          Exempt
+        </div>
       </div>
     ),
   },
@@ -758,11 +764,18 @@ describe("DataTable pinned columns", () => {
   });
 });
 
-describe("DataTable row click guard", () => {
-  it("fires onRowClick from a plain cell but not from interactive elements", async () => {
+describe("DataTable row activation", () => {
+  it("fires onRowClick exactly once from a plain cell but not from interactive elements", async () => {
     const user = userEvent.setup();
     const onRowClick = vi.fn();
-    render(<DataTable data={[person("a", "Alice")]} columns={rowClickColumns} onRowClick={onRowClick} />);
+    render(
+      <DataTable
+        data={[person("a", "Alice")]}
+        columns={rowClickColumns}
+        onRowClick={onRowClick}
+        getRowLabel={(row) => `Open person ${row.name}`}
+      />,
+    );
 
     await user.click(screen.getByTestId("name-cell"));
     expect(onRowClick).toHaveBeenCalledTimes(1);
@@ -771,8 +784,68 @@ describe("DataTable row click guard", () => {
     await user.click(screen.getByTestId("row-button"));
     expect(onRowClick).toHaveBeenCalledTimes(1);
 
-    await user.click(screen.getByTestId("row-input"));
+    await user.click(screen.getByTestId("row-link"));
     expect(onRowClick).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByTestId("row-checkbox"));
+    expect(onRowClick).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByTestId("row-click-exempt"));
+    expect(onRowClick).toHaveBeenCalledTimes(1);
+  });
+
+  it("activates a focused row with Enter and Space and exposes its accessible label", async () => {
+    const user = userEvent.setup();
+    const onRowClick = vi.fn();
+    render(
+      <DataTable
+        data={[person("a", "Alice")]}
+        columns={rowClickColumns}
+        onRowClick={onRowClick}
+        getRowLabel={(row) => `Open person ${row.name}`}
+      />,
+    );
+
+    const row = screen.getByRole("row", { name: "Open person Alice" });
+    expect(row).toHaveAttribute("tabindex", "0");
+    row.focus();
+    expect(row).toHaveFocus();
+
+    await user.keyboard("{Enter}");
+    expect(onRowClick).toHaveBeenCalledTimes(1);
+    expect(onRowClick).toHaveBeenCalledWith(expect.objectContaining({ id: "a" }));
+
+    await user.keyboard(" ");
+    expect(onRowClick).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not activate the row when Enter starts on an inner button", () => {
+    const onRowClick = vi.fn();
+    render(
+      <DataTable
+        data={[person("a", "Alice")]}
+        columns={rowClickColumns}
+        onRowClick={onRowClick}
+        getRowLabel={(row) => `Open person ${row.name}`}
+      />,
+    );
+
+    fireEvent.keyDown(screen.getByTestId("row-button"), { key: "Enter", code: "Enter" });
+
+    expect(onRowClick).not.toHaveBeenCalled();
+  });
+
+  it("keeps rows without row activation unfocusable, unlabeled, and inactive", async () => {
+    const user = userEvent.setup();
+    render(<DataTable data={[person("a", "Alice")]} columns={rowClickColumns} />);
+
+    const row = screen.getByText("Alice").closest("tr");
+    expect(row).not.toHaveAttribute("tabindex");
+    expect(row).not.toHaveAttribute("aria-label");
+
+    await user.click(screen.getByText("Alice"));
+    fireEvent.keyDown(row as HTMLTableRowElement, { key: "Enter", code: "Enter" });
+    expect(row).not.toHaveFocus();
   });
 });
 

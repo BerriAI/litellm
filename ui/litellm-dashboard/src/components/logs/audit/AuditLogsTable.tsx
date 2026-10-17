@@ -13,7 +13,12 @@ import {
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
-import { AUDIT_TABLE_NAME_DISPLAY, AuditLogEntry, getAuditLogsTableColumns } from "./AuditLogsTableColumns";
+import {
+  AUDIT_TABLE_NAME_DISPLAY,
+  AuditLogEntry,
+  auditActionLabel,
+  getAuditLogsTableColumns,
+} from "./AuditLogsTableColumns";
 
 interface AuditLogsTableProps {
   data: AuditLogEntry[];
@@ -112,7 +117,7 @@ export function AuditLogsTable({
   onViewLog,
 }: AuditLogsTableProps) {
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const columns = useMemo(() => getAuditLogsTableColumns({ onViewLog }), [onViewLog]);
+  const columns = useMemo(() => getAuditLogsTableColumns(), []);
   const hasActiveSearch = Boolean(searchValue?.trim());
 
   return (
@@ -121,6 +126,8 @@ export function AuditLogsTable({
       data={data}
       columns={columns}
       getRowId={(row) => row.id}
+      onRowClick={onViewLog}
+      getRowLabel={(log) => `Open audit log ${auditActionLabel(log.action)} ${log.object_id}`}
       paginationMode="server"
       pagination={pagination}
       onPaginationChange={onPaginationChange}

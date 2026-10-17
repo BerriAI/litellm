@@ -1,5 +1,5 @@
 import type { ColumnFiltersState, PaginationState } from "@tanstack/react-table";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -69,11 +69,25 @@ describe("AuditLogsTable", () => {
     expect(screen.getByText("sk-hash-abc")).toBeInTheDocument();
   });
 
-  it("opens the detail drawer from the Object ID identity cell with the full row", async () => {
+  it("opens the detail drawer from a plain cell and exposes the accessible row name", async () => {
     const user = userEvent.setup();
     const props = renderTable();
+    const row = screen.getByRole("row", { name: "Open audit log Created team-obj-123" });
 
-    await user.click(screen.getByText("team-obj-123"));
+    await user.click(within(row).getAllByRole("cell")[0]);
+
+    expect(props.onViewLog).toHaveBeenCalledTimes(1);
+    expect(props.onViewLog).toHaveBeenCalledWith(ROWS[0]);
+  });
+
+  it("opens the audit detail drawer when Enter is pressed on the focused row", async () => {
+    const user = userEvent.setup();
+    const props = renderTable();
+    const row = screen.getByRole("row", { name: "Open audit log Created team-obj-123" });
+
+    row.focus();
+    expect(row).toHaveFocus();
+    await user.keyboard("{Enter}");
 
     expect(props.onViewLog).toHaveBeenCalledTimes(1);
     expect(props.onViewLog).toHaveBeenCalledWith(ROWS[0]);
