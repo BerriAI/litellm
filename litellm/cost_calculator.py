@@ -1891,7 +1891,7 @@ def completion_cost(
                     elif call_type in ("embedding", "aembedding") and isinstance(completion_response, ModelResponse):
                         # Vertex reports billableCharacterCount per embedding; the
                         # response transformation stashes the summed count here
-                        _hidden_params: Final = get_hidden_params(completion_response) or {}
+                        _hidden_params = get_hidden_params(completion_response) or {}
                         if isinstance(
                             _billable := _hidden_params.get("billable_character_count"),
                             (int, float),

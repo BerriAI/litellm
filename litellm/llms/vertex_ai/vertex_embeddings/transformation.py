@@ -245,7 +245,7 @@ class VertexAITextEmbeddingConfig(LiteLLMBaseModel):
                 }
             )
             input_tokens += embedding["statistics"]["token_count"]
-            _statistics: Final = cast(  # cast-ok: Vertex statistics arrive as untyped JSON
+            _statistics = cast(  # cast-ok: Vertex statistics arrive as untyped JSON
                 "dict[str, object]", embedding["statistics"]
             )
             if isinstance(billable := _statistics.get("billableCharacterCount"), (int, float)):
