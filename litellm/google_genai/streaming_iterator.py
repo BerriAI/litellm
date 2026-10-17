@@ -185,13 +185,48 @@ class AsyncGoogleGenAIGenerateContentStreamingIterator(BaseGoogleGenAIGenerateCo
         # Gemini streamGenerateContent uses SSE line framing; aiter_lines keeps
         # large inlineData payloads (e.g. image/jpeg) intact within one event.
         self.stream_iterator = response.aiter_lines()
+        self._primed_chunk: bytes | None = None
+        self._primed_exhausted: bool = False
+
+    async def _read_next_chunk(self) -> bytes:
+        """Read one SSE event off the line iterator. Callers record it, so a primed event is counted once, when it is handed over."""
+        chunk: Final[bytes] = await _anext_google_genai_sse_chunk(self.stream_iterator)
+        return chunk
+
+    async def prime_first_chunk(self) -> None:
+        """
+        Read the first SSE event now, inside the caller's own retry window.
+
+        The handler that builds this iterator returns as soon as the response headers
+        arrive, so a stream that drops before its first event would otherwise fail in
+        whoever consumes the iterator, long after the call that opened it was recorded
+        as a success and its retry budget spent. Gemini sends no lifecycle frames
+        before content, so one event is enough to prove the stream is alive. A stream
+        that ends before its first event is a valid empty answer and is replayed as an
+        immediate end of stream.
+        """
+        if self._primed_chunk is not None or self._primed_exhausted:
+            return
+        try:
+            self._primed_chunk = await self._read_next_chunk()
+        except StopAsyncIteration:
+            self._primed_exhausted = True
 
     def __aiter__(self):
         return self
 
     async def __anext__(self):
+        if self._primed_chunk is not None:
+            primed: Final[bytes] = self._primed_chunk
+            self._primed_chunk = None
+            self.collected_chunks.append(primed)
+            return primed
+        if self._primed_exhausted:
+            self._primed_exhausted = False
+            await self._handle_async_streaming_logging()
+            raise StopAsyncIteration
         try:
-            chunk: Final = await _anext_google_genai_sse_chunk(self.stream_iterator)
+            chunk = await self._read_next_chunk()
             self.collected_chunks.append(chunk)
             return chunk
         except StopAsyncIteration:
