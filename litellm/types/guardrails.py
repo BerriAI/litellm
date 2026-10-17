@@ -1195,6 +1195,16 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         description="Maximum decisions calls in flight at once on the guardrail in each proxy worker. Implemented by guardrail='decision_model'.",
     )
 
+    forward_messages_as_sent: bool | None = Field(
+        default=False,
+        description=(
+            "Only honored by guardrail='generic_guardrail_api'. When True, structured_messages reaches the "
+            "guardrail exactly as the client sent it, so rows can carry provider-native content blocks and "
+            "keys the OpenAI chat types do not declare. Default False sends OpenAI-format chat rows with "
+            "undeclared keys removed."
+        ),
+    )
+
     extra_headers: list[str] | None = Field(
         default=None,
         description=(
