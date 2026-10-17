@@ -1,11 +1,12 @@
 import asyncio
 from collections.abc import Callable, Sequence
+from types import SimpleNamespace
 from typing import Final, Literal
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from mcp.server.context import ServerRequestContext
-from mcp.types import GetPromptRequest, GetPromptRequestParams, GetPromptResult
+from mcp.types import GetPromptRequest, GetPromptRequestParams, GetPromptResult, ListToolsResult
 from mcp.types import Tool as MCPTool
 
 import litellm
@@ -42,6 +43,10 @@ class _CatalogHookCapture(CustomLogger):
 
 async def _served_catalog_tool() -> str:
     return "ok"
+
+
+def _listing_client() -> SimpleNamespace:
+    return SimpleNamespace(discovery_auth_fingerprint=AsyncMock(return_value="test-credential-hash"))
 
 
 @pytest.mark.parametrize(
@@ -1558,8 +1563,8 @@ async def test_list_mcp_tools_records_the_catalog_only_when_asked(
     upstream = [MCPTool(name="echo", description="Echo text back", inputSchema={"type": "object"})]
     with (
         patch.object(operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[server])),
-        patch.object(manager, "create_mcp_client", AsyncMock(return_value=object())),
-        patch.object(manager, "_fetch_tools_with_timeout", AsyncMock(return_value=upstream)),
+        patch.object(manager, "create_mcp_client", AsyncMock(return_value=_listing_client())),
+        patch.object(manager, "_fetch_tools_with_timeout", AsyncMock(return_value=ListToolsResult(tools=upstream))),
         patch.dict(manager.tool_name_to_mcp_server_name_mapping),
     ):
         try:

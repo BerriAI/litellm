@@ -99,7 +99,7 @@ from litellm.constants import (
     MCP_TOOL_LISTING_MAX_PAGES,
     MCP_TOOL_LISTING_TIMEOUT,
 )
-from litellm.experimental_mcp_client.tools import list_tools_with_pagination
+from litellm.experimental_mcp_client.tools import list_tools_result_with_pagination, list_tools_with_pagination
 from litellm.llms.custom_httpx.http_handler import get_ssl_configuration
 from litellm.proxy._experimental.mcp_server.mcp_context import get_active_mcp_request_ctx
 from litellm.proxy._experimental.mcp_server.mcp_debug import capture_upstream_error_response
@@ -1046,6 +1046,9 @@ class MCPClient:
             return await self.run_with_session(lambda session: session.list_tools(params=params), quiet_on_error=True)
 
     async def list_tools(self, raise_on_error: bool = False) -> list[MCPTool]:
+        return (await self.list_tools_result(raise_on_error=raise_on_error)).tools
+
+    async def list_tools_result(self, raise_on_error: bool = False) -> ListToolsResult:
         """List available tools from the server.
 
         Args:
@@ -1060,16 +1063,20 @@ class MCPClient:
         try:
             # A per-server timeout above the global default extends the whole-walk deadline
             listing_deadline: Final = max(self.timeout, MCP_TOOL_LISTING_TIMEOUT)
-            tools: Final = await self.run_with_session(
-                partial(list_tools_with_pagination, listing_deadline=listing_deadline, require_complete=raise_on_error),
+            listing: Final = await self.run_with_session(
+                partial(
+                    list_tools_result_with_pagination,
+                    listing_deadline=listing_deadline,
+                    require_complete=raise_on_error,
+                ),
                 quiet_on_error=raise_on_error,
             )
-            tool_count: Final = len(tools)
-            tool_names: Final = tuple(tool.name for tool in tools)
+            tool_count: Final = len(listing.tools)
+            tool_names: Final = tuple(tool.name for tool in listing.tools)
             verbose_logger.info(
                 "MCP client listed %s tools from %s: %s", tool_count, self.server_url or "stdio", tool_names
             )
-            return tools
+            return listing
         except asyncio.CancelledError:
             verbose_logger.warning("MCP client list_tools was cancelled")
             raise
@@ -1099,7 +1106,7 @@ class MCPClient:
             if raise_on_error:
                 raise
             # Return empty list instead of raising to allow graceful degradation
-            return []
+            return ListToolsResult(tools=[])
 
     @staticmethod
     def error_tool_result(exc: Exception) -> MCPCallToolResult:

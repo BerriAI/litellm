@@ -9,7 +9,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
-
+from mcp.types import ListToolsResult
+from mcp.types import Tool as MCPTool
 
 if sys.version_info < (3, 11):
     from exceptiongroup import ExceptionGroup
@@ -114,7 +115,7 @@ async def test_fetch_tools_from_passthrough_raises_on_upstream_401():
     )
 
     mock_client = MagicMock()
-    mock_client.list_tools = AsyncMock(side_effect=upstream_error)
+    mock_client.list_tools_result = AsyncMock(side_effect=upstream_error)
 
     with pytest.raises(MCPUpstreamAuthError) as exc_info:
         await manager._fetch_tools_with_timeout(mock_client, passthrough_server.name)
@@ -124,7 +125,7 @@ async def test_fetch_tools_from_passthrough_raises_on_upstream_401():
         'Bearer resource_metadata="https://upstream"'
     )
     assert exc_info.value.server_name == "sample_docs"
-    mock_client.list_tools.assert_awaited_with(raise_on_error=True)
+    mock_client.list_tools_result.assert_awaited_with(raise_on_error=True)
 
 
 @pytest.mark.asyncio
@@ -149,7 +150,7 @@ async def test_fetch_tools_from_delegated_oauth2_raises_on_upstream_401():
     )
 
     mock_client = MagicMock()
-    mock_client.list_tools = AsyncMock(side_effect=upstream_error)
+    mock_client.list_tools_result = AsyncMock(side_effect=upstream_error)
 
     with pytest.raises(MCPUpstreamAuthError) as exc_info:
         await manager._fetch_tools_with_timeout(mock_client, delegated_server.name)
@@ -159,7 +160,7 @@ async def test_fetch_tools_from_delegated_oauth2_raises_on_upstream_401():
         'Bearer resource_metadata="https://upstream"'
     )
     assert exc_info.value.server_name == "delegated_docs"
-    mock_client.list_tools.assert_awaited_with(raise_on_error=True)
+    mock_client.list_tools_result.assert_awaited_with(raise_on_error=True)
 
 
 @pytest.mark.asyncio
@@ -188,14 +189,14 @@ async def test_fetch_tools_from_client_credentials_oauth2_surfaces_upstream_401(
     )
 
     mock_client = MagicMock()
-    mock_client.list_tools = AsyncMock(side_effect=upstream_error)
+    mock_client.list_tools_result = AsyncMock(side_effect=upstream_error)
 
     with pytest.raises(MCPUpstreamAuthError) as exc_info:
         await manager._fetch_tools_with_timeout(mock_client, m2m_server.name)
 
     assert exc_info.value.status_code == 401
     assert exc_info.value.server_name == "m2m_docs"
-    mock_client.list_tools.assert_awaited_with(raise_on_error=True)
+    mock_client.list_tools_result.assert_awaited_with(raise_on_error=True)
 
 
 @pytest.mark.asyncio
@@ -211,13 +212,12 @@ async def test_fetch_tools_from_passthrough_returns_tools_on_success():
         oauth_passthrough=True,
     )
 
-    tool = MagicMock()
-    tool.name = "list_documents"
+    tool = MCPTool(name="list_documents", inputSchema={"type": "object"})
     mock_client = MagicMock()
-    mock_client.list_tools = AsyncMock(return_value=[tool])
+    mock_client.list_tools_result = AsyncMock(return_value=ListToolsResult(tools=[tool]))
 
-    tools = await manager._fetch_tools_with_timeout(mock_client, passthrough_server.name)
-    assert tools == [tool]
+    listing = await manager._fetch_tools_with_timeout(mock_client, passthrough_server.name)
+    assert listing.tools == [tool]
 
 
 @pytest.mark.parametrize("status_code", [401, 403])
@@ -307,7 +307,7 @@ async def test_fetch_tools_from_gateway_managed_surfaces_upstream_401():
         "401", request=response.request, response=response
     )
     mock_client = MagicMock()
-    mock_client.list_tools = AsyncMock(side_effect=upstream_error)
+    mock_client.list_tools_result = AsyncMock(side_effect=upstream_error)
 
     with pytest.raises(MCPUpstreamAuthError) as exc_info:
         await manager._fetch_tools_with_timeout(mock_client, oauth2_server.name)
@@ -315,7 +315,7 @@ async def test_fetch_tools_from_gateway_managed_surfaces_upstream_401():
     assert exc_info.value.status_code == 401
     assert exc_info.value.www_authenticate is None
     assert exc_info.value.server_name == "keycloak_whoami"
-    mock_client.list_tools.assert_awaited_with(raise_on_error=True)
+    mock_client.list_tools_result.assert_awaited_with(raise_on_error=True)
 
 
 def _http_server(server_id: str, name: str, **kwargs) -> MCPServer:
@@ -463,7 +463,7 @@ async def test_fetch_tools_logs_upstream_request_details_on_500(caplog):
     )
     response = httpx.Response(500, request=request)
     mock_client = MagicMock()
-    mock_client.list_tools = AsyncMock(
+    mock_client.list_tools_result = AsyncMock(
         side_effect=httpx.HTTPStatusError("500", request=request, response=response)
     )
 
@@ -553,13 +553,15 @@ async def test_scope_authorization_releases_progress_without_waiting_for_tool_re
     from mcp.server.context import ServerRequestContext
     from starlette.requests import Request
 
+    from litellm.proxy._experimental.mcp_server.legacy_callbacks import (
+        get_scope_response,
+        record_upstream_tool_authorization,
+    )
     from litellm.proxy._experimental.mcp_server.mcp_context import active_mcp_request_ctx_var
     from litellm.proxy._experimental.mcp_server.scope_challenge import (
         SCOPE_RESPONSE_KEY,
         OAuthScopeResponse,
     )
-
-    from litellm.proxy._experimental.mcp_server.legacy_callbacks import get_scope_response, record_upstream_tool_authorization
 
     send = AsyncMock()
     gate = OAuthScopeResponse(send, "https://gateway.example", "/mcp/docs")
@@ -598,7 +600,11 @@ async def test_scope_middleware_releases_waiting_response_on_validation_or_cance
     from mcp.server.context import ServerRequestContext
     from starlette.requests import Request
 
-    from litellm.proxy._experimental.mcp_server.scope_challenge import SCOPE_RESPONSE_KEY, OAuthScopeResponse, finish_scope_response
+    from litellm.proxy._experimental.mcp_server.scope_challenge import (
+        SCOPE_RESPONSE_KEY,
+        OAuthScopeResponse,
+        finish_scope_response,
+    )
 
     send = AsyncMock()
     gate = OAuthScopeResponse(send, "https://gateway.example", "/mcp/docs")
@@ -635,7 +641,11 @@ async def test_streamable_sdk_relays_scope_challenge_before_committing_http_resp
 
     from litellm.proxy._experimental.mcp_server.legacy_callbacks import get_scope_response
     from litellm.proxy._experimental.mcp_server.mcp_context import active_mcp_request_ctx_var
-    from litellm.proxy._experimental.mcp_server.scope_challenge import SCOPE_RESPONSE_KEY, OAuthScopeResponse, finish_scope_response
+    from litellm.proxy._experimental.mcp_server.scope_challenge import (
+        SCOPE_RESPONSE_KEY,
+        OAuthScopeResponse,
+        finish_scope_response,
+    )
 
     async def call_tool(context, params):
         token = active_mcp_request_ctx_var.set(context)
@@ -687,7 +697,10 @@ async def test_scope_challenges_are_isolated_between_concurrent_requests():
     from mcp.server.context import ServerRequestContext
     from starlette.requests import Request
 
-    from litellm.proxy._experimental.mcp_server.legacy_callbacks import get_scope_response, record_upstream_tool_authorization
+    from litellm.proxy._experimental.mcp_server.legacy_callbacks import (
+        get_scope_response,
+        record_upstream_tool_authorization,
+    )
     from litellm.proxy._experimental.mcp_server.mcp_context import active_mcp_request_ctx_var
     from litellm.proxy._experimental.mcp_server.scope_challenge import SCOPE_RESPONSE_KEY, OAuthScopeResponse
 
@@ -738,8 +751,9 @@ async def test_scope_middleware_preserves_non_http_requests():
 
 @pytest.mark.parametrize("path", ["/mcp", "/toolset/demo/mcp"])
 def test_managed_step_up_metadata_matches_the_sdk_configured_resource(path):
-    from mcp.shared.auth_utils import check_resource_allowed
     from urllib.parse import urlsplit
+
+    from mcp.shared.auth_utils import check_resource_allowed
 
     error = MCPUpstreamAuthError(403, None, "docs", required_scope="tools.write")
     response = error.to_http_exception("https://gateway.test", path)
