@@ -118,6 +118,7 @@ success_callback: List[CALLBACK_TYPES] = []
 failure_callback: List[CALLBACK_TYPES] = []
 service_callback: List[CALLBACK_TYPES] = []
 audit_log_callbacks: List[CALLBACK_TYPES] = []
+batch_line_item_callbacks: Sequence[CALLBACK_TYPES] = ()
 # logging_callback_manager is lazy-loaded via __getattr__
 _custom_logger_compatible_callbacks_literal = Literal[
     "lago",
@@ -170,6 +171,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "focus",
     "mavvrik",
     "vantage",
+    "ternary",
     "posthog",
     "levo",
     "compression_interception",
@@ -205,7 +207,7 @@ _async_failure_callback: List[Union[str, Callable[..., object], "CustomLogger"]]
     []
 )  # internal variable - async custom callbacks are routed here.
 pre_call_rules: List[Callable] = []
-post_call_rules: List[Callable] = []
+post_call_rules: List[Callable[..., object]] = []
 turn_off_message_logging: Optional[bool] = False
 standard_logging_payload_excluded_fields: Optional[List[str]] = (
     None  # Fields to exclude from StandardLoggingPayload before callbacks receive it
@@ -391,6 +393,7 @@ key_alias_pattern: str | None = None
 enable_gemini_default_thinking_level_low: bool = (
     False  # opt-in: force thinkingLevel low/minimal for Gemini 3 thinking param mapping
 )
+gemini_include_thoughts_default: bool = True
 ####################
 logging: bool = True
 enable_loadbalancing_on_batch_endpoints: Optional[bool] = None
@@ -476,6 +479,7 @@ max_end_user_budget_id: Optional[str] = None
 # pass through unchanged.
 validate_end_user_id_in_db: bool = False
 block_requests_for_models_without_pricing: bool = False
+personal_key_model_access_from_teams: bool = False
 disable_end_user_cost_tracking: Optional[bool] = None
 disable_end_user_cost_tracking_prometheus_only: Optional[bool] = None
 enable_end_user_cost_tracking_prometheus_only: Optional[bool] = None
@@ -720,6 +724,7 @@ aws_polly_models: Set = set()
 transcribe_models: Set = set()
 gigachat_models: Set = set()
 llamagate_models: Set = set()
+coralbricks_models: Set[str] = set()
 reducto_models: Set = set()
 bedrock_mantle_models: Set = set()
 
@@ -1011,6 +1016,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             gigachat_models.add(key)
         elif value.get("litellm_provider") == "llamagate":
             llamagate_models.add(key)
+        elif value.get("litellm_provider") == "coralbricks":
+            coralbricks_models.add(key)
         elif value.get("litellm_provider") == "reducto":
             reducto_models.add(key)
         elif value.get("litellm_provider") == "bedrock_mantle":
@@ -1145,6 +1152,7 @@ model_list = list(
     | docker_model_runner_models
     | reducto_models
     | bedrock_mantle_models
+    | coralbricks_models
     | set(clarifai_models)
 )
 
@@ -1169,7 +1177,9 @@ def _build_models_by_provider() -> dict:
         "edenai": edenai_models,
         "datarobot": datarobot_models,
         "vertex_ai": vertex_chat_models
+        | vertex_code_chat_models
         | vertex_text_models
+        | vertex_code_text_models
         | vertex_anthropic_models
         | vertex_vision_models
         | vertex_language_models
@@ -1177,7 +1187,7 @@ def _build_models_by_provider() -> dict:
         | vertex_minimax_models
         | vertex_moonshot_models
         | vertex_zai_models,
-        "ai21": ai21_models,
+        "ai21": ai21_models | ai21_chat_models,
         "bedrock": bedrock_models | bedrock_converse_models,
         "petals": petals_models,
         "ollama": ollama_models,
@@ -1264,6 +1274,7 @@ def _build_models_by_provider() -> dict:
         "transcribe": transcribe_models,
         "gigachat": gigachat_models,
         "llamagate": llamagate_models,
+        "coralbricks": coralbricks_models,
         "reducto": reducto_models,
         "bedrock_mantle": bedrock_mantle_models,
     }
@@ -1407,6 +1418,7 @@ from .exceptions import (
     InvalidRequestError,
     BadRequestError,
     ImageFetchError,
+    MalformedRequestFieldError as MalformedRequestFieldError,
     VectorStoreSearchError,
     NotFoundError,
     PermissionDeniedError,
@@ -1688,6 +1700,9 @@ if TYPE_CHECKING:
     from .llms.openrouter.decisions.transformation import (
         OpenRouterDecisionsConfig as OpenRouterDecisionsConfig,
     )
+    from .llms.fireworks_ai.decisions.transformation import (
+        FireworksAIDecisionsConfig as FireworksAIDecisionsConfig,
+    )
     from .llms.cloudflare.decisions.transformation import (
         CloudflareDecisionsConfig as CloudflareDecisionsConfig,
     )
@@ -1699,6 +1714,12 @@ if TYPE_CHECKING:
     )
     from .llms.hosted_vllm.decisions.transformation import (
         HostedVLLMDecisionsConfig as HostedVLLMDecisionsConfig,
+    )
+    from .llms.laya.decisions.transformation import (
+        LayaDecisionsConfig as LayaDecisionsConfig,
+    )
+    from .llms.bespoke.decisions.transformation import (
+        BespokeDecisionsConfig as BespokeDecisionsConfig,
     )
     from .llms.openai.decisions.transformation import (
         OpenAIDecisionsConfig as OpenAIDecisionsConfig,
@@ -2271,11 +2292,14 @@ if TYPE_CHECKING:
     get_response_string: Callable[..., str]
     supports_function_calling: Callable[..., bool]
     supports_web_search: Callable[..., bool]
+    supports_tool_search: Callable[..., bool]
     supports_url_context: Callable[..., bool]
     supports_response_schema: Callable[..., bool]
     supports_parallel_function_calling: Callable[..., bool]
     supports_vision: Callable[..., bool]
     supports_audio_input: Callable[..., bool]
+    supports_video_input: Callable[..., bool]
+    supports_box_questions: Callable[..., bool]
     supports_audio_output: Callable[..., bool]
     supports_system_messages: Callable[..., bool]
     supports_reasoning: Callable[..., bool]

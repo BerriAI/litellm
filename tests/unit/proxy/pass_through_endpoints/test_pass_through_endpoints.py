@@ -9911,6 +9911,93 @@ def test_init_kwargs_with_tags_in_header(mock_request, mock_user_api_key_dict):
     assert metadata["tags"] == ["tag1", "tag2"]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("operation", "stream"), (("generateContent", False), ("streamGenerateContent", True)))
+async def test_vertex_passthrough_forwards_body_and_request_tags_to_spend_payload(
+    mock_request, operation, stream, httpx_transport
+):
+    target: Final = (
+        "https://aiplatform.googleapis.com/v1/projects/test-project/locations/global/publishers/google/"
+        f"models/gemini-3.1-flash-lite:{operation}"
+    )
+    request_body: Final = {"contents": [{"role": "user", "parts": [{"text": "Say hello"}]}]}
+    response_body: Final = {
+        "candidates": [{"content": {"role": "model", "parts": [{"text": "hello"}]}, "finishReason": "STOP"}],
+        "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
+    }
+    request: Final = mock_request(
+        headers=Headers({"tags": "vertex-js-sdk,pass-through-endpoint"}),
+        request_body=request_body,
+    )
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key="test-key", user_id="test-user", team_id="test-team")
+
+    with respx.mock(assert_all_called=True) as upstream:
+        route: Final = upstream.post(target).respond(status_code=200, json=response_body)
+        response: Final = await pass_through_request(
+            request=request,
+            target=target,
+            custom_headers={},
+            user_api_key_dict=user_api_key_dict,
+            custom_llm_provider="vertex_ai",
+            stream=stream,
+        )
+
+    assert response.status_code == 200
+    if stream:
+        streamed_body: Final = b"".join([chunk async for chunk in response.body_iterator])
+        assert json.loads(streamed_body) == response_body
+    assert json.loads(route.calls.last.request.content) == request_body
+
+    start_time: Final = datetime(2026, 1, 15, 12, 0, 0)
+    passthrough_payload: Final = PassthroughStandardLoggingPayload(
+        url=target,
+        request_body=request_body,
+        request_method="POST",
+    )
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="gemini-3.1-flash-lite",
+        messages=[],
+        stream=stream,
+        call_type="pass_through_endpoint",
+        start_time=start_time,
+        litellm_call_id="vertex-request-tags",
+        function_id="vertex-request-tags",
+    )
+    logging_kwargs: Final = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+        request=request,
+        user_api_key_dict=user_api_key_dict,
+        passthrough_logging_payload=passthrough_payload,
+        _parsed_body=request_body,
+        litellm_call_id="vertex-request-tags",
+        logging_obj=logging_obj,
+    )
+    logging_obj.update_environment_variables(
+        model="gemini-3.1-flash-lite",
+        user="unknown",
+        optional_params={},
+        litellm_params=logging_kwargs["litellm_params"],
+        call_type="pass_through_endpoint",
+    )
+    log_dispatch: Final = AsyncMock()
+    await PassThroughEndpointLogging(log_dispatch=log_dispatch).pass_through_async_success_handler(
+        httpx_response=route.calls.last.response,
+        response_body=response_body,
+        logging_obj=logging_obj,
+        url_route=target,
+        result=json.dumps(response_body),
+        start_time=start_time,
+        end_time=start_time,
+        cache_hit=False,
+        request_body=request_body,
+        custom_llm_provider="vertex_ai",
+        **logging_kwargs,
+    )
+
+    logged_kwargs: Final = log_dispatch.await_args.kwargs
+    assert logged_kwargs["call_type"] == "pass_through_endpoint"
+    assert logged_kwargs["litellm_params"]["metadata"]["tags"] == ["vertex-js-sdk", "pass-through-endpoint"]
+
+
 athropic_request_body: Final = {
     "model": "claude-sonnet-4-5-20250929",
     "max_tokens": 256,

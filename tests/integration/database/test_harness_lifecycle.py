@@ -4,21 +4,23 @@ import asyncio
 import errno
 import os
 import re
+import shutil
 import signal
 import socket
 import subprocess
 import sys
 import time
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractContextManager, ExitStack
 from pathlib import Path
 from queue import SimpleQueue
-from threading import Event
 from tempfile import TemporaryDirectory
+from threading import Event
 from types import FrameType
 from typing import Final, Literal
+from xml.etree import ElementTree
 
 import httpx
 import psutil
@@ -29,6 +31,7 @@ from typing_extensions import ReadOnly, TypedDict
 
 from tests.integration._support import process as process_support
 from tests.integration._support.async_server import LoopbackServer
+from tests.integration._support.budget import case_timeout_seconds
 from tests.integration._support.client import Gateway, eventually
 from tests.integration._support.database_relay import (
     DatabaseRelay,
@@ -40,6 +43,9 @@ from tests.integration._support.database_relay import (
 )
 from tests.integration._support.runtime import configure_executor
 from tests.integration._support.sharding import ShardExecution, shard_errors
+from tests.integration._support.wire import Reply, wire_server
+from tests.integration._support.ports import allocate_port
+from tests.integration.run import _without_provider_api_keys
 
 
 class ExitRecord(TypedDict):
@@ -51,6 +57,147 @@ class ExitRecord(TypedDict):
 Relay = DatabaseRelay | DroppedConnectionRelay | HeldStatementRelay
 RelayFactory = Callable[[str, bytes], AbstractContextManager[tuple[Relay, str]]]
 STARTED_WORKER: Final = re.compile(r"Started server process \[(\d+)\]")
+NESTED_RUN_SECONDS: Final = 60.0
+WORKER_STACK_BOOT_SECONDS: Final = 30.0
+OUTER_TEST_SLACK_SECONDS: Final = 30.0
+
+
+def _nested_run_seconds(workers: int) -> float:
+    return NESTED_RUN_SECONDS + (workers * WORKER_STACK_BOOT_SECONDS if workers > 1 else 0.0)
+
+
+def _nested_run(*values: object, workers: int) -> object:
+    return pytest.param(*values, marks=pytest.mark.timeout(_nested_run_seconds(workers) + OUTER_TEST_SLACK_SECONDS))
+
+
+def _nested_pytest_environment(environment: Mapping[str, str]) -> dict[str, str]:
+    inherited_run_settings: Final = frozenset(
+        (
+            "INTEGRATION_RESULTS_DIR",
+            "INTEGRATION_ROUTING",
+            "INTEGRATION_WORKER_ISOLATION",
+            "INTEGRATION_COVERAGE_FILE",
+            "INTEGRATION_CASE_SHARDS",
+            "INTEGRATION_CASE_SHARD_INDEX",
+            "CIRCLE_NODE_TOTAL",
+            "CIRCLE_NODE_INDEX",
+            "PYTEST_XDIST_WORKER",
+            "PYTEST_XDIST_WORKER_COUNT",
+            "PYTEST_XDIST_TESTRUNUID",
+            "GITHUB_ACTIONS",
+        )
+    )
+    return {name: value for name, value in environment.items() if name not in inherited_run_settings}
+
+
+def test_runner_environment_drops_inherited_provider_api_keys() -> None:
+    inherited: Final = {
+        "OPENAI_API_KEY": "ambient-openai",
+        "GEMINI_API_KEY": "ambient-gemini",
+        "OTHER_API_KEY": "ambient-other",
+        "LITELLM_MASTER_KEY": "sk-integration-master",
+        "OPENAI_BASE_URL": "http://127.0.0.1:8190",
+    }
+    filtered: Final = _without_provider_api_keys(inherited)
+    assert filtered == {
+        "LITELLM_MASTER_KEY": "sk-integration-master",
+        "OPENAI_BASE_URL": "http://127.0.0.1:8190",
+    }
+    assert inherited["OPENAI_API_KEY"] == "ambient-openai"
+
+
+@pytest.mark.parametrize("fails", (False, True), ids=("passing-test", "failing-test"))
+def test_sdk_teardown_delivers_logging_before_restoring_callbacks(tmp_path: Path, fails: bool) -> None:
+    root: Final = Path(__file__).resolve().parents[3]
+    events: Final = tmp_path / "callbacks.json"
+    probe: Final = tmp_path / "test_callback_teardown.py"
+    probe.write_text(
+        "import asyncio, json, litellm, pytest\n"
+        "from pathlib import Path\n"
+        "from litellm.integrations.custom_logger import CustomLogger\n"
+        f"EVENTS = Path({str(events)!r})\n"
+        "ORIGINAL = tuple(litellm.callbacks)\n"
+        "@pytest.fixture\n"
+        "def release():\n"
+        "    gate = asyncio.Event()\n"
+        "    yield gate\n"
+        "    gate.set()\n"
+        "async def test_request(release):\n"
+        "    started = asyncio.Event()\n"
+        "    request_loop = asyncio.get_running_loop()\n"
+        "    class Recorder(CustomLogger):\n"
+        "        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):\n"
+        "            started.set()\n"
+        "            await release.wait()\n"
+        "            EVENTS.write_text(json.dumps({\n"
+        "                'registered': self in litellm.callbacks,\n"
+        "                'same_loop': asyncio.get_running_loop() is request_loop,\n"
+        "                'call_id': kwargs['litellm_call_id'],\n"
+        "            }))\n"
+        "    litellm.callbacks.append(Recorder())\n"
+        "    response = await litellm.acompletion(model='gpt-4o-mini',\n"
+        "        messages=[{'role': 'user', 'content': 'teardown'}],\n"
+        "        mock_response='done', litellm_call_id='teardown-request')\n"
+        "    await asyncio.wait_for(started.wait(), timeout=5)\n"
+        "    assert response.choices[0].message.content == 'done'\n"
+        "    assert not EVENTS.exists()\n"
+        f"    assert not {fails}, 'intentional test failure'\n"
+        "def test_next():\n"
+        "    assert EVENTS.exists(), 'logging did not finish before the next test'\n"
+        "    assert json.loads(EVENTS.read_text()) == {\n"
+        "        'registered': True, 'same_loop': True, 'call_id': 'teardown-request'}\n"
+        "    assert tuple(litellm.callbacks) == ORIGINAL\n"
+    )
+    result: Final = subprocess.run(
+        (
+            sys.executable,
+            "-P",
+            "-m",
+            "pytest",
+            str(probe),
+            "--noconftest",
+            "-p",
+            "tests.integration.sdk.conftest",
+            "-o",
+            "addopts=",
+            "-o",
+            "asyncio_mode=auto",
+            "-o",
+            "asyncio_default_fixture_loop_scope=session",
+            f"--junitxml={tmp_path / 'junit.xml'}",
+            "-q",
+        ),
+        cwd=root,
+        env=_nested_pytest_environment(os.environ),
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == (1 if fails else 0), result.stdout + result.stderr
+    cases: Final = ElementTree.parse(tmp_path / "junit.xml").findall(".//testcase")
+    assert tuple(case.attrib["name"] for case in cases) == ("test_request", "test_next")
+    assert all(case.find("error") is None for case in cases), result.stdout + result.stderr
+    assert (cases[0].find("failure") is not None) == fails, result.stdout + result.stderr
+    assert cases[1].find("failure") is None, result.stdout + result.stderr
+
+
+def test_owned_readiness_rejects_a_healthy_listener_from_another_process(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("INTEGRATION_PROXY_READY_SECONDS", "0")
+    with wire_server(lambda request: Reply(body=b"healthy")) as foreign:
+        with subprocess.Popen(
+            (sys.executable, "-I", "-c", "import time; time.sleep(30)"), start_new_session=True
+        ) as process:
+            try:
+                port: Final = int(foreign.url.rsplit(":", 1)[1])
+                launch: Final = process_support._Launch(process, port, tmp_path / "proxy.log", time.monotonic())
+                with pytest.raises(AssertionError, match="readiness deadline"):
+                    process_support._wait_until_ready(launch)
+                assert process.poll() is None
+            finally:
+                process_support.stop_child(process, grace_seconds=3)
 
 
 @pytest.mark.parametrize("factory", (database_relay, dropped_connection_relay, held_statement_relay))
@@ -73,10 +220,11 @@ async def _unused_peer(reader: asyncio.StreamReader, writer: asyncio.StreamWrite
 
 
 def test_relay_bind_failure_closes_its_loop_and_allows_repeated_cleanup() -> None:
+    port: Final = allocate_port()
     with socket.socket() as occupied:
-        occupied.bind(("127.0.0.1", 0))
+        occupied.bind(("127.0.0.1", port))
         occupied.listen()
-        relay: Final = LoopbackServer(occupied.getsockname()[1], _unused_peer)
+        relay: Final = LoopbackServer(port, _unused_peer)
         with pytest.raises(OSError, match=os.strerror(errno.EADDRINUSE).lower()):
             relay.start()
         relay.stop()
@@ -86,7 +234,7 @@ def test_relay_bind_failure_closes_its_loop_and_allows_repeated_cleanup() -> Non
 def test_upstream_readiness_failure_reaps_the_started_process(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(process_support, "_UPSTREAM_READY_SECONDS", 0)
     children_before: Final = frozenset(child.pid for child in psutil.Process().children(recursive=True))
-    slot: Final = process_support.UpstreamSlot(tmp_path, process_support._free_port(), process_support._harness_root())
+    slot: Final = process_support.UpstreamSlot(tmp_path, allocate_port(), process_support._harness_root())
     try:
         with pytest.raises(AssertionError, match="readiness deadline exceeded"):
             slot.start()
@@ -124,39 +272,41 @@ async def test_owned_runtime_starts_the_entire_held_provider_burst_on_a_small_ru
                 release.set()
 
 
-@pytest.mark.timeout(90)
+@pytest.mark.timeout(case_timeout_seconds())
 def test_slow_worker_startup_survives_healthchecks_and_a_stalled_worker_is_replaced(
     gateway: Gateway, tmp_path: Path
 ) -> None:
     hook: Final = tmp_path / "slow_worker_startup.py"
-    hook.write_text("from threading import Event\n\ndef configure():\n    Event().wait(6)\n")
+    receipts: Final = tmp_path / "startup-receipts"
+    receipts.mkdir()
+    hook.write_text(
+        "import os\nfrom pathlib import Path\nfrom threading import Event\n\ndef configure():\n"
+        f"    root = Path({str(receipts)!r})\n"
+        "    try:\n"
+        "        with (root / 'first').open('x'):\n"
+        "            pass\n"
+        "    except FileExistsError:\n"
+        "        Event().wait(6)\n"
+        "    (root / str(os.getpid())).touch()\n"
+    )
     overrides: Final = {
         "PYTHONPATH": os.pathsep.join((str(tmp_path), os.environ.get("PYTHONPATH", ""))),
         "LITELLM_WORKER_STARTUP_HOOKS": "slow_worker_startup:configure",
     }
     with process_support.owned_proxy_process(gateway, tmp_path, overrides, workers=2) as owned:
-        workers: Final = eventually(
-            lambda: tuple(int(pid) for pid in STARTED_WORKER.findall(owned.log.read_text())),
-            lambda pids: len(pids) == 2 and owned.log.read_text().count("Application startup complete.") == 2,
-            seconds=30,
+        workers: Final = tuple(int(pid) for pid in STARTED_WORKER.findall(owned.log.read_text()))
+        assert len(workers) == 2, owned.log.read_text()
+        assert all((receipts / str(pid)).exists() for pid in workers), (
+            "Proxy yielded before both workers finished startup"
         )
-        victim: Final = psutil.Process(workers[0])
-        victim.suspend()
-        try:
-            replacement: Final = eventually(
-                lambda: tuple(int(pid) for pid in STARTED_WORKER.findall(owned.log.read_text())),
-                lambda pids: len(pids) == 3 and owned.log.read_text().count("Application startup complete.") == 3,
-                seconds=30,
-            )
-            assert replacement[-1] not in workers
-            assert not psutil.pid_exists(victim.pid), "Supervisor did not reap the stalled worker"
-            response: Final = owned.gateway.request("GET", "/health/readiness")
-            assert response.status_code == 200, response.text
-        finally:
-            try:
-                victim.kill()
-            except psutil.NoSuchProcess:
-                pass
+        assert owned.log.read_text().count("Application startup complete.") == 2
+        replacement: Final = owned.stall_worker(workers[0])
+        assert replacement not in workers
+        assert tuple(int(pid) for pid in STARTED_WORKER.findall(owned.log.read_text()))[-1] == replacement
+        assert owned.log.read_text().count("Application startup complete.") == 3
+        assert not psutil.pid_exists(workers[0]), "Supervisor did not reap the stalled worker"
+        response: Final = owned.gateway.request("GET", "/health/readiness")
+        assert response.status_code == 200, response.text
 
 
 def test_interrupted_cleanup_reaps_the_owned_root_and_its_child() -> None:
@@ -196,8 +346,7 @@ def test_interrupted_cleanup_reaps_the_owned_root_and_its_child() -> None:
             assert process.poll() is not None
             eventually(lambda: process_support.group_members(process.pid), lambda members: not members, seconds=5)
         finally:
-            process_support.signal_group(process.pid, signal.SIGKILL)
-            process.wait(timeout=3)
+            process_support.stop_process_group(process, 3)
 
 
 @pytest.mark.parametrize("explicit_dotenv", (False, True))
@@ -264,11 +413,7 @@ def test_seeded_collection_reuses_scoped_fixtures_and_executes_every_case(tmp_pa
             "--timeout=15",
             "-q",
         ),
-        env={
-            name: value
-            for name, value in os.environ.items()
-            if name not in ("INTEGRATION_RESULTS_DIR", "INTEGRATION_ROUTING")
-        },
+        env=_nested_pytest_environment(os.environ),
         capture_output=True,
         text=True,
         timeout=30,
@@ -306,7 +451,6 @@ def test_native_file_selection_reuses_fixtures_and_qualifies_an_empty_shard(
             "    yield 'shared'\n"
             "    record('stop shared')\n"
             "@pytest.mark.parametrize('number', range(4))\n"
-            "@pytest.mark.xdist_group('shared')\n"
             "def test_shared(shared, number):\n"
             "    assert shared == 'shared'\n"
             "    record('shared ' + str(number))\n"
@@ -358,22 +502,13 @@ def test_native_file_selection_reuses_fixtures_and_qualifies_an_empty_shard(
                     "--integration-order-seed=1848224111",
                     "--hypothesis-seed=4106601",
                     "--timeout=15",
+                    f"--junitxml={outputs[index] / 'junit.xml'}",
                     *(("-n", str(workers), "--dist=loadgroup") if workers > 1 else ()),
                     "-q",
                 ),
                 cwd=root,
                 env={
-                    **{
-                        name: value
-                        for name, value in os.environ.items()
-                        if name
-                        not in (
-                            "INTEGRATION_RESULTS_DIR",
-                            "INTEGRATION_ROUTING",
-                            "GITHUB_ACTIONS",
-                            "PYTEST_XDIST_WORKER",
-                        )
-                    },
+                    **_nested_pytest_environment(os.environ),
                     "INTEGRATION_RESULTS_DIR": str(outputs[index]),
                     "PYTHONPATH": os.pathsep.join((str(root), str(root / "tests"), str(root / "tests/e2e"))),
                 },
@@ -391,6 +526,12 @@ def test_native_file_selection_reuses_fixtures_and_qualifies_an_empty_shard(
             ShardExecution.model_validate_json((output / "execution.json").read_text()) for output in outputs
         )
         assert shard_errors(executions, 3) == ()
+        for output, execution in zip(outputs, executions, strict=True):
+            cases: Final = ElementTree.parse(output / "junit.xml").findall(".//testcase")
+            assert sorted(case.attrib["name"] for case in cases) == sorted(
+                nodeid.rsplit("::", 1)[-1] for nodeid in execution.collected
+            )
+            assert all("@integration_fixture_" not in nodeid for nodeid in execution.inventory)
         assert len(executions[0].inventory) == (2 if subset else 13)
         assert executions[2].collected == ()
         assert executions[2].complete
@@ -404,6 +545,243 @@ def test_native_file_selection_reuses_fixtures_and_qualifies_an_empty_shard(
     assert sorted(event for event in observed if event.startswith("plain ")) == (
         [] if subset else [f"plain {index}" for index in range(8)]
     )
+
+
+@pytest.mark.parametrize(
+    ("workers", "seed"),
+    tuple(_nested_run(workers, seed, workers=workers) for workers, seed in ((1, 1848224111), (2, 0), (2, 984872314))),
+)
+@pytest.mark.parametrize("class_parameters", (False, True))
+def test_mixed_fixture_scopes_reuse_outer_and_inner_configurations(
+    tmp_path: Path, workers: int, seed: int, class_parameters: bool
+) -> None:
+    events: Final = tmp_path / "events.txt"
+    root: Final = Path(__file__).resolve().parents[3]
+    with TemporaryDirectory(prefix="mixed-scopes-", dir=Path(__file__).parent) as directory:
+        probe: Final = Path(directory) / "test_fixture_probe.py"
+        probe.write_text(
+            "import pytest\nfrom pathlib import Path\n"
+            f"EVENTS = Path({str(events)!r})\n"
+            "def record(value):\n"
+            "    with EVENTS.open('a') as output:\n"
+            "        output.write(value + '\\n')\n"
+            "@pytest.fixture(scope='module', params=('M0', 'M1'))\n"
+            "def module_rig(request):\n"
+            "    record('start ' + request.param)\n"
+            "    yield request.param\n"
+            "    record('stop ' + request.param)\n"
+            f"@pytest.fixture(scope='class', params={('C0', 'C1') if class_parameters else None!r})\n"
+            "def class_rig(request, module_rig):\n"
+            "    identity = (\n"
+            "        module_rig + '/' + request.cls.__name__\n"
+            "        + ('/' + request.param if hasattr(request, 'param') else '')\n"
+            "    )\n"
+            "    record('start ' + identity)\n"
+            "    yield identity\n"
+            "    record('stop ' + identity)\n"
+            "class TestFirst:\n"
+            "    @pytest.mark.parametrize('number', range(3))\n"
+            "    def test_case(self, module_rig, class_rig, number):\n"
+            "        assert class_rig.startswith(module_rig + '/')\n"
+            "        record('case ' + class_rig + '/' + str(number))\n"
+            "    def test_skip(self, class_rig):\n"
+            "        pytest.skip('retained mixed-scope skip')\n"
+            "class TestSecond:\n"
+            "    @pytest.mark.parametrize('number', range(3))\n"
+            "    def test_case(self, module_rig, class_rig, number):\n"
+            "        assert class_rig.startswith(module_rig + '/')\n"
+            "        record('case ' + class_rig + '/' + str(number))\n"
+        )
+        result: Final = subprocess.run(
+            (
+                sys.executable,
+                "-P",
+                "tests/integration/run.py",
+                "database",
+                "--results",
+                str(tmp_path),
+                "--workers",
+                str(workers),
+                "--order-seed",
+                str(seed),
+                str(probe.relative_to(root)),
+            ),
+            cwd=root,
+            env=_nested_pytest_environment(os.environ),
+            capture_output=True,
+            text=True,
+            timeout=_nested_run_seconds(workers),
+            check=False,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        execution: Final = ShardExecution.model_validate_json((tmp_path / "execution.json").read_text())
+        assert execution.complete
+        expected_passes: Final = 24 if class_parameters else 12
+        expected_skips: Final = 4 if class_parameters else 2
+        assert len(execution.collected) == expected_passes + expected_skips
+        assert len(execution.passed) == expected_passes
+        assert len(execution.skipped) == expected_skips
+        cases: Final = ElementTree.parse(tmp_path / "junit.xml").findall(".//testcase")
+        assert sorted(case.attrib["name"] for case in cases) == sorted(
+            nodeid.rsplit("::", 1)[-1] for nodeid in execution.collected
+        )
+    observed: Final = tuple(events.read_text().splitlines())
+    starts: Final = Counter(event.removeprefix("start ") for event in observed if event.startswith("start "))
+    stops: Final = Counter(event.removeprefix("stop ") for event in observed if event.startswith("stop "))
+    assert starts == stops
+    assert len(starts) == (10 if class_parameters else 6)
+    assert all(count == 1 for count in starts.values()), observed
+    executed: Final = tuple(event for event in observed if event.startswith("case "))
+    assert len(executed) == len(frozenset(executed)) == expected_passes
+
+
+@pytest.mark.parametrize("workers", tuple(_nested_run(workers, workers=workers) for workers in (1, 2)))
+def test_direct_and_dependent_consumers_reuse_the_same_module_parameter(tmp_path: Path, workers: int) -> None:
+    source: Final = Path(__file__).resolve().parents[3]
+    root: Final = tmp_path / "probe-root"
+    for relative in (
+        "pyproject.toml",
+        "tests/__init__.py",
+        "tests/_fake_openai_endpoint_server.py",
+        "tests/integration/__init__.py",
+        "tests/integration/conftest.py",
+        "tests/integration/run.py",
+        "tests/integration/proxy_config.yaml",
+        "tests/integration/mcp_coverage.toml",
+        "tests/integration/cost_calculation/cost_map.py",
+        "tests/integration/cost_calculation/cost_tracking_case.py",
+    ):
+        destination: Final = root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source / relative, destination)
+    shutil.copytree(
+        source / "tests/integration/_support",
+        root / "tests/integration/_support",
+        ignore=shutil.ignore_patterns("__pycache__"),
+    )
+    events: Final = tmp_path / "events.txt"
+    results: Final = tmp_path / "results"
+    probe: Final = root / "tests/integration/database/test_fixture_probe.py"
+    probe.parent.mkdir(parents=True, exist_ok=True)
+    probe.write_text(
+        "import pytest\nfrom pathlib import Path\n"
+        f"EVENTS = Path({str(events)!r})\n"
+        "def record(value):\n"
+        "    with EVENTS.open('a') as output:\n"
+        "        output.write(value + '\\n')\n"
+        "@pytest.fixture(scope='module', params=('A', 'B'))\n"
+        "def outer(request):\n"
+        "    record('start ' + request.param)\n"
+        "    yield request.param\n"
+        "    record('stop ' + request.param)\n"
+        "@pytest.fixture(scope='module')\n"
+        "def dependent(outer):\n"
+        "    return outer\n"
+        "@pytest.mark.parametrize('number', range(5))\n"
+        "def test_parent(outer, number):\n"
+        "    record(f'case {outer}-parent-{number}')\n"
+        "@pytest.mark.parametrize('number', range(5))\n"
+        "def test_child(outer, dependent, number):\n"
+        "    assert dependent == outer\n"
+        "    record(f'case {outer}-child-{number}')\n"
+        "def test_retained_skip(outer):\n"
+        "    pytest.skip('retained shared consumer skip')\n"
+    )
+    result: Final = subprocess.run(
+        (
+            sys.executable,
+            "-P",
+            str(root / "tests/integration/run.py"),
+            "database",
+            "--workers",
+            str(workers),
+            "--order-seed",
+            "1",
+            "--results",
+            str(results),
+            str(probe.relative_to(root)),
+        ),
+        cwd=root,
+        env=_nested_pytest_environment(
+            {
+                **os.environ,
+                "INTEGRATION_CASE_SHARDS": "2",
+                "INTEGRATION_CASE_SHARD_INDEX": "1",
+                "CIRCLE_NODE_TOTAL": "2",
+                "CIRCLE_NODE_INDEX": "1",
+            }
+        ),
+        capture_output=True,
+        text=True,
+        timeout=_nested_run_seconds(workers),
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    execution: Final = ShardExecution.model_validate_json((results / "execution.json").read_bytes())
+    assert execution.complete and len(execution.collected) == 22
+    assert len(execution.passed) == 20 and len(execution.skipped) == 2
+    assert all("::test_retained_skip[" in node for node in execution.skipped)
+    junit: Final = ElementTree.parse(results / "junit.xml")
+    assert len(junit.findall(".//testcase")) == 22 and len(junit.findall(".//skipped")) == 2
+    assert all("@integration_fixture_" not in node.attrib["name"] for node in junit.findall(".//testcase"))
+    observed: Final = tuple(events.read_text().splitlines())
+    assert Counter(event for event in observed if event.startswith("start ")) == Counter({"start A": 1, "start B": 1})
+    assert Counter(event for event in observed if event.startswith("stop ")) == Counter({"stop A": 1, "stop B": 1})
+    executed: Final = tuple(event for event in observed if event.startswith("case "))
+    assert len(executed) == len(frozenset(executed)) == 20
+
+
+def test_worker_crash_keeps_the_original_junit_identity_and_an_incomplete_execution(tmp_path: Path) -> None:
+    root: Final = Path(__file__).resolve().parents[3]
+    with TemporaryDirectory(prefix="worker-crash-", dir=Path(__file__).parent) as directory:
+        probe: Final = Path(directory) / "test_fixture_probe.py"
+        probe.write_text(
+            "import os, pytest\n"
+            "@pytest.fixture(scope='module')\n"
+            "def shared():\n"
+            "    yield 'shared'\n"
+            "def test_worker_crash(shared):\n"
+            "    assert shared == 'shared'\n"
+            "    os._exit(7)\n"
+        )
+        result: Final = subprocess.run(
+            (
+                sys.executable,
+                "-P",
+                "-m",
+                "pytest",
+                str(probe.relative_to(root)),
+                "--noconftest",
+                "-p",
+                "tests.integration.conftest",
+                "-o",
+                "addopts=",
+                "-n",
+                "2",
+                "--dist=loadgroup",
+                "--max-worker-restart=0",
+                f"--junitxml={tmp_path / 'junit.xml'}",
+                "-q",
+            ),
+            cwd=root,
+            env={
+                **_nested_pytest_environment(os.environ),
+                "INTEGRATION_RESULTS_DIR": str(tmp_path),
+            },
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        assert result.returncode == 1, result.stdout + result.stderr
+        execution: Final = ShardExecution.model_validate_json((tmp_path / "execution.json").read_text())
+        assert not execution.complete
+        assert execution.passed == ()
+        assert execution.skipped == ()
+        assert execution.collected == (str(probe.relative_to(root)) + "::test_worker_crash",)
+        cases: Final = ElementTree.parse(tmp_path / "junit.xml").findall(".//testcase")
+        assert tuple(case.attrib.get("name") for case in cases) == ("test_worker_crash",)
+        assert cases[0].find("error") is not None
 
 
 @pytest.mark.parametrize("assignment", ("absent", "missing", "foreign"))
@@ -437,11 +815,7 @@ def test_invalid_native_selections_fail_before_any_case_runs(
             ),
             cwd=root,
             env={
-                **{
-                    name: value
-                    for name, value in os.environ.items()
-                    if name not in ("INTEGRATION_RESULTS_DIR", "INTEGRATION_ROUTING", "GITHUB_ACTIONS")
-                },
+                **_nested_pytest_environment(os.environ),
                 "PYTHONPATH": os.pathsep.join((str(root), str(root / "tests"), str(root / "tests/e2e"))),
             },
             capture_output=True,
@@ -453,9 +827,12 @@ def test_invalid_native_selections_fail_before_any_case_runs(
         assert not events.exists()
 
 
-@pytest.mark.parametrize("entrypoint", ("gateway", "refused"))
+@pytest.mark.parametrize("entrypoint", ("gateway", "refused", "zero-workers"))
 def test_owned_entrypoints_record_exit_and_reap_the_process_group(
-    gateway: Gateway, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, entrypoint: Literal["gateway", "refused"]
+    gateway: Gateway,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    entrypoint: Literal["gateway", "refused", "zero-workers"],
 ) -> None:
     monkeypatch.setenv("INTEGRATION_RESULTS_DIR", str(tmp_path))
     config: Final = tmp_path / "config.yaml"
@@ -471,7 +848,9 @@ def test_owned_entrypoints_record_exit_and_reap_the_process_group(
             "model_list: []\ngeneral_settings:\n  master_key: os.environ/LITELLM_MASTER_KEY\n"
             "  database_url: os.environ/DATABASE_URL\n"
         )
-        with process_support.owned_gateway_image(gateway, tmp_path, {}, config=config, workers=1) as owned:
+        with process_support.owned_gateway_image(
+            gateway, tmp_path, {}, config=config, workers=0 if entrypoint == "zero-workers" else 1
+        ) as owned:
             response: Final = owned.gateway.request("GET", "/health/readiness")
             assert response.status_code == 200, response.text
         completed: Final = TypeAdapter(ExitRecord).validate_json(owned.log.with_suffix(".exit.json").read_text())
