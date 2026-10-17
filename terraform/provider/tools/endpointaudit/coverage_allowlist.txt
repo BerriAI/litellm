@@ -93,6 +93,7 @@ GET /guardrails/submissions
 GET /guardrails/submissions/{guardrail_id}
 POST /credentials/migrate-encryption
 POST /customer/block
+POST /customer/bulk_update
 POST /customer/unblock
 POST /guardrails/apply_guardrail
 POST /guardrails/register
