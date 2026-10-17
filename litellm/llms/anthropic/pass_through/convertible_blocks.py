@@ -146,8 +146,12 @@ def tool_result_text_parts(tool_result: Mapping[str, object]) -> tuple[str, ...]
     return tuple(part for part in parts if part is not None)
 
 
-def _user_content_blocks(message: Mapping[str, object]) -> tuple[object, ...]:
-    return _list_items(message.get("content")) if message.get("role") == "user" else ()
+def _user_content_blocks(message: object) -> tuple[object, ...]:
+    match as_str_mapping(message):
+        case {"role": "user", "content": content}:
+            return _list_items(content)
+        case _:
+            return ()
 
 
 def _non_string_text_errors(label: str, content: object) -> Iterator[str]:
@@ -168,7 +172,7 @@ def _tool_result_text_errors(block: object) -> Iterator[str]:
             return iter(())
 
 
-def malformed_tool_result_text_error(messages: Iterable[Mapping[str, object]]) -> str | None:
+def malformed_tool_result_text_error(messages: Iterable[object]) -> str | None:
     blocks: Final = chain.from_iterable(map(_user_content_blocks, messages))
     return next(chain.from_iterable(map(_tool_result_text_errors, blocks)), None)
 
@@ -310,8 +314,7 @@ def _restored_message(message: object, kept: Mapping[str, Iterator[_KeptParts]])
 
 
 def keep_non_string_tool_result_texts(rewritten: Sequence[object], original: object) -> Sequence[object]:
-    original_messages: Final = filter(None, map(as_str_mapping, _list_items(original)))
-    blocks: Final = chain.from_iterable(map(_user_content_blocks, original_messages))
+    blocks: Final = chain.from_iterable(map(_user_content_blocks, _list_items(original)))
     by_id: Final = tuple(sorted(chain.from_iterable(map(_tool_result_non_string_texts, blocks)), key=itemgetter(0)))
     if not any(parts for _, parts in by_id):
         return rewritten
@@ -334,13 +337,13 @@ def _without_non_string_text(block: object) -> object:
 
 
 def _without_non_string_texts(
-    message: Mapping[str, object],
+    message: dict[str, object],  # mutable-ok: AnthropicMessagesRequest.messages is typed list[dict]
 ) -> dict[str, object]:  # mutable-ok: AnthropicMessagesRequest.messages is typed list[dict]
     match message:
         case {"role": "user", "content": list()}:
             return {**message, "content": [_without_non_string_text(block) for block in _user_content_blocks(message)]}
         case _:
-            return {**message}
+            return message
 
 
 def drop_non_string_tool_result_texts(

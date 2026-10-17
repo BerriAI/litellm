@@ -1036,3 +1036,52 @@ def test_mistral_transform_request_hoists_tool_message_image():
         {"type": "text", "text": TOOL_RESULT_IMAGE_BOUNDARY},
         {"type": "image_url", "image_url": {"url": data_uri}},
     ]
+
+
+def test_mistral_transform_request_drops_an_empty_tool_message_for_a_call_already_answered_earlier():
+    messages: List[AllMessageValues] = cast(
+        List[AllMessageValues],
+        [
+            {"role": "user", "content": "weather?"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "weather", "arguments": "{}"}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "sunny"},
+            {"role": "assistant", "content": "It is sunny"},
+            {"role": "tool", "tool_call_id": "call_1", "content": ""},
+            {"role": "user", "content": "thanks"},
+        ],
+    )
+
+    request = MistralConfig().transform_request(
+        model="mistral-small-latest", messages=messages, optional_params={}, litellm_params={}, headers={}
+    )
+
+    assert [m.get("role") for m in request["messages"]] == ["user", "assistant", "tool", "assistant", "user"]
+
+
+def test_mistral_transform_request_drops_an_empty_tool_message_whose_call_id_is_not_a_string():
+    messages: List[AllMessageValues] = cast(
+        List[AllMessageValues],
+        [
+            {"role": "user", "content": "read the log"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": {"nested": "call_1"}, "type": "function", "function": {"name": "read", "arguments": "{}"}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": {"nested": "call_1"}, "content": ""},
+        ],
+    )
+
+    request = MistralConfig().transform_request(
+        model="mistral-small-latest", messages=messages, optional_params={}, litellm_params={}, headers={}
+    )
+
+    assert [m.get("role") for m in request["messages"]] == ["user", "assistant"]

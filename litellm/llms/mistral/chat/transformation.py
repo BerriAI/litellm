@@ -6,8 +6,8 @@ Why separate file? Make it easy to see how transformation works
 Docs - https://docs.mistral.ai/api/
 """
 
-from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
-from itertools import chain
+from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping
+from itertools import accumulate
 from typing import TYPE_CHECKING, Final, Literal, cast, get_type_hints, overload
 
 import httpx
@@ -29,7 +29,7 @@ from litellm.router_utils.reasoning_effort_capability import (
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.mistral import MistralThinkingBlock, MistralToolCallMessage
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionAssistantToolCall
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse, ModelResponseStream
 from litellm.utils import convert_to_model_response_object, supports_reasoning
 
@@ -274,12 +274,14 @@ class MistralConfig(OpenAIGPTConfig):
         messages = handle_messages_with_content_list_to_str_conversion(messages)
 
         ## 3. Handle name in message
-        tool_call_ids: Final = MistralConfig._tool_call_ids(messages)
+        open_tool_call_ids_before: Final = accumulate(
+            messages, MistralConfig._open_tool_call_ids, initial=frozenset[str]()
+        )
         new_messages: Final[list[AllMessageValues]] = []
-        for m in messages:
+        for m, open_tool_call_ids in zip(messages, open_tool_call_ids_before, strict=False):
             m = MistralConfig._handle_name_in_message(m)
             m = MistralConfig._handle_tool_call_message(m)
-            if MistralConfig._is_empty_assistant_message(m) and not MistralConfig._answers(m, tool_call_ids):
+            if MistralConfig._is_empty_assistant_message(m) and not MistralConfig._answers(m, open_tool_call_ids):
                 continue
             m = strip_none_values_from_message(MistralConfig._with_tool_reply_content(m))
             new_messages.append(m)
@@ -472,15 +474,32 @@ class MistralConfig(OpenAIGPTConfig):
         return message
 
     @staticmethod
-    def _tool_call_ids(messages: Sequence[AllMessageValues]) -> frozenset[str]:
-        tool_calls: Final[Iterator[ChatCompletionAssistantToolCall]] = chain.from_iterable(
-            message.get("tool_calls") or () for message in messages if message["role"] == "assistant"
-        )
-        return frozenset(tool_call_id for tool_call in tool_calls if (tool_call_id := tool_call.get("id")))
+    def _tool_call_id(tool_call: object) -> str | None:
+        match tool_call:
+            case {"id": str(tool_call_id)}:
+                return tool_call_id
+            case _:
+                return None
 
     @staticmethod
-    def _answers(message: AllMessageValues, tool_call_ids: frozenset[str]) -> bool:
-        return message["role"] == "tool" and message.get("tool_call_id") in tool_call_ids
+    def _open_tool_call_ids(open_tool_call_ids: frozenset[str], message: AllMessageValues) -> frozenset[str]:
+        match message:
+            case {"role": "assistant", "tool_calls": list(tool_calls)}:
+                return frozenset(filter(None, map(MistralConfig._tool_call_id, tool_calls)))
+            case {"role": "tool", "tool_call_id": str(tool_call_id)}:
+                return open_tool_call_ids - {tool_call_id}
+            case {"role": "tool"}:
+                return open_tool_call_ids
+            case _:
+                return frozenset()
+
+    @staticmethod
+    def _answers(message: AllMessageValues, open_tool_call_ids: frozenset[str]) -> bool:
+        match message:
+            case {"role": "tool", "tool_call_id": str(tool_call_id)}:
+                return tool_call_id in open_tool_call_ids
+            case _:
+                return False
 
     @staticmethod
     def _with_tool_reply_content(message: AllMessageValues) -> AllMessageValues:

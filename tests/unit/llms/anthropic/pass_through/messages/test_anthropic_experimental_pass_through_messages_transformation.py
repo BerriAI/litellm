@@ -157,3 +157,27 @@ def test_drop_params_drops_a_non_string_tool_result_text_on_the_native_request(
     )
 
     assert request["messages"][2]["content"][0]["content"] == expected_tool_result_content
+
+
+def test_drop_params_forwards_a_non_object_message_item_as_sent_on_the_native_request():
+    tool_result_turn = {
+        "role": "user",
+        "content": [
+            {
+                "type": "tool_result",
+                "tool_use_id": "toolu_01",
+                "content": [{"type": "text", "text": None}, {"type": "text", "text": "sunny"}],
+            }
+        ],
+    }
+
+    request = AnthropicMessagesConfig().transform_anthropic_messages_request(
+        model="claude-sonnet-4-5",
+        messages=[{"role": "user", "content": "What is the weather?"}, 7, tool_result_turn],
+        anthropic_messages_optional_request_params={"max_tokens": 64},
+        litellm_params=GenericLiteLLMParams(drop_params=True),
+        headers={},
+    )
+
+    assert request["messages"][1] == 7
+    assert request["messages"][2]["content"][0]["content"] == [{"type": "text", "text": "sunny"}]
