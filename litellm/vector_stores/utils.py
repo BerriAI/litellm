@@ -1,3 +1,4 @@
+import copy
 from collections.abc import Container, Mapping
 from typing import Final, cast, get_type_hints
 
@@ -71,7 +72,7 @@ def _decoded_metadata(metadata: object) -> object:
 
 def callers_metadata_snapshot(raw_json_body: bytes | None, parsed_body: VectorStoreWriteBody) -> object:
     raw_body: Final = None if raw_json_body is None else _json_object(raw_json_body)
-    metadata: Final = parsed_body.metadata if raw_body is None else raw_body.get("metadata")
+    metadata: Final = copy.deepcopy(parsed_body.metadata) if raw_body is None else raw_body.get("metadata")
     return _decoded_metadata(metadata)
 
 
