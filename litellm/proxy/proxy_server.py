@@ -17035,7 +17035,7 @@ async def model_info_v1(
     alias_models: Final = copy.deepcopy(llm_router.get_model_list_from_model_alias())
     all_models.extend(alias_models)
 
-    all_models = expand_wildcard_deployments_for_model_info(all_models)
+    all_models = expand_wildcard_deployments_for_model_info(all_models, pattern_router=llm_router.pattern_router)
 
     allowed_model_names: Final = await _get_v1_model_info_allowed_model_names_with_access_groups(
         user_api_key_dict=user_api_key_dict,

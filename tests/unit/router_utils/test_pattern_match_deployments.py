@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Final
 from unittest.mock import Mock, patch
 
@@ -13,7 +14,13 @@ import litellm
 from litellm import Router
 from litellm.litellm_core_utils import get_llm_provider_logic
 from litellm.router import Deployment, LiteLLM_Params
-from litellm.router_utils.pattern_match_deployments import PatternMatchRouter, PatternUtils
+from litellm.router_utils.pattern_match_deployments import (
+    PatternMatchRouter,
+    PatternUtils,
+    fill_wildcards,
+    greedy_captures,
+    matches_from_start,
+)
 from litellm.types.router import ModelInfo
 import json
 from unittest.mock import MagicMock
@@ -376,6 +383,179 @@ def test_pattern_matching_router_uses_default_wildcard_for_unmatched_model() -> 
     deployments: Final = router.pattern_router.route("gpt-4o-mini")
 
     assert tuple(deployment["model_name"] for deployment in deployments) == ("*",)
+
+
+@pytest.mark.parametrize(
+    "request_model", ["openai/gpt-4o", "team/claude-haiku-4-5", "teamx/claude", "odd?[name]/x", "oddX[name]/x"]
+)
+def test_serves_agrees_with_whether_routing_finds_a_pattern(request_model: str) -> None:
+    pattern_router: Final = PatternMatchRouter()
+    pattern_router.add_pattern("openai/*", _wildcard_deployment("openai/*"))
+    pattern_router.add_pattern("team/claude-*", _wildcard_deployment("team/claude-*"))
+    pattern_router.add_pattern("odd?[name]/*", _wildcard_deployment("odd?[name]/*"))
+
+    assert pattern_router.serves(request_model) is (pattern_router.route(request_model) is not None)
+
+
+@pytest.mark.parametrize(
+    ("route", "registered"),
+    [
+        ("openai/*", True),
+        ("odd?[name]/*", True),
+        ("openai/gpt-*", False),
+        ("odd?[name]/x*", False),
+        ("oddX[name]/*", False),
+    ],
+)
+def test_registers_only_routes_that_were_added(route: str, registered: bool) -> None:
+    pattern_router: Final = PatternMatchRouter()
+    pattern_router.add_pattern("openai/*", _wildcard_deployment("openai/*"))
+    pattern_router.add_pattern("odd?[name]/*", _wildcard_deployment("odd?[name]/*"))
+
+    assert pattern_router.registers(route) is registered
+
+
+@pytest.mark.parametrize(
+    ("request_model", "wildcard", "shadowed"),
+    [
+        ("openai/gpt-4o", "*", True),
+        ("openai/gpt-4o", "openai/*", False),
+        ("meta-llama/llama-3-8b", "*", False),
+        ("openai/gpt-4o", "openai/gpt-*", True),
+    ],
+)
+def test_shadowing_regex_only_when_another_registered_pattern_serves_the_request(
+    request_model: str, wildcard: str, shadowed: bool
+) -> None:
+    pattern_router: Final = PatternMatchRouter()
+    pattern_router.add_pattern("*", _wildcard_deployment("*"))
+    pattern_router.add_pattern("openai/*", _wildcard_deployment("openai/*"))
+
+    assert (pattern_router.shadowing_regex(request_model, wildcard) is not None) is shadowed
+
+
+@pytest.mark.parametrize(
+    ("pattern", "request_model"),
+    [
+        ("openai/*", "openai/gpt-4o"),
+        ("openai/*", "azure/gpt-4o"),
+        ("a*b", "axxbyy"),
+        ("a*b", "ayy"),
+        ("stars/*******!", "stars/abc!"),
+        ("stars/*******!", "stars/abc"),
+        ("odd?[name]/*", "odd?[name]/x"),
+        ("odd?[name]/*", "oddX[name]/x"),
+    ],
+)
+def test_matches_from_start_agrees_with_the_routing_regex(pattern: str, request_model: str) -> None:
+    regex: Final = PatternMatchRouter().pattern_to_regex(pattern)
+
+    assert matches_from_start(regex, request_model) is (re.match(regex, request_model) is not None)
+
+
+@pytest.mark.timeout(10)
+def test_shadowing_regex_answers_promptly_beside_a_route_with_many_stars() -> None:
+    pattern_router: Final = PatternMatchRouter()
+    pattern_router.add_pattern("stars/*", _wildcard_deployment("stars/*"))
+    pattern_router.add_pattern("stars/*******!", _wildcard_deployment("stars/*******!"))
+    long_id: Final = "stars/" + "x" * 200
+
+    assert pattern_router.shadowing_regex(long_id, "stars/*") is None
+    assert pattern_router.shadowing_regex(f"{long_id}!", "stars/*") == pattern_router.pattern_to_regex("stars/*******!")
+
+
+@pytest.mark.parametrize(
+    ("pattern", "deployment_model", "request_model"),
+    [
+        ("openai/*", "openai/*", "openai/gpt-4o"),
+        ("openai/*", "openai/*", "azure/gpt-4o"),
+        ("llmengine/fo::*::static::*", "openai/fo::*::static::*", "llmengine/fo::bar::static::baz::static::qux"),
+        ("*meta.llama3*", "bedrock/meta.llama3*", "hello-world-meta.llama3-70b"),
+        ("a*b", "x/*", "abab"),
+        ("*aa*", "p/*aa*", "aaaa"),
+        ("stars/********g", "openai/********g", "stars/gpt-4o-mini"),
+        ("stars/*******!", "openai/*******!", "stars/abc"),
+        ("odd?[name]/*", "openai/*", "odd?[name]/x"),
+    ],
+)
+def test_greedy_captures_map_a_request_to_the_model_routing_sends_it_to(
+    pattern: str, deployment_model: str, request_model: str
+) -> None:
+    pattern_router: Final = PatternMatchRouter()
+    pattern_router.add_pattern(pattern, {"model_name": pattern, "litellm_params": {"model": deployment_model}})
+    routed: Final = _matched_models(pattern_router.route(request_model))
+    captures: Final = greedy_captures(pattern_router.pattern_to_regex(pattern), request_model)
+    mapped: Final = [] if captures is None else [fill_wildcards(captures, deployment_model, request_model)]
+
+    assert mapped == routed
+
+
+@pytest.mark.timeout(10)
+def test_routes_elsewhere_answers_promptly_when_a_route_with_many_stars_serves_the_id() -> None:
+    pattern_router: Final = PatternMatchRouter()
+    pattern_router.add_pattern("stars/*", {"model_name": "stars/*", "litellm_params": {"model": "openai/*"}})
+    pattern_router.add_pattern(
+        "stars/********g", {"model_name": "stars/********g", "litellm_params": {"model": "openai/********g"}}
+    )
+    long_id: Final = "g" + "x" * 40
+
+    assert pattern_router.routes_elsewhere(f"stars/{long_id}", "stars/*", f"openai/{long_id}") is True
+    assert pattern_router.routes_elsewhere(f"stars/{long_id}", "stars/*", "openai/g") is False
+
+
+@pytest.mark.parametrize(
+    ("request_model", "wildcard", "routed_model", "routes_elsewhere"),
+    [
+        ("openai/gpt-4.1-mini", "openai/*", "openai/gpt-4.1-mini", False),
+        ("openai/gpt-oss-120b", "*", "groq/openai/gpt-oss-120b", True),
+        ("llama-3-8b", "*", "groq/llama-3-8b", False),
+        ("openai/gpt-4.1-mini", "openai/gpt-4.1*", "openai/gpt-4.1-mini", False),
+    ],
+)
+def test_routes_elsewhere_only_when_the_serving_route_sends_another_model(
+    request_model: str, wildcard: str, routed_model: str, routes_elsewhere: bool
+) -> None:
+    pattern_router: Final = PatternMatchRouter()
+    pattern_router.add_pattern("*", {"model_name": "*", "litellm_params": {"model": "groq/*"}})
+    pattern_router.add_pattern("openai/*", _wildcard_deployment("openai/*"))
+    pattern_router.add_pattern("openai/gpt-4.1*", _wildcard_deployment("openai/gpt-4.1*"))
+
+    assert pattern_router.routes_elsewhere(request_model, wildcard, routed_model) is routes_elsewhere
+
+
+@pytest.mark.parametrize(
+    ("wide_model", "narrow_route", "narrow_model", "custom_llm_provider", "listed_id", "routes_elsewhere"),
+    [
+        ("openai/*", "wide/gpt-4o*", "openai/responses/gpt-4o*", None, "wide/gpt-4o-mini", False),
+        ("bedrock/*", "wide/us.anthropic*", "bedrock/converse/us.anthropic*", None, "wide/us.anthropic.claude-v2", False),
+        ("openai/*", "wide/gpt-4.1*", "gpt-4.1*", "openai", "wide/gpt-4.1-mini", False),
+        ("openai/*", "wide/gpt-4o*", "azure/gpt-4o*", None, "wide/gpt-4o-mini", False),
+        ("openai/*", "wide/gpt-4.1*", "openai/gpt-4o-mini", None, "wide/gpt-4.1-mini", True),
+        ("openai/*", "wide/gpt-4o*", "openai/responses/gpt-4o-mini", None, "wide/gpt-4o", True),
+        ("openai/*", "wide/gpt-4o*", "openrouter/openai/gpt-4o*", None, "wide/gpt-4o-mini", False),
+        ("openai/*", "wide/gpt-4o*", "openrouter/openai/chatgpt-4o-latest", None, "wide/gpt-4o-latest", True),
+    ],
+)
+def test_routes_elsewhere_compares_the_model_each_route_reaches_at_its_provider(
+    wide_model: str,
+    narrow_route: str,
+    narrow_model: str,
+    custom_llm_provider: str | None,
+    listed_id: str,
+    routes_elsewhere: bool,
+) -> None:
+    pattern_router: Final = PatternMatchRouter()
+    pattern_router.add_pattern("wide/*", {"model_name": "wide/*", "litellm_params": {"model": wide_model}})
+    pattern_router.add_pattern(
+        narrow_route,
+        {
+            "model_name": narrow_route,
+            "litellm_params": {"model": narrow_model, "custom_llm_provider": custom_llm_provider},
+        },
+    )
+    routed_model: Final = wide_model.replace("*", listed_id.removeprefix("wide/"))
+
+    assert pattern_router.routes_elsewhere(listed_id, "wide/*", routed_model) is routes_elsewhere
 
 
 def test_sorted_patterns():

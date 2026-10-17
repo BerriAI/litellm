@@ -3,9 +3,16 @@ Helper functions for health check calls.
 """
 
 import base64
-from collections.abc import Awaitable, Callable, Mapping
+import sys
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Literal
 
+from litellm.litellm_core_utils.get_llm_provider_logic import (
+    model_matches_wildcard,
+    model_name_at_provider,
+    split_route_type_prefix,
+    strip_provider_family_prefix,
+)
 from litellm.llms.base_llm.ocr.transformation import DocumentType
 from litellm.rust_bridge import runtime
 from litellm.rust_bridge.ocr.entrypoints import NATIVE_OCR_HEALTH_CHECK_DOCUMENT
@@ -80,6 +87,32 @@ def _ocr_health_check_document(model: str, custom_llm_provider: str) -> Document
     return native(model, custom_llm_provider)
 
 
+def _wildcard_health_check_models(
+    wildcard_suffix: str, custom_llm_provider: str, candidate_models: Sequence[str]
+) -> tuple[str, ...]:
+    route_type_prefix, model_pattern = split_route_type_prefix(wildcard_suffix, custom_llm_provider)
+    model_ids: Final = dict.fromkeys(
+        strip_provider_family_prefix(model, custom_llm_provider) for model in candidate_models
+    )
+    matching: Final = tuple(
+        f"{custom_llm_provider}/{route_type_prefix}{model_id}"
+        for model_id in model_ids
+        if model_matches_wildcard(model_id, model_pattern)
+    )
+    return matching[:3] or tuple(dict.fromkeys(candidate_models))[:3]
+
+
+def _wildcard_probe_models(
+    wildcard_suffix: str, custom_llm_provider: str, cheapest_models: Sequence[str]
+) -> tuple[str, ...]:
+    route_models: Final = _wildcard_health_check_models(wildcard_suffix, custom_llm_provider, cheapest_models)
+    probed: Final = frozenset(model_name_at_provider(model, custom_llm_provider) for model in route_models)
+    provider_models: Final = (
+        model for model in cheapest_models[:3] if model_name_at_provider(model, custom_llm_provider) not in probed
+    )
+    return (*route_models, *provider_models)
+
+
 class HealthCheckHelpers:
     @staticmethod
     async def ahealth_check_wildcard_models(
@@ -93,17 +126,16 @@ class HealthCheckHelpers:
             pick_cheapest_chat_models_from_llm_provider,
         )
 
-        # this is a wildcard model, we need to pick a random model from the provider
-        cheapest_models = pick_cheapest_chat_models_from_llm_provider(custom_llm_provider=custom_llm_provider, n=3)
+        cheapest_models = pick_cheapest_chat_models_from_llm_provider(
+            custom_llm_provider=custom_llm_provider, n=sys.maxsize
+        )
         if len(cheapest_models) == 0:
             raise Exception(
                 f"Unable to health check wildcard model for provider {custom_llm_provider}. Add a model on your config.yaml or contribute here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
             )
-        if len(cheapest_models) > 1:
-            fallback_models = cheapest_models[1:]  # Pick the last 2 models from the shuffled list
-        else:
-            fallback_models = None
-        model_params["model"] = cheapest_models[0]
+        candidates: Final = _wildcard_probe_models(model, custom_llm_provider, cheapest_models)
+        fallback_models: Final = list(candidates[1:]) or None
+        model_params["model"] = candidates[0]
         model_params["litellm_logging_obj"] = litellm_logging_obj
         model_params["fallbacks"] = fallback_models
         model_params["max_tokens"] = model_params.get("max_tokens", 16)  # GPT-5 models require max_output_tokens >= 16

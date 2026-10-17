@@ -1,3 +1,6 @@
+import re
+from fnmatch import fnmatchcase
+from types import MappingProxyType
 from typing import Final, cast
 from urllib.parse import urlparse
 
@@ -16,6 +19,27 @@ from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.secret_managers.main import get_secret, get_secret_str
 
 from ..types.router import GenericLiteLLMParams, LiteLLM_Params
+from ..types.utils import LlmProviders
+
+_KNOWN_PROVIDERS: Final = frozenset(provider.value for provider in LlmProviders)
+_GLOB_CHARS_OTHER_THAN_STAR: Final = re.compile(r"[\[?]")
+_ROUTE_TYPE_PREFIXES_BY_PROVIDER: Final = MappingProxyType(
+    {
+        "azure": ("o_series/", "gpt5_series/"),
+        "bedrock": (
+            "converse/",
+            "invoke/",
+            "claude_platform/",
+            "converse_like/",
+            "async_invoke/",
+            "openai/",
+            "mantle/",
+            "chat_completions/",
+            "nova/",
+            "nova-2/",
+        ),
+    }
+)
 
 
 def invalid_provider_routing_hints_message(error: ValidationError) -> str:
@@ -156,6 +180,33 @@ def declared_authenticating_provider(model: str | None, custom_llm_provider: str
     """
     declared: Final = custom_llm_provider or (model.split("/", 1)[0] if model and "/" in model else None)
     return declared if declared in PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO else None
+
+
+def strip_provider_family_prefix(model: str, custom_llm_provider: str) -> str:
+    leading, sep, model_id = model.partition("/")
+    if not sep:
+        return model
+    is_provider_family: Final = leading == custom_llm_provider or (
+        leading in _KNOWN_PROVIDERS and custom_llm_provider.startswith(f"{leading}_")
+    )
+    return model_id if is_provider_family else model
+
+
+def model_matches_wildcard(model_id: str, wildcard: str) -> bool:
+    return fnmatchcase(model_id, _GLOB_CHARS_OTHER_THAN_STAR.sub(r"[\g<0>]", wildcard))
+
+
+def split_route_type_prefix(model_path: str, custom_llm_provider: str) -> tuple[str, str]:
+    prefixes: Final = ("responses/", *_ROUTE_TYPE_PREFIXES_BY_PROVIDER.get(custom_llm_provider, ()))
+    prefix: Final = next((prefix for prefix in prefixes if model_path.startswith(prefix)), "")
+    return prefix, model_path.removeprefix(prefix)
+
+
+def model_name_at_provider(model: str, custom_llm_provider: str | None) -> str:
+    leading, sep, path = model.partition("/")
+    provider: Final = custom_llm_provider or (leading if sep else "")
+    model_path: Final = path if sep and leading == provider else model
+    return strip_provider_family_prefix(split_route_type_prefix(model_path, provider)[1], provider)
 
 
 def inferred_provider(model: str | None) -> str | None:

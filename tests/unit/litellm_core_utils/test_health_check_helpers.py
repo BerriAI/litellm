@@ -8,6 +8,7 @@ from types import MappingProxyType
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 import respx
 
@@ -18,6 +19,8 @@ from litellm.litellm_core_utils.health_check_helpers import (
     HealthCheckHelpers,
     default_health_check_mode,
     native_health_check_mode,
+    _wildcard_health_check_models,
+    _wildcard_probe_models,
 )
 from litellm.main import ahealth_check
 from litellm.proxy._types import UserAPIKeyAuth
@@ -1503,3 +1506,166 @@ async def test_audio_transcription_health_check_returns_transcribed_text(
     assert "error" not in response
     assert upstream.called
     assert b'name="file"' in upstream.calls.last.request.content
+
+
+def test_wildcard_health_check_models_star_wildcard_unchanged():
+    candidates: Final = ("databricks/a", "databricks/b", "databricks/c", "databricks/d")
+    assert _wildcard_health_check_models("*", "databricks", candidates) == (
+        "databricks/a",
+        "databricks/b",
+        "databricks/c",
+    )
+
+
+def test_wildcard_health_check_models_partial_prefix_matching_literal_keeps_stripped_id():
+    assert _wildcard_health_check_models("gpt-4*", "openai", ["gpt-4o-mini"]) == ("openai/gpt-4o-mini",)
+
+
+def test_wildcard_health_check_models_partial_prefix_filters_candidates_to_literal_prefix():
+    assert _wildcard_health_check_models(
+        "gpt-4*", "openai", ["gpt-5-nano", "gpt-4o-mini", "gpt-4.1-mini", "gpt-4o"]
+    ) == ("openai/gpt-4o-mini", "openai/gpt-4.1-mini", "openai/gpt-4o")
+
+
+def test_wildcard_health_check_models_keeps_a_vendor_namespace_that_matches_another_provider_name():
+    candidates: Final = ("openai/gpt-oss-20b", "wandb/openai/gpt-oss-120b")
+
+    assert _wildcard_health_check_models("openai/gpt*", "wandb", candidates) == (
+        "wandb/openai/gpt-oss-20b",
+        "wandb/openai/gpt-oss-120b",
+    )
+    assert "wandb/gpt-oss-20b" not in _wildcard_health_check_models("gpt*", "wandb", candidates)
+
+
+def test_wildcard_health_check_models_strips_the_provider_family_prefix():
+    assert _wildcard_health_check_models("gemma*", "ollama_chat", ["ollama/llama3:8b", "ollama/gemma3:1b"]) == (
+        "ollama_chat/gemma3:1b",
+    )
+
+
+def test_wildcard_health_check_models_treats_glob_characters_other_than_star_literally():
+    assert _wildcard_health_check_models("gpt-4?*", "openai", ["gpt-4o", "gpt-4?-preview"]) == (
+        "openai/gpt-4?-preview",
+    )
+    assert _wildcard_health_check_models("gpt-[4]*", "openai", ["gpt-4o", "gpt-[4]o"]) == ("openai/gpt-[4]o",)
+
+
+@pytest.mark.timeout(5)
+def test_wildcard_health_check_models_with_many_stars_returns_promptly():
+    candidates: Final = ("gpt-4o-mini", "gpt-4.1-nano")
+
+    assert _wildcard_health_check_models("*" * 30 + "!", "openai", candidates) == candidates
+
+
+def test_wildcard_health_check_models_probes_each_model_once():
+    candidates: Final = ("gemini/gemini-exp-1206", "gemini-exp-1206", "gemini/gemini-exp-1114", "gemini-2.0-flash")
+
+    assert _wildcard_health_check_models("gemini-exp*", "gemini", candidates) == (
+        "gemini/gemini-exp-1206",
+        "gemini/gemini-exp-1114",
+    )
+
+
+@pytest.mark.parametrize(
+    ("wildcard_suffix", "custom_llm_provider", "expected"),
+    [
+        ("converse/*", "bedrock", ("bedrock/converse/amazon.nova-micro-v1:0", "bedrock/converse/anthropic.claude-v2")),
+        ("nova/amazon.*", "bedrock", ("bedrock/nova/amazon.nova-micro-v1:0",)),
+        ("o_series/*", "azure", ("azure/o_series/amazon.nova-micro-v1:0", "azure/o_series/anthropic.claude-v2")),
+    ],
+)
+def test_wildcard_health_check_models_probes_through_the_route_type_prefix(
+    wildcard_suffix: str, custom_llm_provider: str, expected: tuple[str, ...]
+) -> None:
+    candidates: Final = (f"{custom_llm_provider}/amazon.nova-micro-v1:0", "anthropic.claude-v2")
+
+    assert _wildcard_health_check_models(wildcard_suffix, custom_llm_provider, candidates) == expected
+
+
+def test_wildcard_probe_models_probe_each_provider_model_once_for_a_full_wildcard():
+    candidates: Final = ("openai/gpt-4o-mini", "gpt-4.1-nano", "o3-mini", "gpt-5-nano")
+
+    assert _wildcard_probe_models("*", "openai", candidates) == (
+        "openai/gpt-4o-mini",
+        "openai/gpt-4.1-nano",
+        "openai/o3-mini",
+    )
+
+
+@pytest.mark.asyncio
+async def test_ahealth_check_partial_wildcard_is_healthy_when_only_a_provider_model_answers(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        model: Final = json.loads(request.content)["model"]
+        if model.startswith("gpt-4o"):
+            return httpx.Response(404, json={"error": {"message": "not found", "type": "invalid_request_error"}})
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-1",
+                "object": "chat.completion",
+                "created": 0,
+                "model": model,
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+
+    upstream: Final = respx_mock.post("https://oai.test/v1/chat/completions").mock(side_effect=answer)
+
+    result: Final = await ahealth_check(
+        model_params={"model": "openai/gpt-4o*", "api_key": "x", "api_base": "https://oai.test/v1"},
+        mode="chat",
+    )
+
+    probed: Final = [json.loads(call.request.content)["model"] for call in upstream.calls]
+    assert "error" not in result, result
+    assert probed[0].startswith("gpt-4o")
+    assert not probed[-1].startswith("gpt-4o")
+
+
+def test_wildcard_health_check_models_partial_prefix_matching_nothing_keeps_cheapest_candidates():
+    assert _wildcard_health_check_models("ft:*", "openai", ["gpt-4o-mini", "gpt-4.1-nano"]) == (
+        "gpt-4o-mini",
+        "gpt-4.1-nano",
+    )
+
+
+@pytest.mark.asyncio
+async def test_ahealth_check_partial_prefix_wildcard_never_probes_a_spliced_model_id(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    from litellm.litellm_core_utils.llm_request_utils import pick_cheapest_chat_models_from_llm_provider
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    cheapest: Final = pick_cheapest_chat_models_from_llm_provider(custom_llm_provider="databricks", n=1)
+    upstream: Final = respx_mock.post("https://dbx.test/serving-endpoints/chat/completions").respond(
+        json={
+            "id": "chatcmpl-1",
+            "object": "chat.completion",
+            "created": 0,
+            "model": "probe",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+    )
+
+    result: Final = await ahealth_check(
+        model_params={
+            "model": "databricks/system.ai.*",
+            "api_key": "x",
+            "api_base": "https://dbx.test/serving-endpoints",
+        },
+        mode="chat",
+    )
+
+    assert "error" not in result, result
+    assert upstream.call_count == 1
+    assert json.loads(upstream.calls[0].request.content)["model"] == cheapest[0].removeprefix("databricks/")
