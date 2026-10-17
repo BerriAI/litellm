@@ -20,6 +20,7 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 )
 from litellm.proxy.image_endpoints.endpoints import batch_to_bytesio
 from litellm.proxy.video_endpoints.utils import (
+    VideoRequestRoute,
     encode_character_id_in_response,
     encode_video_id_in_response,
     extract_model_from_target_model_names,
@@ -85,6 +86,7 @@ async def video_generation(
 
     # Read request body
     data: Final = await read_request_body(request=request)
+    requested: Final = VideoRequestRoute.model_validate(data)
     if input_reference is not None:
         input_reference_file: Final = await batch_to_bytesio([input_reference])
         if input_reference_file:
@@ -121,8 +123,8 @@ async def video_generation(
     else:
         return encode_video_id_in_response(
             response=generated,
-            fallback_provider=data.get("custom_llm_provider"),
-            fallback_model_id=data.get("model"),
+            fallback_provider=requested.custom_llm_provider,
+            fallback_model_id=requested.model,
         )
 
 
@@ -471,6 +473,7 @@ async def video_remix(
     )
 
     data: Final = await read_request_body(request=request)
+    requested: Final = VideoRequestRoute.model_validate(data)
     data["video_id"] = video_id
 
     decoded: Final = decode_video_id_with_provider(video_id)
@@ -480,7 +483,7 @@ async def video_remix(
     custom_llm_provider: Final = (
         get_custom_llm_provider_from_request_headers(request=request)
         or get_custom_llm_provider_from_request_query(request=request)
-        or data.get("custom_llm_provider")
+        or requested.custom_llm_provider
         or provider_from_id
     )
     if custom_llm_provider:
@@ -525,7 +528,7 @@ async def video_remix(
         return encode_video_id_in_response(
             response=remixed,
             fallback_provider=custom_llm_provider,
-            fallback_model_id=model_id_from_decoded or data.get("model"),
+            fallback_model_id=model_id_from_decoded or requested.model,
         )
 
 
@@ -784,6 +787,7 @@ async def video_edit(
     )
 
     data: Final = await read_request_body(request=request)
+    requested: Final = VideoRequestRoute.model_validate(data)
     uploaded_video: Final = data.pop("video", None)
     if isinstance(uploaded_video, StarletteUploadFile):
         video_files: Final = await batch_to_bytesio((uploaded_video,))
@@ -842,7 +846,7 @@ async def video_edit(
         return encode_video_id_in_response(
             response=edited,
             fallback_provider=custom_llm_provider,
-            fallback_model_id=model_id_from_decoded or data.get("model"),
+            fallback_model_id=model_id_from_decoded or requested.model,
         )
 
 
@@ -892,6 +896,7 @@ async def video_extension(
     )
 
     data: Final = await read_request_body(request=request)
+    requested: Final = VideoRequestRoute.model_validate(data)
     data["video_id"] = video_reference_to_id(data.pop("video", None))
 
     decoded: Final = decode_video_id_with_provider(data["video_id"])
@@ -943,5 +948,5 @@ async def video_extension(
         return encode_video_id_in_response(
             response=extended,
             fallback_provider=custom_llm_provider,
-            fallback_model_id=model_id_from_decoded or data.get("model"),
+            fallback_model_id=model_id_from_decoded or requested.model,
         )

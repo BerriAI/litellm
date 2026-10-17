@@ -221,17 +221,15 @@ def test_encode__object_without_id_attr_returned_unchanged():
 
 def _video(video_id: str, hidden_params: dict[str, object] | None = None) -> VideoObject:
     video: Final[VideoObject] = VideoObject(id=video_id, object="video", status="queued")
-    video._hidden_params = dict(hidden_params or {})  # pyright: ignore[reportPrivateUsage]  # the router sets hidden params; no public setter
+    video.hidden_params = dict(hidden_params or {})
     return video
 
 
 def test_encode_video__fills_empty_model_id_from_hidden_params() -> None:
-    """Regression for #33423: the provider transform encodes the id with an empty
-    model_id; the router-recorded model_id must be stamped back in."""
     original_id: Final = encode_video_id_with_provider("video_raw", "openai", "")
     video: Final = _video(original_id, hidden_params={"model_id": "deployment-1"})
 
-    out: Final = encode_video_id_in_response(video, fallback_provider=None, fallback_model_id="sora-2")
+    out: Final = encode_video_id_in_response(video, fallback_provider=None, fallback_model_id=None)
 
     assert isinstance(out, VideoObject)
     assert decode_video_id_with_provider(out.id) == {
@@ -239,11 +237,36 @@ def test_encode_video__fills_empty_model_id_from_hidden_params() -> None:
         "model_id": "deployment-1",
         "video_id": "video_raw",
     }
-    # a new object is returned; the input and its hidden params are left intact
     assert out is not video
     assert video.id == original_id
-    assert out._hidden_params == {"model_id": "deployment-1"}  # pyright: ignore[reportPrivateUsage]  # verify hidden params survive the copy
+    assert out.hidden_params == {"model_id": "deployment-1"}
     assert out.status == "queued"
+
+
+def test_encode_video__asked_for_model_wins_over_hidden_deployment_id() -> None:
+    video: Final = _video(
+        encode_video_id_with_provider("video_raw", "openai", ""), hidden_params={"model_id": "deployment-1"}
+    )
+
+    out: Final = encode_video_id_in_response(video, fallback_provider=None, fallback_model_id="sora-alias")
+
+    assert isinstance(out, VideoObject)
+    assert decode_video_id_with_provider(out.id).get("model_id") == "sora-alias"
+
+
+def test_encode_video__stamped_id_kept_with_served_model_over_hidden_deployment_id() -> None:
+    original_id: Final = encode_video_id_with_provider("task_1", "volcengine", "seedance-group", "seedance-east")
+    video: Final = _video(original_id, hidden_params={"model_id": "deployment-1"})
+
+    out: Final = encode_video_id_in_response(video, fallback_provider=None, fallback_model_id="other")
+
+    assert out is video
+    assert decode_video_id_with_provider(out.id) == {
+        "custom_llm_provider": "volcengine",
+        "model_id": "seedance-group",
+        "video_id": "task_1",
+        "served_model": "seedance-east",
+    }
 
 
 def test_encode_video__falls_back_to_given_model_id() -> None:

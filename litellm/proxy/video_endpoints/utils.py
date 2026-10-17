@@ -1,8 +1,8 @@
 from typing import Any, Final
 
 import orjson
+from pydantic import BaseModel, ConfigDict
 
-from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.types.videos.main import VideoObject
 from litellm.types.videos.utils import (
     decode_video_id_with_provider,
@@ -77,28 +77,27 @@ def _non_empty_str(value: object) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
+class VideoRequestRoute(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    model: object = None
+    custom_llm_provider: object = None
+
+
 def encode_video_id_in_response(
     response: object,
-    fallback_provider: str | None,
-    fallback_model_id: str | None,
+    fallback_provider: object,
+    fallback_model_id: object,
 ) -> object:
-    """
-    Return a copy of a VideoObject whose id is re-stamped with the resolved model_id.
-
-    Provider transforms encode video ids without a model_id, so a later
-    status/content call cannot resolve the deployment (and its per-model
-    api_key) from the id. The endpoint knows the model_id, so it fills it in.
-    """
     if not isinstance(response, VideoObject) or not response.id:
         return response
 
-    hidden_params: Final = get_hidden_params_dict(response)
     decoded: Final = decode_video_id_with_provider(response.id)
-    model_id: Final = (
-        _non_empty_str(hidden_params.get("model_id"))
-        or _non_empty_str(decoded.get("model_id"))
-        or _non_empty_str(fallback_model_id)
-    )
+    if decoded.get("model_id"):
+        return response
+
+    hidden_params: Final = response.hidden_params
+    model_id: Final = _non_empty_str(fallback_model_id) or _non_empty_str(hidden_params.get("model_id"))
     provider: Final = (
         _non_empty_str(decoded.get("custom_llm_provider"))
         or _non_empty_str(hidden_params.get("custom_llm_provider"))

@@ -75,20 +75,16 @@ SENTINEL = object()
 def _video_with_empty_model_id(
     hidden_params: dict[str, object] | None = None,
 ) -> VideoObject:
-    """A VideoObject as the provider transforms return it: the id is encoded with
-    the provider but an empty model_id (#33423)."""
     video: Final[VideoObject] = VideoObject(
         id=encode_video_id_with_provider("video_new456", "azure", ""),
         object="video",
         status="queued",
     )
-    video._hidden_params = dict(hidden_params or {})  # pyright: ignore[reportPrivateUsage]  # the router sets hidden params; no public setter
+    video.hidden_params = dict(hidden_params or {})
     return video
 
 
 def _assert_id_resolves_to_deployment(response: object) -> None:
-    """The returned video id must carry VIDEO_MODEL_ID, so a follow-up
-    status/content call resolves the deployment (and its per-model api_key)."""
     assert isinstance(response, VideoObject)
     assert decode_video_id_with_provider(response.id) == {
         "custom_llm_provider": "azure",
@@ -133,7 +129,6 @@ class Harness:
         return dict(self.base_process.call_args.args[0].data)
 
     def respond_with(self, response: object) -> None:
-        """Make the mocked base_process_llm_request return `response`."""
         self.base_process.return_value = response  # pyright: ignore[reportAny]  # MagicMock subclasses Any in typeshed
 
     def route_type(self) -> str:
@@ -276,10 +271,10 @@ async def test_generation__input_reference_attached(harness):
 
 
 @pytest.mark.asyncio
-async def test_generation__restamps_id_with_router_model_id(harness: Harness) -> None:
-    harness.respond_with(_video_with_empty_model_id(hidden_params={"model_id": VIDEO_MODEL_ID}))
+async def test_generation__restamps_id_with_asked_for_model_over_router_deployment_id(harness: Harness) -> None:
+    harness.respond_with(_video_with_empty_model_id(hidden_params={"model_id": "deployment-uuid"}))
 
-    resp: Final = await call_generation(harness, body={"model": "sora-2", "prompt": "x"})
+    resp: Final = await call_generation(harness, body={"model": VIDEO_MODEL_ID, "prompt": "x"})
 
     _assert_id_resolves_to_deployment(resp)
 
@@ -336,8 +331,6 @@ async def test_status__model_encoded_id_full_contract(harness):
 
 @pytest.mark.asyncio
 async def test_status__restamps_response_id_with_decoded_model_id(harness: Harness) -> None:
-    """The status transform drops the model_id from the returned id; re-using
-    that id for content would then fail with invalid_api_key."""
     harness.respond_with(_video_with_empty_model_id())
 
     resp: Final = await call_status(harness, AZURE_VIDEO_ID)
@@ -541,6 +534,23 @@ async def test_edit__json_string_video_reference_from_form_field(harness):
     )
 
     assert harness.processor_data()["video_id"] == "video_plain"
+
+
+@pytest.mark.asyncio
+async def test_edit__uploaded_video_restamps_new_id_with_requested_model(harness: Harness) -> None:
+    import io
+
+    upload: Final = StarletteUploadFile(file=io.BytesIO(b"rawmp4"), filename="clip.mp4")
+    harness.read_body.return_value = {"model": VIDEO_MODEL_ID, "prompt": "make it nighttime", "video": upload}
+    harness.respond_with(_video_with_empty_model_id())
+
+    resp: Final = await endpoints.video_edit(
+        request=FakeRequest(raw_body=b"multipart"),
+        fastapi_response=Response(),
+        user_api_key_dict=_user(),
+    )
+
+    _assert_id_resolves_to_deployment(resp)
 
 
 @pytest.mark.asyncio
