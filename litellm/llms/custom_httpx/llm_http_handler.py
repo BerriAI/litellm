@@ -2140,14 +2140,14 @@ class BaseLLMHTTPHandler:
             except httpx.HTTPStatusError as e:
                 hit_max_attempt = attempt_idx + 1 == max_attempts
                 should_retry = provider_config.should_retry_anthropic_messages_on_http_error(
-                    e=e, litellm_params=litellm_params_dict, request_body=request_body
+                    e=e, litellm_params=litellm_params_dict, request_body=request_body, model=model
                 )
                 if should_retry and not hit_max_attempt:
                     if logging_obj.baseline_cache_context is not None:
                         await logging_obj.invalidate_baseline_cache_estimate("retried_request")
                     verbose_logger.debug(
-                        "Anthropic /v1/messages: invalid thinking signature; "
-                        "stripping thinking blocks and retrying (attempt %s/%s).",
+                        "Anthropic /v1/messages: recoverable %s; transforming the request and retrying (attempt %s/%s).",
+                        e.response.status_code,
                         attempt_idx + 2,
                         max_attempts,
                     )

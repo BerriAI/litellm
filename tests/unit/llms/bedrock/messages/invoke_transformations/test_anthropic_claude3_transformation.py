@@ -28,6 +28,7 @@ from litellm.constants import (
 # Ensure the project root is on the import path so `litellm` can be imported when
 # tests are executed from any working directory.
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.anthropic.pass_through.messages.mid_conversation_system import (
     as_system_content_blocks,
 )
@@ -4009,3 +4010,123 @@ def test_bedrock_removed_tool_change_does_not_add_beta(explicit_beta: bool) -> N
 
     assert result["messages"] == [{"role": "user", "content": "Reply with OK"}]
     assert result.get("anthropic_beta", []).count(beta) == int(explicit_beta)
+
+
+_BEDROCK_INVOKE_URL: Final = "https://bedrock-runtime.us-east-1.amazonaws.com/model/us.anthropic.claude-opus-4-8/invoke"
+_NATIVE_OUTPUT_REJECTION: Final = (
+    '{"message":"The model returned the following errors: compilation exceeded limits: Schema is too complex."}'
+)
+_STALE_SIGNATURE_ERROR: Final = '{"message":"messages.1.content.0: Invalid `signature` in `thinking` block"}'
+_ZEBRA_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"zebra_count": {"type": "integer"}},
+    "required": ["zebra_count"],
+    "additionalProperties": False,
+}
+
+
+def _native_output_messages_body() -> dict[str, object]:
+    return {
+        "anthropic_version": "bedrock-2023-05-31",
+        "max_tokens": 100,
+        "thinking": {"type": "adaptive"},
+        "output_config": {"format": {"type": "json_schema", "schema": _ZEBRA_SCHEMA}},
+        "messages": [
+            {"role": "user", "content": [{"type": "text", "text": "Count the zebras."}]},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "counting", "signature": "stale"},
+                    {"type": "text", "text": "Three."},
+                ],
+            },
+            {"role": "user", "content": [{"type": "text", "text": "Count them again."}]},
+        ],
+    }
+
+
+async def _post_bedrock_messages(
+    model: str, model_info: Mapping[str, object] | None, replies: Sequence[httpx.Response]
+) -> tuple[Mock, httpx.Response | BaseLLMException]:
+    from unittest.mock import AsyncMock
+
+    from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+    from litellm.types.router import GenericLiteLLMParams
+
+    client: Final = Mock()
+    client.post = AsyncMock(side_effect=list(replies))
+    logging_obj: Final = Mock(baseline_cache_context=None)
+    logging_obj.model_call_details = {}
+    try:
+        response: Final = await BaseLLMHTTPHandler()._async_post_anthropic_messages_with_http_error_retry(
+            async_httpx_client=client,
+            request_url=_BEDROCK_INVOKE_URL,
+            headers={},
+            signed_json_body=None,
+            request_body=_native_output_messages_body(),
+            stream=False,
+            logging_obj=logging_obj,
+            provider_config=AmazonAnthropicClaudeMessagesConfig(),
+            litellm_params=GenericLiteLLMParams(
+                aws_access_key_id="AKIAFAKEFORTESTS",
+                aws_secret_access_key="fake-secret",
+                aws_region_name="us-east-1",
+                model_info=model_info,
+            ),
+            api_key=None,
+            model=model,
+        )
+    except BaseLLMException as error:
+        return client, error
+    return client, response
+
+
+def _bedrock_reply(status_code: int, text: str) -> httpx.Response:
+    return httpx.Response(status_code, request=httpx.Request("POST", _BEDROCK_INVOKE_URL), text=text)
+
+
+@pytest.mark.parametrize(
+    ("model", "model_info"),
+    [("us.anthropic.claude-opus-4-8", None), ("us.anthropic.claude-opus-5-5", {"supports_bedrock_native_structured_output": True})],
+    ids=["mapped_opt_in", "deployment_opt_in"],
+)
+async def test_bedrock_messages_native_output_rejection_is_sent_again_signed_with_the_schema_inlined(
+    local_model_cost_map, model, model_info
+):
+    client, outcome = await _post_bedrock_messages(
+        model,
+        model_info,
+        [
+            _bedrock_reply(400, _STALE_SIGNATURE_ERROR),
+            _bedrock_reply(400, _NATIVE_OUTPUT_REJECTION),
+            _bedrock_reply(200, '{"type":"message","content":[]}'),
+        ],
+    )
+
+    assert isinstance(outcome, httpx.Response) and outcome.status_code == 200
+    first, second, third = (json.loads(call.kwargs["data"]) for call in client.post.await_args_list)
+    assert first["output_config"]["format"]["schema"] == _ZEBRA_SCHEMA
+    assert "output_config" in second and "thinking" not in second
+    assert "output_config" not in third
+    assert "zebra_count" in json.dumps(third["messages"][-1])
+    assert "zebra_count" not in json.dumps(second["messages"])
+
+
+@pytest.mark.parametrize(
+    ("model", "model_info", "error_text"),
+    [
+        ("us.anthropic.claude-opus-4-8", None, '{"message":"messages.0.content: Field required"}'),
+        ("us.anthropic.claude-sonnet-4-6", None, _NATIVE_OUTPUT_REJECTION),
+        ("us.anthropic.claude-opus-4-8", {"supports_bedrock_native_structured_output": False}, _NATIVE_OUTPUT_REJECTION),
+    ],
+    ids=["other_400", "native_model", "deployment_opt_out"],
+)
+async def test_bedrock_messages_400_is_not_retried_unless_it_rejects_opt_in_native_output(
+    local_model_cost_map, model, model_info, error_text
+):
+    client, outcome = await _post_bedrock_messages(
+        model, model_info, [_bedrock_reply(400, error_text), _bedrock_reply(200, '{"type":"message","content":[]}')]
+    )
+
+    assert isinstance(outcome, BaseLLMException) and outcome.status_code == 400
+    assert client.post.await_count == 1

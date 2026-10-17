@@ -1,7 +1,7 @@
 import json
 import re
 import uuid
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from itertools import chain
 from typing import Final
 from urllib.parse import unquote
@@ -17,7 +17,8 @@ _HAIKU: Final = "us.anthropic.claude-haiku-5-5"
 _FABLE: Final = "us.anthropic.claude-fable-5"
 _SONNET: Final = "us.anthropic.claude-sonnet-4-6"
 _OPUS: Final = "us.anthropic.claude-opus-5-5"
-_OPT_IN: Final = "au.anthropic.claude-opus-4-8"
+_OPT_IN: Final = _OPUS
+_OPUS_4_8: Final = "us.anthropic.claude-opus-4-8"
 _DEEPSEEK: Final = "deepseek.v3.2"
 _AWS: Final[dict[str, JsonValue]] = {
     "aws_access_key_id": "AKIASCRIPTEDPROVIDER",
@@ -38,6 +39,8 @@ _JSON_VALUE: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 _FABLE_REJECTION: Final = (
     "The model returned the following errors: output_config.format: Extra inputs are not permitted"
 )
+_SCHEMA_TOO_COMPLEX: Final = "The model returned the following errors: compilation exceeded limits: Schema is too complex."
+_MAX_TOKENS_400: Final = "The model returned the following errors: max_tokens: 2048 > 1024, the maximum for this request"
 _UNSUPPORTED_KEYWORDS: Final = (
     "minimum",
     "maximum",
@@ -818,3 +821,85 @@ def test_numeric_formats_and_wide_schemas_follow_the_bedrock_native_key(
         tools: Final = _tools(body, invoke)
         assert (_JSON_TOOL in tools) is not native, body
         assert native or tools[_JSON_TOOL]["properties"] == schema["properties"], body
+
+
+def _rejecting_native_output(message: str) -> Callable[[Request], Reply]:
+    def reply(request: Request) -> Reply:
+        native: Final = _native_schema(_JSON.validate_json(request.body), _is_invoke(request))
+        return _bedrock(request) if native is None else _error_reply(message)
+
+    return reply
+
+
+def _fallback_answer(gateway: Gateway, entry: str, model: str, marker: str) -> JsonValue:
+    match entry:
+        case "converse_chat_stream":
+            streamed: Final = _chat_body(
+                model, marker, stream=True, thinking=_ADAPTIVE, response_format=_response_format(_SCHEMA)
+            )
+            return _content_json(_stream_message(gateway.request("POST", "/v1/chat/completions", streamed)))
+        case "converse_output_config":
+            chat: Final = _chat_body(model, marker, output_config={"format": {"type": "json_schema", "schema": _SCHEMA}})
+            return _content_json(_chat_message(gateway.request("POST", "/v1/chat/completions", chat)))
+        case _:
+            return _opt_in_answer(gateway, entry, model, marker)
+
+
+@pytest.mark.parametrize(
+    ("entry", "rejection"),
+    [
+        ("converse_chat", _FABLE_REJECTION),
+        ("converse_chat_stream", _SCHEMA_TOO_COMPLEX),
+        ("converse_responses", _FABLE_REJECTION),
+        ("converse_messages", _FABLE_REJECTION),
+        ("converse_output_config", _FABLE_REJECTION),
+        ("invoke_chat", _FABLE_REJECTION),
+        ("invoke_messages", _SCHEMA_TOO_COMPLEX),
+    ],
+)
+def test_bedrock_rejecting_opt_in_native_output_gets_one_retry_without_it(
+    gateway: Gateway, entry: str, rejection: str
+) -> None:
+    marker, marker_hex = _marker()
+    route: Final = entry.split("_", 1)[0]
+    invoke: Final = route == "invoke"
+    with wire_server(_rejecting_native_output(rejection)) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire, route, _OPUS_4_8)
+        assert _fallback_answer(gateway, entry, model, marker) == _payload(marker_hex)
+        rejected, retried = (_JSON.validate_json(request.body) for request in wire.drain())
+        assert _native_schema(rejected, invoke) is not None, rejected
+        assert _native_schema(retried, invoke) is None, retried
+        tools: Final = _tools(retried, invoke)
+        match entry:
+            case "converse_output_config":
+                assert not tools, retried
+            case "invoke_messages":
+                assert not tools, retried
+                prompt: Final = json.dumps(retried["messages"])
+                assert all(name in prompt for name in object_value(_SCHEMA["properties"])), retried
+            case _:
+                assert tools[_JSON_TOOL]["properties"] == _SCHEMA["properties"], retried
+
+
+@pytest.mark.parametrize(
+    ("backend", "rejection"),
+    [(_OPUS_4_8, _MAX_TOKENS_400), (_SONNET, _FABLE_REJECTION)],
+    ids=["other_400", "native_model"],
+)
+@pytest.mark.parametrize("route", ["converse", "invoke"])
+def test_bedrock_400_is_not_retried_unless_it_rejects_opt_in_native_output(
+    gateway: Gateway, route: str, backend: str, rejection: str
+) -> None:
+    marker, marker_hex = _marker()
+    with wire_server(_rejecting_native_output(rejection)) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire, route, backend)
+        response: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            _chat_body(model, marker, thinking=_ADAPTIVE, response_format=_response_format(_SCHEMA)),
+        )
+        assert response.status_code == 400, response.text
+        assert rejection.split(": ", 1)[1] in response.text, response.text
+        _, body = _one_call(wire, marker_hex)
+        assert _native_schema(body, route == "invoke") == _SCHEMA, body
+

@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -180,7 +180,11 @@ class BaseAnthropicMessagesConfig(ABC):
         return 2
 
     def should_retry_anthropic_messages_on_http_error(
-        self, e: httpx.HTTPStatusError, litellm_params: dict, request_body: object = None
+        self,
+        e: httpx.HTTPStatusError,
+        litellm_params: Mapping[str, object],
+        request_body: object = None,
+        model: str | None = None,
     ) -> bool:
         """
         When True, async_anthropic_messages_handler will transform the request body
@@ -202,7 +206,9 @@ class BaseAnthropicMessagesConfig(ABC):
         ) and is_anthropic_thinking_binding_mismatch_error(error_text)
         return not caller_asked_for_this_error and is_anthropic_invalid_thinking_block_error(error_text)
 
-    def transform_anthropic_messages_request_on_http_error(self, e: httpx.HTTPStatusError, request_data: dict) -> dict:
+    def transform_anthropic_messages_request_on_http_error(
+        self, e: httpx.HTTPStatusError, request_data: dict[str, object]
+    ) -> dict[str, object]:
         """
         Mutates request_data in place when retrying after a recoverable HTTP error.
         """

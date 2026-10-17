@@ -57,12 +57,18 @@ from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.base_llm.chat.transformation import REQUEST_PARAMS, BaseConfig, BaseLLMException
 from litellm.llms.bedrock.chat.tool_result_images import place_tool_result_images
 from litellm.llms.bedrock.common_utils import (
+    NativeOutputFallback,
     bedrock_chat_uses_native_structured_output,
     bedrock_cleaned_output_schema,
     bedrock_model_supports_regex_lookaround,
     bedrock_native_output_format,
+    bedrock_native_output_is_opt_in,
     bedrock_supports_tool_search,
     deployment_model_info,
+    requested_tools,
+    requests_output_config_format,
+    thinking_enabled_after_mapping,
+    without_bedrock_native_output_opt_in,
 )
 from litellm.llms.bedrock.request_metadata import (
     bedrock_request_metadata_headers,
@@ -166,6 +172,17 @@ def _tools_the_model_accepts(
     if bedrock_model_supports_regex_lookaround(model, litellm_params):
         return list(tools)
     return [tool_with_sanitized_parameters(tool, drop_lookaround_regex_patterns) for tool in tools]
+
+
+_OUTPUT_CONFIG_BLOCK: Final = TypeAdapter(OutputConfigBlock)
+_JSON_SCHEMA_DICT: Final = TypeAdapter(dict[str, object])
+
+
+def _native_json_schema_definition(output_config: object) -> JsonSchemaDefinition | None:
+    if not isinstance(output_config, Mapping):
+        return None
+    text_format: Final = _OUTPUT_CONFIG_BLOCK.validate_python(output_config).get("textFormat")
+    return None if text_format is None else text_format["structure"]["jsonSchema"]
 
 
 class AmazonConverseConfig(BaseConfig):
@@ -1372,11 +1389,7 @@ class AmazonConverseConfig(BaseConfig):
             )
             optional_params = self._add_tools_to_optional_params(optional_params=optional_params, tools=[_tool])
 
-            if (
-                litellm.utils.supports_tool_choice(model=model, custom_llm_provider=self.custom_llm_provider)
-                and not is_thinking_enabled
-                and not AnthropicModelInfo.forced_tool_use_unsupported(model)
-            ):
+            if self._forces_json_tool_choice(model, is_thinking_enabled):
                 optional_params["tool_choice"] = ToolChoiceValuesBlock(
                     tool=SpecificToolChoiceBlock(name=RESPONSE_FORMAT_TOOL_NAME)
                 )
@@ -1391,6 +1404,56 @@ class AmazonConverseConfig(BaseConfig):
 
         optional_params["json_mode"] = True
         return optional_params
+
+    def _forces_json_tool_choice(self, model: str, is_thinking_enabled: bool) -> bool:
+        return (
+            litellm.utils.supports_tool_choice(model=model, custom_llm_provider=self.custom_llm_provider)
+            and not is_thinking_enabled
+            and not AnthropicModelInfo.forced_tool_use_unsupported(model)
+        )
+
+    def native_output_fallback(
+        self, model: str, optional_params: Mapping[str, object], litellm_params: Mapping[str, object]
+    ) -> NativeOutputFallback | None:
+        native_json_schema: Final = (
+            _native_json_schema_definition(optional_params.get("outputConfig"))
+            if optional_params.get("json_mode") is True
+            else None
+        )
+        if native_json_schema is None and not requests_output_config_format(optional_params):
+            return None
+        capability_model: Final = bedrock_capability_model(model, litellm_params.get("base_model"))
+        if not bedrock_native_output_is_opt_in(
+            capability_model, self.custom_llm_provider or "bedrock_converse", deployment_model_info(litellm_params)
+        ):
+            return None
+        if native_json_schema is None:
+            return NativeOutputFallback(
+                optional_params=optional_params,
+                litellm_params=without_bedrock_native_output_opt_in(litellm_params),
+            )
+        json_tool: Final = self._create_json_tool_call_for_response_format(
+            json_schema=_JSON_SCHEMA_DICT.validate_json(native_json_schema["schema"]),
+            description=native_json_schema.get("description"),
+        )
+        tool_choice: Final[Mapping[str, object]] = (
+            {"tool_choice": ToolChoiceValuesBlock(tool=SpecificToolChoiceBlock(name=RESPONSE_FORMAT_TOOL_NAME))}
+            if self._forces_json_tool_choice(capability_model, thinking_enabled_after_mapping(optional_params))
+            else {}
+        )
+        fake_stream: Final[Mapping[str, object]] = (
+            {"fake_stream": True} if optional_params.get("stream") is True else {}
+        )
+        without_native_output: Final = {key: value for key, value in optional_params.items() if key != "outputConfig"}
+        return NativeOutputFallback(
+            optional_params={
+                **without_native_output,
+                "tools": [*requested_tools(optional_params), json_tool],
+                **tool_choice,
+                **fake_stream,
+            },
+            litellm_params=litellm_params,
+        )
 
     def update_optional_params_with_thinking_tokens(self, non_default_params: dict, optional_params: dict):
         """
