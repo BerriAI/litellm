@@ -14,7 +14,7 @@ import json
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Protocol
 
 from litellm.harness.options import DeepAgentsOptions
 from litellm.harness.types import (
@@ -73,7 +73,7 @@ _APPROVAL_DECISIONS: Final = ("approve", "reject")
 
 def chat_model_kwargs(
     ctx: SessionContext,
-) -> dict[str, Any]:  # mutable-ok: ChatLiteLLM constructor kwargs, splatted as **kwargs
+) -> dict[str, object]:  # mutable-ok: ChatLiteLLM constructor kwargs, splatted as **kwargs
     """ChatLiteLLM constructor kwargs for gateway or SDK mode."""
     if not ctx.model:
         raise ValueError("Harness.DEEPAGENTS needs model=")
@@ -107,7 +107,7 @@ def blocked_tools(permissions: str, disable_tools: Sequence[str]) -> frozenset[s
 
 def interrupt_config(
     permissions: str, blocked: frozenset[str]
-) -> dict[str, Any] | None:  # mutable-ok: deepagents create_deep_agent(interrupt_on=) takes a dict
+) -> dict[str, dict[str, list[str]]] | None:  # mutable-ok: deepagents create_deep_agent(interrupt_on=) takes a dict
     """interrupt_on for permissions='ask': approve/reject every mutating built-in."""
     if permissions != "ask":
         return None
@@ -211,19 +211,25 @@ def _message_events(message: object, skip_tools: frozenset[str]) -> tuple[Event,
         calls = getattr(message, "tool_calls", None) or ()
         return tuple(tool_call_event(call) for call in calls if call.get("name") not in skip_tools)
     if kind == "tool" and getattr(message, "name", None) not in skip_tools:
+        status: Final[object] = getattr(message, "status", None)
         return (
             ToolResult(
                 id=str(getattr(message, "tool_call_id", "") or ""),
                 output=content_text(getattr(message, "content", "")),
-                is_error=getattr(message, "status", None) == "error",
+                is_error=status == "error",
             ),
         )
     return ()
 
 
+class InterruptLike(Protocol):
+    @property
+    def id(self) -> str: ...
+
+
 def interrupts_in(
     update: object,
-) -> list[Any]:  # mutable-ok: returns a list; existing callers/tests compare it to list literals
+) -> list[InterruptLike]:  # mutable-ok: returns a list; existing callers/tests compare it to list literals
     if not isinstance(update, Mapping):
         return []  # mutable-ok: returns a list; existing callers/tests compare it to list literals
     found = update.get("__interrupt__")
@@ -260,7 +266,7 @@ def approval_requests(
     return list(kept)  # mutable-ok: list return; callers/tests compare to lists
 
 
-def decision(allowed: bool, reason: str) -> dict[str, Any]:  # mutable-ok: LangGraph resume payload (HITL decision dict)
+def decision(allowed: bool, reason: str) -> dict[str, str]:  # mutable-ok: LangGraph resume payload (HITL decision dict)
     if allowed:
         return {"type": "approve"}  # mutable-ok: LangGraph resume payload (HITL decision dict)
     return {  # mutable-ok: LangGraph HITL decision
@@ -273,7 +279,7 @@ def decision(allowed: bool, reason: str) -> dict[str, Any]:  # mutable-ok: LangG
 class TurnState:
     """Mutable state across the stream passes of one turn."""
 
-    interrupts: tuple[Any, ...] = ()
+    interrupts: tuple[InterruptLike, ...] = ()
 
 
 class DeepAgentsHarnessConfig(BaseHarnessConfig):

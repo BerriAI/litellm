@@ -1,15 +1,14 @@
-import errno
 import json
 import threading
 import os
 import re
 import signal
-import socket
 import subprocess
 import sys
 import time
 import uuid
 from collections.abc import Generator, Iterable, Iterator, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from enum import Enum
@@ -32,11 +31,13 @@ from pydantic import TypeAdapter
 
 from tests.integration._support.budget import import_seconds, readiness_for, readiness_seconds
 from tests.integration._support.client import GATEWAY_LIMITS, Gateway
+from tests.integration._support.ports import allocate_port
 
 DB_PUSH: Final = ("--use_prisma_db_push",)
 MIGRATE_DEPLOY: Final = ()
 LEGACY_MIGRATE_DEPLOY: Final = ("--use_legacy_migration_resolver",)
 CONFIGURATION: Final = TypeAdapter(dict[str, object])
+_DEPLOYMENT_IDS: Final = TypeAdapter(dict[str, list[str]])
 MCP_COVERAGE_CONFIG: Final = Path(__file__).resolve().parents[1] / "mcp_coverage.toml"
 
 
@@ -149,9 +150,9 @@ def _is_reaped(process: psutil.Process) -> bool:
     return False
 
 
-def _wait_until_reaped(process: psutil.Process, supervisor: psutil.Process, seconds: float) -> None:
+def _wait_until_reaped(process: psutil.Process, seconds: float) -> None:
     deadline: Final = time.monotonic() + seconds
-    while not _is_reaped(process) and not _is_stopped(supervisor):
+    while not _is_reaped(process):
         assert time.monotonic() < deadline, f"The supervisor did not reap worker {process.pid} within {seconds:.0f}s"
         time.sleep(0.05)
 
@@ -159,8 +160,6 @@ def _wait_until_reaped(process: psutil.Process, supervisor: psutil.Process, seco
 @dataclass(frozen=True, slots=True)
 class WorkerKill:
     victim: psutil.Process
-    supervisor: psutil.Process
-    reap_seconds: float
     fired: threading.Event
 
     def freeze(self) -> psutil.Process:
@@ -172,7 +171,6 @@ class WorkerKill:
         with suppress(psutil.NoSuchProcess):
             self.victim.kill()
         _wait_until_gone(self.victim, STRICT_HEALTHCHECK_SECONDS)
-        _wait_until_reaped(self.victim, self.supervisor, self.reap_seconds)
         self.fired.set()
 
 
@@ -208,6 +206,33 @@ class OwnedProxy:
         identity: Final = response.headers.get("x-integration-worker-pid", "")
         return int(identity) if response.status_code == 200 and identity.isdecimal() else None
 
+    def _deployment_ids_on_a_worker(self, model_name: str) -> tuple[int, frozenset[str]] | None:
+        try:
+            with httpx.Client(
+                base_url=str(self.gateway.client.base_url),
+                timeout=2,
+                trust_env=False,
+                limits=httpx.Limits(max_keepalive_connections=0),
+            ) as client:
+                response: Final = client.get("/health/integration-deployment-ids", params={"model_name": model_name})
+        except httpx.TransportError:
+            return None
+        identity: Final = response.headers.get("x-integration-worker-pid", "")
+        if response.status_code != 200 or not identity.isdecimal():
+            return None
+        return int(identity), frozenset(_DEPLOYMENT_IDS.validate_python(response.json())["model_ids"])
+
+    def serves_only_on_every_worker(self, model_name: str, model_id: str) -> bool:
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            answers: Final = tuple(pool.map(self._deployment_ids_on_a_worker, (model_name,) * 16))
+        samples: Final = tuple(answer for answer in answers if answer is not None)
+        workers: Final = self.worker_pids()
+        return (
+            bool(workers)
+            and workers <= frozenset(pid for pid, _ in samples)
+            and all(model_ids == {model_id} for _, model_ids in samples)
+        )
+
     def _await_replacement(self, before: frozenset[int]) -> int:
         budget: Final = readiness_seconds(1)
         deadline: Final = time.monotonic() + budget
@@ -222,22 +247,22 @@ class OwnedProxy:
         assert pid in before, f"{pid} is not a serving worker of this proxy: {sorted(before)}"
         return psutil.Process(pid), before
 
-    def _worker_kill(self, victim: psutil.Process) -> WorkerKill:
-        reap_seconds: Final = healthcheck_seconds(self.healthcheck) + STRICT_HEALTHCHECK_SECONDS
-        return WorkerKill(victim, psutil.Process(self.process.pid), reap_seconds, threading.Event())
+    def _replacement_of(self, victim: psutil.Process, before: frozenset[int]) -> int:
+        _wait_until_reaped(victim, healthcheck_seconds(self.healthcheck) + STRICT_HEALTHCHECK_SECONDS)
+        return self._await_replacement(before)
 
     @contextmanager
     def replacing_worker(self, pid: int) -> Iterator[WorkerKill]:
         victim, before = self._victim(pid)
-        kill: Final = self._worker_kill(victim)
+        kill: Final = WorkerKill(victim, threading.Event())
         yield kill
         assert kill.fired.is_set(), f"replacing_worker({pid}) exited without killing the worker"
-        self._await_replacement(before)
+        self._replacement_of(victim, before)
 
     def kill_worker(self, pid: int) -> int:
         victim, before = self._victim(pid)
-        self._worker_kill(victim)()
-        return self._await_replacement(before)
+        WorkerKill(victim, threading.Event())()
+        return self._replacement_of(victim, before)
 
     @contextmanager
     def suspended(self, pid: int) -> Iterator[psutil.Process]:
@@ -377,16 +402,6 @@ def _stop(process: subprocess.Popen[bytes]) -> None:
         raise
 
 
-_PORT_ATTEMPTS: Final = 3
-_BIND_COLLISION: Final = os.strerror(errno.EADDRINUSE).lower()
-
-
-def _free_port() -> int:
-    with socket.socket() as reserve:
-        reserve.bind(("127.0.0.1", 0))
-        return reserve.getsockname()[1]
-
-
 @dataclass(frozen=True, slots=True)
 class _Launch:
     process: subprocess.Popen[bytes]
@@ -429,7 +444,7 @@ def _stop_launch(launch: _Launch) -> None:
 
 
 def _launch(command: tuple[str, ...], root: Path, environment: Mapping[str, str], output: Path) -> _Launch:
-    port: Final = _free_port()
+    port: Final = allocate_port()
     log_path: Final = output / f"owned-proxy-{uuid.uuid4().hex}.log"
     started: Final = time.monotonic()
     with log_path.open("w") as log:
@@ -442,10 +457,6 @@ def _launch(command: tuple[str, ...], root: Path, environment: Mapping[str, str]
             start_new_session=True,
         )
     return _Launch(process, port, log_path, started)
-
-
-def _lost_port_race(exit_code: int | None, log: Path) -> bool:
-    return exit_code is not None and _BIND_COLLISION in log.read_text().lower()
 
 
 def _owns_listener(launch: _Launch) -> bool:
@@ -494,6 +505,8 @@ def _prisma_running(launch: _Launch) -> bool:
 
 
 def _answer(client: httpx.Client, launch: _Launch) -> tuple[bool, int | None]:
+    if not _owns_listener(launch):
+        return False, None
     try:
         response: Final = client.get("/health/integration-readiness", timeout=2)
     except httpx.ConnectError:
@@ -501,7 +514,7 @@ def _answer(client: httpx.Client, launch: _Launch) -> tuple[bool, int | None]:
     except httpx.TransportError:
         return True, None
     identity: Final = response.headers.get("x-integration-worker-pid", "")
-    ready: Final = response.status_code == 200 and identity.isdecimal() and _owns_listener(launch)
+    ready: Final = response.status_code == 200 and identity.isdecimal()
     return True, int(identity) if ready else None
 
 
@@ -569,42 +582,36 @@ def _wait_until_ready(launch: _Launch, workers: int = 1) -> BootPhases | None:
     )
 
 
-def _launch_until_bound(
-    command: tuple[str, ...], root: Path, environment: Mapping[str, str], output: Path, attempts: int, workers: int
+def _launch_until_ready(
+    command: tuple[str, ...], root: Path, environment: Mapping[str, str], output: Path, workers: int
 ) -> _Launch:
     launch: Final = _launch(command, root, environment, output)
     try:
         phases: Final = _wait_until_ready(launch, workers)
-        exit_code: Final = launch.process.poll()
-        assert exit_code is None or (attempts > 1 and _lost_port_race(exit_code, launch.log)), (
-            "Owned proxy exited before readiness"
-        )
+        assert launch.process.poll() is None, "Owned proxy exited before readiness"
     except BaseException:
         _stop_launch(launch)
         raise
-    if exit_code is None:
-        assert phases is not None
-        launch.log.with_suffix(".startup.json").write_text(
-            json.dumps(
-                {
-                    "root_pid": launch.process.pid,
-                    "readiness_seconds": time.monotonic() - launch.started,
-                    "logical_cpus": os.cpu_count(),
-                    "workers": workers,
-                    "spawned_at": _wall_clock(launch.started),
-                    "phases": {
-                        "prisma_started": phases.prisma_started,
-                        "prisma_finished": phases.prisma_finished,
-                        "listening": phases.listening,
-                        "first_ready": phases.first_ready,
-                    },
-                }
-            )
-            + "\n"
+    assert phases is not None
+    launch.log.with_suffix(".startup.json").write_text(
+        json.dumps(
+            {
+                "root_pid": launch.process.pid,
+                "readiness_seconds": time.monotonic() - launch.started,
+                "logical_cpus": os.cpu_count(),
+                "workers": workers,
+                "spawned_at": _wall_clock(launch.started),
+                "phases": {
+                    "prisma_started": phases.prisma_started,
+                    "prisma_finished": phases.prisma_finished,
+                    "listening": phases.listening,
+                    "first_ready": phases.first_ready,
+                },
+            }
         )
-        return launch
-    _stop_launch(launch)
-    return _launch_until_bound(command, root, environment, output, attempts - 1, workers)
+        + "\n"
+    )
+    return launch
 
 
 def _proxy_root() -> Path:
@@ -726,6 +733,7 @@ def owned_proxy_process(
     coverage_file: Path | None = None,
     healthcheck: WorkerHealthcheck = WorkerHealthcheck.STRICT,
     inherited: Mapping[str, str] = os.environ,
+    client_timeout: float = 15,
 ) -> Iterator[OwnedProxy]:
     assert "--timeout_worker_healthcheck" not in extra_arguments, "Choose the worker healthcheck with `healthcheck`"
     root: Final = _proxy_root()
@@ -753,13 +761,52 @@ def owned_proxy_process(
         *database_setup,
         *extra_arguments,
     )
-    launch: Final = _launch_until_bound(command, root, environment, output, _PORT_ATTEMPTS, workers)
+    launch: Final = _launch_until_ready(command, root, environment, output, workers)
     process: Final = launch.process
+    try:
+        with httpx.Client(
+            base_url=f"http://127.0.0.1:{launch.port}", timeout=client_timeout, trust_env=False, limits=GATEWAY_LIMITS
+        ) as client:
+            yield OwnedProxy(Gateway(client, gateway.key, gateway.upstream_url), process, launch.log, healthcheck)
+    finally:
+        _stop_launch(launch)
+
+
+@contextmanager
+def configless_proxy_process(
+    gateway: Gateway,
+    directory: Path,
+    overrides: Mapping[str, str],
+    *,
+    model: str,
+    api_base: str,
+    workers: int = 1,
+) -> Iterator[OwnedProxy]:
+    environment: Final = _proxy_environment(gateway, {**overrides, "STORE_MODEL_IN_DB": "False"}, ())
+    output: Final = Path(os.environ.get("INTEGRATION_RESULTS_DIR", str(directory)))
+    output.mkdir(parents=True, exist_ok=True)
+    command: Final = (
+        sys.executable,
+        "-m",
+        "integration._support.proxy",
+        "--model",
+        model,
+        "--api_base",
+        api_base,
+        "--host",
+        "127.0.0.1",
+        "--num_workers",
+        str(workers),
+        "--timeout_worker_healthcheck",
+        str(healthcheck_seconds(WorkerHealthcheck.STRICT)),
+        *DB_PUSH,
+    )
+    launch: Final = _launch_until_ready(command, _proxy_root(), environment, output, workers)
     try:
         with httpx.Client(
             base_url=f"http://127.0.0.1:{launch.port}", timeout=15, trust_env=False, limits=GATEWAY_LIMITS
         ) as client:
-            yield OwnedProxy(Gateway(client, gateway.key, gateway.upstream_url), process, launch.log, healthcheck)
+            yield OwnedProxy(Gateway(client, gateway.key, gateway.upstream_url), launch.process, launch.log)
     finally:
         _stop_launch(launch)
 
@@ -787,7 +834,7 @@ def owned_gateway_image(
         "--timeout-worker-healthcheck",
         str(int(graceful_stop_seconds())),
     )
-    launch: Final = _launch_until_bound(command, root, environment, output, _PORT_ATTEMPTS, workers)
+    launch: Final = _launch_until_ready(command, root, environment, output, workers)
     try:
         with httpx.Client(
             base_url=f"http://127.0.0.1:{launch.port}", timeout=15, trust_env=False, limits=GATEWAY_LIMITS
@@ -833,7 +880,7 @@ def refused_boot_log(
         with httpx.Client(base_url=f"http://127.0.0.1:{launch.port}", timeout=15, trust_env=False) as client:
             deadline: Final = time.monotonic() + readiness_seconds(1)
             while launch.process.poll() is None:
-                assert not _is_ready(client), (
+                assert not (_owns_listener(launch) and _is_ready(client)), (
                     f"Proxy became ready instead of refusing to boot:\n{launch.log.read_text()}"
                 )
                 assert time.monotonic() < deadline, "Proxy neither exited nor became ready within the deadline"
@@ -969,7 +1016,7 @@ def owned_upstream(
     directory: Path, *, tls: bool = False, port: int | None = None, inherited: Mapping[str, str] = os.environ
 ) -> Generator[UpstreamSlot]:
     certificate: Final = self_signed_certificate(directory) if tls else None
-    slot: Final = UpstreamSlot(directory, port or _free_port(), _harness_root(), certificate, inherited)
+    slot: Final = UpstreamSlot(directory, port or allocate_port(), _harness_root(), certificate, inherited)
     try:
         slot.start()
         yield slot

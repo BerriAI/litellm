@@ -182,13 +182,12 @@ class TestApplyToolsetScope:
 
         admitted = UserAPIKeyAuth(user_id="user-1", object_permission=None)
         admitted.mcp_admitted_user_subject = True
-        admitted.mcp_session_resource_server_id = "server-own"
+        admitted.mcp_session_resource_server_ids = ("server-own", "server-own-other")
         admitted.requires_fresh_policy = True
         granted = AsyncMock(return_value=frozenset({"toolset-123"}))
         resolve = AsyncMock(return_value={"server-team": ["tool1"]})
         with patch(
-            "litellm.proxy._experimental.mcp_server.server."
-            "global_mcp_server_manager.resolve_toolset_tool_permissions",
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.resolve_toolset_tool_permissions",
             new=resolve,
         ):
             with pytest.raises(HTTPException) as exc_info:
@@ -203,18 +202,17 @@ class TestApplyToolsetScope:
 
         admitted = UserAPIKeyAuth(user_id="user-1", object_permission=None)
         admitted.mcp_admitted_user_subject = True
-        admitted.mcp_session_resource_server_id = "server-team"
+        admitted.mcp_session_resource_server_ids = ("server-team",)
         granted = AsyncMock(return_value=frozenset({"toolset-123"}))
         resolve = AsyncMock(return_value={"server-team": ["tool1"], "server-other": ["tool2"]})
         with patch(
-            "litellm.proxy._experimental.mcp_server.server."
-            "global_mcp_server_manager.resolve_toolset_tool_permissions",
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.resolve_toolset_tool_permissions",
             new=resolve,
         ):
             result = await apply_toolset_scope(admitted, "toolset-123", granted=granted)
 
         assert result.mcp_toolset_id == "toolset-123"
-        assert result.mcp_session_resource_server_id == "server-team"
+        assert result.mcp_session_resource_server_ids == ("server-team",)
         resolve.assert_awaited_once_with(toolset_ids=["toolset-123"], requires_fresh_policy=False)
 
     @pytest.mark.asyncio

@@ -128,6 +128,22 @@ class TestGigaChatPassthroughConfig:
         assert str(complete_url) == "https://custom.gigachat.ru/api/v1/chat/completions"
         assert base_target_url == api_base
 
+    @pytest.mark.parametrize(
+        "api_base",
+        ["https://custom.gigachat.ru/api/v1", "https://custom.gigachat.ru/api/v1/"],
+    )
+    def test_get_complete_url_ignores_a_trailing_slash_on_api_base(self, api_base):
+        complete_url, _ = GigaChatPassthroughConfig().get_complete_url(
+            api_base=api_base,
+            api_key=None,
+            model="GigaChat",
+            endpoint="chat/completions",
+            request_query_params=None,
+            litellm_params={},
+        )
+
+        assert str(complete_url) == "https://custom.gigachat.ru/api/v1/chat/completions"
+
     @patch(  # test-quality-ok: patching litellm internal for unit test isolation
         "litellm.llms.gigachat.passthrough.transformation.get_secret_str"
     )
