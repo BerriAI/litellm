@@ -17,6 +17,7 @@ import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.base_llm.passthrough.transformation import PassthroughStreamCollector
+from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock.passthrough.transformation import (
     BedrockPassthroughConfig,
     is_bedrock_streaming_endpoint,
@@ -820,3 +821,127 @@ def test_stream_collector_logs_nothing_for_an_unrecognized_endpoint():
     collector.add(_event_frame("messageStart", {"role": "assistant"}))
 
     assert collector.build_logged_response(_converse_stream_logging_obj()) is None
+
+
+REQUEST_METADATA_HEADER = "x-amzn-bedrock-request-metadata"
+REQUEST_METADATA_FIELDS = ["user_api_key_alias", "user_api_key_team_alias", "spend_logs_metadata"]
+PROXY_IDENTITY = {
+    "user_api_key_alias": "prod-key",
+    "user_api_key_team_alias": "platform",
+    "spend_logs_metadata": {"agent": "triage-bot"},
+}
+EXPECTED_REQUEST_METADATA = {"user_api_key_alias": "prod-key", "user_api_key_team_alias": "platform", "agent": "triage-bot"}
+CONVERSE_BODY = {"messages": [{"role": "user", "content": [{"text": "hi"}]}]}
+INVOKE_BODY = {"anthropic_version": "bedrock-2023-05-31", "max_tokens": 8, "messages": [{"role": "user", "content": "hi"}]}
+
+
+async def _sent_passthrough_request(
+    action: str, body: dict[str, object], identity: dict[str, object], **kwargs: object
+) -> httpx.Request:
+    requests: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"ok": True}, request=request)
+
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "bedrock-pt",
+                "litellm_params": {
+                    "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+                    "aws_access_key_id": "AKIAROUTERKEY",
+                    "aws_secret_access_key": "router-secret",
+                    "aws_region_name": "us-west-2",
+                },
+            }
+        ]
+    )
+    await router.allm_passthrough_route(
+        model="bedrock-pt",
+        method="POST",
+        endpoint=f"/model/bedrock-pt/{action}",
+        data=body,
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(respond)),
+        litellm_metadata=identity,
+        **kwargs,
+    )
+    return requests[0]
+
+
+def _signed_header_names(request: httpx.Request) -> frozenset[str]:
+    return frozenset(request.headers["authorization"].split("SignedHeaders=")[1].split(",")[0].split(";"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["converse", "converse-stream"])
+async def test_converse_passthrough_signs_proxy_identity_into_request_metadata(
+    action: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", REQUEST_METADATA_FIELDS)
+    caller_body: Final = {**CONVERSE_BODY, "requestMetadata": {"user_api_key_team_alias": "forged", "ticket": "T-42"}}
+
+    request: Final = await _sent_passthrough_request(action, caller_body, PROXY_IDENTITY)
+
+    assert json.loads(request.content) == {
+        **CONVERSE_BODY,
+        "requestMetadata": {**EXPECTED_REQUEST_METADATA, "ticket": "T-42"},
+    }
+    assert caller_body["requestMetadata"] == {"user_api_key_team_alias": "forged", "ticket": "T-42"}
+    assert REQUEST_METADATA_HEADER not in request.headers
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["invoke", "invoke-with-response-stream"])
+async def test_invoke_passthrough_sends_proxy_identity_as_a_signed_header(
+    action: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", REQUEST_METADATA_FIELDS)
+
+    request: Final = await _sent_passthrough_request(action, INVOKE_BODY, PROXY_IDENTITY)
+
+    assert json.loads(request.headers[REQUEST_METADATA_HEADER]) == EXPECTED_REQUEST_METADATA
+    assert REQUEST_METADATA_HEADER in _signed_header_names(request)
+    assert json.loads(request.content) == INVOKE_BODY
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("setting", [None, []])
+async def test_passthrough_requests_are_untouched_when_forwarding_is_off(
+    setting: list[str] | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", setting)
+    caller_body: Final = {**CONVERSE_BODY, "requestMetadata": {"user_api_key_team_alias": "forged"}}
+
+    converse: Final = await _sent_passthrough_request("converse", caller_body, PROXY_IDENTITY)
+    invoke: Final = await _sent_passthrough_request("invoke", INVOKE_BODY, PROXY_IDENTITY)
+
+    assert json.loads(converse.content) == caller_body
+    assert REQUEST_METADATA_HEADER not in invoke.headers
+
+
+@pytest.mark.asyncio
+async def test_converse_passthrough_drops_reserved_caller_keys_when_nothing_resolves(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", REQUEST_METADATA_FIELDS)
+    caller_body: Final = {**CONVERSE_BODY, "requestMetadata": {"user_api_key_team_alias": "forged"}}
+
+    request: Final = await _sent_passthrough_request("converse", caller_body, {})
+
+    assert json.loads(request.content) == CONVERSE_BODY
+
+
+@pytest.mark.asyncio
+async def test_malformed_caller_request_metadata_is_rejected_unless_params_are_dropped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", REQUEST_METADATA_FIELDS)
+    caller_body: Final = {**CONVERSE_BODY, "requestMetadata": {"user_api_key_team_alias": "forged", "bad!": "x"}}
+
+    with pytest.raises(BedrockError, match="requestMetadata") as rejected:
+        await _sent_passthrough_request("converse", caller_body, PROXY_IDENTITY)
+    dropped: Final = await _sent_passthrough_request("converse", caller_body, PROXY_IDENTITY, drop_params=True)
+
+    assert rejected.value.status_code == 400
+    assert json.loads(dropped.content) == {**CONVERSE_BODY, "requestMetadata": EXPECTED_REQUEST_METADATA}

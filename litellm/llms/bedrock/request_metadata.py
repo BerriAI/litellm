@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sized
 from typing import Final
 
 import litellm
@@ -134,6 +134,22 @@ def resolve_bedrock_request_metadata(
     )
     resolved: Final = {key: value for key, value in (*identity, *client)}
     return resolved or None
+
+
+def bedrock_request_metadata_violation(caller_metadata: object) -> str | None:
+    text_pairs: Final = _text_pairs(caller_metadata)
+    entry_count: Final = len(caller_metadata) if isinstance(caller_metadata, Sized) else 0
+    if caller_metadata is None:
+        return None
+    if not isinstance(caller_metadata, Mapping):
+        return "requestMetadata must be a dictionary"
+    if entry_count > BEDROCK_REQUEST_METADATA_MAX_PAIRS:
+        return f"requestMetadata can contain a maximum of {BEDROCK_REQUEST_METADATA_MAX_PAIRS} items"
+    if len(text_pairs) != entry_count:
+        return "requestMetadata keys and values must be strings"
+    if not all(_is_forwardable(key, value) for key, value in text_pairs):
+        return "requestMetadata keys must be 1-256 and values 0-256 characters of [a-zA-Z0-9\\s:_@$#=/+,.-]"
+    return None
 
 
 def bedrock_request_metadata_is_owned() -> bool:
