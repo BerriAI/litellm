@@ -3,7 +3,7 @@ import contextlib
 import json
 import logging
 import math
-from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Coroutine, Mapping, Sequence
 from datetime import datetime
 from functools import lru_cache
 from types import MappingProxyType
@@ -136,6 +136,7 @@ from litellm.types.router_weights import validate_router_weights
 
 _LateResponseT = TypeVar("_LateResponseT", bound=Response)
 _LlmCallT = TypeVar("_LlmCallT")
+_ChunkT: Final = TypeVar("_ChunkT")
 
 KNOWN_PROXY_ROUTES: Final = frozenset(
     route for member in LiteLLMRoutes for route in member.value if route.startswith("/")
@@ -864,6 +865,21 @@ def _extract_error_from_sse_chunk(event_line: str | bytes) -> dict:
     return default_error
 
 
+async def _close_upstream(upstream: object) -> None:
+    aclose: Final[Callable[[], Awaitable[object]] | None] = getattr(upstream, "aclose", None)
+    if aclose is not None:
+        await aclose()
+
+
+async def _close_upstream_and_log_its_spend(upstream: object) -> bool:
+    """Close the upstream and wait until the spend it collected has been logged. False when it had none to log."""
+    await _close_upstream(upstream)
+    wait_for_spend_flush: Final[Callable[[], Awaitable[object]] | None] = getattr(
+        upstream, "wait_for_spend_flush", None
+    )
+    return wait_for_spend_flush is not None and await wait_for_spend_flush() is True
+
+
 class _UpstreamClosingStreamingResponse(StreamingResponse):
     """StreamingResponse that always closes its body iterator and the wrapped
     upstream generator.
@@ -910,7 +926,7 @@ class _UpstreamClosingStreamingResponse(StreamingResponse):
 
 
 class _ClientDisconnectedBeforeFirstChunk(Exception):
-    """Client went away during create_response's first-chunk buffering window.
+    """Client went away while the first chunk of a streamed response was being buffered.
 
     The upstream LLM stream has already been closed by the time this is raised.
     """
@@ -934,24 +950,24 @@ async def _wait_for_http_disconnect(request: Request) -> None:
 
 
 async def _buffer_first_chunk_honoring_disconnect(
-    generator: AsyncGenerator[str, None],
+    generator: AsyncGenerator[_ChunkT, None],
     request: Request | None,
-) -> str:
+) -> _ChunkT:
     """Fetch the first streamed chunk, cancelling the upstream LLM call if the
     client disconnects before it arrives.
 
-    create_response buffers the first chunk to detect error-only streams before
-    handing the StreamingResponse to Starlette, which only begins listening for
-    client disconnects once it is serving that response. A disconnect during a
-    long time-to-first-token would otherwise leave the upstream call running
-    until the request timeout (LIT-3568). Cancelling the fetch propagates into
-    async_streaming_data_generator, whose finally block records the 499 and
-    closes the upstream stream.
+    create_response and the guarded passthrough relay buffer the first chunk
+    before handing the StreamingResponse to Starlette, which only begins
+    listening for client disconnects once it is serving that response. A
+    disconnect during a long time-to-first-token would otherwise leave the
+    upstream call running until the request timeout (LIT-3568). Cancelling the
+    fetch propagates into the generator, whose cleanup closes the upstream
+    stream. A cancellation of the caller stops the fetch the same way.
     """
     if request is None:
         return await generator.__anext__()
 
-    chunk_task: Final[asyncio.Task[str]] = asyncio.ensure_future(generator.__anext__())
+    chunk_task: Final[asyncio.Task[_ChunkT]] = asyncio.ensure_future(generator.__anext__())
     disconnect_task: Final[asyncio.Task[None]] = asyncio.ensure_future(_wait_for_http_disconnect(request))
     try:
         await asyncio.wait({chunk_task, disconnect_task}, return_when=asyncio.FIRST_COMPLETED)
@@ -960,6 +976,9 @@ async def _buffer_first_chunk_honoring_disconnect(
         # Take the cancellation path whenever a disconnect was observed, even if
         # the first chunk landed in the same scheduler turn.
         disconnect_observed: Final = disconnect_task.done()
+    except BaseException:
+        await _cancel_first_chunk_fetch(chunk_task, generator)
+        raise
     finally:
         disconnect_task.cancel()
         try:
@@ -970,6 +989,14 @@ async def _buffer_first_chunk_honoring_disconnect(
     if not disconnect_observed and chunk_task.done() and not chunk_task.cancelled():
         return chunk_task.result()
 
+    await _cancel_first_chunk_fetch(chunk_task, generator)
+    verbose_proxy_logger.info("client disconnected before the first streamed chunk, upstream LLM request cancelled")
+    raise _ClientDisconnectedBeforeFirstChunk()
+
+
+async def _cancel_first_chunk_fetch(
+    chunk_task: asyncio.Task[_ChunkT], generator: AsyncGenerator[_ChunkT, None]
+) -> None:
     chunk_task.cancel()
     with anyio.CancelScope(shield=True):
         try:
@@ -979,9 +1006,25 @@ async def _buffer_first_chunk_honoring_disconnect(
         try:
             await generator.aclose()
         except BaseException as exc:  # noqa: BLE001
-            verbose_proxy_logger.debug("create_response: error closing generator on disconnect: %s", exc)
-    verbose_proxy_logger.info("create_response: client disconnected before first chunk, upstream LLM request cancelled")
-    raise _ClientDisconnectedBeforeFirstChunk()
+            verbose_proxy_logger.debug(
+                "error closing the streamed response's generator before its first chunk: %s", exc
+            )
+
+
+def _client_disconnected_response(headers: Mapping[str, str] | None) -> JSONResponse:
+    """The 499 returned once the client left before the first streamed chunk, which the client never reads."""
+    return JSONResponse(
+        status_code=LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED,
+        content={
+            "error": {
+                "message": _CLIENT_DISCONNECT_DETAIL,
+                "type": "client_disconnect",
+                "param": None,
+                "code": str(LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED),
+            }
+        },
+        headers=headers,
+    )
 
 
 def sse_error_payload(exc: BaseException) -> tuple[int, Mapping[str, object]]:
@@ -1111,18 +1154,7 @@ async def create_response(
     except _ClientDisconnectedBeforeFirstChunk:
         # Client vanished during the time-to-first-token wait; the upstream
         # stream is already closed. Return a 499 the (now-gone) client never reads.
-        return JSONResponse(
-            status_code=LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED,
-            content={
-                "error": {
-                    "message": _CLIENT_DISCONNECT_DETAIL,
-                    "type": "client_disconnect",
-                    "param": None,
-                    "code": str(LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED),
-                }
-            },
-            headers=headers,
-        )
+        return _client_disconnected_response(headers)
     except StopAsyncIteration:
         # Generator was empty. Default status
         async def empty_gen() -> AsyncGenerator[str, None]:
@@ -2890,6 +2922,19 @@ class ProxyBaseLLMRequestProcessing:
                             self._has_post_call_guardrails_for_passthrough()
                             and self._passthrough_endpoint_has_stream_guardrail_handler()
                         ):
+                            relayed_guardrails: Final = self._passthrough_stream_guardrails(
+                                self.data  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # self.data is the untyped request dict
+                            )
+                            if relayed_guardrails is not None:
+                                return await self._relay_guarded_passthrough_event_stream(
+                                    request=request,
+                                    request_data=self.data,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # self.data is the untyped request dict
+                                    generator=generator,  # pyright: ignore[reportUnknownArgumentType]  # raw upstream byte stream
+                                    guardrails=relayed_guardrails,
+                                    proxy_logging_obj=proxy_logging_obj,
+                                    user_api_key_dict=user_api_key_dict,
+                                    headers=streaming_headers,  # pyright: ignore[reportUnknownArgumentType]  # merged upstream headers
+                                )
                             body_bytes: Final = b"".join([chunk async for chunk in generator])
                             modified_bytes: Final = await self._handle_event_stream_allm_passthrough_route(
                                 body_bytes=body_bytes,
@@ -3407,6 +3452,175 @@ class ProxyBaseLLMRequestProcessing:
         return LlmPassthroughRouteHandler.supports_event_stream_de_anonymization(
             self.data.get("custom_llm_provider"),
             self.data.get("endpoint"),
+        )
+
+    @staticmethod
+    def _passthrough_stream_guardrails(
+        request_data: dict[str, object],  # mutable-ok: model-level guardrails merge into a copy of it
+    ) -> tuple[tuple[CustomGuardrail, bool], ...] | None:
+        """
+        The post_call guardrails to run on a passthrough event stream relayed frame by frame, each with whether it
+        holds the stream until moderated by default, or None when the stream must be buffered whole instead.
+
+        A guardrail relays when ``post_call_success_hook`` would scan it through ``apply_guardrail``. One that runs
+        its own ``async_post_call_success_hook``, masks responses with ``mask_response_content``, releases a held
+        stream as each scan passes, runs with ``run_in_parallel`` after the sequential guardrails, or is a step of a
+        post_call policy pipeline still needs the whole response, so its stream stays buffered.
+        """
+        from litellm.proxy.proxy_server import llm_router
+        from litellm.proxy.utils import pipeline_managed_guardrail_names
+
+        if pipeline_managed_guardrail_names(request_data, "post_call"):
+            return None
+        guardrail_data: Final = check_and_merge_model_level_guardrails(  # pyright: ignore[reportUnknownVariableType]  # returns the untyped request dict
+            data=request_data, llm_router=llm_router
+        )
+        relayed: Final[list[tuple[CustomGuardrail, bool]]] = []  # mutable-ok: built once per request
+        for cb in litellm.callbacks:
+            if not isinstance(cb, CustomGuardrail):
+                continue
+            if (
+                cb.should_run_guardrail(  # pyright: ignore[reportUnknownMemberType]  # takes the untyped request dict
+                    data=guardrail_data, event_type=GuardrailEventHooks.post_call
+                )
+                is not True
+            ):
+                continue
+            leaf_attrs = type(cb).__dict__
+            holds_until_moderated = "async_post_call_streaming_iterator_hook" in leaf_attrs
+            if (
+                "apply_guardrail" not in leaf_attrs
+                or cb.use_native_lifecycle_hooks
+                or cb.mask_response_content
+                or cb.run_in_parallel
+                or ProxyBaseLLMRequestProcessing._releases_held_stream_on_scan(cb, holds_until_moderated)
+            ):
+                return None
+            relayed.append((cb, holds_until_moderated))
+        return tuple(relayed)
+
+    @staticmethod
+    def _releases_held_stream_on_scan(guardrail: CustomGuardrail, holds_until_moderated: bool) -> bool:
+        """
+        Whether the unified guardrail holds this guardrail's stream and releases each window once its scan passes
+        (``streaming_buffer_release_on_scan``). Those windows go out as received, without the scan's masks.
+        """
+        from litellm.proxy.utils import unified_guardrail
+
+        def flag(name: str, default: bool) -> bool:
+            return bool(unified_guardrail.resolve_streaming_flag(guardrail, name, default))
+
+        return (
+            flag("streaming_buffer_until_moderated", holds_until_moderated)
+            and flag("streaming_buffer_release_on_scan", False)
+            and not flag("streaming_end_of_stream_only", False)
+        )
+
+    async def _relay_guarded_passthrough_event_stream(
+        self,
+        request: Request | None,
+        request_data: dict[str, object],  # mutable-ok: the request dict the hooks mutate
+        generator: AsyncIterator[bytes],
+        guardrails: Sequence[tuple[CustomGuardrail, bool]],
+        proxy_logging_obj: ProxyLogging,
+        user_api_key_dict: UserAPIKeyAuth,
+        headers: Mapping[str, str],
+    ) -> StreamingResponse | JSONResponse:
+        """
+        Relay a passthrough event stream as it arrives while post_call guardrails scan it, the way /v1/messages
+        streams are guarded. A failure before the first frame raises, so the caller gets an HTTP error as on the
+        buffered path; after it, the failure ends the stream with the provider's in-stream exception frame. A
+        client that leaves before the first frame stops the upstream read and gets the 499 chat completions returns.
+        """
+        from litellm.llms.pass_through.guardrail_translation.handler import (
+            LlmPassthroughRouteHandler,
+        )
+
+        provider: Final = request_data.get("custom_llm_provider")
+        items: Final = LlmPassthroughRouteHandler.event_stream_items(provider, generator)
+        if items is None:
+            raise TypeError(f"provider {provider!r} has no event-stream framer")
+        guarded: Final = proxy_logging_obj.async_post_call_event_stream_iterator_hook(
+            response=items,
+            user_api_key_dict=user_api_key_dict,
+            request_data=request_data,
+            guardrails=guardrails,
+        )
+
+        async def relay() -> AsyncGenerator[bytes, None]:
+            delivered = False  # rebind-ok: set once the first frame reached the caller
+            try:
+                async for item in guarded:
+                    frame = LlmPassthroughRouteHandler.encode_event_stream_item(provider, item)
+                    if frame:
+                        yield frame
+                        delivered = True
+            except Exception as e:
+                if not delivered:
+                    raise
+                verbose_proxy_logger.exception("allm_passthrough_route: guarded event stream failed mid-stream: %s", e)
+                # The failure hook rewrites the request's logging object, so the stream's spend is logged first.
+                await _close_upstream_and_log_its_spend(generator)
+                transformed: Final = await proxy_logging_obj.post_call_failure_hook(  # pyright: ignore[reportUnknownMemberType]  # takes the untyped request dict
+                    user_api_key_dict=user_api_key_dict,
+                    original_exception=e,
+                    request_data=request_data,
+                )
+                failure: Final = transformed if transformed is not None else e
+                message: Final = (
+                    serialize_http_exception_detail(failure.detail)[0]
+                    if isinstance(failure, HTTPException)
+                    else redact_internal_details_from_client_message(getattr(failure, "message", str(failure)))
+                )
+                error_item: Final = LlmPassthroughRouteHandler.event_stream_error_item(
+                    provider, message, error_status_code(failure, status.HTTP_500_INTERNAL_SERVER_ERROR)
+                )
+                if error_item is None:
+                    raise
+                yield error_item
+            finally:
+                try:
+                    await guarded.aclose()
+                finally:
+                    await _close_upstream(generator)
+
+        relayed: Final = relay()
+        read_ahead: Final[list[bytes]] = []  # mutable-ok: the first frame, read before the response starts
+        try:
+            read_ahead.append(await _buffer_first_chunk_honoring_disconnect(relayed, request))
+        except _ClientDisconnectedBeforeFirstChunk:
+            with anyio.CancelScope(shield=True):
+                if not await _close_upstream_and_log_its_spend(generator):
+                    # No spend row settles a stream that returned nothing it could log, so release what the request
+                    # holds, as chat completions does.
+                    from litellm.proxy.spend_tracking.budget_reservation import (
+                        release_budget_reservation_on_cancel,  # pyright: ignore[reportUnknownVariableType]  # takes the untyped reservation dict
+                    )
+
+                    await release_budget_reservation_on_cancel(getattr(user_api_key_dict, "budget_reservation", None))
+                    await proxy_logging_obj.arelease_max_parallel_requests_on_disconnect(user_api_key_dict)
+            return _client_disconnected_response(
+                {k: v for k, v in headers.items() if k.lower() not in ("content-length", "content-type")}
+            )
+        except StopAsyncIteration:
+            pass
+        except BaseException:
+            with anyio.CancelScope(shield=True):
+                await _close_upstream_and_log_its_spend(generator)
+            raise
+
+        async def body() -> AsyncGenerator[bytes, None]:
+            async with contextlib.aclosing(relayed) as rest:
+                for frame in read_ahead:
+                    yield frame
+                async for frame in rest:
+                    yield frame
+
+        return _UpstreamClosingStreamingResponse(
+            content=body(),  # pyright: ignore[reportArgumentType]  # bytes body, as on the unguarded relay
+            media_type=self._passthrough_event_stream_media_type(),
+            headers={k: v for k, v in headers.items() if k.lower() != "content-length"},
+            upstream_generator=relayed,  # pyright: ignore[reportArgumentType]  # closing it closes the guardrails and the upstream
         )
 
     def _passthrough_event_stream_media_type(self) -> str | None:
