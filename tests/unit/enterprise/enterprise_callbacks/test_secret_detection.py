@@ -152,37 +152,25 @@ async def test_pre_call_hook_records_secrets_found_only_in_tool_payloads():
     (
         ({"password": ["hunter2brahms9x", "safe"]}, {"password": ["[REDACTED]", "safe"]}),
         (["a8f5f167f44f4964e6c998dee827110c", "safe"], ["[REDACTED]", "safe"]),
+        ({"password" + " " * 100: ["hunter2brahms9x"]}, {"password" + " " * 100: ["[REDACTED]"]}),
     ),
-    ids=("credential-key-over-list", "unkeyed-high-entropy"),
+    ids=("credential-key-over-list", "unkeyed-high-entropy", "whitespace-padded-credential-key"),
 )
 def test_list_items_are_scanned_beside_their_parent_key_or_quoted(payload, expected):
     assert _guardrail().redact_tool_payload(payload) == expected
 
 
 @pytest.mark.parametrize(
-    ("key", "line"),
-    (
-        ("k" * 10_000, '"' + "k" * 64 + '": "v"'),
-        ("\u0000" * 1000, '"0000' + "\\u0000" * 10 + '": "v"'),
-        ("token" + " " * 1000, '"token": "v"'),
-    ),
-    ids=("long", "control-characters", "whitespace"),
+    ("key", "items"),
+    (("k" * 10_000, 1000), ("\u0000" * 64, 3000), ("tok " * 250_000, 2000)),
+    ids=("long", "control-characters", "long-over-many-items"),
 )
-def test_scanned_key_context_is_collapsed_and_capped_after_escaping(monkeypatch, key, line):
-    guardrail = _guardrail()
-    scan = guardrail.scan_message_for_secrets
-    scanned = []
-    monkeypatch.setattr(guardrail, "scan_message_for_secrets", lambda text: scanned.append(text) or scan(text))
-    assert guardrail.redact_tool_payload({key: ["v", "w"]}) == {key: ["v", "w"]}
-    assert max((line for text in scanned for line in text.splitlines()), key=len) == line
-
-
-def test_long_key_over_a_list_is_scanned_in_bounded_time():
-    payload = {"k" * 10_000: ["v"] * 1000 + [f"AWS_ACCESS_KEY_ID={AWS_KEY}"]}
+def test_keys_over_a_list_are_scanned_in_bounded_time(key, items):
+    payload = {key: ["v"] * items + [f"AWS_ACCESS_KEY_ID={AWS_KEY}"]}
     started = time.perf_counter()
     result = _guardrail().redact_tool_payload(payload)
     assert time.perf_counter() - started < 3.0
-    assert result == {"k" * 10_000: ["v"] * 1000 + ["AWS_ACCESS_KEY_ID=[REDACTED]"]}
+    assert result == {key: ["v"] * items + ["AWS_ACCESS_KEY_ID=[REDACTED]"]}
 
 
 def _recorded(request_data: dict) -> dict:

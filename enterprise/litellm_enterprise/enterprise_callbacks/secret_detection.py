@@ -546,12 +546,13 @@ def _json_unescaped(value: str) -> str:
         return value
 
 
-def _json_line(key: str | None, text: str) -> str:
+def _key_context(key: str) -> str:
+    return json.dumps(" ".join(key.split()), ensure_ascii=False)[1:-1][-_KEY_CONTEXT:]
+
+
+def _json_line(context: str | None, text: str) -> str:
     value: Final = json.dumps(text, ensure_ascii=False)
-    if key is None:
-        return value
-    context: Final = json.dumps(" ".join(key.split()), ensure_ascii=False)[1:-1][-_KEY_CONTEXT:]
-    return f'"{context}": {value}'
+    return value if context is None else f'"{context}": {value}'
 
 
 def _value_in_texts(value: str, texts: Sequence[str]) -> str | None:
@@ -612,7 +613,8 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
         """Redact secrets in a tool payload's string values, scanning each value alone and as its JSON line."""
         fields: Final = tuple(iter_tool_json_fields(payload))
         texts: Final = tuple(text for _, text in fields)
-        keyed: Final = tuple(_json_line(key, text) for key, text in fields)
+        contexts: Final = {key: _key_context(key) for key in {key for key, _ in fields if key is not None}}
+        keyed: Final = tuple(_json_line(None if key is None else contexts[key], text) for key, text in fields)
         detected: Final = tuple(
             {**secret, "value": value}
             for secret in self.scan_message_for_secrets("\n".join((*texts, *keyed)))
