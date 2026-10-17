@@ -1193,24 +1193,12 @@ def transform_request_body(
 
         from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
 
-        # Defense-in-depth: enforce drop/raise contract if unsupported sampling params reach request body
+        # Defense-in-depth: if sampling params bypassed map_openai_params, strip them
+        # unconditionally before building GenerationConfig to prevent Vertex 400 rejection.
         if not VertexGeminiConfig.supports_sampling_params(model):
-            unsupported_sampling: Final = tuple(k for k in ("temperature", "top_p", "top_k") if k in filtered_params)
-            if unsupported_sampling:
-                drop_in_params: Final[bool] = (litellm_params is not None) and (
-                    litellm_params.get("drop_params") is True
-                )
-                should_drop: Final[bool] = (litellm.drop_params is True) or drop_in_params
-                if not should_drop:
-                    raise litellm.utils.UnsupportedParamsError(
-                        message=(
-                            f"{model} does not support {unsupported_sampling[0]}. "
-                            "To drop unsupported params, set `litellm.drop_params = True`."
-                        ),
-                        status_code=400,
-                    )
-                for k in unsupported_sampling:
-                    filtered_params.pop(k, None)
+            filtered_params.pop("temperature", None)
+            filtered_params.pop("top_p", None)
+            filtered_params.pop("top_k", None)
 
         generation_config: Final[GenerationConfig | None] = GenerationConfig(**filtered_params)
 
