@@ -7,11 +7,12 @@ from typing import Final
 import pytest
 import requests
 from click.testing import CliRunner, Result
+from filelock import Timeout
 from requests_mock import Mocker
 
 from litellm.proxy.client.cli import cli
 from litellm.proxy.client.cli.commands.auth import CliTokenData, get_stored_api_key, save_token
-from litellm.proxy.client.cli.commands.auto_sign_in import pkce_browser_sign_in
+from litellm.proxy.client.cli.commands.auto_sign_in import PkceBrowserSignIn
 from litellm.proxy.client.cli.commands.pkce_login import PkceCredential, PkceFailure, pkce_token_record
 from tests.unit.litellm_core_utils.fake_secret_vault import FakeSecretVault
 
@@ -27,6 +28,9 @@ class FakeBrowserSignIn:
     def __init__(self, outcome: PkceCredential | PkceFailure) -> None:
         self.outcome = outcome
         self.calls: list[str] = []
+
+    def unavailable_because(self) -> PkceFailure | None:
+        return None
 
     def __call__(self, base_url: str, echo: Callable[[str], None]) -> PkceCredential | PkceFailure:
         self.calls.append(base_url)
@@ -160,13 +164,10 @@ def test_the_browser_sign_in_fails_at_once_on_a_machine_without_a_browser(reques
     def no_browser() -> webbrowser.BaseBrowser:
         raise webbrowser.Error("could not locate runnable browser")
 
-    echoed: list[str] = []
-
-    outcome: Final = pkce_browser_sign_in(BASE_URL, echoed.append, find_browser=no_browser, environ={})
+    outcome: Final = PkceBrowserSignIn(find_browser=no_browser, environ={}).unavailable_because()
 
     assert outcome == PkceFailure("no web browser is available on this machine")
     assert requests_mock.call_count == 0
-    assert echoed == []
 
 
 @pytest.mark.parametrize("ci", ["true", "1", "True"])
@@ -174,13 +175,10 @@ def test_the_browser_sign_in_never_looks_for_a_browser_in_ci(requests_mock: Mock
     def browser_lookup() -> webbrowser.BaseBrowser:
         raise AssertionError("looked for a browser while CI is set")
 
-    echoed: list[str] = []
-
-    outcome: Final = pkce_browser_sign_in(BASE_URL, echoed.append, find_browser=browser_lookup, environ={"CI": ci})
+    outcome: Final = PkceBrowserSignIn(find_browser=browser_lookup, environ={"CI": ci}).unavailable_because()
 
     assert outcome == PkceFailure("the CI environment variable is set, so lite does not open a browser")
     assert requests_mock.call_count == 0
-    assert echoed == []
 
 
 @pytest.mark.parametrize(
@@ -198,15 +196,12 @@ def test_the_browser_sign_in_never_looks_for_a_browser_in_ci(requests_mock: Mock
 def test_a_text_mode_browser_fails_at_once_even_when_browser_picks_it(
     requests_mock: Mocker, name: str, environ: dict[str, str]
 ) -> None:
-    echoed: list[str] = []
-
-    outcome: Final = pkce_browser_sign_in(
-        BASE_URL, echoed.append, find_browser=lambda: webbrowser.GenericBrowser(name), environ=environ
-    )
+    outcome: Final = PkceBrowserSignIn(
+        find_browser=lambda: webbrowser.GenericBrowser(name), environ=environ
+    ).unavailable_because()
 
     assert outcome == PkceFailure("the web browser is a text-mode one, which lite cannot show while a command waits")
     assert requests_mock.call_count == 0
-    assert echoed == []
 
 
 @pytest.mark.parametrize("ssh_variable", ["SSH_CONNECTION", "SSH_TTY"])
@@ -216,17 +211,14 @@ def test_an_ssh_session_without_a_display_never_opens_a_browser_on_the_remote_sc
     def browser_lookup() -> webbrowser.BaseBrowser:
         raise AssertionError("looked for a browser in an SSH session without a display")
 
-    echoed: list[str] = []
-
-    outcome: Final = pkce_browser_sign_in(
-        BASE_URL, echoed.append, find_browser=browser_lookup, environ={ssh_variable: "203.0.113.7 52144 10.0.0.5 22"}
-    )
+    outcome: Final = PkceBrowserSignIn(
+        find_browser=browser_lookup, environ={ssh_variable: "203.0.113.7 52144 10.0.0.5 22"}
+    ).unavailable_because()
 
     assert outcome == PkceFailure(
         "this is an SSH session without a display, so a browser would open where you cannot see it"
     )
     assert requests_mock.call_count == 0
-    assert echoed == []
 
 
 @pytest.mark.parametrize(
@@ -245,10 +237,10 @@ def test_a_browser_the_user_picked_starts_the_sign_in_and_names_how_long_it_wait
 ) -> None:
     discovery: Final = requests_mock.get(f"{BASE_URL}/.well-known/litellm-cli-auth", status_code=404)
     echoed: list[str] = []
+    sign_in: Final = PkceBrowserSignIn(find_browser=lambda: webbrowser.GenericBrowser("firefox"), environ=environ)
 
-    outcome: Final = pkce_browser_sign_in(
-        BASE_URL, echoed.append, find_browser=lambda: webbrowser.GenericBrowser("firefox"), environ=environ
-    )
+    assert sign_in.unavailable_because() is None
+    outcome: Final = sign_in(BASE_URL, echoed.append)
 
     assert isinstance(outcome, PkceFailure)
     assert discovery.call_count == 1
@@ -412,10 +404,9 @@ def test_a_proxy_without_browser_sign_in_is_named_as_too_old_instead_of_pointing
     requests_mock.post(f"{BASE_URL}/key/generate", status_code=401, json=REJECTED)
     requests_mock.get(f"{BASE_URL}/.well-known/litellm-cli-auth", status_code=discovery_status)
 
-    def sign_in_with_a_picked_browser(base_url: str, echo: Callable[[str], None]) -> PkceCredential | PkceFailure:
-        return pkce_browser_sign_in(
-            base_url, echo, find_browser=lambda: webbrowser.GenericBrowser("firefox"), environ={"BROWSER": "firefox"}
-        )
+    sign_in_with_a_picked_browser: Final = PkceBrowserSignIn(
+        find_browser=lambda: webbrowser.GenericBrowser("firefox"), environ={"BROWSER": "firefox"}
+    )
 
     result: Final = CliRunner().invoke(
         cli,
@@ -520,20 +511,46 @@ def test_a_stored_login_the_proxy_accepts_but_a_command_refuses_reports_a_missin
     assert "sk-member" not in result.output
 
 
-class SiblingSignsInWhileThisCommandWaits:
-    def __init__(self, vault) -> None:
-        self.vault = vault
+class AnotherCommandHoldsTheSignInLock:
+    def __init__(self, when_it_lets_go: Callable[[], None], lets_go: bool = True) -> None:
+        self.when_it_lets_go = when_it_lets_go
+        self.lets_go = lets_go
+        self.attempts = 0
         self.held = False
 
-    def __call__(self) -> "SiblingSignsInWhileThisCommandWaits":
+    def __call__(self) -> "AnotherCommandHoldsTheSignInLock":
         return self
 
-    def __enter__(self) -> None:
-        save_token(_classic_login("sk-sibling"), vault=self.vault)
+    def acquire(self, timeout: float) -> object:
+        self.attempts += 1
+        if self.attempts == 1 or not self.lets_go:
+            raise Timeout("sign-in.lock")
+        self.when_it_lets_go()
         self.held = True
+        return self
 
-    def __exit__(self, *exc_info: object) -> None:
+    def release(self) -> object:
         self.held = False
+        return None
+
+
+class UnwritableLoginDirectory:
+    def __call__(self) -> "UnwritableLoginDirectory":
+        return self
+
+    def acquire(self, timeout: float) -> object:
+        raise PermissionError(13, "Permission denied", "/home/agent/.litellm")
+
+    def release(self) -> object:
+        raise AssertionError("released a sign-in lock it never held")
+
+
+def _lite_with_lock(vault: object, sign_in: FakeBrowserSignIn, lock: object) -> Result:
+    return CliRunner().invoke(
+        cli,
+        ["--base-url", BASE_URL, "keys", "generate"],
+        obj={"secret_vault": vault, "browser_sign_in": sign_in, "sign_in_lock": lock},
+    )
 
 
 def test_a_command_that_waits_for_another_commands_sign_in_uses_its_login_instead_of_a_second_browser(
@@ -544,19 +561,99 @@ def test_a_command_that_waits_for_another_commands_sign_in_uses_its_login_instea
         f"{BASE_URL}/key/generate", [{"status_code": 401, "json": REJECTED}, {"status_code": 200, "json": GENERATED}]
     )
     sign_in: Final = FakeBrowserSignIn(_credential())
-    sibling: Final = SiblingSignsInWhileThisCommandWaits(vault)
+    other_command: Final = AnotherCommandHoldsTheSignInLock(
+        lambda: save_token(_classic_login("sk-sibling"), vault=vault)
+    )
+
+    result: Final = _lite_with_lock(vault, sign_in, other_command)
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout) == GENERATED
+    assert "Another lite command is waiting for a browser sign-in" in result.stderr
+    assert sign_in.calls == []
+    assert _bearers(route) == [None, "Bearer sk-sibling"]
+    assert other_command.held is False
+
+
+def test_a_command_that_waited_on_a_sign_in_that_ended_without_a_login_opens_no_second_browser(
+    requests_mock: Mocker, secret_vault_factory: type[FakeSecretVault]
+) -> None:
+    route: Final = requests_mock.post(f"{BASE_URL}/key/generate", status_code=401, json=REJECTED)
+    sign_in: Final = FakeBrowserSignIn(_credential())
+    other_command: Final = AnotherCommandHoldsTheSignInLock(lambda: None)
+
+    result: Final = _lite_with_lock(secret_vault_factory(), sign_in, other_command)
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "so lite did not open a second one. Run the command again to sign in." in result.stderr
+    assert sign_in.calls == []
+    assert route.call_count == 1
+    assert other_command.held is False
+
+
+def test_a_command_stops_waiting_for_a_sign_in_another_command_never_finishes(
+    requests_mock: Mocker, secret_vault_factory: type[FakeSecretVault]
+) -> None:
+    route: Final = requests_mock.post(f"{BASE_URL}/key/generate", status_code=401, json=REJECTED)
+    sign_in: Final = FakeBrowserSignIn(_credential())
+    other_command: Final = AnotherCommandHoldsTheSignInLock(lambda: None, lets_go=False)
+
+    result: Final = _lite_with_lock(secret_vault_factory(), sign_in, other_command)
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "Another lite command has been waiting for a browser sign-in for over 6 minutes" in result.stderr
+    assert sign_in.calls == []
+    assert route.call_count == 1
+
+
+def test_a_login_directory_lite_cannot_write_still_signs_in_and_finishes_the_command(
+    requests_mock: Mocker, secret_vault_factory: type[FakeSecretVault]
+) -> None:
+    route: Final = requests_mock.post(
+        f"{BASE_URL}/key/generate", [{"status_code": 401, "json": REJECTED}, {"status_code": 200, "json": GENERATED}]
+    )
+    sign_in: Final = FakeBrowserSignIn(_credential())
+
+    result: Final = _lite_with_lock(secret_vault_factory(), sign_in, UnwritableLoginDirectory())
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout) == GENERATED
+    assert sign_in.calls == [BASE_URL]
+    assert _bearers(route) == [None, f"Bearer {SIGNED_IN_KEY}"]
+
+
+@pytest.mark.parametrize(
+    ("environ", "reason"),
+    [
+        ({"CI": "1"}, "the CI environment variable is set"),
+        ({"SSH_CONNECTION": "203.0.113.7 52144 10.0.0.5 22"}, "this is an SSH session without a display"),
+    ],
+    ids=["ci", "ssh_without_a_display"],
+)
+def test_a_rejected_stored_login_fails_at_once_without_a_key_check_or_lock_where_no_browser_can_open(
+    requests_mock: Mocker, secret_vault_factory: type[FakeSecretVault], environ: dict[str, str], reason: str
+) -> None:
+    vault: Final = secret_vault_factory()
+    save_token(_classic_login("sk-stale"), vault=vault)
+    key_check: Final = _key_check(requests_mock, 401)
+    route: Final = requests_mock.post(f"{BASE_URL}/key/generate", status_code=401, json=REJECTED)
+    lock: Final = AnotherCommandHoldsTheSignInLock(lambda: None)
 
     result: Final = CliRunner().invoke(
         cli,
         ["--base-url", BASE_URL, "keys", "generate"],
-        obj={"secret_vault": vault, "browser_sign_in": sign_in, "sign_in_lock": sibling},
+        obj={"secret_vault": vault, "browser_sign_in": PkceBrowserSignIn(environ=environ), "sign_in_lock": lock},
     )
 
-    assert result.exit_code == 0, result.output
-    assert json.loads(result.stdout) == GENERATED
-    assert sign_in.calls == []
-    assert _bearers(route) == [None, "Bearer sk-sibling"]
-    assert sibling.held is False
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert reason in result.stderr
+    assert "Run `lite login --pkce` from a terminal on a machine with a browser" in result.stderr
+    assert _bearers(route) == ["Bearer sk-stale"]
+    assert key_check.call_count == 0
+    assert lock.attempts == 0
 
 
 def test_help_never_signs_in(requests_mock: Mocker, secret_vault_factory: type[FakeSecretVault]) -> None:
