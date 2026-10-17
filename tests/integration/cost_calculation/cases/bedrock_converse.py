@@ -17,7 +17,7 @@ from integration.cost_calculation.cost_tracking_case import (
     RecountExpected,
     RecountRates,
 )
-from integration.cost_calculation.bridge_cost_parity.case import BridgeCostParityTestCase
+from integration.cost_calculation.bridge_cost_parity.case import BridgeCostParityTestCase, bridge_pairs
 from integration.cost_calculation.stream_parity.case import StreamParityTestCase
 
 # anthropic.claude-sonnet-5-v1:0
@@ -6238,6 +6238,14 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
 )
 
 BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
+    *bridge_pairs(
+        (
+            ANTHROPIC_CLAUDE_SONNET_5_V1_0_INPUT_TEXT,
+            ANTHROPIC_CLAUDE_SONNET_5_V1_0_CACHE_READ,
+            ANTHROPIC_CLAUDE_SONNET_5_V1_0_STREAM,
+        ),
+        ("/v1/responses", "/v1/messages"),
+    ),
     BridgeCostParityTestCase(
         native=US_ANTHROPIC_CLAUDE_SONNET_5_INPUT_TEXT, bridged=US_ANTHROPIC_CLAUDE_SONNET_5_RESPONSES_BRIDGED_JSON
     ),

@@ -27,6 +27,7 @@ BAD_KEY: Final = "sk-synthetic-bad-key"
 NATIVE_TARGET: Final = "/openai/v1/chat/completions"
 CONVERSE_TARGET: Final = f"/model/{GPT}/converse"
 LONG_VERSION_GPT: Final = "openai.gpt-" + "1" * 30000
+LONG_UNVERSIONED_GPT: Final = "openai.gpt-x" + "1" * 30000
 PNG_DATA_URL: Final = (
     "data:image/png;base64,"
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
@@ -258,11 +259,12 @@ def test_thirty_thousand_digit_version_is_classified_quickly_and_served_by_conve
     marker: Final = uuid.uuid4().hex
     control_marker: Final = uuid.uuid4().hex
     with wire_server(respond) as wire, gateway.scenario() as scenario, ThreadPoolExecutor(max_workers=1) as pool:
-        control_model: Final = _deployment(scenario, wire)
+        control_model: Final = _deployment(scenario, wire, model=f"bedrock/{LONG_UNVERSIONED_GPT}")
         model: Final = _deployment(scenario, wire, model=f"bedrock/{LONG_VERSION_GPT}")
         control: Final = timed(lambda: _chat(gateway, control_model, control_marker))
         assert _content(control.value) == answer(control_marker), control.value.text
-        _only_request(wire, control_marker)
+        control_request: Final = _only_request(wire, control_marker)
+        assert target_of(control_request) == f"/model/{LONG_UNVERSIONED_GPT}/converse", control_request.target
         liveliness: Final = pool.submit(_timed_liveliness, gateway)
         served: Final = timed(lambda: _chat(gateway, model, marker))
         response: Final = served.value

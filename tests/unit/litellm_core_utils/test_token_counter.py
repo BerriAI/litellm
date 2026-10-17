@@ -1932,3 +1932,20 @@ def test_messages_reach_token_count_honours_disable_token_counter(monkeypatch: p
     messages = _threshold_test_messages(turns=3)
     assert messages_reach_token_count(model="gpt-4o", messages=messages, threshold=0) is True
     assert messages_reach_token_count(model="gpt-4o", messages=messages, threshold=1) is False
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_get_modified_max_tokens_leaves_a_gemini_4_long_decode_budget_alone(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "token_counter", lambda **_: 1_000)
+
+    assert (
+        get_modified_max_tokens(
+            model="gemini/gemini-4-argon",
+            base_model="gemini/gemini-4-argon",
+            messages=[{"role": "user", "content": "Write a complete proof of the prime number theorem."}],
+            user_max_tokens=200_000,
+            buffer_perc=None,
+            buffer_num=None,
+        )
+        == 200_000
+    )
