@@ -30,7 +30,7 @@ from collections.abc import (
 from collections.abc import (
     Set as AbstractSet,
 )
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from itertools import chain
 from types import MappingProxyType, TracebackType, UnionType
@@ -151,10 +151,8 @@ from litellm.proxy.common_utils.token_count_settings import (
     TOKENIZER_LOAD_MAX_RUNNING,
     TOKENIZER_LOAD_REUSE_SECONDS,
     TOKENIZER_LOAD_WAIT_SECONDS,
-    UNAVAILABLE_TOKEN_COUNT_FALLBACKS,
     ProviderCountFailure,
     TokenCountSettings,
-    UnavailableFallbacks,
     cost_map_entry,
     resolve_token_count_settings,
 )
@@ -14472,10 +14470,22 @@ def _get_provider_token_counter(
     return None, None, None
 
 
+def _deployment_in_region(deployment: Mapping[str, object] | None, region: str | None) -> dict[str, object] | None:
+    if deployment is None:
+        return None
+    if region is None:
+        return dict(deployment)
+    return {
+        **deployment,
+        "litellm_params": {**(as_str_mapping(deployment.get("litellm_params")) or {}), "aws_region_name": region},
+    }
+
+
 async def _try_provider_token_count(
     provider_counter: "BaseTokenCounter",
     custom_llm_provider: str | None,
     model_to_use: str,
+    region: str | None,
     messages: list | None,
     contents: list | None,
     deployment: Mapping[str, object] | None,
@@ -14494,7 +14504,7 @@ async def _try_provider_token_count(
             model_to_use=model_to_use or "",
             messages=messages,
             contents=contents,
-            deployment=None if deployment is None else dict(deployment),
+            deployment=_deployment_in_region(deployment, region),
             request_model=request_model,
             tools=tools,
             system=system,
@@ -14516,45 +14526,38 @@ async def _try_provider_token_count(
     return result
 
 
-async def _provider_or_fallback_token_count(
-    count_with: Callable[[str], Awaitable[Union["TokenCountResponse", ProviderCountFailure, None]]],
+async def _provider_token_count(
+    count_with: Callable[[str, str | None], Awaitable[Union["TokenCountResponse", ProviderCountFailure, None]]],
     model_to_use: str,
     settings: TokenCountSettings,
     local_estimate_allowed: bool,
-    deployment_id: str,
-    unavailable_fallbacks: UnavailableFallbacks,
 ) -> Union["TokenCountResponse", ProviderCountFailure, None]:
-    """Count with the provider, then the configured fallback model when the provider cannot count this one.
+    """Count with the provider, using the token_count_model in its region when one is set.
 
     Returns None when the count should be estimated locally, or the provider's failure when the framed local
     estimate stands in for it and that failure is the answer if the estimate cannot read the request."""
-    primary: Final = await count_with(model_to_use)
-    if not isinstance(primary, ProviderCountFailure):
-        return None if primary is None else primary.model_copy(update={"count_source": "provider"})
-    if not primary.cannot_count_model:
-        raise primary.to_proxy_exception()
-    if settings.fallback_model is not None:
-        unavailable_key: Final = f"{deployment_id}:{settings.fallback_model}"
-        if unavailable_fallbacks.get_cache(unavailable_key) is not None:
-            raise primary.to_proxy_exception()
-        fallback: Final = await count_with(settings.fallback_model)
-        if isinstance(fallback, TokenCountResponse):
-            return fallback.model_copy(update={"count_source": "fallback_model", "model_used": settings.fallback_model})
-        if isinstance(fallback, ProviderCountFailure):
-            verbose_proxy_logger.warning(
-                "Token count fallback model %s failed with %s: %s",
-                settings.fallback_model,
-                fallback.status_code,
-                fallback.message,
-            )
-            if fallback.model_unavailable:
-                unavailable_fallbacks.set_cache(unavailable_key, True)
-                raise primary.to_proxy_exception()
-            raise fallback.to_proxy_exception()
-        raise primary.to_proxy_exception()
-    if settings.framing is not None and local_estimate_allowed:
-        return primary
-    raise primary.to_proxy_exception()
+    count_model: Final = settings.count_model
+    counted: Final = await (
+        count_with(model_to_use, None) if count_model is None else count_with(count_model.model, count_model.region)
+    )
+    if counted is None:
+        return None
+    if isinstance(counted, TokenCountResponse):
+        if count_model is None:
+            return counted.model_copy(update={"count_source": "provider"})
+        return counted.model_copy(update={"count_source": "token_count_model", "model_used": count_model.model})
+    failure: Final = (
+        counted
+        if count_model is None or count_model.region is None
+        else replace(
+            counted,
+            message=f"{counted.message}. This model counts tokens with {count_model.model} in {count_model.region}. "
+            f"If that region is not enabled for the AWS account, enable it or set token_count_model in model_info",
+        )
+    )
+    if failure.cannot_count_model and settings.framing is not None and local_estimate_allowed:
+        return failure
+    raise failure.to_proxy_exception()
 
 
 @dataclass(frozen=True, slots=True)
@@ -14937,11 +14940,10 @@ async def count_request_tokens(
         )
     prompt_only: Final = bool(prompt) and conversation_empty
     prompt_as_message: Final = prompt_only and custom_llm_provider in _PROVIDERS_COUNTING_WITHOUT_MESSAGES
-    deployment_id: Final = deployment_view.get("model_info", {}).get("id")
     ladder: Final = (
         None
         if provider_counter is None
-        else await _provider_or_fallback_token_count(
+        else await _provider_token_count(
             count_with=partial(
                 _try_provider_token_count,
                 provider_counter,
@@ -14959,8 +14961,6 @@ async def count_request_tokens(
             model_to_use=model_to_use,
             settings=settings,
             local_estimate_allowed=litellm.disable_token_counter is not True,
-            deployment_id=deployment_id if isinstance(deployment_id, str) else model_to_use,
-            unavailable_fallbacks=UNAVAILABLE_TOKEN_COUNT_FALLBACKS,
         )
     )
     if isinstance(ladder, TokenCountResponse):

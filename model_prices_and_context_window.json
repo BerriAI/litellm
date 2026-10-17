@@ -72846,7 +72846,10 @@
         "cache_read_input_token_cost": 1e-07,
         "input_cost_per_token": 2e-06,
         "litellm_provider": "bedrock_converse",
-        "token_count_fallback_model": "anthropic.claude-opus-5-5",
+        "token_count_model": {
+            "model": "anthropic.claude-opus-5-5",
+            "region": "us-east-1"
+        },
         "supports_tool_search": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -72918,6 +72921,10 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     "au.anthropic.claude-sonnet-5-5": {
+        "token_count_model": {
+            "model": "au.anthropic.claude-opus-5-5",
+            "region": "ap-southeast-4"
+        },
         "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 2.75e-06,
         "cache_creation_input_token_cost_above_1hr": 4.4e-06,
@@ -73114,7 +73121,10 @@
         "cache_read_input_token_cost": 1e-07,
         "input_cost_per_token": 2e-06,
         "litellm_provider": "bedrock_converse",
-        "token_count_fallback_model": "global.anthropic.claude-opus-5-5",
+        "token_count_model": {
+            "model": "global.anthropic.claude-opus-5-5",
+            "region": "us-east-1"
+        },
         "supports_tool_search": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -73321,7 +73331,10 @@
         "cache_read_input_token_cost": 1.1e-07,
         "input_cost_per_token": 2.2e-06,
         "litellm_provider": "bedrock_converse",
-        "token_count_fallback_model": "us.anthropic.claude-opus-5-5",
+        "token_count_model": {
+            "model": "us.anthropic.claude-opus-5-5",
+            "region": "us-east-1"
+        },
         "supports_tool_search": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -74295,7 +74308,10 @@
         "cache_read_input_token_cost": 1e-08,
         "input_cost_per_token": 1e-07,
         "litellm_provider": "bedrock_converse",
-        "token_count_fallback_model": "anthropic.claude-opus-5-5",
+        "token_count_model": {
+            "model": "anthropic.claude-opus-5-5",
+            "region": "us-east-1"
+        },
         "supports_tool_search": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -74372,6 +74388,10 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     "au.anthropic.claude-haiku-5-5": {
+        "token_count_model": {
+            "model": "au.anthropic.claude-opus-5-5",
+            "region": "ap-southeast-4"
+        },
         "input_cost_per_token_above_100k_tokens": 5.5e-07,
         "output_cost_per_token_above_100k_tokens": 2.75e-06,
         "cache_creation_input_token_cost_above_100k_tokens": 6.875e-07,
@@ -74598,7 +74618,10 @@
         "cache_read_input_token_cost": 1e-08,
         "input_cost_per_token": 1e-07,
         "litellm_provider": "bedrock_converse",
-        "token_count_fallback_model": "global.anthropic.claude-opus-5-5",
+        "token_count_model": {
+            "model": "global.anthropic.claude-opus-5-5",
+            "region": "us-east-1"
+        },
         "supports_tool_search": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -74743,7 +74766,10 @@
         "cache_read_input_token_cost": 1.1e-08,
         "input_cost_per_token": 1.1e-07,
         "litellm_provider": "bedrock_converse",
-        "token_count_fallback_model": "us.anthropic.claude-opus-5-5",
+        "token_count_model": {
+            "model": "us.anthropic.claude-opus-5-5",
+            "region": "us-east-1"
+        },
         "supports_tool_search": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,

@@ -21,6 +21,7 @@ from models import (
     ModelNewBody,
     ResponsesInputTokensResponse,
     TokenCounterBody,
+    TokenCountModelBody,
 )
 from proxy_client import ProxyClient
 from reportlab.lib.pagesizes import LETTER
@@ -31,8 +32,8 @@ pytestmark = pytest.mark.e2e
 
 BEDROCK_SONNET: Final = "bedrock/us.anthropic.claude-sonnet-5-5"
 BEDROCK_HAIKU: Final = "bedrock/us.anthropic.claude-haiku-5-5"
-COST_MAP_FALLBACK: Final = "us.anthropic.claude-opus-5-5"
-CONFIGURED_FALLBACK: Final = "us.anthropic.claude-sonnet-5"
+COST_MAP_COUNT_MODEL: Final = "us.anthropic.claude-opus-5-5"
+CONFIGURED_COUNT_MODEL: Final = "us.anthropic.claude-sonnet-5"
 ANTHROPIC_SONNET: Final = "anthropic/claude-sonnet-5-5"
 BEDROCK_KIMI: Final = "bedrock/us.moonshotai.kimi-k3"
 BEDROCK_NOVA: Final = "bedrock/us.amazon.nova-pro-v1:0"
@@ -122,8 +123,12 @@ def bedrock_haiku(proxy: ProxyClient) -> Iterator[Served]:
 
 
 @pytest.fixture(scope="module")
-def bedrock_sonnet_with_configured_fallback(proxy: ProxyClient) -> Iterator[Served]:
-    yield from _serve(proxy, _bedrock(BEDROCK_SONNET), ModelInfoBody(token_count_fallback_model=CONFIGURED_FALLBACK))
+def bedrock_sonnet_with_configured_count_model(proxy: ProxyClient) -> Iterator[Served]:
+    yield from _serve(
+        proxy,
+        _bedrock(BEDROCK_SONNET),
+        ModelInfoBody(token_count_model=TokenCountModelBody(model=CONFIGURED_COUNT_MODEL)),
+    )
 
 
 @pytest.fixture(scope="module")
@@ -193,15 +198,15 @@ def _within_tolerance(counted: int, billed: int) -> bool:
     return abs(counted - billed) <= billed * COUNT_TOLERANCE
 
 
-def _assert_counted_by_the_cost_map_fallback(served: Served, sdk: SdkClients, shape: PromptShape) -> None:
+def _assert_counted_by_the_cost_map_count_model(served: Served, sdk: SdkClients, shape: PromptShape) -> None:
     counted, billed = _count_and_bill(sdk.anthropic(served.key), served.model, shape)
 
-    assert counted.litellm_count_source == "fallback_model", counted
-    assert counted.litellm_count_fallback_model == COST_MAP_FALLBACK, counted
+    assert counted.litellm_count_source == "token_count_model", counted
+    assert counted.litellm_count_model == COST_MAP_COUNT_MODEL, counted
     assert _within_tolerance(counted.input_tokens, billed), (counted, billed)
 
 
-class TestBedrockClaudeCountsWithCostMapFallback:
+class TestBedrockClaudeCountsWithCostMapCountModel:
     @pytest.mark.parametrize("shape", SHAPES, ids=SHAPE_IDS)
     @meta(
         Subject(
@@ -213,10 +218,10 @@ class TestBedrockClaudeCountsWithCostMapFallback:
             mode=Mode.NONSTREAM,
         )
     )
-    def test_sonnet_count_names_the_fallback_model_and_matches_billed_input(
+    def test_sonnet_count_names_the_count_model_and_matches_billed_input(
         self, bedrock_sonnet: Served, sdk: SdkClients, shape: PromptShape
     ) -> None:
-        _assert_counted_by_the_cost_map_fallback(bedrock_sonnet, sdk, shape)
+        _assert_counted_by_the_cost_map_count_model(bedrock_sonnet, sdk, shape)
 
     @pytest.mark.parametrize("shape", SHAPES, ids=SHAPE_IDS)
     @meta(
@@ -229,10 +234,10 @@ class TestBedrockClaudeCountsWithCostMapFallback:
             mode=Mode.NONSTREAM,
         )
     )
-    def test_haiku_count_names_the_fallback_model_and_matches_billed_input(
+    def test_haiku_count_names_the_count_model_and_matches_billed_input(
         self, bedrock_haiku: Served, sdk: SdkClients, shape: PromptShape
     ) -> None:
-        _assert_counted_by_the_cost_map_fallback(bedrock_haiku, sdk, shape)
+        _assert_counted_by_the_cost_map_count_model(bedrock_haiku, sdk, shape)
 
 
 class TestAnthropicClaudeCountsWithProvider:
@@ -253,7 +258,7 @@ class TestAnthropicClaudeCountsWithProvider:
         counted, billed = _count_and_bill(sdk.anthropic(anthropic_sonnet.key), anthropic_sonnet.model, shape)
 
         assert counted.litellm_count_source == "provider", counted
-        assert counted.litellm_count_fallback_model is None, counted
+        assert counted.litellm_count_model is None, counted
         assert _within_tolerance(counted.input_tokens, billed), (counted, billed)
 
 
@@ -275,30 +280,30 @@ class TestBedrockKimiCountsWithFramedLocalEstimate:
         assert _within_tolerance(counted.input_tokens, billed), (counted, billed)
 
 
-class TestConfiguredFallbackModelOverridesCostMap:
+class TestConfiguredCountModelOverridesCostMap:
     @meta(
         Subject(
             domain=Domain.LLM_TRANSLATION,
             route=Route.COUNT_TOKENS,
             providers=(Provider.BEDROCK,),
-            models=(BEDROCK_SONNET, CONFIGURED_FALLBACK),
+            models=(BEDROCK_SONNET, CONFIGURED_COUNT_MODEL),
         )
     )
-    def test_count_names_the_model_info_fallback(
-        self, bedrock_sonnet_with_configured_fallback: Served, sdk: SdkClients
+    def test_count_names_the_model_info_count_model(
+        self, bedrock_sonnet_with_configured_count_model: Served, sdk: SdkClients
     ) -> None:
-        served: Final = bedrock_sonnet_with_configured_fallback
+        served: Final = bedrock_sonnet_with_configured_count_model
         raw: Final = sdk.anthropic(served.key).messages.with_raw_response.count_tokens(
             model=served.model, messages=[_user_turn(SHAPES[0])]
         )
         counted: Final = CountTokensResponse.model_validate_json(raw.text)
 
-        assert counted.litellm_count_source == "fallback_model", counted
-        assert counted.litellm_count_fallback_model == CONFIGURED_FALLBACK, counted
+        assert counted.litellm_count_source == "token_count_model", counted
+        assert counted.litellm_count_model == CONFIGURED_COUNT_MODEL, counted
         assert counted.input_tokens > 0, counted
 
 
-class TestProviderCountErrorWithoutFallback:
+class TestProviderCountErrorWithoutCountModel:
     @meta(
         Subject(
             domain=Domain.LLM_TRANSLATION,

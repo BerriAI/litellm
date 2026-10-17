@@ -1,37 +1,30 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final, Protocol
+from typing import Final
 
 import litellm
-from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.proxy._types import ProxyException
 from litellm.types.token_count import TokenCountSourceFields
 from litellm.types.utils import TokenCountResponse
 
 CANNOT_COUNT_MODEL_STATUSES: Final = frozenset({400, 404})
-MODEL_UNAVAILABLE_STATUS: Final = 404
-UNAVAILABLE_FALLBACK_TTL_SECONDS: Final = 3600
 TOKENIZER_LOAD_WAIT_SECONDS: Final = 5.0
 TOKENIZER_LOAD_REUSE_SECONDS: Final = 60.0
 TOKENIZER_LOAD_MAX_RUNNING: Final = 4
 
 
-class UnavailableFallbacks(Protocol):
-    def get_cache(self, key: str) -> object: ...
-
-    def set_cache(self, key: str, value: bool) -> None: ...
-
-
-UNAVAILABLE_TOKEN_COUNT_FALLBACKS: Final[UnavailableFallbacks] = InMemoryCache(
-    default_ttl=UNAVAILABLE_FALLBACK_TTL_SECONDS
-)
+@dataclass(frozen=True, slots=True)
+class TokenCountModel:
+    model: str
+    region: str | None
 
 
 @dataclass(frozen=True, slots=True)
 class TokenCountSettings:
     framing: int | None
-    fallback_model: str | None
+    count_model: TokenCountModel | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,10 +36,6 @@ class ProviderCountFailure:
     @property
     def cannot_count_model(self) -> bool:
         return not self.rejected_before_provider_call and self.status_code in CANNOT_COUNT_MODEL_STATUSES
-
-    @property
-    def model_unavailable(self) -> bool:
-        return self.status_code == MODEL_UNAVAILABLE_STATUS
 
     def to_proxy_exception(self) -> ProxyException:
         return ProxyException(
@@ -76,25 +65,28 @@ def _framing(value: object) -> int | None:
             return None
 
 
-def _fallback_model(value: object) -> str | None:
+def _non_blank(value: object) -> str | None:
     return value if isinstance(value, str) and value.strip() else None
 
 
-def _resolved_fallback_model(configured: object, default: object) -> str | None:
-    match configured:
-        case str():
-            return _fallback_model(configured)
-        case _:
-            return _fallback_model(default)
+def _count_model(value: Mapping[str, object]) -> TokenCountModel | None:
+    model: Final = _non_blank(value.get("model"))
+    return None if model is None else TokenCountModel(model=model, region=_non_blank(value.get("region")))
+
+
+def _resolved_count_model(configured: object, default: object) -> TokenCountModel | None:
+    configured_mapping: Final = as_str_mapping(configured)
+    if configured_mapping is not None:
+        return _count_model(configured_mapping)
+    default_mapping: Final = as_str_mapping(default)
+    return None if default_mapping is None else _count_model(default_mapping)
 
 
 def resolve_token_count_settings(configured: Mapping[str, object], default: Mapping[str, object]) -> TokenCountSettings:
     framing: Final = _framing(configured.get("token_count_framing"))
     return TokenCountSettings(
         framing=framing if framing is not None else _framing(default.get("token_count_framing")),
-        fallback_model=_resolved_fallback_model(
-            configured.get("token_count_fallback_model"), default.get("token_count_fallback_model")
-        ),
+        count_model=_resolved_count_model(configured.get("token_count_model"), default.get("token_count_model")),
     )
 
 
@@ -102,7 +94,7 @@ def count_source_fields(response: TokenCountResponse) -> TokenCountSourceFields:
     match response.count_source:
         case None:
             return {}
-        case "fallback_model":
-            return {"litellm_count_source": "fallback_model", "litellm_count_fallback_model": response.model_used}
+        case "token_count_model":
+            return {"litellm_count_source": "token_count_model", "litellm_count_model": response.model_used}
         case source:
             return {"litellm_count_source": source}

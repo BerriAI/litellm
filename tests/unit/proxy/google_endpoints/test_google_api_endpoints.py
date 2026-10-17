@@ -221,7 +221,7 @@ def test_google_count_tokens_uses_normalized_total_when_provider_shape_differs()
         model_used="us.anthropic.claude-opus-5-5",
         tokenizer_type="bedrock_api",
         original_response={"input_tokens": 2167},
-        count_source="fallback_model",
+        count_source="token_count_model",
     )
 
     with patch(
@@ -238,5 +238,5 @@ def test_google_count_tokens_uses_normalized_total_when_provider_shape_differs()
         body: Final = response.json()
         assert body["totalTokens"] == 2167
         assert body["promptTokensDetails"] == []
-        assert body["litellm_count_source"] == "fallback_model"
-        assert body["litellm_count_fallback_model"] == "us.anthropic.claude-opus-5-5"
+        assert body["litellm_count_source"] == "token_count_model"
+        assert body["litellm_count_model"] == "us.anthropic.claude-opus-5-5"

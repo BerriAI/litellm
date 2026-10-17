@@ -1207,15 +1207,28 @@
             "additionalProperties": false
           }
         },
-        "token_count_fallback_model": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Model that counts tokens for this one when the provider cannot count it."
-        },
         "token_count_framing": {
           "type": "integer",
           "minimum": 0,
           "description": "Tokens added once per request to a local count estimate, for the provider's chat framing."
+        },
+        "token_count_model": {
+          "type": "object",
+          "required": [
+            "model"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "model": {
+              "type": "string",
+              "minLength": 1
+            },
+            "region": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "description": "Model that counts tokens for this one, and the AWS region its count API runs in."
         },
         "tpm": {
           "type": "integer",

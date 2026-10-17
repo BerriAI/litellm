@@ -574,13 +574,16 @@ def test_capability_flag_stays_on_the_deployment_that_set_it(flag: str) -> None:
 
 
 def test_token_count_settings_stay_on_the_deployment_that_set_them() -> None:
-    """A deployment's ``token_count_fallback_model`` and ``token_count_framing`` must not land on
+    """A deployment's ``token_count_model`` and ``token_count_framing`` must not land on
     the shared ``{provider}/{model}`` key, or a sibling deployment of that model would count with them."""
     from litellm.proxy.common_utils.token_count_settings import cost_map_entry
 
     backend_model = "bedrock/us.anthropic.claude-sonnet-5-5"
     deploy_id = "sonnet-deploy-keep-token-count"
-    configured = {"token_count_fallback_model": "", "token_count_framing": 7}
+    configured = {
+        "token_count_model": {"model": "anthropic.claude-opus-5-5", "region": "us-west-2"},
+        "token_count_framing": 7,
+    }
     builtin = {field: cost_map_entry(backend_model).get(field) for field in configured}
     assert all(builtin[field] != value for field, value in configured.items()), builtin
     model_keys = {
@@ -3442,9 +3445,7 @@ def test_router_capacity_widens_to_a_larger_base_model_window(
     )
     _invalidate_model_cost_lowercase_map()
     router: Final = _capacity_test_router(route, base, base_location, explicit_limit)
-    expected: Final = (
-        explicit_limit if explicit_limit is not None else (1024 if base_location is None else 8192)
-    )
+    expected: Final = explicit_limit if explicit_limit is not None else (1024 if base_location is None else 8192)
     assert _effective_max_input_tokens(router) == expected
     assert _deployments_allowed_for_2048_input_tokens(router) == (1 if expected >= 2048 else 0)
     _invalidate_model_cost_lowercase_map()

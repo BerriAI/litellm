@@ -58,7 +58,7 @@ from litellm.types.llms.base import (
     LiteLLMPydanticObjectBase,
 )
 from litellm.types.mcp import MCPServerCostInfo
-from litellm.types.token_count import TokenCountSource
+from litellm.types.token_count import TokenCountModelInfo, TokenCountSource
 from litellm.types.workload_identity import (
     ANTHROPIC_WIF_KWARGS_KEYS,
     OPENAI_WIF_KWARGS_KEYS,
@@ -231,7 +231,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     bedrock_converse_supports_strict_tools: bool | None
     supports_regex_lookaround: ReadOnly[bool | None]
     token_count_framing: ReadOnly[int | None]
-    token_count_fallback_model: ReadOnly[str | None]
+    token_count_model: ReadOnly[TokenCountModelInfo | None]
 
 
 class SearchContextCostPerQuery(TypedDict, total=False):
@@ -4053,9 +4053,7 @@ DEPLOYMENT_SCOPED_CAPABILITY_FIELDS: Final[frozenset[str]] = frozenset(
     {"supports_regex_lookaround", "supports_assistant_prefill"}
 )
 
-DEPLOYMENT_SCOPED_TOKEN_COUNT_FIELDS: Final[frozenset[str]] = frozenset(
-    {"token_count_framing", "token_count_fallback_model"}
-)
+DEPLOYMENT_SCOPED_TOKEN_COUNT_FIELDS: Final[frozenset[str]] = frozenset({"token_count_framing", "token_count_model"})
 
 SHARED_BACKEND_MODEL_INFO_FIELDS: Final[frozenset[str]] = (
     frozenset(ModelInfoBase.__required_keys__ | ModelInfoBase.__optional_keys__)

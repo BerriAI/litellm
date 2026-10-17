@@ -4187,7 +4187,7 @@ class TestModelInfoCostMapEchoFilter:
     @pytest.mark.parametrize(
         ("model", "field", "edited"),
         [
-            ("bedrock/us.anthropic.claude-sonnet-5-5", "token_count_fallback_model", ""),
+            ("bedrock/us.anthropic.claude-sonnet-5-5", "token_count_model", {}),
             ("bedrock/us.moonshotai.kimi-k3", "token_count_framing", 0),
         ],
     )

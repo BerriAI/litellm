@@ -677,12 +677,12 @@ class AnthropicMessagesResponse(BaseModel):
     usage: Usage | None = None
 
 
-TokenCountSource = Literal["provider", "fallback_model", "local_estimate"]
+TokenCountSource = Literal["provider", "token_count_model", "local_estimate"]
 
 
 class LitellmCountSource(BaseModel, frozen=True):
     litellm_count_source: TokenCountSource | None = None
-    litellm_count_fallback_model: str | None = None
+    litellm_count_model: str | None = None
 
 
 class CountTokensResponse(LitellmCountSource, frozen=True):
@@ -1452,6 +1452,11 @@ class LiteLLMParamsBody(BaseModel):
 ModelMode = Literal["chat", "batch", "realtime", "image_generation"]
 
 
+class TokenCountModelBody(BaseModel, frozen=True):
+    model: str
+    region: str | None = None
+
+
 class ModelInfoBody(BaseModel):
     # id is left unset so the proxy assigns a unique model_id per deployment.
     # Pinning it to the model_name made re-registrations of a fixed-name model
@@ -1464,7 +1469,7 @@ class ModelInfoBody(BaseModel):
     team_id: str | None = None
     allowed_fails: int | None = None
     allowed_fails_policy: dict[str, int] | None = None
-    token_count_fallback_model: str | None = None
+    token_count_model: TokenCountModelBody | None = None
 
 
 class ModelNewBody(BaseModel):

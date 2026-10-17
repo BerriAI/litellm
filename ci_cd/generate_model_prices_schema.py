@@ -287,10 +287,15 @@ def string_key_schemas(modes: tuple) -> dict[str, JsonSchema]:
             "enum": ["none", "minimal", "low", "medium", "high", "xhigh"],
         },
         "comment": STRING,
-        "token_count_fallback_model": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Model that counts tokens for this one when the provider cannot count it.",
+        "token_count_model": {
+            "type": "object",
+            "required": ["model"],
+            "additionalProperties": False,
+            "properties": {
+                "model": {"type": "string", "minLength": 1},
+                "region": {"type": "string", "minLength": 1},
+            },
+            "description": "Model that counts tokens for this one, and the AWS region its count API runs in.",
         },
         "audio_transcription_config": STRING,
         "vertex_ai_audio_api": {

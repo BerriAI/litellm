@@ -1,10 +1,15 @@
 from typing import Literal, TypeAlias
 
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
-TokenCountSource: TypeAlias = Literal["provider", "fallback_model", "local_estimate"]
+TokenCountSource: TypeAlias = Literal["provider", "token_count_model", "local_estimate"]
+
+
+class TokenCountModelInfo(TypedDict):
+    model: ReadOnly[str]
+    region: ReadOnly[NotRequired[str]]
 
 
 class TokenCountSourceFields(TypedDict, total=False):
     litellm_count_source: ReadOnly[TokenCountSource]
-    litellm_count_fallback_model: ReadOnly[str]
+    litellm_count_model: ReadOnly[str]

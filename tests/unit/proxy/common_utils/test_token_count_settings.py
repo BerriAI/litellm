@@ -5,39 +5,55 @@ from typing import Final
 import pytest
 
 from litellm.proxy.common_utils.token_count_settings import (
+    TokenCountModel,
     TokenCountSettings,
     count_source_fields,
     resolve_token_count_settings,
 )
 from litellm.types.utils import TokenCountResponse
 
-_DEFAULT: Final = {"token_count_framing": 97, "token_count_fallback_model": "anthropic.claude-opus-5-5"}
+_OPUS_US_EAST_1: Final = TokenCountModel(model="anthropic.claude-opus-5-5", region="us-east-1")
+_DEFAULT: Final = {
+    "token_count_framing": 97,
+    "token_count_model": {"model": "anthropic.claude-opus-5-5", "region": "us-east-1"},
+}
 _COST_MAP: Final = Path(__file__).parents[4] / "model_prices_and_context_window.json"
 
 
 @pytest.mark.parametrize(
     ("configured", "expected"),
     [
-        ({}, TokenCountSettings(framing=97, fallback_model="anthropic.claude-opus-5-5")),
+        ({}, TokenCountSettings(framing=97, count_model=_OPUS_US_EAST_1)),
         (
-            {"token_count_framing": 5, "token_count_fallback_model": "custom-model"},
-            TokenCountSettings(framing=5, fallback_model="custom-model"),
-        ),
-        ({"token_count_framing": 0}, TokenCountSettings(framing=0, fallback_model="anthropic.claude-opus-5-5")),
-        (
-            {"token_count_framing": None, "token_count_fallback_model": None},
-            TokenCountSettings(framing=97, fallback_model="anthropic.claude-opus-5-5"),
+            {"token_count_framing": 5, "token_count_model": {"model": "custom-model", "region": "ap-southeast-4"}},
+            TokenCountSettings(framing=5, count_model=TokenCountModel(model="custom-model", region="ap-southeast-4")),
         ),
         (
-            {"token_count_framing": True, "token_count_fallback_model": 5},
-            TokenCountSettings(framing=97, fallback_model="anthropic.claude-opus-5-5"),
+            {"token_count_model": {"model": "custom-model"}},
+            TokenCountSettings(framing=97, count_model=TokenCountModel(model="custom-model", region=None)),
         ),
-        ({"token_count_framing": 78.0}, TokenCountSettings(framing=78, fallback_model="anthropic.claude-opus-5-5")),
-        ({"token_count_framing": 1.5}, TokenCountSettings(framing=97, fallback_model="anthropic.claude-opus-5-5")),
-        ({"token_count_framing": -1}, TokenCountSettings(framing=97, fallback_model="anthropic.claude-opus-5-5")),
-        ({"token_count_framing": "78"}, TokenCountSettings(framing=97, fallback_model="anthropic.claude-opus-5-5")),
-        ({"token_count_fallback_model": ""}, TokenCountSettings(framing=97, fallback_model=None)),
-        ({"token_count_fallback_model": "  "}, TokenCountSettings(framing=97, fallback_model=None)),
+        (
+            {"token_count_model": {"model": "custom-model", "region": " "}},
+            TokenCountSettings(framing=97, count_model=TokenCountModel(model="custom-model", region=None)),
+        ),
+        ({"token_count_framing": 0}, TokenCountSettings(framing=0, count_model=_OPUS_US_EAST_1)),
+        (
+            {"token_count_framing": None, "token_count_model": None},
+            TokenCountSettings(framing=97, count_model=_OPUS_US_EAST_1),
+        ),
+        (
+            {"token_count_framing": True, "token_count_model": "custom-model"},
+            TokenCountSettings(framing=97, count_model=_OPUS_US_EAST_1),
+        ),
+        ({"token_count_framing": 78.0}, TokenCountSettings(framing=78, count_model=_OPUS_US_EAST_1)),
+        ({"token_count_framing": 1.5}, TokenCountSettings(framing=97, count_model=_OPUS_US_EAST_1)),
+        ({"token_count_framing": -1}, TokenCountSettings(framing=97, count_model=_OPUS_US_EAST_1)),
+        ({"token_count_framing": "78"}, TokenCountSettings(framing=97, count_model=_OPUS_US_EAST_1)),
+        ({"token_count_model": {}}, TokenCountSettings(framing=97, count_model=None)),
+        (
+            {"token_count_model": {"model": "  ", "region": "us-east-1"}},
+            TokenCountSettings(framing=97, count_model=None),
+        ),
     ],
 )
 def test_config_overrides_the_cost_map_default_key_by_key(
@@ -46,10 +62,8 @@ def test_config_overrides_the_cost_map_default_key_by_key(
     assert resolve_token_count_settings(configured=configured, default=_DEFAULT) == expected
 
 
-def test_no_setting_anywhere_means_no_fallback_and_no_framing() -> None:
-    assert resolve_token_count_settings(configured={}, default={}) == TokenCountSettings(
-        framing=None, fallback_model=None
-    )
+def test_no_setting_anywhere_means_the_model_counts_itself_without_framing() -> None:
+    assert resolve_token_count_settings(configured={}, default={}) == TokenCountSettings(framing=None, count_model=None)
 
 
 def _counted(source: str | None, model_used: str = "us.anthropic.claude-opus-5-5") -> TokenCountResponse:
@@ -69,28 +83,29 @@ def _counted(source: str | None, model_used: str = "us.anthropic.claude-opus-5-5
         ("provider", {"litellm_count_source": "provider"}),
         ("local_estimate", {"litellm_count_source": "local_estimate"}),
         (
-            "fallback_model",
-            {"litellm_count_source": "fallback_model", "litellm_count_fallback_model": "us.anthropic.claude-opus-5-5"},
+            "token_count_model",
+            {"litellm_count_source": "token_count_model", "litellm_count_model": "us.anthropic.claude-opus-5-5"},
         ),
     ],
 )
-def test_count_source_fields_name_the_fallback_model_only_for_a_fallback_count(
+def test_count_source_fields_name_the_counting_model_only_when_token_count_model_counted(
     source: str | None, expected: dict[str, str]
 ) -> None:
     assert count_source_fields(_counted(source)) == expected
 
 
-def test_every_shipped_fallback_model_is_a_mapped_model_of_the_same_provider() -> None:
+def test_every_shipped_token_count_model_is_another_mapped_model_of_the_same_provider_in_a_named_region() -> None:
     cost_map: Final = json.loads(_COST_MAP.read_text())
-    fallbacks: Final = {
-        name: entry["token_count_fallback_model"]
+    count_models: Final = {
+        name: entry["token_count_model"]
         for name, entry in cost_map.items()
-        if isinstance(entry, dict) and "token_count_fallback_model" in entry
+        if isinstance(entry, dict) and "token_count_model" in entry
     }
-    assert fallbacks
+    assert count_models
     assert {
-        name: (cost_map.get(fallback, {}).get("litellm_provider"), cost_map[name]["litellm_provider"])
-        for name, fallback in fallbacks.items()
-        if cost_map.get(fallback, {}).get("litellm_provider") != cost_map[name]["litellm_provider"]
-        or fallback == name
+        name: count_model
+        for name, count_model in count_models.items()
+        if cost_map.get(count_model["model"], {}).get("litellm_provider") != cost_map[name]["litellm_provider"]
+        or count_model["model"] == name
+        or not count_model.get("region")
     } == {}
