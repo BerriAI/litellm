@@ -125,6 +125,17 @@ def test_sambanova_embeddings_request_returns_list_not_none():
     assert embedding_params == []
 
 
+def test_json_configured_provider_advertises_openai_chat_params():
+    params = get_supported_openai_params(
+        model="qwen3.5-397b-a17b",
+        custom_llm_provider="scaleway",
+    )
+
+    assert params is not None
+    assert "tools" in params
+    assert "tool_choice" in params
+
+
 def test_bedrock_converse_alias_resolves_like_bedrock():
     """The ``bedrock_converse`` invocation alias must resolve through AmazonConverseConfig
     just like ``bedrock`` (the codebase already pairs them, e.g. ``_strip_model_name``).
