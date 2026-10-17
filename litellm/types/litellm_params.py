@@ -110,6 +110,7 @@ class BedrockBatchConnection:
     s3_secret_access_key: str | None = None
     s3_encryption_key_id: str | None = None
     bedrock_tags: Sequence[Mapping[str, str]] | None = None
+    bedrock_batch_timeout_hours: int | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

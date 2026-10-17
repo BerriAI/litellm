@@ -102,6 +102,7 @@ CONNECTION_NAMES: Final = (
     "s3_secret_access_key",
     "s3_encryption_key_id",
     "bedrock_tags",
+    "bedrock_batch_timeout_hours",
     "anthropic_federation_rule_id",
     "anthropic_organization_id",
     "anthropic_service_account_id",
@@ -280,6 +281,7 @@ BEDROCK_BATCH_NAMES: Final = (
     "s3_secret_access_key",
     "s3_encryption_key_id",
     "bedrock_tags",
+    "bedrock_batch_timeout_hours",
 )
 
 ARTIFACT_NAMES: Final = ("self", "use_client", "model_config", "rust")
@@ -523,7 +525,11 @@ TYPE_HINT_NAMESPACE: Final[Mapping[str, object]] = {
 
 LEAF_SAMPLES: Final[Mapping[type, Mapping[str, object]]] = {
     litellm_params.ProviderConnection: {"api_key": "k", "request_timeout": 1.5},
-    litellm_params.BedrockBatchConnection: {"aws_batch_role_arn": "arn", "bedrock_tags": ({"k": "v"},)},
+    litellm_params.BedrockBatchConnection: {
+        "aws_batch_role_arn": "arn",
+        "bedrock_tags": ({"k": "v"},),
+        "bedrock_batch_timeout_hours": 168,
+    },
     litellm_params.AnthropicFederationConnection: {
         "anthropic_federation_rule_id": "fdrl_1",
         "anthropic_issuer_ttl_seconds": 300,
@@ -686,6 +692,7 @@ NAMES_SHARED_WITH_TYPED_MODELS: Final[Mapping[str, tuple[str, ...]]] = MappingPr
             "azure_password",
             "azure_scope",
             "azure_username",
+            "bedrock_batch_timeout_hours",
             "bedrock_tags",
             "client_id",
             "client_secret",

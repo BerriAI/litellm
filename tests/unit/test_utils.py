@@ -5765,10 +5765,14 @@ def test_bedrock_batch_params_never_reach_the_provider():
     is extra="allow" and preserves them into litellm_params for the batch and files
     transformations that read them.
     """
-    configured = {
-        field: ([{"key": "team", "value": "configured-value"}] if field == "bedrock_tags" else "configured-value")
-        for field in bedrock_batch_litellm_params
-    }
+    def _configured_value(field: str) -> object:
+        if field == "bedrock_tags":
+            return [{"key": "team", "value": "configured-value"}]
+        if field == "bedrock_batch_timeout_hours":
+            return 48
+        return "configured-value"
+
+    configured = {field: _configured_value(field) for field in bedrock_batch_litellm_params}
     kwargs = {"a_real_provider_specific_param": 1, **configured}
 
     non_default = get_non_default_completion_params(dict(kwargs))

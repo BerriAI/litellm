@@ -419,6 +419,7 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     "anthropic_workspace_id",
     "anthropic-workspace-id",
     "bedrock_tags",
+    "bedrock_batch_timeout_hours",
     # Deployment-pinned AgentCore session: every new caller-chosen value provisions another microVM.
     "agentcore_runtime_session_id",
     # Provider-specific endpoint overrides that flow into the outbound

@@ -412,6 +412,7 @@ class CredentialLiteLLMParams(LiteLLMBaseModel):
     aws_batch_role_arn: str | None = None
     s3_output_bucket_name: str | None = None
     bedrock_tags: list | None = None
+    bedrock_batch_timeout_hours: int | None = None
     ## IBM WATSONX ##
     watsonx_region_name: str | None = None
 
