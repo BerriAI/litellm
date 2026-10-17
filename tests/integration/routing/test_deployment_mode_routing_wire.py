@@ -122,11 +122,15 @@ def _upstream(down: threading.Event | None = None) -> Callable[[Request], Reply]
     return respond
 
 
-def _attempts(wire: Wire) -> tuple[_Attempt, ...]:
+def _is_probe(request: Request) -> bool:
+    return request.method == "POST" and _MARKER.search(request.body.decode()) is None
+
+
+def _attempts(wire: Wire, *, skip_probes: bool = False) -> tuple[_Attempt, ...]:
     return tuple(
         _Attempt(_api(request.target), _marker_in(request.body.decode()), _JSON_OBJECT.validate_json(request.body))
         for request in wire.drain()
-        if request.method == "POST"
+        if request.method == "POST" and not (skip_probes and _is_probe(request))
     )
 
 
@@ -635,7 +639,7 @@ def _priced_chat_pin(scenario: Scenario, wire: Wire) -> str:
 
 
 def _probe_or_marked(request: Request) -> Reply:
-    if request.method == "POST" and _MARKER.search(request.body.decode()) is None:
+    if _is_probe(request):
         return _health_upstream(request)
     return _upstream()(request)
 
@@ -692,6 +696,93 @@ async def test_a_health_probe_of_a_custom_priced_chat_pin_leaves_its_unpinned_si
         (200, 1)
     ] * 6, [probe.text for probe in probes]
     assert probed == ("chat",) * 6, probed
+
+
+_PROBED: Final = "routing-probed-deployment"
+_BACKGROUND_HEALTH_CHECKS: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {"background_health_checks": True, "health_check_interval": 1}
+)
+
+
+def _failing_probes(probes: SimpleQueue[Api]) -> Callable[[Request], Reply]:
+    respond: Final = _upstream()
+
+    def fail_probe(request: Request) -> Reply:
+        if not _is_probe(request):
+            return respond(request)
+        probes.put(_api(request.target))
+        return _error(404, "The model `openai.gpt-5.6-terra` does not exist.", "invalid_request_error")
+
+    return fail_probe
+
+
+def _probed_deployment_config(wire: Wire, tmp_path: Path, mode: str | None, general: Mapping[str, JsonValue]) -> Path:
+    base: Final = _JSON_OBJECT.validate_python(yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text()))
+    params: Final[dict[str, JsonValue]] = {
+        "model": _MANTLE_GPT,
+        "custom_llm_provider": "bedrock_mantle",
+        "api_base": wire.url + "/openai/v1",
+        "api_key": _API_KEY,
+    }
+    pin: Final[dict[str, JsonValue]] = {} if mode is None else {"model_info": {"mode": mode}}
+    config: Final = {
+        **base,
+        "model_list": [{"model_name": _PROBED, "litellm_params": params, **pin}],
+        "general_settings": {**object_value(base["general_settings"]), "store_model_in_db": False, **general},
+        "router_settings": {
+            **object_value(base["router_settings"]),
+            "disable_cooldowns": False,
+            "cooldown_time": 60,
+            "num_retries": 0,
+        },
+    }
+    path: Final = tmp_path / "deployment-mode-routing-failing-probe.yaml"
+    path.write_text(yaml.safe_dump(config))
+    return path
+
+
+def _drained(probes: SimpleQueue[Api]) -> tuple[Api, ...]:
+    return tuple(probes.get() for _ in range(probes.qsize()))
+
+
+@pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
+@pytest.mark.parametrize(("mode", "route"), (("chat", "chat"), (None, "responses")), ids=("chat-pin", "unpinned"))
+async def test_a_failing_health_probe_leaves_its_deployment_serving_the_next_requests(
+    gateway: Gateway, tmp_path: Path, mode: str | None, route: Api
+) -> None:
+    probes: Final[SimpleQueue[Api]] = SimpleQueue()
+    calls: Final = tuple(_Call(_PROBED, "chat", False, uuid.uuid4().hex) for _ in range(4))
+    with wire_server(_failing_probes(probes)) as wire:
+        config: Final = _probed_deployment_config(wire, tmp_path, mode, {})
+        with owned_proxy_process(gateway, tmp_path, {}, config=config) as owned:
+            health: Final = owned.gateway.request("GET", "/health", params={"model": _PROBED})
+            answers: Final = [await _http(owned.gateway, call) for call in calls]
+        served: Final = _routes(_attempts(wire, skip_probes=True))
+    counts: Final = _JSON_OBJECT.validate_json(health.content)
+    assert (counts["healthy_count"], counts["unhealthy_count"]) == (0, 1), health.text
+    assert _drained(probes) == (route,)
+    for call, answer in zip(calls, answers, strict=True):
+        _assert_answered(answer, call.marker)
+    assert served == {call.marker: (route,) for call in calls}
+
+
+@pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
+async def test_failing_background_health_probes_leave_a_chat_pinned_deployment_serving_requests(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    probes: Final[SimpleQueue[Api]] = SimpleQueue()
+    calls: Final = tuple(_Call(_PROBED, "chat", False, uuid.uuid4().hex) for _ in range(4))
+    with wire_server(_failing_probes(probes)) as wire:
+        config: Final = _probed_deployment_config(wire, tmp_path, "chat", _BACKGROUND_HEALTH_CHECKS)
+        with owned_proxy_process(gateway, tmp_path, {}, config=config) as owned:
+            await asyncio.to_thread(eventually, probes.qsize, lambda size: size >= 2, 60)
+            answers: Final = [await _http(owned.gateway, call) for call in calls]
+        served: Final = _routes(_attempts(wire, skip_probes=True))
+    probed: Final = _drained(probes)
+    assert len(probed) >= 2 and set(probed) == {"chat"}, probed
+    for call, answer in zip(calls, answers, strict=True):
+        _assert_answered(answer, call.marker)
+    assert served == {call.marker: ("chat",) for call in calls}
 
 
 @pytest.mark.parametrize(
