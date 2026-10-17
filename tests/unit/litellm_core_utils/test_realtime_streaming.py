@@ -19,11 +19,11 @@ from litellm.constants import (
     REALTIME_SESSION_SUCCESS_LOGGED_KEY,
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.realtime_streaming import (
     RealTimeStreaming,
     client_sent_openai_beta_realtime_header,
 )
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.xai.realtime.transformation import XAIRealtimeNormalizer
 from litellm.llms.xai.realtime.usage_meter import XAIRealtimeUsageMeter
@@ -827,9 +827,7 @@ async def test_usage_meter_snapshot_stored_in_model_call_details():
     backend_ws.send = AsyncMock()
     backend_ws.recv = AsyncMock(
         side_effect=[
-            json.dumps(
-                {"type": "session.created", "session": {"turn_detection": {"type": None}}}
-            ).encode(),
+            json.dumps({"type": "session.created", "session": {"turn_detection": {"type": None}}}).encode(),
             json.dumps(
                 {"type": "response.output_audio.delta", "delta": base64.b64encode(b"x" * 24000).decode()}
             ).encode(),
@@ -4056,9 +4054,7 @@ _XAI_TYPED_VAD_SESSION: Final = {
         pytest.param(({"type": "realtime", "instructions": "hi"},), id="no-turn-detection"),
         pytest.param(({"type": "realtime", "audio": {"input": {"turn_detection": None}}},), id="push-to-talk"),
         pytest.param((_XAI_TYPED_VAD_SESSION,), id="typed-server-vad"),
-        pytest.param(
-            ({"type": "realtime", "instructions": "hi"}, _XAI_TYPED_VAD_SESSION), id="later-typed-server-vad"
-        ),
+        pytest.param(({"type": "realtime", "instructions": "hi"}, _XAI_TYPED_VAD_SESSION), id="later-typed-server-vad"),
     ],
 )
 async def test_xai_session_update_gate_leaves_out_the_vad_type(
@@ -4070,9 +4066,9 @@ async def test_xai_session_update_gate_leaves_out_the_vad_type(
         monkeypatch, *client_sessions, event_normalizer=XAIRealtimeNormalizer()
     )
 
-    assert [session["audio"]["input"]["turn_detection"] for session in forwarded] == [
-        {"create_response": False}
-    ] * (len(client_sessions) + 1)
+    assert [session["audio"]["input"]["turn_detection"] for session in forwarded] == [{"create_response": False}] * (
+        len(client_sessions) + 1
+    )
 
 
 @pytest.mark.asyncio
@@ -4206,7 +4202,9 @@ async def test_client_never_sees_the_error_caused_by_the_guardrail_cancel(monkey
     await RealTimeStreaming(client_ws, backend_ws, logging_obj).backend_to_client_send_messages()
 
     client_errors: Final = [
-        event["error"] for call in client_ws.send_text.await_args_list if (event := json.loads(call.args[0]))["type"] == "error"
+        event["error"]
+        for call in client_ws.send_text.await_args_list
+        if (event := json.loads(call.args[0]))["type"] == "error"
     ]
     assert [(error["code"], error.get("event_id")) for error in client_errors] == [
         ("content_policy_violation", None),
@@ -4266,3 +4264,40 @@ async def test_blocked_transcript_is_removed_from_the_conversation_before_the_re
     sent: Final = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list]
     assert [event["type"] for event in sent] == expected_frames
     assert all(event["item_id"] == "item_blocked" for event in sent if event["type"] == "conversation.item.delete")
+
+
+@pytest.mark.asyncio
+async def test_deferred_setup_holds_every_client_frame_until_backend_setup_complete(monkeypatch):
+    """A client frame that reaches Gemini Live between the setup and its setupComplete is
+    answered with the text "Error: Session is not set up yet" and dropped. Only the
+    session.update that triggers the setup may pass; items, triggers and audio wait."""
+    monkeypatch.setattr(litellm, "gemini_live_defer_setup", True, raising=False)
+    from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
+
+    client_ws = MagicMock()
+    session_update: Final = json.dumps({"type": "session.update", "session": {"modalities": ["audio"]}})
+    item: Final = json.dumps(
+        {
+            "type": "conversation.item.create",
+            "item": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "ctx"}]},
+        }
+    )
+    trigger: Final = json.dumps({"type": "response.create"})
+    audio: Final = json.dumps({"type": "input_audio_buffer.append", "audio": "AA=="})
+    client_ws.receive_text = AsyncMock(side_effect=[session_update, item, trigger, audio, ConnectionClosed(None, None)])
+    backend_ws = MagicMock()
+    backend_ws.send = AsyncMock()
+
+    streaming: Final = RealTimeStreaming(
+        client_ws, backend_ws, MagicMock(), provider_config=GeminiRealtimeConfig(), model="gemini-3.8-live"
+    )
+    await streaming.client_ack_messages()
+
+    assert backend_ws.send.call_count == 1
+    assert "setup" in json.loads(backend_ws.send.call_args_list[0].args[0])
+    assert len(streaming._pending_messages_until_setup) == 3
+
+    streaming._backend_setup_complete = True
+    await streaming._flush_pending_messages_until_setup()
+    sent_after: Final = [json.loads(call.args[0]) for call in backend_ws.send.call_args_list[1:]]
+    assert [next(iter(frame)) for frame in sent_after] == ["clientContent", "realtimeInput"]

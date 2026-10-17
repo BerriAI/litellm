@@ -730,7 +730,8 @@ class RealTimeStreaming:
             msg_obj: Final = _decode_json_object(message)
         except (json.JSONDecodeError, TypeError):
             return False
-        return msg_obj.get("type") in RealTimeStreaming._CLIENT_AUDIO_BUFFER_TYPES
+        # Gemini Live drops any frame received between setup and setupComplete.
+        return msg_obj.get("type") != "session.update"
 
     def _buffer_pending_message_until_setup(self, message: str) -> None:
         try:
