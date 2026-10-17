@@ -368,25 +368,35 @@ _CALLER_CREDENTIAL_FIELDS: Final = frozenset(
 )
 
 
+_CALLER_CREDENTIAL_HEADERS: Final = frozenset(
+    {"api-key", "authorization", "ocp-apim-subscription-key", "x-api-key", "x-goog-api-key"}
+)
+_CALLER_TRANSPORT_FIELDS: Final = frozenset({"api_key", "headers", "provider_specific_header"})
+
+
 def _sent_a_provider_credential(caller_body: Mapping[str, object]) -> bool:
-    """True when the caller's request body, or its ``extra_body``, carries a provider credential field."""
+    """True when the caller's request body, or its ``extra_body``, carries a provider credential field, or its
+    ``extra_headers`` carry a credential header."""
     return not (
         _CALLER_CREDENTIAL_FIELDS.isdisjoint(caller_body)
         and _CALLER_CREDENTIAL_FIELDS.isdisjoint(_logged_fields(caller_body.get("extra_body")))
+        and _CALLER_CREDENTIAL_HEADERS.isdisjoint(
+            header.lower() for header in _logged_fields(caller_body.get("extra_headers"))
+        )
     )
 
 
 def _used_a_caller_credential(logged_call: Mapping[str, object]) -> bool:
     """True when the provider was called with a credential that belongs to the caller rather than the
-    deployment: an api_key or other provider credential field the caller sent with the request, the caller's own
-    Anthropic OAuth token, the caller's own GitHub Copilot connection, or the caller's identity token that a
-    token-exchange deployment trades in on every call."""
+    deployment: an api_key, headers or other provider credential field the caller sent with the request, the
+    caller's own Anthropic OAuth token, the caller's own GitHub Copilot connection, or the caller's identity token
+    that a token-exchange deployment trades in on every call."""
     litellm_params: Final = _logged_fields(logged_call.get("litellm_params"))
     proxy_server_request: Final = _logged_fields(litellm_params.get("proxy_server_request"))
     credential_fields: Final = proxy_server_request.get("credential_fields")
     logged_metadata: Final = _logged_fields(_logged_fields(logged_call.get("standard_logging_object")).get("metadata"))
     return (
-        (isinstance(credential_fields, tuple) and "api_key" in credential_fields)
+        (isinstance(credential_fields, tuple) and any(field in credential_fields for field in _CALLER_TRANSPORT_FIELDS))
         or _sent_a_provider_credential(_logged_fields(proxy_server_request.get("body")))
         or bool(litellm_params.get("token_exchange_endpoint"))
         or logged_metadata.get("used_client_oauth_token") is True

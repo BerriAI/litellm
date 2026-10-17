@@ -221,7 +221,9 @@ class TestSkipMetricsValidation:
                 True,
             ),
             ({"standard_logging_object": {"metadata": {"used_client_oauth_token": True}}}, True),
-            ({"litellm_params": {"proxy_server_request": {"credential_fields": ("headers",)}}}, False),
+            ({"litellm_params": {"proxy_server_request": {"credential_fields": ("headers",)}}}, True),
+            ({"litellm_params": {"proxy_server_request": {"credential_fields": ("provider_specific_header",)}}}, True),
+            ({"litellm_params": {"proxy_server_request": {"credential_fields": ()}}}, False),
             ({"litellm_params": {"proxy_server_request": {"credential_fields": "api_key"}}}, False),
             ({"standard_logging_object": {"metadata": {"used_client_oauth_token": False}}}, False),
             ({"litellm_params": {"proxy_server_request": {"body": {"azure_ad_token": "caller-token"}}}}, True),
@@ -243,18 +245,45 @@ class TestSkipMetricsValidation:
                 False,
             ),
             ({"litellm_params": {"proxy_server_request": {"body": {"extra_body": "azure_ad_token"}}}}, False),
+            (
+                {
+                    "litellm_params": {
+                        "proxy_server_request": {"body": {"extra_headers": {"Authorization": "Bearer sk-caller"}}}
+                    }
+                },
+                True,
+            ),
+            (
+                {"litellm_params": {"proxy_server_request": {"body": {"extra_headers": {"API-Key": "caller-key"}}}}},
+                True,
+            ),
+            (
+                {
+                    "litellm_params": {
+                        "proxy_server_request": {"body": {"extra_headers": {"traceparent": "00-trace-span-01"}}}
+                    }
+                },
+                False,
+            ),
+            ({"litellm_params": {"proxy_server_request": {"body": {"extra_headers": "authorization"}}}}, False),
         ],
         ids=[
             "caller-supplied-api-key",
             "caller-copilot-session",
             "caller-anthropic-oauth-token",
-            "caller-supplied-headers-only",
+            "caller-supplied-headers",
+            "caller-supplied-provider-specific-header",
+            "no-caller-credential-fields",
             "malformed-credential-fields",
             "deployment-anthropic-key",
             "caller-supplied-azure-ad-token",
             "caller-supplied-azure-ad-token-in-extra-body",
             "deployment-azure-ad-token",
             "malformed-extra-body",
+            "caller-authorization-in-extra-headers",
+            "caller-api-key-header-in-extra-headers",
+            "traceparent-only-extra-headers",
+            "malformed-extra-headers",
         ],
     )
     def test_skip_a_provider_401_on_a_credential_the_caller_owns(self, prometheus_logger, logged_call, expected):
