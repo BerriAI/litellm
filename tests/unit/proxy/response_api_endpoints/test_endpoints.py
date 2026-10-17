@@ -2205,6 +2205,30 @@ class TestResponsesWSFirstFrameModelAuth:
         assert billed["litellm_metadata"]["standard_logging_guardrail_information"] == [{"guardrail_cost": 0.5}]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("nested", [False, True])
+    async def test_frame_guard_forwards_a_frame_without_the_instructions_a_guardrail_deleted(self, nested: bool):
+        from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
+
+        async def pre_call_hook(user_api_key_dict, data, call_type, guardrails_only):
+            return {key: value for key, value in data.items() if key != "instructions"}
+
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=pre_call_hook)
+        guard = _responses_ws_frame_guard(
+            {"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock(), proxy_logging_obj
+        )
+        body = {"instructions": "SECRET system prompt", "input": "hi", "store": False}
+        frame = {"type": "response.create", "response": body} if nested else {"type": "response.create", **body}
+
+        with patch.object(litellm, "callbacks", []):
+            guarded = await guard(json.dumps(frame))
+
+        forwarded = json.loads(guarded.frame)
+        assert forwarded["type"] == "response.create"
+        sent_body = forwarded["response"] if nested else {k: v for k, v in forwarded.items() if k != "type"}
+        assert sent_body == {"input": "hi", "store": False}
+
+    @pytest.mark.asyncio
     async def test_frame_guard_hands_back_the_pii_tokens_presidio_masked_with_and_drops_forged_ones(self):
         from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
 

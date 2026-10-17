@@ -1891,11 +1891,13 @@ def _responses_ws_frame_guard(
             )
             await _bill_rejected_frame(rejected_frame_auth, rerouted, frame_data)
             raise rerouted
+        # a guardrail may delete a field (the Responses translation pops ``instructions``), so start without them
         guarded_fields: Final = {key: guarded_data[key] for key in _GUARDED_FRAME_FIELDS if key in guarded_data}
+        kept: Final = {key: value for key, value in body.items() if key not in _GUARDED_FRAME_FIELDS}
         rewritten: Final = (
-            {**frame_obj, "response": {**body, **guarded_fields}}
+            {**frame_obj, "response": {**kept, **guarded_fields}}
             if isinstance(nested, dict)
-            else {**frame_obj, **guarded_fields}
+            else {**kept, **guarded_fields}
         )
         return GuardedResponsesWsFrame(
             frame=json.dumps(rewritten),
