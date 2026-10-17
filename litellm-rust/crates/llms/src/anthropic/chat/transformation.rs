@@ -26,8 +26,8 @@ use crate::{
                 split_leading_system_run, system_blocks,
             },
             params::{
-                MappedParams, ModelCapabilities, apply_sampling_param, json_tool_schema,
-                map_openai_params, map_tools, supported_params, valid_user_id,
+                AnthropicHost, MappedParams, ModelCapabilities, apply_sampling_param,
+                json_tool_schema, map_openai_params, map_tools, supported_params, valid_user_id,
             },
         },
         common_utils::{
@@ -369,18 +369,7 @@ fn apply_output_config(
     if output_config.is_empty() {
         return Ok(());
     }
-    let supports_effort = || -> Result<bool, Error> {
-        if caps.supports("supports_output_config")? {
-            return Ok(true);
-        }
-        for level in ["low", "minimal", "medium", "high", "xhigh", "max"] {
-            if caps.supports(&format!("supports_{level}_reasoning_effort"))? {
-                return Ok(true);
-            }
-        }
-        Ok(false)
-    };
-    if drops && output_config.keys().any(|key| key != "format") && !supports_effort()? {
+    if drops && output_config.keys().any(|key| key != "format") && !caps.supports_effort()? {
         match output_config.get("format") {
             None | Some(Value::Null) => {
                 body.remove("output_config");
@@ -447,61 +436,65 @@ fn default_max_tokens(model: &str, context: &ChatRequestContext<'_>) -> Result<V
     })
 }
 
-impl AnthropicConfig {
-    fn build_request(
-        &self,
-        model: &str,
-        messages: Vec<ChatMessage>,
-        optional_params: Map<String, Value>,
-        context: &ChatRequestContext<'_>,
-    ) -> Result<ProviderChatRequestData, Error> {
-        let caps = ModelCapabilities::new(model, context);
-        let request_metadata = optional_params.get("metadata").cloned();
-        let sorted = sort_params(
-            optional_params,
-            &[],
-            context,
-            |_| supported_params(&caps),
-            "anthropic",
-            model,
-        )?;
-        let drop = sorted.drop;
-        let MappedParams {
-            mut params,
-            json_mode,
-        } = map_openai_params(&sorted.openai, &caps, drop)?;
-        for name in &sorted.allowed {
-            if let Some(value) = sorted.openai.get(name)
-                && !params.contains_key(name)
-            {
-                params.insert(name.clone(), value.clone());
-            }
-        }
-        params.extend(sorted.provider);
-
-        let mut messages: Vec<Value> = messages
-            .iter()
-            .map(serde_json::to_value)
-            .collect::<Result<_, _>>()
-            .map_err(|error| Error::InvalidRequest(ErrorDetail::invalid("messages", error)))?;
-        let original_messages = messages.clone();
-        let prefix_prompt = prefix_prompt(&messages);
-
-        if !params.contains_key("tools")
-            && messages.iter().any(|message| {
-                message
-                    .get("tool_calls")
-                    .is_some_and(|calls| !calls.is_null())
-            })
+/// `AnthropicConfig.transform_request` after `map_openai_params`, for the host `caps` names:
+/// the Messages body, `model` included, and the `anthropic-beta` values the Anthropic API
+/// needs. A host with its own beta rules (Vertex AI) gets no header here and sets its own.
+pub fn build_messages_request(
+    model: &str,
+    messages: Vec<ChatMessage>,
+    optional_params: Map<String, Value>,
+    context: &ChatRequestContext<'_>,
+    host: AnthropicHost,
+    config_params: &[&str],
+) -> Result<ProviderChatRequestData, Error> {
+    let caps = ModelCapabilities::on(host, model, context);
+    let request_metadata = optional_params.get("metadata").cloned();
+    let sorted = sort_params(
+        optional_params,
+        config_params,
+        context,
+        |_| supported_params(&caps),
+        host.provider(),
+        model,
+    )?;
+    let drop = sorted.drop;
+    let MappedParams {
+        mut params,
+        json_mode,
+    } = map_openai_params(&sorted.openai, &caps, drop)?;
+    for name in &sorted.allowed {
+        if let Some(value) = sorted.openai.get(name)
+            && !params.contains_key(name)
         {
-            params.insert("tools".into(), Value::Array(map_tools(&dummy_tool())?));
+            params.insert(name.clone(), value.clone());
         }
+    }
+    params.extend(sorted.provider);
 
-        // `_maybe_drop_speed_param`: fast mode is the Anthropic API's own, per exact entry.
-        if let Some(speed) = params.get("speed").cloned()
-            && capability(context, &[model.to_owned()], "supports_speed")? != Some(true)
-        {
-            drop.unsupported(|| {
+    let mut messages: Vec<Value> = messages
+        .iter()
+        .map(serde_json::to_value)
+        .collect::<Result<_, _>>()
+        .map_err(|error| Error::InvalidRequest(ErrorDetail::invalid("messages", error)))?;
+    let original_messages = messages.clone();
+    let prefix_prompt = prefix_prompt(&messages);
+
+    if !params.contains_key("tools")
+        && messages.iter().any(|message| {
+            message
+                .get("tool_calls")
+                .is_some_and(|calls| !calls.is_null())
+        })
+    {
+        params.insert("tools".into(), Value::Array(map_tools(&dummy_tool())?));
+    }
+
+    // `_maybe_drop_speed_param`: fast mode is the Anthropic API's own, per exact entry.
+    if let Some(speed) = params.get("speed").cloned()
+        && (host != AnthropicHost::Anthropic
+            || capability(context, &[model.to_owned()], "supports_speed")? != Some(true))
+    {
+        drop.unsupported(|| {
                 let shown = match &speed {
                     Value::String(text) => format!("'{text}'"),
                     other => python_dumps(other),
@@ -510,92 +503,109 @@ impl AnthropicConfig {
                     "{model} does not support speed={shown}. To drop unsupported params, set `litellm.drop_params = True`."
                 )))
             })?;
-            params.remove("speed");
+        params.remove("speed");
+    }
+
+    // `maybe_drop_disabled_thinking`.
+    if params
+        .get("thinking")
+        .and_then(|thinking| thinking.get("type"))
+        .and_then(Value::as_str)
+        == Some("disabled")
+        && caps.supports("thinking_always_on")?
+    {
+        params.remove("thinking");
+    }
+
+    let tool_name_reverse_map = sanitize_tool_names(&mut params, &mut messages);
+
+    let (leading, later) = split_leading_system_run(messages);
+    let system = system_blocks(&leading);
+    if !system.is_empty() {
+        params.insert("system".into(), Value::Array(system));
+    }
+    let anthropic_messages = anthropic_messages_pt(place_mid_conversation_system(later))?;
+
+    // `update_headers_with_optional_anthropic_beta` skips a Vertex request, and Vertex's
+    // `get_anthropic_headers` sends none of these.
+    let betas = match host {
+        AnthropicHost::Anthropic => {
+            request_betas(&params, &original_messages, &anthropic_messages, &caps)?
         }
+        AnthropicHost::VertexAi => Vec::new(),
+    };
 
-        // `maybe_drop_disabled_thinking`.
-        if params
-            .get("thinking")
-            .and_then(|thinking| thinking.get("type"))
-            .and_then(Value::as_str)
-            == Some("disabled")
-            && caps.supports("thinking_always_on")?
-        {
-            params.remove("thinking");
-        }
+    if !params.contains_key("max_tokens") {
+        params.insert("max_tokens".into(), default_max_tokens(model, context)?);
+    }
 
-        let tool_name_reverse_map = sanitize_tool_names(&mut params, &mut messages);
-
-        let (leading, later) = split_leading_system_run(messages);
-        let system = system_blocks(&leading);
-        if !system.is_empty() {
-            params.insert("system".into(), Value::Array(system));
-        }
-        let anthropic_messages = anthropic_messages_pt(place_mid_conversation_system(later))?;
-
-        let betas = request_betas(&params, &original_messages, &anthropic_messages, &caps)?;
-
-        if !params.contains_key("max_tokens") {
-            params.insert("max_tokens".into(), default_max_tokens(model, context)?);
-        }
-
-        if let Some(user_id) = request_metadata
-            .as_ref()
-            .and_then(|metadata| metadata.get("user_id"))
-            .and_then(Value::as_str)
-            .filter(|user_id| valid_user_id(user_id))
-        {
-            params.insert("metadata".into(), json!({"user_id": user_id}));
-        }
-        if let Some(Value::Object(metadata)) = params.get("metadata") {
-            match metadata.get("user_id").filter(|user_id| !user_id.is_null()) {
-                Some(user_id) => {
-                    let reduced = json!({"user_id": user_id});
-                    params.insert("metadata".into(), reduced);
-                }
-                None => {
-                    params.remove("metadata");
-                }
+    if let Some(user_id) = request_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("user_id"))
+        .and_then(Value::as_str)
+        .filter(|user_id| valid_user_id(user_id))
+    {
+        params.insert("metadata".into(), json!({"user_id": user_id}));
+    }
+    if let Some(Value::Object(metadata)) = params.get("metadata") {
+        match metadata.get("user_id").filter(|user_id| !user_id.is_null()) {
+            Some(user_id) => {
+                let reduced = json!({"user_id": user_id});
+                params.insert("metadata".into(), reduced);
+            }
+            None => {
+                params.remove("metadata");
             }
         }
-        params.remove("is_vertex_request");
-        params.remove("client_metadata");
-        params.remove("json_mode");
-
-        if let Some(top_k) = params.remove("top_k").filter(|top_k| !top_k.is_null()) {
-            apply_sampling_param(&mut params, &caps, drop, "top_k", &top_k, "top_k")?;
-        }
-
-        let speed = params
-            .get("speed")
-            .and_then(Value::as_str)
-            .map(str::to_owned);
-        let response_format_schema = json_mode
-            .then(|| json_tool_schema(params.get("tools")))
-            .flatten();
-
-        let mut body = Map::from_iter([
-            ("model".to_owned(), json!(model)),
-            ("messages".to_owned(), Value::Array(anthropic_messages)),
-        ]);
-        body.extend(params);
-        apply_output_config(&mut body, &caps, drop.drops())?;
-
-        Ok(ProviderChatRequestData {
-            body: Value::Object(body),
-            stream_shape: StreamShape {
-                json_mode,
-                speed,
-                tool_name_reverse_map,
-                response_format_schema,
-                prefix_prompt,
-            },
-            headers: match betas.is_empty() {
-                true => Vec::new(),
-                false => vec![(BETA_HEADER.to_owned(), betas.join(", "))],
-            },
-        })
     }
+    params.remove("is_vertex_request");
+    params.remove("client_metadata");
+    params.remove("json_mode");
+
+    if let Some(top_k) = params.remove("top_k").filter(|top_k| !top_k.is_null()) {
+        apply_sampling_param(&mut params, &caps, drop, "top_k", &top_k, "top_k")?;
+    }
+
+    let speed = params
+        .get("speed")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let response_format_schema = json_mode
+        .then(|| json_tool_schema(params.get("tools")))
+        .flatten();
+
+    let mut body = Map::from_iter([
+        ("model".to_owned(), json!(model)),
+        ("messages".to_owned(), Value::Array(anthropic_messages)),
+    ]);
+    body.extend(params);
+    apply_output_config(&mut body, &caps, drop.drops())?;
+
+    Ok(ProviderChatRequestData {
+        body: Value::Object(body),
+        stream_shape: StreamShape {
+            json_mode,
+            speed,
+            tool_name_reverse_map,
+            response_format_schema,
+            prefix_prompt,
+        },
+        headers: match betas.is_empty() {
+            true => Vec::new(),
+            false => vec![(BETA_HEADER.to_owned(), betas.join(", "))],
+        },
+    })
+}
+
+/// `transform_parsed_response`: a Messages API answer as a chat completion.
+pub fn transform_messages_response(
+    body: Value,
+    shape: &StreamShape,
+) -> Result<ChatCompletionsResponse, Error> {
+    let body: ResponseProjection = serde_json::from_value(body).map_err(|error| {
+        Error::InvalidResponse(ErrorDetail::invalid("messages response", error))
+    })?;
+    anthropic_response(body, shape)
 }
 
 /// `convert_tool_use_to_openai_format`, the name put back the way the caller spelled it.
@@ -819,7 +829,14 @@ impl BaseConfig for AnthropicConfig {
         optional_params: Map<String, Value>,
         context: &ChatRequestContext<'_>,
     ) -> Result<ProviderChatRequestData, Error> {
-        self.build_request(model, messages, optional_params, context)
+        build_messages_request(
+            model,
+            messages,
+            optional_params,
+            context,
+            AnthropicHost::Anthropic,
+            &[],
+        )
     }
 
     fn transform_response(
@@ -828,10 +845,7 @@ impl BaseConfig for AnthropicConfig {
         response: ProviderChatResponseData,
         shape: &StreamShape,
     ) -> Result<ChatCompletionsResponse, Error> {
-        let body: ResponseProjection = serde_json::from_value(response.body).map_err(|error| {
-            Error::InvalidResponse(ErrorDetail::invalid("messages response", error))
-        })?;
-        anthropic_response(body, shape)
+        transform_messages_response(response.body, shape)
     }
 
     /// `inlines_remote_media`: Anthropic fetches an `https` image itself, not an `http` one.

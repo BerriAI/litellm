@@ -166,25 +166,117 @@ pub fn model_map_candidates(model: &str) -> Vec<String> {
     candidates
 }
 
+/// The host an Anthropic Messages request built from a chat call goes to. The request is the
+/// same; the cost-map reads and a few params depend on the host, as Python's
+/// `custom_llm_provider` on the config decides them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AnthropicHost {
+    /// The Anthropic API, `AnthropicConfig`.
+    #[default]
+    Anthropic,
+    /// Claude on Vertex AI, `VertexAIAnthropicConfig`.
+    VertexAi,
+}
+
+impl AnthropicHost {
+    /// The provider an unsupported-params error names.
+    pub fn provider(self) -> &'static str {
+        match self {
+            Self::Anthropic => "anthropic",
+            Self::VertexAi => "vertex_ai",
+        }
+    }
+}
+
+/// `_strip_stable_vertex_version`: a trailing `-<digits>` removed.
+fn strip_stable_vertex_version(model: &str) -> String {
+    let trimmed = model.trim_end_matches(|c: char| c.is_ascii_digit());
+    match trimmed.strip_suffix('-') {
+        Some(head) if trimmed.len() < model.len() => head.to_owned(),
+        _ => model.to_owned(),
+    }
+}
+
+/// The keys `get_model_info_helper` tries for a Vertex AI model, most specific first: the
+/// `vertex_ai/` entry, the bare id, then both with a stable version suffix removed.
+pub fn vertex_model_info_candidates(model: &str) -> Vec<String> {
+    let stripped = strip_stable_vertex_version(model);
+    let mut candidates: Vec<String> = Vec::new();
+    for candidate in [
+        format!("vertex_ai/{model}"),
+        model.to_owned(),
+        format!("vertex_ai/{stripped}"),
+        stripped,
+    ] {
+        if !candidates.contains(&candidate) {
+            candidates.push(candidate);
+        }
+    }
+    candidates
+}
+
 /// The cost-map reads a model's request rules make, through its lookup candidates.
 pub struct ModelCapabilities<'a> {
     pub model: String,
     pub context: ChatRequestContext<'a>,
     pub candidates: Vec<String>,
+    pub host: AnthropicHost,
+    /// The keys a provider-aware lookup (`_get_provider_resolved_capability`) resolves the
+    /// model through; the first entry found answers. Empty when the host has none.
+    pub resolved: Vec<String>,
 }
 
 impl<'a> ModelCapabilities<'a> {
     pub fn new(model: &str, context: &ChatRequestContext<'a>) -> Self {
+        Self::on(AnthropicHost::Anthropic, model, context)
+    }
+
+    pub fn on(host: AnthropicHost, model: &str, context: &ChatRequestContext<'a>) -> Self {
         Self {
             model: model.to_owned(),
             context: *context,
             candidates: model_map_candidates(model),
+            host,
+            resolved: match host {
+                AnthropicHost::Anthropic => Vec::new(),
+                AnthropicHost::VertexAi => vertex_model_info_candidates(model),
+            },
         }
     }
 
     /// `_get_model_capability`: the flag the first candidate the map knows sets.
-    pub fn flag(&self, key: &str) -> Result<Option<bool>, Error> {
+    pub fn walk_flag(&self, key: &str) -> Result<Option<bool>, Error> {
         capability(&self.context, &self.candidates, key)
+    }
+
+    /// `_get_provider_resolved_capability`: the flag of the entry the host's own lookup
+    /// resolves the model to, `None` when that entry does not set it.
+    pub fn resolved_flag(&self, key: &str) -> Result<Option<bool>, Error> {
+        if self.resolved.is_empty() {
+            return Ok(None);
+        }
+        let Some(info) = self.context.model_info else {
+            return match self.context.drop_params {
+                None => Err(Error::Unsupported(
+                    "a request whose translation reads the model cost map",
+                )),
+                Some(_) => Ok(None),
+            };
+        };
+        Ok(self
+            .resolved
+            .iter()
+            .find_map(|candidate| info.entry(candidate))
+            .and_then(|entry| entry.get(key).and_then(Value::as_bool)))
+    }
+
+    /// `_supports_model_capability`'s answer: the host's resolved flag when it sets one, else
+    /// the model-map walk.
+    pub fn flag(&self, key: &str) -> Result<Option<bool>, Error> {
+        match self.resolved_flag(key)? {
+            Some(flag) => Ok(Some(flag)),
+            None => self.walk_flag(key),
+        }
     }
 
     /// `_supports_model_capability`: the flag is set to `true`.
@@ -192,9 +284,32 @@ impl<'a> ModelCapabilities<'a> {
         Ok(self.flag(key)? == Some(true))
     }
 
+    /// `uses_native_structured_output`: Vertex AI reads only its own entry for it.
+    pub fn native_structured_output(&self) -> Result<bool, Error> {
+        match self.host {
+            AnthropicHost::Anthropic => self.supports("supports_native_structured_output"),
+            AnthropicHost::VertexAi => {
+                Ok(self.resolved_flag("supports_native_structured_output")? == Some(true))
+            }
+        }
+    }
+
+    /// `_model_supports_effort_param`: `output_config` or any reasoning effort level.
+    pub fn supports_effort(&self) -> Result<bool, Error> {
+        if self.supports("supports_output_config")? {
+            return Ok(true);
+        }
+        for level in ["low", "minimal", "medium", "high", "xhigh", "max"] {
+            if self.supports(&format!("supports_{level}_reasoning_effort"))? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     /// `_supports_sampling_params`.
     pub fn supports_sampling(&self) -> Result<bool, Error> {
-        if let Some(flag) = self.flag("supports_sampling_params")? {
+        if let Some(flag) = self.walk_flag("supports_sampling_params")? {
             return Ok(flag);
         }
         let lower = self.model.to_lowercase();
@@ -207,7 +322,7 @@ impl<'a> ModelCapabilities<'a> {
     }
 
     pub fn forced_tool_use_unsupported(&self) -> Result<bool, Error> {
-        Ok(self.flag("supports_forced_tool_use")? == Some(false))
+        Ok(self.walk_flag("supports_forced_tool_use")? == Some(false))
     }
 
     pub fn is_adaptive(&self) -> Result<bool, Error> {
@@ -943,15 +1058,22 @@ pub fn supported_params(caps: &ModelCapabilities<'_>) -> Result<Vec<&'static str
         "context_management",
         "cache_control",
     ];
-    let mut reasoning_keys = caps.candidates.clone();
-    reasoning_keys.insert(1, format!("anthropic/{}", caps.model));
-    if caps.model.contains("claude-3-7-sonnet")
-        || caps.is_adaptive()?
-        || capability(&caps.context, &reasoning_keys, "supports_reasoning")? == Some(true)
-    {
+    let supports_reasoning = match caps.host {
+        AnthropicHost::Anthropic => {
+            let mut reasoning_keys = caps.candidates.clone();
+            reasoning_keys.insert(1, format!("anthropic/{}", caps.model));
+            capability(&caps.context, &reasoning_keys, "supports_reasoning")? == Some(true)
+        }
+        // `supports_reasoning(model, "vertex_ai")` reads the entry Vertex resolves to.
+        AnthropicHost::VertexAi => caps.resolved_flag("supports_reasoning")? == Some(true),
+    };
+    if caps.model.contains("claude-3-7-sonnet") || caps.is_adaptive()? || supports_reasoning {
         params.extend(["thinking", "reasoning_effort"]);
     }
-    params.push("service_tier");
+    // `SERVICE_TIER_PROVIDERS`: Vertex AI rejects the field.
+    if caps.host == AnthropicHost::Anthropic {
+        params.push("service_tier");
+    }
     Ok(params)
 }
 
@@ -1001,7 +1123,7 @@ pub fn map_openai_params(
                 let Some(format) = value.as_object() else {
                     continue;
                 };
-                if caps.supports("supports_native_structured_output")? {
+                if caps.native_structured_output()? {
                     if let Some(output_format) = output_format(format) {
                         out.insert("output_format".into(), output_format);
                     }
