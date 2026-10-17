@@ -24,7 +24,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from openai.types.responses import ResponseItemList
 from openai.types.responses.response_create_params import ResponseInputParam
-from pydantic import ConfigDict, TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
 from starlette.websockets import WebSocket, WebSocketDisconnect
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
@@ -1418,6 +1418,7 @@ class _NestedProviderError(TypedDict):
     error: ReadOnly[_ProviderErrorMessage]
 
 
+@with_config(ConfigDict(extra="ignore"))
 class _ProviderOpenAIErrorDetail(TypedDict):
     message: ReadOnly[str]
     type: ReadOnly[str]
@@ -1425,6 +1426,7 @@ class _ProviderOpenAIErrorDetail(TypedDict):
     code: NotRequired[ReadOnly[str | None]]
 
 
+@with_config(ConfigDict(extra="forbid"))
 class _ProviderOpenAIError(TypedDict):
     error: ReadOnly[_ProviderOpenAIErrorDetail]
 

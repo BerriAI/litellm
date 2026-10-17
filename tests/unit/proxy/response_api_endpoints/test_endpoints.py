@@ -3711,6 +3711,16 @@ class TestResponsesInputTokens:
                 id="anthropic_error_message_unwrapped",
             ),
             pytest.param(
+                {
+                    "type": "error",
+                    "error": {"type": "not_found_error", "message": "model: claude-typo"},
+                    "request_id": "req_vrtx_2",
+                },
+                404,
+                {"message": "model: claude-typo", "type": "invalid_request_error", "param": None, "code": None},
+                id="anthropic_error_type_follows_the_status",
+            ),
+            pytest.param(
                 {"error": {"code": 404, "message": "Publisher model not found.", "status": "NOT_FOUND"}},
                 404,
                 {"message": "Publisher model not found.", "type": "invalid_request_error", "param": None, "code": None},
