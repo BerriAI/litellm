@@ -1,5 +1,6 @@
-use std::convert::Infallible;
+use std::{convert::Infallible, sync::Arc};
 
+use super::model_cost::PythonModelCost;
 use crate::routes::inference::InferenceHost;
 use litellm_host_python::{InvokeError, PythonBinding, PythonHostCalls, PythonOwned};
 use litellm_inference_chat::{Error, route::ChatCompletions, types::ChatCompletionsCall};
@@ -26,10 +27,10 @@ pub(super) fn project(
         custom_llm_provider: call.options.custom_llm_provider,
         extra_headers: call.options.extra_headers,
         timeout: call.options.timeout,
-        // Python's own settings decide what a drop would do, so a param that needs one, or a
-        // capability read from the cost map, goes back to Python.
+        // Python's own settings decide what a drop would do, so a param that needs one goes
+        // back to Python. Capabilities come from the cost map Python itself reads.
         drop_params: None,
-        model_info: None,
+        model_info: Some(Arc::new(PythonModelCost::current(py)?)),
     })
 }
 

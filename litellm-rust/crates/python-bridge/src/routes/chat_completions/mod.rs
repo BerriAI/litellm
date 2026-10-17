@@ -1,4 +1,5 @@
 mod host;
+mod model_cost;
 
 use std::sync::Arc;
 
