@@ -64,8 +64,10 @@ def test_openai_cyber_policy_uses_the_structured_error_code(shape: str, code: st
         ("https://qa-user:function-secret@gateway.example/v1?code=function-secret", "https://gateway.example/v1"),
         ("https://gateway.example/v1#function-secret", "https://gateway.example/v1"),
         ("qa-user:function-secret@gateway.example:8080/v1", "gateway.example:8080/v1"),
+        ("https://qa-user:qa?function-secret@gateway.example/v1", "https://gateway.example/v1"),
+        ("https://qa-user:qa#function-secret@gateway.example/v1", "https://gateway.example/v1"),
     ],
-    ids=["userinfo_and_query", "fragment", "no_scheme"],
+    ids=["userinfo_and_query", "fragment", "no_scheme", "question_mark_in_password", "hash_in_password"],
 )
 def test_api_base_line_keeps_credentials_out(configured_api_base: str, shown_api_base: str) -> None:
     request: Final = httpx.Request("POST", "https://gateway.example/v1/chat/completions")
