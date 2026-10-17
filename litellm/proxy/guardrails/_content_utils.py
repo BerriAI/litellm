@@ -9,6 +9,7 @@ every text fragment.
 """
 
 import json
+import math
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Final
@@ -81,31 +82,64 @@ def _tool_json_object(pairs: Sequence[tuple[str, JsonValue]]) -> JsonValue:
     return value
 
 
+def _finite_number(literal: str) -> float:
+    number: Final = float(literal)
+    if not math.isfinite(number):
+        raise ValueError("Non-finite tool argument number")
+    return number
+
+
 def _tool_arguments(arguments: str) -> JsonValue:
-    return _tool_json(json.loads(arguments, object_pairs_hook=_tool_json_object))
+    return _tool_json(
+        json.loads(
+            arguments,
+            object_pairs_hook=_tool_json_object,
+            parse_float=_finite_number,
+            parse_constant=_finite_number,
+        )
+    )
 
 
-def iter_tool_json_text(value: object) -> Iterator[str]:
-    pending: Final[list[tuple[object, bool]]] = [(value, False)]  # mutable-ok: owned DFS stack avoids Python recursion
+def iter_tool_json_fields(value: object) -> Iterator[tuple[str | None, str]]:
+    """Yield ``(nearest key, text)`` for every non-empty string leaf; list items take their parent's key."""
+    pending: Final[list[tuple[object, str | None, bool]]] = [  # mutable-ok: owned DFS stack avoids Python recursion
+        (value, None, False)
+    ]
     active: Final[set[int]] = set()  # mutable-ok: track active ancestry only
     while pending:
-        current, leaving = pending.pop()
+        current, key, leaving = pending.pop()
         if leaving:
             active.remove(id(current))
             continue
         if isinstance(current, str):
             if current:
-                yield current
+                yield key, current
             continue
         if current is None or isinstance(current, (bool, int, float)):
             continue
         fields = _text_object(current)
-        children = tuple(fields.values()) if fields is not None else _object_list(current)
+        if fields is not None:
+            children = tuple(fields.items())
+        else:
+            items = _object_list(current)
+            children = None if items is None else tuple((key, child) for child in items)
         if children is None or id(current) in active:
             raise ValueError("Invalid tool JSON payload")
         active.add(id(current))
-        pending.append((current, True))
-        pending.extend((child, False) for child in reversed(children))
+        pending.append((current, key, True))
+        pending.extend((child, child_key, False) for child_key, child in reversed(children))
+
+
+def iter_tool_json_text(value: object) -> Iterator[str]:
+    for _, text in iter_tool_json_fields(value):
+        yield text
+
+
+def _tool_payload_text(value: object) -> Iterator[str]:
+    """Yield a tool payload's string values as one newline-joined fragment, like one text part."""
+    text: Final = "\n".join(iter_tool_json_text(value))
+    if text:
+        yield text
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,9 +206,9 @@ def _iter_native_content_text(content: object) -> Iterator[str]:
         yield from _iter_text_parts_in_content([part])
         fields = _text_object(part)
         if fields is not None and fields.get("type") == "tool_result":
-            yield from _iter_native_content_text(fields.get("content"))
+            yield from _iter_text_parts_in_content(fields.get("content"))
         elif fields is not None and fields.get("type") == "tool_use":
-            yield from iter_tool_json_text(fields.get("input"))
+            yield from _tool_payload_text(fields.get("input"))
 
 
 # Responses-API item types whose ``output`` field carries user/tool text
@@ -283,9 +317,9 @@ def iter_message_text(data: Mapping[str, object]) -> Iterator[str]:
                         except (ValueError, RecursionError):
                             yield arguments
                         else:
-                            yield from iter_tool_json_text(parsed)
+                            yield from _tool_payload_text(parsed)
                     elif isinstance(arguments, dict):
-                        yield from iter_tool_json_text(arguments)
+                        yield from _tool_payload_text(arguments)
 
 
 def walk_user_text(
@@ -295,7 +329,7 @@ def walk_user_text(
 ) -> int:
     """Rewrite every text fragment in place via ``visit``.
 
-    Mutates ``data["messages"]`` and ``data["input"]``. Returns the number
+    Mutates ``data["messages"]`` (including tool payloads), ``data["system"]`` and ``data["input"]``. Returns the number
     of fragments visited so callers can short-circuit when nothing was
     inspected.
     """
@@ -326,19 +360,19 @@ def walk_user_text(
         rewritten: Final = _rewrite_tool(parsed)
         return arguments if rewritten == parsed else json.dumps(rewritten, ensure_ascii=False)
 
-    def _rewrite_part(part: Mapping[str, object]) -> Mapping[str, object]:
+    def _rewrite_part(part: Mapping[str, object], native: bool) -> Mapping[str, object]:
         nonlocal visited
         text: Final = _part_text(part)
         rewritten: Final = {**part, **({"text": visit(text)} if text is not None else {})}
         if text is not None:
             visited += 1  # rebind-ok: tally each existing text field alongside the native payload
-        if part.get("type") == "tool_result" and "content" in part:
-            return {**rewritten, "content": _rewrite_content(part["content"])}
-        if part.get("type") == "tool_use" and "input" in part:
+        if native and part.get("type") == "tool_result" and "content" in part:
+            return {**rewritten, "content": _rewrite_content(part["content"], native=False)}
+        if native and part.get("type") == "tool_use" and "input" in part:
             return {**rewritten, "input": _rewrite_tool(part["input"])}
         return rewritten
 
-    def _rewrite_content(content: object) -> object:
+    def _rewrite_content(content: object, native: bool = True) -> object:
         nonlocal visited
         if isinstance(content, str):
             if content:
@@ -352,7 +386,7 @@ def walk_user_text(
                     visited += 1
                     new_parts.append(visit(part))
                 elif isinstance(part, dict):
-                    new_parts.append(_rewrite_part(part))
+                    new_parts.append(_rewrite_part(part, native))
                 else:
                     new_parts.append(part)
             return new_parts

@@ -15,6 +15,7 @@ inspection by the relevant guardrail hook:
 import json
 import sys
 from collections.abc import Mapping
+from functools import reduce
 from types import SimpleNamespace
 from typing import Any, Dict, Final, NamedTuple
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -501,6 +502,31 @@ def test_banned_keywords_blocks_responses_api_input(monkeypatch):
         asyncio.run(_run())
 
 
+def test_banned_keywords_still_checks_messages_after_a_deep_tool_result_chain(monkeypatch):
+    monkeypatch.setattr("litellm.banned_keywords_list", ["forbidden"], raising=False)
+    from enterprise.enterprise_hooks.banned_keywords import ENTERPRISE_BannedKeywords
+
+    chain: Final = reduce(
+        lambda content, _: [{"type": "tool_result", "tool_use_id": "tool", "content": content}],
+        range(1500),
+        [{"type": "text", "text": "inner"}],
+    )
+    data: Final = {"messages": [{"role": "assistant", "content": chain}, {"role": "user", "content": "forbidden"}]}
+
+    import asyncio
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(
+            ENTERPRISE_BannedKeywords().async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="hashed", user_id="u"),
+                cache=DualCache(),
+                data=data,
+                call_type="acompletion",
+            )
+        )
+    assert "forbidden" in str(exc.value.detail).lower()
+
+
 @pytest.mark.parametrize("call_type", ["completion", "acompletion", "aresponses"])
 def test_banned_keywords_fires_on_text_content_call_types(monkeypatch, call_type):
     """Locks the call-type gate to the runtime ``route_type`` values the
@@ -961,7 +987,7 @@ class _GoogleRequest(NamedTuple):
                     },
                 ]
             },
-            "ordinary controlinput first input blocked fragment",
+            "ordinary controlinput first \ninput blocked fragment",
             id="native-tool-input",
         ),
         pytest.param(
@@ -1011,7 +1037,7 @@ class _GoogleRequest(NamedTuple):
                     },
                 ]
             },
-            "ordinary controlargument first argument blocked fragment",
+            "ordinary controlargument first \nargument blocked fragment",
             id="chat-tool-arguments",
         ),
     ),

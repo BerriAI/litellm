@@ -15,6 +15,7 @@ import yaml
 from integration._support.client import Gateway
 from integration._support.database import scratch_database
 from integration._support.process import OwnedProxy, owned_proxy_process
+from integration._support.timing import assert_not_delayed_by, timed
 from integration._support.wire import Reply, Request, Wire, wire_server
 from integration.security._license_edge import license_edge
 from pydantic import JsonValue
@@ -317,3 +318,42 @@ def test_chat_tool_arguments_remain_valid_json(rig: Rig) -> None:
     assert arguments["path"] == _input()["path"]
     assert arguments["enabled"] is False
     assert arguments["optional"] is None
+
+
+def test_deeply_nested_tool_arguments_do_not_stall_the_worker(rig: Rig) -> None:
+    def call(depth: int) -> float:
+        rig.wire.drain()
+        arguments: Final = '{"k":' * depth + json.dumps(TEXT) + "}" * depth
+        sent: Final = timed(
+            lambda: rig.proxy.request(
+                "POST",
+                "/v1/chat/completions",
+                {
+                    "model": "gpt",
+                    "cache": {"no-cache": True},
+                    "messages": [
+                        {"role": "user", "content": "read .env"},
+                        {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": "call_1",
+                                    "type": "function",
+                                    "function": {"name": "read", "arguments": arguments},
+                                }
+                            ],
+                        },
+                        {"role": "tool", "tool_call_id": "call_1", "content": "done"},
+                    ],
+                },
+            )
+        )
+        assert sent.value.status_code == 200, sent.value.text
+        upstream: Final = rig.wire.drain()
+        assert len(upstream) == 1
+        assert SECRET.encode() not in upstream[0].body
+        return sent.seconds
+
+    control: Final = tuple(call(1) for _ in range(3))
+    assert_not_delayed_by((call(300),), control=control, injected_delay=5.0)

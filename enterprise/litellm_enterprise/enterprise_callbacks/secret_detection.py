@@ -30,7 +30,7 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.guardrails._content_utils import iter_tool_json_text, map_tool_json_text, walk_user_text
+from litellm.proxy.guardrails._content_utils import iter_tool_json_fields, map_tool_json_text, walk_user_text
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import GenericGuardrailAPIInputs
 
@@ -584,10 +584,16 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
         return pattern.sub("[REDACTED]", text)
 
     def redact_tool_payload(self, payload: JsonValue) -> JsonValue:
-        texts: Final = tuple(iter_tool_json_text(payload))
-        scan_text: Final = "\n".join((*texts, json.dumps(payload, indent=2, ensure_ascii=False)))
+        """Redact secrets in a tool payload's string values, scanning each value alone and beside its key."""
+        fields: Final = tuple(iter_tool_json_fields(payload))
+        texts: Final = tuple(text for _, text in fields)
+        keyed: Final = tuple(
+            f"{json.dumps(key, ensure_ascii=False)}: {json.dumps(text, ensure_ascii=False)}"
+            for key, text in fields
+            if key is not None
+        )
         detected: Final = tuple(
-            secret for secret in self.scan_message_for_secrets(scan_text)
+            secret for secret in self.scan_message_for_secrets("\n".join((*texts, *keyed)))
             if any(secret["value"] in text for text in texts)
         )
         if not detected:
@@ -596,6 +602,10 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
         if counts is not None:
             for secret in detected:
                 counts[secret["type"]] = counts.get(secret["type"], 0) + 1
+        verbose_proxy_logger.warning(
+            "Detected and redacted secrets in tool payload: %s",
+            sorted(dict.fromkeys(secret["type"] for secret in detected)),
+        )
         pattern: Final = re.compile("|".join(re.escape(secret["value"]) for secret in detected))
         return map_tool_json_text(payload, lambda text: pattern.sub("[REDACTED]", text))
 

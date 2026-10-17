@@ -81,6 +81,18 @@ async def test_tool_arguments_native_hook_cannot_forward_unredacted_credentials(
     assert "[REDACTED]" in rewritten
 
 
+@pytest.mark.asyncio
+async def test_deeply_nested_tool_arguments_are_scanned_in_bounded_time():
+    arguments = '{"k":' * 200 + json.dumps(f"AWS_ACCESS_KEY_ID={AWS_KEY}") + "}" * 200
+    data = {"messages": [{"role": "assistant", "tool_calls": [{"id": "call_1", "function": {
+        "name": "save_config", "arguments": arguments}}]}]}
+    started = time.perf_counter()
+    await _guardrail().async_pre_call_hook(UserAPIKeyAuth(), DualCache(), data, "acompletion")
+    assert time.perf_counter() - started < 3.0
+    rewritten = data["messages"][0]["tool_calls"][0]["function"]["arguments"]
+    assert json.loads(rewritten) == json.loads(arguments.replace(AWS_KEY, "[REDACTED]"))
+
+
 def _recorded(request_data: dict) -> dict:
     entries = request_data["metadata"]["standard_logging_guardrail_information"]
     assert len(entries) == 1

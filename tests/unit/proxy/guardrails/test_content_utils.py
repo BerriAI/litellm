@@ -985,3 +985,36 @@ def test_tool_json_graph_unsupported_values_fail_without_echoing_values(value: o
     with pytest.raises(ValueError, match=r"^Invalid tool JSON payload$") as caught:
         _exercise_tool_json(value, operation)
     assert "secret" not in str(caught.value)
+
+
+def test_nested_tool_result_chain_leaves_later_messages_inspected() -> None:
+    chain = reduce(
+        lambda content, _: [{"type": "tool_result", "tool_use_id": "tool", "content": content}],
+        range(1500),
+        [{"type": "text", "text": "inner"}],
+    )
+    data = {"messages": [{"role": "assistant", "content": chain}, {"role": "user", "content": "secret"}]}
+    assert "secret" in tuple(iter_message_text(data))
+    walk_user_text(data, lambda text: text.replace("secret", "[MASKED]"))
+    assert data["messages"][1]["content"] == "[MASKED]"
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    ('{"token":"secret","limit":1e400}', '{"token":"secret","limit":-Infinity}', '{"token":"secret","ratio":NaN}'),
+)
+def test_tool_arguments_with_non_finite_numbers_keep_their_original_bytes(arguments: str) -> None:
+    data = {"messages": [{"tool_calls": [{"function": {"arguments": arguments}}]}]}
+    assert walk_user_text(data, lambda text: text.replace("secret", "[MASKED]")) == 1
+    assert data["messages"][0]["tool_calls"][0]["function"]["arguments"] == arguments.replace("secret", "[MASKED]")
+
+
+@pytest.mark.parametrize(
+    "data",
+    (
+        {"messages": [{"content": [{"type": "tool_use", "input": {"a": "first", "b": [7, {"c": "second"}, "third"]}}]}]},
+        {"messages": [{"tool_calls": [{"function": {"arguments": '{"a":"first","b":[7,{"c":"second"},"third"]}'}}]}]},
+    ),
+)
+def test_native_reader_yields_one_fragment_per_tool_payload(data) -> None:
+    assert tuple(iter_message_text(data)) == ("first\nsecond\nthird",)
