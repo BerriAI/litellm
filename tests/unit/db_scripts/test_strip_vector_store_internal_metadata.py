@@ -76,6 +76,7 @@ def test_dry_run_lists_matching_key_names_without_values_and_sends_no_update(cap
     assert "hash-value-1" not in out
     assert "member@example.com" not in out
     assert _posts(seen) == []
+    assert {request.headers["authorization"] for request in seen} == {"Bearer sk-test"}
 
 
 def test_apply_nulls_exactly_the_proxy_written_keys_and_leaves_caller_keys_alone(capsys):
@@ -119,6 +120,37 @@ def test_listing_follows_has_more_with_the_last_store_id(capsys):
     assert "scanned=3 matched=1" in capsys.readouterr().out
 
 
+def test_listing_walks_more_pages_than_the_interpreter_recursion_limit(capsys):
+    stores: Final = tuple({"id": f"vs_{index}", "metadata": None} for index in range(sys.getrecursionlimit() + 50))
+    transport, _ = _fake_openai(stores, page_size=1)
+
+    assert _run([], transport) == 0
+    assert f"scanned={len(stores)} matched=0" in capsys.readouterr().out
+
+
+def test_non_string_metadata_values_are_scanned_without_printing_them(capsys):
+    transport, _ = _fake_openai(({"id": "vs_9", "metadata": {"user_api_key": "secret-value", "count": 7}},))
+
+    exit_code: Final = _run([], transport)
+
+    out: Final = capsys.readouterr().out
+    assert exit_code == 0
+    assert "vs_9: would delete 1 keys: user_api_key" in out
+    assert "secret-value" not in out
+
+
+def test_an_unexpected_response_shape_exits_non_zero_without_echoing_metadata(capsys):
+    def malformed(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": [{"metadata": {"user_api_key": "secret-value"}}], "has_more": False})
+
+    exit_code: Final = _run([], httpx.MockTransport(malformed))
+
+    captured: Final = capsys.readouterr()
+    assert exit_code == 2
+    assert "unexpected vector store response shape" in captured.err
+    assert "secret-value" not in captured.out + captured.err
+
+
 def test_vector_store_id_retrieves_only_the_named_stores_without_listing(capsys):
     transport, seen = _fake_openai((POLLUTED, CLEAN, NO_METADATA))
 
@@ -148,6 +180,13 @@ def test_a_listing_error_exits_non_zero_without_updating_anything():
 
     assert _run(["--apply"], httpx.MockTransport(reject)) == 2
     assert [request.method for request in seen] == ["GET"]
+
+
+def test_an_unreachable_api_exits_non_zero():
+    def unreachable(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    assert _run([], httpx.MockTransport(unreachable)) == 2
 
 
 def test_an_api_key_is_required(monkeypatch):

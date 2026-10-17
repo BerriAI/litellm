@@ -3,10 +3,11 @@ import os
 import sys
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
+from itertools import accumulate, repeat, takewhile
 from typing import Final, Literal, TextIO
 
 import httpx
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, JsonValue, ValidationError
 
 DEFAULT_API_BASE: Final = "https://api.openai.com/v1"
 LIST_PAGE_SIZE: Final = "100"
@@ -36,7 +37,7 @@ class VectorStore(BaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     id: str
-    metadata: dict[str, str] | None = None
+    metadata: dict[str, JsonValue] | None = None
 
 
 class VectorStorePage(BaseModel):
@@ -88,14 +89,23 @@ def matching_keys(store: VectorStore, extra_keys: frozenset[str]) -> tuple[str, 
     return tuple(sorted(key for key in (store.metadata or {}) if is_proxy_written_key(key, extra_keys)))
 
 
-def list_all_stores(client: httpx.Client, after: str | None = None) -> Iterator[VectorStore]:
+def fetch_page(client: httpx.Client, after: str | None) -> VectorStorePage:
     params: Final = {"limit": LIST_PAGE_SIZE} if after is None else {"limit": LIST_PAGE_SIZE, "after": after}
-    page: Final = VectorStorePage.model_validate_json(
-        client.get("/vector_stores", params=params).raise_for_status().content
+    return VectorStorePage.model_validate_json(client.get("/vector_stores", params=params).raise_for_status().content)
+
+
+def fetch_next_page(client: httpx.Client, page: VectorStorePage | None) -> VectorStorePage | None:
+    if page is None or not page.has_more or not page.data:
+        return None
+    return fetch_page(client, after=page.data[-1].id)
+
+
+def list_all_stores(client: httpx.Client) -> Iterator[VectorStore]:
+    pages: Final = accumulate(
+        repeat(None), lambda page, _: fetch_next_page(client, page), initial=fetch_page(client, after=None)
     )
-    yield from page.data
-    if page.has_more and page.data:
-        yield from list_all_stores(client, after=page.data[-1].id)
+    for page in takewhile(lambda page: page is not None, pages):
+        yield from page.data
 
 
 def retrieve_stores(client: httpx.Client, store_ids: tuple[str, ...]) -> Iterator[VectorStore]:
@@ -204,6 +214,9 @@ def main(argv: Sequence[str] | None = None, transport: httpx.BaseTransport | Non
             return 2
         except httpx.TransportError as error:
             sys.stderr.write(f"could not reach {options.api_base}: {type(error).__name__}\n")
+            return 2
+        except ValidationError:
+            sys.stderr.write(f"unexpected vector store response shape from {options.api_base}\n")
             return 2
 
 
