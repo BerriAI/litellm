@@ -2384,7 +2384,7 @@ class Logging(LiteLLMLoggingBaseClass):
             await self.async_failure_handler(exception, traceback_exception)
         finally:
             if self._should_run_sync_failure_callbacks_for_async_calls():
-                executor.submit(self.failure_handler, exception, traceback_exception)
+                executor.submit(self.failure_handler, exception, traceback_exception, for_async_request=True)
 
     def should_run_logging(
         self,
@@ -3422,12 +3422,15 @@ class Logging(LiteLLMLoggingBaseClass):
                                 call_details["complete_response"] = call_details.get("complete_streaming_response", {})
                                 result = call_details_view["complete_response"]
 
-                            callback.log_success_event(
-                                kwargs=call_details,
-                                response_obj=result,
-                                start_time=start_time,
-                                end_time=end_time,
-                            )
+                            if not (
+                                for_async_request and self._async_handler_logs_to(callback, "async_log_success_event")
+                            ):
+                                callback.log_success_event(
+                                    kwargs=call_details,
+                                    response_obj=result,
+                                    start_time=start_time,
+                                    end_time=end_time,
+                                )
                     if (
                         callable(callback) is True and is_sync_request and customLogger is not None
                     ):  # custom logger functions
@@ -3958,6 +3961,8 @@ class Logging(LiteLLMLoggingBaseClass):
         traceback_exception: str,
         start_time: datetime.datetime | None = None,
         end_time: datetime.datetime | None = None,
+        *,
+        for_async_request: bool = False,
     ) -> None:
         """Restores trace_id/session_id contextvars once this attempt's own failure
         logging (including any nested calls its callbacks trigger) is fully done."""
@@ -3967,6 +3972,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 traceback_exception=traceback_exception,
                 start_time=start_time,
                 end_time=end_time,
+                for_async_request=for_async_request,
             )
         finally:
             self._restore_correlation_context()
@@ -3977,6 +3983,7 @@ class Logging(LiteLLMLoggingBaseClass):
         traceback_exception: str,
         start_time: datetime.datetime | None = None,
         end_time: datetime.datetime | None = None,
+        for_async_request: bool = False,
     ) -> None:
         verbose_logger.debug("Logging Details LiteLLM-Failure Call: %s", litellm.failure_callback)
         if not self.should_run_logging(event_type="sync_failure"):  # prevent double logging
@@ -4069,6 +4076,7 @@ class Logging(LiteLLMLoggingBaseClass):
                         isinstance(callback, CustomLogger)
                         and is_sync_request
                         and self.call_type != CallTypes.pass_through.value
+                        and not (for_async_request and self._async_handler_logs_to(callback, "async_log_failure_event"))
                     ):  # custom logger class
                         callback.log_failure_event(
                             start_time=start_time,
@@ -4376,6 +4384,18 @@ class Logging(LiteLLMLoggingBaseClass):
 
         cb_name: Final = self._get_callback_name(cb)
         return any(prefix in cb_name for prefix in INTERNAL_PREFIXES)
+
+    def _async_handler_logs_to(
+        self,
+        logger: CustomLogger,
+        async_hook: Literal["async_log_success_event", "async_log_failure_event"],
+    ) -> bool:
+        """True when the async handler gives ``logger`` its own ``async_hook`` for this call."""
+        if getattr(type(logger), async_hook) is getattr(CustomLogger, async_hook):
+            return False
+        if async_hook == "async_log_failure_event":
+            return logger in (self.dynamic_async_failure_callbacks or []) or logger in litellm._async_failure_callback  # pyright: ignore[reportUnknownMemberType, reportPrivateUsage]  # callback lists are untyped and have no public accessor
+        return logger in (self.dynamic_async_success_callbacks or []) or logger in litellm._async_success_callback  # pyright: ignore[reportUnknownMemberType, reportPrivateUsage]  # callback lists are untyped and have no public accessor
 
     def _remove_internal_custom_logger_callbacks(self, callbacks: list) -> list:
         """
