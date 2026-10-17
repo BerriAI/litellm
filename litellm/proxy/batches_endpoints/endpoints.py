@@ -19,7 +19,6 @@ from litellm.batches.main import CancelBatchRequest, RetrieveBatchRequest
 from litellm.litellm_core_utils.hidden_params import get_hidden_params, set_hidden_param
 from litellm.llms.openai.workload_identity import resolve_openai_workload_identity_config
 from litellm.proxy._types import *
-from litellm.proxy.auth.auth_utils import model_name_for_access_check
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.batches_endpoints.common_utils import validate_batch_list_limit
 from litellm.proxy.batches_endpoints.litellm_executed_batches import (
@@ -612,10 +611,11 @@ async def retrieve_batch(
 
         unified_model_id: Final = get_model_id_from_unified_batch_id(unified_batch_id) if unified_batch_id else None
         if unified_model_id is not None:
+            resolved_unified_model: Final = (
+                llm_router.resolve_model_name_from_model_id(unified_model_id) if llm_router is not None else None
+            )
             await authorize_model_for_key(
-                model_id=model_name_for_access_check(
-                    model_id=unified_model_id, llm_router=llm_router, team_id=user_api_key_dict.team_id
-                ),
+                model_id=resolved_unified_model or unified_model_id,
                 llm_router=llm_router,
                 user_api_key_dict=user_api_key_dict,
             )
@@ -1120,10 +1120,11 @@ async def cancel_batch(
 
         unified_model_id: Final = get_model_id_from_unified_batch_id(unified_batch_id) if unified_batch_id else None
         if unified_model_id is not None:
+            resolved_unified_model: Final = (
+                llm_router.resolve_model_name_from_model_id(unified_model_id) if llm_router is not None else None
+            )
             await authorize_model_for_key(
-                model_id=model_name_for_access_check(
-                    model_id=unified_model_id, llm_router=llm_router, team_id=user_api_key_dict.team_id
-                ),
+                model_id=resolved_unified_model or unified_model_id,
                 llm_router=llm_router,
                 user_api_key_dict=user_api_key_dict,
             )

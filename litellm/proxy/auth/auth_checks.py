@@ -4803,6 +4803,24 @@ def check_model_access_helper(
 _check_model_access_helper: Final = check_model_access_helper
 
 
+def _owning_team_names_for_team_deployment(
+    model: str,
+    llm_router: Router | None,
+    team_id: str | None,
+    team_model_aliases: Mapping[str, str] | None,
+) -> tuple[str, ...]:
+    if llm_router is None or team_id is None or not model.startswith(f"model_name_{team_id}_"):
+        return ()
+    deployment: Final = llm_router.get_deployment_by_model_group_name(model_group_name=model)
+    public_name: Final = (
+        deployment.model_info.team_public_model_name
+        if deployment is not None and deployment.model_info.team_id == team_id
+        else None
+    )
+    legacy_aliases: Final = tuple(alias for alias, target in (team_model_aliases or {}).items() if target == model)
+    return (*((public_name,) if public_name else ()), *legacy_aliases)
+
+
 def _can_object_call_model(
     model: str | list[str],
     llm_router: Router | None,
@@ -4872,6 +4890,9 @@ def _can_object_call_model(
         else (
             *((model, compaction_parent) if compaction_parent is not None else (model,)),
             *((global_or_router_alias_target,) if global_or_router_alias_target else ()),
+            *_owning_team_names_for_team_deployment(
+                model=model, llm_router=llm_router, team_id=team_id, team_model_aliases=team_model_aliases
+            ),
         )
     )
 
