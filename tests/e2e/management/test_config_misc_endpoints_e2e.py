@@ -471,10 +471,16 @@ class TestFallbackManagement:
         assert after == config_rules, (
             f"the refused write changed router_settings.fallbacks from {config_rules} to {after}"
         )
+        match self._get_fallback(client, primary, "general"):
+            case UnknownApiError(status_code=404):
+                pass
+            case refused_rule:
+                pytest.fail(f"the refused rule for {primary} is served anyway: {refused_rule}")
         config_model, config_targets = next(iter(config_rules[0].items()))
         served = unwrap(self._get_fallback(client, config_model, "general"))
         assert served.fallback_models == config_targets, (
-            f"GET /fallback/{config_model} reports {served.fallback_models}, the config file routes it to {config_targets}"
+            f"GET /fallback/{config_model} reports {served.fallback_models}, "
+            f"the config file routes it to {config_targets}"
         )
 
     @staticmethod
