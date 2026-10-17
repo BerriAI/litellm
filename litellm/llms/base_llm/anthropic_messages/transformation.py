@@ -138,6 +138,9 @@ class BaseAnthropicMessagesConfig(ABC):
         """
         return True
 
+    def supports_safeguards(self) -> bool:
+        return True
+
     def handles_web_search_natively(self) -> bool:
         """
         Whether the upstream this config routes to executes ``web_search`` tools

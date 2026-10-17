@@ -192,7 +192,10 @@ class DatabricksBase:
     @staticmethod
     def configured_user_agent(litellm_params: Mapping[str, object]) -> str | None:
         configured: Final = (
-            litellm_params.get("user_agent") or os.getenv("LITELLM_USER_AGENT") or os.getenv("DATABRICKS_USER_AGENT")
+            litellm_params.get("user_agent")
+            or litellm_params.get("databricks_user_agent")
+            or os.getenv("LITELLM_USER_AGENT")
+            or os.getenv("DATABRICKS_USER_AGENT")
         )
         return configured if isinstance(configured, str) else None
 

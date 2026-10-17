@@ -151,12 +151,17 @@ def _native_messages_config(
     return OpenAILikeAnthropicMessagesConfig(cache_control_ttl=_deployment_supports_cache_control_ttl(model_info))
 
 
-def proxy_classifies_tool_uses(model: str, custom_llm_provider: str | None, kwargs: Mapping[str, object]) -> bool:
-    """Whether this proxy, rather than the upstream, answers ``safeguards`` for a request routed this way."""
-    safeguards: Final = kwargs.get("safeguards")
-    if _native_messages_config(model, custom_llm_provider, kwargs.get("model_info")) is not None:
+def _proxy_classifies(model: str, safeguards: object, native_config: BaseAnthropicMessagesConfig | None) -> bool:
+    if native_config is not None and native_config.supports_safeguards():
         return native_route_classifies(model, safeguards)
     return requested_dangerous_tool_use(safeguards) is not None and read_classifier_model_setting() is not None
+
+
+def proxy_classifies_tool_uses(model: str, custom_llm_provider: str | None, kwargs: Mapping[str, object]) -> bool:
+    """Whether this proxy, rather than the upstream, answers ``safeguards`` for a request routed this way."""
+    return _proxy_classifies(
+        model, kwargs.get("safeguards"), _native_messages_config(model, custom_llm_provider, kwargs.get("model_info"))
+    )
 
 
 ####### ENVIRONMENT VARIABLES ###################
@@ -686,7 +691,8 @@ def anthropic_messages_handler(
     )
     safeguards_evaluator: Final = (
         request_safeguards_evaluator(safeguard_kwargs, _SAFEGUARD_MESSAGES.validate_python(messages))
-        if safeguard_kwargs is not None and native_route_classifies(model, safeguard_kwargs.get("safeguards"))
+        if safeguard_kwargs is not None
+        and _proxy_classifies(model, safeguard_kwargs.get("safeguards"), anthropic_messages_provider_config)
         else None
     )
     native_response: Final = base_llm_http_handler.anthropic_messages_handler(

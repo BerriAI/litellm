@@ -63,9 +63,6 @@ class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
     def should_filter_anthropic_beta_headers(self) -> bool:
         return False
 
-    def supports_safeguards(self) -> bool:
-        return False
-
     def supports_cache_control_ttl(self) -> bool:
         return self._cache_control_ttl
 
@@ -132,6 +129,9 @@ class JSONProviderAnthropicMessagesConfig(OpenAILikeAnthropicMessagesConfig):
 
     def should_strip_billing_metadata(self) -> bool:
         return True
+
+    def supports_safeguards(self) -> bool:
+        return False
 
     def _resolve_api_key(self, api_key: str | None) -> str | None:
         return api_key or get_secret_str(self._provider.api_key_env) or litellm.api_key

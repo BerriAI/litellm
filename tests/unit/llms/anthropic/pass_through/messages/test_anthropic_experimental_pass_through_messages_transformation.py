@@ -139,16 +139,25 @@ class _BetaMapRejectsTheClassifierConfig(AnthropicMessagesConfig):
 
 
 def _no_classifier_configs() -> tuple[AnthropicMessagesConfig, ...]:
-    from litellm.llms.openai_like.messages.transformation import OpenAILikeAnthropicMessagesConfig
+    from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+    from litellm.llms.openai_like.messages.transformation import JSONProviderAnthropicMessagesConfig
 
-    return (OpenAILikeAnthropicMessagesConfig(), _BetaMapRejectsTheClassifierConfig())
+    sail: Final = JSONProviderRegistry.get("sail")
+    assert sail is not None
+    return (JSONProviderAnthropicMessagesConfig(sail), _BetaMapRejectsTheClassifierConfig())
 
 
-def _configs_the_beta_map_does_not_list() -> tuple[AnthropicMessagesConfig, ...]:
+def _configs_that_forward_safeguards_as_sent() -> tuple[AnthropicMessagesConfig, ...]:
     from litellm.llms.deepseek.messages.transformation import DeepSeekAnthropicMessagesConfig
     from litellm.llms.github_copilot.messages.transformation import GithubCopilotAnthropicMessagesConfig
+    from litellm.llms.openai_like.messages.transformation import OpenAILikeAnthropicMessagesConfig
 
-    return (DeepSeekAnthropicMessagesConfig(), GithubCopilotAnthropicMessagesConfig(), MinimaxMessagesConfig())
+    return (
+        DeepSeekAnthropicMessagesConfig(),
+        GithubCopilotAnthropicMessagesConfig(),
+        MinimaxMessagesConfig(),
+        OpenAILikeAnthropicMessagesConfig(),
+    )
 
 
 def _safeguards_request(config: AnthropicMessagesConfig) -> dict:
@@ -185,12 +194,13 @@ def test_routes_whose_platform_runs_the_classifier_keep_safeguards_and_the_beta(
     assert _derived_beta_header(config)["anthropic-beta"] == DANGEROUS_TOOL_USE_BETA
 
 
-@pytest.mark.parametrize("config", _configs_the_beta_map_does_not_list(), ids=type)
-def test_routes_the_beta_map_does_not_list_forward_safeguards_and_the_beta_as_sent(
+@pytest.mark.parametrize("config", _configs_that_forward_safeguards_as_sent(), ids=type)
+def test_unjudged_routes_forward_safeguards_and_the_beta_as_sent(
     config: AnthropicMessagesConfig, local_beta_headers_config: None
 ) -> None:
-    """A platform the beta header map has no column for was never judged, so the request
-    reaches it the way the caller sent it, as it did before the pair could be dropped."""
+    """A platform the beta header map has no column for, or a deployment the operator opted into
+    /v1/messages passthrough, was never judged, so the request reaches it the way the caller
+    sent it, as it did before the pair could be dropped."""
     assert _safeguards_request(config)["safeguards"] == AUTO_MODE_SAFEGUARDS
     assert _beta_header(config, DANGEROUS_TOOL_USE_BETA)["anthropic-beta"] == DANGEROUS_TOOL_USE_BETA
     assert _derived_beta_header(config)["anthropic-beta"] == DANGEROUS_TOOL_USE_BETA

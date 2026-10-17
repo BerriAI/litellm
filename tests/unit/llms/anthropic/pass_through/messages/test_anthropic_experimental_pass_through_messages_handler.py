@@ -1842,6 +1842,20 @@ async def test_native_claude_messages_response_is_left_to_claude_code_when_its_b
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+async def test_native_claude_route_that_drops_safeguards_gets_the_classifier_verdict(stream: bool):
+    response = await _native_messages(
+        "sail/claude-sonnet-4-6", _native_upstream(stream=stream, model="claude-sonnet-4-6"), stream=stream
+    )
+
+    if stream:
+        message_deltas = [event for event in response if event["type"] == "message_delta"]
+        assert [delta["delta"]["safeguard_results"] for delta in message_deltas] == [_FLAGGED_CURL]
+    else:
+        assert list(response["safeguard_results"]) == _FLAGGED_CURL
+
+
+@pytest.mark.asyncio
 async def test_anthropic_messages_litellm_router_latency_metadata_tracking():
     """
     Test the anthropic_messages with routing strategy and verify that _latency_per_deployment

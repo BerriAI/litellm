@@ -266,6 +266,56 @@ def _reply(request: httpx.Request, body: dict[str, object]) -> httpx.Response:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("user_agent_param", ["databricks_user_agent", "user_agent"])
+async def test_per_call_partner_user_agent_reaches_the_workspace_like_the_chat_route(user_agent_param: str) -> None:
+    received: Final[list[httpx.Request]] = []  # mutable-ok: the fake workspace records what litellm sent
+
+    def workspace_answers(request: httpx.Request) -> httpx.Response:
+        received.append(request)
+        return _reply(
+            request,
+            {
+                "id": "msg_bdrk_01",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-6",
+                "content": [{"type": "text", "text": "hello"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 12, "output_tokens": 6},
+            },
+        )
+
+    upstream: Final = AsyncHTTPHandler(transport=httpx.MockTransport(workspace_answers))
+    try:
+        await litellm.anthropic.messages.acreate(
+            max_tokens=64,
+            messages=USER_TURN,
+            model=f"databricks/{CLAUDE_MODEL}",
+            api_key=DATABRICKS_API_KEY,
+            api_base=DATABRICKS_API_BASE,
+            client=upstream,
+            **{user_agent_param: "partnerx/1.0"},
+        )
+    finally:
+        await upstream.close()
+    chat_headers: Final = DatabricksConfig().validate_environment(
+        headers={},
+        model=CLAUDE_MODEL,
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={user_agent_param: "partnerx/1.0"},
+        litellm_params={},
+        api_key=DATABRICKS_API_KEY,
+        api_base=DATABRICKS_API_BASE,
+    )
+
+    assert len(received) == 1
+    assert received[0].headers["user-agent"].startswith("partnerx_litellm/")
+    assert received[0].headers["user-agent"] == chat_headers["User-Agent"]
+    assert user_agent_param not in json.loads(received[0].content)
+
+
+@pytest.mark.asyncio
 async def test_safeguards_reach_the_workspace_and_safeguard_results_come_back(
     local_beta_headers_config: None,
 ) -> None:
