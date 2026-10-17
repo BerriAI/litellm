@@ -530,3 +530,49 @@ def test_fake_streamed_json_mode_answer_closes_merged_reasoning_before_the_answe
     assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == (
         f"<think>{answer.choices[0].message.reasoning_content}</think>{answer.choices[0].message.content}"
     )
+
+
+_UPSTREAM_ERROR_BODY: Final = '{"message":"The request is invalid."}'
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    "model", ["us.anthropic.claude-sonnet-4-5-20250929-v1:0", "us.anthropic.claude-opus-4-8"], ids=["sonnet", "opus"]
+)
+@pytest.mark.parametrize(
+    ("upstream_status", "error_class", "status_code"),
+    [
+        (400, litellm.BadRequestError, 400),
+        (429, litellm.RateLimitError, 429),
+        (500, litellm.ServiceUnavailableError, 503),
+        (503, litellm.ServiceUnavailableError, 503),
+    ],
+)
+def test_sync_converse_streaming_upstream_error_carries_the_upstream_body_as_text(
+    model: str,
+    upstream_status: int,
+    error_class: type[litellm.BadRequestError | litellm.RateLimitError | litellm.ServiceUnavailableError],
+    status_code: int,
+) -> None:
+    client: Final = HTTPHandler(
+        client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(upstream_status, content=_UPSTREAM_ERROR_BODY.encode())
+            )
+        )
+    )
+
+    with pytest.raises(error_class) as raised:
+        litellm.completion(
+            model=f"bedrock/converse/{model}",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            num_retries=0,
+            aws_access_key_id="fake",
+            aws_secret_access_key="fake",
+            aws_region_name="us-east-1",
+            client=client,
+        )
+
+    assert raised.value.status_code == status_code
+    assert raised.value.message == f"litellm.{error_class.__name__}: BedrockException - {_UPSTREAM_ERROR_BODY}"

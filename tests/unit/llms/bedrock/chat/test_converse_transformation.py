@@ -10581,3 +10581,105 @@ def test_map_openai_params_drops_the_openai_tool_search_tool_and_every_deferral_
     )
     assert [tool["function"]["name"] for tool in mapped["tools"]] == ["get_weather", "get_stock_price"]
     assert all("defer_loading" not in tool and "defer_loading" not in tool["function"] for tool in mapped["tools"])
+
+
+def _converse_params(
+    model: str, model_info: Mapping[str, object] | None, non_default_params: Mapping[str, object]
+) -> Mapping[str, object]:
+    return AmazonConverseConfig().map_openai_params(
+        non_default_params=dict(non_default_params),
+        optional_params={},
+        model=model,
+        drop_params=False,
+        model_info=model_info,
+    )
+
+
+_OUTPUT_CONFIG_FORMAT: Final = {
+    "output_config": {"format": {"type": "json_schema", "schema": CAPITAL_RESPONSE_FORMAT["json_schema"]["schema"]}}
+}
+
+
+@pytest.mark.parametrize(
+    "request_params",
+    [
+        {"response_format": CAPITAL_RESPONSE_FORMAT, "thinking": ADAPTIVE_THINKING},
+        {"response_format": CAPITAL_RESPONSE_FORMAT, "reasoning_effort": "low"},
+        {"response_format": CAPITAL_RESPONSE_FORMAT, "thinking": {"type": "enabled", "budget_tokens": 2048}},
+        _OUTPUT_CONFIG_FORMAT,
+    ],
+    ids=["adaptive", "reasoning_effort", "budget", "output_config_format"],
+)
+@pytest.mark.parametrize("model", ["us.anthropic.claude-opus-4-8", "global.anthropic.claude-sonnet-5"])
+def test_uses_opt_in_native_output_when_the_opt_in_drove_native_output(local_model_cost_map, model, request_params):
+    optional_params: Final = _converse_params(model, None, request_params)
+
+    assert AmazonConverseConfig().uses_opt_in_native_output(model, optional_params, {"model_info": {"id": "d1"}})
+
+
+@pytest.mark.parametrize(
+    ("model", "model_info", "request_params"),
+    [
+        ("us.anthropic.claude-opus-4-8", None, {"response_format": CAPITAL_RESPONSE_FORMAT}),
+        (
+            "us.anthropic.claude-opus-4-8",
+            {"supports_bedrock_native_structured_output": False},
+            {"response_format": CAPITAL_RESPONSE_FORMAT, "thinking": ADAPTIVE_THINKING},
+        ),
+        (
+            "us.anthropic.claude-sonnet-4-6",
+            {"supports_bedrock_native_structured_output": True},
+            {"response_format": CAPITAL_RESPONSE_FORMAT, "thinking": ADAPTIVE_THINKING},
+        ),
+    ],
+    ids=["no_thinking", "deployment_opt_out", "native_model"],
+)
+def test_uses_opt_in_native_output_is_false_when_native_output_did_not_come_from_the_opt_in(
+    local_model_cost_map, model, model_info, request_params
+):
+    optional_params: Final = _converse_params(model, model_info, request_params)
+
+    assert not AmazonConverseConfig().uses_opt_in_native_output(model, optional_params, {"model_info": model_info})
+
+
+def test_uses_opt_in_native_output_reads_the_base_model_of_an_application_inference_profile(local_model_cost_map):
+    profile: Final = "arn:aws:bedrock:us-east-1:000000000000:application-inference-profile/profile-id"
+    litellm_params: Final = {"base_model": "bedrock/us.anthropic.claude-opus-4-8"}
+    optional_params: Final = _converse_params(
+        "us.anthropic.claude-opus-4-8",
+        None,
+        {"response_format": CAPITAL_RESPONSE_FORMAT, "thinking": ADAPTIVE_THINKING},
+    )
+
+    assert AmazonConverseConfig().uses_opt_in_native_output(profile, optional_params, litellm_params)
+
+
+_CALLER_OUTPUT_CONFIG_WITH_A_SCHEMA_OBJECT: Final = {
+    "textFormat": {"type": "json_schema", "structure": {"jsonSchema": {"name": "capital", "schema": {"type": "object"}}}}
+}
+_BEDROCK_SCHEMA_TYPE_ERROR: Final = "outputConfig.textFormat.structure.jsonSchema.schema must be a string"
+
+
+@pytest.mark.parametrize("model", [_OPUS, _LLAMA], ids=["opt_in", "not_opt_in"])
+@pytest.mark.respx(assert_all_called=True)
+def test_a_malformed_caller_output_config_gets_bedrocks_own_400(
+    model: str, respx_mock: respx.Router, local_model_cost_map: None
+) -> None:
+    route: Final = respx_mock.post(url__regex=r"/converse$").mock(
+        return_value=httpx.Response(400, json={"message": _BEDROCK_SCHEMA_TYPE_ERROR})
+    )
+
+    with pytest.raises(litellm.BadRequestError, match=re.escape(_BEDROCK_SCHEMA_TYPE_ERROR)):
+        completion(
+            model=f"bedrock/converse/{model}",
+            messages=[{"role": "user", "content": "What is the capital of France?"}],
+            response_format=CAPITAL_RESPONSE_FORMAT,
+            outputConfig=_CALLER_OUTPUT_CONFIG_WITH_A_SCHEMA_OBJECT,
+            num_retries=0,
+            aws_access_key_id="fake",
+            aws_secret_access_key="fake",
+            aws_region_name="us-east-1",
+            client=HTTPHandler(),
+        )
+
+    assert route.call_count == 1
