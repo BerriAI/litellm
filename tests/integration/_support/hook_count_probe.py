@@ -50,7 +50,22 @@ class HookCountProbe(CustomLogger):
         await _send_async("async_failure", kwargs)
 
 
+class SyncOnlyHookCountProbe(CustomLogger):
+    """Overrides only the sync success and failure hooks."""
+
+    def log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        _send("sync_success", kwargs)
+
+    def log_failure_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        _send("sync_failure", kwargs)
+
+
 probe: Final = HookCountProbe()
+sync_only_probe: Final = SyncOnlyHookCountProbe()
 
 
 def sync_success_function(
