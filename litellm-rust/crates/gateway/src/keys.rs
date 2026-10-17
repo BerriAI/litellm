@@ -39,24 +39,16 @@ impl KeyLookup for PostgresKeys {
     }
 }
 
-/// The key store, when a database is configured: `general_settings.database_url` (which may be
+/// The proxy's database, when one is configured: `general_settings.database_url` (which may be
 /// an `os.environ/` reference) or else `DATABASE_URL`, as the Python proxy resolves it. The pool
 /// connects on first use, so the gateway starts, and the master key works, with the database down.
-pub async fn store(
+pub async fn database(
     config: &Config,
     secrets: &dyn SecretSource,
-) -> Result<Option<Arc<dyn KeyLookup>>, Error> {
+) -> Result<Option<PgPool>, Error> {
     let Some(url) = database_url(config, secrets).await? else {
         return Ok(None);
     };
-    // Inference does not run global guardrails or policies, so a virtual key would get past
-    // them; refuse to start rather than serve keys the operator expects to be guarded.
-    if !config.guardrails.is_empty()
-        || !config.policies.is_empty()
-        || !config.policy_attachments.is_empty()
-    {
-        return Err(Error::GuardedVirtualKeys);
-    }
     let general = &config.general_settings;
     let defaults = PoolSettings::default();
     let settings = PoolSettings {
@@ -73,11 +65,23 @@ pub async fn store(
             .and_then(|seconds| Duration::try_from_secs_f64(seconds).ok())
             .or(defaults.idle_timeout),
     };
-    let pool = litellm_db::connect_lazy(url.expose(), &settings)?;
-    Ok(Some(Arc::new(PostgresKeys {
+    Ok(Some(litellm_db::connect_lazy(url.expose(), &settings)?))
+}
+
+/// The key store over the proxy's database.
+pub fn store(config: &Config, pool: PgPool) -> Result<Arc<dyn KeyLookup>, Error> {
+    // Inference does not run global guardrails or policies, so a virtual key would get past
+    // them; refuse to start rather than serve keys the operator expects to be guarded.
+    if !config.guardrails.is_empty()
+        || !config.policies.is_empty()
+        || !config.policy_attachments.is_empty()
+    {
+        return Err(Error::GuardedVirtualKeys);
+    }
+    Ok(Arc::new(PostgresKeys {
         pool,
         personal_keys_use_teams: personal_keys_use_teams(config),
-    })))
+    }))
 }
 
 /// `litellm_settings.personal_key_model_access_from_teams`.

@@ -91,8 +91,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
             },
         )
     });
-    let keys = litellm_gateway::build_keys(&config, inference.secrets.as_ref())
-        .await?
+    let database = litellm_gateway::build_database(&config, inference.secrets.as_ref()).await?;
+    let keys = database
+        .clone()
+        .map(|pool| litellm_gateway::build_keys_on(&config, pool))
+        .transpose()?
         .map(|keys| litellm_gateway::key_cache(keys, &config));
     let virtual_keys = keys.is_some();
     let coordination =
@@ -109,7 +112,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
         coordination.start(inference.clone(), keys.clone(), shutdown.clone());
     }
     // Built-in hooks and observers are added here as the gateway gains them.
-    litellm_gateway::hooks::install(&inference, &config, Vec::new(), Vec::new()).await?;
+    let mut observers: Vec<Arc<dyn litellm_gateway_hooks::Observer>> = Vec::new();
+    let spend = database.zip(litellm_gateway::spend::SpendSettings::from_config(&config));
+    let spend_tracking = spend.is_some();
+    if let Some((pool, settings)) = spend {
+        observers.push(litellm_gateway::spend::SpendWriter::start(pool, settings));
+    }
+    litellm_gateway::hooks::install(&inference, &config, Vec::new(), observers).await?;
     let listener = tokio::net::TcpListener::bind((settings.host.as_str(), settings.port)).await?;
     let address = listener.local_addr()?;
     // Without TCP_NODELAY, Nagle holds small SSE chunks until the client's delayed ACK (~40 ms per stream).
@@ -120,7 +129,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     });
 
     let shared_state = coordination.is_some();
-    tracing::info!(%address, models = config.model_list.len(), virtual_keys, shared_state, log_level = %level, "gateway listening");
+    tracing::info!(%address, models = config.model_list.len(), virtual_keys, shared_state, spend_tracking, log_level = %level, "gateway listening");
 
     let draining = litellm_gateway::health::Draining::default();
     let metrics = litellm_gateway::metrics::Metrics::new(&config, draining.flag());
