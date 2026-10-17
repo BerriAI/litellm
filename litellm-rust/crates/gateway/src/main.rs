@@ -140,6 +140,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     if let Some((pool, settings)) = spend {
         observers.push(litellm_gateway::spend::SpendWriter::start(pool, settings));
     }
+    let prometheus = litellm_gateway::prometheus::Prometheus::from_config(&config)?.map(Arc::new);
+    if let Some(prometheus) = &prometheus {
+        observers.push(prometheus.clone());
+    }
     litellm_gateway::hooks::install(&inference, &config, hooks, observers).await?;
     let listener = tokio::net::TcpListener::bind((settings.host.as_str(), settings.port)).await?;
     let address = listener.local_addr()?;
@@ -154,7 +158,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     tracing::info!(%address, models = config.model_list.len(), virtual_keys, shared_state, spend_tracking, log_level = %level, "gateway listening");
 
     let draining = litellm_gateway::health::Draining::default();
-    let metrics = litellm_gateway::metrics::Metrics::new(&config, draining.flag());
+    let metrics =
+        litellm_gateway::metrics::Metrics::new(&config, draining.flag()).serve(prometheus);
     let metrics_auth = litellm_gateway::metrics_auth(&config, inference.secrets.clone());
     let app = litellm_gateway::with_ops(
         litellm_gateway::router_with_key_cache(inference.clone(), &config, ui, mcp_router, keys),

@@ -52,7 +52,8 @@ pub(crate) struct Tracking {
     pipeline: Arc<Pipeline>,
     route: Route,
     admission: Admission,
-    deployment: Mutex<Option<DeploymentFacts>>,
+    /// The deployment the latest attempt went to, and when it was sent.
+    deployment: Mutex<Option<(DeploymentFacts, SystemTime)>>,
     started: Instant,
 }
 
@@ -181,7 +182,8 @@ impl Tracking {
             provider: deployment.custom_llm_provider.clone(),
             api_base: deployment.api_base.clone(),
         };
-        *self.deployment.lock().unwrap_or_else(|e| e.into_inner()) = Some(facts);
+        *self.deployment.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some((facts, SystemTime::now()));
     }
 
     /// Adds the hooks' response headers and follows the body to its end; an error is recorded
@@ -194,7 +196,10 @@ impl Tracking {
             deployment,
             started,
         } = self;
-        let deployment = deployment.into_inner().unwrap_or_else(|e| e.into_inner());
+        let (deployment, upstream_started_at) = deployment
+            .into_inner()
+            .unwrap_or_else(|e| e.into_inner())
+            .unzip();
         let mut response = match result {
             Ok(response) => response,
             Err(error) => {
@@ -204,6 +209,7 @@ impl Tracking {
                     usage: None,
                     cost: None,
                     time_to_first_byte: None,
+                    upstream_started_at,
                     ended_at: SystemTime::now(),
                     interrupted: false,
                 };
@@ -237,6 +243,7 @@ impl Tracking {
             route,
             admission: Some(admission),
             deployment,
+            upstream_started_at,
             status: response.status().as_u16(),
             meter,
             started,
@@ -276,6 +283,7 @@ struct Finish {
     route: Route,
     admission: Option<Admission>,
     deployment: Option<DeploymentFacts>,
+    upstream_started_at: Option<SystemTime>,
     status: u16,
     meter: Meter,
     body: Option<Vec<Bytes>>,
@@ -318,6 +326,7 @@ impl Drop for Finish {
             usage: self.usage(),
             cost: None,
             time_to_first_byte: self.first_byte,
+            upstream_started_at: self.upstream_started_at,
             ended_at: SystemTime::now(),
             interrupted: !self.ended,
         };

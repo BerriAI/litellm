@@ -446,7 +446,7 @@ fn status(record: &Record) -> &'static str {
 }
 
 /// The model as the proxy logs it: the deployment's model without its provider route.
-fn logged_model(record: &Record) -> String {
+pub(crate) fn logged_model(record: &Record) -> String {
     match &record.outcome.deployment {
         Some(deployment) => match (deployment.provider(), deployment.model.split_once('/')) {
             (Some(provider), Some((prefix, rest))) if prefix == provider => rest.to_owned(),
