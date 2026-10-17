@@ -11,12 +11,15 @@ Validates that:
 
 import copy
 import json
+from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Literal
+from typing import Literal, TypeAlias
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import respx
+from pydantic import JsonValue
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.caching.caching import DualCache
@@ -2024,14 +2027,113 @@ class TestConverseStreamGuardrailRelay:
         assert _decoded_frames(item) == [("exception", exception_type, {"message": "scan failed"})]
 
 
-def _invoke_chunk_frame(event: dict) -> bytes:
+class _InvokeTextBlock(TypedDict):
+    type: ReadOnly[Literal["text"]]
+    text: ReadOnly[str]
+
+
+class _InvokeToolUseBlock(TypedDict):
+    type: ReadOnly[Literal["tool_use"]]
+    id: ReadOnly[str]
+    name: ReadOnly[str]
+    input: ReadOnly[Mapping[str, JsonValue]]
+
+
+class _InvokeUsage(TypedDict, total=False):
+    input_tokens: ReadOnly[int]
+    output_tokens: ReadOnly[int]
+
+
+class _InvokeMessage(TypedDict, total=False):
+    id: ReadOnly[str]
+    type: ReadOnly[Literal["message"]]
+    role: ReadOnly[Literal["assistant"]]
+    content: ReadOnly[Sequence[_InvokeTextBlock | _InvokeToolUseBlock]]
+    model: ReadOnly[str]
+    stop_reason: ReadOnly[str | None]
+    usage: ReadOnly[_InvokeUsage]
+
+
+class _InvokeTextDelta(TypedDict):
+    type: ReadOnly[Literal["text_delta"]]
+    text: ReadOnly[str]
+
+
+class _InvokeJsonDelta(TypedDict):
+    type: ReadOnly[Literal["input_json_delta"]]
+    partial_json: ReadOnly[str]
+
+
+class _InvokeThinkingDelta(TypedDict):
+    type: ReadOnly[Literal["thinking_delta"]]
+    thinking: ReadOnly[str]
+
+
+class _InvokeSignatureDelta(TypedDict):
+    type: ReadOnly[Literal["signature_delta"]]
+    signature: ReadOnly[str]
+
+
+_InvokeDelta: TypeAlias = _InvokeTextDelta | _InvokeJsonDelta | _InvokeThinkingDelta | _InvokeSignatureDelta
+
+
+class _InvokeMessageStart(TypedDict):
+    type: ReadOnly[Literal["message_start"]]
+    message: ReadOnly[_InvokeMessage]
+
+
+class _InvokeBlockStart(TypedDict):
+    type: ReadOnly[Literal["content_block_start"]]
+    index: ReadOnly[int]
+    content_block: ReadOnly[_InvokeTextBlock | _InvokeToolUseBlock]
+
+
+class _InvokeBlockDelta(TypedDict):
+    type: ReadOnly[Literal["content_block_delta"]]
+    index: ReadOnly[int]
+    delta: ReadOnly[_InvokeDelta]
+
+
+class _InvokeBlockStop(TypedDict):
+    type: ReadOnly[Literal["content_block_stop"]]
+    index: ReadOnly[int]
+
+
+class _InvokeStopReason(TypedDict):
+    stop_reason: ReadOnly[str]
+
+
+class _InvokeMessageDelta(TypedDict):
+    type: ReadOnly[Literal["message_delta"]]
+    delta: ReadOnly[_InvokeStopReason]
+    usage: ReadOnly[_InvokeUsage]
+
+
+class _InvokeMessageStop(TypedDict):
+    type: ReadOnly[Literal["message_stop"]]
+
+
+_InvokeEvent: TypeAlias = (
+    _InvokeMessageStart
+    | _InvokeBlockStart
+    | _InvokeBlockDelta
+    | _InvokeBlockStop
+    | _InvokeMessageDelta
+    | _InvokeMessageStop
+)
+
+
+def _invoke_raw_chunk_frame(event_json: bytes) -> bytes:
     import base64
-    import json
 
     return _build_frame(
         {":event-type": "chunk", ":content-type": "application/json", ":message-type": "event"},
-        json.dumps({"bytes": base64.b64encode(json.dumps(event).encode()).decode(), "p": "abcdef"}).encode(),
+        json.dumps({"bytes": base64.b64encode(event_json).decode(), "p": "abcdef"}).encode(),
     )
+
+
+def _invoke_chunk_frame(event: _InvokeEvent) -> bytes:
+    return _invoke_raw_chunk_frame(json.dumps(event).encode())
 
 
 def _invoke_stream(*deltas: str) -> tuple[bytes, ...]:
@@ -2059,7 +2161,7 @@ def _invoke_card_stream() -> tuple[bytes, ...]:
     return _invoke_stream("Card: 4111 1111 ", "1111 1111.", " Thanks!")
 
 
-def _decoded_invoke_frames(raw: bytes) -> list[tuple[str, dict]]:
+def _decoded_invoke_frames(raw: bytes) -> list[tuple[str, dict[str, JsonValue]]]:
     import base64
     import json
 
@@ -2069,11 +2171,21 @@ def _decoded_invoke_frames(raw: bytes) -> list[tuple[str, dict]]:
     ]
 
 
+def _delta_text(event: Mapping[str, JsonValue]) -> str:
+    delta = event["delta"]
+    assert isinstance(delta, dict) and delta.get("type") == "text_delta", event
+    text = delta["text"]
+    assert isinstance(text, str), event
+    return text
+
+
 def _streamed_text(raw: bytes) -> str:
     return "".join(
-        event["delta"]["text"]
+        _delta_text(event)
         for _, event in _decoded_invoke_frames(raw)
-        if event.get("type") == "content_block_delta" and event["delta"].get("type") == "text_delta"
+        if event.get("type") == "content_block_delta"
+        and isinstance(delta := event.get("delta"), dict)
+        and delta.get("type") == "text_delta"
     )
 
 
@@ -2116,7 +2228,7 @@ class _ToolInputRecordingGuardrail(CustomGuardrail):
         return inputs
 
 
-def _invoke_delta_frame(index: int, delta: dict) -> bytes:
+def _invoke_delta_frame(index: int, delta: _InvokeDelta) -> bytes:
     return _invoke_chunk_frame({"type": "content_block_delta", "index": index, "delta": delta})
 
 
@@ -2150,13 +2262,11 @@ class TestBufferedInvokeStream:
 
         result = await _run_post_call_guardrail_on_stream(stream, guardrail, monkeypatch, endpoint=_INVOKE_STREAM)
 
-        deltas = [
-            event["delta"] for _, event in _decoded_invoke_frames(result) if event["type"] == "content_block_delta"
-        ]
-        assert deltas[0] == {"type": "thinking_delta", "thinking": "The card is ****"}
-        assert deltas[1] == {"type": "signature_delta", "signature": "sig-4111 1111 1111 1111"}
-        assert deltas[2]["text"] + deltas[3]["text"] == "Paying with **** now"
-        assert deltas[4] == {"type": "input_json_delta", "partial_json": '{"card": "****"}'}
+        events = [event for _, event in _decoded_invoke_frames(result) if event["type"] == "content_block_delta"]
+        assert events[0]["delta"] == {"type": "thinking_delta", "thinking": "The card is ****"}
+        assert events[1]["delta"] == {"type": "signature_delta", "signature": "sig-4111 1111 1111 1111"}
+        assert _delta_text(events[2]) + _delta_text(events[3]) == "Paying with **** now"
+        assert events[4]["delta"] == {"type": "input_json_delta", "partial_json": '{"card": "****"}'}
 
     @pytest.mark.asyncio
     async def test_two_text_blocks_reach_the_guardrail_as_two_texts(self, monkeypatch):
@@ -2173,12 +2283,14 @@ class TestBufferedInvokeStream:
 
         assert guardrail.received_texts == [["First 4111 1111 1111 1111", "Second 4111 1111 1111 1111"]]
         events = [event for _, event in _decoded_invoke_frames(result)]
-        assert [event["delta"]["text"] for event in events[:2]] == ["First ****", "Second ****"]
+        assert [_delta_text(event) for event in events[:2]] == ["First ****", "Second ****"]
 
     @pytest.mark.asyncio
     async def test_a_delta_whose_text_is_not_a_string_is_left_as_received(self, monkeypatch):
         guardrail = _CardMaskingGuardrail()
-        odd = _invoke_delta_frame(0, {"type": "text_delta", "text": 4111})
+        odd = _invoke_raw_chunk_frame(
+            b'{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":4111}}'
+        )
         stream = b"".join(
             (
                 _invoke_delta_frame(0, {"type": "text_delta", "text": "Card 4111 1111 1111 1111"}),
@@ -2191,7 +2303,7 @@ class TestBufferedInvokeStream:
 
         assert guardrail.received_texts == [["Card 4111 1111 1111 1111"]]
         frames = _decoded_invoke_frames(result)
-        assert frames[0][1]["delta"]["text"] == "Card ****"
+        assert _delta_text(frames[0][1]) == "Card ****"
         assert odd in result
 
     @pytest.mark.asyncio
@@ -2540,7 +2652,11 @@ class TestInvokeStreamGuardrailRelay:
 
     @pytest.mark.asyncio
     async def test_sampled_scan_key_reads_the_received_text_once_a_guardrail_rewrote_it(self):
-        delta = {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "In Paris"}}
+        delta: _InvokeBlockDelta = {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "text_delta", "text": "In Paris"},
+        }
         frames = [
             frame
             async for frame in BedrockPassthroughGuardrailHandler.event_stream_items(
