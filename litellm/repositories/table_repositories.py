@@ -92,6 +92,10 @@ class ClaudeCodePluginRepository(PrismaTableRepository["prisma_models.LiteLLM_Cl
     table_name = "litellm_claudecodeplugintable"
 
 
+class ClaudeCodePluginArchiveRepository(PrismaTableRepository["prisma_models.LiteLLM_ClaudeCodePluginArchiveTable"]):
+    table_name = "litellm_claudecodepluginarchivetable"
+
+
 class TeamMembershipRepository(PrismaTableRepository["prisma_models.LiteLLM_TeamMembership"]):
     table_name = "litellm_teammembership"
 

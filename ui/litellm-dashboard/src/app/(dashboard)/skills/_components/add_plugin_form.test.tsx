@@ -3,14 +3,16 @@ import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderWithProviders } from "@/../tests/test-utils";
 import AddPluginForm from "./add_plugin_form";
-import { registerClaudeCodePlugin } from "@/components/networking";
+import { registerClaudeCodePlugin, uploadClaudeCodePluginArchive } from "@/components/networking";
 import { toast } from "@/lib/toast";
 
 vi.mock("@/components/networking", () => ({
   registerClaudeCodePlugin: vi.fn().mockResolvedValue({ status: "success" }),
+  uploadClaudeCodePluginArchive: vi.fn().mockResolvedValue({}),
 }));
 
 const mockRegister = vi.mocked(registerClaudeCodePlugin);
+const mockUpload = vi.mocked(uploadClaudeCodePluginArchive);
 const mockMessageError = vi.mocked(toast.error);
 
 const DEFAULT_PROPS = {
@@ -180,6 +182,49 @@ describe("AddPluginForm", () => {
         expect.objectContaining({ source: { source: "github", repo: "anthropics/claude-code" } }),
       );
     });
+  });
+
+  it("creates hosted plugins before uploading their zip archive", async () => {
+    renderWithProviders(<AddPluginForm {...DEFAULT_PROPS} />);
+    const file = new File(["zip"], "hosted-plugin.zip", { type: "application/zip" });
+
+    fireEvent.click(screen.getByLabelText("Upload a zip to LiteLLM"));
+    fireEvent.change(screen.getByPlaceholderText("my-skill"), { target: { value: "hosted-plugin" } });
+    fireEvent.change(screen.getByLabelText("Plugin archive (.zip)"), { target: { files: [file] } });
+    await submit();
+
+    await waitFor(() => {
+      expect(mockRegister).toHaveBeenCalledWith(
+        "sk-test",
+        expect.objectContaining({ name: "hosted-plugin", source: { source: "hosted" } }),
+      );
+      expect(mockUpload).toHaveBeenCalledWith("sk-test", "hosted-plugin", file);
+    });
+    expect(mockRegister.mock.invocationCallOrder[0]).toBeLessThan(mockUpload.mock.invocationCallOrder[0]);
+  });
+
+  it("keeps a created hosted plugin available and retries only the failed upload", async () => {
+    mockUpload.mockRejectedValueOnce(new Error("Archive upload failed"));
+    renderWithProviders(<AddPluginForm {...DEFAULT_PROPS} />);
+    const file = new File(["zip"], "hosted-plugin.zip", { type: "application/zip" });
+
+    fireEvent.click(screen.getByLabelText("Upload a zip to LiteLLM"));
+    fireEvent.change(screen.getByPlaceholderText("my-skill"), { target: { value: "hosted-plugin" } });
+    fireEvent.change(screen.getByLabelText("Plugin archive (.zip)"), { target: { files: [file] } });
+    await submit();
+
+    expect(await screen.findByRole("button", { name: "Retry Upload" })).toBeInTheDocument();
+    expect(mockMessageError).toHaveBeenCalledWith("Archive upload failed");
+    expect(DEFAULT_PROPS.onSuccess).toHaveBeenCalled();
+    expect(DEFAULT_PROPS.onClose).not.toHaveBeenCalled();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Retry Upload" }));
+    });
+
+    expect(mockRegister).toHaveBeenCalledTimes(1);
+    expect(mockUpload).toHaveBeenCalledTimes(2);
+    expect(DEFAULT_PROPS.onClose).toHaveBeenCalled();
   });
 
   it("submits a github subdir source from a tree URL", async () => {

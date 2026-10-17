@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { CircleHelp } from "lucide-react";
 import { z } from "zod";
 import { toast } from "@/lib/toast";
-import { registerClaudeCodePlugin } from "@/components/networking";
+import { registerClaudeCodePlugin, uploadClaudeCodePluginArchive } from "@/components/networking";
 import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
@@ -40,7 +40,7 @@ interface AddPluginFormProps {
 }
 
 const addPluginShape = {
-  skillUrl: z.string().min(1, "Please enter a repository or zip archive URL"),
+  skillUrl: z.string(),
   subPath: z
     .string()
     .refine(
@@ -151,6 +151,9 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessT
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [urlPreview, setUrlPreview] = useState<SkillSourcePreview | null>(null);
   const [subPathLock, setSubPathLock] = useState<SubPathLock | null>(null);
+  const [isHostedUpload, setIsHostedUpload] = useState(false);
+  const [archiveFile, setArchiveFile] = useState<File | null>(null);
+  const [createdHostedPluginName, setCreatedHostedPluginName] = useState<string | null>(null);
 
   const recomputePreview = (skillUrl: string, subPath: string) => {
     const lock = subPathLockFor(parseSkillSource(skillUrl)?.parsed.source);
@@ -169,12 +172,18 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessT
   };
 
   const handleSubmit = async (values: AddPluginFormValues) => {
+    const selectedArchiveFile = archiveFile;
     if (!accessToken) {
       toast.error("No access token available");
       return;
     }
 
-    if (!urlPreview) {
+    if (isHostedUpload && selectedArchiveFile === null) {
+      toast.error("Please choose a .zip archive");
+      return;
+    }
+
+    if (!isHostedUpload && !urlPreview) {
       toast.error("Please enter a valid repository or zip archive URL");
       return;
     }
@@ -196,12 +205,30 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessT
 
     setIsSubmitting(true);
     try {
-      await registerClaudeCodePlugin(accessToken, buildRegisterRequest(values, urlPreview.parsed));
+      if (isHostedUpload) {
+        const pluginName = values.name.trim();
+        if (createdHostedPluginName !== pluginName) {
+          await registerClaudeCodePlugin(accessToken, buildRegisterRequest(values, { source: "hosted" }));
+          setCreatedHostedPluginName(pluginName);
+          onSuccess();
+        }
+        if (selectedArchiveFile === null) {
+          return;
+        }
+        await uploadClaudeCodePluginArchive(accessToken, pluginName, selectedArchiveFile);
+      } else if (urlPreview) {
+        await registerClaudeCodePlugin(accessToken, buildRegisterRequest(values, urlPreview.parsed));
+      }
       toast.success("Skill registered successfully");
       form.reset(EMPTY_VALUES);
       setUrlPreview(null);
       setSubPathLock(null);
-      onSuccess();
+      setIsHostedUpload(false);
+      setArchiveFile(null);
+      setCreatedHostedPluginName(null);
+      if (!isHostedUpload) {
+        onSuccess();
+      }
       onClose();
     } catch (error) {
       console.error("Error registering skill:", error);
@@ -215,8 +242,13 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessT
     form.reset(EMPTY_VALUES);
     setUrlPreview(null);
     setSubPathLock(null);
+    setIsHostedUpload(false);
+    setArchiveFile(null);
+    setCreatedHostedPluginName(null);
     onClose();
   };
+
+  const submitButtonText = createdHostedPluginName ? "Retry Upload" : "Add Skill";
 
   return (
     <Dialog open={visible} onOpenChange={(open) => !open && handleCancel()}>
@@ -227,71 +259,111 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessT
         <TooltipProvider>
           <form onSubmit={form.handleSubmit(handleSubmit)} noValidate className="mt-4">
             <FieldGroup>
-              <FormField
-                control={form.control}
-                name="skillUrl"
-                label={labelWithHint(
-                  "Source URL",
-                  "Paste an HTTPS git repository URL from GitHub, GitLab, Bitbucket, or a self-hosted host (e.g. github.com/org/repo or github.com/org/repo/tree/main/my-skill), or an HTTPS link to a .zip archive of the skill hosted on S3 or any static file server. For a private repository use its SSH clone URL (git@ghe.example.com:org/repo.git) so Claude Code clones it with your own SSH key.",
-                )}
-              >
-                {({ ref, onChange, ...field }) => (
-                  <Input
-                    {...field}
-                    ref={ref}
-                    placeholder="https://github.com/org/repo or https://bucket.s3.amazonaws.com/my-skill.zip"
-                    className="rounded-lg"
-                    onChange={(event) => {
-                      onChange(event);
-                      recomputePreview(event.target.value, form.getValues("subPath"));
-                    }}
+              <div role="group" aria-label="Plugin source" className="flex gap-4 text-sm">
+                <label className="flex items-center gap-2">
+                  <input
+                    type="radio"
+                    name="plugin-source"
+                    checked={!isHostedUpload}
+                    disabled={createdHostedPluginName !== null}
+                    onChange={() => setIsHostedUpload(false)}
                   />
-                )}
-              </FormField>
-
-              <FormField
-                control={form.control}
-                name="subPath"
-                label={labelWithHint(
-                  "Subfolder path (Optional)",
-                  "Path within the repository where the skill lives (e.g., plugins/my-skill). Leave empty if the skill is at the repo root.",
-                )}
-                description={subPathLock ? SUB_PATH_LOCK_REASON[subPathLock] : undefined}
-              >
-                {({ ref, onChange, ...field }) => (
-                  <Input
-                    {...field}
-                    ref={ref}
-                    placeholder="plugins/my-skill"
-                    className="rounded-lg"
-                    onChange={(event) => {
-                      onChange(event);
-                      recomputePreview(form.getValues("skillUrl"), event.target.value);
-                    }}
-                    disabled={subPathLock !== null}
+                  Use a URL
+                </label>
+                <label className="flex items-center gap-2">
+                  <input
+                    type="radio"
+                    name="plugin-source"
+                    checked={isHostedUpload}
+                    disabled={createdHostedPluginName !== null}
+                    onChange={() => setIsHostedUpload(true)}
                   />
-                )}
-              </FormField>
+                  Upload a zip to LiteLLM
+                </label>
+              </div>
 
-              {urlPreview?.parsed.source === "archive" && (
-                <FormField
-                  control={form.control}
-                  name="sha256"
-                  label={labelWithHint(
-                    "Archive SHA-256 (Optional)",
-                    "Hex digest of the zip file. Claude Code refuses to install the archive if its checksum does not match.",
-                  )}
-                >
-                  {({ ref, ...field }) => (
-                    <Input {...field} ref={ref} placeholder="64 hex characters" className="rounded-lg font-mono" />
-                  )}
-                </FormField>
-              )}
-
-              {urlPreview && (
-                <div className="rounded-lg border border-info/20 bg-info/10 px-3 py-2 text-sm text-info">
-                  Detected: {urlPreview.label}
+              {isHostedUpload ? (
+                <div className="flex flex-col gap-2">
+                  <label htmlFor="plugin-archive-file" className="text-sm font-medium">
+                    Plugin archive (.zip)
+                  </label>
+                  <Input
+                    id="plugin-archive-file"
+                    type="file"
+                    accept=".zip,application/zip"
+                    aria-label="Plugin archive (.zip)"
+                    onChange={(event) => setArchiveFile(event.target.files?.[0] ?? null)}
+                  />
                 </div>
+              ) : (
+                <>
+                  <FormField
+                    control={form.control}
+                    name="skillUrl"
+                    label={labelWithHint(
+                      "Source URL",
+                      "Paste an HTTPS git repository URL from GitHub, GitLab, Bitbucket, or a self-hosted host (e.g. github.com/org/repo or github.com/org/repo/tree/main/my-skill), or an HTTPS link to a .zip archive of the skill hosted on S3 or any static file server. For a private repository use its SSH clone URL (git@ghe.example.com:org/repo.git) so Claude Code clones it with your own SSH key.",
+                    )}
+                  >
+                    {({ ref, onChange, ...field }) => (
+                      <Input
+                        {...field}
+                        ref={ref}
+                        placeholder="https://github.com/org/repo or https://bucket.s3.amazonaws.com/my-skill.zip"
+                        className="rounded-lg"
+                        onChange={(event) => {
+                          onChange(event);
+                          recomputePreview(event.target.value, form.getValues("subPath"));
+                        }}
+                      />
+                    )}
+                  </FormField>
+
+                  <FormField
+                    control={form.control}
+                    name="subPath"
+                    label={labelWithHint(
+                      "Subfolder path (Optional)",
+                      "Path within the repository where the skill lives (e.g., plugins/my-skill). Leave empty if the skill is at the repo root.",
+                    )}
+                    description={subPathLock ? SUB_PATH_LOCK_REASON[subPathLock] : undefined}
+                  >
+                    {({ ref, onChange, ...field }) => (
+                      <Input
+                        {...field}
+                        ref={ref}
+                        placeholder="plugins/my-skill"
+                        className="rounded-lg"
+                        onChange={(event) => {
+                          onChange(event);
+                          recomputePreview(form.getValues("skillUrl"), event.target.value);
+                        }}
+                        disabled={subPathLock !== null}
+                      />
+                    )}
+                  </FormField>
+
+                  {urlPreview?.parsed.source === "archive" && (
+                    <FormField
+                      control={form.control}
+                      name="sha256"
+                      label={labelWithHint(
+                        "Archive SHA-256 (Optional)",
+                        "Hex digest of the zip file. Claude Code refuses to install the archive if its checksum does not match.",
+                      )}
+                    >
+                      {({ ref, ...field }) => (
+                        <Input {...field} ref={ref} placeholder="64 hex characters" className="rounded-lg font-mono" />
+                      )}
+                    </FormField>
+                  )}
+
+                  {urlPreview && (
+                    <div className="rounded-lg border border-info/20 bg-info/10 px-3 py-2 text-sm text-info">
+                      Detected: {urlPreview.label}
+                    </div>
+                  )}
+                </>
               )}
 
               <FormField
@@ -299,7 +371,15 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessT
                 name="name"
                 label={labelWithHint("Skill Name", "Unique identifier in kebab-case format (e.g., my-skill)")}
               >
-                {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="my-skill" className="rounded-lg" />}
+                {({ ref, ...field }) => (
+                  <Input
+                    {...field}
+                    ref={ref}
+                    placeholder="my-skill"
+                    className="rounded-lg"
+                    disabled={createdHostedPluginName !== null}
+                  />
+                )}
               </FormField>
 
               <div className="flex gap-4">
@@ -414,7 +494,7 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessT
               </Button>
               <Button type="submit" disabled={isSubmitting} aria-busy={isSubmitting}>
                 {isSubmitting && <UiLoadingSpinner className="size-4" />}
-                {isSubmitting ? "Adding..." : "Add Skill"}
+                {isSubmitting ? "Adding..." : submitButtonText}
               </Button>
             </div>
           </form>
