@@ -1,4 +1,4 @@
-from typing import Any, Final, cast, get_type_hints
+from typing import Final, cast, get_type_hints
 
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
 from litellm.types.vector_stores import (
@@ -12,7 +12,7 @@ class VectorStoreRequestUtils:
 
     @staticmethod
     def get_requested_vector_store_search_optional_param(
-        params: dict[str, Any],
+        params: dict[str, object],
         vector_store_provider_config: BaseVectorStoreConfig,
     ) -> VectorStoreSearchOptionalRequestParams:
         """
@@ -37,7 +37,7 @@ class VectorStoreRequestUtils:
 
     @staticmethod
     def get_requested_vector_store_create_optional_param(
-        params: dict[str, Any],
+        params: dict[str, object],
     ) -> VectorStoreCreateOptionalRequestParams:
         """
         Filter parameters to only include those defined in VectorStoreCreateOptionalRequestParams.

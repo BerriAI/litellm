@@ -3,7 +3,6 @@ import base64
 import json
 import os
 import re
-import signal
 import threading
 import uuid
 from collections.abc import Iterable, Iterator, Mapping, Sequence
@@ -904,13 +903,14 @@ async def test_c02_worker_sigkill_mid_burst_leaves_the_sibling_serving_content_l
             held_by: Final = MappingProxyType({pid: _open_peer_connections(pid, wire.url) for pid in workers})
             assert sum(held_by.values()) == 20, held_by
             victim_pid, survivor_pid = sorted(workers, key=held_by.__getitem__)
-            psutil.Process(victim_pid).send_signal(signal.SIGKILL)
-            release.set()
-            served: Final = await burst
-            assert held_by[survivor_pid] >= 10, held_by
-            assert len(served) == held_by[survivor_pid], (held_by, len(served))
-            for item in served:
-                assert item.status == 200 and _ANSWER in item.text, (item.call, item.status, item.text)
+            with owned.replacing_worker(victim_pid) as kill:
+                await asyncio.to_thread(kill)
+                release.set()
+                served: Final = await burst
+                assert held_by[survivor_pid] >= 10, held_by
+                assert len(served) == held_by[survivor_pid], (held_by, len(served))
+                for item in served:
+                    assert item.status == 200 and _ANSWER in item.text, (item.call, item.status, item.text)
             eventually(
                 lambda: len(_STARTED_WORKER.findall(owned.log.read_text())), lambda count: count == 3, seconds=60
             )
@@ -947,7 +947,7 @@ async def test_c03_proxy_terminated_mid_burst_lands_every_answered_content_less_
                 _burst(_proxy_url(candidate), candidate.key, _PLAIN, calls, tolerate_transport_errors=True)
             )
             await asyncio.to_thread(eventually, held_indexes.qsize, lambda size: size == 12, 60)
-            owned.process.terminate()
+            owned.begin_shutdown()
             release.set()
             served: Final = await burst
             eventually(owned.process.poll, lambda code: code is not None, seconds=60)

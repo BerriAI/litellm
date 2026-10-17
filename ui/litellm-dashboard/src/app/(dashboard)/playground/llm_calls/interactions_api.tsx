@@ -1,5 +1,6 @@
+import type { ResponseHeadersListener } from "@/lib/http/observeResponseHeaders";
 import { toast } from "@/lib/toast";
-import { getGlobalLitellmHeaderName, getProxyBaseUrl } from "@/components/networking";
+import { getGatewayBaseUrl, getGlobalLitellmHeaderName } from "@/components/networking";
 import {
   buildPlaygroundHeaders,
   type CustomHeaders,
@@ -16,6 +17,7 @@ export async function makeInteractionsRequest(
   customBaseUrl?: string,
   previousInteractionId?: string,
   customHeaders?: CustomHeaders,
+  onResponseHeaders?: ResponseHeadersListener,
 ): Promise<void> {
   if (!accessToken) {
     throw new Error("Virtual Key is required");
@@ -26,7 +28,7 @@ export async function makeInteractionsRequest(
     console.log = function () {};
   }
 
-  const proxyBaseUrl = customBaseUrl || getProxyBaseUrl();
+  const proxyBaseUrl = customBaseUrl || getGatewayBaseUrl();
   const normalizedBaseUrl = proxyBaseUrl.endsWith("/") ? proxyBaseUrl.slice(0, -1) : proxyBaseUrl;
   const requestUrl = `${normalizedBaseUrl}/v1beta/interactions`;
 
@@ -51,6 +53,7 @@ export async function makeInteractionsRequest(
       body: JSON.stringify(body),
       signal,
     });
+    onResponseHeaders?.(response.headers);
 
     if (!response.ok) {
       const errorText = await response.text();

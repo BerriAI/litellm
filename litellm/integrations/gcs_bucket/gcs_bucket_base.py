@@ -2,6 +2,8 @@ import json
 import os
 from typing import TYPE_CHECKING, Any, Final
 
+from pydantic import TypeAdapter
+
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.integrations.gcs_bucket.gcs_bucket_mock_client import (
@@ -25,6 +27,7 @@ if TYPE_CHECKING:
 else:
     VertexBase = Any
 IAM_AUTH_KEY: Final = "IAM_AUTH"
+_UPLOAD_RESPONSE: Final = TypeAdapter(object)
 
 
 class GCSBucketBase(CustomBatchLogger):
@@ -297,7 +300,7 @@ class GCSBucketBase(CustomBatchLogger):
         bucket_name: str,
         object_name: str,
         logging_payload: StandardLoggingPayload | str,
-    ):
+    ) -> object:
         """
         Helper function to make POST request to GCS Bucket in the specified bucket.
         """
@@ -325,4 +328,4 @@ class GCSBucketBase(CustomBatchLogger):
         verbose_logger.debug("GCS Bucket status code %s", response.status_code)
         verbose_logger.debug("GCS Bucket response.text %s", response.text)
 
-        return response.json()
+        return _UPLOAD_RESPONSE.validate_python(response.json())
