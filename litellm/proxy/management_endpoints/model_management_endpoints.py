@@ -2289,9 +2289,35 @@ class ModelManagementAuthChecks:
     ) -> None:
         if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
             return
+        stored: Final = _decrypted_litellm_params(model_params.litellm_params)
+
+        # Static-key endpoint harvest (LD fork R2-9): a non-admin write that
+        # moves api_base/base_url while the stored server-owned api_key stays
+        # in place sends that key to the endpoint the caller names. The team
+        # must bring its own key (set api_key in the same write) or route
+        # through an admin-attached credential.
+        repoints_endpoint: Final = incoming_params is not None and not incoming_params.keys().isdisjoint(
+            ("api_base", "base_url")
+        )
+        brings_own_key: Final = (
+            incoming_params is not None and incoming_params.get("api_key") is not None
+        )
+        server_key_stays: Final = (
+            stored.get("api_key") not in (None, "") and not brings_own_key
+        )
+        if repoints_endpoint and server_key_stays:
+            raise ProxyException(
+                message=(
+                    "Only proxy admins can repoint a deployment's endpoint (api_base/base_url) "
+                    "while its api_key stays server-owned; supply your own api_key with the "
+                    "new endpoint."
+                ),
+                type=ProxyErrorTypes.auth_error.value,
+                code=status.HTTP_403_FORBIDDEN,
+                param="api_base",
+            )
         if not write_touches_federation_surface(incoming_params):
             return
-        stored: Final = _decrypted_litellm_params(model_params.litellm_params)
         wif_fields: Final = await effective_server_owned_wif_fields(stored, incoming_params, prisma_client)
         if wif_fields:
             # ProxyException rather than HTTPException so the offending field stays a structured
