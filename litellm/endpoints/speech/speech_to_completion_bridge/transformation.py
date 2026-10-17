@@ -30,6 +30,11 @@ class ChatAudioParam(TypedDict):
     format: ReadOnly[NotRequired[str]]
 
 
+class ChatSpeechConfigAudioParam(TypedDict):
+    speech_config: ReadOnly[Mapping[str, object]]
+    format: ReadOnly[str]
+
+
 class SpeechToCompletionBridgeTransformationHandler:
     def _validate_response_format(
         self, model: str, custom_llm_provider: str, optional_params: Mapping[str, object]
@@ -68,7 +73,17 @@ class SpeechToCompletionBridgeTransformationHandler:
 
     def _chat_audio_param(
         self, model: str, voice: str | Mapping[str, object] | None, optional_params: Mapping[str, object]
-    ) -> ChatAudioParam | None:
+    ) -> ChatAudioParam | ChatSpeechConfigAudioParam | None:
+        if isinstance(voice, Mapping) and self._is_gemini_tts_model(model):
+            from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+                normalize_gemini_speech_config,
+            )
+
+            speech_audio: Final[ChatSpeechConfigAudioParam] = {
+                "speech_config": normalize_gemini_speech_config(voice),
+                "format": GEMINI_TTS_CHAT_AUDIO_FORMAT,
+            }
+            return speech_audio
         if not isinstance(voice, str):
             return None
         audio_format: Final = self._chat_audio_format(model, optional_params)
@@ -145,8 +160,9 @@ class SpeechToCompletionBridgeTransformationHandler:
         return wav_header + pcm_data
 
     def _is_gemini_tts_model(self, model: str) -> bool:
-        """Check if the model is a Gemini TTS model that returns PCM16 data."""
-        return "gemini" in model.lower() and ("tts" in model.lower() or "preview-tts" in model.lower())
+        from litellm.utils import is_gemini_tts_model
+
+        return is_gemini_tts_model(model)
 
     def _gemini_tts_response_body(self, decoded_audio: bytes, response_format: str | None) -> tuple[bytes, str]:
         if response_format == GEMINI_TTS_RAW_RESPONSE_FORMAT:
@@ -154,7 +170,7 @@ class SpeechToCompletionBridgeTransformationHandler:
         return self._convert_pcm16_to_wav(decoded_audio), "audio/wav"
 
     def transform_response(
-        self, model_response: "ModelResponse", response_format: str | None
+        self, model_response: "ModelResponse", model: str, response_format: str | None
     ) -> "HttpxBinaryResponseContent":
         import base64
 
@@ -168,7 +184,6 @@ class SpeechToCompletionBridgeTransformationHandler:
             raise ValueError("No audio part found in the response")
         decoded_audio: Final = base64.b64decode(audio_part.data)
 
-        model: Final = getattr(model_response, "model", "")
         content, content_type = (
             self._gemini_tts_response_body(decoded_audio, response_format)
             if self._is_gemini_tts_model(model)

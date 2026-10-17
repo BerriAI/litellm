@@ -22,7 +22,7 @@ from litellm.constants import (
     OPENAI_LIVE_TERMINAL_RESPONSE_EVENT_TYPES,
     REALTIME_METERED_USAGE_KEY,
 )
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none
 from litellm.litellm_core_utils.cost_discount import resolve_cost_discount
 from litellm.litellm_core_utils.decisions_pricing import decisions_pricing_fields, is_decisions_call_type
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
@@ -1081,13 +1081,12 @@ def _extract_service_tier(source: object) -> str | None:
 def get_usage_object(
     completion_response: object,
 ) -> Usage | None:
+    response_fields: Final = as_str_mapping(completion_response)
     usage_obj: Final = cast(
-        Usage | ResponseAPIUsage | dict | BaseModel,
-        (
-            completion_response.get("usage")
-            if isinstance(completion_response, dict)
-            else getattr(completion_response, "get", lambda x: None)("usage")
-        ),
+        Usage | ResponseAPIUsage | dict[str, object] | BaseModel | None,
+        response_fields.get("usage")
+        if response_fields is not None
+        else attribute_or_none(completion_response, "usage"),
     )
 
     if isinstance(completion_response, (DecisionsResponse, OpenAIDecisionResponse)):
@@ -1114,9 +1113,9 @@ def get_usage_object(
     elif isinstance(usage_obj, dict) and InteractionsUsageObjectTransformation.is_interactions_usage_object(usage_obj):
         return InteractionsUsageObjectTransformation.transform_interactions_usage_object(usage_obj)
     elif isinstance(usage_obj, dict):
-        return Usage(**usage_obj)
+        return Usage.model_validate(usage_obj)
     elif isinstance(usage_obj, BaseModel):
-        return Usage(**usage_obj.model_dump())
+        return Usage.model_validate(usage_obj.model_dump())
     else:
         verbose_logger.debug("Unknown usage object type: %s, usage_obj: %s", type(usage_obj), usage_obj)
         return None
@@ -1557,8 +1556,10 @@ def completion_cost(
                     verbose_logger.debug("selected model name for cost calculation: %s", model)
 
                 if completion_response is not None and (
-                    isinstance(completion_response, BaseModel) or isinstance(completion_response, dict)
-                ):  # tts returns a custom class
+                    isinstance(completion_response, (BaseModel, dict))
+                    or isinstance(completion_response, HttpxBinaryResponseContent)
+                    and completion_response.usage is not None
+                ):
                     if isinstance(completion_response, dict):
                         usage_obj: dict | Usage | None = completion_response.get("usage", {})
                     else:

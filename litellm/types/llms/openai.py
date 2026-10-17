@@ -2,7 +2,7 @@ import builtins
 from collections.abc import Iterable, Mapping
 from enum import Enum
 from os import PathLike
-from typing import IO, Any, Final, Generic, Literal, Optional, TypeAlias, Union
+from typing import IO, TYPE_CHECKING, Any, Final, Generic, Literal, Optional, TypeAlias, Union
 
 import httpx
 from openai import Omit
@@ -96,6 +96,9 @@ from litellm.types.responses.main import (
 
 from .base import CachedTokensDetails
 
+if TYPE_CHECKING:
+    from litellm.types.utils import Usage
+
 FileContent = IO[bytes] | bytes | PathLike
 
 FileTypes = (
@@ -126,6 +129,7 @@ _ResponseT = TypeVar("_ResponseT", bound=httpx.Response | SDKResponse, default=h
 
 class HttpxBinaryResponseContent(_HttpxBinaryResponseContent, Generic[_ResponseT]):
     _hidden_params: dict
+    usage: "Usage | None"
     response: _ResponseT  # pyright: ignore[reportIncompatibleVariableOverride]  # SDK accepts both backends at runtime
 
     @property
@@ -139,6 +143,7 @@ class HttpxBinaryResponseContent(_HttpxBinaryResponseContent, Generic[_ResponseT
     def __init__(self, response: _ResponseT) -> None:
         super().__init__(response)  # pyright: ignore[reportArgumentType]  # SDK accepts both backends at runtime
         self._hidden_params = {}
+        self.usage = None
 
     @property
     def content_type(self) -> str | None:
