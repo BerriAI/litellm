@@ -114,7 +114,7 @@ jobs:
       - uses: ./.github/actions/cache-cargo-build
       - name: Install the frozen E2E environment
         run: |
-          .github/scripts/uv_sync_with_retries.sh --frozen --extra proxy --extra proxy-runtime --extra extra_proxy --group ci --group proxy-dev --group e2e-dev
+          uv sync --frozen --extra proxy --extra proxy-runtime --extra extra_proxy --group ci --group proxy-dev --group e2e-dev
           uv run --no-sync python scripts/prisma_generate_if_needed.py
           uv run --no-sync playwright install --with-deps chromium
 
