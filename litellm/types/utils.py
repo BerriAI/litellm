@@ -4436,6 +4436,7 @@ class SearchProviders(str, Enum):
     DATAFORSEO = "dataforseo"
     FIRECRAWL = "firecrawl"
     FASTCRW = "fastcrw"
+    KEENABLE = "keenable"
     SEARXNG = "searxng"
     LINKUP = "linkup"
     DUCKDUCKGO = "duckduckgo"
