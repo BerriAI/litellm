@@ -1,8 +1,13 @@
+import hashlib
+import json
 from collections.abc import Mapping, Sequence
+from datetime import datetime, tzinfo
 from typing import Final
 
+import jwt
 import pytest
 from fastapi import HTTPException, Request
+from starlette.types import Message
 
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.proxy._types import UserAPIKeyAuth
@@ -193,3 +198,52 @@ async def test_receipt_startup_refuses_an_enabled_policy_without_a_writer_databa
     assert isinstance(await configured_charge_receipts(None), ChargeReceiptConfigurationError)
     monkeypatch.setenv("LITELLM_CHARGE_RECEIPTS_ENABLED", "false")
     assert await configured_charge_receipts(None) is None
+
+
+class FrozenJWTClock(datetime):
+    @classmethod
+    def now(cls, tz: tzinfo | None = None) -> datetime:
+        return STAMP.astimezone(tz) if tz is not None else STAMP.replace(tzinfo=None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("changed", ("none", "body", "scope", "key", "path", "method", "window", "background"))
+async def test_signed_context_binds_the_original_scope_and_exact_request(
+    monkeypatch: pytest.MonkeyPatch,
+    changed: str,
+) -> None:
+    monkeypatch.setattr(jwt.api_jwt, "datetime", FrozenJWTClock)
+    body: Final = json.dumps({"model": RECEIPT.model, "background": changed == "background"}).encode()
+    issued: Final = int(STAMP.timestamp())
+    token: Final = jwt.encode(
+        {
+            "version": 1,
+            "sub": RECEIPT.request_id,
+            "aud": "litellm-charge-receipts",
+            "iat": issued,
+            "exp": issued + (301 if changed == "window" else 300),
+            "gateway_scope": "c" * 64 if changed == "scope" else RECEIPT.gateway_scope,
+            "key_hash": "c" * 64 if changed == "key" else RECEIPT.key_hash,
+            "body_sha256": hashlib.sha256(b"other" if changed == "body" else body).hexdigest(),
+            "method": "GET" if changed == "method" else "POST",
+            "route": "/v1/chat/completions" if changed == "path" else "/v1/responses",
+        },
+        SETTINGS.destination_secret.get_secret_value(),
+        algorithm="HS256",
+    )
+
+    async def receive() -> Message:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    request: Final = Request(request_for(token=token).scope, receive)
+    query: Final = ScriptedQuery((({"installed": True, "durable": True},),))
+    runtime: Final = ChargeReceiptRuntime(SETTINGS, ChargeReceiptStore(query))
+    if changed == "none":
+        await authorize_charge_receipt(request, UserAPIKeyAuth(api_key=RECEIPT.key_hash), runtime, json.loads(body))
+        context: Final = request.state.charge_receipt_context
+        assert context.context.request_id == RECEIPT.request_id and context.key_hash == RECEIPT.key_hash
+        assert len(query.calls) == 1
+    else:
+        with pytest.raises(HTTPException) as error:
+            await authorize_charge_receipt(request, UserAPIKeyAuth(api_key=RECEIPT.key_hash), runtime, json.loads(body))
+        assert error.value.status_code == 400 and not query.calls

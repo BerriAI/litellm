@@ -121,3 +121,46 @@ async def test_readiness_is_cached_only_after_a_valid_durability_probe() -> None
     assert len(query.calls) == 1
     await runtime.close()
     assert not await runtime.ready()
+
+
+@pytest.mark.asyncio
+async def test_success_logging_projects_only_the_canonical_charge_and_usage() -> None:
+    query: Final = ScriptedQuery()
+    runtime: Final = ChargeReceiptRuntime(SETTINGS, ChargeReceiptStore(query))
+    capture: Final = runtime.bind(BillingContext(request_id=RECEIPT.request_id), RECEIPT.key_hash)
+    expected: Final = RECEIPT.model_copy(update={"event_id": capture.event_id})
+    query.replies = (acknowledged(expected),)
+    result: Final = await capture.capture_success(
+        {
+            "model": RECEIPT.model,
+            "litellm_params": {},
+            "response_cost": 0.25,
+            "messages": [{"role": "user", "content": "private prompt"}],
+            "standard_logging_object": {
+                "prompt_tokens": 4,
+                "completion_tokens": 2,
+                "total_tokens": 6,
+                "response_cost": 0.25,
+            },
+        },
+        {"id": "owned-response", "usage": {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6}},
+        STAMP,
+        STAMP,
+    )
+    assert isinstance(result, CommittedCharge) and await capture.wait()
+    assert json.loads(str(query.calls[0].parameters[2])) == expected.model_dump()
+
+
+@pytest.mark.asyncio
+async def test_unreadable_logging_input_cannot_create_a_success_or_failure_charge() -> None:
+    query: Final = ScriptedQuery()
+    runtime: Final = ChargeReceiptRuntime(SETTINGS, ChargeReceiptStore(query))
+    success: Final = runtime.bind(BillingContext(request_id=RECEIPT.request_id), RECEIPT.key_hash)
+    failure: Final = success.fork()
+    assert failure.event_id != success.event_id
+    assert isinstance(
+        await success.capture_success({"litellm_params": object()}, object(), STAMP, STAMP),
+        FailedCharge,
+    )
+    assert isinstance(await failure.capture_failure({"litellm_params": object()}, 0.25, STAMP, STAMP), FailedCharge)
+    assert not await success.wait() and not await failure.wait() and not query.calls

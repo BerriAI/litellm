@@ -50,6 +50,28 @@ from tests._master_key import MASTER_KEY
 
 PUBLICLY_KNOWN_KEY: Final = "sk-" + "1234"
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("selected", (True, False))
+async def test_charge_receipt_capability_reports_only_the_authenticated_key_scope(
+    monkeypatch: pytest.MonkeyPatch, selected: bool,
+) -> None:
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.spend_tracking.charge_receipt_capture import ChargeReceiptRuntime
+    from litellm.proxy.spend_tracking.charge_receipts import ChargeReceiptStore
+    from litellm.proxy.utils import ProxyLogging
+    from tests.unit.proxy.spend_tracking._charge_receipt_cases import RECEIPT, SETTINGS, ScriptedQuery
+
+    logging: Final = ProxyLogging(UserApiKeyCache())
+    logging.charge_receipts = ChargeReceiptRuntime(SETTINGS, ChargeReceiptStore(ScriptedQuery()))
+    monkeypatch.setattr(proxy_server_module, "proxy_logging_obj", logging)
+    result: Final = await proxy_server_module.charge_receipt_capabilities(
+        UserAPIKeyAuth(api_key=RECEIPT.key_hash if selected else "c" * 64),
+    )
+    assert result.model_dump() == {
+        "version": 1, "required": selected, "gateway_scope": RECEIPT.gateway_scope if selected else None,
+    }
+
 example_embedding_result = {
     "object": "list",
     "data": [

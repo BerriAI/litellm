@@ -57,6 +57,8 @@ from litellm.proxy.litellm_pre_call_utils import (
     get_metadata_variable_name,
     move_guardrails_to_metadata,
 )
+
+
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.types.utils import CredentialItem
 
@@ -10289,3 +10291,10 @@ async def test_per_user_token_resolution_uses_key_identity_without_header_mappin
     called_user_ids = [call.kwargs["user_id"] for call in load.await_args_list]
     assert called_user_ids == ["user-a"]
     assert updated["secret_fields"]["user_provider_credentials"]["copilot-cred"] == "gho_user_a_token"
+
+
+@pytest.mark.parametrize("name", ("x-litellm-billing-context", "X-LiteLLM-Billing-Context"))
+def test_signed_charge_context_is_not_forwarded_to_the_provider(name: str) -> None:
+    headers: Final = Headers({name: "private signed attribution", "x-request-label": "safe"})
+    assert clean_headers(headers).get(name.lower()) is None
+    assert LiteLLMProxyRequestSetup._get_forwardable_headers(dict(headers)) == {"x-request-label": "safe"}
