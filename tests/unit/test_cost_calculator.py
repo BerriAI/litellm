@@ -149,6 +149,45 @@ def test_completion_cost_uses_response_model_for_dynamic_routing(_local_model_co
     assert cost > 0, "Cost should be calculated using response model"
 
 
+@pytest.mark.parametrize(
+    "response_model, request_model, base_model",
+    [
+        ("gpt-4o", None, "gpt-4o-not-in-cost-map"),
+        ("snapshot-not-in-cost-map", "gpt-4o", None),
+    ],
+    ids=["unpriced_base_model_uses_response_model", "unpriced_response_model_uses_request_model"],
+)
+def test_completion_cost_prices_the_first_candidate_name_in_the_cost_map(
+    _local_model_cost_map: None, response_model: str, request_model: str | None, base_model: str | None
+) -> None:
+    response = ModelResponse(
+        model=response_model, choices=[], usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+    )
+    gpt_4o_cost: Final = sum(
+        cost_per_token(model="gpt-4o", prompt_tokens=100, completion_tokens=50, custom_llm_provider="openai")
+    )
+
+    cost: Final = completion_cost(
+        completion_response=response, model=request_model, custom_llm_provider="openai", base_model=base_model
+    )
+
+    assert gpt_4o_cost > 0
+    assert cost == gpt_4o_cost
+
+
+def test_completion_cost_raises_the_last_candidates_error_when_no_name_is_priced(_local_model_cost_map: None) -> None:
+    response = ModelResponse(
+        model="snapshot-not-in-cost-map",
+        choices=[],
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+    )
+
+    with pytest.raises(litellm.exceptions.ModelNotMappedError, match="model=request-model-not-in-cost-map"):
+        completion_cost(
+            completion_response=response, model="request-model-not-in-cost-map", custom_llm_provider="openai"
+        )
+
+
 def test_completion_cost_strips_dated_azure_snapshot_model(_local_model_cost_map: None) -> None:
     dated_response = ModelResponse(
         model="gpt-5.6-luna-2099-01-01",
@@ -2169,6 +2208,32 @@ def test_cost_margin_combined(monkeypatch):
     print(f"  - Original cost: ${cost_without_margin:.6f}")
     print(f"  - Cost with margin (8% + $0.0005): ${cost_with_margin:.6f}")
     print(f"  - Margin added: ${cost_with_margin - cost_without_margin:.6f}")
+
+
+def test_cost_breakdown_total_is_the_discounted_and_margined_cost(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "cost_discount_config", {"openai": 0.1})
+    monkeypatch.setattr(litellm, "cost_margin_config", {"openai": {"percentage": 0.08, "fixed_amount": 0.0005}})
+    logging_obj = Logging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="breakdown-total",
+        function_id="f",
+    )
+
+    cost: Final = completion_cost(
+        completion_response=ModelResponse(
+            model="gpt-4o", usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+        ),
+        model="gpt-4o",
+        custom_llm_provider="openai",
+        litellm_logging_obj=logging_obj,
+    )
+
+    assert logging_obj.cost_breakdown["total_cost"] == cost
+    assert logging_obj.cost_breakdown["original_cost"] != cost
 
 
 def test_cost_margin_global(monkeypatch):

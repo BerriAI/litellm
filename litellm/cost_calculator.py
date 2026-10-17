@@ -1405,6 +1405,195 @@ def _response_time_ms_for_cost(
     return 0.0
 
 
+def _transcription_file_duration(
+    completion_response: object, requested_model: str | None, custom_llm_provider: str | None
+) -> float:
+    # Check _hidden_params first (duration stored there to avoid polluting the response body), then fall
+    # back to the response attribute (for verbose_json responses that naturally include provider duration)
+    hidden: Final = getattr(completion_response, "_hidden_params", {}) or {}
+    return hidden.get("audio_transcription_duration", getattr(completion_response, "duration", 0.0)) or (
+        completion_response.usage.seconds
+        if isinstance(completion_response, TranscriptionResponse)
+        and isinstance(completion_response.usage, TranscriptionUsageDurationObject)
+        and _bills_provider_transcription_seconds(requested_model, custom_llm_provider)
+        else 0.0
+    )
+
+
+def _search_call_cost(
+    model: str,
+    custom_llm_provider: str | None,
+    optional_params: Mapping[str, object] | None,
+    configured_cost_per_query: float | None,
+    region_name: str | None,
+    litellm_logging_obj: LitellmLoggingObject | None,
+    service_tier: str | None,
+    data_residency: str | None,
+) -> float:
+    from litellm.search import search_provider_cost_per_query
+
+    query: Final = optional_params.get("query") if optional_params is not None else None
+    number_of_queries: Final = len(query) if isinstance(query, list) else 1
+    search_model: Final = (
+        f"{custom_llm_provider}/search" if custom_llm_provider and "/" not in (model or "") else model or ""
+    )
+    prompt_cost, completion_cost_result = (
+        (number_of_queries * configured_cost_per_query, 0.0)
+        if configured_cost_per_query is not None
+        else search_provider_cost_per_query(
+            model=search_model,
+            custom_llm_provider=custom_llm_provider,
+            number_of_queries=number_of_queries,
+            optional_params=optional_params,
+        )
+    )
+    original_cost: Final = prompt_cost + completion_cost_result
+    discounted_cost, discount_percent, discount_amount = _apply_cost_discount(
+        base_cost=original_cost,
+        custom_llm_provider=custom_llm_provider,
+        model=model,
+        region_name=region_name,
+    )
+    final_cost, margin_percent, margin_fixed_amount, margin_total_amount = _apply_cost_margin(
+        base_cost=discounted_cost,
+        custom_llm_provider=custom_llm_provider,
+    )
+    _store_cost_breakdown_in_logging_obj(
+        litellm_logging_obj=litellm_logging_obj,
+        prompt_tokens_cost_usd_dollar=prompt_cost,
+        completion_tokens_cost_usd_dollar=completion_cost_result,
+        cost_for_built_in_tools_cost_usd_dollar=0.0,
+        total_cost_usd_dollar=final_cost,
+        original_cost=original_cost,
+        discount_percent=discount_percent,
+        discount_amount=discount_amount,
+        margin_percent=margin_percent,
+        margin_fixed_amount=margin_fixed_amount,
+        margin_total_amount=margin_total_amount,
+        service_tier=service_tier,
+        data_residency=data_residency,
+    )
+    return final_cost
+
+
+def _additional_costs_model(
+    model: str, completion_response: object, litellm_logging_obj: LitellmLoggingObject | None
+) -> str:
+    """The Azure Model Router bills its flat fee under the router's name, not the routed-to model's"""
+    request_model: Final = litellm_logging_obj.model if litellm_logging_obj is not None else None
+    hidden_params: Final = (
+        (getattr(completion_response, "_hidden_params", None) or {}) if completion_response is not None else {}
+    )
+    hidden_model: Final = hidden_params.get("model") or hidden_params.get("litellm_model_name")
+    hidden_model_is_router: Final = bool(
+        hidden_model and ("model_router" in hidden_model.lower() or "model-router" in hidden_model.lower())
+    )
+    model_for_additional_costs: Final = (
+        hidden_model
+        if completion_response is not None and (hidden_model_is_router or request_model is None)
+        else request_model
+    )
+    return model_for_additional_costs if model_for_additional_costs is not None else model
+
+
+def _adjusted_token_cost(
+    *,
+    prompt_tokens_cost_usd_dollar: float,
+    completion_tokens_cost_usd_dollar: float,
+    prompt_tokens: int,
+    completion_tokens: int,
+    model: str,
+    model_for_discount: str,
+    pricing_provider: str | None,
+    custom_llm_provider: str | None,
+    region_name: str | None,
+    completion_response: object,
+    usage_object: Usage | None,
+    standard_built_in_tools_params: StandardBuiltInToolsParams | None,
+    custom_cost_per_token: CostPerToken | None,
+    litellm_logging_obj: LitellmLoggingObject | None,
+    service_tier: str | None,
+    data_residency: str | None,
+    vertex_location: str | None,
+) -> float:
+    """Token cost plus built-in tool and provider costs, with the configured discount and margin applied"""
+    additional_costs: Final = (
+        _get_additional_costs(
+            model=_additional_costs_model(model, completion_response, litellm_logging_obj),
+            custom_llm_provider=custom_llm_provider,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        )
+        if custom_llm_provider in ("azure_ai", "azure") and not azure_ai_is_model_router_name(model)
+        else None
+    )
+    cost_for_built_in_tools: Final = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        response_object=completion_response,
+        usage=usage_object,
+        standard_built_in_tools_params=standard_built_in_tools_params,
+        custom_llm_provider=custom_llm_provider,
+    )
+    token_and_tool_cost: Final = (
+        prompt_tokens_cost_usd_dollar + completion_tokens_cost_usd_dollar + cost_for_built_in_tools
+    )
+    original_cost: Final = (
+        token_and_tool_cost + sum(additional_costs.values()) if additional_costs else token_and_tool_cost
+    )
+    discounted_cost, discount_percent, discount_amount = (
+        _apply_cost_discount(
+            base_cost=original_cost,
+            custom_llm_provider=custom_llm_provider,
+            model=model_for_discount,
+            region_name=region_name,
+        )
+        if litellm.cost_discount_config
+        else (original_cost, 0.0, 0.0)
+    )
+    final_cost, margin_percent, margin_fixed_amount, margin_total_amount = (
+        _apply_cost_margin(base_cost=discounted_cost, custom_llm_provider=custom_llm_provider)
+        if litellm.cost_margin_config
+        else (discounted_cost, 0.0, 0.0, 0.0)
+    )
+    if litellm_logging_obj is None:
+        return final_cost
+    token_type_breakdown: Final = (
+        get_token_type_cost_breakdown(
+            model=model,
+            custom_llm_provider=pricing_provider,
+            usage=usage_object,
+            service_tier=service_tier,
+            data_residency=data_residency,
+            vertex_location=vertex_location,
+            custom_cost_per_token=custom_cost_per_token,
+        )
+        if usage_object is not None and model
+        else None
+    )
+    _store_cost_breakdown_in_logging_obj(
+        litellm_logging_obj=litellm_logging_obj,
+        prompt_tokens_cost_usd_dollar=prompt_tokens_cost_usd_dollar,
+        completion_tokens_cost_usd_dollar=completion_tokens_cost_usd_dollar,
+        cost_for_built_in_tools_cost_usd_dollar=cost_for_built_in_tools,
+        total_cost_usd_dollar=final_cost,
+        original_cost=original_cost,
+        additional_costs=additional_costs,
+        discount_percent=discount_percent,
+        discount_amount=discount_amount,
+        margin_percent=margin_percent,
+        margin_fixed_amount=margin_fixed_amount,
+        margin_total_amount=margin_total_amount,
+        cache_read_cost=token_type_breakdown.cache_read_cost if token_type_breakdown is not None else None,
+        cache_creation_cost=token_type_breakdown.cache_creation_cost if token_type_breakdown is not None else None,
+        reasoning_cost=token_type_breakdown.reasoning_cost if token_type_breakdown is not None else None,
+        service_tier=service_tier,
+        data_residency=data_residency,
+        vertex_location=vertex_location,
+        billed_token_rates=token_type_breakdown.rates if token_type_breakdown is not None else None,
+    )
+    return final_cost
+
+
 def completion_cost(
     completion_response: object | None = None,
     model: str | None = None,
@@ -1448,610 +1637,424 @@ def completion_cost(
     Raises if no candidate model name resolves to pricing. Register the model via `litellm.register_model`
     or add it to model_prices_and_context_window.json.
     """
-    try:
-        call_type = infer_call_type(call_type, completion_response) or "completion"
+    call_type = infer_call_type(call_type, completion_response) or "completion"
 
-        if call_type == CallTypes.aresponses_websocket.value and isinstance(
-            completion_response, LiteLLMRealtimeStreamLoggingObject
-        ):
-            ws_tier_parts: Final = _split_responses_ws_logging_object_by_service_tier(completion_response)
-            if ws_tier_parts is not None:
-                return sum(
-                    completion_cost(
-                        completion_response=part,
-                        model=model,
-                        prompt=prompt,
-                        messages=messages,
-                        completion=completion,
-                        total_time=total_time,
-                        call_type=call_type,
-                        custom_llm_provider=custom_llm_provider,
-                        region_name=region_name,
-                        size=size,
-                        quality=quality,
-                        n=n,
-                        custom_cost_per_token=custom_cost_per_token,
-                        custom_cost_per_second=custom_cost_per_second,
-                        optional_params=optional_params,
-                        custom_pricing=custom_pricing,
-                        base_model=base_model,
-                        standard_built_in_tools_params=standard_built_in_tools_params,
-                        litellm_model_name=litellm_model_name,
-                        router_model_id=router_model_id,
-                        litellm_logging_obj=litellm_logging_obj,
-                        service_tier=service_tier,
-                        data_residency=data_residency,
-                        vertex_location=vertex_location,
-                    )
-                    for part in ws_tier_parts
-                )
-
-        if (
-            (call_type == "aimage_generation" or call_type == "image_generation")
-            and model is not None
-            and isinstance(model, str)
-            and len(model) == 0
-            and custom_llm_provider == "azure"
-        ):
-            model = "dall-e-2"  # for dall-e-2, azure expects an empty model name
-        # Handle Inputs to completion_cost
-        prompt_tokens = 0
-        prompt_characters: int | None = None
-        completion_tokens = 0
-        completion_characters: int | None = None
-        cache_creation_input_tokens: int | None = None
-        cache_read_input_tokens: int | None = None
-        audio_transcription_file_duration: float = 0.0
-        provider_usage_object: Final = get_usage_object(completion_response=completion_response)
-        cost_per_token_usage_object: Final[Usage | None] = (
-            _without_provider_stated_cost(provider_usage_object) if custom_pricing else provider_usage_object
-        )
-        rerank_billed_units: RerankBilledUnits | None = None
-
-        explicit_tier: Final = _normalize_service_tier(service_tier)
-        if explicit_tier is not None:
-            service_tier = explicit_tier
-        else:
-            service_tier = _resolve_billable_service_tier(  # rebind-ok: resolved from request then response
-                requested=optional_params.get("service_tier") if optional_params is not None else None,
-                served=_served_service_tier(completion_response, cost_per_token_usage_object),
-            )
-
-        explicit_pricing: Final = custom_pricing is True or base_model is not None
-        custom_priced_request_model: Final = model if custom_pricing is True else None
-        configured_cost_per_query: Final = (
-            _configured_search_cost_per_query(litellm_logging_obj) if custom_pricing else None
-        )
-        base_model_provider: Final = (
-            _base_model_pricing_provider(
-                base_model,
-                _get_provider_for_cost_calc(
+    if call_type == CallTypes.aresponses_websocket.value and isinstance(
+        completion_response, LiteLLMRealtimeStreamLoggingObject
+    ):
+        ws_tier_parts: Final = _split_responses_ws_logging_object_by_service_tier(completion_response)
+        if ws_tier_parts is not None:
+            return sum(
+                completion_cost(
+                    completion_response=part,
                     model=model,
-                    custom_llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else None,
-                ),
-            )
-            if base_model is not None and custom_pricing is not True
-            else None
-        )
-        selected_model: Final = select_model_name_for_cost_calc(
-            model=model,
-            completion_response=completion_response,
-            custom_llm_provider=base_model_provider or custom_llm_provider,
-            custom_pricing=custom_pricing,
-            base_model=base_model,
-            router_model_id=router_model_id,
-            region_name=region_name,
-        )
-
-        requested_model: Final = model
-        potential_model_names: Final = [
-            selected_model,
-            _get_response_model(completion_response),
-        ]
-        if model is not None:
-            potential_model_names.append(model)
-
-        for idx, model in enumerate(potential_model_names):
-            try:
-                if verbose_logger.isEnabledFor(logging.DEBUG):
-                    verbose_logger.debug("selected model name for cost calculation: %s", model)
-
-                if completion_response is not None and (
-                    isinstance(completion_response, BaseModel) or isinstance(completion_response, dict)
-                ):  # tts returns a custom class
-                    if isinstance(completion_response, dict):
-                        usage_obj: dict | Usage | None = completion_response.get("usage", {})
-                    else:
-                        usage_obj = getattr(completion_response, "usage", {})
-                    if isinstance(usage_obj, BaseModel) and not _is_known_usage_objects(usage_obj=usage_obj):
-                        _usage_for_dump = cast(BaseModel, usage_obj)
-                        setattr(
-                            completion_response,
-                            "usage",
-                            litellm.Usage(**_usage_for_dump.model_dump()),
-                        )
-                    if isinstance(usage_obj, (DecisionsUsage, OpenAIDecisionUsage)):
-                        _usage = _decisions_usage(usage_obj).model_dump()
-                    elif usage_obj is None:
-                        _usage = {}
-                    elif isinstance(usage_obj, BaseModel):
-                        _usage = cast(BaseModel, usage_obj).model_dump()
-                    else:
-                        _usage = usage_obj
-
-                    if litellm.AnthropicConfig.is_anthropic_usage_object(_usage):
-                        _usage = (
-                            litellm.AnthropicConfig()
-                            .calculate_usage(usage_object=_usage, reasoning_content=None)
-                            .model_dump()
-                        )
-                    elif ResponseAPILoggingUtils.is_response_api_usage(_usage):
-                        _usage = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(_usage).model_dump()
-                    elif TranscriptionUsageObjectTransformation.is_transcription_usage_object(_usage):
-                        tr_usage = TranscriptionUsageObjectTransformation.transform_transcription_usage_object(
-                            cast(
-                                TranscriptionUsageDurationObject | TranscriptionUsageTokensObject,
-                                _usage,
-                            )
-                        )
-                        if tr_usage is not None:
-                            _usage = tr_usage.model_dump()
-                    elif InteractionsUsageObjectTransformation.is_interactions_usage_object(_usage):
-                        _usage = InteractionsUsageObjectTransformation.transform_interactions_usage_object(
-                            _usage
-                        ).model_dump()
-                    else:
-                        _usage = _usage
-
-                    # get input/output tokens from completion_response
-                    prompt_tokens = _usage.get("prompt_tokens", 0)
-                    completion_tokens = _usage.get("completion_tokens", 0)
-                    cache_creation_input_tokens = _usage.get("cache_creation_input_tokens", 0)
-                    cache_read_input_tokens = _usage.get("cache_read_input_tokens", 0)
-                    if (
-                        "prompt_tokens_details" in _usage
-                        and _usage["prompt_tokens_details"] != {}
-                        and _usage["prompt_tokens_details"]
-                    ):
-                        prompt_tokens_details = _usage.get("prompt_tokens_details") or {}
-                        cache_read_input_tokens = prompt_tokens_details.get("cached_tokens", 0)
-
-                    hidden_params = getattr(completion_response, "_hidden_params", None)
-                    if hidden_params is not None:
-                        custom_llm_provider = hidden_params.get("custom_llm_provider", custom_llm_provider or None)
-                        region_name = hidden_params.get("region_name", region_name)
-
-                else:
-                    if model is None:
-                        raise ValueError(
-                            f"Model is None and does not exist in passed completion_response. Passed completion_response={completion_response}, model={model}"
-                        )
-                    if len(messages) > 0:
-                        prompt_tokens = token_counter(model=model, messages=messages)
-                    elif len(prompt) > 0:
-                        prompt_tokens = token_counter(model=model, text=prompt)
-                    completion_tokens = token_counter(model=model, text=completion)
-
-                # Handle A2A calls before model check - A2A doesn't require a model
-                if call_type in _A2A_CALL_TYPES:
-                    from litellm.a2a_protocol.cost_calculator import A2ACostCalculator
-
-                    return A2ACostCalculator.calculate_a2a_cost(litellm_logging_obj=litellm_logging_obj)
-
-                if model is None:
-                    raise ValueError(
-                        f"Model is None and does not exist in passed completion_response. Passed completion_response={completion_response}, model={model}"
-                    )
-                if custom_llm_provider is None:
-                    try:
-                        model, custom_llm_provider, _, _ = litellm.get_llm_provider(
-                            model=model
-                        )  # strip the llm provider from the model name -> for image gen cost calculation
-                    except Exception as e:
-                        verbose_logger.debug(
-                            "litellm.cost_calculator.py::completion_cost() - Error inferring custom_llm_provider - %s",
-                            e,
-                        )
-                if CostCalculatorUtils.call_type_has_image_response(call_type) and isinstance(
-                    completion_response, ImageResponse
-                ):
-                    ### IMAGE GENERATION COST CALCULATION ###
-                    return CostCalculatorUtils.route_image_generation_cost_calculator(
-                        model=model,
-                        custom_llm_provider=custom_llm_provider,
-                        completion_response=completion_response,
-                        quality=quality,
-                        n=n,
-                        size=size,
-                        optional_params=optional_params,
-                        call_type=call_type,
-                        model_info=_deployment_model_info(litellm_logging_obj, custom_pricing, router_model_id),
-                        vertex_location=vertex_location,
-                    )
-                elif call_type in _VIDEO_CALL_TYPES:
-                    ### VIDEO GENERATION COST CALCULATION ###
-                    _video_model_info: ModelInfo | None = _deployment_model_info(
-                        litellm_logging_obj, custom_pricing, router_model_id
-                    )
-
-                    usage_obj = getattr(completion_response, "usage", None)
-                    duration_seconds: float | None = None
-                    video_resolution: str | None = None
-                    provider_reported_cost: float | None = None
-                    if completion_response is not None and usage_obj:
-                        # Handle both dict and Pydantic Usage object
-                        if isinstance(usage_obj, dict):
-                            duration_seconds = usage_obj.get("duration_seconds", None)
-                            _vr = usage_obj.get("video_resolution", None)
-                            provider_reported_cost = usage_obj.get("provider_reported_cost_usd", None)
-                            _vc = usage_obj.get("video_count", None)
-                        else:
-                            duration_seconds = getattr(usage_obj, "duration_seconds", None)
-                            _vr = getattr(usage_obj, "video_resolution", None)
-                            provider_reported_cost = getattr(usage_obj, "provider_reported_cost_usd", None)
-                            _vc = getattr(usage_obj, "video_count", None)
-                        if _vr is not None:
-                            video_resolution = str(_vr).strip().lower()
-                        video_count = _vc if isinstance(_vc, int) and not isinstance(_vc, bool) and _vc > 1 else 1
-
-                        if _video_model_info is None and provider_reported_cost is not None:
-                            return float(provider_reported_cost)
-
-                        if duration_seconds is not None:
-                            # Calculate cost based on video duration using video-specific cost calculation
-                            from litellm.llms.openai.cost_calculation import (
-                                video_generation_cost,
-                            )
-
-                            return video_generation_cost(
-                                model=model,
-                                duration_seconds=duration_seconds,
-                                custom_llm_provider=custom_llm_provider,
-                                model_info=_video_model_info,
-                                video_resolution=video_resolution,
-                            ) * video_count + _video_input_image_cost(
-                                requested_model or model,
-                                custom_llm_provider,
-                                _video_model_info,
-                                getattr(completion_response, "usage", None),
-                            )
-                    # Fallback to default video cost calculation if no duration available
-                    return default_video_cost_calculator(
-                        model=model,
-                        duration_seconds=0.0,  # Default to 0 if no duration available
-                        custom_llm_provider=custom_llm_provider,
-                        model_info=_video_model_info,
-                        video_resolution=video_resolution,
-                    )
-                elif call_type in _SPEECH_CALL_TYPES:
-                    prompt_characters = litellm.utils.count_characters(text=prompt)
-                elif call_type in _TRANSCRIPTION_CALL_TYPES:
-                    # Check _hidden_params first (duration stored there to
-                    # avoid polluting the response body), then fall back to
-                    # the response attribute (for verbose_json responses that
-                    # naturally include duration from the provider).
-                    _hidden = getattr(completion_response, "_hidden_params", {}) or {}
-                    audio_transcription_file_duration = _hidden.get(
-                        "audio_transcription_duration",
-                        getattr(completion_response, "duration", 0.0),
-                    ) or (
-                        completion_response.usage.seconds
-                        if isinstance(completion_response, TranscriptionResponse)
-                        and isinstance(completion_response.usage, TranscriptionUsageDurationObject)
-                        and _bills_provider_transcription_seconds(requested_model, custom_llm_provider)
-                        else 0.0
-                    )
-                elif call_type in _RERANK_CALL_TYPES:
-                    if completion_response is not None and isinstance(completion_response, RerankResponse):
-                        meta_obj = completion_response.meta
-                        if meta_obj is not None:
-                            billed_units: RerankBilledUnits = meta_obj.get("billed_units") or {}
-                        else:
-                            billed_units = {}
-
-                        rerank_billed_units = RerankBilledUnits(
-                            search_units=billed_units.get("search_units"),
-                            total_tokens=billed_units.get("total_tokens"),
-                        )
-
-                        search_units = billed_units.get("search_units") or 1  # cohere charges per request by default.
-                        completion_tokens = search_units
-                elif call_type in _SEARCH_CALL_TYPES:
-                    from litellm.search import search_provider_cost_per_query
-
-                    # Extract number_of_queries from optional_params or default to 1
-                    number_of_queries = 1
-                    if optional_params is not None:
-                        # Check if query is a list (multiple queries)
-                        query = optional_params.get("query")
-                        if isinstance(query, list):
-                            number_of_queries = len(query)
-                        elif query is not None:
-                            number_of_queries = 1
-
-                    search_model = model or ""
-                    if custom_llm_provider and "/" not in search_model:
-                        # If model is like "tavily-search", construct "tavily/search" for cost lookup
-                        search_model = f"{custom_llm_provider}/search"
-
-                    (
-                        prompt_cost,
-                        completion_cost_result,
-                    ) = (
-                        (number_of_queries * configured_cost_per_query, 0.0)
-                        if configured_cost_per_query is not None
-                        else search_provider_cost_per_query(
-                            model=search_model,
-                            custom_llm_provider=custom_llm_provider,
-                            number_of_queries=number_of_queries,
-                            optional_params=optional_params,
-                        )
-                    )
-
-                    # Return the total cost (prompt_cost + completion_cost, but for search it's just prompt_cost)
-                    _final_cost = prompt_cost + completion_cost_result
-
-                    # Apply discount
-                    original_cost = _final_cost
-                    (
-                        _final_cost,
-                        discount_percent,
-                        discount_amount,
-                    ) = _apply_cost_discount(
-                        base_cost=_final_cost,
-                        custom_llm_provider=custom_llm_provider,
-                        model=model,
-                        region_name=region_name if isinstance(region_name, str) else None,
-                    )
-
-                    # Apply margin from module-level config if configured
-                    (
-                        _final_cost,
-                        margin_percent,
-                        margin_fixed_amount,
-                        margin_total_amount,
-                    ) = _apply_cost_margin(
-                        base_cost=_final_cost,
-                        custom_llm_provider=custom_llm_provider,
-                    )
-
-                    # Store cost breakdown in logging object if available
-                    _store_cost_breakdown_in_logging_obj(
-                        litellm_logging_obj=litellm_logging_obj,
-                        prompt_tokens_cost_usd_dollar=prompt_cost,
-                        completion_tokens_cost_usd_dollar=completion_cost_result,
-                        cost_for_built_in_tools_cost_usd_dollar=0.0,
-                        total_cost_usd_dollar=_final_cost,
-                        original_cost=original_cost,
-                        discount_percent=discount_percent,
-                        discount_amount=discount_amount,
-                        margin_percent=margin_percent,
-                        margin_fixed_amount=margin_fixed_amount,
-                        margin_total_amount=margin_total_amount,
-                        service_tier=service_tier,
-                        data_residency=data_residency,
-                    )
-
-                    return _final_cost
-                elif call_type == _AREALTIME_CALL_TYPE and isinstance(
-                    completion_response, LiteLLMRealtimeStreamLoggingObject
-                ):
-                    if cost_per_token_usage_object is None or custom_llm_provider is None:
-                        raise ValueError(
-                            f"usage object and custom_llm_provider must be provided for realtime stream cost calculation. Got cost_per_token_usage_object={cost_per_token_usage_object}, custom_llm_provider={custom_llm_provider}"
-                        )
-                    return handle_realtime_stream_cost_calculation(
-                        results=completion_response.results,
-                        combined_usage_object=cost_per_token_usage_object,
-                        custom_llm_provider=custom_llm_provider,
-                        litellm_model_name=model,
-                        data_residency=data_residency,
-                        litellm_logging_obj=litellm_logging_obj,
-                        custom_pricing_model=selected_model if custom_pricing else None,
-                        base_pricing_model=(selected_model if base_model is not None and not custom_pricing else None),
-                    )
-                elif call_type == _MCP_CALL_TYPE:
-                    from litellm.proxy._experimental.mcp_server.cost_calculator import (
-                        MCPCostCalculator,
-                    )
-
-                    return MCPCostCalculator.calculate_mcp_tool_call_cost(litellm_logging_obj=litellm_logging_obj)
-                response_time_ms = _response_time_ms_for_cost(
-                    completion_response=completion_response,
-                    litellm_logging_obj=litellm_logging_obj,
+                    prompt=prompt,
+                    messages=messages,
+                    completion=completion,
                     total_time=total_time,
-                )
-                model_for_discount = custom_priced_request_model or model
-                # Calculate cost based on prompt_tokens, completion_tokens
-                if (
-                    "togethercomputer" in model or "together_ai" in model or custom_llm_provider == "together_ai"
-                ) and not has_together_registry_pricing(model, litellm.model_cost):
-                    model = get_model_params_and_category(model, call_type=CallTypes(call_type))
-
-                # replicate llms are calculate based on time for request running
-                # see https://replicate.com/pricing
-                elif (model in litellm.replicate_models or "replicate" in model) and model not in litellm.model_cost:
-                    # for unmapped replicate model, default to replicate's time tracking logic
-                    return get_replicate_completion_pricing(completion_response, response_time_ms)
-
-                if model is None:
-                    raise ValueError(
-                        f"Model is None and does not exist in passed completion_response. Passed completion_response={completion_response}, model={model}"
-                    )
-
-                if custom_llm_provider is not None and custom_llm_provider == "vertex_ai":
-                    # Calculate the prompt characters + response characters
-                    if len(messages) > 0:
-                        prompt_string = litellm.utils.get_formatted_prompt(
-                            data={"messages": messages}, call_type="completion"
-                        )
-
-                        prompt_characters = litellm.utils.count_characters(text=prompt_string)
-                    if completion_response is not None and isinstance(completion_response, ModelResponse):
-                        completion_string = litellm.utils.get_response_string(response_obj=completion_response)
-                        completion_characters = litellm.utils.count_characters(text=completion_string)
-
-                # Get the original request model for router detection
-                request_model_for_cost = None
-                if litellm_logging_obj is not None:
-                    request_model_for_cost = litellm_logging_obj.model
-
-                pricing_provider: str | None = (
-                    base_model_provider
-                    if base_model_provider is not None and idx == 0
-                    else custom_llm_provider
-                    if isinstance(custom_llm_provider, str)
-                    else None
-                )
-                (
-                    prompt_tokens_cost_usd_dollar,
-                    completion_tokens_cost_usd_dollar,
-                ) = cost_per_token(
-                    model=model,
-                    prompt_tokens=prompt_tokens or 0,
-                    completion_tokens=completion_tokens or 0,
-                    custom_llm_provider=pricing_provider,
-                    response_time_ms=response_time_ms,
-                    region_name=None if explicit_pricing else region_name,
-                    custom_cost_per_second=custom_cost_per_second,
-                    custom_cost_per_token=custom_cost_per_token,
-                    prompt_characters=prompt_characters,
-                    completion_characters=completion_characters,
-                    cache_creation_input_tokens=cache_creation_input_tokens,
-                    cache_read_input_tokens=cache_read_input_tokens,
-                    usage_object=cost_per_token_usage_object,
                     call_type=call_type,
-                    audio_transcription_file_duration=audio_transcription_file_duration,
-                    rerank_billed_units=rerank_billed_units,
+                    custom_llm_provider=custom_llm_provider,
+                    region_name=region_name,
+                    size=size,
+                    quality=quality,
+                    n=n,
+                    custom_cost_per_token=custom_cost_per_token,
+                    custom_cost_per_second=custom_cost_per_second,
+                    optional_params=optional_params,
+                    custom_pricing=custom_pricing,
+                    base_model=base_model,
+                    standard_built_in_tools_params=standard_built_in_tools_params,
+                    litellm_model_name=litellm_model_name,
+                    router_model_id=router_model_id,
+                    litellm_logging_obj=litellm_logging_obj,
                     service_tier=service_tier,
                     data_residency=data_residency,
                     vertex_location=vertex_location,
-                    response=completion_response,
-                    custom_model_info=_ocr_model_info(litellm_logging_obj, custom_pricing, router_model_id),
                 )
+                for part in ws_tier_parts
+            )
 
-                # Get additional costs from provider (e.g., routing fees, infrastructure costs)
-                if custom_llm_provider in ("azure_ai", "azure") and not azure_ai_is_model_router_name(model):
-                    model_for_additional_costs = request_model_for_cost
-                    if completion_response is not None:
-                        hidden_params = getattr(completion_response, "_hidden_params", None) or {}
-                        hidden_model = hidden_params.get("model") or hidden_params.get("litellm_model_name")
-                        if (
-                            hidden_model
-                            and (
-                                "model_router" in (hidden_model or "").lower()
-                                or "model-router" in (hidden_model or "").lower()
-                            )
-                            or model_for_additional_costs is None
-                        ):
-                            model_for_additional_costs = hidden_model
-                    if model_for_additional_costs is None:
-                        model_for_additional_costs = model
-                    additional_costs = _get_additional_costs(
-                        model=model_for_additional_costs,
-                        custom_llm_provider=custom_llm_provider,
-                        prompt_tokens=prompt_tokens or 0,
-                        completion_tokens=completion_tokens or 0,
-                    )
+    if (
+        (call_type == "aimage_generation" or call_type == "image_generation")
+        and model is not None
+        and isinstance(model, str)
+        and len(model) == 0
+        and custom_llm_provider == "azure"
+    ):
+        model = "dall-e-2"  # for dall-e-2, azure expects an empty model name
+    # Handle Inputs to completion_cost
+    prompt_tokens = 0
+    prompt_characters: int | None = None
+    completion_tokens = 0
+    completion_characters: int | None = None
+    cache_creation_input_tokens: int | None = None
+    cache_read_input_tokens: int | None = None
+    audio_transcription_file_duration: float = 0.0
+    provider_usage_object: Final = get_usage_object(completion_response=completion_response)
+    cost_per_token_usage_object: Final[Usage | None] = (
+        _without_provider_stated_cost(provider_usage_object) if custom_pricing else provider_usage_object
+    )
+    rerank_billed_units: RerankBilledUnits | None = None
+
+    explicit_tier: Final = _normalize_service_tier(service_tier)
+    if explicit_tier is not None:
+        service_tier = explicit_tier
+    else:
+        service_tier = _resolve_billable_service_tier(  # rebind-ok: resolved from request then response
+            requested=optional_params.get("service_tier") if optional_params is not None else None,
+            served=_served_service_tier(completion_response, cost_per_token_usage_object),
+        )
+
+    explicit_pricing: Final = custom_pricing is True or base_model is not None
+    custom_priced_request_model: Final = model if custom_pricing is True else None
+    configured_cost_per_query: Final = (
+        _configured_search_cost_per_query(litellm_logging_obj) if custom_pricing else None
+    )
+    base_model_provider: Final = (
+        _base_model_pricing_provider(
+            base_model,
+            _get_provider_for_cost_calc(
+                model=model,
+                custom_llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else None,
+            ),
+        )
+        if base_model is not None and custom_pricing is not True
+        else None
+    )
+    selected_model: Final = select_model_name_for_cost_calc(
+        model=model,
+        completion_response=completion_response,
+        custom_llm_provider=base_model_provider or custom_llm_provider,
+        custom_pricing=custom_pricing,
+        base_model=base_model,
+        router_model_id=router_model_id,
+        region_name=region_name,
+    )
+
+    potential_model_names: Final = (selected_model, _get_response_model(completion_response)) + (
+        (model,) if model is not None else ()
+    )
+
+    for idx, candidate_model in enumerate(potential_model_names):
+        try:
+            if verbose_logger.isEnabledFor(logging.DEBUG):
+                verbose_logger.debug("selected model name for cost calculation: %s", candidate_model)
+
+            if completion_response is not None and (
+                isinstance(completion_response, BaseModel) or isinstance(completion_response, dict)
+            ):  # tts returns a custom class
+                if isinstance(completion_response, dict):
+                    usage_obj: dict | Usage | None = completion_response.get("usage", {})
                 else:
-                    additional_costs = None
-
-                _final_cost = prompt_tokens_cost_usd_dollar + completion_tokens_cost_usd_dollar
-                cost_for_built_in_tools = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
-                    model=model,
-                    response_object=completion_response,
-                    usage=cost_per_token_usage_object,
-                    standard_built_in_tools_params=standard_built_in_tools_params,
-                    custom_llm_provider=custom_llm_provider,
-                )
-                _final_cost += cost_for_built_in_tools
-                if additional_costs:
-                    _final_cost += sum(additional_costs.values())
-
-                original_cost = _final_cost
-                if litellm.cost_discount_config:
-                    (
-                        _final_cost,
-                        discount_percent,
-                        discount_amount,
-                    ) = _apply_cost_discount(
-                        base_cost=_final_cost,
-                        custom_llm_provider=custom_llm_provider,
-                        model=model_for_discount,
-                        region_name=region_name if isinstance(region_name, str) else None,
+                    usage_obj = getattr(completion_response, "usage", {})
+                if isinstance(usage_obj, BaseModel) and not _is_known_usage_objects(usage_obj=usage_obj):
+                    _usage_for_dump = cast(BaseModel, usage_obj)
+                    setattr(
+                        completion_response,
+                        "usage",
+                        litellm.Usage(**_usage_for_dump.model_dump()),
                     )
+                if isinstance(usage_obj, (DecisionsUsage, OpenAIDecisionUsage)):
+                    _usage = _decisions_usage(usage_obj).model_dump()
+                elif usage_obj is None:
+                    _usage = {}
+                elif isinstance(usage_obj, BaseModel):
+                    _usage = cast(BaseModel, usage_obj).model_dump()
                 else:
-                    discount_percent = 0.0
-                    discount_amount = 0.0
+                    _usage = usage_obj
 
-                # Apply margin from module-level config if configured
-                if litellm.cost_margin_config:
-                    (
-                        _final_cost,
-                        margin_percent,
-                        margin_fixed_amount,
-                        margin_total_amount,
-                    ) = _apply_cost_margin(
-                        base_cost=_final_cost,
-                        custom_llm_provider=custom_llm_provider,
+                if litellm.AnthropicConfig.is_anthropic_usage_object(_usage):
+                    _usage = (
+                        litellm.AnthropicConfig()
+                        .calculate_usage(usage_object=_usage, reasoning_content=None)
+                        .model_dump()
                     )
-                else:
-                    margin_percent = 0.0
-                    margin_fixed_amount = 0.0
-                    margin_total_amount = 0.0
-
-                # Store cost breakdown in logging object if available
-                if litellm_logging_obj is not None:
-                    _reasoning_cost: float | None = None
-                    _cache_read_cost: float | None = None
-                    _cache_creation_cost: float | None = None
-                    _billed_token_rates: BilledTokenRates | None = None
-                    if cost_per_token_usage_object is not None and model:
-                        _token_type_breakdown = get_token_type_cost_breakdown(
-                            model=model,
-                            custom_llm_provider=pricing_provider,
-                            usage=cost_per_token_usage_object,
-                            service_tier=service_tier,
-                            data_residency=data_residency,
-                            vertex_location=vertex_location,
-                            custom_cost_per_token=custom_cost_per_token,
+                elif ResponseAPILoggingUtils.is_response_api_usage(_usage):
+                    _usage = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(_usage).model_dump()
+                elif TranscriptionUsageObjectTransformation.is_transcription_usage_object(_usage):
+                    tr_usage = TranscriptionUsageObjectTransformation.transform_transcription_usage_object(
+                        cast(
+                            TranscriptionUsageDurationObject | TranscriptionUsageTokensObject,
+                            _usage,
                         )
-                        _reasoning_cost = _token_type_breakdown.reasoning_cost
-                        _cache_read_cost = _token_type_breakdown.cache_read_cost
-                        _cache_creation_cost = _token_type_breakdown.cache_creation_cost
-                        _billed_token_rates = _token_type_breakdown.rates
-                    _store_cost_breakdown_in_logging_obj(
-                        litellm_logging_obj=litellm_logging_obj,
-                        prompt_tokens_cost_usd_dollar=prompt_tokens_cost_usd_dollar,
-                        completion_tokens_cost_usd_dollar=completion_tokens_cost_usd_dollar,
-                        cost_for_built_in_tools_cost_usd_dollar=cost_for_built_in_tools,
-                        total_cost_usd_dollar=_final_cost,
-                        original_cost=original_cost,
-                        additional_costs=additional_costs,
-                        discount_percent=discount_percent,
-                        discount_amount=discount_amount,
-                        margin_percent=margin_percent,
-                        margin_fixed_amount=margin_fixed_amount,
-                        margin_total_amount=margin_total_amount,
-                        cache_read_cost=_cache_read_cost,
-                        cache_creation_cost=_cache_creation_cost,
-                        reasoning_cost=_reasoning_cost,
-                        service_tier=service_tier,
-                        data_residency=data_residency,
-                        vertex_location=vertex_location,
-                        billed_token_rates=_billed_token_rates,
+                    )
+                    if tr_usage is not None:
+                        _usage = tr_usage.model_dump()
+                elif InteractionsUsageObjectTransformation.is_interactions_usage_object(_usage):
+                    _usage = InteractionsUsageObjectTransformation.transform_interactions_usage_object(
+                        _usage
+                    ).model_dump()
+                else:
+                    _usage = _usage
+
+                # get input/output tokens from completion_response
+                prompt_tokens = _usage.get("prompt_tokens", 0)
+                completion_tokens = _usage.get("completion_tokens", 0)
+                cache_creation_input_tokens = _usage.get("cache_creation_input_tokens", 0)
+                cache_read_input_tokens = _usage.get("cache_read_input_tokens", 0)
+                if (
+                    "prompt_tokens_details" in _usage
+                    and _usage["prompt_tokens_details"] != {}
+                    and _usage["prompt_tokens_details"]
+                ):
+                    prompt_tokens_details = _usage.get("prompt_tokens_details") or {}
+                    cache_read_input_tokens = prompt_tokens_details.get("cached_tokens", 0)
+
+                hidden_params = getattr(completion_response, "_hidden_params", None)
+                if hidden_params is not None:
+                    custom_llm_provider = hidden_params.get("custom_llm_provider", custom_llm_provider or None)
+                    region_name = hidden_params.get("region_name", region_name)
+
+            else:
+                if candidate_model is None:
+                    raise ValueError(
+                        f"Model is None and does not exist in passed completion_response. Passed completion_response={completion_response}, model={candidate_model}"
+                    )
+                if len(messages) > 0:
+                    prompt_tokens = token_counter(model=candidate_model, messages=messages)
+                elif len(prompt) > 0:
+                    prompt_tokens = token_counter(model=candidate_model, text=prompt)
+                completion_tokens = token_counter(model=candidate_model, text=completion)
+
+            # Handle A2A calls before model check - A2A doesn't require a model
+            if call_type in _A2A_CALL_TYPES:
+                from litellm.a2a_protocol.cost_calculator import A2ACostCalculator
+
+                return A2ACostCalculator.calculate_a2a_cost(litellm_logging_obj=litellm_logging_obj)
+
+            if candidate_model is None:
+                raise ValueError(
+                    f"Model is None and does not exist in passed completion_response. Passed completion_response={completion_response}, model={candidate_model}"
+                )
+            if custom_llm_provider is None:
+                try:
+                    candidate_model, custom_llm_provider, _, _ = litellm.get_llm_provider(
+                        model=candidate_model
+                    )  # strip the llm provider from the model name -> for image gen cost calculation
+                except Exception as e:
+                    verbose_logger.debug(
+                        "litellm.cost_calculator.py::completion_cost() - Error inferring custom_llm_provider - %s",
+                        e,
+                    )
+            if CostCalculatorUtils.call_type_has_image_response(call_type) and isinstance(
+                completion_response, ImageResponse
+            ):
+                return CostCalculatorUtils.route_image_generation_cost_calculator(
+                    model=candidate_model,
+                    custom_llm_provider=custom_llm_provider,
+                    completion_response=completion_response,
+                    quality=quality,
+                    n=n,
+                    size=size,
+                    optional_params=optional_params,
+                    call_type=call_type,
+                    model_info=_deployment_model_info(litellm_logging_obj, custom_pricing, router_model_id),
+                    vertex_location=vertex_location,
+                )
+            elif call_type in _VIDEO_CALL_TYPES:
+                _video_model_info: ModelInfo | None = _deployment_model_info(
+                    litellm_logging_obj, custom_pricing, router_model_id
+                )
+
+                usage_obj = getattr(completion_response, "usage", None)
+                duration_seconds: float | None = None
+                video_resolution: str | None = None
+                provider_reported_cost: float | None = None
+                if completion_response is not None and usage_obj:
+                    # Handle both dict and Pydantic Usage object
+                    if isinstance(usage_obj, dict):
+                        duration_seconds = usage_obj.get("duration_seconds", None)
+                        _vr = usage_obj.get("video_resolution", None)
+                        provider_reported_cost = usage_obj.get("provider_reported_cost_usd", None)
+                        _vc = usage_obj.get("video_count", None)
+                    else:
+                        duration_seconds = getattr(usage_obj, "duration_seconds", None)
+                        _vr = getattr(usage_obj, "video_resolution", None)
+                        provider_reported_cost = getattr(usage_obj, "provider_reported_cost_usd", None)
+                        _vc = getattr(usage_obj, "video_count", None)
+                    if _vr is not None:
+                        video_resolution = str(_vr).strip().lower()
+                    video_count = _vc if isinstance(_vc, int) and not isinstance(_vc, bool) and _vc > 1 else 1
+
+                    if _video_model_info is None and provider_reported_cost is not None:
+                        return float(provider_reported_cost)
+
+                    if duration_seconds is not None:
+                        # Calculate cost based on video duration using video-specific cost calculation
+                        from litellm.llms.openai.cost_calculation import (
+                            video_generation_cost,
+                        )
+
+                        return video_generation_cost(
+                            model=candidate_model,
+                            duration_seconds=duration_seconds,
+                            custom_llm_provider=custom_llm_provider,
+                            model_info=_video_model_info,
+                            video_resolution=video_resolution,
+                        ) * video_count + _video_input_image_cost(
+                            model or candidate_model,
+                            custom_llm_provider,
+                            _video_model_info,
+                            getattr(completion_response, "usage", None),
+                        )
+                # Fallback to default video cost calculation if no duration available
+                return default_video_cost_calculator(
+                    model=candidate_model,
+                    duration_seconds=0.0,  # Default to 0 if no duration available
+                    custom_llm_provider=custom_llm_provider,
+                    model_info=_video_model_info,
+                    video_resolution=video_resolution,
+                )
+            elif call_type in _SPEECH_CALL_TYPES:
+                prompt_characters = litellm.utils.count_characters(text=prompt)
+            elif call_type in _TRANSCRIPTION_CALL_TYPES:
+                audio_transcription_file_duration = _transcription_file_duration(
+                    completion_response, requested_model=model, custom_llm_provider=custom_llm_provider
+                )
+            elif call_type in _RERANK_CALL_TYPES:
+                if completion_response is not None and isinstance(completion_response, RerankResponse):
+                    meta_obj = completion_response.meta
+                    if meta_obj is not None:
+                        billed_units: RerankBilledUnits = meta_obj.get("billed_units") or {}
+                    else:
+                        billed_units = {}
+
+                    rerank_billed_units = RerankBilledUnits(
+                        search_units=billed_units.get("search_units"),
+                        total_tokens=billed_units.get("total_tokens"),
                     )
 
-                return _final_cost
-            except Exception as e:
-                verbose_logger.debug(
-                    "litellm.cost_calculator.py::completion_cost() - Error calculating cost for model=%s - %s", model, e
+                    search_units = billed_units.get("search_units") or 1  # cohere charges per request by default.
+                    completion_tokens = search_units
+            elif call_type in _SEARCH_CALL_TYPES:
+                return _search_call_cost(
+                    model=candidate_model,
+                    custom_llm_provider=custom_llm_provider,
+                    optional_params=optional_params,
+                    configured_cost_per_query=configured_cost_per_query,
+                    region_name=region_name if isinstance(region_name, str) else None,
+                    litellm_logging_obj=litellm_logging_obj,
+                    service_tier=service_tier,
+                    data_residency=data_residency,
                 )
-                if idx == len(potential_model_names) - 1:
-                    raise e
-        raise Exception(f"Unable to calculate cost for received potential model names - {potential_model_names}")
-    except Exception as e:
-        raise e
+            elif call_type == _AREALTIME_CALL_TYPE and isinstance(
+                completion_response, LiteLLMRealtimeStreamLoggingObject
+            ):
+                if cost_per_token_usage_object is None or custom_llm_provider is None:
+                    raise ValueError(
+                        f"usage object and custom_llm_provider must be provided for realtime stream cost calculation. Got cost_per_token_usage_object={cost_per_token_usage_object}, custom_llm_provider={custom_llm_provider}"
+                    )
+                return handle_realtime_stream_cost_calculation(
+                    results=completion_response.results,
+                    combined_usage_object=cost_per_token_usage_object,
+                    custom_llm_provider=custom_llm_provider,
+                    litellm_model_name=candidate_model,
+                    data_residency=data_residency,
+                    litellm_logging_obj=litellm_logging_obj,
+                    custom_pricing_model=selected_model if custom_pricing else None,
+                    base_pricing_model=(selected_model if base_model is not None and not custom_pricing else None),
+                )
+            elif call_type == _MCP_CALL_TYPE:
+                from litellm.proxy._experimental.mcp_server.cost_calculator import (
+                    MCPCostCalculator,
+                )
+
+                return MCPCostCalculator.calculate_mcp_tool_call_cost(litellm_logging_obj=litellm_logging_obj)
+            response_time_ms = _response_time_ms_for_cost(
+                completion_response=completion_response,
+                litellm_logging_obj=litellm_logging_obj,
+                total_time=total_time,
+            )
+            model_for_discount = custom_priced_request_model or candidate_model
+            if (
+                "togethercomputer" in candidate_model
+                or "together_ai" in candidate_model
+                or custom_llm_provider == "together_ai"
+            ) and not has_together_registry_pricing(candidate_model, litellm.model_cost):
+                candidate_model = get_model_params_and_category(candidate_model, call_type=CallTypes(call_type))
+
+            # replicate llms are calculate based on time for request running
+            # see https://replicate.com/pricing
+            elif (
+                candidate_model in litellm.replicate_models or "replicate" in candidate_model
+            ) and candidate_model not in litellm.model_cost:
+                # for unmapped replicate model, default to replicate's time tracking logic
+                return get_replicate_completion_pricing(completion_response, response_time_ms)
+
+            if custom_llm_provider is not None and custom_llm_provider == "vertex_ai":
+                # Calculate the prompt characters + response characters
+                if len(messages) > 0:
+                    prompt_string = litellm.utils.get_formatted_prompt(
+                        data={"messages": messages}, call_type="completion"
+                    )
+
+                    prompt_characters = litellm.utils.count_characters(text=prompt_string)
+                if completion_response is not None and isinstance(completion_response, ModelResponse):
+                    completion_string = litellm.utils.get_response_string(response_obj=completion_response)
+                    completion_characters = litellm.utils.count_characters(text=completion_string)
+
+            pricing_provider: str | None = (
+                base_model_provider
+                if base_model_provider is not None and idx == 0
+                else custom_llm_provider
+                if isinstance(custom_llm_provider, str)
+                else None
+            )
+            (
+                prompt_tokens_cost_usd_dollar,
+                completion_tokens_cost_usd_dollar,
+            ) = cost_per_token(
+                model=candidate_model,
+                prompt_tokens=prompt_tokens or 0,
+                completion_tokens=completion_tokens or 0,
+                custom_llm_provider=pricing_provider,
+                response_time_ms=response_time_ms,
+                region_name=None if explicit_pricing else region_name,
+                custom_cost_per_second=custom_cost_per_second,
+                custom_cost_per_token=custom_cost_per_token,
+                prompt_characters=prompt_characters,
+                completion_characters=completion_characters,
+                cache_creation_input_tokens=cache_creation_input_tokens,
+                cache_read_input_tokens=cache_read_input_tokens,
+                usage_object=cost_per_token_usage_object,
+                call_type=call_type,
+                audio_transcription_file_duration=audio_transcription_file_duration,
+                rerank_billed_units=rerank_billed_units,
+                service_tier=service_tier,
+                data_residency=data_residency,
+                vertex_location=vertex_location,
+                response=completion_response,
+                custom_model_info=_ocr_model_info(litellm_logging_obj, custom_pricing, router_model_id),
+            )
+
+            return _adjusted_token_cost(
+                prompt_tokens_cost_usd_dollar=prompt_tokens_cost_usd_dollar,
+                completion_tokens_cost_usd_dollar=completion_tokens_cost_usd_dollar,
+                prompt_tokens=prompt_tokens or 0,
+                completion_tokens=completion_tokens or 0,
+                model=candidate_model,
+                model_for_discount=model_for_discount,
+                pricing_provider=pricing_provider,
+                custom_llm_provider=custom_llm_provider,
+                region_name=region_name if isinstance(region_name, str) else None,
+                completion_response=completion_response,
+                usage_object=cost_per_token_usage_object,
+                standard_built_in_tools_params=standard_built_in_tools_params,
+                custom_cost_per_token=custom_cost_per_token,
+                litellm_logging_obj=litellm_logging_obj,
+                service_tier=service_tier,
+                data_residency=data_residency,
+                vertex_location=vertex_location,
+            )
+        except Exception as e:
+            verbose_logger.debug(
+                "litellm.cost_calculator.py::completion_cost() - Error calculating cost for model=%s - %s",
+                candidate_model,
+                e,
+            )
+            if idx == len(potential_model_names) - 1:
+                raise e
+    raise Exception(f"Unable to calculate cost for received potential model names - {potential_model_names}")
 
 
 def get_response_cost_from_hidden_params(
