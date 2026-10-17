@@ -4,6 +4,7 @@ Unit tests for the in-gateway `clear_tool_uses_20250919` polyfill editor.
 
 from copy import deepcopy
 
+import litellm
 from litellm.llms.anthropic.pass_through.context_management.constants import (
     CLEARED_TOOL_RESULT_PLACEHOLDER,
 )
@@ -14,7 +15,7 @@ from litellm.llms.anthropic.pass_through.context_management.editors.clear_tool_u
 MODEL = "xai/grok-4"
 
 
-def _make_pair(tool_use_id: str, result_text: str, location: str = "Mumbai"):
+def _make_pair(tool_use_id: str, result_text: str, location: str = "Mumbai", name: str = "get_weather"):
     """Return an (assistant, user) message pair with one tool_use + tool_result."""
     assistant_msg = {
         "role": "assistant",
@@ -22,7 +23,7 @@ def _make_pair(tool_use_id: str, result_text: str, location: str = "Mumbai"):
             {
                 "type": "tool_use",
                 "id": tool_use_id,
-                "name": "get_weather",
+                "name": name,
                 "input": {"location": location},
             }
         ],
@@ -203,10 +204,74 @@ def test_cleared_input_tokens_is_nonnegative():
     assert applied["cleared_input_tokens"] >= 0
 
 
-def test_ignored_knobs_do_not_alter_behavior():
-    """clear_at_least / exclude_tools / clear_tool_inputs are accepted but ignored in v0."""
+def _result_contents(messages):
+    """tool_use_id -> tool_result content."""
+    return {
+        block["tool_use_id"]: block["content"]
+        for msg in messages
+        if isinstance(msg.get("content"), list)
+        for block in msg["content"]
+        if block.get("type") == "tool_result"
+    }
+
+
+def _cleared_ids(messages):
+    return {
+        tool_use_id
+        for tool_use_id, content in _result_contents(messages).items()
+        if content == CLEARED_TOOL_RESULT_PLACEHOLDER
+    }
+
+
+def _result_tokens(text: str) -> int:
+    return litellm.token_counter(model=MODEL, text=text)
+
+
+def test_clear_at_least_clears_in_batches_and_leaves_an_incomplete_batch():
+    """Oldest first, a batch closes once it reaches clear_at_least; the rest waits."""
+    messages = _make_history(n_pairs=8)
+    one_result = _result_tokens(_result_contents(messages)["toolu_00"])
+    edit_spec = {
+        "type": "clear_tool_uses_20250919",
+        "trigger": {"type": "tool_uses", "value": 0},
+        "keep": {"type": "tool_uses", "value": 1},
+        # Three results fill a batch; two don't.
+        "clear_at_least": {"type": "input_tokens", "value": 2 * one_result + 1},
+    }
+    new_messages, applied = apply_clear_tool_uses_20250919(
+        model=MODEL, messages=messages, tools=None, system=None, edit_spec=edit_spec
+    )
+    # 7 eligible: two batches of 3; the 7th waits for its batch to fill.
+    assert applied is not None
+    assert applied["cleared_tool_uses"] == 6
+    assert _cleared_ids(new_messages) == {f"toolu_{i:02d}" for i in range(6)}
+    assert "warnings" not in applied
+
+
+def test_clear_at_least_keeps_the_cleared_prefix_stable_between_requests():
+    """A new tool use doesn't move the cleared prefix until the next batch fills (prompt-cache friendly)."""
+    history = _make_history(n_pairs=10)
+    one_result = _result_tokens(_result_contents(history)["toolu_00"])
+    edit_spec = {
+        "type": "clear_tool_uses_20250919",
+        "trigger": {"type": "tool_uses", "value": 0},
+        "keep": {"type": "tool_uses", "value": 1},
+        "clear_at_least": {"type": "input_tokens", "value": 2 * one_result + 1},
+    }
+    cleared = []
+    for n_pairs in (8, 9, 10):
+        new_messages, _ = apply_clear_tool_uses_20250919(
+            model=MODEL, messages=history[: 1 + 2 * n_pairs], tools=None, system=None, edit_spec=edit_spec
+        )
+        cleared.append(_cleared_ids(new_messages))
+    assert cleared[0] == cleared[1] == {f"toolu_{i:02d}" for i in range(6)}
+    assert cleared[2] == {f"toolu_{i:02d}" for i in range(9)}
+
+
+def test_clear_at_least_out_of_reach_leaves_messages_unchanged():
     messages = _make_history(n_pairs=3)
-    _, applied = apply_clear_tool_uses_20250919(
+    original = deepcopy(messages)
+    new_messages, applied = apply_clear_tool_uses_20250919(
         model=MODEL,
         messages=messages,
         tools=None,
@@ -216,26 +281,113 @@ def test_ignored_knobs_do_not_alter_behavior():
             "trigger": {"type": "tool_uses", "value": 0},
             "keep": {"type": "tool_uses", "value": 1},
             "clear_at_least": {"type": "input_tokens", "value": 999_999_999},
-            "exclude_tools": ["get_weather"],
-            "clear_tool_inputs": True,
         },
     )
-    # Despite clear_at_least being huge, polyfill still applies (knob ignored).
-    # Despite clear_tool_inputs=True, inputs are NOT cleared (knob ignored).
+    assert applied is None
+    assert new_messages == original
+
+
+def test_exclude_tools_are_never_cleared_and_do_not_count_toward_keep():
+    """keep counts clearable uses only: with keep=1 the newest get_weather result stays, not the newest search."""
+    messages = [{"role": "user", "content": "Plan a trip."}]
+    for i, name in enumerate(["get_weather", "search", "get_weather", "get_weather", "search"]):
+        messages.extend(_make_pair(f"toolu_{i:02d}", f"Result {i}: " + "x" * 200, name=name))
+    new_messages, applied = apply_clear_tool_uses_20250919(
+        model=MODEL,
+        messages=messages,
+        tools=None,
+        system=None,
+        edit_spec={
+            "type": "clear_tool_uses_20250919",
+            "trigger": {"type": "tool_uses", "value": 0},
+            "keep": {"type": "tool_uses", "value": 1},
+            "exclude_tools": ["search"],
+        },
+    )
     assert applied is not None
+    assert _cleared_ids(new_messages) == {"toolu_00", "toolu_02"}
     assert applied["cleared_tool_uses"] == 2
-    # Ignored knobs surface as warnings on the AppliedEdit so operators can
-    # see what was dropped (the v0 polyfill silently dropping them at debug
-    # log level made misconfiguration invisible from the response).
-    assert set(applied.get("warnings", [])) == {
-        "clear_at_least_ignored",
-        "exclude_tools_ignored",
-        "clear_tool_inputs_ignored",
+
+
+def _tool_inputs(messages):
+    return {
+        block["id"]: block["input"]
+        for msg in messages
+        if msg["role"] == "assistant"
+        for block in msg["content"]
+        if block.get("type") == "tool_use"
     }
 
 
-def test_no_ignored_knobs_omits_warnings_field():
-    """When the caller doesn't pass any unsupported knobs, no ``warnings`` are added."""
+def test_clear_tool_inputs_true_empties_the_inputs_of_cleared_uses_only():
+    messages = _make_history(n_pairs=3)
+    new_messages, applied = apply_clear_tool_uses_20250919(
+        model=MODEL,
+        messages=messages,
+        tools=None,
+        system=None,
+        edit_spec={
+            "type": "clear_tool_uses_20250919",
+            "trigger": {"type": "tool_uses", "value": 0},
+            "keep": {"type": "tool_uses", "value": 1},
+            "clear_tool_inputs": True,
+        },
+    )
+    assert applied is not None
+    assert _tool_inputs(new_messages) == {"toolu_00": {}, "toolu_01": {}, "toolu_02": {"location": "City2"}}
+    # The caller's messages are not mutated.
+    assert _tool_inputs(messages)["toolu_00"] == {"location": "City0"}
+
+
+def test_clear_tool_inputs_list_clears_only_the_named_tools():
+    messages = [{"role": "user", "content": "Plan a trip."}]
+    for i, name in enumerate(["get_weather", "search", "get_weather"]):
+        messages.extend(_make_pair(f"toolu_{i:02d}", f"Result {i}: " + "x" * 200, location=f"City{i}", name=name))
+    new_messages, applied = apply_clear_tool_uses_20250919(
+        model=MODEL,
+        messages=messages,
+        tools=None,
+        system=None,
+        edit_spec={
+            "type": "clear_tool_uses_20250919",
+            "trigger": {"type": "tool_uses", "value": 0},
+            "keep": {"type": "tool_uses", "value": 1},
+            "clear_tool_inputs": ["search"],
+        },
+    )
+    assert applied is not None
+    assert _cleared_ids(new_messages) == {"toolu_00", "toolu_01"}
+    assert _tool_inputs(new_messages) == {
+        "toolu_00": {"location": "City0"},
+        "toolu_01": {},
+        "toolu_02": {"location": "City2"},
+    }
+
+
+def test_invalid_knobs_are_ignored_with_warnings():
+    messages = _make_history(n_pairs=3)
+    new_messages, applied = apply_clear_tool_uses_20250919(
+        model=MODEL,
+        messages=messages,
+        tools=None,
+        system=None,
+        edit_spec={
+            "type": "clear_tool_uses_20250919",
+            "trigger": {"type": "tool_uses", "value": 0},
+            "keep": {"type": "tool_uses", "value": 1},
+            "clear_at_least": {"type": "tool_uses", "value": 5},
+            "exclude_tools": "get_weather",
+            "clear_tool_inputs": "yes",
+        },
+    )
+    assert applied is not None
+    assert applied["cleared_tool_uses"] == 2
+    assert _tool_inputs(new_messages)["toolu_00"] == {"location": "City0"}
+    assert applied["warnings"] == ["clear_at_least_invalid", "exclude_tools_invalid", "clear_tool_inputs_invalid"]
+
+
+def test_valid_spec_omits_warnings_field():
+    """A spec without invalid fields gets no ``warnings``."""
     messages = _make_history(n_pairs=3)
     _, applied = apply_clear_tool_uses_20250919(
         model=MODEL,

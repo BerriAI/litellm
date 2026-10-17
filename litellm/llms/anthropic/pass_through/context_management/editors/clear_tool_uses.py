@@ -1,4 +1,18 @@
-"""``clear_tool_uses_20250919`` polyfill (v0: ``trigger`` and ``keep`` only)."""
+"""``clear_tool_uses_20250919`` polyfill.
+
+Honors every field of the edit: ``trigger``, ``keep``, ``clear_at_least``,
+``exclude_tools`` and ``clear_tool_inputs``. Selection follows the Anthropic
+API, as measured against it:
+
+- ``keep`` counts clearable tool uses only; uses of ``exclude_tools`` are never
+  cleared and don't count toward ``keep`` or ``clear_at_least``.
+- Clearing goes oldest first in batches of at least ``clear_at_least`` tokens;
+  an incomplete last batch stays. The cleared prefix therefore only grows from
+  one request to the next instead of moving with every new tool use, so each
+  batch costs one prompt-cache miss and the requests between batches hit.
+- ``clear_tool_inputs`` (``true`` or a list of tool names) also clears the
+  ``input`` of the cleared tool uses.
+"""
 
 from typing import Any, Final, cast
 
@@ -27,11 +41,101 @@ class ClearToolUsesEditSpec(TypedDict, total=False):
     clear_tool_inputs: ReadOnly[object]
 
 
+def _tool_uses_in_order(messages: list[dict[str, object]]) -> list[tuple[str, str | None]]:
+    """Return (id, name) of every tool_use block, in chronological order."""
+    uses: Final[list[tuple[str, str | None]]] = []
+    for msg in messages:
+        content = msg.get("content")
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "tool_use":
+                    block_id = block.get("id")
+                    if isinstance(block_id, str):
+                        name = block.get("name")
+                        uses.append((block_id, name if isinstance(name, str) else None))
+    return uses
+
+
+def _tool_result_texts(messages: list[dict[str, object]]) -> dict[str, str]:
+    """Return tool_use_id -> the text of its tool_result (non-text blocks count as empty)."""
+    texts: Final[dict[str, str]] = {}
+    for msg in messages:
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not (isinstance(block, dict) and block.get("type") == "tool_result"):
+                continue
+            block_id = block.get("tool_use_id")
+            if not isinstance(block_id, str):
+                continue
+            result = block.get("content")
+            if isinstance(result, str):
+                texts[block_id] = result
+            elif isinstance(result, list):
+                texts[block_id] = "\n".join(
+                    part["text"]
+                    for part in result
+                    if isinstance(part, dict) and part.get("type") == "text" and isinstance(part.get("text"), str)
+                )
+            else:
+                texts[block_id] = ""
+    return texts
+
+
+def _resolve_clear_at_least(value: object) -> tuple[int, bool]:
+    """Return (minimum tokens per batch, valid). 0 clears every eligible result."""
+    if value is None:
+        return 0, True
+    if isinstance(value, dict) and value.get("type", "input_tokens") == "input_tokens":
+        tokens = value.get("value")
+        if isinstance(tokens, int) and not isinstance(tokens, bool) and tokens >= 0:
+            return tokens, True
+    return 0, False
+
+
+def _resolve_tool_names(value: object) -> tuple[frozenset[str], bool]:
+    """Return (tool names, valid) for a list-of-names field."""
+    if value is None:
+        return frozenset(), True
+    if isinstance(value, list) and all(isinstance(name, str) for name in value):
+        return frozenset(value), True
+    return frozenset(), False
+
+
+def _resolve_clear_tool_inputs(value: object) -> tuple[bool | frozenset[str], bool]:
+    """Return (``True`` for all tools, else the tool names whose inputs to clear; valid)."""
+    if value is None or value is False:
+        return frozenset(), True
+    if value is True:
+        return True, True
+    return _resolve_tool_names(value)
+
+
+def _select_in_batches(
+    candidates: list[str],
+    tokens: dict[str, int],
+    clear_at_least: int,
+) -> list[str]:
+    """Oldest first, close a batch once it holds ``clear_at_least`` tokens; drop the incomplete last batch."""
+    selected: Final[list[str]] = []
+    batch: list[str] = []
+    batch_tokens = 0
+    for tool_use_id in candidates:
+        batch.append(tool_use_id)
+        batch_tokens += tokens[tool_use_id]
+        if batch_tokens >= clear_at_least:
+            selected.extend(batch)
+            batch = []
+            batch_tokens = 0
+    return selected
+
+
 def _count_tool_uses(messages: list[dict[str, object]]) -> int:
     """Return the number of tool_use content blocks across all messages.
 
     Only counts blocks with a string ``id`` to stay consistent with
-    :func:`_collect_tool_use_ids_in_order`, which is the source of truth for
+    :func:`_tool_uses_in_order`, which is the source of truth for
     which blocks are clearable.
     """
     count = 0
@@ -43,20 +147,6 @@ def _count_tool_uses(messages: list[dict[str, object]]) -> int:
                     if isinstance(block.get("id"), str):
                         count += 1
     return count
-
-
-def _collect_tool_use_ids_in_order(messages: list[dict[str, object]]) -> list[str]:
-    """Return tool_use ids in the chronological order they appear in messages."""
-    ids: Final[list[str]] = []
-    for msg in messages:
-        content = msg.get("content")
-        if isinstance(content, list):
-            for block in content:
-                if isinstance(block, dict) and block.get("type") == "tool_use":
-                    block_id = block.get("id")
-                    if isinstance(block_id, str):
-                        ids.append(block_id)
-    return ids
 
 
 def _trigger_met(
@@ -150,6 +240,35 @@ def _clear_tool_results(
     return new_messages, cleared
 
 
+def _clear_tool_inputs(
+    messages: list[dict[str, object]],
+    ids_to_clear: set[str],
+    tools_to_clear: bool | frozenset[str],
+) -> list[dict[str, object]]:
+    """Empty the ``input`` of the matching tool_use blocks."""
+    new_messages: Final[list[dict[str, object]]] = []
+    for msg in messages:
+        content = msg.get("content")
+        if not isinstance(content, list):
+            new_messages.append(msg)
+            continue
+        new_blocks: list[object] = []
+        mutated = False
+        for block in content:
+            if (
+                isinstance(block, dict)
+                and block.get("type") == "tool_use"
+                and block.get("id") in ids_to_clear
+                and (tools_to_clear is True or block.get("name") in tools_to_clear)
+            ):
+                new_blocks.append({**block, "input": {}})
+                mutated = True
+            else:
+                new_blocks.append(block)
+        new_messages.append({**msg, "content": new_blocks} if mutated else msg)
+    return new_messages
+
+
 def apply_clear_tool_uses_20250919(
     *,
     model: str,
@@ -159,12 +278,20 @@ def apply_clear_tool_uses_20250919(
     edit_spec: ClearToolUsesEditSpec,
 ) -> tuple[list[dict[str, object]], AppliedEdit | None]:
     """Apply clear_tool_uses; return (messages, AppliedEdit or None)."""
-    ignored_knobs = [knob for knob in ("clear_at_least", "exclude_tools", "clear_tool_inputs") if knob in edit_spec]
-    for ignored_knob in ignored_knobs:
+    warnings: Final[list[str]] = []
+    clear_at_least, valid = _resolve_clear_at_least(edit_spec.get("clear_at_least"))
+    if not valid:
+        warnings.append("clear_at_least_invalid")
+    exclude_tools, valid = _resolve_tool_names(edit_spec.get("exclude_tools"))
+    if not valid:
+        warnings.append("exclude_tools_invalid")
+    tools_to_clear_inputs, valid = _resolve_clear_tool_inputs(edit_spec.get("clear_tool_inputs"))
+    if not valid:
+        warnings.append("clear_tool_inputs_invalid")
+    for warning in warnings:
         verbose_logger.warning(
-            "context_management polyfill: ignoring '%s' on %s "
-            "(supported only on Anthropic-family forwarding path in v0)",
-            ignored_knob,
+            "context_management polyfill: %s on %s; the field is ignored",
+            warning,
             CLEAR_TOOL_USES_EDIT_TYPE,
         )
 
@@ -182,21 +309,33 @@ def apply_clear_tool_uses_20250919(
         return messages, None
 
     keep_count: Final = _resolve_keep_count(keep)
-    tool_use_ids: Final = _collect_tool_use_ids_in_order(messages)
-    if len(tool_use_ids) <= keep_count:
+    # Uses of excluded tools are never cleared and don't count toward ``keep``.
+    clearable: Final = [tool_use_id for tool_use_id, name in _tool_uses_in_order(messages) if name not in exclude_tools]
+    if len(clearable) <= keep_count:
         return messages, None
-
-    ids_to_clear: Final = set(tool_use_ids[: len(tool_use_ids) - keep_count])
 
     # Never clear the latest completed tool_result (reply context).
     last_completed_id: Final = _last_completed_tool_use_id(messages)
-    if last_completed_id is not None:
-        ids_to_clear.discard(last_completed_id)
+    result_texts: Final = _tool_result_texts(messages)
+    candidates: Final = [
+        tool_use_id
+        for tool_use_id in clearable[: len(clearable) - keep_count]
+        if tool_use_id in result_texts and tool_use_id != last_completed_id
+    ]
+    ids_to_clear: Final = set(candidates)
+    if clear_at_least > 0:
+        tokens: Final = {
+            tool_use_id: litellm.token_counter(model=model, text=result_texts[tool_use_id])
+            for tool_use_id in candidates
+        }
+        ids_to_clear.intersection_update(_select_in_batches(candidates, tokens, clear_at_least))
 
     edited, cleared_count = _clear_tool_results(messages, ids_to_clear)
     verbose_logger.debug("context_management polyfill: edited: %s", edited)
     if cleared_count == 0:
         return messages, None
+    if tools_to_clear_inputs:
+        edited = _clear_tool_inputs(edited, ids_to_clear, tools_to_clear_inputs)
 
     if tokens_before is None:
         tokens_before = litellm.token_counter(model=model, messages=messages, tools=cast(Any, tools))
@@ -208,6 +347,6 @@ def apply_clear_tool_uses_20250919(
         "cleared_tool_uses": cleared_count,
         "cleared_input_tokens": cleared_input_tokens,
     }
-    if ignored_knobs:
-        applied["warnings"] = [f"{knob}_ignored" for knob in ignored_knobs]
+    if warnings:
+        applied["warnings"] = warnings
     return edited, applied
