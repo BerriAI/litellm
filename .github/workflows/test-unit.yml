@@ -288,6 +288,7 @@ jobs:
               tests/unit/llms/linkup
               tests/unit/llms/litellm_proxy
               tests/unit/llms/llamafile
+              tests/unit/llms/llmman
               tests/unit/llms/lm_studio
               tests/unit/llms/manus
               tests/unit/llms/meta_llama

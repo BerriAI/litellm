@@ -2028,6 +2028,9 @@ if TYPE_CHECKING:
     from .llms.llamafile.chat.transformation import (
         LlamafileChatConfig as _LlamafileChatConfig,
     )
+    from .llms.llmman.chat.transformation import (
+        LlmmanChatConfig as _LlmmanChatConfig,
+    )
     from .llms.lm_studio.chat.transformation import (
         LMStudioChatConfig as _LMStudioChatConfig,
     )
@@ -2055,6 +2058,7 @@ if TYPE_CHECKING:
     LiteLLMProxyChatConfig: Type[_LiteLLMProxyChatConfig]
     DeepInfraConfig: Type[_DeepInfraConfig]
     LlamafileChatConfig: Type[_LlamafileChatConfig]
+    LlmmanChatConfig: Type[_LlmmanChatConfig]
     LMStudioChatConfig: Type[_LMStudioChatConfig]
     LmStudioEmbeddingConfig: Type[_LmStudioEmbeddingConfig]
     IBMWatsonXEmbeddingConfig: Type[_IBMWatsonXEmbeddingConfig]
