@@ -28,7 +28,9 @@ def _catalogue_declares_default_effort() -> bool:
     the one litellm gave before it existed. Scanning costs ~80us on the largest published map and
     only on the fallback path, which is noise beside the request it precedes.
     """
-    return any(isinstance(entry, dict) and "default_reasoning_effort" in entry for entry in litellm.model_cost.values())
+    return any(
+        isinstance(entry, dict) and "default_reasoning_effort" in entry for entry in (*litellm.model_cost.values(),)
+    )
 
 
 def _normalize_reasoning_effort_for_chat_completion(
@@ -48,7 +50,7 @@ def _normalize_reasoning_effort_for_chat_completion(
     return None
 
 
-def _get_effort_level(value: str | dict | None) -> str | None:
+def get_effort_level(value: str | dict | None) -> str | None:
     """Extract the effective effort level from reasoning_effort (string or dict).
 
     Use this for guards that compare effort level (e.g. xhigh validation, "none" checks).
@@ -63,6 +65,8 @@ def _get_effort_level(value: str | dict | None) -> str | None:
         return value["effort"]
     return None
 
+
+_get_effort_level = get_effort_level
 
 GPT_REASONING_SERIES_MARKERS: Final = ("gpt-5", "gpt-6")
 
@@ -162,6 +166,14 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
             custom_llm_provider=None,
             key=f"supports_{level}_reasoning_effort",
         )
+
+    @classmethod
+    def supports_reasoning_effort_level(
+        cls,
+        model: str,
+        level: str,
+    ) -> bool:
+        return cls._supports_reasoning_effort_level(model, level)
 
     @classmethod
     def effort_resolves_to_none(cls, model: str, effective_effort: str | None) -> bool:
@@ -274,7 +286,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         # tool/sampling guards — dict inputs like {"effort": "none", "summary": "detailed"}
         # must be treated as effort="none" to avoid incorrect tool-drop or sampling errors.
         raw_reasoning_effort = non_default_params.get("reasoning_effort") or optional_params.get("reasoning_effort")
-        effective_effort: Final = _get_effort_level(raw_reasoning_effort)
+        effective_effort: Final = get_effort_level(raw_reasoning_effort)
 
         # Normalize dict reasoning_effort to string for Chat Completions API.
         # Example: {"effort": "high", "summary": "detailed"} -> "high"

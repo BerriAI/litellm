@@ -2,8 +2,11 @@
 
 import os
 import sys
+from typing import Final, Literal
 
 import httpx
+import pytest
+from openai import Timeout as SDKTimeout
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../..")))
 
@@ -142,3 +145,35 @@ def test_httpx_timeout_preserved_for_openai():
     )
     assert out is t
     assert isinstance(out, httpx.Timeout)
+
+
+@pytest.mark.parametrize("source", ("model", "timeout", "request_timeout"))
+def test_sdk_timeout_preserves_components_for_httpx_providers(
+    source: Literal["model", "timeout", "request_timeout"],
+) -> None:
+    timeout: Final = SDKTimeout(connect=2.0, read=None, write=5.0, pool=7.0)
+    resolved: Final = CompletionTimeout.resolve(
+        timeout if source == "model" else None,
+        {} if source == "model" else {source: timeout},
+        "openai",
+        global_timeout=None,
+        supports_httpx_timeout=supports_httpx_timeout,
+    )
+    assert isinstance(resolved, httpx.Timeout)
+    assert resolved.as_dict() == timeout.as_dict()
+
+
+@pytest.mark.parametrize("read_timeout, expected", ((23.0, 23.0), (None, 600.0)))
+def test_sdk_timeout_coerces_read_timeout_for_providers_without_httpx_support(
+    read_timeout: float | None, expected: float
+) -> None:
+    assert (
+        CompletionTimeout.resolve(
+            SDKTimeout(connect=2.0, read=read_timeout, write=5.0, pool=7.0),
+            {},
+            "azure_ai",
+            global_timeout=None,
+            supports_httpx_timeout=supports_httpx_timeout,
+        )
+        == expected
+    )
