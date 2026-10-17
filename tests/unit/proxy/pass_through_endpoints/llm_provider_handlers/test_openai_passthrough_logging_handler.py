@@ -1837,10 +1837,7 @@ class TestOpenAIPassthroughResponsesStreamingSpendLog:
 
     def _expected_spend(self) -> float:
         rates = litellm.model_cost[self.MODEL_MAP_KEY]
-        return (
-            self.INPUT_TOKENS * rates["input_cost_per_token"]
-            + self.OUTPUT_TOKENS * rates["output_cost_per_token"]
-        )
+        return self.INPUT_TOKENS * rates["input_cost_per_token"] + self.OUTPUT_TOKENS * rates["output_cost_per_token"]
 
     def _responses_stream_chunks(self) -> List[str]:
         """Usage arrives only on the terminal `response.completed` event, nested under
@@ -1918,12 +1915,16 @@ class TestOpenAIPassthroughResponsesStreamingSpendLog:
         logging_obj.model_call_details["custom_llm_provider"] = "openai"
         return logging_obj
 
-    def test_streamed_responses_passthrough_spend_log_is_priced(self, local_model_cost_map):
+    @pytest.mark.parametrize(
+        "url_route",
+        ["https://api.openai.com/v1/responses", "https://chatgpt.com/backend-api/codex/responses"],
+    )
+    def test_streamed_responses_passthrough_spend_log_is_priced(self, local_model_cost_map, url_route):
         """The spend row books the same tokens, spend and `resp_` id as the buffered call."""
         result = OpenAIPassthroughLoggingHandler._handle_logging_openai_collected_chunks(
             litellm_logging_obj=self._logging_obj(),
             passthrough_success_handler_obj=None,
-            url_route="https://api.openai.com/v1/responses",
+            url_route=url_route,
             request_body={
                 "model": "gpt-4o-mini",
                 "input": "Say hi in one word.",
@@ -1952,6 +1953,33 @@ class TestOpenAIPassthroughResponsesStreamingSpendLog:
 
         row_metadata = json.loads(spend_log_row["metadata"])
         assert row_metadata["model_map_information"]["model_map_key"] == self.MODEL_MAP_KEY
+
+    def test_unpriced_codex_responses_preserve_terminal_usage(self) -> None:
+        from typing import Final
+
+        native_model: Final = "litellm-test-native-unpriced"
+        result: Final = OpenAIPassthroughLoggingHandler._handle_logging_openai_collected_chunks(
+            litellm_logging_obj=self._logging_obj(),
+            passthrough_success_handler_obj=None,
+            url_route="https://chatgpt.com/backend-api/codex/responses",
+            request_body={"model": native_model, "input": "hi", "stream": True},
+            endpoint_type=None,
+            start_time=self.start_time,
+            all_chunks=[chunk.replace(self.MODEL_MAP_KEY, native_model) for chunk in self._responses_stream_chunks()],
+            end_time=self.end_time,
+        )
+        spend_log_row: Final = get_logging_payload(
+            kwargs=result["kwargs"],
+            response_obj=result["result"],
+            start_time=self.start_time,
+            end_time=self.end_time,
+        )
+        assert spend_log_row["prompt_tokens"] == self.INPUT_TOKENS
+        assert spend_log_row["completion_tokens"] == self.OUTPUT_TOKENS
+        assert spend_log_row["total_tokens"] == self.INPUT_TOKENS + self.OUTPUT_TOKENS
+        assert spend_log_row["request_id"] == self.RESPONSE_ID
+        assert spend_log_row["model"] == native_model
+        assert spend_log_row["spend"] == 0.0
 
 
 class TestOpenAIPassthroughEmbeddingsSpendLog:

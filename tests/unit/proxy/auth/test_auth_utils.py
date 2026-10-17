@@ -39,6 +39,23 @@ from litellm.types.utils import oauth_token_exchange_litellm_params, server_owne
 from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS, OPENAI_WIF_KWARGS_KEYS
 
 
+def test_codex_subscription_model_remains_visible_to_gateway_access_and_budget_checks() -> None:
+    from litellm.proxy.pass_through_endpoints.codex_passthrough_endpoints import codex_responses
+
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/backend-api/codex/responses",
+            "endpoint": codex_responses,
+            "headers": [],
+        }
+    )
+    assert get_model_from_request(
+        {"model": "synthetic-native"}, request.url.path, request=request
+    ) == "synthetic-native"
+
+
 @pytest.mark.parametrize(
     "field",
     [

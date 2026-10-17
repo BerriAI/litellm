@@ -1,0 +1,122 @@
+from collections.abc import AsyncIterator
+from contextlib import AsyncExitStack
+from typing import Annotated, Final, Literal
+
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from pydantic import TypeAdapter, ValidationError
+
+from litellm.llms.chatgpt.common_utils import CHATGPT_API_BASE
+from litellm.proxy._types import SpecialHeaders, UserAPIKeyAuth
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.http_parsing_utils import read_request_body, safe_set_request_parsed_body
+from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import caller_headers_without_litellm_secrets
+from litellm.proxy.pass_through_endpoints.pass_through_endpoints import pass_through_request
+
+router: Final = APIRouter()
+_NEVER_FORWARDED: Final = frozenset(
+    {"host", "content-length", "content-encoding", "accept-encoding", "cookie", "connection", "transfer-encoding"}
+) | (SpecialHeaders.litellm_credential_header_names() - {"authorization"})
+_BODY: Final = TypeAdapter(dict[str, object])
+
+
+async def validate_codex_request(request: Request) -> None:
+    from litellm.proxy.proxy_server import general_settings_view
+
+    if any(encoding.strip().lower() != "identity" for encoding in request.headers.getlist("content-encoding")):
+        raise HTTPException(
+            status_code=415,
+            detail="Compressed Codex requests are unsupported. Set features.enable_request_compression = false in Codex.",
+        )
+    custom_header: Final = general_settings_view().get("litellm_key_header_name")
+    gateway_key: Final = request.headers.get("x-litellm-api-key") or (
+        request.headers.get(custom_header) if isinstance(custom_header, str) else None
+    )
+    if not gateway_key:
+        raise HTTPException(status_code=401, detail="A separate LiteLLM gateway credential is required")
+    scheme, _, token = request.headers.get("authorization", "").partition(" ")
+    if scheme.lower() != "bearer" or not token.strip():
+        raise HTTPException(status_code=401, detail="A ChatGPT subscription bearer token is required")
+    raw: Final = await request.body()
+    try:
+        parsed: Final = _BODY.validate_json(raw) if raw else {}
+    except ValidationError:
+        raise HTTPException(status_code=400, detail="A JSON object is required") from None
+    safe_set_request_parsed_body(request=request, parsed_body=parsed)
+
+
+async def codex_gateway_auth(
+    request: Request,
+    _: Annotated[None, Depends(validate_codex_request)],
+    user: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> UserAPIKeyAuth:
+    return user
+
+
+async def codex_response_lifetime() -> AsyncIterator[AsyncExitStack]:
+    async with AsyncExitStack() as owner:
+        yield owner
+
+
+async def _relay_codex(
+    request: Request, user: UserAPIKeyAuth, endpoint: Literal["models", "responses"], owner: AsyncExitStack
+) -> Response:
+    headers: Final = caller_headers_without_litellm_secrets(request, user, _NEVER_FORWARDED)
+    if "authorization" not in headers:
+        raise HTTPException(status_code=401, detail="The ChatGPT credential must differ from the gateway credential")
+    body: Final = _BODY.validate_python(await read_request_body(request))
+    return await pass_through_request(
+        request=request,
+        target=f"{CHATGPT_API_BASE}/{endpoint}",
+        custom_headers=dict(headers),
+        user_api_key_dict=user,
+        custom_body=body,
+        stream=body.get("stream") is True,
+        custom_llm_provider="openai",
+        follow_redirects=False,
+        use_custom_headers_only=True,
+        response_owner=owner,
+    )
+
+
+@router.get(
+    "/backend-api/codex/models",
+    tags=["ChatGPT subscription Pass-through", "pass-through"],
+    description="Forward the signed-in user's native Codex catalog using a separate LiteLLM gateway credential.",
+)
+async def codex_models(
+    request: Request,
+    user: Annotated[UserAPIKeyAuth, Depends(codex_gateway_auth)],
+    owner: Annotated[AsyncExitStack, Depends(codex_response_lifetime, scope="request")],
+) -> Response:
+    return await _relay_codex(request, user, "models", owner)
+
+
+@router.post(
+    "/backend-api/codex/responses",
+    tags=["ChatGPT subscription Pass-through", "pass-through"],
+    description=(
+        "Relay uncompressed ChatGPT subscription Responses over HTTP/SSE. "
+        "Set features.enable_request_compression = false in Codex. The client owns login and token refresh."
+    ),
+    openapi_extra={
+        "requestBody": {
+            "required": True,
+            "content": {"application/json": {"schema": {"type": "object", "additionalProperties": True}}},
+        }
+    },
+    responses={
+        200: {
+            "description": "The upstream Responses payload or unchanged server-sent events",
+            "content": {
+                "application/json": {"schema": {"type": "object", "additionalProperties": True}},
+                "text/event-stream": {"schema": {"type": "string"}},
+            },
+        }
+    },
+)
+async def codex_responses(
+    request: Request,
+    user: Annotated[UserAPIKeyAuth, Depends(codex_gateway_auth)],
+    owner: Annotated[AsyncExitStack, Depends(codex_response_lifetime, scope="request")],
+) -> Response:
+    return await _relay_codex(request, user, "responses", owner)

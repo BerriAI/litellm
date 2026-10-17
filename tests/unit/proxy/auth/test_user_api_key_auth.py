@@ -506,6 +506,26 @@ async def test_auth_not_connected_to_db():
     assert valid_token.token == "failed-to-connect-to-db"
 
 
+def test_custom_key_auth_diagnostics_never_include_header_values(caplog: pytest.LogCaptureFixture) -> None:
+    from starlette.requests import Request as StarletteRequest
+
+    request: Final = StarletteRequest(
+        {
+            "type": "http",
+            "headers": [
+                (b"x-custom-key", b"Bearer synthetic-gateway-secret"),
+                (b"authorization", b"Bearer synthetic-subscription-secret"),
+            ],
+        }
+    )
+    with caplog.at_level(logging.DEBUG, logger=verbose_proxy_logger.name):
+        result: Final = get_api_key_from_custom_header(request=request, custom_litellm_key_header_name="x-custom-key")
+    assert result == "synthetic-gateway-secret"
+    assert "x-custom-key" in caplog.text
+    assert "synthetic-gateway-secret" not in caplog.text
+    assert "synthetic-subscription-secret" not in caplog.text
+
+
 def _assert_api_key_from_custom_header(headers, custom_header_name, expected_api_key):
     verbose_proxy_logger.setLevel(logging.DEBUG)
     request = MagicMock(spec=Request)
@@ -546,8 +566,6 @@ def test_get_api_key_from_custom_header_different_casing():
         custom_header_name="X-Custom-API-Key",
         expected_api_key=token,
     )
-
-
 
 
 @pytest.mark.parametrize(

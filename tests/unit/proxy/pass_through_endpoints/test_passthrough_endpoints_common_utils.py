@@ -16,6 +16,29 @@ from unittest.mock import Mock
 from litellm.proxy.pass_through_endpoints.common_utils import get_litellm_virtual_key
 
 
+def test_passthrough_logging_headers_redact_credentials_without_changing_the_request() -> None:
+    from typing import Final
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.pass_through_endpoints.common_utils import passthrough_logging_headers
+
+    request: Final = Request(
+        {
+            "type": "http",
+            "headers": [
+                (b"authorization", b"Bearer synthetic-subscription"),
+                (b"x-litellm-api-key", b"synthetic-gateway"),
+                (b"chatgpt-account-id", b"synthetic-account"),
+            ],
+        }
+    )
+    logged: Final = passthrough_logging_headers(request, UserAPIKeyAuth())
+    assert "synthetic-subscription" not in repr(logged)
+    assert "synthetic-gateway" not in repr(logged)
+    assert logged["chatgpt-account-id"] == "synthetic-account"
+    assert request.headers["authorization"] == "Bearer synthetic-subscription"
+
+
 @pytest.mark.asyncio
 async def test_get_litellm_virtual_key():
     """

@@ -4352,9 +4352,9 @@ def get_api_key_from_custom_header(request: Request, custom_litellm_key_header_n
     custom_litellm_key_header_name = custom_litellm_key_header_name.lower()
     _headers: Final = {k.lower(): v for k, v in request.headers.items()}
     verbose_proxy_logger.debug(
-        "searching for custom_litellm_key_header_name= %s, in headers=%s",
+        "searching for custom_litellm_key_header_name= %s, in header names=%s",
         custom_litellm_key_header_name,
-        _headers,
+        tuple(_headers),
     )
     custom_api_key: Final = _headers.get(custom_litellm_key_header_name)
     if custom_api_key:
