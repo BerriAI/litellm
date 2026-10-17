@@ -3311,8 +3311,8 @@ async def test_cancel__unified_batch_id_rejects_key_without_model_grant(cancel_h
     cancel_harness.router_acancel.assert_not_called()
 
 
-TEAM_INTERNAL_MODEL_NAME = "model_name_team-a_00000000-0000-0000-0000-000000000000"
-TEAM_PUBLIC_MODEL_NAME = "team-gpt4o-mini"
+TEAM_INTERNAL_MODEL_NAME: Final = "model_name_team-a_00000000-0000-0000-0000-000000000000"
+TEAM_PUBLIC_MODEL_NAME: Final = "team-gpt4o-mini"
 
 
 def _team_scoped_deployment() -> Deployment:
@@ -3332,10 +3332,12 @@ def _route_unified_batch_to_team_deployment(
 
 
 @pytest.mark.asyncio
-async def test_retrieve__team_scoped_deployment_authorizes_owning_team_by_public_name(retrieve_harness):
+async def test_retrieve__team_scoped_deployment_authorizes_owning_team_by_public_name(
+    retrieve_harness: RetrieveHarness,
+) -> None:
     _route_unified_batch_to_team_deployment(retrieve_harness)
 
-    resp = await call_retrieve(
+    resp: Final = await call_retrieve(
         retrieve_harness, UNIFIED_BATCH_ID_FOR_GPT4O_MINI, user=_key_restricted_to(TEAM_PUBLIC_MODEL_NAME)
     )
 
@@ -3344,7 +3346,9 @@ async def test_retrieve__team_scoped_deployment_authorizes_owning_team_by_public
 
 
 @pytest.mark.asyncio
-async def test_cancel__team_scoped_deployment_authorizes_owning_team_by_public_name(cancel_harness):
+async def test_cancel__team_scoped_deployment_authorizes_owning_team_by_public_name(
+    cancel_harness: CancelHarness,
+) -> None:
     _route_unified_batch_to_team_deployment(cancel_harness)
 
     await call_cancel(cancel_harness, UNIFIED_BATCH_ID_FOR_GPT4O_MINI, user=_key_restricted_to(TEAM_PUBLIC_MODEL_NAME))
@@ -3382,7 +3386,9 @@ async def test_cancel__team_scoped_deployment_authorizes_owning_team_by_public_n
         ),
     ],
 )
-async def test_retrieve__team_scoped_deployment_rejects_keys_outside_its_grant(retrieve_harness, deployment, user):
+async def test_retrieve__team_scoped_deployment_rejects_keys_outside_its_grant(
+    retrieve_harness: RetrieveHarness, deployment: Deployment, user: UserAPIKeyAuth
+) -> None:
     _route_unified_batch_to_team_deployment(retrieve_harness, deployment)
 
     with pytest.raises(ProxyException) as exc_info:
@@ -3419,8 +3425,8 @@ async def test_retrieve__team_scoped_deployment_rejects_keys_outside_its_grant(r
     ],
 )
 async def test_retrieve__team_scoped_deployment_authorizes_internal_name_and_legacy_alias_grants(
-    retrieve_harness, deployment, user
-):
+    retrieve_harness: RetrieveHarness, deployment: Deployment, user: UserAPIKeyAuth
+) -> None:
     _route_unified_batch_to_team_deployment(retrieve_harness, deployment)
 
     await call_retrieve(retrieve_harness, UNIFIED_BATCH_ID_FOR_GPT4O_MINI, user=user)

@@ -4890,9 +4890,13 @@ def _can_object_call_model(
         else (
             *((model, compaction_parent) if compaction_parent is not None else (model,)),
             *((global_or_router_alias_target,) if global_or_router_alias_target else ()),
-            *_owning_team_names_for_team_deployment(
-                model=model, llm_router=llm_router, team_id=team_id, team_model_aliases=team_model_aliases
-            ),
+        )
+    )
+    owning_team_names: Final = (
+        ()
+        if key_alias_applied
+        else _owning_team_names_for_team_deployment(
+            model=model, llm_router=llm_router, team_id=team_id, team_model_aliases=team_model_aliases
         )
     )
 
@@ -4906,6 +4910,11 @@ def _can_object_call_model(
             team_id=team_id,
         ):
             return True
+    if any(
+        check_model_access_helper(model=name, llm_router=llm_router, models=models, team_id=team_id)
+        for name in owning_team_names
+    ):
+        return True
 
     internal_message: Final = (
         f"{object_type} not allowed to access model. This {object_type} can only access models={models}. "

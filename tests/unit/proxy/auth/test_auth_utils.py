@@ -1505,15 +1505,15 @@ async def test_managed_batch_routes_pass_team_model_access_check(route, request_
         )
 
 
-_TEAM_DEPLOYMENT_ID = "team-a-deployment-id"
-_TEAM_INTERNAL_MODEL_NAME = "model_name_team-a_6d1f3c2e-0000-4000-8000-000000000000"
-_TEAM_PUBLIC_MODEL_NAME = "team-batch-model"
-_TEAM_MANAGED_BATCH_ID = _encode_managed_id(
+_TEAM_DEPLOYMENT_ID: Final = "team-a-deployment-id"
+_TEAM_INTERNAL_MODEL_NAME: Final = "model_name_team-a_6d1f3c2e-0000-4000-8000-000000000000"
+_TEAM_PUBLIC_MODEL_NAME: Final = "team-batch-model"
+_TEAM_MANAGED_BATCH_ID: Final = _encode_managed_id(
     f"litellm_proxy;model_id:{_TEAM_DEPLOYMENT_ID};llm_batch_id:provider-batch-789"
 )
 
 
-def _team_scoped_router() -> Router:
+def _team_scoped_router(public_model_name: str | None = _TEAM_PUBLIC_MODEL_NAME) -> Router:
     return Router(
         model_list=[
             {
@@ -1522,7 +1522,7 @@ def _team_scoped_router() -> Router:
                 "model_info": {
                     "id": _TEAM_DEPLOYMENT_ID,
                     "team_id": "team-a",
-                    "team_public_model_name": _TEAM_PUBLIC_MODEL_NAME,
+                    **({"team_public_model_name": public_model_name} if public_model_name else {}),
                 },
             },
         ]
@@ -1567,11 +1567,13 @@ def _team_scoped_character_id() -> str:
         ),
     ],
 )
-async def test_team_scoped_managed_ids_authorize_only_the_owning_team_by_public_name(route, request_data):
+async def test_team_scoped_managed_ids_authorize_only_the_owning_team_by_public_name(
+    route: str, request_data: dict[str, str]
+) -> None:
     from litellm.proxy._types import ProxyException
     from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
 
-    llm_router = _team_scoped_router()
+    llm_router: Final = _team_scoped_router()
 
     async def check(team_id: str) -> None:
         await can_key_call_resolved_model(
@@ -1586,6 +1588,38 @@ async def test_team_scoped_managed_ids_authorize_only_the_owning_team_by_public_
     await check("team-a")
     with pytest.raises(ProxyException) as exc_info:
         await check("team-b")
+    assert exc_info.value.code == "403"
+
+
+@pytest.mark.asyncio
+async def test_legacy_team_alias_authorizes_a_team_batch_only_for_keys_granted_the_alias() -> None:
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
+
+    llm_router: Final = _team_scoped_router(public_model_name=None)
+
+    async def check(key_models: list[str]) -> None:
+        await can_key_call_resolved_model(
+            model=get_model_from_request(
+                request_data={"batch_id": _TEAM_MANAGED_BATCH_ID},
+                route="/v1/batches/{batch_id}",
+                llm_router=llm_router,
+                team_id="team-a",
+            ),
+            llm_model_list=None,
+            valid_token=UserAPIKeyAuth(
+                api_key="sk-team",
+                team_id="team-a",
+                models=key_models,
+                team_models=["legacy-team-model"],
+                team_model_aliases={"legacy-team-model": _TEAM_INTERNAL_MODEL_NAME},
+            ),
+            llm_router=llm_router,
+        )
+
+    await check(["legacy-team-model"])
+    with pytest.raises(ProxyException) as exc_info:
+        await check(["some-other-model"])
     assert exc_info.value.code == "403"
 
 
