@@ -27,7 +27,8 @@ from litellm.types.utils import LlmProviders, ProviderSpecificModelInfo
 
 _V = TypeVar("_V")
 
-ROUTER_ONLY_CALL_KWARGS: Final = frozenset({"silent_model", "include_fallback_errors"})
+MID_STREAM_CONTINUATION_KWARG: Final = "_mid_stream_continuation"
+ROUTER_ONLY_CALL_KWARGS: Final = frozenset({"silent_model", "include_fallback_errors", MID_STREAM_CONTINUATION_KWARG})
 _OBJECT_MAPPING_ADAPTER: Final[TypeAdapter[Mapping[object, object]]] = TypeAdapter(Mapping[object, object])
 
 
