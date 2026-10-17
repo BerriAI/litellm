@@ -2116,7 +2116,16 @@ class TestOpenAIPassthroughResponsesSubRouteBilling:
     @pytest.mark.parametrize(
         ("method", "sub_route", "request_body", "response_body"),
         [
-            pytest.param("POST", "", CREATE_REQUEST, _stored_response("completed", False, RESPONSES_USAGE), id="create"),
+            pytest.param(
+                "POST", "", CREATE_REQUEST, _stored_response("completed", False, RESPONSES_USAGE), id="create"
+            ),
+            pytest.param(
+                "POST",
+                "/",
+                CREATE_REQUEST,
+                _stored_response("completed", False, RESPONSES_USAGE),
+                id="create_trailing_slash",
+            ),
             pytest.param(
                 "POST",
                 "/compact",

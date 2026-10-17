@@ -14,6 +14,7 @@ import httpx
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.hidden_params import set_hidden_param
+from litellm.litellm_core_utils.internal_call_metadata import is_background_response
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import (
     get_standard_logging_object_payload,
@@ -56,7 +57,7 @@ _AZURE_OPENAI_HOSTNAMES: Final = ("openai.azure.com", "cognitiveservices.azure.c
 _AZURE_OPENAI_PATH_MARKERS: Final = ("/openai/", "/v1/")
 
 
-def _hostname_matches(hostname: str, suffixes: tuple) -> bool:
+def _hostname_matches(hostname: str, suffixes: tuple[str, ...]) -> bool:
     """True if hostname equals one of `suffixes` or is a subdomain of it.
 
     Uses suffix matching (not a bare substring test) so look-alikes such as
@@ -100,6 +101,12 @@ def is_openai_compatible_url(url_route: str | None) -> bool:
 
 
 _is_openai_compatible_url: Final = is_openai_compatible_url
+
+
+def _responses_sub_route(path: str) -> tuple[str, ...] | None:
+    segments: Final = path.rstrip("/").split("/")
+    anchor: Final = max((index for index, segment in enumerate(segments) if segment == "responses"), default=None)
+    return None if anchor is None else tuple(segments[anchor + 1 :])
 
 
 def _is_remote_high_detail_image(part: object) -> bool:
@@ -185,6 +192,18 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         return _is_openai_compatible_host(parsed_url.hostname) and (
             "/v1/responses" in parsed_url.path or "/responses" in parsed_url.path
         )
+
+    @staticmethod
+    def is_billed_openai_responses_call(url_route: str, response_body: Mapping[str, object]) -> bool:
+        match _responses_sub_route(urlparse(url_route).path):
+            case () | ("compact",):
+                return True
+            case ("input_tokens",):
+                return False
+            case (_,) | (_, "cancel"):
+                return is_background_response(response_body)
+            case _:
+                return False
 
     @staticmethod
     def is_openai_embeddings_route(url_route: str) -> bool:
@@ -348,7 +367,9 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         is_embeddings: Final = OpenAIPassthroughLoggingHandler.is_openai_embeddings_route(url_route)
         is_image_generation: Final = OpenAIPassthroughLoggingHandler.is_openai_image_generation_route(url_route)
         is_image_editing: Final = OpenAIPassthroughLoggingHandler.is_openai_image_editing_route(url_route)
-        is_responses: Final = OpenAIPassthroughLoggingHandler.is_openai_responses_route(url_route)
+        is_responses: Final = OpenAIPassthroughLoggingHandler.is_openai_responses_route(
+            url_route
+        ) and OpenAIPassthroughLoggingHandler.is_billed_openai_responses_call(url_route, response_body)
 
         if not (is_chat_completions or is_embeddings or is_image_generation or is_image_editing or is_responses):
             return {
