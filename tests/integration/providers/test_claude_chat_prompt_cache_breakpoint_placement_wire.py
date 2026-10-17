@@ -778,6 +778,31 @@ def test_a_five_minute_tool_config_cache_point_left_out_after_the_last_tool_keep
     assert marks == (Mark(_TOOL_LABEL, "1h"), Mark(_label(SYSTEM), "1h"), Mark(_label(final_text(marker)), "1h"))
 
 
+def test_a_five_minute_tool_config_cache_point_sent_after_the_function_tool_when_a_marked_web_search_tool_is_last(
+    gateway: Gateway,
+) -> None:
+    marker: Final = new_marker()
+    turns: Final[list[JsonValue]] = [
+        {"role": "system", "content": [_text(SYSTEM, prompt_cache_breakpoint=_EXPLICIT)]},
+        _final(marker, prompt_cache_breakpoint=_ONE_HOUR_BREAKPOINT),
+    ]
+    marks: Final = _marks_sent(
+        gateway,
+        "bedrock_converse",
+        lambda model: chat_body(
+            model,
+            turns,
+            tools=[
+                TOOL,
+                {"type": "web_search_20250305", "name": "web_search", "prompt_cache_breakpoint": _ONE_HOUR_BREAKPOINT},
+            ],
+            drop_params=True,
+        ),
+        cache_control_injection_points=[{"location": "tool_config", "control": {"type": "ephemeral", "ttl": "5m"}}],
+    )
+    assert marks == (Mark(_TOOL_LABEL, "5m"), Mark(_label(SYSTEM), None), Mark(_label(final_text(marker)), None))
+
+
 @pytest.mark.parametrize(
     ("deployment_drops", "expected"),
     (

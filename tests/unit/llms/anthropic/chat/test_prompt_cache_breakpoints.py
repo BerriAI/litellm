@@ -1176,6 +1176,66 @@ def test_a_tool_config_cache_point_takes_one_of_claudes_four_only_when_converse_
 
 
 @pytest.mark.parametrize(
+    ("tools", "sent_later_mark"),
+    [
+        pytest.param(
+            [
+                {
+                    "type": "function",
+                    "function": {"name": "t"},
+                    "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "1h"},
+                }
+            ],
+            _ONE_HOUR,
+            id="left-out-after-a-function-tool-mark",
+        ),
+        pytest.param(
+            [
+                {"type": "function", "function": {"name": "t"}},
+                {
+                    "type": "web_search_20250305",
+                    "name": "web_search",
+                    "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "1h"},
+                },
+            ],
+            _EPHEMERAL,
+            id="sent-after-a-function-tool-when-converse-drops-the-marked-web-search-tool",
+        ),
+        pytest.param(
+            [
+                {
+                    "type": "function",
+                    "function": {"name": "t"},
+                    "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "1h"},
+                },
+                {"toolSpec": {"name": "u", "inputSchema": {"json": {"type": "object"}}}},
+            ],
+            _EPHEMERAL,
+            id="sent-after-a-bedrock-tool-spec-passed-through-after-the-marked-tool",
+        ),
+    ],
+)
+def test_a_five_minute_tool_config_cache_point_keeps_later_breakpoints_one_hour_only_when_converse_leaves_it_out(
+    tools: list[object], sent_later_mark: dict[str, object]
+):
+    result: Final = _resolved(
+        [
+            {"role": "system", "content": [_part("s", prompt_cache_breakpoint=_EXPLICIT)]},
+            {"role": "user", "content": [_part("ask", prompt_cache_breakpoint={"mode": "explicit", "ttl": "1h"})]},
+        ],
+        tools,
+        drop_params=True,
+        tool_config_cache_control=ChatCompletionCachedContent(type="ephemeral", ttl="5m"),
+        route="converse",
+    )
+
+    assert list(result.messages) == [
+        {"role": "system", "content": [_part("s", cache_control=sent_later_mark)]},
+        {"role": "user", "content": [_part("ask", cache_control=sent_later_mark)]},
+    ]
+
+
+@pytest.mark.parametrize(
     ("route", "sent_bash_mark"),
     [("anthropic", _ONE_HOUR), ("converse", _EPHEMERAL)],
     ids=["route_sends_tools_in_order", "route_sends_bash_after_functions"],

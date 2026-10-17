@@ -664,13 +664,17 @@ def _planned(marks: Sequence[_Placed], drop_params: bool) -> _Plan:
     )
 
 
-def _last_listed_tool(tools: Sequence[object], late_tools: frozenset[int]) -> _Path | None:
-    listed: Final = tuple(
+def _in_converse_tool_config(tool: _Fields) -> bool:
+    return "toolSpec" in tool or "cachePoint" in tool or _converse_sends_tool_mark(tool)
+
+
+def _last_tool_in_tool_config(tools: Sequence[object], late_tools: frozenset[int]) -> _Path | None:
+    sent: Final = tuple(
         index
         for index, tool in enumerate(tools)
-        if index not in late_tools and (_fields(tool) or {}).get("type") not in ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
+        if index not in late_tools and _in_converse_tool_config(_fields(tool) or {})
     )
-    return ("tools", listed[-1]) if listed else None
+    return ("tools", sent[-1]) if sent else None
 
 
 def _sets_a_ttl(cache_control: object) -> bool:
@@ -803,7 +807,7 @@ def claude_prompt_cache(
     plan: Final = _route_plan(
         marks,
         renamed_tools,
-        _last_listed_tool(renamed_tools, late_tools),
+        _last_tool_in_tool_config(renamed_tools, late_tools),
         tool_config_cache_control,
         drop_params,
     )
