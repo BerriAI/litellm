@@ -13,6 +13,7 @@ from typing import Any, Final, cast
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_BOUNDARY,
     TOOL_RESULT_IMAGE_PLACEHOLDER,
+    anthropic_inline_document,
     encrypted_reasoning_signature,
     responses_reasoning_items_from_thinking_blocks,
     with_prompt_cache_breakpoint,
@@ -105,27 +106,18 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         block: Mapping[str, object],
     ) -> dict[str, str] | None:  # mutable-ok: API message payload
         """Convert an Anthropic document block to a Responses input_file part."""
+        inline_document: Final = anthropic_inline_document(block)
+        if inline_document is not None:
+            return {
+                "type": "input_file",
+                "filename": inline_document.filename,
+                "file_data": inline_document.file_data,
+            }
         raw_source: Final = block.get("source")
         if not isinstance(raw_source, Mapping):
             return None
         source: Final = cast(Mapping[str, object], raw_source)  # cast-ok: untrusted client payload
-        source_type: Final = source.get("type")
-        if source_type == "base64":
-            data: Final = source.get("data")
-            if not isinstance(data, str) or not data:
-                return None
-            raw_media_type: Final = source.get("media_type")
-            media_type: Final = (
-                raw_media_type if isinstance(raw_media_type, str) and raw_media_type else "application/pdf"
-            )
-            raw_title: Final = block.get("title")
-            filename: Final = raw_title if isinstance(raw_title, str) and raw_title else "document.pdf"
-            return {
-                "type": "input_file",
-                "filename": filename,
-                "file_data": f"data:{media_type};base64,{data}",
-            }
-        if source_type == "url":
+        if source.get("type") == "url":
             url: Final = source.get("url")
             if not isinstance(url, str) or not url:
                 return None

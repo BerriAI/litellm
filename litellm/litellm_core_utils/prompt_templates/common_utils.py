@@ -9,6 +9,7 @@ import json
 import mimetypes
 import re
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from graphlib import CycleError, TopologicalSorter
 from itertools import chain, groupby, islice
 from os import PathLike
@@ -265,6 +266,33 @@ def anthropic_image_source_to_openai_url(image_source: Mapping[str, object]) -> 
         url: Final = image_source.get("url")
         return url if isinstance(url, str) else ""
     return None
+
+
+@dataclass(frozen=True, slots=True)
+class InlineDocument:
+    filename: str
+    file_data: str
+
+
+def _document_media_type(source: object) -> str:
+    match source:
+        case {"media_type": str() as media_type} if media_type:
+            return media_type
+        case _:
+            return "application/pdf"
+
+
+def anthropic_inline_document(document: Mapping[str, object]) -> InlineDocument | None:
+    source: Final = document.get("source")
+    match source:
+        case {"type": "base64", "data": str() as data} if data:
+            title: Final = document.get("title")
+            return InlineDocument(
+                filename=title if isinstance(title, str) and title else "document.pdf",
+                file_data=f"data:{_document_media_type(source)};base64,{data}",
+            )
+        case _:
+            return None
 
 
 def _image_part_url(part: Mapping[str, object]) -> str | None:
