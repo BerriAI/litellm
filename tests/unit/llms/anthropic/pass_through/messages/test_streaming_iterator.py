@@ -1560,7 +1560,12 @@ async def test_relay_teardown_dispatches_deferred_billing_when_sentinel_never_co
 _CLAUDE_CODE_SAFEGUARD_RESULTS = [
     {
         "type": "dangerous_tool_use",
-        "status": {"type": "available", "tool_uses": {"toolu_01": {"verdict": "dangerous"}}},
+        "status": {
+            "type": "available",
+            "tool_uses": {
+                "toolu_01": {"type": "evaluated", "outcome": "flagged", "explanation": "deletes the filesystem root"}
+            },
+        },
     }
 ]
 

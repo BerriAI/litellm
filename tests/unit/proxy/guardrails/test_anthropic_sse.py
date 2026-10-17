@@ -1,4 +1,5 @@
 import json
+from itertools import chain
 from typing import Final
 
 import pytest
@@ -23,7 +24,36 @@ def _decode(chunks: tuple[bytes, ...]) -> list[tuple[str, dict[str, object]]]:
     return decoded
 
 
-def _upstream_stream(delta: dict[str, object]) -> tuple[bytes, ...]:
+def _tool_use_frames(index: int, tool_use_id: str, name: str) -> tuple[bytes, ...]:
+    return (
+        _frame(
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": index,
+                "content_block": {"type": "tool_use", "id": tool_use_id, "name": name, "input": {}},
+            },
+        ),
+        _frame(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": index,
+                "delta": {"type": "input_json_delta", "partial_json": '{"command": "ls"}'},
+            },
+        ),
+        _frame("content_block_stop", {"type": "content_block_stop", "index": index}),
+    )
+
+
+def _upstream_stream(
+    delta: dict[str, object], text: str = "call 555-0100", tool_uses: tuple[tuple[str, str], ...] = ()
+) -> tuple[bytes, ...]:
+    tool_use_frames = tuple(
+        chain.from_iterable(
+            _tool_use_frames(index, tool_use_id, name) for index, (tool_use_id, name) in enumerate(tool_uses, start=1)
+        )
+    )
     return (
         _frame(
             "message_start",
@@ -47,18 +77,21 @@ def _upstream_stream(delta: dict[str, object]) -> tuple[bytes, ...]:
         ),
         _frame(
             "content_block_delta",
-            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "call 555-0100"}},
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}},
         ),
         _frame("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        *tool_use_frames,
         _frame("message_delta", {"type": "message_delta", "delta": delta, "usage": {"output_tokens": 2}}),
         _frame("message_stop", {"type": "message_stop"}),
     )
 
 
-SAFEGUARD_RESULTS: Final = [
-    {"type": "dangerous_tool_use", "status": {"type": "available", "tool_uses": {"toolu_01": {"verdict": "dangerous"}}}}
-]
-REFUSAL_STOP_DETAILS: Final = {"type": "refusal", "category": "cyber", "explanation": "declined"}
+def _safeguard_results(tool_uses: dict[str, dict[str, str]]) -> list[dict[str, object]]:
+    return [{"type": "dangerous_tool_use", "status": {"type": "available", "tool_uses": tool_uses}}]
+
+
+SAFEGUARD_RESULTS: Final = _safeguard_results({})
+REFUSAL_STOP_DETAILS: Final = {"type": "refusal", "category": "cyber", "explanation": None}
 
 
 @pytest.mark.parametrize(
@@ -87,3 +120,80 @@ def test_rewritten_stream_keeps_the_upstream_message_delta_fields(stop_reason: s
     assert payloads["content_block_delta"]["delta"] == {"type": "text_delta", "text": "call <PHONE>"}
     assert payloads["message_delta"]["delta"] == upstream_delta
     assert not set(delta_fields) & set(payloads["message_start"]["message"])
+
+
+SSN: Final = "123-45-6789"
+
+
+@pytest.mark.parametrize(
+    ("upstream_delta", "tool_uses", "expected_fields"),
+    [
+        (
+            {
+                "stop_reason": "refusal",
+                "stop_sequence": None,
+                "stop_details": {"type": "refusal", "category": "cyber", "explanation": f"Request involves SSN {SSN}"},
+            },
+            (),
+            {"stop_details": {"type": "refusal", "category": "cyber", "explanation": None}},
+        ),
+        (
+            {
+                "stop_reason": "tool_use",
+                "stop_sequence": None,
+                "safeguard_results": _safeguard_results(
+                    {"toolu_bash": {"type": "evaluated", "outcome": "flagged", "explanation": f"leaks SSN {SSN}"}}
+                ),
+            },
+            (("toolu_bash", "Bash"),),
+            {"safeguard_results": _safeguard_results({"toolu_bash": {"type": "evaluated", "outcome": "flagged"}})},
+        ),
+    ],
+    ids=["stop_details_explanation", "verdict_explanation"],
+)
+def test_masked_stream_drops_the_unmasked_upstream_explanations(
+    upstream_delta: dict[str, object], tool_uses: tuple[tuple[str, str], ...], expected_fields: dict[str, object]
+):
+    upstream = _upstream_stream(upstream_delta, text=f"my SSN is {SSN}", tool_uses=tool_uses)
+    assembled = assemble_anthropic_sse_stream(upstream, restore_identity=True)
+    assert assembled is not None
+    choice = assembled.choices[0]
+    assert isinstance(choice, Choices)
+    choice.message.content = "my SSN is <US_SSN>"
+
+    rewritten = anthropic_sse_chunks_from_response(assembled, upstream)
+    message_delta = next(payload for event, payload in _decode(rewritten) if event == "message_delta")
+
+    assert not [chunk for chunk in rewritten if SSN.encode() in chunk]
+    assert {key: message_delta["delta"][key] for key in expected_fields} == expected_fields
+
+
+def test_rewritten_stream_keeps_only_the_verdicts_of_tool_uses_it_still_delivers():
+    kept_verdict = {"type": "evaluated", "outcome": "not_flagged"}
+    upstream = _upstream_stream(
+        {
+            "stop_reason": "tool_use",
+            "stop_sequence": None,
+            "safeguard_results": _safeguard_results(
+                {"toolu_glob": {"type": "evaluated", "outcome": "flagged"}, "toolu_bash": kept_verdict}
+            ),
+        },
+        tool_uses=(("toolu_glob", "Glob"), ("toolu_bash", "Bash")),
+    )
+    assembled = assemble_anthropic_sse_stream(upstream)
+    assert assembled is not None
+    choice = assembled.choices[0]
+    assert isinstance(choice, Choices)
+    choice.message.tool_calls = [call for call in choice.message.tool_calls or [] if call.id == "toolu_bash"]
+    choice.message.content = "Permission denied: Tool 'Glob' denied"
+
+    decoded = _decode(anthropic_sse_chunks_from_response(assembled, upstream))
+    message_delta = next(payload for event, payload in decoded if event == "message_delta")
+    delivered_tool_use_ids = [
+        payload["content_block"]["id"]
+        for event, payload in decoded
+        if event == "content_block_start" and payload["content_block"]["type"] == "tool_use"
+    ]
+
+    assert delivered_tool_use_ids == ["toolu_bash"]
+    assert message_delta["delta"]["safeguard_results"] == _safeguard_results({"toolu_bash": kept_verdict})

@@ -8,8 +8,11 @@ hook scan such a stream, and re-emit it when the guardrail rewrote the response.
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import Final
+
+from pydantic import TypeAdapter, ValidationError
 
 from litellm.llms.anthropic.pass_through.stream_assembly import anthropic_message_delta_fields
 from litellm.llms.anthropic.pass_through.stream_assembly import (
@@ -20,6 +23,14 @@ from litellm.llms.anthropic.pass_through.stream_assembly import (
 )
 from litellm.llms.anthropic.pass_through.stream_assembly import (
     is_raw_sse_stream as is_raw_sse_stream,  # noqa: PLC0414  # public re-export
+)
+from litellm.types.llms.anthropic import (
+    AnthropicStopDetails,
+    SafeguardResult,
+    SafeguardStatusAvailable,
+    SafeguardStatusUnsupported,
+    SafeguardToolUseEvaluated,
+    SafeguardToolUseVerdict,
 )
 from litellm.types.utils import Choices, ModelResponse
 
@@ -51,6 +62,84 @@ from litellm.llms.anthropic.pass_through.stream_assembly import (  # noqa: E402 
     is_sse_error_stream as is_sse_error_stream,  # noqa: PLC0414  # public re-export
 )
 
+_STOP_DETAILS: Final = TypeAdapter(AnthropicStopDetails)
+_SAFEGUARD_RESULTS: Final = TypeAdapter(tuple[SafeguardResult, ...])
+
+
+def _stop_details_without_explanation(raw: object) -> AnthropicStopDetails | None:
+    try:
+        stop_details: Final = _STOP_DETAILS.validate_python(raw)
+    except ValidationError:
+        return None
+    return {**stop_details, "explanation": None}
+
+
+def _verdict_without_explanation(verdict: SafeguardToolUseVerdict) -> SafeguardToolUseVerdict:
+    match verdict:
+        case {"type": "evaluated"}:
+            return SafeguardToolUseEvaluated(type="evaluated", outcome=verdict["outcome"])
+        case _:
+            return verdict
+
+
+def _status_for_delivered_tool_uses(
+    status: SafeguardStatusAvailable | SafeguardStatusUnsupported, delivered_tool_use_ids: frozenset[str]
+) -> SafeguardStatusAvailable | SafeguardStatusUnsupported:
+    match status:
+        case {"type": "available"}:
+            return SafeguardStatusAvailable(
+                type="available",
+                tool_uses={
+                    tool_use_id: _verdict_without_explanation(verdict)
+                    for tool_use_id, verdict in status["tool_uses"].items()
+                    if tool_use_id in delivered_tool_use_ids
+                },
+            )
+        case _:
+            return status
+
+
+def _safeguard_results_for_delivered_tool_uses(
+    raw: object, delivered_tool_use_ids: frozenset[str]
+) -> tuple[SafeguardResult, ...] | None:
+    try:
+        results: Final = _SAFEGUARD_RESULTS.validate_python(raw)
+    except ValidationError:
+        return None
+    return tuple(
+        SafeguardResult(
+            type=result["type"], status=_status_for_delivered_tool_uses(result["status"], delivered_tool_use_ids)
+        )
+        for result in results
+    )
+
+
+def _tool_use_id(block: object) -> str | None:
+    match block:
+        case {"type": "tool_use", "id": str() as tool_use_id}:
+            return tool_use_id
+        case _:
+            return None
+
+
+def _rewritten_message_delta_fields(
+    source_chunks: Sequence[object], delivered_content: Sequence[object]
+) -> Mapping[str, object]:
+    source_fields: Final = anthropic_message_delta_fields(source_chunks)
+    delivered_tool_use_ids: Final = frozenset(
+        tool_use_id for block in delivered_content if (tool_use_id := _tool_use_id(block)) is not None
+    )
+    stop_details: Final = _stop_details_without_explanation(source_fields.get("stop_details"))
+    safeguard_results: Final = _safeguard_results_for_delivered_tool_uses(
+        source_fields.get("safeguard_results"), delivered_tool_use_ids
+    )
+    return MappingProxyType(
+        {
+            **({"stop_details": stop_details} if stop_details is not None else {}),
+            **({"safeguard_results": safeguard_results} if safeguard_results is not None else {}),
+        }
+    )
+
 
 def anthropic_sse_chunks_from_response(assembled: ModelResponse, source_chunks: Sequence[object]) -> tuple[bytes, ...]:
     """Re-emit a rewritten response as the SSE events of the ``source_chunks`` stream it replaces."""
@@ -66,6 +155,9 @@ def anthropic_sse_chunks_from_response(assembled: ModelResponse, source_chunks: 
     )
     return tuple(
         FakeAnthropicMessagesStreamIterator(
-            response=anthropic_response, message_delta_fields=anthropic_message_delta_fields(source_chunks)
+            response=anthropic_response,
+            message_delta_fields=_rewritten_message_delta_fields(
+                source_chunks, anthropic_response.get("content") or ()
+            ),
         ).chunks
     )

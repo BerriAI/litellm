@@ -7,7 +7,12 @@ from litellm.llms.anthropic.pass_through.messages.fake_stream_iterator import (
 _CLAUDE_CODE_SAFEGUARD_RESULTS = [
     {
         "type": "dangerous_tool_use",
-        "status": {"type": "available", "tool_uses": {"toolu_01": {"verdict": "dangerous"}}},
+        "status": {
+            "type": "available",
+            "tool_uses": {
+                "toolu_01": {"type": "evaluated", "outcome": "flagged", "explanation": "deletes the filesystem root"}
+            },
+        },
     }
 ]
 

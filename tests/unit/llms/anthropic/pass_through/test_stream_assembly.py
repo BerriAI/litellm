@@ -57,7 +57,15 @@ ANTHROPIC_STREAM: Final = (
 )
 
 SAFEGUARD_RESULTS: Final = [
-    {"type": "dangerous_tool_use", "status": {"type": "available", "tool_uses": {"toolu_01": {"verdict": "dangerous"}}}}
+    {
+        "type": "dangerous_tool_use",
+        "status": {
+            "type": "available",
+            "tool_uses": {
+                "toolu_01": {"type": "evaluated", "outcome": "flagged", "explanation": "deletes the filesystem root"}
+            },
+        },
+    }
 ]
 SAFEGUARDED_STREAM: Final = (
     *ANTHROPIC_STREAM[:5],
