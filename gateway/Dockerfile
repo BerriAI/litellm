@@ -20,12 +20,8 @@ RUN curl -fsSL -o pgbouncer.tar.gz "https://www.pgbouncer.org/downloads/files/${
     make -j"$(nproc)" pgbouncer && \
     install -m 0755 pgbouncer /usr/local/bin/pgbouncer
 
-# ---------- Builder ----------
-# Rust extension stage. It copies only the inputs of the native build, so the
-# expensive maturin + cargo compile (fat LTO) stays cached in BuildKit until
-# pyproject.toml, README.md, rust-toolchain.toml or litellm-rust/ change.
-# maturin's PEP 517 backend installs Rust with puccinialin when cargo is absent,
-# exactly as the builder's `uv sync` did before.
+# ---------- Rust extension ----------
+# Copies only the native build's inputs, so the fat-LTO compile stays cached across Python-only changes
 FROM $LITELLM_BUILD_IMAGE AS rust-native
 
 WORKDIR /app
@@ -50,6 +46,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uvx --python python3.13 --from maturin==1.15.0 --with puccinialin==0.1.14 \
         python -c "import maturin; maturin.build_wheel('/wheels')"
 
+# ---------- Builder ----------
 FROM $LITELLM_BUILD_IMAGE AS builder
 
 WORKDIR /app

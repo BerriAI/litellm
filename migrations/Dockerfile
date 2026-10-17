@@ -24,11 +24,7 @@ FROM $UV_IMAGE AS uvbin
 # under nodeenv. Crucially we do NOT run `prisma generate` at RUNTIME; the
 # old migration job did, on every pod start, which is the wasteful behaviour
 # the componentization is fixing.
-# Rust extension stage. It copies only the inputs of the native build, so the
-# expensive maturin + cargo compile (fat LTO) stays cached in BuildKit until
-# pyproject.toml, README.md, rust-toolchain.toml or litellm-rust/ change.
-# maturin's PEP 517 backend installs Rust with puccinialin when cargo is absent,
-# exactly as the builder's `uv sync` did before.
+# Copies only the native build's inputs, so the fat-LTO compile stays cached across Python-only changes
 FROM $LITELLM_BUILD_IMAGE AS rust-native
 
 WORKDIR /app
