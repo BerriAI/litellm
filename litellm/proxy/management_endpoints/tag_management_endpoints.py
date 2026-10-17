@@ -426,10 +426,11 @@ async def _add_tag_to_deployment(deployment: "Deployment", tag: str) -> bool:
             where={"model_id": deployment.model_info.id},
             data={"litellm_params": json.dumps(existing_params)},
         )
-        return True
     except Exception as e:
         verbose_proxy_logger.exception("Error adding tag to deployment: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
+    else:
+        return True
 
 
 async def _remove_tag_from_deployment(deployment: "Deployment", tag: str) -> None:
