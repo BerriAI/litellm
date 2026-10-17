@@ -4,7 +4,9 @@ Utils used for litellm.transcription() and litellm.atranscription()
 
 import hashlib
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Final
 
 from litellm.types.files import (
@@ -15,6 +17,13 @@ from litellm.types.files import (
     get_file_mime_type_from_extension,
 )
 from litellm.types.utils import FileTypes
+
+# webm is an audio/video container; get_file_mime_type_from_extension returns
+# "video/webm", but this helper only ever handles audio for transcription, so a
+# .webm upload is audio. Labeling it video/webm makes Vertex Gemini
+# transcription return an empty transcript.
+# https://github.com/BerriAI/litellm/issues/38963
+_AUDIO_CONTAINER_MIME_OVERRIDES: Final[Mapping[str, str]] = MappingProxyType({"webm": "audio/webm"})
 
 
 @dataclass
@@ -121,7 +130,9 @@ def process_audio_file(audio_file: FileTypes) -> ProcessedAudioFile:
         try:
             # Extract extension from filename
             extension: Final = filename.split(".")[-1].lower() if "." in filename else "wav"
-            content_type = get_file_mime_type_from_extension(extension)
+            content_type = _AUDIO_CONTAINER_MIME_OVERRIDES.get(extension) or get_file_mime_type_from_extension(
+                extension
+            )
         except ValueError:
             # If extension is not recognized, fallback to audio/wav
             content_type = "audio/wav"
