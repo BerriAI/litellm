@@ -2119,6 +2119,29 @@ class TestResponsesWSFirstFrameModelAuth:
         assert scanned["litellm_metadata"]["guardrails"] == ["key-required"]
 
     @pytest.mark.asyncio
+    async def test_frame_guard_copies_an_admitted_bucket_that_holds_the_otel_parent_span(self):
+        import threading
+
+        from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
+
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=lambda **kwargs: kwargs["data"])
+        span = threading.RLock()
+        guard = _responses_ws_frame_guard(
+            {"model": "gpt-4o-mini", "litellm_metadata": {"litellm_parent_otel_span": span}},
+            MagicMock(),
+            proxy_logging_obj,
+        )
+
+        guarded = await guard(json.dumps({"type": "response.create", "input": "hi"}))
+
+        assert json.loads(guarded.frame) == {"type": "response.create", "input": "hi"}
+        assert (
+            proxy_logging_obj.pre_call_hook.await_args.kwargs["data"]["litellm_metadata"]["litellm_parent_otel_span"]
+            is span
+        )
+
+    @pytest.mark.asyncio
     async def test_frame_guard_rejects_a_frame_that_carries_input_at_both_levels(self):
         from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
 

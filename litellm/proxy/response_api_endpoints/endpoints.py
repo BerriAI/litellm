@@ -1,6 +1,5 @@
 import asyncio
 import contextlib
-import copy
 import json
 import uuid
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
@@ -1873,7 +1872,8 @@ def _responses_ws_frame_guard(
             },
             "model": model,
             "litellm_call_id": str(uuid.uuid4()),
-            metadata_key: copy.deepcopy(bucket),
+            # shallow: the bucket carries proxy-owned objects (the OTEL parent span) that cannot be deep-copied
+            metadata_key: {**bucket},
         }
         try:
             guarded_data: Final = await proxy_logging_obj.pre_call_hook(
