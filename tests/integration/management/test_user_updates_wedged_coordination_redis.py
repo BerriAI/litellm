@@ -16,6 +16,7 @@ from pydantic import JsonValue
 from redis import Redis
 from redis.client import PubSub
 
+from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import _BULK_EVICTION_WAIT_SECONDS
 from tests.integration._support.budget import case_timeout_seconds
 from tests.integration._support.client import (
     GATEWAY_LIMITS,
@@ -35,7 +36,6 @@ _WEDGED_PUBLISHES_PER_BURST_USER: Final = 2
 _HANDLER_BUDGET_SECONDS: Final = 0.75
 _BULK_BUDGET_SECONDS: Final = 2.0
 _COORDINATION_SOCKET_TIMEOUT_SECONDS: Final = 5.0
-_EVICTION_WAIT_CAP_SECONDS: Final = 2.0
 _CHANNEL: Final = "litellm_proxy.auth_cache_invalidation"
 
 
@@ -206,9 +206,7 @@ def test_user_budget_updates_return_promptly_while_coordination_redis_is_wedged(
                         assert timings["s6_customer_update"] < _HANDLER_BUDGET_SECONDS, (
                             f"/customer/update took {timings['s6_customer_update']:.3f}s with a wedged coordination Redis"
                         )
-                        timings["s7_reset_spend"] = _timed_post(
-                            survivor, f"/key/{key}/reset_spend", {"reset_to": 0}
-                        )
+                        timings["s7_reset_spend"] = _timed_post(survivor, f"/key/{key}/reset_spend", {"reset_to": 0})
                         assert timings["s7_reset_spend"] < _HANDLER_BUDGET_SECONDS, (
                             f"/key/<key>/reset_spend took {timings['s7_reset_spend']:.3f}s "
                             "with a wedged coordination Redis"
@@ -254,8 +252,8 @@ def test_user_budget_updates_return_promptly_while_coordination_redis_is_wedged(
                             if i % 5 in (0, 1, 4) and status == 200
                         )
                         timings["c1_burst_p95"] = elapsed_sorted[int(len(elapsed_sorted) * 0.95) - 1]
-                        assert timings["c1_burst_p95"] < _EVICTION_WAIT_CAP_SECONDS, (
-                            f"burst p95 {timings['c1_burst_p95']:.3f}s reached the {_EVICTION_WAIT_CAP_SECONDS}s "
+                        assert timings["c1_burst_p95"] < _BULK_EVICTION_WAIT_SECONDS, (
+                            f"burst p95 {timings['c1_burst_p95']:.3f}s reached the {_BULK_EVICTION_WAIT_SECONDS}s "
                             "cap on the proxy's own Redis waits, so burst updates waited on the wedged Redis"
                         )
                         eventually(

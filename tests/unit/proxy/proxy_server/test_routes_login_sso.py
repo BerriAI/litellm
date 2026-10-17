@@ -568,7 +568,7 @@ def test_a_refused_attempt_carries_retry_after(client, monkeypatch, reset_login_
     _install_real_auth(monkeypatch, max_failed_login_attempts_per_source=2, failed_login_block_seconds=77)
     assert [_json_login(client, "/v2/login") for _ in range(2)] == [401, 401]
 
-    _set_throttle_clock(monkeypatch, 1_000.4)
+    _set_throttle_clock(monkeypatch, 1_000.6)
     refused = client.post("/v2/login", json={"username": "admin", "password": "wrong"})
     assert refused.status_code == 429
     assert refused.headers.get("retry-after") == "77"
@@ -580,7 +580,7 @@ def test_the_form_returns_a_human_readable_lockout_page(client, monkeypatch, res
     _install_real_auth(monkeypatch, max_failed_login_attempts_per_source=2, failed_login_block_seconds=77)
     assert [_form_login(client) for _ in range(2)] == [401, 401]
 
-    _set_throttle_clock(monkeypatch, 1_000.4)
+    _set_throttle_clock(monkeypatch, 1_000.6)
     refused = client.post("/login", data={"username": "admin", "password": "wrong"})
     assert refused.status_code == 429
     assert refused.headers.get("content-type", "").startswith("text/html")
