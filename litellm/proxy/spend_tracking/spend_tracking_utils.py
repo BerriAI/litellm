@@ -67,6 +67,7 @@ from litellm.proxy._types import (
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.proxy.utils import PrismaClient, hash_token
+from litellm.responses.litellm_completion_transformation.compaction_items import summary_only_compaction_item
 from litellm.types.router import DeploymentTypedDict, LiteLLM_Params
 from litellm.types.utils import (
     BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
@@ -1181,11 +1182,21 @@ def _is_spend_log_content(parent: Mapping[str, object], key: str) -> bool:
     )
 
 
+def _is_compaction_block_summary(parent: Mapping[str, object], key: str, keep_compaction_blocks: bool) -> bool:
+    return (
+        keep_compaction_blocks
+        and key == "content"
+        and parent.get("type") == "compaction"
+        and isinstance(parent.get(key), str)
+    )
+
+
 def _sanitize_request_body_for_spend_logs_payload(
     request_body: Mapping[str, object],
     visited: set | None = None,
     max_string_length_prompt_in_db: int | None = None,
     mask_credentials: bool = True,
+    keep_compaction_blocks: bool = False,
 ) -> dict:
     """
     Recursively sanitize request body to prevent logging large base64 strings or other large values.
@@ -1215,7 +1226,7 @@ def _sanitize_request_body_for_spend_logs_payload(
     def _sanitize_value(value: object, mask_credentials: bool) -> object:
         if isinstance(value, Mapping):
             return _sanitize_request_body_for_spend_logs_payload(
-                value, visited, max_string_length_prompt_in_db, mask_credentials
+                value, visited, max_string_length_prompt_in_db, mask_credentials, keep_compaction_blocks
             )
         elif isinstance(value, list):
             return [_sanitize_value(item, mask_credentials) for item in value]
@@ -1256,6 +1267,8 @@ def _sanitize_request_body_for_spend_logs_payload(
     return {
         k: REDACTED_BY_LITELM_STRING
         if mask_credentials and _is_request_body_credential(k, v)
+        else v
+        if _is_compaction_block_summary(request_body, k, keep_compaction_blocks)
         else _sanitize_value(v, mask_credentials and not _is_spend_log_content(request_body, k))
         for k, v in request_body.items()
         if k not in _SENSITIVE_REQUEST_BODY_KEYS
@@ -1774,6 +1787,30 @@ def _stored_request_without_requester_ip_address(request_body: Mapping[object, o
     }
 
 
+def _with_whole_compaction_summary(item: object, stored_item: object) -> object:
+    summary_only: Final = summary_only_compaction_item(item)
+    if summary_only is None or not isinstance(stored_item, Mapping):
+        return stored_item
+    return {**_OBJECT_MAPPING.validate_python(stored_item), "encrypted_content": summary_only}
+
+
+def _sanitize_proxy_server_request_body(request_body: Mapping[str, object]) -> Mapping[object, object]:
+    sanitized: Final = _OBJECT_MAPPING.validate_python(_sanitize_request_body_for_spend_logs_payload(request_body))
+    items: Final = request_body.get("input")
+    stored_items: Final = sanitized.get("input")
+    if not isinstance(items, list) or not isinstance(stored_items, list):
+        return sanitized
+    return {
+        **sanitized,
+        "input": [
+            _with_whole_compaction_summary(item, stored_item)
+            for item, stored_item in zip(
+                _OBJECT_LIST.validate_python(items), _OBJECT_LIST.validate_python(stored_items)
+            )
+        ],
+    }
+
+
 def _get_proxy_server_request_for_spend_logs_payload(
     metadata: dict,
     litellm_params: Mapping[str, object],
@@ -1818,8 +1855,7 @@ def _get_proxy_server_request_for_spend_logs_payload(
                     _request_body = _convert_mapping_to_json_serializable(without_classifier_audit(_request_body))
                     perform_redaction(model_call_details=_request_body, result=None)
 
-            _request_body = _sanitize_request_body_for_spend_logs_payload(_request_body)
-            stored_request_body: Final = _OBJECT_MAPPING.validate_python(_request_body)
+            stored_request_body: Final = _sanitize_proxy_server_request_body(_request_body)
             _request_body_json_str: Final = safe_dumps(
                 _stored_request_without_requester_ip_address(stored_request_body)
                 if drop_requester_ip_address
@@ -1893,7 +1929,9 @@ def _get_response_for_spend_logs_payload(
                 response_obj = _convert_to_json_serializable_dict(response_obj)
                 response_obj = perform_redaction(model_call_details={}, result=response_obj)
 
-        sanitized_wrapper: Final = _sanitize_request_body_for_spend_logs_payload({"response": response_obj})
+        sanitized_wrapper: Final = _sanitize_request_body_for_spend_logs_payload(
+            {"response": response_obj}, keep_compaction_blocks=True
+        )
 
         sanitized_response: Final = sanitized_wrapper.get("response", response_obj)
 

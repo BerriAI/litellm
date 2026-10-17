@@ -1,12 +1,20 @@
 import asyncio
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from itertools import chain
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import REDACTED_BY_LITELLM, REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
 from litellm.litellm_core_utils.cold_storage_handler import ColdStorageHandler
+from litellm.responses.litellm_completion_transformation.compaction_items import (
+    holds_compaction_summary,
+    input_items,
+    instruction_items,
+    response_holds_compaction_block,
+)
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -66,6 +74,67 @@ def _stored_responses_api_output(stored_response: object) -> ResponseInputParam 
             return None
 
 
+@dataclass(frozen=True, slots=True)
+class _ReplayStart:
+    index: int
+    at_output: bool
+
+
+def _compaction_point(
+    index: int, spend_log: "SpendLogsPayload", proxy_server_request: Mapping[str, object] | None
+) -> _ReplayStart | None:
+    if response_holds_compaction_block(spend_log.get("response")):
+        return _ReplayStart(index=index, at_output=True)
+    if proxy_server_request is not None and holds_compaction_summary(proxy_server_request.get("input")):
+        return _ReplayStart(index=index, at_output=False)
+    return None
+
+
+def _replay_start(
+    spend_logs: Sequence["SpendLogsPayload"], proxy_server_requests: Sequence[Mapping[str, object] | None]
+) -> _ReplayStart:
+    return next(
+        (
+            start
+            for index in range(len(spend_logs) - 1, -1, -1)
+            if (start := _compaction_point(index, spend_logs[index], proxy_server_requests[index])) is not None
+        ),
+        _ReplayStart(index=0, at_output=False),
+    )
+
+
+def _replayed_request(
+    index: int,
+    proxy_server_request: Mapping[str, object] | None,
+    start: _ReplayStart,
+    earlier_instructions: tuple[object, ...],
+) -> Mapping[str, object] | None:
+    if proxy_server_request is None or index != start.index:
+        return proxy_server_request
+    stored_input: Final = proxy_server_request.get("input")
+    if start.at_output:
+        return {
+            **proxy_server_request,
+            "input": [*earlier_instructions, *instruction_items(stored_input)],
+            "messages": None,
+        }
+    if not earlier_instructions:
+        return proxy_server_request
+    return {**proxy_server_request, "input": [*earlier_instructions, *input_items(stored_input)]}
+
+
+def _instruction_items_before(
+    proxy_server_requests: Sequence[Mapping[str, object] | None], start: _ReplayStart
+) -> tuple[object, ...]:
+    return tuple(
+        chain.from_iterable(
+            instruction_items(request.get("input"))
+            for request in proxy_server_requests[: start.index]
+            if request is not None
+        )
+    )
+
+
 def _stored_instructions(proxy_server_request: Mapping[str, object] | None) -> str | None:
     instructions: Final = None if proxy_server_request is None else proxy_server_request.get("instructions")
     return instructions if isinstance(instructions, str) and instructions else None
@@ -110,11 +179,15 @@ class ResponsesSessionHandler:
             await ResponsesSessionHandler.get_proxy_server_request_from_spend_log(spend_log=spend_log)
             for spend_log in all_spend_logs
         ]
-        for spend_log, proxy_server_request_dict in zip(all_spend_logs, proxy_server_requests):
+        start: Final = _replay_start(all_spend_logs, proxy_server_requests)
+        earlier_instructions: Final = _instruction_items_before(proxy_server_requests, start)
+        for index in range(start.index, len(all_spend_logs)):
             chat_completion_message_history = (
                 ResponsesSessionHandler.extend_chat_completion_message_with_spend_log_payload(
-                    spend_log=spend_log,
-                    proxy_server_request_dict=proxy_server_request_dict,
+                    spend_log=all_spend_logs[index],
+                    proxy_server_request_dict=_replayed_request(
+                        index, proxy_server_requests[index], start, earlier_instructions
+                    ),
                     chat_completion_message_history=chat_completion_message_history,
                     item_cache_control=item_cache_control,
                 )
@@ -181,6 +254,7 @@ class ResponsesSessionHandler:
                     responses_api_request={},
                     replay_reasoning=True,
                     item_cache_control=item_cache_control,
+                    only_since_compaction=True,
                 )
             )
 
@@ -195,6 +269,7 @@ class ResponsesSessionHandler:
                     responses_api_request={},
                     replay_reasoning=True,
                     item_cache_control=item_cache_control,
+                    only_since_compaction=True,
                 )
             )
         elif isinstance(_response_output, dict) and _response_output and _response_output != {}:

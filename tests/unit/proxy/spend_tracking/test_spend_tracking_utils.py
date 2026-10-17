@@ -1055,6 +1055,73 @@ def test_get_response_for_spend_logs_payload_truncates_large_base64(mock_should_
     assert parsed["data"][0]["other_field"] == "value"
 
 
+def test_get_response_for_spend_logs_payload_keeps_a_long_compaction_summary_whole(monkeypatch: pytest.MonkeyPatch):
+    from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB
+
+    monkeypatch.setenv("STORE_PROMPTS_IN_SPEND_LOGS", "true")
+    filler = "detail " * (MAX_STRING_LENGTH_PROMPT_IN_DB // 7)
+    summary = f"{filler}The cat is named Biscuit. {filler}"
+    answer = f"{filler}OK{filler}"
+    payload = cast(
+        StandardLoggingPayload,
+        {
+            "response": {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": answer,
+                            "provider_specific_fields": {
+                                "compaction_blocks": [{"type": "compaction", "content": summary}]
+                            },
+                        }
+                    }
+                ]
+            }
+        },
+    )
+
+    message = json.loads(_get_response_for_spend_logs_payload(payload))["choices"][0]["message"]
+    assert message["provider_specific_fields"]["compaction_blocks"] == [{"type": "compaction", "content": summary}]
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in message["content"]
+
+
+def test_stored_request_keeps_only_the_summary_of_a_long_claude_compaction_input_item(monkeypatch: pytest.MonkeyPatch):
+    from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB
+
+    monkeypatch.setenv("STORE_PROMPTS_IN_SPEND_LOGS", "true")
+    filler = "detail " * (MAX_STRING_LENGTH_PROMPT_IN_DB // 7)
+    summary = f"{filler}The cat is named Biscuit. {filler}"
+    claude_item = json.dumps({"type": "compaction", "content": summary, "padding": filler * 10})
+    opaque_item = "gAAAA" + "x" * (MAX_STRING_LENGTH_PROMPT_IN_DB * 2)
+    request_body = {
+        "input": [
+            {"type": "compaction", "id": "cmp_1", "encrypted_content": claude_item},
+            {"type": "compaction", "id": "cmp_2", "encrypted_content": opaque_item},
+            {"role": "assistant", "content": [{"type": "compaction", "content": f"{filler}Biscuit{filler}"}]},
+            {"role": "user", "content": f"{filler}What is my cat called?{filler}"},
+        ],
+        "metadata": {"note": {"type": "compaction", "encrypted_content": claude_item}},
+    }
+
+    stored = json.loads(
+        _get_proxy_server_request_for_spend_logs_payload(
+            metadata={}, litellm_params={"proxy_server_request": {"body": request_body}}
+        )
+    )
+
+    claude_stored, opaque_stored, messages_block_stored, message_stored = stored["input"]
+    assert {**claude_stored, "encrypted_content": json.loads(claude_stored["encrypted_content"])} == {
+        "type": "compaction",
+        "id": "cmp_1",
+        "encrypted_content": {"type": "compaction", "content": summary},
+    }
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in opaque_stored["encrypted_content"]
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in messages_block_stored["content"][0]["content"]
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in message_stored["content"]
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in stored["metadata"]["note"]["encrypted_content"]
+
+
 @patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
 def test_get_response_for_spend_logs_payload_strips_null_bytes(mock_should_store):
     """Regression for PostgreSQL 22P05: NUL bytes must be stripped from response."""

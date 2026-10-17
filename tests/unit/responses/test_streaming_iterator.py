@@ -2557,3 +2557,24 @@ def test_faked_stream_builds_each_refusal_summary_and_custom_tool_input_once_for
         (1, "content", 1): "No forecasts for Mars.",
         (2, "input", 0): "curl wttr.in/Berlin",
     }
+
+
+_COMPACTION_SUMMARY: Final = "The user planned a Tokyo trip."
+_NEXT_TURN: Final = {"type": "message", "role": "user", "content": "And Osaka?"}
+_COMPACTED_INPUT: Final = [
+    {"type": "message", "role": "user", "content": "Plan a Tokyo trip. " * 200},
+    {"type": "message", "role": "assistant", "content": "Day one, Asakusa. " * 200},
+    {
+        "type": "compaction",
+        "id": "cmp_1",
+        "encrypted_content": json.dumps({"type": "compaction", "content": _COMPACTION_SUMMARY}),
+    },
+    _NEXT_TURN,
+]
+_SUMMARY_INPUT: Final = [{"type": "message", "role": "user", "content": _COMPACTION_SUMMARY}, _NEXT_TURN]
+
+
+def test_usage_estimate_counts_a_compaction_item_as_its_summary():
+    assert _estimate_usage_from_text("gpt-4o-mini", _COMPACTED_INPUT, {}, "Dotonbori.") == _estimate_usage_from_text(
+        "gpt-4o-mini", _SUMMARY_INPUT, {}, "Dotonbori."
+    )

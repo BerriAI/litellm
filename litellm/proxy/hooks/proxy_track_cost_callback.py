@@ -4,6 +4,8 @@ from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Final, Protocol, cast
 
+from pydantic import TypeAdapter
+
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.batches.batch_utils import batch_cost_is_final
@@ -17,6 +19,7 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_information_cost
+from litellm.litellm_core_utils.redact_messages import MESSAGE_REDACTION_ENABLE_HEADERS
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import (
     get_key_object,
@@ -87,6 +90,9 @@ _CAPTURED_IDENTITY_CALL_TYPES: Final[frozenset[str]] = frozenset(
 )
 
 
+_OBJECT_MAPPING: Final = TypeAdapter(ObjectMapping)
+
+
 def _proxy_stamped_used_client_oauth_token(
     request_data: Mapping[str, object], request_route: str | None
 ) -> bool | None:
@@ -110,6 +116,26 @@ def _failure_snapshot_with_guardrails_recorded_after_it(
     ):
         return None
     return {**failure_snapshot, "guardrail_information": recorded_guardrail_information}
+
+
+def _guardrail_info_lifted_from_litellm_metadata(
+    litellm_metadata: ObjectMapping, *, guardrail_info_already_set: bool
+) -> ObjectMapping:
+    guardrail_info: Final = litellm_metadata.get("standard_logging_guardrail_information")
+    if guardrail_info is None or guardrail_info_already_set:
+        return {}
+    return {"standard_logging_guardrail_information": guardrail_info}
+
+
+def _redaction_opt_in_lifted_from_litellm_metadata(
+    litellm_metadata: ObjectMapping, *, caller_set_headers: bool
+) -> ObjectMapping:
+    request_headers: Final = litellm_metadata.get("headers")
+    if caller_set_headers or not isinstance(request_headers, dict):
+        return {}
+    headers: Final = _OBJECT_MAPPING.validate_python(request_headers)
+    opt_in_headers: Final = {name: headers[name] for name in MESSAGE_REDACTION_ENABLE_HEADERS if name in headers}
+    return {"headers": opt_in_headers} if opt_in_headers else {}
 
 
 def _proxy_spend_writer() -> DBSpendUpdateWriter:
@@ -226,13 +252,17 @@ class _ProxyDBLogger(CustomLogger):
         existing_metadata.update(_metadata)
 
         litellm_metadata_bucket: Final = request_data.get("litellm_metadata")
-        if (
-            isinstance(litellm_metadata_bucket, dict)
-            and "standard_logging_guardrail_information" not in existing_metadata
-        ):
-            guardrail_info: Final = litellm_metadata_bucket.get("standard_logging_guardrail_information")
-            if guardrail_info is not None:
-                existing_metadata["standard_logging_guardrail_information"] = guardrail_info
+        litellm_metadata: Final[ObjectMapping] = (
+            _OBJECT_MAPPING.validate_python(litellm_metadata_bucket)
+            if isinstance(litellm_metadata_bucket, dict)
+            else {}
+        )
+        existing_metadata.update(
+            _guardrail_info_lifted_from_litellm_metadata(
+                litellm_metadata,
+                guardrail_info_already_set="standard_logging_guardrail_information" in existing_metadata,
+            )
+        )
 
         if "litellm_params" not in request_data:
             request_data["litellm_params"] = {}
@@ -247,7 +277,12 @@ class _ProxyDBLogger(CustomLogger):
         request_data["litellm_params"]["proxy_server_request"] = (
             request_data.get("proxy_server_request") or existing_litellm_params.get("proxy_server_request") or {}
         )
-        request_data["litellm_params"]["metadata"] = existing_metadata
+        request_data["litellm_params"]["metadata"] = {
+            **existing_metadata,
+            **_redaction_opt_in_lifted_from_litellm_metadata(
+                litellm_metadata, caller_set_headers="headers" in existing_metadata
+            ),
+        }
 
         # Preserve model name and custom_llm_provider
         if "model" not in request_data:

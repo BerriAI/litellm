@@ -22,6 +22,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
 )
 from litellm.litellm_core_utils.served_output_texts import SERVED_OUTPUT_TEXTS_KEY
+from litellm.llms.base_llm.guardrail_translation.utils import stream_item_field, stream_item_items
 from litellm.llms.vertex_ai.common_utils import (
     redact_vertex_ai_metadata_from_litellm_params,
     redact_vertex_ai_metadata_from_logged_object,
@@ -38,6 +39,8 @@ if TYPE_CHECKING:
     LiteLLMLoggingObject = _LiteLLMLoggingObject
 else:
     LiteLLMLoggingObject = Any
+
+MESSAGE_REDACTION_ENABLE_HEADERS: Final = ("litellm-enable-message-redaction", "x-litellm-enable-message-redaction")
 
 
 def redact_message_input_output_from_custom_logger(
@@ -147,33 +150,45 @@ def _redacted_provider_specific_fields(fields: Mapping[str, object]) -> Mapping[
     return {
         **fields,
         **({"reasoning_content": REDACTED_BY_LITELLM} if fields.get("reasoning_content") is not None else {}),
-        **{key: None for key in ("thinking_blocks", "reasoningContentBlocks", "citations") if key in fields},
+        **{
+            key: None
+            for key in (
+                "thinking_blocks",
+                "reasoningContentBlocks",
+                "citations",
+                "compaction_blocks",
+                "compaction_delta",
+            )
+            if key in fields
+        },
     }
+
+
+def _redact_field_when_present(item: object, field: str) -> None:
+    if getattr(item, field, None) is not None:
+        setattr(item, field, REDACTED_BY_LITELLM)
 
 
 def _redact_responses_api_output(output_items):
     """Helper to redact ResponsesAPIResponse output items."""
     for output_item in output_items:
+        output_type = stream_item_field(output_item, "type")
         if getattr(output_item, "text", None) is not None:
             output_item.text = REDACTED_BY_LITELLM
 
-        if hasattr(output_item, "content") and isinstance(output_item.content, list):
-            for content_part in output_item.content:
-                if getattr(content_part, "text", None) is not None:
-                    content_part.text = REDACTED_BY_LITELLM
-                if getattr(content_part, "refusal", None) is not None:
-                    content_part.refusal = REDACTED_BY_LITELLM
+        for content_part in stream_item_items(output_item, "content"):
+            _redact_field_when_present(content_part, "text")
+            _redact_field_when_present(content_part, "refusal")
 
-        # Redact reasoning items in output array
-        if hasattr(output_item, "type") and output_item.type == "reasoning":
-            if hasattr(output_item, "summary") and isinstance(output_item.summary, list):
-                for summary_item in output_item.summary:
-                    if getattr(summary_item, "text", None) is not None:
-                        summary_item.text = REDACTED_BY_LITELLM
+        if output_type == "reasoning":
+            for summary_item in stream_item_items(output_item, "summary"):
+                _redact_field_when_present(summary_item, "text")
 
-        if hasattr(output_item, "type") and output_item.type == "function_call" and hasattr(output_item, "arguments"):
+        if output_type == "compaction" and hasattr(output_item, "encrypted_content"):
+            output_item.encrypted_content = REDACTED_BY_LITELLM
+        if output_type == "function_call" and hasattr(output_item, "arguments"):
             output_item.arguments = REDACTED_BY_LITELLM
-        if hasattr(output_item, "type") and output_item.type == "custom_tool_call" and hasattr(output_item, "input"):
+        if output_type == "custom_tool_call" and hasattr(output_item, "input"):
             output_item.input = REDACTED_BY_LITELLM
 
 
@@ -182,6 +197,7 @@ def _redact_responses_api_output_dict(output_items, redacted_str: str):
     for output_item in output_items:
         if not isinstance(output_item, dict):
             continue
+        output_type = stream_item_field(output_item, "type")
 
         if output_item.get("text") is not None:
             output_item["text"] = redacted_str
@@ -193,14 +209,16 @@ def _redact_responses_api_output_dict(output_items, redacted_str: str):
                 if isinstance(content_item, dict) and content_item.get("refusal") is not None:
                     content_item["refusal"] = redacted_str
 
-        if output_item.get("type") == "reasoning" and isinstance(output_item.get("summary"), list):
+        if output_type == "reasoning" and isinstance(output_item.get("summary"), list):
             for summary_item in output_item["summary"]:
                 if isinstance(summary_item, dict) and summary_item.get("text") is not None:
                     summary_item["text"] = redacted_str
 
-        if output_item.get("type") == "function_call" and "arguments" in output_item:
+        if output_type == "compaction" and "encrypted_content" in output_item:
+            output_item["encrypted_content"] = redacted_str
+        if output_type == "function_call" and "arguments" in output_item:
             output_item["arguments"] = redacted_str
-        if output_item.get("type") == "custom_tool_call" and "input" in output_item:
+        if output_type == "custom_tool_call" and "input" in output_item:
             output_item["input"] = redacted_str
 
 
@@ -442,13 +460,8 @@ def should_redact_message_logging(model_call_details: dict) -> bool:
         # User explicitly disabled redaction via header
         return False
 
-    possible_enable_headers: Final = [
-        "litellm-enable-message-redaction",  # old header. maintain backwards compatibility
-        "x-litellm-enable-message-redaction",  # new header
-    ]
-
     is_redaction_enabled_via_header = False
-    for header in possible_enable_headers:
+    for header in MESSAGE_REDACTION_ENABLE_HEADERS:
         if bool(request_headers.get(header, False)):
             is_redaction_enabled_via_header = True
             break

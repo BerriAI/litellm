@@ -1,15 +1,17 @@
 import json
 from collections.abc import Mapping, Sequence
 from itertools import chain
-from typing import Final
+from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 import respx
+from openai.types.responses.response_compaction_item import ResponseCompactionItem
 from pydantic import BaseModel
 
 import litellm
+from litellm import CustomLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.responses.litellm_completion_transformation.handler import (
     LiteLLMCompletionTransformationHandler,
@@ -51,6 +53,7 @@ async def test_async_response_api_handler_merges_trace_id_without_error():
         instructions: str | None = None,
         request_kwargs: Mapping[str, object] | None = None,
         previous_response_client_ids: tuple[str, ...] = (),
+        input_replaces_history: bool = False,
     ) -> dict[str, object]:
         litellm_completion_request["litellm_trace_id"] = "session-trace"
         return litellm_completion_request
@@ -541,3 +544,465 @@ def test_streamed_responses_over_anthropic_emit_the_responses_event_sequence(res
     assert deltas == "Argentina won."
     assert completed.response.status == "completed"
     assert completed.response.output[0].content[0].text == "Argentina won."
+
+
+_ANTHROPIC_MESSAGES_URL: Final = "https://api.anthropic.com/v1/messages"
+_COMPACTION_BLOCK: Final = {"type": "compaction", "content": "The user pasted a long document and asked about it."}
+_FIRST_INPUT: Final = ({"role": "user", "content": "What is the first word of the document?"},)
+_NEXT_INPUT: Final = ({"role": "user", "content": "And the last word?"},)
+_COMPACT_AT_50K: Final = ({"type": "compaction", "compact_threshold": 50000},)
+
+
+def _anthropic_message(*content: Mapping[str, object]) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "id": "msg_compacted",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-5-5",
+            "content": list(content),
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        },
+    )
+
+
+def _replay(output: Sequence[BaseModel]) -> list[object]:
+    return [*_FIRST_INPUT, *(item.model_dump(exclude_none=True) for item in output), *_NEXT_INPUT]
+
+
+def _sent_assistant_content(route: respx.Route) -> list[object]:
+    sent: Final = json.loads(route.calls.last.request.content)
+    return next(message["content"] for message in sent["messages"] if message["role"] == "assistant")
+
+
+def test_responses_over_anthropic_return_the_compaction_block_and_send_it_back(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        side_effect=[
+            _anthropic_message(_COMPACTION_BLOCK, {"type": "text", "text": "The."}),
+            _anthropic_message({"type": "text", "text": "dog."}),
+        ]
+    )
+
+    first: Final = litellm.responses(
+        model=_MODEL, input=list(_FIRST_INPUT), context_management=list(_COMPACT_AT_50K), api_key="mock_api_key"
+    )
+    litellm.responses(
+        model=_MODEL, input=_replay(first.output), context_management=list(_COMPACT_AT_50K), api_key="mock_api_key"
+    )
+
+    assert [item.type for item in first.output] == ["compaction", "message"]
+    assert _sent_assistant_content(route) == [_COMPACTION_BLOCK, {"type": "text", "text": "The."}]
+
+
+def test_streamed_responses_over_anthropic_emit_the_compaction_item_and_send_it_back(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        side_effect=[
+            httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                content=_anthropic_sse(
+                    {
+                        "type": "message_start",
+                        "message": {
+                            "id": "msg_compacted_stream",
+                            "type": "message",
+                            "role": "assistant",
+                            "model": "claude-sonnet-5-5",
+                            "content": [],
+                            "usage": {"input_tokens": 9, "output_tokens": 1},
+                        },
+                    },
+                    {
+                        "type": "content_block_start",
+                        "index": 0,
+                        "content_block": {"type": "compaction", "content": None},
+                    },
+                    {
+                        "type": "content_block_delta",
+                        "index": 0,
+                        "delta": {"type": "compaction_delta", "content": _COMPACTION_BLOCK["content"]},
+                    },
+                    {"type": "content_block_stop", "index": 0},
+                    {"type": "content_block_start", "index": 1, "content_block": {"type": "text", "text": ""}},
+                    {"type": "content_block_delta", "index": 1, "delta": {"type": "text_delta", "text": "The."}},
+                    {"type": "content_block_stop", "index": 1},
+                    {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 4}},
+                    {"type": "message_stop"},
+                ),
+            ),
+            _anthropic_message({"type": "text", "text": "dog."}),
+        ]
+    )
+
+    events: Final = tuple(
+        litellm.responses(
+            model=_MODEL,
+            input=list(_FIRST_INPUT),
+            context_management=list(_COMPACT_AT_50K),
+            stream=True,
+            api_key="mock_api_key",
+        )
+    )
+    item_events: Final = tuple(
+        event
+        for event in events
+        if event.type in (ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE)
+    )
+    completed: Final = events[-1].response
+    litellm.responses(
+        model=_MODEL, input=_replay(completed.output), context_management=list(_COMPACT_AT_50K), api_key="mock_api_key"
+    )
+
+    assert [(event.type, event.output_index, event.item.type) for event in item_events] == [
+        (ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, 0, "compaction"),
+        (ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, 1, "message"),
+        (ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE, 0, "compaction"),
+        (ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE, 1, "message"),
+    ]
+    assert item_events[0].item.encrypted_content == ""
+    assert item_events[0].item.id == item_events[2].item.id
+    assert [(item.type, getattr(item, "encrypted_content", None)) for item in completed.output[:1]] == [
+        ("compaction", item_events[2].item.encrypted_content)
+    ]
+    assert completed.output[0].id == item_events[2].item.id
+    assert _sent_assistant_content(route) == [_COMPACTION_BLOCK, {"type": "text", "text": "The."}]
+
+
+@pytest.mark.asyncio
+async def test_async_streamed_compaction_item_is_done_before_the_reasoning_that_follows_it() -> None:
+    anthropic: Final = httpx.MockTransport(
+        lambda _request: httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_anthropic_sse(
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": "msg_compacted_thinking",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": "claude-sonnet-5-5",
+                        "content": [],
+                        "usage": {"input_tokens": 9, "output_tokens": 1},
+                    },
+                },
+                {"type": "content_block_start", "index": 0, "content_block": {"type": "compaction", "content": None}},
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "compaction_delta", "content": _COMPACTION_BLOCK["content"]},
+                },
+                {"type": "content_block_stop", "index": 0},
+                {"type": "content_block_start", "index": 1, "content_block": {"type": "thinking", "thinking": ""}},
+                {"type": "content_block_delta", "index": 1, "delta": {"type": "thinking_delta", "thinking": "Recall."}},
+                {"type": "content_block_delta", "index": 1, "delta": {"type": "signature_delta", "signature": "sig"}},
+                {"type": "content_block_stop", "index": 1},
+                {"type": "content_block_start", "index": 2, "content_block": {"type": "text", "text": ""}},
+                {"type": "content_block_delta", "index": 2, "delta": {"type": "text_delta", "text": "The."}},
+                {"type": "content_block_stop", "index": 2},
+                {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 4}},
+                {"type": "message_stop"},
+            ),
+        )
+    )
+
+    stream: Final = await litellm.aresponses(
+        model=_MODEL,
+        input=list(_FIRST_INPUT),
+        context_management=list(_COMPACT_AT_50K),
+        stream=True,
+        api_key="mock_api_key",
+        client=AsyncHTTPHandler(transport=anthropic),
+    )
+    events: Final = [event async for event in stream]
+    done_items: Final = [
+        (event.output_index, event.item.type)
+        for event in events
+        if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE
+    ]
+    reasoning_done: Final = next(
+        index
+        for index, event in enumerate(events)
+        if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE and event.item.type == "reasoning"
+    )
+    sequence_numbers: Final = [
+        event.sequence_number for event in events[: reasoning_done + 1] if getattr(event, "sequence_number", None)
+    ]
+
+    assert done_items == [(0, "compaction"), (1, "reasoning"), (2, "message")]
+    assert [item.type for item in events[-1].response.output] == ["compaction", "reasoning", "message"]
+    assert sequence_numbers == sorted(set(sequence_numbers))
+
+
+def _compaction_stream_events(*summaries: str) -> tuple[Mapping[str, object], ...]:
+    return tuple(
+        chain.from_iterable(
+            (
+                {
+                    "type": "content_block_start",
+                    "index": 2 * index,
+                    "content_block": {"type": "compaction", "content": None},
+                },
+                {
+                    "type": "content_block_delta",
+                    "index": 2 * index,
+                    "delta": {"type": "compaction_delta", "content": summary},
+                },
+                {"type": "content_block_stop", "index": 2 * index},
+                {"type": "content_block_start", "index": 2 * index + 1, "content_block": {"type": "text", "text": ""}},
+                {"type": "content_block_delta", "index": 2 * index + 1, "delta": {"type": "text_delta", "text": "Ok."}},
+                {"type": "content_block_stop", "index": 2 * index + 1},
+            )
+            for index, summary in enumerate(summaries)
+        )
+    )
+
+
+def test_streamed_compaction_item_done_carries_the_same_newest_block_as_the_completed_response(
+    respx_mock: respx.MockRouter,
+) -> None:
+    respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        return_value=httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_anthropic_sse(
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": "msg_compacted_twice",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": "claude-sonnet-5-5",
+                        "content": [],
+                        "usage": {"input_tokens": 9, "output_tokens": 1},
+                    },
+                },
+                *_compaction_stream_events("First summary.", "Second summary."),
+                {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 4}},
+                {"type": "message_stop"},
+            ),
+        )
+    )
+
+    events: Final = tuple(
+        litellm.responses(
+            model=_MODEL,
+            input=list(_FIRST_INPUT),
+            context_management=list(_COMPACT_AT_50K),
+            stream=True,
+            api_key="mock_api_key",
+        )
+    )
+    streamed: Final = tuple(
+        (event.item.id, json.loads(event.item.encrypted_content)["content"])
+        for event in events
+        if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE and event.item.type == "compaction"
+    )
+    completed: Final = tuple(
+        (item.id, json.loads(item.encrypted_content)["content"])
+        for item in events[-1].response.output
+        if item.type == "compaction"
+    )
+
+    assert streamed == completed
+    assert [summary for _, summary in completed] == ["Second summary."]
+
+
+def test_responses_over_anthropic_send_back_a_compaction_item_replayed_as_sdk_output(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        side_effect=[
+            _anthropic_message(_COMPACTION_BLOCK, {"type": "text", "text": "The."}),
+            _anthropic_message({"type": "text", "text": "dog."}),
+        ]
+    )
+
+    first: Final = litellm.responses(
+        model=_MODEL, input=list(_FIRST_INPUT), context_management=list(_COMPACT_AT_50K), api_key="mock_api_key"
+    )
+    litellm.responses(
+        model=_MODEL,
+        input=[*_FIRST_INPUT, *first.output, *_NEXT_INPUT],
+        context_management=list(_COMPACT_AT_50K),
+        api_key="mock_api_key",
+    )
+
+    assert _sent_assistant_content(route)[0] == _COMPACTION_BLOCK
+
+
+@pytest.mark.asyncio
+async def test_router_with_encrypted_content_affinity_sends_the_compaction_block_back(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        side_effect=[
+            _anthropic_message(_COMPACTION_BLOCK, {"type": "text", "text": "The."}),
+            _anthropic_message({"type": "text", "text": "dog."}),
+        ]
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "claude",
+                "litellm_params": {"model": _MODEL, "api_key": "mock_api_key"},
+                "model_info": {"id": "deployment-a"},
+            }
+        ],
+        optional_pre_call_checks=["encrypted_content_affinity"],
+    )
+
+    first: Final = await router.aresponses(
+        model="claude", input=list(_FIRST_INPUT), context_management=list(_COMPACT_AT_50K)
+    )
+    await router.aresponses(model="claude", input=_replay(first.output), context_management=list(_COMPACT_AT_50K))
+
+    assert first.output[0].encrypted_content.startswith("litellm_enc:")
+    assert _sent_assistant_content(route) == [_COMPACTION_BLOCK, {"type": "text", "text": "The."}]
+
+
+_DOCUMENT_BEFORE_COMPACTION: Final = "The design document pasted before the compaction."
+_TURN_BEFORE_COMPACTION: Final = {
+    "request_id": "chatcmpl-before-compaction",
+    "call_type": "aresponses",
+    "session_id": "session-compacted",
+    "proxy_server_request": {
+        "model": _MODEL,
+        "input": [
+            {"role": "developer", "content": "Use metric units."},
+            {"role": "user", "content": _DOCUMENT_BEFORE_COMPACTION},
+        ],
+    },
+    "response": {
+        "id": "chatcmpl-before-compaction",
+        "object": "chat.completion",
+        "created": 0,
+        "model": _MODEL,
+        "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "Read it."}}],
+    },
+}
+
+
+class _RecordingRawAnthropicMessages:
+    def __init__(self) -> None:
+        self.body: str = ""
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.body = request.content.decode()
+        return _anthropic_message({"type": "text", "text": "dog."})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("context_management", [None, list(_COMPACT_AT_50K)], ids=["summary_text", "native_block"])
+@pytest.mark.parametrize(
+    "compaction_item",
+    [
+        pytest.param(
+            {"type": "compaction", "id": "cmp_caller", "encrypted_content": json.dumps(_COMPACTION_BLOCK)},
+            id="param_dict",
+        ),
+        pytest.param(
+            ResponseCompactionItem(type="compaction", id="cmp_caller", encrypted_content=json.dumps(_COMPACTION_BLOCK)),
+            id="sdk_output_item",
+        ),
+    ],
+)
+async def test_previous_response_id_with_a_compaction_item_in_input_replays_only_the_stored_instructions(
+    context_management: list[Mapping[str, object]] | None,
+    compaction_item: Mapping[str, object] | ResponseCompactionItem,
+) -> None:
+    anthropic: Final = _RecordingRawAnthropicMessages()
+
+    with patch("litellm.proxy.proxy_server.prisma_client", _FakePrismaClient([_TURN_BEFORE_COMPACTION])):
+        await litellm.aresponses(
+            model=_MODEL,
+            previous_response_id="chatcmpl-before-compaction",
+            input=[compaction_item, *_NEXT_INPUT],
+            context_management=context_management,
+            api_key="sk-ant-fake",
+            client=AsyncHTTPHandler(transport=httpx.MockTransport(anthropic)),
+        )
+
+    assert _DOCUMENT_BEFORE_COMPACTION not in anthropic.body
+    assert "Read it." not in anthropic.body
+    assert "Use metric units." in anthropic.body
+    assert _COMPACTION_BLOCK["content"] in anthropic.body
+    assert _NEXT_INPUT[0]["content"] in anthropic.body
+
+
+class _RecordingCustomLLM(CustomLLM):
+    def __init__(self) -> None:
+        super().__init__()
+        self.sent_messages: list[object] = []
+
+    def completion(self, *args: object, **kwargs: object) -> ModelResponse:
+        self.sent_messages.extend(cast(list[object], kwargs["messages"]))
+        return litellm.completion(
+            model="gpt-5.6", messages=[{"role": "user", "content": "Hi."}], mock_response="dog."
+        )
+
+
+def test_responses_over_a_custom_provider_send_a_compaction_item_as_summary_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    custom_llm: Final = _RecordingCustomLLM()
+    monkeypatch.setattr(litellm, "provider_list", list(litellm.provider_list))
+    monkeypatch.setattr(litellm, "_custom_providers", list(litellm._custom_providers))
+    monkeypatch.setattr(
+        litellm, "custom_provider_map", [{"provider": "compaction-test-llm", "custom_handler": custom_llm}]
+    )
+    compaction_item: Final = {
+        "type": "compaction",
+        "id": "cmp_earlier",
+        "encrypted_content": json.dumps(_COMPACTION_BLOCK),
+    }
+
+    litellm.responses(
+        model="compaction-test-llm/my-model",
+        input=[*_FIRST_INPUT, {"role": "assistant", "content": "The."}, compaction_item, *_NEXT_INPUT],
+        context_management=list(_COMPACT_AT_50K),
+        drop_params=True,
+    )
+
+    assert custom_llm.sent_messages == [
+        {"role": "user", "content": _COMPACTION_BLOCK["content"]},
+        *_NEXT_INPUT,
+    ]
+
+
+def test_responses_over_anthropic_send_a_compaction_item_as_summary_text_when_the_request_does_not_compact(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        return_value=_anthropic_message({"type": "text", "text": "dog."})
+    )
+    compaction_item: Final = {
+        "type": "compaction",
+        "id": "cmp_earlier",
+        "encrypted_content": json.dumps(_COMPACTION_BLOCK),
+    }
+
+    litellm.responses(
+        model=_MODEL,
+        input=[*_FIRST_INPUT, {"role": "assistant", "content": "The."}, compaction_item, *_NEXT_INPUT],
+        api_key="mock_api_key",
+    )
+
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert sent["messages"] == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": _COMPACTION_BLOCK["content"]},
+                {"type": "text", "text": _NEXT_INPUT[0]["content"]},
+            ],
+        }
+    ]

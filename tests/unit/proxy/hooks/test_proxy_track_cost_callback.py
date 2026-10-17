@@ -164,6 +164,74 @@ async def test_async_post_call_failure_hook_does_not_clobber_guardrail_info_in_m
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    "request_headers, caller_metadata, redaction_is_global, code_word_is_stored",
+    [
+        ({"x-litellm-enable-message-redaction": "true"}, {"user_id": "claude-code-session"}, False, False),
+        ({"litellm-enable-message-redaction": "true"}, {}, False, False),
+        ({"user-agent": "claude-cli"}, {"user_id": "claude-code-session"}, False, True),
+        ({"user-agent": "claude-cli"}, {"headers": {"x-litellm-enable-message-redaction": "true"}}, False, False),
+        ({"litellm-disable-message-redaction": "true"}, {"user_id": "claude-code-session"}, True, False),
+    ],
+    ids=[
+        "enable_header_redacts",
+        "legacy_enable_header_redacts",
+        "no_header_stores_prompt",
+        "caller_metadata_headers_still_apply",
+        "disable_header_never_loosens_global_redaction",
+    ],
+)
+async def test_async_post_call_failure_hook_honors_the_redaction_header_on_a_litellm_metadata_route(
+    monkeypatch: pytest.MonkeyPatch,
+    request_headers: dict[str, str],
+    caller_metadata: dict[str, object],
+    redaction_is_global: bool,
+    code_word_is_stored: bool,
+):
+    monkeypatch.setenv("STORE_PROMPTS_IN_SPEND_LOGS", "true")
+    monkeypatch.setattr(litellm, "turn_off_message_logging", redaction_is_global)
+    writer: Final = MagicMock(spec=DBSpendUpdateWriter)
+    writer.update_database = AsyncMock()
+    logger: Final = ProxyDBLogger(spend_writer=lambda: writer)
+    request_input: Final = "The code word is VERMILION-42. Reply OK."
+    body_metadata: Final = dict(caller_metadata)
+    litellm_metadata_headers: Final = dict(request_headers)
+
+    await logger.async_post_call_failure_hook(
+        request_data={
+            "model": "gpt-5.6",
+            "input": request_input,
+            "metadata": body_metadata,
+            "litellm_metadata": {"headers": litellm_metadata_headers},
+            "proxy_server_request": {
+                "url": "http://localhost/v1/responses",
+                "body": {
+                    "model": "gpt-5.6",
+                    "input": request_input,
+                    "temperature": 7,
+                    "metadata": body_metadata,
+                    "litellm_metadata": {"headers": litellm_metadata_headers},
+                },
+            },
+        },
+        original_exception=Exception("temperature must be at most 2"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="test_api_key"),
+    )
+
+    row: Final = get_logging_payload(
+        kwargs=writer.update_database.call_args.kwargs["kwargs"],
+        response_obj={},
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    stored_request: Final = json.loads(row["proxy_server_request"])
+    assert stored_request["temperature"] == 7
+    assert ("VERMILION-42" in row["proxy_server_request"]) is code_word_is_stored
+    assert stored_request["metadata"].get("headers") == caller_metadata.get("headers")
+    assert stored_request["litellm_metadata"]["headers"] == request_headers
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     "used_client_oauth_token, custom_llm_provider, expected",
     [(True, "anthropic", True), (True, "bedrock", False), (False, "anthropic", False)],
 )

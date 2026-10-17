@@ -6502,6 +6502,169 @@ def test_transform_request_reads_service_tier_from_responses_api_request() -> No
     assert result["service_tier"] == "priority"
 
 
+_COMPACTION_BLOCK: Final = {"type": "compaction", "content": "Earlier turns covered the Tokyo trip."}
+
+
+_COMPACTION_REQUESTED: Final = ResponsesAPIOptionalRequestParams(
+    context_management=[{"type": "compaction", "compact_threshold": 50000}]
+)
+_SUMMARY_AS_TEXT: Final = {"role": "user", "content": _COMPACTION_BLOCK["content"]}
+
+
+def _anthropic_form_context_management(edit: Mapping[str, object]) -> ResponsesAPIOptionalRequestParams:
+    return cast(  # cast-ok: Anthropic's native {"edits": [...]} form, which the param type does not declare
+        ResponsesAPIOptionalRequestParams, {"context_management": {"edits": [edit]}}
+    )
+
+
+@pytest.mark.parametrize(
+    ("model", "responses_api_request", "replayed_compaction"),
+    [
+        (
+            "anthropic/claude-sonnet-5-5",
+            _COMPACTION_REQUESTED,
+            {
+                "role": "assistant",
+                "content": None,
+                "provider_specific_fields": {"compaction_blocks": [_COMPACTION_BLOCK]},
+            },
+        ),
+        (
+            "anthropic/claude-sonnet-5-5",
+            _anthropic_form_context_management({"type": "compact_20260112"}),
+            {
+                "role": "assistant",
+                "content": None,
+                "provider_specific_fields": {"compaction_blocks": [_COMPACTION_BLOCK]},
+            },
+        ),
+        ("anthropic/claude-sonnet-5-5", ResponsesAPIOptionalRequestParams(), _SUMMARY_AS_TEXT),
+        (
+            "anthropic/claude-sonnet-5-5",
+            _anthropic_form_context_management({"type": "clear_tool_uses_20250919"}),
+            _SUMMARY_AS_TEXT,
+        ),
+        ("gemini/gemini-3.8-flash", _COMPACTION_REQUESTED, _SUMMARY_AS_TEXT),
+        ("bedrock/claude_platform/claude-sonnet-5-5", _COMPACTION_REQUESTED, _SUMMARY_AS_TEXT),
+    ],
+)
+def test_compaction_input_item_replays_as_a_compaction_block_only_when_anthropic_compacts(
+    model: str, responses_api_request: ResponsesAPIOptionalRequestParams, replayed_compaction: Mapping[str, object]
+) -> None:
+    result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model=model,
+        input=cast(
+            ResponseInputParam,
+            [
+                {"type": "compaction", "id": "cmp_openai", "encrypted_content": "gAAAAABopaque"},
+                {"type": "compaction", "id": "cmp_litellm", "encrypted_content": json.dumps(_COMPACTION_BLOCK)},
+                {"role": "user", "content": "And Osaka?"},
+            ],
+        ),
+        responses_api_request=responses_api_request,
+    )
+
+    assert [dict(message) for message in result["messages"]] == [
+        replayed_compaction,
+        {"role": "user", "content": "And Osaka?"},
+    ]
+
+
+def _replayed_compacted_answer(model: str, context_management: object) -> list[tuple[object, object, object]]:
+    async def session_lookup(previous_response_id: str) -> ChatCompletionSession:
+        return ChatCompletionSession(
+            messages=[
+                Message(
+                    role="assistant",
+                    content="Day one, Asakusa.",
+                    provider_specific_fields={"compaction_blocks": [_COMPACTION_BLOCK]},
+                ),
+                {"role": "user", "content": "Day two?"},
+                Message(role="assistant", content="Ueno."),
+            ],
+            litellm_session_id=None,
+        )
+
+    request: Final = asyncio.run(
+        LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
+            previous_response_id="resp_compacted",
+            litellm_completion_request={
+                "model": model,
+                "messages": [{"role": "user", "content": "And Osaka?"}],
+                **({"context_management": context_management} if context_management else {}),
+            },
+            instructions=None,
+            session_lookup=session_lookup,
+        )
+    )
+    return [
+        (
+            message.get("role"),
+            message.get("content"),
+            (message.get("provider_specific_fields") or {}).get("compaction_blocks"),
+        )
+        for message in request["messages"]
+    ]
+
+
+_TURNS_AFTER_THE_COMPACTED_ANSWER: Final = [
+    ("user", "Day two?", None),
+    ("assistant", "Ueno.", None),
+    ("user", "And Osaka?", None),
+]
+_ANSWER_AFTER_SUMMARY: Final = [
+    ("user", _COMPACTION_BLOCK["content"], None),
+    ("assistant", "Day one, Asakusa.", None),
+    *_TURNS_AFTER_THE_COMPACTED_ANSWER,
+]
+
+
+@pytest.mark.parametrize(
+    ("model", "context_management", "replayed"),
+    [
+        (
+            "anthropic/claude-sonnet-5-5",
+            _COMPACTION_REQUESTED["context_management"],
+            [("assistant", "Day one, Asakusa.", [_COMPACTION_BLOCK]), *_TURNS_AFTER_THE_COMPACTED_ANSWER],
+        ),
+        ("anthropic/claude-sonnet-5-5", None, _ANSWER_AFTER_SUMMARY),
+        (
+            "bedrock/claude_platform/claude-sonnet-5-5",
+            _COMPACTION_REQUESTED["context_management"],
+            _ANSWER_AFTER_SUMMARY,
+        ),
+        ("gpt-5.6", _COMPACTION_REQUESTED["context_management"], _ANSWER_AFTER_SUMMARY),
+    ],
+)
+def test_stored_compacted_answer_replays_its_block_only_when_anthropic_compacts(
+    model: str, context_management: object, replayed: list[tuple[object, object, object]]
+) -> None:
+    assert _replayed_compacted_answer(model, context_management) == replayed
+
+
+def test_summary_replay_drops_the_history_its_compaction_item_replaces() -> None:
+    result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model="gemini/gemini-3.8-flash",
+        input=cast(
+            ResponseInputParam,
+            [
+                {"role": "system", "content": "Answer briefly."},
+                {"role": "user", "content": "Plan a Tokyo trip."},
+                {"role": "assistant", "content": "Day one, Asakusa."},
+                {"type": "compaction", "id": "cmp_litellm", "encrypted_content": json.dumps(_COMPACTION_BLOCK)},
+                {"role": "user", "content": "And Osaka?"},
+            ],
+        ),
+        responses_api_request=_COMPACTION_REQUESTED,
+    )
+
+    assert [dict(message) for message in result["messages"]] == [
+        {"role": "system", "content": "Answer briefly."},
+        _SUMMARY_AS_TEXT,
+        {"role": "user", "content": "And Osaka?"},
+    ]
+
+
 def _continued_chain_request(request_kwargs: Mapping[str, object]) -> Mapping[str, object]:
     async def session_lookup(previous_response_id: str) -> ChatCompletionSession:
         assert previous_response_id == "resp_turn_1"
