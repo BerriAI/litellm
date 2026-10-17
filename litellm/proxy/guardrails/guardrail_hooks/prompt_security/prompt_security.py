@@ -644,9 +644,10 @@ class PromptSecurityGuardrail(CustomGuardrail):
     async def _process_document_item(self, item: dict, user_api_key_alias: str | None) -> dict:
         """Process and sanitize document/file items."""
         doc_data: Final = item.get("document") or item.get("file") or item
+        url_key: Final = "file_data" if isinstance(doc_data, dict) and not doc_data.get("url") else "url"
 
         if isinstance(doc_data, dict):
-            url = doc_data.get("url", "")
+            url = doc_data.get(url_key) or ""
             doc_content = doc_data.get("data", "")
         else:
             url = doc_data if isinstance(doc_data, str) else ""
@@ -695,7 +696,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
                     if url.startswith("data:") and header:
                         sanitized_url: Final = f"{header},{sanitized_encoded}"
                         if isinstance(doc_data, dict):
-                            doc_data["url"] = sanitized_url
+                            doc_data[url_key] = sanitized_url
                     elif isinstance(doc_data, dict):
                         doc_data["data"] = sanitized_encoded
 
