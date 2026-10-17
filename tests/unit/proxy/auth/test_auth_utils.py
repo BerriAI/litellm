@@ -4351,6 +4351,112 @@ class TestIsRequestBodySafeBlocksAwsIdentitySelectors:
         )
 
 
+_VERTEX_TARGET_PARAMS: Final = ("vertex_location", "vertex_project", "vertex_ai_location", "vertex_ai_project")
+
+
+def _vertex_pinned_router(configurable_clientside_auth_params: list[str]) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "gemini-2.5-flash",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-2.5-flash",
+                    "vertex_project": "admin-project",
+                    "vertex_location": "europe-west4",
+                    "configurable_clientside_auth_params": configurable_clientside_auth_params,
+                },
+            }
+        ]
+    )
+
+
+class TestIsRequestBodySafeBlocksVertexTargetOverrides:
+    @pytest.mark.parametrize("param", _VERTEX_TARGET_PARAMS)
+    @pytest.mark.parametrize(
+        "placement",
+        [
+            lambda param: {param: "us-central1"},
+            lambda param: {"extra_body": {param: "us-central1"}},
+            lambda param: {"metadata": {param: "us-central1"}},
+            lambda param: {"litellm_metadata": {param: "us-central1"}},
+        ],
+        ids=["root", "extra_body", "metadata", "litellm_metadata"],
+    )
+    def test_vertex_target_is_rejected_without_admin_opt_in(
+        self, param: str, placement: Callable[[str], dict[str, object]]
+    ) -> None:
+        with pytest.raises(ValueError, match=param):
+            is_request_body_safe(
+                request_body={"model": "gemini-2.5-flash", **placement(param)},
+                general_settings={},
+                llm_router=_vertex_pinned_router([]),
+                model="gemini-2.5-flash",
+                route="/v1/chat/completions",
+            )
+
+    def test_vertex_target_is_allowed_under_proxy_wide_opt_in(self) -> None:
+        assert (
+            is_request_body_safe(
+                request_body={"model": "gemini-2.5-flash", **{param: "us-central1" for param in _VERTEX_TARGET_PARAMS}},
+                general_settings={"allow_client_side_credentials": True},
+                llm_router=None,
+                model="gemini-2.5-flash",
+                route="/v1/chat/completions",
+            )
+            is True
+        )
+
+    def test_deployment_opt_in_allows_only_the_listed_vertex_target(self) -> None:
+        router: Final = _vertex_pinned_router(["vertex_location"])
+        assert (
+            is_request_body_safe(
+                request_body={"model": "gemini-2.5-flash", "vertex_location": "us-central1"},
+                general_settings={},
+                llm_router=router,
+                model="gemini-2.5-flash",
+                route="/v1/chat/completions",
+            )
+            is True
+        )
+        with pytest.raises(ValueError, match="vertex_project"):
+            is_request_body_safe(
+                request_body={
+                    "model": "gemini-2.5-flash",
+                    "vertex_location": "us-central1",
+                    "vertex_project": "caller-project",
+                },
+                general_settings={},
+                llm_router=router,
+                model="gemini-2.5-flash",
+                route="/v1/chat/completions",
+            )
+
+    @pytest.mark.parametrize("route", ["/vertex_ai/live", "/rag/ingest", "/v1/rag/ingest"])
+    def test_routes_that_name_their_vertex_target_keep_project_and_location(self, route: str) -> None:
+        assert (
+            is_request_body_safe(
+                request_body={"vertex_project": "caller-project", "vertex_location": "us-central1"},
+                general_settings={},
+                llm_router=None,
+                model="",
+                route=route,
+            )
+            is True
+        )
+
+    @pytest.mark.parametrize("route", ["/vertex_ai/live", "/rag/ingest"])
+    @pytest.mark.parametrize("param", ["api_base", "vertex_ai_project", "vertex_ai_location"])
+    def test_routes_that_name_their_vertex_target_reject_every_other_banned_param(self, route: str, param: str) -> None:
+        with pytest.raises(ValueError, match=param):
+            is_request_body_safe(
+                request_body={"vertex_location": "us-central1", param: "caller-chosen"},
+                general_settings={},
+                llm_router=None,
+                model="",
+                route=route,
+            )
+
+
 @pytest.mark.parametrize(
     "allowed_param, input_value, should_return_true",
     [

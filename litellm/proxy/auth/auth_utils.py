@@ -304,6 +304,18 @@ def route_manages_mcp_servers(route: str | None) -> bool:
     return route is not None and _MCP_SERVER_MANAGEMENT_ROUTE.fullmatch(route) is not None
 
 
+_VERTEX_TARGET_NAMING_ROUTES: Final[frozenset[str]] = frozenset(("/vertex_ai/live", "/rag/ingest", "/v1/rag/ingest"))
+_CALLER_NAMED_VERTEX_TARGET_PARAMS: Final[frozenset[str]] = frozenset(("vertex_project", "vertex_location"))
+
+
+def _without_caller_named_vertex_target(request_body: Mapping[str, object], route: str | None) -> Mapping[str, object]:
+    if route not in _VERTEX_TARGET_NAMING_ROUTES:
+        return request_body
+    return MappingProxyType(
+        {key: value for key, value in request_body.items() if key not in _CALLER_NAMED_VERTEX_TARGET_PARAMS}
+    )
+
+
 _NESTED_CONFIG_KEYS: Final[tuple[str, ...]] = ("litellm_embedding_config", "extra_body")
 
 # Metadata containers that carry per-request configuration consumed by the
@@ -396,6 +408,10 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     "aws_external_id",
     "aws_session_tags",
     "vertex_credentials",
+    "vertex_location",
+    "vertex_project",
+    "vertex_ai_location",
+    "vertex_ai_project",
     # Azure managed-identity / federated-auth token. The Azure provider
     # transformer reads ``azure_ad_token`` (top-level or via
     # ``extra_body``) and resolves it through ``get_secret`` before
@@ -650,7 +666,7 @@ def is_request_body_safe(
         raise ValueError("Rejected Request: model_list is not allowed in the request body.")
     manages_deployments: Final = route_manages_deployments(route)
     _check_banned_params(
-        request_body,
+        _without_caller_named_vertex_target(request_body, route),
         general_settings,
         llm_router,
         model,
