@@ -175,7 +175,9 @@ describe("useSaveCustomer", () => {
       mcp_servers_and_groups: { servers: [server.server_id, added.server_id], accessGroups: [], toolsets: [] },
     };
 
-    await expect(result.current.saveCustomer(values)).rejects.toThrow("Wait for each new MCP server's tools to load");
+    await expect(result.current.saveCustomer(values)).rejects.toThrow(
+      "Choose allowed tools for each MCP server before saving",
+    );
     expect(mocks.update).not.toHaveBeenCalled();
 
     await result.current.saveCustomer({
@@ -193,6 +195,29 @@ describe("useSaveCustomer", () => {
         mcp_tool_permissions: { [server.server_id]: ["read"], [added.server_id]: ["read"] },
       },
     });
+  });
+
+  it("refuses removing the toolset that limits a stored direct server's tools until it has an allowlist", async () => {
+    const stored: EndUser = {
+      ...customer,
+      object_permission: { ...permission, mcp_toolsets: [toolset.toolset_id], mcp_tool_permissions: {} },
+    };
+    mocks.servers.mockReturnValue({ data: [server], isSuccess: true });
+    mocks.toolsets.mockReturnValue({ data: [toolset], isSuccess: true });
+    const { result } = renderHook(() => useSaveCustomer(stored));
+    const values = {
+      ...toCustomerFormValues(stored),
+      mcp_servers_and_groups: { servers: [server.server_id], accessGroups: [], toolsets: [] },
+    };
+
+    await expect(result.current.saveCustomer(values)).rejects.toThrow(
+      "Choose allowed tools for each MCP server before saving",
+    );
+    expect(mocks.update).not.toHaveBeenCalled();
+
+    await result.current.saveCustomer({ ...values, mcp_tool_permissions: { [server.server_id]: ["read"] } });
+
+    expect(mocks.update).toHaveBeenCalledOnce();
   });
 
   it("refuses a permission edit while a stored access group's catalog has failed, then saves after it loads", async () => {

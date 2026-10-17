@@ -3,7 +3,7 @@ import { useCreateCustomer, useUpdateCustomer } from "@/app/(dashboard)/hooks/cu
 import { useMCPAccessGroups } from "@/app/(dashboard)/hooks/mcpServers/useMCPAccessGroups";
 import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
 import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolsets";
-import { buildCustomerPayload, newDirectServersWithoutAllowlist, type CustomerFormValues } from "./customerPayload";
+import { buildCustomerPayload, serversLosingToolLimits, type CustomerFormValues } from "./customerPayload";
 
 export const useSaveCustomer = (existing: EndUser | null) => {
   const { data: servers = [], isSuccess: serversReady } = useMCPServers();
@@ -27,9 +27,11 @@ export const useSaveCustomer = (existing: EndUser | null) => {
     if (catalogs.some(({ needed, ready }) => needed && !ready)) {
       return Promise.reject(new Error("MCP catalogs must finish loading before permission changes can be saved"));
     }
-    if (newDirectServersWithoutAllowlist(values, existing, servers, toolsets).length > 0) {
+    if (serversLosingToolLimits(values, existing, servers, toolsets).length > 0) {
       return Promise.reject(
-        new Error("Wait for each new MCP server's tools to load, or choose its allowed tools, before saving"),
+        new Error(
+          "Choose allowed tools for each MCP server before saving, or it gets every tool including delete tools",
+        ),
       );
     }
     return existing ? update.mutateAsync(payload) : create.mutateAsync(payload);

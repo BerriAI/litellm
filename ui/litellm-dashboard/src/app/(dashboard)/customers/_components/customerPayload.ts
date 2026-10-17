@@ -1,7 +1,12 @@
 import type { EndUser } from "@/app/(dashboard)/hooks/customers/useCustomers";
 import type { UpdateCustomerRequest } from "@/app/(dashboard)/hooks/customers/customerApi";
 import type { MCPServer, MCPToolset } from "@/components/mcp_tools/types";
-import { mcpAllowedToolsFor, mcpServersForIdentifier } from "@/components/mcp_server_management/effectiveMcpServers";
+import {
+  mcpAllowedToolsFor,
+  mcpServersForIdentifier,
+  mcpToolPermissionKeysFor,
+  resolveEffectiveMcpServers,
+} from "@/components/mcp_server_management/effectiveMcpServers";
 import { extractMcpEntitlement, type McpEntitlementUpdate } from "@/components/mcp_server_management/mcpEntitlement";
 
 export const getCustomerBudgetCounts = (customers: readonly EndUser[]): ReadonlyMap<string, number> =>
@@ -76,37 +81,40 @@ const extractEditedMcpGrant = (
 ): McpEntitlementUpdate | null => {
   const grant = extractMcpEntitlement(values, servers, toolsets);
   if (!grant) return null;
-  const previousValues = {
-    mcp_servers_and_groups: {
-      servers: storedGrant.mcp_servers,
-      accessGroups: storedGrant.mcp_access_groups,
-      toolsets: storedGrant.mcp_toolsets,
-    },
-    mcp_tool_permissions: storedGrant.mcp_tool_permissions,
+  const storedSelection = {
+    allServers: servers,
+    selectedServers: storedGrant.mcp_servers,
+    selectedAccessGroups: storedGrant.mcp_access_groups,
+    selectedToolsets: storedGrant.mcp_toolsets,
+    toolsets,
+    toolPermissions: {},
   };
-  const previousPermissions = extractMcpEntitlement(previousValues, servers, toolsets)?.mcp_tool_permissions ?? {};
-  // A stored tool-permission key that no stored server, group or toolset reaches is itself a server grant, so it
-  // survives edits to the selection. A key normalization rewrote into server ids is not one of these
-  const independentKeys = new Set(
-    Object.keys(storedGrant.mcp_tool_permissions).filter(
-      (key) =>
-        !Object.hasOwn(previousPermissions, key) &&
-        !mcpServersForIdentifier(servers, key).some((server) => Object.hasOwn(previousPermissions, server.server_id)),
-    ),
-  );
-  const independentServerIds = new Set(
-    Array.from(independentKeys).flatMap((key) =>
-      mcpServersForIdentifier(servers, key).map((server) => server.server_id),
-    ),
-  );
+  const selectedServerIds = new Set(resolveEffectiveMcpServers(storedSelection).map(({ server }) => server.server_id));
+  // A stored tool-permission key grants every server it names, so servers that only a key reaches survive edits to
+  // the selection, including the other servers behind an alias a selected server shares
+  const keyOnlyServers = Object.keys(storedGrant.mcp_tool_permissions)
+    .flatMap((key) => mcpServersForIdentifier(servers, key))
+    .filter((server) => !selectedServerIds.has(server.server_id));
+  const keyOnlyServerIds = new Set(keyOnlyServers.map((server) => server.server_id));
+  const namesOnlyKeyOnlyServers = (key: string): boolean => {
+    const named = mcpServersForIdentifier(servers, key);
+    return named.length > 0 && named.every((server) => keyOnlyServerIds.has(server.server_id));
+  };
   const independentPermissions = Object.fromEntries(
-    Object.entries(values.mcp_tool_permissions).filter(
-      ([key]) =>
-        independentKeys.has(key) ||
-        mcpServersForIdentifier(servers, key).some((server) => independentServerIds.has(server.server_id)),
-    ),
+    Object.entries(values.mcp_tool_permissions).filter(([key]) => namesOnlyKeyOnlyServers(key)),
   );
-  return { ...grant, mcp_tool_permissions: { ...grant.mcp_tool_permissions, ...independentPermissions } };
+  const keyOnlyPermissions = Object.fromEntries(
+    keyOnlyServers
+      .filter((server) => mcpToolPermissionKeysFor(server, independentPermissions, servers).length === 0)
+      .flatMap((server) => {
+        const allowed = mcpAllowedToolsFor(server, values.mcp_tool_permissions, servers);
+        return allowed ? [[server.server_id, [...allowed]]] : [];
+      }),
+  );
+  return {
+    ...grant,
+    mcp_tool_permissions: { ...grant.mcp_tool_permissions, ...independentPermissions, ...keyOnlyPermissions },
+  };
 };
 
 const changedMcpGrant = (
@@ -117,6 +125,13 @@ const changedMcpGrant = (
 ): McpEntitlementUpdate | null => {
   const storedGrant = storedMcpGrant(existing);
   const storedIdentity = grantIdentity(storedGrant);
+  const formGrant = {
+    mcp_servers: values.mcp_servers_and_groups.servers,
+    mcp_access_groups: values.mcp_servers_and_groups.accessGroups,
+    mcp_toolsets: values.mcp_servers_and_groups.toolsets,
+    mcp_tool_permissions: values.mcp_tool_permissions,
+  };
+  if (grantIdentity(formGrant) === storedIdentity) return null;
   const grant = extractEditedMcpGrant(values, storedGrant, servers, toolsets);
   return grant && grantIdentity(grant) !== storedIdentity ? grant : null;
 };
@@ -147,7 +162,26 @@ export const buildCustomerPayload = (
   };
 };
 
-export const newDirectServersWithoutAllowlist = (
+const unrestrictedDirectServerIds = (
+  grant: McpEntitlementUpdate,
+  servers: MCPServer[],
+  toolsets: MCPToolset[],
+): ReadonlySet<string> => {
+  const toolsetServerIds = new Set(
+    toolsets
+      .filter((toolset) => grant.mcp_toolsets.includes(toolset.toolset_id))
+      .flatMap((toolset) => toolset.tools.map((tool) => tool.server_id)),
+  );
+  return new Set(
+    grant.mcp_servers
+      .flatMap((identifier) => mcpServersForIdentifier(servers, identifier))
+      .filter((server) => !toolsetServerIds.has(server.server_id))
+      .filter((server) => mcpAllowedToolsFor(server, grant.mcp_tool_permissions, servers) === undefined)
+      .map((server) => server.server_id),
+  );
+};
+
+export const serversLosingToolLimits = (
   values: CustomerFormValues,
   existing: EndUser | null,
   servers: MCPServer[],
@@ -155,16 +189,7 @@ export const newDirectServersWithoutAllowlist = (
 ): readonly MCPServer[] => {
   const grant = changedMcpGrant(values, existing, servers, toolsets);
   if (!grant) return [];
-  const exemptServerIds = new Set([
-    ...(existing?.object_permission?.mcp_servers ?? []).flatMap((identifier) =>
-      mcpServersForIdentifier(servers, identifier).map((server) => server.server_id),
-    ),
-    ...toolsets
-      .filter((toolset) => grant.mcp_toolsets.includes(toolset.toolset_id))
-      .flatMap((toolset) => toolset.tools.map((tool) => tool.server_id)),
-  ]);
-  return grant.mcp_servers
-    .flatMap((identifier) => mcpServersForIdentifier(servers, identifier))
-    .filter((server) => !exemptServerIds.has(server.server_id))
-    .filter((server) => mcpAllowedToolsFor(server, grant.mcp_tool_permissions, servers) === undefined);
+  const unrestricted = unrestrictedDirectServerIds(grant, servers, toolsets);
+  const alreadyUnrestricted = unrestrictedDirectServerIds(storedMcpGrant(existing), servers, toolsets);
+  return servers.filter((server) => unrestricted.has(server.server_id) && !alreadyUnrestricted.has(server.server_id));
 };

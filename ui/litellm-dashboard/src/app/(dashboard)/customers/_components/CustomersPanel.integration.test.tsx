@@ -457,6 +457,35 @@ describe("Customers management", () => {
     );
   });
 
+  it("denies every MCP server to a customer through the No MCP Servers option", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<CustomersPanel />, { searchParams: "customer=alice%40example.test&edit=true" });
+    await user.click(await screen.findByLabelText("MCP Servers / Access Groups / Toolsets"));
+    const noServers = (await screen.findAllByRole("option")).find((option) =>
+      option.textContent?.startsWith("No MCP Servers"),
+    );
+    await user.click(noServers!);
+    await user.click(document.body);
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledExactlyOnceWith("/customer/update", {
+        accessToken: "sk-test",
+        body: {
+          user_id: activeCustomer.user_id,
+          alias: "Alice",
+          models: [],
+          object_permission: {
+            mcp_servers: ["no-mcp-servers"],
+            mcp_access_groups: [],
+            mcp_toolsets: [],
+            mcp_tool_permissions: {},
+          },
+        },
+      }),
+    );
+  });
+
   it("shows a catalog failure when removing an MCP grant and keeps the customer unsaved", async () => {
     const user = userEvent.setup();
     const directCustomer: EndUser = {

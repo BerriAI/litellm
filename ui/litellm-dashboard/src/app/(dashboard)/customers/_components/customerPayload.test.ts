@@ -354,7 +354,44 @@ describe("customer payload", () => {
     });
   });
 
-  it("drops a shared-alias tool grant once no server it names is selected", () => {
+  it.each([
+    { edit: "only the alias", servers: ["server-a"], expected: undefined },
+    {
+      edit: "the server selection",
+      servers: ["server-a", "server-c"],
+      expected: {
+        mcp_servers: ["server-a", "server-c"],
+        mcp_access_groups: [],
+        mcp_toolsets: [],
+        mcp_tool_permissions: { "server-a": ["read"], "server-b": ["read"] },
+      },
+    },
+  ])("keeps the other server behind a shared alias key when editing $edit", ({ servers, expected }) => {
+    const sharedServer = { ...server, server_id: "server-a", alias: "shared" };
+    const anotherSharedServer = { ...server, server_id: "server-b", alias: "shared" };
+    const addedServer = { ...server, server_id: "server-c" };
+    const stored = {
+      ...customer,
+      object_permission: {
+        ...permission,
+        mcp_servers: [sharedServer.server_id],
+        mcp_access_groups: [],
+        mcp_toolsets: [],
+        mcp_tool_permissions: { shared: ["read"] },
+      },
+    };
+    const values = {
+      ...toCustomerFormValues(stored),
+      alias: "New alias",
+      mcp_servers_and_groups: { servers, accessGroups: [], toolsets: [] },
+    };
+
+    expect(
+      buildCustomerPayload(values, stored, [sharedServer, anotherSharedServer, addedServer], []).object_permission,
+    ).toEqual(expected);
+  });
+
+  it("keeps the other shared-alias server once the selected one is deselected", () => {
     const sharedServer = { ...server, server_id: "server-a", alias: "shared" };
     const anotherSharedServer = { ...server, server_id: "server-b", alias: "shared" };
     const keptServer = { ...server, server_id: "server-c" };
@@ -376,7 +413,7 @@ describe("customer payload", () => {
       mcp_servers: [keptServer.server_id],
       mcp_access_groups: [],
       mcp_toolsets: [],
-      mcp_tool_permissions: {},
+      mcp_tool_permissions: { [anotherSharedServer.server_id]: ["read"] },
     };
 
     expect(
