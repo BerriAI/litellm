@@ -784,3 +784,22 @@ def test_vertex_claude_4_8_plus_cost_map_entries_carry_mid_conversation_system_f
         and info.get("supports_mid_conversation_system") is not True
     ]
     assert missing == []
+
+
+def test_vertex_messages_request_body_puts_system_and_tools_before_messages() -> None:
+    result: Final = VertexAIPartnerModelsAnthropicMessagesConfig().transform_anthropic_messages_request(
+        model="claude-opus-5-5",
+        messages=[{"role": "user", "content": "Hello"}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 256,
+            "system": [{"type": "text", "text": "You are terse."}],
+            "tools": [{"name": "get_weather", "input_schema": {"type": "object", "properties": {}}}],
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    keys: Final = list(result)
+    assert keys.index("system") < keys.index("messages"), f"key order sent to Vertex: {keys}"
+    assert keys.index("tools") < keys.index("messages"), f"key order sent to Vertex: {keys}"
+    assert result["messages"] == [{"role": "user", "content": "Hello"}]

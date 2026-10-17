@@ -364,3 +364,21 @@ def test_drop_params_forwards_a_non_object_message_item_as_sent_on_the_native_re
 
     assert request["messages"][1] == 7
     assert request["messages"][2]["content"][0]["content"] == [{"type": "text", "text": "sunny"}]
+
+
+def test_messages_request_body_ends_with_messages_after_system_and_tools() -> None:
+    messages: Final = [{"role": "user", "content": "Hello"}]
+    request: Final = AnthropicMessagesConfig().transform_anthropic_messages_request(
+        model="claude-opus-5-5",
+        messages=messages,
+        anthropic_messages_optional_request_params={
+            "max_tokens": 256,
+            "system": [{"type": "text", "text": "You are terse."}],
+            "tools": [{"name": "get_weather", "input_schema": {"type": "object", "properties": {}}}],
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert list(request)[-1] == "messages", f"key order sent upstream: {list(request)}"
+    assert request["messages"] == messages
