@@ -259,6 +259,8 @@ _POSITIVE_SERIES_CAP: Final[TypeAdapter[int]] = TypeAdapter(Annotated[int, Field
 _POSITIVE_SERIES_TTL: Final[TypeAdapter[float]] = TypeAdapter(Annotated[float, Field(gt=0)])
 _SERIES_CLEANUP_INTERVAL: Final[TypeAdapter[float]] = TypeAdapter(Annotated[float, Field(ge=0)])
 _DEFAULT_SERIES_CLEANUP_INTERVAL_SECONDS: Final = 60.0
+_REMAINING_USAGE: Final[TypeAdapter[float]] = TypeAdapter(Annotated[float, Field(allow_inf_nan=False)])
+_ADDITIONAL_HEADERS: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 
 
 def _number_or_none(value: object, limit: TypeAdapter[_SeriesLimitT]) -> _SeriesLimitT | None:
@@ -3252,12 +3254,16 @@ class PrometheusLogger(CustomLogger):
         deployment.
         """
         try:
-            additional_headers: Final = (standard_logging_payload.get("hidden_params", {}) or {}).get(
-                "additional_headers"
-            ) or {}
+            additional_headers: Final[Mapping[str, object]] = (
+                standard_logging_payload.get("hidden_params", {}) or {}
+            ).get("additional_headers") or {}
 
-            already_have_tokens: Final = additional_headers.get("x_ratelimit_remaining_tokens") is not None
-            already_have_requests: Final = additional_headers.get("x_ratelimit_remaining_requests") is not None
+            already_have_tokens: Final = (
+                _number_or_none(additional_headers.get("x_ratelimit_remaining_tokens"), _REMAINING_USAGE) is not None
+            )
+            already_have_requests: Final = (
+                _number_or_none(additional_headers.get("x_ratelimit_remaining_requests"), _REMAINING_USAGE) is not None
+            )
             if already_have_tokens and already_have_requests:
                 return
 
@@ -3350,12 +3356,15 @@ class PrometheusLogger(CustomLogger):
                     model_group=enum_values.model_group,
                 )
 
-            remaining_requests: int | None = None
-            remaining_tokens: int | None = None
-            if additional_headers := standard_logging_payload["hidden_params"]["additional_headers"]:
-                # OpenAI / OpenAI Compatible headers
-                remaining_requests = additional_headers.get("x_ratelimit_remaining_requests", None)
-                remaining_tokens = additional_headers.get("x_ratelimit_remaining_tokens", None)
+            additional_headers: Final = _ADDITIONAL_HEADERS.validate_python(
+                standard_logging_payload["hidden_params"]["additional_headers"] or {}
+            )
+            remaining_requests: Final = _number_or_none(
+                additional_headers.get("x_ratelimit_remaining_requests"), _REMAINING_USAGE
+            )
+            remaining_tokens: Final = _number_or_none(
+                additional_headers.get("x_ratelimit_remaining_tokens"), _REMAINING_USAGE
+            )
 
             if litellm_overhead_time_ms := standard_logging_payload["hidden_params"].get("litellm_overhead_time_ms"):
                 _labels = prometheus_label_factory(
@@ -3373,7 +3382,7 @@ class PrometheusLogger(CustomLogger):
                 label_context=label_context,
             )
 
-            if isinstance(remaining_requests, int):
+            if remaining_requests is not None:
                 """
                 "model_group",
                 "api_provider",
@@ -3387,7 +3396,7 @@ class PrometheusLogger(CustomLogger):
                 )
                 self.litellm_remaining_requests_metric.labels(**_labels).set(remaining_requests)
 
-            if isinstance(remaining_tokens, int):
+            if remaining_tokens is not None:
                 _labels = prometheus_label_factory(
                     supported_enum_labels=self.get_labels_for_metric(metric_name="litellm_remaining_tokens_metric"),
                     enum_values=enum_values,

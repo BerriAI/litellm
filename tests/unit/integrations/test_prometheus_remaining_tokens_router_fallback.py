@@ -336,3 +336,54 @@ def test_unparseable_provider_ratelimit_header_skips_only_its_own_gauge(
     assert _sample_values("litellm_remaining_requests_metric") == (0.0,)
     assert _sample_values("litellm_remaining_tokens_metric") == ()
     assert _sample_values("litellm_deployment_success_responses_total") == (1.0,)
+
+
+def test_decimal_provider_ratelimit_headers_set_both_gauges(prometheus_logger: PrometheusLogger):
+    payload: Final = _build_payload(
+        model_group="groq-group",
+        custom_llm_provider="groq",
+        additional_headers={
+            "x_ratelimit_remaining_requests": "12.0",
+            "x_ratelimit_remaining_tokens": "856.5",
+        },
+    )
+
+    prometheus_logger.set_llm_deployment_success_metrics(
+        request_kwargs={
+            "litellm_params": {"custom_llm_provider": "groq", "metadata": {}},
+            "model": "llama-3.1-8b-instant",
+            "standard_logging_object": payload,
+        },
+        start_time=datetime(2026, 1, 1),
+        end_time=datetime(2026, 1, 1, 0, 0, 1),
+        enum_values=_enum_values(model_group="groq-group"),
+        output_tokens=2.0,
+    )
+
+    assert _sample_values("litellm_remaining_requests_metric") == (12.0,)
+    assert _sample_values("litellm_remaining_tokens_metric") == (856.5,)
+
+
+@pytest.mark.asyncio
+async def test_router_fills_the_gauge_an_unparseable_provider_header_could_not_set(
+    prometheus_logger: PrometheusLogger,
+):
+    payload: Final = _build_payload(
+        additional_headers={
+            "x_ratelimit_remaining_requests": 7,
+            "x_ratelimit_remaining_tokens": "856, abc",
+        }
+    )
+    fake_router: Final = MagicMock()
+    fake_router.get_remaining_model_group_usage = AsyncMock(
+        return_value={"x-ratelimit-remaining-tokens": 555, "x-ratelimit-remaining-requests": 999}
+    )
+
+    with patch("litellm.proxy.proxy_server.llm_router", fake_router, create=True):
+        await prometheus_logger._async_set_router_remaining_metrics(
+            standard_logging_payload=payload,
+            enum_values=_enum_values(),
+        )
+
+    assert _sample_values("litellm_remaining_tokens_metric") == (555.0,)
+    assert _sample_values("litellm_remaining_requests_metric") == ()
