@@ -11,6 +11,7 @@ Covers the three defects from the ticket:
 """
 
 import cProfile
+import json
 import sys
 import tempfile
 import time
@@ -46,6 +47,130 @@ def _isolate_masked_entity_count():
 
 def _guardrail() -> _ENTERPRISE_SecretDetection:
     return _ENTERPRISE_SecretDetection(guardrail_name="hide-secrets", event_hook="pre_call", default_on=True)
+
+
+def test_tool_payload_scans_raw_values_and_key_context_without_changing_keys():
+    payload = {
+        "password": "hunter2brahms9x",
+        "command": "export API_TOKEN=0123456789abcdef0123456789abcdef01234567",
+        AWS_KEY: "safe",
+        "path": 'C:\\tmp\\"config"',
+        "count": 7,
+        "optional": None,
+        "enabled": False,
+        "nested": [f"AWS_ACCESS_KEY_ID={AWS_KEY}\nkeep this line", "safe"],
+    }
+    result = _guardrail().redact_tool_payload(payload)
+    assert result.keys() == payload.keys()
+    assert result["password"] == "[REDACTED]"
+    assert result["command"] == "export API_TOKEN=[REDACTED]"
+    assert result["nested"] == ["AWS_ACCESS_KEY_ID=[REDACTED]\nkeep this line", "safe"]
+    assert result[AWS_KEY] == "safe"
+    assert result["path"] == payload["path"]
+    assert result["count"] == 7
+    assert result["optional"] is None
+    assert result["enabled"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "arguments",
+    (
+        '{"env":"AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE","env":"safe"}',
+        '{"env":"AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE",broken',
+        json.dumps({"password": "hunter2brahms9x", "ok": True}),
+    ),
+)
+async def test_tool_arguments_native_hook_cannot_forward_unredacted_credentials(arguments):
+    data = {
+        "messages": [
+            {
+                "role": "assistant",
+                "tool_calls": [{"id": "call_1", "function": {"name": "save_config", "arguments": arguments}}],
+            }
+        ]
+    }
+    await _guardrail().async_pre_call_hook(UserAPIKeyAuth(), DualCache(), data, "acompletion")
+    rewritten = data["messages"][0]["tool_calls"][0]["function"]["arguments"]
+    assert AWS_KEY not in rewritten
+    assert "hunter2brahms9x" not in rewritten
+    assert "[REDACTED]" in rewritten
+
+
+@pytest.mark.asyncio
+async def test_deeply_nested_tool_arguments_are_scanned_in_bounded_time():
+    arguments = '{"k":' * 200 + json.dumps(f"AWS_ACCESS_KEY_ID={AWS_KEY}") + "}" * 200
+    data = {
+        "messages": [
+            {
+                "role": "assistant",
+                "tool_calls": [{"id": "call_1", "function": {"name": "save_config", "arguments": arguments}}],
+            }
+        ]
+    }
+    started = time.perf_counter()
+    await _guardrail().async_pre_call_hook(UserAPIKeyAuth(), DualCache(), data, "acompletion")
+    assert time.perf_counter() - started < 3.0
+    rewritten = data["messages"][0]["tool_calls"][0]["function"]["arguments"]
+    assert json.loads(rewritten) == json.loads(arguments.replace(AWS_KEY, "[REDACTED]"))
+
+
+@pytest.mark.parametrize("password", ("hunter2\\brahms9x", "hunter2\tbrahms9x"))
+def test_tool_payload_redacts_keyword_values_that_need_json_escaping(password):
+    assert _guardrail().redact_tool_payload({"password": password, "path": ".env"}) == {
+        "password": "[REDACTED]",
+        "path": ".env",
+    }
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_records_secrets_found_only_in_tool_payloads():
+    data = {
+        "system": "You are a coding agent",
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": "t1", "name": "write", "input": {"env": f"AWS_ACCESS_KEY_ID={AWS_KEY}"}}
+                ],
+            },
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "written"}]},
+        ],
+        "metadata": {},
+    }
+    await _guardrail().async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(), cache=DualCache(), data=data, call_type="anthropic_messages"
+    )
+    assert data["messages"][0]["content"][0]["input"] == {"env": "AWS_ACCESS_KEY_ID=[REDACTED]"}
+    recorded = _recorded(data)
+    assert recorded["guardrail_response"] == "mask"
+    assert recorded["masked_entity_count"] == {"AWS Access Key": 1}
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    (
+        ({"password": ["hunter2brahms9x", "safe"]}, {"password": ["[REDACTED]", "safe"]}),
+        (["a8f5f167f44f4964e6c998dee827110c", "safe"], ["[REDACTED]", "safe"]),
+        ({"password" + " " * 100: ["hunter2brahms9x"]}, {"password" + " " * 100: ["[REDACTED]"]}),
+    ),
+    ids=("credential-key-over-list", "unkeyed-high-entropy", "whitespace-padded-credential-key"),
+)
+def test_list_items_are_scanned_beside_their_parent_key_or_quoted(payload, expected):
+    assert _guardrail().redact_tool_payload(payload) == expected
+
+
+@pytest.mark.parametrize(
+    ("key", "items"),
+    (("k" * 10_000, 1000), ("\u0000" * 64, 3000), ("tok " * 250_000, 2000)),
+    ids=("long", "control-characters", "long-over-many-items"),
+)
+def test_keys_over_a_list_are_scanned_in_bounded_time(key, items):
+    payload = {key: ["v"] * items + [f"AWS_ACCESS_KEY_ID={AWS_KEY}"]}
+    started = time.perf_counter()
+    result = _guardrail().redact_tool_payload(payload)
+    assert time.perf_counter() - started < 3.0
+    assert result == {key: ["v"] * items + ["AWS_ACCESS_KEY_ID=[REDACTED]"]}
 
 
 def _recorded(request_data: dict) -> dict:
