@@ -55,6 +55,7 @@ from litellm.llms.base_llm.guardrail_translation.base_translation import (
 from litellm.llms.base_llm.guardrail_translation.utils import (
     blocked_responses_stream_usage,
     effective_skip_system_message_for_guardrail,
+    list_field,
     merge_guardrailed_scoped_messages,
     role_out_of_guardrail_scope,
     scoped_structured_message_indices,
@@ -764,11 +765,11 @@ class OpenAIResponsesHandler(BaseTranslation):
             data.get("input"), data.get("instructions"), structured_messages, merged
         )
 
-    def extract_request_tool_names(self, data: dict) -> list[str]:
+    def extract_request_tool_names(self, data: Mapping[str, object]) -> list[str]:
         """Extract tool names from Responses API request (tools[].name for function
         and custom, tools[].server_label for mcp)."""
         names: Final[list[str]] = []
-        for tool in data.get("tools") or []:
+        for tool in list_field(data, "tools"):
             if not isinstance(tool, dict):
                 continue
             if tool.get("type") in ("function", "custom") and tool.get("name"):
@@ -1754,6 +1755,8 @@ class OpenAIResponsesHandler(BaseTranslation):
     def _block_continuation_events(
         exc: "ModifyResponseException", responses_so_far: Sequence[object]
     ) -> Sequence[ResponsesAPIStreamingResponse]:
+        from litellm.responses.streaming_iterator import opening_item_payload, opening_part_payload
+
         response_id, model, output_index = _continuation_identity(exc, responses_so_far)
         item: Final = _blocked_output_item(exc)
         item_id: Final = item.id
@@ -1769,14 +1772,14 @@ class OpenAIResponsesHandler(BaseTranslation):
             OutputItemAddedEvent(
                 type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
                 output_index=output_index,
-                item=item,
+                item=BaseLiteLLMOpenAIResponseObject.model_validate(opening_item_payload(item.model_dump())),
             ),
             ContentPartAddedEvent(
                 type=ResponsesAPIStreamEvents.CONTENT_PART_ADDED,
                 item_id=item_id,
                 output_index=output_index,
                 content_index=0,
-                part=BaseLiteLLMOpenAIResponseObject.model_validate(part),
+                part=BaseLiteLLMOpenAIResponseObject.model_validate(opening_part_payload(part)),
             ),
             OutputTextDeltaEvent(
                 type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,

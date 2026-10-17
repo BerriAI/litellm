@@ -30,6 +30,7 @@ from litellm.constants import (
 )
 from litellm.exceptions import (
     CallerCredentialAuthenticationError,
+    MalformedRequestFieldError,
     validate_rate_limit_category,
     validate_rate_limit_type,
 )
@@ -262,6 +263,7 @@ _POSITIVE_SERIES_CAP: Final[TypeAdapter[int]] = TypeAdapter(Annotated[int, Field
 _POSITIVE_SERIES_TTL: Final[TypeAdapter[float]] = TypeAdapter(Annotated[float, Field(gt=0)])
 _SERIES_CLEANUP_INTERVAL: Final[TypeAdapter[float]] = TypeAdapter(Annotated[float, Field(ge=0)])
 _DEFAULT_SERIES_CLEANUP_INTERVAL_SECONDS: Final = 60.0
+_ADDITIONAL_HEADERS: Final[TypeAdapter[Mapping[object, object]]] = TypeAdapter(Mapping[object, object])
 
 
 def _number_or_none(value: object, limit: TypeAdapter[_SeriesLimitT]) -> _SeriesLimitT | None:
@@ -270,6 +272,15 @@ def _number_or_none(value: object, limit: TypeAdapter[_SeriesLimitT]) -> _Series
     try:
         return limit.validate_python(value)
     except ValidationError:
+        return None
+
+
+def _gauge_reading_or_none(value: object) -> float | None:
+    if not isinstance(value, str | int | float):
+        return None
+    try:
+        return float(value)
+    except (ValueError, OverflowError):
         return None
 
 
@@ -3195,13 +3206,17 @@ class PrometheusLogger(CustomLogger):
             if exception is not None:
                 exception_status = str(getattr(exception, "status_code", None))
                 if exception_status == "None" or not exception_status:
-                    code: Final = getattr(exception, "code", None)
+                    code: Final[object] = getattr(exception, "code", None)
                     if code is not None:
                         exception_status = str(code)
 
             # On LiteLLM-side rejects (no deployment picked), route request_kwargs["model"]
             # into requested_model and leave deployment-scoped labels empty.
-            deployment_selected: Final = bool(model_id) and not _litellm_params.get(PROXY_REJECTED_BEFORE_ROUTING_KEY)
+            deployment_selected: Final = (
+                bool(model_id)
+                and not _litellm_params.get(PROXY_REJECTED_BEFORE_ROUTING_KEY)
+                and not isinstance(exception, MalformedRequestFieldError)
+            )
             if deployment_selected:
                 label_litellm_model_name = litellm_model_name
                 label_model_id = model_id
@@ -3442,12 +3457,11 @@ class PrometheusLogger(CustomLogger):
                     model_group=enum_values.model_group,
                 )
 
-            remaining_requests: int | None = None
-            remaining_tokens: int | None = None
-            if additional_headers := standard_logging_payload["hidden_params"]["additional_headers"]:
-                # OpenAI / OpenAI Compatible headers
-                remaining_requests = additional_headers.get("x_ratelimit_remaining_requests", None)
-                remaining_tokens = additional_headers.get("x_ratelimit_remaining_tokens", None)
+            additional_headers: Final = _ADDITIONAL_HEADERS.validate_python(
+                standard_logging_payload["hidden_params"]["additional_headers"] or {}
+            )
+            remaining_requests: Final = _gauge_reading_or_none(additional_headers.get("x_ratelimit_remaining_requests"))
+            remaining_tokens: Final = _gauge_reading_or_none(additional_headers.get("x_ratelimit_remaining_tokens"))
 
             if litellm_overhead_time_ms := standard_logging_payload["hidden_params"].get("litellm_overhead_time_ms"):
                 _labels = prometheus_label_factory(
@@ -3465,7 +3479,7 @@ class PrometheusLogger(CustomLogger):
                 label_context=label_context,
             )
 
-            if remaining_requests:
+            if remaining_requests is not None:
                 """
                 "model_group",
                 "api_provider",
@@ -3479,7 +3493,7 @@ class PrometheusLogger(CustomLogger):
                 )
                 self.litellm_remaining_requests_metric.labels(**_labels).set(remaining_requests)
 
-            if remaining_tokens:
+            if remaining_tokens is not None:
                 _labels = prometheus_label_factory(
                     supported_enum_labels=self.get_labels_for_metric(metric_name="litellm_remaining_tokens_metric"),
                     enum_values=enum_values,

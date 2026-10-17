@@ -1,8 +1,6 @@
 import json
-import socket
 import uuid
 from collections.abc import Iterator, Mapping, Sequence
-from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
@@ -47,6 +45,7 @@ from integration._support.responses_stream import (
     sse_events,
 )
 from integration._support.wire import Reply, Request, Wire, wire_server
+from integration._support.ports import allocate_port
 from pydantic import JsonValue
 
 _PRIMARY: Final = "bridged-primary"
@@ -110,15 +109,9 @@ class FallbackProxy:
     spare_port: int
 
 
-def _free_ports(count: int) -> tuple[int, ...]:
-    with ExitStack() as reserved:
-        sockets: Final = tuple(reserved.enter_context(socket.socket()) for _ in range(count))
-        for reserve in sockets:
-            reserve.bind(("127.0.0.1", 0))
-        return tuple(reserve.getsockname()[1] for reserve in sockets)
-
-
-def _fallback_config(directory: Path, primary_port: int, spare_port: int) -> Path:
+def _fallback_config(
+    directory: Path, primary_port: int, spare_port: int, extra_router_settings: Mapping[str, JsonValue]
+) -> Path:
     base: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
     deployments: Final = [
         {
@@ -131,21 +124,35 @@ def _fallback_config(directory: Path, primary_port: int, spare_port: int) -> Pat
         }
         for name, port in ((_PRIMARY, primary_port), (_SPARE, spare_port))
     ]
-    router_settings: Final = {"num_retries": 0, "disable_cooldowns": True, "fallbacks": [{_PRIMARY: [_SPARE]}]}
+    router_settings: Final = {
+        "num_retries": 0,
+        "disable_cooldowns": True,
+        "fallbacks": [{_PRIMARY: [_SPARE]}],
+        **extra_router_settings,
+    }
     path: Final = directory / "bridged-fallbacks.yaml"
     path.write_text(yaml.safe_dump({**base, "model_list": deployments, "router_settings": router_settings}))
     return path
 
 
+def _fallback_proxy(
+    tmp_path_factory: pytest.TempPathFactory, extra_router_settings: Mapping[str, JsonValue]
+) -> Iterator[FallbackProxy]:
+    directory: Final = tmp_path_factory.mktemp("bridged-fallbacks")
+    primary_port, spare_port = allocate_port(), allocate_port()
+    config: Final = _fallback_config(directory, primary_port, spare_port, extra_router_settings)
+    with gateway_from_environment() as shared, owned_proxy(shared, directory, {}, config=config) as owned:
+        yield FallbackProxy(owned, primary_port, spare_port)
+
+
 @pytest.fixture(scope="module")
 def fallback_proxy(tmp_path_factory: pytest.TempPathFactory) -> Iterator[FallbackProxy]:
-    directory: Final = tmp_path_factory.mktemp("bridged-fallbacks")
-    primary_port, spare_port = _free_ports(2)
-    with (
-        gateway_from_environment() as shared,
-        owned_proxy(shared, directory, {}, config=_fallback_config(directory, primary_port, spare_port)) as owned,
-    ):
-        yield FallbackProxy(owned, primary_port, spare_port)
+    yield from _fallback_proxy(tmp_path_factory, {})
+
+
+@pytest.fixture(scope="module")
+def bad_request_opt_out_proxy(tmp_path_factory: pytest.TempPathFactory) -> Iterator[FallbackProxy]:
+    yield from _fallback_proxy(tmp_path_factory, {"fallback_on_unsupported_params": False})
 
 
 def test_bridged_in_stream_rate_limit_falls_back_to_the_healthy_deployment(fallback_proxy: FallbackProxy) -> None:
@@ -198,9 +205,7 @@ def test_bridged_top_level_rate_limit_falls_back_to_the_healthy_deployment(fallb
 
 
 _INVALID_PROMPT: Final = "Invalid prompt: your prompt was flagged."
-
-
-@pytest.mark.parametrize(
+_INVALID_PROMPT_REJECTIONS: Final = pytest.mark.parametrize(
     "rejection",
     [
         pytest.param(
@@ -210,7 +215,10 @@ _INVALID_PROMPT: Final = "Invalid prompt: your prompt was flagged."
         pytest.param(openai_error_event("invalid_prompt", _INVALID_PROMPT), id="top_level"),
     ],
 )
-def test_bridged_invalid_prompt_answers_a_bad_request_without_trying_the_fallback(
+
+
+@_INVALID_PROMPT_REJECTIONS
+def test_bridged_invalid_prompt_before_any_token_falls_back_to_the_healthy_deployment(
     fallback_proxy: FallbackProxy, rejection: Mapping[str, JsonValue]
 ) -> None:
     identity: Final = "resp_" + uuid.uuid4().hex
@@ -223,6 +231,29 @@ def test_bridged_invalid_prompt_answers_a_bad_request_without_trying_the_fallbac
         ) as spare,
     ):
         response: Final = _chat(fallback_proxy.gateway, chat_body(_PRIMARY, identity))
+        assert response.status_code == 200, response.text
+        assert chat_content(data_frames(response.text)) == "fallback answer", response.text
+        assert len(primary.drain()) == 1 and len(spare.drain()) == 1
+        row: Final = spend_row(response.headers["x-litellm-call-id"])
+        assert row["status"] == "success" and row["model_group"] == _SPARE, row
+
+
+@_INVALID_PROMPT_REJECTIONS
+def test_bridged_invalid_prompt_answers_a_bad_request_without_trying_the_fallback_when_bad_requests_opt_out(
+    bad_request_opt_out_proxy: FallbackProxy, rejection: Mapping[str, JsonValue]
+) -> None:
+    identity: Final = "resp_" + uuid.uuid4().hex
+    with (
+        wire_server(
+            serve((frame(created(identity)), frame(rejection)), AZURE_TARGET),
+            port=bad_request_opt_out_proxy.primary_port,
+        ) as primary,
+        wire_server(
+            serve(healthy_stream(identity, "fallback answer"), AZURE_TARGET),
+            port=bad_request_opt_out_proxy.spare_port,
+        ) as spare,
+    ):
+        response: Final = _chat(bad_request_opt_out_proxy.gateway, chat_body(_PRIMARY, identity))
         assert response.status_code == 400, response.text
         message: Final = string_value(error_body(response)["message"])
         assert message.startswith("litellm.BadRequestError: ") and _INVALID_PROMPT in message, message
