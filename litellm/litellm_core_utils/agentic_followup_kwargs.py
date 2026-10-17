@@ -4,6 +4,23 @@ from types import MappingProxyType
 from typing import Final
 
 
+def resolve_agentic_followup_model(
+    *,
+    request_model: str,
+    patch_model: str | None,
+    custom_llm_provider: str,
+    known_providers: Collection[str],
+) -> str:
+    """The request model is already provider-stripped, so a leading "openai/" there is an org name.
+    Only a callback-supplied model may carry its own provider prefix and switch providers"""
+    model: Final = patch_model or request_model
+    if not custom_llm_provider or model.startswith(f"{custom_llm_provider}/"):
+        return model
+    if patch_model and "/" in patch_model and patch_model.split("/", 1)[0] in known_providers:
+        return patch_model
+    return f"{custom_llm_provider}/{model}"
+
+
 def build_agentic_followup_kwargs(
     *,
     request_kwargs: Mapping[str, object],
