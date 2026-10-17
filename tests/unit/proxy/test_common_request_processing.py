@@ -1724,6 +1724,29 @@ class TestProxyBaseLLMRequestProcessing:
 
         assert "x-litellm-classifier-cost" not in headers
 
+    def test_get_custom_headers_drops_a_provider_header_http_cannot_carry(self):
+        user_api_key_dict: Final = MagicMock(spec=UserAPIKeyAuth)
+        user_api_key_dict.tpm_limit = None
+        user_api_key_dict.rpm_limit = None
+        user_api_key_dict.max_budget = None
+        user_api_key_dict.spend = 0
+
+        headers: Final = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=user_api_key_dict,
+            call_id="call-1",
+            **{
+                "llm_provider-x-amzn-requestid": "req-1",
+                "llm_provider-x-provider-region": "東京リージョン",
+                "llm_provider-x-provider-city": "Zürich",
+            },
+        )
+        response: Final = Response()
+        response.headers.update(headers)
+
+        assert response.headers["llm_provider-x-amzn-requestid"] == "req-1"
+        assert response.headers["llm_provider-x-provider-city"] == "Zürich"
+        assert "llm_provider-x-provider-region" not in response.headers
+
     def test_get_cost_breakdown_from_logging_obj_helper(self):
         """
         Test the helper function that extracts cost breakdown information.

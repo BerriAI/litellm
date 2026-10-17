@@ -506,6 +506,10 @@ async def _cancel_pending_gather_tasks(tasks: Sequence["asyncio.Task[object]"]) 
             pass
 
 
+def _encodes_as_latin1(value: str) -> bool:
+    return all(ord(character) < 256 for character in value)
+
+
 @lru_cache(maxsize=512)
 def _litellm_model_supports_stream_options(litellm_model: str) -> bool:
     try:
@@ -2027,10 +2031,11 @@ class ProxyBaseLLMRequestProcessing:
                 headers.update(logging_caching_headers)
 
         try:
-            return {key: str(value) for key, value in headers.items() if value not in exclude_values}
+            present: Final = {key: str(value) for key, value in headers.items() if value not in exclude_values}
         except Exception as e:
             verbose_proxy_logger.error("Error setting custom headers: %s", e)
             return {}
+        return {key: value for key, value in present.items() if _encodes_as_latin1(value)}
 
     @staticmethod
     async def build_litellm_proxy_success_headers_from_llm_response(
