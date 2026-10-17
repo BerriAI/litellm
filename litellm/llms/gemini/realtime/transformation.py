@@ -159,6 +159,14 @@ def _base64_decoded_byte_count(data: str) -> int:
     return max(len(data) * 3 // 4 - padding, 0)
 
 
+def _output_item_done_events(events: Sequence[OpenAIRealtimeEvents]) -> Sequence[OpenAIRealtimeOutputItemDone]:
+    return [
+        cast(OpenAIRealtimeOutputItemDone, event)  # cast-ok: the type literal discriminates the union
+        for event in events
+        if event["type"] == "response.output_item.done"
+    ]
+
+
 class GeminiRealtimeConfig(BaseRealtimeConfig):
     _TOOL_CALL_ID_TO_NAME_MAX = 256  # LRU cap for call_id→name mapping
 
@@ -167,6 +175,8 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         self._tool_call_id_to_name: OrderedDict[str, str] = OrderedDict()
         # the last client frame already asked Gemini for a generation
         self._generation_requested: bool = False
+        # output items produced since the previous response.done (Gemini lists none)
+        self._pending_output_items: tuple[OpenAIRealtimeOutputItemDone, ...] = ()
         # Gemini Live sometimes emits usageMetadata in a standalone frame between
         # turns; buffer it here so the next response.done carries the token counts.
         self._pending_usage_metadata: dict | None = None
@@ -1613,12 +1623,14 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                         self._pending_usage_metadata = standalone_usage_metadata
                     server_content_handled = True
                     continue
+                done_output_items = (*self._pending_output_items, *_output_item_done_events(returned_message))
+                self._pending_output_items = ()
                 transformed_response_done_event = self.transform_response_done_event(
                     message=BidiGenerateContentServerMessage(**json_message),
                     current_response_id=current_response_id,
                     current_conversation_id=current_conversation_id,
                     session_configuration_request=session_configuration_request,
-                    output_items=None,
+                    output_items=list(done_output_items) or None,
                 )
                 returned_message.append(transformed_response_done_event)
                 current_output_item_id = None
@@ -1686,6 +1698,8 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             transformed_message=returned_message,
             current_delta_chunks=current_delta_chunks,
         )
+        if not any(m["type"] == "response.done" for m in returned_message):
+            self._pending_output_items = (*self._pending_output_items, *_output_item_done_events(returned_message))
         current_item_chunks = self.update_current_item_chunks(
             transformed_message=returned_message,
             current_item_chunks=current_item_chunks,
