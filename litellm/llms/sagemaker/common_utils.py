@@ -1,3 +1,4 @@
+import codecs
 import functools
 import json
 from collections.abc import AsyncIterator, Iterator, Mapping
@@ -128,6 +129,8 @@ class AWSEventStreamDecoder:
         self.parser = EventStreamJSONParser()
         self.content_blocks: list = []
         self.is_messages_api = is_messages_api
+        # event boundaries need not fall on UTF-8 character boundaries
+        self._utf8_decoder = codecs.getincrementaldecoder("utf-8")()
 
     def _chunk_parser_messages_api(self, chunk_data: _SageMakerMessagesChunkData) -> StreamingChatCompletionChunk:
         openai_chunk: Final = StreamingChatCompletionChunk(**{"model": self.model, **chunk_data})
@@ -192,6 +195,9 @@ class AWSEventStreamDecoder:
                         # If it's not valid JSON yet, continue to the next event
                         continue
 
+        # raise on a stream truncated mid-character
+        self._utf8_decoder.decode(b"", final=True)
+
         # Handle any remaining data after the iterator is exhausted
         if accumulated_json:
             try:
@@ -242,11 +248,18 @@ class AWSEventStreamDecoder:
                     # If it's not valid JSON yet, continue to the next event
                     continue
                 except UnicodeDecodeError as e:
+                    # genuinely invalid bytes (not a split character) stay tolerated
                     verbose_logger.warning("UnicodeDecodeError: %s. Attempting to combine with next event.", e)
                     continue
+                except ValueError:
+                    # non-200 error events must surface, as in the sync path
+                    raise
                 except Exception as e:
                     verbose_logger.error("Error parsing message: %s. Attempting to combine with next event.", e)
                     continue
+
+        # raise on a stream truncated mid-character
+        self._utf8_decoder.decode(b"", final=True)
 
         # Handle any remaining data after the iterator is exhausted
         if accumulated_json:
@@ -284,10 +297,14 @@ class AWSEventStreamDecoder:
             chunk = parsed_response.get("chunk")
             if not chunk:
                 return None
-            return chunk.get("bytes").decode()
+            chunk_bytes: Final = chunk.get("bytes")
+            if not isinstance(chunk_bytes, bytes):
+                return None
+            return self._utf8_decoder.decode(chunk_bytes)
         else:
             chunk = response_dict.get("body")
             if not chunk:
                 return None
-
-            return chunk.decode()
+            if not isinstance(chunk, bytes):
+                return None
+            return self._utf8_decoder.decode(chunk)
