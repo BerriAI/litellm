@@ -5,6 +5,9 @@ from typing import Final, cast  # noqa: TID251  # narrows legacy callable signat
 import pytest
 
 import litellm
+from litellm.caching.caching import Cache
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.websearch_interception.handler import WebSearchInterceptionLogger
 from litellm.llms.anthropic.pass_through.messages import handler as python_messages
 from litellm.messages import dispatch
 from litellm.messages.dispatch import (
@@ -17,6 +20,7 @@ from litellm.rust_bridge.catalog import Feature, Route, RouteRule, Rules, Target
 from litellm.rust_bridge.configuration import Rollout
 from litellm.rust_bridge.messages.entrypoints import NATIVE_AMESSAGES, NATIVE_MESSAGES, NativeAmessages, NativeMessages
 from litellm.rust_bridge.public_call import NativeCall
+from litellm.types.llms.anthropic import ANTHROPIC_ADVISOR_TOOL_TYPE
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 
 MESSAGES: Final = [{"role": "user", "content": "hi"}]
@@ -425,3 +429,175 @@ def test_messages_binding_error_delegates_unchanged_to_python() -> None:
     )
 
     assert response is expected
+
+
+class _Rewrite(CustomLogger):
+    async def async_pre_request_hook(self, model: str, messages: list, kwargs: dict) -> dict | None:  # pyright: ignore[reportMissingTypeArgument]  # mirrors the CustomLogger signature
+        return kwargs
+
+
+class _Agentic(CustomLogger):
+    async def async_should_run_agentic_loop(self, *args: object, **kwargs: object) -> tuple[bool, dict]:  # pyright: ignore[reportIncompatibleMethodOverride, reportMissingTypeArgument]  # test double only needs the override
+        return False, {}
+
+
+ADVISOR_TOOL: Final = {"type": ANTHROPIC_ADVISOR_TOOL_TYPE, "name": "advisor", "model": "claude-opus-5-5"}
+
+
+@pytest.mark.parametrize(
+    ("feature", "model", "kwargs", "settings"),
+    (
+        (Feature.MOCK_RESPONSE, "anthropic/claude-sonnet-4-5", {"mock_response": "hi"}, {}),
+        (
+            Feature.PROXY_MCP_TOOLS,
+            "anthropic/claude-sonnet-4-5",
+            {"tools": [{"type": "mcp", "server_label": "gateway", "server_url": "litellm_proxy"}]},
+            {},
+        ),
+        (Feature.CALLER_CLIENT, "anthropic/claude-sonnet-4-5", {"client": object()}, {}),
+        (Feature.TIMEOUT_VARIANTS, "anthropic/claude-sonnet-4-5", {"request_timeout": 5}, {}),
+        (Feature.AGENTIC_LOOP_HOOK, "anthropic/claude-sonnet-4-5", {}, {"callbacks": [_Agentic()]}),
+        (Feature.RESPONSE_CACHE, "anthropic/claude-sonnet-4-5", {}, {"cache": Cache()}),
+        (Feature.TLS_POLICY, "anthropic/claude-sonnet-4-5", {}, {"ssl_security_level": "DEFAULT@SECLEVEL=1"}),
+        (Feature.MODIFY_PARAMS, "anthropic/claude-sonnet-4-5", {}, {"modify_params": True}),
+        (
+            Feature.WORKLOAD_IDENTITY,
+            "anthropic/claude-sonnet-4-5",
+            {"anthropic_federation_rule_id": "rule-1", "anthropic_organization_id": "org-1"},
+            {},
+        ),
+        (Feature.CACHE_CONTROL_INJECTION, "anthropic/claude-sonnet-4-5", {"enable_prompt_caching": True}, {}),
+        (
+            Feature.THINKING_SIGNATURE_RETRY,
+            "anthropic/claude-sonnet-4-5",
+            {"messages": [{"role": "assistant", "content": [{"type": "redacted_thinking", "data": "x"}]}]},
+            {},
+        ),
+        (
+            Feature.STREAM_COST_INJECTION,
+            "anthropic/claude-sonnet-4-5",
+            {"stream": True},
+            {"include_cost_in_streaming_usage": True},
+        ),
+    ),
+)
+def test_each_detected_feature_reaches_its_rule(
+    monkeypatch: pytest.MonkeyPatch,
+    feature: Feature,
+    model: str,
+    kwargs: Mapping[str, object],
+    settings: Mapping[str, object],
+) -> None:
+    rules: Final[Rules] = (
+        RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY, features=frozenset({feature})),
+        RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED),
+    )
+    python_result: Final = response(model)
+    native_result: Final = response(model)
+
+    def served(call_kwargs: Mapping[str, object]) -> AnthropicMessagesResponse:
+        messages: Final = call_kwargs.get("messages", MESSAGES)
+        return _DISPATCH.run(
+            (16, messages, model),
+            {name: value for name, value in call_kwargs.items() if name != "messages"},
+            python=lambda *call_args, **python_kwargs: python_result,
+            binding=messages_binding(lambda request: native_result),
+            native=lambda hook, request, call_args, native_kwargs: hook(request),
+            rules=rules,
+        )
+
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "cache", None)
+    monkeypatch.setattr(litellm, "ssl_security_level", None)
+    for setting in ("modify_params", "enable_anthropic_prompt_caching", "include_cost_in_streaming_usage"):
+        monkeypatch.setattr(litellm, setting, False)
+    for name in ("SSL_SECURITY_LEVEL", "SSL_ECDH_CURVE", "ANTHROPIC_FEDERATION_RULE_ID", "ANTHROPIC_ORGANIZATION_ID"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    assert served({}) is native_result
+    for name, value in settings.items():
+        monkeypatch.setattr(litellm, name, value)
+    assert served(kwargs) is python_result
+
+
+ASYNC_ONLY_FEATURES: Final = (
+    pytest.param(Feature.PRE_REQUEST_HOOK, {}, {"callbacks": [_Rewrite()]}, id="pre-request-hook"),
+    pytest.param(
+        Feature.WEBSEARCH_INTERCEPTION, {}, {"callbacks": [WebSearchInterceptionLogger()]}, id="websearch-interception"
+    ),
+    pytest.param(
+        Feature.MESSAGES_INTERCEPTOR,
+        {"model": "deepseek/deepseek-v4-flash", "tools": [ADVISOR_TOOL]},
+        {},
+        id="messages-interceptor",
+    ),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("feature", "kwargs", "settings"), ASYNC_ONLY_FEATURES)
+async def test_handler_hooks_the_sync_entry_never_runs_keep_only_async_calls_on_python(
+    monkeypatch: pytest.MonkeyPatch, feature: Feature, kwargs: Mapping[str, object], settings: Mapping[str, object]
+) -> None:
+    rules: Final[Rules] = (
+        RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY, features=frozenset({feature})),
+        RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED),
+    )
+    python_result: Final = response()
+    native_result: Final = response()
+    model: Final = str(kwargs.get("model", "anthropic/claude-sonnet-4-5"))
+    call_kwargs: Final = {name: value for name, value in kwargs.items() if name != "model"}
+
+    async def python(*call_args: object, **python_kwargs: object) -> AnthropicMessagesResponse:  # kwargs-ok: stub
+        return python_result
+
+    async def native(request: NativeCall) -> AnthropicMessagesResponse:
+        return native_result
+
+    monkeypatch.setattr(litellm, "callbacks", [])
+    for name, value in settings.items():
+        monkeypatch.setattr(litellm, name, value)
+    served_async: Final = await _ADISPATCH.arun(
+        (16, MESSAGES, model),
+        call_kwargs,
+        python=python,
+        binding=amessages_binding(native),
+        native=lambda hook, request, args, native_kwargs: hook(request),
+        rules=rules,
+    )
+    served_sync: Final = _DISPATCH.run(
+        (16, MESSAGES, model),
+        call_kwargs,
+        python=lambda *call_args, **python_kwargs: python_result,
+        binding=messages_binding(lambda request: native_result),
+        native=lambda hook, request, args, native_kwargs: hook(request),
+        rules=rules,
+    )
+    assert served_async is python_result
+    assert served_sync is native_result
+
+
+@pytest.mark.asyncio
+async def test_interceptor_feature_follows_the_resolved_provider() -> None:
+    rules: Final[Rules] = (
+        RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY, features=frozenset({Feature.MESSAGES_INTERCEPTOR})),
+        RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED),
+    )
+    native_result: Final = response()
+
+    async def python(*call_args: object, **call_kwargs: object) -> AnthropicMessagesResponse:  # kwargs-ok: stub
+        pytest.fail("anthropic serves the advisor tool itself")
+
+    async def native(request: NativeCall) -> AnthropicMessagesResponse:
+        return native_result
+
+    result: Final = await _ADISPATCH.arun(
+        (16, MESSAGES, "claude-sonnet-4-5"),
+        {"tools": [ADVISOR_TOOL], "custom_llm_provider": "anthropic"},
+        python=python,
+        binding=amessages_binding(native),
+        native=lambda hook, request, call_args, call_kwargs: hook(request),
+        rules=rules,
+    )
+    assert result is native_result
