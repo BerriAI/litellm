@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export type ResultKind = "key" | "team" | "user" | "budget" | "spend" | "log";
+export type ResultKind = "key" | "team" | "user" | "budget" | "spend" | "log" | "fallback";
 
 const limitedList = <Schema extends z.ZodType<unknown>>(schema: Schema, limit = 50) =>
   z.preprocess((value) => (Array.isArray(value) ? value.slice(0, limit) : value), z.array(schema));
@@ -150,6 +150,7 @@ export function projectToolResult(kind: ResultKind, value: unknown, secrets: rea
     ]),
     spend: limitedList(spend),
     log: z.object({ ...pagination, data: limitedList(log) }),
+    fallback: z.object({ fallbacks: limitedList(z.record(z.string(), limitedList(text))).nullish() }),
   };
   const parsed = schemas[kind].safeParse(value);
   if (!parsed.success)

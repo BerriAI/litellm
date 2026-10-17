@@ -5,16 +5,18 @@
  */
 
 import { Button } from "@/components/ui/button";
+import { ModelGroup } from "@/components/llm_calls/fetch_models";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Plus, X } from "lucide-react";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { toast } from "@/lib/toast";
+import { fallbackChainOptions, fallbackPrimaryLabel, primaryModelOptions } from "./fallbackOptions";
 import { FallbackGroup, FallbackGroupConfig } from "./FallbackGroupConfig";
 
 interface FallbackSelectionFormProps {
   groups: FallbackGroup[];
   onGroupsChange: (groups: FallbackGroup[]) => void;
-  availableModels: string[];
+  modelGroups: ModelGroup[];
   maxFallbacks?: number;
   maxGroups?: number;
 }
@@ -22,10 +24,12 @@ interface FallbackSelectionFormProps {
 export function FallbackSelectionForm({
   groups,
   onGroupsChange,
-  availableModels,
+  modelGroups,
   maxFallbacks = 10,
   maxGroups = 5,
 }: FallbackSelectionFormProps) {
+  const primaryOptions = useMemo(() => primaryModelOptions(modelGroups), [modelGroups]);
+  const chainOptions = useMemo(() => fallbackChainOptions(modelGroups), [modelGroups]);
   const [activeKey, setActiveKey] = useState(groups.length > 0 ? groups[0].id : "1");
 
   // Reset activeKey when groups change (e.g., when modal reopens)
@@ -77,7 +81,7 @@ export function FallbackSelectionForm({
   };
 
   const groupLabel = (group: FallbackGroup, index: number) =>
-    group.primaryModel ? group.primaryModel : `Group ${index + 1}`;
+    group.primaryModel ? fallbackPrimaryLabel(group.primaryModel) : `Group ${index + 1}`;
 
   if (groups.length === 0) {
     return (
@@ -128,7 +132,8 @@ export function FallbackSelectionForm({
           <FallbackGroupConfig
             group={group}
             onChange={handleGroupUpdate}
-            availableModels={availableModels}
+            primaryOptions={primaryOptions}
+            fallbackOptions={chainOptions}
             maxFallbacks={maxFallbacks}
           />
         </TabsContent>

@@ -104,6 +104,22 @@ const requestLogsFields = {
   model: optionalText,
   status_filter: optional(z.enum(["success", "failure"])),
 };
+const fallbackTarget = text.regex(/^[^*]+$/, "Wildcard entries cannot be fallback targets.");
+const fallbackSetFields = {
+  model: text.describe(
+    "The primary model group, or a provider wildcard like openai/* meaning all models from that provider.",
+  ),
+  fallbacks: z
+    .array(fallbackTarget)
+    .min(1)
+    .max(10)
+    .describe("Concrete model groups to try in order. Never a wildcard."),
+};
+const fallbackDeleteFields = { model: text };
+
+type RouterSettings = Record<string, unknown>;
+const fallbackEntries = (settings: RouterSettings): Record<string, string[]>[] =>
+  Array.isArray(settings.fallbacks) ? (settings.fallbacks as Record<string, string[]>[]) : [];
 
 export function createLiteAdminOperations(context: OperationContext) {
   const active = () => {
@@ -111,6 +127,14 @@ export function createLiteAdminOperations(context: OperationContext) {
     context.assertCurrent();
   };
   const auth = { accessToken: context.accessToken, signal: context.signal };
+  const readRouterSettings = async (): Promise<RouterSettings> => {
+    const data = await apiClient.get<{ router_settings?: RouterSettings }>("/get/config/callbacks", auth);
+    const settings = { ...(data?.router_settings ?? {}) };
+    delete settings.model_group_retry_policy;
+    return settings;
+  };
+  const saveRouterSettings = (routerSettings: RouterSettings) =>
+    apiClient.post<unknown>("/config/update", { ...auth, body: { router_settings: routerSettings } });
   const operation =
     (mode: "read" | "write" | "delete", kind: ResultKind, extraArguments?: Record<string, unknown>) =>
     <Schema extends z.ZodType<Record<string, unknown>>>(
@@ -338,6 +362,40 @@ export function createLiteAdminOperations(context: OperationContext) {
           ...auth,
           query: { ...a, start_date: `${a.start_date} 00:00:00`, end_date: `${a.end_date} 23:59:59` },
         }),
+    ),
+    operation("read", "fallback")("fallbacks_list", "List configured router fallbacks", object({}), async () => ({
+      fallbacks: fallbackEntries(await readRouterSettings()),
+    })),
+    operation("write", "fallback")(
+      "fallback_set",
+      "Set the fallback chain for a model",
+      object(fallbackSetFields),
+      async (a) => {
+        const settings = await readRouterSettings();
+        const current = fallbackEntries(settings);
+        const existingIndex = current.findIndex(
+          (entry) => entry !== null && typeof entry === "object" && a.model in entry,
+        );
+        const updated =
+          existingIndex >= 0
+            ? current.map((entry, index) => (index === existingIndex ? { [a.model]: a.fallbacks } : entry))
+            : [...current, { [a.model]: a.fallbacks }];
+        await saveRouterSettings({ ...settings, fallbacks: updated });
+        return { fallbacks: updated };
+      },
+    ),
+    operation("delete", "fallback")(
+      "fallback_delete",
+      "Remove the fallback chain for a primary model",
+      object(fallbackDeleteFields),
+      async (a) => {
+        const settings = await readRouterSettings();
+        const updated = fallbackEntries(settings)
+          .map((entry) => Object.fromEntries(Object.entries(entry).filter(([key]) => key !== a.model)))
+          .filter((entry) => Object.keys(entry).length > 0);
+        await saveRouterSettings({ ...settings, fallbacks: updated });
+        return { fallbacks: updated };
+      },
     ),
   ];
 }

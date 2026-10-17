@@ -16,8 +16,13 @@ vi.mock("@/components/llm_calls/fetch_models", () => ({
 }));
 
 vi.mock("../Settings/RouterSettings/Fallbacks/FallbackSelectionForm", () => ({
-  FallbackSelectionForm: ({ availableModels }: { availableModels: string[] }) => (
-    <div data-testid="available-models">{availableModels.join(",")}</div>
+  FallbackSelectionForm: ({ modelGroups }: { modelGroups: { model_group: string }[] }) => (
+    <div data-testid="available-models">
+      {modelGroups
+        .map((modelGroup) => modelGroup.model_group)
+        .sort()
+        .join(",")}
+    </div>
   ),
 }));
 

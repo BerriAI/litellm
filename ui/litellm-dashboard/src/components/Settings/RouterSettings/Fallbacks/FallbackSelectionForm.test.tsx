@@ -6,7 +6,11 @@ import type { FallbackGroup } from "./FallbackGroupConfig";
 import { toast } from "@/lib/toast";
 
 const mockOnGroupsChange = vi.fn();
-const AVAILABLE_MODELS = ["gpt-4", "gpt-3.5-turbo", "claude-3-opus"];
+const AVAILABLE_MODEL_GROUPS = [
+  { model_group: "gpt-4", providers: ["openai"] },
+  { model_group: "gpt-3.5-turbo", providers: ["openai"] },
+  { model_group: "claude-3-opus", providers: ["anthropic"] },
+];
 
 describe("FallbackSelectionForm", () => {
   beforeEach(() => {
@@ -16,14 +20,14 @@ describe("FallbackSelectionForm", () => {
 
   it("should render the component", () => {
     render(
-      <FallbackSelectionForm groups={[]} onGroupsChange={mockOnGroupsChange} availableModels={AVAILABLE_MODELS} />,
+      <FallbackSelectionForm groups={[]} onGroupsChange={mockOnGroupsChange} modelGroups={AVAILABLE_MODEL_GROUPS} />,
     );
     expect(screen.getByText(/no fallback groups configured/i)).toBeInTheDocument();
   });
 
   it("should show Create First Group button when no groups exist", () => {
     render(
-      <FallbackSelectionForm groups={[]} onGroupsChange={mockOnGroupsChange} availableModels={AVAILABLE_MODELS} />,
+      <FallbackSelectionForm groups={[]} onGroupsChange={mockOnGroupsChange} modelGroups={AVAILABLE_MODEL_GROUPS} />,
     );
     expect(screen.getByRole("button", { name: /create first group/i })).toBeInTheDocument();
   });
@@ -31,7 +35,7 @@ describe("FallbackSelectionForm", () => {
   it("should call onGroupsChange when Create First Group is clicked", async () => {
     const user = userEvent.setup();
     render(
-      <FallbackSelectionForm groups={[]} onGroupsChange={mockOnGroupsChange} availableModels={AVAILABLE_MODELS} />,
+      <FallbackSelectionForm groups={[]} onGroupsChange={mockOnGroupsChange} modelGroups={AVAILABLE_MODEL_GROUPS} />,
     );
 
     await user.click(screen.getByRole("button", { name: /create first group/i }));
@@ -49,7 +53,11 @@ describe("FallbackSelectionForm", () => {
   it("should display tabs when groups exist", () => {
     const groups: FallbackGroup[] = [{ id: "1", primaryModel: null, fallbackModels: [] }];
     render(
-      <FallbackSelectionForm groups={groups} onGroupsChange={mockOnGroupsChange} availableModels={AVAILABLE_MODELS} />,
+      <FallbackSelectionForm
+        groups={groups}
+        onGroupsChange={mockOnGroupsChange}
+        modelGroups={AVAILABLE_MODEL_GROUPS}
+      />,
     );
     expect(screen.getByRole("tab", { name: /group 1/i })).toBeInTheDocument();
   });
@@ -57,16 +65,36 @@ describe("FallbackSelectionForm", () => {
   it("should display primary model as tab label when set", () => {
     const groups: FallbackGroup[] = [{ id: "1", primaryModel: "gpt-4", fallbackModels: [] }];
     render(
-      <FallbackSelectionForm groups={groups} onGroupsChange={mockOnGroupsChange} availableModels={AVAILABLE_MODELS} />,
+      <FallbackSelectionForm
+        groups={groups}
+        onGroupsChange={mockOnGroupsChange}
+        modelGroups={AVAILABLE_MODEL_GROUPS}
+      />,
     );
     expect(screen.getByRole("tab", { name: "gpt-4" })).toBeInTheDocument();
+  });
+
+  it("should display friendly label for provider wildcard primary", () => {
+    const groups: FallbackGroup[] = [{ id: "1", primaryModel: "openai/*", fallbackModels: [] }];
+    render(
+      <FallbackSelectionForm
+        groups={groups}
+        onGroupsChange={mockOnGroupsChange}
+        modelGroups={AVAILABLE_MODEL_GROUPS}
+      />,
+    );
+    expect(screen.getByRole("tab", { name: "All OpenAI Models" })).toBeInTheDocument();
   });
 
   it("should call onGroupsChange when add tab button is clicked", async () => {
     const user = userEvent.setup();
     const groups: FallbackGroup[] = [{ id: "1", primaryModel: null, fallbackModels: [] }];
     render(
-      <FallbackSelectionForm groups={groups} onGroupsChange={mockOnGroupsChange} availableModels={AVAILABLE_MODELS} />,
+      <FallbackSelectionForm
+        groups={groups}
+        onGroupsChange={mockOnGroupsChange}
+        modelGroups={AVAILABLE_MODEL_GROUPS}
+      />,
     );
 
     const addTabButton = screen.getByRole("button", { name: /add fallback group/i });
@@ -94,7 +122,7 @@ describe("FallbackSelectionForm", () => {
       <FallbackSelectionForm
         groups={groups}
         onGroupsChange={mockOnGroupsChange}
-        availableModels={AVAILABLE_MODELS}
+        modelGroups={AVAILABLE_MODEL_GROUPS}
         maxGroups={5}
       />,
     );
@@ -107,7 +135,7 @@ describe("FallbackSelectionForm", () => {
       <FallbackSelectionForm
         groups={groups}
         onGroupsChange={mockOnGroupsChange}
-        availableModels={AVAILABLE_MODELS}
+        modelGroups={AVAILABLE_MODEL_GROUPS}
         maxGroups={3}
       />,
     );
@@ -121,7 +149,11 @@ describe("FallbackSelectionForm", () => {
       { id: "2", primaryModel: "gpt-3.5-turbo", fallbackModels: [] },
     ];
     render(
-      <FallbackSelectionForm groups={groups} onGroupsChange={mockOnGroupsChange} availableModels={AVAILABLE_MODELS} />,
+      <FallbackSelectionForm
+        groups={groups}
+        onGroupsChange={mockOnGroupsChange}
+        modelGroups={AVAILABLE_MODEL_GROUPS}
+      />,
     );
 
     const removeButtons = screen.getAllByRole("button", { name: /^remove /i });
@@ -138,7 +170,11 @@ describe("FallbackSelectionForm", () => {
   it("should render FallbackGroupConfig for each group", () => {
     const groups: FallbackGroup[] = [{ id: "1", primaryModel: null, fallbackModels: [] }];
     render(
-      <FallbackSelectionForm groups={groups} onGroupsChange={mockOnGroupsChange} availableModels={AVAILABLE_MODELS} />,
+      <FallbackSelectionForm
+        groups={groups}
+        onGroupsChange={mockOnGroupsChange}
+        modelGroups={AVAILABLE_MODEL_GROUPS}
+      />,
     );
     expect(screen.getByRole("combobox", { name: /primary model/i })).toHaveValue("");
     expect(screen.getByText("Primary Model")).toBeInTheDocument();
@@ -147,7 +183,11 @@ describe("FallbackSelectionForm", () => {
   it("should display group with primary and fallback models in FallbackGroupConfig", () => {
     const groups: FallbackGroup[] = [{ id: "1", primaryModel: "gpt-4", fallbackModels: ["gpt-3.5-turbo"] }];
     render(
-      <FallbackSelectionForm groups={groups} onGroupsChange={mockOnGroupsChange} availableModels={AVAILABLE_MODELS} />,
+      <FallbackSelectionForm
+        groups={groups}
+        onGroupsChange={mockOnGroupsChange}
+        modelGroups={AVAILABLE_MODEL_GROUPS}
+      />,
     );
     expect(screen.getByRole("tab", { name: "gpt-4" })).toBeInTheDocument();
     expect(screen.getAllByText("gpt-4").length).toBeGreaterThan(0);
@@ -165,7 +205,7 @@ describe("FallbackSelectionForm", () => {
       <FallbackSelectionForm
         groups={groups}
         onGroupsChange={mockOnGroupsChange}
-        availableModels={AVAILABLE_MODELS}
+        modelGroups={AVAILABLE_MODEL_GROUPS}
         maxGroups={5}
       />,
     );

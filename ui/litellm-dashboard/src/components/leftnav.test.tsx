@@ -251,6 +251,7 @@ describe("Sidebar (leftnav)", () => {
       "Virtual Keys",
       "Playground",
       "Models + Endpoints",
+      "Fallbacks",
       "Agentic",
       "MCP Servers",
       "Guardrails",

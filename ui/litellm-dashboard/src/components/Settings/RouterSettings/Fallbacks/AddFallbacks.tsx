@@ -65,8 +65,6 @@ export default function AddFallbacks({ accessToken, value = [], onChange, disabl
     }
   }, [accessToken, isModalVisible]);
 
-  const availableModels = Array.from(new Set(modelInfo.map((option) => option.model_group))).sort();
-
   const handleCancel = () => {
     setIsModalVisible(false);
     // Reset to initial state
@@ -139,7 +137,7 @@ export default function AddFallbacks({ accessToken, value = [], onChange, disabl
           key={modalKey}
           groups={groups}
           onGroupsChange={setGroups}
-          availableModels={availableModels}
+          modelGroups={modelInfo}
           maxFallbacks={10}
           maxGroups={5}
         />

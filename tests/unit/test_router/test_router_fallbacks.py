@@ -427,6 +427,42 @@ def test_router_fallbacks_with_wildcard_model_name():
     assert response["choices"][0]["message"]["content"] == "Hi this is claude!"
 
 
+def test_router_fallbacks_with_provider_wildcard_fallback_key():
+    """
+    A fallback key of "openai/*" must catch a failing request routed through a
+    wildcard "openai/*" deployment (model_group is the requested model name,
+    e.g. "openai/gpt-6-astra").
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {
+                    "model": "openai/*",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                },
+            },
+            {
+                "model_name": "claude-3-haiku",
+                "litellm_params": {
+                    "model": "claude-haiku-4-5-20251001",
+                    "api_key": os.getenv("ANTHROPIC_API_KEY"),
+                    "mock_response": "Hi this is claude!",
+                },
+            },
+        ],
+        fallbacks=[{"openai/*": ["claude-3-haiku"]}],
+    )
+
+    response = router.completion(
+        model="openai/gpt-6-astra",
+        messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        mock_testing_fallbacks=True,
+    )
+
+    assert response["choices"][0]["message"]["content"] == "Hi this is claude!"
+
+
 def test_get_fallback_model_group():
     from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
 
