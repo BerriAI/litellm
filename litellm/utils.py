@@ -6181,7 +6181,7 @@ def get_model_info_helper(
                         e,
                     )
 
-        if custom_llm_provider == "huggingface":
+        if custom_llm_provider == "huggingface" and get_model_cost_key(model) is None:
             max_tokens: Final = _get_max_position_embeddings(model_name=model)
             return ModelInfoBase(
                 key=model,
