@@ -110,6 +110,7 @@ export const useConversation = (prompt: any, accessToken: string | null) => {
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
+      let buffer = "";
 
       let assistantMessage = "";
       let model: string | undefined;
@@ -121,8 +122,9 @@ export const useConversation = (prompt: any, accessToken: string | null) => {
         const { done, value } = await reader.read();
         if (done) break;
 
-        const chunk = decoder.decode(value);
-        const lines = chunk.split("\n");
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
 
         for (const line of lines) {
           if (line.startsWith("data: ")) {
@@ -144,15 +146,15 @@ export const useConversation = (prompt: any, accessToken: string | null) => {
               throw new Error(errorMessage);
             }
 
-            if (!model && parsed.model) {
+            if (!model && parsed?.model) {
               model = parsed.model;
             }
 
-            if (parsed.usage) {
+            if (parsed?.usage) {
               usage = parsed.usage;
             }
 
-            const content = parsed.choices?.[0]?.delta?.content;
+            const content = parsed?.choices?.[0]?.delta?.content;
             if (content) {
               if (!timeToFirstToken) {
                 timeToFirstToken = Date.now() - startTime;

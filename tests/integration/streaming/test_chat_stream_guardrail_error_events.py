@@ -11,7 +11,7 @@ import httpx
 import openai
 import pytest
 import yaml
-from integration._support.client import JSON_OBJECT, Gateway, eventually, object_value, string_value
+from integration._support.client import JSON_OBJECT, Gateway, eventually, list_value, object_value, string_value
 from integration._support.database import read_rows
 from integration._support.process import OwnedProxy, WorkerHealthcheck, graceful_stop_seconds, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
@@ -224,18 +224,17 @@ def _payloads(text: str) -> tuple[dict[str, JsonValue], ...]:
     return tuple(JSON_OBJECT.validate_json(line) for line in _data_lines(text) if line != "[DONE]")
 
 
+def _choices(payloads: Sequence[Mapping[str, JsonValue]]) -> Iterator[dict[str, JsonValue]]:
+    for payload in payloads:
+        yield from map(object_value, list_value(payload.get("choices") or []))
+
+
 def _content(payloads: Sequence[Mapping[str, JsonValue]]) -> str:
-    return "".join(
-        string_value(object_value(object_value(choice)["delta"]).get("content") or "")
-        for payload in payloads
-        for choice in payload.get("choices") or []
-    )
+    return "".join(string_value(object_value(choice["delta"]).get("content") or "") for choice in _choices(payloads))
 
 
 def _finish_reasons(payloads: Sequence[Mapping[str, JsonValue]]) -> tuple[JsonValue, ...]:
-    return tuple(
-        object_value(choice).get("finish_reason") for payload in payloads for choice in payload.get("choices") or []
-    )
+    return tuple(choice.get("finish_reason") for choice in _choices(payloads))
 
 
 @dataclass(frozen=True, slots=True)

@@ -40,4 +40,4 @@ class StreamError(Exception):
 
     def __init__(self, error: object) -> None:
         self.error = error
-        super().__init__(_stream_error_message(error))
+        super().__init__(redact_string(_stream_error_message(error)))

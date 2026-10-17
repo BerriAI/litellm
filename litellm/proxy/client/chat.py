@@ -14,7 +14,7 @@ _SSE_LINE: Final[TypeAdapter[bytes | bytearray]] = TypeAdapter(
 
 def _raise_if_error_frame(chunk: object) -> None:
     match chunk:
-        case {"error": object() as error}:
+        case {"error": object() as error} if error:
             raise StreamError(error)
         case _:
             return

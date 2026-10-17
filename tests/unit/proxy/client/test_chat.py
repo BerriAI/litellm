@@ -1,13 +1,14 @@
 import importlib
 import importlib.util
 from importlib.machinery import PathFinder
+import json
 import time
 import site
 import sys
 
 import pytest
 import requests
-from pydantic import ValidationError
+from pydantic import JsonValue, ValidationError
 from litellm.proxy.client.chat import ChatClient
 from litellm.proxy.client.exceptions import StreamError, UnauthorizedError
 
@@ -297,8 +298,13 @@ def test_completions_stream_yields_parsed_sse_chunks(client, base_url, sample_me
 )
 @responses.activate
 def test_completions_stream_raises_on_an_error_frame_after_partial_content(
-    client, base_url, sample_messages, error_frame, error, message
-):
+    client: ChatClient,
+    base_url: str,
+    sample_messages: list[dict[str, str]],
+    error_frame: bytes,
+    error: JsonValue,
+    message: str,
+) -> None:
     body = b'data: {"choices": [{"delta": {"content": "Hel"}}]}\n\n' + error_frame + b"\n\ndata: [DONE]\n\n"
     responses.add(responses.POST, f"{base_url}/chat/completions", body=body, status=200)
     stream = client.completions_stream(model="gpt-4", messages=sample_messages)
@@ -308,6 +314,27 @@ def test_completions_stream_raises_on_an_error_frame_after_partial_content(
         next(stream)
     assert raised.value.error == error
     assert str(raised.value) == message
+
+
+@pytest.mark.parametrize("error", [None, False, 0, "", {}])
+@responses.activate
+def test_completions_stream_yields_a_chunk_whose_error_is_empty(
+    client: ChatClient, base_url: str, sample_messages: list[dict[str, str]], error: JsonValue
+) -> None:
+    chunk = {"choices": [{"delta": {"content": "Hel"}}], "error": error}
+    body = b"data: " + json.dumps(chunk).encode() + b"\n\ndata: [DONE]\n\n"
+    responses.add(responses.POST, f"{base_url}/chat/completions", body=body, status=200)
+
+    assert list(client.completions_stream(model="gpt-4", messages=sample_messages)) == [chunk]
+
+
+def test_stream_error_redacts_a_key_in_its_message() -> None:
+    key = "sk-" + "a1b2c3d4" * 4
+
+    error = StreamError({"message": f"upstream rejected {key}"})
+
+    assert key not in str(error)
+    assert str(error).startswith("upstream rejected ")
 
 
 @responses.activate
