@@ -1949,6 +1949,7 @@ def _extract_models_from_managed_resource_id(
     resource_id: object,
     resource_id_field: str | None = None,
     llm_router: Router | None = None,
+    team_id: str | None = None,
 ) -> list[str]:
     if not isinstance(resource_id, str) or not resource_id:
         return []
@@ -1972,7 +1973,9 @@ def _extract_models_from_managed_resource_id(
             )
             _append_model_candidates(
                 candidates=candidates,
-                value=_resolve_model_id_with_router(get_model_id_from_unified_batch_id(unified_file_id), llm_router),
+                value=_resolve_model_id_with_router(
+                    get_model_id_from_unified_batch_id(unified_file_id), llm_router, team_id
+                ),
             )
     except Exception as e:
         verbose_proxy_logger.debug("Unable to extract model from managed file/batch ID: %s", str(e))
@@ -1984,7 +1987,7 @@ def _extract_models_from_managed_resource_id(
         if parsed_id:
             _append_model_candidates(
                 candidates=candidates,
-                value=_resolve_model_id_with_router(parsed_id.get("model_id"), llm_router),
+                value=_resolve_model_id_with_router(parsed_id.get("model_id"), llm_router, team_id),
             )
             _append_model_candidates(candidates=candidates, value=parsed_id.get("target_model_names"))
     except Exception as e:
@@ -2001,13 +2004,13 @@ def _extract_models_from_managed_resource_id(
                 model_id = decode_video_id_with_provider(resource_id).get("model_id")
                 _append_model_candidates(
                     candidates=candidates,
-                    value=_resolve_model_id_with_router(model_id, llm_router),
+                    value=_resolve_model_id_with_router(model_id, llm_router, team_id),
                 )
             else:
                 model_id = decode_character_id_with_provider(resource_id).get("model_id")
                 _append_model_candidates(
                     candidates=candidates,
-                    value=_resolve_model_id_with_router(model_id, llm_router),
+                    value=_resolve_model_id_with_router(model_id, llm_router, team_id),
                 )
         except Exception as e:
             verbose_proxy_logger.debug("Unable to extract model from managed video/character ID: %s", str(e))
@@ -2015,14 +2018,28 @@ def _extract_models_from_managed_resource_id(
     return _dedupe_model_candidates(candidates)
 
 
-def _resolve_model_id_with_router(model_id: str | None, llm_router: Router | None) -> str | None:
+def _resolve_model_id_with_router(
+    model_id: str | None, llm_router: Router | None, team_id: str | None = None
+) -> str | None:
     if model_id is None or llm_router is None:
         return model_id
     try:
-        return llm_router.resolve_model_name_from_model_id(model_id) or model_id
+        return model_name_for_access_check(model_id=model_id, llm_router=llm_router, team_id=team_id)
     except Exception as e:
         verbose_proxy_logger.debug("Unable to resolve model_id from managed resource ID: %s", str(e))
         return model_id
+
+
+def model_name_for_access_check(model_id: str, llm_router: Router | None, team_id: str | None) -> str:
+    if llm_router is None:
+        return model_id
+    deployment: Final = llm_router.get_deployment(model_id=model_id)
+    callers_team_public_name: Final = (
+        deployment.model_info.team_public_model_name
+        if deployment is not None and team_id is not None and deployment.model_info.team_id == team_id
+        else None
+    )
+    return callers_team_public_name or llm_router.resolve_model_name_from_model_id(model_id) or model_id
 
 
 def get_cache_prediction_deployments(
@@ -2120,6 +2137,7 @@ def _extract_model_candidates_from_request(
                     request_data.get(field),
                     resource_id_field=field,
                     llm_router=llm_router,
+                    team_id=team_id,
                 ),
             )
 

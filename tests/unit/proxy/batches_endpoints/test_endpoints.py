@@ -3318,9 +3318,6 @@ TEAM_PUBLIC_MODEL_NAME = "team-gpt4o-mini"
 
 
 def _team_scoped_deployment() -> Deployment:
-    # What the proxy stores for a model added under a team: the router-facing
-    # model_name is the generated internal one, the public name the team calls
-    # lives only on model_info.team_public_model_name.
     return Deployment(
         model_name=TEAM_INTERNAL_MODEL_NAME,
         litellm_params=LiteLLM_Params(model="gpt-4o-mini"),
@@ -3328,19 +3325,17 @@ def _team_scoped_deployment() -> Deployment:
     )
 
 
+def _route_unified_batch_to_team_deployment(harness: RetrieveHarness | CancelHarness) -> None:
+    harness.router.resolve_model_name_from_model_id = MagicMock(return_value=TEAM_INTERNAL_MODEL_NAME)
+    harness.router.get_deployment = MagicMock(return_value=_team_scoped_deployment())
+
+
 @pytest.mark.asyncio
-async def test_retrieve__team_scoped_deployment_authorizes_against_public_name(retrieve_harness):
-    """Regression for #46958: the unified batch id resolves to the deployment's
-    internal model_name, which is in no key or team allowlist, so authorize got a
-    name that could never match and team keys got 403 on their own batches. The
-    public name is what allowlists hold, so it is what must be authorized."""
-    retrieve_harness.router.resolve_model_name_from_model_id = MagicMock(return_value=TEAM_INTERNAL_MODEL_NAME)
-    retrieve_harness.router.get_deployment = MagicMock(return_value=_team_scoped_deployment())
+async def test_retrieve__team_scoped_deployment_authorizes_owning_team_by_public_name(retrieve_harness):
+    _route_unified_batch_to_team_deployment(retrieve_harness)
 
     resp = await call_retrieve(
-        retrieve_harness,
-        UNIFIED_BATCH_ID_FOR_GPT4O_MINI,
-        user=UserAPIKeyAuth(api_key="sk-team", models=[TEAM_PUBLIC_MODEL_NAME]),
+        retrieve_harness, UNIFIED_BATCH_ID_FOR_GPT4O_MINI, user=_key_restricted_to(TEAM_PUBLIC_MODEL_NAME)
     )
 
     assert retrieve_harness.router_aretrieve.call_count == 1
@@ -3348,18 +3343,35 @@ async def test_retrieve__team_scoped_deployment_authorizes_against_public_name(r
 
 
 @pytest.mark.asyncio
-async def test_retrieve__team_scoped_deployment_still_rejects_unrelated_key(retrieve_harness):
-    """The public-name mapping must not widen access: a key without the public
-    name in its grants is still denied."""
-    retrieve_harness.router.resolve_model_name_from_model_id = MagicMock(return_value=TEAM_INTERNAL_MODEL_NAME)
-    retrieve_harness.router.get_deployment = MagicMock(return_value=_team_scoped_deployment())
+async def test_cancel__team_scoped_deployment_authorizes_owning_team_by_public_name(cancel_harness):
+    _route_unified_batch_to_team_deployment(cancel_harness)
+
+    await call_cancel(cancel_harness, UNIFIED_BATCH_ID_FOR_GPT4O_MINI, user=_key_restricted_to(TEAM_PUBLIC_MODEL_NAME))
+
+    assert cancel_harness.router_acancel.call_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "user",
+    [
+        pytest.param(_key_restricted_to("some-other-model"), id="owning-team-key-without-the-model"),
+        pytest.param(
+            UserAPIKeyAuth(
+                api_key="sk-team-b",
+                team_id="team-b",
+                team_models=[TEAM_PUBLIC_MODEL_NAME],
+                models=[TEAM_PUBLIC_MODEL_NAME],
+            ),
+            id="other-team-key-granted-the-same-public-name",
+        ),
+    ],
+)
+async def test_retrieve__team_scoped_deployment_rejects_keys_outside_its_grant(retrieve_harness, user):
+    _route_unified_batch_to_team_deployment(retrieve_harness)
 
     with pytest.raises(ProxyException) as exc_info:
-        await call_retrieve(
-            retrieve_harness,
-            UNIFIED_BATCH_ID_FOR_GPT4O_MINI,
-            user=UserAPIKeyAuth(api_key="sk-other", models=["some-other-model"]),
-        )
+        await call_retrieve(retrieve_harness, UNIFIED_BATCH_ID_FOR_GPT4O_MINI, user=user)
 
     assert exc_info.value.code == "403"
     retrieve_harness.router_aretrieve.assert_not_called()
@@ -3367,8 +3379,6 @@ async def test_retrieve__team_scoped_deployment_still_rejects_unrelated_key(retr
 
 @pytest.mark.asyncio
 async def test_retrieve__deployment_without_public_name_authorizes_resolved_name(retrieve_harness):
-    """No team_public_model_name -> the resolved model name is authorized, exactly
-    as before the mapping existed."""
     retrieve_harness.router.get_deployment = MagicMock(
         return_value=Deployment(
             model_name="gpt-4o-mini",
@@ -3377,28 +3387,9 @@ async def test_retrieve__deployment_without_public_name_authorizes_resolved_name
         )
     )
 
-    await call_retrieve(
-        retrieve_harness,
-        UNIFIED_BATCH_ID_FOR_GPT4O_MINI,
-        user=UserAPIKeyAuth(api_key="sk-key", models=["gpt-4o-mini"]),
-    )
+    await call_retrieve(retrieve_harness, UNIFIED_BATCH_ID_FOR_GPT4O_MINI, user=_key_restricted_to("gpt-4o-mini"))
 
     assert retrieve_harness.router_aretrieve.call_count == 1
-
-
-@pytest.mark.asyncio
-async def test_cancel__team_scoped_deployment_authorizes_against_public_name(cancel_harness):
-    """Same regression as retrieve, on the cancel route's identical lookup."""
-    cancel_harness.router.resolve_model_name_from_model_id = MagicMock(return_value=TEAM_INTERNAL_MODEL_NAME)
-    cancel_harness.router.get_deployment = MagicMock(return_value=_team_scoped_deployment())
-
-    await call_cancel(
-        cancel_harness,
-        UNIFIED_BATCH_ID_FOR_GPT4O_MINI,
-        user=UserAPIKeyAuth(api_key="sk-team", models=[TEAM_PUBLIC_MODEL_NAME]),
-    )
-
-    assert cancel_harness.router_acancel.call_count == 1
 
 
 @pytest.mark.asyncio

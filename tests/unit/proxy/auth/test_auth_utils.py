@@ -1505,6 +1505,74 @@ async def test_managed_batch_routes_pass_team_model_access_check(route, request_
         )
 
 
+_TEAM_DEPLOYMENT_ID = "team-a-deployment-id"
+_TEAM_INTERNAL_MODEL_NAME = "model_name_team-a_6d1f3c2e-0000-4000-8000-000000000000"
+_TEAM_PUBLIC_MODEL_NAME = "team-batch-model"
+_TEAM_MANAGED_BATCH_ID = _encode_managed_id(
+    f"litellm_proxy;model_id:{_TEAM_DEPLOYMENT_ID};llm_batch_id:provider-batch-789"
+)
+_TEAM_MANAGED_BATCH_OUTPUT_FILE_ID = _encode_managed_id(
+    f"litellm_proxy;model_id:{_TEAM_DEPLOYMENT_ID};llm_batch_id:provider-batch-789;llm_output_file_id:provider-file-789"
+)
+
+
+def _team_scoped_batch_router():
+    from litellm.router import Router
+
+    return Router(
+        model_list=[
+            {
+                "model_name": _TEAM_INTERNAL_MODEL_NAME,
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test-key"},
+                "model_info": {
+                    "id": _TEAM_DEPLOYMENT_ID,
+                    "team_id": "team-a",
+                    "team_public_model_name": _TEAM_PUBLIC_MODEL_NAME,
+                },
+            },
+        ]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "route, request_data",
+    [
+        ("/v1/batches/{batch_id}", {"batch_id": _TEAM_MANAGED_BATCH_ID}),
+        ("/v1/batches/{batch_id}/cancel", {"batch_id": _TEAM_MANAGED_BATCH_ID}),
+        ("/v1/files/{file_id}/content", {"file_id": _TEAM_MANAGED_BATCH_OUTPUT_FILE_ID}),
+    ],
+)
+async def test_team_scoped_batch_routes_authorize_the_owning_team_by_public_name(route, request_data):
+    from litellm.proxy._types import LiteLLM_TeamTable
+    from litellm.proxy.auth.auth_checks import can_team_access_model
+
+    llm_router = _team_scoped_batch_router()
+    owning_team_model = get_model_from_request(
+        request_data=request_data, route=route, llm_router=llm_router, team_id="team-a"
+    )
+    other_team_model = get_model_from_request(
+        request_data=request_data, route=route, llm_router=llm_router, team_id="team-b"
+    )
+
+    assert owning_team_model == _TEAM_PUBLIC_MODEL_NAME
+    assert (
+        await can_team_access_model(
+            model=owning_team_model,
+            team_object=LiteLLM_TeamTable(team_id="team-a", models=[_TEAM_PUBLIC_MODEL_NAME]),
+            llm_router=llm_router,
+        )
+        is True
+    )
+    assert other_team_model == _TEAM_INTERNAL_MODEL_NAME
+    with pytest.raises(Exception, match="is not available for this API key"):
+        await can_team_access_model(
+            model=other_team_model,
+            team_object=LiteLLM_TeamTable(team_id="team-b", models=[_TEAM_PUBLIC_MODEL_NAME]),
+            llm_router=llm_router,
+        )
+
+
 def test_get_model_from_request_resolves_character_id_model_with_router():
     from litellm.types.videos.utils import encode_character_id_with_provider
 
