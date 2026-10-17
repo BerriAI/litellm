@@ -1196,6 +1196,9 @@ def _map_sagemaker_exception(
             )
 
 
+_VERTEX_403_STATUS_CODE_PATTERN: Final = re.compile(r"(?<![0-9A-Za-z])403(?![0-9A-Za-z])")
+
+
 def _map_vertex_exception(
     *,
     model: str,
@@ -1252,7 +1255,9 @@ def _map_vertex_exception(
             llm_provider=custom_llm_provider,
             litellm_debug_info=extra_information,
         )
-    elif "403" in error_str:
+    elif not isinstance(
+        getattr(original_exception, "status_code", None), int
+    ) and _VERTEX_403_STATUS_CODE_PATTERN.search(error_str):
         raise BadRequestError(
             message=f"{custom_llm_provider.capitalize()}Exception BadRequestError - {error_str}",
             model=model,
