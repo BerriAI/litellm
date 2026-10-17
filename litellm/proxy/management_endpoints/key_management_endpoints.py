@@ -461,7 +461,11 @@ def _effective_key_for_generate(data: GenerateKeyRequest, now: datetime) -> Lite
     folded_metadata: Final = {**metadata, **metadata_fields}
     columns: Final = handle_key_type(data, {**column_fields})
     expires: Final = (
-        now + timedelta(seconds=duration_in_seconds(duration=data.duration)) if data.duration is not None else None
+        data.expires
+        if data.expires is not None
+        else (
+            now + timedelta(seconds=duration_in_seconds(duration=data.duration)) if data.duration is not None else None
+        )
     )
     budget_reset_at: Final = (
         get_budget_reset_time(budget_duration=data.budget_duration) if data.budget_duration is not None else None
@@ -1158,9 +1162,37 @@ _BUDGET_NUMERIC_KEYS = frozenset(
 )
 
 
+def _key_expiration_error(
+    data: GenerateKeyRequest | UpdateKeyRequest, *, max_duration: str | None, now: datetime | None
+) -> str | None:
+    if data.expires is not None and data.expires.utcoffset() is None:
+        return "expires must include a timezone"
+
+    if max_duration is None:
+        return None
+    if data.expires is None:
+        return (
+            "expires cannot be null when a maximum key duration is configured"
+            if "expires" in data.model_fields_set
+            else None
+        )
+
+    max_expires: Final = (now if now is not None else datetime.now(timezone.utc)) + timedelta(
+        seconds=duration_in_seconds(duration=max_duration)
+    )
+    if data.expires > max_expires:
+        return (
+            "expires is over max duration limit set in config "
+            f"- requested_expires={data.expires.isoformat()}; max_duration={max_duration}"
+        )
+    return None
+
+
 def _enforce_upperbound_key_params(
     data: GenerateKeyRequest | UpdateKeyRequest,
     fill_defaults: bool = True,
+    *,
+    now: datetime | None = None,
 ) -> None:
     """
     Enforce upperbound limits on key parameters.
@@ -1174,18 +1206,31 @@ def _enforce_upperbound_key_params(
     # budget enforcement for any key that carries it.
     for elem in data:
         key, value = elem
-        if key in _BUDGET_NUMERIC_KEYS and value is not None:
-            if not math.isfinite(value):
-                raise HTTPException(
-                    status_code=400,
-                    detail={"error": f"{key} must be a finite number. Received: {value}"},
-                )
+        if key in _BUDGET_NUMERIC_KEYS and value is not None and not math.isfinite(value):
+            raise HTTPException(
+                status_code=400,
+                detail={"error": f"{key} must be a finite number. Received: {value}"},
+            )
+
+    expiration_error: Final = _key_expiration_error(
+        data,
+        max_duration=(
+            litellm.upperbound_key_generate_params.duration
+            if litellm.upperbound_key_generate_params is not None
+            else None
+        ),
+        now=now,
+    )
+    if expiration_error is not None:
+        raise HTTPException(status_code=400, detail={"error": expiration_error})
 
     if litellm.upperbound_key_generate_params is None:
         return
 
     for elem in data:
         key, value = elem
+        if key == "duration" and data.expires is not None:
+            continue
         upperbound_value = getattr(litellm.upperbound_key_generate_params, key, None)
         if upperbound_value is not None:
             if value is None:
@@ -1256,6 +1301,8 @@ async def _common_key_generation_helper(
     user_api_key_dict: UserAPIKeyAuth,
     litellm_changed_by: str | None,
     team_table: LiteLLM_TeamTableCachedObj | None,
+    *,
+    now: datetime | None = None,
 ) -> GenerateKeyResponse:
     from litellm.proxy import proxy_server
     from litellm.proxy.proxy_server import (
@@ -1341,6 +1388,7 @@ async def _common_key_generation_helper(
             if (
                 value is None
                 and (key != "budget_duration" or key not in data.model_fields_set)
+                and (key != "duration" or data.expires is None)
                 and key
                 in [
                     "max_budget",
@@ -1362,7 +1410,8 @@ async def _common_key_generation_helper(
                 setattr(data, key, litellm.default_key_generate_params.get(key, {}))
 
     # check if user set upperbound key/generate params on config.yaml
-    _enforce_upperbound_key_params(data, fill_defaults=True)
+    generation_time: Final = now if now is not None else datetime.now(timezone.utc)
+    _enforce_upperbound_key_params(data, fill_defaults=True, now=generation_time)
 
     # Delegated-authority ceiling (GHSA-q775-qw9r-2r4g): a non-admin caller
     # cannot grant a key a higher budget than their own authority.
@@ -1439,12 +1488,27 @@ async def _common_key_generation_helper(
             "litellm.proxy.proxy_server.generate_key_fn(): Enterprise key management params not applied - %s", e
         )
 
+    team_fields: Final[Mapping[str, object]] = (
+        team_table.model_dump(include={"metadata"}) if team_table is not None else MappingProxyType({})
+    )
+    team_metadata: Final = TypeAdapter[dict[str, object] | None](dict[str, object] | None).validate_python(
+        team_fields.get("metadata")
+    )
+    team_key_duration: Final = TypeAdapter[str | None](str | None).validate_python(
+        team_metadata.get("team_member_key_duration")
+        if team_metadata is not None and data.user_id is not None
+        else None
+    )
+    team_expiration_error: Final = _key_expiration_error(data, max_duration=team_key_duration, now=generation_time)
+    if team_expiration_error is not None:
+        raise HTTPException(status_code=400, detail={"error": team_expiration_error})
+
     await _enforce_custom_key_policy(
         hook=_custom_key_policy_hook(proxy_server),
         build_policy_request=lambda: CustomKeyPolicyRequest(
             operation="generate",
             existing_key=None,
-            effective_key=_effective_key_for_generate(data=data, now=datetime.now(timezone.utc)),
+            effective_key=_effective_key_for_generate(data=data, now=generation_time),
             request=data,
         ),
     )
@@ -1659,7 +1723,11 @@ async def _common_key_generation_helper(
 
     try:
         response = await generate_key_helper_fn(
-            request_type="key", **data_json, table_name="key", llm_router=llm_router
+            request_type="key",
+            **{key: value for key, value in data_json.items() if key != "expires"},
+            expires=data.expires,
+            table_name="key",
+            llm_router=llm_router,
         )
     except KeyProjectBindingError:
         if prisma_client is not None:
@@ -2165,6 +2233,8 @@ async def generate_key_fn(
 
     Parameters:
     - duration: Optional[str] - Specify the length of time the token is valid for. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
+    - expires: Optional[datetime] - Absolute expiration with a timezone. Overrides duration within the configured limit.
+      Past timestamps are allowed and produce expired keys.
     - key_alias: Optional[str] - User defined key alias
     - key: Optional[str] - User defined key value. Must start with 'sk-' and be at least 16 characters long. If not set, a 16-digit unique sk-key is created for you.
     - team_id: Optional[str] - The team id of the key
@@ -2729,13 +2799,13 @@ async def prepare_key_update_data(
 
     if "duration" in non_default_values:
         duration: Final = non_default_values.pop("duration")
-        if duration is None or duration == "-1":
-            # Set expires to None to indicate the key never expires
-            non_default_values["expires"] = None
-        elif duration and (isinstance(duration, str)) and len(duration) > 0:
-            duration_s: Final = duration_in_seconds(duration=duration)
-            expires: Final = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
-            non_default_values["expires"] = expires
+
+        if "expires" not in non_default_values:
+            if duration is None or duration == "-1":
+                non_default_values["expires"] = None
+            elif isinstance(duration, str) and duration:
+                duration_s: Final = duration_in_seconds(duration=duration)
+                non_default_values["expires"] = datetime.now(timezone.utc) + timedelta(seconds=duration_s)
 
     if "budget_duration" in non_default_values:
         budget_duration: Final = non_default_values.pop("budget_duration")
@@ -3674,6 +3744,8 @@ async def update_key_fn(
     - rpm_limit_type: Optional[str] - RPM rate limit type - "best_effort_throughput", "guaranteed_throughput", or "dynamic"
     - allowed_cache_controls: Optional[list] - List of allowed cache control values
     - duration: Optional[str] - Key validity duration ("30d", "1h", etc.), null to never expire, or "-1" to never expire (deprecated, use null)
+    - expires: Optional[datetime] - Absolute expiration with a timezone. Overrides duration within the configured limit.
+      Past timestamps expire the key immediately. Null clears expiration only when no maximum duration is configured.
     - permissions: Optional[dict] - Key-specific permissions
     - send_invite_email: Optional[bool] - Send invite email to user_id
     - guardrails: Optional[List[str]] - List of active guardrails for the key
@@ -4895,6 +4967,7 @@ async def generate_key_helper_fn(
     access_group_ids: list[str] | None = None,
     budget_limits: list | None = None,  # multiple concurrent budget windows
     *,
+    expires: datetime | None = None,
     llm_router: Router | None = None,
 ):
     from litellm.proxy.proxy_server import premium_user, prisma_client
@@ -4915,12 +4988,13 @@ async def generate_key_helper_fn(
         else:
             token = f"sk-{secrets.token_urlsafe(LENGTH_OF_LITELLM_GENERATED_KEY)}"
 
-    if duration is None:  # allow tokens that never expire
-        expires = None
-    else:
-        # Add duration to current time for exact expiration (not standardized reset time)
-        duration_seconds: Final = duration_in_seconds(duration)
-        expires = datetime.now(timezone.utc) + timedelta(seconds=duration_seconds)
+    effective_expires: Final = (
+        expires
+        if expires is not None
+        else datetime.now(timezone.utc) + timedelta(seconds=duration_in_seconds(duration))
+        if duration is not None
+        else None
+    )
 
     if key_budget_duration is None:  # one-time budget
         key_reset_at = None
@@ -4997,7 +5071,7 @@ async def generate_key_helper_fn(
         key_data: Final = {
             "token": token,
             "key_alias": key_alias,
-            "expires": expires,
+            "expires": effective_expires,
             "models": models,
             "aliases": aliases_json,
             "config": config_json,

@@ -4523,9 +4523,9 @@ async def test_generate_key_team_member_inherits_org_skips_membership_check():
 
     # Team belongs to an org; caller is a team member but NOT an explicit member
     # of that organization (the regression scenario).
-    mock_team_table = MagicMock()
-    mock_team_table.organization_id = org_id
-    mock_team_table.metadata = None
+    team_table: Final = LiteLLM_TeamTableCachedObj(
+        team_id="team-1", organization_id=org_id
+    )
 
     mock_validate_org = AsyncMock()
     mock_generate_key = AsyncMock(
@@ -4579,7 +4579,7 @@ async def test_generate_key_team_member_inherits_org_skips_membership_check():
                 user_role=LitellmUserRoles.INTERNAL_USER.value,
             ),
             litellm_changed_by=None,
-            team_table=mock_team_table,
+            team_table=team_table,
         )
 
     # Key creation proceeded for the team member ...
@@ -4675,9 +4675,9 @@ async def test_generate_key_foreign_org_with_mismatched_team_still_enforces_memb
     team_org_id = "other-org"
     foreign_org_id = "someone-elses-org"
 
-    mock_team_table = MagicMock()
-    mock_team_table.organization_id = team_org_id
-    mock_team_table.metadata = None
+    team_table: Final = LiteLLM_TeamTableCachedObj(
+        team_id="team-1", organization_id=team_org_id
+    )
 
     mock_validate_org = AsyncMock()
     mock_generate_key = AsyncMock(
@@ -4735,7 +4735,7 @@ async def test_generate_key_foreign_org_with_mismatched_team_still_enforces_memb
                 user_role=LitellmUserRoles.INTERNAL_USER.value,
             ),
             litellm_changed_by=None,
-            team_table=mock_team_table,
+            team_table=team_table,
         )
 
     mock_validate_org.assert_awaited_once()
@@ -16258,25 +16258,28 @@ async def test_ghsa_q775_ui_session_token_team_key_exempt_from_budget_ceiling():
         max_budget=0.25,
     )
 
+    prisma: Final = MagicMock()
+    prisma.insert_data = AsyncMock(
+        return_value=LiteLLM_VerificationToken(token="hashed-token")
+    )
+
     with (
-        patch("litellm.proxy.proxy_server.prisma_client", AsyncMock()),
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
         patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
         patch("litellm.proxy.proxy_server.llm_router", None),
         patch("litellm.proxy.proxy_server.premium_user", False),
         patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"),
     ):
-        try:
-            await _common_key_generation_helper(
-                data=data,
-                user_api_key_dict=user_api_key_dict,
-                litellm_changed_by=None,
-                team_table=MagicMock(),
-            )
-        except (HTTPException, ProxyException) as err:
-            msg = str(getattr(err, "detail", "")) + str(getattr(err, "message", ""))
-            assert (
-                "cannot exceed" not in msg.lower()
-            ), "UI/CLI session token creating a team key must be exempt from the ceiling"
+        result: Final = await _common_key_generation_helper(
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=None,
+            team_table=LiteLLM_TeamTableCachedObj(team_id="team-abc"),
+        )
+
+    assert result.team_id == data.team_id
+    assert result.max_budget == data.max_budget
+    assert prisma.insert_data.await_args.kwargs["data"]["max_budget"] == data.max_budget
 
 
 @pytest.mark.asyncio
@@ -22833,3 +22836,210 @@ async def test_key_generate_reads_the_team_from_the_writer_database_not_the_cach
         )
 
     assert raised.value.message == "Team not found for team_id=1234. Non-admin users cannot create keys for non-existent teams."
+
+
+@pytest.mark.parametrize("duration", (None, "1d"))
+def test_effective_key_for_generate_preserves_explicit_expires(duration: str | None) -> None:
+    now: Final = datetime(2030, 1, 1, tzinfo=timezone.utc)
+    expires: Final = now + timedelta(hours=1)
+    effective_key: Final = _effective_key_for_generate(
+        data=GenerateKeyRequest(expires=expires, duration=duration), now=now
+    )
+    assert effective_key.expires == expires
+
+
+@pytest.mark.parametrize("duration", (None, "1d", "30d"))
+@pytest.mark.asyncio
+async def test_generate_explicit_expires_overrides_default_duration(
+    monkeypatch: pytest.MonkeyPatch, duration: str | None
+) -> None:
+    expires: Final = datetime(2030, 1, 1, tzinfo=timezone(timedelta(hours=4)))
+    prisma: Final = MagicMock()
+    prisma.insert_data = AsyncMock(return_value=LiteLLM_VerificationToken(token="hashed-token"))
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
+    monkeypatch.setattr(litellm, "default_key_generate_params", {"duration": duration})
+    monkeypatch.setattr(litellm, "upperbound_key_generate_params", None)
+
+    response: Final = await generate_key_fn(
+        data=GenerateKeyRequest.model_validate({"expires": expires.isoformat()}),
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"),
+    )
+
+    assert prisma.insert_data.await_args.kwargs["data"]["expires"] == expires
+    assert response.expires == expires
+    assert response.duration is None
+
+
+@pytest.mark.parametrize("duration", (None, "1d"))
+@pytest.mark.asyncio
+async def test_update_preserves_explicit_expires(
+    monkeypatch: pytest.MonkeyPatch, duration: str | None
+) -> None:
+    from fastapi import Request
+
+    expires: Final = datetime(2030, 1, 1, tzinfo=timezone(timedelta(hours=-5)))
+    existing_key: Final = LiteLLM_VerificationToken(token="hashed-token", expires=expires + timedelta(days=1))
+    prisma: Final = MagicMock()
+    prisma.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=existing_key)
+
+    async def update_row(token: str, data: Mapping[str, object]) -> Mapping[str, object]:
+        return {"data": {**existing_key.model_dump(), **data}}
+
+    prisma.update_data = AsyncMock(side_effect=update_row)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache())
+    monkeypatch.setattr(litellm, "upperbound_key_generate_params", None)
+
+    response: Final = await update_key_fn(
+        request=Request({"type": "http"}),
+        data=UpdateKeyRequest.model_validate(
+            {"key": existing_key.token, "duration": duration, "expires": expires.isoformat()}
+        ),
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"),
+        litellm_changed_by=None,
+    )
+
+    assert prisma.update_data.await_args.kwargs["data"]["expires"] == expires
+    assert response["expires"] == expires
+
+
+@pytest.mark.parametrize(
+    "user_id, team_duration, offset, global_duration, rejected",
+    (
+        ("member", "1h", timedelta(hours=12), "1d", True),
+        ("member", "1h", timedelta(hours=12), None, True),
+        ("member", "1h", timedelta(hours=1, microseconds=1), "1d", True),
+        ("member", "1h", None, None, True),
+        ("member", "1h", timedelta(hours=1), "1d", False),
+        ("member", "1h", timedelta(minutes=30), "1d", False),
+        ("member", None, timedelta(hours=12), "1d", False),
+        (None, "1h", timedelta(hours=12), "1d", False),
+        ("member", "2d", timedelta(hours=12), "1h", True),
+    ),
+)
+@pytest.mark.parametrize("duration", (None, "30d"))
+@pytest.mark.asyncio
+async def test_generate_explicit_expires_respects_team_member_lifetime(
+    monkeypatch: pytest.MonkeyPatch,
+    user_id: str | None,
+    team_duration: str | None,
+    offset: timedelta | None,
+    global_duration: str | None,
+    rejected: bool,
+    duration: str | None,
+) -> None:
+    from litellm.types.proxy.management_endpoints.ui_sso import LiteLLM_UpperboundKeyGenerateParams
+
+    now: Final = datetime(2030, 1, 1, tzinfo=timezone.utc)
+    expires: Final = (now + offset).astimezone(timezone(timedelta(hours=4))) if offset is not None else None
+    team: Final = LiteLLM_TeamTableCachedObj(
+        team_id="team",
+        metadata={"team_member_key_duration": team_duration},
+        members_with_roles=[Member(user_id="member", role="user")],
+        team_member_permissions=["/key/generate"],
+    )
+    prisma: Final = MagicMock()
+    prisma.insert_data = AsyncMock(return_value=LiteLLM_VerificationToken(token="hashed-token"))
+    policy: Final = AsyncMock(return_value={"decision": True})
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_custom_key_policy", policy)
+    monkeypatch.setattr(litellm, "default_key_generate_params", None)
+    monkeypatch.setattr(
+        litellm, "upperbound_key_generate_params", LiteLLM_UpperboundKeyGenerateParams(duration=global_duration)
+    )
+    request: Final = GenerateKeyRequest(team_id=team.team_id, user_id=user_id, expires=expires, duration=duration)
+    caller: Final = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER if user_id is not None else LitellmUserRoles.PROXY_ADMIN,
+        user_id="member",
+    )
+    key_generation_check(team, caller, request, KeyManagementRoutes.KEY_GENERATE)
+
+    if rejected:
+        with pytest.raises(HTTPException) as raised:
+            await _common_key_generation_helper(request, caller, None, team, now=now)
+        assert raised.value.status_code == 400
+        assert "expires" in raised.value.detail["error"]
+        assert "duration" in raised.value.detail["error"]
+        prisma.insert_data.assert_not_awaited()
+        policy.assert_not_awaited()
+        return
+
+    response: Final = await _common_key_generation_helper(request, caller, None, team, now=now)
+    assert response.expires == expires
+    assert prisma.insert_data.await_args.kwargs["data"]["expires"] == expires
+    assert policy.await_args.args[0].effective_key.expires == expires
+
+
+@pytest.mark.parametrize(
+    "changes, expected",
+    (
+        ({"key_alias": "renamed"}, {}),
+        ({"expires": None}, {"expires": None}),
+        ({"duration": "1d", "expires": None}, {"expires": None}),
+    ),
+)
+@pytest.mark.asyncio
+async def test_update_expiration_merge_patch(changes: Mapping[str, object], expected: Mapping[str, object]) -> None:
+    existing_key: Final = LiteLLM_VerificationToken(
+        token="hashed-token", expires=datetime(2030, 1, 1, tzinfo=timezone.utc)
+    )
+    result: Final = await prepare_key_update_data(
+        data=UpdateKeyRequest.model_validate({"key": existing_key.token, **changes}),
+        existing_key_row=existing_key,
+    )
+    assert {key: value for key, value in result.items() if key in ("expires", "duration")} == expected
+
+
+@pytest.mark.parametrize("request_type", (GenerateKeyRequest, UpdateKeyRequest))
+@pytest.mark.parametrize(
+    "offset",
+    (timedelta(seconds=-1), timedelta(0), timedelta(hours=12), timedelta(days=1), timedelta(days=1, microseconds=1)),
+)
+@pytest.mark.parametrize("duration", (None, "30d"))
+def test_explicit_expires_respects_duration_limit(
+    monkeypatch: pytest.MonkeyPatch,
+    request_type: type[GenerateKeyRequest] | type[UpdateKeyRequest],
+    offset: timedelta,
+    duration: str | None,
+) -> None:
+    from litellm.types.proxy.management_endpoints.ui_sso import LiteLLM_UpperboundKeyGenerateParams
+
+    now: Final = datetime(2030, 1, 1, tzinfo=timezone.utc)
+    expires: Final = (now + offset).astimezone(timezone(timedelta(hours=4)))
+    request: Final = request_type(key="sk-test", expires=expires, duration=duration)
+    monkeypatch.setattr(litellm, "upperbound_key_generate_params", LiteLLM_UpperboundKeyGenerateParams(duration="1d"))
+
+    if offset > timedelta(days=1):
+        with pytest.raises(HTTPException) as raised:
+            _enforce_upperbound_key_params(request, fill_defaults=request_type is GenerateKeyRequest, now=now)
+        assert raised.value.status_code == 400
+        assert "expires is over max duration limit" in raised.value.detail["error"]
+        return
+
+    _enforce_upperbound_key_params(request, fill_defaults=request_type is GenerateKeyRequest, now=now)
+    assert request.expires == expires
+    assert request.duration == duration
+
+
+@pytest.mark.parametrize("request_type", (GenerateKeyRequest, UpdateKeyRequest))
+def test_explicit_null_expires_cannot_bypass_duration_limit(
+    monkeypatch: pytest.MonkeyPatch, request_type: type[GenerateKeyRequest] | type[UpdateKeyRequest]
+) -> None:
+    from litellm.types.proxy.management_endpoints.ui_sso import LiteLLM_UpperboundKeyGenerateParams
+
+    monkeypatch.setattr(litellm, "upperbound_key_generate_params", LiteLLM_UpperboundKeyGenerateParams(duration="1d"))
+    with pytest.raises(HTTPException) as raised:
+        _enforce_upperbound_key_params(request_type(key="sk-test", expires=None))
+    assert raised.value.status_code == 400
+    assert raised.value.detail == {"error": "expires cannot be null when a maximum key duration is configured"}
+
+
+@pytest.mark.parametrize("request_type", (GenerateKeyRequest, UpdateKeyRequest))
+def test_explicit_expires_requires_timezone(
+    monkeypatch: pytest.MonkeyPatch, request_type: type[GenerateKeyRequest] | type[UpdateKeyRequest]
+) -> None:
+    monkeypatch.setattr(litellm, "upperbound_key_generate_params", None)
+    with pytest.raises(HTTPException) as raised:
+        _enforce_upperbound_key_params(request_type(key="sk-test", expires=datetime(2030, 1, 1)))
+    assert raised.value.status_code == 400
+    assert raised.value.detail == {"error": "expires must include a timezone"}
