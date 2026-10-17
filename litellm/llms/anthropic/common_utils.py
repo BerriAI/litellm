@@ -118,6 +118,31 @@ _DECODED_JSON: Final = TypeAdapter(object)
 _CLAUDE_CODE_USER_AGENT_PREFIXES: Final = ("claude-cli/", "claude-code/")
 
 
+def _tool_without_custom_field(tool: object) -> object:
+    if not isinstance(tool, dict):
+        return tool
+
+    tool_dict: Final = OBJECT_MAPPING_ADAPTER.validate_python(tool)
+    if "custom" not in tool_dict:
+        return tool
+
+    without_custom: Final = {key: value for key, value in tool_dict.items() if key != "custom"}
+    custom: Final = tool_dict["custom"]
+    if not isinstance(custom, dict) or "defer_loading" in tool_dict:
+        return without_custom
+
+    custom_dict: Final = OBJECT_MAPPING_ADAPTER.validate_python(custom)
+    defer_loading: Final = custom_dict.get("defer_loading")
+    if not isinstance(defer_loading, bool):
+        return without_custom
+
+    return {**without_custom, "defer_loading": defer_loading}
+
+
+def tools_without_custom_field(tools: Sequence[object]) -> list[object]:
+    return [_tool_without_custom_field(tool) for tool in tools]
+
+
 def is_anthropic_messages_url(url: str) -> bool:
     """Check whether a URL addresses Anthropic's Messages API."""
     parsed_url: Final = urlparse(url)

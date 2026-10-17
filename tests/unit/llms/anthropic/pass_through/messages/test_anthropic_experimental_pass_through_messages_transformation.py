@@ -10,6 +10,9 @@ from litellm.llms.anthropic.pass_through.messages.transformation import (
 from litellm.llms.anthropic.wif import get_anthropic_wif_token
 from litellm.llms.minimax.messages.transformation import MinimaxMessagesConfig
 from litellm.llms.tencent.messages.transformation import TencentAnthropicMessagesConfig
+from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation import (
+    VertexAIPartnerModelsAnthropicMessagesConfig,
+)
 from tests.unit.llms.anthropic.test_anthropic_wif import (
     ScriptedPoster,
     make_engine,
@@ -22,6 +25,49 @@ _WIF_PARAMS: Final[dict] = {
     "anthropic_organization_id": "org-uuid-1",
     "anthropic_identity_token_file": "/var/run/secrets/identity-token",
 }
+
+
+@pytest.mark.parametrize(
+    "config_class",
+    [AnthropicMessagesConfig, VertexAIPartnerModelsAnthropicMessagesConfig],
+)
+def test_messages_request_removes_tool_custom_fields_without_mutating_tools(
+    config_class: type[AnthropicMessagesConfig],
+) -> None:
+    tools: Final[list[dict[str, object]]] = [
+        {
+            "name": "A",
+            "input_schema": {"type": "object", "properties": {}},
+            "custom": {"eager_input_streaming": True},
+        },
+        {
+            "name": "B",
+            "input_schema": {"type": "object", "properties": {}},
+            "custom": {"defer_loading": True},
+        },
+        {"name": "C", "input_schema": {"type": "object", "properties": {}}},
+    ]
+    optional_params: Final[dict[str, object]] = {"max_tokens": 50, "tools": tools}
+
+    request: Final = config_class().transform_anthropic_messages_request(
+        model="claude-haiku-5-5",
+        messages=[{"role": "user", "content": "Hi"}],
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["tools"] == [
+        {"name": "A", "input_schema": {"type": "object", "properties": {}}},
+        {
+            "name": "B",
+            "input_schema": {"type": "object", "properties": {}},
+            "defer_loading": True,
+        },
+        {"name": "C", "input_schema": {"type": "object", "properties": {}}},
+    ]
+    assert tools[0]["custom"] == {"eager_input_streaming": True}
+    assert optional_params["tools"] is tools
 
 
 def test_workload_identity_allowed_for_anthropic() -> None:

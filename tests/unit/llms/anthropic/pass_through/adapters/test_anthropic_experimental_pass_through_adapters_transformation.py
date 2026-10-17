@@ -4204,6 +4204,21 @@ def test_translate_anthropic_tools_to_openai_preserves_parameters_type():
     assert new_tools[0]["type"] == "function"
 
 
+def test_translate_anthropic_custom_field_does_not_change_openai_parameters():
+    input_schema: Final = {"type": "object", "properties": {"city": {"type": "string"}}}
+    tools: Final = [
+        {
+            "name": "get_weather",
+            "input_schema": input_schema,
+            "custom": {"eager_input_streaming": True},
+        }
+    ]
+
+    new_tools, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_tools_to_openai(tools=tools)
+
+    assert new_tools[0]["function"]["parameters"] == input_schema
+
+
 def test_translate_anthropic_tools_to_openai_maps_strict_onto_function_not_parameters():
     """A tool-level `strict` lands on the OpenAI function, leaving the caller's `input_schema` untouched."""
     adapter = LiteLLMAnthropicMessagesAdapter()

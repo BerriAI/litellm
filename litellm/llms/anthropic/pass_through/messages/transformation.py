@@ -1,5 +1,5 @@
 from collections.abc import AsyncIterator, Mapping, Sequence
-from typing import ClassVar, Final
+from typing import ClassVar, Final, cast  # noqa: TID251  # TypedDict kwargs avoid 22 new type errors
 
 import httpx
 
@@ -15,6 +15,7 @@ from litellm.types.llms.anthropic import (
     ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,
     ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,
     AnthropicMessagesRequest,
+    AnthropicMessagesRequestOptionalParams,
 )
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
@@ -30,6 +31,7 @@ from ...common_utils import (
     requires_native_compaction_beta,
     strip_advisor_blocks_from_messages,
     strip_encrypted_reasoning_blocks_from_anthropic_messages,
+    tools_without_custom_field,
 )
 from .mid_conversation_system import (
     as_system_content_blocks,
@@ -651,16 +653,32 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
 
         # Auto-strip advisor blocks from history if advisor tool is absent.
         # Prevents Anthropic 400: advisor_tool_result in history requires advisor tool.
-        _tools: Final = anthropic_messages_optional_request_params.get("tools") or []
+        tools: Final = anthropic_messages_optional_request_params.get("tools")
+        request_params: Final = cast(  # cast-ok: keep request kwargs typed for AnthropicMessagesRequest
+            AnthropicMessagesRequestOptionalParams,
+            (
+                {
+                    **anthropic_messages_optional_request_params,
+                    "max_tokens": max_tokens,
+                    "tools": tools_without_custom_field(tools),
+                }
+                if isinstance(tools, list)
+                else {
+                    **anthropic_messages_optional_request_params,
+                    "max_tokens": max_tokens,
+                }
+            ),
+        )
+
+        _tools: Final = tools or []
         _has_advisor: Final = any(isinstance(t, dict) and t.get("type") == ANTHROPIC_ADVISOR_TOOL_TYPE for t in _tools)
         if not _has_advisor:
             messages = strip_advisor_blocks_from_messages(messages)
 
         anthropic_messages_request: Final[AnthropicMessagesRequest] = AnthropicMessagesRequest(
             messages=strip_encrypted_reasoning_blocks_from_anthropic_messages(messages),
-            max_tokens=max_tokens,
             model=model,
-            **anthropic_messages_optional_request_params,
+            **request_params,
         )
         return dict(anthropic_messages_request)
 
