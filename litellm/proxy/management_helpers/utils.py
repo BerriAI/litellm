@@ -215,8 +215,8 @@ async def handle_budget_for_entity(
         update_budget,
     )
 
-    # Get all budget field names
-    budget_params: Final = LiteLLM_BudgetTable.model_fields.keys()
+    # Get all budget field names, excluding budget_id which selects the budget rather than a budget setting
+    budget_params: Final = set(LiteLLM_BudgetTable.model_fields.keys()) - {"budget_id"}
 
     # Extract budget fields from data
     _json_data: Final = _BUDGET_DATA_MAPPING.validate_python(
