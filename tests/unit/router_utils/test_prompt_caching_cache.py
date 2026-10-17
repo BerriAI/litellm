@@ -426,6 +426,57 @@ def test_a_marked_turn_too_deep_to_serialize_keeps_the_pin_of_the_mark_before_it
     assert cache.get_model_id(messages=first_turn, tools=None) == {"model_id": "deployment-2"}
 
 
+def _deep_marked_question(question: str) -> AllMessageValues:
+    return cast(
+        AllMessageValues,
+        {"role": "user", "content": question, "cache_control": {"type": "ephemeral"}, "x": _DEEP_VALUE},
+    )
+
+
+def test_a_pin_written_past_two_turns_too_deep_to_serialize_lands_on_the_mark_before_the_first() -> None:
+    cache: Final = _pin_cache(_ManualClock())
+    first_turn: Final = _system_block_messages({"type": "ephemeral"})
+    messages: Final = [
+        *first_turn,
+        _deep_marked_question("Find the termination clause."),
+        cast(
+            AllMessageValues,
+            {"role": "user", "content": "Now the renewal clause.", "cache_control": {"type": "ephemeral"}},
+        ),
+        _deep_marked_question("And the governing law."),
+    ]
+
+    cache.add_model_id(model_id="deployment-1", messages=first_turn, tools=None)
+    cache.add_model_id(model_id="deployment-2", messages=messages, tools=None)
+
+    assert cache.get_model_id(messages=first_turn, tools=None) == {"model_id": "deployment-2"}
+
+
+def test_a_pin_cut_before_a_turn_too_deep_to_serialize_lasts_only_as_long_as_the_marks_it_kept() -> None:
+    clock: Final = _ManualClock()
+    cache: Final = _pin_cache(clock)
+    first_turn: Final = _system_block_messages({"type": "ephemeral"})
+    messages: Final = cast(
+        list[AllMessageValues],
+        [
+            *first_turn,
+            {"role": "assistant", "content": None, "tool_calls": [{**_tool_call("call_1"), "x": _DEEP_VALUE}]},
+            {"role": "tool", "tool_call_id": "call_1", "content": "Section 9."},
+            {
+                "role": "user",
+                "content": "Find the renewal clause.",
+                "cache_control": {"type": "ephemeral", "ttl": "1h"},
+            },
+        ],
+    )
+
+    cache.add_model_id(model_id="deployment-1", messages=messages, tools=None, honors_one_hour_ttl=True)
+
+    assert cache.get_model_id(messages=first_turn, tools=None) == {"model_id": "deployment-1"}
+    clock.advance(PROMPT_CACHE_PIN_TTL_SECONDS + 1)
+    assert cache.get_model_id(messages=first_turn, tools=None) is None
+
+
 async def _first_non_none(read):
     while True:
         value = await read()
