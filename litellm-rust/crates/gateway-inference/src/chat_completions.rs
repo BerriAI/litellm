@@ -93,6 +93,18 @@ async fn handle(
         None => route,
     };
 
+    // Chat forwards no client headers of its own; hooks may set some.
+    let extra_headers = tracking
+        .as_ref()
+        .and_then(|tracking| tracking.edit_headers(Vec::new()))
+        .filter(|headers| !headers.is_empty())
+        .map(|headers| {
+            headers
+                .into_iter()
+                .map(|(name, value)| (name, Value::from(value)))
+                .collect::<Map<String, Value>>()
+        });
+    let extra_headers = &extra_headers;
     let cache_headers = crate::caching::CacheHeaders::default();
     let mut body = Some(body);
     let routed = gateway
@@ -120,7 +132,7 @@ async fn handle(
                         &deployment.model,
                         deployment.custom_llm_provider.as_deref(),
                     ) {
-                        return openai(gateway, deployment, body).await;
+                        return openai(gateway, deployment, body, extra_headers.clone()).await;
                     }
                     let (messages, optional_params) = split(body);
                     let call = ChatCompletionsCall {
@@ -130,7 +142,7 @@ async fn handle(
                         api_key: deployment.api_key.clone(),
                         api_base: deployment.api_base.clone(),
                         custom_llm_provider: deployment.custom_llm_provider.clone(),
-                        extra_headers: None,
+                        extra_headers: extra_headers.clone(),
                         timeout: deployment.timeout,
                     };
                     Ok(litellm_host_http::serve_unary(
@@ -166,6 +178,7 @@ async fn openai(
     gateway: &Gateway,
     deployment: &Deployment,
     body: Map<String, Value>,
+    extra_headers: Option<Map<String, Value>>,
 ) -> Result<Response, Error> {
     let machine = gateway.chat_completions.clone().openai_machine(
         OpenAiChatCall {
@@ -174,7 +187,7 @@ async fn openai(
             api_key: deployment.api_key.clone(),
             api_base: deployment.api_base.clone(),
             custom_llm_provider: deployment.custom_llm_provider.clone(),
-            extra_headers: None,
+            extra_headers,
             timeout: deployment.timeout,
         },
         None,

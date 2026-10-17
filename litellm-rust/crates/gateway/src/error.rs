@@ -20,6 +20,8 @@ pub enum Error {
     DatabaseUrl(String),
     #[error("reading a gateway setting from the secret source failed")]
     Secret(#[from] litellm_secrets::Error),
+    #[error("litellm_settings.hooks: {0}")]
+    Hooks(String),
     #[error("coordination Redis: {0}")]
     Redis(String),
     #[error("MCP requires a configured master key")]
