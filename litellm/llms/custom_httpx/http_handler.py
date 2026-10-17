@@ -664,7 +664,14 @@ class AsyncHTTPHandler:
         logging_obj: LiteLLMLoggingObject | None = None,
         files: RequestFiles | None = None,
         content: _RequestContent | None = None,
+        replay_on_remote_protocol_error: bool = True,
     ):
+        """
+        ``replay_on_remote_protocol_error=False`` re-raises a connection reset that happens after the
+        request was written instead of replaying the POST on a new client. Callers whose POST is not
+        idempotent (e.g. it creates a billable task) must pass it. ``httpx.ConnectError`` is still
+        replayed: no request was sent, so it cannot duplicate anything.
+        """
         start_time: Final = time.time()
         try:
             if timeout is None:
@@ -687,7 +694,9 @@ class AsyncHTTPHandler:
             response: Final = await self.client.send(req, stream=stream)
             response.raise_for_status()
             return response
-        except (httpx.RemoteProtocolError, httpx.ConnectError):
+        except (httpx.RemoteProtocolError, httpx.ConnectError) as connection_error:
+            if isinstance(connection_error, httpx.RemoteProtocolError) and not replay_on_remote_protocol_error:
+                raise
             # Retry the request with a new session if there is a connection error
             new_client: Final = self.create_client(timeout=timeout, event_hooks=self.event_hooks)
             try:

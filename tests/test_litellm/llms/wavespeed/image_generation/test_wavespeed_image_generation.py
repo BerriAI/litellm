@@ -8,7 +8,10 @@ import respx
 
 import litellm
 
-from litellm.llms.wavespeed.common_utils import WaveSpeedError
+from litellm.llms.wavespeed.common_utils import (
+    POST_SUBMIT_ERROR_STATUS_CODE,
+    WaveSpeedError,
+)
 from litellm.llms.wavespeed.image_generation.handler import WaveSpeedImageGeneration
 from litellm.llms.wavespeed.image_generation.transformation import (
     WaveSpeedImageGenerationConfig,
@@ -97,8 +100,8 @@ def test_submit_is_issued_exactly_once_when_polling_fails(generate):
         generate()
 
     assert submit.call_count == 1
-    assert poll.call_count == 5
-    assert "5 times in a row" in str(exc_info.value)
+    assert poll.call_count == 10
+    assert "10 times in a row" in str(exc_info.value)
 
 
 @respx.mock
@@ -222,7 +225,7 @@ def test_sync_poll_timeout(generate, zero_poll_budget):
     with pytest.raises(WaveSpeedError) as exc_info:
         generate()
 
-    assert exc_info.value.status_code == 408
+    assert exc_info.value.status_code == POST_SUBMIT_ERROR_STATUS_CODE
     assert "did not finish within" in str(exc_info.value)
     assert submit.call_count == 1
     assert poll.call_count == 0
@@ -244,7 +247,7 @@ async def test_async_poll_timeout(zero_poll_budget):
             timeout=None,
         )
 
-    assert exc_info.value.status_code == 408
+    assert exc_info.value.status_code == POST_SUBMIT_ERROR_STATUS_CODE
 
 
 @pytest.mark.asyncio
@@ -265,8 +268,8 @@ async def test_async_submit_is_issued_exactly_once_when_polling_fails():
         )
 
     assert submit.call_count == 1
-    assert poll.call_count == 5
-    assert "5 times in a row" in str(exc_info.value)
+    assert poll.call_count == 10
+    assert "10 times in a row" in str(exc_info.value)
 
 
 @pytest.mark.asyncio
@@ -366,3 +369,160 @@ def test_poll_requests_honour_the_caller_timeout(generate):
         "write": 2.5,
         "pool": 2.5,
     }
+
+
+async def run_async(**overrides):
+    return await WaveSpeedImageGeneration().async_image_generation(
+        model=MODEL,
+        prompt="a red panda",
+        model_response=ImageResponse(),
+        optional_params={},
+        litellm_params={"api_key": "sk-test", "api_base": None},
+        logging_obj=MagicMock(),
+        timeout=None,
+        **overrides,
+    )
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_async_submit_reset_after_send_is_not_replayed():
+    """A reset after the request was written may have created a paid task: send once, fail non-retryably."""
+    submit = respx.post(SUBMIT_URL).mock(side_effect=httpx.RemoteProtocolError("server disconnected"))
+    poll = respx.get(RESULT_URL).mock(return_value=httpx.Response(200, json=prediction("completed")))
+
+    with pytest.raises(WaveSpeedError) as exc_info:
+        await run_async()
+
+    assert submit.call_count == 1
+    assert poll.call_count == 0
+    assert exc_info.value.status_code == POST_SUBMIT_ERROR_STATUS_CODE
+    assert not litellm._should_retry(exc_info.value.status_code)
+
+
+@respx.mock
+def test_sync_submit_reset_after_send_is_not_retried_and_not_retryable(generate):
+    submit = respx.post(SUBMIT_URL).mock(side_effect=httpx.RemoteProtocolError("server disconnected"))
+
+    with pytest.raises(WaveSpeedError) as exc_info:
+        generate()
+
+    assert submit.call_count == 1
+    assert not litellm._should_retry(exc_info.value.status_code)
+
+
+@respx.mock
+def test_poll_gateway_error_then_success_is_tolerated(generate):
+    submit = respx.post(SUBMIT_URL).mock(return_value=httpx.Response(200, json=prediction("created")))
+    poll = respx.get(RESULT_URL).mock(
+        side_effect=[
+            httpx.Response(502, text="bad gateway"),
+            httpx.Response(429, text="slow down"),
+            httpx.Response(503, text="unavailable"),
+            httpx.Response(200, json=prediction("completed", outputs=[OUTPUT_URL])),
+        ]
+    )
+
+    response = generate()
+
+    assert [image.url for image in response.data] == [OUTPUT_URL]
+    assert submit.call_count == 1
+    assert poll.call_count == 4
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_async_poll_gateway_error_then_success_is_tolerated():
+    respx.post(SUBMIT_URL).mock(return_value=httpx.Response(200, json=prediction("created")))
+    poll = respx.get(RESULT_URL).mock(
+        side_effect=[
+            httpx.Response(504, text="timeout"),
+            httpx.Response(200, json=prediction("completed", outputs=[OUTPUT_URL])),
+        ]
+    )
+
+    response = await run_async()
+
+    assert [image.url for image in response.data] == [OUTPUT_URL]
+    assert poll.call_count == 2
+
+
+@respx.mock
+def test_persistent_poll_502_fails_with_prediction_id_and_is_not_retryable(generate):
+    submit = respx.post(SUBMIT_URL).mock(return_value=httpx.Response(200, json=prediction("created")))
+    poll = respx.get(RESULT_URL).mock(return_value=httpx.Response(502, text="bad gateway"))
+
+    with pytest.raises(WaveSpeedError) as exc_info:
+        generate()
+
+    assert submit.call_count == 1
+    assert poll.call_count == 10
+    assert "pred-123" in str(exc_info.value)
+    assert "502" in str(exc_info.value)
+    assert not litellm._should_retry(exc_info.value.status_code)
+
+
+@respx.mock
+def test_unusable_poll_response_names_the_prediction(generate):
+    respx.post(SUBMIT_URL).mock(return_value=httpx.Response(200, json=prediction("created")))
+    respx.get(RESULT_URL).mock(return_value=httpx.Response(404, text="not found"))
+
+    with pytest.raises(WaveSpeedError) as exc_info:
+        generate()
+
+    assert "pred-123" in str(exc_info.value)
+    assert exc_info.value.status_code == 404
+
+
+@respx.mock
+def test_deleted_prediction_is_terminal(generate):
+    respx.post(SUBMIT_URL).mock(return_value=httpx.Response(200, json=prediction("created")))
+    poll = respx.get(RESULT_URL).mock(return_value=httpx.Response(200, json=prediction("deleted")))
+
+    with pytest.raises(WaveSpeedError):
+        generate()
+
+    assert poll.call_count == 1
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_router_retries_never_resubmit_after_the_task_was_accepted():
+    """Router num_retries re-runs the whole call; after the submit it must not issue a second paid POST."""
+    submit = respx.post(SUBMIT_URL).mock(return_value=httpx.Response(200, json=prediction("created")))
+    respx.get(RESULT_URL).mock(return_value=httpx.Response(502, text="bad gateway"))
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "ws-image",
+                "litellm_params": {"model": f"wavespeed/{MODEL}", "api_key": "sk-test"},
+            }
+        ],
+        num_retries=2,
+    )
+
+    with pytest.raises(Exception, match="pred-123"):
+        await router.aimage_generation(model="ws-image", prompt="a red panda")
+
+    assert submit.call_count == 1
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_router_still_retries_a_submit_the_server_rejected():
+    """Errors before the task was accepted keep their retryable status."""
+    submit = respx.post(SUBMIT_URL).mock(return_value=httpx.Response(503, text="unavailable"))
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "ws-image",
+                "litellm_params": {"model": f"wavespeed/{MODEL}", "api_key": "sk-test"},
+            }
+        ],
+        num_retries=2,
+    )
+
+    with pytest.raises(Exception, match="unavailable"):
+        await router.aimage_generation(model="ws-image", prompt="a red panda")
+
+    assert submit.call_count == 3

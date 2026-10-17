@@ -7207,6 +7207,11 @@ class BaseLLMHTTPHandler:
             },
         )
 
+        post_kwargs: dict[str, bool] = (  # mutable-ok: splatted into post()
+            {}
+            if video_generation_provider_config.replay_create_on_connection_reset()
+            else {"replay_on_remote_protocol_error": False}
+        )
         try:
             if files and len(files) > 0:
                 response = await async_httpx_client.post(
@@ -7215,6 +7220,7 @@ class BaseLLMHTTPHandler:
                     data=data,
                     files=files,
                     timeout=timeout,
+                    **post_kwargs,
                 )
             elif video_generation_provider_config.use_multipart_form_data():
                 response = await async_httpx_client.post(  # rebind-ok: one of three mutually-exclusive branches
@@ -7222,6 +7228,7 @@ class BaseLLMHTTPHandler:
                     headers=headers,
                     files=serialize_multipart_form_fields(data),
                     timeout=timeout,
+                    **post_kwargs,
                 )
             else:
                 response = await async_httpx_client.post(
@@ -7229,6 +7236,7 @@ class BaseLLMHTTPHandler:
                     headers=headers,
                     json=data,
                     timeout=timeout,
+                    **post_kwargs,
                 )
 
         except Exception as e:

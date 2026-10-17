@@ -120,6 +120,10 @@ class WaveSpeedVideoConfig(BaseVideoConfig):
     OpenAI equivalent are passed straight through to the prediction body.
     """
 
+    def replay_create_on_connection_reset(self) -> bool:
+        # Every create call starts a billable prediction, so it is never re-sent after a reset.
+        return False
+
     def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: base contract returns bare `list`
         return ["model", "prompt", "input_reference", "seconds", "size", "user", "extra_headers"]  # mutable-ok: ditto
 

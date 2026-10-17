@@ -1314,3 +1314,38 @@ async def test_finalizer_on_live_loop_disposes_foreign_loop_session_without_sche
 
     assert AsyncHTTPHandler._finalizer_close_tasks == baseline_tasks
     assert session.closed
+
+
+@pytest.mark.asyncio
+async def test_async_post_replays_remote_protocol_error_unless_the_caller_opts_out(monkeypatch):
+    """The replay on a new client is the default for every caller; a non-idempotent POST opts out."""
+    import respx
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    url = "https://example.test/submit"
+    with respx.mock:
+        route = respx.post(url).mock(
+            side_effect=[httpx.RemoteProtocolError("reset"), httpx.Response(200, json={"ok": True})]
+        )
+        handler = AsyncHTTPHandler()
+        response = await handler.post(url=url, json={})
+        assert response.json() == {"ok": True}
+        assert route.call_count == 2
+
+    with respx.mock:
+        route = respx.post(url).mock(
+            side_effect=[httpx.RemoteProtocolError("reset"), httpx.Response(200, json={"ok": True})]
+        )
+        handler = AsyncHTTPHandler()
+        with pytest.raises(httpx.RemoteProtocolError):
+            await handler.post(url=url, json={}, replay_on_remote_protocol_error=False)
+        assert route.call_count == 1
+
+    with respx.mock:
+        route = respx.post(url).mock(
+            side_effect=[httpx.ConnectError("refused"), httpx.Response(200, json={"ok": True})]
+        )
+        handler = AsyncHTTPHandler()
+        response = await handler.post(url=url, json={}, replay_on_remote_protocol_error=False)
+        assert response.status_code == 200
+        assert route.call_count == 2

@@ -92,6 +92,13 @@ class BaseVideoConfig(ABC):
             raise ValueError("api_base is required")
         return api_base
 
+    def replay_create_on_connection_reset(self) -> bool:
+        """
+        Whether the async create POST may be replayed on a new client after the connection
+        was reset mid-request. Providers whose create call starts a billable task return False.
+        """
+        return True
+
     def use_multipart_form_data(self) -> bool:
         """
         Whether video create requests without files must still be sent as

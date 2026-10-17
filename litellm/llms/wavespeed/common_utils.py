@@ -35,10 +35,18 @@ DEFAULT_API_BASE: Final = "https://api.wavespeed.ai"
 CHAT_API_BASE: Final = "https://llm.wavespeed.ai/v1"
 DEFAULT_POLLING_INTERVAL: Final = 1.0
 DEFAULT_MAX_POLLING_TIME: Final = 600
-MAX_CONSECUTIVE_POLL_FAILURES: Final = 5
+# Poll GETs are read-only, so a flaky result endpoint is ridden out: 10 consecutive failures with a
+# linear backoff (1s, 2s, ... 9s between tries) is ~45s of tolerated outage before giving up.
+MAX_CONSECUTIVE_POLL_FAILURES: Final = 10
+TRANSIENT_POLL_STATUS_CODES: Final = frozenset({429, 500, 502, 503, 504})
+# Status of every error raised after the submit was accepted or sent. litellm's retry logic (Router,
+# num_retries) only retries 408/409/429/>=500, so a non-retryable 4xx stops it from re-running the
+# whole call, which would issue a fresh billable submit. 424 (Failed Dependency) is mapped to a plain
+# APIError by exception_type and is not a cooldown trigger.
+POST_SUBMIT_ERROR_STATUS_CODE: Final = 424
 
 SUCCESS_STATUS: Final = "completed"
-FAILURE_STATUSES: Final = frozenset({"failed", "cancelled", "timeout"})
+FAILURE_STATUSES: Final = frozenset({"failed", "cancelled", "timeout", "deleted"})
 PENDING_STATUSES: Final = frozenset({"created", "processing"})
 
 OPENAI_STATUS_BY_WAVESPEED_STATUS: Final = MappingProxyType(
@@ -49,6 +57,7 @@ OPENAI_STATUS_BY_WAVESPEED_STATUS: Final = MappingProxyType(
         "failed": "failed",
         "cancelled": "failed",
         "timeout": "failed",
+        "deleted": "failed",
     }
 )
 
@@ -249,7 +258,10 @@ def poll_outcome(prediction: WaveSpeedPrediction) -> Literal["done", "pending"]:
     if status in FAILURE_STATUSES:
         raise WaveSpeedError(
             status_code=400,
-            message=f"WaveSpeed prediction {status}: {prediction.get('error') or 'no error detail returned'}",
+            message=(
+                f"WaveSpeed prediction {prediction.get('id', '')} {status}: "
+                f"{prediction.get('error') or 'no error detail returned'}"
+            ),
         )
     return "pending"
 

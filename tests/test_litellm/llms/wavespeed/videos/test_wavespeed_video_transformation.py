@@ -359,3 +359,31 @@ class TestWaveSpeedVideoReferenceInputs:
     def test_a_url_reference_is_left_alone(self):
         mapped = self.config.map_openai_params({"input_reference": "https://example.com/frame.png"}, MODEL, False)
         assert mapped["image"] == "https://example.com/frame.png"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_async_video_create_is_not_replayed_after_a_connection_reset(monkeypatch):
+    """The create POST starts a paid prediction, so a reset after the request was sent must not re-send it."""
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    submit = respx.post(f"{API_BASE}/api/v3/{MODEL}").mock(
+        side_effect=[httpx.RemoteProtocolError("reset"), httpx.Response(200, json=prediction("created"))]
+    )
+
+    with pytest.raises(Exception, match="reset"):
+        await BaseLLMHTTPHandler().async_video_generation_handler(
+            model=MODEL,
+            prompt="a red panda",
+            video_generation_provider_config=WaveSpeedVideoConfig(),
+            video_generation_optional_request_params={},
+            custom_llm_provider="wavespeed",
+            litellm_params=GenericLiteLLMParams(api_key="sk-test"),
+            logging_obj=Mock(),
+            timeout=5.0,
+            client=AsyncHTTPHandler(),
+        )
+
+    assert submit.call_count == 1

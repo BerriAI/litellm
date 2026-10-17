@@ -5,15 +5,17 @@ WaveSpeed predictions are asynchronous: one submit POST returns a prediction id,
 result endpoint is polled until the prediction reaches a terminal status.
 
 The submit POST is issued exactly once and is never retried, because every submission is a
-billable task and a retry would create a duplicate one. Poll GETs are read-only, so a short
-run of connection failures is tolerated before giving up.
+billable task and a retry would create a duplicate one. Poll GETs are read-only, so a run of
+transport failures or transient HTTP statuses (429/500/502/503/504) is tolerated, with backoff,
+before giving up. Every error raised after the submit is non-retryable for litellm's own retry
+logic (see ``POST_SUBMIT_ERROR_STATUS_CODE``) so a Router/num_retries retry cannot resubmit.
 """
 
 import asyncio
 import time
 from collections.abc import Coroutine, Mapping
 from types import MappingProxyType
-from typing import Final, NamedTuple
+from typing import Final, Literal, NamedTuple
 
 import httpx
 
@@ -33,6 +35,8 @@ from ..common_utils import (
     DEFAULT_MAX_POLLING_TIME,
     DEFAULT_POLLING_INTERVAL,
     MAX_CONSECUTIVE_POLL_FAILURES,
+    POST_SUBMIT_ERROR_STATUS_CODE,
+    TRANSIENT_POLL_STATUS_CODES,
     WaveSpeedError,
     build_result_url,
     get_prediction_id,
@@ -89,12 +93,15 @@ class WaveSpeedImageGeneration:
         sync_client: Final = client if isinstance(client, HTTPHandler) else _get_httpx_client()
         prepared: Final = self._prepare(model, prompt, resolved, optional_params, extra_headers, logging_obj)
 
-        submit_response: Final = sync_client.post(
-            url=prepared.submit_url,
-            headers=to_request_payload(prepared.headers),
-            json=to_request_payload(prepared.body),
-            timeout=timeout,
-        )
+        try:
+            submit_response: Final = sync_client.post(
+                url=prepared.submit_url,
+                headers=to_request_payload(prepared.headers),
+                json=to_request_payload(prepared.body),
+                timeout=timeout,
+            )
+        except httpx.RemoteProtocolError as e:
+            raise _submit_outcome_unknown_error(e) from e
         prediction_id: Final = get_prediction_id(unwrap_envelope(submit_response))
         result_url: Final = build_result_url(resolved.api_base, prediction_id)
         deadline: Final = time.time() + DEFAULT_MAX_POLLING_TIME
@@ -106,11 +113,20 @@ class WaveSpeedImageGeneration:
                 poll_response = sync_client.get(url=result_url, headers=poll_headers, timeout=timeout)
             except Exception as e:  # noqa: BLE001  # any transport failure is retried, never the billable submit
                 consecutive_failures = _record_poll_failure(consecutive_failures, prediction_id, e)
-                time.sleep(DEFAULT_POLLING_INTERVAL)
+                time.sleep(DEFAULT_POLLING_INTERVAL * consecutive_failures)
+                continue
+
+            if poll_response.status_code in TRANSIENT_POLL_STATUS_CODES:
+                consecutive_failures = _record_poll_failure(
+                    consecutive_failures,
+                    prediction_id,
+                    f"HTTP {poll_response.status_code}: {poll_response.text[:200]}",
+                )
+                time.sleep(DEFAULT_POLLING_INTERVAL * consecutive_failures)
                 continue
 
             consecutive_failures = 0
-            if poll_outcome(unwrap_envelope(poll_response)) == "done":
+            if _poll_outcome(prediction_id, poll_response) == "done":
                 return self._transform(
                     model, poll_response, model_response, logging_obj, prepared, optional_params, resolved
                 )
@@ -135,12 +151,16 @@ class WaveSpeedImageGeneration:
         async_client: Final = client or get_async_httpx_client(llm_provider=litellm.LlmProviders.WAVESPEED)
         prepared: Final = self._prepare(model, prompt, resolved, optional_params, extra_headers, logging_obj)
 
-        submit_response: Final = await async_client.post(
-            url=prepared.submit_url,
-            headers=to_request_payload(prepared.headers),
-            json=to_request_payload(prepared.body),
-            timeout=timeout,
-        )
+        try:
+            submit_response: Final = await async_client.post(
+                url=prepared.submit_url,
+                headers=to_request_payload(prepared.headers),
+                json=to_request_payload(prepared.body),
+                timeout=timeout,
+                replay_on_remote_protocol_error=False,
+            )
+        except httpx.RemoteProtocolError as e:
+            raise _submit_outcome_unknown_error(e) from e
         prediction_id: Final = get_prediction_id(unwrap_envelope(submit_response))
         result_url: Final = build_result_url(resolved.api_base, prediction_id)
         deadline: Final = time.time() + DEFAULT_MAX_POLLING_TIME
@@ -152,11 +172,20 @@ class WaveSpeedImageGeneration:
                 poll_response = await async_client.get(url=result_url, headers=poll_headers, timeout=timeout)
             except Exception as e:  # noqa: BLE001  # any transport failure is retried, never the billable submit
                 consecutive_failures = _record_poll_failure(consecutive_failures, prediction_id, e)
-                await asyncio.sleep(DEFAULT_POLLING_INTERVAL)
+                await asyncio.sleep(DEFAULT_POLLING_INTERVAL * consecutive_failures)
+                continue
+
+            if poll_response.status_code in TRANSIENT_POLL_STATUS_CODES:
+                consecutive_failures = _record_poll_failure(
+                    consecutive_failures,
+                    prediction_id,
+                    f"HTTP {poll_response.status_code}: {poll_response.text[:200]}",
+                )
+                await asyncio.sleep(DEFAULT_POLLING_INTERVAL * consecutive_failures)
                 continue
 
             consecutive_failures = 0
-            if poll_outcome(unwrap_envelope(poll_response)) == "done":
+            if _poll_outcome(prediction_id, poll_response) == "done":
                 return self._transform(
                     model, poll_response, model_response, logging_obj, prepared, optional_params, resolved
                 )
@@ -246,11 +275,34 @@ def _resolve_params(litellm_params: GenericLiteLLMParams | Mapping[str, object])
     )
 
 
-def _record_poll_failure(consecutive_failures: int, prediction_id: str, error: Exception) -> int:
+def _poll_outcome(prediction_id: str, poll_response: httpx.Response) -> Literal["done", "pending"]:
+    """Classify a poll response; an unusable one fails with the prediction id and is not retried."""
+    try:
+        prediction: Final = unwrap_envelope(poll_response)
+    except WaveSpeedError as e:
+        raise WaveSpeedError(
+            status_code=e.status_code if not litellm._should_retry(e.status_code) else POST_SUBMIT_ERROR_STATUS_CODE,  # pyright: ignore[reportPrivateUsage]  # litellm's own retry predicate
+            message=f"WaveSpeed result polling for prediction {prediction_id} failed (HTTP {e.status_code}): {e.message}",
+            headers=e.headers,
+        ) from e
+    return poll_outcome(prediction)
+
+
+def _submit_outcome_unknown_error(error: Exception) -> WaveSpeedError:
+    return WaveSpeedError(
+        status_code=POST_SUBMIT_ERROR_STATUS_CODE,
+        message=(
+            "WaveSpeed submit connection was reset after the request was sent, so the task may have been "
+            f"created. It was not re-sent to avoid a duplicate paid task: {error}"
+        ),
+    )
+
+
+def _record_poll_failure(consecutive_failures: int, prediction_id: str, error: Exception | str) -> int:
     next_count: Final = consecutive_failures + 1
     if next_count >= MAX_CONSECUTIVE_POLL_FAILURES:
         raise WaveSpeedError(
-            status_code=500,
+            status_code=POST_SUBMIT_ERROR_STATUS_CODE,
             message=(
                 f"WaveSpeed result polling for prediction {prediction_id} failed {next_count} times in a row: {error}"
             ),
@@ -261,7 +313,7 @@ def _record_poll_failure(consecutive_failures: int, prediction_id: str, error: E
 
 def _timeout_error(prediction_id: str) -> WaveSpeedError:
     return WaveSpeedError(
-        status_code=408,
+        status_code=POST_SUBMIT_ERROR_STATUS_CODE,
         message=f"WaveSpeed prediction {prediction_id} did not finish within {DEFAULT_MAX_POLLING_TIME} seconds",
     )
 
