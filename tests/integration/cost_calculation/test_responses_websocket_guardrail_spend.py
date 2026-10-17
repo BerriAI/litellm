@@ -162,4 +162,7 @@ def test_every_turn_runs_the_pre_call_guardrail_and_bills_only_its_own_guardrail
             (0.0 if _BLOCKED_WORD in text else _llm_cost()) + _COST_PER_WORD * len(text.split()) for text in texts
         ]
         assert [float(row["spend"]) for row in rows] == pytest.approx(expected), rows
-        assert eventually(lambda: _key_spend(key), lambda spend: spend > 0, seconds=70) == pytest.approx(sum(expected))
+        total: Final = sum(expected)
+        assert eventually(
+            lambda: _key_spend(key), lambda spend: abs(spend - total) < 1e-6, seconds=70
+        ) == pytest.approx(total)
