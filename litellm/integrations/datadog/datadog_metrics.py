@@ -62,6 +62,10 @@ class DatadogMetricsLogger(CustomBatchLogger):
 
         super().__init__(**kwargs)
 
+        # Distribution points at the head of the queue that Datadog rejected; they ride the next flush
+        # but do not count toward `batch_size`
+        self.unsent_distribution_count = 0
+
         # Start periodic flush task only if instructed
         if start_periodic_flush:
             asyncio.create_task(self.periodic_flush())
@@ -196,7 +200,7 @@ class DatadogMetricsLogger(CustomBatchLogger):
 
             self._add_metrics_from_log(log=standard_logging_object, kwargs=kwargs, status_code="200")
 
-            if len(self.log_queue) >= self.batch_size:
+            if len(self.log_queue) - self.unsent_distribution_count >= self.batch_size:
                 await self.flush_queue()
 
         except Exception as e:
@@ -218,7 +222,7 @@ class DatadogMetricsLogger(CustomBatchLogger):
 
             self._add_metrics_from_log(log=standard_logging_object, kwargs=kwargs, status_code=status_code)
 
-            if len(self.log_queue) >= self.batch_size:
+            if len(self.log_queue) - self.unsent_distribution_count >= self.batch_size:
                 await self.flush_queue()
 
         except Exception as e:
@@ -245,9 +249,19 @@ class DatadogMetricsLogger(CustomBatchLogger):
             if distributions:
                 await self._upload_distributions_to_datadog({"series": distributions})
         except (Exception, asyncio.CancelledError) as e:
-            self.log_queue[: len(batch)] = distributions
+            unsent: Final = distributions[-self.batch_size :]
+            self.log_queue[: len(batch)] = unsent
+            self.unsent_distribution_count = len(unsent)
+            if dropped := len(distributions) - len(unsent):
+                verbose_logger.warning(
+                    "Datadog Metrics: keeping the newest %s unsent distribution points; dropped %s older ones.",
+                    len(unsent),
+                    dropped,
+                )
             verbose_logger.exception("Datadog Metrics: Error in async_send_batch: %s", e)
             raise
+
+        self.unsent_distribution_count = 0
 
     async def _upload_to_datadog(self, payload: DatadogMetricsPayload):
         await self._post_compressed(self.upload_url, safe_dumps(payload), len(payload["series"]), encoding="gzip")

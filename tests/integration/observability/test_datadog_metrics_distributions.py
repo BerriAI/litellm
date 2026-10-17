@@ -208,6 +208,7 @@ def rig_factory(gateway: Gateway, tmp_path: Path) -> RigFactory:
         hostname: str | None = None,
         callback_setting: str | None = "callbacks",
         upstream: Callable[[Request], Reply] = surface_reply,
+        batch_size: int | None = None,
     ) -> Iterator[Rig]:
         cert, key = write_self_signed_cert(tmp_path, SITE_HOSTS)
         with (
@@ -221,6 +222,7 @@ def rig_factory(gateway: Gateway, tmp_path: Path) -> RigFactory:
                 "DD_SERVICE": "litellm-integration",
                 "SSL_CERT_FILE": str(cert),
                 **({"HOSTNAME": hostname} if hostname is not None else {}),
+                **({"DEFAULT_BATCH_SIZE": str(batch_size)} if batch_size is not None else {}),
             }
             removed: Final = ("DD_APP_KEY", "POD_NAME", *(("HOSTNAME",) if hostname is None else ()))
             with owned_proxy(
@@ -494,6 +496,40 @@ def test_an_endpoint_outage_delivers_every_sample_exactly_once_after_recovery(
                 assert len(distribution_samples(intake, metric, model)) == burst, metric
                 assert len(series_points(intake, metric, model)) == burst, metric
             assert sum(series_points(intake, REQUEST_COUNT_METRIC, model)) == burst
+
+
+def test_a_lasting_distribution_outage_retries_one_bounded_batch_per_flush(rig_factory: RigFactory) -> None:
+    """Datadog rejects every distribution upload while requests keep finishing. The rejected samples ride the
+    next flush, but they neither make every request flush nor pile up into one ever-growing retry: each retry
+    carries at most two batches of samples, and every gauge and count still lands on `/api/v2/series` once."""
+    batch_size: Final = 21  # the metrics of three requests
+    requests: Final = 120
+    intake: Final = DatadogIntake(failing={DISTRIBUTIONS: 10**6})
+    with rig_factory(intake, batch_size=batch_size) as rig:
+        with rig.proxy.scenario() as scenario:
+            model: Final = scenario.model(api_base=rig.provider_url + "/v1", api_key="synthetic-provider-key")
+            key: Final = scenario.key(models=[model])
+            marker: Final = f"dd-{uuid.uuid4().hex[:8]}"
+            statuses: Final = tuple(
+                status
+                for index in range(requests)
+                for status in _chat(str(rig.proxy.client.base_url), key, model, (f"{marker}-{index}",))
+            )
+            assert statuses == (200,) * requests, statuses
+            eventually(
+                lambda: sum(series_points(intake, REQUEST_COUNT_METRIC, model)),
+                lambda total: total >= requests,
+                seconds=FLUSH_WAIT_SECONDS,
+                return_last_on_timeout=True,
+            )
+
+            retries: Final = tuple(len(upload.series) for upload in intake.rejected(DISTRIBUTIONS))
+            assert retries, "the scripted outage never answered an upload"
+            assert len(retries) <= requests // 2, retries
+            assert max(retries) <= 2 * batch_size, retries
+            for metric in LATENCIES:
+                assert len(series_points(intake, metric, model)) == requests, metric
+            assert sum(series_points(intake, REQUEST_COUNT_METRIC, model)) == requests
 
 
 def test_requests_finishing_while_a_slow_flush_is_in_flight_are_not_lost(rig_factory: RigFactory) -> None:

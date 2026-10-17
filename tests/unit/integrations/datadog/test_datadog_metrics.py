@@ -540,6 +540,66 @@ async def test_flush_retries_only_distributions_after_v1_failure(clean_env):
 
 
 @pytest.mark.asyncio
+async def test_flush_keeps_only_the_newest_batch_of_rejected_distributions(clean_env):
+    logger = DatadogMetricsLogger(batch_size=2, start_periodic_flush=False)
+    logger.async_client = AsyncMock()
+    v1_url = "https://api.test.datadoghq.com/api/v1/distribution_points"
+    logger.async_client.post.return_value = Response(503, json={"errors": ["down"]}, request=Request("POST", v1_url))
+    timestamp = int(time.time())
+    distributions = [
+        {
+            "metric": "litellm_proxy.request.total_latency",
+            "type": "distribution",
+            "points": ((timestamp, (float(seconds),)),),
+            "tags": ("env:test",),
+        }
+        for seconds in range(3)
+    ]
+    logger.log_queue = list(distributions)
+
+    await logger.flush_queue()
+
+    assert logger.log_queue == distributions[1:]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("log_event", ("async_log_success_event", "async_log_failure_event"))
+async def test_rejected_distributions_do_not_count_toward_the_batch_size(clean_env, log_event):
+    """While Datadog rejects distributions, a request triggers a flush only once a batch of new metrics has
+    queued behind them, and once Datadog takes them every queued metric counts again."""
+    logger = DatadogMetricsLogger(batch_size=8, start_periodic_flush=False)
+    logger.async_client = AsyncMock()
+    v2_url = "https://api.test.datadoghq.com/api/v2/series"
+    v1_url = "https://api.test.datadoghq.com/api/v1/distribution_points"
+    responses = {
+        v2_url: Response(202, json={"status": "ok"}, request=Request("POST", v2_url)),
+        v1_url: Response(503, json={"errors": ["down"]}, request=Request("POST", v1_url)),
+    }
+    logger.async_client.post.side_effect = lambda url, **_: responses[url]
+    now = datetime.now()
+    kwargs = {
+        "standard_logging_object": StandardLoggingPayload(custom_llm_provider="openai", model="gpt-4o"),
+        "start_time": now - timedelta(seconds=1),
+        "api_call_start_time": now - timedelta(seconds=0.5),
+        "end_time": now,
+    }
+
+    async def posts_after_each_of(requests: int) -> list[int]:
+        posts = []
+        for _ in range(requests):
+            await getattr(logger, log_event)(kwargs, None, kwargs["start_time"], now)
+            posts.append(logger.async_client.post.call_count)
+        return posts
+
+    assert await posts_after_each_of(4) == [0, 2, 2, 4]
+
+    responses[v1_url] = Response(202, json={"status": "ok"}, request=Request("POST", v1_url))
+
+    assert await posts_after_each_of(4) == [4, 6, 6, 8]
+    assert logger.log_queue == []
+
+
+@pytest.mark.asyncio
 async def test_flush_keeps_the_whole_batch_when_the_series_upload_fails(clean_env):
     logger = DatadogMetricsLogger(start_periodic_flush=False)
     logger.async_client = AsyncMock()
