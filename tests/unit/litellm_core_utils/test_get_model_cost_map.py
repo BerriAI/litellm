@@ -686,6 +686,25 @@ def test_boot_load_does_not_retry_non_retryable_failure():
     assert source["fallback_reason"] is not None
 
 
+def test_boot_load_falls_back_when_urlsplit_rejects_the_url():
+    client, calls = _mock_client([httpx.Response(200, content=_real_map_bytes())], client_cls=httpx.Client)
+    sleeper = _SyncSleepRecorder()
+
+    cost_map = get_model_cost_map(
+        url="http://[bad/model_prices.json",
+        sleep=sleeper,
+        rng=random.Random(0),
+        client=client,
+    )
+    assert calls["count"] == 0
+    assert sleeper.waits == []
+    assert _retry_threads() == []
+    assert cost_map.keys() >= _load_root_cost_map().keys() - {"sample_spec", FALLBACK_GENERALIZATIONS_KEY}
+    source = get_model_cost_map_source_info()
+    assert source["source"] == "local"
+    assert "invalid URL" in (source["fallback_reason"] or "")
+
+
 def test_boot_load_respects_local_env_override(monkeypatch):
     """LITELLM_LOCAL_MODEL_COST_MAP=True still short-circuits to the backup with zero HTTP."""
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
