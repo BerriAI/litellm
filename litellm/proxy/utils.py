@@ -1013,13 +1013,16 @@ def _failure_usage_to_lift(
     model_call_details: Mapping[str, object],
     request_body: Mapping[str, object],
     dispatched: bool,
+    timed_out: bool = False,
 ) -> tuple[object, object] | None:
     """A stream that broke mid-flight still billed the provider for the chunks
     already delivered; the streaming handler stashes that recovered usage and
     cost in model_call_details, so prefer it. Otherwise a request that was
     dispatched to a provider and failed without upstream usage gets an
-    estimated input-side Usage priced at the model's input rate, since the
-    provider bills the prompt it accepted even when no answer came back. The raw request body backfills
+    estimated input-side Usage. On a timeout that usage is priced at the
+    model's input rate, since the provider bills the prompt it accepted even
+    though no answer came back; any other post-dispatch failure stays at zero
+    cost. The raw request body backfills
     the system prompt when the SDK bridges an endpoint (e.g. /v1/messages on a
     chat-completions provider) without filling optional_params. Returns the
     (combined_usage_object, response_cost) pair to lift, or None."""
@@ -1047,6 +1050,8 @@ def _failure_usage_to_lift(
     )
     if estimated_usage is None:
         return None
+    if not timed_out:
+        return estimated_usage, 0.0
     estimated_input_cost, _ = litellm.cost_per_token(
         model=str(model_call_details.get("model") or ""),
         custom_llm_provider=str(model_call_details.get("custom_llm_provider") or "") or None,
@@ -1167,7 +1172,7 @@ _PROXY_ONLY_LLM_API_ERRORS: Final = (HTTPException, ProxyException, GuardrailRai
 _LOG_DB_METRICS_CALL_TYPES: Final = frozenset(("get_data", "insert_data", "update_data", "delete_data"))
 
 
-def _failure_fields_to_lift(request_data: Mapping[str, object]) -> Mapping[str, object]:
+def _failure_fields_to_lift(request_data: Mapping[str, object], timed_out: bool = False) -> Mapping[str, object]:
     """Failure-path callbacks run after ``litellm_logging_obj`` is popped from
     request_data (it is not serialisable), so the caller merges these fields
     onto request_data first: the request start and first-handoff instants for
@@ -1183,6 +1188,7 @@ def _failure_fields_to_lift(request_data: Mapping[str, object]) -> Mapping[str, 
         model_call_details=_model_call_details,
         request_body=request_data,
         dispatched=_first_handoff is not None,
+        timed_out=timed_out,
     )
     _entries: Final = (
         ("start_time", _model_call_details.get("start_time")),
@@ -3406,7 +3412,11 @@ class ProxyLogging:
                 original_exception=original_exception,
             )
 
-        request_data.update(await offload_token_count(_failure_fields_to_lift)(request_data))
+        request_data.update(
+            await offload_token_count(_failure_fields_to_lift)(
+                request_data, timed_out=isinstance(original_exception, litellm.Timeout)
+            )
+        )
 
         # Remove before callbacks iterate — not serialisable
         request_data.pop("litellm_logging_obj", None)
