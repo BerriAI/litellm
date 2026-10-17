@@ -79,6 +79,14 @@ def test_served_stream_output_texts_keeps_every_choice_index_when_chunks_carry_o
     assert served_stream_output_texts(chunks) == ("first choice", MASKED)
 
 
+def test_served_stream_output_texts_treats_a_null_choice_index_as_zero():
+    null_index_chunks = (
+        ModelResponseStream(choices=[StreamingChoices(index=None, delta=Delta(content="hello"))]),
+        ModelResponseStream(choices=[StreamingChoices(index=None, delta=Delta(content=" world"))]),
+    )
+    assert served_stream_output_texts(null_index_chunks) == ("hello world",)
+
+
 def test_blanked_output_is_served_as_empty_text_and_overlaid():
     assert served_output_texts(_chat_response("")) == ("",)
     assert served_output_texts({"type": "message", "role": "assistant", "content": [{"type": "text", "text": ""}]}) == (
