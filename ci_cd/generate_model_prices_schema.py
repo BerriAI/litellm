@@ -19,6 +19,7 @@ NONNEG_NUMBER: JsonSchema = {"type": "number", "minimum": 0}
 NONNEG_INTEGER: JsonSchema = {"type": "integer", "minimum": 0}
 BOOLEAN: JsonSchema = {"type": "boolean"}
 STRING: JsonSchema = {"type": "string"}
+NON_BLANK_STRING: Final[JsonSchema] = {"type": "string", "pattern": r"\S"}
 TIME_WINDOW: Final[JsonSchema] = {"type": "string", "pattern": r"^([01]\d|2[0-3]):[0-5]\d-([01]\d|2[0-3]):[0-5]\d$"}
 WEEKDAY_PATTERN: Final = (
     r"(?i)^(mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday|sun|sunday)$"
@@ -102,6 +103,16 @@ OBJECT_KEYS: dict[str, JsonSchema] = {
     "provider_specific_entry": {
         "type": "object",
         "description": "Provider-internal routing hints (e.g. bedrock_invocation_schema).",
+    },
+    "token_count_model": {
+        "type": "object",
+        "required": ["model"],
+        "additionalProperties": False,
+        "properties": {
+            "model": NON_BLANK_STRING,
+            "region": NON_BLANK_STRING,
+        },
+        "description": "Model that counts tokens for this one, and the AWS region its count API runs in.",
     },
 }
 
@@ -287,11 +298,6 @@ def string_key_schemas(modes: tuple) -> dict[str, JsonSchema]:
             "enum": ["none", "minimal", "low", "medium", "high", "xhigh"],
         },
         "comment": STRING,
-        "token_count_fallback_model": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Model that counts tokens for this one when the provider cannot count it.",
-        },
         "audio_transcription_config": STRING,
         "vertex_ai_audio_api": {
             "type": "string",

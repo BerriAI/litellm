@@ -304,16 +304,23 @@ TOKEN_COUNT_ENTRY: Final = MappingProxyType(
         "litellm_provider": "bedrock_converse",
         "mode": "chat",
         "token_count_framing": 78,
-        "token_count_fallback_model": "us.anthropic.claude-opus-5-5",
+        "token_count_model": {"model": "us.anthropic.claude-opus-5-5", "region": "us-east-1"},
     }
 )
 
 
-@pytest.mark.parametrize("framing", [0, 78])
-def test_generator_classifies_token_count_settings(framing: int):
+@pytest.mark.parametrize(
+    "setting",
+    [
+        {"token_count_framing": 0},
+        {"token_count_framing": 78},
+        {"token_count_model": {"model": "us.anthropic.claude-opus-5-5"}},
+    ],
+)
+def test_generator_classifies_token_count_settings(setting: dict):
     generator = load_generator()
     schema = json.loads(generator.render(generator.build_schema({"some-model": dict(TOKEN_COUNT_ENTRY)})))
-    assert build_validator(schema).is_valid({"some-model": {**TOKEN_COUNT_ENTRY, "token_count_framing": framing}})
+    assert build_validator(schema).is_valid({"some-model": {**TOKEN_COUNT_ENTRY, **setting}})
 
 
 @pytest.mark.parametrize(
@@ -322,8 +329,14 @@ def test_generator_classifies_token_count_settings(framing: int):
         {"token_count_framing": -1},
         {"token_count_framing": "78"},
         {"token_count_framing": 1.5},
-        {"token_count_fallback_model": ""},
-        {"token_count_fallback_model": 5},
+        {"token_count_model": {"model": ""}},
+        {"token_count_model": {"model": "   "}},
+        {"token_count_model": {"model": "us.anthropic.claude-opus-5-5", "region": ""}},
+        {"token_count_model": {"model": "us.anthropic.claude-opus-5-5", "region": "   "}},
+        {"token_count_model": {"model": "us.anthropic.claude-opus-5-5", "region": 5}},
+        {"token_count_model": {"region": "us-east-1"}},
+        {"token_count_model": "us.anthropic.claude-opus-5-5"},
+        {"token_count_model": {"model": "us.anthropic.claude-opus-5-5", "zone": "us-east-1"}},
     ],
 )
 def test_generated_token_count_schema_rejects_malformed_settings(setting: dict):
@@ -417,6 +430,24 @@ def test_azure_gpt_6_1_sol_data_zone_rows_price_requests_at_the_regional_premium
     global_cost = total_cost("azure/gpt-6.1-sol")
     assert global_cost > 0
     assert total_cost(f"azure/{region}/gpt-6.1-sol") == pytest.approx(global_cost * premium)
+
+
+AZURE_GPT_6_1_SOL_ROWS: Final = (
+    "azure/gpt-6.1-sol",
+    "azure/gpt-6.1-sol-2026-09-29",
+    "azure/us/gpt-6.1-sol",
+    "azure/eu/gpt-6.1-sol",
+    "azure/apac/gpt-6.1-sol",
+    "azure_ai/gpt-6.1-sol",
+)
+
+
+@pytest.mark.parametrize("row", AZURE_GPT_6_1_SOL_ROWS)
+def test_azure_gpt_6_1_sol_rows_accept_the_same_reasoning_efforts_as_the_openai_row(prices: dict, row: str):
+    openai_efforts: Final = resolve_supported_reasoning_efforts(prices["gpt-6.1-sol"], deployment_is_mapped=True)
+    assert openai_efforts
+
+    assert resolve_supported_reasoning_efforts(prices[row], deployment_is_mapped=True) == openai_efforts
 
 
 # https://ai.google.dev/gemini-api/docs/models/deep-research-preview-04-2026

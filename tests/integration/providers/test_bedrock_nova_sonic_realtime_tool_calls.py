@@ -8,6 +8,11 @@ dials: ``AWSCRTHTTPClient`` -> TLS ALPN h2 -> invoke-with-bidirectional-stream) 
 sides: the OpenAI realtime events the websocket client receives, and the toolSpec / toolResult
 documents the proxy forwarded to the peer.
 
+The fallback cells cover a websocket that outlives one provider attempt. A refused stream keeps the
+client's opening message for the fallback, which gets it once whether it dials Bedrock again or
+an OpenAI realtime deployment, and once Bedrock accepted a stream no later attempt may open a second
+provider session on that websocket.
+
 The file boots its own proxy instead of the shared gateway so it can pass ``SSL_CERT_FILE``
 pointing at the peer's self-signed cert, which is the only way the CRT h2 client trusts it.
 """
@@ -21,12 +26,19 @@ import uuid
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from contextlib import asynccontextmanager
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 
+import httpx
 import pytest
 import websockets
+import yaml
 from integration._support.bedrock_realtime_peer import (
+    BedrockEvent,
     BedrockRealtimePeer,
+    OpeningEnd,
+    Refusal,
+    StreamFailure,
     Turn,
     assistant_text,
     bedrock_realtime_peer,
@@ -43,12 +55,15 @@ from integration._support.client import (
     object_value,
     string_value,
 )
-from integration._support.process import owned_proxy
+from integration._support.process import graceful_stop_seconds, owned_proxy
 from integration._support.tls import write_self_signed_cert
+from integration._support.upstream import delete_scenario, register_scenario
+from integration.cost_calculation.cost_tracking_case import RealtimeResponse
 from pydantic import JsonValue
 from websockets.asyncio.client import ClientConnection
+from websockets.exceptions import ConnectionClosed
 
-pytestmark: Final = pytest.mark.timeout(180)
+pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
 
 DEPLOYMENT: Final = "bedrock/amazon.nova-2-sonic-v1:0"
 WEATHER_PARAMETERS: Final = {"type": "object", "properties": {"location": {"type": "string"}}, "required": ["location"]}
@@ -60,6 +75,30 @@ WEATHER_FUNCTION: Final = {
 NESTED_TOOL: Final = {"type": "function", "function": WEATHER_FUNCTION}
 FLAT_TOOL: Final = {"type": "function", **WEATHER_FUNCTION}
 TOOL_RESULT_OUTPUT: Final = '{"temperature_f":72,"conditions":"sunny"}'
+QUESTION: Final = "What is the weather in New York right now?"
+ANSWER: Final = "It is 72 and sunny"
+INSTRUCTIONS: Final = "Answer every weather question in one short sentence."
+OPENAI_VOICE_MODEL: Final = "gpt-realtime-2.1"
+BEDROCK_REPLAY_GROUPS: Final = MappingProxyType(
+    {
+        "system_prompt": ("sonic-refused-session-update-first", "sonic-replay-session-update-first"),
+        "user_input": ("sonic-refused-text-first", "sonic-replay-text-first"),
+    }
+)
+OPENAI_REPLAY_GROUPS: Final = ("sonic-refused-openai-fallback", "openai-replay-target")
+OPENAI_COMMITTED_GROUPS: Final = ("sonic-committed-openai-fallback", "openai-committed-target")
+FALLBACK_GROUPS: Final = (*BEDROCK_REPLAY_GROUPS.values(), OPENAI_REPLAY_GROUPS, OPENAI_COMMITTED_GROUPS)
+SCRIPTED_DONE: Final[dict[str, JsonValue]] = {
+    "type": "response.done",
+    "event_id": "evt_$UNIQUE_ID",
+    "response": {
+        "id": "resp_$UNIQUE_ID",
+        "object": "realtime.response",
+        "status": "completed",
+        "output": [],
+        "usage": {"total_tokens": 0, "input_tokens": 0, "output_tokens": 0},
+    },
+}
 
 
 @pytest.fixture(scope="module")
@@ -67,15 +106,35 @@ def cert(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path]:
     return write_self_signed_cert(tmp_path_factory.mktemp("bedrock-sonic-cert"))
 
 
+def _fallback_config(directory: Path) -> Path:
+    stock: Final = JSON_OBJECT.validate_python(
+        yaml.safe_load((Path(__file__).resolve().parents[1] / "proxy_config.yaml").read_text())
+    )
+    config: Final = {
+        **stock,
+        "router_settings": {
+            **object_value(stock["router_settings"]),
+            "fallbacks": [{source: [target]} for source, target in FALLBACK_GROUPS],
+        },
+    }
+    path: Final = directory / "bedrock-sonic-fallbacks.yaml"
+    path.write_text(yaml.safe_dump(config))
+    return path
+
+
 @pytest.fixture(scope="module")
 def candidate(tmp_path_factory: pytest.TempPathFactory, cert: tuple[Path, Path]) -> Iterator[Gateway]:
+    directory: Final = tmp_path_factory.mktemp("bedrock-sonic")
     with gateway_from_environment() as base:
-        with owned_proxy(base, tmp_path_factory.mktemp("bedrock-sonic"), {"SSL_CERT_FILE": str(cert[0])}) as proxy:
+        with owned_proxy(base, directory, {"SSL_CERT_FILE": str(cert[0])}, config=_fallback_config(directory)) as proxy:
             yield proxy
 
 
 def _deployment(gateway: Gateway, scenario: Scenario, peer: BedrockRealtimePeer) -> str:
-    name: Final = f"bedrock-sonic-{uuid.uuid4().hex[:12]}"
+    return _bedrock_deployment(gateway, scenario, peer, f"bedrock-sonic-{uuid.uuid4().hex[:12]}")
+
+
+def _bedrock_deployment(gateway: Gateway, scenario: Scenario, peer: BedrockRealtimePeer, name: str) -> str:
     created: Final = gateway.post(
         "/model/new",
         {
@@ -92,6 +151,44 @@ def _deployment(gateway: Gateway, scenario: Scenario, peer: BedrockRealtimePeer)
     )
     scenario.cleanups.callback(scenario.delete_model, string_value(object_value(created["model_info"])["id"]))
     return name
+
+
+def _openai_deployment(gateway: Gateway, scenario: Scenario, name: str) -> str:
+    scenario_id: Final = f"bedrock-sonic-fallback-{uuid.uuid4().hex[:12]}"
+    handle: Final = register_scenario(
+        scenario_id, RealtimeResponse(content_type="application/x-realtime", events=(SCRIPTED_DONE,))
+    )
+    scenario.cleanups.callback(delete_scenario, handle)
+    created: Final = gateway.post(
+        "/model/new",
+        {
+            "model_name": name,
+            "litellm_params": {
+                "model": f"openai/{OPENAI_VOICE_MODEL}",
+                "api_key": scenario_id,
+                "api_base": f"{gateway.upstream_url}/v1",
+            },
+            "model_info": {"mode": "realtime"},
+        },
+    )
+    scenario.cleanups.callback(scenario.delete_model, string_value(object_value(created["model_info"])["id"]))
+    return scenario_id
+
+
+def _upstream_requests(gateway: Gateway, scenario_id: str) -> tuple[dict[str, JsonValue], ...]:
+    with httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream:
+        observations: Final = JSON_OBJECT.validate_json(upstream.get("/__observations").content)
+    requests: Final = observations["requests"]
+    assert isinstance(requests, list), observations
+    return tuple(
+        request
+        for request in map(object_value, requests)
+        if request["authorization"] == f"Bearer {scenario_id}" or request["api_key"] == scenario_id
+    )
+
+
+def _upstream_frames(requests: tuple[dict[str, JsonValue], ...]) -> tuple[dict[str, JsonValue], ...]:
+    return tuple(object_value(request["body"]) for request in requests if request["method"] == "WEBSOCKET_FRAME")
 
 
 def _session_update(tool: Mapping[str, JsonValue]) -> str:
@@ -113,10 +210,14 @@ def _user_text() -> str:
             "item": {
                 "type": "message",
                 "role": "user",
-                "content": [{"type": "input_text", "text": "What is the weather in New York right now?"}],
+                "content": [{"type": "input_text", "text": QUESTION}],
             },
         }
     )
+
+
+def _instructions_update() -> str:
+    return json.dumps({"type": "session.update", "session": {"instructions": INSTRUCTIONS}})
 
 
 _RESPONSE_CREATE: Final = json.dumps({"type": "response.create"})
@@ -207,6 +308,7 @@ def test_nested_tool_call_before_assistant_block(candidate: Gateway, cert: tuple
         assert _tail_types(events) == (
             "response.created",
             "response.output_item.added",
+            "response.function_call_arguments.delta",
             "response.function_call_arguments.done",
             "response.output_item.done",
             "response.done",
@@ -376,3 +478,160 @@ def test_malformed_tool_content(candidate: Gateway, cert: tuple[Path, Path], con
         events: Final = asyncio.run(_one_call_session(candidate, model, key, NESTED_TOOL))
         (call,) = _function_calls(events)
         assert string_value(call["arguments"]) == (content if content is not None else "{}"), events
+
+
+def _of_type(events: tuple[Event, ...], event_type: str) -> tuple[Event, ...]:
+    return tuple(event for event in events if event.get("type") == event_type)
+
+
+def _bedrock_fields(events: tuple[BedrockEvent, ...], name: str) -> tuple[dict[str, JsonValue], ...]:
+    bodies: Final = tuple(object_value(event["event"]) for event in events)
+    return tuple(object_value(body[name]) for body in bodies if name in body)
+
+
+def _text_inputs(events: tuple[BedrockEvent, ...], role: str) -> tuple[str, ...]:
+    roles: Final = MappingProxyType(
+        {string_value(start["contentName"]): start.get("role") for start in _bedrock_fields(events, "contentStart")}
+    )
+    return tuple(
+        string_value(text["content"])
+        for text in _bedrock_fields(events, "textInput")
+        if roles.get(string_value(text["contentName"])) == role
+    )
+
+
+def _answer_turn() -> Turn:
+    return Turn("user_input", assistant_text(ANSWER) + (usage(30, 12),))
+
+
+def _answer_text(events: tuple[Event, ...]) -> str:
+    return "".join(string_value(event["delta"]) for event in _of_type(events, "response.text.delta"))
+
+
+async def _opened_with(socket: ClientConnection, opening: tuple[str, ...], stop: frozenset[str]) -> tuple[Event, ...]:
+    created: Final = JSON_OBJECT.validate_json(await socket.recv())
+    for message in opening:
+        await socket.send(message)
+    return (created,) + await _events_until(socket, lambda event, _events: event.get("type") in stop)
+
+
+async def _session(
+    gateway: Gateway, model: str, key: str, opening: tuple[str, ...], stop: frozenset[str]
+) -> tuple[Event, ...]:
+    async with _realtime(gateway, model, key) as socket:
+        return await _opened_with(socket, opening, stop)
+
+
+async def _session_until_closed(
+    gateway: Gateway, model: str, key: str, opening: tuple[str, ...]
+) -> tuple[tuple[Event, ...], int | None]:
+    async with _realtime(gateway, model, key) as socket:
+        events: Final = await _opened_with(socket, opening, frozenset(("error", "session.created")))
+        if events[-1].get("type") != "error":
+            return events, None
+        try:
+            await asyncio.wait_for(socket.recv(), 30)
+        except ConnectionClosed:
+            return events, socket.close_code
+        return events, None
+
+
+@pytest.mark.parametrize("after", ["system_prompt", "user_input"], ids=["session-update-first", "text-first"])
+def test_refused_opening_is_replayed_on_the_bedrock_fallback(
+    candidate: Gateway, cert: tuple[Path, Path], after: OpeningEnd
+) -> None:
+    source, target = BEDROCK_REPLAY_GROUPS[after]
+    update_first: Final = after == "system_prompt"
+    opening: Final = ((_instructions_update(),) if update_first else ()) + (_user_text(), _RESPONSE_CREATE)
+    opening_role, opening_text = ("SYSTEM", INSTRUCTIONS) if update_first else ("USER", QUESTION)
+    with (
+        bedrock_realtime_peer((), cert, refusal=Refusal(after)) as refusing,
+        bedrock_realtime_peer((_answer_turn(),), cert) as healthy,
+        candidate.scenario() as scenario,
+    ):
+        _bedrock_deployment(candidate, scenario, refusing, source)
+        _bedrock_deployment(candidate, scenario, healthy, target)
+        events: Final = asyncio.run(
+            _session(
+                candidate, source, scenario.key(), opening, frozenset(("response.done", "error", "session.created"))
+            )
+        )
+        assert len(_of_type(events, "session.created")) == 1, events
+        assert len(_of_type(events, "session.updated")) == int(update_first), events
+        assert _of_type(events, "error") == (), events
+        assert len(_response_dones(events)) == 1, events
+        assert _answer_text(events) == ANSWER, events
+        (replayed,) = healthy.streams()
+        assert _text_inputs(replayed, "USER") == (QUESTION,), replayed
+        assert _text_inputs(replayed, "SYSTEM").count(INSTRUCTIONS) == int(update_first), replayed
+        refused: Final = refusing.streams()
+        assert refused and all(opening_text in _text_inputs(stream, opening_role) for stream in refused), refused
+
+
+def test_refused_text_opening_is_replayed_on_the_openai_fallback(candidate: Gateway, cert: tuple[Path, Path]) -> None:
+    source, target = OPENAI_REPLAY_GROUPS
+    with (
+        bedrock_realtime_peer((), cert, refusal=Refusal("user_input")) as refusing,
+        candidate.scenario() as scenario,
+    ):
+        _bedrock_deployment(candidate, scenario, refusing, source)
+        scenario_id: Final = _openai_deployment(candidate, scenario, target)
+        events: Final = asyncio.run(
+            _session(
+                candidate,
+                source,
+                scenario.key(),
+                (_user_text(), _RESPONSE_CREATE),
+                frozenset(("response.done", "error")),
+            )
+        )
+        assert _of_type(events, "error") == (), events
+        assert len(_response_dones(events)) == 1, events
+        requests: Final = _upstream_requests(candidate, scenario_id)
+        assert len(tuple(request for request in requests if request["method"] == "WEBSOCKET")) == 1, requests
+        assert _upstream_frames(requests) == (json.loads(_user_text()), json.loads(_RESPONSE_CREATE)), requests
+
+
+def test_committed_session_failure_closes_the_socket_without_another_provider_stream(
+    candidate: Gateway, cert: tuple[Path, Path]
+) -> None:
+    source, target = OPENAI_COMMITTED_GROUPS
+    with (
+        bedrock_realtime_peer((_answer_turn(),), cert, failure=StreamFailure()) as committed,
+        candidate.scenario() as scenario,
+    ):
+        _bedrock_deployment(candidate, scenario, committed, source)
+        scenario_id: Final = _openai_deployment(candidate, scenario, target)
+        events, close_code = asyncio.run(
+            _session_until_closed(candidate, source, scenario.key(), (_user_text(), _RESPONSE_CREATE))
+        )
+        assert len(_of_type(events, "session.created")) == 1, events
+        assert len(_response_dones(events)) == 1, events
+        assert _answer_text(events) == ANSWER, events
+        assert string_value(events[-1]["type"]) == "error", events
+        assert close_code == 1011, events
+        assert _upstream_requests(candidate, scenario_id) == ()
+        assert len(committed.streams()) == 1
+
+
+def test_voice_object_is_refused_and_never_reaches_bedrock(candidate: Gateway, cert: tuple[Path, Path]) -> None:
+    voice_update: Final = json.dumps({"type": "session.update", "session": {"voice": {"id": "voice_123"}}})
+    with bedrock_realtime_peer((_answer_turn(),), cert) as peer, candidate.scenario() as scenario:
+        model: Final = _deployment(candidate, scenario, peer)
+        events: Final = asyncio.run(
+            _session(
+                candidate,
+                model,
+                scenario.key(),
+                (voice_update, _user_text(), _RESPONSE_CREATE),
+                frozenset(("response.done", "session.created")),
+            )
+        )
+        errors: Final = tuple(object_value(event["error"]) for event in _of_type(events, "error"))
+        assert tuple((error.get("code"), error.get("param")) for error in errors) == (
+            ("invalid_type", "session.voice"),
+        ), events
+        assert _of_type(events, "session.updated") == (), events
+        assert len(_of_type(events, "session.created")) == 1, events
+        assert _answer_text(events) == ANSWER, events
+        assert "voice_123" not in json.dumps(peer.received())

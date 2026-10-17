@@ -27,21 +27,27 @@ from litellm.llms.openai.responses.count_tokens.transformation import (
 from litellm.llms.openai.workload_identity import (
     OpenAIWorkloadIdentityConfig,
     get_workload_identity_bearer_token,
+    openai_static_api_key,
     resolve_openai_workload_identity_config,
 )
-from litellm.types.utils import LlmProviders, TokenCountMessagesFormat, TokenCountResponse
+from litellm.types.utils import CountContextManagement, LlmProviders, TokenCountMessagesFormat, TokenCountResponse
 
 # Global handler instance - reuse across all token counting requests
 openai_count_tokens_handler: Final = OpenAICountTokensHandler()
 
 
-def _workload_identity_config(litellm_params: Mapping[str, object]) -> OpenAIWorkloadIdentityConfig | None:
+def _workload_identity_config(
+    litellm_params: Mapping[str, object],
+) -> OpenAIWorkloadIdentityConfig | OpenAIError | None:
     api_base: Final = litellm_params.get("api_base")
-    return resolve_openai_workload_identity_config(
-        api_key=None,
-        api_base=api_base if isinstance(api_base, str) else None,
-        litellm_params=litellm_params,
-    )
+    try:
+        return resolve_openai_workload_identity_config(
+            api_key=None,
+            api_base=api_base if isinstance(api_base, str) else None,
+            litellm_params=litellm_params,
+        )
+    except OpenAIError as e:
+        return e
 
 
 class OpenAITokenCounter(BaseTokenCounter):
@@ -95,6 +101,7 @@ class OpenAITokenCounter(BaseTokenCounter):
         system: object = None,
         messages_format: TokenCountMessagesFormat = "openai",
         output_format: JsonValue = None,
+        context_management: CountContextManagement | None = None,
     ) -> TokenCountResponse | None:
         """
         Count tokens using OpenAI's Responses API /input_tokens endpoint.
@@ -125,7 +132,18 @@ class OpenAITokenCounter(BaseTokenCounter):
         credentials: Final = get_openai_credentials(
             api_base=litellm_params.get("api_base"), api_key=litellm_params.get("api_key")
         )
-        credential: Final = credentials.api_key or _workload_identity_config(litellm_params)
+        credential: Final = openai_static_api_key(credentials.api_key) or _workload_identity_config(litellm_params)
+
+        if isinstance(credential, OpenAIError):
+            return TokenCountResponse(
+                total_tokens=0,
+                request_model=request_model,
+                model_used=model_to_use,
+                tokenizer_type="openai_api",
+                error=True,
+                error_message=credential.message,
+                status_code=credential.status_code,
+            )
 
         if credential is None:
             return TokenCountResponse(

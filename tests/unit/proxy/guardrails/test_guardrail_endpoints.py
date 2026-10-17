@@ -954,6 +954,17 @@ async def test_provider_specific_params_includes_embedding_toggle():
 
 
 @pytest.mark.asyncio
+async def test_provider_specific_params_offers_forward_messages_as_sent_off_by_default():
+    from litellm.proxy.guardrails.guardrail_endpoints import get_provider_specific_params
+
+    provider_params = await get_provider_specific_params()
+
+    field = provider_params["generic_guardrail_api"]["optional_params"]["fields"]["forward_messages_as_sent"]
+    assert field["type"] == "boolean"
+    assert field["default_value"] is False
+
+
+@pytest.mark.asyncio
 async def test_provider_specific_params_exposes_bedrock_streaming_flags():
     from litellm.proxy.guardrails.guardrail_endpoints import get_provider_specific_params
 

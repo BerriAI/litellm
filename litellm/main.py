@@ -257,6 +257,7 @@ from .llms.openai.completion.handler import OpenAITextCompletion
 from .llms.openai.image_variations.handler import OpenAIImageVariationsHandler
 from .llms.openai.openai import OpenAIChatCompletion
 from .llms.openai.transcriptions.handler import OpenAIAudioTranscription
+from .llms.openai.workload_identity import build_openai_client
 from .llms.openai_like.chat.handler import OpenAILikeChatHandler
 from .llms.openai_like.embedding.handler import OpenAILikeEmbeddingHandler
 from .llms.ovhcloud.chat.transformation import OVHCloudChatConfig
@@ -1214,13 +1215,18 @@ def _register_custom_pricing_for_request(
         litellm.register_model({shared_key: entry}, persist_across_reloads=False)
         return
     litellm.register_model(
-        {
-            deployment_id: entry,
-            shared_key: CustomPricingLiteLLMParams.strip_custom_pricing_fields(entry),
-        },
+        {deployment_id: entry},
         persist_across_reloads=False,
         warning_display_name=shared_key,
         custom_llm_provider=custom_llm_provider,
+        add_to_provider_model_sets=False,
+    )
+    litellm.register_model(
+        {shared_key: CustomPricingLiteLLMParams.strip_custom_pricing_fields(entry)},
+        persist_across_reloads=False,
+        warning_display_name=shared_key,
+        custom_llm_provider=custom_llm_provider,
+        add_to_provider_model_sets=False,
     )
 
 
@@ -4128,6 +4134,7 @@ def _complete_sagemaker(ctx: CompletionDispatchContext) -> _CompletionDispatchRe
 _ADDITIONAL_DROP_PARAMS_ADAPTER: Final = TypeAdapter(list[str])
 _OPTIONAL_PARAMS_ADAPTER: Final = TypeAdapter(dict[str, object])
 _REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _PROVIDER_ROUTING_HINTS: Final = TypeAdapter(ProviderRoutingHints)
 _BASE_URL_HINT: Final = TypeAdapter(BaseUrlRoutingHint)
 
@@ -5693,6 +5700,7 @@ def completion(
         )
         optional_params = get_optional_params(
             **{**optional_param_args, "reasoning_effort": provider_reasoning_effort},
+            model_info=_MODEL_INFO_ADAPTER.validate_python(model_info) if isinstance(model_info, dict) else None,
             **non_default_params,
             _litellm_responses_api_bridge_allowed=bedrock_responses_bridge_allowed,
         )
@@ -5790,6 +5798,7 @@ def completion(
                     "github_copilot_user_session",
                     PROVIDER_AFFINITY_HEADER_KWARG_KEY,
                     "fireworks_forward_user_id",
+                    "responses_api_version",
                 )
                 if key in kwargs
             },
@@ -7897,17 +7906,14 @@ def adapter_completion(*, adapter_id: str, **kwargs) -> BaseModel | AdapterCompl
 
 
 def moderation(input: str, model: str | None = None, api_key: str | None = None, **kwargs) -> OpenAIModerationResponse:
-    from litellm.llms.openai.common_utils import OpenAIHTTPClient
-
-    # only supports open ai for now
-    api_key = api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
-
-    # Extract api_base from kwargs
+    static_api_key: Final = api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
     api_base: Final = kwargs.get("api_base", None)
 
-    openai_client = kwargs.get("client", None)
-    if openai_client is None:
-        openai_client = openai.OpenAI(api_key=api_key, base_url=api_base, http_client=OpenAIHTTPClient())
+    openai_client: Final = kwargs.get("client", None) or build_openai_client(
+        api_key=static_api_key,
+        api_base=api_base,
+        litellm_params=kwargs,
+    )
 
     if model is not None:
         response = openai_client.moderations.create(input=input, model=model)
@@ -7930,8 +7936,7 @@ async def amoderation(
 ) -> OpenAIModerationResponse:
     from openai import AsyncOpenAI
 
-    # only supports open ai for now
-    api_key = api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
+    static_api_key: Final = api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
     optional_params: Final = GenericLiteLLMParams.model_validate(kwargs)
     litellm_logging_obj: Final[LiteLLMLoggingObj | None] = kwargs.get("litellm_logging_obj", None)
     _dynamic_api_base = None
@@ -7957,8 +7962,9 @@ async def amoderation(
         # _get_openai_client maintains in-memory caching logic for OpenAI clients
         _openai_client: AsyncOpenAI = openai_chat_completions.get_openai_client(
             is_async=True,
-            api_key=api_key,
+            api_key=static_api_key,
             api_base=optional_params.api_base or _dynamic_api_base,
+            litellm_params=optional_params.model_dump(exclude_none=True),
         )
     else:
         _openai_client = openai_client
@@ -7978,7 +7984,7 @@ async def amoderation(
         moderation_request: Final = {"input": input, "model": model}
         litellm_logging_obj.pre_call(
             input=input,
-            api_key=api_key,
+            api_key=static_api_key,
             additional_args={
                 "complete_input_dict": moderation_request,
                 "api_base": str(_openai_client.base_url),
@@ -8211,9 +8217,7 @@ def transcription(
             or get_secret("OPENAI_ORGANIZATION")
             or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
         )
-        # set API KEY
-
-        api_key = api_key or litellm.api_key or litellm.openai_key or get_secret("OPENAI_API_KEY")
+        static_api_key: Final = api_key or litellm.api_key or litellm.openai_key or get_secret("OPENAI_API_KEY")
         response = openai_audio_transcriptions.audio_transcriptions(
             model=model,
             audio_file=file,
@@ -8225,7 +8229,7 @@ def transcription(
             logging_obj=litellm_logging_obj,
             max_retries=max_retries,
             api_base=api_base,
-            api_key=api_key,
+            api_key=static_api_key,
             provider_config=provider_config,
             litellm_params=litellm_params_dict,
             shared_session=shared_session,
@@ -8547,6 +8551,7 @@ def speech(
             client=client,  # pass AsyncOpenAI, OpenAI client
             aspeech=aspeech,
             shared_session=shared_session,
+            litellm_params=litellm_params_dict,
         )
     elif custom_llm_provider in AZURE_OPENAI_AUDIO_PROVIDERS:
         # Check if this is Azure Speech Service (Cognitive Services TTS)

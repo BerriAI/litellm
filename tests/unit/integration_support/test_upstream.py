@@ -21,7 +21,11 @@ async def test_realtime_disconnect_after_session_creation_keeps_unexpected_error
     response: Final = RealtimeResponse(content_type="application/x-realtime", events=({"type": "response.done"},))
     provider.scenario_store.put("owned-scenario", response)
     incoming: Final[deque[Message]] = deque(
-        ({"type": "websocket.connect"}, {"type": "websocket.receive", "text": '{"type":"response.create"}'})
+        (
+            {"type": "websocket.connect"},
+            {"type": "websocket.receive", "text": '{"type":"response.create"}'},
+            {"type": "websocket.disconnect", "code": 1006},
+        )
     )
     outgoing: Final[deque[Message]] = deque()
 
