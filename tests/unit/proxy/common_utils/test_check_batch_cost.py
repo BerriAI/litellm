@@ -3246,12 +3246,17 @@ class TestMultiPodBatchCostClaim:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("status", ("completed", "failed", "expired", "cancelled"))
-    async def test_cost_claim_persists_terminal_metadata_without_a_later_write(self, status: str) -> None:
+    @pytest.mark.parametrize("metadata_text", ("before\x00after", r"\u0000"))
+    async def test_cost_claim_persists_terminal_metadata_without_a_later_write(
+        self, status: str, metadata_text: str
+    ) -> None:
         row: Final = _FakeManagedObjectRow()
         journal: Final = []
         prisma: Final = self._prisma(row, journal)
         router: Final = self._router()
-        router.aretrieve_batch.return_value.status = status
+        router.aretrieve_batch.return_value = router.aretrieve_batch.return_value.model_copy(
+            update={"status": status, "metadata": {"annotation": metadata_text}}
+        )
         prisma.db.litellm_managedobjecttable.update.side_effect = RuntimeError("final write unavailable")
         worker: Final = self._instance(prisma, router)
         with self._billing_patches(journal) as logging_obj:
@@ -3260,6 +3265,7 @@ class TestMultiPodBatchCostClaim:
         assert row.batch_processed is True
         assert row.status == ("complete" if status == "completed" else status)
         assert json.loads(row.file_object)["status"] == status
+        assert json.loads(row.file_object)["metadata"] == {"annotation": metadata_text.replace("\x00", "")}
         assert logging_obj.async_success_handler.await_count == 1
 
     @pytest.mark.asyncio
