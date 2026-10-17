@@ -179,16 +179,16 @@ def test_native_content_filter_scope_logs_without_blocking(
                     (
                         identity,
                         "logging_only",
-                        "guardrail_intervened" if direction == blocked_side else "success",
+                        "guardrail_flagged" if direction == blocked_side else "success",
                     )
                     for direction in expected_directions
                 ), entries
-                intervened_entries: Final = tuple(
-                    entry for entry in entries if entry["guardrail_status"] == "guardrail_intervened"
+                flagged_entries: Final = tuple(
+                    entry for entry in entries if entry["guardrail_status"] == "guardrail_flagged"
                 )
-                assert len(intervened_entries) == 1, entries
-                assert intervened_entries[0]["guardrail_response"] is not None, entries
-                assert intervened_entries[0]["guardrail_response"] == "REDACTED_BY_LITELM", entries
+                assert len(flagged_entries) == 1, entries
+                assert flagged_entries[0]["guardrail_response"] is not None, entries
+                assert flagged_entries[0]["guardrail_response"] == "REDACTED_BY_LITELM", entries
     finally:
         delete_scenario(upstream_handle)
 
@@ -829,14 +829,14 @@ def test_G6_database_guardrail_polling_normalizes_invalid_scope_without_reinitia
             id="H2-post-rejects-invalid-number",
         ),
         pytest.param(
-            "H2",
+            "H3",
             "generic_guardrail_api",
             "logging_only",
             "",
-            422,
+            200,
             None,
-            "logging_only_scope",
-            id="H2-post-rejects-invalid-empty-string",
+            "",
+            id="H3-post-stores-empty-scope-as-unset",
         ),
         pytest.param(
             "H2",

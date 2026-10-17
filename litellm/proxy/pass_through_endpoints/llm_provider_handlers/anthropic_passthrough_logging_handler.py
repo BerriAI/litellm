@@ -10,12 +10,14 @@ from pydantic import ConfigDict, TypeAdapter
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import ANTHROPIC_BATCHES_ROUTE
+from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_content_from_model_response,
 )
 from litellm.llms.anthropic import get_anthropic_config
+from litellm.llms.anthropic.common_utils import anthropic_error_frame_exception
 from litellm.llms.anthropic.pass_through.stream_assembly import (
     build_complete_streaming_response,
     build_complete_streaming_response_legacy,
@@ -35,6 +37,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     PassthroughStandardLoggingPayload,
 )
 from litellm.types.utils import (
+    CompletionTokensDetailsWrapper,
     LiteLLMBatch,
     ModelResponse,
     TextCompletionResponse,
@@ -254,6 +257,26 @@ class AnthropicPassthroughLoggingHandler:
         )
 
     @staticmethod
+    async def log_error_frame_as_failure(
+        attempt_logging_obj: LiteLLMLoggingObj,
+        request_body: Mapping[str, object],
+        all_chunks: Sequence[str | bytes],
+        error_event: tuple[str, str, int],
+    ) -> None:
+        """A stream closed at the provider's `event: error` frame is one failed attempt of the request: it logs
+        through the attempt-scoped copy its caller took at the close, so the usage it consumed never reaches
+        the success log of the attempt the router opens in its place."""
+        error_type, message, status_code = error_event
+        await asyncify(AnthropicPassthroughLoggingHandler.record_partial_usage_for_failure)(
+            litellm_logging_obj=attempt_logging_obj, request_body=request_body, all_chunks=all_chunks
+        )
+        await attempt_logging_obj.dispatch_failure_handlers(
+            anthropic_error_frame_exception(error_type, message, status_code, str(attempt_logging_obj.model)),
+            "",
+            prefer_async_handlers=True,
+        )
+
+    @staticmethod
     def _cost_partial_stream_or_zero(
         partial_response: ModelResponse | TextCompletionResponse, model: str, logging_obj: LiteLLMLoggingObj
     ) -> float:
@@ -306,13 +329,13 @@ class AnthropicPassthroughLoggingHandler:
                 if not line.startswith("data:"):
                     continue
                 try:
-                    data = json.loads(line[len("data:") :].strip())
+                    data = _JSON_OBJECT.validate_python(json.loads(line[len("data:") :].strip()))
                 except (json.JSONDecodeError, ValueError):
                     continue
                 if not isinstance(data, dict):
                     continue
                 if data.get("type") == "message_start":
-                    value = (data.get("message") or {}).get(field)
+                    value = _JSON_OBJECT.validate_python(data.get("message") or {}).get(field)
                     if isinstance(value, str) and value:
                         return value
         return None
@@ -398,7 +421,7 @@ class AnthropicPassthroughLoggingHandler:
         # Anthropic costing reads completion_tokens_details.text_tokens, so the
         # stale message_start placeholder there must be corrected too or spend
         # stays undercounted even after completion_tokens is fixed.
-        details: Final = getattr(usage, "completion_tokens_details", None)
+        details: Final[CompletionTokensDetailsWrapper | None] = getattr(usage, "completion_tokens_details", None)
         if details is not None and getattr(details, "text_tokens", None) is not None:
             details.text_tokens = recovered_output_tokens
         return usage

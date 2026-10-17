@@ -8,7 +8,7 @@ from types import MappingProxyType
 from typing import Any, Final, Literal, cast, get_type_hints
 
 import httpx
-from pydantic import TypeAdapter, ValidationError
+from pydantic import JsonValue, TypeAdapter, ValidationError
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
@@ -23,7 +23,7 @@ from litellm.types.llms.vertex_ai import (
     PartType,
     Schema,
 )
-from litellm.types.utils import TokenCountResponse
+from litellm.types.utils import CountContextManagement, TokenCountMessagesFormat, TokenCountResponse
 from litellm.utils import supports_response_schema, supports_system_messages
 
 GEMINI_VIDEO_METADATA_KEYS: Final = MappingProxyType(
@@ -227,7 +227,7 @@ class VertexAIModelRoute(str, Enum):
 VERTEX_AI_MODEL_ROUTES: Final = [f"{route.value}/" for route in VertexAIModelRoute]
 
 
-def get_vertex_ai_model_route(model: str, litellm_params: dict | None = None) -> VertexAIModelRoute:
+def get_vertex_ai_model_route(model: str, litellm_params: Mapping[str, object] | None = None) -> VertexAIModelRoute:
     """
     Determine which handler to use for a Vertex AI model based on the model name.
 
@@ -258,10 +258,9 @@ def get_vertex_ai_model_route(model: str, litellm_params: dict | None = None) ->
         VertexAIPartnerModels,
     )
 
-    # Check base_model in litellm_params for gemini override
-    if litellm_params and litellm_params.get("base_model") is not None:
-        if "gemini" in litellm_params["base_model"]:
-            return VertexAIModelRoute.GEMINI
+    base_model: Final = litellm_params.get("base_model") if litellm_params else None
+    if isinstance(base_model, str) and "gemini" in base_model:
+        return VertexAIModelRoute.GEMINI
 
     # Check for agent_engine models (Reasoning Engines)
     if "agent_engine/" in model:
@@ -297,6 +296,13 @@ def get_vertex_ai_model_route(model: str, litellm_params: dict | None = None) ->
 
     # Default to non-gemini (legacy vertex models like chat-bison, text-bison, etc.)
     return VertexAIModelRoute.NON_GEMINI
+
+
+GEMINI_API_ROUTES: Final = frozenset({VertexAIModelRoute.GEMINI, VertexAIModelRoute.NON_GEMINI})
+
+
+def uses_vertex_gemini_api(model: str, litellm_params: Mapping[str, object] | None = None) -> bool:
+    return get_vertex_ai_model_route(model, litellm_params) in GEMINI_API_ROUTES
 
 
 def get_supports_system_message(
@@ -732,13 +738,13 @@ def build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
     # refs recursively and correctly detects/skips circular references.
     unpack_defs(parameters, defs)
 
+    _convert_schema_types(parameters)
+
     # 5. Nullable fields:
     #     * https://github.com/pydantic/pydantic/issues/1270
     #     * https://stackoverflow.com/a/58841311
     #     * https://github.com/pydantic/pydantic/discussions/4872
     convert_anyof_null_to_nullable(parameters)
-
-    _convert_schema_types(parameters)
 
     # Handle empty strings in enum values - Gemini doesn't accept empty strings in enums
     _fix_enum_empty_strings(parameters)
@@ -920,34 +926,28 @@ def convert_anyof_null_to_nullable(schema, depth=0):
         )
     """ Converts null objects within anyOf by removing them and adding nullable to all remaining objects """
     anyof: Final = schema.get("anyOf", None)
-    if anyof is not None:
-        contains_null = False
+    if isinstance(anyof, list):
+        non_null_branches: Final = [
+            atype for atype in anyof if not (isinstance(atype, dict) and atype.get("type") == "null")
+        ]
+        contains_null: Final = len(non_null_branches) < len(anyof)
+        anyof[:] = non_null_branches or anyof[:1]
         for atype in anyof:
-            if isinstance(atype, dict) and atype.get("type") == "null":
-                # remove null type
-                anyof.remove(atype)
-                contains_null = True
-            elif "type" not in atype and len(atype) == 0:
-                # Handle empty object case
+            if not isinstance(atype, dict):
+                continue
+            if not atype:
                 atype["type"] = "object"
-
-        if len(anyof) == 0:
-            # Edge case: response schema with only null type present is invalid in Vertex AI
-            raise ValueError(
-                "Invalid input: AnyOf schema with only null type is not supported. Please provide a non-null type."
-            )
-
-        if contains_null:
-            # set all types to nullable following guidance found here: https://cloud.google.com/vertex-ai/generative-ai/docs/samples/generativeaionvertexai-gemini-controlled-generation-response-schema-3#generativeaionvertexai_gemini_controlled_generation_response_schema_3-python
-            # Empty `items: {}` on array branches is left in place; downstream
-            # process_items() converts it to {"type": "object"}, which Vertex
-            # requires whenever type == "array" (even inside anyOf).
-            for atype in anyof:
+            if contains_null:
+                # set all types to nullable following guidance found here: https://cloud.google.com/vertex-ai/generative-ai/docs/samples/generativeaionvertexai-gemini-controlled-generation-response-schema-3#generativeaionvertexai_gemini_controlled_generation_response_schema_3-python
+                # Empty `items: {}` on array branches is left in place; downstream
+                # process_items() converts it to {"type": "object"}, which Vertex
+                # requires whenever type == "array" (even inside anyOf).
                 atype["nullable"] = True
+            convert_anyof_null_to_nullable(atype, depth=depth + 1)
 
     properties: Final = schema.get("properties", None)
     if properties is not None:
-        for name, value in properties.items():
+        for value in properties.values():
             convert_anyof_null_to_nullable(value, depth=depth + 1)
 
     items: Final = schema.get("items", None)
@@ -1272,6 +1272,9 @@ class VertexAITokenCounter(BaseTokenCounter):
         request_model: str = "",
         tools: list[dict[str, object]] | None = None,
         system: object | None = None,
+        messages_format: TokenCountMessagesFormat = "openai",
+        output_format: JsonValue = None,
+        context_management: CountContextManagement | None = None,
     ) -> TokenCountResponse | None:
         import copy
 
@@ -1284,6 +1287,11 @@ class VertexAITokenCounter(BaseTokenCounter):
 
         deployment = deployment or {}
         count_tokens_params_request: Final = copy.deepcopy(deployment.get("litellm_params", {}))
+
+        if not VertexAIPartnerModels.is_vertex_partner_model(model_to_use) and not uses_vertex_gemini_api(
+            model_to_use, count_tokens_params_request
+        ):
+            return None
 
         # Check if this is a partner model (Claude, Mistral, etc.)
         if VertexAIPartnerModels.is_vertex_partner_model(model_to_use):
@@ -1343,30 +1351,63 @@ class VertexAITokenCounter(BaseTokenCounter):
                     original_response=result,
                 )
         else:
-            from litellm.llms.vertex_ai.count_tokens.handler import VertexAITokenCounter
-            from litellm.llms.vertex_ai.gemini.transformation import (
-                gemini_convert_messages_with_history,  # pyright: ignore[reportPrivateUsage]  # shared helper already used by gemini/chat, context_caching, and vertex_and_google_ai_studio_gemini
+            from litellm.llms.vertex_ai.count_tokens.context import (
+                VertexGeminiCountContextError,
+                count_context_edits,
+                count_context_error_response,
+                gemini_count_contents,
+                inference_request_view,
+                provider_error_response,
+                unconvertible_messages_error,
+                vertex_gemini_count_context,
             )
+            from litellm.llms.vertex_ai.count_tokens.handler import VertexAITokenCounter
+
+            request_view: Final = await inference_request_view(
+                messages or [],
+                system,
+                messages_format,
+                count_context_edits(context_management, tools, count_tokens_params_request, model_to_use),
+            )
+            if isinstance(request_view, VertexGeminiCountContextError):
+                return count_context_error_response(request_view, request_model, model_to_use)
+            count_context: Final = vertex_gemini_count_context(system=request_view.system, tools=tools)
+            if isinstance(count_context, VertexGeminiCountContextError):
+                return count_context_error_response(count_context, request_model, model_to_use)
+            blocks_error: Final = unconvertible_messages_error(request_view.messages, messages_format)
+            if blocks_error is not None:
+                return count_context_error_response(blocks_error, request_model, model_to_use)
 
             resolved_contents: Final = (
-                contents if contents is not None else gemini_convert_messages_with_history(messages=messages or [])
+                contents
+                if contents is not None
+                else await gemini_count_contents(
+                    request_view.messages, messages_format, model_to_use, "vertex_ai", count_tokens_params_request
+                )
             )
+            if isinstance(resolved_contents, VertexGeminiCountContextError):
+                return count_context_error_response(resolved_contents, request_model, model_to_use)
 
             count_tokens_params: Final = {
                 "model": model_to_use,
                 "contents": resolved_contents,
+                "system_instruction": count_context.system_instruction,
+                "tools": count_context.tools,
             }
             count_tokens_params_request.update(count_tokens_params)
-            result = await VertexAITokenCounter().acount_tokens(
-                **count_tokens_params_request,
-            )
+            try:
+                result = await VertexAITokenCounter().acount_tokens(
+                    **count_tokens_params_request,
+                )
+            except litellm.APIError as error:
+                return provider_error_response(error, request_model, model_to_use)
 
-            if result is not None and "totalTokens" in result:
+            if "totalTokens" in result:
                 return TokenCountResponse(
                     total_tokens=result["totalTokens"],
                     request_model=request_model,
                     model_used=model_to_use,
-                    tokenizer_type=result.get("tokenizer_used", ""),
+                    tokenizer_type=result.get("tokenizer_used", "gemini"),
                     original_response=result,
                 )
 

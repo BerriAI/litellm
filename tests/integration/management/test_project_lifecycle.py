@@ -1,7 +1,6 @@
 import json
 import os
 import re
-import signal
 import threading
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
@@ -958,14 +957,12 @@ def test_ownership_enforced_after_worker_kill(ownership_gateway: Gateway, tmp_pa
                 assert len(workers) == 2, tuple(process.pid for process in workers)
                 victim: Final = workers[0]
                 survivor: Final = workers[1]
-                with ThreadPoolExecutor(max_workers=24) as pool:
+                with owned.replacing_worker(victim.pid) as kill, ThreadPoolExecutor(max_workers=24) as pool:
                     futures: Final = tuple(pool.submit(serve, index) for index in range(24))
                     try:
                         assert started.wait(timeout=10)
-                        os.kill(victim.pid, signal.SIGKILL)
+                        kill()
                         release_stream.set()
-                        psutil.wait_procs((victim,), timeout=10)
-                        assert not psutil.pid_exists(victim.pid), victim.pid
                     finally:
                         release_stream.set()
                     burst: Final = tuple(future.result(timeout=90) for future in futures)

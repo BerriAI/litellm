@@ -31,6 +31,7 @@ from typing_extensions import ReadOnly, TypedDict
 
 from tests.integration._support import process as process_support
 from tests.integration._support.async_server import LoopbackServer
+from tests.integration._support.budget import case_timeout_seconds
 from tests.integration._support.client import Gateway, eventually
 from tests.integration._support.database_relay import (
     DatabaseRelay,
@@ -43,6 +44,8 @@ from tests.integration._support.database_relay import (
 from tests.integration._support.runtime import configure_executor
 from tests.integration._support.sharding import ShardExecution, shard_errors
 from tests.integration._support.wire import Reply, wire_server
+from tests.integration._support.ports import allocate_port
+from tests.integration.run import _without_provider_api_keys
 
 
 class ExitRecord(TypedDict):
@@ -54,6 +57,17 @@ class ExitRecord(TypedDict):
 Relay = DatabaseRelay | DroppedConnectionRelay | HeldStatementRelay
 RelayFactory = Callable[[str, bytes], AbstractContextManager[tuple[Relay, str]]]
 STARTED_WORKER: Final = re.compile(r"Started server process \[(\d+)\]")
+NESTED_RUN_SECONDS: Final = 60.0
+WORKER_STACK_BOOT_SECONDS: Final = 30.0
+OUTER_TEST_SLACK_SECONDS: Final = 30.0
+
+
+def _nested_run_seconds(workers: int) -> float:
+    return NESTED_RUN_SECONDS + (workers * WORKER_STACK_BOOT_SECONDS if workers > 1 else 0.0)
+
+
+def _nested_run(*values: object, workers: int) -> object:
+    return pytest.param(*values, marks=pytest.mark.timeout(_nested_run_seconds(workers) + OUTER_TEST_SLACK_SECONDS))
 
 
 def _nested_pytest_environment(environment: Mapping[str, str]) -> dict[str, str]:
@@ -62,6 +76,7 @@ def _nested_pytest_environment(environment: Mapping[str, str]) -> dict[str, str]
             "INTEGRATION_RESULTS_DIR",
             "INTEGRATION_ROUTING",
             "INTEGRATION_WORKER_ISOLATION",
+            "INTEGRATION_COVERAGE_FILE",
             "INTEGRATION_CASE_SHARDS",
             "INTEGRATION_CASE_SHARD_INDEX",
             "CIRCLE_NODE_TOTAL",
@@ -73,6 +88,98 @@ def _nested_pytest_environment(environment: Mapping[str, str]) -> dict[str, str]
         )
     )
     return {name: value for name, value in environment.items() if name not in inherited_run_settings}
+
+
+def test_runner_environment_drops_inherited_provider_api_keys() -> None:
+    inherited: Final = {
+        "OPENAI_API_KEY": "ambient-openai",
+        "GEMINI_API_KEY": "ambient-gemini",
+        "OTHER_API_KEY": "ambient-other",
+        "LITELLM_MASTER_KEY": "sk-integration-master",
+        "OPENAI_BASE_URL": "http://127.0.0.1:8190",
+    }
+    filtered: Final = _without_provider_api_keys(inherited)
+    assert filtered == {
+        "LITELLM_MASTER_KEY": "sk-integration-master",
+        "OPENAI_BASE_URL": "http://127.0.0.1:8190",
+    }
+    assert inherited["OPENAI_API_KEY"] == "ambient-openai"
+
+
+@pytest.mark.parametrize("fails", (False, True), ids=("passing-test", "failing-test"))
+def test_sdk_teardown_delivers_logging_before_restoring_callbacks(tmp_path: Path, fails: bool) -> None:
+    root: Final = Path(__file__).resolve().parents[3]
+    events: Final = tmp_path / "callbacks.json"
+    probe: Final = tmp_path / "test_callback_teardown.py"
+    probe.write_text(
+        "import asyncio, json, litellm, pytest\n"
+        "from pathlib import Path\n"
+        "from litellm.integrations.custom_logger import CustomLogger\n"
+        f"EVENTS = Path({str(events)!r})\n"
+        "ORIGINAL = tuple(litellm.callbacks)\n"
+        "@pytest.fixture\n"
+        "def release():\n"
+        "    gate = asyncio.Event()\n"
+        "    yield gate\n"
+        "    gate.set()\n"
+        "async def test_request(release):\n"
+        "    started = asyncio.Event()\n"
+        "    request_loop = asyncio.get_running_loop()\n"
+        "    class Recorder(CustomLogger):\n"
+        "        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):\n"
+        "            started.set()\n"
+        "            await release.wait()\n"
+        "            EVENTS.write_text(json.dumps({\n"
+        "                'registered': self in litellm.callbacks,\n"
+        "                'same_loop': asyncio.get_running_loop() is request_loop,\n"
+        "                'call_id': kwargs['litellm_call_id'],\n"
+        "            }))\n"
+        "    litellm.callbacks.append(Recorder())\n"
+        "    response = await litellm.acompletion(model='gpt-4o-mini',\n"
+        "        messages=[{'role': 'user', 'content': 'teardown'}],\n"
+        "        mock_response='done', litellm_call_id='teardown-request')\n"
+        "    await asyncio.wait_for(started.wait(), timeout=5)\n"
+        "    assert response.choices[0].message.content == 'done'\n"
+        "    assert not EVENTS.exists()\n"
+        f"    assert not {fails}, 'intentional test failure'\n"
+        "def test_next():\n"
+        "    assert EVENTS.exists(), 'logging did not finish before the next test'\n"
+        "    assert json.loads(EVENTS.read_text()) == {\n"
+        "        'registered': True, 'same_loop': True, 'call_id': 'teardown-request'}\n"
+        "    assert tuple(litellm.callbacks) == ORIGINAL\n"
+    )
+    result: Final = subprocess.run(
+        (
+            sys.executable,
+            "-P",
+            "-m",
+            "pytest",
+            str(probe),
+            "--noconftest",
+            "-p",
+            "tests.integration.sdk.conftest",
+            "-o",
+            "addopts=",
+            "-o",
+            "asyncio_mode=auto",
+            "-o",
+            "asyncio_default_fixture_loop_scope=session",
+            f"--junitxml={tmp_path / 'junit.xml'}",
+            "-q",
+        ),
+        cwd=root,
+        env=_nested_pytest_environment(os.environ),
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == (1 if fails else 0), result.stdout + result.stderr
+    cases: Final = ElementTree.parse(tmp_path / "junit.xml").findall(".//testcase")
+    assert tuple(case.attrib["name"] for case in cases) == ("test_request", "test_next")
+    assert all(case.find("error") is None for case in cases), result.stdout + result.stderr
+    assert (cases[0].find("failure") is not None) == fails, result.stdout + result.stderr
+    assert cases[1].find("failure") is None, result.stdout + result.stderr
 
 
 def test_owned_readiness_rejects_a_healthy_listener_from_another_process(
@@ -90,8 +197,7 @@ def test_owned_readiness_rejects_a_healthy_listener_from_another_process(
                     process_support._wait_until_ready(launch)
                 assert process.poll() is None
             finally:
-                process.kill()
-                process.wait(timeout=3)
+                process_support.stop_child(process, grace_seconds=3)
 
 
 @pytest.mark.parametrize("factory", (database_relay, dropped_connection_relay, held_statement_relay))
@@ -114,10 +220,11 @@ async def _unused_peer(reader: asyncio.StreamReader, writer: asyncio.StreamWrite
 
 
 def test_relay_bind_failure_closes_its_loop_and_allows_repeated_cleanup() -> None:
+    port: Final = allocate_port()
     with socket.socket() as occupied:
-        occupied.bind(("127.0.0.1", 0))
+        occupied.bind(("127.0.0.1", port))
         occupied.listen()
-        relay: Final = LoopbackServer(occupied.getsockname()[1], _unused_peer)
+        relay: Final = LoopbackServer(port, _unused_peer)
         with pytest.raises(OSError, match=os.strerror(errno.EADDRINUSE).lower()):
             relay.start()
         relay.stop()
@@ -127,7 +234,7 @@ def test_relay_bind_failure_closes_its_loop_and_allows_repeated_cleanup() -> Non
 def test_upstream_readiness_failure_reaps_the_started_process(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(process_support, "_UPSTREAM_READY_SECONDS", 0)
     children_before: Final = frozenset(child.pid for child in psutil.Process().children(recursive=True))
-    slot: Final = process_support.UpstreamSlot(tmp_path, process_support._free_port(), process_support._harness_root())
+    slot: Final = process_support.UpstreamSlot(tmp_path, allocate_port(), process_support._harness_root())
     try:
         with pytest.raises(AssertionError, match="readiness deadline exceeded"):
             slot.start()
@@ -165,7 +272,7 @@ async def test_owned_runtime_starts_the_entire_held_provider_burst_on_a_small_ru
                 release.set()
 
 
-@pytest.mark.timeout(90)
+@pytest.mark.timeout(case_timeout_seconds())
 def test_slow_worker_startup_survives_healthchecks_and_a_stalled_worker_is_replaced(
     gateway: Gateway, tmp_path: Path
 ) -> None:
@@ -193,23 +300,13 @@ def test_slow_worker_startup_survives_healthchecks_and_a_stalled_worker_is_repla
             "Proxy yielded before both workers finished startup"
         )
         assert owned.log.read_text().count("Application startup complete.") == 2
-        victim: Final = psutil.Process(workers[0])
-        victim.suspend()
-        try:
-            replacement: Final = eventually(
-                lambda: tuple(int(pid) for pid in STARTED_WORKER.findall(owned.log.read_text())),
-                lambda pids: len(pids) == 3 and owned.log.read_text().count("Application startup complete.") == 3,
-                seconds=30,
-            )
-            assert replacement[-1] not in workers
-            assert not psutil.pid_exists(victim.pid), "Supervisor did not reap the stalled worker"
-            response: Final = owned.gateway.request("GET", "/health/readiness")
-            assert response.status_code == 200, response.text
-        finally:
-            try:
-                victim.kill()
-            except psutil.NoSuchProcess:
-                pass
+        replacement: Final = owned.stall_worker(workers[0])
+        assert replacement not in workers
+        assert tuple(int(pid) for pid in STARTED_WORKER.findall(owned.log.read_text()))[-1] == replacement
+        assert owned.log.read_text().count("Application startup complete.") == 3
+        assert not psutil.pid_exists(workers[0]), "Supervisor did not reap the stalled worker"
+        response: Final = owned.gateway.request("GET", "/health/readiness")
+        assert response.status_code == 200, response.text
 
 
 def test_interrupted_cleanup_reaps_the_owned_root_and_its_child() -> None:
@@ -249,8 +346,7 @@ def test_interrupted_cleanup_reaps_the_owned_root_and_its_child() -> None:
             assert process.poll() is not None
             eventually(lambda: process_support.group_members(process.pid), lambda members: not members, seconds=5)
         finally:
-            process_support.signal_group(process.pid, signal.SIGKILL)
-            process.wait(timeout=3)
+            process_support.stop_process_group(process, 3)
 
 
 @pytest.mark.parametrize("explicit_dotenv", (False, True))
@@ -451,7 +547,10 @@ def test_native_file_selection_reuses_fixtures_and_qualifies_an_empty_shard(
     )
 
 
-@pytest.mark.parametrize(("workers", "seed"), ((1, 1848224111), (2, 0), (2, 984872314)))
+@pytest.mark.parametrize(
+    ("workers", "seed"),
+    tuple(_nested_run(workers, seed, workers=workers) for workers, seed in ((1, 1848224111), (2, 0), (2, 984872314))),
+)
 @pytest.mark.parametrize("class_parameters", (False, True))
 def test_mixed_fixture_scopes_reuse_outer_and_inner_configurations(
     tmp_path: Path, workers: int, seed: int, class_parameters: bool
@@ -511,7 +610,7 @@ def test_mixed_fixture_scopes_reuse_outer_and_inner_configurations(
             env=_nested_pytest_environment(os.environ),
             capture_output=True,
             text=True,
-            timeout=60,
+            timeout=_nested_run_seconds(workers),
             check=False,
         )
         assert result.returncode == 0, result.stdout + result.stderr
@@ -536,16 +635,21 @@ def test_mixed_fixture_scopes_reuse_outer_and_inner_configurations(
     assert len(executed) == len(frozenset(executed)) == expected_passes
 
 
-@pytest.mark.parametrize("workers", (1, 2))
+@pytest.mark.parametrize("workers", tuple(_nested_run(workers, workers=workers) for workers in (1, 2)))
 def test_direct_and_dependent_consumers_reuse_the_same_module_parameter(tmp_path: Path, workers: int) -> None:
     source: Final = Path(__file__).resolve().parents[3]
     root: Final = tmp_path / "probe-root"
     for relative in (
         "pyproject.toml",
         "tests/__init__.py",
+        "tests/_fake_openai_endpoint_server.py",
         "tests/integration/__init__.py",
         "tests/integration/conftest.py",
         "tests/integration/run.py",
+        "tests/integration/proxy_config.yaml",
+        "tests/integration/mcp_coverage.toml",
+        "tests/integration/cost_calculation/cost_map.py",
+        "tests/integration/cost_calculation/cost_tracking_case.py",
     ):
         destination: Final = root / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -609,7 +713,7 @@ def test_direct_and_dependent_consumers_reuse_the_same_module_parameter(tmp_path
         ),
         capture_output=True,
         text=True,
-        timeout=60,
+        timeout=_nested_run_seconds(workers),
         check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr

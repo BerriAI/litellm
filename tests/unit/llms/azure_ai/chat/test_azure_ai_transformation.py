@@ -345,6 +345,195 @@ def test_azure_ai_grok_stop_parameter_handling():
     assert "stop" in gpt_params, "GPT models should support stop parameter"
 
 
+@pytest.mark.respx(assert_all_called=True)
+def test_azure_ai_grok_bills_reasoning_tokens_reported_outside_completion_tokens(
+    respx_mock: respx.MockRouter,
+) -> None:
+    api_url: Final = "https://example-resource.services.ai.azure.com/models/chat/completions"
+    route: Final = respx_mock.post(url__startswith=api_url).mock(
+        return_value=Response(
+            200,
+            json={
+                "id": "chatcmpl-grok",
+                "object": "chat.completion",
+                "created": 1700000000,
+                "model": "grok-4.7",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "42"}, "finish_reason": "stop"}],
+                "usage": {
+                    "prompt_tokens": 14,
+                    "completion_tokens": 10,
+                    "total_tokens": 336,
+                    "completion_tokens_details": {"reasoning_tokens": 312},
+                },
+            },
+        )
+    )
+
+    response: Final = litellm.completion(
+        model="azure_ai/grok-4.7",
+        messages=[{"role": "user", "content": "What is the meaning of life?"}],
+        api_base="https://example-resource.services.ai.azure.com/models",
+        api_key="azure-ai-test-key",
+    )
+    model_info: Final = litellm.get_model_info(model="grok-4.7", custom_llm_provider="azure_ai")
+    expected_cost: Final = 14 * model_info["input_cost_per_token"] + 322 * model_info["output_cost_per_token"]
+
+    assert route.call_count == 1
+    assert response.usage.completion_tokens == 322
+    assert response.usage.total_tokens == response.usage.prompt_tokens + response.usage.completion_tokens
+    assert response._hidden_params["response_cost"] == pytest.approx(expected_cost, rel=1e-9)
+
+
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize(
+    ("upstream_model", "usage", "expected_completion_tokens"),
+    [
+        pytest.param(
+            "grok-4.7",
+            {
+                "prompt_tokens": 14,
+                "completion_tokens": 10,
+                "total_tokens": 336,
+                "completion_tokens_details": {"reasoning_tokens": 312},
+            },
+            322,
+            id="grok-reports-reasoning-outside-completion",
+        ),
+        pytest.param(
+            "gpt-5.4-mini",
+            {
+                "prompt_tokens": 14,
+                "completion_tokens": 322,
+                "total_tokens": 336,
+                "completion_tokens_details": {"reasoning_tokens": 312},
+            },
+            322,
+            id="reasoning-already-inside-completion",
+        ),
+    ],
+)
+def test_azure_ai_counts_reasoning_tokens_once_whatever_the_deployment_is_named(
+    respx_mock: respx.MockRouter,
+    upstream_model: str,
+    usage: dict[str, object],
+    expected_completion_tokens: int,
+) -> None:
+    api_url: Final = "https://example-resource.services.ai.azure.com/models/chat/completions"
+    respx_mock.post(url__startswith=api_url).mock(
+        return_value=Response(
+            200,
+            json={
+                "id": "chatcmpl-x",
+                "object": "chat.completion",
+                "created": 1700000000,
+                "model": upstream_model,
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "42"}, "finish_reason": "stop"}],
+                "usage": usage,
+            },
+        )
+    )
+
+    response: Final = litellm.completion(
+        model="azure_ai/team-reasoner",
+        messages=[{"role": "user", "content": "What is the meaning of life?"}],
+        api_base="https://example-resource.services.ai.azure.com/models",
+        api_key="azure-ai-test-key",
+    )
+
+    assert response.usage.completion_tokens == expected_completion_tokens
+    assert response.usage.total_tokens == response.usage.prompt_tokens + response.usage.completion_tokens
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_azure_ai_grok_stream_folds_reasoning_tokens_into_the_usage_chunk(respx_mock: respx.MockRouter) -> None:
+    api_url: Final = "https://example-resource.services.ai.azure.com/models/chat/completions"
+    stream_body: Final = (
+        'data: {"id":"chatcmpl-grok","object":"chat.completion.chunk","created":1700000000,"model":"grok-4.7",'
+        '"choices":[{"index":0,"delta":{"role":"assistant","content":"42"},"finish_reason":null}]}\n\n'
+        'data: {"id":"chatcmpl-grok","object":"chat.completion.chunk","created":1700000000,"model":"grok-4.7",'
+        '"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n'
+        'data: {"id":"chatcmpl-grok","object":"chat.completion.chunk","created":1700000000,"model":"grok-4.7",'
+        '"choices":[],"usage":{"prompt_tokens":14,"completion_tokens":10,"total_tokens":336,'
+        '"completion_tokens_details":{"reasoning_tokens":312}}}\n\n'
+        "data: [DONE]\n\n"
+    )
+    route: Final = respx_mock.post(url__startswith=api_url).mock(
+        return_value=Response(200, text=stream_body, headers={"content-type": "text/event-stream"})
+    )
+
+    chunks: Final = tuple(
+        litellm.completion(
+            model="azure_ai/grok-4.7",
+            messages=[{"role": "user", "content": "What is the meaning of life?"}],
+            api_base="https://example-resource.services.ai.azure.com/models",
+            api_key="azure-ai-test-key",
+            stream=True,
+            stream_options={"include_usage": True},
+        )
+    )
+    usage_chunks: Final = [chunk.usage for chunk in chunks if getattr(chunk, "usage", None) is not None]
+
+    assert route.call_count == 1
+    assert len(usage_chunks) == 1
+    assert usage_chunks[0].completion_tokens == 322
+    assert usage_chunks[0].total_tokens == usage_chunks[0].prompt_tokens + usage_chunks[0].completion_tokens
+
+
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize(
+    ("completion_tokens", "expected_completion_tokens"),
+    [
+        pytest.param(10, 322, id="reasoning-outside-completion"),
+        pytest.param(322, 322, id="reasoning-already-inside-completion"),
+    ],
+)
+def test_azure_ai_stream_counts_reasoning_tokens_once_whatever_the_chunks_call_the_model(
+    respx_mock: respx.MockRouter,
+    completion_tokens: int,
+    expected_completion_tokens: int,
+) -> None:
+    api_url: Final = "https://example-resource.services.ai.azure.com/models/chat/completions"
+    chunk_base: Final = {
+        "id": "chatcmpl-x",
+        "object": "chat.completion.chunk",
+        "created": 1700000000,
+        "model": "team-reasoner",
+    }
+    chunks_sent: Final = (
+        {"choices": [{"index": 0, "delta": {"role": "assistant", "content": "42"}, "finish_reason": None}]},
+        {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+        {
+            "choices": [],
+            "usage": {
+                "prompt_tokens": 14,
+                "completion_tokens": completion_tokens,
+                "total_tokens": 336,
+                "completion_tokens_details": {"reasoning_tokens": 312},
+            },
+        },
+    )
+    stream_body: Final = "".join(f"data: {json.dumps({**chunk_base, **chunk})}\n\n" for chunk in chunks_sent)
+    respx_mock.post(url__startswith=api_url).mock(
+        return_value=Response(200, text=f"{stream_body}data: [DONE]\n\n", headers={"content-type": "text/event-stream"})
+    )
+
+    chunks: Final = tuple(
+        litellm.completion(
+            model="azure_ai/team-reasoner",
+            messages=[{"role": "user", "content": "What is the meaning of life?"}],
+            api_base="https://example-resource.services.ai.azure.com/models",
+            api_key="azure-ai-test-key",
+            stream=True,
+            stream_options={"include_usage": True},
+        )
+    )
+    usage_chunks: Final = [chunk.usage for chunk in chunks if getattr(chunk, "usage", None) is not None]
+
+    assert len(usage_chunks) == 1
+    assert usage_chunks[0].completion_tokens == expected_completion_tokens
+    assert usage_chunks[0].total_tokens == usage_chunks[0].prompt_tokens + usage_chunks[0].completion_tokens
+
+
 def test_azure_model_router_response_shows_actual_model():
     """
     Test that Azure Model Router returns the actual model used in the response,
