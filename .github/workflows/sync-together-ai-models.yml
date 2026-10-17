@@ -41,10 +41,6 @@ jobs:
           uv run --frozen python scripts/sync_together_ai_models.py --write --pr-body-file "$RUNNER_TEMP/pr_body.md"
         env:
           TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
-      - name: Regenerate the JSON schema
-        if: steps.existing.outputs.open_pr == ''
-        run: |
-          uv run --frozen python ci_cd/generate_model_prices_schema.py
       - name: Create a pull request when the registry changed
         if: steps.existing.outputs.open_pr == ''
         run: |
@@ -57,8 +53,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b "$branch"
           git add model_prices_and_context_window.json \
-            litellm/model_prices_and_context_window_backup.json \
-            model_prices_and_context_window.schema.json
+            litellm/model_prices_and_context_window_backup.json
           git commit -m "feat(models): sync together_ai model registry $(date +'%Y-%m-%d')"
           gh auth setup-git
           git push origin "$branch"
