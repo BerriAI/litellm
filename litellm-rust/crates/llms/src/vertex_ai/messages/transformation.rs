@@ -213,23 +213,14 @@ fn has_web_search_tool(tools: Option<&[Recognized<MessagesTool>]>) -> bool {
 }
 
 /// Python's Vertex `validate_anthropic_messages_environment` beta set: the shared feature
-/// betas under Vertex's policy, plus the web search and safeguards betas Vertex needs spelled
-/// out.
+/// betas under Vertex's policy, plus the web search beta Vertex needs spelled out.
 fn vertex_feature_betas(request: &MessagesRequest) -> BetaSet {
     let params = &request.params;
     provider_feature_betas(request, BetaProvider::VertexAi).union(
-        [
-            has_web_search_tool(params.tools.as_deref())
-                .then_some(AnthropicBeta::WebSearch20250305),
-            params
-                .extra
-                .get("safeguards")
-                .is_some_and(|value| !value.is_null())
-                .then_some(AnthropicBeta::DangerousToolUse20260903),
-        ]
-        .into_iter()
-        .flatten()
-        .collect(),
+        has_web_search_tool(params.tools.as_deref())
+            .then_some(AnthropicBeta::WebSearch20250305)
+            .into_iter()
+            .collect(),
     )
 }
 
