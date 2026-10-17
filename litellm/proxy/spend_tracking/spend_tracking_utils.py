@@ -54,6 +54,7 @@ from litellm.litellm_core_utils.litellm_logging import (
     is_valid_sha256_hash,
     request_model_access_groups_from_litellm_params,
 )
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field, parts_of
 from litellm.litellm_core_utils.ptu_pricing import azure_spillover
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps, strip_null_bytes
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
@@ -1146,7 +1147,7 @@ def _get_messages_for_spend_logs_payload(
     metadata: dict | None = None,
 ) -> str:
     if should_store_prompts_and_responses_in_spend_logs():
-        if standard_logging_payload is not None:
+        if standard_logging_payload is not None and not stores_latest_user_message_only():
             call_type: Final = standard_logging_payload.get("call_type", "")
             if call_type == "_arealtime":
                 messages: Final = standard_logging_payload.get("messages")
@@ -1162,6 +1163,68 @@ _SENSITIVE_REQUEST_BODY_KEYS: Final = frozenset({"secret_fields"})
 _REQUEST_BODY_CREDENTIAL_MASKER: Final = SensitiveDataMasker(extra_sensitive_patterns=frozenset({"apikey"}))
 _TOOL_INPUT_BLOCK_TYPES: Final = frozenset({"tool_use", "server_tool_use", "mcp_tool_use"})
 _TOOL_OUTPUT_BLOCK_TYPES: Final = frozenset({"tool_result", "mcp_tool_result", "function_call_output"})
+_LATEST_USER_MESSAGE_STORAGE: Final = "latest_user_message"
+_TEXT_BLOCK_TYPES: Final = frozenset({"text", "input_text"})
+_OMITTED_BLOCK_PLACEHOLDERS: Final = MappingProxyType(
+    {
+        "image": "[image omitted]",
+        "image_url": "[image omitted]",
+        "input_image": "[image omitted]",
+        "file": "[file omitted]",
+        "input_file": "[file omitted]",
+        "document": "[file omitted]",
+        "input_audio": "[audio omitted]",
+    }
+)
+
+
+def stores_latest_user_message_only() -> bool:
+    from litellm.proxy.proxy_server import general_settings_view
+
+    return general_settings_view().get("spend_logs_prompt_storage") == _LATEST_USER_MESSAGE_STORAGE
+
+
+def _content_block_text(block: object) -> str | None:
+    if isinstance(block, str):
+        return block
+    block_type: Final = message_field(block, "type")
+    if block_type in _TEXT_BLOCK_TYPES:
+        text: Final = message_field(block, "text")
+        return text if isinstance(text, str) else None
+    return _OMITTED_BLOCK_PLACEHOLDERS.get(block_type) if isinstance(block_type, str) else None
+
+
+def _is_tool_output_block(block: object) -> bool:
+    return message_field(block, "type") in _TOOL_OUTPUT_BLOCK_TYPES
+
+
+def _user_content_text(content: object) -> str | None:
+    if isinstance(content, str):
+        return content or None
+    blocks: Final = parts_of(content)
+    if any(_is_tool_output_block(block) for block in blocks):
+        return None
+    texts: Final = tuple(text for text in map(_content_block_text, blocks) if text)
+    return "\n".join(texts) or None
+
+
+def _latest_user_message_text(request_body: Mapping[str, object]) -> str | None:
+    turns: Final = request_body.get("messages", request_body.get("input"))
+    if isinstance(turns, str):
+        return turns or None
+    latest: Final = next(reversed(parts_of(turns)), None)
+    if message_field(latest, "role") != "user":
+        return None
+    return _user_content_text(message_field(latest, "content"))
+
+
+def _latest_user_message_body(request_body: Mapping[str, object]) -> Mapping[str, object]:
+    text: Final = _latest_user_message_text(request_body)
+    return MappingProxyType({}) if text is None else MappingProxyType({_LATEST_USER_MESSAGE_STORAGE: text})
+
+
+def _stored_request_body(request_body: Mapping[str, object]) -> Mapping[str, object]:
+    return _latest_user_message_body(request_body) if stores_latest_user_message_only() else request_body
 
 
 def _is_request_body_credential(key: str, value: object) -> bool:
@@ -1818,7 +1881,7 @@ def _get_proxy_server_request_for_spend_logs_payload(
                     _request_body = _convert_mapping_to_json_serializable(without_classifier_audit(_request_body))
                     perform_redaction(model_call_details=_request_body, result=None)
 
-            _request_body = _sanitize_request_body_for_spend_logs_payload(_request_body)
+            _request_body = _sanitize_request_body_for_spend_logs_payload(_stored_request_body(_request_body))
             stored_request_body: Final = _OBJECT_MAPPING.validate_python(_request_body)
             _request_body_json_str: Final = safe_dumps(
                 _stored_request_without_requester_ip_address(stored_request_body)
@@ -1862,7 +1925,7 @@ def _get_response_for_spend_logs_payload(
     payload: StandardLoggingPayload | None,
     kwargs: dict | None = None,
 ) -> str:
-    if payload is None:
+    if payload is None or stores_latest_user_message_only():
         return "{}"
     if should_store_prompts_and_responses_in_spend_logs():
         response_obj: object = payload.get("response")

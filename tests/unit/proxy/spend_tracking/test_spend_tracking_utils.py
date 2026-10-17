@@ -661,9 +661,7 @@ def test_small_request_no_truncation():
 
     # Verify the content was NOT truncated
     assert sanitized["messages"][0]["content"] == small_content
-    assert (
-        len(sanitized["messages"][0]["content"]) == MAX_STRING_LENGTH_PROMPT_IN_DB - 100
-    )
+    assert len(sanitized["messages"][0]["content"]) == MAX_STRING_LENGTH_PROMPT_IN_DB - 100
 
 
 def test_configurable_string_length_env_var(monkeypatch):
@@ -6621,6 +6619,151 @@ def test_spend_logs_payload_with_prompts_enabled(monkeypatch: pytest.MonkeyPatch
     )
     assert payload_disabled["messages"] == "{}"
     assert payload_disabled["response"] == "{}"
+
+
+_LATEST_ONLY_SETTINGS: Final = {"store_prompts_in_spend_logs": True, "spend_logs_prompt_storage": "latest_user_message"}
+_PRIOR_CHAT_TURNS: Final = (
+    {"role": "system", "content": "system prompt"},
+    {"role": "user", "content": "earlier user turn"},
+    {"role": "assistant", "content": "earlier answer"},
+)
+
+
+_LATEST_ONLY_ROW: Final = TypeAdapter(dict[str, str])
+_FULL_CHAT_ROW: Final = TypeAdapter(dict[str, list[dict[str, str]]])
+_STORED_RESPONSE: Final = TypeAdapter(object)
+
+
+def _stored_request_json(body: Mapping[str, object]) -> str:
+    return _get_proxy_server_request_for_spend_logs_payload(
+        metadata={}, litellm_params={"proxy_server_request": {"body": body}}
+    )
+
+
+def _stored_request_body(body: Mapping[str, object]) -> dict[str, str]:
+    return _LATEST_ONLY_ROW.validate_json(_stored_request_json(body))
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        ({"messages": [*_PRIOR_CHAT_TURNS, {"role": "user", "content": "latest"}]}, {"latest_user_message": "latest"}),
+        (
+            {
+                "system": "system prompt",
+                "tools": [{"name": "lookup"}],
+                "messages": [
+                    {"role": "user", "content": "earlier user turn"},
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "describe"},
+                            {"type": "image", "source": {"type": "base64", "data": "AAAA"}},
+                            {"type": "document", "source": {"type": "base64", "data": "AAAA"}},
+                        ],
+                    },
+                ],
+            },
+            {"latest_user_message": "describe\n[image omitted]\n[file omitted]"},
+        ),
+        (
+            {"messages": [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "data:,"}}]}]},
+            {"latest_user_message": "[image omitted]"},
+        ),
+        (
+            {"instructions": "system prompt", "input": "plain responses input"},
+            {"latest_user_message": "plain responses input"},
+        ),
+        (
+            {
+                "input": [
+                    {"role": "user", "content": "earlier user turn"},
+                    {
+                        "type": "message",
+                        "role": "user",
+                        "content": [
+                            {"type": "input_text", "text": "summarize"},
+                            {"type": "input_file", "file_id": "file-1"},
+                        ],
+                    },
+                ]
+            },
+            {"latest_user_message": "summarize\n[file omitted]"},
+        ),
+        (
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": ""},
+                            {"type": "thinking", "thinking": "hidden"},
+                            {"type": "text", "text": "keep"},
+                        ],
+                    }
+                ]
+            },
+            {"latest_user_message": "keep"},
+        ),
+        ({"messages": [*_PRIOR_CHAT_TURNS, {"role": "tool", "tool_call_id": "c", "content": "tool out"}]}, {}),
+        (
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "tool_result", "tool_use_id": "t", "content": "tool out"},
+                            {"type": "text", "text": "reminder next to a tool result"},
+                        ],
+                    }
+                ]
+            },
+            {},
+        ),
+        ({"input": [{"role": "user", "content": "q"}, {"type": "function_call_output", "output": "out"}]}, {}),
+        ({"messages": [{"role": "user", "content": "q"}, {"role": "assistant", "content": "prefill"}]}, {}),
+        ({"messages": [{"role": "user", "content": ""}]}, {}),
+        ({"messages": []}, {}),
+        ({"model": "gpt-4o-mini"}, {}),
+    ],
+)
+def test_latest_user_message_mode_stores_only_the_latest_user_text(
+    monkeypatch: pytest.MonkeyPatch, body: Mapping[str, object], expected: dict[str, str]
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", _LATEST_ONLY_SETTINGS)
+    assert _stored_request_body(body) == expected
+
+
+def test_latest_user_message_mode_keeps_the_existing_string_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.delenv("MAX_STRING_LENGTH_PROMPT_IN_DB", raising=False)
+    chat_body: Final = {"messages": [{"role": "user", "content": "a" * 1500 + "b" * 1500}]}
+    monkeypatch.setattr(proxy_server, "general_settings", {"store_prompts_in_spend_logs": True})
+    capped_today: Final = _FULL_CHAT_ROW.validate_json(_stored_request_json(chat_body))["messages"][0]["content"]
+    monkeypatch.setattr(proxy_server, "general_settings", _LATEST_ONLY_SETTINGS)
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in capped_today, capped_today
+    assert _stored_request_body(chat_body) == {"latest_user_message": capped_today}
+
+
+def test_latest_user_message_mode_drops_the_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    payload: Final = cast(StandardLoggingPayload, {"response": {"choices": [{"message": {"content": "answer"}}]}})
+    monkeypatch.setattr(proxy_server, "general_settings", {"store_prompts_in_spend_logs": True})
+    assert _STORED_RESPONSE.validate_json(_get_response_for_spend_logs_payload(payload)) == payload["response"]
+    monkeypatch.setattr(proxy_server, "general_settings", _LATEST_ONLY_SETTINGS)
+    assert _get_response_for_spend_logs_payload(payload) == "{}"
+
+
+def test_latest_user_message_mode_unset_stores_the_full_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    body: Final = {"messages": [*_PRIOR_CHAT_TURNS, {"role": "user", "content": "latest"}]}
+    monkeypatch.setattr(proxy_server, "general_settings", {"store_prompts_in_spend_logs": True})
+    assert _STORED_RESPONSE.validate_json(_stored_request_json(body)) == body
 
 
 @pytest.mark.parametrize(

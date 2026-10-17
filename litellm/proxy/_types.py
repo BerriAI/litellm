@@ -2794,6 +2794,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="If True, stores request messages and responses in spend logs. Default is False.",
     )
+    spend_logs_prompt_storage: Literal["latest_user_message"] | None = Field(
+        None,
+        description="With store_prompts_in_spend_logs on, 'latest_user_message' stores only the text of the request's latest user message and no response. Unset stores the full request and response.",
+    )
     disable_requester_ip_address_logging: bool | None = Field(
         None,
         description="If True, new spend log rows store requester_ip_address as null in the column, the metadata and the stored request. The stored request also drops client-IP forwarding headers such as x-forwarded-for, and IP addresses in its other header values and in stored error messages are masked. Guardrails, metrics and callbacks that read the standard logging payload still receive the IP. Default is False.",
