@@ -5,6 +5,35 @@ ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.11.7@sha256:240fb85ab0f263ef12f492d8476aa3a2
 FROM $UV_IMAGE AS uvbin
 
 # ---------- Builder ----------
+# Rust extension stage. It copies only the inputs of the native build, so the
+# expensive maturin + cargo compile (fat LTO) stays cached in BuildKit until
+# pyproject.toml, README.md, rust-toolchain.toml or litellm-rust/ change.
+# maturin's PEP 517 backend installs Rust with puccinialin when cargo is absent,
+# exactly as the builder's `uv sync` did before.
+FROM $LITELLM_BUILD_IMAGE AS rust-native
+
+WORKDIR /app
+USER root
+
+COPY --from=uvbin /uv /uvx /usr/local/bin/
+
+RUN for i in 1 2 3; do \
+      apk add --no-cache bash gcc python-3.13 python-3.13-dev openssl openssl-dev && break; \
+      [ $i = 3 ] && { echo "apk add failed after 3 retries" >&2; exit 1; }; \
+      sleep 5; \
+    done
+
+ENV UV_PYTHON_DOWNLOADS=0
+
+COPY pyproject.toml README.md rust-toolchain.toml ./
+COPY litellm-rust ./litellm-rust
+
+RUN --mount=type=cache,target=/root/.cache/uv \
+    mkdir -p litellm/rust_bridge /wheels && \
+    touch litellm/__init__.py litellm/rust_bridge/__init__.py && \
+    uvx --python python3.13 --from maturin==1.15.0 --with puccinialin==0.1.14 \
+        python -c "import maturin; maturin.build_wheel('/wheels')"
+
 FROM $LITELLM_BUILD_IMAGE AS builder
 
 WORKDIR /app
@@ -54,7 +83,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 COPY . .
 
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-default-groups --no-editable \
+    uv sync --frozen --no-install-project --no-default-groups --no-editable \
         --extra proxy \
         --extra proxy-runtime \
         --group admin-mcp \
@@ -62,6 +91,10 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         --extra semantic-router \
         --extra saml \
         --python python3.13
+
+# The project itself comes from the rust-native wheel instead of a fresh compile.
+RUN --mount=type=bind,from=rust-native,source=/wheels,target=/wheels \
+    uv pip install --python /app/.venv/bin/python --no-deps /wheels/litellm-*.whl
 
 RUN cp "$(python -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"/litellm/rust_bridge/_native*.so litellm/rust_bridge/
 
