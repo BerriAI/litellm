@@ -8635,11 +8635,19 @@ class ProxyConfig:
                     db_general_settings=db_general_settings.param_value,
                 )
 
-            # initialize vector stores, guardrails, etc. table in db
-            await self._init_non_llm_objects_in_db(prisma_client=prisma_client)
+            if self._should_load_db_object(object_type="pass_through_endpoints"):
+                await self._init_pass_through_endpoints_in_db()
 
         except Exception as e:
             verbose_proxy_logger.exception("litellm.proxy.proxy_server.py::ProxyConfig:add_deployment - %s", e)
+
+        try:
+            # initialize vector stores, guardrails, etc. table in db
+            await self._init_non_llm_objects_in_db(prisma_client=prisma_client)
+        except Exception as e:  # noqa: BLE001  # log and carry on, like the reconcile handler above
+            verbose_proxy_logger.exception(
+                "litellm.proxy.proxy_server.py::ProxyConfig:add_deployment non-LLM objects - %s", e
+            )
 
         # Read while the lock is still held: once it is released the next reconcile can
         # begin, and clear_cache's leading wipe would make this look like a mass drop.
@@ -8727,9 +8735,6 @@ class ProxyConfig:
 
         if self._should_load_db_object(object_type="agents"):
             await self._init_agents_in_db(prisma_client=prisma_client)
-
-        if self._should_load_db_object(object_type="pass_through_endpoints"):
-            await self._init_pass_through_endpoints_in_db()
 
         if self._should_load_db_object(object_type="prompts"):
             await self._init_prompts_in_db(prisma_client=prisma_client)
