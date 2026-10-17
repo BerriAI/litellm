@@ -67,6 +67,7 @@ class Route(str, Enum):
     RERANK = "rerank"
     OCR = "ocr"
     VECTOR_STORES = "vector_stores"
+    RAG = "rag"
     REALTIME = "realtime"
     A2A = "a2a"
     USER_MANAGEMENT = "user_management"

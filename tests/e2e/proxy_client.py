@@ -83,6 +83,10 @@ from models import (
     ModelUpdateBody,
     OcrBody,
     OcrResponse,
+    RagIngestBody,
+    RagIngestResponse,
+    RagQueryBody,
+    RagQueryResponse,
     RerankBody,
     RerankResponse,
     ResponsesStreamBody,
@@ -1035,6 +1039,29 @@ class ProxyClient:
             headers=self.transport.bearer(key),
             json=body,
             response_type=RerankResponse,
+        )
+
+    @step(
+        "Ingest {body.file.filename} with /v1/rag/ingest into a "
+        "{body.ingest_options.vector_store.custom_llm_provider} vector store"
+    )
+    def rag_ingest(self, key: str, body: RagIngestBody) -> Result[RagIngestResponse]:
+        return self.transport.post(
+            "/v1/rag/ingest",
+            headers=self.transport.bearer(key),
+            json=body,
+            response_type=RagIngestResponse,
+            timeout=SLOW_PROVIDER_TIMEOUT_SECONDS,
+        )
+
+    @step("Send a /v1/rag/query request to {body.model} over vector store {body.retrieval_config.vector_store_id}")
+    def rag_query(self, key: str, body: RagQueryBody) -> Result[RagQueryResponse]:
+        return self.transport.post(
+            "/v1/rag/query",
+            headers=self.transport.bearer(key),
+            json=body,
+            response_type=RagQueryResponse,
+            timeout=SLOW_PROVIDER_TIMEOUT_SECONDS,
         )
 
     @step("Count tokens with /v1/messages/count_tokens for {body.model}")

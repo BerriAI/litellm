@@ -42,6 +42,7 @@ LlmEndpoint = Literal[
     "realtime",
     "google_native",
     "vector_stores",
+    "rag",
     "ocr",
     "bedrock_native",
 ]
@@ -62,6 +63,7 @@ LlmRoute = Literal[
     "sagemaker",
     "together_ai",
     "vertex",
+    "vertex_agent_engine",
     "xiaomi_mimo",
 ]
 
@@ -82,6 +84,7 @@ LlmCapability = Literal[
     "logprobs",
     "prompt_cache_1h",
     "prompt_cache_5m",
+    "rerank",
     "response_headers",
     "service_tier",
     "structured_output",
