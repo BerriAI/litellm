@@ -74,8 +74,6 @@ class Feature(str, Enum):
     """A registered MessagesInterceptor that takes over the call."""
     AGENTIC_LOOP_HOOK = "agentic_loop_hook"
     """A logger overriding async_should_run_agentic_loop, which may run follow-up calls."""
-    RESPONSE_CACHE = "response_cache"
-    """litellm.cache, whose hit and store order differs from native."""
     TLS_POLICY = "tls_policy"
     """An OpenSSL security level or ECDH curve that native TLS cannot apply."""
     MANAGED_RESOURCE_IDS = "managed_resource_ids"
@@ -142,14 +140,11 @@ COMMON_PYTHON_FEATURES: Final = frozenset(
     }
 )
 
-CHAT_PYTHON_FEATURES: Final = COMMON_PYTHON_FEATURES | {Feature.RESPONSE_CACHE}
-
 MESSAGES_PYTHON_FEATURES: Final = COMMON_PYTHON_FEATURES | {
     Feature.SAFEGUARDS_CLASSIFIER,
     Feature.PRE_REQUEST_HOOK,
     Feature.WEBSEARCH_INTERCEPTION,
     Feature.MESSAGES_INTERCEPTOR,
-    Feature.RESPONSE_CACHE,
     Feature.MODIFY_PARAMS,
     Feature.WORKLOAD_IDENTITY,
     Feature.CACHE_CONTROL_INJECTION,
@@ -170,7 +165,6 @@ RESPONSES_PYTHON_FEATURES: Final = COMMON_PYTHON_FEATURES | {
     Feature.INPUT_REWRITE,
     Feature.EXTRA_BODY,
     Feature.PROVIDER_AFFINITY,
-    Feature.RESPONSE_CACHE,
     Feature.MANAGED_RESOURCE_IDS,
     Feature.CACHE_CONTROL_MARKS,
     Feature.ANTHROPIC_TOOL_SEARCH,
@@ -180,7 +174,7 @@ RESPONSES_PYTHON_FEATURES: Final = COMMON_PYTHON_FEATURES | {
 }
 
 RULES: Final[Rules] = (
-    RouteRule(Route.CHAT_COMPLETIONS, Rollout.PYTHON_ONLY, features=CHAT_PYTHON_FEATURES),
+    RouteRule(Route.CHAT_COMPLETIONS, Rollout.PYTHON_ONLY, features=COMMON_PYTHON_FEATURES),
     RouteRule(Route.CHAT_COMPLETIONS, Rollout.PYTHON_ONLY),
     RouteRule(Route.EMBEDDINGS, Rollout.PYTHON_ONLY),
     RouteRule(Route.OCR, Rollout.RUST_REQUIRED),

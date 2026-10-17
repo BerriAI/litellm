@@ -93,7 +93,6 @@ _FEATURES: Final[detectors.Detectors] = MappingProxyType(
         ),
         Feature.PRE_REQUEST_HOOK: detectors.pre_request_hook,
         Feature.WEBSEARCH_INTERCEPTION: detectors.websearch_interception,
-        Feature.RESPONSE_CACHE: detectors.response_cache,
         Feature.MODIFY_PARAMS: detectors.modify_params,
         Feature.WORKLOAD_IDENTITY: detectors.anthropic_workload_identity,
         Feature.CACHE_CONTROL_INJECTION: detectors.cache_control_injection,
