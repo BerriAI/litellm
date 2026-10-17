@@ -707,6 +707,36 @@ def test_walk_user_text_redacts_custom_tool_call_output():
     assert data["input"][0]["output"] == "[MASKED]"
 
 
+@pytest.mark.parametrize(
+    ("item", "field", "masked"),
+    (
+        (
+            {"type": "function_call", "name": "secret_tool_name", "arguments": '{"token": "secret", "count": 7}'},
+            "arguments",
+            '{"token": "[MASKED]", "count": 7}',
+        ),
+        ({"type": "function_call", "arguments": '{"token":"secret",broken'}, "arguments", '{"token":"[MASKED]",broken'),
+        ({"type": "custom_tool_call", "name": "secret_tool_name", "input": "echo secret"}, "input", "echo [MASKED]"),
+    ),
+    ids=("function-call", "function-call-malformed", "custom-tool-call"),
+)
+def test_responses_tool_call_items_are_read_and_masked(item, field, masked):
+    data = {"input": [{"role": "user", "content": "go"}, item]}
+    assert any("secret" in text and "secret_tool_name" not in text for text in iter_message_text(data))
+    assert walk_user_text(data, lambda text: text.replace("secret", "[MASKED]")) == 2
+    assert data["input"][1][field] == masked
+    assert data["input"][1].get("name", "secret_tool_name") == "secret_tool_name"
+
+
+@pytest.mark.parametrize("instructions", ("secret rules", [{"type": "input_text", "text": "secret rules"}]))
+def test_responses_instructions_are_read_and_masked(instructions):
+    data = {"instructions": instructions, "input": "hi"}
+    assert "secret rules" in tuple(iter_message_text(data))
+    assert walk_user_text(data, lambda text: text.replace("secret", "[MASKED]")) == 2
+    masked = data["instructions"] if isinstance(instructions, str) else data["instructions"][0]["text"]
+    assert masked == "[MASKED] rules"
+
+
 def test_build_inspection_messages_custom_tool_call_output():
     """build_inspection_messages should include custom_tool_call_output text."""
     data = {

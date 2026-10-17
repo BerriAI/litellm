@@ -201,6 +201,9 @@ def _iter_native_content_text(content: object) -> Iterator[str]:
 # built-in shape; ``custom_tool_call_output`` is the custom-tool
 # counterpart (see ``ChatCompletionCustomToolCallOutput``).
 _OUTPUT_ITEM_TYPES: Final[frozenset[str]] = frozenset({"function_call_output", "custom_tool_call_output"})
+# Responses input items carrying the model's tool call: ``function_call`` holds
+# JSON ``arguments`` and ``custom_tool_call`` holds a freeform ``input`` string.
+_CALL_ITEM_FIELDS: Final[Mapping[str, str]] = {"function_call": "arguments", "custom_tool_call": "input"}
 
 
 def _part_text(part: Mapping[str, object]) -> str | None:
@@ -278,12 +281,13 @@ def _iter_inspection_messages(data: Mapping[str, object]) -> Iterator[object]:
 
 
 def iter_message_text(data: Mapping[str, object]) -> Iterator[str]:
-    """Yield every text fragment from ``messages`` AND ``input``.
+    """Yield every text fragment from ``system``, ``instructions``, ``messages`` AND ``input``.
 
     Walks every role (user, assistant, system, …) — guardrails inspect
     the entire conversation, not just user turns.
     """
     yield from _iter_native_content_text(data.get("system"))
+    yield from _iter_native_content_text(data.get("instructions"))
     for message in _iter_inspection_messages(data):
         fields = _text_object(message)
         if fields is None:
@@ -295,16 +299,31 @@ def iter_message_text(data: Mapping[str, object]) -> Iterator[str]:
                 call_fields = _text_object(call)
                 function = _text_object(call_fields.get("function")) if call_fields is not None else None
                 if function is not None:
-                    arguments = function.get("arguments")
-                    if isinstance(arguments, str) and arguments:
-                        try:
-                            parsed = _tool_arguments(arguments)
-                        except (ValueError, RecursionError):
-                            yield arguments
-                        else:
-                            yield from _tool_payload_text(parsed)
-                    elif isinstance(arguments, dict):
-                        yield from _tool_payload_text(arguments)
+                    yield from _iter_arguments_text(function.get("arguments"))
+    items: Final = _object_list(data.get("input")) if isinstance(data.get("input"), list) else None
+    for item in items or ():
+        call = _call_item(item)
+        if call is not None:
+            yield from _iter_arguments_text(call[1])
+
+
+def _call_item(item: object) -> tuple[str, object] | None:
+    """Return ``(field, value)`` for a Responses tool-call input item, else None."""
+    fields: Final = _text_object(item)
+    field: Final = _CALL_ITEM_FIELDS.get(str(fields.get("type"))) if fields is not None else None
+    return (field, fields.get(field)) if fields is not None and field is not None and field in fields else None
+
+
+def _iter_arguments_text(arguments: object) -> Iterator[str]:
+    if isinstance(arguments, str) and arguments:
+        try:
+            parsed: Final = _tool_arguments(arguments)
+        except (ValueError, RecursionError):
+            yield arguments
+        else:
+            yield from _tool_payload_text(parsed)
+    elif isinstance(arguments, dict):
+        yield from _tool_payload_text(arguments)
 
 
 def walk_user_text(
@@ -314,7 +333,8 @@ def walk_user_text(
 ) -> int:
     """Rewrite every text fragment in place via ``visit``.
 
-    Mutates ``data["messages"]`` (including tool payloads), ``data["system"]`` and ``data["input"]``. Returns the number
+    Mutates ``data["messages"]`` and ``data["input"]`` (including tool payloads), ``data["system"]`` and
+    ``data["instructions"]``. Returns the number
     of fragments visited so callers can short-circuit when nothing was
     inspected.
     """
@@ -393,6 +413,8 @@ def walk_user_text(
 
     if "system" in data:
         data["system"] = _rewrite_content(data["system"])  # rebind-ok: preserve the native hook's in-place contract
+    if "instructions" in data:
+        data["instructions"] = _rewrite_content(data["instructions"])  # rebind-ok: Responses system prompt, in place
 
     input_value: Final = data.get("input")
     if isinstance(input_value, str):
@@ -419,6 +441,8 @@ def walk_user_text(
                     item["content"] = _rewrite_content(item["content"])
                 elif item.get("type") in _OUTPUT_ITEM_TYPES and "output" in item:
                     item["output"] = _rewrite_content(item["output"])
+                elif (call := _call_item(item)) is not None:
+                    item[call[0]] = _rewrite_arguments(call[1])
         return visited
 
     return visited

@@ -353,6 +353,45 @@ def test_existing_text_shapes_still_redact(caller: Caller, path: str) -> None:
     _stored(caller, request_id)
 
 
+_RESPONSES_ITEMS: Final[dict[str, tuple[JsonValue, ...]]] = {
+    "instructions": (),
+    "function-call": (
+        {
+            "type": "function_call",
+            "call_id": "call_1",
+            "name": "write_file",
+            "arguments": json.dumps({"path": ".env", "content": TEXT}),
+        },
+        {"type": "function_call_output", "call_id": "call_1", "output": "written"},
+    ),
+    "custom-tool-call": (
+        {"type": "custom_tool_call", "call_id": "call_1", "name": "shell", "input": f"export {TEXT}"},
+        {"type": "custom_tool_call_output", "call_id": "call_1", "output": "done"},
+    ),
+}
+
+
+@pytest.mark.parametrize("shape", tuple(_RESPONSES_ITEMS))
+def test_responses_tool_calls_and_instructions_are_redacted(caller: Caller, shape: str) -> None:
+    marker: Final = _identity()
+    body: Final = {
+        "model": "gpt",
+        "cache": {"no-cache": True},
+        "input": [{"role": "user", "content": f"{marker} write the env file"}, *_RESPONSES_ITEMS[shape]],
+        **({"instructions": TEXT} if shape == "instructions" else {}),
+    }
+    response: Final = caller.rig.proxy.request(
+        "POST", "/v1/responses", body, key=caller.key, headers={"x-litellm-call-id": marker}
+    )
+    assert response.status_code == 200 and "accepted" in response.text, response.text
+    sent: Final = _wire(caller, marker)
+    if shape == "function-call":
+        assert json.loads(sent["input"][1]["arguments"]) == {"path": ".env", "content": "AWS_ACCESS_KEY_ID=[REDACTED]"}
+    if shape == "custom-tool-call":
+        assert sent["input"][1]["input"] == "export AWS_ACCESS_KEY_ID=[REDACTED]"
+    _stored(caller, marker)
+
+
 def test_cache_hit_keeps_masked_guardrail_metadata(caller: Caller) -> None:
     marker: Final = _identity()
     body: Final = {**_body("openai", marker), "cache": {"ttl": 60}}
