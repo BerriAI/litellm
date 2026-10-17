@@ -146,9 +146,9 @@ def _collect_strings(node: object, holders: list[_StringHolder]) -> None:
 
 
 def _collect_block_text(block: dict, holders: list[_StringHolder]) -> None:
-    holder: Final = _block_text_holder(block)
-    if holder is not None and _child(*holder):
-        holders.append(holder)
+    text: Final = block.get("text")
+    if isinstance(text, str) and text:
+        holders.append((block, "text"))
 
 
 def _request_field_holders(body: Mapping[str, object]) -> tuple[_StringHolder, ...]:
@@ -168,8 +168,8 @@ def _extract_converse_texts(
 
     Returns (texts, holders) where each holder is the (container, key) pair
     that owns the extracted string, so write-back mutates it in place. Besides
-    top-level ``text`` and ``guardContent`` blocks this scans the arbitrary-JSON
-    fields a caller can hide prompt content in -- ``toolUse.input`` and
+    top-level ``text`` blocks this scans the arbitrary-JSON fields a caller can
+    hide prompt content in -- ``toolUse.input`` and
     ``toolResult.content[].json`` (alongside ``toolResult.content[].text``) --
     as well as ``additionalModelRequestFields``, a free-form model-parameter bag
     with no schema that a caller can route blocked content through.
@@ -411,7 +411,7 @@ def _tool_result_text(tool_result: object) -> str:
     return rendered or "<non-text tool result omitted>"
 
 
-def _neutralized(block: object, guarded: bool) -> object:
+def _neutralized(block: object) -> object:
     tool_use: Final = _child(block, "toolUse")
     if as_json_object(tool_use) is not None:
         arguments: Final = json.dumps(_child(tool_use, "input"))
@@ -419,8 +419,7 @@ def _neutralized(block: object, guarded: bool) -> object:
     tool_result: Final = _child(block, "toolResult")
     if as_json_object(tool_result) is None:
         return block
-    text: Final = f"[tool result for {_child(tool_result, 'toolUseId')}: {_tool_result_text(tool_result)}]"
-    return {"guardContent": {"text": {"text": text}}} if guarded else {"text": text}
+    return {"text": f"[tool result for {_child(tool_result, 'toolUseId')}: {_tool_result_text(tool_result)}]"}
 
 
 def _has_tool_block(content: Sequence[object]) -> bool:
@@ -429,10 +428,9 @@ def _has_tool_block(content: Sequence[object]) -> bool:
 
 def _tool_config_drop(body: Mapping[str, object]) -> tuple[_Assign | _Remove, ...]:
     """Remove ``toolConfig`` and turn every ``toolUse`` and ``toolResult`` block into text."""
-    guarded: Final = "guardrailConfig" in body
     turns: Final = as_json_array(body.get("messages")) or ()
     neutralized: Final = tuple(
-        _Assign((message, "content"), [_neutralized(block, guarded) for block in content])
+        _Assign((message, "content"), [_neutralized(block) for block in content])
         for message in turns
         if (content := as_json_array(_child(message, "content"))) is not None and _has_tool_block(content)
     )
