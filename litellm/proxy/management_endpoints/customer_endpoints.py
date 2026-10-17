@@ -24,7 +24,6 @@ if TYPE_CHECKING:
     from prisma.models import LiteLLM_BudgetTable as PrismaBudgetRow
     from prisma.models import LiteLLM_EndUserTable as PrismaEndUserRow
 
-    from enterprise.enterprise_hooks.blocked_user_list import ENTERPRISE_BlockedUserList
     from litellm.proxy.utils import PrismaClient
 
 import litellm
@@ -156,7 +155,11 @@ def _to_customer_response(record: BaseModel) -> CustomerResponse:
     return CustomerResponse.model_validate(record.model_dump())
 
 
-def _configured_blocked_user_hook() -> "ENTERPRISE_BlockedUserList":
+class _BlockedUserHook(Protocol):
+    blocked_user_list: list[str] | None
+
+
+def _configured_blocked_user_hook() -> _BlockedUserHook:
     try:
         from enterprise.enterprise_hooks.blocked_user_list import ENTERPRISE_BlockedUserList
     except ImportError:
