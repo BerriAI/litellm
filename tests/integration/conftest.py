@@ -38,6 +38,7 @@ REPORTS: Final = pytest.StashKey[list[pytest.TestReport]]()
 WORKER_INVENTORY: Final = TypeAdapter(tuple[str, ...])
 SHARD_PATH: Final[TypeAdapter[Path | None]] = TypeAdapter(Path | None)
 SHARD_FILES: Final = pytest.StashKey[frozenset[str] | None]()
+FAILED_COLLECTIONS: Final = pytest.StashKey[frozenset[str]]()
 GROUP_SUFFIX: Final = re.compile(r"@integration_fixture_[0-9a-f]{64}$")
 INTEGER_OPTION: Final = TypeAdapter(int)
 STRING_ENVIRONMENT: Final = TypeAdapter(dict[str, str])
@@ -103,6 +104,12 @@ class IntegrationReportPlugin:
 
     def pytest_runtest_logreport(self, report: pytest.TestReport) -> None:
         self.config.stash[REPORTS].append(report)
+
+    def pytest_collectreport(self, report: pytest.CollectReport) -> None:
+        if report.failed:
+            self.config.stash[FAILED_COLLECTIONS] = self.config.stash.get(FAILED_COLLECTIONS, frozenset()) | {
+                report.nodeid.split("::", 1)[0]
+            }
 
     @pytest.hookimpl(optionalhook=True)
     def pytest_xdist_node_collection_finished(self, node: object, ids: Sequence[str]) -> None:
@@ -224,8 +231,12 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         raise pytest.UsageError("Parallel integration runs require CircleCI's shard file selection")
     if files is not None:
         available: Final = frozenset(item.nodeid.split("::", 1)[0] for item in owned)
-        if files - available:
-            raise pytest.UsageError(f"Integration shard selected uncollected files: {sorted(files - available)}")
+        for file in sorted(files - available - config.stash.get(FAILED_COLLECTIONS, frozenset())):
+            config.hook.pytest_collectreport(
+                report=pytest.CollectReport(
+                    file, "failed", f"Integration shard selected {file}, which has no tests", []
+                )
+            )
         selected: Final = tuple(item for item in items if item not in owned or item.nodeid.split("::", 1)[0] in files)
         deselected: Final = tuple(item for item in owned if item.nodeid.split("::", 1)[0] not in files)
         config.hook.pytest_deselected(items=deselected)
