@@ -49,7 +49,7 @@ describe("MCPToolPermissions", () => {
 
     await user.click(screen.getByRole("checkbox", { name: "delete_record" }));
 
-    expect(onChange).toHaveBeenCalledExactlyOnceWith({ [mockServerId]: ["list_records"] });
+    expect(onChange).toHaveBeenCalledExactlyOnceWith({ [mockServerId]: ["list_records"] }, "edit");
   });
 
   it("defaults a newly added edit server to non-delete tools without narrowing stored servers", async () => {
@@ -78,7 +78,7 @@ describe("MCPToolPermissions", () => {
     rerender(<MCPToolPermissions {...props} selectedServers={[mockServerId, newServerId]} />);
 
     await waitFor(() => {
-      expect(onChange).toHaveBeenCalledExactlyOnceWith({ [newServerId]: ["list_records"] });
+      expect(onChange).toHaveBeenCalledExactlyOnceWith({ [newServerId]: ["list_records"] }, "default");
     });
   });
 
