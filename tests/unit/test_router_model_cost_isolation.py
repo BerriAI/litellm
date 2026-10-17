@@ -578,15 +578,15 @@ def test_token_count_settings_stay_on_the_deployment_that_set_them() -> None:
     the shared ``{provider}/{model}`` key, or a sibling deployment of that model would count with them."""
     from litellm.proxy.common_utils.token_count_settings import cost_map_entry
 
-    backend_model = "bedrock/us.anthropic.claude-sonnet-5-5"
-    deploy_id = "sonnet-deploy-keep-token-count"
-    configured = {
+    backend_model: Final = "bedrock/us.anthropic.claude-sonnet-5-5"
+    deploy_id: Final = "sonnet-deploy-keep-token-count"
+    configured: Final = {
         "token_count_model": {"model": "anthropic.claude-opus-5-5", "region": "us-west-2"},
         "token_count_framing": 7,
     }
-    builtin = {field: cost_map_entry(backend_model).get(field) for field in configured}
+    builtin: Final = {field: cost_map_entry(backend_model).get(field) for field in configured}
     assert all(builtin[field] != value for field, value in configured.items()), builtin
-    model_keys = {
+    model_keys: Final = {
         key: copy.deepcopy(litellm.model_cost.get(key))
         for key in (deploy_id, backend_model, backend_model.removeprefix("bedrock/"))
     }

@@ -14553,7 +14553,7 @@ async def _provider_token_count(
             "If that region is not enabled for the AWS account, enable it or set token_count_model in model_info"
         )
     )
-    if failure.cannot_count_model and settings.framing is not None and local_estimate_allowed:
+    if count_model is None and failure.cannot_count_model and settings.framing is not None and local_estimate_allowed:
         return failure
     raise failure.to_proxy_exception()
 

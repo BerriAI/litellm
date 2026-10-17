@@ -1413,20 +1413,28 @@ async def test_uncountable_model_without_framing_raises():
     assert raised.value.code == "404"
 
 
-@pytest.mark.parametrize("count_model", [None, _OPUS_IN_US_EAST_1])
 @pytest.mark.asyncio
-async def test_uncountable_model_with_framing_falls_through_to_the_local_estimate(count_model: TokenCountModel | None):
-    counter = _ScriptedCounter(
-        {
-            "us.anthropic.claude-sonnet-5-5": _provider_reply("sonnet", status_code=400),
-            "us.anthropic.claude-opus-5-5": _provider_reply("opus", status_code=404),
-        }
-    )
+async def test_uncountable_model_with_framing_falls_through_to_the_local_estimate():
+    counter: Final = _ScriptedCounter({"us.anthropic.claude-sonnet-5-5": _provider_reply("sonnet", status_code=400)})
 
-    result: Final = await _ladder(counter, TokenCountSettings(framing=0, count_model=count_model))
+    result: Final = await _ladder(counter, TokenCountSettings(framing=0, count_model=None))
 
     assert isinstance(result, ProviderCountFailure)
     assert len(counter.calls) == 1
+
+
+@pytest.mark.parametrize("status_code", [400, 404])
+@pytest.mark.asyncio
+async def test_token_count_model_error_stands_even_with_framing(status_code: int):
+    counter: Final = _ScriptedCounter(
+        {"us.anthropic.claude-opus-5-5": _provider_reply("opus", status_code=status_code)}
+    )
+
+    with pytest.raises(ProxyException) as raised:
+        await _ladder(counter, TokenCountSettings(framing=78, count_model=_OPUS_IN_US_EAST_1))
+
+    assert raised.value.code == str(status_code)
+    assert "us.anthropic.claude-opus-5-5 in us-east-1" in raised.value.message
 
 
 @pytest.mark.asyncio
