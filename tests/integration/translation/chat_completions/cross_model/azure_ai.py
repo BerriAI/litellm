@@ -2,10 +2,7 @@ from dataclasses import replace
 from typing import Final
 
 from integration._support.client import list_value, object_value
-from integration.translation.case import (
-    SSEFrame,
-    StreamingTranslationTestCase,
-)
+from integration.translation.case import SSEFrame, StreamingTranslationTestCase
 from integration.translation.chat_completions.cross_model.contracts import followup_request
 from integration.translation.chat_completions.bases.azure_ai import (
     CLAUDE_FABLE_5_1_TEST_CASE,
@@ -18,9 +15,41 @@ from integration.translation.chat_completions.templates import (
     coding_agent_stream_message,
     CODING_AGENT_RESPONSE,
 )
-from integration.translation.templates.anthropic import (
-    ANTHROPIC_AGENT_REQUEST,
-    ANTHROPIC_AGENT_RESPONSE,
+from integration.translation.templates.anthropic import ANTHROPIC_AGENT_REQUEST, ANTHROPIC_AGENT_RESPONSE
+
+CLAUDE_FABLE_5_CROSS_MODEL_TEST_CASE: Final = replace(
+    CLAUDE_FABLE_5_TEST_CASE,
+    mock_provider_response={
+        **CLAUDE_FABLE_5_TEST_CASE.mock_provider_response,
+        "usage": {
+            **object_value(ANTHROPIC_AGENT_RESPONSE["usage"]),
+            "input_tokens": 1184,
+            "output_tokens": 105,
+            "output_tokens_details": {"thinking_tokens": 0},
+            "service_tier": "standard",
+            "inference_geo": "not_available",
+        },
+    },
+    expected_litellm_response={
+        **CLAUDE_FABLE_5_TEST_CASE.expected_litellm_response,
+        "usage": {
+            "completion_tokens": 105,
+            "prompt_tokens": 1184,
+            "total_tokens": 1289,
+            "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 105},
+            "prompt_tokens_details": {
+                "cached_tokens": 0,
+                "text_tokens": 1184,
+                "cache_write_tokens": 0,
+                "cache_creation_tokens": 0,
+                "cache_creation_token_details": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "inference_geo": "not_available",
+            "service_tier": "standard",
+        },
+    },
 )
 
 CLAUDE_FABLE_5_1_AGENT_TEST_CASE: Final = replace(
@@ -349,7 +378,7 @@ CLAUDE_FABLE_5_1_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase
         SSEFrame(data={"type": "message_stop"}, event="message_stop"),
     ),
     expected_litellm_message=coding_agent_stream_message(
-        ("toolu_01PfMSQLj6cQzebc2vGbdsV8", "toolu_01SVc4RwmEaMiDK33hUEbTZW"),
+        ("toolu_01PfMSQLj6cQzebc2vGbdsV8", "toolu_01SVc4RwmEaMiDK33hUEbTZW")
     ),
     expected_litellm_usage={
         "prompt_tokens": 1184,
@@ -593,7 +622,7 @@ CLAUDE_FABLE_5_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
         SSEFrame(data={"type": "message_stop"}, event="message_stop"),
     ),
     expected_litellm_message=coding_agent_stream_message(
-        ("toolu_01DprHn2GeJDAWFEyTqBzy2Z", "toolu_016kava9hqtKw71W4vBEedfW"),
+        ("toolu_01DprHn2GeJDAWFEyTqBzy2Z", "toolu_016kava9hqtKw71W4vBEedfW")
     ),
     expected_litellm_usage={
         "prompt_tokens": 1184,

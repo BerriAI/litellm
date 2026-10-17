@@ -196,7 +196,7 @@ HIGH: Final[tuple[AgentCases, ...]] = (
         azure_ai.CLAUDE_FABLE_5_1_AGENT_STREAMING_TEST_CASE,
     ),
     (
-        azure_ai.CLAUDE_FABLE_5_TEST_CASE,
+        azure_ai.CLAUDE_FABLE_5_CROSS_MODEL_TEST_CASE,
         azure_ai.CLAUDE_FABLE_5_AGENT_FOLLOWUP_TEST_CASE,
         azure_ai.CLAUDE_FABLE_5_AGENT_STREAMING_TEST_CASE,
     ),
