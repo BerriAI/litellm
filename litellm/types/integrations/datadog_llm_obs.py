@@ -69,6 +69,10 @@ class DDLLMObsError(TypedDict, total=False):
 class Meta(TypedDict, total=False):
     # The span kind: "agent", "workflow", "llm", "tool", "task", "embedding", or "retrieval".
     kind: Literal["llm", "tool", "task", "embedding", "retrieval"]
+    # Top-level model fields required for Datadog cost attribution on llm/embedding spans.
+    # Values are also kept under metadata for backwards compatibility.
+    model_name: ReadOnly[str]
+    model_provider: ReadOnly[str]
     input: InputMeta  # The span's input information.
     output: OutputMeta  # The span's output information.
     metadata: dict[str, Any]
