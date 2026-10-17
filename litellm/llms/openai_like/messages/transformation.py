@@ -8,6 +8,7 @@ from litellm.llms.anthropic.pass_through.messages.transformation import (
 from litellm.llms.openai_like.json_loader import SimpleProviderConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.utils import LlmProviders
 
 DEFAULT_ANTHROPIC_API_VERSION: Final = "2023-06-01"
 
@@ -57,6 +58,7 @@ class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
             headers=normalized,
             optional_params=optional_params,
             messages=messages,
+            beta_map_provider=LlmProviders.OPENAI_LIKE.value,
         )
         return merged, api_base
 
