@@ -305,11 +305,21 @@ def _same_pattern_listing(
     )
 
 
+def _deployment_provider_and_path(deployment_model: str, custom_llm_provider: str | None) -> tuple[str, str] | None:
+    provider, provider_sep, deployment_path = deployment_model.partition("/")
+    if provider_sep:
+        return provider, deployment_path
+    return (custom_llm_provider, deployment_model) if custom_llm_provider else None
+
+
 def _wildcard_listings(wildcard_model: str, litellm_params: LiteLLM_Params | None) -> tuple[_WildcardListing, ...]:
     deployment_model: Final = litellm_params.model if litellm_params is not None else wildcard_model
-    provider, provider_sep, deployment_path = deployment_model.partition("/")
-    if not provider_sep:
+    provider_and_path: Final = _deployment_provider_and_path(
+        deployment_model, litellm_params.custom_llm_provider if litellm_params is not None else None
+    )
+    if provider_and_path is None:
         return ()
+    provider, deployment_path = provider_and_path
 
     route_type_prefix, model_pattern = split_route_type_prefix(deployment_path, provider)
     if wildcard_model.count("*") == 1 and "*" not in model_pattern:
@@ -427,6 +437,11 @@ def expand_wildcard_deployments_for_model_info(
     return expanded
 
 
+def _is_team_only_route(route: str, llm_router: Router, team_id: str | None) -> bool:
+    team_router: Final = llm_router.team_pattern_routers.get(team_id) if team_id is not None else None
+    return team_router is not None and team_router.registers(route) and not llm_router.pattern_router.registers(route)
+
+
 def _ids_listed_by_route(route: str, llm_router: Router | None, team_id: str | None) -> tuple[str, ...]:
     model_list: Final = llm_router.get_model_list(model_name=route, team_id=team_id) if llm_router else None
     pattern_router: Final = llm_router.pattern_router if llm_router else None
@@ -438,7 +453,10 @@ def _ids_listed_by_route(route: str, llm_router: Router | None, team_id: str | N
         if model_list
         else _listings_served_by_route(route, None, pattern_router)
     )
-    return tuple(listing.listed_id for listing in listings)
+    listed_ids: Final = (listing.listed_id for listing in listings)
+    if llm_router is None or not _is_team_only_route(route, llm_router, team_id):
+        return tuple(listed_ids)
+    return tuple(listed_id for listed_id in listed_ids if not llm_router.pattern_router.serves(listed_id))
 
 
 def _routes_can_list_same_ids(route: str, other_route: str) -> bool:

@@ -216,6 +216,12 @@ class PatternMatchRouter:
         serving_regex: Final = next((regex for regex in self.patterns if matches_from_start(regex, request)), own_regex)
         return None if serving_regex == own_regex else serving_regex
 
+    def serves(self, request: str) -> bool:
+        return any(matches_from_start(regex, request) for regex in self.patterns)
+
+    def registers(self, route: str) -> bool:
+        return self.pattern_to_regex(route) in self.patterns
+
     def routes_elsewhere(self, request: str, wildcard: str, routed_model: str) -> bool:
         serving_regex: Final = self.shadowing_regex(request, wildcard)
         captures: Final = greedy_captures(serving_regex, request) if serving_regex is not None else None

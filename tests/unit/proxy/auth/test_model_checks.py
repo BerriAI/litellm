@@ -630,6 +630,33 @@ def test_azure_route_type_infix_lists_the_same_ids_as_the_route_without_it(
     )
 
 
+@pytest.mark.parametrize("model_pattern", ["*", "gpt-4*"])
+def test_bare_deployment_model_with_custom_llm_provider_lists_the_same_ids_as_the_provider_prefixed_model(
+    monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None, model_pattern: str
+) -> None:
+    import litellm
+    from litellm.proxy.auth.model_checks import (
+        expand_wildcard_deployments_for_model_info,
+        get_known_models_from_wildcard,
+    )
+    from litellm.types.router import LiteLLM_Params
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", False)
+    bare_deployment: Final = {
+        "model_name": "openai/*",
+        "litellm_params": {"model": model_pattern, "custom_llm_provider": "openai"},
+    }
+
+    prefixed: Final = get_known_models_from_wildcard("openai/*", LiteLLM_Params(model=f"openai/{model_pattern}"))
+
+    assert prefixed
+    assert (
+        get_known_models_from_wildcard("openai/*", LiteLLM_Params(model=model_pattern, custom_llm_provider="openai"))
+        == prefixed
+    )
+    assert [row["model_name"] for row in expand_wildcard_deployments_for_model_info([bare_deployment])] == prefixed
+
+
 @pytest.mark.parametrize(
     ("model_name", "deployment_model"),
     [
@@ -1281,7 +1308,7 @@ def test_key_scoped_to_a_wildcard_lists_only_its_own_teams_narrower_routes(monke
             {
                 "model_name": "team-b-narrow",
                 "litellm_params": {"model": "openai/gpt-4o*"},
-                "model_info": {"team_id": "team-b", "team_public_model_name": "wide/gpt-4.1*"},
+                "model_info": {"team_id": "team-b", "team_public_model_name": "tw/gpt-4.1*"},
             },
         ]
     )
@@ -1290,7 +1317,7 @@ def test_key_scoped_to_a_wildcard_lists_only_its_own_teams_narrower_routes(monke
     def listed_for(team_id: str) -> list[str]:
         return sorted(
             get_complete_model_list(
-                key_models=["wide/*"],
+                key_models=["tw/*"],
                 team_models=[],
                 proxy_model_list=["wide/*"],
                 user_model=None,
@@ -1300,8 +1327,43 @@ def test_key_scoped_to_a_wildcard_lists_only_its_own_teams_narrower_routes(monke
             )
         )
 
-    assert "wide/gpt-4.1-mini" in listed_for("team-b")
-    assert "wide/gpt-4.1-mini" not in listed_for("team-a")
+    assert "tw/gpt-4.1-mini" in listed_for("team-b")
+    assert "tw/gpt-4.1-mini" not in listed_for("team-a")
+
+
+@pytest.mark.parametrize(("key_models", "team_models"), [(["wide/*"], []), ([], ["wide/*", "wide/claude-*"])])
+def test_team_key_does_not_list_team_route_ids_a_proxy_wide_route_catches_first(
+    monkeypatch: pytest.MonkeyPatch, key_models: list[str], team_models: list[str]
+) -> None:
+    import litellm
+    from litellm import Router
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", False)
+    team_route: Final = {
+        "model_name": "team-b-claude",
+        "litellm_params": {"model": "anthropic/claude-*"},
+        "model_info": {"team_id": "team-b", "team_public_model_name": "wide/claude-*"},
+    }
+    router: Final = Router(model_list=[{"model_name": "wide/*", "litellm_params": {"model": "openai/*"}}, team_route])
+    monkeypatch.setitem(litellm.models_by_provider, "openai", ["gpt-4o", "gpt-4o-mini"])
+    monkeypatch.setitem(litellm.models_by_provider, "anthropic", ["claude-haiku-4-5", "claude-sonnet-4-5"])
+    unshadowed_router: Final = Router(model_list=[team_route])
+
+    def listed(llm_router: Router) -> list[str]:
+        return get_complete_model_list(
+            key_models=key_models,
+            team_models=team_models,
+            proxy_model_list=["wide/*"],
+            user_model=None,
+            infer_model_from_keys=False,
+            llm_router=llm_router,
+            team_id="team-b",
+        )
+
+    assert "wide/claude-haiku-4-5" in listed(unshadowed_router)
+    assert not [model for model in listed(router) if model.startswith("wide/claude-")]
+    assert "wide/gpt-4o" in listed(router)
 
 
 def _wide_route_beside_a_narrower_route_to_another_provider(monkeypatch: pytest.MonkeyPatch):

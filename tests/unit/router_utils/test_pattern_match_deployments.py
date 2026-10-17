@@ -386,6 +386,36 @@ def test_pattern_matching_router_uses_default_wildcard_for_unmatched_model() -> 
 
 
 @pytest.mark.parametrize(
+    "request_model", ["openai/gpt-4o", "team/claude-haiku-4-5", "teamx/claude", "odd?[name]/x", "oddX[name]/x"]
+)
+def test_serves_agrees_with_whether_routing_finds_a_pattern(request_model: str) -> None:
+    pattern_router: Final = PatternMatchRouter()
+    pattern_router.add_pattern("openai/*", _wildcard_deployment("openai/*"))
+    pattern_router.add_pattern("team/claude-*", _wildcard_deployment("team/claude-*"))
+    pattern_router.add_pattern("odd?[name]/*", _wildcard_deployment("odd?[name]/*"))
+
+    assert pattern_router.serves(request_model) is (pattern_router.route(request_model) is not None)
+
+
+@pytest.mark.parametrize(
+    ("route", "registered"),
+    [
+        ("openai/*", True),
+        ("odd?[name]/*", True),
+        ("openai/gpt-*", False),
+        ("odd?[name]/x*", False),
+        ("oddX[name]/*", False),
+    ],
+)
+def test_registers_only_routes_that_were_added(route: str, registered: bool) -> None:
+    pattern_router: Final = PatternMatchRouter()
+    pattern_router.add_pattern("openai/*", _wildcard_deployment("openai/*"))
+    pattern_router.add_pattern("odd?[name]/*", _wildcard_deployment("odd?[name]/*"))
+
+    assert pattern_router.registers(route) is registered
+
+
+@pytest.mark.parametrize(
     ("request_model", "wildcard", "shadowed"),
     [
         ("openai/gpt-4o", "*", True),
