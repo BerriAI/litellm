@@ -248,6 +248,26 @@ class VertexAIBaseConfig:
         ]
 
 
+def _vertex_service_tier_headers(
+    service_tier: str | None,
+    custom_llm_provider: str | None,
+) -> tuple[tuple[str, str], ...]:
+    if custom_llm_provider not in (
+        litellm.LlmProviders.VERTEX_AI.value,
+        litellm.LlmProviders.VERTEX_AI_BETA.value,
+    ):
+        return ()
+    if service_tier is None:
+        return ()
+    normalized_service_tier: Final = service_tier.lower()
+    if normalized_service_tier not in ("flex", "priority"):
+        return ()
+    return (
+        ("X-Vertex-AI-LLM-Request-Type", "shared"),
+        ("X-Vertex-AI-LLM-Shared-Request-Type", normalized_service_tier),
+    )
+
+
 class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     """
     Reference: https://cloud.google.com/vertex-ai/docs/generative-ai/chat/test-chat-prompts
@@ -2779,14 +2799,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     def validate_environment(
         self,
-        headers: dict | None,
+        headers: Mapping[str, str] | None,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        api_key: str | dict | None = None,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+        api_key: str | Mapping[str, str] | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         default_headers: Final = {
             "Content-Type": "application/json",
         }
@@ -2794,9 +2814,22 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             default_headers.update(api_key)
         elif api_key is not None:
             default_headers["Authorization"] = f"Bearer {api_key}"
+        service_tier_value: Final = optional_params.get("service_tier")
+        service_tier: Final[str | None] = service_tier_value if isinstance(service_tier_value, str) else None
+        custom_llm_provider_value: Final = litellm_params.get("custom_llm_provider")
+        custom_llm_provider: Final[str | None] = (
+            custom_llm_provider_value if isinstance(custom_llm_provider_value, str) else None
+        )
+        service_tier_headers: Final = dict(
+            _vertex_service_tier_headers(
+                service_tier=service_tier,
+                custom_llm_provider=custom_llm_provider,
+            )
+        )
+
+        default_headers.update(service_tier_headers)
         if headers is not None:
             default_headers.update(headers)
-
         return default_headers
 
 
@@ -3025,12 +3058,12 @@ class VertexLLM(VertexBase):
         )
 
         headers: Final = VertexGeminiConfig().validate_environment(
-            api_key=auth_header,
-            headers=extra_headers,
+            api_key=cast(str | Mapping[str, str] | None, auth_header),  # cast-ok: Vertex auth headers contain strings
+            headers=cast(Mapping[str, str] | None, extra_headers),  # cast-ok: request headers contain strings
             model=model,
             messages=messages,
-            optional_params=optional_params,
-            litellm_params=litellm_params,
+            optional_params=cast(Mapping[str, object], optional_params),  # cast-ok: request parameter keys are strings
+            litellm_params=cast(Mapping[str, object], litellm_params),  # cast-ok: request parameter keys are strings
         )
 
         request_body: Final = await async_transform_request_body(
@@ -3128,12 +3161,12 @@ class VertexLLM(VertexBase):
         )
 
         headers: Final = VertexGeminiConfig().validate_environment(
-            api_key=auth_header,
-            headers=extra_headers,
+            api_key=cast(str | Mapping[str, str] | None, auth_header),  # cast-ok: Vertex auth headers contain strings
+            headers=cast(Mapping[str, str] | None, extra_headers),  # cast-ok: request headers contain strings
             model=model,
             messages=messages,
-            optional_params=optional_params,
-            litellm_params=litellm_params,
+            optional_params=cast(Mapping[str, object], optional_params),  # cast-ok: request parameter keys are strings
+            litellm_params=cast(Mapping[str, object], litellm_params),  # cast-ok: request parameter keys are strings
         )
 
         request_body: Final = await async_transform_request_body(
@@ -3311,12 +3344,12 @@ class VertexLLM(VertexBase):
             use_psc_endpoint_format=use_psc_endpoint_format,
         )
         headers: Final = VertexGeminiConfig().validate_environment(
-            api_key=auth_header,
-            headers=extra_headers,
+            api_key=cast(str | Mapping[str, str] | None, auth_header),  # cast-ok: Vertex auth headers contain strings
+            headers=cast(Mapping[str, str] | None, extra_headers),  # cast-ok: request headers contain strings
             model=model,
             messages=messages,
-            optional_params=optional_params,
-            litellm_params=litellm_params,
+            optional_params=cast(Mapping[str, object], optional_params),  # cast-ok: request parameter keys are strings
+            litellm_params=cast(Mapping[str, object], litellm_params),  # cast-ok: request parameter keys are strings
         )
 
         ## TRANSFORMATION ##

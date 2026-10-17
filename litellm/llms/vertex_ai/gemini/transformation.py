@@ -88,17 +88,6 @@ def _apply_gemini_mime_type_aliases(mime_type: str) -> str:
     return _GEMINI_MIME_TYPE_ALIASES.get(normalized, normalized)
 
 
-def _map_vertex_service_tier(service_tier: str) -> str:
-    normalized_service_tier: Final = service_tier.lower()
-    if normalized_service_tier == "flex":
-        return "SERVICE_TIER_FLEX"
-    if normalized_service_tier == "priority":
-        return "SERVICE_TIER_PRIORITY"
-    if normalized_service_tier == "default":
-        return "SERVICE_TIER_STANDARD"
-    return service_tier
-
-
 def _get_vertex_base() -> "VertexBase":
     """Lazily return the shared VertexBase instance to avoid a module-load-time cyclic import."""
     global _GCS_METADATA_VERTEX_BASE
@@ -1236,14 +1225,11 @@ def transform_request_body(
         if cached_content is not None:
             data["cachedContent"] = cached_content
 
-        if service_tier := optional_params.pop("service_tier", None):
+        if (
+            service_tier := optional_params.pop("service_tier", None)
+        ) and custom_llm_provider == LlmProviders.GEMINI.value:
             if isinstance(service_tier, str):
-                if custom_llm_provider in (
-                    LlmProviders.VERTEX_AI.value,
-                    LlmProviders.VERTEX_AI_BETA.value,
-                ):
-                    data["serviceTier"] = _map_vertex_service_tier(service_tier)
-                elif service_tier.lower() == "default":
+                if service_tier.lower() == "default":
                     data["serviceTier"] = "standard"
                 else:
                     data["serviceTier"] = service_tier.lower()

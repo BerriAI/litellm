@@ -209,17 +209,22 @@ def test_vertex_ai_includes_labels():
 
 
 @pytest.mark.parametrize(
-    ("service_tier", "expected_service_tier"),
+    ("custom_llm_provider", "service_tier"),
     [
-        ("flex", "SERVICE_TIER_FLEX"),
-        ("FLEX", "SERVICE_TIER_FLEX"),
-        ("priority", "SERVICE_TIER_PRIORITY"),
-        ("default", "SERVICE_TIER_STANDARD"),
-        ("SERVICE_TIER_FLEX", "SERVICE_TIER_FLEX"),
+        ("vertex_ai", "flex"),
+        ("vertex_ai", "FLEX"),
+        ("vertex_ai", "priority"),
+        ("vertex_ai", "default"),
+        ("vertex_ai", "SERVICE_TIER_FLEX"),
+        ("vertex_ai_beta", "flex"),
+        ("vertex_ai_beta", "FLEX"),
+        ("vertex_ai_beta", "priority"),
+        ("vertex_ai_beta", "default"),
+        ("vertex_ai_beta", "SERVICE_TIER_FLEX"),
     ],
 )
-def test_service_tier_forwarded_to_vertex_ai(
-    service_tier: str, expected_service_tier: str
+def test_service_tier_not_forwarded_to_vertex_body(
+    custom_llm_provider: str, service_tier: str
 ) -> None:
     messages: Final = [{"role": "user", "content": "test"}]
     optional_params: Final = {"service_tier": service_tier}
@@ -229,25 +234,31 @@ def test_service_tier_forwarded_to_vertex_ai(
         messages=messages,
         model="gemini-2.5-pro",
         optional_params=optional_params,
-        custom_llm_provider="vertex_ai",
+        custom_llm_provider=custom_llm_provider,
         litellm_params=litellm_params,
         cached_content=None,
     )
 
-    assert result["serviceTier"] == expected_service_tier
+    assert "serviceTier" not in result
 
 
-def test_service_tier_forwarded_to_gemini() -> None:
+@pytest.mark.parametrize(
+    ("service_tier", "expected_service_tier"),
+    [("flex", "flex"), ("PRIORITY", "priority"), ("default", "standard")],
+)
+def test_service_tier_forwarded_to_gemini(
+    service_tier: str, expected_service_tier: str
+) -> None:
     result: Final = transform_request_body(
         messages=[{"role": "user", "content": "test"}],
         model="gemini-2.5-pro",
-        optional_params={"service_tier": "flex"},
+        optional_params={"service_tier": service_tier},
         custom_llm_provider="gemini",
         litellm_params={},
         cached_content=None,
     )
 
-    assert result["serviceTier"] == "flex"
+    assert result["serviceTier"] == expected_service_tier
 
 
 def test_extra_body_cache_not_forwarded_to_vertex_ai():

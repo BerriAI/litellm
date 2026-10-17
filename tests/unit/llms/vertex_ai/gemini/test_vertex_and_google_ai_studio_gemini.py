@@ -5286,6 +5286,80 @@ def test_vertex_ai_web_search_options_in_map_openai_params():
     assert "web_search_options" not in optional_params, "web_search_options should be removed after transformation"
 
 
+@pytest.mark.parametrize("custom_llm_provider", ["vertex_ai", "vertex_ai_beta"])
+@pytest.mark.parametrize(
+    ("service_tier", "expected_service_tier"),
+    [
+        ("flex", "flex"),
+        ("FLEX", "flex"),
+        ("priority", "priority"),
+        ("PRIORITY", "priority"),
+    ],
+)
+def test_validate_environment_adds_shared_service_tier_headers(
+    custom_llm_provider: str, service_tier: str, expected_service_tier: str
+) -> None:
+    result: Final = VertexGeminiConfig().validate_environment(
+        headers=None,
+        model="gemini-2.5-pro",
+        messages=[],
+        optional_params={"service_tier": service_tier},
+        litellm_params={"custom_llm_provider": custom_llm_provider},
+    )
+
+    assert result["X-Vertex-AI-LLM-Request-Type"] == "shared"
+    assert result["X-Vertex-AI-LLM-Shared-Request-Type"] == expected_service_tier
+
+
+@pytest.mark.parametrize("service_tier", [None, "default", "DEFAULT"])
+def test_validate_environment_omits_shared_service_tier_headers_for_default_and_unset(
+    service_tier: str | None,
+) -> None:
+    optional_params: Final = {} if service_tier is None else {"service_tier": service_tier}
+    result: Final = VertexGeminiConfig().validate_environment(
+        headers=None,
+        model="gemini-2.5-pro",
+        messages=[],
+        optional_params=optional_params,
+        litellm_params={"custom_llm_provider": "vertex_ai"},
+    )
+
+    assert "X-Vertex-AI-LLM-Request-Type" not in result
+    assert "X-Vertex-AI-LLM-Shared-Request-Type" not in result
+
+
+@pytest.mark.parametrize("service_tier", ["flex", "priority", "FLEX", "PRIORITY"])
+def test_validate_environment_omits_shared_service_tier_headers_for_gemini(
+    service_tier: str,
+) -> None:
+    result: Final = VertexGeminiConfig().validate_environment(
+        headers=None,
+        model="gemini-2.5-pro",
+        messages=[],
+        optional_params={"service_tier": service_tier},
+        litellm_params={"custom_llm_provider": "gemini"},
+    )
+
+    assert "X-Vertex-AI-LLM-Request-Type" not in result
+    assert "X-Vertex-AI-LLM-Shared-Request-Type" not in result
+
+
+def test_validate_environment_preserves_caller_service_tier_header_overrides() -> None:
+    result: Final = VertexGeminiConfig().validate_environment(
+        headers={
+            "X-Vertex-AI-LLM-Request-Type": "caller-request-type",
+            "X-Vertex-AI-LLM-Shared-Request-Type": "caller-tier",
+        },
+        model="gemini-2.5-pro",
+        messages=[],
+        optional_params={"service_tier": "flex"},
+        litellm_params={"custom_llm_provider": "vertex_ai"},
+    )
+
+    assert result["X-Vertex-AI-LLM-Request-Type"] == "caller-request-type"
+    assert result["X-Vertex-AI-LLM-Shared-Request-Type"] == "caller-tier"
+
+
 def test_vertex_ai_service_tier_in_map_openai_params():
     """Test that service_tier is correctly mapped to optional_params."""
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
