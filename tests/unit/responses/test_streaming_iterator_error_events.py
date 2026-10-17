@@ -31,6 +31,7 @@ import pytest
 import litellm
 from litellm.exceptions import MidStreamFallbackError
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.litellm_logging import _get_provider_request_id
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.responses.streaming_iterator import (
@@ -38,8 +39,10 @@ from litellm.responses.streaming_iterator import (
     BaseResponsesAPIStreamingIterator,
     ResponsesAPIStreamingIterator,
     SyncResponsesAPIStreamingIterator,
+    _ResponsesWsTurn,
     _status_code_for_error_fields,
 )
+from litellm.utils import ProviderConfigManager
 from litellm.types.llms.openai import (
     ErrorEvent,
     ErrorEventError,
@@ -658,3 +661,88 @@ def test_openai_top_level_error_event_keeps_the_provider_code_and_message(
     assert exc_info.value.status_code == status_code
     assert type(exc_info.value.original_exception) is exception_type
     assert f"upstream said {code}" in str(exc_info.value.original_exception)
+
+
+_AZURE_RESPONSES_API_BASE: Final = "https://responses-mid-stream.openai.azure.com"
+_AZURE_RESPONSES_FAILED_EVENT: Final = {
+    "type": "response.failed",
+    "sequence_number": 2,
+    "response": {
+        "id": "resp_mid_stream",
+        "object": "response",
+        "created_at": 1790000000,
+        "status": "failed",
+        "model": "gpt-5.4-mini",
+        "output": [],
+        "error": {"code": "server_error", "message": "upstream failed mid-stream"},
+    },
+}
+
+
+def _azure_responses_logging_obj() -> LiteLLMLoggingObj:
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="gpt-5.4-mini",
+        messages=[],
+        stream=True,
+        call_type="aresponses",
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id="responses-mid-stream",
+        function_id="responses-mid-stream",
+    )
+    logging_obj.update_environment_variables(
+        model="gpt-5.4-mini",
+        optional_params={},
+        litellm_params=get_litellm_params(
+            api_base=_AZURE_RESPONSES_API_BASE,
+            custom_llm_provider="azure",
+            metadata={"model_group": "gpt-5.4-mini-azure", "deployment": "azure/gpt-5.4-mini"},
+        ),
+    )
+    return logging_obj
+
+
+def _assert_names_the_azure_deployment(exception: BaseException) -> None:
+    debug_info: Final = getattr(exception, "litellm_debug_info", None)
+    assert isinstance(debug_info, str)
+    assert f"API Base: `{_AZURE_RESPONSES_API_BASE}`" in debug_info
+    assert "model_group: `gpt-5.4-mini-azure`" in debug_info
+    assert "deployment: `azure/gpt-5.4-mini`" in debug_info
+    assert "api.openai.com" not in debug_info
+
+
+@pytest.mark.asyncio
+async def test_response_failed_after_output_reports_the_deployment_it_was_sent_to():
+    delta: Final = {
+        "type": "response.output_text.delta",
+        "sequence_number": 1,
+        "item_id": "msg_mid_stream",
+        "output_index": 0,
+        "content_index": 0,
+        "delta": "1",
+    }
+    body: Final = "".join(f"data: {json.dumps(event)}\n\n" for event in (delta, _AZURE_RESPONSES_FAILED_EVENT))
+    iterator: Final = ResponsesAPIStreamingIterator(
+        response=httpx.Response(200, headers={"content-type": "text/event-stream"}, content=body.encode()),
+        model="gpt-5.4-mini",
+        responses_api_provider_config=ProviderConfigManager.get_provider_responses_api_config(
+            provider="azure", model="gpt-5.4-mini"
+        ),
+        logging_obj=_azure_responses_logging_obj(),
+        custom_llm_provider="azure",
+    )
+    stream: Final = aiter(iterator)
+    assert getattr(await anext(stream), "delta", None) == "1"
+
+    with pytest.raises(MidStreamFallbackError) as exc_info:
+        await anext(stream)
+    assert exc_info.value.is_pre_first_chunk is False
+    _assert_names_the_azure_deployment(exc_info.value.original_exception)
+
+
+def test_responses_websocket_turn_failure_reports_the_deployment_it_was_sent_to():
+    turn: Final = _ResponsesWsTurn(logging_obj=_azure_responses_logging_obj(), events=(_AZURE_RESPONSES_FAILED_EVENT,))
+
+    failure: Final = turn.failure("gpt-5.4-mini", "azure")
+
+    assert failure is not None
+    _assert_names_the_azure_deployment(failure)

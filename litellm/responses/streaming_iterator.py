@@ -264,7 +264,11 @@ def stream_error_status_and_message(error_obj: object) -> tuple[int, str]:
 
 
 def _map_stream_error_to_exception(
-    error_obj: object, model: str, custom_llm_provider: str, headers: httpx.Headers | None = None
+    error_obj: object,
+    model: str,
+    custom_llm_provider: str,
+    headers: httpx.Headers | None = None,
+    logging_obj: LiteLLMLoggingObj | None = None,
 ) -> Exception:
     from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
@@ -277,13 +281,18 @@ def _map_stream_error_to_exception(
         body=error_body,
         headers=headers,
     )
+    litellm_params: Final[LiteLLM_Params | Mapping[str, object]] = (
+        {}
+        if logging_obj is None
+        else _typed_gets_litellm_params(logging_obj.model_call_details.get)("litellm_params", {})
+    )
     try:
         return litellm.exception_type(
             model=model,
             custom_llm_provider=custom_llm_provider,
             original_exception=provider_exception,
             completion_kwargs={},
-            extra_kwargs={},
+            extra_kwargs=litellm_params,
         )
     except Exception as mapped_exception:
         return mapped_exception
@@ -676,6 +685,7 @@ class BaseResponsesAPIStreamingIterator:
             self.model or "",
             self.custom_llm_provider or "",
             headers=provider_request_id_headers(self._raw_response_headers),
+            logging_obj=self.logging_obj,
         )
 
     def _maybe_raise_for_error_event(self, result: object) -> None:
@@ -1989,7 +1999,9 @@ class _ResponsesWsTurn:
         )
         if failed_event is None:
             return None
-        return _map_stream_error_to_exception(_ws_event_error(failed_event), model, custom_llm_provider)
+        return _map_stream_error_to_exception(
+            _ws_event_error(failed_event), model, custom_llm_provider, logging_obj=self.logging_obj
+        )
 
 
 _RESPONSES_WS_OUTPUT_ITEM_EVENT_TYPES: Final = frozenset({"response.output_item.added", "response.output_item.done"})

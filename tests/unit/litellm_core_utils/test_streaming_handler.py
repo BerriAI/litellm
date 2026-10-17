@@ -1386,6 +1386,7 @@ async def test_async_streaming_read_timeout_triggers_midstream_fallback(
 
 
 _AZURE_DEPLOYMENT_API_BASE: Final = "https://mid-stream-debug.openai.azure.com"
+_MID_STREAM_START_TIME: Final = 1_790_000_000.0
 
 
 def _azure_deployment_logging_obj(api_base: str | None) -> Logging:
@@ -1394,7 +1395,7 @@ def _azure_deployment_logging_obj(api_base: str | None) -> Logging:
         messages=[{"role": "user", "content": "Count from 1 to 40"}],
         stream=True,
         call_type="acompletion",
-        start_time=time.time(),
+        start_time=_MID_STREAM_START_TIME,
         litellm_call_id="mid-stream-debug-info",
         function_id="mid-stream-debug-info",
     )
