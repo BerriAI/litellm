@@ -251,7 +251,7 @@ class FakeRouter:
     def get_model_ids(self, model_name: str) -> list[str]:
         return [DEPLOYMENT_ID] if model_name == BATCH_MODEL else []
 
-    def get_model_group_info(self, model_group: str) -> None:
+    def get_model_list(self, model_name: str | None = None) -> None:
         return None
 
 
