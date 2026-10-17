@@ -2737,6 +2737,143 @@ async def test_azure_ai_decisions_use_entra_token_without_api_key(
     assert route.calls[0].request.headers["authorization"] == "Bearer entra-access-token"
 
 
+def test_azure_ai_systemone_prefers_entra_token_to_environment_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    _clear_azure_ai_auth_environment(monkeypatch)
+    monkeypatch.setenv("AZURE_AI_API_KEY", "env-key")
+    route: Final = respx_mock.post("https://res.services.ai.azure.com/providers/microsoft/v1/systemone").respond(
+        json={**_RESPONSE, "model": "microsoft-decision-1"}
+    )
+
+    litellm.systemone(
+        model="azure_ai/decision-1",
+        state="review",
+        questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        api_base="https://res.services.ai.azure.com",
+        azure_ad_token="entra-access-token",
+    )
+
+    assert route.called
+    assert route.calls[0].request.headers["authorization"] == "Bearer entra-access-token"
+
+
+@pytest.mark.asyncio
+async def test_azure_ai_decisions_prefers_entra_token_to_environment_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    _clear_azure_ai_auth_environment(monkeypatch)
+    monkeypatch.setenv("AZURE_AI_API_KEY", "env-key")
+    route: Final = respx_mock.post("https://res.services.ai.azure.com/providers/microsoft/v1/systemone").respond(
+        json={**_RESPONSE, "model": "microsoft-decision-1"}
+    )
+
+    await litellm.adecisions(
+        model="azure_ai/decision-1",
+        input="review",
+        questions=_PREDICATE_QUESTIONS,
+        api_base="https://res.services.ai.azure.com",
+        azure_ad_token="entra-access-token",
+    )
+
+    assert route.called
+    assert route.calls[0].request.headers["authorization"] == "Bearer entra-access-token"
+
+
+def test_azure_ai_decisions_uses_environment_api_key_without_entra_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    _clear_azure_ai_auth_environment(monkeypatch)
+    monkeypatch.setenv("AZURE_AI_API_KEY", "env-key")
+    route: Final = respx_mock.post("https://res.services.ai.azure.com/providers/microsoft/v1/systemone").respond(
+        json={**_RESPONSE, "model": "microsoft-decision-1"}
+    )
+
+    litellm.decisions(
+        model="azure_ai/decision-1",
+        input="review",
+        questions=_PREDICATE_QUESTIONS,
+        api_base="https://res.services.ai.azure.com",
+    )
+
+    assert route.called
+    assert route.calls[0].request.headers["authorization"] == "Bearer env-key"
+
+
+def test_azure_ai_decisions_explicit_api_key_precedes_entra_and_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    _clear_azure_ai_auth_environment(monkeypatch)
+    monkeypatch.setenv("AZURE_AI_API_KEY", "env-key")
+    route: Final = respx_mock.post("https://res.services.ai.azure.com/providers/microsoft/v1/systemone").respond(
+        json={**_RESPONSE, "model": "microsoft-decision-1"}
+    )
+
+    litellm.decisions(
+        model="azure_ai/decision-1",
+        input="review",
+        questions=_PREDICATE_QUESTIONS,
+        api_base="https://res.services.ai.azure.com",
+        api_key="call-key",
+        azure_ad_token="entra-access-token",
+    )
+
+    assert route.called
+    assert route.calls[0].request.headers["authorization"] == "Bearer call-key"
+
+
+def test_azure_ai_decisions_does_not_validate_noncredential_params_as_auth(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    _clear_azure_ai_auth_environment(monkeypatch)
+    route: Final = respx_mock.post("https://res.services.ai.azure.com/providers/microsoft/v1/systemone").respond(
+        json={**_RESPONSE, "model": "microsoft-decision-1"}
+    )
+
+    litellm.decisions(
+        model="azure_ai/decision-1",
+        input="review",
+        questions=_PREDICATE_QUESTIONS,
+        api_base="https://res.services.ai.azure.com",
+        azure_ad_token="entra-access-token",
+        max_retries="three",
+    )
+
+    assert route.called
+    assert route.calls[0].request.headers["authorization"] == "Bearer entra-access-token"
+
+
+def test_azure_ai_decisions_malformed_credential_is_a_sanitized_bad_request(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    _clear_azure_ai_auth_environment(monkeypatch)
+    route: Final = respx_mock.post("https://res.services.ai.azure.com/providers/microsoft/v1/systemone").respond(
+        json={**_RESPONSE, "model": "microsoft-decision-1"}
+    )
+
+    with pytest.raises(litellm.BadRequestError) as caught:
+        litellm.decisions(
+            model="azure_ai/decision-1",
+            input="review",
+            questions=_PREDICATE_QUESTIONS,
+            api_base="https://res.services.ai.azure.com",
+            azure_ad_token="entra-access-token",
+            azure_scope=123,
+        )
+
+    assert caught.value.status_code == 400
+    assert "azure_scope" in str(caught.value)
+    assert "entra-access-token" not in str(caught.value)
+    assert "123" not in str(caught.value)
+    assert not route.called
+
+
 def test_azure_ai_decisions_prefer_api_key_when_both_are_set(
     monkeypatch: pytest.MonkeyPatch,
     respx_mock: respx.MockRouter,

@@ -486,6 +486,14 @@ class BaseDecisionsConfig(ABC):
     def missing_api_base_message(self, custom_llm_provider: str) -> str:
         return f"api_base is required for Decisions provider '{custom_llm_provider}'"
 
+    def select_api_key(
+        self,
+        explicit_api_key: str | None,
+        provider_api_key: str | None,
+        litellm_params: Mapping[str, object],
+    ) -> str | None:
+        return provider_api_key or explicit_api_key
+
     def resolve_api_base(self, api_base: str | None) -> str | None:
         return api_base or self._first_secret(self.api_base_env) or self.get_default_api_base()
 

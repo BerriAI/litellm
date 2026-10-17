@@ -1,27 +1,44 @@
 import asyncio
 import re
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 
 import httpx
+from pydantic import ValidationError
 
 import litellm
-from litellm.llms.azure_ai.common_utils import get_azure_ai_auth_headers
+from litellm.llms.azure_ai.common_utils import (
+    AZURE_ENTRA_LITELLM_PARAM_KEYS,
+    get_azure_ai_auth_headers,
+    has_azure_entra_params,
+)
 from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig
 
 _FOUNDRY_ROUTE_SUFFIX: Final = re.compile(r"(/api/projects/[^/]+)?(/openai/v1|/openai|/models|/v1)?$")
+_AZURE_AI_CREDENTIAL_PARAM_KEYS: Final = AZURE_ENTRA_LITELLM_PARAM_KEYS | frozenset({"azure_ad_token_provider"})
 
 
 class AzureAIDecisionsConfig(BaseDecisionsConfig):
     """Microsoft Foundry decision models (Microsoft-Decision-1), where model is the deployment name"""
 
     path = "/providers/microsoft/v1/systemone"
-    api_key_env = ("AZURE_AI_API_KEY",)
+    api_key_env = ()
     api_base_env = ("AZURE_AI_API_BASE",)
     api_key_required = False
 
     def missing_api_base_message(self, custom_llm_provider: str) -> str:
         return "Missing AZURE_AI_API_BASE - set AZURE_AI_API_BASE or pass api_base, e.g. https://<resource>.services.ai.azure.com"
+
+    def select_api_key(
+        self,
+        explicit_api_key: str | None,
+        provider_api_key: str | None,
+        litellm_params: Mapping[str, object],
+    ) -> str | None:
+        if explicit_api_key or has_azure_entra_params(litellm_params):
+            return explicit_api_key
+        return provider_api_key
 
     def validate_environment(
         self,
@@ -30,8 +47,23 @@ class AzureAIDecisionsConfig(BaseDecisionsConfig):
         api_key: str | None,
         litellm_params: Mapping[str, object],
     ) -> Mapping[str, str]:
+        credential_params: Final = MappingProxyType(
+            {key: litellm_params[key] for key in _AZURE_AI_CREDENTIAL_PARAM_KEYS if key in litellm_params}
+        )
         try:
-            auth_headers: Final = get_azure_ai_auth_headers(api_key, litellm_params)
+            auth_headers: Final = get_azure_ai_auth_headers(api_key, credential_params)
+        except ValidationError as error:
+            field_names: Final = tuple(
+                dict.fromkeys(
+                    ".".join(str(field) for field in detail["loc"])
+                    for detail in error.errors(include_input=False, include_context=False, include_url=False)
+                )
+            )
+            raise litellm.BadRequestError(
+                message=f"Invalid Azure AI credential parameter(s): {', '.join(field_names)}",
+                model=model,
+                llm_provider="azure_ai",
+            ) from error
         except ValueError as error:
             raise litellm.AuthenticationError(message=str(error), model=model, llm_provider="azure_ai") from error
         return {

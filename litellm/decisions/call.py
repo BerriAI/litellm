@@ -459,7 +459,12 @@ def prepare_call(
 
     try:
         resolved_api_base, static_api_key = provider_config.resolve_connection(
-            dynamic_api_base or api_base, dynamic_api_key or api_key
+            dynamic_api_base or api_base,
+            provider_config.select_api_key(
+                explicit_api_key=api_key,
+                provider_api_key=dynamic_api_key,
+                litellm_params=kwargs,
+            ),
         )
     except ValueError as error:
         raise litellm.BadRequestError(message=str(error), model=model, llm_provider=provider) from error
