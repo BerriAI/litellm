@@ -4,7 +4,7 @@ from collections.abc import Callable, Mapping
 from typing import Final
 
 import pytest
-from integration._support.client import Gateway, eventually
+from integration._support.client import Gateway, eventually, list_value
 from integration._support.database import read_rows
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue
@@ -64,7 +64,7 @@ def _messages_body(model: str, text: str) -> Mapping[str, JsonValue]:
     return {"model": model, "max_tokens": 16, "messages": [{"role": "user", "content": text}]}
 
 
-@pytest.mark.parametrize(
+FAILURE_ROUTES: Final = pytest.mark.parametrize(
     ("route", "body"),
     (
         ("/v1/chat/completions", _chat_body),
@@ -73,9 +73,14 @@ def _messages_body(model: str, text: str) -> Mapping[str, JsonValue]:
     ),
     ids=("chat", "responses", "messages"),
 )
-def test_a_provider_500_failure_row_names_the_model_group_the_caller_asked_for(
-    gateway: Gateway, route: str, body: Callable[[str, str], Mapping[str, JsonValue]]
-) -> None:
+
+
+def _provider_500_failure_row(
+    gateway: Gateway,
+    route: str,
+    body: Callable[[str, str], Mapping[str, JsonValue]],
+    headers: Mapping[str, str] | None = None,
+) -> tuple[str, dict[str, JsonValue]]:
     def provider(request: Request) -> Reply:
         assert request.method == "POST"
         return Reply(
@@ -87,16 +92,37 @@ def test_a_provider_500_failure_row_names_the_model_group_the_caller_asked_for(
         model: Final = scenario.model(api_base=wire.url + "/v1", num_retries=0)
         key: Final = scenario.key(models=[model])
         failed: Final = gateway.request(
-            "POST", route, body(model, f"failed dispatch group {uuid.uuid4().hex}"), key=key
+            "POST", route, body(model, f"failed dispatch group {uuid.uuid4().hex}"), key=key, headers=headers
         )
         assert failed.status_code == 500, failed.text
         assert wire.drain()
         rows: Final = eventually(
             lambda: read_rows(
-                'SELECT status, model_group FROM "LiteLLM_SpendLogs" WHERE request_id=%s',
+                'SELECT status, model_group, request_tags FROM "LiteLLM_SpendLogs" WHERE request_id=%s',
                 (failed.headers["x-litellm-call-id"],),
             ),
             lambda values: len(values) == 1,
             seconds=70,
         )
-        assert rows[0]["status"] == "failure" and rows[0]["model_group"] == model, rows
+        assert rows[0]["status"] == "failure", rows
+        return model, rows[0]
+
+
+@FAILURE_ROUTES
+def test_a_provider_500_failure_row_names_the_model_group_the_caller_asked_for(
+    gateway: Gateway, route: str, body: Callable[[str, str], Mapping[str, JsonValue]]
+) -> None:
+    model, row = _provider_500_failure_row(gateway, route, body)
+
+    assert row["model_group"] == model, row
+
+
+@FAILURE_ROUTES
+def test_a_provider_500_failure_row_keeps_the_tags_the_caller_sent(
+    gateway: Gateway, route: str, body: Callable[[str, str], Mapping[str, JsonValue]]
+) -> None:
+    tag: Final = f"failed-dispatch-{uuid.uuid4().hex}"
+
+    _, row = _provider_500_failure_row(gateway, route, body, {"x-litellm-tags": tag})
+
+    assert tag in list_value(row["request_tags"]), row

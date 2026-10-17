@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import hashlib
 import os
 import uuid
@@ -8,6 +9,7 @@ from dataclasses import dataclass
 from functools import partial
 from datetime import UTC, datetime
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 
 import httpx
@@ -50,8 +52,23 @@ TURN_SPEND: Final = USAGE["input_tokens"] * INPUT_RATE + USAGE["output_tokens"] 
 TURN_TOKENS: Final = USAGE["total_tokens"]
 MANAGED_PROVIDER: Final = "mistral"
 SPEND_ROWS_FOR_KEY: Final = (
-    'SELECT request_id, spend, status, model_group, metadata FROM "LiteLLM_SpendLogs" WHERE api_key = %s'
+    'SELECT request_id, spend, status, model_group, metadata, request_tags FROM "LiteLLM_SpendLogs" WHERE api_key = %s'
 )
+TURN_CHECK_FAULT: Final = "turn_check_fault"
+FAULTING_TURN_CHECK: Final = f"""
+from litellm.integrations.custom_logger import CustomLogger
+
+
+class FaultingTurnCheck(CustomLogger):
+    async def async_pre_call_check(self, deployment, parent_otel_span):
+        fault = (deployment.get("model_info") or {{}}).get("{TURN_CHECK_FAULT}")
+        if fault:
+            raise RuntimeError(fault)
+        return None
+
+
+instance = FaultingTurnCheck()
+"""
 FrameReader = Callable[[], int]
 
 
@@ -70,13 +87,17 @@ def _redis() -> Redis:
     return Redis(host=os.environ["REDIS_HOST"], port=int(os.environ["REDIS_PORT"]), decode_responses=True)
 
 
-def _config(directory: Path, router_settings: Mapping[str, JsonValue]) -> Path:
+def _config(directory: Path, router_settings: Mapping[str, JsonValue], callbacks: tuple[str, ...]) -> Path:
     base: Final = JSON_OBJECT.validate_python(yaml.safe_load(PROXY_CONFIG.read_text()))
     path: Final = directory / "turn-admission.yaml"
     path.write_text(
         yaml.safe_dump(
             {
                 **base,
+                "litellm_settings": {
+                    **object_value(base["litellm_settings"]),
+                    **({"callbacks": list(callbacks)} if callbacks else {}),
+                },
                 "router_settings": {
                     **object_value(base["router_settings"]),
                     "redis_host": os.environ["REDIS_HOST"],
@@ -91,13 +112,17 @@ def _config(directory: Path, router_settings: Mapping[str, JsonValue]) -> Path:
 
 @contextmanager
 def _admitting_proxy(
-    tmp_path_factory: pytest.TempPathFactory, cert: tuple[Path, Path], router_settings: Mapping[str, JsonValue]
+    tmp_path_factory: pytest.TempPathFactory,
+    cert: tuple[Path, Path],
+    router_settings: Mapping[str, JsonValue],
+    callback_sources: Mapping[str, str] = MappingProxyType({}),
 ) -> Iterator[Gateway]:
     directory: Final = tmp_path_factory.mktemp("responses-ws-turn-admission")
+    for module, source in callback_sources.items():
+        (directory / f"{module}.py").write_text(source)
+    config: Final = _config(directory, router_settings, tuple(f"{module}.instance" for module in callback_sources))
     with gateway_from_environment() as base:
-        with owned_proxy(
-            base, directory, {"SSL_CERT_FILE": str(cert[0])}, config=_config(directory, router_settings)
-        ) as proxy:
+        with owned_proxy(base, directory, {"SSL_CERT_FILE": str(cert[0])}, config=config) as proxy:
             yield proxy
 
 
@@ -109,6 +134,12 @@ def cert(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path]:
 @pytest.fixture(scope="module")
 def limited(tmp_path_factory: pytest.TempPathFactory, cert: tuple[Path, Path]) -> Iterator[Gateway]:
     with _admitting_proxy(tmp_path_factory, cert, {"optional_pre_call_checks": ["enforce_model_rate_limits"]}) as proxy:
+        yield proxy
+
+
+@pytest.fixture(scope="module")
+def faulting(tmp_path_factory: pytest.TempPathFactory, cert: tuple[Path, Path]) -> Iterator[Gateway]:
+    with _admitting_proxy(tmp_path_factory, cert, {}, {"faulting_turn_check": FAULTING_TURN_CHECK}) as proxy:
         yield proxy
 
 
@@ -189,9 +220,13 @@ def _deployment_spend(deployment: Deployment) -> float:
         return float(redis.get(f"deployment_spend:{deployment.identity}:1d") or 0)
 
 
-def _configured_tpm(gateway: Gateway, deployment: Deployment) -> JsonValue:
+def _configured(gateway: Gateway, deployment: Deployment, section: str) -> dict[str, JsonValue]:
     entries: Final = list_value(gateway.get("/model/info", {"litellm_model_id": deployment.identity})["data"])
-    return object_value(object_value(entries[0])["litellm_params"]).get("tpm")
+    return object_value(object_value(entries[0])[section])
+
+
+def _configured_tpm(gateway: Gateway, deployment: Deployment) -> JsonValue:
+    return _configured(gateway, deployment, "litellm_params").get("tpm")
 
 
 def _tokens_counted(identity: str, minute: str) -> int:
@@ -222,6 +257,21 @@ async def _until(read: Callable[[], float], satisfied: Callable[[float], bool]) 
     return await asyncio.to_thread(eventually, read, satisfied, 15)
 
 
+async def _close_code(connection: websockets.ClientConnection) -> int | None:
+    with contextlib.suppress(TimeoutError):
+        await asyncio.wait_for(connection.wait_closed(), timeout=20)
+    return connection.close_code
+
+
+def _failure_rows(key: str) -> list[dict[str, JsonValue]]:
+    rows: Final = eventually(
+        lambda: read_rows(SPEND_ROWS_FOR_KEY, (_key_hash(key),)),
+        lambda found: any(row["status"] == "failure" for row in found),
+        seconds=70,
+    )
+    return [row for row in rows if row["status"] == "failure"]
+
+
 @pytest.mark.parametrize("relay", ("native", "managed"))
 def test_a_turn_past_the_deployment_budget_is_refused_on_the_open_socket_and_logged_once_as_its_failure(
     limited: Gateway, cert: tuple[Path, Path], relay: str
@@ -230,9 +280,10 @@ def test_a_turn_past_the_deployment_budget_is_refused_on_the_open_socket_and_log
         budget: Final = {"max_budget": TURN_SPEND / 2, "budget_duration": "1d"}
         deployment: Final = _native(scenario, peer, **budget) if relay == "native" else _managed(scenario, **budget)
         key: Final = scenario.key(models=[deployment.name])
+        tag: Final = f"ws-turn-{uuid.uuid4().hex}"
 
         async def session() -> tuple[tuple[dict[str, JsonValue], ...], ...]:
-            async with _socket(limited, key, deployment.name) as connection:
+            async with _socket(limited, key, deployment.name, {"x-litellm-tags": tag}) as connection:
                 first: Final = await _say(connection, deployment.name)
                 await _until(lambda: _deployment_spend(deployment), lambda spent: spent > TURN_SPEND / 2)
                 return (first, await _say(connection, deployment.name), await _say(connection, deployment.name))
@@ -243,17 +294,58 @@ def test_a_turn_past_the_deployment_budget_is_refused_on_the_open_socket_and_log
         _assert_refused(second)
         _assert_refused(third)
         assert deployment.forwarded_turns() == 1
-        rows: Final = eventually(
-            lambda: read_rows(SPEND_ROWS_FOR_KEY, (_key_hash(key),)),
-            lambda found: any(row["status"] == "failure" for row in found),
-            seconds=70,
-        )
-        failures: Final = [row for row in rows if row["status"] == "failure"]
-        assert len(failures) == 1, rows
+        failures: Final = _failure_rows(key)
+        assert len(failures) == 1, failures
         assert failures[0]["model_group"] == deployment.name, failures
+        assert tag in list_value(failures[0]["request_tags"]), failures
         assert float(failures[0]["spend"]) == 0.0, failures
         error: Final = object_value(object_value(failures[0]["metadata"])["error_information"])
         assert str(error["error_code"]) == "429", error
+
+
+@pytest.mark.parametrize("relay", ("native", "managed"))
+def test_a_turn_whose_admission_check_fails_gets_a_500_frame_and_ends_the_socket_as_its_failure(
+    faulting: Gateway, cert: tuple[Path, Path], relay: str
+) -> None:
+    with responses_peer(cert) as peer, faulting.scenario() as scenario:
+        deployment: Final = _native(scenario, peer) if relay == "native" else _managed(scenario)
+        key: Final = scenario.key(models=[deployment.name])
+        fault: Final = f"turn check unavailable {uuid.uuid4().hex}"
+
+        def fail_the_turn_check() -> None:
+            faulting.request(
+                "PATCH",
+                f"/model/{deployment.identity}/update",
+                {"model_info": {"id": deployment.identity, TURN_CHECK_FAULT: fault}},
+            ).raise_for_status()
+            eventually(
+                lambda: _configured(faulting, deployment, "model_info").get(TURN_CHECK_FAULT),
+                lambda configured: configured == fault,
+                seconds=15,
+            )
+
+        async def session() -> tuple[tuple[dict[str, JsonValue], ...], tuple[dict[str, JsonValue], ...], int | None]:
+            async with _socket(faulting, key, deployment.name) as connection:
+                first: Final = await _say(connection, deployment.name)
+                await asyncio.to_thread(fail_the_turn_check)
+                second: Final = await _say(connection, deployment.name)
+                return first, second, await _close_code(connection)
+
+        first, second, close_code = asyncio.run(session())
+
+        completed(first)
+        assert [event.get("type") for event in second] == ["error"], second
+        assert second[0]["status"] == 500, second
+        error: Final = object_value(second[0]["error"])
+        assert error["type"] == "server_error", second
+        assert fault in string_value(error["message"]), second
+        assert close_code == 1011, close_code
+        assert deployment.forwarded_turns() == 1
+        failures: Final = _failure_rows(key)
+        assert len(failures) == 1, failures
+        assert failures[0]["model_group"] == deployment.name, failures
+        recorded: Final = object_value(object_value(failures[0]["metadata"])["error_information"])
+        assert fault in string_value(recorded["error_message"]), recorded
 
 
 def test_a_socket_opened_after_websocket_turns_spent_the_budget_is_refused_and_so_is_http(
