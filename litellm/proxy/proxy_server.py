@@ -4,6 +4,7 @@ import enum
 import importlib
 import inspect
 import io
+import itertools
 import os
 import random
 import re
@@ -562,6 +563,7 @@ from litellm.proxy.config_resolvers.settings_rules import (
 from litellm.proxy.config_resolvers.settings_rules import (
     JsonValue as SettingsJsonValue,
 )
+from litellm.proxy.config_resolvers.sso import SSO_FIELD_ENV_VARS
 from litellm.proxy.container_endpoints.endpoints import router as container_router
 from litellm.proxy.credential_endpoints.endpoints import router as credential_router
 from litellm.proxy.db.create_views import SupportsRawQueries
@@ -2242,9 +2244,9 @@ class _InvitationAcceptTxManager(Protocol):
 _ProxyModelRow: TypeAlias = "prisma_models.LiteLLM_ProxyModelTable"
 
 
-def _config_param_table(client: PrismaClient | None) -> TableActions[_ConfigParamRow]:
+def _config_param_table(client: PrismaClient | None, *, use_writer: bool = False) -> TableActions[_ConfigParamRow]:
     return cast(  # cast-ok: this is prisma's LiteLLM_Config actions object, which parses its Json column to a mapping
-        "TableActions[_ConfigParamRow]", ConfigRepository(client).table
+        "TableActions[_ConfigParamRow]", ConfigRepository(client, use_writer=use_writer).table
     )
 
 
@@ -5582,6 +5584,23 @@ def _as_settings_mapping(value: object) -> Mapping[str, SettingsJsonValue]:
     return _SETTINGS_MAPPING.validate_python(value)
 
 
+_SSO_ENVIRONMENT_VARIABLES: Final = frozenset(SSO_FIELD_ENV_VARS.values())
+_ENVIRONMENT_VALUES: Final = TypeAdapter(Mapping[str, str])
+
+
+def _config_row_revision(row: object) -> int | None:
+    revision: Final[object] = getattr(row, "reload_revision", None)
+    return revision if isinstance(revision, int) and not isinstance(revision, bool) else None
+
+
+def _restore_environment(keys: frozenset[str], values: Mapping[str, str]) -> None:
+    for key in keys:
+        if (value := values.get(key)) is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+
+
 def _get_field_default(field_info: FieldInfo) -> JsonValue:
     if field_info.default is PydanticUndefined:
         return None
@@ -5743,6 +5762,12 @@ class ProxyConfig:
         self.router_settings: Final[SettingsStore] = SettingsStore("router_settings")
         self.litellm_settings: Final[SettingsStore] = SettingsStore("litellm_settings")
         self.environment_variables: Final[SettingsStore] = SettingsStore("environment_variables")
+        self._environment_before_db: Mapping[str, str] | None = None
+        self._db_environment_revision: int | None = None
+        self._environment_read_numbers: Final = itertools.count(1)
+        self._latest_applied_environment_read: int = 0
+        self._db_environment_keys: frozenset[str] = frozenset()
+        self._sso_environment_removals: frozenset[str] = frozenset()
         self._warned_shadowed_keys: frozenset[tuple[Section, str]] = frozenset()
         self._db_config_callback_entries: Mapping[tuple[str, str], _DbCallbackRegistration] = MappingProxyType({})
         self._settings_stores: Final[Mapping[Section, SettingsStore]] = MappingProxyType(
@@ -6047,7 +6072,7 @@ class ProxyConfig:
         if prisma_client is None or not (general_settings.get("store_model_in_db", False) is True or store_model_in_db):
             return
 
-        row: Final[_ConfigParamRow | None] = await _config_param_table(prisma_client).find_first(
+        row: Final[_ConfigParamRow | None] = await _config_param_table(prisma_client, use_writer=True).find_first(
             where={"param_name": "environment_variables"}
         )
         existing: Final[dict] = dict(row.param_value) if row is not None and row.param_value is not None else {}
@@ -8381,6 +8406,8 @@ class ProxyConfig:
             verbose_proxy_logger.info("'store_model_in_db' is not True, skipping db updates")
             return config
 
+        environment_before_db: Final = self._captured_environment_before_db()
+        environment_read: Final = next(self._environment_read_numbers)
         sections: Final = tuple(self._settings_stores)
         responses: Final = await asyncio.gather(*(get_config_param(prisma_client, section) for section in sections))
         for section, response in zip(sections, responses):
@@ -8394,6 +8421,10 @@ class ProxyConfig:
             )
             if section == "litellm_settings":
                 self._apply_litellm_settings_db_values(self._prepared_db_settings_values(section, param_value))
+            elif section == "environment_variables":
+                await self._apply_db_environment_variables_row(
+                    prisma_client, response, environment_before_db, environment_read
+                )
             else:
                 self._settings_stores[section].apply_db_row(
                     section,
@@ -8402,6 +8433,49 @@ class ProxyConfig:
 
         self._warn_about_shadowed_db_settings()
         return self._config_with_resolved_settings(config)
+
+    async def _apply_db_environment_variables_row(
+        self, prisma_client: PrismaClient, row: object, environment_before_db: Mapping[str, str], read: int
+    ) -> None:
+        current: Final = await self._environment_row_not_behind_the_applied_one(prisma_client, row)
+        if current is None or (param_value := getattr(current, "param_value", None)) is None:
+            return
+        self._apply_db_environment_variables(param_value, _config_row_revision(current), environment_before_db, read)
+
+    async def _environment_row_not_behind_the_applied_one(
+        self, prisma_client: PrismaClient, row: object
+    ) -> object | None:
+        if not self._is_behind_applied_environment_revision(row):
+            return row
+        applied_revision: Final = self._db_environment_revision
+        try:
+            writer_row: Final = await call_with_db_reconnect_retry(
+                prisma_client,
+                lambda: ConfigRepository(prisma_client, use_writer=True).table.find_unique(
+                    where={"param_name": "environment_variables"}
+                ),
+                reason="environment_variables_writer_read_failure",
+            )
+        except Exception as e:
+            if not (
+                PrismaDBExceptionHandler.is_database_transport_error(e)
+                or PrismaDBExceptionHandler.is_database_connection_error(e)
+            ):
+                raise
+            verbose_proxy_logger.warning(
+                "Could not read environment_variables from the writer database, keeping the current environment "
+                "variables until the next config sync: %s",
+                e,
+            )
+            return None
+        return writer_row if self._db_environment_revision == applied_revision else None
+
+    def _is_behind_applied_environment_revision(self, row: object) -> bool:
+        applied_revision: Final = self._db_environment_revision
+        if applied_revision is None or row is None:
+            return False
+        revision: Final = _config_row_revision(row)
+        return revision is None or revision < applied_revision
 
     def _warn_about_shadowed_db_settings(self) -> None:
         shadowed: Final[frozenset[tuple[Section, str]]] = frozenset(
@@ -8414,20 +8488,46 @@ class ProxyConfig:
         self._warned_shadowed_keys = shadowed
 
     def _prepared_db_settings_values(self, section: Section, value: object) -> Mapping[str, SettingsJsonValue]:
-        if section == "environment_variables":
-            decrypted: Final = self.decrypt_and_set_db_env_variables(
-                dict(_as_settings_mapping(value)), return_original_value=True
-            )
-            normalized: Final = {
-                **decrypted,
-                **{key.upper(): decrypted_value for key, decrypted_value in decrypted.items()},
-            }
-            for key, decrypted_value in normalized.items():
-                os.environ[key] = decrypted_value
-            return _as_settings_mapping(normalized)
-
         scrubbed: Final = _scrub_db_overlay_remote_module_loads(section=section, db_value=value)
         return _as_settings_mapping(scrubbed)
+
+    def _apply_db_environment_variables(
+        self, value: object, revision: int | None, environment_before_db: Mapping[str, str], read: int
+    ) -> None:
+        if read < self._latest_applied_environment_read:
+            return
+        self._latest_applied_environment_read = read
+        applied_revision: Final = self._db_environment_revision
+        row: Final = _as_settings_mapping(value)
+        decrypted: Final = _ENVIRONMENT_VALUES.validate_python(
+            self.decrypt_and_set_db_env_variables(dict(row), return_original_value=True)
+        )
+        applied: Final = {**decrypted, **{key.upper(): decrypted_value for key, decrypted_value in decrypted.items()}}
+        os.environ.update(applied)
+        if revision is None or revision == applied_revision:
+            self._db_environment_keys = self._db_environment_keys | frozenset(applied)
+        else:
+            stored: Final = frozenset(key for key, stored_value in row.items() if stored_value is not None)
+            still_stored: Final = stored | frozenset(key.upper() for key in stored)
+            removed: Final = self._db_environment_keys - still_stored
+            _restore_environment(removed - _SSO_ENVIRONMENT_VARIABLES, environment_before_db)
+            self._sso_environment_removals = (
+                self._sso_environment_removals | (removed & _SSO_ENVIRONMENT_VARIABLES)
+            ) - still_stored
+            self._db_environment_keys = (self._db_environment_keys & still_stored) | frozenset(applied)
+            self._db_environment_revision = revision
+        self.environment_variables.apply_db_row("environment_variables", _as_settings_mapping(applied))
+
+    def _restore_sso_environment_removals(self, sso_table_keys: frozenset[str]) -> None:
+        _restore_environment(
+            self._sso_environment_removals - sso_table_keys, self._environment_before_db or MappingProxyType({})
+        )
+        self._sso_environment_removals = frozenset()
+
+    def _captured_environment_before_db(self) -> Mapping[str, str]:
+        if self._environment_before_db is None:
+            self._environment_before_db = MappingProxyType(dict(os.environ))
+        return self._environment_before_db
 
     def _apply_litellm_settings_db_values(self, db_values: Mapping[str, SettingsJsonValue]) -> None:
         self.litellm_settings.apply_db_row("litellm_settings", db_values)
@@ -8662,6 +8762,8 @@ class ProxyConfig:
 
         if self._should_load_db_object(object_type="sso_settings"):
             await self._init_sso_settings_in_db(prisma_client=prisma_client)
+        else:
+            self._restore_sso_environment_removals(frozenset())
         if self._should_load_db_object(object_type="cache_settings"):
             from litellm.proxy.management_endpoints.cache_settings_endpoints import (
                 CacheSettingsManager,
@@ -8838,6 +8940,11 @@ class ProxyConfig:
                 sso_settings.sso_settings.pop("ui_access_mode", None)
                 uppercase_sso_settings: Final = {key.upper(): value for key, value in sso_settings.sso_settings.items()}
                 self.decrypt_and_set_db_env_variables(environment_variables=uppercase_sso_settings)
+            self._restore_sso_environment_removals(
+                frozenset()
+                if sso_settings is None
+                else frozenset(key.upper() for key, value in sso_settings.sso_settings.items() if value)
+            )
         except Exception as e:
             verbose_proxy_logger.exception(
                 "litellm.proxy.proxy_server.py::ProxyConfig:_init_sso_settings_in_db - %s", e
@@ -19092,7 +19199,7 @@ async def update_config(
         proxy_config.reject_config_owned_writes(section_name="router_settings", changed_keys=router_settings_updates)
 
         async def _read_section(param_name: str) -> dict:
-            row: Final[_ConfigParamRow | None] = await _config_param_table(prisma_client).find_first(
+            row: Final[_ConfigParamRow | None] = await _config_param_table(prisma_client, use_writer=True).find_first(
                 where={"param_name": param_name}
             )
             if row is None or row.param_value is None:

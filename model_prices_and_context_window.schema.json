@@ -1027,6 +1027,9 @@
         "supports_bedrock_converse_tool_result_images": {
           "type": "boolean"
         },
+        "supports_bedrock_native_structured_output": {
+          "type": "boolean"
+        },
         "supports_bedrock_runtime_chat_completions_inline_reasoning": {
           "type": "boolean"
         },
