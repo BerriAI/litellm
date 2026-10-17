@@ -322,9 +322,9 @@ def _credentials_table(prisma_client: PrismaClient) -> TableActions[CredentialIt
     )
 
 
-def _config_table(prisma_client: PrismaClient) -> _ConfigTableActions:
+def _config_table(prisma_client: PrismaClient, *, use_writer: bool = False) -> _ConfigTableActions:
     return cast(  # cast-ok: ConfigRepository.table hides the write actions this module needs on that same object
-        "_ConfigTableActions", ConfigRepository(prisma_client).table
+        "_ConfigTableActions", ConfigRepository(prisma_client, use_writer=use_writer).table
     )
 
 
@@ -5566,7 +5566,7 @@ async def rotate_master_key(
         await publish_config_change(redis_cache=coordination_redis_cache(), object_type="litellm_proxymodeltable")
     # 3. process config table
     try:
-        config = await _config_table(prisma_client).find_many()
+        config = await _config_table(prisma_client, use_writer=True).find_many()
     except Exception:
         config = None
 
@@ -5589,7 +5589,7 @@ async def rotate_master_key(
             if encrypted_env_vars:
                 await _config_table(prisma_client).update(
                     where={"param_name": "environment_variables"},
-                    data={"param_value": prisma.Json(encrypted_env_vars)},
+                    data={"param_value": prisma.Json({**environment_variables_dict, **encrypted_env_vars})},
                 )
 
     try:

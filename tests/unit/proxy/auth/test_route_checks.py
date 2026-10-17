@@ -4782,6 +4782,51 @@ def test_view_only_user_denied_credential_connection_routes(method: str, route: 
         _internal_user_check(route, method, role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY)
 
 
+_SELF_SCOPED_CREDENTIAL_WRITES = (
+    ("POST", "/credentials/x/user_connection/start"),
+    ("POST", "/credentials/x/user_connection/poll"),
+    ("DELETE", "/credentials/x/user_connection"),
+    ("POST", "/v1/mcp/server/oauth/srv-1/register"),
+    ("POST", "/v1/mcp/server/srv-1/oauth-user-credential"),
+    ("DELETE", "/v1/mcp/server/srv-1/oauth-user-credential"),
+    ("POST", "/v1/mcp/server/srv-1/user-credential"),
+    ("DELETE", "/v1/mcp/server/srv-1/user-credential"),
+    ("POST", "/v1/mcp/server/srv-1/user-env-vars"),
+    ("DELETE", "/v1/mcp/server/srv-1/user-env-vars"),
+)
+
+
+@pytest.mark.parametrize(("method", "route"), _SELF_SCOPED_CREDENTIAL_WRITES)
+def test_proxy_admin_viewer_allowed_self_scoped_credential_writes(method: str, route: str) -> None:
+    """Regression for LIT-9320: these handlers only write the caller's own credential
+    row, so a read-only admin can use them like /user/password/change."""
+    assert _internal_user_check(route, method, role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY) is None
+
+
+@pytest.mark.parametrize(
+    ("method", "route"),
+    [
+        ("POST", "/v1/mcp/server"),
+        ("PUT", "/v1/mcp/server"),
+        ("DELETE", "/v1/mcp/server/srv-1"),
+        ("POST", "/v1/mcp/server/import"),
+        ("POST", "/v1/mcp/server/srv-1/pin"),
+        ("PATCH", "/v1/mcp/server/srv-1/oauth-user-credential"),
+        ("PUT", "/v1/mcp/server/srv-1/user-credential"),
+        ("PATCH", "/v1/mcp/server/srv-1/user-env-vars"),
+        ("POST", "/v1/mcp/server/srv-1/user-credential/rotate"),
+        ("POST", "/v1/mcp/server/oauth/srv-1/token"),
+        ("DELETE", "/v1/mcp/server/oauth/srv-1/register"),
+        ("PATCH", "/credentials/x/user_connection"),
+        ("DELETE", "/credentials/user_connections"),
+        ("POST", "/key/generate"),
+    ],
+)
+def test_proxy_admin_viewer_denied_mcp_admin_and_sibling_writes(method: str, route: str) -> None:
+    with pytest.raises(HTTPException, match="user not allowed to access this route"):
+        _internal_user_check(route, method, role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)
+
+
 def test_user_connection_route_registration_order_wins_over_generic_credential_routes() -> None:
     """The :path placeholders in the generic CRUD routes could swallow the
     user_connection paths; the concrete routes must register (and match) first."""
