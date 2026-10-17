@@ -45,22 +45,19 @@ def call(**kwargs: object) -> NativeCall:
 
 
 @pytest.mark.parametrize(
-    ("model", "provider", "tools", "expected"),
+    ("provider", "tools", "expected"),
     (
-        ("deepseek/test-model", None, [{"type": ANTHROPIC_ADVISOR_TOOL_TYPE}], True),
-        ("anthropic/test-model", None, [{"type": ANTHROPIC_ADVISOR_TOOL_TYPE}], False),
-        ("test-model", "anthropic", [{"type": ANTHROPIC_ADVISOR_TOOL_TYPE}], False),
-        ("unresolved-model", None, [{"type": ANTHROPIC_ADVISOR_TOOL_TYPE}], True),
-        ("deepseek/test-model", None, [{"type": "function", "name": "f"}], False),
-        ("deepseek/test-model", None, ["not-a-tool"], False),
-        ("deepseek/test-model", None, [], False),
-        ("deepseek/test-model", None, None, False),
+        ("deepseek", [{"type": ANTHROPIC_ADVISOR_TOOL_TYPE}], True),
+        ("anthropic", [{"type": ANTHROPIC_ADVISOR_TOOL_TYPE}], False),
+        (None, [{"type": ANTHROPIC_ADVISOR_TOOL_TYPE}], True),
+        ("deepseek", [{"type": "function", "name": "f"}], False),
+        ("deepseek", ["not-a-tool"], False),
+        ("deepseek", [], False),
+        ("deepseek", None, False),
     ),
 )
-def test_messages_interception_matches_tools_and_resolved_provider(
-    model: str, provider: str | None, tools: object, expected: bool
-) -> None:
-    assert messages_detectors.intercepted(call(model=model, custom_llm_provider=provider, tools=tools)) is expected
+def test_messages_interception_matches_tools_and_provider(provider: str | None, tools: object, expected: bool) -> None:
+    assert messages_detectors.intercepted(call(model="test-model", tools=tools), provider) is expected
 
 
 def _wrap_nested_level(value: object, depth: int) -> object:
