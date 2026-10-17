@@ -309,6 +309,27 @@ def test_exclude_tools_are_never_cleared_and_do_not_count_toward_keep():
     assert applied["cleared_tool_uses"] == 2
 
 
+def test_history_of_only_excluded_tools_is_left_unchanged():
+    messages = [{"role": "user", "content": "Plan a trip."}]
+    for i in range(4):
+        messages.extend(_make_pair(f"toolu_{i:02d}", f"Result {i}: " + "x" * 200, name="search"))
+    original = deepcopy(messages)
+    new_messages, applied = apply_clear_tool_uses_20250919(
+        model=MODEL,
+        messages=messages,
+        tools=None,
+        system=None,
+        edit_spec={
+            "type": "clear_tool_uses_20250919",
+            "trigger": {"type": "tool_uses", "value": 0},
+            "keep": {"type": "tool_uses", "value": 1},
+            "exclude_tools": ["search"],
+        },
+    )
+    assert applied is None
+    assert new_messages == original
+
+
 def _tool_inputs(messages):
     return {
         block["id"]: block["input"]
