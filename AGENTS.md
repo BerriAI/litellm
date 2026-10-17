@@ -74,7 +74,7 @@ Always pull before starting any work. The checkout or worktree may be sitting on
 
 Internal contributors branch a new PR off the repository's current default branch, with a branch name prefixed with litellm_
 
-Do not add `Co-Authored-By: Claude` or any Claude attribution to commit messages. Never use a `claude/` prefix or put a `/` in a branch name. Do not add "Generated with Claude Code" (or any similar attribution) to PR descriptions or comments. Do not create a new PR/branch off the existing PR to fix/add something that is related and could've just been committed directly to the existing PR's branch
+Do not add `Co-Authored-By: Claude` or any Claude attribution to commit messages. Never use a `claude/` branch prefix. Do not add "Generated with Claude Code" (or any similar attribution) to PR descriptions or comments. Do not create a new PR/branch off the existing PR to fix/add something that is related and could've just been committed directly to the existing PR's branch
 
 When working on a PR, keep the PR description in sync with new commits being made
 

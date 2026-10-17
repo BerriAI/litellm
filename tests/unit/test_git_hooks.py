@@ -1,7 +1,8 @@
 """Tests for the repo's git hook scripts in ``.githooks/``.
 
-The hooks enforce Conventional Commits 1.0.0 on the commit-msg path and
-Conventional Branches on the pre-push path. Each hook is exercised here as a
+The hooks enforce Conventional Commits 1.0.0 on the commit-msg path and, on the
+pre-push path, either the internal ``litellm_`` branch prefix or Conventional
+Branches. Each hook is exercised here as a
 subprocess against representative valid / invalid inputs so that any future
 regex change or accidental edit gets caught by ``make test-unit``.
 
@@ -225,12 +226,32 @@ def test_pre_push_accepts_conventional_branches(branch):
 @pytest.mark.parametrize(
     "branch",
     [
+        "litellm_fix_bedrock_sts_region",
+        "litellm_conventional_commits",
+        "litellm_backport_45721_rc_1_106_0",
+        "litellm_fix/optimize-streaming",
+    ],
+)
+def test_pre_push_accepts_litellm_prefixed_branches(branch):
+    result = _run_pre_push(_ref_line(branch))
+    assert result.returncode == 0, (
+        f"hook rejected a litellm_ branch:\n  branch: {branch!r}\n"
+        f"  stderr: {result.stderr}"
+    )
+
+
+@pytest.mark.parametrize(
+    "branch",
+    [
         "random-branch-name",
-        "litellm_fix/optimize-streaming",  # legacy pattern is now rejected
         "ui/navbar-notifications",         # not in the allow list
         "feature/",                        # empty description
         "Feature/foo",                     # type is case-sensitive
         "feat/foo",                        # angular commit type, not branch type
+        "litellm_",                        # empty description
+        "litellm-fix-foo",                 # hyphen is not the litellm_ prefix
+        "Litellm_fix_foo",                 # prefix is case-sensitive
+        "mylitellm_fix_foo",               # prefix must start the name
     ],
 )
 def test_pre_push_rejects_non_conventional_branches(branch):
