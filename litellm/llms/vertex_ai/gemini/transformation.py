@@ -1197,9 +1197,8 @@ def transform_request_body(
         if not VertexGeminiConfig.supports_sampling_params(model):
             unsupported_sampling = [k for k in ("temperature", "top_p", "top_k") if k in filtered_params]
             if unsupported_sampling:
-                should_drop = (
-                    litellm.drop_params is True
-                    or (litellm_params and litellm_params.get("drop_params") is True)
+                should_drop = litellm.drop_params is True or (
+                    litellm_params and litellm_params.get("drop_params") is True
                 )
                 if not should_drop:
                     first_k = unsupported_sampling[0]
