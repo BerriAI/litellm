@@ -1,6 +1,7 @@
 import asyncio
 import json
 import random
+import typing
 from typing import Callable, Coroutine, Iterable, List, Optional, Tuple
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -433,6 +434,52 @@ async def test_writes_during_the_throttle_wait_collapse_into_the_next_resync() -
     assert pubsub.queue.empty()
 
 
+async def test_write_arriving_during_throttle_wait_does_not_trigger_an_extra_resync() -> None:
+    pubsub: typing.Final = _QueuePubSub()
+    cache: typing.Final = _FakeRedisCache(_ScriptedPubSubRedisClient([pubsub]))
+    clock: typing.Final = _FakeClock()
+    first_resync: typing.Final = asyncio.Event()
+    second_resync: typing.Final = asyncio.Event()
+    inserted_during_wait: typing.Final = asyncio.Event()
+    resyncs: typing.Final[List[str]] = []
+
+    async def recording_sleep(seconds: float) -> None:
+        if seconds > 0 and not inserted_during_wait.is_set():
+            inserted_during_wait.set()
+            pubsub.queue.put_nowait("change-during-wait")
+        await asyncio.sleep(0)
+
+    async def resync() -> None:
+        resyncs.append("resync")
+        if len(resyncs) == 1:
+            first_resync.set()
+        if len(resyncs) == 2:
+            second_resync.set()
+
+    subscriber: typing.Final = ConfigSyncSubscriber(
+        redis_cache=cache,
+        resync_callbacks=(resync,),
+        debounce_seconds=0.0,
+        jitter_max_seconds=0.0,
+        min_resync_interval_seconds=10.0,
+        sleep=recording_sleep,
+        monotonic=clock,
+    )
+
+    subscriber.start()
+    pubsub.queue.put_nowait("first-change")
+    await asyncio.wait_for(first_resync.wait(), timeout=5)
+    clock.now += 4.0
+    pubsub.queue.put_nowait("second-change")
+    await asyncio.wait_for(second_resync.wait(), timeout=5)
+    await asyncio.sleep(0.05)
+    await subscriber.stop()
+
+    assert inserted_during_wait.is_set()
+    assert resyncs == ["resync", "resync"]
+    assert pubsub.queue.empty()
+
+
 async def test_polls_without_messages_do_not_trigger_resyncs() -> None:
     pubsub = _EmptyPollsThenMessagePubSub(empty_polls=3, initial_messages=["change"])
     cache = _FakeRedisCache(_ScriptedPubSubRedisClient([pubsub]))
@@ -493,15 +540,21 @@ async def test_second_start_does_not_open_a_second_subscription() -> None:
     assert pubsub.subscribed_channels == [CONFIG_SYNC_CHANNEL]
 
 
-async def test_redis_error_leads_to_backoff_and_resubscribe() -> None:
+async def test_redis_error_resubscribes_then_resyncs_without_new_message() -> None:
     broken = _BrokenPubSub()
-    healthy = _QueuePubSub(initial_messages=[json.dumps({"object_type": "litellm_credentialstable"})])
+    healthy = _QueuePubSub()
     cache = _FakeRedisCache(_ScriptedPubSubRedisClient([broken, healthy]))
     resyncs: List[str] = []
     fired = asyncio.Event()
+
+    async def resync() -> None:
+        resyncs.append("resync")
+        if healthy.subscribed_channels == [CONFIG_SYNC_CHANNEL]:
+            fired.set()
+
     subscriber = ConfigSyncSubscriber(
         redis_cache=cache,
-        resync_callbacks=(_recording_callback(resyncs, "resync", fired),),
+        resync_callbacks=(resync,),
         debounce_seconds=0.01,
         jitter_max_seconds=0.0,
         backoff_initial_seconds=0.02,
