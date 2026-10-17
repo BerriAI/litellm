@@ -7676,6 +7676,50 @@ async def test_sync_success_handler_landing_after_logging_hook_keeps_hook_payloa
     assert seen_edits == [(mirrored, "masked by hook")]
 
 
+def test_sync_logging_hook_edits_stay_off_a_caller_supplied_payload_for_async_requests(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sync_payloads: Final[list[object]] = []
+
+    class EditingHook(CustomLogger):
+        def logging_hook(
+            self, kwargs: dict[str, object], result: object, call_type: str
+        ) -> tuple[dict[str, object], object]:
+            payload = kwargs["standard_logging_object"]
+            assert isinstance(payload, dict)
+            payload["response"] = "edited by sync hook"
+            return kwargs, result
+
+    class AthinaRecorder:
+        def log_event(
+            self,
+            kwargs: dict[str, object],
+            response_obj: object,
+            start_time: object,
+            end_time: object,
+            print_verbose: object,
+        ) -> None:
+            sync_payloads.append(kwargs["standard_logging_object"])
+
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "success_callback", [EditingHook(), "athina"])
+    monkeypatch.setattr(litellm_logging, "athinaLogger", AthinaRecorder())
+    logging_obj: Final = _async_request_logging_obj("caller-supplied-payload", [])
+    supplied_payload: Final = {"id": "caller-supplied-payload", "response": "original"}
+    logging_obj.model_call_details["standard_logging_object"] = supplied_payload
+
+    logging_obj.success_handler(
+        result=ModelResponse(), for_async_request=True, standard_logging_object=supplied_payload
+    )
+
+    assert len(sync_payloads) == 1
+    sync_payload: Final = sync_payloads[0]
+    assert isinstance(sync_payload, dict)
+    assert sync_payload["response"] == "edited by sync hook"
+    assert supplied_payload == {"id": "caller-supplied-payload", "response": "original"}
+    assert logging_obj.model_call_details["standard_logging_object"] is supplied_payload
+
+
 @pytest.mark.asyncio
 async def test_sync_only_logger_keeps_the_async_payload_when_its_result_builds_none(
     monkeypatch: pytest.MonkeyPatch,
