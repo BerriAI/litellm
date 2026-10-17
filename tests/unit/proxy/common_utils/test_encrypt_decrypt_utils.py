@@ -20,6 +20,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     encrypt_bearer_token,
     encrypt_value,
     encrypt_value_helper,
+    is_undecryptable_ciphertext,
 )
 
 
@@ -266,3 +267,50 @@ def test_bearer_token_uses_only_header_safe_characters(length: int):
 
     assert re.fullmatch(r"kind_a_[A-Za-z0-9_-]+", token), token
     assert decrypt_bearer_token(token, prefix="kind_a_") == "x" * length
+
+
+@pytest.mark.parametrize("use_aes", [False, True])
+def test_is_undecryptable_ciphertext_flags_value_written_under_another_key(
+    monkeypatch: pytest.MonkeyPatch, use_aes: bool
+) -> None:
+    if use_aes:
+        _use_aes(monkeypatch)
+    ciphertext = encrypt_value_helper("sk-provider-secret", new_encryption_key="sk-old-master-key")
+    assert is_undecryptable_ciphertext(value=ciphertext, signing_key="sk-salt-aes-1234") is True
+    assert is_undecryptable_ciphertext(value=ciphertext, signing_key="sk-old-master-key") is False
+
+
+def test_is_undecryptable_ciphertext_flags_standard_base64_row_under_another_key() -> None:
+    # The nonce is random, so draw until the standard-alphabet characters actually appear.
+    candidates = (
+        base64.b64encode(encrypt_value(value="sk-provider-secret-" + "x" * 64, signing_key="sk-old-master-key")).decode(
+            "utf-8"
+        )
+        for _ in range(200)
+    )
+    ciphertext = next(c for c in candidates if "+" in c or "/" in c)
+    assert is_undecryptable_ciphertext(value=ciphertext, signing_key="sk-salt-aes-1234") is True
+    assert is_undecryptable_ciphertext(value=ciphertext, signing_key="sk-old-master-key") is False
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "gpt-4o",
+        "openai/gpt-4o",
+        "os.environ/OPENAI_API_KEY",
+        "",
+        "abcd",
+        12,
+        None,
+        "https://example.com/v1",
+        "huggingface/meta-llama/Meta-Llama-3-70B-Instruct-fine-tuned-abcd",
+    ],
+)
+def test_is_undecryptable_ciphertext_ignores_plaintext(value: object) -> None:
+    assert is_undecryptable_ciphertext(value=value, signing_key="sk-salt-aes-1234") is False
+
+
+def test_is_undecryptable_ciphertext_without_signing_key_is_false() -> None:
+    ciphertext = encrypt_value_helper("sk-provider-secret", new_encryption_key="sk-old-master-key")
+    assert is_undecryptable_ciphertext(value=ciphertext, signing_key=None) is False
