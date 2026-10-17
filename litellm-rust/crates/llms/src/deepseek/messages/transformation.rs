@@ -451,4 +451,27 @@ mod tests {
             json!({"type": "enabled", "budget_tokens": 1024})
         );
     }
+
+    #[rstest]
+    #[case::without_client_betas(&[])]
+    #[case::with_client_betas(&[("anthropic-beta", "claude-code-20250219,interleaved-thinking-2025-05-14")])]
+    fn safeguards_and_client_betas_reach_deepseek_as_sent(#[case] client: &[(&str, &str)]) {
+        let safeguards = json!([{"type": "dangerous_tool_use", "classifier_context": {"v": 1}}]);
+        let body = json!({
+            "model": "deepseek-v4-pro",
+            "max_tokens": 100,
+            "messages": [{"role": "user", "content": "hi"}],
+            "safeguards": safeguards
+        });
+        let headers: Headers = client
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.to_string()))
+            .collect();
+        assert_eq!(
+            DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG
+                .request_headers(headers.clone(), &request_from(body.clone())),
+            headers
+        );
+        assert_eq!(transformed(body)["safeguards"], safeguards);
+    }
 }

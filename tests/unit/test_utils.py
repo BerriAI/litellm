@@ -14,7 +14,7 @@ from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePath
-from typing import Final, cast
+from typing import Final, SupportsIndex, cast
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -1257,6 +1257,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_native_streaming": {"type": "boolean"},
                 "supports_image_size": {"type": "boolean"},
                 "supports_native_structured_output": {"type": "boolean"},
+                "supports_bedrock_native_structured_output": {"type": "boolean"},
                 "use_openai_responses_path": {"type": "boolean"},
                 "off_peak_pricing": {
                     "type": "object",
@@ -4883,6 +4884,104 @@ def test_reapply_runtime_registrations_drops_request_scoped_registrations(monkey
         _invalidate_model_cost_lowercase_map()
 
 
+def test_model_cost_walks_survive_a_registration_landing_mid_walk(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.utils import _invalidate_model_cost_lowercase_map, _rebuild_model_cost_lowercase_map
+
+    class _KeyRegisteredMidWalk(str):
+        def lower(self) -> str:
+            litellm.model_cost.setdefault("lit-5853-registered-during-the-rebuild", {"mode": "chat"})
+            return super().lower()
+
+    class _EntryRegisteredMidWalk(dict):
+        def get(self, field: str, default: object = None) -> object:
+            litellm.model_cost.setdefault("lit-5853-registered-during-add-known-models", {"mode": "chat"})
+            return super().get(field, default)
+
+    monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
+    litellm.model_cost[_KeyRegisteredMidWalk("LIT-5853-WALKED-LAST")] = _EntryRegisteredMidWalk(mode="chat")
+    try:
+        assert _rebuild_model_cost_lowercase_map()["lit-5853-walked-last"] == "LIT-5853-WALKED-LAST"
+        litellm.add_known_models(model_cost_map=litellm.model_cost)
+        assert "lit-5853-registered-during-the-rebuild" in litellm.model_cost
+        assert "lit-5853-registered-during-add-known-models" in litellm.model_cost
+    finally:
+        _invalidate_model_cost_lowercase_map()
+
+
+class _KeyWhoseLoweringLosesTheRace(str):
+    """Lowering the key is the one Python-level step between the lookup map's rebuild and
+    its read, so another thread's registration invalidating the map lands right there."""
+
+    def lower(self) -> str:
+        from litellm.utils import _invalidate_model_cost_lowercase_map
+
+        _invalidate_model_cost_lowercase_map()
+        return super().lower()
+
+
+def test_case_insensitive_model_cost_lookup_survives_an_invalidation_mid_lookup() -> None:
+    from litellm.utils import _get_model_cost_key, _invalidate_model_cost_lowercase_map
+
+    _invalidate_model_cost_lowercase_map()
+    try:
+        assert _get_model_cost_key(_KeyWhoseLoweringLosesTheRace("GPT-4O")) == "gpt-4o"
+    finally:
+        _invalidate_model_cost_lowercase_map()
+
+
+def _register_a_model_mid_walk() -> None:
+    litellm.model_cost.setdefault("lit-5853-registered-mid-walk", {"mode": "chat"})
+
+
+class _KeyReadDuringARegistration(str):
+    def startswith(
+        self,
+        prefix: str | tuple[str, ...],
+        start: SupportsIndex | None = None,
+        end: SupportsIndex | None = None,
+    ) -> bool:
+        _register_a_model_mid_walk()
+        return super().startswith(prefix, start, end)
+
+    def lower(self) -> str:
+        _register_a_model_mid_walk()
+        return super().lower()
+
+
+class _EntryReadDuringARegistration(dict[str, object]):
+    def __contains__(self, key: object) -> bool:
+        _register_a_model_mid_walk()
+        return super().__contains__(key)
+
+
+@pytest.mark.parametrize("walk", ["fal_ai", "fireworks_ai", "ollama", "gpt-5", "case-insensitive scan"])
+def test_request_path_cost_map_walks_survive_a_registration_mid_walk(monkeypatch: pytest.MonkeyPatch, walk: str) -> None:
+    from litellm.llms.fal_ai.cost_calculator import _keyed_rows
+    from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
+    from litellm.llms.ollama.common_utils import OllamaModelInfo
+    from litellm.llms.openai.chat.gpt_5_transformation import _catalogue_declares_default_effort
+    from litellm.utils import _handle_new_key_with_scan, _invalidate_model_cost_lowercase_map
+
+    walks: Final[Mapping[str, Callable[[], object]]] = {
+        "fal_ai": lambda: _keyed_rows("lit-5853-model", "standard"),
+        "fireworks_ai": FireworksAIConfig._get_fireworks_index,
+        "ollama": lambda: OllamaModelInfo._is_static_ollama_model("ollama/lit-5853-model"),
+        "gpt-5": _catalogue_declares_default_effort,
+        "case-insensitive scan": lambda: _handle_new_key_with_scan("lit-5853-model"),
+    }
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {_KeyReadDuringARegistration("lit-5853-catalog-model"): _EntryReadDuringARegistration(mode="chat")},
+    )
+
+    try:
+        walks[walk]()
+        assert "lit-5853-registered-mid-walk" in litellm.model_cost
+    finally:
+        _invalidate_model_cost_lowercase_map()
+
+
 class _JsonCapture(logging.Handler):
     def __init__(self):
         super().__init__()
@@ -7533,6 +7632,25 @@ def test_get_model_info_gemini(monkeypatch):
         ):
             assert info.get("tpm") is not None, f"{model} does not have tpm"
             assert info.get("rpm") is not None, f"{model} does not have rpm"
+
+
+def test_register_model_without_a_provider_never_inherits_another_providers_entry(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.utils import _invalidate_model_cost_lowercase_map
+
+    key: Final = "azure/claude-sonnet-4-6"
+    monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
+    litellm.model_cost.pop(key, None)
+    try:
+        litellm.register_model(
+            {key: {"input_cost_per_token": 1e-07, "output_cost_per_token": 4e-07}}, persist_across_reloads=False
+        )
+        assert litellm.model_cost[key].get("litellm_provider") is None
+        info: Final = litellm.get_model_info(key)
+        assert info["litellm_provider"] == "azure"
+        assert info["input_cost_per_token"] == 1e-07
+        assert info["output_cost_per_token"] == 4e-07
+    finally:
+        _invalidate_model_cost_lowercase_map()
 
 
 @pytest.mark.parametrize(

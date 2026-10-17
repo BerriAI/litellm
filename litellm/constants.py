@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 from enum import Enum
 from types import MappingProxyType
@@ -18,6 +19,9 @@ MICROSOFT_365_COPILOT_DEFAULT_TOKEN_EXCHANGE_PROFILE: Final = "jwt_bearer_obo"
 MICROSOFT_365_COPILOT_DEFAULT_TOKEN_EXCHANGE_SCOPE: Final = "https://graph.microsoft.com/.default"
 # Replies depend on the caller's delegated identity, which response-cache keys do not include.
 RESPONSE_CACHE_EXCLUDED_PROVIDERS: Final = frozenset({"microsoft_365_copilot", "databricks_agent"})
+CLAUDE_CODE_PICKER_PATTERN: Final = re.compile(r"claude|anthropic", re.IGNORECASE)
+GATEWAY_CLIENT_HEADER: Final = "x-gateway-client"
+CLAUDE_CODE_CLIENT: Final = "claude-code"
 MICROSOFT_365_COPILOT_DEFAULT_TIME_ZONE: Final = "UTC"
 GITHUB_COPILOT_PER_USER_AUTH_TYPE: Final = "per_user_oauth"
 GITHUB_COPILOT_AUTH_TYPE_KEY: Final = "github_copilot_auth_type"
@@ -391,7 +395,7 @@ DEEPGRAM_DEFAULT_API_BASE: Final = "https://api.deepgram.com/v1"
 NADIR_DEFAULT_API_BASE: Final = "https://api.getnadir.com/v1"
 DEEPGRAM_LISTEN_DEFAULT_MODEL: Final = "nova-3"
 
-BEDROCK_REALTIME_PENDING_SESSION_UPDATE_SCOPE_KEY: Final = "litellm.bedrock_realtime.pending_session_update"
+BEDROCK_REALTIME_PENDING_OPENING_MESSAGE_SCOPE_KEY: Final = "litellm.bedrock_realtime.pending_opening_message"
 BEDROCK_REALTIME_SESSION_COMMITTED_SCOPE_KEY: Final = "litellm.bedrock_realtime.session_committed"
 BEDROCK_REALTIME_COMMITTED_FAILURE_SCOPE_KEY: Final = "litellm.bedrock_realtime.committed_failure"
 BEDROCK_REALTIME_SDK_DISTRIBUTION: Final = "aws-sdk-bedrock-runtime"
@@ -1615,6 +1619,7 @@ CLOUDZERO_EXPORT_INTERVAL_MINUTES: Final = get_env_int("CLOUDZERO_EXPORT_INTERVA
 MCP_TOOL_NAME_PREFIX: Final = "mcp_tool"
 MAXIMUM_TRACEBACK_LINES_TO_LOG: Final = get_env_int("MAXIMUM_TRACEBACK_LINES_TO_LOG", 100)
 PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS: Final = 4096
+INTERNAL_CALLBACK_NAMES: Final = frozenset({"cache", "vector_store_pre_call_hook"})
 
 # Headers to control callbacks
 X_LITELLM_DISABLE_CALLBACKS: Final = "x-litellm-disable-callbacks"

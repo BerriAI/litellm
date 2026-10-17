@@ -19,7 +19,7 @@ import requests
 from pydantic import ConfigDict, JsonValue, TypeAdapter, ValidationError, model_validator
 from pydantic.types import StringConstraints
 
-from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 PI_CONFIG_DIR_ENV: Final = "PI_CODING_AGENT_DIR"
 PI_PROVIDER_NAME: Final = "litellm"
