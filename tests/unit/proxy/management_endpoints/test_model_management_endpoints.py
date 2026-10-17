@@ -3403,6 +3403,64 @@ class TestUpdateDBModelBlocked:
         assert "blocked" not in result
 
 
+class TestJsonTemporalDefault:
+    def test_raises_type_error_for_unsupported_values(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _json_temporal_default,
+        )
+
+        with pytest.raises(TypeError, match="not JSON serializable"):
+            _json_temporal_default(object())
+
+    def test_isoformats_date_and_time(self):
+        import datetime
+
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _json_temporal_default,
+        )
+
+        assert _json_temporal_default(datetime.time(9, 30)) == "09:30:00"
+        assert _json_temporal_default(datetime.date(2026, 1, 2)) == "2026-01-02"
+
+
+class TestUpdateDBModelAccessWindows:
+    """model_info.access_windows holds datetime.time values; editing a model with a
+    saved window must not 500 on json.dumps (issue #46872)."""
+
+    def test_update_db_model_serializes_access_window_times(self):
+        import datetime
+
+        from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+        from litellm.router_utils.access_windows import parse_access_windows
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo, updateDeployment
+
+        db_model = Deployment(
+            model_name="gpt-4o",
+            litellm_params=LiteLLM_Params(model="openai/gpt-4o"),
+            model_info=ModelInfo(
+                id="dep-window",
+                access_windows=(
+                    {
+                        "start": datetime.time(9, 0),
+                        "end": datetime.time(17, 0),
+                        "timezone": "America/New_York",
+                        "team_ids": ("team-1",),
+                    },
+                ),
+            ),
+        )
+
+        result = update_db_model(db_model=db_model, updated_patch=updateDeployment())
+
+        stored = json.loads(result["model_info"])
+        assert stored["access_windows"][0]["start"] == "09:00:00"
+        assert stored["access_windows"][0]["end"] == "17:00:00"
+        # the stored JSON still parses back into valid windows - no data lost
+        windows = parse_access_windows(stored)
+        assert len(windows) == 1
+        assert windows[0].start == datetime.time(9, 0)
+
+
 class TestUpdateDBModelKeepsLegacyDropParams:
     def test_partial_patch_keeps_encrypted_string_drop_params(self, monkeypatch):
         from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
