@@ -519,7 +519,7 @@ def test_anthropic_compatible_providers_receive_the_beta_only_where_the_proxy_de
         _spend_row(f"msg_{marker}")
 
 
-def test_github_copilot_messages_receive_the_derived_beta_without_the_client_header(
+def test_github_copilot_messages_forward_safeguards_without_deriving_the_beta(
     gateway: Gateway, tmp_path: Path
 ) -> None:
     marker: Final = uuid.uuid4().hex
@@ -538,7 +538,7 @@ def test_github_copilot_messages_receive_the_derived_beta_without_the_client_hea
             _assert_answered(response, marker)
             observed: Final = _only(wire)
             _expect_messages(
-                observed, target="/v1/messages", auth=("authorization", "Bearer synthetic-copilot-token"), beta=BETA
+                observed, target="/v1/messages", auth=("authorization", "Bearer synthetic-copilot-token"), beta=None
             )
             assert observed.headers.get("openai-intent") == "messages-proxy", observed.header_names
             _spend_row(f"msg_{marker}")

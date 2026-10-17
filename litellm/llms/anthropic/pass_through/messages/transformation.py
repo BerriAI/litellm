@@ -773,7 +773,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         if optional_params.get("speed") == "fast":
             beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.FAST_MODE_2026_02_01.value)
 
-        if optional_params.get("safeguards") is not None:
+        if optional_params.get("safeguards") is not None and custom_llm_provider != "github_copilot":
             beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value)
 
         if messages_carry_output_config(messages):
