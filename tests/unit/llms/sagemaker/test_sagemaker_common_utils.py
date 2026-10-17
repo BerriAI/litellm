@@ -232,6 +232,105 @@ async def test_aiter_bytes_valid_chunk_followed_by_unicode_error():
         assert chunks[0]["text"] == "hello"  # Verify the content of the valid chunk
 
 
+def _make_event_stream_message(payload: bytes, status_code: int = 200):
+    mock_event = MagicMock()
+    mock_event.to_response_dict.return_value = {
+        "status_code": status_code,
+        "headers": {},
+        "body": payload,
+    }
+    return mock_event
+
+
+def test_iter_bytes_split_multibyte_utf8():
+    """
+    Ensure AWSEventStreamDecoder.iter_bytes correctly decodes multi-byte UTF-8
+    characters split across PayloadPart chunks (Issue #46876).
+    """
+    decoder = AWSEventStreamDecoder(model="test-model")
+    payload = ("data: " + json.dumps({"token": {"text": "café"}}, ensure_ascii=False) + "\n\n").encode()
+    cut = payload.index("é".encode()) + 1
+
+    event1 = _make_event_stream_message(payload[:cut])
+    event2 = _make_event_stream_message(payload[cut:])
+
+    mock_buffer = MagicMock()
+    mock_buffer.__iter__.return_value = [event1, event2]
+
+    with patch("botocore.eventstream.EventStreamBuffer", return_value=mock_buffer):
+        chunks = [c for c in decoder.iter_bytes(iter([b""])) if c is not None]
+        assert len(chunks) == 1
+        assert chunks[0]["text"] == "café"
+
+
+@pytest.mark.asyncio
+async def test_aiter_bytes_split_multibyte_utf8():
+    """
+    Ensure AWSEventStreamDecoder.aiter_bytes correctly decodes multi-byte UTF-8
+    characters split across PayloadPart chunks (Issue #46876).
+    """
+    decoder = AWSEventStreamDecoder(model="test-model")
+    payload = ("data: " + json.dumps({"token": {"text": "café"}}, ensure_ascii=False) + "\n\n").encode()
+    cut = payload.index("é".encode()) + 1
+
+    event1 = _make_event_stream_message(payload[:cut])
+    event2 = _make_event_stream_message(payload[cut:])
+
+    mock_buffer = MagicMock()
+    mock_buffer.__iter__.return_value = [event1, event2]
+
+    with patch("botocore.eventstream.EventStreamBuffer", return_value=mock_buffer):
+        async def mock_gen():
+            yield b""
+
+        chunks = [c async for c in decoder.aiter_bytes(mock_gen()) if c is not None]
+        assert len(chunks) == 1
+        assert chunks[0]["text"] == "café"
+
+
+def test_iter_bytes_raises_on_non_200_event():
+    """
+    Ensure AWSEventStreamDecoder.iter_bytes raises ValueError when an event with non-200 status code arrives.
+    """
+    decoder = AWSEventStreamDecoder(model="test-model")
+    err_event = _make_event_stream_message(b'{"Message": "Endpoint error"}', status_code=500)
+
+    mock_buffer = MagicMock()
+    mock_buffer.__iter__.return_value = [err_event]
+
+    with (
+        patch("botocore.eventstream.EventStreamBuffer", return_value=mock_buffer),
+        pytest.raises(ValueError, match="Bad response code, expected 200"),
+    ):
+        list(decoder.iter_bytes(iter([b""])))
+
+
+@pytest.mark.asyncio
+async def test_aiter_bytes_raises_on_non_200_event():
+    """
+    Ensure AWSEventStreamDecoder.aiter_bytes raises ValueError when an event with non-200 status code arrives,
+    rather than swallowing the error and silently terminating the stream (Issue #46876).
+    """
+    decoder = AWSEventStreamDecoder(model="test-model")
+    err_event = _make_event_stream_message(b'{"Message": "Endpoint error"}', status_code=500)
+
+    mock_buffer = MagicMock()
+    mock_buffer.__iter__.return_value = [err_event]
+
+    async def mock_gen():
+        yield b""
+
+    async def consume():
+        async for _ in decoder.aiter_bytes(mock_gen()):
+            pass
+
+    with (
+        patch("botocore.eventstream.EventStreamBuffer", return_value=mock_buffer),
+        pytest.raises(ValueError, match="Bad response code, expected 200"),
+    ):
+        await consume()
+
+
 class TestSagemakerTransform:
     def setup_method(self):
         self.config = SagemakerConfig()
