@@ -479,16 +479,29 @@ async def _acompletion(
     messages: list[Mapping[str, object]],  # mutable-ok: callers pass the request message list unchanged
     tools: list[_ToolDef] | None = None,  # mutable-ok: forwarded verbatim to acompletion
     stream: bool = False,
-    team_id: str | None = None,
-    model_aliases: Mapping[str, str] | None = None,
+    user_api_key_dict: "UserAPIKeyAuth | None" = None,
 ) -> ModelResponse | CustomStreamWrapper:
+    from litellm.proxy.auth.auth_checks import key_model_aliases_for_auth_check
+    from litellm.proxy.litellm_pre_call_utils import sanitized_user_api_key_auth
     from litellm.proxy.proxy_server import llm_router
     from litellm.types.llms.openai import AllMessageValues
 
     completion_messages: Final = cast(  # cast-ok: acompletion accepts the same Mapping messages it already receives
         list[AllMessageValues], messages
     )
+    team_id: Final = user_api_key_dict.team_id if user_api_key_dict is not None else None
+    model_aliases: Final = (
+        key_model_aliases_for_auth_check(user_api_key_dict) if user_api_key_dict is not None else None
+    )
     resolved_model: Final = model_aliases.get(model, model) if model_aliases is not None else model
+    router_metadata: Final = (
+        {
+            "user_api_key_team_id": team_id,
+            "user_api_key_auth": sanitized_user_api_key_auth(user_api_key_dict),
+        }
+        if user_api_key_dict is not None
+        else {"user_api_key_team_id": team_id}
+    )
     team_model_name: Final = (
         llm_router.map_team_model(resolved_model, team_id) if llm_router is not None and team_id is not None else None
     )
@@ -508,7 +521,7 @@ async def _acompletion(
                 stream=True,
                 temperature=USAGE_AI_TEMPERATURE,
                 drop_params=True,
-                metadata={"user_api_key_team_id": team_id},
+                metadata=router_metadata,
             )
         return await llm_router.acompletion(  # pyright: ignore[reportUnknownMemberType]  # Router.acompletion overloads carry untyped **kwargs
             model=router_model,
@@ -516,7 +529,7 @@ async def _acompletion(
             tools=tools,
             temperature=USAGE_AI_TEMPERATURE,
             drop_params=True,
-            metadata={"user_api_key_team_id": team_id},
+            metadata=router_metadata,
         )
     return await litellm.acompletion(
         model=resolved_model,
@@ -668,8 +681,7 @@ async def _process_tool_call(
 async def _stream_final_response(
     model: str,
     chat_messages: list[Mapping[str, object]],
-    team_id: str | None,
-    model_aliases: Mapping[str, str] | None,
+    user_api_key_dict: "UserAPIKeyAuth | None",
 ) -> AsyncIterator[str]:
     """Stream the final LLM response after tool results are appended."""
     yield _sse({"type": "status", "message": "Analyzing results..."})
@@ -678,8 +690,7 @@ async def _stream_final_response(
         model=model,
         messages=chat_messages,
         stream=True,
-        team_id=team_id,
-        model_aliases=model_aliases,
+        user_api_key_dict=user_api_key_dict,
     )
     async for chunk in response:
         delta = chunk.choices[0].delta.content
@@ -692,8 +703,7 @@ async def stream_usage_ai_chat(
     model: str | None = None,
     user_id: str | None = None,
     is_admin: bool = False,
-    team_id: str | None = None,
-    model_aliases: Mapping[str, str] | None = None,
+    user_api_key_dict: "UserAPIKeyAuth | None" = None,
 ) -> AsyncGenerator[str, None]:
     """Stream SSE events: status → tool_call → chunk → done."""
     resolved_model: Final = _resolve_model(model)
@@ -710,8 +720,7 @@ async def stream_usage_ai_chat(
             model=resolved_model,
             messages=chat_messages,
             tools=tools,
-            team_id=team_id,
-            model_aliases=model_aliases,
+            user_api_key_dict=user_api_key_dict,
         )
         choice: Final = response.choices[0]
 
@@ -725,7 +734,7 @@ async def stream_usage_ai_chat(
         for tc in choice.message.tool_calls:
             async for event in _process_tool_call(tc, chat_messages, user_id, is_admin):
                 yield event
-        async for event in _stream_final_response(resolved_model, chat_messages, team_id, model_aliases):
+        async for event in _stream_final_response(resolved_model, chat_messages, user_api_key_dict):
             yield event
         yield _sse({"type": "done"})
 

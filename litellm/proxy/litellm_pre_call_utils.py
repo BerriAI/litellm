@@ -1349,6 +1349,17 @@ def redact_credential_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
     }
 
 
+def sanitized_user_api_key_auth(user_api_key_dict: UserAPIKeyAuth) -> UserAPIKeyAuth:
+    return user_api_key_dict.model_copy(
+        update={
+            "metadata": strip_callback_config(user_api_key_dict.metadata),
+            "team_metadata": strip_callback_config(user_api_key_dict.team_metadata),
+            "project_metadata": strip_callback_config(user_api_key_dict.project_metadata),
+            "organization_metadata": strip_callback_config(user_api_key_dict.organization_metadata),
+        }
+    )
+
+
 class LiteLLMProxyRequestSetup:
     @staticmethod
     def _get_timeout_from_request(headers: dict) -> float | None:
@@ -1824,14 +1835,7 @@ class LiteLLMProxyRequestSetup:
                 user_api_key_dict.matched_model_access_groups
             )
         # UserAPIKeyAuth object for MCP server access control
-        data[_metadata_variable_name]["user_api_key_auth"] = user_api_key_dict.model_copy(
-            update={
-                "metadata": strip_callback_config(user_api_key_dict.metadata),
-                "team_metadata": strip_callback_config(user_api_key_dict.team_metadata),
-                "project_metadata": strip_callback_config(user_api_key_dict.project_metadata),
-                "organization_metadata": strip_callback_config(user_api_key_dict.organization_metadata),
-            }
-        )
+        data[_metadata_variable_name]["user_api_key_auth"] = sanitized_user_api_key_auth(user_api_key_dict)
         return data
 
     @staticmethod

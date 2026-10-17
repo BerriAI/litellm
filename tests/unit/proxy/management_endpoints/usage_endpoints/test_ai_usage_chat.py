@@ -1155,6 +1155,7 @@ class TestUsageAiChatModelAccess:
 class TestUsageAiChatTeamModelRouting:
     @pytest.mark.asyncio
     async def test_team_public_model_name_routes_through_router(self):
+        from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat import (
             _acompletion,
         )
@@ -1188,7 +1189,7 @@ class TestUsageAiChatTeamModelRouting:
             result: Final = await _acompletion(
                 model="my-team-model",
                 messages=[{"role": "user", "content": "hi"}],
-                team_id="team-a",
+                user_api_key_dict=UserAPIKeyAuth(team_id="team-a"),
             )
 
         assert result is expected_response
@@ -1200,6 +1201,7 @@ class TestUsageAiChatTeamModelRouting:
 
     @pytest.mark.asyncio
     async def test_team_public_model_name_without_team_id_uses_litellm(self):
+        from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat import (
             _acompletion,
         )
@@ -1233,6 +1235,7 @@ class TestUsageAiChatTeamModelRouting:
             result: Final = await _acompletion(
                 model="my-team-model",
                 messages=[{"role": "user", "content": "hi"}],
+                user_api_key_dict=UserAPIKeyAuth(),
             )
 
         assert result is expected_response
@@ -1241,6 +1244,7 @@ class TestUsageAiChatTeamModelRouting:
 
     @pytest.mark.asyncio
     async def test_key_alias_resolves_to_router_model(self):
+        from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat import (
             _acompletion,
         )
@@ -1270,12 +1274,60 @@ class TestUsageAiChatTeamModelRouting:
             result: Final = await _acompletion(
                 model="my-alias",
                 messages=[{"role": "user", "content": "hi"}],
-                model_aliases={"my-alias": "gpt-4o-mini"},
+                user_api_key_dict=UserAPIKeyAuth(aliases={"my-alias": "gpt-4o-mini"}),
             )
 
         assert result is expected_response
         router.acompletion.assert_awaited_once()
         assert router.acompletion.await_args.kwargs["model"] == "gpt-4o-mini"
+        mock_litellm_acompletion.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_router_calls_receive_sanitized_caller_auth_for_access_group_filtering(self):
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat import (
+            _acompletion,
+        )
+        from litellm.router import Router
+
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "shared-model",
+                    "litellm_params": {"model": "gpt-4o", "api_key": "sk-dummy"},
+                    "model_info": {"access_groups": ["AG-A"]},
+                },
+                {
+                    "model_name": "shared-model",
+                    "litellm_params": {"model": "gpt-4o-mini", "api_key": "sk-dummy"},
+                    "model_info": {"access_groups": ["AG-B"]},
+                },
+            ]
+        )
+        expected_response: Final = MagicMock()
+        router.acompletion = AsyncMock(return_value=expected_response)
+        mock_litellm_acompletion = AsyncMock(return_value=MagicMock())
+
+        with (
+            patch(  # test-quality-ok: _acompletion reads the proxy_server.llm_router module global; no injection seam
+                "litellm.proxy.proxy_server.llm_router", router
+            ),
+            patch(  # test-quality-ok: _acompletion calls the module-level litellm.acompletion directly; no injection seam
+                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm.acompletion",
+                new=mock_litellm_acompletion,
+            ),
+        ):
+            result: Final = await _acompletion(
+                model="shared-model",
+                messages=[{"role": "user", "content": "hi"}],
+                user_api_key_dict=UserAPIKeyAuth(models=["AG-A"], api_key="sk-test"),
+            )
+
+        assert result is expected_response
+        router.acompletion.assert_awaited_once()
+        forwarded_auth: Final = router.acompletion.await_args.kwargs["metadata"]["user_api_key_auth"]
+        assert forwarded_auth.models == ["AG-A"]
+        assert router.acompletion.await_args.kwargs["metadata"]["user_api_key_team_id"] is None
         mock_litellm_acompletion.assert_not_called()
 
 
