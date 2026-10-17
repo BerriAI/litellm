@@ -34,7 +34,9 @@ const exactly = (text: string): RegExp => new RegExp(`^${text.replace(/[.*+?^${}
  * searchable combobox: it only opens on click, typing filters the list, and the
  * option has to be picked explicitly because nothing is highlighted by default.
  * Options are matched on their visible text, not their accessible name, which
- * also carries the provider logo's alt text ("Anthropic logo Anthropic").
+ * also carries the provider logo's alt text ("Anthropic logo Anthropic"). The
+ * name is matched on the option's own label element, because an option can also
+ * carry a sublabel line, and matching the whole option would read both.
  */
 async function selectProvider(page: PlaywrightPage, providerName: string) {
   const providerDropdown = page.getByRole("combobox", { name: "Provider", exact: true });
@@ -42,7 +44,7 @@ async function selectProvider(page: PlaywrightPage, providerName: string) {
   await providerDropdown.fill(providerName);
   await page
     .getByRole("option")
-    .filter({ hasText: exactly(providerName) })
+    .filter({ has: page.getByText(exactly(providerName)) })
     .click();
   await expect(providerDropdown).toHaveValue(providerName);
 }
