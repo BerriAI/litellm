@@ -306,12 +306,29 @@ impl Finish {
         }
     }
 
-    fn usage(&self) -> Option<Usage> {
-        match &self.meter {
-            Meter::Off => None,
-            Meter::Stream(meter) => meter.usage(),
-            Meter::Body(chunks) => body_usage(self.route, &chunks.concat()),
-        }
+    /// The usage the response reported, with its cost when the deployment is priced by the
+    /// model its response names, which only a chat completion carries.
+    fn usage_and_cost(&self) -> (Option<Usage>, Option<f64>) {
+        let by_model = self.pipeline.prices().prices_by_response_model()
+            && self.route == Route::ChatCompletions;
+        let (usage, model) = match &self.meter {
+            Meter::Off => (None, None),
+            Meter::Stream(meter) => (meter.usage(), meter.model().map(str::to_owned)),
+            Meter::Body(chunks) => {
+                let body = chunks.concat();
+                let model = by_model.then(|| body_model(&body)).flatten();
+                (body_usage(self.route, &body), model)
+            }
+        };
+        let cost = by_model
+            .then_some(())
+            .zip(self.deployment.as_ref().zip(usage.as_ref()))
+            .and_then(|((), (deployment, usage))| {
+                self.pipeline
+                    .prices()
+                    .response_cost(&deployment.id, model.as_deref(), usage)
+            });
+        (usage, cost)
     }
 }
 
@@ -320,11 +337,12 @@ impl Drop for Finish {
         let Some(admission) = self.admission.take() else {
             return;
         };
+        let (usage, cost) = self.usage_and_cost();
         let outcome = Outcome {
             deployment: self.deployment.take(),
             status: self.status,
-            usage: self.usage(),
-            cost: None,
+            usage,
+            cost,
             time_to_first_byte: self.first_byte,
             upstream_started_at: self.upstream_started_at,
             ended_at: SystemTime::now(),
@@ -348,6 +366,17 @@ fn body_usage(route: Route, body: &[u8]) -> Option<Usage> {
         Route::Messages => Usage::from_anthropic(&value),
         Route::ChatCompletions => Usage::from_openai(&value),
     }
+}
+
+/// The `model` a complete chat completion names, found by its first key like [`body_usage`].
+fn body_model(body: &[u8]) -> Option<String> {
+    const KEY: &[u8] = b"\"model\":";
+    let start = memchr::memmem::find(body, KEY)? + KEY.len();
+    serde_json::Deserializer::from_slice(&body[start..])
+        .into_iter::<String>()
+        .next()?
+        .ok()
+        .filter(|model| !model.is_empty())
 }
 
 struct Tapped {
@@ -400,5 +429,17 @@ mod tests {
         let usage =
             body_usage(Route::ChatCompletions, &serde_json::to_vec(&chat).unwrap()).unwrap();
         assert_eq!((usage.prompt_tokens(), usage.output_tokens), (5, 6));
+    }
+
+    #[rstest]
+    #[case::top_level(
+        br#"{"id":"c","model":"gpt-4o-2024-11-20","choices":[]}"#,
+        Some("gpt-4o-2024-11-20")
+    )]
+    #[case::spaced(br#"{"model": "gpt-4o", "choices":[]}"#, Some("gpt-4o"))]
+    #[case::inside_content(br#"{"choices":[{"message":{"content":"\"model\":\"x\""}}]}"#, None)]
+    #[case::empty(br#"{"model":"","choices":[]}"#, None)]
+    fn body_model_reads_the_response_model(#[case] body: &[u8], #[case] expected: Option<&str>) {
+        assert_eq!(body_model(body).as_deref(), expected);
     }
 }

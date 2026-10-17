@@ -47,6 +47,7 @@ fn call(extra: Value) -> OpenAiChatCall {
         custom_llm_provider: None,
         extra_headers: None,
         timeout: Some(Duration::from_secs(60)),
+        ..OpenAiChatCall::default()
     }
 }
 

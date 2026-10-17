@@ -174,6 +174,24 @@ fn split(mut body: Map<String, Value>) -> (Value, Map<String, Value>) {
     (messages, body)
 }
 
+/// The deployment's `litellm_params` a provider reads beyond its connection: its
+/// `api_version`, `base_model` and every key the config adds.
+fn provider_params(deployment: &Deployment) -> Map<String, Value> {
+    let params = &deployment.litellm_params;
+    let mut provider_params: Map<String, Value> = params
+        .extra
+        .iter()
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .collect();
+    if let Some(api_version) = &params.api_version {
+        provider_params.insert("api_version".into(), api_version.clone().into());
+    }
+    if let Some(base_model) = &deployment.base_model {
+        provider_params.insert("base_model".into(), base_model.clone().into());
+    }
+    provider_params
+}
+
 async fn openai(
     gateway: &Gateway,
     deployment: &Deployment,
@@ -189,6 +207,14 @@ async fn openai(
             custom_llm_provider: deployment.custom_llm_provider.clone(),
             extra_headers,
             timeout: deployment.timeout,
+            litellm_params: provider_params(deployment),
+            drop_params: gateway.drop_params()
+                || deployment
+                    .litellm_params
+                    .drop_params
+                    .as_ref()
+                    .is_some_and(|flag| flag.is_set()),
+            model_info: gateway.model_info(),
         },
         None,
     );
