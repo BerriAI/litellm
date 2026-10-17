@@ -15,6 +15,7 @@ from unittest.mock import MagicMock, patch
 
 import boto3
 import httpx
+import openai
 import pytest
 import respx
 from botocore.credentials import Credentials
@@ -28,6 +29,7 @@ from litellm.rust_bridge import configuration
 from litellm.types.utils import AdapterCompletionStreamWrapper, ModelResponse
 from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
 from tests.unit.llms.bedrock.slow_upstream import (
+    CONVERSE_ANSWER,
     STREAM_TIMEOUT_SECONDS,
     UPSTREAM_FIRST_BYTE_SECONDS,
     slow_upstream_answer,
@@ -311,14 +313,6 @@ def test_sync_converse_streaming_fails_at_the_request_timeout_not_the_upstreams_
         litellm.completion(client=slow_upstream_sync_client(), **_converse_streaming_kwargs())
 
 
-_CONVERSE_ANSWER: Final = json.dumps(
-    {
-        "output": {"message": {"role": "assistant", "content": [{"text": "hi"}]}},
-        "stopReason": "end_turn",
-        "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
-        "metrics": {"latencyMs": 1},
-    }
-).encode()
 
 _FAKE_STREAMED_REQUESTS: Final = pytest.mark.parametrize(
     ("model", "request_params"),
@@ -375,7 +369,7 @@ def test_sync_fake_stream_is_bounded_by_the_request_timeout_not_the_stream_timeo
         model="bedrock",
         messages=[{"role": "user", "content": "hi"}],
         stream=True,
-        client=slow_upstream_sync_client(_CONVERSE_ANSWER),
+        client=slow_upstream_sync_client(CONVERSE_ANSWER),
         **request_params,
     )
 
@@ -392,7 +386,7 @@ async def test_async_fake_stream_is_bounded_by_the_request_timeout_not_the_strea
         model="bedrock",
         messages=[{"role": "user", "content": "hi"}],
         stream=True,
-        client=slow_upstream_async_client(_CONVERSE_ANSWER),
+        client=slow_upstream_async_client(CONVERSE_ANSWER),
         **request_params,
     )
 
@@ -410,7 +404,7 @@ async def test_fake_stream_keeps_a_stream_timeout_longer_than_the_request_timeou
         model="bedrock",
         messages=[{"role": "user", "content": "hi"}],
         stream=True,
-        client=slow_upstream_async_client(_CONVERSE_ANSWER),
+        client=slow_upstream_async_client(CONVERSE_ANSWER),
     )
 
     assert "".join([chunk.choices[0].delta.content or "" async for chunk in response]) == "hi"
@@ -450,7 +444,7 @@ async def test_fake_stream_on_each_router_surface_is_bounded_by_the_request_time
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    respx_mock.post(url__regex=_BEDROCK_RUNTIME_URL).mock(side_effect=slow_upstream_answer(_CONVERSE_ANSWER))
+    respx_mock.post(url__regex=_BEDROCK_RUNTIME_URL).mock(side_effect=slow_upstream_answer(CONVERSE_ANSWER))
     router: Final = _router_with_a_stream_timeout_shorter_than_the_upstreams_first_byte(
         "bedrock/converse/ai21.jamba-1-5-large-v1:0"
     )
@@ -472,7 +466,7 @@ async def test_fake_stream_through_a_router_adapter_is_bounded_by_the_request_ti
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setattr(litellm, "adapters", [{"id": "chat", "adapter": _ChatCompletionAdapter()}])
-    respx_mock.post(url__regex=_BEDROCK_RUNTIME_URL).mock(side_effect=slow_upstream_answer(_CONVERSE_ANSWER))
+    respx_mock.post(url__regex=_BEDROCK_RUNTIME_URL).mock(side_effect=slow_upstream_answer(CONVERSE_ANSWER))
     router: Final = _router_with_a_stream_timeout_shorter_than_the_upstreams_first_byte(
         "bedrock/converse/ai21.jamba-1-5-large-v1:0"
     )
@@ -500,7 +494,7 @@ async def test_live_anthropic_messages_stream_through_the_router_fails_at_the_st
 
     with pytest.raises(litellm.Timeout) as excinfo:
         await _anthropic_messages_text(router)
-    assert excinfo.value.timeout == STREAM_TIMEOUT_SECONDS
+    assert getattr(excinfo.value, "timeout", None) == STREAM_TIMEOUT_SECONDS
 
 
 def test_sync_live_stream_through_the_router_fails_at_the_stream_timeout() -> None:
@@ -522,7 +516,7 @@ async def test_async_live_stream_through_the_router_fails_at_the_stream_timeout(
         await router.acompletion(
             model="bedrock", messages=[{"role": "user", "content": "hi"}], stream=True, client=slow_upstream_async_client()
         )
-    assert excinfo.value.timeout == STREAM_TIMEOUT_SECONDS
+    assert getattr(excinfo.value, "timeout", None) == STREAM_TIMEOUT_SECONDS
 
 
 @pytest.mark.asyncio
@@ -536,10 +530,41 @@ async def test_failed_fake_stream_reports_the_request_timeout_it_was_bounded_by(
             model="bedrock",
             messages=[{"role": "user", "content": "hi"}],
             stream=True,
-            client=slow_upstream_async_client(_CONVERSE_ANSWER),
+            client=slow_upstream_async_client(CONVERSE_ANSWER),
         )
-    assert excinfo.value.timeout == request_timeout
+    assert getattr(excinfo.value, "timeout", None) == request_timeout
 
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stream_text",
+    [_text_completion_text, _anthropic_messages_text, _responses_text],
+    ids=["text_completion", "anthropic_messages", "responses"],
+)
+@pytest.mark.parametrize(
+    ("model", "upstream_answer", "bounding_timeout"),
+    [
+        ("bedrock/converse/ai21.jamba-1-5-large-v1:0", CONVERSE_ANSWER, UPSTREAM_FIRST_BYTE_SECONDS / 2),
+        ("bedrock/anthropic.claude-sonnet-4-5-v1:0", b"", STREAM_TIMEOUT_SECONDS),
+    ],
+    ids=["fake_stream", "live_stream"],
+)
+async def test_failed_stream_on_each_router_surface_reports_the_timeout_it_was_bounded_by(
+    stream_text: Callable[[litellm.Router], Awaitable[str]],
+    model: str,
+    upstream_answer: bytes,
+    bounding_timeout: float,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post(url__regex=_BEDROCK_RUNTIME_URL).mock(side_effect=slow_upstream_answer(upstream_answer))
+    router: Final = _bedrock_router(model, timeout=UPSTREAM_FIRST_BYTE_SECONDS / 2, stream_timeout=STREAM_TIMEOUT_SECONDS)
+
+    with pytest.raises(openai.APIError) as excinfo:
+        await stream_text(router)
+    assert getattr(excinfo.value, "timeout", None) == bounding_timeout
 
 RECORDED_REASONING: Final = "Tokyo proper has about 14 million people."
 RECORDED_THINKING_TOKENS: Final = 309

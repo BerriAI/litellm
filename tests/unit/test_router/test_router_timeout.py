@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from datetime import datetime, timedelta
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Final
 from unittest.mock import AsyncMock, Mock
 
@@ -13,11 +15,15 @@ import respx
 
 import litellm
 from litellm import Router
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+from litellm.router_utils.cooldown_handlers import is_caller_timeout_408
+from litellm.types.llms.openai import AllMessageValues
 import time
 from unittest.mock import patch, MagicMock
 
 from tests.unit.llms.bedrock.slow_upstream import (
+    CONVERSE_ANSWER,
     STREAM_TIMEOUT_SECONDS,
     UPSTREAM_FIRST_BYTE_SECONDS,
     slow_upstream_answer,
@@ -191,7 +197,7 @@ async def test_prompt_managed_stream_keeps_the_target_deployments_own_stream_tim
         stream_timeout=UPSTREAM_FIRST_BYTE_SECONDS * 2,
         num_retries=0,
     )
-    messages: Final = [{"role": "user", "content": "hi"}]
+    messages: Final[list[AllMessageValues]] = [{"role": "user", "content": "hi"}]
 
     with pytest.raises(litellm.Timeout):
         await router.acompletion(
@@ -204,12 +210,130 @@ async def test_prompt_managed_stream_keeps_the_target_deployments_own_stream_tim
                 messages=messages,
                 stream=True,
                 call_type="acompletion",
-                start_time=time.time(),
+                start_time=datetime.now(),
                 litellm_call_id="prompt-managed-stream",
                 function_id="f",
             ),
         )
 
+
+
+@pytest.mark.asyncio
+async def test_prompt_managed_fake_stream_keeps_the_target_deployments_own_timeout() -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "jamba-agent",
+                "litellm_params": {"model": "litellm_agent/jamba-target"},
+            },
+            {
+                "model_name": "jamba-target",
+                "litellm_params": {
+                    "model": "bedrock/converse/ai21.jamba-1-5-large-v1:0",
+                    "aws_access_key_id": "fake",
+                    "aws_secret_access_key": "fake",
+                    "aws_region_name": "us-east-1",
+                    "timeout": UPSTREAM_FIRST_BYTE_SECONDS * 2,
+                },
+            },
+        ],
+        timeout=STREAM_TIMEOUT_SECONDS,
+        stream_timeout=STREAM_TIMEOUT_SECONDS,
+        num_retries=0,
+    )
+    messages: Final[list[AllMessageValues]] = [{"role": "user", "content": "hi"}]
+
+    response: Final = await router.acompletion(
+        model="jamba-agent",
+        messages=messages,
+        stream=True,
+        client=slow_upstream_async_client(CONVERSE_ANSWER),
+        litellm_logging_obj=LiteLLMLogging(
+            model="jamba-agent",
+            messages=messages,
+            stream=True,
+            call_type="acompletion",
+            start_time=datetime.now(),
+            litellm_call_id="prompt-managed-fake-stream",
+            function_id="f",
+        ),
+    )
+
+    assert isinstance(response, litellm.CustomStreamWrapper)
+    assert "".join([chunk.choices[0].delta.content or "" async for chunk in response]) == "hi"
+
+
+class _FailureDetails(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged: Final = asyncio.Event()
+        self.details: Mapping[str, object] = {}
+
+    async def async_log_failure_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.details = kwargs
+        self.logged.set()
+
+
+async def _drain_messages_stream(router: Router) -> None:
+    response: Final = await router.aanthropic_messages(
+        model="native", messages=[{"role": "user", "content": "hi"}], max_tokens=10, stream=True, client_side_timeout=True
+    )
+    _ = [chunk async for chunk in response]
+
+
+async def _drain_native_responses_stream(router: Router) -> None:
+    response: Final = await router.aresponses(model="native", input="hi", stream=True, client_side_timeout=True)
+    _ = [event async for event in response]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "drain"),
+    [
+        ("bedrock/invoke/anthropic.claude-sonnet-4-5-v1:0", _drain_messages_stream),
+        ("openai/gpt-4.1", _drain_native_responses_stream),
+    ],
+    ids=["anthropic_messages", "responses"],
+)
+async def test_native_live_stream_cut_at_the_stream_timeout_is_not_blamed_on_the_deployment(
+    model: str,
+    drain: Callable[[Router], Awaitable[None]],
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    failure_details: Final = _FailureDetails()
+    monkeypatch.setattr(litellm, "callbacks", [failure_details])
+    respx_mock.post(url__regex=r"https://(bedrock-runtime\.us-east-1\.amazonaws\.com|api\.openai\.com)/.*").mock(
+        side_effect=slow_upstream_answer()
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "native",
+                "litellm_params": {
+                    "model": model,
+                    "api_key": "fake",
+                    "aws_access_key_id": "fake",
+                    "aws_secret_access_key": "fake",
+                    "aws_region_name": "us-east-1",
+                },
+            }
+        ],
+        timeout=UPSTREAM_FIRST_BYTE_SECONDS * 2,
+        stream_timeout=STREAM_TIMEOUT_SECONDS,
+        num_retries=0,
+    )
+
+    with pytest.raises(litellm.Timeout):
+        await drain(router)
+    await asyncio.wait_for(failure_details.logged.wait(), timeout=10)
+
+    started: Final = failure_details.details.get("api_call_start_time")
+    assert isinstance(started, datetime)
+    assert is_caller_timeout_408(failure_details.details, 408, ended=started + timedelta(seconds=STREAM_TIMEOUT_SECONDS))
 
 @pytest.mark.asyncio
 async def test_bedrock_timeout_preserves_the_provider_timeout_error(

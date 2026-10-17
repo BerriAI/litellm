@@ -5767,6 +5767,7 @@ def completion(
             supports_httpx_timeout=supports_httpx_timeout,
             stream_kind=stream_kind,
         )
+        logging.record_applied_timeout(timeout)
         processed_non_default_params: Final = pre_process_non_default_params(
             model=model,
             passed_params=optional_param_args,

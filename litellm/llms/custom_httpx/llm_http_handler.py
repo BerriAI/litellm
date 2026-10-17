@@ -2349,6 +2349,13 @@ class BaseLLMHTTPHandler:
             },
         )
 
+        applied_timeout: Final = self._resolve_anthropic_messages_timeout(
+            litellm_params=litellm_params,
+            stream=stream or False,
+            custom_llm_provider=custom_llm_provider,
+        )
+        if applied_timeout is not None:
+            logging_obj.record_applied_timeout(applied_timeout)
         response: Final = await self._async_post_anthropic_messages_with_http_error_retry(
             async_httpx_client=async_httpx_client,
             request_url=request_url,
@@ -2361,11 +2368,7 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             api_key=api_key,
             model=model,
-            timeout=self._resolve_anthropic_messages_timeout(
-                litellm_params=litellm_params,
-                stream=stream or False,
-                custom_llm_provider=custom_llm_provider,
-            ),
+            timeout=applied_timeout,
         )
 
         # used for logging + cost tracking

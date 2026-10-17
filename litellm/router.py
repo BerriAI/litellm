@@ -5117,6 +5117,7 @@ class Router:
                 }
             )
         litellm_logging_object = cast(LiteLLMLogging, litellm_logging_object)
+        caller_timeout: Final = kwargs.get("timeout")
         caller_stream_timeout: Final = kwargs.get("stream_timeout")
         specific_deployment: Final = kwargs.pop("specific_deployment", None)
         prompt_management_deployment: Final = await self.async_get_available_deployment(
@@ -5190,12 +5191,20 @@ class Router:
             kwargs.pop("original_function")
             return await litellm.acompletion(**kwargs)
 
-        target_group_stream_timeout: Final = (
-            caller_stream_timeout if caller_stream_timeout is not None else filtered_data.get("stream_timeout")
-        )
+        target_group_timeouts: Final = {
+            key: value
+            for key, value in (
+                ("timeout", caller_timeout if caller_timeout is not None else filtered_data.get("timeout")),
+                (
+                    "stream_timeout",
+                    caller_stream_timeout if caller_stream_timeout is not None else filtered_data.get("stream_timeout"),
+                ),
+            )
+            if value is not None
+        }
         return await self.async_function_with_fallbacks(
-            **{key: value for key, value in kwargs.items() if key != "stream_timeout"},
-            **({"stream_timeout": target_group_stream_timeout} if target_group_stream_timeout is not None else {}),
+            **{key: value for key, value in kwargs.items() if key not in ("timeout", "stream_timeout")},
+            **target_group_timeouts,
         )
 
     def image_generation(self, prompt: str, model: str, **kwargs):
