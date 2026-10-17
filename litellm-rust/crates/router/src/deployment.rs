@@ -18,6 +18,9 @@ pub struct Deployment {
     /// `model_info.team_id`: the team that owns this deployment, which only that team's keys
     /// may use. `None` for a deployment every caller shares.
     pub team_id: Option<String>,
+    /// `model_info.id`, which names the deployment in state shared with other replicas and
+    /// with Python routers on the same Redis.
+    pub id: Option<String>,
 }
 
 impl Deployment {
@@ -42,6 +45,7 @@ impl Deployment {
             litellm_params: params.clone(),
             shaping: MessagesShaping::default(),
             team_id: None,
+            id: None,
         })
     }
 

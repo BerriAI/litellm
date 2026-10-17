@@ -3,8 +3,14 @@ mod error;
 mod group;
 mod health;
 mod policy;
+mod shared;
 
-use std::{collections::HashMap, time::Instant};
+use std::{
+    collections::HashMap,
+    fmt,
+    sync::{Arc, OnceLock},
+    time::{Duration, Instant},
+};
 
 use litellm_config::{Config, Model};
 
@@ -13,15 +19,30 @@ pub use error::Error;
 pub use group::ModelGroup;
 pub use health::{Failure, InFlight};
 pub use policy::{CooldownPolicy, RoutingPolicy, RoutingStrategy};
+pub use shared::{CountFuture, SharedHealth};
 
 use group::Member;
+use health::Health;
 
 /// The model groups of a config and the health of each deployment in them.
-#[derive(Debug)]
 pub struct Router {
     groups: HashMap<String, ModelGroup>,
+    /// Every deployment's shared-state id and health, in a fixed order.
+    deployments: Box<[(Box<str>, Arc<Health>)]>,
+    shared: OnceLock<Arc<dyn SharedHealth>>,
     policy: RoutingPolicy,
     epoch: Instant,
+}
+
+impl fmt::Debug for Router {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Router")
+            .field("groups", &self.groups)
+            .field("policy", &self.policy)
+            .field("shared", &self.shared.get().is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 impl Default for Router {
@@ -63,6 +84,7 @@ impl Router {
                     Deployment {
                         timeout: deployment.timeout.or(policy.timeout),
                         team_id: owner_team(model),
+                        id: model_id(model),
                         ..deployment
                     },
                 ))
@@ -76,22 +98,57 @@ impl Router {
         policy: RoutingPolicy,
     ) -> Self {
         let mut members: HashMap<String, Vec<Member>> = HashMap::new();
-        for (name, deployment) in deployments {
-            members
-                .entry(name)
-                .or_default()
-                .push(Member::new(deployment));
+        let mut order = Vec::new();
+        for (position, (name, deployment)) in deployments.into_iter().enumerate() {
+            let id = match &deployment.id {
+                Some(id) => id.as_str().into(),
+                None => derived_id(&name, position, &deployment),
+            };
+            let group = members.entry(name.clone()).or_default();
+            order.push((name, group.len()));
+            group.push(Member::new(id, deployment));
         }
+        let groups: HashMap<String, ModelGroup> = members
+            .into_iter()
+            .map(|(name, members)| {
+                let group = ModelGroup::new(name.as_str().into(), members.into());
+                (name, group)
+            })
+            .collect();
+        let deployments = order
+            .into_iter()
+            .map(|(name, index)| {
+                let member = groups[&name].member(index);
+                (member.id.clone(), member.health.clone())
+            })
+            .collect();
         Self {
-            groups: members
-                .into_iter()
-                .map(|(name, members)| {
-                    let group = ModelGroup::new(name.as_str().into(), members.into());
-                    (name, group)
-                })
-                .collect(),
+            groups,
+            deployments,
+            shared: OnceLock::new(),
             policy,
             epoch: Instant::now(),
+        }
+    }
+
+    /// Shares cooldowns, and `allowed_fails` counts, with other replicas through `shared`.
+    /// Only the first call takes effect.
+    pub fn share_health(&self, shared: Arc<dyn SharedHealth>) {
+        let _ = self.shared.set(shared);
+    }
+
+    /// Every deployment's id in shared state, in config order; [`Router::cool_down`] takes a
+    /// position in it.
+    pub fn deployment_ids(&self) -> impl ExactSizeIterator<Item = &str> {
+        self.deployments.iter().map(|(id, _)| &**id)
+    }
+
+    /// Cools the deployment at `position` of [`Router::deployment_ids`] for `remaining`, as
+    /// another replica reported; a longer cooldown already running here is kept.
+    pub fn cool_down(&self, position: usize, remaining: Duration) {
+        if let Some((_, health)) = self.deployments.get(position) {
+            let remaining = u64::try_from(remaining.as_millis()).unwrap_or(u64::MAX);
+            health.cool_until(self.now().saturating_add(remaining));
         }
     }
 
@@ -206,12 +263,25 @@ impl Router {
             let Some(failure) = classify(&error) else {
                 return Err(error);
             };
+            let shared = self.shared.get();
+            let fleet_failures = match (shared, self.policy.cooldown.allowed_fails) {
+                (Some(shared), Some(_)) => {
+                    shared
+                        .count_failure(&member.id, self.policy.cooldown.window())
+                        .await
+                }
+                _ => None,
+            };
             if member.health.record_failure(
                 self.now(),
                 failure,
                 &self.policy.cooldown,
                 group.len() > 1,
+                fleet_failures,
             ) {
+                if let Some(shared) = shared {
+                    shared.cooled(&member.id, self.policy.cooldown.cooldown_time, failure);
+                }
                 tracing::warn!(
                     model_group = group.name(),
                     deployment = index,
@@ -239,6 +309,38 @@ impl Router {
     fn now(&self) -> u64 {
         u64::try_from(self.epoch.elapsed().as_millis()).unwrap_or(u64::MAX)
     }
+}
+
+/// `model_info.id` when it is a string or a number, as Python reads it.
+fn model_id(model: &Model) -> Option<String> {
+    match model.model_info.get("id")? {
+        litellm_config::Value::String(id) if !id.is_empty() => Some(id.clone()),
+        litellm_config::Value::Number(id) => Some(id.to_string()),
+        _ => None,
+    }
+}
+
+/// An id for a deployment without `model_info.id`, the same on every replica that loads the
+/// same config and different when the deployment's group, place or target changes.
+fn derived_id(group: &str, position: usize, deployment: &Deployment) -> Box<str> {
+    use sha2::{Digest, Sha256};
+
+    let mut hash = Sha256::new();
+    for part in [
+        group,
+        &position.to_string(),
+        &deployment.model,
+        deployment.api_base.as_deref().unwrap_or_default(),
+    ] {
+        hash.update(part.as_bytes());
+        hash.update([0]);
+    }
+    let digest = hash.finalize();
+    let hex: String = digest[..16]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    format!("gateway-{hex}").into()
 }
 
 /// The indices of the deployments in `group` that `usable` rejects.
@@ -527,6 +629,85 @@ mod tests {
 
         assert_eq!(tried, vec![("good".to_owned(), false)]);
         assert!(result.is_ok());
+    }
+
+    #[derive(Default)]
+    struct Fleet {
+        cooled: std::sync::Mutex<Vec<(String, Duration)>>,
+        failures: Option<u32>,
+    }
+
+    impl SharedHealth for Fleet {
+        fn cooled(&self, deployment: &str, cooldown: Duration, _: Failure) {
+            self.cooled
+                .lock()
+                .unwrap()
+                .push((deployment.to_owned(), cooldown));
+        }
+
+        fn count_failure<'a>(&'a self, _: &'a str, _: Duration) -> CountFuture<'a> {
+            Box::pin(async move { self.failures })
+        }
+    }
+
+    fn cooling_after(allowed_fails: u32) -> RoutingPolicy {
+        RoutingPolicy {
+            cooldown: CooldownPolicy {
+                allowed_fails: Some(allowed_fails),
+                cooldown_time: Duration::from_secs(60),
+            },
+            ..retries(0)
+        }
+    }
+
+    #[rstest]
+    #[case::fleet_over_allowed(Some(3), true)]
+    #[case::fleet_within_allowed(Some(1), false)]
+    #[case::fleet_unavailable(None, false)]
+    #[tokio::test]
+    async fn allowed_fails_counts_failures_across_replicas(
+        #[case] failures: Option<u32>,
+        #[case] cools: bool,
+    ) {
+        let router = router(&["a"], cooling_after(2));
+        let fleet = Arc::new(Fleet {
+            failures,
+            ..Fleet::default()
+        });
+        router.share_health(fleet.clone());
+
+        let _ = send(&router, |_| Err(Some(Failure::Unavailable))).await;
+
+        let id = router.deployment_ids().next().unwrap().to_owned();
+        let expected = cools.then(|| (id, Duration::from_secs(60)));
+        assert_eq!(fleet.cooled.lock().unwrap().first().cloned(), expected);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_cooldown_from_another_replica_is_skipped_here() {
+        let router = router(&["a", "b"], retries(0));
+        router.cool_down(0, Duration::from_secs(60));
+
+        for _ in 0..20 {
+            let (tried, _) = send(&router, |_| Ok("served")).await;
+            assert_eq!(tried[0].0, "b");
+        }
+    }
+
+    #[rstest]
+    fn deployments_are_named_by_model_info_id_or_a_stable_derived_id() {
+        let yaml = "model_list:\n  - {model_name: m, litellm_params: {model: openai/a}, model_info: {id: shared-a}}\n  - {model_name: m, litellm_params: {model: openai/b}}\n  - {model_name: n, litellm_params: {model: openai/b}}\n";
+        let ids = |yaml: &str| -> Vec<String> {
+            let router = Router::from_config(&Config::from_yaml(yaml).unwrap()).unwrap();
+            router.deployment_ids().map(str::to_owned).collect()
+        };
+
+        let first = ids(yaml);
+        assert_eq!(first[0], "shared-a");
+        assert!(first[1].starts_with("gateway-") && first[2].starts_with("gateway-"));
+        assert_ne!(first[1], first[2]);
+        assert_eq!(ids(yaml), first);
     }
 
     #[rstest]

@@ -877,6 +877,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "backon"
+version = "1.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cffb0e931875b666fc4fcb20fee52e9bbd1ef836fd9e9e04ec21555f9f85f7ef"
+dependencies = [
+ "fastrand",
+]
+
+[[package]]
 name = "base16ct"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1248,7 +1257,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cfc320937d09e6de266b31b9afb480f197d7a861be86be7cb2ea7e5d1bfffc5e"
 dependencies = [
  "bytes",
+ "futures-core",
  "memchr",
+ "pin-project-lite",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -3750,8 +3763,10 @@ dependencies = [
  "litellm-http",
  "litellm-inference",
  "litellm-llms",
+ "litellm-router",
  "litellm-secrets",
  "litellm-tracing",
+ "redis",
  "rstest",
  "serde",
  "serde_json",
@@ -4299,6 +4314,7 @@ dependencies = [
  "litellm-router-types",
  "rand 0.8.7",
  "rstest",
+ "sha2 0.10.9",
  "strum",
  "thiserror 2.0.19",
  "tokio",
@@ -5773,18 +5789,29 @@ version = "1.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2acbc41a996f7652b2ddd9dfd98cc4ff602cfd742ae35382f07f608405ab50ed"
 dependencies = [
+ "arc-swap",
  "arcstr",
+ "async-lock",
+ "backon",
+ "bytes",
+ "cfg-if",
  "combine",
  "crc16",
+ "futures-channel",
+ "futures-util",
  "itoa",
  "num-bigint 0.5.1",
  "percent-encoding",
+ "pin-project-lite",
  "rand 0.10.2",
  "rustls 0.23.42",
  "rustls-native-certs",
  "ryu",
  "sha1_smol",
  "socket2 0.6.5",
+ "tokio",
+ "tokio-rustls 0.26.4",
+ "tokio-util",
  "url",
  "xxhash-rust",
 ]

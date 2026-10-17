@@ -121,7 +121,7 @@ impl Auth {
     }
 
     /// Also accepts virtual keys from `keys`; the configured authenticator is tried first.
-    pub fn with_virtual_keys(self, keys: crate::CachedKeyLookup) -> Self {
+    pub fn with_virtual_keys(self, keys: Arc<crate::CachedKeyLookup>) -> Self {
         Self {
             authenticator: Arc::new(crate::VirtualKeyAuthenticator::new(
                 self.authenticator.clone(),
