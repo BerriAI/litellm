@@ -6,6 +6,7 @@ import pytest
 from fastapi import HTTPException, Request
 
 import litellm
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
     LiteLLM_ManagedVectorStore,
 )
@@ -3256,3 +3257,159 @@ class TestConfigOwnedVectorStores:
         assert response["status"] == "success", response
         prisma.db.litellm_managedvectorstorestable.delete.assert_awaited_once_with(where={"vector_store_id": self.DB_ID})
         assert registry.get_litellm_managed_vector_store_from_registry(self.DB_ID) is None
+
+
+CALLERS_METADATA = {"team": "llmproxy", "endpoint": "ingest", "trace_id": "callers-trace"}
+
+
+class _PreCallBodies(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged_bodies = []
+
+    def log_pre_api_call(self, model, messages, kwargs):
+        self.logged_bodies.append(kwargs["litellm_params"]["proxy_server_request"]["body"])
+
+
+@pytest.mark.parametrize("operation", ["create", "update"])
+@pytest.mark.parametrize("model", [None, "gpt-5"])
+@pytest.mark.parametrize(
+    ("metadata_field", "expected_metadata"),
+    [
+        ({"metadata": CALLERS_METADATA}, CALLERS_METADATA),
+        ({"metadata": {}}, {}),
+        ({"metadata": json.dumps(CALLERS_METADATA)}, CALLERS_METADATA),
+        ({"metadata": None}, None),
+        ({}, None),
+    ],
+)
+def test_proxy_vector_store_writes_send_the_provider_exactly_the_callers_metadata(
+    monkeypatch, operation, model, metadata_field, expected_metadata
+):
+    import httpx
+    import respx
+    from fastapi.testclient import TestClient
+
+    from litellm.constants import VECTOR_STORE_CALLER_METADATA_KWARG
+    from litellm.proxy import proxy_server
+    from litellm.proxy.proxy_server import app
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    monkeypatch.setattr(proxy_server, "master_key", "sk-master-test")
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        litellm.Router(
+            model_list=[{"model_name": "gpt-5", "litellm_params": {"model": "openai/gpt-5", "api_key": "sk-test"}}]
+        ),
+    )
+    pre_call_bodies = _PreCallBodies()
+    monkeypatch.setattr(litellm, "callbacks", [pre_call_bodies])
+    sent_bodies = []
+
+    def echo(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        sent_bodies.append(body)
+        return httpx.Response(
+            200,
+            json={
+                "id": "vs_1",
+                "object": "vector_store",
+                "created_at": 0,
+                "name": "x",
+                "usage_bytes": 0,
+                "file_counts": {"in_progress": 0, "completed": 0, "failed": 0, "cancelled": 0, "total": 0},
+                "status": "completed",
+                "metadata": body.get("metadata"),
+            },
+        )
+
+    path = "/v1/vector_stores" if operation == "create" else "/v1/vector_stores/vs_1"
+    routing = {} if model is None else {"model": model}
+    with respx.mock(assert_all_called=False) as upstream:
+        upstream.post(url__regex=r"https://api\.openai\.com/v1/vector_stores.*").mock(side_effect=echo)
+        response = TestClient(app).post(
+            path,
+            json={"name": "x", **routing, **metadata_field},
+            headers={
+                "Authorization": "Bearer sk-master-test",
+                "x-litellm-tags": "header-tag",
+                "x-litellm-trace-id": "header-trace",
+                "x-litellm-session-id": "header-session",
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert len(sent_bodies) == 1
+    assert sent_bodies[0].get("metadata") == expected_metadata
+    assert len(pre_call_bodies.logged_bodies) == 1
+    assert "name" in pre_call_bodies.logged_bodies[0]
+    assert VECTOR_STORE_CALLER_METADATA_KWARG not in pre_call_bodies.logged_bodies[0]
+
+
+@pytest.mark.parametrize("operation", ["create", "update"])
+@pytest.mark.parametrize(
+    "request_body",
+    [
+        {"data": {"name": "x", "metadata": json.dumps(CALLERS_METADATA)}},
+        {
+            "content": json.dumps({"name": "x", "metadata": CALLERS_METADATA})[:-1]
+            + ', "nested": '
+            + "[" * 300
+            + "]" * 300
+            + "}",
+            "headers": {"Content-Type": "application/json"},
+        },
+    ],
+    ids=["form", "json-too-deep-to-reparse"],
+)
+def test_proxy_vector_store_writes_send_only_the_callers_metadata_when_the_raw_body_cannot_be_reparsed(
+    monkeypatch, operation, request_body
+):
+    import httpx
+    import respx
+    from fastapi.testclient import TestClient
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.proxy_server import app
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    monkeypatch.setattr(proxy_server, "master_key", "sk-master-test")
+    monkeypatch.setattr(proxy_server, "llm_router", litellm.Router(model_list=[]))
+    sent_bodies = []
+
+    def echo(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        sent_bodies.append(body)
+        return httpx.Response(
+            200,
+            json={
+                "id": "vs_1",
+                "object": "vector_store",
+                "created_at": 0,
+                "name": "x",
+                "usage_bytes": 0,
+                "file_counts": {"in_progress": 0, "completed": 0, "failed": 0, "cancelled": 0, "total": 0},
+                "status": "completed",
+                "metadata": body.get("metadata"),
+            },
+        )
+
+    path = "/v1/vector_stores" if operation == "create" else "/v1/vector_stores/vs_1"
+    headers = {
+        "Authorization": "Bearer sk-master-test",
+        "x-litellm-trace-id": "header-trace",
+        **request_body.get("headers", {}),
+    }
+    body_kwargs = {key: value for key, value in request_body.items() if key != "headers"}
+    with respx.mock(assert_all_called=False) as upstream:
+        upstream.post(url__regex=r"https://api\.openai\.com/v1/vector_stores.*").mock(side_effect=echo)
+        response = TestClient(app).post(path, headers=headers, **body_kwargs)
+
+    assert response.status_code == 200, response.text
+    assert len(sent_bodies) == 1
+    assert sent_bodies[0].get("metadata") == CALLERS_METADATA
