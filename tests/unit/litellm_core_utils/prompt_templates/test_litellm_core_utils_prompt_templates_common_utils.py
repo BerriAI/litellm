@@ -3,6 +3,7 @@ import functools
 import json
 import os
 import sys
+from collections.abc import Mapping
 from typing import Final
 
 import pytest
@@ -25,6 +26,10 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     parse_tool_call_arguments,
     responses_reasoning_items_from_thinking_blocks,
     salvage_concatenated_tool_arguments,
+    schema_grammar_branch_count,
+    schema_has_open_object,
+    schema_has_unresolvable_ref,
+    schema_property_count,
     split_concatenated_json_objects,
     strip_encrypted_reasoning_from_messages,
     system_messages_first,
@@ -2263,3 +2268,76 @@ def test_get_semantic_cache_prompt_from_messages_matches_get_str_from_messages_w
     messages: list[dict[str, object]],
 ) -> None:
     assert get_semantic_cache_prompt_from_messages(messages) == get_str_from_messages(messages)
+
+
+@pytest.mark.parametrize(
+    ("schema", "is_open"),
+    [
+        ({"type": "object", "properties": {"a": {"type": "string"}}}, False),
+        ({"type": "object", "properties": {}}, False),
+        ({"type": "object", "additionalProperties": False}, False),
+        ({"type": "string"}, False),
+        ({"type": "object"}, True),
+        ({"type": ["object", "null"]}, True),
+        ({"type": "object", "properties": {"a": {"type": "string"}}, "additionalProperties": True}, True),
+        ({"type": "object", "additionalProperties": {"type": "integer"}}, True),
+        ({"type": "object", "properties": {}, "patternProperties": {"^x": {"type": "string"}}}, True),
+        ({"type": "object", "properties": {"inner": {"anyOf": [{"type": "object"}, {"type": "null"}]}}}, True),
+        ({"type": "array", "items": {"type": "object", "additionalProperties": {"type": "string"}}}, True),
+    ],
+)
+def test_schema_has_open_object_flags_any_node_that_accepts_unlisted_keys(schema, is_open):
+    assert schema_has_open_object(schema) is is_open
+
+
+def _object_with(properties: Mapping[str, object], **defs: Mapping[str, object]) -> Mapping[str, object]:
+    return {"type": "object", "properties": properties, **defs}
+
+
+@pytest.mark.parametrize(
+    ("schema", "unresolvable"),
+    [
+        (_object_with({"a": {"type": "string"}}), False),
+        (_object_with({"a": {"$ref": "#/$defs/A"}, "b": {"$ref": "#/$defs/A"}}, **{"$defs": {"A": {"type": "string"}}}), False),
+        (_object_with({"a": {"$ref": "#/definitions/A"}}, definitions={"A": {"$ref": "#/definitions/B"}, "B": {"type": "integer"}}), False),
+        (_object_with({"a": {"$ref": "/$defs/A"}}, **{"$defs": {"A": {"items": {"$ref": "/$defs/B"}}, "B": {"type": "string"}}}), False),
+        (_object_with({"a": {"$ref": "#/$defs/Missing"}}, **{"$defs": {"A": {"type": "string"}}}), True),
+        (_object_with({"a": {"$ref": "other.json#/A"}}), True),
+        (_object_with({"parent": {"$ref": "#"}}), True),
+        (_object_with({"a": {"$ref": "#/$defs/A"}}, **{"$defs": {"A": {"type": "array", "items": {"$ref": "#/$defs/A"}}}}), True),
+        (_object_with({"a": {"$ref": "/$defs/A"}}, **{"$defs": {"A": {"type": "array", "items": {"$ref": "/$defs/A"}}}}), True),
+        (
+            _object_with(
+                {"a": {"$ref": "#/$defs/A"}},
+                **{"$defs": {"A": {"properties": {"b": {"$ref": "#/$defs/B"}}}, "B": {"properties": {"a": {"$ref": "#/$defs/A"}}}}},
+            ),
+            True,
+        ),
+    ],
+    ids=["no-refs", "shared-def", "chained-definitions", "root-path-defs", "missing-def", "external", "root", "self-cycle", "root-path-self-cycle", "mutual-cycle"],
+)
+def test_schema_has_unresolvable_ref_flags_refs_that_cannot_be_inlined(schema, unresolvable):
+    assert schema_has_unresolvable_ref(schema) is unresolvable
+
+
+@pytest.mark.parametrize(
+    ("schema", "properties", "branches"),
+    [
+        (_object_with({"a": {"type": "string"}, "b": {"type": "string"}, "c": {"type": "string"}}, required=["a"]), 3, 8),
+        (
+            _object_with(
+                {"x": {"$ref": "#/$defs/Pair"}, "y": {"$ref": "#/$defs/Pair"}},
+                required=["x", "y"],
+                **{"$defs": {"Pair": _object_with({"l": {"type": "string"}, "r": {"type": "string"}}, required=["l"])}},
+            ),
+            4,
+            7,
+        ),
+        (_object_with({"inner": _object_with({"z": {"type": "string"}})}, required=["inner"]), 2, 4),
+    ],
+    ids=["flat", "shared-def-counted-once", "nested"],
+)
+def test_schema_size_counts_every_written_object_once(schema, properties, branches):
+    assert schema_property_count(schema) == properties
+    assert schema_grammar_branch_count(schema) == branches
+
