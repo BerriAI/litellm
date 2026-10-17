@@ -2,7 +2,7 @@ from typing import Any, Final
 
 import litellm
 from litellm.llms.anthropic.common_utils import normalize_cache_control_in_anthropic_payload
-from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.llms.openai_like.json_loader import SimpleProviderConfig

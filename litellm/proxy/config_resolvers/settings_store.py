@@ -13,6 +13,7 @@ from litellm.proxy.config_resolvers.settings_rules import (
     Resolved,
     Section,
     SettingValue,
+    is_resource_list,
     resolve,
     rule_for,
 )
@@ -49,8 +50,13 @@ class SettingsStore(MutableMapping[str, JsonValue]):
         self._deleted_runtime_keys: frozenset[str] = frozenset()
 
     def load_yaml(self, mapping: Mapping[str, JsonValue]) -> None:
-        self._yaml_values = MappingProxyType(dict(mapping))
-        self._clear_runtime()
+        self._yaml_values = MappingProxyType(
+            {key: value for key, value in mapping.items() if not is_resource_list(self._section, key)}
+        )
+        self._runtime_values = MappingProxyType(
+            {key: value for key, value in self._runtime_values.items() if is_resource_list(self._section, key)}
+        )
+        self._deleted_runtime_keys = frozenset()
 
     def config_value(self, key: str) -> JsonValue:
         return self._yaml_values.get(key)
@@ -136,10 +142,6 @@ class SettingsStore(MutableMapping[str, JsonValue]):
     def __bool__(self) -> bool:
         return any(True for _ in self)
 
-    def _clear_runtime(self) -> None:
-        self._runtime_values = _EMPTY_VALUES
-        self._deleted_runtime_keys = frozenset()
-
     def _clear_runtime_keys(self, keys: frozenset[str]) -> None:
         stale: Final = frozenset(key for key in keys if not self.owned_by_config(key))
         if not stale:
@@ -160,6 +162,9 @@ class SettingsStore(MutableMapping[str, JsonValue]):
             )
         )
 
+    def db_value(self, key: str) -> SettingValue:
+        return self._db_value(key) if is_resource_list(self._section, key) else ABSENT
+
     def _db_value(self, key: str) -> SettingValue:
         rule: Final = rule_for(self._section, key)
         return self._database_rows.get(rule.db_row, _EMPTY_VALUES).get(key, ABSENT)
@@ -176,3 +181,10 @@ class SettingsStore(MutableMapping[str, JsonValue]):
     def _resolution_for(self, key: str) -> Resolved:
         yaml_value: Final[SettingValue] = self._yaml_values.get(key, ABSENT)
         return resolve(yaml_value, self._db_value(key))
+
+
+def source_for(settings: SettingsStore, key: str, default: object = None) -> FieldSource:
+    source: Final = settings.source(key)
+    if source == "unset":
+        return "default" if default is not None else "unset"
+    return source

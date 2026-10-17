@@ -25,7 +25,16 @@ from litellm.proxy.management_endpoints.ui_sso import (
 
 
 async def lookup_consent_teams(user_id: str) -> tuple[ConsentTeam, ...] | ReloadUserFailure:
-    user: Final = await load_active_user_by_id(user_id)
+    return await _consent_teams(await load_active_user_by_id(user_id))
+
+
+async def lookup_consent_teams_from_database(user_id: str) -> tuple[ConsentTeam, ...] | ReloadUserFailure:
+    """The same teams read from the database row, for a grant that is consumed once it is settled: the
+    membership the minter will re-check must be the membership the team was picked from."""
+    return await _consent_teams(await load_active_user_by_id(user_id, source="database"))
+
+
+async def _consent_teams(user: LiteLLM_UserTable | ReloadUserFailure) -> tuple[ConsentTeam, ...] | ReloadUserFailure:
     if isinstance(user, str):
         return user
     details: Final = await _team_details(user.teams)
@@ -39,7 +48,7 @@ async def lookup_consent_teams(user_id: str) -> tuple[ConsentTeam, ...] | Reload
 
 
 async def mint_proxy_credential(
-    user_id: str, team_id: str | None
+    user_id: str, team_id: str | None, *, allowed_routes: Sequence[str] | None = None
 ) -> MintedProxyCredential | ProxyCredentialMintFailure:
     """Mint the ``lite login`` credential for a consented grant. Membership is checked
     live against the database row, so a team the user left between consent and redemption (or between refreshes)
@@ -53,7 +62,9 @@ async def mint_proxy_credential(
     user row handed to the minter carries no team list, exactly like ``lite login``'s, so
     the minter's own first-team fallback stays inert. The credential carries the role the
     proxy already enforces for the user on every request, so a row with no role (JWT auth's
-    upsert writes none) mints as an internal user instead of being refused."""
+    upsert writes none) mints as an internal user instead of being refused. ``allowed_routes``
+    narrows the credential to those route groups, the way a virtual key's ``allowed_routes`` does,
+    for a grant whose scope asked for less than the full credential."""
     user: Final = await load_active_user_by_id(user_id, source="database")
     if isinstance(user, str):
         return user
@@ -75,6 +86,7 @@ async def mint_proxy_credential(
         team_alias=selected.team_alias,
         team_models=selected.team_models,
         team_model_aliases=selected.team_model_aliases,
+        allowed_routes=allowed_routes,
     )
     return MintedProxyCredential(
         key=key,

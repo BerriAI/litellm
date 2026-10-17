@@ -24,7 +24,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallChunk
 from litellm.types.proxy.guardrails.guardrail_hooks.base import (
     GuardrailConfigModel,
 )
@@ -36,7 +36,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.singulr import (
     ToolCall,
     ToolCallFunction,
 )
-from litellm.types.utils import CallTypes, GenericGuardrailAPIInputs
+from litellm.types.utils import CallTypes, ChatCompletionMessageToolCall, GenericGuardrailAPIInputs
 
 _DEFAULT_API_BASE: Final = "http://localhost:8003"
 _GUARD_ENDPOINT: Final = "/api/v1/ai-gateway/litellm-v2"
@@ -85,8 +85,6 @@ class SingulrGuardrail(CustomGuardrail):
         else:
             self.block_on_error = block_on_error
 
-        self.timeout = _DEFAULT_TIMEOUT if timeout is None else timeout
-
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback,
         )
@@ -101,6 +99,7 @@ class SingulrGuardrail(CustomGuardrail):
             ]
 
         super().__init__(**kwargs)
+        self.timeout = _DEFAULT_TIMEOUT if timeout is None else timeout
 
     @staticmethod
     def get_config_model() -> type["GuardrailConfigModel"] | None:
@@ -125,7 +124,7 @@ class SingulrGuardrail(CustomGuardrail):
         )
 
     @classmethod
-    def _resolve_metadata_value(cls, request_data: Mapping[str, Any], key: str) -> str | None:
+    def _resolve_metadata_value(cls, request_data: Mapping[str, object], key: str) -> str | None:
         for container in cls._metadata_containers(request_data=request_data):
             value = container.get(key)
             if value:
@@ -133,7 +132,7 @@ class SingulrGuardrail(CustomGuardrail):
         return None
 
     @classmethod
-    def _resolve_user_role_from_request_data(cls, request_data: Mapping[str, Any]) -> str | None:
+    def _resolve_user_role_from_request_data(cls, request_data: Mapping[str, object]) -> str | None:
         for container in cls._metadata_containers(request_data=request_data):
             auth = container.get("user_api_key_auth")
             if isinstance(auth, UserAPIKeyAuth) and auth.user_role:
@@ -141,7 +140,7 @@ class SingulrGuardrail(CustomGuardrail):
         return None
 
     @classmethod
-    def _build_metadata(cls, request_data: Mapping[str, Any]) -> Mapping[str, str] | None:
+    def _build_metadata(cls, request_data: Mapping[str, object]) -> Mapping[str, str] | None:
         fields: Final = (
             "user_api_key_alias",
             "user_api_key_user_id",
@@ -157,11 +156,11 @@ class SingulrGuardrail(CustomGuardrail):
         )
         if not any(value for _, value in resolved):
             return None
-        return {key: value for key, value in resolved if value}  # mutable-ok: short-lived JSON payload dict
+        return {key: value for key, value in resolved if value}
 
     @staticmethod
     def _build_user_message(text: str) -> Mapping[str, str]:
-        return {"role": "user", "content": text}  # mutable-ok: short-lived JSON payload dict
+        return {"role": "user", "content": text}
 
     def _build_headers(self) -> Mapping[str, str]:
         all_headers: Final = MappingProxyType(
@@ -339,7 +338,7 @@ class SingulrGuardrail(CustomGuardrail):
         return inputs
 
     @staticmethod
-    def _build_tool_call(tool_call: Mapping[str, Any]) -> "ToolCall | None":
+    def _build_tool_call(tool_call: ChatCompletionToolCallChunk | ChatCompletionMessageToolCall) -> "ToolCall | None":
         tool_call_id: Final = tool_call.get("id")
         fun: Final = tool_call.get("function")
         if not tool_call_id or not fun:

@@ -15,7 +15,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, ParamSpec, TypeVar, cast, get_args, overload
 
 import httpx
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import TypeAdapter, ValidationError
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
@@ -32,8 +32,10 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.aws_partition import contains_bedrock_arn, get_aws_dns_suffix
 from litellm.litellm_core_utils.dd_tracing import tracer
+from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.secret_managers.main import get_secret, get_secret_str
-from litellm.types.llms.bedrock import AWS_AUTH_PARAM_KEYS, AwsAuthParams, AwsSessionTag
+from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.llms.bedrock import AWS_AUTH_PARAM_KEYS, AwsAuthParams, AwsSessionTag, BearerPreparedRequest
 
 if TYPE_CHECKING:
     from botocore.awsrequest import AWSPreparedRequest
@@ -97,11 +99,16 @@ def _assume_role_params(
             )
 
 
-_SecureTransportBool = TypedDict("_SecureTransportBool", {"aws:SecureTransport": ReadOnly[Literal["true"]]})
+_SecureTransportBool: Final = TypedDict("_SecureTransportBool", {"aws:SecureTransport": ReadOnly[Literal["true"]]})
+
+_CalledViaLastEquals: Final = TypedDict(
+    "_CalledViaLastEquals", {"aws:CalledViaLast": ReadOnly[Literal["aws-external-anthropic.amazonaws.com"]]}
+)
 
 
-class _SecureTransportCondition(TypedDict):
+class _SessionPolicyCondition(TypedDict):
     Bool: ReadOnly[_SecureTransportBool]
+    StringEquals: NotRequired[ReadOnly[_CalledViaLastEquals]]
 
 
 class _SessionPolicyStatement(TypedDict):
@@ -109,7 +116,7 @@ class _SessionPolicyStatement(TypedDict):
     Effect: ReadOnly[Literal["Allow"]]
     Action: ReadOnly[tuple[str, ...]]
     Resource: ReadOnly[Literal["*"]]
-    Condition: ReadOnly[_SecureTransportCondition]
+    Condition: ReadOnly[_SessionPolicyCondition]
 
 
 class WebIdentitySessionPolicy(TypedDict):
@@ -145,11 +152,24 @@ _WEB_IDENTITY_SESSION_POLICY_ACTIONS: Final[Mapping[str, tuple[str, ...]]] = Map
             "aws-external-anthropic:Get*",
             "aws-external-anthropic:List*",
         ),
+        "ClaudePlatformOutboundIdentityLiteLLM": (
+            "sts:GetWebIdentityToken",
+            "sts:TagGetWebIdentityToken",
+        ),
         "BedrockMantleLiteLLM": ("bedrock-mantle:CreateInference",),
     }
 )
 
-_SECURE_TRANSPORT_ONLY: Final = _SecureTransportCondition(Bool=_SecureTransportBool({"aws:SecureTransport": "true"}))
+_SECURE_TRANSPORT_ONLY: Final = _SessionPolicyCondition(Bool=_SecureTransportBool({"aws:SecureTransport": "true"}))
+
+_WEB_IDENTITY_SESSION_POLICY_CONDITIONS: Final[Mapping[str, _SessionPolicyCondition]] = MappingProxyType(
+    {
+        "ClaudePlatformOutboundIdentityLiteLLM": _SessionPolicyCondition(
+            Bool=_SecureTransportBool({"aws:SecureTransport": "true"}),
+            StringEquals=_CalledViaLastEquals({"aws:CalledViaLast": "aws-external-anthropic.amazonaws.com"}),
+        ),
+    }
+)
 
 
 def build_web_identity_session_policy() -> WebIdentitySessionPolicy:
@@ -161,7 +181,7 @@ def build_web_identity_session_policy() -> WebIdentitySessionPolicy:
                 Effect="Allow",
                 Action=actions,
                 Resource="*",
-                Condition=_SECURE_TRANSPORT_ONLY,
+                Condition=_WEB_IDENTITY_SESSION_POLICY_CONDITIONS.get(sid, _SECURE_TRANSPORT_ONLY),
             )
             for sid, actions in _WEB_IDENTITY_SESSION_POLICY_ACTIONS.items()
         ),
@@ -176,7 +196,7 @@ def pop_aws_auth_params(
     )
 
 
-class BedrockRequestTarget(BaseModel):
+class BedrockRequestTarget(LiteLLMBaseModel):
     aws_region_name: str
     aws_bedrock_runtime_endpoint: str | None
 
@@ -194,7 +214,7 @@ def bedrock_bearer_token(api_key: str | None) -> str | None:
     return token or None
 
 
-class _WebIdentityTokenClaims(BaseModel):
+class _WebIdentityTokenClaims(LiteLLMBaseModel):
     aud: str | list[str] | None = None
     iss: str | None = None
 
@@ -282,7 +302,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         self,
         credential_args: Mapping[str, str | bool | tuple[AwsSessionTag, ...] | None],
         credential_fetcher: Callable[[], tuple[Credentials, int | None]],
-    ) -> Any:
+    ) -> Credentials:
         """
         Read-through IAM cache on the process-wide ``DualCache``.
 
@@ -445,6 +465,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         # iam_cache: static keys, ambient env (including skip-AssumeRole path), web identity, and
         # AssumeRole. Do not cache profile / explicit session-token paths here.
         #########################################################
+        ensure_optional_import("botocore")
         if self._is_auth_with_web_identity_token(
             aws_web_identity_token,
             aws_role_name,
@@ -524,6 +545,17 @@ class BaseAWSLLM(SignsRequestsWithAWS):
             aws_session_tags=_canonical_aws_session_tags(auth_params.aws_session_tags),
         )
 
+    def resolve_s3_credentials(self, params: Mapping[str, object], aws_region_name: str | None) -> Credentials:
+        """S3 signing identity: the s3_* static pair as-is when both are set, otherwise the resolved aws_* params."""
+        from botocore.credentials import Credentials
+
+        from litellm.llms.bedrock.common_utils import s3_static_key_pair
+
+        s3_pair: Final = s3_static_key_pair(params)
+        if s3_pair is None:
+            return self.resolve_credentials(AwsAuthParams.model_validate(params), aws_region_name)
+        return Credentials(access_key=s3_pair[0], secret_key=s3_pair[1])
+
     def _get_aws_region_from_model_arn(self, model: str | None) -> str | None:
         try:
             # First check if the string contains the expected prefix
@@ -599,7 +631,10 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         if provider is not None:
             return provider
 
-        for provider in get_args(BEDROCK_INVOKE_PROVIDERS_LITERAL):
+        invoke_providers: Final[tuple[BEDROCK_INVOKE_PROVIDERS_LITERAL, ...]] = get_args(
+            BEDROCK_INVOKE_PROVIDERS_LITERAL
+        )
+        for provider in invoke_providers:
             if provider in model:
                 return provider
         return None
@@ -712,9 +747,12 @@ class BaseAWSLLM(SignsRequestsWithAWS):
                 return cast(BEDROCK_EMBEDDING_PROVIDERS_LITERAL, potential_provider)
 
         # Fallback: check if any provider name appears in the model string
-        for provider in get_args(BEDROCK_EMBEDDING_PROVIDERS_LITERAL):
+        embedding_providers: Final[tuple[BEDROCK_EMBEDDING_PROVIDERS_LITERAL, ...]] = get_args(
+            BEDROCK_EMBEDDING_PROVIDERS_LITERAL
+        )
+        for provider in embedding_providers:
             if provider in model:
-                return cast(BEDROCK_EMBEDDING_PROVIDERS_LITERAL, provider)
+                return provider
 
         return None
 
@@ -763,6 +801,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
                 aws_region_name = standard_aws_region_name
         if aws_region_name is None:
             try:
+                ensure_optional_import("boto3")
                 import boto3
 
                 with tracer.trace("boto3.Session()"):
@@ -778,6 +817,14 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         self._validate_aws_region_name(aws_region_name)
         return aws_region_name
 
+    def get_aws_region_name(
+        self,
+        optional_params: dict[str, object],  # mutable-ok: mirrors override contract
+        model: str | None = None,
+        model_id: str | None = None,
+    ) -> str:
+        return self._get_aws_region_name(optional_params, model, model_id)
+
     @staticmethod
     def _validate_aws_region_name(aws_region_name: str | None) -> None:
         """
@@ -791,6 +838,13 @@ class BaseAWSLLM(SignsRequestsWithAWS):
                 f"Invalid AWS region format: {aws_region_name!r}. "
                 "Region names must contain only lowercase letters, digits, and hyphens."
             )
+
+    @classmethod
+    def validate_aws_region_name(
+        cls,
+        aws_region_name: str | None,
+    ) -> None:
+        return cls._validate_aws_region_name(aws_region_name)
 
     @staticmethod
     def _parse_sts_region_from_endpoint(
@@ -931,6 +985,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
 
         # For ECS/EC2: call sts:GetCallerIdentity to check if already running as the role
         try:
+            ensure_optional_import("boto3")
             import boto3
 
             with tracer.trace("boto3.client(sts).get_caller_identity"):
@@ -990,6 +1045,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         """
         Authenticate with AWS Web Identity Token
         """
+        ensure_optional_import("boto3")
         import boto3
 
         verbose_logger.debug(
@@ -1089,6 +1145,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         aws_session_tags: Sequence[AwsSessionTag] | None = None,
     ) -> dict:
         """Handle cross-account role assumption for IRSA."""
+        ensure_optional_import("boto3")
         import boto3
 
         verbose_logger.debug("Cross-account role assumption detected")
@@ -1154,6 +1211,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         aws_session_tags: Sequence[AwsSessionTag] | None = None,
     ) -> dict:
         """Handle same-account role assumption for IRSA."""
+        ensure_optional_import("boto3")
         import boto3
 
         irsa_sts_kwargs: Final = self._build_sts_client_kwargs(
@@ -1260,6 +1318,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         """
         Authenticate with AWS Role
         """
+        ensure_optional_import("boto3")
         import boto3
         from botocore.credentials import Credentials
 
@@ -1383,6 +1442,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         """
         Authenticate with AWS profile
         """
+        ensure_optional_import("boto3")
         import boto3
 
         # uses auth values from AWS profile usually stored in ~/.aws/credentials
@@ -1421,6 +1481,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         """
         Authenticate with AWS Access Key and Secret Key
         """
+        ensure_optional_import("boto3")
         import boto3
 
         # Check if credentials are already in cache. These credentials have no expiry time.
@@ -1441,6 +1502,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         """
         Authenticate with AWS Environment Variables
         """
+        ensure_optional_import("boto3")
         import boto3
 
         with tracer.trace("boto3.Session()"):
@@ -1534,10 +1596,6 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         Returns:
             Credentials: Boto3 credentials object
         """
-        try:
-            from botocore.credentials import Credentials
-        except ImportError:
-            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
         aws_region_name: Final = self._get_aws_region_name(optional_params, model)
         optional_params.pop("aws_region_name", None)
         auth_params: Final = pop_aws_auth_params(optional_params)
@@ -1567,23 +1625,26 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         headers: dict,
         api_key: str | None = None,
         supports_bearer_token: bool = True,
-    ) -> AWSPreparedRequest:
+    ) -> AWSPreparedRequest | BearerPreparedRequest:
         aws_bearer_token: Final = bedrock_bearer_token(api_key) if supports_bearer_token else None
 
         if aws_bearer_token is not None:
-            try:
-                from botocore.awsrequest import AWSRequest
-            except ImportError:
-                raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
             headers["Authorization"] = f"Bearer {aws_bearer_token}"
-            request = AWSRequest(method="POST", url=endpoint_url, data=data, headers=headers)
+            bearer_request: Final = httpx.Request("POST", endpoint_url, content=data, headers=headers)
+            return BearerPreparedRequest(
+                method="POST",
+                url=str(bearer_request.url),
+                headers={
+                    name.decode("ascii"): value.decode(bearer_request.headers.encoding)
+                    for name, value in bearer_request.headers.raw
+                },
+                body=bearer_request.content,
+            )
         else:
-            try:
-                from botocore.auth import SigV4Auth
-                from botocore.awsrequest import AWSRequest
-                from botocore.exceptions import NoCredentialsError
-            except ImportError:
-                raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
+            ensure_optional_import("botocore")
+            from botocore.auth import SigV4Auth
+            from botocore.awsrequest import AWSRequest
+            from botocore.exceptions import NoCredentialsError
 
             if credentials is None:
                 raise NoCredentialsError()
@@ -1676,12 +1737,10 @@ class BaseAWSLLM(SignsRequestsWithAWS):
             return headers, json.dumps(request_data).encode()
 
         # If no bearer token is set, proceed with the existing SigV4 authentication
-        try:
-            from botocore.auth import SigV4Auth
-            from botocore.awsrequest import AWSRequest
-            from botocore.credentials import Credentials
-        except ImportError:
-            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
+        ensure_optional_import("botocore")
+        from botocore.auth import SigV4Auth
+        from botocore.awsrequest import AWSRequest
+        from botocore.credentials import Credentials
 
         auth_params: Final = AwsAuthParams.model_validate(optional_params)
         aws_region_name: Final = self._get_aws_region_name(optional_params=optional_params, model=model)
@@ -1727,11 +1786,9 @@ def sign_aws_json_post(
     body: str,
     headers: Mapping[str, str],
 ) -> AWSPreparedRequest:
-    try:
-        from botocore.auth import SigV4Auth
-        from botocore.awsrequest import AWSRequest
-    except ImportError:
-        raise ImportError(f"Missing boto3 to call {service_name}. Run 'pip install boto3'.")
+    ensure_optional_import("botocore")
+    from botocore.auth import SigV4Auth
+    from botocore.awsrequest import AWSRequest
 
     aws_request: Final = AWSRequest(method="POST", url=url, data=body, headers=headers)
     SigV4Auth(get_credentials(), service_name, aws_region_name).add_auth(aws_request)

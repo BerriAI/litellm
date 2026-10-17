@@ -2,14 +2,11 @@ use std::{collections::BTreeSet, time::Duration};
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use litellm_auth::{InputSource, Sourced};
-use litellm_auth_azure::AzureAuthInputs;
-use litellm_core_utils::{
-    call_arguments::CallArguments,
-    serde_compat::{FiniteF64, LaxI64},
-    url_utils::ApiUrl,
-};
+use litellm_auth_azure::{AzureAuthInputs, SECRET_NAMES as AZURE_AUTH_SECRET_NAMES};
+use litellm_core_utils::{call_arguments::CallArguments, url_utils::ApiUrl};
+use litellm_llms_types::serde_compat::{FiniteF64, LaxI64};
 use reqwest::Url;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use serde_with::serde_as;
 use tokio::time::Instant;
@@ -20,11 +17,13 @@ use crate::base_llm::ocr::{
     handler::{CallHooks, OcrClient, read_json_response},
     settings::OcrSettings,
     transformation::{
-        BaseOcrConfig, DecodedOcrResponse, LiteLLMOcrResponse, OCR_INLINE_MAX_BYTES,
-        OCR_POLL_RETRY_SECS, OcrConnection, OcrCredentialInputs, OcrDocument, OcrPage,
-        OcrPageDimensions, OcrResponseContext, OcrResponseFormat, OcrUsageInfo, PreparedOcrRequest,
+        BaseOcrConfig, DecodedOcrResponse, OCR_INLINE_MAX_BYTES, OCR_POLL_RETRY_SECS,
+        OcrConnection, OcrCredentialInputs, OcrResponseContext, PreparedOcrRequest,
         ResolvedOcrCredentials, decode_and_normalize_response, decode_response,
     },
+};
+use litellm_llms_types::formats::ocr::{
+    LiteLLMOcrResponse, OcrDocument, OcrPage, OcrPageDimensions, OcrResponseFormat, OcrUsageInfo,
 };
 
 const AZURE_DI_SUBSCRIPTION_HEADER: &str = "Ocp-Apim-Subscription-Key";
@@ -55,37 +54,20 @@ pub enum DocumentIntelligenceRequest {
     },
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(
+    Clone, Debug, PartialEq, strum::EnumString, strum::Display, serde_with::DeserializeFromStr,
+)]
 enum OperationStatus {
+    #[strum(serialize = "succeeded")]
     Succeeded,
+    #[strum(serialize = "running")]
     Running,
+    #[strum(serialize = "notStarted")]
     NotStarted,
+    #[strum(serialize = "failed")]
     Failed,
+    #[strum(default, transparent)]
     Unknown(String),
-}
-
-impl<'de> Deserialize<'de> for OperationStatus {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        Ok(match String::deserialize(deserializer)?.as_str() {
-            "succeeded" => Self::Succeeded,
-            "running" => Self::Running,
-            "notStarted" => Self::NotStarted,
-            "failed" => Self::Failed,
-            value => Self::Unknown(value.to_string()),
-        })
-    }
-}
-
-impl std::fmt::Display for OperationStatus {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(match self {
-            Self::Succeeded => "succeeded",
-            Self::Running => "running",
-            Self::NotStarted => "notStarted",
-            Self::Failed => "failed",
-            Self::Unknown(value) => value,
-        })
-    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -141,6 +123,17 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
         Some(AZURE_DI_API_KEY_ENV)
     }
 
+    fn secret_names(&self) -> Vec<&'static str> {
+        [
+            [AZURE_DI_API_KEY_ENV, AZURE_DI_ENDPOINT_ENV].as_slice(),
+            AZURE_AUTH_SECRET_NAMES,
+        ]
+        .into_iter()
+        .flatten()
+        .copied()
+        .collect()
+    }
+
     fn resolve_connection_params(&self, inputs: OcrCredentialInputs) -> ResolvedOcrCredentials {
         ResolvedOcrCredentials {
             api_key: inputs.api_key.and_then(|key| {
@@ -172,12 +165,15 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
     async fn validate_environment(
         &self,
         request: &PreparedOcrRequest,
-        _client: &OcrClient,
+        client: &OcrClient,
     ) -> Result<Self::Environment, Error> {
         let config = crate::azure_ai::ocr::common_utils::azure_auth_inputs(request)?;
-        self.resolve_headers(&request.connection, &config, &|name: &str| {
-            request.connection.secret(name)
-        })
+        self.resolve_headers(
+            &client.auth().azure,
+            &request.connection,
+            &config,
+            &|name: &str| request.connection.secret(name),
+        )
         .await
     }
 
@@ -439,7 +435,7 @@ fn pixel_dimension(value: f64, scale: f64, field: &'static str) -> Result<i64, E
 }
 
 async fn read_operation_response(
-    http_client: &reqwest::Client,
+    http_client: &litellm_http::Client,
     response: reqwest::Response,
     original_url: &str,
     headers: &[(String, String)],
@@ -478,7 +474,7 @@ async fn read_operation_response(
 }
 
 async fn poll_operation(
-    http_client: &reqwest::Client,
+    http_client: &litellm_http::Client,
     url: Url,
     headers: &[(String, String)],
     connection: &OcrConnection,
@@ -550,6 +546,14 @@ async fn poll_operation(
 }
 
 impl AzureDocumentIntelligenceOcrConfig {
+    pub fn analyze_path(model: &str) -> Result<[String; 3], Error> {
+        Ok([
+            "documentintelligence".into(),
+            "documentModels".into(),
+            format!("{}:analyze", model_id(model)?),
+        ])
+    }
+
     fn build_ocr_url(
         &self,
         endpoint: &str,
@@ -557,9 +561,9 @@ impl AzureDocumentIntelligenceOcrConfig {
         params: &DocumentIntelligenceParams,
         api_version: &str,
     ) -> Result<String, Error> {
-        let model = format!("{}:analyze", model_id(model)?);
+        let path = Self::analyze_path(model)?;
         ApiUrl::parse(endpoint)
-            .and_then(|url| url.complete_path(&["documentintelligence", "documentModels", &model]))
+            .and_then(|url| url.complete_path(&path.each_ref().map(String::as_str)))
             .map(|url| {
                 url.append_query_pairs(
                     [("api-version", api_version)]
@@ -581,6 +585,7 @@ impl AzureDocumentIntelligenceOcrConfig {
 
     async fn resolve_headers(
         &self,
+        auth: &litellm_auth_azure::AzureAuthService,
         connection: &OcrConnection,
         config: &AzureAuthInputs,
         env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
@@ -616,7 +621,7 @@ impl AzureDocumentIntelligenceOcrConfig {
                     .collect(),
             );
         }
-        let token = super::super::common_utils::resolve_entra(config, env_lookup)
+        let token = super::super::common_utils::resolve_entra(auth, config, env_lookup)
             .await?
             .ok_or(Error::MissingAzureDocumentIntelligenceCredentials)?;
         super::super::common_utils::validate_destination(connection, token.source())?;
@@ -648,6 +653,43 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::*;
+
+    #[rstest]
+    #[case::succeeded("succeeded", OperationStatus::Succeeded)]
+    #[case::running("running", OperationStatus::Running)]
+    #[case::not_started("notStarted", OperationStatus::NotStarted)]
+    #[case::failed("failed", OperationStatus::Failed)]
+    fn operation_status_parses_known_values(
+        #[case] input: &str,
+        #[case] expected: OperationStatus,
+    ) {
+        let parsed = serde_json::from_value::<OperationStatus>(json!(input)).unwrap();
+
+        assert_eq!(parsed, expected);
+        assert_eq!(parsed.to_string(), input);
+    }
+
+    #[rstest]
+    #[case::unknown("queued")]
+    #[case::case_sensitive("NotStarted")]
+    #[case::escaped("future\"\\\n")]
+    #[case::empty("")]
+    fn operation_status_preserves_unknown_values(#[case] input: &str) {
+        let parsed = serde_json::from_value::<OperationStatus>(json!(input)).unwrap();
+
+        assert_eq!(parsed, OperationStatus::Unknown(input.into()));
+        assert_eq!(parsed.to_string(), input);
+    }
+
+    #[rstest]
+    #[case::number(json!(1))]
+    #[case::boolean(json!(true))]
+    #[case::array(json!([]))]
+    #[case::null(Value::Null)]
+    #[case::object(json!({"status": "succeeded"}))]
+    fn operation_status_rejects_non_string_json(#[case] input: Value) {
+        assert!(serde_json::from_value::<OperationStatus>(input).is_err());
+    }
 
     fn map(value: Value) -> Result<DocumentIntelligenceParams, Error> {
         let arguments = serde_json::from_value(value).unwrap();
@@ -790,9 +832,12 @@ mod tests {
         };
 
         let error = AzureDocumentIntelligenceOcrConfig
-            .resolve_headers(&connection, &Default::default(), &|name| {
-                (name == AZURE_DI_API_KEY_ENV).then(|| "environment-key".into())
-            })
+            .resolve_headers(
+                &Default::default(),
+                &connection,
+                &Default::default(),
+                &|name| (name == AZURE_DI_API_KEY_ENV).then(|| "environment-key".into()),
+            )
             .await
             .unwrap_err();
 
@@ -814,7 +859,12 @@ mod tests {
         };
 
         let headers = AzureDocumentIntelligenceOcrConfig
-            .resolve_headers(&connection, &Default::default(), &|_| None)
+            .resolve_headers(
+                &Default::default(),
+                &connection,
+                &Default::default(),
+                &|_| None,
+            )
             .await
             .unwrap();
 

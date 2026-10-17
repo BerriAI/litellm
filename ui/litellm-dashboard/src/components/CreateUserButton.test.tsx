@@ -19,6 +19,8 @@ vi.mock("./networking", () => ({
     SSO_ENABLED: false,
   }),
   getProxyBaseUrl: vi.fn().mockReturnValue("http://localhost"),
+  getGlobalLitellmHeaderName: vi.fn(() => "X-Litellm-Key"),
+  getUiPageUrl: (url: string) => url,
 }));
 
 vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({

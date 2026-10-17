@@ -1,8 +1,6 @@
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 
 use litellm_core_utils::settings::Lookup;
-
-pub type Secrets = Arc<dyn Lookup + Send + Sync>;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct OcrSettings {
@@ -11,8 +9,6 @@ pub struct OcrSettings {
     pub poll_timeout: Duration,
     pub document_intelligence_api_version: String,
     pub document_intelligence_dpi: i64,
-    pub vertex_project: Option<String>,
-    pub vertex_location: Option<String>,
     pub enable_azure_ad_token_refresh: bool,
 }
 
@@ -24,8 +20,6 @@ impl Default for OcrSettings {
             poll_timeout: Duration::from_secs(120),
             document_intelligence_api_version: "2024-11-30".into(),
             document_intelligence_dpi: 96,
-            vertex_project: None,
-            vertex_location: None,
             enable_azure_ad_token_refresh: false,
         }
     }

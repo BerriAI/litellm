@@ -5,7 +5,7 @@ import { CircleHelp } from "lucide-react";
 import type { Dayjs } from "dayjs";
 import * as React from "react";
 import { useForm, type Resolver } from "react-hook-form";
-import { z } from "zod/v4";
+import { z } from "zod";
 
 import { TagsInput } from "@/app/(dashboard)/guardrails/_components/content_filter/TagsInput";
 import { FormField } from "@/components/shared/form/FormField";
@@ -14,6 +14,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { SearchSelect } from "@/components/shared/SearchSelect";
+import { credentialOptions } from "@/components/shared/credentialOptions";
+import { AttachedCredential, CredentialNameHint } from "@/components/shared/CredentialIdentity";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -60,58 +63,34 @@ const PTU_EDIT_FIELDS: PtuEditField[] = [
   { name: PTU_END_FIELD, label: "PTU Effective To (UTC)", input: "datetime" },
 ];
 
-export type TouchedPricingField = "input_cost" | "output_cost" | "cache_read_cost" | "cache_write_cost";
-
-const PRICING_FIELDS: readonly TouchedPricingField[] = [
+const PRICING_FIELDS = [
   "input_cost",
   "output_cost",
   "cache_read_cost",
   "cache_write_cost",
+  "cache_write_cost_1h",
 ] as const;
+export type TouchedPricingField = (typeof PRICING_FIELDS)[number];
 
-const COST_SOURCES: Record<TouchedPricingField, { param: string; info: string }> = {
-  input_cost: { param: "input_cost_per_token", info: "input_cost_per_token" },
-  output_cost: { param: "output_cost_per_token", info: "output_cost_per_token" },
-  cache_read_cost: { param: "cache_read_input_token_cost", info: "cache_read_input_token_cost" },
-  cache_write_cost: { param: "cache_creation_input_token_cost", info: "cache_creation_input_token_cost" },
+const COST_SOURCES: Record<TouchedPricingField, string> = {
+  input_cost: "input_cost_per_token",
+  output_cost: "output_cost_per_token",
+  cache_read_cost: "cache_read_input_token_cost",
+  cache_write_cost: "cache_creation_input_token_cost",
+  cache_write_cost_1h: "cache_creation_input_token_cost_above_1hr",
 };
-
-export interface ModelEditFormValues {
-  model_name?: string;
-  litellm_model_name?: string;
-  api_base?: string;
-  custom_llm_provider?: string;
-  organization?: string;
-  tpm?: string | number | null;
-  rpm?: string | number | null;
-  max_retries?: string | number | null;
-  timeout?: string | number | null;
-  stream_timeout?: string | number | null;
-  input_cost?: string | number | null;
-  output_cost?: string | number | null;
-  cache_read_cost?: string | number | null;
-  cache_write_cost?: string | number | null;
-  ptu_count?: string | number | null;
-  cost_per_ptu_per_hour?: string | number | null;
-  ptu_effective_from?: Dayjs | null;
-  ptu_effective_to?: Dayjs | null;
-  cache_control?: boolean;
-  cache_control_injection_points?: CacheControlInjectionPoint[];
-  model_access_group?: string[];
-  guardrails?: string[];
-  vector_store_ids?: string[];
-  tags?: string[];
-  health_check_model?: string | null;
-  litellm_credential_name?: string;
-  litellm_extra_params?: string;
-  model_info?: string;
-  team_id?: string;
-}
-
-type ModelEditFieldName = keyof ModelEditFormValues;
 
 const scalar = z.union([z.string(), z.number(), z.null()]).optional();
 const textish = z.string().optional();
+
+const isBlank = (value: string | number | null | undefined): boolean => value == null || String(value).trim() === "";
+
+export const perMillionToPerToken = scalar
+  .refine(
+    (perMillion) => isBlank(perMillion) || (Number.isFinite(Number(perMillion)) && Number(perMillion) >= 0),
+    "Enter a price of 0 or more",
+  )
+  .transform((perMillion) => (isBlank(perMillion) ? null : Number(perMillion) / 1_000_000));
 
 const modelEditShape = {
   model_name: textish,
@@ -124,10 +103,11 @@ const modelEditShape = {
   max_retries: scalar,
   timeout: scalar,
   stream_timeout: scalar,
-  input_cost: scalar,
-  output_cost: scalar,
-  cache_read_cost: scalar,
-  cache_write_cost: scalar,
+  input_cost: perMillionToPerToken,
+  output_cost: perMillionToPerToken,
+  cache_read_cost: perMillionToPerToken,
+  cache_write_cost: perMillionToPerToken,
+  cache_write_cost_1h: perMillionToPerToken,
   ptu_count: scalar,
   cost_per_ptu_per_hour: scalar,
   ptu_effective_from: z.custom<Dayjs | null>().nullish(),
@@ -139,11 +119,13 @@ const modelEditShape = {
   vector_store_ids: z.array(z.string()).optional(),
   tags: z.array(z.string()).optional(),
   health_check_model: z.string().nullish(),
-  litellm_credential_name: textish,
+  litellm_credential_name: z.string().nullish(),
   litellm_extra_params: textish,
   model_info: textish,
   team_id: textish,
 };
+
+type ModelEditFieldName = keyof typeof modelEditShape;
 
 const isJson = (value: string): boolean => {
   try {
@@ -204,6 +186,10 @@ const buildSchema = (ptuEnabled: boolean, isFieldTouched: (field: TouchedPricing
     }
   });
 
+type ModelEditSchema = ReturnType<typeof buildSchema>;
+export type ModelEditFormValues = z.input<ModelEditSchema>;
+export type ModelEditSubmitValues = z.output<ModelEditSchema>;
+
 const perMillionTokens = (...rates: (number | null | undefined)[]): number | null => {
   const rate = rates.find((candidate) => candidate != null);
   return rate == null ? null : rate * 1_000_000;
@@ -240,6 +226,10 @@ export const toModelEditFormValues = (localModelData: any, isWildcardModel: bool
     localModelData.litellm_params?.cache_creation_input_token_cost,
     localModelData.model_info?.cache_creation_input_token_cost,
   ),
+  cache_write_cost_1h: perMillionTokens(
+    localModelData.litellm_params?.cache_creation_input_token_cost_above_1hr,
+    localModelData.model_info?.cache_creation_input_token_cost_above_1hr,
+  ),
   cache_control: localModelData.litellm_params?.cache_control_injection_points ? true : false,
   cache_control_injection_points: localModelData.litellm_params?.cache_control_injection_points || [],
   model_access_group: Array.isArray(localModelData.model_info?.access_groups)
@@ -254,7 +244,7 @@ export const toModelEditFormValues = (localModelData: any, isWildcardModel: bool
   tags: Array.isArray(localModelData.litellm_params?.tags) ? localModelData.litellm_params.tags : [],
   // antd never mounted this field for a non-wildcard model, so the key must be absent, not null.
   ...(isWildcardModel ? { health_check_model: localModelData.model_info?.health_check_model } : {}),
-  litellm_credential_name: localModelData.litellm_params?.litellm_credential_name || "",
+  litellm_credential_name: localModelData.litellm_params?.litellm_credential_name ?? null,
   litellm_extra_params: JSON.stringify(
     Object.fromEntries(
       Object.entries(localModelData.litellm_params || {}).filter(
@@ -268,8 +258,8 @@ export const toModelEditFormValues = (localModelData: any, isWildcardModel: bool
 });
 
 const displayCost = (localModelData: any, field: TouchedPricingField): string => {
-  const { param, info } = COST_SOURCES[field];
-  const rate = localModelData?.litellm_params?.[param] ?? localModelData?.model_info?.[info];
+  const key = COST_SOURCES[field];
+  const rate = localModelData?.litellm_params?.[key] ?? localModelData?.model_info?.[key];
   return rate != null ? (Number(rate) * 1_000_000).toFixed(4) : "Not Set";
 };
 
@@ -285,7 +275,7 @@ interface ModelInfoEditFormProps {
   showCacheControl: boolean;
   setShowCacheControl: (checked: boolean) => void;
   onCancel: () => void;
-  onSubmit: (values: ModelEditFormValues, isFieldTouched: (field: TouchedPricingField) => boolean) => Promise<void>;
+  onSubmit: (values: ModelEditSubmitValues, isFieldTouched: (field: TouchedPricingField) => boolean) => Promise<void>;
   modelAccessGroups: string[] | null;
   guardrailsList: string[];
   tagsList: Record<string, Tag>;
@@ -373,10 +363,10 @@ const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
   };
 
   // react-hook-form refreshes control._options every render, so this rebuild is what the next submit runs.
-  const resolver: Resolver<ModelEditFormValues> = (values, context, options) =>
+  const resolver: Resolver<ModelEditFormValues, unknown, ModelEditSubmitValues> = (values, context, options) =>
     zodResolver(buildSchema(ptuCostAttributionEnabled, isFieldTouched))(values, context, options);
 
-  const form = useForm<ModelEditFormValues>({
+  const form = useForm<ModelEditFormValues, unknown, ModelEditSubmitValues>({
     resolver,
     defaultValues: toModelEditFormValues(localModelData, isWildcardModel),
   });
@@ -524,6 +514,12 @@ const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
               "Defaults to Input Cost if blank",
               "If left blank on save, defaults to Input Cost (backend falls back to input_cost_per_token).",
             )}
+            {pricingField(
+              "cache_write_cost_1h",
+              "Cache Write Cost (1 hour, per 1M tokens)",
+              "Defaults to the cost map 1 hour rate, else Cache Write Cost",
+              "Rate for prompt cache writes with a 1 hour TTL. If left blank on save, known models use their cost map 1 hour rate, otherwise Cache Write Cost.",
+            )}
 
             {textField("api_base", "API Base", "Enter API base", localModelData.litellm_params?.api_base)}
             {textField(
@@ -634,36 +630,32 @@ const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
               <FieldLabel>Existing Credentials</FieldLabel>
               {isEditing ? (
                 <FormField control={form.control} name="litellm_credential_name">
-                  {({ id, value, onChange, onBlur }) => {
-                    const items = [
-                      { value: "", label: "None" },
-                      ...credentialsList.map((credential) => ({
-                        value: credential.credential_name,
-                        label: credential.credential_name,
-                      })),
-                    ];
-                    return (
-                      <Select
-                        items={items}
-                        value={(value as string) ?? ""}
-                        onValueChange={(selected: string | null) => onChange(selected ?? "")}
-                      >
-                        <SelectTrigger id={id} className="w-full" onBlur={onBlur}>
-                          <SelectValue placeholder="Select or search for existing credentials" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {items.map((item) => (
-                            <SelectItem key={item.value} value={item.value}>
-                              {item.label}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    );
-                  }}
+                  {({ id, value, onChange }) => (
+                    <>
+                      <SearchSelect
+                        inputId={id}
+                        placeholder="Select or search for existing credentials"
+                        options={credentialOptions(credentialsList)}
+                        value={(value as string | null) ?? ""}
+                        allowClear={false}
+                        onValueChange={(selected) => {
+                          if (selected !== null) onChange(selected === "" ? null : selected);
+                        }}
+                      />
+                      <CredentialNameHint
+                        credentialName={value as string | null | undefined}
+                        credentials={credentialsList}
+                      />
+                    </>
+                  )}
                 </FormField>
               ) : (
-                <Display>{localModelData.litellm_params?.litellm_credential_name || "Manual"}</Display>
+                <Display>
+                  <AttachedCredential
+                    credentialName={localModelData.litellm_params?.litellm_credential_name}
+                    credentials={credentialsList}
+                  />
+                </Display>
               )}
             </div>
 

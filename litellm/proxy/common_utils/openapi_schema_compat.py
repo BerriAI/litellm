@@ -5,7 +5,7 @@ FastAPI 0.120+ has stricter schema generation that fails on certain types like o
 This module provides a compatibility layer to handle these cases gracefully.
 """
 
-from typing import Any, Final
+from typing import Final
 
 from litellm._logging import verbose_proxy_logger
 
@@ -16,7 +16,7 @@ def get_openapi_schema_with_compat(
     version: str,
     description: str,
     routes: list,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """
     Generate OpenAPI schema with compatibility handling for FastAPI 0.120+.
 
@@ -40,7 +40,9 @@ def get_openapi_schema_with_compat(
         from pydantic_core import core_schema
 
         # Store original method
-        original_unknown_type_schema: Final = GenerateSchema._unknown_type_schema
+        original_unknown_type_schema: Final = (
+            GenerateSchema._unknown_type_schema  # pyright: ignore[reportPrivateUsage]  # Pydantic schema internals
+        )
 
         def patched_unknown_type_schema(self, obj):
             """Patch to handle openai.Timeout and other non-serializable types"""

@@ -1,3 +1,4 @@
+import { selectAutoRouterApproach } from "../../../tests/autoRouterSetup";
 import React, { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
@@ -306,7 +307,7 @@ describe("forecast classifier form", () => {
     );
   });
 
-  it("switches a populated standard router to Capability without saving hidden pools or their overrides", () => {
+  it("switches a populated standard router to Capability without saving hidden pools or their overrides", async () => {
     renderWithProviders(
       <Form
         initialValue={{
@@ -329,7 +330,7 @@ describe("forecast classifier form", () => {
         }}
       />,
     );
-    fireEvent.click(screen.getByRole("tab", { name: "Capability" }));
+    await selectAutoRouterApproach("Capability");
     fireEvent.change(screen.getByLabelText("Solve probability threshold"), { target: { value: "0.7" } });
     expect(screen.getByRole("button", { name: "Save configuration" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Save configuration" }));
@@ -347,7 +348,7 @@ describe("forecast classifier form", () => {
 
   it.each(["capability", "llm_v2"] as const)(
     "carries non-default solver assignments when switching away from %s",
-    (source) => {
+    async (source) => {
       const pair = { efficient_tier: "MEDIUM", capable_tier: "COMPLEX" };
       const previous: ComplexityRouterConfigValue = {
         ...(source === "capability" ? initial : fuseInitial),
@@ -359,7 +360,7 @@ describe("forecast classifier form", () => {
         tier_model_params: { MEDIUM: { efficient: { max_tokens: 128 } }, COMPLEX: { capable: { speed: "fast" } } },
       };
       renderWithProviders(<Form initialValue={previous} />);
-      fireEvent.click(screen.getByRole("tab", { name: source === "capability" ? "Fuse v2" : "Capability" }));
+      await selectAutoRouterApproach(source === "capability" ? "Fuse v2" : "Capability");
       if (source === "capability") {
         fireEvent.change(screen.getByLabelText("Efficient solver profile"), { target: { value: "Small solver" } });
         fireEvent.change(screen.getByLabelText("Capable solver profile"), { target: { value: "Large solver" } });
@@ -402,20 +403,22 @@ describe("forecast classifier form", () => {
   ] as const)("restores the current rubric when switching %s through Complexity to %s", async (source, target) => {
     const user = userEvent.setup();
     renderWithProviders(<Form initialValue={source === "capability" ? initial : fuseInitial} />);
-    fireEvent.click(screen.getByRole("tab", { name: "Complexity" }));
+    await selectAutoRouterApproach("Complexity");
     fireEvent.click(screen.getByRole("radio", { name: new RegExp(`^${target}`) }));
-    await user.click(screen.getByRole("combobox", { name: "Classifier Model" }));
+    await user.click(screen.getByRole("combobox", { name: "Judge model" }));
     await user.click(screen.getByRole("option", { name: "judge" }));
     fireEvent.click(screen.getByRole("button", { name: "Save configuration" }));
     const output = screen.getByRole("status", { name: "Saved configuration" });
     expect(output).toHaveTextContent('"classification_rubric":"agentic"');
     expect(output).toHaveTextContent('"model":"judge"');
-    expect(output).toHaveTextContent('"timeout_ms":3000');
+    expect(output).toHaveTextContent(
+      `"timeout_ms":${(source === "capability" ? initial : fuseInitial).classifier_llm_config?.timeout_ms}`,
+    );
     expect(output).not.toHaveTextContent('"capability_classifier_config"');
     expect(output).not.toHaveTextContent('"llm_v2_config"');
   });
 
-  it("saves capability threshold edits together with fitted calibration", () => {
+  it("saves capability threshold edits together with fitted calibration", async () => {
     renderWithProviders(<Form />);
     fireEvent.change(screen.getByLabelText("Solve probability threshold"), { target: { value: "0.6" } });
     fireEvent.click(screen.getByRole("button", { name: "Classifier options" }));
@@ -432,9 +435,9 @@ describe("forecast classifier form", () => {
     expect(screen.getByRole("button", { name: "Save configuration" })).toBeDisabled();
   });
 
-  it("switches to Fuse, requires solver context, and saves the filled fields", () => {
+  it("switches to Fuse, requires solver context, and saves the filled fields", async () => {
     renderWithProviders(<Form />);
-    fireEvent.click(screen.getByRole("tab", { name: "Fuse v2" }));
+    await selectAutoRouterApproach("Fuse v2");
     expect(screen.queryByLabelText("Solve probability threshold")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Save configuration" })).toBeDisabled();
     fireEvent.change(screen.getByLabelText("Efficient solver profile"), {

@@ -5,8 +5,8 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Annotated, Final, Literal, NamedTuple, Optional, cast
 
 from fastapi import HTTPException
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
-from typing_extensions import Any, override
+from pydantic import ConfigDict, Field, ValidationError
+from typing_extensions import override
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
@@ -26,6 +26,7 @@ from litellm.proxy.common_utils.callback_utils import (
     add_guardrail_to_applied_guardrails_header,
 )
 from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import AllMessageValues, OpenAIChatCompletionToolParam
 from litellm.types.proxy.guardrails.guardrail_hooks.crowdstrike_aidr import (
     CrowdStrikeAIDRGuardrailConfigModelOptionalParams,
@@ -41,18 +42,18 @@ class CrowdStrikeAIDRGuardrailMissingSecrets(Exception):
     """Custom exception for missing CrowdStrike AIDR secrets."""
 
 
-class _TextContentPart(BaseModel):
+class _TextContentPart(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["text"] = "text"
     text: str
 
 
-class _ImageUrl(BaseModel):
+class _ImageUrl(LiteLLMBaseModel):
     url: str
 
 
-class _ImageUrlContentPart(BaseModel):
+class _ImageUrlContentPart(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["image_url"] = "image_url"
@@ -62,28 +63,28 @@ class _ImageUrlContentPart(BaseModel):
 _ContentPart = Annotated[_TextContentPart | _ImageUrlContentPart, Field(discriminator="type")]
 
 
-class _Message(BaseModel):
+class _Message(LiteLLMBaseModel):
     role: str
     content: str | list[_ContentPart] | None = None
 
 
-class _GuardInput(BaseModel):
+class _GuardInput(LiteLLMBaseModel):
     messages: list[_Message]
     tools: Sequence[OpenAIChatCompletionToolParam] | None = None
 
 
-class _GuardChatCompletionsResult(BaseModel):
+class _GuardChatCompletionsResult(LiteLLMBaseModel):
     guard_output: _GuardInput | None = None
     """Updated structured prompt."""
     blocked: bool | None = None
     """Whether or not the prompt triggered a block detection."""
     transformed: bool | None = None
     """Whether or not the original input was transformed."""
-    detectors: dict[str, Any] | None = None
+    detectors: dict[str, object] | None = None
     """Result of the policy analyzing and input prompt."""
 
 
-class _GuardChatCompletionsResponse(BaseModel):
+class _GuardChatCompletionsResponse(LiteLLMBaseModel):
     result: _GuardChatCompletionsResult | None = None
 
 
@@ -147,8 +148,8 @@ def _extract_text_from_message(message: _Message) -> str:
     return "\n".join(part.text for part in content if isinstance(part, _TextContentPart))
 
 
-def _merge_metadata_bags(request_data: Mapping[str, Any]) -> Mapping[str, Any] | None:
-    merged: Final[dict[str, Any]] = {}
+def _merge_metadata_bags(request_data: Mapping[str, object]) -> Mapping[str, object] | None:
+    merged: Final[dict[str, object]] = {}
     present = False
     for bag in (request_data.get("metadata"), request_data.get("litellm_metadata")):
         if isinstance(bag, Mapping):
@@ -325,7 +326,7 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
         self._set_streaming_params(streaming_params_from_litellm_params(litellm_params))
 
     async def _call_crowdstrike_aidr_guard(
-        self, payload: dict[str, Any], hook_name: str
+        self, payload: dict[str, object], hook_name: str
     ) -> _GuardChatCompletionsResult:
         """
         Makes the API call to the CrowdStrike AIDR AI Guard endpoint.
@@ -355,7 +356,9 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
             "CrowdStrike AIDR Guardrail (%s): Calling endpoint %s with payload: %s", hook_name, endpoint, payload
         )
 
-        response: Final = await self.async_handler.post(url=endpoint, json=payload, headers=headers)
+        response: Final = await self.async_handler.post(
+            url=endpoint, json=payload, headers=headers, timeout=self.timeout
+        )
         assert response is not None
         response.raise_for_status()
 
@@ -384,7 +387,7 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
             if transformed_signal:
                 raise HTTPException(
                     status_code=500,
-                    detail={  # mutable-ok: one-shot HTTPException detail payload, never mutated after construction
+                    detail={
                         "error": "CrowdStrike AIDR returned a transformed response litellm could not parse; "
                         "failing closed instead of dropping the delivered redactions",
                         "guardrail_name": self.guardrail_name,
@@ -435,7 +438,7 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
         return [_extract_text_from_message(msg) for msg in tail]
 
     async def _call_or_fail_open(
-        self, payload: dict[str, Any], hook_name: str, request_data: dict[str, object]
+        self, payload: dict[str, object], hook_name: str, request_data: dict[str, object]
     ) -> _GuardChatCompletionsResult:
         start_time: Final = time.time()
         try:
@@ -518,7 +521,7 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
             event_type = "output"
             hook_name = "apply_guardrail (response)"
 
-        ai_guard_payload: Final[dict[str, Any]] = {
+        ai_guard_payload: Final[dict[str, object]] = {
             "guard_input": guard_input.model_dump(mode="json"),
             "event_type": event_type,
         }
@@ -533,7 +536,7 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
             if user_id:
                 ai_guard_payload["user_id"] = user_id
 
-            extra_info: Final[dict[str, str]] = {}
+            extra_info: Final[dict[str, object]] = {}
             user_email: Final = metadata.get("user_api_key_user_email")
             if user_email:
                 extra_info["user_name"] = user_email

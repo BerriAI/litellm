@@ -74,7 +74,7 @@ locals {
     "/v1/models*", "/models*",
     "/openai/*", "/engines/*",
     "/v1/messages*", "/messages*",
-    "/v1/skills/*", "/v1/a2a/*",
+    "/v1/skills/*", "/v1/a2a/*", "/api/event_logging*",
     "/v1/rerank*", "/v2/rerank*", "/rerank*",
     "/v1/ocr*", "/ocr*",
     "/v1/rag/*", "/rag/*",

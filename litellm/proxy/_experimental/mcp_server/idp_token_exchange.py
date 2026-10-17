@@ -20,13 +20,15 @@ from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 
 EXCHANGE_ROUTE: Final = "/token"
 REJECTED_SUBJECT_TOKEN: Final = "subject_token was rejected by the gateway's JWT auth"
-SUBJECT_TOKEN_CHECK_UNAVAILABLE: Final = (
-    "the gateway could not verify subject_token because its identity provider or database is unavailable; retry"
+_CHECK_UNAVAILABLE: Final = (
+    "the gateway could not verify {parameter} because its identity provider or database is unavailable; retry"
 )
-SUBJECT_TOKEN_CHECK_FAULTED: Final = (
-    "the gateway could not verify subject_token because its database reported a fault that is not a transient "
+_CHECK_FAULTED: Final = (
+    "the gateway could not verify {parameter} because its database reported a fault that is not a transient "
     "outage; retrying will not help until the gateway deployment is repaired"
 )
+SUBJECT_TOKEN_CHECK_UNAVAILABLE: Final = _CHECK_UNAVAILABLE.format(parameter="subject_token")
+SUBJECT_TOKEN_CHECK_FAULTED: Final = _CHECK_FAULTED.format(parameter="subject_token")
 GatewayOutage = Literal["retryable", "faulted"]
 
 
@@ -170,6 +172,11 @@ async def identity_from_subject_token(
         return _refusal_for(denied, denied.message)
     except Exception as denied:  # noqa: BLE001  # auth_jwt raises a plain Exception on signature and claim failures
         return _refusal_for(denied, denied)
+    if result.get("agent_id") is not None:
+        return SubjectTokenRefusal(
+            error="invalid_request",
+            description="Agent tokens require direct JWT authentication; this exchange supports users only",
+        )
     user_id: Final = result["user_id"]
     if user_id is None:
         return SubjectTokenRefusal(error="invalid_request", description="subject_token names no user the gateway knows")
@@ -177,28 +184,44 @@ async def identity_from_subject_token(
 
 
 def _refusal_for(denied: Exception, reason: object) -> SubjectTokenRefusal:
+    outage: Final = gateway_outage_refusal(denied, reason, what="a subject_token", parameter="subject_token")
+    if outage is not None:
+        return outage
+    verbose_proxy_logger.warning("token exchange refused a subject_token: %s", log_line(reason))
+    return SubjectTokenRefusal(error="invalid_request", description=REJECTED_SUBJECT_TOKEN)
+
+
+def gateway_outage_refusal(denied: Exception, reason: object, what: str, parameter: str) -> SubjectTokenRefusal | None:
+    """The ``temporarily_unavailable`` refusal when ``denied`` is the gateway failing to check
+    ``what`` (its database or the IdP's JWKS down), naming the grant ``parameter`` it could not verify,
+    else ``None`` because the token itself was bad."""
     outage: Final = _gateway_could_not_verify(denied)
     if outage is None:
-        verbose_proxy_logger.warning("token exchange refused a subject_token: %s", reason)
-        return SubjectTokenRefusal(error="invalid_request", description=REJECTED_SUBJECT_TOKEN)
-    verbose_proxy_logger.error("token exchange could not verify a subject_token, %s: %s", outage, reason)
-    return SubjectTokenRefusal(error="temporarily_unavailable", description=_check_unavailable_description(outage))
+        return None
+    verbose_proxy_logger.error("token endpoint could not verify %s, %s: %s", what, outage, log_line(reason))
+    return SubjectTokenRefusal(
+        error="temporarily_unavailable", description=_check_unavailable_description(outage, parameter)
+    )
 
 
-def _check_unavailable_description(outage: GatewayOutage) -> str:
+def log_line(reason: object) -> str:
+    """``reason`` as one log line, so text a caller controls cannot forge log entries."""
+    return str(reason).replace("\r", " ").replace("\n", " ")
+
+
+def _check_unavailable_description(outage: GatewayOutage, parameter: str) -> str:
     match outage:
         case "retryable":
-            return SUBJECT_TOKEN_CHECK_UNAVAILABLE
+            return _CHECK_UNAVAILABLE.format(parameter=parameter)
         case "faulted":
-            return SUBJECT_TOKEN_CHECK_FAULTED
+            return _CHECK_FAULTED.format(parameter=parameter)
         case _:
             assert_never(outage)
 
 
 def _gateway_could_not_verify(denied: Exception) -> GatewayOutage | None:
-    """A database fault anywhere in the chain (``get_user_object`` wraps prisma failures in a
-    bare ``ValueError``) or a 5xx from JWT auth (the IdP's JWKS unreachable with no cached
-    copy) is the gateway failing, not the token. A fault retrying cannot clear (a missing or
+    """A database fault anywhere in the chain or a 5xx from JWT auth (the IdP's JWKS
+    unreachable with no cached copy) is the gateway failing, not the token. A fault retrying cannot clear (a missing or
     version-skewed query engine) is named as such, the way the mint path words it, so the
     client is not told to wait on a deployment that needs repair."""
     fault: Final = PrismaDBExceptionHandler.find_database_service_unavailable_error_in_chain(denied)

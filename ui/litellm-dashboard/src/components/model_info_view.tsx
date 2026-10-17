@@ -15,6 +15,7 @@ import { copyToClipboard as utilCopyToClipboard } from "../utils/dataUtils";
 import { stripMaskedSecrets } from "../utils/maskedSecretUtils";
 import { truncateString } from "../utils/textUtils";
 import AutoRouterConnectionTest from "./add_model/auto_router_connection_test";
+import { buildSavedJevConnectionTestRequest } from "./add_model/build_auto_router_routing_test_request";
 import { AutoRouterTestTarget, buildComplexityRouterTestTargets } from "./add_model/build_auto_router_test_targets";
 import {
   hasAutoRouterEditor,
@@ -27,6 +28,8 @@ import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import EditAutoRouterModal from "./edit_auto_router/edit_auto_router_modal";
 import ReuseCredentialsModal from "./model_add/reuse_credentials";
+import { credentialLabelsByName } from "./shared/credentialOptions";
+import { CredentialIdentity } from "./shared/CredentialIdentity";
 import { toast } from "@/lib/toast";
 import {
   CredentialItem,
@@ -43,7 +46,7 @@ import {
 import { Logo } from "@/components/molecules/logo/Logo";
 import { ModelPricingSummary } from "@/components/molecules/models/ModelPricingSummary";
 import UpdateModelCredentialsModal from "./update_model_credentials_modal";
-import ModelInfoEditForm, { type ModelEditFormValues, type TouchedPricingField } from "./ModelInfoEditForm";
+import ModelInfoEditForm, { type ModelEditSubmitValues, type TouchedPricingField } from "./ModelInfoEditForm";
 import { Tag } from "./tag_management/types";
 import { getDisplayModelName } from "./view_model/model_name_display";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -259,7 +262,7 @@ export default function ModelInfoView({
   };
 
   const handleModelUpdate = async (
-    values: ModelEditFormValues,
+    values: ModelEditSubmitValues,
     isFieldTouched: (field: TouchedPricingField) => boolean,
   ) => {
     try {
@@ -292,55 +295,30 @@ export default function ModelInfoView({
       };
 
       if (isFieldTouched("input_cost")) {
-        if (values.input_cost !== undefined && values.input_cost !== null && values.input_cost !== "") {
-          updatedLitellmParams.input_cost_per_token = Number(values.input_cost) / 1_000_000;
-        } else {
-          // Explicit null signals the backend to remove the pricing override.
-          updatedLitellmParams.input_cost_per_token = null;
-        }
+        updatedLitellmParams.input_cost_per_token = values.input_cost;
       }
       if (isFieldTouched("output_cost")) {
-        if (values.output_cost !== undefined && values.output_cost !== null && values.output_cost !== "") {
-          updatedLitellmParams.output_cost_per_token = Number(values.output_cost) / 1_000_000;
-        } else {
-          updatedLitellmParams.output_cost_per_token = null;
+        updatedLitellmParams.output_cost_per_token = values.output_cost;
+      }
+      if (isFieldTouched("cache_read_cost")) {
+        updatedLitellmParams.cache_read_input_token_cost = values.cache_read_cost;
+      } else if (isFieldTouched("input_cost")) {
+        const cacheReadCost = values.cache_read_cost ?? values.input_cost;
+        if (cacheReadCost !== null) {
+          updatedLitellmParams.cache_read_input_token_cost = cacheReadCost;
         }
       }
-
-      // Cache Read Cost:
-      //   - explicit value provided → use it
-      //   - field touched but empty → explicit null (signals backend to remove override)
-      //   - only input_cost touched → fall back to input_cost (guarded against null)
-      if (isFieldTouched("cache_read_cost") || isFieldTouched("input_cost")) {
-        if (values.cache_read_cost !== undefined && values.cache_read_cost !== null && values.cache_read_cost !== "") {
-          updatedLitellmParams.cache_read_input_token_cost = Number(values.cache_read_cost) / 1_000_000;
-        } else if (isFieldTouched("cache_read_cost")) {
-          updatedLitellmParams.cache_read_input_token_cost = null;
-        } else if (
-          updatedLitellmParams.input_cost_per_token !== undefined &&
-          updatedLitellmParams.input_cost_per_token !== null
-        ) {
-          updatedLitellmParams.cache_read_input_token_cost = updatedLitellmParams.input_cost_per_token;
-        }
-      }
-
-      // Cache Write Cost: explicit value if provided, else explicit null so the
-      // backend removes the override and falls back to the model-level default.
-      // Sending 0 here would persist a zero rate even when the user intended to unset it.
       if (isFieldTouched("cache_write_cost")) {
-        if (
-          values.cache_write_cost !== undefined &&
-          values.cache_write_cost !== null &&
-          values.cache_write_cost !== ""
-        ) {
-          updatedLitellmParams.cache_creation_input_token_cost = Number(values.cache_write_cost) / 1_000_000;
-        } else {
-          updatedLitellmParams.cache_creation_input_token_cost = null;
-        }
+        updatedLitellmParams.cache_creation_input_token_cost = values.cache_write_cost;
+      }
+      if (isFieldTouched("cache_write_cost_1h")) {
+        updatedLitellmParams.cache_creation_input_token_cost_above_1hr = values.cache_write_cost_1h;
       }
 
-      if (values.litellm_credential_name) {
-        updatedLitellmParams.litellm_credential_name = values.litellm_credential_name;
+      const storedCredentialName: string | null = localModelData?.litellm_params?.litellm_credential_name ?? null;
+      const selectedCredentialName: string | null = values.litellm_credential_name ?? null;
+      if (selectedCredentialName !== storedCredentialName) {
+        updatedLitellmParams.litellm_credential_name = selectedCredentialName;
       } else {
         delete updatedLitellmParams.litellm_credential_name;
       }
@@ -396,6 +374,7 @@ export default function ModelInfoView({
       // without this strip a masked value would be re-encrypted over the real secret.
       // Credential rotation has its own dedicated path (UpdateModelCredentialsModal).
       const safeLitellmParams = stripMaskedSecrets(updatedLitellmParams);
+      const { litellm_credential_name: _sentCredential, ...localLitellmParams } = safeLitellmParams;
 
       const updateData = {
         model_name: values.model_name,
@@ -409,7 +388,10 @@ export default function ModelInfoView({
         ...localModelData,
         model_name: values.model_name,
         litellm_model_name: values.litellm_model_name,
-        litellm_params: safeLitellmParams,
+        litellm_params:
+          selectedCredentialName === null
+            ? localLitellmParams
+            : { ...localLitellmParams, litellm_credential_name: selectedCredentialName },
         model_info: updatedModelInfo,
       };
 
@@ -484,9 +466,7 @@ export default function ModelInfoView({
           // backend silently falls back to deployments[0] and probes
           // the wrong endpoint.
           id: localModelData.model_info?.id,
-          mode: localModelData.model_info?.mode,
         },
-        localModelData.model_info?.mode,
       );
 
       if (response.status === "success") {
@@ -803,7 +783,13 @@ export default function ModelInfoView({
             <DialogHeader>
               <DialogTitle>Using Existing Credential</DialogTitle>
             </DialogHeader>
-            <p className="text-sm">{modelData.litellm_params.litellm_credential_name}</p>
+            <CredentialIdentity
+              className="text-sm"
+              credentialName={modelData.litellm_params.litellm_credential_name ?? ""}
+              label={credentialLabelsByName(credentialsList).get(
+                modelData.litellm_params.litellm_credential_name ?? "",
+              )}
+            />
             <DialogFooter>
               <Button variant="outline" onClick={() => setIsCredentialModalOpen(false)}>
                 Cancel
@@ -846,6 +832,11 @@ export default function ModelInfoView({
               key={autoRouterTestId}
               accessToken={accessToken}
               targets={autoRouterTestTargets}
+              jevRequest={buildSavedJevConnectionTestRequest(
+                (localModelData ?? modelData)?.litellm_params?.complexity_router_config,
+                (localModelData ?? modelData)?.model_info?.id,
+                (localModelData ?? modelData)?.model_info?.team_id,
+              )}
             />
           )}
           <DialogFooter>

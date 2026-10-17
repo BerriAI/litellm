@@ -50,7 +50,7 @@ _INTERACTIONS_MODALITY_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
 )
 
 
-def _modality_field(entry: Mapping[str, Any]) -> str | None:
+def _modality_field(entry: Mapping[str, object]) -> str | None:
     return _INTERACTIONS_MODALITY_FIELDS.get(str(entry.get("modality", "")).lower())
 
 
@@ -58,7 +58,7 @@ def _token_count(value: object) -> int:
     return value if isinstance(value, int) else 0
 
 
-def _modality_token_sums(entries: Sequence[Mapping[str, Any]]) -> Mapping[str, int]:
+def _modality_token_sums(entries: Sequence[Mapping[str, object]]) -> Mapping[str, int]:
     fields: Final = frozenset(field for entry in entries if (field := _modality_field(entry)) is not None)
     return MappingProxyType(
         {
@@ -68,7 +68,7 @@ def _modality_token_sums(entries: Sequence[Mapping[str, Any]]) -> Mapping[str, i
     )
 
 
-def _google_search_query_count(usage_object: Mapping[str, Any]) -> int:
+def _google_search_query_count(usage_object: Mapping[str, object]) -> int:
     entries: Final = usage_object.get("grounding_tool_count")
     if not isinstance(entries, Sequence):
         return 0
