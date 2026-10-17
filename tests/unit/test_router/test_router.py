@@ -23912,6 +23912,105 @@ def test_map_team_model_should_not_iterate_aliases_for_non_alias_team_model_name
     result = router.map_team_model(team_model_name="team-model", team_id="team-1")
     assert result == "team-model", f"Expected public name 'team-model', got {result}"
 
+
+def _team_deployment(
+    public_name: str,
+    litellm_model: str,
+    team_id: str = "team-a",
+    deployment_id: str | None = None,
+) -> DeploymentTypedDict:
+    return {
+        "model_name": f"internal-{team_id}-{public_name}",
+        "litellm_params": {"model": litellm_model},
+        "model_info": {
+            "id": deployment_id or f"{team_id}-{public_name}",
+            "team_id": team_id,
+            "team_public_model_name": public_name,
+        },
+    }
+
+
+_LANGGRAPH_AGENT: Final[DeploymentTypedDict] = _team_deployment("a-langgraph-agent", "langgraph/repro-agent")
+_BEDROCK_CLAUDE: Final[DeploymentTypedDict] = _team_deployment(
+    "a-bedrock-claude", "bedrock/anthropic.claude-sonnet-4-6"
+)
+_OPENAI_GPT: Final[DeploymentTypedDict] = _team_deployment("a-gpt", "openai/gpt-4o-mini")
+
+
+@pytest.mark.parametrize(
+    "team_models, custom_llm_provider, expected",
+    [
+        pytest.param([_LANGGRAPH_AGENT, _BEDROCK_CLAUDE], "bedrock", "a-bedrock-claude", id="match-is-second"),
+        pytest.param([_BEDROCK_CLAUDE, _LANGGRAPH_AGENT], "bedrock", "a-bedrock-claude", id="match-is-first"),
+        pytest.param([_LANGGRAPH_AGENT, _OPENAI_GPT], "bedrock", None, id="no-match-returns-none"),
+        pytest.param([_LANGGRAPH_AGENT, _BEDROCK_CLAUDE], None, "a-langgraph-agent", id="no-provider-keeps-first"),
+        pytest.param(
+            [_team_deployment("b-bedrock-claude", "bedrock/anthropic.claude-sonnet-4-6", team_id="team-b")],
+            "bedrock",
+            None,
+            id="other-teams-match-ignored",
+        ),
+        pytest.param(
+            [
+                _team_deployment("shared", "langgraph/repro-agent", deployment_id="shared-langgraph"),
+                _team_deployment(
+                    "shared",
+                    "bedrock/anthropic.claude-sonnet-4-6",
+                    deployment_id="shared-bedrock",
+                ),
+            ],
+            "bedrock",
+            "shared-bedrock",
+            id="mixed-public-name-langgraph-first",
+        ),
+        pytest.param(
+            [
+                _team_deployment(
+                    "shared",
+                    "bedrock/anthropic.claude-sonnet-4-6",
+                    deployment_id="shared-bedrock",
+                ),
+                _team_deployment("shared", "langgraph/repro-agent", deployment_id="shared-langgraph"),
+            ],
+            "bedrock",
+            "shared-bedrock",
+            id="mixed-public-name-bedrock-first",
+        ),
+        pytest.param(
+            [
+                _team_deployment("shared", "bedrock/anthropic.claude-sonnet-4-6", deployment_id="bedrock-one"),
+                _team_deployment("shared", "bedrock/anthropic.claude-sonnet-4-6", deployment_id="bedrock-two"),
+            ],
+            "bedrock",
+            "shared",
+            id="same-provider-public-name-keeps-load-balancing",
+        ),
+    ],
+)
+def test_map_team_model_without_model_picks_deployment_serving_the_requested_provider(
+    team_models: list[DeploymentTypedDict], custom_llm_provider: str | None, expected: str | None
+) -> None:
+    """A model-less vector store call routed through the team's first deployment, so a langgraph
+    team model made a Bedrock vector store search fail with "not supported for langgraph"."""
+    router = Router(model_list=team_models)
+
+    result = router.map_team_model(None, "team-a", custom_llm_provider=custom_llm_provider)
+
+    assert result == expected, (
+        f"team models {[m['litellm_params']['model'] for m in team_models]}, provider {custom_llm_provider}"
+    )
+
+
+def test_map_team_model_with_explicit_model_ignores_requested_provider() -> None:
+    router = Router(model_list=[_LANGGRAPH_AGENT, _BEDROCK_CLAUDE])
+
+    result = router.map_team_model("a-langgraph-agent", "team-a", custom_llm_provider="bedrock")
+
+    assert result == "a-langgraph-agent", (
+        "an explicit model is the caller's choice and must not be re-picked by provider"
+    )
+
+
 @pytest.mark.usefixtures("_vcr_outcome_gate_router_unit", "setup_and_teardown_router_unit")
 class TestPreCallChecksOptimization:
     """

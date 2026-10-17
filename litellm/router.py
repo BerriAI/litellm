@@ -12565,26 +12565,56 @@ class Router:
         members: Final = routing_group.models if routing_group is not None else ()
         return served_model if served_model == target or served_model in members else model_name
 
-    def map_team_model(self, team_model_name: str | None, team_id: str) -> str | None:
+    def map_team_model(
+        self, team_model_name: str | None, team_id: str, custom_llm_provider: str | None = None
+    ) -> str | None:
         """
-        Check if team_model_name resolves to team-specific deployments.
+        Resolve explicit team models or select a deployment for model-less calls.
 
-        Returns the public model name (unchanged) so the router can find all
-        sibling deployments via team_id filtering, instead of collapsing to a
-        single internal model_name.
-
-        When team_model_name is None (e.g. vector store / file endpoints that
-        don't include a model in their request), returns the first matching
-        team deployment's team_public_model_name so the router can inject BYOK
-        credentials from the team-scoped deployment.
-
-        Returns:
-        - str: the team_model_name if team deployments exist for this team
-        - None: if no team-specific model is found
+        Model-less calls with no provider use the first team deployment. With a provider, they
+        use the first team deployment of that provider, pinned by ID when its public name also
+        covers another provider.
         """
         models: Final = self.get_model_list(model_name=team_model_name, team_id=team_id)
         if not models:
             return None
+        if team_model_name is None and custom_llm_provider is not None:
+
+            def team_deployment_public_name(deployment: DeploymentTypedDict) -> str | None:
+                model_info: Final = _configured_model_info(deployment)
+                if model_info.get("team_id") != team_id:
+                    return None
+                team_public_model_name: Final = model_info.get("team_public_model_name")
+                return (
+                    team_public_model_name
+                    if isinstance(team_public_model_name, str) and team_public_model_name
+                    else deployment["model_name"]
+                )
+
+            matching_deployment: Final = next(
+                (
+                    model
+                    for model in models
+                    if team_deployment_public_name(model) is not None
+                    and provider_for_generic_call(model["litellm_params"]) == custom_llm_provider
+                ),
+                None,
+            )
+            if matching_deployment is None:
+                return None
+            public_name: Final = team_deployment_public_name(matching_deployment)
+            if public_name is None:
+                return None
+            same_public_name_deployments: Final = tuple(
+                candidate for candidate in models if team_deployment_public_name(candidate) == public_name
+            )
+            if all(
+                provider_for_generic_call(candidate["litellm_params"]) == custom_llm_provider
+                for candidate in same_public_name_deployments
+            ):
+                return public_name
+            deployment_id: Final = _configured_model_info(matching_deployment).get("id")
+            return deployment_id if isinstance(deployment_id, str) else None
         for model in models:
             if model.get("model_info", {}).get("team_id") == team_id:
                 if team_model_name is None:
