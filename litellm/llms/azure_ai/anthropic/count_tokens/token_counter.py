@@ -6,7 +6,7 @@ import os
 from collections.abc import Mapping
 from typing import Final
 
-from pydantic import JsonValue, TypeAdapter
+from pydantic import ConfigDict, JsonValue, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -18,8 +18,12 @@ from litellm.types.utils import LlmProviders, TokenCountMessagesFormat, TokenCou
 
 # Global handler instance - reuse across all token counting requests
 azure_ai_anthropic_count_tokens_handler: Final = AzureAIAnthropicCountTokensHandler()
-_LITELLM_PARAMS_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
-_OPTIONAL_STRING_ADAPTER: Final[TypeAdapter[str | None]] = TypeAdapter(str | None)
+_LITELLM_PARAMS_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(
+    Mapping[str, object], config=ConfigDict(hide_input_in_errors=True)
+)
+_OPTIONAL_STRING_ADAPTER: Final[TypeAdapter[str | None]] = TypeAdapter(
+    str | None, config=ConfigDict(hide_input_in_errors=True)
+)
 
 
 def _missing_api_base_response(request_model: str, model_to_use: str) -> TokenCountResponse:

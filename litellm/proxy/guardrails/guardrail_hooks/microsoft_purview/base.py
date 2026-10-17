@@ -31,7 +31,7 @@ GRAPH_SCOPE: Final = "https://graph.microsoft.com/.default"
 SCOPE_CACHE_TTL_SECONDS: Final = 3600.0
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class GraphTokenResponse(TypedDict):
     access_token: ReadOnly[str]
     expires_in: NotRequired[ReadOnly[int | str | float]]

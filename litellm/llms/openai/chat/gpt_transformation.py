@@ -79,12 +79,12 @@ _OBJECT_MAPPING: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[
 _DECODED_JSON: Final = TypeAdapter(object)
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _ModelEntry(TypedDict):
     id: ReadOnly[str]
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _ModelsListResponse(TypedDict):
     data: ReadOnly[Sequence[_ModelEntry]]
 

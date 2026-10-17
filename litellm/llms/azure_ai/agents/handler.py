@@ -81,7 +81,7 @@ class _AzureMessagesData(TypedDict, total=False):
     data: ReadOnly[list[_AzureMessage]]
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _CreatedObject(TypedDict):
     id: ReadOnly[str]
 
@@ -95,7 +95,7 @@ class _RunStatus(TypedDict, total=False):
     last_error: ReadOnly[_RunError]
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _RunStatusOnly(TypedDict, total=False):
     status: ReadOnly[str]
 

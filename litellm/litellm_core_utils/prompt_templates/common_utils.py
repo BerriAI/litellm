@@ -15,7 +15,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeVar, cast
 
-from pydantic import TypeAdapter
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm import verbose_logger
@@ -2540,7 +2540,7 @@ def merge_consecutive_system_messages(
 
 
 _DECODED_JSON: Final = TypeAdapter(object)
-_DECODED_JSON_MAPPING: Final = TypeAdapter(dict[str, object])
+_DECODED_JSON_MAPPING: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 def _decode_json_mapping_at(

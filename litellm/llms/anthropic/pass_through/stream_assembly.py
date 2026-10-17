@@ -98,18 +98,18 @@ _FAST_PATH_DISALLOWED_DELTA_TYPES: Final = frozenset(
 )
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _SseContentBlock(TypedDict):
     type: ReadOnly[NotRequired[object]]
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _SseDelta(TypedDict):
     type: ReadOnly[NotRequired[object]]
     text: ReadOnly[NotRequired[str | None]]
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _SseEvent(TypedDict):
     type: ReadOnly[NotRequired[object]]
     index: ReadOnly[NotRequired[object]]
@@ -118,7 +118,7 @@ class _SseEvent(TypedDict):
 
 
 _SSE_EVENT: Final = TypeAdapter(_SseEvent)
-_SSE_DATA: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
+_SSE_DATA: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True))
 
 
 def collapse_pure_text_chunks(

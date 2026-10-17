@@ -7619,7 +7619,7 @@ async def async_mock_completion_streaming_obj(
 
 
 ########## Reading Config File ############################
-_CONFIG_ARGS: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
+_CONFIG_ARGS: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True))
 
 
 def read_config_args(config_path) -> dict:
@@ -8573,7 +8573,9 @@ def validate_openai_optional_params(stop: str | list[str] | None = None, **kwarg
     return stop
 
 
-_BUNDLED_MODEL_COST_MAP: Final = TypeAdapter(dict[str, dict[str, object]], config=ConfigDict(strict=True))
+_BUNDLED_MODEL_COST_MAP: Final = TypeAdapter(
+    dict[str, dict[str, object]], config=ConfigDict(strict=True, hide_input_in_errors=True)
+)
 
 
 @lru_cache(maxsize=1)

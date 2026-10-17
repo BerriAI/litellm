@@ -99,12 +99,12 @@ if TYPE_CHECKING:
     from jwt.types import Options
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _OIDCDiscoveryDocument(TypedDict, total=False):
     jwks_uri: ReadOnly[str]
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _JWKSResponse(TypedDict, total=False):
     keys: ReadOnly[Sequence[Mapping[str, object]]]
 
@@ -131,7 +131,7 @@ class _SignedClaimSummary(TypedDict):
 
 _JWKS_RESPONSE_ADAPTER: Final = TypeAdapter(_JWKSResponse)
 _OIDC_DISCOVERY_ADAPTER: Final = TypeAdapter(_OIDCDiscoveryDocument)
-_JSON_OBJECT_ADAPTER: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
+_JSON_OBJECT_ADAPTER: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True))
 
 # Module-level singleton for the JWKS discovery endpoint to access.
 _mcp_jwt_signer_instance: Optional["MCPJWTSigner"] = None

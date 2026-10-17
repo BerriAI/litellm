@@ -230,7 +230,7 @@ async def _request_token_async(
         )
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _TokenResponse(TypedDict):
     tok: NotRequired[ReadOnly[str | None]]
     access_token: NotRequired[ReadOnly[str | None]]
@@ -239,7 +239,7 @@ class _TokenResponse(TypedDict):
 
 
 _TOKEN_RESPONSE: Final = TypeAdapter(_TokenResponse)
-_JSON_BODY: Final = TypeAdapter(object)
+_JSON_BODY: Final = TypeAdapter(object, config=ConfigDict(hide_input_in_errors=True))
 
 
 def _parse_token_response(response: httpx.Response) -> tuple[str, int]:

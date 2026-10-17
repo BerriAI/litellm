@@ -33,7 +33,7 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _VertexGemmaPredictionsResponse(TypedDict, total=False):
     predictions: NotRequired[ReadOnly[dict[str, object]]]
 

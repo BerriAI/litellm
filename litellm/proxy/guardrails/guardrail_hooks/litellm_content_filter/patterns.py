@@ -19,7 +19,7 @@ from typing_extensions import ReadOnly, TypedDict
 from litellm.proxy.guardrails.content_filter_data import DATA_ROOTS, category_dirs
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _PatternEntry(TypedDict):
     name: ReadOnly[str]
     display_name: ReadOnly[str]
@@ -28,7 +28,7 @@ class _PatternEntry(TypedDict):
     description: ReadOnly[str]
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _PatternsFile(TypedDict):
     patterns: ReadOnly[Sequence[_PatternEntry]]
 

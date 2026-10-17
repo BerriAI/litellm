@@ -37,7 +37,7 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _VertexFileData(TypedDict, total=False):
     mimeType: ReadOnly[str]
     uri: ReadOnly[str]

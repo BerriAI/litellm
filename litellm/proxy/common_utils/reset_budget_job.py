@@ -10,7 +10,7 @@ from itertools import chain
 from types import MappingProxyType
 from typing import Final, Generic, Literal, Protocol, TypeVar
 
-from pydantic import TypeAdapter
+from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import assert_never
 
 import litellm
@@ -86,9 +86,9 @@ class _RowReset(Generic[_RowT]):
 
 _LINKED_KEYS_WHERE: Final[Mapping[str, object]] = MappingProxyType({"budget_duration": None, "spend": {"gt": 0}})
 _SPENT_ROWS_WHERE: Final[Mapping[str, object]] = MappingProxyType({"spend": {"gt": 0}})
-_WINDOW_ROWS: Final = TypeAdapter(list[dict[str, object]])
-_WINDOW_JSON_INPUT: Final = TypeAdapter(str | bytes)
-_WINDOW_STRING: Final = TypeAdapter(str)
+_WINDOW_ROWS: Final = TypeAdapter(list[dict[str, object]], config=ConfigDict(hide_input_in_errors=True))
+_WINDOW_JSON_INPUT: Final = TypeAdapter(str | bytes, config=ConfigDict(hide_input_in_errors=True))
+_WINDOW_STRING: Final = TypeAdapter(str, config=ConfigDict(hide_input_in_errors=True))
 
 
 def _window_json_input(value: object) -> str | bytes:

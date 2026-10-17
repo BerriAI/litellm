@@ -29,7 +29,7 @@ class PromptManagementClient(TypedDict):
     optional_params: dict[str, object] | None
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _HumanloopPromptResponse(TypedDict):
     template: ReadOnly[Mapping[str, object] | Sequence[object] | str | int | float | bool | None]
     model: ReadOnly[str | None]

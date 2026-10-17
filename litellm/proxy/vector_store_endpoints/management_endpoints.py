@@ -91,7 +91,9 @@ _LITELLM_PARAMS_MASKER: Final = SensitiveDataMasker(extra_sensitive_patterns=fro
 _REDACT_LITELLM_PARAMS_MAX_DEPTH: Final = 10
 
 _DECODED_JSON: Final = TypeAdapter(object)
-_VECTOR_STORE_METADATA: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
+_VECTOR_STORE_METADATA: Final = TypeAdapter(
+    dict[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True)
+)
 
 
 def _redact_sensitive_litellm_params(litellm_params: object, _depth: int = 0) -> Any:

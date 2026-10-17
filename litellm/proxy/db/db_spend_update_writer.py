@@ -103,7 +103,9 @@ else:
 RESPONSES_SESSION_CALL_TYPES: Final = frozenset({CallTypes.responses.value, CallTypes.aresponses.value})
 _SPEND_METADATA_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _JsonPayload: TypeAlias = Mapping[str, object] | Sequence[object] | str | int | float | bool | None
-_JSON_VALUE_ADAPTER: Final[TypeAdapter[_JsonPayload]] = TypeAdapter(_JsonPayload, config=ConfigDict(strict=True))
+_JSON_VALUE_ADAPTER: Final[TypeAdapter[_JsonPayload]] = TypeAdapter(
+    _JsonPayload, config=ConfigDict(strict=True, hide_input_in_errors=True)
+)
 
 
 def _parsed_request_tags(request_tags: object) -> Iterable[object] | None:

@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 
-_PROMPT_API_RESPONSE: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
+_PROMPT_API_RESPONSE: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True))
 
 
 class GenericPromptManager(CustomPromptManagement):

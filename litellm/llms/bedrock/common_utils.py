@@ -1846,9 +1846,11 @@ def get_bedrock_response_stream_shape():
 
 
 _BEDROCK_STREAM_OUTPUT_SHAPES: Final = ("ConverseStreamOutput", "ResponseStream")
-_BEDROCK_MAPPING_ADAPTER: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(strict=True))
-_BEDROCK_HTTP_STATUS_ADAPTER: Final = TypeAdapter(int, config=ConfigDict(strict=True))
-_BEDROCK_STREAM_BYTES_ADAPTER: Final = TypeAdapter(bytes, config=ConfigDict(strict=True))
+_BEDROCK_MAPPING_ADAPTER: Final = TypeAdapter(
+    Mapping[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True)
+)
+_BEDROCK_HTTP_STATUS_ADAPTER: Final = TypeAdapter(int, config=ConfigDict(strict=True, hide_input_in_errors=True))
+_BEDROCK_STREAM_BYTES_ADAPTER: Final = TypeAdapter(bytes, config=ConfigDict(strict=True, hide_input_in_errors=True))
 
 
 def _modeled_error_status(member: Shape) -> int | None:

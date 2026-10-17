@@ -40,7 +40,7 @@ class _AccessTokenPoll(TypedDict):
     error: ReadOnly[NotRequired[object]]
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _ApiKeyInfo(TypedDict):
     token: ReadOnly[NotRequired[str]]
 

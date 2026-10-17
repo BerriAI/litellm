@@ -26,7 +26,7 @@ from litellm.utils import print_verbose
 API_BASE: Final = "https://api.braintrustdata.com/v1"
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _BraintrustProject(TypedDict):
     id: ReadOnly[str]
 

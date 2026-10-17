@@ -8,7 +8,7 @@ import json
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final
 
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 from typing_extensions import override
 
 from litellm.integrations.opentelemetry_utils.base_otel_llm_obs_attributes import (
@@ -28,7 +28,7 @@ from litellm.types.utils import (
 if TYPE_CHECKING:
     from opentelemetry.trace import Span
 
-_OBJECT_DICT: Final = TypeAdapter(dict[str, object])
+_OBJECT_DICT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 def get_output_content_by_type(

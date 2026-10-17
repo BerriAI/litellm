@@ -26,7 +26,7 @@ from litellm.types.utils import LlmProviders
 from .authenticator import get_access_token, get_access_token_async
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _GigaChatUploadResponse(TypedDict):
     id: ReadOnly[NotRequired[str | None]]
 

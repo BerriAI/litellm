@@ -54,19 +54,19 @@ _LITELLM_INTERNAL_KEYS: Final = frozenset(
 )
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _GeminiAgentResponse(TypedDict):
     id: ReadOnly[NotRequired[str | None]]
     name: ReadOnly[NotRequired[str | None]]
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _GeminiAgentListResponse(TypedDict):
     agents: ReadOnly[NotRequired[list[dict[str, object]]]]
     nextPageToken: ReadOnly[NotRequired[str | None]]
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _GeminiAgentVersionsResponse(TypedDict):
     agentVersions: ReadOnly[NotRequired[list[dict[str, object]]]]
     nextPageToken: ReadOnly[NotRequired[str | None]]

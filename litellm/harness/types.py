@@ -21,7 +21,7 @@ FileChangeKind = Literal["created", "modified", "deleted"]
 STATE_VERSION = 1
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _StateDocument(TypedDict):
     harness: ReadOnly[object]
     version: ReadOnly[bool | int | float | str]

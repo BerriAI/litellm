@@ -78,8 +78,8 @@ NOVA_INVOKE_STREAM_EVENT_TYPES: Final = (
     "metadata",
 )
 NOVA_INVOKE_STREAM_EVENT_PAYLOAD: Final = TypeAdapter(dict[str, object])
-_EVENT_STREAM_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
-_EVENT_STREAM_BYTES: Final = TypeAdapter(bytes, config=ConfigDict(strict=True))
+_EVENT_STREAM_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True))
+_EVENT_STREAM_BYTES: Final = TypeAdapter(bytes, config=ConfigDict(strict=True, hide_input_in_errors=True))
 
 
 class AmazonCohereChatConfig:

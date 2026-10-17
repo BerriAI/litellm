@@ -34,17 +34,17 @@ class _WhiteSpaceConfig(LiteLLMBaseModel):
     max_overlap_tokens: object = 400
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _FileSearchStore(TypedDict):
     name: ReadOnly[NotRequired[str]]
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _UploadedFileRef(TypedDict):
     name: ReadOnly[NotRequired[str]]
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _UploadResponse(TypedDict):
     name: ReadOnly[NotRequired[str]]
     file: ReadOnly[NotRequired[_UploadedFileRef]]

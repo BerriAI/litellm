@@ -26,7 +26,9 @@ from litellm.types.interactions import (
 )
 from litellm.utils import CustomStreamWrapper
 
-_INTERACTIONS_STREAMING_CHUNK_ADAPTER: Final = TypeAdapter(object, config=ConfigDict(strict=True))
+_INTERACTIONS_STREAMING_CHUNK_ADAPTER: Final = TypeAdapter(
+    object, config=ConfigDict(strict=True, hide_input_in_errors=True)
+)
 
 
 class BaseInteractionsAPIStreamingIterator:

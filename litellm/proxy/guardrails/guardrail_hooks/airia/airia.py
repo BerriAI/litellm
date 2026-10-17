@@ -8,7 +8,7 @@ from typing import (
 )
 
 import httpx
-from pydantic import TypeAdapter
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import GuardrailRaisedException
@@ -37,7 +37,7 @@ DEFAULT_BLOCKED_MESSAGE: Final = "Blocked by your organization's content policy.
 
 SUPPORTED_EVENT_HOOKS: Final = (GuardrailEventHooks.pre_call, GuardrailEventHooks.post_call)
 
-_PARSED_JSON: Final = TypeAdapter(object)
+_PARSED_JSON: Final = TypeAdapter(object, config=ConfigDict(hide_input_in_errors=True))
 
 
 def _stream_cannot_carry_a_rewrite(request_data: Mapping[str, object] | None) -> bool:

@@ -15,7 +15,7 @@ from urllib.parse import quote, unquote
 import httpx
 from httpx import Headers, Response
 from openai.types.file_deleted import FileDeleted
-from pydantic import TypeAdapter
+from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import ReadOnly, Required, TypedDict
 
 import litellm
@@ -80,7 +80,9 @@ from litellm.types.utils import (
 from ..common_utils import VertexAIError
 from ..vertex_llm_base import VertexBase
 
-_BATCH_BODY_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
+_BATCH_BODY_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(
+    dict[str, object], config=ConfigDict(hide_input_in_errors=True)
+)
 
 _GCP_LABEL_VALUE_MAX_LEN: Final = 63
 _CUSTOM_ID_RAW_LABEL_PREFIX: Final = "b32_"

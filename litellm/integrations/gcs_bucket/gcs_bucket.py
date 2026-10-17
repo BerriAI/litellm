@@ -26,7 +26,9 @@ if TYPE_CHECKING:
 else:
     VertexBase = Any
 
-_GCS_RESPONSE_PAYLOAD_ADAPTER: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
+_GCS_RESPONSE_PAYLOAD_ADAPTER: Final = TypeAdapter(
+    dict[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True)
+)
 
 
 class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):

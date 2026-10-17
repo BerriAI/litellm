@@ -21,7 +21,9 @@ SCIM_ROLES_METADATA_KEY: Final = "scim_roles"
 
 SCIM_MANAGED_TEAM_METADATA_KEY: Final = "scim_managed"
 SCIM_TEAM_DATA_METADATA_KEY: Final = "scim_data"
-_SCIM_SERIALIZED_FIELDS_ADAPTER: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
+_SCIM_SERIALIZED_FIELDS_ADAPTER: Final = TypeAdapter(
+    dict[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True)
+)
 
 
 class LiteLLM_UserScimMetadata(LiteLLMBaseModel):

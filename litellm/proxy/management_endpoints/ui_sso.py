@@ -231,7 +231,9 @@ def _team_detail_db(repo: TeamRepository) -> "TableActions[_TeamDetailRow]":
     return repo.table
 
 
-_SSO_TOKEN_CLAIMS_ADAPTER: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(strict=True))
+_SSO_TOKEN_CLAIMS_ADAPTER: Final = TypeAdapter(
+    Mapping[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True)
+)
 _DECODED_JSON: Final = TypeAdapter(object)
 
 
