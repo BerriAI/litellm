@@ -259,7 +259,6 @@ _POSITIVE_SERIES_CAP: Final[TypeAdapter[int]] = TypeAdapter(Annotated[int, Field
 _POSITIVE_SERIES_TTL: Final[TypeAdapter[float]] = TypeAdapter(Annotated[float, Field(gt=0)])
 _SERIES_CLEANUP_INTERVAL: Final[TypeAdapter[float]] = TypeAdapter(Annotated[float, Field(ge=0)])
 _DEFAULT_SERIES_CLEANUP_INTERVAL_SECONDS: Final = 60.0
-_REMAINING_USAGE: Final[TypeAdapter[float]] = TypeAdapter(Annotated[float, Field(allow_inf_nan=False)])
 _ADDITIONAL_HEADERS: Final[TypeAdapter[Mapping[object, object]]] = TypeAdapter(Mapping[object, object])
 
 
@@ -269,6 +268,15 @@ def _number_or_none(value: object, limit: TypeAdapter[_SeriesLimitT]) -> _Series
     try:
         return limit.validate_python(value)
     except ValidationError:
+        return None
+
+
+def _gauge_reading_or_none(value: object) -> float | None:
+    if not isinstance(value, str | int | float):
+        return None
+    try:
+        return float(value)
+    except (ValueError, OverflowError):
         return None
 
 
@@ -3355,12 +3363,8 @@ class PrometheusLogger(CustomLogger):
             additional_headers: Final = _ADDITIONAL_HEADERS.validate_python(
                 standard_logging_payload["hidden_params"]["additional_headers"] or {}
             )
-            remaining_requests: Final = _number_or_none(
-                additional_headers.get("x_ratelimit_remaining_requests"), _REMAINING_USAGE
-            )
-            remaining_tokens: Final = _number_or_none(
-                additional_headers.get("x_ratelimit_remaining_tokens"), _REMAINING_USAGE
-            )
+            remaining_requests: Final = _gauge_reading_or_none(additional_headers.get("x_ratelimit_remaining_requests"))
+            remaining_tokens: Final = _gauge_reading_or_none(additional_headers.get("x_ratelimit_remaining_tokens"))
 
             if litellm_overhead_time_ms := standard_logging_payload["hidden_params"].get("litellm_overhead_time_ms"):
                 _labels = prometheus_label_factory(
