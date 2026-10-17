@@ -1023,6 +1023,29 @@ def test_messages_400_on_bedrock_invoke_reaches_the_caller_after_one_call_unless
         _one_call(wire, marker_hex)
 
 
+def test_a_messages_retry_without_native_output_still_omits_the_deployments_dropped_params(gateway: Gateway) -> None:
+    marker, marker_hex = _marker()
+    with wire_server(_rejecting_native_output(_FABLE_REJECTION)) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model=f"bedrock/invoke/{_OPUS_4_8}",
+            api_base=wire.url,
+            model_info=None,
+            additional_drop_params=["stop_sequences"],
+            **_AWS,
+        )
+        request: Final = _messages_body(
+            model, marker, stop_sequences=["END"], output_config={"format": {"type": "json_schema", "schema": _SCHEMA}}
+        )
+        assert _messages_text(_messages_blocks(gateway.request("POST", "/v1/messages", request))) == _payload(
+            marker_hex
+        )
+        rejected, retried = (_JSON.validate_json(call.body) for call in wire.drain())
+        assert _native_schema(rejected, True) is not None, rejected
+        assert _native_schema(retried, True) is None, retried
+        assert "stop_sequences" not in rejected, rejected
+        assert "stop_sequences" not in retried, retried
+
+
 def _carries_thinking_block(message: JsonValue) -> bool:
     content: Final = object_value(message).get("content")
     return isinstance(content, list) and any(object_value(block).get("type") == "thinking" for block in content)
