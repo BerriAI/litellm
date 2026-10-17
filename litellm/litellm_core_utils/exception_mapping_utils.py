@@ -5,7 +5,6 @@ import traceback
 from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final, Protocol, cast
-from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
@@ -2427,11 +2426,10 @@ def with_deployment_api_base(litellm_params: object) -> Mapping[str, object]:
 
 
 def _api_base_without_credentials(api_base: str) -> str:
-    try:
-        parts: Final = urlsplit(api_base)
-    except ValueError:
-        return ""
-    return urlunsplit((parts.scheme, parts.netloc.rpartition("@")[2], parts.path, "", ""))
+    without_query: Final = api_base.split("#", 1)[0].split("?", 1)[0]
+    scheme, separator, rest = without_query.partition("://")
+    authority, slash, path = (rest if separator else without_query).partition("/")
+    return f"{scheme + separator if separator else ''}{authority.rpartition('@')[2]}{slash}{path}"
 
 
 def _is_guardrail_block(original_exception: Exception) -> bool:

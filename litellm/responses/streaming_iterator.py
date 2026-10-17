@@ -1994,14 +1994,16 @@ class _ResponsesWsTurn:
     def with_event(self, event: Mapping[str, object]) -> _ResponsesWsTurn:
         return _ResponsesWsTurn(logging_obj=self.logging_obj, events=(*self.events, event))
 
-    def failure(self, model: str, custom_llm_provider: str) -> Exception | None:
+    def failure(
+        self, model: str, custom_llm_provider: str, connection_logging_obj: LiteLLMLoggingObj
+    ) -> Exception | None:
         failed_event: Final = next(
             (event for event in self.events if event.get("type") in _RESPONSES_WS_FAILURE_EVENT_TYPES), None
         )
         if failed_event is None:
             return None
         return _map_stream_error_to_exception(
-            _ws_event_error(failed_event), model, custom_llm_provider, logging_obj=self.logging_obj
+            _ws_event_error(failed_event), model, custom_llm_provider, logging_obj=connection_logging_obj
         )
 
 
@@ -2161,7 +2163,7 @@ class ResponsesWebSocketStreaming:
 
     def _log_turn(self, turn: _ResponsesWsTurn) -> None:
         events: Final = list(turn.events)
-        exception: Final = turn.failure(self.authorized_model or "", self.custom_llm_provider or "")
+        exception: Final = turn.failure(self.authorized_model or "", self.custom_llm_provider or "", self.logging_obj)
         if exception is None:
             asyncio.create_task(turn.logging_obj.dispatch_success_handlers(events, prefer_async_handlers=True))
             return

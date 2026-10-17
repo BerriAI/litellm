@@ -1468,8 +1468,12 @@ async def _mid_stream_debug_info(
 @pytest.mark.parametrize("failure", ["transport_error", "unparseable_chunk"])
 @pytest.mark.parametrize(
     ("logged_api_base", "routed_api_base"),
-    [(_AZURE_DEPLOYMENT_REQUEST_URL, _AZURE_DEPLOYMENT_API_BASE), (_AZURE_DEPLOYMENT_API_BASE, None)],
-    ids=["routed", "sdk"],
+    [
+        (_AZURE_DEPLOYMENT_REQUEST_URL, _AZURE_DEPLOYMENT_API_BASE),
+        (_AZURE_DEPLOYMENT_API_BASE, None),
+        (_AZURE_DEPLOYMENT_API_BASE, ""),
+    ],
+    ids=["routed", "sdk", "empty_routed"],
 )
 async def test_mid_stream_error_reports_the_deployment_it_was_sent_to(
     logged_api_base: str,

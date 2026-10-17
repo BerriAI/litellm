@@ -708,10 +708,10 @@ def _azure_responses_logging_obj(logged_api_base: str, routed_api_base: str | No
     return logging_obj
 
 
-def _assert_names_the_azure_deployment(exception: BaseException) -> None:
+def _assert_names_the_azure_deployment(exception: BaseException, api_base: str = _AZURE_RESPONSES_API_BASE) -> None:
     debug_info: Final = getattr(exception, "litellm_debug_info", None)
     assert isinstance(debug_info, str)
-    assert f"API Base: `{_AZURE_RESPONSES_API_BASE}`" in debug_info
+    assert f"API Base: `{api_base}`" in debug_info
     assert "model_group: `gpt-5.4-mini-azure`" in debug_info
     assert "deployment: `azure/gpt-5.4-mini`" in debug_info
     assert "api.openai.com" not in debug_info
@@ -773,8 +773,18 @@ class _ScriptedAzureSocket:
 
 
 @pytest.mark.asyncio
-async def test_responses_websocket_turn_failure_reports_the_deployment_it_was_sent_to():
-    connection_logging_obj: Final = _azure_responses_logging_obj(_AZURE_RESPONSES_WS_URL, _AZURE_RESPONSES_API_BASE)
+@pytest.mark.parametrize(
+    ("routed_api_base", "reported_api_base"),
+    [
+        (_AZURE_RESPONSES_API_BASE, _AZURE_RESPONSES_API_BASE),
+        (None, "wss://responses-mid-stream.openai.azure.com/openai/v1/responses"),
+    ],
+    ids=["router", "no_router"],
+)
+async def test_responses_websocket_turn_failure_reports_the_deployment_it_was_sent_to(
+    routed_api_base: str | None, reported_api_base: str
+):
+    connection_logging_obj: Final = _azure_responses_logging_obj(_AZURE_RESPONSES_WS_URL, routed_api_base)
     connection_logging_obj.pre_call(input=None, api_key="", additional_args={"api_base": _AZURE_RESPONSES_WS_URL})
     socket: Final = _ScriptedAzureSocket((json.dumps(_AZURE_RESPONSES_FAILED_EVENT),))
     streaming: Final = ResponsesWebSocketStreaming(
@@ -788,4 +798,4 @@ async def test_responses_websocket_turn_failure_reports_the_deployment_it_was_se
     failure: Final = await streaming.bidirectional_forward()
 
     assert failure is not None
-    _assert_names_the_azure_deployment(failure)
+    _assert_names_the_azure_deployment(failure, reported_api_base)

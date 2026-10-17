@@ -58,7 +58,16 @@ def test_openai_cyber_policy_uses_the_structured_error_code(shape: str, code: st
 
 
 
-def test_api_base_line_keeps_credentials_out() -> None:
+@pytest.mark.parametrize(
+    ("configured_api_base", "shown_api_base"),
+    [
+        ("https://qa-user:function-secret@gateway.example/v1?code=function-secret", "https://gateway.example/v1"),
+        ("https://gateway.example/v1#function-secret", "https://gateway.example/v1"),
+        ("qa-user:function-secret@gateway.example:8080/v1", "gateway.example:8080/v1"),
+    ],
+    ids=["userinfo_and_query", "fragment", "no_scheme"],
+)
+def test_api_base_line_keeps_credentials_out(configured_api_base: str, shown_api_base: str) -> None:
     request: Final = httpx.Request("POST", "https://gateway.example/v1/chat/completions")
     original: Final = OpenAIError(
         status_code=500, message="upstream failed", request=request, response=httpx.Response(500, request=request)
@@ -69,11 +78,11 @@ def test_api_base_line_keeps_credentials_out() -> None:
             original_exception=original,
             custom_llm_provider="openai",
             completion_kwargs={},
-            extra_kwargs={"api_base": "https://qa-user:function-secret@gateway.example/v1?code=function-secret"},
+            extra_kwargs={"api_base": configured_api_base},
         )
     debug_info: Final = caught.value.litellm_debug_info
     assert isinstance(debug_info, str)
-    assert "API Base: `https://gateway.example/v1`" in debug_info
+    assert f"API Base: `{shown_api_base}`" in debug_info
     assert "function-secret" not in debug_info
 
 # Test cases for is_error_str_context_window_exceeded
