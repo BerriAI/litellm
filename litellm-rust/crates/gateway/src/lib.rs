@@ -1,4 +1,5 @@
 mod auth;
+pub mod budgets;
 pub mod coordination;
 pub mod drain;
 mod error;

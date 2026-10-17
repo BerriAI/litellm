@@ -8,6 +8,8 @@ use bytes::Bytes;
 use http::HeaderMap;
 use serde_json::{Map, Value};
 
+use litellm_gateway_auth::keys::KeyBudgets;
+
 use crate::usage::Usage;
 
 /// The facts a hook reads or an observer asks for. The gateway builds only what some hook or
@@ -101,6 +103,7 @@ pub struct KeyFacts {
     pub org_id: Option<String>,
     pub metadata: Arc<Map<String, Value>>,
     pub team_metadata: Arc<Map<String, Value>>,
+    pub budgets: KeyBudgets,
 }
 
 /// What the gateway knows about a request before it is sent, shared by every hook and observer.

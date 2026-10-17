@@ -180,7 +180,7 @@ fn refused(refusal: Refusal) -> Response {
     let body = json!({"error": {
         "message": refusal.message,
         "type": refusal.kind,
-        "param": "None",
+        "param": refusal.param,
         "code": status.as_u16().to_string(),
     }});
     let mut response = (status, Json(body)).into_response();
