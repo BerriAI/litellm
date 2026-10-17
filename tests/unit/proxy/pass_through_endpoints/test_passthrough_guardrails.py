@@ -155,6 +155,26 @@ class TestJsonPathExtractorEvaluate:
         result = JsonPathExtractor.evaluate(data, "messages[*].content")
         assert result == ["You are helpful", "Hello"]
 
+    def test_nested_array_wildcards(self):
+        """Should extract values through two array wildcards.
+
+        Regression test for #46302: the recursive wildcard branch passes the
+        already-normalized remaining path (e.g. "content.[*].text") back
+        through evaluate, where the old replace-based normalization injected
+        an empty segment ("content..[*].text") and silently dropped every
+        nested-wildcard expression - so a pass-through guardrail whose only
+        request_fields entry is messages[*].content[*].text never saw any
+        text and skipped the check entirely.
+        """
+        data = {
+            "messages": [
+                {"role": "user", "content": [{"type": "text", "text": "item1"}]},
+                {"role": "assistant", "content": [{"type": "text", "text": "item2"}]},
+            ]
+        }
+        assert JsonPathExtractor.evaluate(data, "messages[*].content[*].text") == ["item1", "item2"]
+        assert JsonPathExtractor.extract_fields(data, ["messages[*].content[*].text"]) == "item1" + chr(10) + "item2"
+
     def test_missing_key_returns_none(self):
         """Should return None for missing key."""
         data = {"query": "test"}
