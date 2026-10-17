@@ -1439,3 +1439,47 @@ def test_a_compaction_endpoint_declaration_keeps_the_model_available_for_compact
         _served_by_every_worker(rig.gateway, frozenset(identities))
         response: Final = rig.gateway.request("POST", "/responses/compact", {"model": model, "input": marker})
         _assert_served(rig, response, marker, "/v1/responses/compact")
+
+
+@pytest.mark.parametrize("alias_source", ["key_alias", "key_router", "team_router"])
+def test_local_rate_limit_fallbacks_resolve_saved_aliases(rig: _Rig, tmp_path: Path, alias_source: str) -> None:
+    suffix: Final = uuid.uuid4().hex[:12]
+    names: Final = {label: f"gate-fallback-alias-{label}-{suffix}" for label in ("primary", "target", "alias")}
+    shared: Final = _CONFIG.validate_python(yaml.safe_load((_TESTS_ROOT / "integration/proxy_config.yaml").read_text()))
+    config: Final = {
+        **shared,
+        "model_list": [
+            _routed_entry(names["primary"], rig.api_base, f"openai/{_CHAT_MODEL}", {"mode": "chat"}),
+            _routed_entry(names["target"], rig.api_base, f"openai/{_CHAT_MODEL}", {"mode": "chat"}),
+        ],
+        "router_settings": {
+            **object_value(shared["router_settings"]),
+            "num_retries": 0,
+            "fallbacks": [{names["primary"]: [names["alias"]]}],
+        },
+    }
+    path: Final = tmp_path / "fallback-alias.yaml"
+    path.write_text(yaml.safe_dump(config, sort_keys=False))
+    aliases: Final = {names["alias"]: names["target"]}
+    with (
+        owned_proxy_process(rig.gateway, tmp_path, {}, config=path, workers=2) as owned,
+        owned.gateway.scenario() as scenario,
+    ):
+        team: Final = (
+            scenario.team(router_settings={"model_group_alias": aliases}) if alias_source == "team_router" else None
+        )
+        key: Final = scenario.key(
+            team_id=team,
+            aliases=aliases if alias_source == "key_alias" else {},
+            router_settings={"model_group_alias": aliases} if alias_source == "key_router" else None,
+            model_rpm_limit={names["primary"]: 1},
+        )
+        first: Final = owned.gateway.request(
+            "POST", "/v1/chat/completions", _chat_body(names["primary"], _marker()), key=key
+        )
+        assert first.status_code == 200, first.text
+        marker: Final = _marker()
+        second: Final = owned.gateway.request(
+            "POST", "/v1/chat/completions", _chat_body(names["primary"], marker), key=key
+        )
+        _assert_fallback_answered(rig.upstream, second, marker)

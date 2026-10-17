@@ -2519,6 +2519,17 @@ class ProxyBaseLLMRequestProcessing:
                 original_model,
                 fallback_models,
             )
+            raw_router_settings: Final = _DECODED_JSON.validate_python(
+                _REQUEST_FIELDS.validate_python(rate_limited_data).get("router_settings_override")
+            )
+            group_alias: Final = _DECODED_JSON.validate_python(
+                _REQUEST_FIELDS.validate_python(raw_router_settings).get("model_group_alias")
+                if isinstance(raw_router_settings, Mapping)
+                else None
+            )
+            key_aliases: Final[object] = cast(  # cast-ok: auth aliases are dynamically typed at runtime
+                object, user_api_key_dict.aliases
+            )
             try:
                 for fallback_model in fallback_models:
                     if fallback_model == original_model:
@@ -2534,8 +2545,17 @@ class ProxyBaseLLMRequestProcessing:
                     self.data = independent_snapshot(pristine)
                     self.data["model"] = fallback_model
                     try:
+                        probe_data = {
+                            **_REQUEST_FIELDS.validate_python(pristine),
+                            "model": resolve_served_model(
+                                fallback_model,
+                                _DECODED_JSON.validate_python(litellm.model_alias_map),
+                                key_aliases,
+                                group_alias,
+                            ),
+                        }
                         if (
-                            endpoint_unsupported_by_model(route_type, self.data, llm_router, user_api_key_dict.team_id)
+                            endpoint_unsupported_by_model(route_type, probe_data, llm_router, user_api_key_dict.team_id)
                             is not None
                         ):
                             continue

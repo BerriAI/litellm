@@ -11285,6 +11285,39 @@ def test_is_deployment_blocked_static_helper_reflects_blocked_flag():
     )
 
 
+def test_synchronous_text_completion_rejects_a_restricted_model_before_the_provider() -> None:
+    model: Final = "text-completion-openai/unit-text-model"
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {
+                    "model": model,
+                    "api_base": "https://sync-router.invalid/v1",
+                    "api_key": "unit-provider-key",
+                },
+                "model_info": {"enforce_supported_endpoints": True, "supported_endpoints": ["/v1/embeddings"]},
+            }
+        ],
+        num_retries=0,
+    )
+    with respx.mock(assert_all_called=False) as upstream:
+        provider: Final = upstream.post("https://sync-router.invalid/v1/completions").respond(
+            200,
+            json={
+                "id": "cmpl-unit",
+                "object": "text_completion",
+                "created": 1,
+                "model": "unit-text-model",
+                "choices": [{"text": "provider called", "index": 0, "finish_reason": "stop", "logprobs": None}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+        with pytest.raises(litellm.BadRequestError, match="/v1/completions is not supported"):
+            router.text_completion(model=model, prompt="test")
+        assert provider.call_count == 0
+
+
 def test_endpoint_preflight_returns_unavailable_model_errors_as_values() -> None:
     router: Final = Router(
         model_list=[
