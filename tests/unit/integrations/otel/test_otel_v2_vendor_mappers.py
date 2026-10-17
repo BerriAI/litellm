@@ -702,6 +702,8 @@ def test_langfuse_mapper_renders_an_ocr_call_with_the_page_markdown_as_output():
         ("amoderation", {"results": [{"flagged": True, "categories": {"violence": True}}]}, "flagged: violence"),
         ("aimage_generation", {"data": [{"b64_json": "QUJDRA=="}]}, "b64_json image (4 bytes)"),
         ("aspeech", {"object": "binary", "content_type": "audio/mpeg", "num_bytes": 9}, "audio/mpeg (9 bytes)"),
+        ("pass_through_endpoint", {"response": '{"answers": {"q": 0.9}}'}, '{"answers": {"q": 0.9}}'),
+        ("pass_through_endpoint", {"response": {"answers": {"q": 0.9}}}, '{"answers": {"q": 0.9}}'),
     ],
 )
 def test_langfuse_mapper_renders_every_non_chat_route_output_as_an_assistant_message(

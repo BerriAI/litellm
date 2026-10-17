@@ -810,6 +810,7 @@ def _output_choices(response: Mapping[str, object]) -> tuple[Mapping[str, object
         or _search_choices(response)
         or _image_choices(response)
         or _binary_choices(response)
+        or _passthrough_choices(response)
     )
 
 
@@ -917,6 +918,13 @@ def _image_location(item: Mapping[str, object]) -> str | None:
     if not isinstance(encoded, str):
         return None
     return f"b64_json image ({len(encoded) * 3 // 4 - encoded[-2:].count('=')} bytes)"
+
+
+def _passthrough_choices(response: Mapping[str, object]) -> tuple[_Choice, ...]:
+    body: Final = response.get("response")
+    mapping: Final = as_str_mapping(body)
+    text: Final = json.dumps(dict(mapping)) if mapping is not None else as_str(body)
+    return (_text_choice(text),) if text else ()
 
 
 def _binary_choices(response: Mapping[str, object]) -> tuple[_Choice, ...]:
