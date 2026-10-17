@@ -22,6 +22,7 @@ from litellm.constants import (
     MANAGED_OBJECT_STALENESS_CUTOFF_DAYS,
     MAX_OBJECTS_PER_POLL_CYCLE,
 )
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.repositories.table_repositories import ManagedObjectRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.verification_token_repository import VerificationTokenRepository
@@ -764,6 +765,10 @@ class CheckBatchCost:
             start_time=datetime.now(),
             litellm_call_id=str(uuid.uuid4()),
             function_id=str(uuid.uuid4()),
+            dynamic_success_callbacks=list(litellm.success_callback),
+            dynamic_async_success_callbacks=[
+                callback for callback in litellm.success_callback if isinstance(callback, CustomLogger)
+            ],
         )
 
         deployment_api_base: Final = deployment_info.litellm_params.api_base
@@ -805,6 +810,11 @@ class CheckBatchCost:
                 batch_failed_requests=batch_result.failed_requests,
                 batch_prompt_cost=batch_result.prompt_cost,
                 batch_completion_cost=batch_result.completion_cost,
+            )
+            logging_obj.handle_sync_success_callbacks_for_async_calls(
+                result=response,
+                start_time=logging_obj.start_time,
+                end_time=datetime.now(),
             )
         except Exception:
             await self._release_job_claim(job)
