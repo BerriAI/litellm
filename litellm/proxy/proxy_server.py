@@ -951,7 +951,14 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionSystemMessage,
     ChatCompletionToolParam,
+    GenericEvent,
     HttpxBinaryResponseContent,
+    ResponseCompletedEvent,
+    ResponseCreatedEvent,
+    ResponseFailedEvent,
+    ResponseIncompleteEvent,
+    ResponseInProgressEvent,
+    ResponsesAPIResponse,
 )
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
@@ -9913,7 +9920,7 @@ def _restamp_streaming_chunk_model(
     # Note: This warning is intentionally verbose. A mismatch is a useful signal that an
     # internal provider/deployment identifier is leaking into the public API, and helps
     # maintainers/operators catch regressions while preserving OpenAI-compatible output.
-    if not target_model or not isinstance(chunk, (BaseModel, dict)):
+    if not target_model or not isinstance(chunk, (BaseModel, dict, bytes)):
         return chunk, model_mismatch_logged
 
     # For Azure Model Router, preserve the actual model used in each chunk
@@ -9925,9 +9932,21 @@ def _restamp_streaming_chunk_model(
     if not fallback_was_attempted and request_data.get("fastest_response", False):
         return chunk, model_mismatch_logged
 
-    downstream_model: Final = chunk.get("model") if isinstance(chunk, dict) else getattr(chunk, "model", None)
+    if isinstance(chunk, bytes):
+        if request_data.get("_litellm_raw_sse_stream"):
+            return chunk, model_mismatch_logged
+        return _restamp_nested_response_model_in_sse_frame(chunk, target_model), model_mismatch_logged
+
+    typed_chunk: Final[BaseModel | Mapping[str, object]] = chunk
+    restamped_chunk: Final = _restamp_nested_response_model(typed_chunk, target_model)
+
+    downstream_model: Final = (
+        restamped_chunk.get("model")
+        if isinstance(restamped_chunk, Mapping)
+        else getattr(restamped_chunk, "model", None)
+    )
     if downstream_model == target_model:
-        return chunk, model_mismatch_logged
+        return restamped_chunk, model_mismatch_logged
 
     if not model_mismatch_logged and downstream_model != target_model:
         verbose_proxy_logger.debug(
@@ -9945,22 +9964,92 @@ def _restamp_streaming_chunk_model(
     logging_obj: Final = request_data.get("litellm_logging_obj")
     if isinstance(logging_obj, LiteLLMLoggingObj):
         logging_obj.client_facing_stream_model = target_model
-    if isinstance(chunk, dict):
-        return {**chunk, "model": target_model}, model_mismatch_logged
+    if isinstance(restamped_chunk, Mapping):
+        return {**restamped_chunk, "model": target_model}, model_mismatch_logged
 
     try:
-        return chunk.model_copy(update={"model": target_model}), model_mismatch_logged
+        return restamped_chunk.model_copy(update={"model": target_model}), model_mismatch_logged
     except Exception as e:
         verbose_proxy_logger.error(
             "litellm_call_id=%s: failed to override chunk.model=%r on chunk_type=%s. error=%s",
             request_data.get("litellm_call_id"),
             target_model,
-            type(chunk),
+            type(restamped_chunk),
             str(e),
             exc_info=True,
         )
 
-    return chunk, model_mismatch_logged
+    return restamped_chunk, model_mismatch_logged
+
+
+def _nested_response_of(chunk: BaseModel) -> object:
+    if isinstance(
+        chunk,
+        (
+            ResponseCreatedEvent,
+            ResponseInProgressEvent,
+            ResponseCompletedEvent,
+            ResponseFailedEvent,
+            ResponseIncompleteEvent,
+        ),
+    ):
+        return chunk.response
+    if isinstance(chunk, GenericEvent):
+        extra_fields: Final[Mapping[str, object]] = chunk.model_extra or {}
+        return extra_fields.get("response")
+    return None
+
+
+def _restamp_nested_response_model(
+    chunk: BaseModel | Mapping[str, object], target_model: str
+) -> BaseModel | Mapping[str, object]:
+    if not isinstance(chunk, BaseModel):
+        restamped_event: Final = _event_with_restamped_nested_model(chunk, target_model)
+        return chunk if restamped_event is None else restamped_event
+    nested_response: Final = _nested_response_of(chunk)
+    if isinstance(nested_response, ResponsesAPIResponse):
+        if nested_response.model in (None, target_model):
+            return chunk
+        return chunk.model_copy(update={"response": nested_response.model_copy(update={"model": target_model})})
+    untyped_response: Final = as_str_mapping(nested_response)
+    if untyped_response is None or untyped_response.get("model") in (None, target_model):
+        return chunk
+    return chunk.model_copy(update={"response": {**untyped_response, "model": target_model}})
+
+
+def _event_with_restamped_nested_model(event: Mapping[str, object], target_model: str) -> Mapping[str, object] | None:
+    nested_response: Final = as_str_mapping(event.get("response"))
+    if nested_response is None or nested_response.get("model") in (None, target_model):
+        return None
+    return {**event, "response": {**nested_response, "model": target_model}}
+
+
+_SSE_DATA_FIELD: Final = b"data:"
+_SSE_NESTED_RESPONSE_MARKER: Final = b'"response"'
+_SSE_EVENT_OBJECT: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+
+
+def _restamp_nested_response_model_in_sse_frame(frame: bytes, target_model: str) -> bytes:
+    if _SSE_NESTED_RESPONSE_MARKER not in frame:
+        return frame
+    return b"".join(
+        _restamp_nested_response_model_in_sse_line(line, target_model) for line in frame.splitlines(keepends=True)
+    )
+
+
+def _restamp_nested_response_model_in_sse_line(line: bytes, target_model: str) -> bytes:
+    if not line.startswith(_SSE_DATA_FIELD):
+        return line
+    try:
+        event: Final = _SSE_EVENT_OBJECT.validate_json(line.removeprefix(_SSE_DATA_FIELD).strip())
+    except ValidationError:
+        return line
+    restamped_event: Final = _event_with_restamped_nested_model(event, target_model)
+    if restamped_event is None:
+        return line
+    serialized_event: Final = json.dumps(restamped_event, separators=(",", ":"), ensure_ascii=False)
+    line_ending: Final = line[len(line.rstrip(b"\r\n")) :]
+    return _SSE_DATA_FIELD + b" " + serialized_event.encode() + line_ending
 
 
 def _fast_serialize_simple_model_response_stream(
