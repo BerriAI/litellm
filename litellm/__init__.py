@@ -2363,6 +2363,7 @@ _AGENT_EXPORTS: Final = frozenset(
         "ClaudeCodeOptions",
         "CodexOptions",
         "OpenCodeOptions",
+        "PiOptions",
         "DeepAgentsOptions",
         "ToolLoopOptions",
     }
