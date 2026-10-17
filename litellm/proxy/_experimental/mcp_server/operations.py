@@ -53,6 +53,7 @@ from typing_extensions import ReadOnly, TypedDict, assert_never
 from litellm._logging import verbose_logger
 from litellm.constants import (
     MAXIMUM_TRACEBACK_LINES_TO_LOG,
+    MCP_SKILL_OWNER_LOOKUP_MAX_PAGES,
     MCP_TOOL_LISTING_TIMEOUT,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -129,6 +130,15 @@ from litellm.proxy._experimental.mcp_server.result_conversion import (
     complete_call_tool_result,
     handler_outcome,
     to_call_tool_result,
+)
+from litellm.proxy._experimental.mcp_server.skills import (
+    SKILLS_EXTENSION,
+    GetSkillRequest,
+    GetSkillRequestParams,
+    GetSkillResult,
+    ListSkillsRequest,
+    ListSkillsResult,
+    SkillResource,
 )
 from litellm.proxy._experimental.mcp_server.tool_registry import (
     global_mcp_tool_registry,
@@ -2799,13 +2809,25 @@ async def mcp_read_resource(
             detail="User not allowed to read this resource.",
         )
 
-    if len(allowed_mcp_servers) != 1:
+    server: Final = (
+        allowed_mcp_servers[0]
+        if len(allowed_mcp_servers) == 1
+        else await _skill_owner(
+            str(url),
+            allowed_mcp_servers,
+            user_api_key_auth=user_api_key_auth,
+            mcp_auth_header=mcp_auth_header,
+            mcp_server_auth_headers=mcp_server_auth_headers,
+            oauth2_headers=oauth2_headers,
+            raw_headers=raw_headers,
+            client_ip=client_ip,
+        )
+    )
+    if server is None:
         raise HTTPException(
             status_code=400,
             detail=("Multiple MCP servers configured; read_resource currently supports exactly one allowed server."),
         )
-
-    server: Final = allowed_mcp_servers[0]
 
     server_auth_header, extra_headers = _prepare_mcp_server_headers(
         server=server,
@@ -2814,6 +2836,7 @@ async def mcp_read_resource(
         oauth2_headers=oauth2_headers,
         raw_headers=raw_headers,
         user_api_key_auth=user_api_key_auth,
+        scope_servers=allowed_mcp_servers,
     )
 
     await _enforce_mcp_server_rate_limit(user_api_key_auth, server)
@@ -2829,6 +2852,73 @@ async def mcp_read_resource(
         request_state=request_state,
         allow_input_required=allow_input_required,
     )
+
+
+async def _skill_owner(
+    uri: str,
+    servers: Sequence[MCPServer],
+    *,
+    user_api_key_auth: UserAPIKeyAuth | None,
+    mcp_auth_header: str | None,
+    mcp_server_auth_headers: Mapping[str, Mapping[str, str]] | None,
+    oauth2_headers: Mapping[str, str] | None,
+    raw_headers: Mapping[str, str] | None,
+    client_ip: str | None,
+) -> MCPServer | None:
+    server_auth_headers: Final = (
+        {name: dict(headers) for name, headers in mcp_server_auth_headers.items()}
+        if mcp_server_auth_headers is not None
+        else None
+    )
+    oauth_headers: Final = dict(oauth2_headers) if oauth2_headers is not None else None
+    forwarded_headers: Final = dict(raw_headers) if raw_headers is not None else None
+
+    async def serves(server: MCPServer) -> bool | ProxyRateLimitError:
+        auth_header, extra_headers = _prepare_mcp_server_headers(
+            server=server,
+            mcp_server_auth_headers=server_auth_headers,
+            mcp_auth_header=mcp_auth_header,
+            oauth2_headers=oauth_headers,
+            raw_headers=forwarded_headers,
+            user_api_key_auth=user_api_key_auth,
+            scope_servers=list(servers),
+        )
+
+        async def scan(cursor: str | None, remaining: int) -> bool | ProxyRateLimitError:
+            rejection: Final = await _mcp_server_rate_limit_rejection(server, user_api_key_auth)
+            if rejection is not None:
+                return rejection
+            try:
+                page: Final = await global_mcp_server_manager.get_optional_catalog_page(
+                    server,
+                    ListSkillsRequest(params=PaginatedRequestParams(cursor=cursor)),
+                    user_api_key_auth,
+                    mcp_auth_header=auth_header,
+                    extra_headers=extra_headers,
+                    raw_headers=raw_headers,
+                    client_ip=client_ip,
+                )
+            except Exception as error:  # noqa: BLE001  # an unreachable upstream cannot claim the resource
+                verbose_logger.debug("MCP skill owner lookup failed for %s: %s", server.name, error)
+                return False
+            if not isinstance(page, ListSkillsResult):
+                return False
+            if any(_skill_lists_uri(skill_entry.uri, skill_entry.resources, uri) for skill_entry in page.skills):
+                return True
+            return page.next_cursor is not None and remaining > 1 and await scan(page.next_cursor, remaining - 1)
+
+        return await scan(None, MCP_SKILL_OWNER_LOOKUP_MAX_PAGES)
+
+    owned: Final = await asyncio.gather(*(serves(server) for server in servers))
+    owners: Final = tuple(server for server, owns in zip(servers, owned) if owns is True)
+    rejections: Final = tuple(owns for owns in owned if isinstance(owns, ProxyRateLimitError))
+    if not owners and rejections:
+        raise rejections[0]
+    return owners[0] if len(owners) == 1 else None
+
+
+def _skill_lists_uri(skill_uri: str, resources: Sequence[SkillResource], uri: str) -> bool:
+    return skill_uri == uri or any(resource.uri == uri for resource in resources)
 
 
 def _get_standard_logging_mcp_tool_call(
@@ -3224,6 +3314,94 @@ async def _execute_list_prompts(
         return ListPromptsResult(prompts=[])
 
 
+async def _execute_list_skills(context: OperationContext, params: PaginatedRequestParams) -> ListSkillsResult:
+    from mcp.types import INVALID_PARAMS, INVALID_REQUEST
+
+    from litellm.proxy._experimental.mcp_server.catalog import list_gateway_catalog
+    from litellm.proxy._experimental.mcp_server.server_resolution import MCPServerTargetCatalog
+
+    if context.mcp_proxy_mode:
+        _reject_mcp_proxy_operation()
+    if "resources" in disabled_capabilities():
+        return ListSkillsResult(skills=())
+    try:
+        catalog: Final = MCPServerTargetCatalog(global_mcp_server_manager, listing=list_gateway_catalog)
+        result: Final = await catalog.list(context, ListSkillsRequest(params=params))
+    except MCPError:
+        raise
+    except HTTPException as error:
+        raise MCPError(code=INVALID_REQUEST, message=_http_detail_message(error.detail)) from error
+    except Exception as error:
+        if params.cursor is not None:
+            raise MCPError(
+                code=INVALID_PARAMS, message="Catalog continuation unavailable; start a fresh listing"
+            ) from error
+        return ListSkillsResult(skills=())
+    assert isinstance(result, ListSkillsResult)
+    return result
+
+
+async def _execute_get_skill(context: OperationContext, params: GetSkillRequestParams) -> GetSkillResult:
+    from mcp.types import INVALID_PARAMS, INVALID_REQUEST
+
+    if context.mcp_proxy_mode:
+        _reject_mcp_proxy_operation()
+    if "resources" in disabled_capabilities():
+        _reject_disabled_capability("resources")
+    (
+        user_api_key_auth,
+        mcp_auth_header,
+        mcp_servers,
+        mcp_server_auth_headers,
+        oauth2_headers,
+        raw_headers,
+        client_ip,
+    ) = context.legacy_auth()
+    allowed: Final = await _get_allowed_mcp_servers(
+        user_api_key_auth=user_api_key_auth, mcp_servers=mcp_servers, client_ip=client_ip
+    )
+    if mcp_servers and not allowed:
+        try:
+            await raise_denied_scoped_mcp_access(
+                requested_names=mcp_servers, user_api_key_auth=user_api_key_auth, client_ip=client_ip
+            )
+        except HTTPException as error:
+            raise MCPError(code=INVALID_REQUEST, message=_http_detail_message(error.detail)) from error
+
+    owner: Final = await _skill_owner(
+        params.uri,
+        allowed,
+        user_api_key_auth=user_api_key_auth,
+        mcp_auth_header=mcp_auth_header,
+        mcp_server_auth_headers=mcp_server_auth_headers,
+        oauth2_headers=oauth2_headers,
+        raw_headers=raw_headers,
+        client_ip=client_ip,
+    )
+    if owner is None:
+        raise MCPError(code=INVALID_PARAMS, message=f"No skill is served at {params.uri}")
+    auth_header, extra_headers = _prepare_mcp_server_headers(
+        server=owner,
+        mcp_server_auth_headers=mcp_server_auth_headers,
+        mcp_auth_header=mcp_auth_header,
+        oauth2_headers=oauth2_headers,
+        raw_headers=raw_headers,
+        user_api_key_auth=user_api_key_auth,
+        scope_servers=allowed,
+    )
+    await _enforce_mcp_server_rate_limit(user_api_key_auth, owner)
+    result: Final = await global_mcp_server_manager.get_skill_from_server(
+        owner,
+        params,
+        user_api_key_auth,
+        mcp_auth_header=auth_header,
+        extra_headers=extra_headers,
+        raw_headers=raw_headers,
+        client_ip=client_ip,
+    )
+    return result.model_copy(update={"cache_scope": "private"})
+
+
 async def _execute_get_prompt(
     context: OperationContext, params: GetPromptRequestParams, host_progress_callback: ProgressCallback | None = None
 ) -> GetPromptResult | InputRequiredResult:
@@ -3404,6 +3582,8 @@ GatewayOperation: TypeAlias = (
     | ListResourcesRequest
     | ListResourceTemplatesRequest
     | ReadResourceRequest
+    | ListSkillsRequest
+    | GetSkillRequest
 )
 GatewayResult: TypeAlias = (
     DiscoverResult
@@ -3415,6 +3595,8 @@ GatewayResult: TypeAlias = (
     | ListResourcesResult
     | ListResourceTemplatesResult
     | ReadResourceResult
+    | ListSkillsResult
+    | GetSkillResult
 )
 
 
@@ -3470,6 +3652,12 @@ class GatewayOperations:
         self, operation: ReadResourceRequest, context: OperationContext
     ) -> ReadResourceResult | InputRequiredResult: ...
 
+    @overload
+    async def execute(self, operation: ListSkillsRequest, context: OperationContext) -> ListSkillsResult: ...
+
+    @overload
+    async def execute(self, operation: GetSkillRequest, context: OperationContext) -> GetSkillResult: ...
+
     @catalog_operation(lambda: global_mcp_server_manager)
     async def execute(self, operation: GatewayOperation, context: OperationContext) -> GatewayResult:
         if not isinstance(operation, (CallToolRequest, GetPromptRequest, ReadResourceRequest)):
@@ -3513,6 +3701,11 @@ class GatewayOperations:
                     else (
                         *(() if "prompts" in disabled else (ListPromptsRequest(),)),
                         *(() if "resources" in disabled else (ListResourcesRequest(), ListResourceTemplatesRequest())),
+                        *(
+                            (ListSkillsRequest(),)
+                            if "resources" not in disabled and SKILLS_EXTENSION in context.client_extensions
+                            else ()
+                        ),
                     )
                 )
                 memo_token: Final = _mcp_server_admission_memo.set({})
@@ -3547,12 +3740,16 @@ class GatewayOperations:
                         await asyncio.gather(*tasks, return_exceptions=True)
                     finally:
                         _mcp_server_admission_memo.reset(memo_token)
+                listed: Final[tuple[object, ...]] = tuple(results)  # pyright: ignore[reportUnknownArgumentType]  # gather over mixed tasks erases element types
+                skills_listed: Final = any(isinstance(result, ListSkillsResult) and result.skills for result in listed)
                 return build_discovery(
                     configured=configured_versions(),
                     revision=context.protocol_version or "2025-11-25",
                     transport=MCPTransport.http,
                     authorized_operations=enabled_gateway_operations(disabled),
                     upstream_versions=upstream_versions,
+                    client_extensions=context.client_extensions,
+                    upstream_extensions=frozenset({SKILLS_EXTENSION}) if skills_listed else frozenset(),
                     capabilities=ServerCapabilities(
                         tools=notifications.tools
                         or (
@@ -3569,13 +3766,15 @@ class GatewayOperations:
                         resources=notifications.resources
                         or (
                             ResourcesCapability()
-                            if any(
+                            if skills_listed
+                            or any(
                                 (isinstance(result, ListResourcesResult) and result.resources)
                                 or (isinstance(result, ListResourceTemplatesResult) and result.resource_templates)
                                 for result in results
                             )
                             else None
                         ),
+                        extensions={SKILLS_EXTENSION: {}} if skills_listed else None,
                     ),
                 )
             case AuthorizedToolCall():
@@ -3621,5 +3820,9 @@ class GatewayOperations:
                 )
             case ReadResourceRequest(params=params):
                 return await _execute_read_resource(context, params, self._host_progress_callback)
+            case ListSkillsRequest(params=params):
+                return await _execute_list_skills(context, params or PaginatedRequestParams())
+            case GetSkillRequest(params=params):
+                return await _execute_get_skill(context, params)
             case _:
                 return assert_never(operation)

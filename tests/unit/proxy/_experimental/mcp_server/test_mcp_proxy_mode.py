@@ -63,6 +63,8 @@ async def test_proxy_rejects_non_tool_protocol_operations() -> None:
     from mcp.server.context import ServerRequestContext
     from mcp.types import GetPromptRequestParams, PaginatedRequestParams, ReadResourceRequestParams
 
+    from litellm.proxy._experimental.mcp_server.skills import GetSkillRequestParams
+
     ctx = ServerRequestContext(
         session=SimpleNamespace(),
         lifespan_context={},
@@ -80,6 +82,10 @@ async def test_proxy_rejects_non_tool_protocol_operations() -> None:
         await server.list_resource_templates(ctx, PaginatedRequestParams())
     with pytest.raises(MCPError):
         await server.read_resource(ctx, ReadResourceRequestParams(uri="https://example.com/resource"))
+    with pytest.raises(MCPError, match="unavailable on /mcp/proxy"):
+        await server.list_skills(ctx, PaginatedRequestParams())
+    with pytest.raises(MCPError, match="unavailable on /mcp/proxy"):
+        await server.get_skill(ctx, GetSkillRequestParams(uri="skill://billing/refunds/SKILL.md"))
 
 
 class FailureRecorder(CustomLogger):

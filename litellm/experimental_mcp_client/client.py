@@ -50,6 +50,7 @@ class _SessionCallbackMap(TypedDict):
 
 from mcp.types import (
     CONNECTION_CLOSED,
+    INVALID_PARAMS,
     METHOD_NOT_FOUND,
     REQUEST_TIMEOUT,
     CacheableResult,
@@ -107,6 +108,14 @@ from litellm.proxy._experimental.mcp_server.result_conversion import (
     age_freshness,
     aggregate_freshness,
     error_text_result,
+)
+from litellm.proxy._experimental.mcp_server.skills import (
+    SKILLS_EXTENSION,
+    GetSkillRequest,
+    GetSkillRequestParams,
+    GetSkillResult,
+    ListSkillsRequest,
+    ListSkillsResult,
 )
 from litellm.types.llms.custom_http import VerifyTypes
 from litellm.types.mcp import (
@@ -719,6 +728,7 @@ class MCPClient:
                         )
                         if self._elicitation_callback is not None
                         else None,
+                        extensions={SKILLS_EXTENSION: {}},
                     ),
                 )
             ),
@@ -776,6 +786,7 @@ class MCPClient:
                         sampling_callback=session_kwargs["sampling_callback"],
                         elicitation_callback=session_kwargs["elicitation_callback"],
                         logging_callback=session_kwargs["logging_callback"],
+                        extensions={SKILLS_EXTENSION: {}},
                     )
                     session: Final = await session_ctx.__aenter__()
                     try:
@@ -1009,6 +1020,8 @@ class MCPClient:
 
         async def fetch(session: ClientSession) -> "CatalogListResult":
             capabilities: Final = session.server_capabilities
+            if isinstance(request, ListSkillsRequest):
+                return await self._list_skills_page(session, params)
             empty: Final = (
                 ListPromptsResult(prompts=[])
                 if isinstance(request, ListPromptsRequest)
@@ -1040,6 +1053,24 @@ class MCPClient:
 
         with anyio.fail_after(max(self.timeout, MCP_TOOL_LISTING_TIMEOUT)):
             return await self.run_with_session(fetch, quiet_on_error=True)
+
+    @staticmethod
+    async def _list_skills_page(session: ClientSession, params: PaginatedRequestParams) -> ListSkillsResult:
+        capabilities: Final = session.server_capabilities
+        if capabilities is not None and SKILLS_EXTENSION in (capabilities.extensions or {}):
+            return await session.send_request(ListSkillsRequest(params=params), ListSkillsResult)
+        if params.cursor is not None:
+            raise MCPError(code=INVALID_PARAMS, message="Upstream catalog became unavailable; start a fresh listing")
+        return ListSkillsResult(skills=())
+
+    async def get_skill(self, params: GetSkillRequestParams) -> GetSkillResult:
+        async def fetch(session: ClientSession) -> GetSkillResult:
+            capabilities: Final = session.server_capabilities
+            if capabilities is None or SKILLS_EXTENSION not in (capabilities.extensions or {}):
+                raise MCPError(code=INVALID_PARAMS, message=f"No skill is served at {params.uri}")
+            return await session.send_request(GetSkillRequest(params=params), GetSkillResult)
+
+        return await self.run_with_session(fetch, quiet_on_error=True)
 
     async def list_tools_page(self, params: PaginatedRequestParams) -> ListToolsResult:
         with anyio.fail_after(max(self.timeout, MCP_TOOL_LISTING_TIMEOUT)):

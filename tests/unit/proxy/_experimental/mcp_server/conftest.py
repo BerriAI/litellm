@@ -133,7 +133,7 @@ def _mcp_request_ctx():
         from mcp.server.context import ServerRequestContext
 
         kwargs = {
-            "session": SimpleNamespace(),
+            "session": SimpleNamespace(client_capabilities=None),
             "lifespan_context": {},
             "protocol_version": "2025-06-18",
             "method": "",
