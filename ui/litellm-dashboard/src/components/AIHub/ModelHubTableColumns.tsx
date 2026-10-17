@@ -14,6 +14,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/cva.config";
+import { displayMode } from "@/lib/decisionModels";
 import { copyToClipboard } from "@/utils/dataUtils";
 
 export interface ModelHubData {
@@ -31,6 +32,7 @@ export interface ModelHubData {
   supports_function_calling: boolean;
   supported_openai_params?: string[];
   is_public_model_group: boolean;
+  description?: string;
   [key: string]: any;
 }
 
@@ -127,7 +129,7 @@ export const getModelHubTableColumns = ({ onModelClick }: ModelHubTableColumnsDe
   },
   {
     id: "mode",
-    accessorKey: "mode",
+    accessorFn: (row) => (row.mode ? displayMode(row.mode) : ""),
     meta: { title: "Mode", className: "hidden lg:table-cell" },
     header: ({ column }) => <DataTableSortHeader column={column} title="Mode" />,
     size: 110,
@@ -135,7 +137,7 @@ export const getModelHubTableColumns = ({ onModelClick }: ModelHubTableColumnsDe
     sortingFn: "alphanumeric",
     cell: ({ row }) =>
       row.original.mode ? (
-        <span className="font-mono text-xs text-muted-foreground">{row.original.mode}</span>
+        <span className="font-mono text-xs text-muted-foreground">{displayMode(row.original.mode)}</span>
       ) : (
         <span className="text-xs text-muted-foreground">-</span>
       ),

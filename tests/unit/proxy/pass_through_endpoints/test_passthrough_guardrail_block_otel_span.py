@@ -18,7 +18,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 pytest.importorskip("opentelemetry")
 
@@ -81,15 +81,16 @@ def _user_api_key_dict():
     return d
 
 
-def _mock_request():
-    r = MagicMock()
-    r.method = "POST"
-    r.query_params = {}
-    r.url = "http://testserver/mock/echo"
-    headers = MagicMock()
-    headers.copy.return_value = {}
-    r.headers = headers
-    return r
+def _mock_request() -> Request:
+    return Request({
+        "type": "http",
+        "method": "POST",
+        "scheme": "http",
+        "server": ("testserver", 80),
+        "path": "/mock/echo",
+        "headers": [],
+        "query_string": b"",
+    })
 
 
 def _httpx_response(text: str) -> httpx.Response:
@@ -146,8 +147,8 @@ async def _drive(response_text: str):
         patch("litellm.proxy.proxy_server.llm_router", None),
         patch(f"{_PT_MOD}.pass_through_endpoint_logging", mock_pt_logging),
         patch(f"{_PT_MOD}.get_async_httpx_client", return_value=mock_async_client_obj),
-        patch(f"{_PT_MOD}._read_request_body", new_callable=AsyncMock, return_value={}),
-        patch(f"{_PT_MOD}._safe_get_request_headers", return_value={}),
+        patch(f"{_PT_MOD}.read_request_body", new_callable=AsyncMock, return_value={}),
+        patch(f"{_PT_MOD}.safe_get_request_headers", return_value={}),
         patch(_COLLECT, return_value=["block-demo"]),
     ]
     try:

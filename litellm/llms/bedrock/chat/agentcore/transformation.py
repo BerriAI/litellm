@@ -193,6 +193,12 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         verbose_logger.debug("Generated new session ID: %s", generated_id)
         return generated_id
 
+    def get_runtime_session_id(
+        self,
+        optional_params: dict[str, object],  # mutable-ok: mirrors override contract
+    ) -> str:
+        return self._get_runtime_session_id(optional_params)
+
     def _get_runtime_user_id(self, optional_params: dict) -> str | None:
         """
         Get runtime user ID if provided
@@ -201,6 +207,12 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         if user_id:
             verbose_logger.debug("Using provided runtimeUserId: %s", user_id)
         return user_id
+
+    def get_runtime_user_id(
+        self,
+        optional_params: dict[str, object],  # mutable-ok: mirrors override contract
+    ) -> str | None:
+        return self._get_runtime_user_id(optional_params)
 
     def transform_request(
         self,
@@ -301,7 +313,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             return None
 
         try:
-            data: Final = json.loads(json_str)
+            data: Final[object] = json.loads(json_str)
             # Skip non-dict data (some lines contain JSON strings)
             return data if isinstance(data, dict) else None
         except json.JSONDecodeError:
@@ -379,7 +391,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             verbose_logger.warning("Failed to calculate token usage: %s", e)
             return None
 
-    def _parse_json_response(self, response_json: dict) -> AgentCoreParsedResponse:
+    def _parse_json_response(self, response_json: object) -> AgentCoreParsedResponse:
         """
         Parse direct JSON response (non-streaming).
 
@@ -462,14 +474,14 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         Returns:
             AgentCoreParsedResponse: Parsed response data
         """
-        content_type: Final = raw_response.headers.get("content-type", "").lower()
+        content_type: Final = ", ".join(httpx.Headers(raw_response.headers).get_list("content-type")).lower()
         verbose_logger.debug("AgentCore response Content-Type: %s", content_type)
 
         # Parse response based on content type
         if "application/json" in content_type:
             # Direct JSON response
             verbose_logger.debug("Parsing JSON response")
-            response_json: Final = raw_response.json()
+            response_json: Final[object] = raw_response.json()
             verbose_logger.debug("Response JSON: %s", response_json)
             return self._parse_json_response(response_json)
         else:
@@ -645,17 +657,18 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         signed_json_body: bytes | None = None,
         *,
         litellm_params: Mapping[str, object],
+        timeout: float | httpx.Timeout | None = None,
     ) -> "CustomStreamWrapper":
         """
         Simplified sync streaming - returns a generator that yields ModelResponse chunks.
         """
         from litellm.llms.custom_httpx.http_handler import (
             HTTPHandler,
-            _get_httpx_client,
+            get_httpx_client,
         )
 
         if client is None or not isinstance(client, HTTPHandler):
-            client = _get_httpx_client(params={})
+            client = get_httpx_client(params={})
 
         verbose_logger.debug("Making sync streaming request to: %s", api_base)
 
@@ -685,14 +698,14 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         )
 
         # Check if response is JSON (agent used sync return) instead of SSE
-        content_type: Final = response.headers.get("content-type", "").lower()
+        content_type: Final = ", ".join(httpx.Headers(response.headers).get_list("content-type")).lower()
         if "application/json" in content_type:
             verbose_logger.debug(
                 "AgentCore streaming: received JSON response instead of SSE, converting to single-chunk stream"
             )
             try:
                 body: Final = response.read()
-                response_json: Final = json.loads(body)
+                response_json: Final[object] = json.loads(body)
             except (json.JSONDecodeError, Exception) as e:
                 raise BedrockError(
                     status_code=response.status_code,
@@ -866,6 +879,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         signed_json_body: bytes | None = None,
         *,
         litellm_params: Mapping[str, object],
+        timeout: float | httpx.Timeout | None = None,
     ) -> "CustomStreamWrapper":
         """
         Simplified async streaming - returns an async generator that yields ModelResponse chunks.
@@ -906,14 +920,14 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         )
 
         # Check if response is JSON (agent used sync return) instead of SSE
-        content_type: Final = response.headers.get("content-type", "").lower()
+        content_type: Final = ", ".join(httpx.Headers(response.headers).get_list("content-type")).lower()
         if "application/json" in content_type:
             verbose_logger.debug(
                 "AgentCore streaming: received JSON response instead of SSE, converting to single-chunk stream"
             )
             try:
                 body: Final = await response.aread()
-                response_json: Final = json.loads(body)
+                response_json: Final[object] = json.loads(body)
             except (json.JSONDecodeError, Exception) as e:
                 raise BedrockError(
                     status_code=response.status_code,

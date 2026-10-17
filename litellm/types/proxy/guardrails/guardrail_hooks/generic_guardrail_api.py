@@ -1,9 +1,10 @@
 from collections.abc import Mapping, Sequence
 from typing import Any, Final, Literal, cast  # noqa: TID251  # JSON chat rows have no typed constructor across roles
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import ConfigDict, Field, SerializerFunctionWrapHandler, model_serializer
 from typing_extensions import TypedDict
 
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionToolCallChunk,
@@ -12,16 +13,24 @@ from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigM
 from litellm.types.utils import ChatCompletionMessageToolCall
 
 
-class GuardrailToolParam(BaseModel):
+class GuardrailToolParam(LiteLLMBaseModel):
     """A tool forwarded verbatim to the guardrail for inspection.
 
     Built-in tools (code_interpreter, file_search, ...) have no ``function`` block
-    and stash their config in tool-specific keys, so only ``type`` is required and
-    ``extra="allow"`` preserves the rest instead of stripping it.
+    and stash their config in tool-specific keys, and provider-native tools such as
+    Gemini ``function_declarations`` carry no ``type`` at all, so nothing is required
+    and ``extra="allow"`` preserves the rest instead of stripping it.
     """
 
     model_config = ConfigDict(extra="allow")
-    type: str
+    type: str | None = None
+
+    @model_serializer(mode="wrap")
+    def _without_absent_type(self, handler: SerializerFunctionWrapHandler) -> Mapping[str, object]:
+        dumped: Final = cast("Mapping[str, object]", handler(self))  # cast-ok: handler dumps this model's fields
+        if self.type is not None:
+            return dumped
+        return {key: value for key, value in dumped.items() if key != "type"}
 
 
 class GenericGuardrailAPIMetadata(TypedDict, total=False):
@@ -35,7 +44,7 @@ class GenericGuardrailAPIMetadata(TypedDict, total=False):
     user_api_key_org_id: str | None
 
 
-class GenericGuardrailAPIOptionalParams(BaseModel):
+class GenericGuardrailAPIOptionalParams(LiteLLMBaseModel):
     """Optional parameters for the Generic Guardrail API"""
 
     additional_provider_specific_params: dict[str, Any] | None = Field(
@@ -58,6 +67,15 @@ class GenericGuardrailAPIOptionalParams(BaseModel):
             "True (default) raises and blocks the request on error. "
             "False logs a critical error and allows the request to proceed, so only a valid "
             "guardrail response can block or modify it; broader than unreachable_fallback."
+        ),
+    )
+
+    forward_messages_as_sent: bool | None = Field(
+        default=False,
+        description=(
+            "When True, structured_messages reaches the guardrail exactly as the client sent it, so rows can "
+            "carry provider-native content blocks and keys the OpenAI chat types do not declare. False "
+            "(default) sends OpenAI-format chat rows with undeclared keys removed."
         ),
     )
 
@@ -119,7 +137,7 @@ class GenericGuardrailAPIConfigModel(
         return "Generic Guardrail API"
 
 
-class GenericGuardrailAPIRequest(BaseModel):
+class GenericGuardrailAPIRequest(LiteLLMBaseModel):
     """Request model for the Generic Guardrail API"""
 
     input_type: Literal["request", "response"]

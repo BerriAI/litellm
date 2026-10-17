@@ -801,23 +801,30 @@ def test_update_dictionary_merges_nested_dicts_without_aliasing():
     object stays untouched, and the caller's incoming nested dict is never
     inserted by reference into the merged result.
     """
-    from litellm.utils import _update_dictionary
+    from litellm.utils import update_dictionary
 
-    existing_nested = {"hours_utc": "01:00-02:00"}
+    from typing import cast
+
+    existing_nested = cast(dict[str, object], {"hours_utc": "01:00-02:00", 1: "existing"})
     existing = {"off_peak_pricing": existing_nested}
-    incoming_nested = {"windows": [{"hours_utc": "16:00-19:00", "weekdays": [2]}]}
+    incoming_nested = cast(
+        dict[str, object],
+        {"windows": [{"hours_utc": "16:00-19:00", "weekdays": [2]}], 2: "new"},
+    )
     incoming = {"off_peak_pricing": incoming_nested}
 
-    merged = _update_dictionary(existing, incoming)
+    merged = update_dictionary(existing, incoming)
 
     assert merged["off_peak_pricing"] == {
         "hours_utc": "01:00-02:00",
         "windows": [{"hours_utc": "16:00-19:00", "weekdays": [2]}],
+        1: "existing",
+        2: "new",
     }
-    assert existing_nested == {"hours_utc": "01:00-02:00"}
+    assert existing_nested == {"hours_utc": "01:00-02:00", 1: "existing"}
     assert merged["off_peak_pricing"] is not incoming_nested
 
-    fresh = _update_dictionary({}, incoming)
+    fresh = update_dictionary({}, incoming)
     assert fresh["off_peak_pricing"] == incoming_nested
     assert fresh["off_peak_pricing"] is not incoming_nested
 
@@ -1012,3 +1019,82 @@ def test_completion_registers_cost_per_second_pricing():
         assert litellm.model_cost[model_key]["cost_per_second"] == 0.02
     finally:
         _restore_model_cost_entries(original_entries)
+
+
+def test_update_model_cost():
+    try:
+        litellm.register_model(
+            {
+                "gpt-4": {
+                    "max_tokens": 8192,
+                    "input_cost_per_token": 0.00002,
+                    "output_cost_per_token": 0.00006,
+                    "litellm_provider": "openai",
+                    "mode": "chat",
+                },
+            }
+        )
+        assert litellm.model_cost["gpt-4"]["input_cost_per_token"] == 0.00002
+    except Exception as e:
+        pytest.fail(f"An error occurred: {e}")
+
+
+def test_register_model_scopes_builtin_match_to_the_given_provider():
+    """Registering under an id that collides with another provider's catalog
+    key keeps the entry provider-less under the id instead of merging into the
+    baseten row."""
+    colliding_id: Final = "baseten/zai-org/glm-5.2"
+    builtin_key: Final = "baseten/zai-org/GLM-5.2"
+    model_cost_entries: Final = _snapshot_model_cost_entries((colliding_id, builtin_key))
+    builtin_row_before: Final = copy.deepcopy(litellm.model_cost[builtin_key])
+    try:
+        litellm.register_model(
+            {
+                colliding_id: {
+                    "input_cost_per_token": 0.00000096,
+                    "output_cost_per_token": 0.00000302,
+                    "cache_read_input_token_cost": 0.00000010,
+                    "mode": "chat",
+                }
+            },
+            custom_llm_provider="openai",
+        )
+
+        entry: Final = litellm.model_cost[colliding_id]
+        assert "litellm_provider" not in entry
+        assert entry["input_cost_per_token"] == 0.00000096
+        assert entry["output_cost_per_token"] == 0.00000302
+        assert entry["cache_read_input_token_cost"] == 0.00000010
+        assert litellm.model_cost[builtin_key] == builtin_row_before
+    finally:
+        _restore_model_cost_entries(model_cost_entries)
+
+
+def test_per_request_custom_pricing_scopes_a_colliding_deployment_id_to_its_provider():
+    from litellm.main import _register_custom_pricing_for_request
+
+    deployment_id: Final = "baseten/zai-org/glm-5.2"
+    builtin_key: Final = "baseten/zai-org/GLM-5.2"
+    shared_key: Final = "openai/zai-org/GLM-5.2"
+    model_cost_entries: Final = _snapshot_model_cost_entries((deployment_id, builtin_key, shared_key))
+    builtin_row_before: Final = copy.deepcopy(litellm.model_cost[builtin_key])
+    openai_models_before: Final = frozenset(litellm.open_ai_chat_completion_models)
+    try:
+        _register_custom_pricing_for_request(
+            model="zai-org/GLM-5.2",
+            custom_llm_provider="openai",
+            kwargs={
+                "input_cost_per_token": 0.00000096,
+                "output_cost_per_token": 0.00000302,
+                "metadata": {"model_info": {"id": deployment_id}},
+            },
+            model_info={"mode": "chat"},
+        )
+
+        entry: Final = litellm.model_cost[deployment_id]
+        assert entry["input_cost_per_token"] == 0.00000096
+        assert entry["output_cost_per_token"] == 0.00000302
+        assert litellm.model_cost[builtin_key] == builtin_row_before
+    finally:
+        _restore_model_cost_entries(model_cost_entries)
+        litellm.open_ai_chat_completion_models.intersection_update(openai_models_before)

@@ -439,6 +439,40 @@ describe("Settings", () => {
     });
   });
 
+  it("should post the saved s3_v2 folder partitioning when unchanged", async () => {
+    mockS3Callback({ S3_LOG_PROMPTS_ONLY: null, S3_PARTITION_GRANULARITY: "hour" }, "s3_v2");
+    const user = await openS3EditModal("s3_v2");
+
+    const dialog = screen.getByRole("dialog");
+    const partitioning = await within(dialog).findByRole("combobox", { name: "Folder Partitioning" });
+    expect(partitioning).toHaveTextContent("hour");
+
+    await user.click(await within(dialog).findByRole("button", { name: "Save Changes" }));
+    await waitFor(() => {
+      expect(vi.mocked(setCallbacksCall)).toHaveBeenCalledTimes(1);
+    });
+    const [, payload] = vi.mocked(setCallbacksCall).mock.calls[0];
+    expect(payload.environment_variables.s3_partition_granularity).toBe("hour");
+  });
+
+  it("should leave an unset s3_v2 folder partitioning out of the save payload", async () => {
+    mockS3Callback({ S3_LOG_PROMPTS_ONLY: null, S3_PARTITION_GRANULARITY: null }, "s3_v2");
+    const user = await openS3EditModal("s3_v2");
+
+    const dialog = screen.getByRole("dialog");
+    const partitioning = await within(dialog).findByRole("combobox", { name: "Folder Partitioning" });
+    expect(partitioning).toHaveTextContent("Select folder partitioning");
+    expect(partitioning).not.toHaveTextContent(/day|hour/i);
+
+    await user.click(await within(dialog).findByRole("button", { name: "Save Changes" }));
+    await waitFor(() => {
+      expect(vi.mocked(setCallbacksCall)).toHaveBeenCalledTimes(1);
+    });
+    const [, payload] = vi.mocked(setCallbacksCall).mock.calls[0];
+    expect(Object.keys(payload.environment_variables)).not.toContain("s3_partition_granularity");
+    expect(payload.environment_variables.callback).toBe("s3_v2");
+  });
+
   it("should not offer folder partitioning for the legacy s3 callback, which cannot honour it", async () => {
     mockS3Callback({ S3_LOG_PROMPTS_ONLY: null, S3_PARTITION_GRANULARITY: null });
     const user = await openS3EditModal();

@@ -1,12 +1,19 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, renderWithProviders as render, screen, waitFor, within } from "../../../tests/test-utils";
 import { usePathname } from "next/navigation";
 import { AuthProvider } from "@/contexts/AuthContext";
+import { recordUiEvent } from "@/lib/telemetry/uiEvents";
 import Layout from "./layout";
 
 const { replaceMock } = vi.hoisted(() => ({ replaceMock: vi.fn() }));
 
 let searchParamsValue = new URLSearchParams();
+
+vi.mock("@/lib/telemetry/uiEvents", () => ({
+  recordUiEvent: vi.fn(() => Promise.resolve()),
+}));
+
+vi.mock("@/app/(dashboard)/telemetry/_components/TelemetryEnvBanner", () => ({ default: () => null }));
 
 vi.mock("next/navigation", () => ({
   useRouter: vi.fn(() => ({ push: vi.fn(), replace: replaceMock })),
@@ -15,41 +22,26 @@ vi.mock("next/navigation", () => ({
 }));
 
 vi.mock("@/components/liteadmin/LiteAdmin", () => ({
-  default: () => <button>LiteAdmin</button>,
+  LiteAdminFrame: ({ children }: { children: React.ReactNode }) => children,
 }));
 
 vi.mock("@/components/DashboardHeader", () => ({
-  DashboardHeader: () => <div data-testid="dashboard-header" />,
-}));
-
-vi.mock("@/app/(dashboard)/components/SidebarProvider", () => ({
-  default: ({ sidebarCollapsed }: { sidebarCollapsed: boolean }) => (
-    <div data-testid="sidebar" data-collapsed={String(sidebarCollapsed)} />
+  DashboardHeader: ({ navigationTrigger }: { navigationTrigger?: React.ReactNode }) => (
+    <div data-testid="dashboard-header">{navigationTrigger}</div>
   ),
 }));
 
-vi.mock("@/components/DebugWarningBanner", () => ({
-  DebugWarningBanner: () => null,
-}));
-
-vi.mock("@/components/NoRedisWarningBanner", () => ({
-  NoRedisWarningBanner: () => null,
-}));
-
-vi.mock("@/components/EnvCredentialLoginWarningBanner", () => ({
-  EnvCredentialLoginWarningBanner: () => null,
-}));
-
-vi.mock("@/components/LicenseExpiryBanner", () => ({
-  LicenseExpiryBanner: () => null,
+vi.mock("@/app/(dashboard)/components/SidebarProvider", () => ({
+  default: ({ sidebarCollapsed, onToggleCollapsed }: { sidebarCollapsed: boolean; onToggleCollapsed: () => void }) => (
+    <div data-testid="sidebar" data-collapsed={String(sidebarCollapsed)}>
+      <button onClick={onToggleCollapsed}>Close navigation</button>
+      <a href="#settings">Settings</a>
+    </div>
+  ),
 }));
 
 vi.mock("@/components/UserBanner", () => ({
   UserBanner: () => null,
-}));
-
-vi.mock("@/components/UpgradeBanner", () => ({
-  UpgradeBanner: () => null,
 }));
 
 vi.mock("@/contexts/ThemeContext", () => ({
@@ -89,30 +81,72 @@ describe("(dashboard) Layout", () => {
     vi.mocked(usePathname).mockReturnValue("/ui/guardrails");
   });
 
-  it.each(["/ui/playground", "/ui/playground/"])(
-    "hides LiteAdmin on %s and restores it after leaving Playground",
-    async (pathname) => {
-      const dashboard = () => (
-        <AuthProvider>
-          <Layout>
-            <div data-testid="page-content" />
-          </Layout>
-        </AuthProvider>
-      );
-      const { rerender } = render(dashboard());
-      pendingUiConfig.resolve();
-      expect(await screen.findByRole("button", { name: "LiteAdmin" })).toBeInTheDocument();
+  it("starts mobile navigation closed, opens a modal drawer and closes it after choosing a page", async () => {
+    render(
+      <AuthProvider>
+        <Layout>
+          <p>Gateway content</p>
+        </Layout>
+      </AuthProvider>,
+    );
+    pendingUiConfig.resolve();
 
-      vi.mocked(usePathname).mockReturnValue(pathname);
-      rerender(dashboard());
-      expect(screen.queryByRole("button", { name: "LiteAdmin" })).not.toBeInTheDocument();
-      expect(screen.getByTestId("page-content")).toBeInTheDocument();
+    const trigger = await screen.findByRole("button", { name: "Open navigation" });
+    expect(screen.queryByRole("dialog", { name: "Navigation" })).not.toBeInTheDocument();
 
-      vi.mocked(usePathname).mockReturnValue("/ui/api-keys");
-      rerender(dashboard());
-      expect(screen.getByRole("button", { name: "LiteAdmin" })).toBeInTheDocument();
-    },
-  );
+    fireEvent.click(trigger);
+    const navigation = await screen.findByRole("dialog", { name: "Navigation" });
+    expect(within(navigation).getByRole("button", { name: "Close navigation" })).toBeInTheDocument();
+    fireEvent.click(within(navigation).getByRole("link", { name: "Settings" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Navigation" })).not.toBeInTheDocument());
+  });
+
+  it("records one page view per route segment, not per query change", async () => {
+    const dashboard = () => (
+      <AuthProvider>
+        <Layout>
+          <p>Gateway content</p>
+        </Layout>
+      </AuthProvider>
+    );
+    const { rerender } = render(dashboard());
+    pendingUiConfig.resolve();
+    await screen.findByRole("button", { name: "Open navigation" });
+    searchParamsValue = new URLSearchParams("tab=members");
+    rerender(dashboard());
+    vi.mocked(usePathname).mockReturnValue("/ui/teams/abc-123");
+    rerender(dashboard());
+    vi.mocked(usePathname).mockReturnValue("/ui/teams/def-456");
+    rerender(dashboard());
+
+    await vi.waitFor(() =>
+      expect(vi.mocked(recordUiEvent).mock.calls).toEqual([
+        [{ page: "guardrails", action: "view" }],
+        [{ page: "teams", action: "view" }],
+      ]),
+    );
+  });
+
+  it("closes the mobile drawer when navigation changes outside the drawer", async () => {
+    const dashboard = () => (
+      <AuthProvider>
+        <Layout>
+          <p>Gateway content</p>
+        </Layout>
+      </AuthProvider>
+    );
+    const { rerender } = render(dashboard());
+    pendingUiConfig.resolve();
+    fireEvent.click(await screen.findByRole("button", { name: "Open navigation" }));
+    expect(await screen.findByRole("dialog", { name: "Navigation" })).toBeInTheDocument();
+
+    vi.mocked(usePathname).mockReturnValue("/ui/api-keys");
+    rerender(dashboard());
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Navigation" })).not.toBeInTheDocument());
+    vi.mocked(usePathname).mockReturnValue("/ui/guardrails");
+    rerender(dashboard());
+    expect(screen.queryByRole("dialog", { name: "Navigation" })).not.toBeInTheDocument();
+  });
 
   it("collapses the sidebar on Logs for a full-screen view and expands it again after leaving", async () => {
     const dashboard = () => (

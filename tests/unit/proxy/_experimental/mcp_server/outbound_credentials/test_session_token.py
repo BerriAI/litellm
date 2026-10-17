@@ -156,7 +156,7 @@ def test_key_rotation_invalidates_outstanding_tokens():
 @pytest.mark.parametrize(
     "candidate,expected",
     [
-        ("sk-1234", NotASessionToken),
+        ("sk-9876", NotASessionToken),
         ("llm_env_something", NotASessionToken),
         ("", NotASessionToken),
         (SESSION_TOKEN_PREFIX, SessionMalformed),
@@ -189,6 +189,7 @@ def test_alg_none_token_is_rejected():
         _valid_claims(iat="evil"),
         _valid_claims(kind="access"),
         _valid_claims(user_id=""),
+        _valid_claims(family=""),
         _valid_claims(nbf=0),
         {k: v for k, v in _valid_claims().items() if k != "client_id"},
         {k: v for k, v in _valid_claims().items() if k != "exp"},
@@ -218,6 +219,8 @@ def test_empty_principal_fields_rejected_at_construction():
         SessionPrincipal(user_id="", client_id="c")
     with pytest.raises(ValidationError):
         SessionPrincipal(user_id="u", client_id="")
+    with pytest.raises(ValidationError):
+        SessionPrincipal(user_id="u", client_id="c", resource_server_ids=())
 
 
 def test_short_signing_key_rejected_at_construction():
@@ -247,6 +250,46 @@ def _decoded_claims(token: str, prefix: str) -> dict:
     )
 
 
+def test_single_server_scope_keeps_the_scalar_wire_claim():
+    principal = SessionPrincipal(
+        user_id="user-123",
+        client_id="llm_client_abc",
+        resource_server_ids=("alpha-id",),
+    )
+    minted = mint_session_token(principal, KEYS, NOW)
+    assert isinstance(minted, MintedSessionToken)
+
+    claims = _decoded_claims(minted.token.get_secret_value(), SESSION_TOKEN_PREFIX)
+    opened = open_session_token(minted.token.get_secret_value(), KEYS, NOW)
+    assert claims["resource_server_id"] == "alpha-id"
+    assert "resource_server_ids" not in claims
+    assert isinstance(opened, OpenedSessionToken)
+    assert opened.principal.resource_server_ids == ("alpha-id",)
+
+
+def test_multi_server_scope_round_trips_through_the_list_claim():
+    principal = SessionPrincipal(
+        user_id="user-123",
+        client_id="llm_client_abc",
+        resource_server_ids=("alpha-id", "beta-id"),
+    )
+    minted = mint_session_token(principal, KEYS, NOW)
+    assert isinstance(minted, MintedSessionToken)
+
+    claims = _decoded_claims(minted.token.get_secret_value(), SESSION_TOKEN_PREFIX)
+    opened = open_session_token(minted.token.get_secret_value(), KEYS, NOW)
+    assert claims["resource_server_ids"] == ["alpha-id", "beta-id"]
+    assert "resource_server_id" not in claims
+    assert isinstance(opened, OpenedSessionToken)
+    assert opened.principal == principal
+
+
+def test_token_with_both_server_scope_claims_is_malformed():
+    token = _sign_claims(_valid_claims(resource_server_id="alpha-id", resource_server_ids=["alpha-id", "beta-id"]))
+
+    assert isinstance(open_session_token(token, KEYS, NOW), SessionMalformed)
+
+
 def test_mcp_principal_wire_claims_carry_no_audience_or_team_keys():
     access_claims = _decoded_claims(_mint_access(), SESSION_TOKEN_PREFIX)
     refresh_claims = _decoded_claims(_mint_refresh(), SESSION_REFRESH_PREFIX)
@@ -273,6 +316,31 @@ def test_proxy_api_audience_and_team_round_trip_through_the_refresh_token():
     opened = open_session_refresh_token(token, KEYS, NOW)
     assert isinstance(opened, OpenedSessionToken)
     assert opened.principal == principal
+
+
+def test_refresh_token_family_is_rooted_at_the_first_jti_and_carried_through_rotation():
+    root = mint_session_refresh_token(PRINCIPAL, KEYS, NOW)
+    assert isinstance(root, MintedSessionToken)
+    root_token = root.token.get_secret_value()
+    assert "family" not in _decoded_claims(root_token, SESSION_REFRESH_PREFIX)
+    opened_root = open_session_refresh_token(root_token, KEYS, NOW)
+    assert isinstance(opened_root, OpenedSessionToken)
+    assert opened_root.family == opened_root.jti
+
+    rotated = mint_session_refresh_token(PRINCIPAL, KEYS, NOW, family=opened_root.family)
+    assert isinstance(rotated, MintedSessionToken)
+    rotated_token = rotated.token.get_secret_value()
+    assert _decoded_claims(rotated_token, SESSION_REFRESH_PREFIX)["family"] == opened_root.jti
+    opened_rotated = open_session_refresh_token(rotated_token, KEYS, NOW)
+    assert isinstance(opened_rotated, OpenedSessionToken)
+    assert opened_rotated.jti != opened_root.jti
+    assert opened_rotated.family == opened_root.jti
+
+    twice_rotated = mint_session_refresh_token(PRINCIPAL, KEYS, NOW, family=opened_rotated.family)
+    assert isinstance(twice_rotated, MintedSessionToken)
+    opened_twice = open_session_refresh_token(twice_rotated.token.get_secret_value(), KEYS, NOW)
+    assert isinstance(opened_twice, OpenedSessionToken)
+    assert opened_twice.family == opened_root.jti
 
 
 def test_signed_claims_with_an_unknown_audience_are_rejected():
