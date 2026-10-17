@@ -15,7 +15,10 @@ import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import encrypted_reasoning_signature
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
     CONVERTED_SYSTEM_NOTE,
+    DROP_MID_CONVERSATION_SYSTEM_ENV,
     anthropic_system_blocks,
+    drop_mid_conversation_system,
+    drops_mid_conversation_system,
     place_mid_conversation_system,
     split_leading_system_run,
 )
@@ -550,3 +553,32 @@ def test_anthropic_system_blocks_keeps_text_parts_with_their_cache_control_and_d
         {"type": "text", "text": "one", "cache_control": {"type": "ephemeral", "ttl": "1h"}},
         {"type": "text", "text": "two", "cache_control": {"type": "ephemeral"}},
     )
+
+
+def test_drop_mid_conversation_system_keeps_the_leading_run_and_removes_every_later_system_message():
+    messages = [
+        {"role": "system", "content": "one"},
+        {"role": "system", "content": "two"},
+        {"role": "user", "content": "q1"},
+        {"role": "system", "content": "reminder"},
+        {"role": "assistant", "content": "a1"},
+        {"role": "system", "content": "trailing"},
+    ]
+
+    kept = drop_mid_conversation_system(messages)
+
+    assert [m["content"] for m in kept] == ["one", "two", "q1", "a1"]
+    assert drop_mid_conversation_system(kept) == kept
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [("true", True), ("TRUE", True), (" true ", True), ("false", False), ("drop", False), ("1", False), (None, False)],
+)
+def test_drops_mid_conversation_system_only_on_a_literal_true(monkeypatch, value: str | None, expected: bool):
+    if value is None:
+        monkeypatch.delenv(DROP_MID_CONVERSATION_SYSTEM_ENV, raising=False)
+    else:
+        monkeypatch.setenv(DROP_MID_CONVERSATION_SYSTEM_ENV, value)
+
+    assert drops_mid_conversation_system() is expected

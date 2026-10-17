@@ -29,6 +29,7 @@ prompt cache readable across turns. Messages are handled in OpenAI format; the
 Anthropic wire shape is built later by ``anthropic_messages_pt``.
 """
 
+import os
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from itertools import accumulate, chain, dropwhile, groupby, takewhile
 from operator import itemgetter
@@ -54,6 +55,8 @@ from .common_utils import is_unsignable_thinking_block
 CONVERTED_SYSTEM_NOTE: Final = (
     "Operator note (not from the user): the following was originally a mid-conversation system-role reminder."
 )
+
+DROP_MID_CONVERSATION_SYSTEM_ENV: Final = "LITELLM_DROP_MIDTURN_SYSTEM"
 
 _USER_TYPE_ROLES: Final = frozenset({"user", "tool", "function"})
 _TOOL_ROLES: Final = frozenset({"tool", "function"})
@@ -102,6 +105,22 @@ def _kind(message: object) -> _MessageKind:
     if role == "user":
         return "user"
     return "other"
+
+
+def drops_mid_conversation_system() -> bool:
+    """``LITELLM_DROP_MIDTURN_SYSTEM=true`` removes every system message after the leading run
+    before any placement runs, for operators whose backend must never see one (a strict chat
+    template) and who would rather lose the reminder than deliver it as a user turn."""
+    return os.getenv(DROP_MID_CONVERSATION_SYSTEM_ENV, "").strip().lower() == "true"
+
+
+def drop_mid_conversation_system(messages: Sequence[_Message]) -> tuple[_Message, ...]:
+    """``messages`` without the system messages that follow the leading run."""
+    leading_count: Final = next(
+        (index for index, message in enumerate(messages) if not is_system_message(message)),
+        len(messages),
+    )
+    return (*messages[:leading_count], *(m for m in messages[leading_count:] if not is_system_message(m)))
 
 
 def split_leading_system_run(
