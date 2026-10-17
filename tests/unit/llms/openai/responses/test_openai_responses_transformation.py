@@ -1630,6 +1630,43 @@ class TestTransformListInputItemsRequest:
         assert data["model"] == "gpt-4o"
         assert data["input"] == "hello"
 
+    @pytest.mark.parametrize(
+        ("config", "api_base"),
+        [
+            pytest.param(
+                OpenAIResponsesAPIConfig(),
+                "https://api.openai.com/v1/responses",
+                id="openai",
+            ),
+            pytest.param(
+                AzureOpenAIResponsesAPIConfig(),
+                "https://x.openai.azure.com/openai/v1/responses?api-version=preview",
+                id="azure",
+            ),
+        ],
+    )
+    def test_compact_response_request_omits_metadata(
+        self,
+        config: OpenAIResponsesAPIConfig | AzureOpenAIResponsesAPIConfig,
+        api_base: str,
+    ) -> None:
+        _, data = config.transform_compact_response_api_request(
+            model="gpt-5-mini",
+            input="hi",
+            response_api_optional_request_params={
+                "metadata": {"a": "b"},
+                "instructions": "be brief",
+                "previous_response_id": "resp_1",
+            },
+            api_base=api_base,
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert "metadata" not in data
+        assert data["instructions"] == "be brief"
+        assert data["previous_response_id"] == "resp_1"
+
     def test_azure_transform_list_input_items_request_minimal(self):
         """Test Azure implementation with minimal parameters"""
         # Setup
