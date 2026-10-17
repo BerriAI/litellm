@@ -5,7 +5,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-
 import litellm
 from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
 from litellm.types.llms.gemini import BidiGenerateContentServerMessage
@@ -2235,3 +2234,25 @@ def test_gemini_realtime_response_done_reports_no_grounding_when_none_ran():
 
     assert input_details.get("web_search_requests") is None
     assert input_details.get("google_maps_grounding_requests") is None
+
+
+def test_gemini_maps_the_two_vad_sensitivities():
+    """start_of_speech_sensitivity / end_of_speech_sensitivity reach Gemini's
+    automaticActivityDetection; values outside the enums are not forwarded."""
+    config = GeminiRealtimeConfig()
+
+    mapped = config.map_automatic_turn_detection(
+        {
+            "type": "server_vad",
+            "create_response": True,
+            "silence_duration_ms": 700,
+            "start_of_speech_sensitivity": "START_SENSITIVITY_LOW",
+            "end_of_speech_sensitivity": "END_SENSITIVITY_LOW",
+        }
+    )
+    assert mapped["startOfSpeechSensitivity"] == "START_SENSITIVITY_LOW"
+    assert mapped["endOfSpeechSensitivity"] == "END_SENSITIVITY_LOW"
+    assert mapped["silenceDurationMs"] == 700
+
+    rejected = config.map_automatic_turn_detection({"type": "server_vad", "end_of_speech_sensitivity": "TRES_BASSE"})
+    assert "endOfSpeechSensitivity" not in rejected

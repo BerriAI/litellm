@@ -5,7 +5,7 @@ This file contains the transformation logic for the Gemini realtime API.
 import json
 from collections import OrderedDict
 from collections.abc import Mapping, Sequence
-from typing import Any, Final, cast
+from typing import Any, Final, cast, get_args
 
 from typing_extensions import ReadOnly, Required, TypedDict
 
@@ -27,6 +27,8 @@ from litellm.types.llms.gemini import (
     BidiGenerateContentServerContent,
     BidiGenerateContentServerMessage,
     BidiGenerateContentSetup,
+    EndOfSpeechSensitivityEnum,
+    StartOfSpeechSensitivityEnum,
 )
 from litellm.types.llms.openai import (
     OpenAIRealtimeContentPartDone,
@@ -75,6 +77,14 @@ MAP_GEMINI_FIELD_TO_OPENAI_EVENT: Final[dict[str, OpenAIRealtimeEventTypes | Res
 # Keys the main transform loop handles; siblings like ``usageMetadata`` are skipped.
 _KNOWN_GEMINI_TOP_LEVEL_KEYS: Final[set] = {map_key.split(".", 1)[0] for map_key in MAP_GEMINI_FIELD_TO_OPENAI_EVENT}
 
+
+# Gemini accepts only its enum spellings; anything else is dropped, not forwarded
+_START_OF_SPEECH_SENSITIVITIES: Final[Mapping[object, StartOfSpeechSensitivityEnum]] = {
+    value: value for value in get_args(StartOfSpeechSensitivityEnum)
+}
+_END_OF_SPEECH_SENSITIVITIES: Final[Mapping[object, EndOfSpeechSensitivityEnum]] = {
+    value: value for value in get_args(EndOfSpeechSensitivityEnum)
+}
 
 OPENAI_STOCK_REALTIME_VOICES: Final[frozenset[str]] = frozenset(
     {"alloy", "ash", "ballad", "cedar", "coral", "echo", "marin", "sage", "shimmer", "verse"}
@@ -305,6 +315,12 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             automatic_activity_dection["prefixPaddingMs"] = value["prefix_padding_ms"]
         if "silence_duration_ms" in value and isinstance(value["silence_duration_ms"], int):
             automatic_activity_dection["silenceDurationMs"] = value["silence_duration_ms"]
+        start_sensitivity: Final = _START_OF_SPEECH_SENSITIVITIES.get(value.get("start_of_speech_sensitivity"))
+        if start_sensitivity is not None:
+            automatic_activity_dection["startOfSpeechSensitivity"] = start_sensitivity
+        end_sensitivity: Final = _END_OF_SPEECH_SENSITIVITIES.get(value.get("end_of_speech_sensitivity"))
+        if end_sensitivity is not None:
+            automatic_activity_dection["endOfSpeechSensitivity"] = end_sensitivity
         return automatic_activity_dection
 
     def get_supported_openai_params(self, model: str) -> list[str]:
