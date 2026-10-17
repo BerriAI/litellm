@@ -124,7 +124,7 @@ class PatternMatchRouter:
 
     _pattern_to_regex = pattern_to_regex
 
-    def _return_pattern_matched_deployments(self, matched_pattern: Match, deployments: list[dict]) -> list[dict]:
+    def _return_pattern_matched_deployments(self, matched_pattern: Match[str], deployments: list[dict]) -> list[dict]:
         new_deployments: Final = []
         for deployment in deployments:
             new_deployment = copy.deepcopy(deployment)
@@ -182,7 +182,7 @@ class PatternMatchRouter:
 
     @staticmethod
     def set_deployment_model_name(
-        matched_pattern: Match,
+        matched_pattern: Match[str],
         litellm_deployment_litellm_model: str,
     ) -> str:
         """

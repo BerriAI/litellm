@@ -1,3 +1,5 @@
+from collections.abc import Generator, Mapping
+from contextlib import contextmanager
 from typing import Final
 from unittest.mock import patch
 
@@ -1198,6 +1200,23 @@ def test_custom_prefix_that_starts_a_discovered_id_still_prefixes_every_listed_m
     ]
 
 
+@contextmanager
+def _registered_chat_models(provider_by_model: Mapping[str, str]) -> Generator[None, None, None]:
+    import litellm
+
+    litellm.register_model(
+        {model: {"litellm_provider": provider, "mode": "chat"} for model, provider in provider_by_model.items()},
+        persist_across_reloads=False,
+    )
+    try:
+        yield
+    finally:
+        for model, provider in provider_by_model.items():
+            litellm.model_cost.pop(model, None)
+            litellm.models_by_provider[provider].discard(model)
+        litellm.add_known_models(model_cost_map={})
+
+
 @pytest.mark.parametrize(
     ("wildcard", "deployment_model", "catalog", "expected"),
     [
@@ -1231,76 +1250,102 @@ def test_custom_prefix_that_starts_a_discovered_id_still_prefixes_every_listed_m
 def test_partial_wildcard_lists_catalog_ids_stored_with_the_provider_prefix(
     wildcard: str, deployment_model: str | None, catalog: tuple[str, ...], expected: list[str]
 ) -> None:
-    import litellm
     from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
     from litellm.types.router import LiteLLM_Params
 
     provider: Final = wildcard.split("/", 1)[0]
     deployment: Final = None if deployment_model is None else LiteLLM_Params(model=deployment_model)
-    try:
-        litellm.register_model(
-            {model: {"litellm_provider": provider, "mode": "chat"} for model in catalog},
-            persist_across_reloads=False,
-        )
-
+    with _registered_chat_models(dict.fromkeys(catalog, provider)):
         listed: Final = get_known_models_from_wildcard(wildcard, deployment)
 
-        assert sorted(listed) == expected
-    finally:
-        for model in catalog:
-            litellm.model_cost.pop(model, None)
-            litellm.models_by_provider[provider].discard(model)
-        litellm.add_known_models(model_cost_map={})
+    assert sorted(listed) == expected
 
 
-def test_alias_wildcard_prepends_its_prefix_to_catalog_ids_without_their_provider_prefix() -> None:
-    import litellm
-    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+_ROUTE_CF_ID: Final = "cloudflare/@cf/partial-route-org/model-a-instruct"
+_ROUTE_CF_SUFFIXED_ID: Final = "cloudflare/@cf/partial-route-org/model-b-instruct-v2"
+_ROUTE_HF_ID: Final = "cloudflare/@hf/partial-route-org/model-c"
+_ROUTE_GEMINI_ID: Final = "gemini-partial-route-9-flash"
+_ROUTE_CF_IDS: Final = {_ROUTE_CF_ID, _ROUTE_CF_SUFFIXED_ID}
+
+
+@pytest.mark.parametrize(
+    ("model_name", "deployment_model", "key_model", "reachable"),
+    [
+        pytest.param("cloudflare/@cf/*", "cloudflare/@cf/*", None, _ROUTE_CF_IDS, id="filter"),
+        pytest.param(
+            "cloudflare/@cf/*-instruct", "cloudflare/@cf/*-instruct", None, {_ROUTE_CF_ID}, id="filter-with-suffix"
+        ),
+        pytest.param(
+            "cloudflare/@cf/*",
+            "cloudflare/*",
+            None,
+            {*_ROUTE_CF_IDS, _ROUTE_HF_ID},
+            id="alias-whose-prefix-matches-catalog-ids",
+        ),
+        pytest.param("cloudflare/team-*", "cloudflare/*", None, {*_ROUTE_CF_IDS, _ROUTE_HF_ID}, id="alias"),
+        pytest.param("cloudflare/cf-*", "cloudflare/@cf/*", None, _ROUTE_CF_IDS, id="alias-over-partial-deployment"),
+        pytest.param("*", "cloudflare/@cf/*", None, _ROUTE_CF_IDS, id="catch-all-over-partial-deployment"),
+        pytest.param(
+            "cloudflare/*", "cloudflare/*", "cloudflare/@cf/*", _ROUTE_CF_IDS, id="key-filter-over-provider-wildcard"
+        ),
+        pytest.param("*", "gemini/gemini-partial-route-9*", None, {_ROUTE_GEMINI_ID}, id="catch-all-over-bare-id"),
+        pytest.param("gemini/gemini-*", "gemini/*", None, {_ROUTE_GEMINI_ID}, id="alias-over-bare-id"),
+        pytest.param(
+            "gemini/*", "gemini/*", "gemini/gemini-partial-route-9*", {_ROUTE_GEMINI_ID}, id="key-filter-over-bare-id"
+        ),
+    ],
+)
+def test_every_listed_partial_wildcard_id_routes_to_the_catalog_model_it_names(
+    model_name: str, deployment_model: str, key_model: str | None, reachable: set[str]
+) -> None:
+    from pydantic import TypeAdapter
+
+    from litellm import Router
+    from litellm.proxy.auth.model_checks import expand_wildcard_deployments_for_model_info, get_complete_model_list
     from litellm.types.router import LiteLLM_Params
 
-    catalog_id: Final = "cloudflare/@cf/partial-alias-org/model-a"
-    try:
-        litellm.register_model(
-            {catalog_id: {"litellm_provider": "cloudflare", "mode": "chat"}}, persist_across_reloads=False
+    routed_params: Final = TypeAdapter(tuple[LiteLLM_Params, ...])
+    router: Final = Router(model_list=[{"model_name": model_name, "litellm_params": {"model": deployment_model}}])
+
+    def routed_model(listed_id: str) -> str:
+        routed: Final = routed_params.validate_python(
+            tuple(deployment["litellm_params"] for deployment in router.wildcard_route_deployments(listed_id, None))
+        )
+        return routed[0].model if routed else listed_id
+
+    def routed_catalog_ids(listed: list[str]) -> list[str]:
+        routed_models: Final = [routed_model(listed_id) for listed_id in listed]
+        return sorted(
+            routed.removeprefix("gemini/") if routed.startswith("gemini/gemini-") else routed
+            for routed in routed_models
+            if "partial-route" in routed
         )
 
-        listed: Final = get_known_models_from_wildcard("cloudflare/team-*", LiteLLM_Params(model="cloudflare/*"))
-
-        assert "cloudflare/team-@cf/partial-alias-org/model-a" in listed
-        assert [model for model in listed if model.startswith("cloudflare/team-cloudflare/")] == []
-    finally:
-        litellm.model_cost.pop(catalog_id, None)
-        litellm.models_by_provider["cloudflare"].discard(catalog_id)
-        litellm.add_known_models(model_cost_map={})
-
-
-def test_alias_wildcard_matching_catalog_subprefix_lists_routable_ids() -> None:
-    """GH#46384: an alias whose suffix collides with a catalog sub-prefix (public
-    "cloudflare/@cf/*" over deployment "cloudflare/*") is an alias, not a filter.
-    Routing substitutes the captured suffix into the deployment pattern, so the
-    listing must prepend the alias prefix to provider-stripped catalog ids; the
-    raw catalog id would route to a target that does not exist."""
-    import litellm
-    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
-    from litellm.types.router import LiteLLM_Params
-
-    catalog_id: Final = "cloudflare/@cf/partial-alias-org/model-b"
-    try:
-        litellm.register_model(
-            {catalog_id: {"litellm_provider": "cloudflare", "mode": "chat"}}, persist_across_reloads=False
+    with _registered_chat_models(
+        {
+            _ROUTE_CF_ID: "cloudflare",
+            _ROUTE_CF_SUFFIXED_ID: "cloudflare",
+            _ROUTE_HF_ID: "cloudflare",
+            _ROUTE_GEMINI_ID: "gemini",
+        }
+    ):
+        v1_models: Final = get_complete_model_list(
+            key_models=[key_model or model_name],
+            team_models=[],
+            proxy_model_list=[model_name],
+            user_model=None,
+            infer_model_from_keys=False,
+            llm_router=router,
         )
-
-        listed: Final = get_known_models_from_wildcard("cloudflare/@cf/*", LiteLLM_Params(model="cloudflare/*"))
-
-        # routing captures the segment after "cloudflare/@cf/" and substitutes it into
-        # "cloudflare/*"; every listed id must therefore map back to a catalog id
-        alias_prefix: Final = "cloudflare/@cf/"
-        routed: Final = [
-            f"cloudflare/{model.removeprefix(alias_prefix)}" for model in listed if model.startswith(alias_prefix)
+        model_info_names: Final = [
+            str(row["model_name"])
+            for row in expand_wildcard_deployments_for_model_info(
+                [dict(deployment) for deployment in router.get_model_list() or []]
+            )
         ]
-        assert catalog_id in routed
-        assert catalog_id not in listed
-    finally:
-        litellm.model_cost.pop(catalog_id, None)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # test cleanup
-        litellm.models_by_provider["cloudflare"].discard(catalog_id)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # test cleanup
-        litellm.add_known_models(model_cost_map={})  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # test cleanup
+        listed_v1_models: Final = routed_catalog_ids(v1_models)
+        listed_model_info_names: Final = routed_catalog_ids(model_info_names)
+
+    assert listed_v1_models == sorted(reachable)
+    if key_model is None:
+        assert listed_model_info_names == sorted(reachable)

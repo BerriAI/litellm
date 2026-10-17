@@ -1,6 +1,7 @@
 # What is this?
 ## Common checks for /v1/models and `/model/info`
 import copy
+import re
 from collections.abc import Sequence
 from typing import Final
 
@@ -11,6 +12,7 @@ from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.router import Router
 from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
+from litellm.router_utils.pattern_match_deployments import PatternMatchRouter
 from litellm.types.router import CredentialLiteLLMParams, LiteLLM_Params
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager, get_valid_models
@@ -269,6 +271,26 @@ def _hydrate_litellm_credential_name(
     return litellm_params
 
 
+def _ids_routing_to_catalog_models(
+    name_pattern: str, deployment_pattern: str, provider: str, catalog_ids: Sequence[str]
+) -> tuple[str, ...]:
+    deployment_regex: Final = re.compile(PatternMatchRouter().pattern_to_regex(deployment_pattern))
+    provider_id_prefix: Final = f"{provider}/"
+    catalog_matches: Final = (
+        deployment_regex.fullmatch(f"{provider_id_prefix}{catalog_id.removeprefix(provider_id_prefix)}")
+        for catalog_id in catalog_ids
+    )
+    return tuple(
+        dict.fromkeys(
+            PatternMatchRouter.set_deployment_model_name(
+                matched_pattern=catalog_match, litellm_deployment_litellm_model=name_pattern
+            )
+            for catalog_match in catalog_matches
+            if catalog_match is not None
+        )
+    )
+
+
 def get_known_models_from_wildcard(wildcard_model: str, litellm_params: LiteLLM_Params | None = None) -> list[str]:
     wildcard_model_to_expand: Final = (
         litellm_params.model
@@ -300,25 +322,23 @@ def get_known_models_from_wildcard(wildcard_model: str, litellm_params: LiteLLM_
     if wildcard_models is None:
         return []
     if wildcard_suffix != "*":
-        ## CHECK IF PARTIAL FILTER e.g. `gemini-*`
+        if litellm_params is not None and _check_wildcard_routing(litellm_params.model):
+            return list(
+                _ids_routing_to_catalog_models(
+                    name_pattern=wildcard_model,
+                    deployment_pattern=litellm_params.model,
+                    provider=provider,
+                    catalog_ids=wildcard_models,
+                )
+            )
         model_prefix: Final = wildcard_suffix.replace("*", "")
-
-        deployment_repeats_prefix: Final = litellm_params is not None and litellm_params.model.endswith(
-            f"/{wildcard_suffix}"
-        )
         provider_id_prefix: Final = f"{provider}/"
         filtered_wildcard_models: Final = [
             wc_model
             for wc_model in wildcard_models
             if wc_model.removeprefix(provider_id_prefix).startswith(model_prefix)
         ]
-        # Filter semantics (list matching catalog ids) only apply when the public name is the
-        # deployment's own pattern. For an alias over a broader deployment (e.g. public
-        # "cloudflare/@cf/*" over "cloudflare/*"), routing substitutes the captured suffix into
-        # the deployment pattern, so catalog ids must be listed with the alias prefix prepended
-        # to their provider-stripped form; listing the raw catalog id would advertise models
-        # whose routed target does not exist.
-        if deployment_repeats_prefix or (litellm_params is None and filtered_wildcard_models):
+        if filtered_wildcard_models:
             wildcard_models = filtered_wildcard_models
         else:
             # add model prefix to wildcard models
@@ -363,7 +383,7 @@ def expand_wildcard_deployments_for_model_info(
         # Determine the wildcard pattern to expand.
         # Branch order matters: only fall to litellm_model when model_name is
         # also a wildcard, so a concrete model_name is never overwritten.
-        if _check_wildcard_routing(model_name) and "/" in model_name:
+        if _check_wildcard_routing(model_name) and ("/" in model_name or model_name == "*"):
             wildcard_pattern = model_name
         elif _check_wildcard_routing(model_name) and _check_wildcard_routing(litellm_model):
             wildcard_pattern = litellm_model
