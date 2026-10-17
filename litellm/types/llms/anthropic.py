@@ -782,6 +782,7 @@ class ANTHROPIC_HOSTED_TOOLS(str, Enum):
     WEB_FETCH = "web_fetch"
     MEMORY = "memory"
     TOOL_SEARCH_TOOL = "tool_search_tool"
+    ADVISOR = "advisor"
 
 
 class ANTHROPIC_BETA_HEADER_VALUES(str, Enum):

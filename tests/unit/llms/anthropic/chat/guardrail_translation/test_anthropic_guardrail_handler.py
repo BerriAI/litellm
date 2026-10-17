@@ -1499,6 +1499,52 @@ class TestAnthropicMessagesHandlerInputProcessing:
         assert tools[1]["description"] == "Get the weather at a specific location"
         assert "input_schema" in tools[1]
 
+    @pytest.mark.asyncio
+    async def test_process_input_messages_keeps_advisor_tool_native(self):
+        """The advisor_20260301 server tool must survive the guardrail round trip untouched.
+
+        Claude Code sends the advisor beside its function tools. The guardrail path
+        translates tools to OpenAI format and back; before the fix the advisor was not
+        recognised as a hosted tool and came back as an empty custom tool, so Anthropic
+        treated it as a client tool and Claude Code failed with
+        "No such tool available: advisor".
+        """
+        handler = AnthropicMessagesHandler()
+        guardrail = MockPassThroughGuardrail(guardrail_name="test")
+        advisor_tool = {
+            "type": "advisor_20260301",
+            "name": "advisor",
+            "model": "claude-opus-4-6",
+            "defer_loading": True,
+        }
+        data = {
+            "model": "claude-sonnet-4-6",
+            "messages": [{"role": "user", "content": "Consult the advisor, then answer: what is 2+2?"}],
+            "tools": [
+                advisor_tool,
+                {
+                    "name": "Bash",
+                    "description": "Run a shell command",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {"command": {"type": "string"}},
+                        "required": ["command"],
+                    },
+                },
+            ],
+        }
+
+        result = await handler.process_input_messages(
+            data=data, guardrail_to_apply=guardrail, litellm_logging_obj=MagicMock()
+        )
+
+        tools = result["tools"]
+        assert len(tools) == 2
+        assert tools[0] == advisor_tool
+        assert tools[1]["type"] == "custom"
+        assert tools[1]["name"] == "Bash"
+        assert tools[1]["description"] == "Run a shell command"
+
 
 class ToolAppendingGuardrail(CustomGuardrail):
     """Guardrail that appends a new OpenAI-format function tool, mimicking a
