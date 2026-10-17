@@ -55,6 +55,8 @@ from litellm.types.utils import (
     StandardLoggingModelInformation,
     StandardLoggingPayload,
     StandardLoggingPayloadErrorInformation,
+    StandardLoggingGuardrailInformation,
+    StandardLoggingVectorStoreRequest,
 )
 
 
@@ -6722,6 +6724,10 @@ def _stored_request_body(body: Mapping[str, object]) -> dict[str, str]:
         ),
         ({"input": [{"role": "user", "content": "q"}, {"type": "function_call_output", "output": "out"}]}, {}),
         ({"messages": [{"role": "user", "content": "q"}, {"role": "assistant", "content": "prefill"}]}, {}),
+        (
+            {"messages": [{"role": "user", "content": [{"type": []}, {"type": {}}, {"type": "text", "text": "latest"}]}]},
+            {"latest_user_message": "latest"},
+        ),
         ({"messages": [{"role": "user", "content": ""}]}, {}),
         ({"messages": []}, {}),
         ({"model": "gpt-4o-mini"}, {}),
@@ -6756,6 +6762,45 @@ def test_latest_user_message_mode_drops_the_response(monkeypatch: pytest.MonkeyP
     assert _STORED_RESPONSE.validate_json(_get_response_for_spend_logs_payload(payload)) == payload["response"]
     monkeypatch.setattr(proxy_server, "general_settings", _LATEST_ONLY_SETTINGS)
     assert _get_response_for_spend_logs_payload(payload) == "{}"
+
+
+def test_latest_user_message_mode_keeps_prompt_text_out_of_spend_log_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    prompt: Final = "earlier turn the row must not keep"
+    guardrail_information: Final = cast(
+        list[StandardLoggingGuardrailInformation],
+        [
+            {
+                "guardrail_name": "pii",
+                "guardrail_request": {"messages": [{"role": "user", "content": prompt}]},
+                "guardrail_response": prompt,
+                "match_details": [{"snippet": prompt}],
+                "classification": {"reason": prompt},
+            }
+        ],
+    )
+    error_information: Final = cast(
+        StandardLoggingPayloadErrorInformation,
+        {"error_message": f"BadRequestError: {{'messages': [{{'role': 'user', 'content': '{prompt}'}}]}}"},
+    )
+    vector_store_request: Final = cast(
+        list[StandardLoggingVectorStoreRequest],
+        [{"vector_store_search_response": {"data": [{"content": [{"type": "text", "text": prompt}]}]}}],
+    )
+    monkeypatch.setattr(proxy_server, "general_settings", _LATEST_ONLY_SETTINGS)
+
+    stored: Final = json.dumps(
+        [
+            _sanitize_guardrail_information_for_spend_logs(guardrail_information),
+            sanitize_error_information_for_spend_logs(error_information),
+            _get_vector_store_request_for_spend_logs_payload(vector_store_request),
+        ]
+    )
+
+    assert prompt not in stored, stored
 
 
 def test_latest_user_message_mode_unset_stores_the_full_request(monkeypatch: pytest.MonkeyPatch) -> None:

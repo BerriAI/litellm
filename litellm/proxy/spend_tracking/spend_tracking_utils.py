@@ -1184,18 +1184,27 @@ def stores_latest_user_message_only() -> bool:
     return general_settings_view().get("spend_logs_prompt_storage") == _LATEST_USER_MESSAGE_STORAGE
 
 
+def stores_full_prompts_in_spend_logs() -> bool:
+    return should_store_prompts_and_responses_in_spend_logs() and not stores_latest_user_message_only()
+
+
+def _block_type(block: object) -> str | None:
+    block_type: Final = message_field(block, "type")
+    return block_type if isinstance(block_type, str) else None
+
+
 def _content_block_text(block: object) -> str | None:
     if isinstance(block, str):
         return block
-    block_type: Final = message_field(block, "type")
+    block_type: Final = _block_type(block)
     if block_type in _TEXT_BLOCK_TYPES:
         text: Final = message_field(block, "text")
         return text if isinstance(text, str) else None
-    return _OMITTED_BLOCK_PLACEHOLDERS.get(block_type) if isinstance(block_type, str) else None
+    return _OMITTED_BLOCK_PLACEHOLDERS.get(block_type) if block_type is not None else None
 
 
 def _is_tool_output_block(block: object) -> bool:
-    return message_field(block, "type") in _TOOL_OUTPUT_BLOCK_TYPES
+    return _block_type(block) in _TOOL_OUTPUT_BLOCK_TYPES
 
 
 def _user_content_text(content: object) -> str | None:
@@ -1489,7 +1498,7 @@ def _sanitize_guardrail_information_for_spend_logs(
     here to match OTEL's defensive read pattern; otherwise iteration would
     yield the dict's keys and crash the whole spend-log write.
     """
-    if guardrail_information is None or should_store_prompts_and_responses_in_spend_logs():
+    if guardrail_information is None or stores_full_prompts_in_spend_logs():
         return guardrail_information
     entries: Final = [guardrail_information] if isinstance(guardrail_information, dict) else guardrail_information
     return [_redact_prompt_fields_in_guardrail_entry(entry) for entry in entries if isinstance(entry, dict)]
@@ -1567,7 +1576,7 @@ def sanitize_error_information_for_spend_logs(
     )
     sanitized = cast(dict, {**persisted})
 
-    if not should_store_prompts_and_responses_in_spend_logs():
+    if not stores_full_prompts_in_spend_logs():
         for field in ("error_message", "traceback"):
             value = sanitized.get(field)
             if isinstance(value, str):
@@ -1903,7 +1912,7 @@ def _get_vector_store_request_for_spend_logs_payload(
     """
     If user does not want to store prompts and responses, then remove the content from the vector store request metadata
     """
-    if should_store_prompts_and_responses_in_spend_logs():
+    if stores_full_prompts_in_spend_logs():
         return vector_store_request_metadata
 
     # if user does not want to store prompts and responses, then remove the content from the vector store request metadata
