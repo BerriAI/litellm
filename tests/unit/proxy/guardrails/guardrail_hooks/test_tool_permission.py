@@ -5,6 +5,7 @@ Unit tests for Tool Permission Guardrail (OpenAI tool_calls semantics)
 import json
 import logging
 import re
+from typing import Final
 from unittest.mock import patch
 
 import pytest
@@ -1383,8 +1384,16 @@ class TestToolPermissionGuardrailAnthropicMessages:
     async def test_rewrite_mode_keeps_the_allowed_tool_use_verdict_with_its_explanation(self):
         """Claude Code auto mode reads the classifier verdict from message_delta. The rewrite changes
         no text the explanation could repeat, so the allowed call keeps its verdict whole."""
-        bash_verdict = {"type": "evaluated", "outcome": "flagged", "explanation": "lists the home directory"}
-        safeguard_results = [
+        default_on_rewriting: Final = ToolPermissionGuardrail(
+            guardrail_name="anthropic-rewrite-default-on",
+            rules=self.rules,
+            default_action="deny",
+            on_disallowed_action="rewrite",
+            event_hook=GuardrailEventHooks.post_call,
+            default_on=True,
+        )
+        bash_verdict: Final = {"type": "evaluated", "outcome": "flagged", "explanation": "lists the home directory"}
+        safeguard_results: Final = [
             {
                 "type": "dangerous_tool_use",
                 "status": {
@@ -1393,28 +1402,23 @@ class TestToolPermissionGuardrailAnthropicMessages:
                 },
             }
         ]
-        bash_chunks = self._sse_chunks("Bash", "tu_ok")
-        read_chunks = self._sse_chunks("Read", "tu_bad")
-        read_tool_use = [
-            chunk.replace(b'"index": 1', b'"index": 2') for chunk in read_chunks[4:7]
-        ]
-        message_delta = {
+        bash_chunks: Final = self._sse_chunks("Bash", "tu_ok")
+        read_chunks: Final = self._sse_chunks("Read", "tu_bad")
+        read_tool_use: Final = [chunk.replace(b'"index": 1', b'"index": 2') for chunk in read_chunks[4:7]]
+        message_delta: Final = {
             "type": "message_delta",
             "delta": {"stop_reason": "tool_use", "safeguard_results": safeguard_results},
             "usage": {"output_tokens": 5},
         }
-        chunks = [
+        chunks: Final = [
             *bash_chunks[:7],
             *read_tool_use,
             f"event: message_delta\ndata: {json.dumps(message_delta)}\n\n".encode(),
             bash_chunks[-1],
         ]
 
-        with patch.object(self.rewriting, "should_run_guardrail", return_value=True):
-            out = await self._drain(self.rewriting, chunks)
-
-        body = b"".join(out).decode()
-        delta = next(
+        body: Final = b"".join(await self._drain(default_on_rewriting, chunks)).decode()
+        delta: Final = next(
             json.loads(line[6:])["delta"]
             for line in body.splitlines()
             if line.startswith("data: ") and json.loads(line[6:]).get("type") == "message_delta"

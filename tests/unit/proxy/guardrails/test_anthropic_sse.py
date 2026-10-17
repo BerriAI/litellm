@@ -169,8 +169,23 @@ SSN: Final = "123-45-6789"
             (("toolu_bash", "Bash"),),
             {"safeguard_results": _safeguard_results({"toolu_bash": {"type": "evaluated", "outcome": "flagged"}})},
         ),
+        (
+            {
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "safeguard_results": [
+                    {
+                        "type": "prompt_injection",
+                        "status": {"type": "available", "explanation": f"quotes SSN {SSN}"},
+                        "explanation": f"saw SSN {SSN}",
+                    }
+                ],
+            },
+            (),
+            {"safeguard_results": [{"type": "prompt_injection", "status": {"type": "available"}}]},
+        ),
     ],
-    ids=["stop_details_explanation", "verdict_explanation"],
+    ids=["stop_details_explanation", "verdict_explanation", "unknown_shape_explanation"],
 )
 def test_masked_stream_drops_the_unmasked_upstream_explanations(
     upstream_delta: dict[str, object], tool_uses: tuple[tuple[str, str], ...], expected_fields: dict[str, object]

@@ -2,7 +2,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from functools import lru_cache
 from typing import TYPE_CHECKING, Final, cast, get_type_hints
 
-from pydantic import JsonValue
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
@@ -71,6 +71,71 @@ def anthropic_message_delta(
         "stop_sequence": response.get("stop_sequence"),
         **present_optional,
     }
+
+
+_SAFEGUARD_RESULT_ITEMS: Final = TypeAdapter(tuple[object, ...])
+
+
+def redacted_stop_details(raw: object, keep_explanations: bool) -> object:
+    """``stop_details`` as a rewritten stream may deliver it: its free-text ``explanation`` can quote
+    the text a guardrail rewrote, so it is nulled unless the rewrite changed no text."""
+    stop_details: Final = as_str_mapping(raw)
+    if keep_explanations or stop_details is None or "explanation" not in stop_details:
+        return raw
+    return {**stop_details, "explanation": None}
+
+
+def _without_explanation(raw: object) -> object:
+    mapping: Final = as_str_mapping(raw)
+    if mapping is None:
+        return raw
+    return {key: value for key, value in mapping.items() if key != "explanation"}
+
+
+def _status_without_explanations(raw: object) -> object:
+    status: Final = as_str_mapping(_without_explanation(raw))
+    if status is None:
+        return raw
+    tool_uses: Final = as_str_mapping(status.get("tool_uses"))
+    if tool_uses is None:
+        return status
+    return {
+        **status,
+        "tool_uses": {tool_use_id: _without_explanation(verdict) for tool_use_id, verdict in tool_uses.items()},
+    }
+
+
+def _result_without_explanations(raw: object) -> object:
+    result: Final = as_str_mapping(_without_explanation(raw))
+    if result is None:
+        return raw
+    if "status" not in result:
+        return result
+    return {**result, "status": _status_without_explanations(result["status"])}
+
+
+def _kept_tool_use_verdicts(raw: object, kept_tool_use_ids: frozenset[str]) -> object:
+    result: Final = as_str_mapping(raw)
+    status: Final = as_str_mapping(result.get("status")) if result is not None else None
+    tool_uses: Final = as_str_mapping(status.get("tool_uses")) if status is not None else None
+    if result is None or status is None or tool_uses is None:
+        return raw
+    kept_tool_uses: Final = {
+        tool_use_id: verdict for tool_use_id, verdict in tool_uses.items() if tool_use_id in kept_tool_use_ids
+    }
+    return {**result, "status": {**status, "tool_uses": kept_tool_uses}}
+
+
+def filtered_safeguard_results(raw: object, kept_tool_use_ids: frozenset[str], keep_explanations: bool) -> object:
+    """``safeguard_results`` as a rewritten stream may deliver them: a ``tool_uses`` verdict survives only
+    for a tool call the client gets with the input the classifier judged, and the free-text ``explanation`` of a
+    result, its status and each verdict is dropped unless the rewrite changed no text."""
+    try:
+        results: Final = _SAFEGUARD_RESULT_ITEMS.validate_python(raw)
+    except ValidationError:
+        return raw
+    kept: Final = tuple(_kept_tool_use_verdicts(result, kept_tool_use_ids) for result in results)
+    return kept if keep_explanations else tuple(_result_without_explanations(result) for result in kept)
 
 
 def _mapping_field(container: object, key: str) -> object | None:
