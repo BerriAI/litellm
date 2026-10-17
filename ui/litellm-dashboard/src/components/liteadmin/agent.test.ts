@@ -88,6 +88,10 @@ function transport(responses: ChatCompletion[], statuses: number | readonly numb
   };
 }
 
+const DOCS_INDEX_FIXTURE = `# LiteLLM
+- [Setting Team Budgets](https://docs.litellm.ai/docs/proxy/team_budgets.md): Give each team a spend budget
+`;
+
 const options = () =>
   ({
     model: "selected-model",
@@ -455,6 +459,24 @@ describe("SDK conversation and action lifecycle", () => {
       content: JSON.stringify(failure),
     });
     expect(JSON.stringify(model.requests)).not.toContain("private failure");
+  });
+
+  it("returns docs_search results to the model", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(DOCS_INDEX_FIXTURE)),
+    );
+    const model = transport([completion([call("docs_search", { query: "team budget" })]), completion()]);
+    await runLiteAdmin(options(), model.client);
+    expect(managementFetch).not.toHaveBeenCalled();
+    const toolMessage = model.requests[1].messages.at(-1);
+    expect(toolMessage).toMatchObject({ role: "tool" });
+    const result = JSON.parse(String((toolMessage as { content: string }).content));
+    expect(result.operation).toBe("docs_search");
+    expect(result.success).toBe(true);
+    expect(result.results.map((entry: { url: string }) => entry.url)).toContain(
+      "https://docs.litellm.ai/docs/proxy/team_budgets",
+    );
   });
 
   it("limits history, omits action messages and uses the current date", async () => {
