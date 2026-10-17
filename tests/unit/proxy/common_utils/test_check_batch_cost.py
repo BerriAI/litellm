@@ -10,6 +10,8 @@ import asyncio
 import json
 import logging
 from contextlib import contextmanager
+from copy import copy
+from datetime import datetime, timezone
 from hashlib import sha256
 from typing import TYPE_CHECKING, Final
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -211,7 +213,7 @@ class TestCheckBatchCost:
 
         find_call = mock_prisma_client.db.litellm_managedobjecttable.find_many.call_args
         assert find_call[1]["take"] == MAX_OBJECTS_PER_POLL_CYCLE
-        assert find_call[1]["order"] == {"created_at": "asc"}
+        assert find_call[1]["order"] == [{"created_at": "asc"}, {"id": "asc"}]
         not_in = find_call[1]["where"]["status"]["not_in"]
         assert "stale_expired" in not_in
         # "complete"/"completed" are intentionally NOT excluded from the
@@ -973,10 +975,10 @@ class TestCheckBatchCost:
 
         await check_batch_cost_instance.check_batch_cost()
 
-        assert mock_prisma_client.db.litellm_managedobjecttable.update.call_count == 1, (
+        assert mock_prisma_client.db.litellm_managedobjecttable.update_many.call_count == 2, (
             f"Expected update() to be called exactly once for a {terminal_status} job"
         )
-        update_data = mock_prisma_client.db.litellm_managedobjecttable.update.call_args[1]["data"]
+        update_data = mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args[1]["data"]
         assert update_data["status"] == terminal_status
         assert update_data["batch_processed"] is True, (
             "terminal-status update() must set batch_processed=True so polling stops"
@@ -1079,9 +1081,13 @@ class TestCheckBatchCost:
         assert owner.user_id == "user-1"
         assert owner.team_id == "team-1"
 
-        assert mock_prisma_client.db.litellm_managedobjecttable.update.call_count == 1
-        update_call = mock_prisma_client.db.litellm_managedobjecttable.update.call_args
-        assert update_call.kwargs["where"] == {"id": "job-terminal-mint-1"}
+        assert mock_prisma_client.db.litellm_managedobjecttable.update_many.call_count == 2
+        update_call = mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args
+        assert update_call.kwargs["where"] == {
+            "id": "job-terminal-mint-1",
+            "batch_processed": False,
+            "updated_at": mock_job.updated_at,
+        }
         update_data = update_call.kwargs["data"]
         assert update_data["status"] == terminal_status
         assert update_data["batch_processed"] is True
@@ -1146,10 +1152,10 @@ class TestCheckBatchCost:
         ) as mock_afile_content:
             await check_batch_cost_instance.check_batch_cost()
 
-        assert mock_prisma_client.db.litellm_managedobjecttable.update.call_count == 1, (
+        assert mock_prisma_client.db.litellm_managedobjecttable.update_many.call_count == 2, (
             "a completed batch with no output file must be marked processed exactly once"
         )
-        update_data = mock_prisma_client.db.litellm_managedobjecttable.update.call_args[1]["data"]
+        update_data = mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args[1]["data"]
         assert update_data["status"] == completed_status
         assert update_data["batch_processed"] is True, (
             "completed-without-output update() must set batch_processed=True so polling stops"
@@ -1538,10 +1544,10 @@ class TestCheckBatchCost:
 
         assert mock_afile_content.await_count == 1
         mock_calculate.assert_not_awaited()
-        assert mock_prisma_client.db.litellm_managedobjecttable.update.call_count == 1, (
+        assert mock_prisma_client.db.litellm_managedobjecttable.update_many.call_count == 2, (
             "a terminal batch with a 404ing output file must be retired, not retried forever"
         )
-        update_data = mock_prisma_client.db.litellm_managedobjecttable.update.call_args[1]["data"]
+        update_data = mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args[1]["data"]
         assert update_data["status"] == "failed"
         assert update_data["batch_processed"] is True
 
@@ -2737,9 +2743,10 @@ class TestPollPageStarvation:
         await self._instance(prisma, llm_router).check_batch_cost()
 
         llm_router.aretrieve_batch.assert_not_awaited()
-        prisma.db.litellm_managedobjecttable.update.assert_awaited_once()
-        call = prisma.db.litellm_managedobjecttable.update.call_args[1]
-        assert call["where"] == {"id": "job-no-model"}
+        prisma.db.litellm_managedobjecttable.update_many.assert_awaited()
+        call = prisma.db.litellm_managedobjecttable.update_many.call_args[1]
+        assert call["where"]["id"] == "job-no-model"
+        assert call["where"]["batch_processed"] is False
         assert call["data"] == {"batch_processed": True}
 
     @pytest.mark.asyncio
@@ -2767,8 +2774,8 @@ class TestPollPageStarvation:
 
         await self._instance(prisma, llm_router).check_batch_cost()
 
-        prisma.db.litellm_managedobjecttable.update.assert_awaited_once()
-        assert prisma.db.litellm_managedobjecttable.update.call_args[1]["data"] == {"batch_processed": True}
+        prisma.db.litellm_managedobjecttable.update_many.assert_awaited()
+        assert prisma.db.litellm_managedobjecttable.update_many.call_args[1]["data"] == {"batch_processed": True}
 
     @pytest.mark.asyncio
     async def test_provider_404_with_deployment_gone_keeps_job(self):
@@ -2827,24 +2834,7 @@ class TestPollPageStarvation:
 
         await instance.check_batch_cost()
 
-        assert prisma.db.litellm_managedobjecttable.update.call_args[1]["data"] == {"status": "stale_expired"}
-
-    @pytest.mark.asyncio
-    async def test_stale_cleanup_gives_up_on_never_costed_completed_rows(self):
-        """A row already in a terminal status is never rewritten by the staleness sweep, so
-        it needs its own bound or it starves newer batches indefinitely."""
-        prisma = self._prisma([])
-
-        await self._instance(prisma, MagicMock()).check_batch_cost()
-
-        calls = prisma.db.litellm_managedobjecttable.update_many.call_args_list
-        assert len(calls) == 2, "expected the staleness sweep plus the never-costed sweep"
-        where = calls[1][1]["where"]
-        assert where["file_purpose"] == "batch"
-        assert where["batch_processed"] is False
-        assert where["status"] == {"in": ["complete", "completed"]}
-        assert "created_at" in where
-        assert calls[1][1]["data"] == {"batch_processed": True}
+        assert prisma.db.litellm_managedobjecttable.update_many.call_args[1]["data"] == {"status": "stale_expired"}
 
     @pytest.mark.asyncio
     async def test_newer_batch_is_polled_once_dead_rows_are_retired(self):
@@ -2882,7 +2872,11 @@ class TestPollPageStarvation:
 
         await self._instance(prisma, llm_router).check_batch_cost()
 
-        retired = [call[1]["where"]["id"] for call in prisma.db.litellm_managedobjecttable.update.call_args_list]
+        retired = [
+            call[1]["where"]["id"]
+            for call in prisma.db.litellm_managedobjecttable.update_many.call_args_list
+            if "id" in call[1]["where"]
+        ]
         assert retired == ["job-no-model", "job-gone"]
         assert llm_router.aretrieve_batch.await_args_list[-1][1]["batch_id"] == "batch_live", (
             "the newer healthy batch must still be polled in the same cycle"
@@ -2930,7 +2924,8 @@ class _FakeManagedObjectRow:
         self.team_id = None
         self.api_key = None
         self.request_tags = None
-        self.created_at = 1700000000
+        self.created_at = datetime(9999, 1, 1, tzinfo=timezone.utc)
+        self.updated_at = datetime(2000, 1, 1, tzinfo=timezone.utc)
         self.file_object = json.dumps(
             {
                 "id": "batch-456",
@@ -2960,7 +2955,9 @@ class _FakeManagedObjectTable:
     def _matches(self, where: dict) -> bool:
         for key, value in where.items():
             if key == "created_at":
-                return False
+                if "lt" in value and not self.row.created_at < value["lt"]:
+                    return False
+                continue
             if key == "status":
                 if self.row.status in value.get("not_in", []):
                     return False
@@ -2973,7 +2970,9 @@ class _FakeManagedObjectTable:
     async def _update_many(self, *, where: dict, data: dict) -> int:
         if not self._matches(where):
             return 0
-        if "batch_processed" in where:
+        if "status" in data and "file_object" in data:
+            self.journal.append("finalize")
+        elif "batch_processed" in where:
             self.journal.append("claim" if data.get("batch_processed") else "release")
         for key, value in data.items():
             setattr(self.row, key, value)
@@ -3693,12 +3692,15 @@ class TestBatchLineItemsFromThePoller:
         assert logger.payloads == []
 
     @pytest.mark.asyncio
-    async def test_a_batch_that_could_not_be_retired_sends_no_lines_until_it_is(self, monkeypatch):
+    @pytest.mark.parametrize("database_error", [False, True])
+    async def test_a_batch_that_could_not_be_retired_sends_no_lines_until_it_is(self, monkeypatch, database_error):
         import litellm
 
         journal: list = []
         row, instance = self._setup(journal, status="expired", output_file_id=None, error_file_id="file-err-1")
-        instance.prisma_client.db.litellm_managedobjecttable.update = AsyncMock(side_effect=RuntimeError("db down"))
+        instance.prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
+            side_effect=RuntimeError("db down") if database_error else None, return_value=0
+        )
         logger = self._recording_logger(journal)
         monkeypatch.setattr(litellm, "batch_line_item_callbacks", (logger,))
 
@@ -3833,7 +3835,6 @@ class TestBatchLineItemsFromThePoller:
         assert logger.payloads == []
         assert row.batch_processed is True
         assert f"so the line items of batch batch-456 (job {row.id}) were not stored" in caplog.text
-
 
     @pytest.mark.asyncio
     async def test_batches_store_their_lines_one_at_a_time_in_the_order_they_were_retired(self, monkeypatch):
@@ -4109,3 +4110,91 @@ class TestCreatorTurnedOffMessageLogging:
 
         assert await instance._creator_turned_off_message_logging(self._job(api_key=api_key)) is False
         instance.prisma_client.db.litellm_verificationtoken.find_unique.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_old_completed_batch_remains_available_for_costing() -> None:
+    row: Final = _FakeManagedObjectRow()
+    row.status = "completed"
+    row.created_at = datetime(2000, 1, 1, tzinfo=timezone.utc)
+    prisma: Final = TestMultiPodBatchCostClaim._prisma(row, [])
+    poller: Final = TestMultiPodBatchCostClaim._instance(prisma, TestMultiPodBatchCostClaim._router())
+
+    await poller._cleanup_stale_managed_objects()
+
+    assert row.batch_processed is False
+    assert row.status == "completed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("progress", ["claimed", "refreshed"])
+async def test_stale_retirement_preserves_concurrent_progress(progress: str) -> None:
+    row: Final = _FakeManagedObjectRow()
+    selected: Final = copy(row)
+    if progress == "claimed":
+        row.batch_processed = True
+    row.updated_at = datetime(2000, 1, 2, tzinfo=timezone.utc)
+    prisma: Final = TestMultiPodBatchCostClaim._prisma(row, [])
+    poller: Final = TestMultiPodBatchCostClaim._instance(prisma, TestMultiPodBatchCostClaim._router())
+
+    await poller._retire_job(selected, "provider batch disappeared")
+
+    assert row.batch_processed is (progress == "claimed")
+    assert row.updated_at > selected.updated_at
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("progress", ["claimed", "refreshed"])
+async def test_stale_terminal_response_preserves_concurrent_progress(progress: str) -> None:
+    from litellm.types.utils import LiteLLMBatch
+
+    row: Final = _FakeManagedObjectRow()
+    selected: Final = copy(row)
+    if progress == "claimed":
+        row.batch_processed = True
+    row.updated_at = datetime(2000, 1, 2, tzinfo=timezone.utc)
+    row.file_object = '{"revision":"fresh"}'
+    prisma: Final = TestMultiPodBatchCostClaim._prisma(row, [])
+    poller: Final = TestMultiPodBatchCostClaim._instance(prisma, TestMultiPodBatchCostClaim._router())
+    response: Final = LiteLLMBatch(
+        id="batch-456",
+        completion_window="24h",
+        created_at=1,
+        endpoint="/v1/chat/completions",
+        input_file_id="file-input-1",
+        object="batch",
+        status="failed",
+    )
+
+    assert await poller._finalize_unbilled_terminal_job(selected, response) is False
+
+    assert row.file_object == '{"revision":"fresh"}'
+    assert row.status == "in_progress"
+    assert row.batch_processed is (progress == "claimed")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("legacy", [False, True])
+async def test_permanently_lost_batch_retires_unchanged_row(legacy: bool) -> None:
+    row: Final = _FakeManagedObjectRow()
+    prisma: Final = TestMultiPodBatchCostClaim._prisma(row, [])
+    poller: Final = TestMultiPodBatchCostClaim._instance(prisma, TestMultiPodBatchCostClaim._router())
+    poller._has_batch_processed_column = not legacy
+
+    await poller._retire_job(row, "provider batch disappeared")
+
+    assert row.batch_processed is (not legacy)
+    assert row.status == ("stale_expired" if legacy else "in_progress")
+
+
+@pytest.mark.asyncio
+async def test_failed_retirement_keeps_batch_available() -> None:
+    row: Final = _FakeManagedObjectRow()
+    prisma: Final = TestMultiPodBatchCostClaim._prisma(row, [])
+    prisma.db.litellm_managedobjecttable.update_many = AsyncMock(side_effect=RuntimeError("database unavailable"))
+    poller: Final = TestMultiPodBatchCostClaim._instance(prisma, TestMultiPodBatchCostClaim._router())
+
+    await poller._retire_job(row, "provider batch disappeared")
+
+    assert row.batch_processed is False
+    assert row.status == "in_progress"

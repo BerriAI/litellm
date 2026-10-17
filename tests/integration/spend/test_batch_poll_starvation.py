@@ -1,12 +1,13 @@
 import json
 import os
+from functools import partial
 from hashlib import sha256
 from typing import Final
 
 import pytest
 from integration._support.client import JSON_OBJECT, Gateway, Scenario, eventually, object_value, string_value
-from integration._support.database import read_rows
-from integration._support.upstream import delete_scenario, register_scenario
+from integration._support.database import read_rows, write_rows
+from integration._support.upstream import ScenarioHandle, delete_scenario, register_scenario
 from integration.cost_calculation.cost_tracking_case import JsonResponse, RoutedResponse, TextResponse
 from pydantic import JsonValue
 
@@ -59,17 +60,17 @@ def _accepting_routes() -> dict[str, JsonResponse | TextResponse]:
     }
 
 
-def _gone_at_provider_routes() -> RoutedResponse:
+def _gone_at_provider_routes(*, retryable: bool = False) -> RoutedResponse:
     return RoutedResponse(
         content_type="application/x-routed",
         routes={
             **_accepting_routes(),
             "GET /batches/batch-$REQUEST_ID": JsonResponse(
                 content_type="application/json",
-                status=404,
+                status=503 if retryable else 404,
                 body={
                     "error": {
-                        "message": "No batch found with id 'batch-$REQUEST_ID'.",
+                        "message": "Temporary failure" if retryable else "No batch found with id 'batch-$REQUEST_ID'.",
                         "type": "invalid_request_error",
                         "param": "id",
                         "code": "batch_not_found",
@@ -80,7 +81,7 @@ def _gone_at_provider_routes() -> RoutedResponse:
     )
 
 
-def _completed_routes() -> RoutedResponse:
+def _completed_routes(*, ready: bool = True) -> RoutedResponse:
     output_line: Final = {
         "id": "batch_req_1",
         "custom_id": "r1",
@@ -106,7 +107,8 @@ def _completed_routes() -> RoutedResponse:
         routes={
             **_accepting_routes(),
             "GET /batches/batch-$REQUEST_ID": JsonResponse(
-                content_type="application/json", body=_batch("completed", "file-out-$REQUEST_ID")
+                content_type="application/json",
+                body=_batch("completed", "file-out-$REQUEST_ID") if ready else _batch("in_progress", None),
             ),
             "GET /files/file-out-$REQUEST_ID/content": TextResponse(
                 content_type="application/jsonl", body=json.dumps(output_line, separators=(",", ":")) + "\n"
@@ -115,7 +117,7 @@ def _completed_routes() -> RoutedResponse:
     )
 
 
-def _scripted_deployment(scenario: Scenario, marker: str, routes: RoutedResponse) -> str:
+def _scripted_deployment(scenario: Scenario, marker: str, routes: RoutedResponse) -> tuple[str, ScenarioHandle]:
     scenario_id: Final = f"poll-{marker}-{sha256(os.urandom(16)).hexdigest()[:12]}"
     handle: Final = register_scenario(scenario_id, routes)
     scenario.cleanups.callback(delete_scenario, handle)
@@ -133,7 +135,7 @@ def _scripted_deployment(scenario: Scenario, marker: str, routes: RoutedResponse
         },
     )
     scenario.cleanups.callback(scenario.delete_model, string_value(object_value(created["model_info"])["id"]))
-    return string_value(created["model_name"])
+    return string_value(created["model_name"]), handle
 
 
 def _submitted_batch_id(gateway: Gateway, key: str, model_name: str) -> str:
@@ -173,20 +175,39 @@ def _managed_rows(batch_ids: tuple[str, ...]) -> list[dict[str, JsonValue]]:
     )
 
 
+@pytest.mark.parametrize("retryable", [False, True])
+@pytest.mark.parametrize("old_completed", [False, True])
 @pytest.mark.timeout(180)
 @pytest.mark.covers("quota_management.spend_tracking.batch_costs.uncostable_rows_retire_so_newer_batches_are_costed")
-def test_batches_gone_at_provider_do_not_starve_a_newer_batch_out_of_cost_polling(gateway: Gateway) -> None:
+def test_uncostable_batches_do_not_starve_billable_batches(
+    gateway: Gateway, retryable: bool, old_completed: bool
+) -> None:
     with gateway.scenario() as scenario:
-        key: Final = scenario.key()
+        team_id: Final = scenario.team()
+        key: Final = scenario.key(team_id=team_id)
         gone_batch_ids: Final = tuple(
             _submitted_batch_id(
-                gateway, key, _scripted_deployment(scenario, f"gone{index}", _gone_at_provider_routes())
+                gateway,
+                key,
+                _scripted_deployment(scenario, f"gone{index}", _gone_at_provider_routes(retryable=retryable))[0],
             )
             for index in range(MAX_OBJECTS_PER_POLL_CYCLE)
         )
-        costable_batch_id: Final = _submitted_batch_id(
-            gateway, key, _scripted_deployment(scenario, "costable", _completed_routes())
-        )
+        model, upstream = _scripted_deployment(scenario, "costable", _completed_routes(ready=False))
+        costable_batch_id: Final = _submitted_batch_id(gateway, key, model)
+        for batch_id in (*gone_batch_ids, costable_batch_id):
+            scenario.cleanups.callback(
+                write_rows,
+                'DELETE FROM "LiteLLM_ManagedObjectTable" WHERE unified_object_id = %s',
+                (batch_id,),
+            )
+        if old_completed:
+            write_rows(
+                'UPDATE "LiteLLM_ManagedObjectTable" SET status = %s, '
+                "created_at = NOW() - INTERVAL '30 days' WHERE unified_object_id = %s",
+                ("completed", costable_batch_id),
+            )
+        register_scenario(upstream.scenario_id, _completed_routes(), control_url=upstream.control_url)
         spend_rows: Final = eventually(
             lambda: read_rows(
                 'SELECT call_type, status, prompt_tokens, completion_tokens, spend FROM "LiteLLM_SpendLogs" '
@@ -209,4 +230,22 @@ def test_batches_gone_at_provider_do_not_starve_a_newer_batch_out_of_cost_pollin
             }
         ]
         assert _managed_rows((costable_batch_id,)) == [{"batch_processed": True}]
-        assert _managed_rows(gone_batch_ids) == [{"batch_processed": True}] * MAX_OBJECTS_PER_POLL_CYCLE
+        expected_blockers: Final = [{"batch_processed": not retryable}] * MAX_OBJECTS_PER_POLL_CYCLE
+        blockers: Final = eventually(
+            lambda: _managed_rows(gone_batch_ids), lambda rows: rows == expected_blockers, seconds=120
+        )
+        assert blockers == expected_blockers
+
+        expected_spend: Final = BATCH_COST_SHARE * (
+            PROMPT_TOKENS * INPUT_COST_PER_TOKEN + COMPLETION_TOKENS * OUTPUT_COST_PER_TOKEN
+        )
+        for table, column, identity in (
+            ("LiteLLM_VerificationToken", "token", sha256(key.encode()).hexdigest()),
+            ("LiteLLM_TeamTable", "team_id", team_id),
+        ):
+            balance: Final = eventually(
+                partial(read_rows, f'SELECT spend FROM "{table}" WHERE {column} = %s', (identity,)),
+                lambda rows: len(rows) == 1 and rows[0]["spend"] == pytest.approx(expected_spend),
+                seconds=70,
+            )
+            assert balance == [{"spend": pytest.approx(expected_spend)}]
