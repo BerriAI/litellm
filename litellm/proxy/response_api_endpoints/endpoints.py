@@ -1,40 +1,84 @@
 import asyncio
 import contextlib
 import json
-from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Mapping, Sequence
+import uuid
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from dataclasses import dataclass
 from enum import Enum
 from functools import partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, NamedTuple, Protocol, TypeAlias, cast, get_args
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Final,
+    Literal,
+    NamedTuple,
+    Protocol,
+    TypeAlias,
+    cast,
+    get_args,
+    runtime_checkable,
+)
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from openai.types.responses import ResponseItemList
 from openai.types.responses.response_create_params import ResponseInputParam
-from pydantic import ConfigDict, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
 from starlette.websockets import WebSocket, WebSocketDisconnect
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
+import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import EMPTY_MAPPING
+from litellm.anthropic_interface.exceptions.exception_mapping_utils import AnthropicExceptionMapping
+from litellm.constants import EMPTY_MAPPING, MANAGED_BACKGROUND_RESPONSE_METADATA_KEY, TERMINAL_RESPONSE_STATUSES
 from litellm.integrations.custom_guardrail import ModifyResponseException
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, get_metadata_variable_name_from_kwargs
+from litellm.litellm_core_utils.internal_call_metadata import is_background_response, requests_background
+from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+from litellm.litellm_core_utils.tool_fields import first_validation_error
 from litellm.llms.openai.responses.guardrail_translation.handler import (
     OpenAIResponsesHandler,
     build_blocked_response,
 )
 from litellm.proxy._types import *
+from litellm.proxy.auth.auth_utils import carries_client_side_overrides
 from litellm.proxy.auth.user_api_key_auth import (
     UserAPIKeyAuth,
     user_api_key_auth,
     user_api_key_auth_websocket,
 )
-from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing, create_response
-from litellm.proxy.common_utils.http_parsing_utils import (
-    _read_request_body,
-    _safe_set_request_parsed_body,
+from litellm.proxy.common_request_processing import (
+    ProxyBaseLLMRequestProcessing,
+    cost_headers,
+    create_response,
+    resolve_counted_tool_fields,
+)
+from litellm.proxy.common_utils.error_body_call_id import error_body_call_id, with_call_id
+from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
+    _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _safe_set_request_parsed_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    read_request_body,
+    safe_set_request_parsed_body,
+)
+from litellm.proxy.common_utils.openai_error_payload import (
+    LITELLM_CALL_ID_HEADER,
+    error_status_code,
+    openai_error_type_for_status,
+)
+from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
+from litellm.proxy.hooks.responses_id_security import ResponsesIDSecurity, decrypted_response_id
+from litellm.proxy.litellm_pre_call_utils import (
+    _CLIENT_PRICING_METADATA_FIELDS,  # pyright: ignore[reportPrivateUsage]  # the HTTP path's own strip list
+    _UNTRUSTED_METADATA_CONTROL_FIELDS,  # pyright: ignore[reportPrivateUsage]  # the HTTP path's own strip list
+)
+from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import (
+    request_tags_from_request_data,
 )
 from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
+from litellm.responses.streaming_iterator import GuardedResponsesWsFrame, ResponsesWsFrameGuard
+from litellm.router import Router
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     REASONING_EFFORT,
@@ -45,9 +89,13 @@ from litellm.types.responses.main import DeleteResponseResult
 from litellm.types.utils import TokenCountResponse
 
 if TYPE_CHECKING:
-    from litellm.router import Router
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.proxy.utils import ProxyLogging
 
 router: Final = APIRouter()
+_RESPONSES_WS_CONFIG_VALUE_ADAPTER: Final[TypeAdapter[object | None]] = TypeAdapter(object | None)
+_DECODED_JSON: Final = TypeAdapter(object)
+_PROXY_SERVER_REQUEST_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 
 _ResponseDocSchemas: TypeAlias = dict[int | str, dict[str, object]]  # fastapi's responses kwarg
 
@@ -184,12 +232,12 @@ async def _resolve_cursor_model_variant_before_auth(request: Request) -> None:
     from litellm.proxy.proxy_server import llm_router
 
     try:
-        raw_body: Final = await _read_request_body(request=request)
+        raw_body: Final = await read_request_body(request=request)
     except (json.JSONDecodeError, ProxyException):
         return
     resolved: Final = _resolve_cursor_model_variant(raw_body, llm_router)
     if resolved is not raw_body:
-        _safe_set_request_parsed_body(request=request, parsed_body=resolved)
+        safe_set_request_parsed_body(request=request, parsed_body=resolved)
 
 
 @router.post(
@@ -244,7 +292,6 @@ async def responses_api(
     ```
     """
     from litellm.proxy.proxy_server import (
-        _read_request_body,
         general_settings,
         llm_router,
         native_background_mode,
@@ -252,6 +299,7 @@ async def responses_api(
         polling_via_cache_enabled,
         proxy_config,
         proxy_logging_obj,
+        read_request_body,
         redis_usage_cache,
         select_data_generator,
         user_api_base,
@@ -263,7 +311,7 @@ async def responses_api(
     )
 
     native_data_generator: Final = partial(select_data_generator, responses_stream_errors=True)
-    data = await _read_request_body(request=request)
+    data = await read_request_body(request=request)  # rebind-ok: pre-existing rebinding on a rename-only line
 
     # Check if polling via cache should be used for this request
     from litellm.proxy.response_polling.polling_handler import (
@@ -313,7 +361,7 @@ async def responses_api(
             )
             raise_if_required_body_param_missing(route_type="aresponses", data=data, llm_router=llm_router)
         except Exception as e:
-            raise await processor._handle_llm_api_exception(
+            raise await processor.handle_llm_api_exception(
                 e=e,
                 user_api_key_dict=user_api_key_dict,
                 proxy_logging_obj=proxy_logging_obj,
@@ -341,7 +389,7 @@ async def responses_api(
         asyncio.create_task(
             background_streaming_task(
                 polling_id=polling_id,
-                data=data.copy(),
+                data=dict(_without_managed_background_marker(data)),
                 polling_handler=polling_handler,
                 request=request,
                 fastapi_response=fastapi_response,
@@ -376,7 +424,11 @@ async def responses_api(
             llm_router=llm_router,
             general_settings=general_settings,
             proxy_config=proxy_config,
-            select_data_generator=native_data_generator,
+            select_data_generator=(
+                partial(_streamed_background_data_generator, native_data_generator, proxy_logging_obj)
+                if requests_background(_PROXY_SERVER_REQUEST_ADAPTER.validate_python(data))
+                else native_data_generator
+            ),
             model=None,
             user_model=user_model,
             user_temperature=user_temperature,
@@ -386,49 +438,38 @@ async def responses_api(
             version=version,
         )
 
-        # Store in managed objects table if background mode is enabled
-        if data.get("background") and isinstance(response, ResponsesAPIResponse):
-            if response.status in ["queued", "in_progress"]:
-                from litellm_enterprise.proxy.hooks.managed_files import (
-                    PROXY_LiteLLMManagedFiles,
-                )
+        if isinstance(response, ResponsesAPIResponse) and (data.get("background") or is_background_response(response)):
+            managed_files_obj: Final = _managed_files_hook(proxy_logging_obj)
 
-                managed_files_obj: Final = cast(
-                    PROXY_LiteLLMManagedFiles | None,
-                    proxy_logging_obj.get_proxy_hook("managed_files"),
-                )
+            if managed_files_obj and llm_router:
+                try:
+                    hidden_params: Final = getattr(response, "_hidden_params", {}) or {}
+                    model_id: Final = hidden_params.get("model_id", None)
 
-                if managed_files_obj and llm_router:
-                    try:
-                        # Get the actual deployment model_id from hidden params
-                        hidden_params: Final = getattr(response, "_hidden_params", {}) or {}
-                        model_id: Final = hidden_params.get("model_id", None)
-
-                        if not model_id:
-                            verbose_proxy_logger.warning(
-                                "No model_id found in response hidden params for response %s, skipping managed object storage",
-                                response.id,
-                            )
-                            raise Exception("No model_id found in response hidden params")
-                        # Store in managed objects table
-                        await managed_files_obj.store_unified_object_id(
-                            unified_object_id=response.id,
-                            file_object=response,
-                            litellm_parent_otel_span=None,
-                            model_object_id=response.id,
-                            file_purpose="response",
-                            user_api_key_dict=user_api_key_dict,
-                        )
-
-                        verbose_proxy_logger.info(
-                            "Stored background response %s in managed objects table with unified_id=%s",
-                            response.id,
+                    if not model_id:
+                        verbose_proxy_logger.warning(
+                            "No model_id found in response hidden params for response %s, skipping managed object storage",
                             response.id,
                         )
-                    except Exception as e:
-                        verbose_proxy_logger.error(
-                            "Failed to store background response in managed objects table: %s", e
-                        )
+                        raise Exception("No model_id found in response hidden params")
+                    await managed_files_obj.store_unified_object_id(
+                        unified_object_id=response.id,
+                        file_object=response,
+                        litellm_parent_otel_span=None,
+                        model_object_id=decrypted_response_id(response.id),
+                        file_purpose="response",
+                        user_api_key_dict=user_api_key_dict,
+                        request_tags=_background_response_spend_tags(processor.data),
+                        persist_attribution=True,
+                    )
+
+                    verbose_proxy_logger.info(
+                        "Stored background response %s in managed objects table with unified_id=%s",
+                        response.id,
+                        response.id,
+                    )
+                except Exception as e:
+                    verbose_proxy_logger.error("Failed to store background response in managed objects table: %s", e)
 
         return response
     except ModifyResponseException as e:
@@ -451,7 +492,7 @@ async def responses_api(
             return await create_response(generator=_blocked_stream(), media_type="text/event-stream", headers={})
         return build_blocked_response(e)
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -547,7 +588,7 @@ async def cursor_chat_completions(
     from litellm.types.llms.openai import ResponsesAPIResponse
     from litellm.types.utils import ModelResponse
 
-    raw_body: Final = await _read_request_body(request=request)
+    raw_body: Final = await read_request_body(request=request)
 
     if _is_chat_completions_body(raw_body):
         # Genuine chat completions body (Cursor sends these for models whose BYOK it
@@ -556,7 +597,7 @@ async def cursor_chat_completions(
         # empty messages stub alongside a real agent-mode input array
         normalized: Final = _normalize_tool_dialect(raw_body, to_chat=True)
         if normalized is not raw_body:
-            _safe_set_request_parsed_body(request=request, parsed_body=normalized)
+            safe_set_request_parsed_body(request=request, parsed_body=normalized)
         return await chat_completion(
             request=request,
             fastapi_response=fastapi_response,
@@ -667,7 +708,7 @@ async def cursor_chat_completions(
         # Streaming responses are already transformed by cursor_select_data_generator
         return response
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -719,11 +760,11 @@ async def get_response(
     ```
     """
     from litellm.proxy.proxy_server import (
-        _read_request_body,
         general_settings,
         llm_router,
         proxy_config,
         proxy_logging_obj,
+        read_request_body,
         redis_usage_cache,
         select_data_generator,
         user_api_base,
@@ -760,11 +801,12 @@ async def get_response(
         return state
 
     # Normal provider response flow
-    data: Final = await _read_request_body(request=request)
+    data: Final = await read_request_body(request=request)
+    read_settles_billing: Final = not carries_client_side_overrides(data)
     data["response_id"] = response_id
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        return await processor.base_process_llm_request(
+        response: Final[object] = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -783,12 +825,272 @@ async def get_response(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
+    await _bill_finished_background_response(
+        response=response,
+        response_id=response_id,
+        user_api_key_dict=user_api_key_dict,
+        fastapi_response=fastapi_response,
+        read_settles_billing=read_settles_billing,
+    )
+    return response
+
+
+def _background_response_spend_tags(data: Mapping[str, object]) -> tuple[str, ...] | None:
+    proxy_server_request: Final = data.get("proxy_server_request")
+    client_tags: Final = (
+        StandardLoggingPayloadSetup.get_request_tags(
+            {}, _PROXY_SERVER_REQUEST_ADAPTER.validate_python(proxy_server_request)
+        )
+        if isinstance(proxy_server_request, dict)
+        else []
+    )
+    tags: Final = (*(request_tags_from_request_data(data) or ()), *client_tags)
+    return tags or None
+
+
+@runtime_checkable
+class _BackgroundResponseStore(Protocol):
+    async def store_unified_object_id(
+        self,
+        unified_object_id: str,
+        file_object: ResponsesAPIResponse,
+        litellm_parent_otel_span: None,
+        model_object_id: str,
+        file_purpose: Literal["response"],
+        user_api_key_dict: UserAPIKeyAuth,
+        request_tags: Sequence[str] | None = None,
+        persist_attribution: bool = False,
+    ) -> None: ...
+
+    async def track_untracked_background_response(
+        self,
+        response_id: str,
+        response: ResponsesAPIResponse,
+        user_api_key_dict: UserAPIKeyAuth,
+        request_tags: Sequence[str] | None = None,
+    ) -> bool: ...
+
+
+def _managed_files_hook(proxy_logging_obj: "ProxyLogging") -> _BackgroundResponseStore | None:
+    hook: Final = proxy_logging_obj.get_proxy_hook("managed_files")
+    return hook if isinstance(hook, _BackgroundResponseStore) else None
+
+
+async def _bill_finished_background_response(
+    response: object,
+    response_id: str,
+    user_api_key_dict: UserAPIKeyAuth,
+    fastapi_response: Response,
+    read_settles_billing: bool,
+) -> None:
+    from litellm.proxy.proxy_server import proxy_logging_obj
+
+    if not isinstance(response, ResponsesAPIResponse) or not is_background_response(response):
+        return
+    if response.status not in TERMINAL_RESPONSE_STATUSES:
+        return
+    managed_files_hook: Final = _managed_files_hook(proxy_logging_obj)
+    track_untracked: Final = (
+        partial(
+            managed_files_hook.track_untracked_background_response,
+            response_id,
+            user_api_key_dict=user_api_key_dict,
+        )
+        if managed_files_hook is not None
+        else None
+    )
+    charge: Final = await _settle_background_billing(
+        (lambda cost_check: cost_check.bill_if_finished(response_id, response, track_untracked))
+        if read_settles_billing
+        else (lambda cost_check: cost_check.bill_from_deployment(response_id, track_untracked))
+    )
+    _report_charge(charge, fastapi_response)
+
+
+class _BilledCharge(Protocol):
+    @property
+    def cost(self) -> float | None: ...
+
+    @property
+    def logging_obj(self) -> "LiteLLMLoggingObj": ...
+
+
+_UntrackedResponseTracker: TypeAlias = Callable[[ResponsesAPIResponse], Awaitable[bool]]
+
+
+class _BackgroundCostCheck(Protocol):
+    async def bill_from_deployment(
+        self, response_id: str, track_untracked: _UntrackedResponseTracker | None = None
+    ) -> _BilledCharge | None: ...
+
+    async def bill_if_finished(
+        self,
+        response_id: str,
+        response: ResponsesAPIResponse,
+        track_untracked: _UntrackedResponseTracker | None = None,
+    ) -> _BilledCharge | None: ...
+
+
+def _background_cost_check() -> _BackgroundCostCheck | None:
+    from litellm.proxy.proxy_server import llm_router, prisma_client, proxy_logging_obj
+
+    if prisma_client is None or llm_router is None:
+        return None
+    try:
+        from litellm_enterprise.proxy.common_utils.check_responses_cost import CheckResponsesCost
+    except ImportError:
+        return None
+
+    return CheckResponsesCost(  # pyright: ignore[reportUnknownVariableType]  # litellm_enterprise is absent from the type-check venv
+        proxy_logging_obj=proxy_logging_obj, prisma_client=prisma_client, llm_router=llm_router
+    )
+
+
+_BillingSettlement: TypeAlias = Callable[[_BackgroundCostCheck], Awaitable[_BilledCharge | None]]
+_BILLING_RETRY_DELAYS_SECONDS: Final = (5.0, 30.0, 120.0)
+_billing_retries: Final[set["asyncio.Task[None]"]] = set()  # mutable-ok: the event loop keeps only weak task refs
+
+
+@dataclass(frozen=True, slots=True)
+class _BillingFailed:
+    error: Exception
+
+
+async def _attempt_billing(
+    settle: _BillingSettlement, cost_check: _BackgroundCostCheck
+) -> _BilledCharge | None | _BillingFailed:
+    try:
+        return await settle(cost_check)
+    except Exception as e:
+        return _BillingFailed(e)
+
+
+async def _retry_background_billing(
+    settle: _BillingSettlement, cost_check: _BackgroundCostCheck, retry_delays: Sequence[float]
+) -> None:
+    for delay in retry_delays:
+        await asyncio.sleep(delay)
+        outcome = await _attempt_billing(settle, cost_check)
+        if not isinstance(outcome, _BillingFailed):
+            return
+        verbose_proxy_logger.warning("Retrying the bill for a finished background response failed: %s", outcome.error)
+    verbose_proxy_logger.error("Gave up billing a finished background response; the cost poll bills it when enabled")
+
+
+def _schedule_billing_retry(
+    settle: _BillingSettlement, cost_check: _BackgroundCostCheck, retry_delays: Sequence[float]
+) -> None:
+    retry: Final = asyncio.create_task(_retry_background_billing(settle, cost_check, retry_delays))
+    _billing_retries.add(retry)
+    retry.add_done_callback(_billing_retries.discard)
+
+
+async def _settle_background_billing(
+    settle: _BillingSettlement, retry_delays: Sequence[float] = _BILLING_RETRY_DELAYS_SECONDS
+) -> _BilledCharge | None:
+    cost_check: Final = _background_cost_check()
+    if cost_check is None:
+        return None
+    outcome: Final = await _attempt_billing(settle, cost_check)
+    if not isinstance(outcome, _BillingFailed):
+        return outcome
+    verbose_proxy_logger.warning(
+        "Billing a finished background response failed, retrying in background: %s", outcome.error
+    )
+    _schedule_billing_retry(settle, cost_check, retry_delays)
+    return None
+
+
+def _report_charge(charge: _BilledCharge | None, fastapi_response: Response) -> None:
+    if charge is None or charge.cost is None:
+        return
+    billed_headers: Final = cost_headers(charge.cost, charge.logging_obj)
+    fastapi_response.headers.update({name: value for name, value in billed_headers.items() if value is not None})
+
+
+def _caller_may_address_response(
+    response_id: str, user_api_key_dict: UserAPIKeyAuth, proxy_logging_obj: "ProxyLogging"
+) -> bool:
+    security_hook: Final = proxy_logging_obj.get_proxy_hook("responses_id_security")
+    if not isinstance(security_hook, ResponsesIDSecurity):
+        return True
+    try:
+        security_hook.authorize_response_id(response_id, user_api_key_dict)
+    except HTTPException:
+        return False
+    return True
+
+
+def _without_managed_background_marker(request_data: Mapping[str, object]) -> Mapping[str, object]:
+    metadata: Final = request_data.get("litellm_metadata")
+    if not isinstance(metadata, Mapping):
+        return dict(request_data)
+    return {
+        **request_data,
+        "litellm_metadata": {
+            key: value
+            for key, value in _PROXY_SERVER_REQUEST_ADAPTER.validate_python(metadata).items()
+            if key != MANAGED_BACKGROUND_RESPONSE_METADATA_KEY
+        },
+    }
+
+
+def _streamed_background_data_generator(
+    select_data_generator: Callable[..., AsyncIterator[str | bytes]],
+    proxy_logging_obj: "ProxyLogging",
+    response: object,
+    user_api_key_dict: UserAPIKeyAuth,
+    request_data: dict[str, object],
+    request: Request | None = None,
+) -> AsyncIterator[str | bytes]:
+    chunks: Final = select_data_generator(
+        response=response, user_api_key_dict=user_api_key_dict, request_data=request_data, request=request
+    )
+    managed_files_hook: Final = _managed_files_hook(proxy_logging_obj)
+    if managed_files_hook is None:
+        return chunks
+    track_untracked: Final = partial(
+        managed_files_hook.track_untracked_background_response,
+        user_api_key_dict=user_api_key_dict,
+        request_tags=_background_response_spend_tags(request_data),
+    )
+    return _bill_streamed_background_response(response, chunks, track_untracked)
+
+
+async def _bill_streamed_background_response(
+    stream: object,
+    chunks: AsyncIterator[str | bytes],
+    track_untracked: Callable[[str, ResponsesAPIResponse], Awaitable[bool]],
+) -> AsyncIterator[str | bytes]:
+    async for chunk in chunks:
+        completed: object = ProxyBaseLLMRequestProcessing.extract_completed_responses_response(stream)
+        if not isinstance(completed, ResponsesAPIResponse):
+            yield chunk
+            continue
+        await _bill_finished_stream(completed, track_untracked)
+        yield chunk
+        async for remaining_chunk in chunks:
+            yield remaining_chunk
+        return
+    late_completed: Final = ProxyBaseLLMRequestProcessing.extract_completed_responses_response(stream)
+    if isinstance(late_completed, ResponsesAPIResponse):
+        await _bill_finished_stream(late_completed, track_untracked)
+
+
+async def _bill_finished_stream(
+    response: ResponsesAPIResponse, track_untracked: Callable[[str, ResponsesAPIResponse], Awaitable[bool]]
+) -> None:
+    if not is_background_response(response):
+        return
+    await _settle_background_billing(
+        lambda cost_check: cost_check.bill_if_finished(response.id, response, partial(track_untracked, response.id))
+    )
 
 
 @router.delete(
@@ -830,11 +1132,11 @@ async def delete_response(
     ```
     """
     from litellm.proxy.proxy_server import (
-        _read_request_body,
         general_settings,
         llm_router,
         proxy_config,
         proxy_logging_obj,
+        read_request_body,
         redis_usage_cache,
         select_data_generator,
         user_api_base,
@@ -869,11 +1171,16 @@ async def delete_response(
             raise HTTPException(status_code=500, detail="Failed to delete polling response")
 
     # Normal provider response flow
-    data: Final = await _read_request_body(request=request)
+    data: Final = await read_request_body(request=request)
     data["response_id"] = response_id
+    charge: Final = (
+        await _settle_background_billing(lambda cost_check: cost_check.bill_from_deployment(response_id))
+        if _caller_may_address_response(response_id, user_api_key_dict, proxy_logging_obj)
+        else None
+    )
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        return await processor.base_process_llm_request(
+        deleted: Final = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -892,12 +1199,14 @@ async def delete_response(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
+    _report_charge(charge, fastapi_response)
+    return deleted
 
 
 @router.get(
@@ -926,11 +1235,11 @@ async def get_response_input_items(
 ):
     """List input items for a response."""
     from litellm.proxy.proxy_server import (
-        _read_request_body,
         general_settings,
         llm_router,
         proxy_config,
         proxy_logging_obj,
+        read_request_body,
         select_data_generator,
         user_api_base,
         user_max_tokens,
@@ -940,7 +1249,7 @@ async def get_response_input_items(
         version,
     )
 
-    data: Final = await _read_request_body(request=request)
+    data: Final = await read_request_body(request=request)
     data["response_id"] = response_id
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -963,7 +1272,7 @@ async def get_response_input_items(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -1009,11 +1318,11 @@ async def compact_response(
     ```
     """
     from litellm.proxy.proxy_server import (
-        _read_request_body,
         general_settings,
         llm_router,
         proxy_config,
         proxy_logging_obj,
+        read_request_body,
         select_data_generator,
         user_api_base,
         user_max_tokens,
@@ -1023,7 +1332,7 @@ async def compact_response(
         version,
     )
 
-    data: Final = await _read_request_body(request=request)
+    data: Final = await read_request_body(request=request)
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
@@ -1045,7 +1354,7 @@ async def compact_response(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -1088,6 +1397,15 @@ def _proxy_token_counter() -> _TokenCounter:
 _token_counter_dep: Final = Depends(_proxy_token_counter)
 
 
+def _proxy_llm_router() -> Router | None:
+    from litellm.proxy.proxy_server import llm_router
+
+    return llm_router
+
+
+_llm_router_dep: Final = Depends(_proxy_llm_router)
+
+
 def _responses_invalid_request_response(message: str, param: str | None, code: str | None) -> JSONResponse:
     body: Final[_ResponsesApiErrorBody] = {
         "error": {
@@ -1098,6 +1416,85 @@ def _responses_invalid_request_response(message: str, param: str | None, code: s
         }
     }
     return JSONResponse(status_code=400, content=body)
+
+
+class _ProviderErrorMessage(TypedDict):
+    message: ReadOnly[str]
+
+
+class _NestedProviderError(TypedDict):
+    error: ReadOnly[_ProviderErrorMessage]
+
+
+@with_config(ConfigDict(extra="ignore"))
+class _ProviderOpenAIErrorDetail(TypedDict):
+    message: ReadOnly[str]
+    type: ReadOnly[str]
+    param: NotRequired[ReadOnly[str | None]]
+    code: NotRequired[ReadOnly[str | None]]
+
+
+@with_config(ConfigDict(extra="forbid"))
+class _ProviderOpenAIError(TypedDict):
+    error: ReadOnly[_ProviderOpenAIErrorDetail]
+
+
+_PROVIDER_COUNT_ERROR_TYPE: Final = "token_counting_error"
+_PROVIDER_OPENAI_ERROR: Final = TypeAdapter(_ProviderOpenAIError)
+_NESTED_PROVIDER_ERROR: Final = TypeAdapter(_NestedProviderError)
+
+
+def _provider_error_json(raw_message: str) -> str:
+    start: Final = raw_message.find("{")
+    return raw_message if start == -1 else raw_message[start:]
+
+
+def _provider_error_message(raw_message: str) -> str:
+    error_json: Final = _provider_error_json(raw_message)
+    try:
+        return _NESTED_PROVIDER_ERROR.validate_json(error_json)["error"]["message"]
+    except ValidationError:
+        flat_message: Final = AnthropicExceptionMapping.extract_error_message(error_json)
+        return raw_message if flat_message == error_json else flat_message
+
+
+def _provider_count_error_body(raw_message: str, status_code: int) -> _ResponsesApiErrorBody:
+    try:
+        provider_error: Final = _PROVIDER_OPENAI_ERROR.validate_json(_provider_error_json(raw_message))["error"]
+    except ValidationError:
+        return {
+            "error": {
+                "message": _provider_error_message(raw_message),
+                "type": openai_error_type_for_status(status_code),
+                "param": None,
+                "code": None,
+            }
+        }
+    return {
+        "error": {
+            "message": provider_error["message"],
+            "type": provider_error["type"],
+            "param": provider_error.get("param"),
+            "code": provider_error.get("code"),
+        }
+    }
+
+
+def _provider_count_error_response(exc: ProxyException, request: Request) -> JSONResponse:
+    from litellm.proxy.proxy_server import (
+        _close_dangling_otel_server_span,  # pyright: ignore[reportPrivateUsage]  # proxy_server keeps the span-close helper private; a route that answers an error itself must stamp the OTel server span like the global ProxyException handler does
+        general_settings_view,
+    )
+
+    status_code: Final = error_status_code(exc, 500)
+    _close_dangling_otel_server_span(request, status_code, exc=exc)
+    body: Final = _provider_count_error_body(exc.message, status_code)
+    call_id: Final = error_body_call_id(general_settings_view(), exc.headers.get(LITELLM_CALL_ID_HEADER))
+    return JSONResponse(
+        status_code=status_code,
+        content={"error": with_call_id({**body["error"]}, call_id)},
+        headers=exc.headers,
+    )
 
 
 def _missing_responses_param_response(param: str) -> JSONResponse:
@@ -1144,6 +1541,8 @@ def _responses_input_as_token_count_messages(
 async def responses_input_tokens(
     request: Request,
     token_counter: _TokenCounter = _token_counter_dep,
+    llm_router: Router | None = _llm_router_dep,
+    user_api_key_dict: UserAPIKeyAuth = _user_api_key_auth_dep,
 ):
     """
     Count the input tokens of a Responses API request without calling the model.
@@ -1162,7 +1561,7 @@ async def responses_input_tokens(
 
     Returns: `{"object": "response.input_tokens", "input_tokens": <count>}`
     """
-    data: Final = await _read_request_body(request=request)
+    data: Final = await read_request_body(request=request)
     model_name: Final = data.get("model")
     input_value: Final = data.get("input")
     if not isinstance(model_name, str) or not model_name:
@@ -1176,6 +1575,13 @@ async def responses_input_tokens(
             code="missing_required_parameter",
         )
 
+    counted_fields: Final = {
+        name: data[name] for name in ("model", "tools", "drop_params", "additional_drop_params") if name in data
+    }
+    token_fields: Final = resolve_counted_tool_fields(counted_fields, llm_router, user_api_key_dict.team_id)
+    if isinstance(token_fields, ProxyException):
+        return _responses_invalid_request_response(message=token_fields.message, param=token_fields.param, code=None)
+
     try:
         payload: Final[_TokenCountPayload] = {
             "model": model_name,
@@ -1183,15 +1589,24 @@ async def responses_input_tokens(
                 input_value=input_value,
                 instructions=data.get("instructions"),
             ),
-            "tools": data.get("tools"),
+            "tools": token_fields.get("tools"),
         }
         token_request: Final = TokenCountRequest.model_validate(payload)
+    except ValidationError as e:
+        return _responses_invalid_request_response(
+            message=first_validation_error(e), param=str(e.errors(include_url=False)[0]["loc"][0]), code=None
+        )
     except Exception as e:
         return _responses_invalid_request_response(
             message=f"Invalid request for token counting: {e}", param=None, code=None
         )
 
-    token_response: Final = await token_counter(request=token_request, call_endpoint=True)
+    try:
+        token_response: Final = await token_counter(request=token_request, call_endpoint=True)
+    except ProxyException as e:
+        if e.type != _PROVIDER_COUNT_ERROR_TYPE:
+            raise
+        return _provider_count_error_response(e, request)
     result: Final[_ResponsesInputTokensResult] = {
         "object": "response.input_tokens",
         "input_tokens": token_response.total_tokens,
@@ -1240,11 +1655,11 @@ async def cancel_response(
     ```
     """
     from litellm.proxy.proxy_server import (
-        _read_request_body,
         general_settings,
         llm_router,
         proxy_config,
         proxy_logging_obj,
+        read_request_body,
         redis_usage_cache,
         select_data_generator,
         user_api_base,
@@ -1283,11 +1698,12 @@ async def cancel_response(
             raise HTTPException(status_code=500, detail="Failed to cancel polling response")
 
     # Normal provider response flow
-    data: Final = await _read_request_body(request=request)
+    data: Final = await read_request_body(request=request)
+    read_settles_billing: Final = not carries_client_side_overrides(data)
     data["response_id"] = response_id
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        return await processor.base_process_llm_request(
+        response: Final[object] = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -1306,12 +1722,35 @@ async def cancel_response(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
+    await _bill_finished_background_response(
+        response=response,
+        response_id=response_id,
+        user_api_key_dict=user_api_key_dict,
+        fastapi_response=fastapi_response,
+        read_settles_billing=read_settles_billing,
+    )
+    return response
+
+
+def _resolve_responses_ws_session_limit_seconds() -> float:
+    from litellm.proxy.proxy_server import general_settings
+
+    field: Final = "responses_websocket_session_limit_seconds"
+    raw: Final = _RESPONSES_WS_CONFIG_VALUE_ADAPTER.validate_python(general_settings.get(field))
+    try:
+        return ConfigGeneralSettings.model_validate(
+            {} if raw is None else {field: raw}
+        ).responses_websocket_session_limit_seconds
+    except ValidationError as e:
+        default: Final = DEFAULT_RESPONSES_WEBSOCKET_SESSION_LIMIT_SECONDS
+        verbose_proxy_logger.warning("invalid general_settings.%s=%r (%s); using default %ss", field, raw, e, default)
+        return default
 
 
 async def _read_ws_model_from_first_frame(
@@ -1321,12 +1760,10 @@ async def _read_ws_model_from_first_frame(
     """Read the first WS frame and return (model, raw_message), or None on error.
 
     Sends an appropriate error frame and closes the socket before returning None.
+    The session-duration deadline is enforced by the caller, not here.
     """
     try:
-        first_message: Final = await asyncio.wait_for(websocket.receive_text(), timeout=30)
-    except asyncio.TimeoutError:
-        await websocket.close(code=1008, reason="Timed out waiting for first message")
-        return None
+        first_message: Final = await websocket.receive_text()
     except WebSocketDisconnect:
         return None
     except Exception:
@@ -1335,7 +1772,7 @@ async def _read_ws_model_from_first_frame(
         return None
 
     try:
-        first_event: Final = json.loads(first_message)
+        first_event: Final = as_str_mapping(_DECODED_JSON.validate_python(json.loads(first_message)))
     except json.JSONDecodeError:
         await websocket.send_text(
             json.dumps(
@@ -1351,7 +1788,7 @@ async def _read_ws_model_from_first_frame(
         await websocket.close(code=1008, reason="Invalid JSON in first message")
         return None
 
-    if not isinstance(first_event, dict) or first_event.get("type") != "response.create":
+    if first_event is None or first_event.get("type") != "response.create":
         await websocket.send_text(
             json.dumps(
                 {
@@ -1436,8 +1873,8 @@ async def _enforce_responses_ws_first_frame_model_auth(
     llm_router: "Router | None",
 ) -> None:
     from litellm.proxy.auth.user_api_key_auth import (
-        _enforce_key_and_fallback_model_access,
-        _run_centralized_common_checks,
+        enforce_key_and_fallback_model_access,
+        run_centralized_common_checks,
     )
     from litellm.proxy.proxy_server import (
         general_settings,
@@ -1456,7 +1893,7 @@ async def _enforce_responses_ws_first_frame_model_auth(
         return
     if user_custom_auth is not None and not general_settings.get("custom_auth_run_common_checks", False):
         return
-    await _enforce_key_and_fallback_model_access(
+    await enforce_key_and_fallback_model_access(
         valid_token=user_api_key_dict,
         request_data=request_data,
         route=route,
@@ -1464,7 +1901,7 @@ async def _enforce_responses_ws_first_frame_model_auth(
         llm_model_list=llm_model_list,
         llm_router=llm_router,
     )
-    await _run_centralized_common_checks(
+    await run_centralized_common_checks(
         user_api_key_auth_obj=user_api_key_dict,
         request=request,
         request_data=request_data,
@@ -1472,25 +1909,148 @@ async def _enforce_responses_ws_first_frame_model_auth(
     )
 
 
-@router.websocket("/v1/responses")
-@router.websocket("/responses")
-async def responses_websocket_endpoint(
+_WS_FRAME: Final = TypeAdapter(dict[str, object])
+_GUARDRAIL_INFORMATION: Final = TypeAdapter(list[dict[str, object]])
+_PII_TOKENS: Final = TypeAdapter(dict[str, str])
+_GUARDRAIL_INFORMATION_KEY: Final = "standard_logging_guardrail_information"
+_GUARDED_FRAME_FIELDS: Final = ("input", "instructions", "tools")
+_CLIENT_METADATA_KEYS: Final = ("metadata", "litellm_metadata")
+# the guardrail list is merged from key, team and the admission frame; a later frame cannot shrink it
+_CLIENT_GUARDRAIL_SELECTORS: Final = ("guardrails", "guardrail_config", "policies")
+
+
+class _PreCallGuardrailWalk(Protocol):
+    async def pre_call_hook(
+        self,
+        *,
+        user_api_key_dict: UserAPIKeyAuth,
+        data: dict[str, object],  # mutable-ok: ProxyLogging.pre_call_hook hands the guardrails a dict they edit
+        call_type: Literal["aresponses"],
+        guardrails_only: bool,
+    ) -> dict[str, object]: ...  # mutable-ok: ProxyLogging.pre_call_hook returns the guardrails' own dict
+
+
+def _responses_ws_frame_guard(
+    admitted: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth, proxy_logging_obj: _PreCallGuardrailWalk
+) -> ResponsesWsFrameGuard:
+    """Socket admission skips guardrails (the first frame's ``input`` is not part of the admitted request), so every
+    ``response.create`` frame gets the pre_call guardrail walk the HTTP ``/v1/responses`` path runs on its body."""
+    metadata_key: Final = get_metadata_variable_name_from_kwargs(admitted)
+    admitted_bucket: Final = admitted.get(metadata_key)
+    bucket: Final = {
+        key: value
+        for key, value in (
+            _WS_FRAME.validate_python(admitted_bucket) if isinstance(admitted_bucket, dict) else {}
+        ).items()
+        if key != _GUARDRAIL_INFORMATION_KEY
+    }
+    model: Final = admitted.get("model")
+
+    # a blocked frame is billed as its own failed request; only the first turn settles the admission reservation
+    rejected_frame_auth: Final = user_api_key_dict.model_copy(update={"budget_reservation": None})
+
+    async def guard(frame: str) -> GuardedResponsesWsFrame:
+        frame_obj: Final = _WS_FRAME.validate_json(frame)
+        nested: Final = frame_obj.get("response")
+        if isinstance(nested, dict) and any(key in frame_obj for key in _GUARDED_FRAME_FIELDS):
+            raise ValueError(
+                "response.create carries input, instructions or tools both at the top level and under response"
+            )
+        body: Final = _WS_FRAME.validate_python(nested) if isinstance(nested, dict) else frame_obj
+        frame_data: Final = {
+            **{
+                key: _without_untrusted_metadata(key, value)
+                for key, value in body.items()
+                if key != "type" and key not in _CLIENT_GUARDRAIL_SELECTORS
+            },
+            "model": model,
+            "litellm_call_id": str(uuid.uuid4()),
+            # shallow: the bucket carries proxy-owned objects (the OTEL parent span) that cannot be deep-copied
+            metadata_key: {**bucket},
+        }
+        try:
+            guarded_data: Final = await proxy_logging_obj.pre_call_hook(
+                user_api_key_dict=user_api_key_dict, data=frame_data, call_type="aresponses", guardrails_only=True
+            )
+        except Exception as e:
+            await _bill_rejected_frame(rejected_frame_auth, e, frame_data)
+            raise
+        if guarded_data.get("model") != model:
+            rerouted: Final = ValueError(
+                f"a guardrail rerouted this turn to {guarded_data.get('model')!r}; an open Responses WebSocket"
+                f" is bound to {model!r}, send this turn over HTTP /v1/responses"
+            )
+            await _bill_rejected_frame(rejected_frame_auth, rerouted, frame_data)
+            raise rerouted
+        # a guardrail may delete a field (the Responses translation pops ``instructions``), so start without them
+        guarded_fields: Final = {key: guarded_data[key] for key in _GUARDED_FRAME_FIELDS if key in guarded_data}
+        kept: Final = {key: value for key, value in body.items() if key not in _GUARDED_FRAME_FIELDS}
+        rewritten: Final = (
+            {**frame_obj, "response": {**kept, **guarded_fields}}
+            if isinstance(nested, dict)
+            else {**kept, **guarded_fields}
+        )
+        return GuardedResponsesWsFrame(
+            frame=json.dumps(rewritten),
+            guardrail_information=_recorded_guardrail_information(guarded_data.get(metadata_key)),
+            pii_tokens=_recorded_pii_tokens(guarded_data.get("metadata")),
+        )
+
+    return guard
+
+
+def _without_untrusted_metadata(key: str, value: object) -> object:
+    """Like the HTTP path, drop the proxy-owned ``user_api_key_*`` and guardrail control keys a client may forge."""
+    if key not in _CLIENT_METADATA_KEYS or not isinstance(value, dict):
+        return value
+    return {
+        name: item
+        for name, item in _WS_FRAME.validate_python(value).items()
+        if not name.startswith("user_api_key_")
+        and name not in _UNTRUSTED_METADATA_CONTROL_FIELDS
+        and name not in _CLIENT_PRICING_METADATA_FIELDS
+        and name not in ("headers", "pii_tokens", *_CLIENT_GUARDRAIL_SELECTORS)
+    }
+
+
+async def _bill_rejected_frame(
+    user_api_key_dict: UserAPIKeyAuth,
+    exception: Exception,
+    frame_data: dict[str, object],  # mutable-ok: the spend logger stamps the failure row on the request dict
+) -> None:
+    """Only the spend logger sees a rejected frame; the other failure hooks (the rate limiter's slot release,
+    alerting) belong to the live connection, which stays open. Billing never replaces the guardrail's own error."""
+    for callback in litellm.callbacks:
+        if isinstance(callback, ProxyDBLogger):
+            try:
+                await callback.async_post_call_failure_hook(  # pyright: ignore[reportUnknownMemberType]  # bare dict
+                    request_data=frame_data, original_exception=exception, user_api_key_dict=user_api_key_dict
+                )
+            except Exception:  # noqa: BLE001  # billing never replaces the guardrail's own error
+                verbose_proxy_logger.exception("[Non-Blocking] Responses WebSocket: billing a rejected frame failed")
+
+
+def _recorded_pii_tokens(metadata: object) -> Mapping[str, str]:
+    """Presidio stores the tokens it masked a frame with in ``metadata.pii_tokens``; the socket unmasks with them."""
+    recorded: Final = _WS_FRAME.validate_python(metadata).get("pii_tokens") if isinstance(metadata, dict) else None
+    return MappingProxyType(_PII_TOKENS.validate_python(recorded)) if isinstance(recorded, dict) else _NO_PII_TOKENS
+
+
+_NO_PII_TOKENS: Final[Mapping[str, str]] = MappingProxyType({})
+
+
+def _recorded_guardrail_information(bucket: object) -> tuple[Mapping[str, object], ...]:
+    recorded: Final = (
+        _WS_FRAME.validate_python(bucket).get(_GUARDRAIL_INFORMATION_KEY) if isinstance(bucket, dict) else None
+    )
+    return tuple(_GUARDRAIL_INFORMATION.validate_python(recorded)) if recorded else ()
+
+
+async def _responses_websocket_session(
     websocket: WebSocket,
-    model: str | None = fastapi.Query(None, description="The model to use for the responses WebSocket session."),
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth_websocket),
-):
-    """
-    Responses API WebSocket mode endpoint.
-
-    Keeps a persistent WebSocket connection for response.create events,
-    enabling lower-latency agentic workflows with many tool-call round trips.
-
-    Follows the OpenAI split: the bearer token is validated at connection time
-    (before accept); the model is resolved either from the ?model= query param
-    or from the first response.create frame, whichever is present.
-
-    See: https://developers.openai.com/api/docs/guides/websocket-mode/
-    """
+    model: str | None,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
     from litellm.proxy.proxy_server import (
         general_settings,
         llm_router,
@@ -1504,16 +2064,6 @@ async def responses_websocket_endpoint(
         version,
     )
     from litellm.proxy.route_llm_request import route_request
-
-    # Accept the WebSocket handshake. Key was already validated by the Depends
-    # above; we can safely accept regardless of whether ?model= was supplied.
-    requested_protocols: Final = [
-        p.strip() for p in (websocket.headers.get("sec-websocket-protocol") or "").split(",") if p.strip()
-    ]
-    accept_kwargs: Final[dict] = {}
-    if requested_protocols:
-        accept_kwargs["subprotocol"] = requested_protocols[0]
-    await websocket.accept(**accept_kwargs)
 
     result: Final = await _read_ws_model_from_first_frame(websocket, query_model=model)
     if result is None:
@@ -1535,7 +2085,7 @@ async def responses_websocket_endpoint(
         "headers": headers_list,
     }
     request: Final = Request(scope=scope)
-    request._url = websocket.url
+    request._url = websocket.url  # pyright: ignore[reportPrivateUsage]  # Starlette WebSocket URL storage
 
     _body_bytes: Final = json.dumps({"model": resolved_model}).encode()
 
@@ -1571,6 +2121,7 @@ async def responses_websocket_endpoint(
             user_api_base=user_api_base,
             model=resolved_model,
             route_type="_aresponses_websocket",
+            skip_guardrails=True,
         )
     except Exception as e:
         verbose_proxy_logger.exception("Responses WebSocket pre-call error")
@@ -1586,13 +2137,16 @@ async def responses_websocket_endpoint(
                     }
                 )
             )
-        except Exception:
+        except (WebSocketDisconnect, RuntimeError, OSError):
             pass
         await websocket.close(code=1008, reason="Pre-call error")
         return
 
     routed_data: Final = dict(
-        data, user_api_key_dict=user_api_key_dict, **_routing_hints_from_first_ws_frame(first_message)
+        data,
+        user_api_key_dict=user_api_key_dict,
+        responses_ws_frame_guard=_responses_ws_frame_guard(data, user_api_key_dict, proxy_logging_obj),
+        **_routing_hints_from_first_ws_frame(first_message),
     )
     # Phase 2: route to upstream provider
     try:
@@ -1619,3 +2173,57 @@ async def responses_websocket_endpoint(
             request_data=routed_data,
         )
         await websocket.close(code=1011, reason="Internal server error")
+    finally:
+        await proxy_logging_obj.arelease_responses_websocket_slot(user_api_key_dict)
+
+
+@router.websocket("/v1/responses")
+@router.websocket("/responses")
+async def responses_websocket_endpoint(
+    websocket: WebSocket,
+    model: str | None = fastapi.Query(None, description="The model to use for the responses WebSocket session."),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth_websocket),
+):
+    """
+    Responses API WebSocket mode endpoint.
+
+    Keeps a persistent WebSocket connection for response.create events,
+    enabling lower-latency agentic workflows with many tool-call round trips.
+
+    Follows the OpenAI split: the bearer token is validated at connection time
+    (before accept); the model is resolved either from the ?model= query param
+    or from the first response.create frame, whichever is present.
+
+    The session is bounded by a lifetime measured from accept, configured via
+    general_settings.responses_websocket_session_limit_seconds (60-7200,
+    default 3600). There is no separate first-frame deadline, so
+    pre-established connections may sit idle until their first response.create.
+
+    See: https://developers.openai.com/api/docs/guides/websocket-mode/
+    """
+    # Accept the WebSocket handshake. Key was already validated by the Depends
+    # above; we can safely accept regardless of whether ?model= was supplied.
+    requested_protocols: Final = [
+        p.strip() for p in (websocket.headers.get("sec-websocket-protocol") or "").split(",") if p.strip()
+    ]
+    accept_kwargs: Final[dict] = {}
+    if requested_protocols:
+        accept_kwargs["subprotocol"] = requested_protocols[0]
+    await websocket.accept(**accept_kwargs)
+
+    limit_seconds: Final = _resolve_responses_ws_session_limit_seconds()
+    session_task: Final = asyncio.ensure_future(
+        _responses_websocket_session(websocket=websocket, model=model, user_api_key_dict=user_api_key_dict)
+    )
+    try:
+        await asyncio.wait_for(asyncio.shield(session_task), timeout=limit_seconds)
+    except asyncio.TimeoutError:
+        verbose_proxy_logger.info("Responses WebSocket closed: session duration limit reached")
+        session_task.cancel()
+        with contextlib.suppress(Exception):
+            await websocket.close(code=1000, reason="Session duration limit reached")
+    finally:
+        if not session_task.done():
+            session_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await session_task

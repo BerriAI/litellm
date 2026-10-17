@@ -10,7 +10,7 @@ from typing_extensions import TypeIs  # noqa: TID251  # narrows untyped wire pay
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value, is_nested_path
-from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig, ReasoningSummaryLevel
 from litellm.types.llms.openai import (
     AllMessageValues,
     OutputTokensDetails,
@@ -1121,9 +1121,15 @@ class ResponsesAPIRequestUtils:
 
         if raw_headers_from_request:
             headers_obj: Final = Headers(raw_headers_from_request)
-            mcp_auth_header = MCPRequestHandler._get_mcp_auth_header_from_headers(headers_obj)
-            mcp_server_auth_headers = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers_obj)
-            oauth2_headers = MCPRequestHandler._get_oauth2_headers_from_headers(headers_obj)
+            mcp_auth_header = (  # rebind-ok: pre-existing rebinding on a rename-only line
+                MCPRequestHandler.get_mcp_auth_header_from_headers(headers_obj)
+            )
+            mcp_server_auth_headers = (  # rebind-ok: pre-existing rebinding on a rename-only line
+                MCPRequestHandler.get_mcp_server_auth_headers_from_headers(headers_obj)
+            )
+            oauth2_headers = (  # rebind-ok: pre-existing rebinding on a rename-only line
+                MCPRequestHandler.get_oauth2_headers_from_headers(headers_obj)
+            )
 
         if tools:
             for tool in tools:
@@ -1133,7 +1139,7 @@ class ResponsesAPIRequestUtils:
                         # Merge tool headers into mcp_server_auth_headers
                         # Extract server-specific headers from tool.headers
                         headers_obj_from_tool = Headers(tool_headers)
-                        tool_mcp_server_auth_headers = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(
+                        tool_mcp_server_auth_headers = MCPRequestHandler.get_mcp_server_auth_headers_from_headers(
                             headers_obj_from_tool
                         )
                         if tool_mcp_server_auth_headers:
@@ -1288,3 +1294,19 @@ class ResponseAPILoggingUtils:
         return chat_usage
 
     _transform_response_api_usage_to_chat_usage = transform_response_api_usage_to_chat_usage
+
+
+def auto_reasoning_summary(model: str, custom_llm_provider: object) -> ReasoningSummaryLevel:
+    """The summary level the auto summary injects for a target, read from its Responses API config."""
+    from litellm.utils import ProviderConfigManager
+
+    try:
+        provider: Final = (
+            custom_llm_provider if isinstance(custom_llm_provider, str) else litellm.get_llm_provider(model=model)[1]
+        )
+    except litellm.exceptions.BadRequestError:
+        return "detailed"
+    responses_config: Final = ProviderConfigManager.get_provider_responses_api_config(
+        provider, model.removeprefix(f"{provider}/")
+    )
+    return "detailed" if responses_config is None else responses_config.auto_reasoning_summary()

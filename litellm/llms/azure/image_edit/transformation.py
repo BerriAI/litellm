@@ -65,7 +65,7 @@ class AzureImageEditConfig(OpenAIImageEditConfig):
         params: Final = GenericLiteLLMParams(**(litellm_params or {}))
         if api_key is not None and params.api_key is None:
             params.api_key = api_key
-        return BaseAzureLLM._base_validate_azure_environment(headers=headers, litellm_params=params)
+        return BaseAzureLLM.base_validate_azure_environment(headers=headers, litellm_params=params)
 
     def get_complete_url(
         self,
