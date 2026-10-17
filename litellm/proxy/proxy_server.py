@@ -346,6 +346,7 @@ from litellm.litellm_core_utils.core_helpers import (
     drop_params_flag,
     get_litellm_metadata_from_kwargs,
     get_parent_otel_span_from_kwargs,
+    iter_items,
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -14915,6 +14916,11 @@ def _drops_params(deployment: Mapping[str, object] | None) -> bool:
     return litellm.drop_params is True or (litellm_params is not None and litellm_params.get("drop_params") is True)
 
 
+def _text_only_contents(contents: Sequence[Mapping[str, object]]) -> bool:
+    parts: Final = chain.from_iterable(iter_items(content.get("parts") or ()) for content in contents)
+    return all(isinstance(part, Mapping) and part.keys() == {"text"} for part in parts)
+
+
 def _router_default_litellm_params(router: Router) -> Mapping[str, object]:
     defaults: Final[Mapping[str, object] | None] = getattr(router, "default_litellm_params", None)
     if defaults is None:
@@ -15044,6 +15050,7 @@ async def count_request_tokens(
             code=400,
         )
     prompt_only: Final = bool(prompt) and conversation_empty
+    contents_estimable: Final = not contents or (bool(messages) and _text_only_contents(contents))
     prompt_as_message: Final = prompt_only and custom_llm_provider in _PROVIDERS_COUNTING_WITHOUT_MESSAGES
     ladder: Final = (
         None
@@ -15065,7 +15072,7 @@ async def count_request_tokens(
             ),
             model_to_use=model_to_use,
             settings=settings,
-            local_estimate_allowed=litellm.disable_token_counter is not True and (bool(messages) or not contents),
+            local_estimate_allowed=litellm.disable_token_counter is not True and contents_estimable,
         )
     )
     if isinstance(ladder, TokenCountResponse):

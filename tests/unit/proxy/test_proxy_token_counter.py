@@ -1542,6 +1542,21 @@ async def test_framing_keeps_the_400_for_blocks_the_provider_counter_cannot_conv
             {"messages": [], "contents": [{"role": "user", "parts": [{"text": "What is new?"}]}]},
             id="google_contents",
         ),
+        pytest.param(
+            {
+                "messages": [{"role": "user", "content": "Describe this"}],
+                "contents": [
+                    {
+                        "role": "user",
+                        "parts": [
+                            {"text": "Describe this"},
+                            {"fileData": {"mimeType": "image/png", "fileUri": "gs://b/c.png"}},
+                        ],
+                    }
+                ],
+            },
+            id="google_contents_with_media_the_translation_dropped",
+        ),
     ],
 )
 async def test_framed_estimate_that_cannot_read_the_body_answers_the_provider_error(
@@ -1584,6 +1599,7 @@ async def test_framed_estimate_counts_google_contents_like_the_same_text_sent_as
 
     assert from_google.count_source == "local_estimate"
     assert from_google.total_tokens == from_messages.total_tokens
+
 
 @pytest.mark.asyncio
 async def test_framed_deployment_whose_custom_tokenizer_cannot_load_answers_the_provider_error(
