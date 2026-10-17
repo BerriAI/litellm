@@ -26,7 +26,7 @@ from openai.types.responses import ResponseItemList
 from openai.types.responses.response_create_params import ResponseInputParam
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 from starlette.websockets import WebSocket, WebSocketDisconnect
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.anthropic_interface.exceptions.exception_mapping_utils import AnthropicExceptionMapping
@@ -1418,8 +1418,19 @@ class _NestedProviderError(TypedDict):
     error: ReadOnly[_ProviderErrorMessage]
 
 
+class _ProviderOpenAIErrorDetail(TypedDict):
+    message: ReadOnly[str]
+    type: ReadOnly[str]
+    param: NotRequired[ReadOnly[str | None]]
+    code: NotRequired[ReadOnly[str | None]]
+
+
+class _ProviderOpenAIError(TypedDict):
+    error: ReadOnly[_ProviderOpenAIErrorDetail]
+
+
 _PROVIDER_COUNT_ERROR_TYPE: Final = "token_counting_error"
-_OPENAI_ERROR_BODY: Final = TypeAdapter(_ResponsesApiErrorBody)
+_PROVIDER_OPENAI_ERROR: Final = TypeAdapter(_ProviderOpenAIError)
 _NESTED_PROVIDER_ERROR: Final = TypeAdapter(_NestedProviderError)
 
 
@@ -1439,7 +1450,7 @@ def _provider_error_message(raw_message: str) -> str:
 
 def _provider_count_error_body(raw_message: str, status_code: int) -> _ResponsesApiErrorBody:
     try:
-        return _OPENAI_ERROR_BODY.validate_json(_provider_error_json(raw_message))
+        provider_error: Final = _PROVIDER_OPENAI_ERROR.validate_json(_provider_error_json(raw_message))["error"]
     except ValidationError:
         return {
             "error": {
@@ -1449,6 +1460,14 @@ def _provider_count_error_body(raw_message: str, status_code: int) -> _Responses
                 "code": None,
             }
         }
+    return {
+        "error": {
+            "message": provider_error["message"],
+            "type": provider_error["type"],
+            "param": provider_error.get("param"),
+            "code": provider_error.get("code"),
+        }
+    }
 
 
 def _provider_count_error_response(exc: ProxyException, request: Request) -> JSONResponse:

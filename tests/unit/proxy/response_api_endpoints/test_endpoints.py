@@ -3680,6 +3680,23 @@ class TestResponsesInputTokens:
             ),
             pytest.param(
                 {
+                    "error": {
+                        "message": "Missing required parameter: 'tools[0].name'.",
+                        "type": "invalid_request_error",
+                        "param": "tools[0].name",
+                    }
+                },
+                400,
+                {
+                    "message": "Missing required parameter: 'tools[0].name'.",
+                    "type": "invalid_request_error",
+                    "param": "tools[0].name",
+                    "code": None,
+                },
+                id="openai_error_without_code_keeps_type_and_param",
+            ),
+            pytest.param(
+                {
                     "type": "error",
                     "error": {"type": "invalid_request_error", "message": "tools.0: Input tag 'function' is invalid"},
                     "request_id": "req_vrtx_1",
