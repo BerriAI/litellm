@@ -451,7 +451,6 @@ def _rig(
     upstream: Surface | None = None,
     billing: Billing = EVEN_ROUNDS,
     prices: Mapping[str, JsonValue] | None = None,
-    server_fields: Mapping[str, object] | None = None,
 ) -> Iterator[Rig]:
     alias: Final = "llm" + uuid.uuid4().hex[:8]
     with (
@@ -459,7 +458,7 @@ def _rig(
         wire_server(_model_double(_fixed_turn(f"{alias}-add"), billing)) as wire,
         gateway.scenario() as scenario,
     ):
-        server_id: Final = register_mcp(scenario, peer, alias, **(server_fields or {}))
+        server_id: Final = register_mcp(scenario, peer, alias)
         model: Final = scenario.model(
             model=_upstream_model(upstream or surface), api_base=wire.url + "/v1", **(prices or {})
         )
@@ -548,57 +547,6 @@ def test_toolset_gateway_url_serves_a_team_granted_toolset_to_a_key_without_its_
         assert requests, "model was never called"
         assert all(names == (rig.tool,) for names in requests), requests
         assert [call["body"]["params"]["name"] for call in _peer_add_calls(rig.peer)] == ["add"]
-
-
-def _chat_with_key_in(rig: Rig, header: str, key: str) -> httpx.Response:
-    return rig.gateway.client.post(
-        "/v1/chat/completions",
-        headers={header: f"Bearer {key}"},
-        json={
-            "model": rig.model,
-            "messages": [{"role": "user", "content": f"add {rig.alias} for {key}"}],
-            "tools": [AUTO],
-        },
-        timeout=90,
-    )
-
-
-@pytest.mark.parametrize("header", ("Authorization", "x-litellm-api-key"))
-def test_chat_runs_an_oauth_server_tool_with_the_callers_own_stored_token_and_nobody_elses(
-    gateway: Gateway, header: str
-) -> None:
-    oauth_server: Final = {
-        "auth_type": "oauth2",
-        "oauth2_flow": "authorization_code",
-        "authorization_url": "http://127.0.0.1:9/authorize",
-        "token_url": "http://127.0.0.1:9/token",
-        "credentials": {"client_id": "synthetic-oauth-client"},
-    }
-    with _rig(gateway, "chat", server_fields=oauth_server) as rig:
-        grant: Final = {"mcp_servers": [rig.server_id]}
-        owner: Final = rig.scenario.key(user_id=rig.scenario.user(), object_permission=grant)
-        stranger: Final = rig.scenario.key(user_id=rig.scenario.user(), object_permission=grant)
-        token: Final = "user-token-" + uuid.uuid4().hex
-        stored: Final = rig.gateway.request(
-            "POST",
-            f"/v1/mcp/server/{rig.server_id}/oauth-user-credential",
-            {"access_token": token, "expires_in": 3600},
-            key=owner,
-        )
-        assert stored.status_code == 200, stored.text
-        rig.scenario.cleanups.callback(
-            rig.gateway.request, "DELETE", f"/v1/mcp/server/{rig.server_id}/oauth-user-credential", key=owner
-        )
-        answered: Final = _chat_with_key_in(rig, header, owner)
-        assert answered.status_code == 200, answered.text
-        assert rig.final_text(answered.json()) == ANSWER, answered.text
-        owner_calls: Final = tool_calls(rig.peer.drain())
-        assert [call["headers"].get(b"authorization") for call in owner_calls] == [f"Bearer {token}".encode()]
-        assert all(rig.tool in names for names in rig.upstream_tools())
-        _chat_with_key_in(rig, header, stranger)
-        assert tool_calls(rig.peer.drain()) == (), "a caller without a stored token reached the server"
-        stranger_requests: Final = rig.upstream_tools()
-        assert stranger_requests and all(rig.tool not in names for names in stranger_requests), stranger_requests
 
 
 @pytest.mark.parametrize("surface", ("chat", "responses", "messages"))

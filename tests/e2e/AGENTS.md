@@ -60,7 +60,7 @@ Every test under `tests/e2e/mcp/` must exercise the proxy against the real Datad
 - Prefer calling real Datadog tools that prove the product path (e.g. `search_datadog_logs` for list/call and permission denials). Seed a unique marker (`e2e-datadog-mcp-*`) in a chat completion when you need a log the tool can find. Dual-read with `dd_logs` from conftest when delivery matters
 - Delete the MCP server (and any keys) through `resources.defer` the same way every other suite tears down
 - If a new MCP behavior cannot be covered with Datadog's tool surface, say so in the PR and get agreement before inventing another upstream. The default is always Datadog
-- Gateway-managed OAuth (an authorize/token dance and per-user stored tokens) is out of scope here, since Datadog only takes static headers. Those flows are integration tests in `tests/integration/mcp/test_mcp_oauth_flows.py` and `tests/integration/mcp/test_mcp_llm_endpoints.py` against an owned authorization-server double. Do not add a third-party OAuth upstream that needs a saved browser login
+- Gateway-managed OAuth (an authorize/token dance and per-user stored tokens) is out of scope here, since Datadog only takes static headers. Those flows are integration tests against an owned authorization-server double, in `tests/integration/mcp/test_mcp_oauth_flows.py` and, for a chat completion calling the tool with the caller's stored token, the F2-chat cases of `tests/integration/security/test_mcp_slots.py`. Do not add a third-party OAuth upstream that needs a saved browser login
 
 ## Lay the pattern down in a class
 
