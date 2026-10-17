@@ -760,6 +760,20 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
         additional_headers: Final = get_response_headers(raw_response_headers)
 
         completion_fields: Final = _JSON_DICT.validate_python(completion_response)
+        if "error" in completion_fields:
+            raise FireworksAIException(
+                message=f"Fireworks AI returned an error body with status {raw_response.status_code}: {completion_fields['error']}",
+                status_code=raw_response.status_code,
+                headers=raw_response_headers,
+            )
+
+        if not isinstance(completion_fields.get("choices"), list):
+            raise FireworksAIException(
+                message=f"LiteLLM: provider returned a response with no 'choices'. Raw keys: {list(completion_fields.keys())}",
+                status_code=raw_response.status_code,
+                headers=raw_response_headers,
+            )
+
         response: Final = ModelResponse(**completion_fields)
 
         if response.model is not None:
