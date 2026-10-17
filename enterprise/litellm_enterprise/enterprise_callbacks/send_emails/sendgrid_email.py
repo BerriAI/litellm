@@ -5,7 +5,7 @@ Docs: https://docs.sendgrid.com/api-reference/mail-send/mail-send
 """
 
 import os
-from typing import List
+from typing import Final, List
 
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import (
@@ -25,6 +25,12 @@ class SendGridEmailLogger(BaseEmailLogger):
 
     Required env vars:
     - SENDGRID_API_KEY
+
+    Optional env vars:
+    - SENDGRID_SENDER_EMAIL: Override the sender address. When unset, falls back to
+      the `from_email` argument passed by the caller.
+    - SENDGRID_REPLY_TO_EMAIL: Address recipients reply to. When unset, SendGrid
+      defaults Reply-To to the sender address.
     """
 
     def __init__(self, internal_usage_cache=None, **kwargs):
@@ -34,6 +40,7 @@ class SendGridEmailLogger(BaseEmailLogger):
         )
         self.sendgrid_api_key = os.getenv("SENDGRID_API_KEY")
         self.sendgrid_sender_email = os.getenv("SENDGRID_SENDER_EMAIL")
+        self.sendgrid_reply_to_email = os.getenv("SENDGRID_REPLY_TO_EMAIL")
         verbose_logger.debug("SendGrid Email Logger initialized.")
 
     async def send_email(
@@ -54,8 +61,15 @@ class SendGridEmailLogger(BaseEmailLogger):
             f"Sending email via SendGrid from {sender_email} to {to_email} with subject {subject}"
         )
 
+        reply_to: Final = (
+            {"reply_to": {"email": self.sendgrid_reply_to_email}}
+            if self.sendgrid_reply_to_email
+            else {}
+        )
+
         payload = {
             "from": {"email": sender_email},
+            **reply_to,
             "personalizations": [
                 {
                     "to": [{"email": email} for email in to_email],
