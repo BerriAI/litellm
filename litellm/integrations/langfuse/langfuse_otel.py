@@ -1,16 +1,20 @@
 import base64
 import json
 import os
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Optional
 
 from litellm._logging import verbose_logger
 from litellm.integrations.arize import _utils
+from litellm.integrations.arize._utils import safe_set_attribute
 from litellm.integrations.langfuse.langfuse_otel_attributes import (
     LangfuseLLMObsOTELAttributes,
 )
 from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
+from litellm.integrations.otel.model.trace_controls import caller_trace_controls, langfuse_trace_controls
+from litellm.integrations.otel.model.utils import as_str_mapping
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.types.integrations.langfuse_otel import (
     LangfuseSpanAttributes,
@@ -40,19 +44,22 @@ class LangfuseOtelLogger(OpenTelemetry):
         super().__init__(config=config, *args, **kwargs)
 
     @staticmethod
-    def set_langfuse_otel_attributes(span: Span, kwargs, response_obj):
+    def set_langfuse_otel_attributes(span: Span, kwargs, response_obj) -> None:
         """
         Sets OpenTelemetry span attributes for Langfuse observability.
         Uses the same attribute setting logic as Arize Phoenix for consistency.
         """
 
-        _utils.set_attributes(span, kwargs, response_obj, LangfuseLLMObsOTELAttributes)
+        _utils.set_attributes(span, kwargs, response_obj, LangfuseLLMObsOTELAttributes, emit_session_and_user=False)
         span.set_attribute("langfuse.observation.type", "generation")
 
         #########################################################
         # Set Langfuse specific attributes
         #########################################################
-        LangfuseOtelLogger._set_langfuse_specific_attributes(span=span, kwargs=kwargs, response_obj=response_obj)
+        try:
+            LangfuseOtelLogger._set_langfuse_specific_attributes(span=span, kwargs=kwargs, response_obj=response_obj)
+        finally:
+            LangfuseOtelLogger._set_trace_user_attribute(span=span, kwargs=kwargs)
 
     @staticmethod
     def _extract_langfuse_metadata(kwargs: dict) -> dict:
@@ -256,6 +263,30 @@ class LangfuseOtelLogger(OpenTelemetry):
             )
 
         LangfuseOtelLogger._set_observation_output(span=span, response_obj=response_obj)
+
+    @staticmethod
+    def _set_trace_user_attribute(span: Span, kwargs: Mapping[str, object]) -> None:
+        caller: Final = caller_trace_controls(kwargs).user_id
+        if caller is not None:
+            if caller != LangfuseOtelLogger._mapped_caller_trace_user_id(kwargs):
+                safe_set_attribute(span, LangfuseSpanAttributes.TRACE_USER_ID.value, caller)
+            return
+        slp: Final[Mapping[str, object]] = as_str_mapping(kwargs.get("standard_logging_object")) or MappingProxyType({})
+        slp_metadata: Final[Mapping[str, object]] = as_str_mapping(slp.get("metadata")) or MappingProxyType({})
+        end_user: Final = (
+            slp_metadata.get("user_api_key_end_user_id")
+            or slp.get("end_user")
+            or langfuse_trace_controls(kwargs).user_id
+        )
+        if end_user:
+            safe_set_attribute(span, LangfuseSpanAttributes.TRACE_USER_ID.value, str(end_user))
+
+    @staticmethod
+    def _mapped_caller_trace_user_id(kwargs: Mapping[str, object]) -> str | None:
+        """The caller trace user that `_set_metadata_attributes` already wrote from the header or `metadata`."""
+        request: Final[Mapping[str, object]] = as_str_mapping(kwargs.get("litellm_params")) or MappingProxyType({})
+        mapped_sources: Final = {key: request.get(key) for key in ("metadata", "proxy_server_request")}
+        return caller_trace_controls({"litellm_params": mapped_sources}).user_id
 
     @staticmethod
     def _get_langfuse_otel_host() -> str | None:

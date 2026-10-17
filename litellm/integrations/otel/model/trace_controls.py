@@ -1,9 +1,9 @@
-"""The caller's Langfuse trace controls, parsed from the live callback kwargs."""
+"""Langfuse trace controls, parsed from the live callback kwargs."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Final
 
 from pydantic import TypeAdapter, ValidationError
@@ -18,8 +18,8 @@ _ITEMS: Final = TypeAdapter(tuple[object, ...])
 class TraceControls:
     """The caller's trace-level Langfuse controls: ``metadata.trace_name`` / ``trace_user_id`` / ``session_id`` /
     ``tags`` on the request (SDK or proxy body), with the proxy's ``langfuse_<control>`` headers winning over the
-    body for the scalar ones. Mutation controls (``trace_id``, ``existing_trace_id``, ``update_trace_keys``) are
-    deliberately not carried."""
+    body for the scalar ones. ``langfuse_trace_controls`` fills a missing ``user_id`` with the proxy end user. Mutation
+    controls (``trace_id``, ``existing_trace_id``, ``update_trace_keys``) are deliberately not carried."""
 
     name: str | None = None
     user_id: str | None = None
@@ -33,11 +33,7 @@ def caller_trace_controls(kwargs: Mapping[str, object]) -> TraceControls:
         return TraceControls()
     proxy_request: Final = as_str_mapping(request.get("proxy_server_request"))
     headers: Final = as_str_mapping(proxy_request.get("headers")) if proxy_request is not None else None
-    bodies: Final = tuple(
-        metadata
-        for key in ("metadata", "litellm_metadata")
-        if (metadata := as_str_mapping(request.get(key))) is not None
-    )
+    bodies: Final = _metadata_bodies(request)
 
     def scalar(control: str) -> str | None:
         from_header: Final = as_str(headers.get(f"{LANGFUSE_HEADER_PREFIX}{control}")) if headers is not None else None
@@ -50,6 +46,28 @@ def caller_trace_controls(kwargs: Mapping[str, object]) -> TraceControls:
         user_id=scalar("trace_user_id"),
         session_id=scalar("session_id"),
         tags=next((tags for body in bodies if (tags := _str_items(body.get("tags")))), ()),
+    )
+
+
+def langfuse_trace_controls(kwargs: Mapping[str, object]) -> TraceControls:
+    controls: Final = caller_trace_controls(kwargs)
+    if controls.user_id:
+        return controls
+    request: Final = as_str_mapping(kwargs.get("litellm_params"))
+    if request is None:
+        return controls
+    end_user: Final = next(
+        (value for body in _metadata_bodies(request) if (value := as_str(body.get("user_api_key_end_user_id")))),
+        None,
+    )
+    return replace(controls, user_id=end_user)
+
+
+def _metadata_bodies(request: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    return tuple(
+        metadata
+        for key in ("metadata", "litellm_metadata")
+        if (metadata := as_str_mapping(request.get(key))) is not None
     )
 
 

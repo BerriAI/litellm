@@ -439,6 +439,56 @@ def test_langfuse_user_and_session_headers_beat_body_metadata_on_both_spans():
         assert attrs["session.id"] == "from-header-s"
 
 
+def test_the_proxy_end_user_fills_user_id_when_the_caller_names_no_trace_user():
+    logger, exporter = _logger()
+
+    root_attrs, generation_attrs = _run_named_request(
+        logger, exporter, {"metadata": {"user_api_key_end_user_id": "end-1"}, "proxy_server_request": {"headers": {}}}
+    )
+
+    assert root_attrs["user.id"] == "end-1"
+    assert generation_attrs["user.id"] == "end-1"
+
+
+def test_a_callers_trace_user_id_still_wins_over_the_proxy_end_user():
+    logger, exporter = _logger()
+
+    root_attrs, generation_attrs = _run_named_request(
+        logger,
+        exporter,
+        {
+            "metadata": {"trace_user_id": "caller-1", "user_api_key_end_user_id": "end-1"},
+            "proxy_server_request": {"headers": {}},
+        },
+    )
+
+    assert root_attrs["user.id"] == "caller-1"
+    assert generation_attrs["user.id"] == "caller-1"
+
+
+@pytest.mark.parametrize(
+    ("metadata", "expected_root_user"),
+    [
+        ({"user_api_key_end_user_id": "end-1"}, None),
+        ({"trace_user_id": "caller-1", "user_api_key_end_user_id": "end-1"}, "caller-1"),
+    ],
+    ids=["end-user-stays-off", "caller-trace-user-as-before"],
+)
+def test_a_root_another_v2_logger_started_gets_only_the_callers_trace_user(metadata, expected_root_user):
+    first, first_exporter = _logger(mappers=("genai",))
+    langfuse, _ = _logger()
+    root: Final = _start_root(first)
+
+    langfuse.log_pre_api_call(
+        model="gpt-5.4-mini",
+        messages=[],
+        kwargs={"litellm_call_id": "call_1", "litellm_params": {"metadata": metadata}},
+    )
+    root.end()
+
+    assert _root_attrs(first_exporter).get("user.id") == expected_root_user
+
+
 def test_caller_metadata_cannot_override_the_proxy_team_identity():
     logger, exporter = _logger()
     response: Final = ModelResponse(choices=[Choices(message=Message(role="assistant", content="pong"))])
