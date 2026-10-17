@@ -956,6 +956,7 @@ from litellm.types.llms.openai import (
     ResponseFailedEvent,
     ResponseIncompleteEvent,
     ResponseInProgressEvent,
+    ResponsesAPIResponse,
 )
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
@@ -9869,9 +9870,7 @@ def _restamp_streaming_chunk_model(
     return restamped_chunk, model_mismatch_logged
 
 
-def _restamp_nested_response_model(
-    chunk: BaseModel | Mapping[str, object], target_model: str
-) -> BaseModel | Mapping[str, object]:
+def _nested_response_of(chunk: BaseModel) -> object:
     if isinstance(
         chunk,
         (
@@ -9882,15 +9881,24 @@ def _restamp_nested_response_model(
             ResponseIncompleteEvent,
         ),
     ):
-        nested_response: Final = chunk.response
-        if nested_response.model not in (None, target_model):
-            return chunk.model_copy(update={"response": nested_response.model_copy(update={"model": target_model})})
-        return chunk
+        return chunk.response
+    if isinstance(chunk, GenericEvent):
+        extra_fields: Final[Mapping[str, object]] = chunk.model_extra or {}
+        return extra_fields.get("response")
+    return None
 
-    if not isinstance(chunk, GenericEvent):
+
+def _restamp_nested_response_model(
+    chunk: BaseModel | Mapping[str, object], target_model: str
+) -> BaseModel | Mapping[str, object]:
+    if not isinstance(chunk, BaseModel):
         return chunk
-    extra_fields: Final[Mapping[str, object]] = chunk.model_extra or {}
-    untyped_response: Final = as_str_mapping(extra_fields.get("response"))
+    nested_response: Final = _nested_response_of(chunk)
+    if isinstance(nested_response, ResponsesAPIResponse):
+        if nested_response.model in (None, target_model):
+            return chunk
+        return chunk.model_copy(update={"response": nested_response.model_copy(update={"model": target_model})})
+    untyped_response: Final = as_str_mapping(nested_response)
     if untyped_response is None or untyped_response.get("model") in (None, target_model):
         return chunk
     return chunk.model_copy(update={"response": {**untyped_response, "model": target_model}})

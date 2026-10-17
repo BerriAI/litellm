@@ -530,6 +530,28 @@ def test_restamp_streaming_chunk_rewrites_nested_model_on_completed_event():
     assert chunk.response.model == "hosted_vllm/some-model", "the priced original must not change"
 
 
+@pytest.mark.parametrize("event_type", ["response.in_progress", "response.failed", "response.incomplete"])
+def test_restamp_streaming_chunk_rewrites_nested_model_on_other_lifecycle_events(event_type):
+    from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+    from litellm.proxy.proxy_server import _restamp_streaming_chunk_model
+
+    payload = {
+        "type": event_type,
+        "sequence_number": 1,
+        "response": {"id": "resp_test", "object": "response", "created_at": 0, "output": [], "model": "gpt-backend"},
+    }
+    chunk = OpenAIResponsesAPIConfig.get_event_model_class(event_type).model_validate(payload)
+    result, _ = _restamp_streaming_chunk_model(
+        chunk=chunk,
+        requested_model_from_client="client-model",
+        request_data={"litellm_call_id": "test-call-id"},
+        model_mismatch_logged=False,
+    )
+
+    assert result.response.model == "client-model"
+    assert chunk.response.model == "gpt-backend", "the priced original must not change"
+
+
 def test_restamp_streaming_chunk_leaves_nested_none_model_untouched():
     from litellm.proxy.proxy_server import _restamp_streaming_chunk_model
 
@@ -661,6 +683,27 @@ def test_restamp_streaming_chunk_rewrites_nested_model_on_queued_event():
 
     assert result.model_dump()["response"] == {**queued_payload["response"], "model": "client-model"}
     assert chunk.model_dump()["response"]["model"] == "gpt-backend-2026-01-01", "the priced original must not change"
+
+
+def test_restamp_streaming_chunk_rewrites_nested_model_when_lifecycle_event_kept_raw_response():
+    from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+    from litellm.proxy.proxy_server import _restamp_streaming_chunk_model
+
+    partial_response = {"id": "resp_test", "object": "response", "status": "in_progress", "model": "gpt-backend-2026-01-01"}
+    chunk = OpenAIResponsesAPIConfig().transform_streaming_response(
+        model="gpt-backend",
+        parsed_chunk={"type": "response.created", "sequence_number": 0, "response": partial_response},
+        logging_obj=MagicMock(),
+    )
+    result, _ = _restamp_streaming_chunk_model(
+        chunk=chunk,
+        requested_model_from_client="client-model",
+        request_data={"litellm_call_id": "test-call-id"},
+        model_mismatch_logged=False,
+    )
+
+    assert result.response == {**partial_response, "model": "client-model"}
+    assert chunk.response["model"] == "gpt-backend-2026-01-01", "the priced original must not change"
 
 
 def test_restamp_streaming_chunk_leaves_generic_event_without_nested_response_untouched():
