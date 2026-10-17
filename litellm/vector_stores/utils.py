@@ -1,17 +1,14 @@
-import copy
 from collections.abc import Container, Mapping
 from typing import Final, cast, get_type_hints
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
-from litellm.constants import ROUTING_REQUEST_TAGS_METADATA_KEY
+from litellm.constants import ROUTING_REQUEST_TAGS_METADATA_KEY, VECTOR_STORE_CALLER_METADATA_KWARG
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
 from litellm.types.vector_stores import (
     VectorStoreCreateOptionalRequestParams,
     VectorStoreSearchOptionalRequestParams,
 )
-
-CALLER_METADATA_KWARG: Final = "litellm_vector_store_caller_metadata"
 
 LITELLM_WRITTEN_METADATA_KEYS: Final = frozenset(
     {
@@ -49,19 +46,38 @@ def _callers_metadata(metadata: Mapping[object, object]) -> Mapping[object, obje
     return {key: value for key, value in metadata.items() if _is_callers_key(key)}
 
 
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])
+
+
 class VectorStoreWriteBody(BaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     metadata: object = None
 
 
-def callers_metadata_snapshot(request_body: VectorStoreWriteBody) -> object:
-    return copy.deepcopy(request_body.metadata)
+def _json_object(raw: str | bytes) -> Mapping[str, object] | None:
+    try:
+        return _JSON_OBJECT.validate_json(raw)
+    except ValidationError:
+        return None
+
+
+def _decoded_metadata(metadata: object) -> object:
+    if not isinstance(metadata, str):
+        return metadata
+    decoded: Final = _json_object(metadata)
+    return metadata if decoded is None else decoded
+
+
+def callers_metadata_snapshot(raw_json_body: bytes | None, parsed_body: VectorStoreWriteBody) -> object:
+    raw_body: Final = None if raw_json_body is None else _json_object(raw_json_body)
+    metadata: Final = parsed_body.metadata if raw_body is None else raw_body.get("metadata")
+    return _decoded_metadata(metadata)
 
 
 def _metadata_for_provider(params: Mapping[str, object]) -> object:
-    if CALLER_METADATA_KWARG in params:
-        return params[CALLER_METADATA_KWARG]
+    if VECTOR_STORE_CALLER_METADATA_KWARG in params:
+        return params[VECTOR_STORE_CALLER_METADATA_KWARG]
     metadata: Final = params.get("metadata")
     if not isinstance(metadata, Mapping):
         return metadata

@@ -143,8 +143,12 @@ PROXY_STAMPED_METADATA: Final = {
 }
 
 
+def _copy(metadata: Mapping[object, object] | None) -> dict[object, object] | None:
+    return None if metadata is None else dict(metadata)
+
+
 async def _metadata_sent_to_provider(
-    operation: str, metadata: Mapping[object, object], **kwargs: object
+    operation: str, metadata: Mapping[object, object] | None, **kwargs: object
 ) -> list[object]:
     sent_metadata: Final[list[object]] = []
 
@@ -167,9 +171,9 @@ async def _metadata_sent_to_provider(
 
     client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(echo_vector_store))
     if operation == "create":
-        await acreate(name="x", metadata=dict(metadata), api_key="sk-test", client=client, **kwargs)
+        await acreate(name="x", metadata=_copy(metadata), api_key="sk-test", client=client, **kwargs)
     else:
-        await aupdate(vector_store_id="vs_1", metadata=dict(metadata), api_key="sk-test", client=client, **kwargs)
+        await aupdate(vector_store_id="vs_1", metadata=_copy(metadata), api_key="sk-test", client=client, **kwargs)
     return sent_metadata
 
 
@@ -187,9 +191,12 @@ async def test_proxy_vector_store_writes_send_only_the_callers_metadata_to_the_p
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("operation", ["create", "update"])
-async def test_direct_sdk_vector_store_writes_keep_caller_keys_that_share_proxy_key_names(operation: str):
-    callers_metadata: Final = {"team": "llmproxy", "endpoint": "ingest", "deployment": "prod", "agent_id": "bot-7"}
-
+@pytest.mark.parametrize(
+    "callers_metadata", [{"team": "llmproxy", "endpoint": "ingest", "deployment": "prod", "agent_id": "bot-7"}, None]
+)
+async def test_direct_sdk_vector_store_writes_send_the_callers_metadata_unchanged(
+    operation: str, callers_metadata: Mapping[object, object] | None
+):
     sent_metadata: Final = await _metadata_sent_to_provider(operation, callers_metadata)
 
     assert sent_metadata == [callers_metadata]
