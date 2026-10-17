@@ -379,6 +379,22 @@ class TestMCPServerManager:
         with patch.object(manager, "_get_general_settings", return_value={}):
             assert manager.get_mcp_server_by_id(server.server_id, client_ip="8.8.8.8") is None
 
+    def test_get_mcp_server_by_identifier_matches_alias_case_and_server_id(self):
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="alpha-id",
+            name="alpha",
+            server_name="alpha",
+            alias="alpha-alias",
+            transport=MCPTransport.http,
+        )
+        manager.registry[server.server_id] = server
+
+        assert manager.get_mcp_server_by_identifier("ALPHA") is server
+        assert manager.get_mcp_server_by_identifier("alpha-alias") is server
+        assert manager.get_mcp_server_by_identifier("alpha-id") is server
+        assert manager.get_mcp_server_by_identifier("unknown") is None
+
     async def test_create_mcp_client_stdio(self, monkeypatch):
         """Test creating MCP client for stdio transport"""
         monkeypatch.setenv("LITELLM_ENABLE_MCP_STDIO", "true")
@@ -1625,9 +1641,10 @@ class TestMCPServerManager:
         assert server.oauth2_flow is None
 
     @pytest.mark.asyncio
-    async def test_load_servers_from_config_warns_for_id_jag_with_google_sso(self, monkeypatch, caplog):
+    async def test_load_servers_from_config_is_silent_for_id_jag_with_saml_sso(self, monkeypatch, caplog):
+        """A SAML login retains the signed assertion as the saml2 subject token, so SAML is not a gap."""
         self._clear_sso_env(monkeypatch)
-        monkeypatch.setenv("GOOGLE_CLIENT_ID", "google-cid")
+        monkeypatch.setenv("SAML_IDP_METADATA_URL", "https://idp.example.com/metadata")
         manager = MCPServerManager()
         with (
             patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)),
@@ -1636,10 +1653,25 @@ class TestMCPServerManager:
         ):
             await manager.load_servers_from_config(self._id_jag_config())
 
-        warnings = [message for message in caplog.messages if "oauth2_id_jag" in message]
-        assert len(warnings) == 1
-        assert "idjag_server" in warnings[0]
-        assert "GENERIC_CLIENT_ID" in warnings[0]
+        assert [message for message in caplog.messages if "oauth2_id_jag" in message] == []
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("client_id_env", ["GOOGLE_CLIENT_ID", "MICROSOFT_CLIENT_ID", "GENERIC_CLIENT_ID"])
+    async def test_load_servers_from_config_is_silent_for_id_jag_under_oidc_logins(
+        self, monkeypatch, caplog, client_id_env
+    ):
+        """Every OIDC login captures the IdP id_token an id_jag server spends, so none of them is a gap."""
+        self._clear_sso_env(monkeypatch)
+        monkeypatch.setenv(client_id_env, "cid")
+        manager = MCPServerManager()
+        with (
+            patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)),
+            patch.object(manager, "hydrate_config_servers_dcr_clients", new=AsyncMock()),
+            caplog.at_level(logging.WARNING, logger="LiteLLM"),
+        ):
+            await manager.load_servers_from_config(self._id_jag_config())
+
+        assert not any("oauth2_id_jag" in message for message in caplog.messages)
 
     @pytest.mark.asyncio
     async def test_load_servers_from_config_does_not_warn_for_id_jag_without_sso(self, monkeypatch, caplog):
@@ -13765,7 +13797,7 @@ class TestSessionResourceScopeIntersect:
 
         auth = UserAPIKeyAuth(user_id="scoped-user")
         auth.mcp_admitted_user_subject = True
-        auth.mcp_session_resource_server_id = scope
+        auth.mcp_session_resource_server_ids = None if scope is None else (scope,)
         return auth
 
     def test_scope_reader_is_none_for_keys_and_unscoped_subjects(self):
@@ -13779,7 +13811,14 @@ class TestSessionResourceScopeIntersect:
     def test_scope_reader_returns_sealed_scope_for_admitted_subjects(self):
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
 
-        assert MCPServerManager._admitted_session_resource_scope(self._admitted_auth("b")) == "b"
+        assert MCPServerManager._admitted_session_resource_scope(self._admitted_auth("b")) == frozenset({"b"})
+
+    def test_scope_reader_returns_all_sealed_server_ids(self):
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+
+        auth = self._admitted_auth("first")
+        auth.mcp_session_resource_server_ids = ("first", "second")
+        assert MCPServerManager._admitted_session_resource_scope(auth) == frozenset({"first", "second"})
 
     @pytest.mark.asyncio
     async def test_admin_registry_seed_still_bounded_by_session_resource_scope(self):
@@ -13811,8 +13850,40 @@ class TestSessionResourceScopeIntersect:
             ),
         ):
             assert await manager.get_allowed_mcp_servers(auth) == ["granted-id"]
-            auth.mcp_session_resource_server_id = None
+            auth.mcp_session_resource_server_ids = None
             assert set(await manager.get_allowed_mcp_servers(auth)) == {"granted-id", "other-id"}
+
+    @pytest.mark.asyncio
+    async def test_admin_registry_seed_keeps_both_servers_in_a_multi_server_session(self):
+        from unittest.mock import AsyncMock, patch
+
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+        from litellm.proxy._types import LitellmUserRoles
+        from litellm.types.mcp import MCPTransport
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+        manager = MCPServerManager()
+        for server_id in ("alpha-id", "beta-id", "gamma-id"):
+            manager.registry[server_id] = MCPServer(
+                server_id=server_id,
+                name=server_id,
+                server_name=server_id,
+                url="https://example.com/mcp",
+                transport=MCPTransport.http,
+            )
+        auth = self._admitted_auth("alpha-id")
+        auth.mcp_session_resource_server_ids = ("alpha-id", "beta-id")
+        auth.user_role = LitellmUserRoles.PROXY_ADMIN
+        with (
+            patch.object(MCPServerManager, "get_allow_all_keys_server_ids", return_value=[]),
+            patch.object(
+                MCPServerManager,
+                "_get_active_submitted_mcp_server_ids_for_user",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+        ):
+            assert set(await manager.get_allowed_mcp_servers(auth)) == {"alpha-id", "beta-id"}
 
     @pytest.mark.asyncio
     async def test_get_allowed_mcp_servers_scopes_past_operator_open_union(self):

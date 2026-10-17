@@ -19,7 +19,7 @@ from types import MappingProxyType, TracebackType
 from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, cast
 
 from httpx import Response
-from pydantic import BaseModel, JsonValue
+from pydantic import BaseModel, JsonValue, TypeAdapter
 
 import litellm
 from litellm._internal_context import post_response_phase
@@ -79,7 +79,12 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.error_normalization import normalize_error
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
-from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_param
+from litellm.litellm_core_utils.hidden_params import (
+    HIDDEN_PARAMS_ATTR,
+    get_hidden_params,
+    served_from_cache,
+    set_hidden_param,
+)
 from litellm.litellm_core_utils.internal_call_metadata import (
     MODEL_ACCESS_GROUP_METADATA_KEY,
     is_unbilled_non_inference_call,
@@ -536,6 +541,10 @@ def _resolve_mantle_region_for_cost(
     return resolve_mantle_region(litellm_params or MappingProxyType({}))
 
 
+_PER_CALL_LITELLM_PARAM_DICTS: Final = frozenset({"metadata", "litellm_metadata"})
+_LITELLM_PARAMS: Final = TypeAdapter(dict[str, object])
+
+
 def _provider_response_id(source: object) -> str | None:
     candidate: Final = source.get("id") if isinstance(source, dict) else getattr(source, "id", None)
     return candidate if isinstance(candidate, str) and candidate else None
@@ -770,6 +779,36 @@ class Logging(LiteLLMLoggingBaseClass):
         self._async_success_scheduled: bool = False
         self.on_detached_stream_failure: Callable[[Exception], Awaitable[None]] | None = None
         self.shadow_eval_request_snapshot: GuardrailRequestSnapshot | None = None
+
+    def copy_for_new_call(self, litellm_call_id: str, start_time: datetime.datetime) -> "Logging":
+        """One turn of a long-lived connection: the connection's deployment, key and metadata under its own call id,
+        start time and chunk buffers, so the turn logs and bills as a request of its own."""
+        connection_params: Final = _LITELLM_PARAMS.validate_python(
+            self.litellm_params  # pyright: ignore[reportUnknownMemberType]  # Logging.litellm_params is untyped
+        )
+        litellm_params: Final[dict[str, object]] = {
+            **connection_params,
+            **{
+                key: _LITELLM_PARAMS.validate_python(value)
+                for key, value in connection_params.items()
+                if key in _PER_CALL_LITELLM_PARAM_DICTS and isinstance(value, dict)
+            },
+            "litellm_call_id": litellm_call_id,
+        }
+        new_call: Final = copy.copy(self)
+        new_call.litellm_call_id = litellm_call_id
+        new_call.start_time = start_time
+        new_call.litellm_params = litellm_params
+        new_call.model_call_details = {
+            **self.model_call_details,
+            "litellm_call_id": litellm_call_id,
+            "start_time": start_time,
+            "first_api_call_start_time": None,
+            "litellm_params": litellm_params,
+        }
+        new_call.streaming_chunks = []
+        new_call.sync_streaming_chunks = []
+        return new_call
 
     def set_response_timing_metrics(self, timing_metrics: Mapping[str, float]) -> None:
         """Keep ``_response_ms`` / ``litellm_overhead_time_ms`` for a result that has no ``_hidden_params``."""
@@ -2022,7 +2061,7 @@ class Logging(LiteLLMLoggingBaseClass):
     ) -> None:
         if response_cost is None and not calculation_failed:
             return
-        if self.model_call_details.get("cache_hit") is True:
+        if self.model_call_details.get("cache_hit") is True or _served_from_cache_at_no_charge(result):
             self.model_call_details["zero_cost_diagnostic"] = None
             return
         try:
@@ -2261,6 +2300,54 @@ class Logging(LiteLLMLoggingBaseClass):
         self.model_call_details["combined_usage_object"] = usage
         self.model_call_details["response_cost"] = response_cost
 
+    def attempt_scoped_copy(self) -> "Logging":
+        """A copy with its own model_call_details, so logging one attempt of a request through it leaves
+        the state the request's other attempts share untouched."""
+        attempt: Final = copy.copy(self)
+        attempt.model_call_details = dict(self.model_call_details)
+        return attempt
+
+    def carry_failed_attempt_usage(self) -> None:
+        """Move what a failed earlier attempt stashed off the retry sharing this logging object, so the retry logs its
+        own usage while the request's failure log still bills every attempt."""
+        usage: Final = self.model_call_details.pop("combined_usage_object", None)
+        response_cost: Final = self.model_call_details.pop("response_cost", None)
+        if isinstance(usage, Usage):
+            self.model_call_details["failed_attempts_usage"] = (
+                *self.model_call_details.get("failed_attempts_usage", ()),
+                (usage, float(response_cost) if isinstance(response_cost, (int, float)) else 0.0),
+            )
+
+    def record_continued_partial(self, usage: Usage, response_cost: float, response_id: str) -> None:
+        """Bill what a cut stream already consumed on this continuation's success log, under the id the caller saw."""
+        self.model_call_details["continued_partial_usage"] = usage
+        self.model_call_details["continued_partial_cost"] = response_cost
+        self.model_call_details["continued_response_id"] = response_id
+
+    def _add_continued_partial_spend(self, response: object) -> None:
+        partial_usage: Final = self.model_call_details.get("continued_partial_usage")
+        partial_cost: Final = self.model_call_details.get("continued_partial_cost")
+        own_usage: Final = getattr(response, "usage", None)
+        own_cost: Final = self.model_call_details.get("response_cost")
+        if not (isinstance(partial_usage, Usage) and isinstance(partial_cost, float) and isinstance(own_usage, Usage)):
+            return
+        from litellm.cost_calculator import BaseTokenUsageProcessor
+
+        self.model_call_details["combined_usage_object"] = BaseTokenUsageProcessor.combine_usage_objects(
+            usage_objects=[own_usage, partial_usage]
+        )
+        if not isinstance(own_cost, (int, float)):
+            return
+        self.model_call_details["response_cost"] = own_cost + partial_cost
+        if self.cost_breakdown is not None:
+            self.cost_breakdown = self.cost_breakdown | CostBreakdown(
+                total_cost=own_cost + partial_cost,
+                additional_costs={
+                    **self.cost_breakdown.get("additional_costs", {}),
+                    "mid_stream_partial_cost": partial_cost,
+                },
+            )
+
     def record_assembled_response_for_failure(self, assembled: ModelResponse) -> None:
         """Bill a fully streamed response on the failure log when a post-call hook rejects it."""
         usage: Final = getattr(assembled, "usage", None)
@@ -2384,19 +2471,8 @@ class Logging(LiteLLMLoggingBaseClass):
             )
 
         elif self.call_type == CallTypes.aresponses_websocket.value and isinstance(result, list):  # pyright: ignore[reportUnknownMemberType]  # Logging.call_type is untyped
-            combined_ws_usage: Final = (
-                ResponsesWebSocketTokenUsageProcessor.collect_and_combine_usage_from_responses_ws_results(
-                    results=result  # pyright: ignore[reportUnknownArgumentType]  # raw event dicts from the WS stream
-                )
-            )
-            ws_tier_partition: Final = ResponsesWebSocketTokenUsageProcessor.partition_results_by_service_tier(
+            logging_result = ResponsesWebSocketTokenUsageProcessor.create_logging_object(
                 results=result  # pyright: ignore[reportUnknownArgumentType]  # raw event dicts from the WS stream
-            )
-            ws_service_tier: Final = next(iter(ws_tier_partition)) if len(ws_tier_partition) == 1 else None
-            logging_result = LiteLLMRealtimeStreamLoggingObject(
-                usage=combined_ws_usage,
-                results=result,  # pyright: ignore[reportUnknownArgumentType]  # raw event dicts from the WS stream
-                service_tier=ws_service_tier,
             )
 
         elif self.relays_llm_passthrough and isinstance(result, Response):
@@ -2567,6 +2643,15 @@ class Logging(LiteLLMLoggingBaseClass):
             return response
         return response.model_copy(update={"model": model})
 
+    def _with_continued_response_id(
+        self,
+        response: ModelResponse | TextCompletionResponse | ResponsesAPIResponse | InteractionsAPIResponse,
+    ) -> ModelResponse | TextCompletionResponse | ResponsesAPIResponse | InteractionsAPIResponse:
+        response_id: Final = self.model_call_details.get("continued_response_id")
+        if not isinstance(response_id, str) or getattr(response, "id", None) == response_id:
+            return response
+        return response.model_copy(update={"id": response_id})
+
     def _success_handler_helper_fn(
         self,
         result: object = None,
@@ -2600,6 +2685,8 @@ class Logging(LiteLLMLoggingBaseClass):
                 result = self._handle_a2a_response_logging(result=result)
 
             logging_result: Final = self.normalize_logging_result(result=result)
+            if cache_hit is None and _served_from_cache_at_no_charge(logging_result):
+                self.model_call_details["cache_hit"] = True
 
             if isinstance(result, Response) and isinstance(
                 logging_result, (ModelResponse, EmbeddingResponse, TextCompletionResponse)
@@ -2885,8 +2972,11 @@ class Logging(LiteLLMLoggingBaseClass):
                 self.model_call_details["response_cost"] = self.response_cost_calculator(
                     result=complete_streaming_response
                 )
+                self._add_continued_partial_spend(complete_streaming_response)
                 self._merge_hidden_params_from_response_into_metadata(complete_streaming_response)
-                logged_streaming_response: Final = self._with_client_facing_stream_model(complete_streaming_response)
+                logged_streaming_response: Final = self._with_continued_response_id(
+                    self._with_client_facing_stream_model(complete_streaming_response)
+                )
                 self.model_call_details["complete_streaming_response"] = logged_streaming_response
                 ## STANDARDIZED LOGGING PAYLOAD
                 self.model_call_details["standard_logging_object"] = self._build_standard_logging_payload(
@@ -3422,12 +3512,15 @@ class Logging(LiteLLMLoggingBaseClass):
                     self.model,
                 )
                 self.model_call_details["response_cost"] = None
+            self._add_continued_partial_spend(complete_streaming_response)
 
             self._merge_hidden_params_from_response_into_metadata(complete_streaming_response)
 
             await self._prepare_baseline_cache_estimate(complete_streaming_response)
 
-            logged_streaming_response: Final = self._with_client_facing_stream_model(complete_streaming_response)
+            logged_streaming_response: Final = self._with_continued_response_id(
+                self._with_client_facing_stream_model(complete_streaming_response)
+            )
             self.model_call_details["async_complete_streaming_response"] = logged_streaming_response
 
             ## STANDARDIZED LOGGING PAYLOAD
@@ -4259,6 +4352,9 @@ class Logging(LiteLLMLoggingBaseClass):
         row is built from this response rather than re-parsed from the served body."""
         self.bridged_model_response = response
 
+    def record_bridged_responses_api_response(self, response: ResponsesAPIResponse) -> None:
+        self.record_bridged_model_response(self._translate_responses_api_response_to_model_response(response))
+
     def billable_result(self, result: object) -> object:
         """The response the cost calculator prices: a /v1/messages body served through the chat
         bridge is replaced by the ModelResponse its spend row is built from, anything else is
@@ -4359,6 +4455,7 @@ class Logging(LiteLLMLoggingBaseClass):
         """
         from litellm.completion_extras.litellm_responses_transformation.transformation import (
             LiteLLMResponsesTransformationHandler,
+            responses_provider_metadata,
         )
 
         served_id: Final = _provider_response_id(result)
@@ -4383,7 +4480,9 @@ class Logging(LiteLLMLoggingBaseClass):
                 "usage-only ModelResponse to keep the spend_logs row.",
                 str(e),
             )
-            model_response: Final = litellm.ModelResponse(id=served_id)
+            model_response: Final = litellm.ModelResponse(
+                id=served_id, **responses_provider_metadata(result.model_extra)
+            )
             model_response.model = self.model
             usage: Final = result.usage
             if usage is not None and ResponseAPILoggingUtils.is_response_api_usage(usage):
@@ -4507,6 +4606,32 @@ def get_masked_values(
 _get_masked_values = get_masked_values
 
 
+@lru_cache(maxsize=1)
+def start_sentry(dsn: str) -> None:
+    try:
+        import sentry_sdk
+    except ImportError:
+        print_verbose("Package 'sentry_sdk' is missing. Installing it...")
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "sentry_sdk"])
+        import sentry_sdk
+    from litellm.litellm_core_utils.sentry_scrubbing import build_sentry_init_options
+
+    sentry_sdk.init(**build_sentry_init_options({**os.environ, "SENTRY_DSN": dsn}))
+
+
+def initialize_sentry() -> None:
+    global sentry_sdk_instance, capture_exception, add_breadcrumb
+    dsn: Final = os.environ.get("SENTRY_DSN")
+    if not dsn:
+        return
+    start_sentry(dsn)
+    import sentry_sdk
+
+    sentry_sdk_instance = sentry_sdk  # rebind-ok: process-wide Sentry SDK handle read by every logging path
+    capture_exception = sentry_sdk.capture_exception  # rebind-ok: process-wide Sentry SDK handle
+    add_breadcrumb = sentry_sdk.add_breadcrumb  # rebind-ok: process-wide Sentry SDK handle
+
+
 def set_callbacks(
     callback_list: Iterable[str | Callable[..., object] | CustomLogger],
     function_id: str | None = None,
@@ -4515,9 +4640,6 @@ def set_callbacks(
     Globally sets the callback client
     """
     global \
-        sentry_sdk_instance, \
-        capture_exception, \
-        add_breadcrumb, \
         slack_app, \
         alerts_channel, \
         traceloopLogger, \
@@ -4541,18 +4663,7 @@ def set_callbacks(
     try:
         for callback in callback_list:
             if callback == "sentry":
-                try:
-                    import sentry_sdk
-                except ImportError:
-                    print_verbose("Package 'sentry_sdk' is missing. Installing it...")
-                    subprocess.check_call([sys.executable, "-m", "pip", "install", "sentry_sdk"])
-                    import sentry_sdk
-                from litellm.litellm_core_utils.sentry_scrubbing import build_sentry_init_options
-
-                sentry_sdk_instance = sentry_sdk
-                sentry_sdk_instance.init(**build_sentry_init_options(os.environ))
-                capture_exception = sentry_sdk_instance.capture_exception
-                add_breadcrumb = sentry_sdk_instance.add_breadcrumb
+                initialize_sentry()
             elif callback == "slack":
                 try:
                     from slack_bolt import App
@@ -6599,6 +6710,11 @@ def _get_status_fields(
     return StandardLoggingPayloadStatusFields(llm_api_status=llm_api_status, guardrail_status=guardrail_status)
 
 
+def _served_from_cache_at_no_charge(result: object) -> bool:
+    hidden_params: Final = get_hidden_params(result)
+    return served_from_cache(result) and hidden_params is not None and hidden_params.get("response_cost") == 0
+
+
 def _extract_response_obj_and_hidden_params(
     init_response_obj: object,
     original_exception: Exception | None,
@@ -6714,7 +6830,7 @@ def get_standard_logging_object_payload(
             else raw_usage_dict
         )
 
-        id = response_obj.get("id", kwargs.get("litellm_call_id"))
+        id = response_obj.get("id") or kwargs.get("litellm_call_id")
 
         _model_id: Final = metadata.get("model_info", {}).get("id", "")
         _model_group: Final = metadata.get("model_group", "")
@@ -6761,8 +6877,9 @@ def get_standard_logging_object_payload(
         )  # maintain backwards compatibility with old request body check
 
         saved_cache_cost: float = 0.0
-        if cache_hit is True:
+        if cache_hit is True or served_from_cache(init_response_obj):
             id = f"{id}_cache_hit{time.time()}"  # do not duplicate the request id
+        if cache_hit is True:
             saved_cache_cost = (
                 logging_obj.response_cost_calculator(
                     result=init_response_obj,

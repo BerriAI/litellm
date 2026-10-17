@@ -32,7 +32,9 @@ from mcp.types import (
     ListToolsRequest,
     ListToolsResult,
     PaginatedRequestParams,
+    PromptsCapability,
     RequestId,
+    ResourcesCapability,
     ServerCapabilities,
     ServerNotification,
     SubscribeRequest,
@@ -40,6 +42,7 @@ from mcp.types import (
     SubscriptionFilter,
     SubscriptionsListenRequestParams,
     SubscriptionsListenResult,
+    ToolsCapability,
     UnsubscribeRequest,
     UnsubscribeRequestParams,
 )
@@ -52,6 +55,8 @@ from litellm.proxy._experimental.mcp_server.catalog import (
 )
 from litellm.proxy._experimental.mcp_server.contracts import OperationContext
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+from litellm.types.mcp import MCP_LEGACY_VERSIONS
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 
@@ -219,6 +224,50 @@ async def _targets(context: OperationContext) -> tuple[SubscriptionTarget, ...]:
         return tuple([await prepare(server) for server in allowed])
 
 
+async def subscription_capabilities(context: OperationContext) -> tuple[frozenset[str], ServerCapabilities]:
+    try:
+        targets: Final = await _targets(context)
+    except Exception:  # noqa: BLE001  # missing optional upstream credentials must not erase usable catalog results
+        return frozenset(MCP_LEGACY_VERSIONS), ServerCapabilities()
+    configured: Final = frozenset(target.server.protocol_version for target in targets)
+    versions: Final = (
+        configured | frozenset(MCP_LEGACY_VERSIONS) if not configured or "auto" in configured else configured
+    )
+    if not targets or any(
+        target.server.protocol_version == "2026-07-28" and target.server.transport != "http" for target in targets
+    ):
+        return versions, ServerCapabilities()
+
+    async def probe(target: SubscriptionTarget) -> ServerCapabilities:
+        async def read(session: ClientSession) -> ServerCapabilities:
+            return session.server_capabilities or ServerCapabilities()
+
+        try:
+            if await operations._mcp_server_rate_limit_rejection(target.server, context.user_api_key_auth) is not None:  # pyright: ignore[reportPrivateUsage]  # reuse request-scoped catalog admission
+                return ServerCapabilities()
+            with anyio.fail_after(MCP_TOOL_LISTING_TIMEOUT):
+                return await target.client.run_with_session(read, quiet_on_error=True)
+        except Exception:  # noqa: BLE001  # an optional notification probe must not disable an otherwise usable catalog
+            return ServerCapabilities()
+
+    declared: Final = tuple(await asyncio.gather(*(probe(target) for target in targets)))
+    return versions, ServerCapabilities(
+        tools=ToolsCapability(list_changed=True)
+        if all(item.tools and item.tools.list_changed for item in declared)
+        else None,
+        prompts=PromptsCapability(list_changed=True)
+        if all(item.prompts and item.prompts.list_changed for item in declared)
+        else None,
+        resources=ResourcesCapability(
+            list_changed=all(item.resources and item.resources.list_changed for item in declared) or None,
+            subscribe=(len(targets) == 1 and any(item.resources and item.resources.subscribe for item in declared))
+            or None,
+        )
+        if any(item.resources for item in declared)
+        else None,
+    )
+
+
 async def _listing(event: ServerEvent, context: OperationContext) -> str | None:
     if isinstance(event, ResourceUpdated):
         return None
@@ -250,6 +299,29 @@ async def _listing(event: ServerEvent, context: OperationContext) -> str | None:
             if cursor is None:
                 return digest.hexdigest()
     raise MCPError(code=-32603, message="Subscription catalog exceeds the pagination limit")
+
+
+async def _enforce_rate_limit(context: OperationContext, server: MCPServer) -> None:
+    await operations._enforce_mcp_server_rate_limit(context.user_api_key_auth, server)  # pyright: ignore[reportPrivateUsage]  # same admission policy as other gateway operations
+
+
+async def _unmetered(_: OperationContext, __: MCPServer) -> None:
+    return None
+
+
+async def _admitted() -> ProxyRateLimitError | None:
+    return None
+
+
+@asynccontextmanager
+async def _listener_admission(targets: tuple[SubscriptionTarget, ...]) -> AsyncGenerator[None]:
+    scope: Final = operations._mcp_server_admission_memo.set(  # pyright: ignore[reportPrivateUsage]  # the listener's own catalog refreshes reuse its admission
+        {target.server.server_id: asyncio.create_task(_admitted()) for target in targets}
+    )
+    try:
+        yield
+    finally:
+        operations._mcp_server_admission_memo.reset(scope)  # pyright: ignore[reportPrivateUsage]  # restore the caller's admission scope
 
 
 async def _recheck_authorization(check: Callable[[], Awaitable[OperationContext]]) -> None:
@@ -313,7 +385,7 @@ class GatewaySubscriptions:
         if ctx.protocol_version != "2026-07-28":
             raise MCPError(code=-32601, message="Subscriptions require the modern MCP protocol")
         async with self._capacity(owner):
-            return await self._listen(ctx, params, authorize)
+            return await self._listen(ctx, params, authorize, _enforce_rate_limit)
 
     @asynccontextmanager
     async def _capacity(self, owner: str) -> AsyncGenerator[None]:
@@ -366,6 +438,7 @@ class GatewaySubscriptions:
                     ctx,
                     SubscriptionFilter(tools_list_changed=True, prompts_list_changed=True, resources_list_changed=True),
                     authorization,
+                    _unmetered,
                 )
                 if (ready := self._initializing.get(key)) is not None:
                     ready.set()
@@ -379,6 +452,7 @@ class GatewaySubscriptions:
         ctx: ServerRequestContext,
         notifications: SubscriptionFilter,
         authorization: SubscriptionAuthorization,
+        admit: Callable[[OperationContext, MCPServer], Awaitable[None]],
         scope: anyio.CancelScope | None = None,
         *,
         task_status: TaskStatus[None],
@@ -395,7 +469,7 @@ class GatewaySubscriptions:
 
             async with self._capacity(authorization.owner):
                 await self._listen(
-                    ctx, SubscriptionsListenRequestParams(notifications=notifications), authorization, ready
+                    ctx, SubscriptionsListenRequestParams(notifications=notifications), authorization, admit, ready
                 )
 
     async def legacy_resource(self, ctx: ServerRequestContext, uri: str, *, subscribe: bool) -> None:
@@ -416,6 +490,7 @@ class GatewaySubscriptions:
                     ctx,
                     SubscriptionFilter(resource_subscriptions=[uri]),
                     state.authorization,
+                    _enforce_rate_limit,
                     scope,
                 )
                 state.resources = {**state.resources, uri: scope}
@@ -428,10 +503,15 @@ class GatewaySubscriptions:
         ctx: ServerRequestContext,
         params: SubscriptionsListenRequestParams,
         authorize: Callable[[], Awaitable[OperationContext]],
+        admit: Callable[[OperationContext, MCPServer], Awaitable[None]],
         ready: Callable[[SubscriptionFilter], None] | None = None,
     ) -> SubscriptionsListenResult:
         context: Final = await authorize()
         targets: Final = await self._resolve_targets(context)
+        if any(
+            target.server.protocol_version == "2026-07-28" and target.server.transport != "http" for target in targets
+        ):
+            raise MCPError(code=-32602, message="Modern upstream subscriptions require HTTP")
         if not targets:
             raise HTTPException(status_code=403, detail="No authorized MCP subscription targets")
         if params.notifications.resource_subscriptions and len(targets) != 1:
@@ -449,7 +529,7 @@ class GatewaySubscriptions:
             return fresh
 
         async def relay(target: SubscriptionTarget, *, task_status: TaskStatus[SubscriptionFilter]) -> None:
-            await operations._enforce_mcp_server_rate_limit(context.user_api_key_auth, target.server)  # pyright: ignore[reportPrivateUsage]  # same admission policy as other gateway operations
+            await admit(context, target.server)
 
             legacy: Final = LegacyNotifications()
 
@@ -515,7 +595,7 @@ class GatewaySubscriptions:
             finally:
                 self._upstream_slots.release()
 
-        async with anyio.create_task_group() as group:
+        async with _listener_admission(targets), anyio.create_task_group() as group:
             honored: Final = tuple(
                 [SubscriptionFilter.model_validate(await group.start(relay, target)) for target in targets]
             )

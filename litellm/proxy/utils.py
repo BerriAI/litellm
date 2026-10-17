@@ -65,6 +65,7 @@ from litellm.constants import (
     SPEND_LOG_WRITE_BATCH_MAX_BYTES,
     SPEND_LOG_WRITE_BATCH_MAX_ROWS,
 )
+from litellm.cost_calculator import BaseTokenUsageProcessor
 from litellm.litellm_core_utils.bug_report import (
     bug_report_notice,
     should_report_bug,
@@ -231,7 +232,7 @@ from litellm.proxy.hooks.cache_control_check import (  # noqa: F401, RUF100  # l
 )
 from litellm.proxy.hooks.parallel_request_limiter import (  # noqa: F401, RUF100  # legacy module exports
     PROXY_MaxParallelRequestsHandler,
-    _PROXY_MaxParallelRequestsHandler,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _PROXY_MaxParallelRequestsHandler,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
 )
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (  # noqa: F401, RUF100  # legacy module exports
     PROXY_MaxParallelRequestsHandler_v3,
@@ -990,6 +991,24 @@ _INPUT_ESTIMABLE_CALL_TYPES: Final = frozenset(
 )
 
 
+_FAILED_ATTEMPTS_USAGE: Final = TypeAdapter(tuple[tuple[Usage, float], ...])
+
+
+def _billed_across_attempts(
+    failed_attempts: tuple[tuple[Usage, float], ...], recovered_usage: object, recovered_cost: object
+) -> tuple[Usage, float]:
+    this_attempt: Final = (
+        ((recovered_usage, float(recovered_cost) if isinstance(recovered_cost, (int, float)) else 0.0),)
+        if isinstance(recovered_usage, Usage)
+        else ()
+    )
+    attempts: Final = (*failed_attempts, *this_attempt)
+    return (
+        BaseTokenUsageProcessor.combine_usage_objects([usage for usage, _ in attempts]),
+        sum(response_cost for _, response_cost in attempts),
+    )
+
+
 def _failure_usage_to_lift(
     model_call_details: Mapping[str, object],
     request_body: Mapping[str, object],
@@ -1004,6 +1023,9 @@ def _failure_usage_to_lift(
     chat-completions provider) without filling optional_params. Returns the
     (combined_usage_object, response_cost) pair to lift, or None."""
     recovered_usage: Final = model_call_details.get("combined_usage_object")
+    failed_attempts: Final = _FAILED_ATTEMPTS_USAGE.validate_python(model_call_details.get("failed_attempts_usage", ()))
+    if failed_attempts:
+        return _billed_across_attempts(failed_attempts, recovered_usage, model_call_details.get("response_cost"))
     if recovered_usage is not None:
         return recovered_usage, model_call_details.get("response_cost")
     if not dispatched or model_call_details.get(LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL):
@@ -3250,14 +3272,14 @@ class ProxyLogging:
                 alerting_metadata=alerting_metadata,
                 **extra_kwargs,
             )
-        for client in self.alerting:
-            if client == "sentry":
-                if litellm.utils.sentry_sdk_instance is not None:
-                    litellm.utils.sentry_sdk_instance.capture_message(formatted_message)
-                else:
-                    raise Exception("Missing SENTRY_DSN from environment")
+        if "sentry" in self.alerting:
+            litellm.litellm_core_utils.litellm_logging.initialize_sentry()
+            sentry: Final = litellm.litellm_core_utils.litellm_logging.sentry_sdk_instance
+            if sentry is None:
+                raise Exception("Missing SENTRY_DSN from environment")
+            sentry.capture_message(formatted_message)
 
-    async def failure_handler(self, original_exception, duration: float, call_type: str, traceback_str=""):
+    async def failure_handler(self, original_exception: Exception, duration: float, call_type: str, traceback_str=""):
         """
         Log failed db read/writes
 
@@ -3298,8 +3320,9 @@ class ProxyLogging:
                 call_type=call_type,
             )
 
-        if litellm.utils.capture_exception:
-            litellm.utils.capture_exception(error=original_exception)
+        capture: Final = litellm.litellm_core_utils.litellm_logging.capture_exception
+        if capture is not None:
+            capture(error=original_exception)
 
     async def post_call_failure_hook(
         self,
@@ -3470,6 +3493,7 @@ class ProxyLogging:
         Is triggered when self._is_proxy_only_error() returns True
         """
         litellm_logging_obj: Logging | None = request_data.get("litellm_logging_obj", None)
+        set_up_by_request: Final = litellm_logging_obj is not None
         if litellm_logging_obj is None:
             from litellm._uuid import uuid
 
@@ -3534,7 +3558,9 @@ class ProxyLogging:
                 input = request_data["input"]
                 litellm_logging_obj.model_call_details["input"] = input
                 body_shape_call_type = CallTypes.aembedding.value
-            resolved_call_type: Final = _call_type_for_route(route) or body_shape_call_type
+            resolved_call_type: Final = _call_type_for_route(route) or (
+                None if set_up_by_request else body_shape_call_type
+            )
             if resolved_call_type is not None and litellm_logging_obj.call_type != CallTypes.pass_through.value:
                 litellm_logging_obj.call_type = resolved_call_type
                 litellm_logging_obj.model_call_details["call_type"] = resolved_call_type
@@ -4409,6 +4435,14 @@ class ProxyLogging:
         await limiter.async_release_max_parallel_requests_on_disconnect(user_api_key_dict)
 
     _arelease_max_parallel_requests_on_disconnect = arelease_max_parallel_requests_on_disconnect
+
+    async def arelease_responses_websocket_slot(self, user_api_key_dict: UserAPIKeyAuth) -> None:
+        """Release the slot a Responses WebSocket took at admission. Only call this once that admission succeeded:
+        the legacy limiter keeps no record of its acquisitions and decrements unconditionally."""
+        limiter: Final = self.get_proxy_hook("parallel_request_limiter")
+        if not isinstance(limiter, (PROXY_MaxParallelRequestsHandler_v3, _PROXY_MaxParallelRequestsHandler)):
+            return
+        await limiter.async_release_max_parallel_requests_on_disconnect(user_api_key_dict)
 
     async def enforce_mcp_server_rate_limits(
         self,

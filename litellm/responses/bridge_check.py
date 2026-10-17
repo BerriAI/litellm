@@ -4,6 +4,7 @@ from urllib.parse import urlsplit
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.azure_ai.common_utils import (
     azure_ai_supports_native_responses,
     foundry_chat_rejects_function_tools_while_reasoning,
@@ -11,7 +12,8 @@ from litellm.llms.azure_ai.common_utils import (
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import OpenAIWebSearchOptions
-from litellm.utils import get_model_info_helper
+from litellm.types.utils import LlmProviders
+from litellm.utils import ProviderConfigManager, get_model_info_helper
 
 _OPENAI_DEFAULT_API_BASE: Final = "https://api.openai.com/v1"
 _OPENAI_API_HOST: Final = "api.openai.com"
@@ -34,6 +36,18 @@ def _resolve_openai_api_base(api_base: str | None) -> str:
         or get_secret_str("OPENAI_API_BASE")
         or _OPENAI_DEFAULT_API_BASE
     )
+
+
+def chat_target_accepts_reasoning_summary(model: str, custom_llm_provider: str | None) -> bool:
+    try:
+        local_model, provider, _, _ = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
+        chat_config: Final = ProviderConfigManager.get_provider_chat_config(
+            model=local_model, provider=LlmProviders(provider)
+        )
+    except Exception as e:  # noqa: BLE001  # a capability probe must never fail the request it probes for
+        verbose_logger.debug("chat target reasoning summary check failed: %s", e)
+        return False
+    return chat_config is not None and chat_config.accepts_reasoning_summary_in_reasoning_effort
 
 
 def responses_api_bridge_check(

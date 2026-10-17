@@ -17,7 +17,12 @@ from litellm.llms.anthropic.chat.transformation import (
     DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING,
     AnthropicConfig,
 )
-from litellm.llms.anthropic.common_utils import AnthropicModelInfo, validated_object_mapping
+from litellm.llms.anthropic.common_utils import (
+    OBJECT_MAPPING_ADAPTER,
+    AnthropicModelInfo,
+    carried_thinking_keys,
+    validated_object_mapping,
+)
 from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
@@ -84,6 +89,9 @@ class AmazonAnthropicClaudeMessagesConfig(
     @property
     def beta_headers_provider(self) -> str:
         return self.custom_llm_provider or "bedrock"
+
+    def drops_dangerous_tool_use_beta_without_safeguards(self) -> bool:
+        return True
 
     BEDROCK_INVOKE_ALLOWED_TOP_LEVEL_FIELDS = frozenset(BedrockInvokeAnthropicMessagesRequest.__annotations__.keys())
 
@@ -250,6 +258,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         self,
         anthropic_messages_request: dict,
         model: str,
+        drop_params: bool,
     ) -> bool:
         """
         Bedrock rejects ``clear_thinking_20251015`` context-management edits unless
@@ -286,7 +295,9 @@ class AmazonAnthropicClaudeMessagesConfig(
                 return False
             if t == "enabled":
                 budget_tokens: Final = self._resolve_clear_thinking_budget_tokens(thinking.get("budget_tokens"))
-                self._inject_adaptive_thinking_for_clear_thinking(anthropic_messages_request, budget_tokens, model)
+                self._inject_adaptive_thinking_for_clear_thinking(
+                    anthropic_messages_request, budget_tokens, model, drop_params
+                )
                 return True
             verbose_logger.debug(
                 "Bedrock clear_thinking_20251015: replacing thinking=%s with minimal thinking config",
@@ -305,7 +316,7 @@ class AmazonAnthropicClaudeMessagesConfig(
             return False
 
         if is_adaptive_thinking_model:
-            self._inject_adaptive_thinking_for_clear_thinking(anthropic_messages_request, budget, model)
+            self._inject_adaptive_thinking_for_clear_thinking(anthropic_messages_request, budget, model, drop_params)
             return True
 
         anthropic_messages_request["thinking"] = {
@@ -338,7 +349,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         return "low"
 
     def _inject_adaptive_thinking_for_clear_thinking(
-        self, anthropic_messages_request: dict, budget_tokens: int, model: str
+        self, anthropic_messages_request: dict, budget_tokens: int, model: str, drop_params: bool
     ) -> None:
         """Adaptive-thinking models (Opus 4.7/4.8, Fable 5) reject
         ``thinking.type=enabled`` on Bedrock. Use ``thinking.type=adaptive`` plus
@@ -349,7 +360,9 @@ class AmazonAnthropicClaudeMessagesConfig(
             output_config = {}
         output_config.setdefault("effort", self._effort_from_thinking_budget(budget_tokens))
         thinking: Final = validated_object_mapping(anthropic_messages_request.get("thinking"))
-        carried: Final = {key: value for key, value in (thinking or {}).items() if key not in ("type", "budget_tokens")}
+        carried: Final = carried_thinking_keys(
+            thinking or {}, rebuilt_keys=frozenset(("type", "budget_tokens")), drop_params=drop_params
+        )
         anthropic_messages_request["output_config"] = output_config
         anthropic_messages_request["thinking"] = {**carried, "type": "adaptive"}
         verbose_logger.debug(
@@ -542,8 +555,17 @@ class AmazonAnthropicClaudeMessagesConfig(
         if anthropic_model_info.is_eager_input_streaming_used(tools):
             beta_set.add(ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER)
 
+        dangerous_tool_use_beta: Final = ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value
         if anthropic_messages_optional_request_params.get("safeguards") is not None:
-            beta_set.add(ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value)
+            beta_set.add(dangerous_tool_use_beta)
+        elif dangerous_tool_use_beta in beta_set and self.drops_dangerous_tool_use_beta_without_safeguards():
+            beta_set.discard(dangerous_tool_use_beta)
+            verbose_logger.debug(
+                "Bedrock Invoke: dropping %s from client headers because the request has no safeguards. Bedrock "
+                "answers it with 'invalid beta flag' next to structured outputs before Opus 4.7, and on Sonnet 4.5, "
+                "Opus 4.5, and Opus 4.6 even alone.",
+                dangerous_tool_use_beta,
+            )
 
         self._filter_context_management_for_bedrock_invoke(
             anthropic_messages_request=anthropic_messages_request,
@@ -664,6 +686,7 @@ class AmazonAnthropicClaudeMessagesConfig(
     ) -> dict:
         requested_thinking: Final = anthropic_messages_optional_request_params.get("thinking")
         requested_display_updates: Final = AnthropicModelInfo().is_thinking_display_updates_used(requested_thinking)
+        drop_params: Final = getattr(litellm_params, "drop_params", None) is True
         self._clamp_adaptive_reasoning_effort_for_bedrock(
             model=model,
             optional_params=anthropic_messages_optional_request_params,
@@ -682,7 +705,14 @@ class AmazonAnthropicClaudeMessagesConfig(
             and isinstance(translated_thinking, dict)
             and translated_thinking.get("type") == "adaptive"
         ):
-            anthropic_messages_request["thinking"] = {**translated_thinking, "display": "updates"}
+            anthropic_messages_request["thinking"] = {
+                **carried_thinking_keys(
+                    OBJECT_MAPPING_ADAPTER.validate_python(translated_thinking),
+                    rebuilt_keys=frozenset(("display",)),
+                    drop_params=drop_params,
+                ),
+                "display": "updates",
+            }
         self._normalize_system_role_messages(anthropic_messages_request, model=model)
         #########################################################
         ############## BEDROCK Invoke SPECIFIC TRANSFORMATION ###
@@ -705,6 +735,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         injected_thinking_for_clear_thinking: Final = self._ensure_thinking_for_clear_thinking_context_management(
             anthropic_messages_request=anthropic_messages_request,
             model=model,
+            drop_params=drop_params,
         )
 
         # 4. Remove `ttl` field from cache_control in messages (Bedrock doesn't support it for older models)

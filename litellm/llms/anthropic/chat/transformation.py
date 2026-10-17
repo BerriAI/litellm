@@ -1878,7 +1878,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 else:
                     optional_params["thinking"] = value
                     AnthropicModelInfo.translate_legacy_thinking_for_adaptive_model(
-                        model=model, optional_params=optional_params, custom_llm_provider=self._resolved_provider
+                        model=model,
+                        optional_params=optional_params,
+                        custom_llm_provider=self._resolved_provider,
+                        drop_params=drop_params,
                     )
             elif param == "reasoning_effort":
                 # Accept both string ("low") and dict ({"effort": "low",

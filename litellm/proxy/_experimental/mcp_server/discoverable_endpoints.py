@@ -56,6 +56,7 @@ from litellm.proxy._experimental.mcp_server.faults import (
     render_token_fault,
 )
 from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import (
+    JWT_BEARER_GRANT_TYPE,
     VendorCredentialState,
     aggregate_authorize,
     aggregate_token,
@@ -71,6 +72,11 @@ from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import (
     revoke_refresh_token,
     supported_grant_types,
 )
+from litellm.proxy._experimental.mcp_server.id_jag_grant import (
+    basic_client_id,
+    jwt_bearer_available,
+    redeem_id_jag_assertion,
+)
 from litellm.proxy._experimental.mcp_server.idp_token_exchange import (
     exchange_idp_subject_token,
     token_exchange_available,
@@ -83,6 +89,7 @@ from litellm.proxy._experimental.mcp_server.oauth_identity_binding import (
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     CIMD_METADATA_PATH,
     TOKEN_NO_CACHE_HEADERS,
+    build_upstream_authorize_url,
     build_upstream_oauth2_token_request,
     configured_proxy_base_url,
     get_cimd_client_id,
@@ -918,9 +925,9 @@ def _redirect_to_upstream_authorize(
         **({"scope": scope_value} if scope_value else {}),
         **({"resource": upstream_resource} if upstream_resource else {}),
     }
-    parsed_auth_url: Final = urlparse(mcp_server.effective_authorization_url or "")
-    merged_params: Final = {**dict(parse_qsl(parsed_auth_url.query)), **passthrough_params}
-    return RedirectResponse(urlunparse(parsed_auth_url._replace(query=urlencode(merged_params))))
+    return RedirectResponse(
+        build_upstream_authorize_url(mcp_server.effective_authorization_url or "", passthrough_params)
+    )
 
 
 def _bridge_access_denied_redirect(redirect_uri: str, state: str, mcp_server: MCPServer) -> RedirectResponse:
@@ -1151,11 +1158,9 @@ async def authorize_with_server(
     if upstream_resource:
         params["resource"] = upstream_resource
 
-    parsed_auth_url: Final = urlparse(resolved_server.effective_authorization_url)
-    existing_params: Final = dict(parse_qsl(parsed_auth_url.query))
-    existing_params.update(params)
-    final_url: Final = urlunparse(parsed_auth_url._replace(query=urlencode(existing_params)))
-    response: Final = RedirectResponse(final_url)
+    response: Final = RedirectResponse(
+        build_upstream_authorize_url(resolved_server.effective_authorization_url, params)
+    )
     _set_oauth_state_cookie(response, request, relay_state, encoded_state)
     return response
 
@@ -2397,7 +2402,7 @@ async def token_endpoint(
     grant_type: str = Form(...),
     code: str = Form(None),
     redirect_uri: str = Form(None),
-    client_id: str = Form(...),
+    client_id: str | None = Form(None),
     client_secret: str | None = Form(None),
     code_verifier: str = Form(None),
     refresh_token: str | None = Form(None),
@@ -2406,6 +2411,7 @@ async def token_endpoint(
     subject_token: str | None = Form(None),
     subject_token_type: str | None = Form(None),
     requested_token_type: str | None = Form(None),
+    assertion: str | None = Form(None),
     mcp_server_name: str | None = None,
 ):
     """
@@ -2417,7 +2423,14 @@ async def token_endpoint(
     3. Return the token
     4. Return a virtual key in this response
     """
-    if mcp_server_name is None and is_gateway_dcr_client_id(client_id):
+    presented_client_id: Final = client_id or basic_client_id(request.headers.get("authorization"))
+    if presented_client_id is None:
+        raise HTTPException(
+            status_code=400, detail={"error": "invalid_request", "error_description": "client_id is required"}
+        )
+    if mcp_server_name is None and (
+        is_gateway_dcr_client_id(presented_client_id) or grant_type == JWT_BEARER_GRANT_TYPE
+    ):
         from litellm.proxy.proxy_server import (  # noqa: PLC0415  # circular import at module load
             master_key,
             user_api_key_cache,
@@ -2428,7 +2441,7 @@ async def token_endpoint(
             grant_type=grant_type,
             code=code,
             redirect_uri=redirect_uri,
-            client_id=client_id,
+            client_id=presented_client_id,
             code_verifier=code_verifier,
             refresh_token=refresh_token,
             master_key=master_key,
@@ -2440,9 +2453,12 @@ async def token_endpoint(
             subject_token_type=subject_token_type,
             requested_token_type=requested_token_type,
             exchange_subject_token=exchange_idp_subject_token,
+            assertion=assertion,
+            client_secret=client_secret,
+            redeem_assertion=redeem_id_jag_assertion,
         )
 
-    lookup_name: Final = mcp_server_name or client_id
+    lookup_name: Final = mcp_server_name or presented_client_id
     client_ip: Final = IPAddressUtils.get_mcp_client_ip(request)
     mcp_server = _resolve_mcp_server_by_name_or_id(lookup_name, client_ip)
     if mcp_server is None and mcp_server_name is None:
@@ -2455,7 +2471,7 @@ async def token_endpoint(
         grant_type=grant_type,
         code=code,
         redirect_uri=redirect_uri,
-        client_id=client_id,
+        client_id=presented_client_id,
         client_secret=client_secret,
         code_verifier=code_verifier,
         refresh_token=refresh_token,
@@ -2569,7 +2585,8 @@ async def native_client_auth_discovery(request: Request) -> JSONResponse:
     """The versioned contract a native client (``lite login --pkce``, or a CLI in any other
     language) reads to sign a user in through the browser and obtain a proxy credential."""
     return JSONResponse(
-        native_client_auth_contract(request, token_exchange_available()), headers=TOKEN_NO_CACHE_HEADERS
+        native_client_auth_contract(request, token_exchange_available(), jwt_bearer_available()),
+        headers=TOKEN_NO_CACHE_HEADERS,
     )
 
 
@@ -3113,12 +3130,30 @@ def _build_aggregate_protected_resource_response(request: Request) -> dict:
     return {
         "authorization_servers": [f"{request_base_url}/mcp"],
         "resource": f"{request_base_url}/mcp",
-        "scopes_supported": [],
+        "scopes_supported": _aggregate_header_scopes(request),
     }
 
 
+def _aggregate_header_scopes(request: Request) -> tuple[str, ...]:
+    """Gateway server-scope tokens for the ``x-mcp-servers`` header a client sends with its
+    discovery request, so a client that skips the 401 challenge (Claude Code re-authenticating
+    a server it already knows needs auth) still carries the selection to ``/authorize`` through
+    ``scopes_supported``. Empty when the header is absent or any entry does not resolve."""
+    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (  # noqa: PLC0415  # proxy import cycle
+        MCPRequestHandler,
+        gateway_dcr_challenge_scope,
+    )
+
+    header: Final = request.headers.get(MCPRequestHandler.LITELLM_MCP_SERVERS_HEADER_NAME)
+    if not header:
+        return ()
+    names: Final = tuple(dict.fromkeys(entry.strip() for entry in header.split(",") if entry.strip()))
+    scope: Final = gateway_dcr_challenge_scope("/mcp", names, IPAddressUtils.get_mcp_client_ip(request))
+    return tuple(scope.split()) if scope else ()
+
+
 def _build_aggregate_authorization_server_response(
-    request: Request, token_exchange_available: bool
+    request: Request, token_exchange_available: bool, jwt_bearer_available: bool = False
 ) -> dict[str, object]:
     """RFC 8414 metadata for the gateway as the aggregate authorization server.
 
@@ -3138,9 +3173,13 @@ def _build_aggregate_authorization_server_response(
         "registration_endpoint": f"{request_base_url}/register",
         "response_types_supported": ["code"],
         "scopes_supported": [],
-        "grant_types_supported": supported_grant_types(token_exchange_available),
+        "grant_types_supported": supported_grant_types(token_exchange_available, jwt_bearer_available),
         "code_challenge_methods_supported": ["S256"],
-        "token_endpoint_auth_methods_supported": ["none", "client_secret_post"],
+        "token_endpoint_auth_methods_supported": (
+            ["none", "client_secret_post", "client_secret_basic"]
+            if jwt_bearer_available
+            else ["none", "client_secret_post"]
+        ),
     }
 
 
@@ -3176,7 +3215,7 @@ async def oauth_authorization_server_aggregate(request: Request):
     per-server row win here instead would serve an issuer of {base} against a resource that
     advertised {base}/mcp, which fails the RFC 8414 issuer check and breaks the front door.
     """
-    return _build_aggregate_authorization_server_response(request, token_exchange_available())
+    return _build_aggregate_authorization_server_response(request, token_exchange_available(), jwt_bearer_available())
 
 
 # Standard MCP pattern: /.well-known/oauth-protected-resource/mcp/{server_name}
@@ -3256,6 +3295,10 @@ def _build_oauth_authorization_server_response(
         if explicitly_named
         else request_base_url
     )
+    # With no upstream resolved the document is the gateway's own: its issuer is the bare origin
+    # and its /token serves every grant the gateway does, including the ID-JAG jwt-bearer grant.
+    gateway_owned: Final = mcp_server_name is None and issuer_path is None
+    jwt_bearer: Final = gateway_owned and jwt_bearer_available()
 
     return {
         "issuer": issuer,
@@ -3263,9 +3306,15 @@ def _build_oauth_authorization_server_response(
         "token_endpoint": token_endpoint,
         "response_types_supported": ["code"],
         "scopes_supported": (mcp_server.scopes if mcp_server and mcp_server.scopes else []),
-        "grant_types_supported": ["authorization_code", "refresh_token"],
+        "grant_types_supported": (
+            list(supported_grant_types(token_exchange_available(), jwt_bearer))
+            if gateway_owned
+            else ["authorization_code", "refresh_token"]
+        ),
         "code_challenge_methods_supported": ["S256"],
-        "token_endpoint_auth_methods_supported": ["client_secret_post"],
+        "token_endpoint_auth_methods_supported": (
+            ["none", "client_secret_post", "client_secret_basic"] if jwt_bearer else ["client_secret_post"]
+        ),
         # Claude expects a registration endpoint, even if we just fake it
         "registration_endpoint": (
             f"{request_base_url}/{mcp_server_name}/register" if mcp_server_name else f"{request_base_url}/register"

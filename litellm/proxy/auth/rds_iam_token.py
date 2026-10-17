@@ -24,6 +24,7 @@ def init_rds_client(
     aws_role_name: str | None = None,
     aws_web_identity_token: str | None = None,
     timeout: float | httpx.Timeout | None = None,
+    aws_session_token: str | None = None,
 ):
     from litellm.secret_managers.main import get_secret
 
@@ -108,6 +109,7 @@ def init_rds_client(
             "sts",
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key,
+            aws_session_token=aws_session_token,
         )
 
         sts_response = sts_client.assume_role(RoleArn=aws_role_name, RoleSessionName=aws_session_name)
@@ -128,6 +130,7 @@ def init_rds_client(
             service_name="rds",
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key,
+            aws_session_token=aws_session_token,
             region_name=region_name,
             config=config,
         )
@@ -235,6 +238,7 @@ def generate_iam_auth_token(
             aws_region_name=os.getenv("AWS_REGION_NAME"),
             aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
             aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
+            aws_session_token=os.getenv("AWS_SESSION_TOKEN"),
             aws_session_name=os.getenv("AWS_SESSION_NAME"),
             aws_profile_name=os.getenv("AWS_PROFILE_NAME"),
             aws_role_name=os.getenv("AWS_ROLE_NAME", os.getenv("AWS_ROLE_ARN")),

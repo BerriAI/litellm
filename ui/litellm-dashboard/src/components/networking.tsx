@@ -1465,7 +1465,7 @@ export const teamSpendByUserCall = async (
   accessToken: string,
   startTime: Date,
   endTime: Date,
-  teamIds: string[],
+  teamIds: readonly string[],
 ): Promise<TeamUserSpendResponse> =>
   apiClient.get<TeamUserSpendResponse>(`/team/spend/by_user`, {
     accessToken,
@@ -4840,12 +4840,13 @@ export const fetchDiscoverableMCPServers = async (accessToken: string) => {
 };
 
 export interface ConnectFlowStatus {
-  state: "unscoped" | "interactive" | "m2m" | "stale";
+  state: "unscoped" | "interactive" | "m2m" | "multi" | "stale";
   client_origin: string;
   server_id: string | null;
   server_name: string | null;
   connected: boolean | null;
   requested_scopes?: string[];
+  servers: { server_id: string; server_name: string; connected: boolean }[] | null;
 }
 
 /**

@@ -7992,7 +7992,7 @@ export interface paths {
          * Cancel Interaction
          * @description Cancel an interaction by ID.
          *
-         *     Per OpenAPI spec: POST /{api_version}/interactions/{interaction_id}:cancel
+         *     Per OpenAPI spec: POST /{api_version}/interactions/{interaction_id}/cancel
          */
         post: operations["cancel_interaction_interactions__interaction_id__cancel_post"];
         delete?: never;
@@ -23422,7 +23422,7 @@ export interface paths {
          * Cancel Interaction
          * @description Cancel an interaction by ID.
          *
-         *     Per OpenAPI spec: POST /{api_version}/interactions/{interaction_id}:cancel
+         *     Per OpenAPI spec: POST /{api_version}/interactions/{interaction_id}/cancel
          */
         post: operations["cancel_interaction_v1beta_interactions__interaction_id__cancel_post"];
         delete?: never;
@@ -26992,6 +26992,12 @@ export interface components {
              */
             fail_on_error: boolean | null;
             /**
+             * Forward Messages As Sent
+             * @description Only honored by guardrail='generic_guardrail_api'. When True, structured_messages reaches the guardrail exactly as the client sent it, so rows can carry provider-native content blocks and keys the OpenAI chat types do not declare. Default False sends OpenAI-format chat rows with undeclared keys removed.
+             * @default false
+             */
+            forward_messages_as_sent: boolean | null;
+            /**
              * Guard Name
              * @description Name of the guardrail in guardrails.ai
              */
@@ -27480,8 +27486,10 @@ export interface components {
         };
         /** Body_token_endpoint__mcp_server_name__token_post */
         Body_token_endpoint__mcp_server_name__token_post: {
+            /** Assertion */
+            assertion?: string | null;
             /** Client Id */
-            client_id: string;
+            client_id?: string | null;
             /** Client Secret */
             client_secret?: string | null;
             /** Code */
@@ -27507,8 +27515,10 @@ export interface components {
         };
         /** Body_token_endpoint_token_post */
         Body_token_endpoint_token_post: {
+            /** Assertion */
+            assertion?: string | null;
             /** Client Id */
-            client_id: string;
+            client_id?: string | null;
             /** Client Secret */
             client_secret?: string | null;
             /** Code */
@@ -29650,6 +29660,12 @@ export interface components {
              */
             admission_queue_timeout_seconds: number;
             /**
+             * Agent Access Default Deny
+             * @description When true, a key with no agent grants on itself or its team can reach no agents instead of all agents. Proxy admins are exempt.
+             * @default false
+             */
+            agent_access_default_deny: boolean;
+            /**
              * Alert To Webhook Url
              * @description Mapping of alert type to webhook url. e.g. `alert_to_webhook_url: {'budget_alerts': 'https://nothooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX'}`
              */
@@ -30051,6 +30067,12 @@ export interface components {
              * @description When true, a gateway-managed OAuth2 MCP server whose authorization server advertises Client ID Metadata Document support identifies itself with the gateway's public metadata document URL even when that authorization server also offers dynamic client registration. Requires a public HTTPS PROXY_BASE_URL the authorization server can fetch. Default false: dynamic client registration is used whenever the authorization server offers it, and the metadata document only when it does not.
              */
             mcp_prefer_client_id_metadata_document?: boolean | null;
+            /**
+             * Mcp Require Explicit Server Scope
+             * @description Require aggregate MCP requests to include x-mcp-servers unless a toolset or gateway OAuth session already scopes the server. Off by default.
+             * @default false
+             */
+            mcp_require_explicit_server_scope: boolean;
             /**
              * Mcp Required Fields
              * @description List of MCP server fields that must be filled in for a submission to pass standards checks (e.g. ['description', 'source_url', 'alias']).
@@ -35303,6 +35325,8 @@ export interface components {
             regional_processing_uplift_multiplier_eu?: number | null;
             /** Regional Processing Uplift Multiplier Us */
             regional_processing_uplift_multiplier_us?: number | null;
+            /** Responses Api Version */
+            responses_api_version?: string | null;
             /** Rpm */
             rpm?: number | null;
             /** S3 Access Key Id */
@@ -36456,6 +36480,12 @@ export interface components {
              */
             file_guardrail_timeout?: number | null;
             /**
+             * Forward Messages As Sent
+             * @description Only honored by guardrail='generic_guardrail_api'. When True, structured_messages reaches the guardrail exactly as the client sent it, so rows can carry provider-native content blocks and keys the OpenAI chat types do not declare. Default False sends OpenAI-format chat rows with undeclared keys removed.
+             * @default false
+             */
+            forward_messages_as_sent: boolean | null;
+            /**
              * Gateway Name
              * @description noma_v2 only: name of this gateway, used as the gateway_host label on Noma scans
              */
@@ -37276,6 +37306,8 @@ export interface components {
             id_jag_resource_client_secret?: string | null;
             /** Id Jag Resource Token Endpoint */
             id_jag_resource_token_endpoint?: string | null;
+            /** Id Jag Subject Source */
+            id_jag_subject_source?: string | null;
             /** Redirect Uris */
             redirect_uris?: string[] | null;
             /** Scopes */
@@ -49911,6 +49943,8 @@ export interface components {
             blocked?: boolean | null;
             /** Cache Creation Input Token Cost */
             cache_creation_input_token_cost?: number | null;
+            /** Cache Creation Input Token Cost Above 1Hr */
+            cache_creation_input_token_cost_above_1hr?: number | null;
             /** Cache Read Input Token Cost */
             cache_read_input_token_cost?: number | null;
             /** Cost Per Ptu Per Hour */
@@ -50518,6 +50552,8 @@ export interface components {
             regional_processing_uplift_multiplier_eu?: number | null;
             /** Regional Processing Uplift Multiplier Us */
             regional_processing_uplift_multiplier_us?: number | null;
+            /** Responses Api Version */
+            responses_api_version?: string | null;
             /** Rpm */
             rpm?: number | null;
             /** S3 Access Key Id */

@@ -74,6 +74,7 @@ from litellm.constants import (
 )
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 from litellm.experimental_mcp_client.client import (
+    SESSION_CLEANUP_TIMEOUT_MESSAGE,
     MCPClient,
     PersistentMCPSession,
     UpstreamSessionClosedError,
@@ -195,6 +196,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
     normalize_server_name,
     openapi_tool_name,
     parse_admin_env_vars,
+    server_answers_to,
     strip_known_server_prefix,
     validate_mcp_server_name,
 )
@@ -453,6 +455,7 @@ class MCPServerConfig(TypedDict, total=False):
     upstream_token_header: ReadOnly[str]
     id_jag_resource_token_endpoint: str
     id_jag_resource: str
+    id_jag_subject_source: ReadOnly[str]
     id_jag_resource_client_id: ReadOnly[str]
     id_jag_resource_client_secret: ReadOnly[str]
     client_private_key: str
@@ -1843,6 +1846,13 @@ def _mcp_discovery_cache_ttl() -> float:
     return ttl
 
 
+def _listing_task_was_cancelled(error: asyncio.CancelledError) -> bool:
+    """The MCP client raises its own CancelledError(SESSION_CLEANUP_TIMEOUT_MESSAGE) when a session's
+    teardown outlives its budget while the listing task keeps running. That one is the server's fault,
+    anything else is a real cancellation."""
+    return error.args != (SESSION_CLEANUP_TIMEOUT_MESSAGE,)
+
+
 class MCPServerManager:
     _STDIO_ENV_TEMPLATE_PATTERN = re.compile(r"^\$\{(X-[^}]+)\}$")
 
@@ -2780,6 +2790,7 @@ class MCPServerManager:
                 # ID-JAG fields
                 id_jag_resource_token_endpoint=server_config.get("id_jag_resource_token_endpoint", None),
                 id_jag_resource=server_config.get("id_jag_resource", None),
+                id_jag_subject_source=server_config.get("id_jag_subject_source", None),
                 id_jag_resource_client_id=server_config.get("id_jag_resource_client_id", None),
                 id_jag_resource_client_secret=server_config.get("id_jag_resource_client_secret", None),
                 client_private_key=server_config.get("client_private_key", None),
@@ -3371,6 +3382,7 @@ class MCPServerManager:
                 credentials_dict.get("id_jag_resource_token_endpoint") if credentials_dict else None
             ),
             id_jag_resource=(credentials_dict.get("id_jag_resource") if credentials_dict else None),
+            id_jag_subject_source=(credentials_dict.get("id_jag_subject_source") if credentials_dict else None),
             id_jag_resource_client_id=(credentials_dict.get("id_jag_resource_client_id") if credentials_dict else None),
             id_jag_resource_client_secret=self._decrypt_credential_field(
                 credentials_dict.get("id_jag_resource_client_secret") if credentials_dict else None,
@@ -3608,8 +3620,8 @@ class MCPServerManager:
         return open_ids
 
     @staticmethod
-    def _admitted_session_resource_scope(user_api_key_auth: UserAPIKeyAuth | None) -> str | None:
-        """The single server an admitted session subject's bearer was scoped to at authorize
+    def _admitted_session_resource_scope(user_api_key_auth: UserAPIKeyAuth | None) -> frozenset[str] | None:
+        """The servers an admitted session subject's bearer was scoped to at authorize
         time (RFC 8707 resource), or None for every other principal shape and for unscoped
         sessions. Read at every return path of :meth:`get_allowed_mcp_servers`, including
         the exception fallback, and applied AFTER every union (grants, operator-open,
@@ -3617,7 +3629,8 @@ class MCPServerManager:
         fault therefore never widens a scoped bearer to the allow-all set."""
         if user_api_key_auth is None or not is_mcp_admitted_user_subject(user_api_key_auth):
             return None
-        return user_api_key_auth.mcp_session_resource_server_id
+        resource_server_ids: Final = user_api_key_auth.mcp_session_resource_server_ids
+        return None if resource_server_ids is None else frozenset(resource_server_ids)
 
     async def get_allowed_mcp_servers(
         self,
@@ -3732,7 +3745,7 @@ class MCPServerManager:
             if len(combined_servers) == 0:
                 verbose_logger.debug("No allowed MCP Servers found for user api key auth.")
             scope = MCPServerManager._admitted_session_resource_scope(user_api_key_auth)
-            return [server_id for server_id in combined_servers if scope is None or server_id == scope]
+            return [server_id for server_id in combined_servers if scope is None or server_id in scope]
         except Exception:  # noqa: BLE001
             verbose_logger.exception(
                 "Failed to get allowed MCP servers; team-level object_permission "
@@ -3742,7 +3755,7 @@ class MCPServerManager:
             return [
                 server_id
                 for server_id in dict.fromkeys(allow_all_server_ids + submitted_server_ids)
-                if not explicit_grants_only and (scope is None or server_id == scope)
+                if not explicit_grants_only and (scope is None or server_id in scope)
             ]
 
     @with_service_target(MCP_SERVERS_TARGET)
@@ -5591,7 +5604,10 @@ class MCPServerManager:
             verbose_logger.warning("Timeout while listing tools from %s", server_name)
             raise MCPServerListError(ServerListFault(tag="timeout"), server_name) from e
         except asyncio.CancelledError as e:
-            verbose_logger.warning("Task cancelled while listing tools from %s", server_name)
+            if _listing_task_was_cancelled(e):
+                verbose_logger.debug("Task cancelled while listing tools from %s", server_name)
+                raise
+            verbose_logger.warning("Listing tools from %s was abandoned by the client session: %s", server_name, e)
             raise MCPServerListError(ServerListFault(tag="internal"), server_name) from e
         except ConnectionError as e:
             verbose_logger.warning("Connection error while listing tools from %s: %s", server_name, e)
@@ -7317,6 +7333,19 @@ class MCPServerManager:
                     return None
                 return server
         return None
+
+    def get_mcp_server_by_identifier(self, identifier: str, client_ip: str | None = None) -> MCPServer | None:
+        server: Final = self.get_mcp_server_by_name(identifier, client_ip)
+        if server is not None:
+            return server
+        return next(
+            (
+                server
+                for server in self.get_filtered_registry(client_ip).values()
+                if server_answers_to(server, identifier)
+            ),
+            None,
+        )
 
     def get_filtered_registry(self, client_ip: str | None = None) -> Mapping[str, MCPServer]:
         """

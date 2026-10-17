@@ -32,7 +32,8 @@ from litellm.types.utils import (
 
 _V = TypeVar("_V")
 
-ROUTER_ONLY_CALL_KWARGS: Final = frozenset({"silent_model", "include_fallback_errors"})
+MID_STREAM_CONTINUATION_KWARG: Final = "_mid_stream_continuation"
+ROUTER_ONLY_CALL_KWARGS: Final = frozenset({"silent_model", "include_fallback_errors", MID_STREAM_CONTINUATION_KWARG})
 _OBJECT_MAPPING_ADAPTER: Final[TypeAdapter[Mapping[object, object]]] = TypeAdapter(Mapping[object, object])
 
 
@@ -326,6 +327,9 @@ def filter_team_based_models(
     ]
 
 
+_WEB_SEARCH_TOOL_TYPES: Final = frozenset({"web_search", "web_search_preview"})
+
+
 def _deployment_supports_web_search(deployment: dict) -> bool:
     """
     Check if a deployment supports web search.
@@ -360,14 +364,13 @@ def filter_web_search_deployments(
     if isinstance(healthy_deployments, dict):
         return healthy_deployments
 
-    is_web_search_request = False
-    tools: Final = request_kwargs.get("tools") or []
-    for tool in tools:
-        # These are the two websearch tools for OpenAI / Azure.
-        if tool.get("type") == "web_search" or tool.get("type") == "web_search_preview":
-            is_web_search_request = True
-            break
-
+    tools: Final[object] = request_kwargs.get("tools")
+    is_web_search_request: Final = isinstance(tools, (list, tuple)) and any(
+        isinstance(tool, dict)
+        and isinstance(tool_type := tool.get("type"), str)
+        and tool_type in _WEB_SEARCH_TOOL_TYPES
+        for tool in tools
+    )
     if not is_web_search_request:
         return healthy_deployments
 

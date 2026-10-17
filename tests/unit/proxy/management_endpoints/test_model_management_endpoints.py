@@ -3795,6 +3795,43 @@ class TestUpdateDBModelClearPricing:
         assert "cache_creation_input_token_cost" not in params
         assert "cache_creation_input_token_cost" not in info
 
+    def test_clear_cache_write_1h_cost_removes_from_both_blobs(self):
+        """The dashboard clears the 1 hour cache-write tier with an explicit null, which only
+        takes effect for fields in SPECIAL_MODEL_INFO_PARAMS."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import (
+            Deployment,
+            LiteLLM_Params,
+            ModelInfo,
+            updateLiteLLMParams,
+        )
+
+        db_model = Deployment(
+            model_name="anthropic/*",
+            litellm_params=LiteLLM_Params(
+                model="anthropic/*",
+                cache_creation_input_token_cost=0.00000375,
+                cache_creation_input_token_cost_above_1hr=0.000006,
+            ),
+            model_info=ModelInfo(id="dep-cache-write-1h-0"),
+        )
+
+        result = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(
+                litellm_params=updateLiteLLMParams(cache_creation_input_token_cost_above_1hr=None)
+            ),
+        )
+
+        params = json.loads(result["litellm_params"])
+        info = json.loads(result["model_info"])
+        assert "cache_creation_input_token_cost_above_1hr" not in params
+        assert "cache_creation_input_token_cost_above_1hr" not in info
+        assert params["cache_creation_input_token_cost"] == 0.00000375
+        assert info["cache_creation_input_token_cost"] == 0.00000375
+
     def test_clear_cache_read_preserves_other_pricing(self):
         """Clearing cache_read must not touch input/output cost overrides."""
         from litellm.proxy.management_endpoints.model_management_endpoints import (

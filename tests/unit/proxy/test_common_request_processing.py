@@ -24,6 +24,7 @@ from litellm.litellm_core_utils.bug_report import (
     bug_report_notice,
     build_bug_report,
 )
+from litellm.types.router import RouterRateLimitError, RouterRateLimitErrorBasic
 from litellm.constants import (
     CLIENT_REQUESTED_MODEL_SCOPE_KEY,
     MAX_LITELLM_CALL_ID_LENGTH,
@@ -1722,6 +1723,29 @@ class TestProxyBaseLLMRequestProcessing:
         )
 
         assert "x-litellm-classifier-cost" not in headers
+
+    def test_get_custom_headers_drops_a_provider_header_http_cannot_carry(self):
+        user_api_key_dict: Final = MagicMock(spec=UserAPIKeyAuth)
+        user_api_key_dict.tpm_limit = None
+        user_api_key_dict.rpm_limit = None
+        user_api_key_dict.max_budget = None
+        user_api_key_dict.spend = 0
+
+        headers: Final = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=user_api_key_dict,
+            call_id="call-1",
+            **{
+                "llm_provider-x-amzn-requestid": "req-1",
+                "llm_provider-x-provider-region": "東京リージョン",
+                "llm_provider-x-provider-city": "Zürich",
+            },
+        )
+        response: Final = Response()
+        response.headers.update(headers)
+
+        assert response.headers["llm_provider-x-amzn-requestid"] == "req-1"
+        assert response.headers["llm_provider-x-provider-city"] == "Zürich"
+        assert "llm_provider-x-provider-region" not in response.headers
 
     def test_get_cost_breakdown_from_logging_obj_helper(self):
         """
@@ -4673,6 +4697,21 @@ class TestHandleLLMApiExceptionRetryAfter:
     async def test_handle_llm_api_exception_no_retry_after_for_plain_exception(self):
         proxy_exc = await self._invoke(ValueError("some other failure"))
         assert "retry-after" not in proxy_exc.headers
+
+    @pytest.mark.parametrize(
+        "exc",
+        (
+            RouterRateLimitError(model="gpt-4", cooldown_time=42.3, enable_pre_call_checks=False, cooldown_list=[]),
+            RouterRateLimitErrorBasic(model="gpt-4"),
+        ),
+        ids=("cooldown", "basic"),
+    )
+    async def test_handle_llm_api_exception_answers_a_cooldown_with_429_and_no_bug_notice(self, exc, caplog):
+        with caplog.at_level("ERROR"):
+            proxy_exc = await self._invoke(exc)
+
+        assert (proxy_exc.code, proxy_exc.type) == ("429", "rate_limit_error")
+        assert ISSUE_URL_BASE not in caplog.text
 
     async def test_handle_llm_api_exception_strips_bug_report_notice_from_client_message(self, caplog):
         report = build_bug_report(RuntimeError("boom"), surface="sdk")

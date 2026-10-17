@@ -4,11 +4,50 @@ from typing import Final
 
 import anyio.to_thread
 from starlette.datastructures import Headers, MutableHeaders
+from starlette.routing import get_route_path
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 MINIMUM_SIZE_BYTES: Final = 500
-OFF_LOOP_SIZE_BYTES: Final = 16 * 1024
 COMPRESS_LEVEL: Final = 6
+DASHBOARD_GZIP_PATHS: Final = frozenset(
+    {
+        "/user/daily/activity/aggregated",
+        "/user/daily/activity/aggregated/keys",
+        "/user/daily/activity/aggregated/search",
+        "/user/daily/activity/aggregated/model_top_keys",
+        "/user/daily/activity/aggregated/users",
+        "/user/daily/activity/aggregated/cache_leakage_keys",
+        "/team/daily/activity/aggregated",
+        "/team/daily/activity/aggregated/keys",
+        "/team/daily/activity/aggregated/search",
+        "/team/daily/activity/aggregated/model_top_keys",
+        "/organization/daily/activity/aggregated",
+        "/organization/daily/activity/aggregated/keys",
+        "/organization/daily/activity/aggregated/search",
+        "/organization/daily/activity/aggregated/model_top_keys",
+        "/tag/daily/activity/aggregated",
+        "/tag/daily/activity/aggregated/keys",
+        "/tag/daily/activity/aggregated/search",
+        "/tag/daily/activity/aggregated/model_top_keys",
+        "/customer/daily/activity/aggregated",
+        "/customer/daily/activity/aggregated/keys",
+        "/customer/daily/activity/aggregated/search",
+        "/customer/daily/activity/aggregated/model_top_keys",
+        "/end_user/daily/activity/aggregated",
+        "/end_user/daily/activity/aggregated/keys",
+        "/end_user/daily/activity/aggregated/search",
+        "/end_user/daily/activity/aggregated/model_top_keys",
+        "/agent/daily/activity/aggregated",
+        "/agent/daily/activity/aggregated/keys",
+        "/agent/daily/activity/aggregated/search",
+        "/agent/daily/activity/aggregated/model_top_keys",
+        "/gateway/daily/activity",
+        "/gateway/errors/activity",
+        "/team/spend/by_user",
+        "/global/spend/provider",
+        "/auto_router/benchmarks",
+    }
+)
 
 
 def _coding_weight(part: str) -> tuple[str, float]:
@@ -26,8 +65,6 @@ def accepts_gzip(accept_encoding: str) -> bool:
 
 
 async def _compress(body: bytes) -> bytes:
-    if len(body) < OFF_LOOP_SIZE_BYTES:
-        return gzip.compress(body, compresslevel=COMPRESS_LEVEL)
     return await anyio.to_thread.run_sync(gzip.compress, body, COMPRESS_LEVEL)
 
 
@@ -83,11 +120,12 @@ class _BufferedBodyGzipResponder:
 
 
 class GZipBufferedResponseMiddleware:
-    def __init__(self, app: ASGIApp) -> None:
+    def __init__(self, app: ASGIApp, paths: frozenset[str] = DASHBOARD_GZIP_PATHS) -> None:
         self.app = app
+        self.paths: Final = paths
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http":
+        if scope["type"] != "http" or scope["method"] != "GET" or get_route_path(scope) not in self.paths:
             await self.app(scope, receive, send)
             return
         gzip_accepted: Final = accepts_gzip(Headers(scope=scope).get("accept-encoding", ""))
