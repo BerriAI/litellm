@@ -49,7 +49,7 @@ def _ssh_session_without_a_display(environ: Mapping[str, str]) -> bool:
     return over_ssh and not any(environ.get(name) for name in _DISPLAY_VARIABLES)
 
 
-_OPEN_URL_IN_BROWSER: Final = "import sys, webbrowser; sys.exit(0 if webbrowser.open(sys.argv[1]) else 1)"
+_OPEN_URL_IN_BROWSER: Final = "import sys, webbrowser; sys.exit(0 if webbrowser.get().open(sys.argv[1]) else 1)"
 
 
 def open_browser_detached(url: str) -> PkceFailure | None:

@@ -12,7 +12,7 @@ from requests_mock import Mocker
 
 from litellm.proxy.client.cli import cli
 from litellm.proxy.client.cli.commands.auth import CliTokenData, get_stored_api_key, save_token
-from litellm.proxy.client.cli.commands.auto_sign_in import PkceBrowserSignIn
+from litellm.proxy.client.cli.commands.auto_sign_in import PkceBrowserSignIn, open_browser_detached
 from litellm.proxy.client.cli.commands.pkce_login import PkceCredential, PkceFailure, pkce_token_record
 from tests.unit.litellm_core_utils.fake_secret_vault import FakeSecretVault
 
@@ -249,6 +249,35 @@ def test_a_browser_the_user_picked_starts_the_sign_in_and_names_how_long_it_wait
         "A shell or agent that stops commands sooner should run this one with a longer timeout."
     ]
 
+
+
+def _browser_script(path: Path, ran: Path, exit_code: int) -> Path:
+    path.write_text(f'#!/bin/sh\n: > "{ran}"\nexit {exit_code}\n')
+    path.chmod(0o755)
+    return path
+
+
+@pytest.mark.parametrize(
+    ("picked_exit_code", "expected"),
+    [(0, None), (1, PkceFailure("the web browser did not open"))],
+    ids=["picked-browser-opens", "picked-browser-fails"],
+)
+def test_the_browser_launcher_opens_only_the_browser_lite_picked_and_never_a_hidden_console_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, picked_exit_code: int, expected: PkceFailure | None
+) -> None:
+    picked_ran: Final = tmp_path / "picked-browser-ran"
+    console_ran: Final = tmp_path / "console-browser-ran"
+    picked: Final = _browser_script(tmp_path / "picked-browser", picked_ran, picked_exit_code)
+    _browser_script(tmp_path / "www-browser", console_ran, 0)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    monkeypatch.setenv("TERM", "xterm")
+    monkeypatch.setenv("BROWSER", str(picked))
+    monkeypatch.delenv("DISPLAY", raising=False)
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+
+    assert open_browser_detached(f"{BASE_URL}/v1/cli/authorize?state=abc") == expected
+    assert picked_ran.exists()
+    assert not console_ran.exists()
 
 @pytest.mark.parametrize(
     ("command", "method", "path", "body"),
