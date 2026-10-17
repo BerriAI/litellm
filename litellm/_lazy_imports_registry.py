@@ -350,6 +350,7 @@ LLM_CONFIG_NAMES: Final = (
     "LambdaAIChatConfig",
     "InceptionChatConfig",
     "HyperbolicChatConfig",
+    "WebwrightChatConfig",
     "VercelAIGatewayConfig",
     "EdenAIChatConfig",
     "EdenAIResponsesAPIConfig",
@@ -1303,6 +1304,10 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     "HyperbolicChatConfig": (
         ".llms.hyperbolic.chat.transformation",
         "HyperbolicChatConfig",
+    ),
+    "WebwrightChatConfig": (
+        ".llms.webwright.chat.transformation",
+        "WebwrightChatConfig",
     ),
     "VercelAIGatewayConfig": (
         ".llms.vercel_ai_gateway.chat.transformation",

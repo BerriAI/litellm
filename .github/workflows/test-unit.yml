@@ -356,6 +356,7 @@ jobs:
               tests/unit/llms/voyage
               tests/unit/llms/wandb
               tests/unit/llms/watsonx
+              tests/unit/llms/webwright
               tests/unit/llms/xai
               tests/unit/llms/xinference
               tests/unit/llms/you_com
