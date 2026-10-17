@@ -290,7 +290,12 @@ class MistralConfig(OpenAIGPTConfig):
         first_reply_positions: Final = {
             key: position for position, key in reversed(tuple(enumerate(tool_reply_keys))) if key is not None
         }
-        answering_positions: Final = frozenset(first_reply_positions.values())
+        keys_answered_with_content: Final = frozenset(
+            key for key, is_empty in zip(tool_reply_keys, empty_flags, strict=True) if not is_empty
+        )
+        answering_positions: Final = frozenset(
+            position for key, position in first_reply_positions.items() if key not in keys_answered_with_content
+        )
         new_messages: Final[list[AllMessageValues]] = [
             strip_none_values_from_message(MistralConfig._with_tool_reply_content(m))
             for position, (m, is_empty) in enumerate(zip(prepared_messages, empty_flags, strict=True))

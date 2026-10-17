@@ -1064,6 +1064,32 @@ def test_mistral_transform_request_drops_an_empty_tool_message_for_a_call_alread
     assert [m.get("role") for m in request["messages"]] == ["user", "assistant", "tool", "assistant", "user"]
 
 
+def test_mistral_transform_request_drops_an_empty_tool_message_when_a_later_reply_carries_the_result():
+    messages: List[AllMessageValues] = cast(
+        List[AllMessageValues],
+        [
+            {"role": "user", "content": "weather?"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "weather", "arguments": "{}"}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": ""},
+            {"role": "tool", "tool_call_id": "call_1", "content": "sunny"},
+            {"role": "user", "content": "thanks"},
+        ],
+    )
+
+    request = MistralConfig().transform_request(
+        model="mistral-small-latest", messages=messages, optional_params={}, litellm_params={}, headers={}
+    )
+
+    assert [m.get("role") for m in request["messages"]] == ["user", "assistant", "tool", "user"]
+    assert request["messages"][2]["content"] == "sunny"
+
+
 def test_mistral_transform_request_keeps_an_empty_tool_message_answering_a_call_in_the_first_message():
     messages: List[AllMessageValues] = cast(
         List[AllMessageValues],
