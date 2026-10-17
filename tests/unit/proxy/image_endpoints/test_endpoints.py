@@ -116,6 +116,7 @@ async def test_image_generation_prompt_rerouting(monkeypatch):
     assert pre_call_input["messages"][0]["content"] == "original prompt"
     assert captured_route_request_data["prompt"] == "sanitized prompt"
     assert "messages" not in captured_route_request_data
+    assert captured_route_request_data.get("litellm_logging_obj") is not None
     assert response.headers.get("x-callback-test") == "value"
 
 
