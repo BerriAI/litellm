@@ -452,6 +452,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     rpm: int | None
     provider_specific_entry: dict[str, float] | None
     uses_embed_content: bool | None
+    use_token_counting_api: ReadOnly[bool | None]
 
 
 class ModelInfo(ModelInfoBase, total=False):
