@@ -324,10 +324,16 @@ def _classify_fetch_content(content: bytes, url: str, etag: str | None) -> _Fetc
     return ModelCostMapReloaded(model_cost_map=model_cost_map, revision=git_blob_id(content), etag=etag)
 
 
-def _attempt_fetch_s3(url: str, timeout: int) -> _FetchAttemptOutcome:
+def _split_url(url: str) -> urllib.parse.SplitResult | ModelCostMapReloadUnavailable:
+    try:
+        return urllib.parse.urlsplit(url)
+    except ValueError as error:
+        return ModelCostMapReloadUnavailable(reason=f"invalid URL {url}: {error}")
+
+
+def _attempt_fetch_s3(parts: urllib.parse.SplitResult, url: str, timeout: int) -> _FetchAttemptOutcome:
     from botocore.exceptions import BotoCoreError, ClientError
 
-    parts: Final = urllib.parse.urlsplit(url)
     bucket: Final = parts.netloc
     key: Final = parts.path.lstrip("/")
     if not bucket or not key:
@@ -343,9 +349,11 @@ def _attempt_fetch_s3(url: str, timeout: int) -> _FetchAttemptOutcome:
 
 
 async def _attempt_fetch(client: _AsyncGetClient, url: str, timeout: int) -> _FetchAttemptOutcome:
-    parts: Final = urllib.parse.urlsplit(url)
+    parts: Final = _split_url(url)
+    if isinstance(parts, ModelCostMapReloadUnavailable):
+        return parts
     if parts.scheme == "s3":
-        return await asyncio.to_thread(_attempt_fetch_s3, url, timeout)
+        return await asyncio.to_thread(_attempt_fetch_s3, parts, url, timeout)
     try:
         response: Final = await client.get(url, timeout=timeout)
     except (httpx.HTTPError, httpx.InvalidURL) as e:
@@ -354,9 +362,11 @@ async def _attempt_fetch(client: _AsyncGetClient, url: str, timeout: int) -> _Fe
 
 
 def _attempt_fetch_sync(client: _SyncGetClient, url: str, timeout: int) -> _FetchAttemptOutcome:
-    parts: Final = urllib.parse.urlsplit(url)
+    parts: Final = _split_url(url)
+    if isinstance(parts, ModelCostMapReloadUnavailable):
+        return parts
     if parts.scheme == "s3":
-        return _attempt_fetch_s3(url, timeout)
+        return _attempt_fetch_s3(parts, url, timeout)
     try:
         response: Final = client.get(url, timeout=timeout)
     except (httpx.HTTPError, httpx.InvalidURL) as e:
