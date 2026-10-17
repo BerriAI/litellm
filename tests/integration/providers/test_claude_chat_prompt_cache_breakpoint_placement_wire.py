@@ -24,6 +24,7 @@ from integration.providers._claude_prompt_cache_breakpoint_support import (
     PROVIDERS,
     Provider,
     deployment,
+    litellm_params,
     only_request,
     respond,
     sent_marks,
@@ -672,14 +673,14 @@ def test_breakpoints_on_tool_history_a_response_format_tool_keeps_on_converse_co
     ({"functions": [TOOL["function"]]}, {"web_search_options": {"search_context_size": "low"}}),
     ids=("functions", "web_search_options"),
 )
-def test_breakpoints_on_tool_history_converse_sends_as_text_beside_a_dropped_tool_source_still_take_slots(
+def test_breakpoints_on_tool_history_converse_sends_as_text_beside_a_dropped_tool_source_take_no_slot(
     gateway: Gateway, fields: dict[str, JsonValue]
 ) -> None:
     marker: Final = new_marker()
     marks: Final = _marks_sent(
         gateway, "bedrock_converse", lambda model: _history_without_tools_body(model, marker, **fields)
     )
-    assert [mark.label for mark in marks] == _note_labels()[1:]
+    assert [mark.label for mark in marks] == [_label(SYSTEM), *_note_labels()]
 
 
 def test_a_tool_config_cache_point_before_a_one_hour_breakpoint_is_sent_as_one_hour(gateway: Gateway) -> None:
@@ -734,6 +735,72 @@ def test_a_five_minute_tool_config_cache_point_loosens_a_later_one_hour_breakpoi
         cache_control_injection_points=[{"location": "tool_config", "control": {"type": "ephemeral", "ttl": "5m"}}],
     )
     assert marks == (Mark(_TOOL_LABEL, "5m"), Mark(_label(SYSTEM), None))
+
+
+@pytest.mark.parametrize(
+    ("deployment_drops", "expected"),
+    (
+        (["thinking"], (Mark("tool:json_tool_call", "5m"), Mark(_label(SYSTEM), None))),
+        ([], (Mark(_label(SYSTEM), "1h"),)),
+    ),
+    ids=("deployment_drops_thinking", "deployment_keeps_thinking"),
+)
+def test_a_native_json_schema_turns_into_the_json_tool_on_converse_when_the_deployment_drops_thinking(
+    gateway: Gateway, deployment_drops: list[JsonValue], expected: tuple[Mark, ...]
+) -> None:
+    marker: Final = new_marker()
+    turns: Final[list[JsonValue]] = [
+        {"role": "system", "content": [_text(SYSTEM, prompt_cache_breakpoint=_ONE_HOUR_BREAKPOINT)]},
+        _final(marker),
+    ]
+    with (
+        wire_server(lambda request: respond("bedrock_converse", request)) as wire,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = scenario.model(
+            model_info={"supports_bedrock_native_structured_output": True},
+            **litellm_params(gateway, wire, "bedrock_converse"),
+            additional_drop_params=deployment_drops,
+            cache_control_injection_points=[{"location": "tool_config", "control": {"type": "ephemeral", "ttl": "5m"}}],
+        )
+        status, _, text = post_chat(
+            gateway,
+            {
+                "model": model,
+                "messages": turns,
+                "max_tokens": 2048,
+                "drop_params": True,
+                "response_format": _JSON_SCHEMA,
+                "thinking": {"type": "enabled", "budget_tokens": 1024},
+            },
+        )
+        assert status == 200, text
+        request: Final = only_request(wire)
+    assert sent_marks("bedrock_converse", request) == expected
+
+
+@pytest.mark.parametrize("response_format", _MALFORMED, ids=_MALFORMED_IDS)
+def test_a_malformed_response_format_the_deployment_drops_still_sends_the_system_breakpoint_to_converse(
+    gateway: Gateway, response_format: JsonValue
+) -> None:
+    marker: Final = new_marker()
+    turns: Final[list[JsonValue]] = [
+        {"role": "system", "content": [_text(SYSTEM, prompt_cache_breakpoint=_EXPLICIT)]},
+        _final(marker),
+    ]
+    marks: Final = _marks_sent(
+        gateway,
+        "bedrock_converse",
+        lambda model: {
+            "model": model,
+            "messages": turns,
+            "max_tokens": 64,
+            "drop_params": True,
+            "response_format": response_format,
+        },
+        additional_drop_params=["response_format"],
+    )
+    assert marks == (Mark(_label(SYSTEM), None),)
 
 
 @pytest.mark.parametrize("control", _MALFORMED, ids=_MALFORMED_IDS)
