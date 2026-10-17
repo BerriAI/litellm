@@ -156,7 +156,8 @@ def _to_customer_response(record: BaseModel) -> CustomerResponse:
 
 
 class _BlockedUserHook(Protocol):
-    blocked_user_list: list[str] | None
+    @property
+    def blocked_user_list(self) -> Sequence[str] | None: ...
 
 
 def _configured_blocked_user_hook() -> _BlockedUserHook:
