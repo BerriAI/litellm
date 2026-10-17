@@ -1357,9 +1357,9 @@ async def _ladder(
 
 @pytest.mark.asyncio
 async def test_model_without_token_count_model_counts_itself_in_the_deployment_region():
-    counter = _ScriptedCounter({"us.anthropic.claude-sonnet-5-5": _provider_reply("sonnet", total_tokens=447)})
+    counter: Final = _ScriptedCounter({"us.anthropic.claude-sonnet-5-5": _provider_reply("sonnet", total_tokens=447)})
 
-    result = await _ladder(counter, TokenCountSettings(framing=10, count_model=None))
+    result: Final = await _ladder(counter, TokenCountSettings(framing=10, count_model=None))
 
     assert result is not None
     assert (result.total_tokens, result.count_source) == (447, "provider")
@@ -1377,9 +1377,9 @@ async def test_model_without_token_count_model_counts_itself_in_the_deployment_r
 async def test_token_count_model_counts_the_same_request_in_its_own_region_without_trying_the_model(
     count_model: TokenCountModel, region: str
 ):
-    counter = _ScriptedCounter({"us.anthropic.claude-opus-5-5": _provider_reply("opus", total_tokens=447)})
+    counter: Final = _ScriptedCounter({"us.anthropic.claude-opus-5-5": _provider_reply("opus", total_tokens=447)})
 
-    result = await _ladder(counter, TokenCountSettings(framing=None, count_model=count_model))
+    result: Final = await _ladder(counter, TokenCountSettings(framing=None, count_model=count_model))
 
     assert result is not None
     assert (result.total_tokens, result.count_source, result.model_used) == (
@@ -1395,7 +1395,9 @@ async def test_token_count_model_counts_the_same_request_in_its_own_region_witho
 @pytest.mark.parametrize("status_code", [401, 403, 429, 500])
 @pytest.mark.asyncio
 async def test_errors_other_than_cannot_count_raise_even_with_framing(status_code: int):
-    counter = _ScriptedCounter({"us.anthropic.claude-sonnet-5-5": _provider_reply("sonnet", status_code=status_code)})
+    counter: Final = _ScriptedCounter(
+        {"us.anthropic.claude-sonnet-5-5": _provider_reply("sonnet", status_code=status_code)}
+    )
 
     with pytest.raises(ProxyException) as raised:
         await _ladder(counter, TokenCountSettings(framing=10, count_model=None))
@@ -1406,7 +1408,9 @@ async def test_errors_other_than_cannot_count_raise_even_with_framing(status_cod
 @pytest.mark.parametrize("status_code", [400, 403, 404, 500])
 @pytest.mark.asyncio
 async def test_token_count_model_failure_names_its_region_so_the_user_can_enable_it(status_code: int):
-    counter = _ScriptedCounter({"us.anthropic.claude-opus-5-5": _provider_reply("opus", status_code=status_code)})
+    counter: Final = _ScriptedCounter(
+        {"us.anthropic.claude-opus-5-5": _provider_reply("opus", status_code=status_code)}
+    )
 
     with pytest.raises(ProxyException) as raised:
         await _ladder(counter, TokenCountSettings(framing=None, count_model=_OPUS_IN_US_EAST_1))
@@ -1419,7 +1423,7 @@ async def test_token_count_model_failure_names_its_region_so_the_user_can_enable
 
 @pytest.mark.asyncio
 async def test_token_count_model_without_a_region_answers_its_error_unchanged():
-    counter = _ScriptedCounter({"us.anthropic.claude-opus-5-5": _provider_reply("opus", status_code=404)})
+    counter: Final = _ScriptedCounter({"us.anthropic.claude-opus-5-5": _provider_reply("opus", status_code=404)})
 
     with pytest.raises(ProxyException) as raised:
         await _ladder(
@@ -1434,7 +1438,7 @@ async def test_token_count_model_without_a_region_answers_its_error_unchanged():
 
 @pytest.mark.asyncio
 async def test_uncountable_model_without_framing_raises():
-    counter = _ScriptedCounter({"us.anthropic.claude-sonnet-5-5": _provider_reply("sonnet", status_code=404)})
+    counter: Final = _ScriptedCounter({"us.anthropic.claude-sonnet-5-5": _provider_reply("sonnet", status_code=404)})
 
     with pytest.raises(ProxyException) as raised:
         await _ladder(counter, TokenCountSettings(framing=None, count_model=None))
@@ -1468,7 +1472,7 @@ async def test_token_count_model_error_stands_even_with_framing(status_code: int
 
 @pytest.mark.asyncio
 async def test_uncountable_model_with_framing_raises_when_local_counting_is_disabled():
-    counter = _ScriptedCounter({"us.anthropic.claude-sonnet-5-5": _provider_reply("sonnet", status_code=400)})
+    counter: Final = _ScriptedCounter({"us.anthropic.claude-sonnet-5-5": _provider_reply("sonnet", status_code=400)})
 
     with pytest.raises(ProxyException) as raised:
         await _ladder(counter, TokenCountSettings(framing=10, count_model=None), local_estimate_allowed=False)
