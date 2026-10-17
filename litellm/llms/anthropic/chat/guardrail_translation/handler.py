@@ -34,6 +34,7 @@ from litellm.llms.anthropic.pass_through.stream_assembly import (
     build_complete_streaming_response,
     build_usage_only_response_from_chunks,
 )
+from litellm.llms.anthropic.pass_through.utils import object_items, search_result_inner_texts
 from litellm.llms.base_llm.guardrail_translation.base_translation import (
     BaseTranslation,
     StreamingScanKey,
@@ -109,6 +110,16 @@ class ToolResultBlockTextTarget:
 
 
 @dataclass(frozen=True, slots=True)
+class ToolResultSearchResultTextTarget:
+    """A text block inside a search_result block inside a tool_result."""
+
+    msg_idx: int
+    content_idx: int
+    block_idx: int
+    inner_idx: int
+
+
+@dataclass(frozen=True, slots=True)
 class SystemStringTarget:
     pass
 
@@ -124,7 +135,13 @@ class ToolUseInputTarget:
     content_idx: int
 
 
-MessageTextTarget = MessageContentTarget | ContentBlockTextTarget | ToolResultStringTarget | ToolResultBlockTextTarget
+MessageTextTarget = (
+    MessageContentTarget
+    | ContentBlockTextTarget
+    | ToolResultStringTarget
+    | ToolResultBlockTextTarget
+    | ToolResultSearchResultTextTarget
+)
 InputWriteBackTarget = SystemStringTarget | SystemBlockTextTarget | MessageTextTarget
 
 
@@ -222,6 +239,9 @@ def _write_back_message_text(message: _WritableMessage, target: MessageTextTarge
         case ToolResultBlockTextTarget(content_idx=content_idx, block_idx=block_idx):
             if isinstance(content, list):
                 content[content_idx]["content"][block_idx]["text"] = response
+        case ToolResultSearchResultTextTarget(content_idx=content_idx, block_idx=block_idx, inner_idx=inner_idx):
+            if isinstance(content, list):
+                content[content_idx]["content"][block_idx]["content"][inner_idx]["text"] = response
         case _:
             assert_never(target)
 
@@ -1037,15 +1057,30 @@ class AnthropicMessagesHandler(BaseTranslation):
         blocks: Final = tuple(
             (block_idx, block) for block_idx, block in enumerate(tool_result_content) if isinstance(block, dict)
         )
+        tool_result_content_items: Final = object_items(content_item.get("content"))
         return ExtractedInput(
-            scanned=tuple(
-                ScannedText(block["text"], ToolResultBlockTextTarget(msg_idx, content_idx, block_idx))
-                for block_idx, block in blocks
-                if isinstance(block.get("text"), str)
+            scanned=(
+                *(
+                    ScannedText(block["text"], ToolResultBlockTextTarget(msg_idx, content_idx, block_idx))
+                    for block_idx, block in blocks
+                    if isinstance(block.get("text"), str)
+                ),
+                *chain.from_iterable(
+                    cls._search_result_texts(block, msg_idx, content_idx, block_idx)
+                    for block_idx, block in enumerate(tool_result_content_items)
+                ),
             ),
             images=tuple(
                 image for _, block in blocks if block.get("type") == "image" for image in cls._image_sources(block)
             ),
+        )
+
+    @staticmethod
+    def _search_result_texts(block: object, msg_idx: int, content_idx: int, block_idx: int) -> tuple[ScannedText, ...]:
+        """The text blocks a search_result carries, each written back to its own place."""
+        return tuple(
+            ScannedText(text, ToolResultSearchResultTextTarget(msg_idx, content_idx, block_idx, inner_idx))
+            for inner_idx, text in search_result_inner_texts(block)
         )
 
     @staticmethod
@@ -1095,7 +1130,8 @@ class AnthropicMessagesHandler(BaseTranslation):
                     MessageContentTarget()
                     | ContentBlockTextTarget()
                     | ToolResultStringTarget()
-                    | ToolResultBlockTextTarget() as message_target
+                    | ToolResultBlockTextTarget()
+                    | ToolResultSearchResultTextTarget() as message_target
                 ):
                     _write_back_message_text(messages[message_target.msg_idx], message_target, guardrail_response)
                 case _:
