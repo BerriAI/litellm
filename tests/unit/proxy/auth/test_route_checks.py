@@ -2174,6 +2174,35 @@ def test_get_spend_routes_permission_keeps_access_for_internal_user(route):
     )
 
 
+
+@pytest.mark.parametrize("route", GLOBAL_SPEND_ROUTES)
+def test_get_spend_routes_false_permission_denies_internal_user(route):
+    """Explicit get_spend_routes=false must not open global spend routes."""
+    user_obj = LiteLLM_UserTable(
+        user_id="internal_user_false_perm",
+        user_email="user@example.com",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    valid_token = UserAPIKeyAuth(
+        user_id="internal_user_false_perm",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        permissions={"get_spend_routes": False},
+    )
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    with pytest.raises(Exception):
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=LitellmUserRoles.INTERNAL_USER.value,
+            route=route,
+            request=request,
+            valid_token=valid_token,
+            request_data={},
+        )
+
+
+
 @pytest.mark.parametrize("route", ["/audit", "/audit/some-log-id"])
 def test_proxy_admin_viewer_can_access_audit_logs(route):
     """

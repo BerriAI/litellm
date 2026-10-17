@@ -1035,6 +1035,84 @@ async def test_generate_key_helper_fn_get_spend_routes_false_allowed_non_premium
     assert result.get("token") or result.get("key") or result.get("token_id")
 
 
+
+@pytest.mark.asyncio
+async def test_validate_update_key_data_get_spend_routes_non_premium_returns_403(
+    monkeypatch,
+):
+    """`/key/update` must refuse truthy get_spend_routes on OSS. (#47112 review)"""
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import (
+        LiteLLM_VerificationToken,
+        LitellmUserRoles,
+        UpdateKeyRequest,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _validate_update_key_data,
+    )
+
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints._require_prisma_client",
+        lambda client: client or object(),
+    )
+    # Short-circuit unrelated validators that need a real DB / router.
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints._enforce_allowed_routes_update_permission",
+        lambda **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.check_allowed_passthrough_routes_caller_permission",
+        lambda *a, **k: None,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.check_permissions_caller_permission",
+        lambda **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.check_disable_global_guardrails_caller_permission",
+        lambda *a, **k: None,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints._validate_caller_can_change_key_ownership",
+        lambda **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.common_key_access_checks",
+        lambda **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints._acting_as_team_admin_for_key_update",
+        AsyncMock(return_value=False),
+    )
+
+    data = UpdateKeyRequest(key="sk-test", permissions={"get_spend_routes": True})
+    existing = LiteLLM_VerificationToken(token="hashed", user_id="u1")
+    user = UserAPIKeyAuth(
+        user_id="admin",
+        user_role=LitellmUserRoles.PROXY_ADMIN.value,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _validate_update_key_data(
+            data=data,
+            existing_key_row=existing,
+            user_api_key_dict=user,
+            llm_router=None,
+            premium_user=False,
+            prisma_client=MagicMock(),
+            user_api_key_cache=MagicMock(),
+        )
+    assert exc_info.value.status_code == 403
+    assert "get_spend_routes" in str(exc_info.value.detail)
+
+
+
 @pytest.mark.asyncio
 async def test_generate_key_helper_fn_with_budget_fallbacks(monkeypatch):
     """Regression: /key/generate must accept `budget_fallbacks` end-to-end.
