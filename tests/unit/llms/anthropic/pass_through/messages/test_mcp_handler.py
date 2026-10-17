@@ -1,4 +1,5 @@
 from importlib import import_module
+from typing import Final
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -411,7 +412,7 @@ async def _mcp_safeguards_turn_recording_beta_map_loads(custom_llm_provider: str
     from litellm.llms.anthropic.pass_through.messages import mcp_handler
     from litellm.responses.mcp.request_context import MCPRequestContext
 
-    loader_threads: list[int] = []  # mutable-ok: records the thread each beta map load ran on
+    loader_threads: Final[list[int]] = []  # mutable-ok: records the thread each beta map load ran on
 
     def recording_loader(url: str) -> object:
         loader_threads.append(threading.get_ident())
@@ -444,7 +445,7 @@ async def _mcp_safeguards_turn_recording_beta_map_loads(custom_llm_provider: str
 async def test_anthropic_messages_with_mcp_loads_a_filtered_routes_beta_map_off_the_event_loop():
     import threading
 
-    loader_threads = await _mcp_safeguards_turn_recording_beta_map_loads("azure_ai", "claude-sonnet-4-6")
+    loader_threads: Final = await _mcp_safeguards_turn_recording_beta_map_loads("azure_ai", "claude-sonnet-4-6")
 
     assert len(loader_threads) == 1
     assert threading.get_ident() not in loader_threads
