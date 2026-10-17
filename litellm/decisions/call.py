@@ -56,7 +56,7 @@ from litellm.types.decisions import (
     OpenAIDecisionResponse,
     UnsupportedDecisionsRequest,
 )
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
+from litellm.types.llms.openai import ChatCompletionUserMessage
 from litellm.types.utils import LlmProviders, ProviderSpecificHeader
 from litellm.utils import ProviderConfigManager, get_model_cost_key
 
@@ -416,9 +416,9 @@ def _outbound_headers(
     return MappingProxyType({**(extra_headers or {}), **forwarded})
 
 
-def _logged_request_messages(request: DecisionsRequestFormat) -> list[AllMessageValues]:
+def _logged_request_message(request: DecisionsRequestFormat) -> ChatCompletionUserMessage:
     sent_fields: Final = request.model_dump_json(exclude_none=True, exclude_defaults=True)
-    return [ChatCompletionUserMessage(role="user", content=sent_fields)]
+    return ChatCompletionUserMessage(role="user", content=sent_fields)
 
 
 def prepare_call(
@@ -533,7 +533,7 @@ def prepare_call(
             },
             custom_llm_provider=provider,
         )
-        logging_obj.update_messages(_logged_request_messages(request))
+        logging_obj.update_messages([_logged_request_message(request)])
     return DecisionsCall(
         model=canonical_model,
         requested_model=model,
