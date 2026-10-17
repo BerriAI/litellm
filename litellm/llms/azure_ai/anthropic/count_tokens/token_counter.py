@@ -3,10 +3,9 @@ Azure AI Anthropic Token Counter implementation using the CountTokens API.
 """
 
 import os
-from collections.abc import Mapping
-from typing import Final
+from typing import Any, Final
 
-from pydantic import ConfigDict, JsonValue, TypeAdapter
+from pydantic import JsonValue
 
 import litellm
 from litellm._logging import verbose_logger
@@ -18,12 +17,6 @@ from litellm.types.utils import LlmProviders, TokenCountMessagesFormat, TokenCou
 
 # Global handler instance - reuse across all token counting requests
 azure_ai_anthropic_count_tokens_handler: Final = AzureAIAnthropicCountTokensHandler()
-_LITELLM_PARAMS_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(
-    Mapping[str, object], config=ConfigDict(hide_input_in_errors=True)
-)
-_OPTIONAL_STRING_ADAPTER: Final[TypeAdapter[str | None]] = TypeAdapter(
-    str | None, config=ConfigDict(hide_input_in_errors=True)
-)
 
 
 def _missing_api_base_response(request_model: str, model_to_use: str) -> TokenCountResponse:
@@ -55,7 +48,7 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
         model_to_use: str,
         messages: list[dict[str, JsonValue]] | None,
         contents: list[dict[str, object]] | None,
-        deployment: Mapping[str, object] | None = None,
+        deployment: dict[str, Any] | None = None,
         request_model: str = "",
         tools: list[dict[str, JsonValue]] | None = None,
         system: object | None = None,
@@ -80,24 +73,19 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
         if not messages:
             return None
 
-        litellm_params_value: Final[object] = deployment.get("litellm_params", {}) if deployment is not None else {}
-        litellm_params: Final[Mapping[str, object]] = _LITELLM_PARAMS_ADAPTER.validate_python(
-            litellm_params_value, strict=True
-        )
+        deployment = deployment or {}
+        litellm_params: Final = deployment.get("litellm_params", {})
 
         # Get Azure AI API key from deployment config or environment
-        configured_api_key: Final[object] = litellm_params.get("api_key")
-        api_key: Final[str | None] = (
-            _OPTIONAL_STRING_ADAPTER.validate_python(configured_api_key, strict=True)
-            if configured_api_key
-            else os.getenv("AZURE_AI_API_KEY")
-        )
+        api_key = litellm_params.get("api_key")
+        if not api_key:
+            api_key = os.getenv("AZURE_AI_API_KEY")
 
-        configured_api_base: Final[object] = litellm_params.get("api_base")
         api_base: Final = (
-            _OPTIONAL_STRING_ADAPTER.validate_python(configured_api_base, strict=True)
-            if configured_api_base
-            else os.getenv("AZURE_AI_API_BASE") or os.getenv("AZURE_API_BASE") or litellm.api_base
+            litellm_params.get("api_base")
+            or os.getenv("AZURE_AI_API_BASE")
+            or os.getenv("AZURE_API_BASE")
+            or litellm.api_base
         )
 
         if not api_base:
@@ -109,7 +97,7 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
                 messages=messages,
                 api_key=api_key,
                 api_base=api_base,
-                litellm_params=dict(litellm_params),
+                litellm_params=litellm_params,
                 tools=tools,
                 system=system,
             )

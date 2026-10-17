@@ -10,8 +10,6 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 from httpx._types import RequestFiles
-from pydantic import ConfigDict, TypeAdapter, with_config
-from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.secret_managers.main import get_secret_str
@@ -30,16 +28,6 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
-
-
-@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
-class _StabilityImageEditResponse(TypedDict):
-    errors: ReadOnly[NotRequired[object]]
-    finish_reason: ReadOnly[NotRequired[object]]
-    image: ReadOnly[NotRequired[str | None]]
-
-
-_STABILITY_IMAGE_EDIT_RESPONSE: Final = TypeAdapter(_StabilityImageEditResponse)
 
 
 class StabilityImageEditConfig(BaseImageEditConfig):
@@ -271,7 +259,7 @@ class StabilityImageEditConfig(BaseImageEditConfig):
         OpenAI expects: {"data": [{"b64_json": "base64..."}], "created": timestamp}
         """
         try:
-            response_data: Final = _STABILITY_IMAGE_EDIT_RESPONSE.validate_python(raw_response.json())
+            response_data: Final = raw_response.json()
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error parsing Stability AI response: {e}",

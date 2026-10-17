@@ -13,12 +13,11 @@ This module decodes them into float arrays for OpenAI-compatible responses.
 
 import base64
 import struct
-from collections.abc import Mapping, Sequence
-from typing import Final, Literal
+from collections.abc import Mapping
+from typing import Final
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter, with_config
-from typing_extensions import NotRequired, ReadOnly, TypedDict
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -29,17 +28,6 @@ from litellm.types.utils import EmbeddingResponse, Usage
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _INT: Final = TypeAdapter(int)
-
-
-@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
-class _PerplexityEmbeddingResponse(TypedDict):
-    data: NotRequired[ReadOnly[Sequence[object] | Mapping[str, object] | str]]
-    usage: NotRequired[ReadOnly[object]]
-    model: NotRequired[ReadOnly[str | None]]
-    object: NotRequired[ReadOnly[Literal["list"]]]
-
-
-_PERPLEXITY_EMBEDDING_RESPONSE: Final = TypeAdapter(_PerplexityEmbeddingResponse)
 
 
 class PerplexityEmbeddingError(BaseLLMException):
@@ -164,7 +152,7 @@ class PerplexityEmbeddingConfig(BaseEmbeddingConfig):
         litellm_params: dict = {},
     ) -> EmbeddingResponse:
         try:
-            raw_response_json: Final = _PERPLEXITY_EMBEDDING_RESPONSE.validate_python(raw_response.json())
+            raw_response_json: Final = raw_response.json()
         except Exception:
             raise PerplexityEmbeddingError(message=raw_response.text, status_code=raw_response.status_code)
 
