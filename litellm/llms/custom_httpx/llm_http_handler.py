@@ -109,6 +109,7 @@ from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
     get_async_httpx_client,
     get_httpx_client,
+    header_value,
 )
 from litellm.responses.streaming_iterator import (
     BaseResponsesAPIStreamingIterator,
@@ -473,8 +474,8 @@ def _decoded_body_headers(response: httpx.Response) -> httpx.Headers:
     `aiter_bytes` yields the decoded body, so the upstream transfer headers only
     describe the bytes on the wire when no content-encoding was applied.
     """
-    headers: Final[Mapping[str, str]] = response.headers
-    if headers.get("content-encoding", "identity").lower() == "identity":
+    content_encoding: Final = header_value(response.headers, "content-encoding")
+    if content_encoding is None or content_encoding.lower() == "identity":
         return response.headers
     return httpx.Headers(
         [
@@ -1514,8 +1515,65 @@ class BaseLLMHTTPHandler:
         api_base: str,
         api_key: str | None,
         headers: Mapping[str, str],
-    ) -> tuple[str, dict[str, str], dict[str, object]]:
-        outbound_headers: Final = provider_config.validate_environment(headers=headers, model=model, api_key=api_key)
+        litellm_params: Mapping[str, object],
+    ) -> tuple[str, Mapping[str, str], Mapping[str, object]]:
+        outbound_headers: Final = provider_config.validate_environment(
+            headers=headers,
+            model=model,
+            api_key=api_key,
+            litellm_params=litellm_params,
+        )
+        return self._prepare_decisions_request_with_headers(
+            model=model,
+            logging_obj=logging_obj,
+            provider_config=provider_config,
+            body=body,
+            logged_body=logged_body,
+            api_base=api_base,
+            api_key=api_key,
+            outbound_headers=outbound_headers,
+        )
+
+    async def _aprepare_decisions_request(
+        self,
+        model: str,
+        logging_obj: LiteLLMLoggingObj | None,
+        provider_config: BaseDecisionsConfig,
+        body: Mapping[str, object],
+        logged_body: Mapping[str, object],
+        api_base: str,
+        api_key: str | None,
+        headers: Mapping[str, str],
+        litellm_params: Mapping[str, object],
+    ) -> tuple[str, Mapping[str, str], Mapping[str, object]]:
+        outbound_headers: Final = await provider_config.avalidate_environment(
+            headers=headers,
+            model=model,
+            api_key=api_key,
+            litellm_params=litellm_params,
+        )
+        return self._prepare_decisions_request_with_headers(
+            model=model,
+            logging_obj=logging_obj,
+            provider_config=provider_config,
+            body=body,
+            logged_body=logged_body,
+            api_base=api_base,
+            api_key=api_key,
+            outbound_headers=outbound_headers,
+        )
+
+    def _prepare_decisions_request_with_headers(
+        self,
+        model: str,
+        logging_obj: LiteLLMLoggingObj | None,
+        provider_config: BaseDecisionsConfig,
+        body: Mapping[str, object],
+        logged_body: Mapping[str, object],
+        api_base: str,
+        api_key: str | None,
+        outbound_headers: Mapping[str, str],
+    ) -> tuple[str, Mapping[str, str], Mapping[str, object]]:
         url: Final = provider_config.get_complete_url(api_base=api_base, model=model)
         data: Final = dict(body)
         if logging_obj is not None:
@@ -1552,6 +1610,7 @@ class BaseLLMHTTPHandler:
             api_base=api_base,
             api_key=api_key,
             headers=headers,
+            litellm_params=litellm_params,
         )
         signed_headers, signed_body = provider_config.sign_request(
             headers=outbound_headers,
@@ -1566,7 +1625,7 @@ class BaseLLMHTTPHandler:
             response: Final = sync_httpx_client.post(
                 url,
                 content=signed_body,
-                json=data if signed_body is None else None,
+                json=dict(data) if signed_body is None else None,
                 headers=dict(signed_headers),
                 timeout=timeout,
                 logging_obj=logging_obj,
@@ -1593,7 +1652,7 @@ class BaseLLMHTTPHandler:
         litellm_params: Mapping[str, object],
         client: AsyncHTTPHandler | None = None,
     ) -> DecisionsIRResponse:
-        url, outbound_headers, data = self._prepare_decisions_request(
+        url, outbound_headers, data = await self._aprepare_decisions_request(
             model=model,
             logging_obj=logging_obj,
             provider_config=provider_config,
@@ -1602,6 +1661,7 @@ class BaseLLMHTTPHandler:
             api_base=api_base,
             api_key=api_key,
             headers=headers,
+            litellm_params=litellm_params,
         )
         sign: Final = partial(
             provider_config.sign_request,
@@ -1624,7 +1684,7 @@ class BaseLLMHTTPHandler:
             response: Final = await async_httpx_client.post(
                 url,
                 content=signed_body,
-                json=data if signed_body is None else None,
+                json=dict(data) if signed_body is None else None,
                 headers=dict(signed_headers),
                 timeout=timeout,
                 logging_obj=logging_obj,
@@ -2112,7 +2172,7 @@ class BaseLLMHTTPHandler:
         # str when the caller passes a pre-serialized (unsigned) body to avoid
         # re-dumping; bytes when a provider signed the request (e.g. Bedrock).
         signed_json_body: str | bytes | None,
-        request_body: dict,
+        request_body: dict[str, object],
         stream: bool,
         logging_obj: LiteLLMLoggingObj,
         provider_config: BaseAnthropicMessagesConfig,
@@ -2139,7 +2199,7 @@ class BaseLLMHTTPHandler:
             except httpx.HTTPStatusError as e:
                 hit_max_attempt = attempt_idx + 1 == max_attempts
                 should_retry = provider_config.should_retry_anthropic_messages_on_http_error(
-                    e=e, litellm_params=litellm_params_dict
+                    e=e, litellm_params=litellm_params_dict, request_body=request_body
                 )
                 if should_retry and not hit_max_attempt:
                     if logging_obj.baseline_cache_context is not None:
@@ -2556,9 +2616,10 @@ class BaseLLMHTTPHandler:
             **{key: value for key, value in response_api_optional_request_params.items() if key in modified_kwargs},
             **{key: value for key, value in modified_kwargs.items() if key in optional_param_names},
         }
+        current_litellm_params: Final[Mapping[str, object]] = dict(litellm_params)
         updated_litellm_params: Final = GenericLiteLLMParams(
             **{
-                **{key: value for key, value in dict(litellm_params).items() if key in modified_kwargs},
+                **{key: value for key, value in current_litellm_params.items() if key in modified_kwargs},
                 **{
                     key: value
                     for key, value in modified_kwargs.items()
@@ -3522,9 +3583,7 @@ class BaseLLMHTTPHandler:
         """
         if upload_url_location == "headers":
             # Google Cloud Storage style - URL in X-Goog-Upload-URL header
-            upload_headers: Final[Mapping[str, str]] = response.headers
-            upload_url = upload_headers.get("X-Goog-Upload-URL")
-            return upload_url, None
+            return header_value(response.headers, "X-Goog-Upload-URL"), None
         else:
             # Response body style (e.g., Manus, S3 presigned URLs)
             try:
@@ -6344,7 +6403,7 @@ class BaseLLMHTTPHandler:
             error_text = error.response.text
         else:
             error_text = getattr(error, "text", str(error))
-        error_response: Final = getattr(error, "response", None)
+        error_response: Final[object] = getattr(error, "response", None)
         if error_headers is None and error_response:
             error_headers = getattr(error_response, "headers", None)
         if error_response and hasattr(error_response, "text"):
@@ -7127,7 +7186,8 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        headers: Final = image_edit_provider_config.validate_environment(
+        headers: Final = await asyncio.to_thread(
+            image_edit_provider_config.validate_environment,
             api_key=litellm_params.api_key,
             headers=image_edit_optional_request_params.get("extra_headers", {}) or {},
             model=model,
@@ -7586,7 +7646,8 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        headers: Final = video_generation_provider_config.validate_environment(
+        headers: Final = await asyncio.to_thread(
+            video_generation_provider_config.validate_environment,
             api_key=api_key or litellm_params.get("api_key", None),
             headers=video_generation_optional_request_params.get("extra_headers", {}) or {},
             model=model,
@@ -7781,7 +7842,8 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        headers: Final = video_content_provider_config.validate_environment(
+        headers: Final = await asyncio.to_thread(
+            video_content_provider_config.validate_environment,
             headers=extra_headers or {},
             model="",
             api_key=api_key,
@@ -7961,7 +8023,8 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        headers: Final = video_remix_provider_config.validate_environment(
+        headers: Final = await asyncio.to_thread(
+            video_remix_provider_config.validate_environment,
             api_key=api_key or litellm_params.get("api_key", None),
             headers=extra_headers or {},
             model="",
@@ -8124,7 +8187,8 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        headers: Final = video_provider_config.validate_environment(
+        headers: Final = await asyncio.to_thread(
+            video_provider_config.validate_environment,
             api_key=api_key or litellm_params.get("api_key", None),
             headers=extra_headers or {},
             model="",
@@ -8264,7 +8328,8 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        headers: Final = video_provider_config.validate_environment(
+        headers: Final = await asyncio.to_thread(
+            video_provider_config.validate_environment,
             api_key=api_key or litellm_params.get("api_key", None),
             headers=extra_headers or {},
             model="",
@@ -8436,7 +8501,8 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        headers: Final = video_provider_config.validate_environment(
+        headers: Final = await asyncio.to_thread(
+            video_provider_config.validate_environment,
             api_key=api_key or litellm_params.get("api_key", None),
             headers=extra_headers or {},
             model="",
@@ -8622,7 +8688,8 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        headers: Final = video_provider_config.validate_environment(
+        headers: Final = await asyncio.to_thread(
+            video_provider_config.validate_environment,
             api_key=api_key or litellm_params.get("api_key", None),
             headers=extra_headers or {},
             model="",
@@ -8754,7 +8821,8 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        headers: Final = video_list_provider_config.validate_environment(
+        headers: Final = await asyncio.to_thread(
+            video_list_provider_config.validate_environment,
             api_key=api_key,
             headers=extra_headers or {},
             model="",
@@ -8835,7 +8903,8 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        headers: Final = video_delete_provider_config.validate_environment(
+        headers: Final = await asyncio.to_thread(
+            video_delete_provider_config.validate_environment,
             api_key=api_key,
             headers=extra_headers or {},
             model="",
@@ -9019,7 +9088,8 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        headers: Final = video_status_provider_config.validate_environment(
+        headers: Final = await asyncio.to_thread(
+            video_status_provider_config.validate_environment,
             api_key=api_key,
             headers=extra_headers or {},
             model="",
@@ -9122,6 +9192,7 @@ class BaseLLMHTTPHandler:
         headers: Final = container_provider_config.validate_environment(
             headers=extra_headers or {},
             api_key=litellm_params.get("api_key", None),
+            litellm_params=litellm_params,
         )
 
         # Add Content-Type header for JSON requests
@@ -9197,9 +9268,11 @@ class BaseLLMHTTPHandler:
             async_httpx_client = client
 
         # Validate environment and get headers
-        headers: Final = container_provider_config.validate_environment(
+        headers: Final = await asyncio.to_thread(
+            container_provider_config.validate_environment,
             headers=extra_headers or {},
             api_key=litellm_params.get("api_key", None),
+            litellm_params=litellm_params,
         )
 
         # Add Content-Type header for JSON requests
@@ -9293,6 +9366,7 @@ class BaseLLMHTTPHandler:
         headers: Final = container_provider_config.validate_environment(
             headers=extra_headers or {},
             api_key=litellm_params.get("api_key", None),
+            litellm_params=litellm_params,
         )
 
         if extra_headers:
@@ -9369,9 +9443,11 @@ class BaseLLMHTTPHandler:
             async_httpx_client = client
 
         # Validate environment and get headers
-        headers: Final = container_provider_config.validate_environment(
+        headers: Final = await asyncio.to_thread(
+            container_provider_config.validate_environment,
             headers=extra_headers or {},
             api_key=litellm_params.get("api_key", None),
+            litellm_params=litellm_params,
         )
 
         if extra_headers:
@@ -9460,6 +9536,7 @@ class BaseLLMHTTPHandler:
         headers: Final = container_provider_config.validate_environment(
             headers=extra_headers or {},
             api_key=litellm_params.get("api_key", None),
+            litellm_params=litellm_params,
         )
 
         if extra_headers:
@@ -9536,9 +9613,11 @@ class BaseLLMHTTPHandler:
             async_httpx_client = client
 
         # Validate environment and get headers
-        headers: Final = container_provider_config.validate_environment(
+        headers: Final = await asyncio.to_thread(
+            container_provider_config.validate_environment,
             headers=extra_headers or {},
             api_key=litellm_params.get("api_key", None),
+            litellm_params=litellm_params,
         )
 
         if extra_headers:
@@ -9629,6 +9708,7 @@ class BaseLLMHTTPHandler:
         headers: Final = container_provider_config.validate_environment(
             headers=extra_headers or {},
             api_key=litellm_params.get("api_key", None),
+            litellm_params=litellm_params,
         )
 
         if extra_headers:
@@ -9705,9 +9785,11 @@ class BaseLLMHTTPHandler:
             async_httpx_client = client
 
         # Validate environment and get headers
-        headers: Final = container_provider_config.validate_environment(
+        headers: Final = await asyncio.to_thread(
+            container_provider_config.validate_environment,
             headers=extra_headers or {},
             api_key=litellm_params.get("api_key", None),
+            litellm_params=litellm_params,
         )
 
         if extra_headers:
@@ -9803,6 +9885,7 @@ class BaseLLMHTTPHandler:
         headers: Final = container_provider_config.validate_environment(
             headers=extra_headers or {},
             api_key=litellm_params.get("api_key", None),
+            litellm_params=litellm_params,
         )
 
         if extra_headers:
@@ -9881,9 +9964,11 @@ class BaseLLMHTTPHandler:
             async_httpx_client = client
 
         # Validate environment and get headers
-        headers: Final = container_provider_config.validate_environment(
+        headers: Final = await asyncio.to_thread(
+            container_provider_config.validate_environment,
             headers=extra_headers or {},
             api_key=litellm_params.get("api_key", None),
+            litellm_params=litellm_params,
         )
 
         if extra_headers:
@@ -9972,6 +10057,7 @@ class BaseLLMHTTPHandler:
         headers: Final = container_provider_config.validate_environment(
             headers=extra_headers or {},
             api_key=litellm_params.get("api_key", None),
+            litellm_params=litellm_params,
         )
 
         if extra_headers:
@@ -10047,9 +10133,11 @@ class BaseLLMHTTPHandler:
             async_httpx_client = client
 
         # Validate environment and get headers
-        headers: Final = container_provider_config.validate_environment(
+        headers: Final = await asyncio.to_thread(
+            container_provider_config.validate_environment,
             headers=extra_headers or {},
             api_key=litellm_params.get("api_key", None),
+            litellm_params=litellm_params,
         )
 
         if extra_headers:
@@ -10167,8 +10255,10 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        headers = vector_store_provider_config.validate_environment(
-            headers=extra_headers or {}, litellm_params=litellm_params
+        headers = await asyncio.to_thread(
+            vector_store_provider_config.validate_environment,
+            headers=extra_headers or {},
+            litellm_params=litellm_params,
         )
 
         if extra_headers:
@@ -10410,8 +10500,10 @@ class BaseLLMHTTPHandler:
 
         vector_store_provider_config.validate_create_vector_store()
 
-        headers: Final = vector_store_provider_config.validate_environment(
-            headers=extra_headers or {}, litellm_params=litellm_params
+        headers: Final = await asyncio.to_thread(
+            vector_store_provider_config.validate_environment,
+            headers=extra_headers or {},
+            litellm_params=litellm_params,
         )
 
         if extra_headers:
@@ -10541,8 +10633,10 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        headers: Final = vector_store_provider_config.validate_environment(
-            headers=extra_headers or {}, litellm_params=litellm_params
+        headers: Final = await asyncio.to_thread(
+            vector_store_provider_config.validate_environment,
+            headers=extra_headers or {},
+            litellm_params=litellm_params,
         )
 
         if extra_headers:
@@ -10663,8 +10757,10 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        headers: Final = vector_store_provider_config.validate_environment(
-            headers=extra_headers or {}, litellm_params=litellm_params
+        headers: Final = await asyncio.to_thread(
+            vector_store_provider_config.validate_environment,
+            headers=extra_headers or {},
+            litellm_params=litellm_params,
         )
 
         if extra_headers:
@@ -10805,8 +10901,10 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        headers: Final = vector_store_provider_config.validate_environment(
-            headers=extra_headers or {}, litellm_params=litellm_params
+        headers: Final = await asyncio.to_thread(
+            vector_store_provider_config.validate_environment,
+            headers=extra_headers or {},
+            litellm_params=litellm_params,
         )
 
         if extra_headers:
@@ -10950,8 +11048,10 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        headers: Final = vector_store_provider_config.validate_environment(
-            headers=extra_headers or {}, litellm_params=litellm_params
+        headers: Final = await asyncio.to_thread(
+            vector_store_provider_config.validate_environment,
+            headers=extra_headers or {},
+            litellm_params=litellm_params,
         )
 
         if extra_headers:
@@ -11068,8 +11168,10 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        headers: Final = vector_store_files_provider_config.validate_environment(
-            headers=extra_headers or {}, litellm_params=litellm_params
+        headers: Final = await asyncio.to_thread(
+            vector_store_files_provider_config.validate_environment,
+            headers=extra_headers or {},
+            litellm_params=litellm_params,
         )
 
         if extra_headers:
@@ -11210,8 +11312,10 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        headers: Final = vector_store_files_provider_config.validate_environment(
-            headers=extra_headers or {}, litellm_params=litellm_params
+        headers: Final = await asyncio.to_thread(
+            vector_store_files_provider_config.validate_environment,
+            headers=extra_headers or {},
+            litellm_params=litellm_params,
         )
         if extra_headers:
             headers.update(extra_headers)
@@ -11351,8 +11455,10 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        headers: Final = vector_store_files_provider_config.validate_environment(
-            headers=extra_headers or {}, litellm_params=litellm_params
+        headers: Final = await asyncio.to_thread(
+            vector_store_files_provider_config.validate_environment,
+            headers=extra_headers or {},
+            litellm_params=litellm_params,
         )
         if extra_headers:
             headers.update(extra_headers)
@@ -11482,8 +11588,10 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        headers: Final = vector_store_files_provider_config.validate_environment(
-            headers=extra_headers or {}, litellm_params=litellm_params
+        headers: Final = await asyncio.to_thread(
+            vector_store_files_provider_config.validate_environment,
+            headers=extra_headers or {},
+            litellm_params=litellm_params,
         )
         if extra_headers:
             headers.update(extra_headers)
@@ -11619,8 +11727,10 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        headers: Final = vector_store_files_provider_config.validate_environment(
-            headers=extra_headers or {}, litellm_params=litellm_params
+        headers: Final = await asyncio.to_thread(
+            vector_store_files_provider_config.validate_environment,
+            headers=extra_headers or {},
+            litellm_params=litellm_params,
         )
         if extra_headers:
             headers.update(extra_headers)
@@ -11762,8 +11872,10 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        headers: Final = vector_store_files_provider_config.validate_environment(
-            headers=extra_headers or {}, litellm_params=litellm_params
+        headers: Final = await asyncio.to_thread(
+            vector_store_files_provider_config.validate_environment,
+            headers=extra_headers or {},
+            litellm_params=litellm_params,
         )
         if extra_headers:
             headers.update(extra_headers)

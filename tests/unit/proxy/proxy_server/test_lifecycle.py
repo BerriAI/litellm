@@ -17,6 +17,7 @@ Pins covered:
 
 from __future__ import annotations
 
+import asyncio
 import gc
 import inspect
 import json
@@ -24,6 +25,7 @@ import logging
 import os
 import subprocess
 from collections.abc import Awaitable, Callable
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -33,9 +35,9 @@ from typing_extensions import TypedDict
 
 import litellm.proxy.proxy_server as ps
 from litellm.proxy.common_utils import debug_utils
+from litellm.proxy.management_helpers.audit_logs import track_audit_task
 from litellm.proxy.proxy_server import (
     ProxyStartupEvent,
-    initialize_shared_aiohttp_session,
     _resolve_pydantic_type,
     _resolve_typed_dict_type,
     cleanup_router_config_variables,
@@ -43,6 +45,7 @@ from litellm.proxy.proxy_server import (
     get_litellm_model_info,
     initialize,
     initialize_from_worker_config,
+    initialize_shared_aiohttp_session,
     load_from_azure_key_vault,
     proxy_shutdown_event,
     proxy_startup_event,
@@ -226,6 +229,46 @@ async def test_proxy_shutdown_drains_gateway_requests_before_disconnecting(monke
 
 
 @pytest.mark.asyncio
+async def test_proxy_shutdown_drains_audit_writes_beside_the_gateway_flush_before_disconnecting(monkeypatch):
+    """
+    A management call returns before its audit row is written, so shutdown waits
+    for that write while prisma is still connected. It waits beside the gateway
+    flush rather than before it, so the two waits overlap inside the teardown budget.
+    """
+    calls: list[str] = []  # mutable-ok: records call order, which is the assertion
+    gateway_flush_started: Final = asyncio.Event()
+
+    fake_prisma = MagicMock()
+    fake_prisma.disconnect = AsyncMock(side_effect=lambda: calls.append("disconnect"))
+    monkeypatch.setattr(ps, "prisma_client", fake_prisma, raising=False)
+
+    async def _record_flush(client, accumulator):
+        gateway_flush_started.set()
+        calls.append("flush")
+
+    async def _audit_write_that_finishes_after_the_flush_starts() -> None:
+        await gateway_flush_started.wait()
+        calls.append("audit")
+
+    monkeypatch.setattr(ps, "flush_gateway_requests", _record_flush, raising=False)
+
+    fake_jwt = MagicMock()
+    fake_jwt.close = AsyncMock()
+    monkeypatch.setattr(ps, "jwt_handler", fake_jwt, raising=False)
+    monkeypatch.setattr(ps, "db_writer_client", None, raising=False)
+
+    import litellm
+
+    monkeypatch.setattr(litellm, "cache", None, raising=False)
+    monkeypatch.setattr(litellm, "success_callback", [], raising=False)
+
+    track_audit_task(asyncio.create_task(_audit_write_that_finishes_after_the_flush_starts()))
+    await asyncio.wait_for(proxy_shutdown_event(), timeout=2.0)
+
+    assert calls == ["flush", "audit", "disconnect"]
+
+
+@pytest.mark.asyncio
 async def test_proxy_shutdown_skips_gateway_flush_without_a_database(monkeypatch):
     """No prisma client means nothing to drain to, and no attempt is made."""
     flush = AsyncMock()
@@ -245,6 +288,34 @@ async def test_proxy_shutdown_skips_gateway_flush_without_a_database(monkeypatch
     await proxy_shutdown_event()
 
     assert flush.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_proxy_shutdown_without_a_database_drains_audit_callbacks_before_the_rest_of_teardown(monkeypatch):
+    calls: list[str] = []  # mutable-ok: records call order, which is the assertion
+    monkeypatch.setattr(ps, "prisma_client", None, raising=False)
+    monkeypatch.setattr(
+        ps, "drain_post_call_redis_batches", AsyncMock(side_effect=lambda: calls.append("redis")), raising=False
+    )
+
+    fake_jwt = MagicMock()
+    fake_jwt.close = AsyncMock()
+    monkeypatch.setattr(ps, "jwt_handler", fake_jwt, raising=False)
+    monkeypatch.setattr(ps, "db_writer_client", None, raising=False)
+
+    import litellm
+
+    monkeypatch.setattr(litellm, "cache", None, raising=False)
+    monkeypatch.setattr(litellm, "success_callback", [], raising=False)
+
+    async def _audit_callback_still_sending() -> None:
+        await asyncio.sleep(0.05)
+        calls.append("audit")
+
+    track_audit_task(asyncio.create_task(_audit_callback_still_sending()))
+    await asyncio.wait_for(proxy_shutdown_event(), timeout=2.0)
+
+    assert calls == ["audit", "redis"]
 
 
 @pytest.mark.asyncio

@@ -116,6 +116,25 @@ def test_answers_openai_did_not_return_are_refusals() -> None:
     assert [answer.name for answer in response.answers] == ["damaged", None, "severity", "fraud"]
 
 
+def test_a_box_answer_from_openai_keeps_its_box_instead_of_becoming_a_refusal() -> None:
+    request: Final = {
+        "input": _OPENAI_REQUEST["input"],
+        "questions": [{"type": "box", "name": "crack", "instructions": "Where is the crack?"}],
+    }
+    box: Final = {"top": 0.1, "bottom": 0.4, "left": 0.2, "right": 0.6}
+    payload: Final = {**_OPENAI_RESPONSE, "answers": [{"type": "box", "name": "crack", "box": box, "confidence": 0.7}]}
+    ir: Final = _openai_ir(request)
+
+    response: Final = ir_to_openai_response(OpenAIDecisionsConfig().parse_response(payload, ir), ir, "requested")
+
+    assert response.answers[0].model_dump(mode="json") == {
+        "type": "box",
+        "name": "crack",
+        "box": box,
+        "confidence": 0.7,
+    }
+
+
 def test_a_systemone_request_becomes_an_openai_request_with_questions_named_by_their_keys() -> None:
     request: Final = _SYSTEMONE_BODY.validate_python(
         {

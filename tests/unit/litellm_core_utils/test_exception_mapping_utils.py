@@ -129,6 +129,14 @@ context_window_test_cases = [
         "Invalid 'metadata': maximum input length is 512 characters.",
         False,
     ),
+    (
+        '{"error":{"message":"Input too long: 150055 input tokens, limit is 131072 for this model","code":"upstream_rejected"}}',
+        True,
+    ),
+    (
+        "Input should be 'error' or 'truncate', field: 'context_length_exceeded_behavior', value: 'foo'",
+        False,
+    ),
     # Negative cases (should return False)
     ("A generic API error occurred.", False),
     ("Invalid API Key provided.", False),
@@ -830,6 +838,10 @@ DEVIATIONS_FROM_THE_OPENAI_SHAPE = {
         422: (litellm.APIError, 422),
         500: (litellm.APIError, 500),
     },
+    "inferenceapis": {
+        403: PERMISSION_DENIED,
+        422: (litellm.BadRequestError, 400),
+    },
     "mistral": {402: (litellm.APIError, 402)},
     "nlp_cloud": {
         402: (litellm.RateLimitError, 429),
@@ -876,6 +888,7 @@ PROVIDERS_WITH_A_HANDLER = (
     "gemini",
     "groq",
     "huggingface",
+    "inferenceapis",
     "mistral",
     "nlp_cloud",
     "ollama",
@@ -1119,6 +1132,7 @@ PROVIDERS_THAT_RECOGNISE_A_FULL_CONTEXT_WINDOW = (
     "fireworks_ai",
     "gemini",
     "groq",
+    "inferenceapis",
     "mistral",
     "openai",
     "perplexity",
@@ -2448,7 +2462,6 @@ def test_openai_gateway_timeout_error():
     Test that the OpenAI gateway timeout error is raised
     """
     openai_client = OpenAI()
-    mapped_target = openai_client.chat.completions.with_raw_response  # type: ignore
 
     def _return_exception(*args, **kwargs):
 
@@ -2484,8 +2497,8 @@ def test_openai_gateway_timeout_error():
 
     with pytest.raises(litellm.Timeout) as exc_info:
         with patch.object(
-            mapped_target,
-            "create",
+            openai_client,
+            "post",
             side_effect=_return_exception,
         ):
             litellm.completion(

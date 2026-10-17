@@ -10,7 +10,6 @@ legacy internal names with `general_settings.use_team_public_model_name: false`.
 
 from __future__ import annotations
 
-import re
 from collections.abc import Container, Mapping, Sequence
 from dataclasses import dataclass
 from functools import reduce
@@ -21,15 +20,13 @@ from typing import TYPE_CHECKING, Final, cast
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
+from litellm.constants import CLAUDE_CODE_CLIENT, CLAUDE_CODE_PICKER_PATTERN, GATEWAY_CLIENT_HEADER
 from litellm.router_utils.common_utils import resolve_model_group_alias
 
 if TYPE_CHECKING:
     from litellm.router import Router
     from litellm.types.proxy.model_listing import ModelInfoResponse
 
-CLAUDE_CODE_PICKER_PATTERN: Final = re.compile(r"claude|anthropic", re.IGNORECASE)
-GATEWAY_CLIENT_HEADER: Final = "x-gateway-client"
-CLAUDE_CODE_CLIENT: Final = "claude-code"
 _CLAUDE_CODE_ALIAS_PREFIX: Final = "claude-router-"
 _ONE_MILLION_SUFFIX: Final = "[1m]"
 _ONE_MILLION_TOKENS: Final = 1_000_000
