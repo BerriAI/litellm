@@ -95,13 +95,14 @@ def _request_message_count(kwargs: Mapping[str, object]) -> int:
 
 
 def is_cache_call_type_supported(call_type: str, supported_call_types: Sequence[str] | None) -> bool:
-    if supported_call_types is None:
-        return True
+    allowed_call_types: Final = (
+        DEFAULT_CACHING_SUPPORTED_CALL_TYPES if supported_call_types is None else supported_call_types
+    )
     normalised_call_type: Final = call_type.lstrip("_")
     covering_call_types: Final = (
         ("aresponses", "responses") if normalised_call_type == "aresponses" else (normalised_call_type,)
     )
-    return any(name in supported_call_types for name in covering_call_types)
+    return any(name in allowed_call_types for name in covering_call_types)
 
 
 class Cache:
@@ -205,7 +206,7 @@ class Cache:
             gcs_path (str, optional): Folder path inside the bucket to store cache files.
 
             # Common Cache Args
-            supported_call_types (list, optional): List of call types to cache for. Defaults to cache == on for all call types.
+            supported_call_types (list, optional): Call types to cache. None uses DEFAULT_CACHING_SUPPORTED_CALL_TYPES.
             **kwargs: Additional keyword arguments for redis.Redis() cache
 
         Raises:
@@ -981,21 +982,16 @@ class Cache:
         If cache is default_off then this is only true when user has opted in to use cache
         Always False once the request carries more than `max_messages` messages
         """
-        if self.supported_call_types is not None:
-            raw_source: Final = (
-                kwargs.get("call_type")
-                if kwargs.get("call_type") is not None
-                else (
-                    kwargs.get("route_type")
-                    if kwargs.get("route_type") is not None
-                    else kwargs.get("original_function")
-                )
-            )
-            if raw_source is not None:
-                raw_name: Final[object] = getattr(raw_source, "value", None) or getattr(raw_source, "__name__", None)
-                call_type_name: Final = raw_name if isinstance(raw_name, str) else str(raw_source)
-                if not is_cache_call_type_supported(call_type_name, self.supported_call_types):
-                    return False
+        raw_source: Final = (
+            kwargs.get("call_type")
+            if kwargs.get("call_type") is not None
+            else (kwargs.get("route_type") if kwargs.get("route_type") is not None else kwargs.get("original_function"))
+        )
+        if raw_source is not None:
+            raw_name: Final[object] = getattr(raw_source, "value", None) or getattr(raw_source, "__name__", None)
+            call_type_name: Final = raw_name if isinstance(raw_name, str) else str(raw_source)
+            if not is_cache_call_type_supported(call_type_name, self.supported_call_types):
+                return False
         if self.max_messages is not None and _request_message_count(kwargs) > self.max_messages:
             return False
         if self.mode == CacheMode.default_on:

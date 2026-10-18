@@ -3279,16 +3279,34 @@ def test_call_type_filter_preserves_responses_alias(monkeypatch: pytest.MonkeyPa
     assert handler.should_store_result_in_cache(original_function=litellm.aresponses, kwargs={}) is True
 
 
-@pytest.mark.parametrize("allow_all", [True, False])
-def test_unrestricted_and_empty_call_type_lists(monkeypatch: pytest.MonkeyPatch, allow_all: bool) -> None:
-    cache: Final = Cache(type="local", supported_call_types=None if allow_all else [])
+@pytest.mark.parametrize("allow_inference", [True, False])
+def test_none_and_empty_call_type_lists(monkeypatch: pytest.MonkeyPatch, allow_inference: bool) -> None:
+    cache: Final = Cache(type="local", supported_call_types=None if allow_inference else [])
     monkeypatch.setattr(litellm, "cache", cache)
     handler: Final = LLMCachingHandler(
         original_function=Router._aembedding, request_kwargs={}, start_time=datetime(2026, 1, 1)
     )
 
-    assert cache.should_use_cache(call_type="_aembedding") is allow_all
-    assert handler.should_store_result_in_cache(original_function=Router._aembedding, kwargs={}) is allow_all
+    assert cache.should_use_cache(call_type="_aembedding") is allow_inference
+    assert handler.should_store_result_in_cache(original_function=Router._aembedding, kwargs={}) is allow_inference
+
+
+def test_none_call_types_do_not_read_or_store_file_listings(monkeypatch: pytest.MonkeyPatch) -> None:
+    cache: Final = Cache(type="local", supported_call_types=None)
+    monkeypatch.setattr(litellm, "cache", cache)
+    handler: Final = LLMCachingHandler(
+        original_function=litellm.afile_list, request_kwargs={}, start_time=datetime(2026, 1, 1)
+    )
+    response: Final = {"object": "list", "data": [{"id": "private-file", "object": "file"}]}
+
+    handler.sync_set_cache(result=response, kwargs={"cache_key": "file-list"})
+    assert cache.get_cache(cache_key="file-list") is None
+
+    cache.add_cache(response, cache_key="existing")
+    assert cache.get_cache(cache_key="existing", call_type="afile_list") is None
+
+    cache.add_cache(response, cache_key="direct-file-list", call_type="afile_list")
+    assert cache.get_cache(cache_key="direct-file-list") is None
 
 
 def test_call_type_filter_preserves_message_limit_and_opt_in() -> None:
