@@ -4,7 +4,12 @@ import { Info } from "lucide-react";
 import { ColumnDef } from "@tanstack/react-table";
 
 import { DataTableMultiSortHeader, DataTableSortHeader, type DataTableSortField } from "@/components/shared/DataTable";
-import { inheritedBudgetGates } from "@/components/shared/InheritedBudgetHint";
+import {
+  inheritedBudgetGates,
+  keyOwnerBudgetSource,
+  teamMemberBudgetGate,
+  type TeamMemberBudgetSource,
+} from "@/components/shared/InheritedBudgetHint";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -13,6 +18,7 @@ import {
   IdCell,
   IdentityCell,
   ModelsCell,
+  MoneyCell,
   SpendBudgetCell,
   StatusBadge,
   UserPopoverCell,
@@ -43,6 +49,13 @@ export const KEY_TABLE_SORT_FIELDS: readonly string[] = [
 ];
 
 const getKeyStatus = (key: KeyResponse): KeyStatus => {
+  if (key.deleted_at) {
+    return {
+      tone: "neutral",
+      label: "Deleted",
+      tooltip: `Deleted ${new Date(key.deleted_at).toLocaleString()}${key.deleted_by ? ` by ${key.deleted_by}` : ""}. Kept for audit and spend history; requests using this key are rejected.`,
+    };
+  }
   if (key.blocked === true) {
     const isScimBlocked = (key.metadata as Record<string, unknown> | null | undefined)?.scim_blocked === true;
     return {
@@ -77,13 +90,17 @@ const InfoHeader = ({ label, tooltip }: { label: string; tooltip: string }) => (
 interface KeyTableColumnsDeps {
   allTeams: Team[];
   organizations: Organization[];
+  teamMemberBudgets: Readonly<Record<string, TeamMemberBudgetSource>>;
   onSelectKey: (key: KeyResponse) => void;
+  applyUserBudgetToTeamKeys: boolean;
 }
 
 export const getKeyTableColumns = ({
   allTeams,
   organizations,
+  teamMemberBudgets,
   onSelectKey,
+  applyUserBudgetToTeamKeys,
 }: KeyTableColumnsDeps): ColumnDef<KeyResponse>[] => [
   {
     id: "key_alias",
@@ -257,22 +274,54 @@ export const getKeyTableColumns = ({
   {
     id: "spend",
     accessorKey: "spend",
-    meta: { title: "Spend / Budget", skeleton: "meter" },
+    meta: { title: "Spend / Budget", skeleton: "meter", numeric: true },
     header: ({ table }) => <DataTableMultiSortHeader table={table} fields={SPEND_BUDGET_SORT_FIELDS} />,
-    size: 180,
+    size: 240,
     enableSorting: true,
     cell: ({ row }) => {
       const team = allTeams.find((t) => t.team_id === row.original.team_id);
       const orgId = row.original.organization_id || row.original.org_id || team?.organization_id;
       const organization = organizations.find((o) => o.organization_id === orgId);
+      const memberGate =
+        row.original.max_budget == null
+          ? teamMemberBudgetGate(
+              teamMemberBudgets[row.original.team_id ?? ""],
+              row.original.user_id,
+              row.original.user?.user_email,
+            )
+          : null;
       return (
         <SpendBudgetCell
           spend={row.original.spend}
           maxBudget={row.original.max_budget}
-          inheritedGates={row.original.max_budget == null ? inheritedBudgetGates(team, organization) : []}
+          teamMemberGate={memberGate}
+          inheritedGates={
+            row.original.max_budget == null
+              ? inheritedBudgetGates(
+                  team,
+                  organization,
+                  keyOwnerBudgetSource(row.original, applyUserBudgetToTeamKeys),
+                  memberGate,
+                )
+              : []
+          }
         />
       );
     },
+  },
+  {
+    id: "total_spend",
+    accessorKey: "total_spend",
+    meta: { title: "Lifetime Spend" },
+    header: () => (
+      <InfoHeader
+        label="Lifetime Spend"
+        tooltip="Cumulative spend across every budget period. Budget resets do not touch this value. Lifetime tracking started with LiteLLM v1.103.0 on September 19, 2026, so keys created earlier only count spend since that upgrade."
+      />
+    ),
+    size: 130,
+    enableSorting: false,
+    cell: (info) => <MoneyCell value={info.getValue() as number | null | undefined} showZero />,
   },
   {
     id: "budget_reset_at",

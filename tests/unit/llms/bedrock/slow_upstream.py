@@ -1,0 +1,52 @@
+"""An upstream whose first byte takes longer than the request allows, the way a slow model does.
+
+httpx hands every transport the request's timeout in ``request.extensions["timeout"]``, so this one honours it
+in process the way a socket would: a read timeout shorter than the first byte's latency times out, a longer one
+gets the answer.
+"""
+
+from __future__ import annotations
+
+import json
+from collections.abc import Callable
+from typing import Final
+
+import httpx
+from pydantic import TypeAdapter
+
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+
+STREAM_TIMEOUT_SECONDS: Final = 0.5
+UPSTREAM_FIRST_BYTE_SECONDS: Final = 2.0
+CONVERSE_ANSWER: Final = json.dumps(
+    {
+        "output": {"message": {"role": "assistant", "content": [{"text": "hi"}]}},
+        "stopReason": "end_turn",
+        "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+        "metrics": {"latencyMs": 1},
+    }
+).encode()
+
+_TIMEOUT_EXTENSION: Final = TypeAdapter(dict[str, float | None])
+
+
+def slow_upstream_answer(body: bytes = b"") -> Callable[[httpx.Request], httpx.Response]:
+    def answer(request: httpx.Request) -> httpx.Response:
+        read_timeout: Final = _TIMEOUT_EXTENSION.validate_python(request.extensions["timeout"])["read"]
+        if read_timeout is not None and read_timeout < UPSTREAM_FIRST_BYTE_SECONDS:
+            raise httpx.ReadTimeout(f"no byte arrived within {read_timeout}s", request=request)
+        return httpx.Response(200, content=body, request=request)
+
+    return answer
+
+
+def slow_upstream_transport(body: bytes = b"") -> httpx.MockTransport:
+    return httpx.MockTransport(slow_upstream_answer(body))
+
+
+def slow_upstream_async_client(body: bytes = b"") -> AsyncHTTPHandler:
+    return AsyncHTTPHandler(transport=slow_upstream_transport(body))
+
+
+def slow_upstream_sync_client(body: bytes = b"") -> HTTPHandler:
+    return HTTPHandler(client=httpx.Client(transport=slow_upstream_transport(body)))
