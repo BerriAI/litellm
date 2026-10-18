@@ -48,11 +48,12 @@ def test_validate_environment_sets_headers(config: OpenAIEvalsConfig):
 
 
 @pytest.fixture()
-def reset_shutdown_warning(monkeypatch):
+def reset_shutdown_warning():
     import litellm.llms.openai.evals.transformation as evals_transformation
 
-    monkeypatch.setattr(evals_transformation, "_openai_evals_shutdown_warned", False)
-    return evals_transformation
+    evals_transformation._log_openai_evals_shutdown.cache_clear()
+    yield evals_transformation
+    evals_transformation._log_openai_evals_shutdown.cache_clear()
 
 
 def test_validate_environment_warns_once_about_openai_evals_shutdown(

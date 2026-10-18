@@ -3,6 +3,7 @@ OpenAI Evals API configuration and transformations
 """
 
 from collections.abc import Mapping
+from functools import cache
 from typing import Final
 from urllib.parse import urlparse
 
@@ -39,7 +40,12 @@ OPENAI_EVALS_SHUTDOWN_MESSAGE: Final = (
     "Requests to api.openai.com/v1/evals will fail after that date, and OpenAI names no API replacement. "
     "See https://developers.openai.com/api/docs/deprecations"
 )
-_openai_evals_shutdown_warned = False
+
+
+@cache
+def _log_openai_evals_shutdown() -> None:
+    """Log the shutdown notice; the cache makes it run once per process."""
+    verbose_logger.warning(OPENAI_EVALS_SHUTDOWN_MESSAGE)
 
 
 def _warn_openai_evals_shutdown_once(api_base: str | None) -> None:
@@ -47,14 +53,9 @@ def _warn_openai_evals_shutdown_once(api_base: str | None) -> None:
 
     Azure and other OpenAI-compatible bases keep their own lifecycles, so they don't get the warning.
     """
-    global _openai_evals_shutdown_warned
-    if _openai_evals_shutdown_warned:
-        return
     host: Final = urlparse(api_base).hostname if api_base else "api.openai.com"
-    if host != "api.openai.com":
-        return
-    _openai_evals_shutdown_warned = True
-    verbose_logger.warning(OPENAI_EVALS_SHUTDOWN_MESSAGE)
+    if host == "api.openai.com":
+        _log_openai_evals_shutdown()
 
 
 def _parsed_response_json(raw_response: httpx.Response) -> Mapping[str, object]:
