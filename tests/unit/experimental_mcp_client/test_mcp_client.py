@@ -3,7 +3,6 @@ import base64
 import importlib
 import json
 import os
-import selectors
 import sys
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
@@ -71,6 +70,7 @@ from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
 from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import StaticHeaderAuth
 from litellm.types.mcp import MCPAuth, MCPStdioConfig, MCPTransport
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
+from tests._support.clock_loops import AutojumpClockLoop, ManualClockLoop
 
 _JSONRPC_MESSAGE_ADAPTER: Final = TypeAdapter(JSONRPCMessage)
 
@@ -303,42 +303,6 @@ class _MockTransportClient(MCPClient):
         if self._transport_context is not None:
             return self._transport_context(self.server_url, http_client), http_client
         return streamable_http_client(self.server_url, http_client=http_client), http_client
-
-
-class _ManualClockLoop(asyncio.SelectorEventLoop):
-    """An event loop whose clock moves only when the test advances it, so timeouts fire on test-controlled conditions"""
-
-    def __init__(self, selector: selectors.BaseSelector | None = None) -> None:
-        super().__init__(selector)
-        self._now = 0.0
-
-    def time(self) -> float:
-        return self._now
-
-    def advance(self, seconds: float) -> None:
-        self._now += seconds
-
-
-class _AutojumpSelector(selectors.DefaultSelector):
-    def __init__(self, advance: Callable[[float], None]) -> None:
-        super().__init__()
-        self._advance = advance
-
-    def select(self, timeout: float | None = None) -> list[tuple[selectors.SelectorKey, int]]:
-        ready: Final = super().select(0)
-        if ready or timeout == 0:
-            return ready
-        if timeout is None:
-            return super().select(None)
-        self._advance(timeout)
-        return []
-
-
-class _AutojumpClockLoop(_ManualClockLoop):
-    """A manual-clock loop that jumps to the next timer only once no callback or I/O event is left to run"""
-
-    def __init__(self) -> None:
-        super().__init__(_AutojumpSelector(self.advance))
 
 
 class _FakeExceptionGroup(Exception):
@@ -2140,7 +2104,7 @@ async def test_transport_parsing_failure_is_preserved(transport: MCPTransport, f
 
 
 def test_sse_read_failure_is_preserved() -> None:
-    loop: Final = _AutojumpClockLoop()
+    loop: Final = AutojumpClockLoop()
 
     async def run() -> None:
         client: Final = MCPClient(server_url="https://example.com/sse", transport_type=MCPTransport.sse, timeout=0.2)
@@ -2614,7 +2578,7 @@ def test_optional_discovery_rejects_incomplete_walks(
         "resources/list": {"name": "first", "uri": "test://first"},
         "resources/templates/list": {"name": "first", "uriTemplate": "test://{name}"},
     }[method]
-    loop: Final = _ManualClockLoop()
+    loop: Final = ManualClockLoop()
 
     async def run() -> None:
         cancelled: Final = asyncio.Event()
@@ -3632,7 +3596,7 @@ async def test_modern_call_requires_schema_from_bounded_listing(
 def test_modern_call_uses_discovery_deadline_for_multiple_pages() -> None:
     from mcp.types import ToolsCapability
 
-    loop: Final = _AutojumpClockLoop()
+    loop: Final = AutojumpClockLoop()
 
     async def respond(request: httpx2.Request) -> httpx2.Response:
         payload: Final = _JSONRPC_MESSAGE_ADAPTER.validate_json(request.content)
@@ -3926,7 +3890,7 @@ async def test_optional_discovery_retains_freshness_across_pages(
         }
         return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "result": listing_result})
 
-    clock: Final = _ManualClockLoop()
+    clock: Final = ManualClockLoop()
 
     class CleanupTransport(httpx2.AsyncBaseTransport):
         def __init__(self) -> None:
@@ -3986,7 +3950,7 @@ def test_prompt_continuation_polling_respects_the_original_deadline() -> None:
         )
         return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "result": result})
 
-    loop: Final = _AutojumpClockLoop()
+    loop: Final = AutojumpClockLoop()
     client: Final = _MockTransportClient(
         respond, server_url="https://example.com/mcp", protocol_version="2026-07-28", timeout=0.12
     )

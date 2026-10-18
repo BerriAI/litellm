@@ -347,6 +347,7 @@ def test_bridged_rate_limit_after_output_is_a_provider_typed_error_frame_behind_
     )
     response, _ = _in_stream_error_status(gateway, stream)
     assert response.status_code == 200, response.text
+    assert response.text.rstrip().endswith("data: [DONE]") and response.text.count("data: [DONE]") == 1, response.text
     frames: Final = data_frames(response.text)
     content: Final = chat_content(frames)
     assert content == "Hello there", response.text
