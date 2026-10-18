@@ -18,7 +18,7 @@ from pydantic import JsonValue
 
 from tests.integration.caching.response_cache_case import await_entry, redis_store
 
-pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
+pytestmark: Final = [pytest.mark.timeout(2 * graceful_stop_seconds() + 120), pytest.mark.shares_worker_state]
 
 _POLICY: Final = "integration-tool-policy"
 _BLOCK: Final = "tool-permission-block"
@@ -67,7 +67,12 @@ def _config(directory: Path, model: str, upstream: str, shell: str) -> Path:
                 "router_settings": {"disable_cooldowns": True},
                 "litellm_settings": {
                     "cache": True,
-                    "cache_params": {"type": "redis", "host": "os.environ/REDIS_HOST", "port": "os.environ/REDIS_PORT"},
+                    "cache_params": {
+                        "type": "redis",
+                        "host": "os.environ/REDIS_HOST",
+                        "port": "os.environ/REDIS_PORT",
+                        "max_messages": None,
+                    },
                 },
                 "guardrails": [
                     {

@@ -1,8 +1,8 @@
 import asyncio
-import os
 from collections.abc import AsyncIterator, Generator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
+from importlib import import_module
 from typing import Final
 
 import pytest
@@ -12,10 +12,7 @@ import litellm
 from litellm import utils
 from litellm.litellm_core_utils import litellm_logging, thread_pool_executor
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.rust_bridge.configuration import (
-    _CONFIGURATION,
-    _parse_env_bool,
-)
+from litellm.rust_bridge.configuration import _CONFIGURATION
 from tests.test_litellm_rust.support.callback_recorder import drain_logging
 from tests.test_litellm_rust.support.clickhouse import clickhouse_url as clickhouse_url
 from tests.test_litellm_rust.support.isolation import isolated_callback_registries, rebound
@@ -49,17 +46,13 @@ def recording_server() -> Generator[RecordingServer]:
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
-    if not _parse_env_bool(os.environ.get("LITELLM_RUST")):
-        skip: Final = pytest.mark.skip(reason="requires LITELLM_RUST=1 and a compiled Rust extension")
+    try:
+        import_module("litellm.rust_bridge._native")
+    except ImportError:
+        skip: Final = pytest.mark.skip(reason="requires a compiled litellm.rust_bridge._native extension")
         for item in items:
             if "test_litellm_rust" in item.path.parts:
                 item.add_marker(skip)
-        return
-
-    try:
-        from litellm.rust_bridge import _native  # noqa: F401  # validates the installed extension
-    except ImportError as error:
-        raise pytest.UsageError("LITELLM_RUST=1 requires a compiled litellm.rust_bridge._native extension") from error
 
 
 @pytest.fixture

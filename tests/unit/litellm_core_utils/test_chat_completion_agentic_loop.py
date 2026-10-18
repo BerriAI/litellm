@@ -25,13 +25,13 @@ from typing import Any, Dict, Final, List, Optional, Tuple
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
+from openai._legacy_response import LegacyAPIResponse
 
 import litellm
-from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.code_interpreter_interception.handler import (
     CodeInterpreterInterceptionLogger,
 )
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.chat_completion_agentic_loop import (
     maybe_run_chat_completion_agentic_loop,
 )
@@ -45,9 +45,9 @@ from litellm.types.integrations.custom_logger import (
     AgenticLoopRequestPatch,
 )
 from litellm.types.utils import (
+    ChatCompletionMessageToolCall,
     Choices,
     Function,
-    ChatCompletionMessageToolCall,
     Message,
     ModelResponse,
 )
@@ -142,7 +142,7 @@ def _raw_response_for(model_response: ModelResponse) -> MagicMock:
     (an object exposing `.headers` and `.parse()` -> something with model_dump)."""
     parsed = MagicMock()
     parsed.model_dump.return_value = model_response.model_dump()
-    raw = MagicMock()
+    raw = MagicMock(spec=LegacyAPIResponse)
     raw.headers = {}
     raw.parse.return_value = parsed
     return raw
@@ -171,7 +171,7 @@ async def test_internal_control_fields_never_leak_into_provider_body(restore_cal
         ]
     )
     mock_client = MagicMock()
-    mock_client.chat.completions.with_raw_response.create = create
+    mock_client.post = create
 
     response = await litellm.acompletion(
         model="openai/gpt-4o-mini",
