@@ -273,12 +273,12 @@ def read_classifier_model_setting() -> str | None:
     return configured if isinstance(configured, str) and configured else None
 
 
+def proxy_serves_safeguards(safeguards: object) -> bool:
+    return requested_dangerous_tool_use(safeguards) is not None and read_classifier_model_setting() is not None
+
+
 def native_route_classifies(model: str, safeguards: object) -> bool:
-    return (
-        "claude" not in model.lower()
-        and requested_dangerous_tool_use(safeguards) is not None
-        and read_classifier_model_setting() is not None
-    )
+    return "claude" not in model.lower() and proxy_serves_safeguards(safeguards)
 
 
 def build_safeguards_evaluator(

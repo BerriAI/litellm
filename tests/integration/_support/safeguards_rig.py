@@ -287,6 +287,7 @@ def safeguards_rig(
     directory: Path,
     *,
     environment: Callable[[str], Mapping[str, str]] = no_environment,
+    remove_environment: tuple[str, ...] = (),
     workers: int = 2,
     classifier_model: JsonValue | Omitted = CLASSIFIER_MODEL,
     general_settings: Mapping[str, JsonValue] | None = None,
@@ -310,6 +311,7 @@ def safeguards_rig(
             directory,
             dict(environment(wire.url)),
             config=path,
+            remove_environment=remove_environment,
             workers=workers,
             state=OwnedState.SHARED_WITH_WORKER,
         ) as owned:
