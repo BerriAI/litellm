@@ -5,13 +5,14 @@ import ssl
 import weakref
 from collections.abc import Awaitable, Callable
 from importlib import import_module
-from typing import cast
+from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from redis.asyncio import Redis, RedisCluster
 from redis.asyncio.cluster import ClusterNode
 from redis.asyncio.connection import SSLConnection
+from redis.crc import key_slot
 
 from litellm.caching.evicted_client_closer import EvictedClientCloser
 from litellm.caching.llm_caching_handler import LLMClientCache
@@ -42,6 +43,31 @@ def test_redis_cluster_batch_get(mock_init_redis_cluster):
     # Verify mget_nonatomic was called instead of mget
     mock_redis.mget_nonatomic.assert_called_once()
     assert not mock_redis.mget.called
+
+
+@pytest.mark.parametrize(
+    ("namespace", "expected_source_key", "expected_processing_prefix"),
+    [
+        (None, "buffer", "{buffer}:"),
+        ("tenant", "tenant:buffer", "tenant:{tenant:buffer}:"),
+    ],
+)
+def test_redis_cluster_processing_list_key_preserves_namespace_and_hash_slot(
+    namespace: str | None,
+    expected_source_key: str,
+    expected_processing_prefix: str,
+) -> None:
+    with patch("litellm._redis.init_redis_cluster", return_value=MagicMock()):
+        cache: Final = RedisClusterCache(
+            startup_nodes=[{"host": "localhost", "port": 6379}],
+            namespace=namespace,
+        )
+
+    source_namespaced_key: Final = cache.check_and_fix_namespace("buffer")
+    processing_key: Final = cache._processing_list_key(source_namespaced_key, "worker-1")
+    assert source_namespaced_key == expected_source_key
+    assert processing_key.startswith(expected_processing_prefix)
+    assert key_slot(processing_key.encode()) == key_slot(source_namespaced_key.encode())
 
 
 @pytest.mark.asyncio

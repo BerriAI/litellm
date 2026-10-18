@@ -8,6 +8,11 @@ from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fakeredis import FakeRedis as SyncFakeRedis
+from fakeredis import FakeServer
+from fakeredis.aioredis import FakeRedis
+from redis.asyncio.client import Pipeline
+from redis.exceptions import ConnectionError as RedisConnectionError
 
 import litellm
 from litellm._service_logger import ServiceLogging
@@ -21,6 +26,63 @@ def redis_no_ping():
         # Either raise an exception or return a mock that will handle the task creation
         mock_get_loop.side_effect = RuntimeError("No running event loop")
         yield
+
+
+def _cache_with_fakeredis(namespace: str, redis_version: str | float = "7.0.0") -> tuple[RedisCache, FakeRedis]:
+    server: Final = FakeServer()
+    with (
+        patch("asyncio.get_running_loop", side_effect=RuntimeError("No running event loop")),
+        patch(  # test-quality-ok: RedisCache.__init__ builds its sync client eagerly, with no injection point
+            "litellm._redis.get_redis_client", return_value=SyncFakeRedis(server=server)
+        ),
+    ):
+        redis_cache: Final = RedisCache(host="127.0.0.1", port=_closed_port(), namespace=namespace)
+    redis_cache.redis_version = redis_version
+    redis_client: Final = FakeRedis(server=server)
+    litellm.in_memory_llm_clients_cache.set_cache(key=redis_cache._get_async_client_cache_key(), value=redis_client)
+    return redis_cache, redis_client
+
+
+def _replay_first_pipeline(monkeypatch: pytest.MonkeyPatch, redis_client: FakeRedis, sent_commands: int | None) -> None:
+    """Make the first pipeline behave like a cluster retry after a lost reply, or a connection
+    dropped after sent_commands commands reached Redis"""
+    original_pipeline: Final = redis_client.pipeline
+    pipeline_calls: Final = iter(range(2))
+
+    def pipeline_with_replay(transaction: bool = True) -> Pipeline:
+        pipeline: Final = original_pipeline(transaction=transaction)
+        if next(pipeline_calls, None) != 0:
+            return pipeline
+        original_execute: Final = pipeline.execute
+
+        async def replayed_execute(raise_on_error: bool = True) -> list[object]:
+            commands: Final = tuple(pipeline.command_stack)
+            if sent_commands is not None:
+                pipeline.command_stack = list(commands[:sent_commands])
+                await original_execute(raise_on_error=raise_on_error)
+                raise RedisConnectionError("connection dropped mid-pipeline")
+            await original_execute(raise_on_error=raise_on_error)
+            pipeline.command_stack = list(commands)
+            return await original_execute(raise_on_error=raise_on_error)
+
+        monkeypatch.setattr(pipeline, "execute", replayed_execute)
+        return pipeline
+
+    monkeypatch.setattr(redis_client, "pipeline", pipeline_with_replay)
+
+
+@pytest.mark.asyncio
+async def test_a_retried_lmove_drain_keeps_the_rows_its_first_attempt_moved(monkeypatch: pytest.MonkeyPatch) -> None:
+    redis_cache, redis_client = _cache_with_fakeredis(namespace="retry")
+    await redis_client.rpush("retry:buffer", "row-1", "row-2")
+    _replay_first_pipeline(monkeypatch, redis_client, sent_commands=None)
+
+    drained: Final = await redis_cache.async_drain_list_to_processing(
+        key="buffer", worker_id="worker-1", count=10, ttl_seconds=60
+    )
+
+    assert drained == ["row-1", "row-2"]
+    assert await redis_client.lrange("retry:buffer:processing:worker-1", 0, -1) == [b"row-1", b"row-2"]
 
 
 @pytest.fixture
@@ -57,6 +119,100 @@ def test_check_and_fix_namespace_prefixes_keys_sharing_the_namespace_prefix(
     monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
     redis_cache = RedisCache(namespace=namespace)
     assert redis_cache.check_and_fix_namespace(key=key) == expected
+
+
+@pytest.mark.asyncio
+async def test_async_drain_list_to_processing_respects_count_pending_order_and_namespace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redis_cache, redis_client = _cache_with_fakeredis(namespace="tenant")
+    await redis_client.rpush("tenant:buffer", "first", "second", "third")
+
+    drained: Final = await redis_cache.async_drain_list_to_processing(
+        key="buffer",
+        worker_id="worker-1",
+        count=2,
+        ttl_seconds=60,
+    )
+
+    processing_key: Final = "tenant:buffer:processing:worker-1"
+    assert drained == ["first", "second"]
+    assert await redis_client.lrange(processing_key, 0, -1) == [b"first", b"second"]
+    await redis_client.rpush("tenant:buffer", "newer")
+
+    pending: Final = await redis_cache.async_drain_list_to_processing(
+        key="buffer",
+        worker_id="worker-1",
+        count=2,
+        ttl_seconds=60,
+    )
+
+    assert pending == ["first", "second"]
+    assert await redis_client.lrange("tenant:buffer", 0, -1) == [b"third", b"newer"]
+    redis_keys: Final = await redis_client.keys("*")
+    assert set(redis_keys) == {b"tenant:buffer", processing_key.encode(), b"tenant:buffer:processing-lists"}
+    assert all(redis_key.startswith(b"tenant:") for redis_key in redis_keys)
+
+
+@pytest.mark.asyncio
+async def test_async_drain_list_to_processing_replaces_invalid_utf8_and_acknowledges(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redis_cache, redis_client = _cache_with_fakeredis(namespace="tenant")
+    await redis_client.rpush("tenant:buffer", b"\xff", b"valid")
+
+    drained: Final = await redis_cache.async_drain_list_to_processing(
+        key="buffer",
+        worker_id="worker-utf8",
+        count=2,
+        ttl_seconds=60,
+    )
+    assert drained == ["\ufffd", "valid"]
+
+    await redis_cache.async_ack_processing_list(key="buffer", worker_id="worker-utf8", ttl_seconds=60)
+    assert (
+        await redis_cache.async_drain_list_to_processing(
+            key="buffer",
+            worker_id="worker-utf8",
+            count=2,
+            ttl_seconds=60,
+        )
+        == []
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("redis_version", "expected_items", "expected_processing", "expected_buffer"),
+    [
+        ("6.2.0", ("first", "second"), (b"first", b"second"), (b"third",)),
+        (7.2, ("first", "second"), (b"first", b"second"), (b"third",)),
+        (6.2, ("first", "second"), (b"first", b"second"), (b"third",)),
+    ],
+)
+async def test_async_drain_list_to_processing_preserves_pending_items_for_redis_version(
+    monkeypatch: pytest.MonkeyPatch,
+    redis_version: str | float,
+    expected_items: tuple[str, ...],
+    expected_processing: tuple[bytes, ...],
+    expected_buffer: tuple[bytes, ...],
+) -> None:
+    redis_cache, redis_client = _cache_with_fakeredis(
+        namespace="tenant",
+        redis_version=redis_version,
+    )
+    await redis_client.rpush("tenant:buffer", "first", "second", "third")
+
+    drained: Final = await redis_cache.async_drain_list_to_processing(
+        key="buffer",
+        worker_id="worker-1",
+        count=2,
+        ttl_seconds=60,
+    )
+
+    assert drained == list(expected_items)
+    assert tuple(await redis_client.lrange("tenant:buffer:processing:worker-1", 0, -1)) == expected_processing
+    assert tuple(await redis_client.lrange("tenant:buffer", 0, -1)) == expected_buffer
 
 
 @pytest.mark.parametrize("namespace", [None, "litellm"])

@@ -1,11 +1,20 @@
+import asyncio
 import json
+import socket
 from datetime import datetime, timezone
+from itertools import count
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fakeredis import FakeRedis as SyncFakeRedis
+from fakeredis import FakeServer
+from fakeredis.aioredis import FakeRedis
+from redis.asyncio.client import Pipeline
+from redis.exceptions import TimeoutError as RedisTimeoutError
 
-
+import litellm
+from litellm.caching.redis_cache import RedisCache
 from litellm.constants import REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import DailyTagSpendTransaction
@@ -89,6 +98,101 @@ def mock_redis_cache():
 def redis_update_buffer(mock_redis_cache):
     """Create a RedisUpdateBuffer with a mock RedisCache"""
     return RedisUpdateBuffer(redis_cache=mock_redis_cache)
+
+
+def _closed_port() -> int:
+    with socket.socket() as unbound:
+        unbound.bind(("127.0.0.1", 0))
+        return unbound.getsockname()[1]
+
+
+def _cache_with_fakeredis() -> tuple[RedisCache, FakeRedis]:
+    server: Final = FakeServer()
+    with (
+        patch("asyncio.get_running_loop", side_effect=RuntimeError("no running event loop")),
+        patch(  # test-quality-ok: RedisCache.__init__ builds its sync client eagerly, with no injection point
+            "litellm._redis.get_redis_client", return_value=SyncFakeRedis(server=server)
+        ),
+    ):
+        redis_cache: Final = RedisCache(host="127.0.0.1", port=_closed_port(), namespace="litellm")
+    redis_cache.redis_version = "7.0.0"
+    redis_client: Final = FakeRedis(server=server)
+    litellm.in_memory_llm_clients_cache.set_cache(key=redis_cache._get_async_client_cache_key(), value=redis_client)
+    return redis_cache, redis_client
+
+
+def _hang_after_set_lands(
+    monkeypatch: pytest.MonkeyPatch, redis_client: FakeRedis, key_fragment: str, landed: asyncio.Event
+) -> None:
+    """Let the acknowledgement SET reach Redis, then block until the drain task is cancelled"""
+    original_set: Final = redis_client.set
+
+    async def set_then_hang(name: str, value: str, ex: int | None = None, xx: bool = False) -> object:
+        result: Final = await original_set(name, value, ex=ex, xx=xx)
+        if key_fragment not in name:
+            return result
+        landed.set()
+        await asyncio.Event().wait()
+        return result
+
+    monkeypatch.setattr(redis_client, "set", set_then_hang)
+
+
+def _lose_set_replies(monkeypatch: pytest.MonkeyPatch, redis_client: FakeRedis, key_fragment: str) -> None:
+    original_set: Final = redis_client.set
+
+    async def set_then_timeout(name: str, value: str, ex: int | None = None, xx: bool = False) -> object:
+        result: Final = await original_set(name, value, ex=ex, xx=xx)
+        if key_fragment in name:
+            raise RedisTimeoutError("SET reply lost")
+        return result
+
+    monkeypatch.setattr(redis_client, "set", set_then_timeout)
+
+
+def _timeout_first_pipeline_execute(monkeypatch: pytest.MonkeyPatch, redis_client: FakeRedis) -> None:
+    original_pipeline: Final = redis_client.pipeline
+    pipeline_calls: Final = count()
+
+    def pipeline_with_timeout(transaction: bool = True) -> Pipeline:
+        pipeline: Final = original_pipeline(transaction=transaction)
+        if next(pipeline_calls) == 0:
+            original_execute: Final = pipeline.execute
+
+            async def execute_then_timeout(raise_on_error: bool = True) -> list[object]:
+                await original_execute(raise_on_error=raise_on_error)
+                raise RedisTimeoutError("simulated response timeout")
+
+            monkeypatch.setattr(pipeline, "execute", execute_then_timeout)
+        return pipeline
+
+    monkeypatch.setattr(redis_client, "pipeline", pipeline_with_timeout)
+
+
+def _hold_first_pipeline_until_release(
+    monkeypatch: pytest.MonkeyPatch,
+    redis_client: FakeRedis,
+    move_executed: asyncio.Event,
+    release_move: asyncio.Event,
+) -> None:
+    original_pipeline: Final = redis_client.pipeline
+    pipeline_calls: Final = count()
+
+    def pipeline_with_timeout(transaction: bool = True) -> Pipeline:
+        pipeline: Final = original_pipeline(transaction=transaction)
+        if next(pipeline_calls) == 0:
+            original_execute: Final = pipeline.execute
+
+            async def execute_after_release() -> list[object]:
+                results: Final = await original_execute()
+                move_executed.set()
+                await release_move.wait()
+                return results
+
+            monkeypatch.setattr(pipeline, "execute", execute_after_release)
+        return pipeline
+
+    monkeypatch.setattr(redis_client, "pipeline", pipeline_with_timeout)
 
 
 @pytest.mark.asyncio
@@ -247,7 +351,7 @@ async def test_store_in_memory_spend_updates_all_empty_returns_early(redis_updat
 async def test_get_all_transactions_from_redis_buffer_pipeline(redis_update_buffer, mock_redis_cache):
     """
     Verify get_all_transactions_from_redis_buffer_pipeline correctly parses
-    and aggregates results from async_lpop_pipeline.
+    and aggregates results from each buffer drain.
     """
     # Simulate pipeline results: slot 0 = spend updates, slots 1-5 = daily categories,
     # slot 6 = budget window spend
@@ -277,17 +381,18 @@ async def test_get_all_transactions_from_redis_buffer_pipeline(redis_update_buff
         ]
     )
 
-    mock_redis_cache.async_lpop_pipeline = AsyncMock(
-        return_value=[
-            [db_spend_json],  # slot 0: db spend updates
-            [daily_user_json],  # slot 1: daily user
-            [daily_team_json],  # slot 2: daily team
-            None,  # slot 3: daily org (empty)
-            None,  # slot 4: daily end-user (empty)
-            None,  # slot 5: daily agent (empty)
-            [window_spend_json, window_spend_json],  # slot 6: budget window spend
-        ]
+    mock_redis_cache.async_drain_list_to_processing = AsyncMock(
+        side_effect=(
+            [db_spend_json],
+            [daily_user_json],
+            [daily_team_json],
+            [],
+            [],
+            [],
+            [window_spend_json, window_spend_json],
+        )
     )
+    mock_redis_cache.async_ack_processing_list = AsyncMock()
 
     result = await redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline()
 
@@ -327,12 +432,29 @@ async def test_get_all_transactions_from_redis_buffer_pipeline(redis_update_buff
     assert daily_end_user is None
     assert daily_agent is None
 
-    # Verify pipeline was called once with correct keys
-    mock_redis_cache.async_lpop_pipeline.assert_called_once()
-    from litellm.constants import REDIS_WINDOW_SPEND_UPDATE_BUFFER_KEY
+    from litellm.constants import (
+        REDIS_DAILY_AGENT_SPEND_UPDATE_BUFFER_KEY,
+        REDIS_DAILY_END_USER_SPEND_UPDATE_BUFFER_KEY,
+        REDIS_DAILY_ORG_SPEND_UPDATE_BUFFER_KEY,
+        REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY,
+        REDIS_DAILY_TEAM_SPEND_UPDATE_BUFFER_KEY,
+        REDIS_UPDATE_BUFFER_KEY,
+        REDIS_WINDOW_SPEND_UPDATE_BUFFER_KEY,
+    )
 
-    popped_keys = [op["key"] for op in mock_redis_cache.async_lpop_pipeline.call_args.kwargs["lpop_list"]]
-    assert popped_keys[6] == REDIS_WINDOW_SPEND_UPDATE_BUFFER_KEY
+    drained_keys: Final = tuple(
+        call.kwargs["key"] for call in mock_redis_cache.async_drain_list_to_processing.await_args_list
+    )
+    assert drained_keys == (
+        REDIS_UPDATE_BUFFER_KEY,
+        REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY,
+        REDIS_DAILY_TEAM_SPEND_UPDATE_BUFFER_KEY,
+        REDIS_DAILY_ORG_SPEND_UPDATE_BUFFER_KEY,
+        REDIS_DAILY_END_USER_SPEND_UPDATE_BUFFER_KEY,
+        REDIS_DAILY_AGENT_SPEND_UPDATE_BUFFER_KEY,
+        REDIS_WINDOW_SPEND_UPDATE_BUFFER_KEY,
+    )
+    assert mock_redis_cache.async_ack_processing_list.await_count == 4
 
 
 @pytest.mark.asyncio
@@ -349,8 +471,8 @@ async def test_org_member_spend_is_summed_across_pods_and_restored_on_rpush_fail
 
     member_key: Final = "organization_id::org-1::user_id::user-1"
     pod_json: Final = json.dumps({"org_member_list_transactions": {member_key: 0.25}})
-    mock_redis_cache.async_lpop_pipeline = AsyncMock(
-        return_value=[[pod_json, pod_json], None, None, None, None, None, None]
+    mock_redis_cache.async_drain_list_to_processing = AsyncMock(
+        side_effect=([pod_json, pod_json], [], [], [], [], [], [])
     )
 
     (db_spend, *_rest) = await redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline()
@@ -424,7 +546,7 @@ async def test_restore_transactions_to_redis_pushes_only_provided(redis_update_b
 
 @pytest.mark.asyncio
 async def test_restored_window_spend_transactions_drain_back_unchanged(redis_update_buffer, mock_redis_cache):
-    """A window commit that fails after the destructive lpop must be re-pushed
+    """A window commit that fails after a drain must be re-pushed
     in the store path's encoding, so the next drain returns the same increments."""
     from litellm.constants import REDIS_WINDOW_SPEND_UPDATE_BUFFER_KEY
     from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
@@ -448,8 +570,8 @@ async def test_restored_window_spend_transactions_drain_back_unchanged(redis_upd
     rpush_list = mock_redis_cache.async_rpush_pipeline.call_args.kwargs["rpush_list"]
     assert [op["key"] for op in rpush_list] == [REDIS_WINDOW_SPEND_UPDATE_BUFFER_KEY]
 
-    mock_redis_cache.async_lpop_pipeline = AsyncMock(
-        return_value=[None, None, None, None, None, None, list(rpush_list[0]["values"])]
+    mock_redis_cache.async_drain_list_to_processing = AsyncMock(
+        side_effect=([], [], [], [], [], [], list(rpush_list[0]["values"]))
     )
     drained = await redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline()
 
@@ -476,6 +598,269 @@ async def test_restore_transactions_to_redis_swallows_redis_error(redis_update_b
     )
 
     mock_redis_cache.async_rpush_pipeline.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_pipeline_drain_recovers_spend_after_move_reply_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy._types import Litellm_EntityType
+    from litellm.proxy.db.db_transaction_queue.daily_spend_update_queue import DailySpendUpdateQueue
+    from litellm.proxy.db.db_transaction_queue.spend_update_queue import SpendUpdateQueue
+
+    redis_cache, redis_client = _cache_with_fakeredis()
+    buffer: Final = RedisUpdateBuffer(redis_cache=redis_cache)
+    spend_queue: Final = SpendUpdateQueue()
+    await spend_queue.add_update({"entity_type": Litellm_EntityType.KEY, "entity_id": "key-abc", "response_cost": 0.25})
+    await spend_queue.add_update({"entity_type": Litellm_EntityType.KEY, "entity_id": "key-abc", "response_cost": 0.5})
+    await spend_queue.add_update(
+        {"entity_type": Litellm_EntityType.TEAM, "entity_id": "team-xyz", "response_cost": 1.25}
+    )
+    await buffer.store_in_memory_spend_updates_in_redis(
+        spend_update_queue=spend_queue,
+        daily_spend_update_queue=DailySpendUpdateQueue(),
+        daily_team_spend_update_queue=DailySpendUpdateQueue(),
+        daily_org_spend_update_queue=DailySpendUpdateQueue(),
+        daily_end_user_spend_update_queue=DailySpendUpdateQueue(),
+        daily_agent_spend_update_queue=DailySpendUpdateQueue(),
+    )
+
+    _timeout_first_pipeline_execute(monkeypatch, redis_client)
+    with pytest.raises(RedisTimeoutError, match="simulated response timeout"):
+        await buffer.get_all_transactions_from_redis_buffer_pipeline()
+
+    recovered: Final = await buffer.get_all_transactions_from_redis_buffer_pipeline()
+    assert recovered[0] is not None
+    assert recovered[0]["key_list_transactions"] == {"key-abc": 0.75}
+    assert recovered[0]["team_list_transactions"] == {"team-xyz": 1.25}
+    assert recovered[1:] == (None, None, None, None, None, None)
+    assert await buffer.get_all_transactions_from_redis_buffer_pipeline() == (None, None, None, None, None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_pipeline_drain_keeps_all_buffers_pending_after_partial_move_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.constants import (
+        REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY,
+        REDIS_UPDATE_BUFFER_KEY,
+    )
+
+    redis_cache, redis_client = _cache_with_fakeredis()
+    buffer: Final = RedisUpdateBuffer(redis_cache=redis_cache)
+    db_spend: Final = json.dumps({"key_list_transactions": {"key-partial": 1.25}})
+    daily_spend: Final = json.dumps({"user-partial": {"spend": 2.5, "api_requests": 1}})
+    await redis_cache.async_rpush(key=REDIS_UPDATE_BUFFER_KEY, values=(db_spend,))
+    await redis_cache.async_rpush(key=REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY, values=(daily_spend,))
+
+    _timeout_first_pipeline_execute(monkeypatch, redis_client)
+    with pytest.raises(RedisTimeoutError, match="simulated response timeout"):
+        await buffer.get_all_transactions_from_redis_buffer_pipeline()
+
+    recovered: Final = await buffer.get_all_transactions_from_redis_buffer_pipeline()
+    assert recovered[0] is not None
+    assert recovered[0]["key_list_transactions"] == {"key-partial": 1.25}
+    assert recovered[1] == {"user-partial": {"spend": 2.5, "api_requests": 1}}
+    assert recovered[2:] == (None, None, None, None, None)
+    assert await buffer.get_all_transactions_from_redis_buffer_pipeline() == (None, None, None, None, None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_pipeline_drain_returns_only_keys_with_successful_acknowledgements(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.constants import (
+        REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY,
+        REDIS_UPDATE_BUFFER_KEY,
+    )
+
+    redis_cache, redis_client = _cache_with_fakeredis()
+    buffer: Final = RedisUpdateBuffer(redis_cache=redis_cache)
+    db_spend: Final = json.dumps({"key_list_transactions": {"key-ack": 1.5}})
+    daily_spend: Final = json.dumps({"user-ack": {"spend": 2.75, "api_requests": 1}})
+    await redis_cache.async_rpush(key=REDIS_UPDATE_BUFFER_KEY, values=(db_spend,))
+    await redis_cache.async_rpush(key=REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY, values=(daily_spend,))
+
+    original_set: Final = redis_client.set
+    _lose_set_replies(monkeypatch, redis_client, f"{REDIS_UPDATE_BUFFER_KEY}:processing")
+    first_result: Final = await buffer.get_all_transactions_from_redis_buffer_pipeline()
+    assert first_result[0] is None
+    assert first_result[1] == {"user-ack": {"spend": 2.75, "api_requests": 1}}
+    assert first_result[2:] == (None, None, None, None, None)
+
+    monkeypatch.setattr(redis_client, "set", original_set)
+    second_result: Final = await buffer.get_all_transactions_from_redis_buffer_pipeline()
+    assert second_result[0] is not None
+    assert second_result[0]["key_list_transactions"] == {"key-ack": 1.5}
+    assert second_result[1:] == (None, None, None, None, None, None)
+    assert await buffer.get_all_transactions_from_redis_buffer_pipeline() == (None, None, None, None, None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_spend_logs_are_recovered_once_after_move_reply_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    redis_cache, redis_client = _cache_with_fakeredis()
+    buffer: Final = RedisUpdateBuffer(redis_cache=redis_cache)
+    buffer.should_commit_spend_updates_to_redis = MagicMock(return_value=True)
+    rows: Final = ({"request_id": "req-a"}, {"request_id": "req-b"})
+    assert await buffer.store_spend_logs_in_redis(rows) is True
+
+    _timeout_first_pipeline_execute(monkeypatch, redis_client)
+    with pytest.raises(RedisTimeoutError, match="simulated response timeout"):
+        await buffer.get_spend_logs_from_redis_buffer(limit=10)
+
+    assert await buffer.get_spend_logs_from_redis_buffer(limit=10) == rows
+    assert await buffer.get_spend_logs_from_redis_buffer(limit=10) == ()
+
+
+@pytest.mark.asyncio
+async def test_forked_workers_do_not_take_over_each_others_pending_spend_logs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redis_cache, redis_client = _cache_with_fakeredis()
+    process_id: Final = MagicMock(return_value=100)
+    buffer: Final = RedisUpdateBuffer(redis_cache=redis_cache, process_id=process_id)
+    buffer.should_commit_spend_updates_to_redis = MagicMock(return_value=True)
+    parent_rows: Final = ({"request_id": "req-parent"},)
+    assert await buffer.store_spend_logs_in_redis(parent_rows) is True
+
+    _timeout_first_pipeline_execute(monkeypatch, redis_client)
+    with pytest.raises(RedisTimeoutError, match="simulated response timeout"):
+        await buffer.get_spend_logs_from_redis_buffer(limit=10)
+
+    process_id.return_value = 200
+    child_rows: Final = ({"request_id": "req-child"},)
+    assert await buffer.store_spend_logs_in_redis(child_rows) is True
+    assert await buffer.get_spend_logs_from_redis_buffer(limit=10) == child_rows
+
+    process_id.return_value = 100
+    assert await buffer.get_spend_logs_from_redis_buffer(limit=10) == parent_rows
+    assert await buffer.get_spend_logs_from_redis_buffer(limit=10) == ()
+
+
+@pytest.mark.asyncio
+async def test_overlapping_spend_log_drains_serialize_and_recover_rows_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redis_cache, redis_client = _cache_with_fakeredis()
+    buffer: Final = RedisUpdateBuffer(redis_cache=redis_cache)
+    buffer.should_commit_spend_updates_to_redis = MagicMock(return_value=True)
+    rows: Final = ({"request_id": "req-a"}, {"request_id": "req-b"})
+    assert await buffer.store_spend_logs_in_redis(rows) is True
+
+    move_executed: Final = asyncio.Event()
+    release_move: Final = asyncio.Event()
+    _hold_first_pipeline_until_release(
+        monkeypatch,
+        redis_client,
+        move_executed,
+        release_move,
+    )
+
+    first_call: Final = asyncio.create_task(buffer.get_spend_logs_from_redis_buffer(limit=10))
+    await move_executed.wait()
+
+    second_started: Final = asyncio.Event()
+
+    async def start_second_drain() -> tuple[dict[str, object], ...]:
+        second_started.set()
+        return await buffer.get_spend_logs_from_redis_buffer(limit=10)
+
+    second_call: Final = asyncio.create_task(start_second_drain())
+    await second_started.wait()
+
+    release_move.set()
+    first_result: Final = await first_call
+    second_result: Final = await second_call
+    request_ids: Final = tuple(str(row["request_id"]) for row in first_result + second_result)
+    assert sorted(request_ids) == ["req-a", "req-b"]
+    assert await buffer.get_spend_logs_from_redis_buffer(limit=10) == ()
+
+
+@pytest.mark.asyncio
+async def test_ack_failure_leaves_items_for_the_next_drain(monkeypatch: pytest.MonkeyPatch) -> None:
+    redis_cache, redis_client = _cache_with_fakeredis()
+    buffer: Final = RedisUpdateBuffer(redis_cache=redis_cache)
+    payload: Final = json.dumps(
+        {
+            "key_list_transactions": {"key-ack": 1.5},
+            "user_list_transactions": {},
+            "end_user_list_transactions": {},
+            "team_list_transactions": {},
+            "team_member_list_transactions": {},
+            "org_list_transactions": {},
+            "tag_list_transactions": {},
+        }
+    )
+    await redis_cache.async_rpush(key="litellm_spend_update_buffer", values=(payload,))
+
+    original_set: Final = redis_client.set
+    failed_set: Final = AsyncMock(side_effect=RedisTimeoutError("SET failed"))
+    monkeypatch.setattr(redis_client, "set", failed_set)
+    with pytest.raises(RedisTimeoutError, match="SET failed"):
+        await buffer.get_all_update_transactions_from_redis_buffer()
+
+    monkeypatch.setattr(redis_client, "set", original_set)
+    recovered: Final = await buffer.get_all_update_transactions_from_redis_buffer()
+    assert recovered is not None
+    assert recovered["key_list_transactions"] == {"key-ack": 1.5}
+    assert await buffer.get_all_update_transactions_from_redis_buffer() is None
+
+
+@pytest.mark.asyncio
+async def test_lost_ack_reply_still_hands_the_drained_rows_to_the_next_drain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redis_cache, redis_client = _cache_with_fakeredis()
+    buffer: Final = RedisUpdateBuffer(redis_cache=redis_cache)
+    payload: Final = json.dumps({"key_list_transactions": {"key-lost-ack": 2.5}})
+    await redis_cache.async_rpush(key="litellm_spend_update_buffer", values=(payload,))
+
+    original_set: Final = redis_client.set
+    _lose_set_replies(monkeypatch, redis_client, "litellm_spend_update_buffer")
+    with pytest.raises(RedisTimeoutError, match="SET reply lost"):
+        await buffer.get_all_update_transactions_from_redis_buffer()
+
+    monkeypatch.setattr(redis_client, "set", original_set)
+    recovered: Final = await buffer.get_all_update_transactions_from_redis_buffer()
+    assert recovered is not None
+    assert recovered["key_list_transactions"] == {"key-lost-ack": 2.5}
+    assert await buffer.get_all_update_transactions_from_redis_buffer() is None
+
+
+@pytest.mark.asyncio
+async def test_rows_held_after_a_lost_ack_reply_survive_a_pipeline_drain_that_fails_on_a_sibling_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.constants import (
+        REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY,
+        REDIS_UPDATE_BUFFER_KEY,
+    )
+
+    redis_cache, redis_client = _cache_with_fakeredis()
+    buffer: Final = RedisUpdateBuffer(redis_cache=redis_cache)
+    db_spend: Final = json.dumps({"key_list_transactions": {"key-held": 1.5}})
+    await redis_cache.async_rpush(key=REDIS_UPDATE_BUFFER_KEY, values=(db_spend,))
+
+    original_set: Final = redis_client.set
+    _lose_set_replies(monkeypatch, redis_client, f"{REDIS_UPDATE_BUFFER_KEY}:processing")
+    assert await buffer.get_all_transactions_from_redis_buffer_pipeline() == (None,) * 7
+    monkeypatch.setattr(redis_client, "set", original_set)
+
+    original_type: Final = redis_client.type
+
+    async def type_fails_for_sibling(name: str) -> object:
+        if f"{REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY}:processing" in name:
+            raise RedisTimeoutError("sibling drain failed")
+        return await original_type(name)
+
+    monkeypatch.setattr(redis_client, "type", type_fails_for_sibling)
+    with pytest.raises(RedisTimeoutError, match="sibling drain failed"):
+        await buffer.get_all_transactions_from_redis_buffer_pipeline()
+    monkeypatch.setattr(redis_client, "type", original_type)
+
+    recovered: Final = await buffer.get_all_transactions_from_redis_buffer_pipeline()
+    assert recovered[0] is not None
+    assert recovered[0]["key_list_transactions"] == {"key-held": 1.5}
+    assert recovered[1:] == (None,) * 6
+    assert await buffer.get_all_transactions_from_redis_buffer_pipeline() == (None,) * 7
 
 
 def test_validate_redis_transaction_buffer_raises_without_redis():
@@ -645,7 +1030,7 @@ async def test_store_in_memory_spend_updates_pushes_budget_window_spend(redis_up
 @pytest.mark.asyncio
 async def test_budget_window_payloads_keep_request_ids_for_older_workers(redis_update_buffer, mock_redis_cache):
     """A leader from before the field was dropped indexes request_ids while
-    merging what it popped, and the pop is destructive, so a payload without
+    merging what it drained, and the drain removes the payload, so one without
     the key would cost a rolling deploy those increments."""
     from datetime import datetime, timezone
 
@@ -724,6 +1109,7 @@ async def test_store_in_memory_spend_updates_restores_budget_window_spend_on_rpu
 class _ListRedis:
     def __init__(self) -> None:
         self.rows: list[str] = []
+        self.processing: list[str] = []
 
     async def async_rpush_and_trim(self, key: str, values: list[str], max_len: int) -> int:
         self.rows.extend(values)
@@ -731,12 +1117,18 @@ class _ListRedis:
         del self.rows[:-max_len]
         return pushed_len
 
-    async def async_lpop(self, key: str, count: int | None = None, **kwargs: object) -> list[str] | None:
-        if not self.rows:
-            return None
-        popped = self.rows[:count]
-        del self.rows[:count]
-        return popped
+    async def async_drain_list_to_processing(
+        self, key: str, worker_id: str, count: int, ttl_seconds: int, recovery_seconds: int
+    ) -> list[str]:
+        if self.processing:
+            return self.processing
+        self.processing = self.rows[:count]
+        self.rows = self.rows[count:]
+        return self.processing
+
+    async def async_ack_processing_list(self, key: str, worker_id: str, ttl_seconds: int) -> bool:
+        self.processing = []
+        return True
 
 
 @pytest.mark.asyncio
@@ -769,3 +1161,52 @@ async def test_store_spend_logs_in_redis_is_off_unless_transaction_buffering_is_
 
     assert await buffer.store_spend_logs_in_redis([{"request_id": "a"}]) is False
     assert redis.rows == []
+
+
+@pytest.mark.asyncio
+async def test_rows_whose_acknowledgement_was_cancelled_after_landing_reach_the_next_pipeline_drain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redis_cache, redis_client = _cache_with_fakeredis()
+    buffer: Final = RedisUpdateBuffer(redis_cache=redis_cache)
+    payload: Final = json.dumps({"key_list_transactions": {"key-cancelled-ack": 4.5}})
+    await redis_cache.async_rpush(key="litellm_spend_update_buffer", values=(payload,))
+    original_set: Final = redis_client.set
+    landed: Final = asyncio.Event()
+    _hang_after_set_lands(monkeypatch, redis_client, "litellm_spend_update_buffer", landed)
+
+    shutdown_drain: Final = asyncio.create_task(buffer.get_all_update_transactions_from_redis_buffer())
+    await landed.wait()
+    shutdown_drain.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await shutdown_drain
+
+    monkeypatch.setattr(redis_client, "set", original_set)
+    recovered: Final = await buffer.get_all_update_transactions_from_redis_buffer()
+    assert recovered is not None
+    assert recovered["key_list_transactions"] == {"key-cancelled-ack": 4.5}
+    assert await buffer.get_all_update_transactions_from_redis_buffer() is None
+
+
+@pytest.mark.asyncio
+async def test_spend_logs_whose_acknowledgement_was_cancelled_after_landing_reach_the_next_drain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redis_cache, redis_client = _cache_with_fakeredis()
+    buffer: Final = RedisUpdateBuffer(redis_cache=redis_cache)
+    buffer.should_commit_spend_updates_to_redis = MagicMock(return_value=True)
+    rows: Final = ({"request_id": "req-cancelled"},)
+    assert await buffer.store_spend_logs_in_redis(rows) is True
+    original_set: Final = redis_client.set
+    landed: Final = asyncio.Event()
+    _hang_after_set_lands(monkeypatch, redis_client, "litellm_spend_logs_buffer", landed)
+
+    shutdown_drain: Final = asyncio.create_task(buffer.get_spend_logs_from_redis_buffer(limit=10))
+    await landed.wait()
+    shutdown_drain.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await shutdown_drain
+
+    monkeypatch.setattr(redis_client, "set", original_set)
+    assert await buffer.get_spend_logs_from_redis_buffer(limit=10) == rows
+    assert await buffer.get_spend_logs_from_redis_buffer(limit=10) == ()
