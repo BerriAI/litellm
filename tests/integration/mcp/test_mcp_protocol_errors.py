@@ -4,10 +4,12 @@ import uuid
 from typing import Final
 
 import pytest
-
+from integration._support.asgi import asgi_server
 from integration._support.client import Gateway
 from integration._support.mcp import McpPeer, call_tool, register_mcp, tool_names
 from integration._support.wire import Reply, Request, wire_server
+from mcp.server.mcpserver import MCPServer
+from mcp.server.transport_security import TransportSecuritySettings
 
 
 @pytest.mark.covers("other.mcp.errors.protocol_and_malformed_results_cannot_be_empty_success")
@@ -84,3 +86,27 @@ def test_jsonrpc_error_and_malformed_tool_result_remain_errors(gateway: Gateway)
             control: Final = call_tool(gateway, key, identity, names["add"], {"a": 3, "b": 5})
             assert control.status_code == 200 and control.json()["isError"] is False, control.text
             assert control.json()["content"][0]["text"] == "8"
+
+
+def test_tool_result_larger_than_one_mib_in_a_single_sse_event_reaches_the_caller(gateway: Gateway) -> None:
+    payload: Final = "x" * (3 * 1024 * 1024)
+    server: Final = MCPServer("large-result")
+
+    @server.tool()
+    def dump() -> str:
+        return payload
+
+    app: Final = server.streamable_http_app(
+        stateless_http=True,
+        json_response=False,
+        transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+    )
+    with asgi_server(app) as url, gateway.scenario() as scenario:
+        peer: Final = McpPeer(url + "/mcp", queue.Queue())
+        identity: Final = register_mcp(scenario, peer, "bigsse" + uuid.uuid4().hex[:8])
+        key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+        response: Final = call_tool(gateway, key, identity, "dump", {})
+        assert response.status_code == 200, response.text[:500]
+        body: Final = response.json()
+        assert body["isError"] is False, response.text[:500]
+        assert body["content"][0]["text"] == payload
