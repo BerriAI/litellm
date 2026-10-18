@@ -221,9 +221,7 @@ async def test_gemini_pass_through_endpoint_forwards_key_and_body(
 
     monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-key")
     endpoint: Final = "v1beta/models/gemini-2.5-flash:countTokens"
-    upstream: Final = respx_mock.post(
-        url__startswith=f"https://generativelanguage.googleapis.com/{endpoint}"
-    ).mock(
+    upstream: Final = respx_mock.post(url__startswith=f"https://generativelanguage.googleapis.com/{endpoint}").mock(
         return_value=httpx.Response(
             200,
             json={"totalTokens": 9},
@@ -548,9 +546,7 @@ def test_openai_proxy_gate_allows_admin_everywhere():
     openai_proxy_gate = _openai_proxy_gate_module()
 
     openai_proxy_gate(
-        user_api_key_dict=UserAPIKeyAuth(
-            api_key="sk-admin", user_role=LitellmUserRoles.PROXY_ADMIN, user_id="u2"
-        ),
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-admin", user_role=LitellmUserRoles.PROXY_ADMIN, user_id="u2"),
         endpoint_path="/v1/files/file-abc123",
     )
 

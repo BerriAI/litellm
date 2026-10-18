@@ -3517,7 +3517,7 @@ def _strip_openai_version_prefix(normalized_path: str) -> str:
     (`/V1/files`) are the same upstream call."""
     lowered: Final = normalized_path.lower()
     if lowered == "/v1" or lowered.startswith("/v1/"):
-        return normalized_path[len("/v1"):]
+        return normalized_path[len("/v1") :]
     return normalized_path
 
 

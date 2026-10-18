@@ -2141,7 +2141,6 @@ class TestBedrockPassthroughAwsErrors:
         assert exc_info.value.aws_error_type == "ValidationException"
         assert (exc_info.value.error.message, exc_info.value.error.code) == (message, status_code)
 
-
     @pytest.mark.asyncio
     async def test_bedrock_request_check_is_raised_with_the_aws_error_type_it_carries(
         self, monkeypatch: pytest.MonkeyPatch
@@ -2182,6 +2181,7 @@ class TestBedrockPassthroughAwsErrors:
             await self._answer(error)
 
         assert (exc_info.value.code, exc_info.value.headers.get("x-model-group")) == ("403", "modèle")
+
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("error", "message", "code"),
