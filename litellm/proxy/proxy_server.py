@@ -18704,7 +18704,7 @@ async def _generate_onboarding_ui_session_token(user_obj: _UserTableRow) -> str:
     response: Final = await generate_key_helper_fn(
         llm_router=llm_router,
         request_type="key",
-        **{
+        **{  # pyright: ignore[reportUnknownArgumentType]  # the onboarding spread binds our allow_ui_session_marker flag explicitly
             "user_role": user_obj.user_role,
             "duration": LITELLM_UI_SESSION_DURATION,
             "key_max_budget": litellm.max_ui_session_budget,
