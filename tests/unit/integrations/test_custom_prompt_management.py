@@ -55,22 +55,6 @@ class TestCustomPromptManagement(CustomPromptManagement):
             return model, messages, non_default_params
 
 
-def _anthropic_chat_response() -> httpx.Response:
-    return httpx.Response(
-        200,
-        json={
-            "id": "msg_123",
-            "type": "message",
-            "role": "assistant",
-            "content": [{"type": "text", "text": "Hello"}],
-            "model": "claude-3-5-sonnet",
-            "stop_reason": "end_turn",
-            "stop_sequence": None,
-            "usage": {"input_tokens": 1, "output_tokens": 1},
-        },
-    )
-
-
 @pytest.mark.asyncio
 async def test_custom_prompt_management_with_prompt_id(monkeypatch):
     custom_prompt_management = TestCustomPromptManagement()
@@ -78,7 +62,7 @@ async def test_custom_prompt_management_with_prompt_id(monkeypatch):
 
     # Mock AsyncHTTPHandler.post method
     client = AsyncHTTPHandler()
-    with patch.object(client, "post", return_value=_anthropic_chat_response()) as mock_post:
+    with patch.object(client, "post", return_value=MagicMock()) as mock_post:
         await litellm.acompletion(
             model="anthropic/claude-3-5-sonnet",
             messages=[{"role": "user", "content": "Hello, how are you?"}],
@@ -106,7 +90,7 @@ async def test_custom_prompt_management_with_prompt_id_and_prompt_variables():
 
     # Mock AsyncHTTPHandler.post method
     client = AsyncHTTPHandler()
-    with patch.object(client, "post", return_value=_anthropic_chat_response()) as mock_post:
+    with patch.object(client, "post", return_value=MagicMock()) as mock_post:
         await litellm.acompletion(
             model="anthropic/claude-3-5-sonnet",
             messages=[],
@@ -135,7 +119,7 @@ async def test_custom_prompt_management_without_prompt_id():
 
     # Mock AsyncHTTPHandler.post method
     client = AsyncHTTPHandler()
-    with patch.object(client, "post", return_value=_anthropic_chat_response()) as mock_post:
+    with patch.object(client, "post", return_value=MagicMock()) as mock_post:
         await litellm.acompletion(
             model="anthropic/claude-3-5-sonnet",
             messages=[{"role": "user", "content": "Hello, how are you?"}],

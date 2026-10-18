@@ -317,23 +317,7 @@ def test_router_pattern_match_e2e():
         ]
     )
 
-    with patch.object(
-        client,
-        "post",
-        return_value=httpx.Response(
-            200,
-            json={
-                "id": "msg_123",
-                "type": "message",
-                "role": "assistant",
-                "content": [{"type": "text", "text": "Hello"}],
-                "model": "claude-3-5-sonnet",
-                "stop_reason": "end_turn",
-                "stop_sequence": None,
-                "usage": {"input_tokens": 1, "output_tokens": 1},
-            },
-        ),
-    ) as mock_post:
+    with patch.object(client, "post", new=MagicMock()) as mock_post:
 
         router.completion(
             model="llmengine/my-custom-model",

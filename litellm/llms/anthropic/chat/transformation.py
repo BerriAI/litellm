@@ -3100,7 +3100,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         ## RESPONSE OBJECT
         try:
-            completion_response: Final = _COMPLETION_RESPONSE.validate_python(raw_response.json())
+            completion_response: Final = raw_response.json()
         except Exception as e:
             response_headers: Final = getattr(raw_response, "headers", None)
             raise AnthropicError(
@@ -3186,7 +3186,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
 
 _DECODED_JSON: Final = TypeAdapter(object)
-_COMPLETION_RESPONSE: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
 _REQUEST_TOOLS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
 
 
