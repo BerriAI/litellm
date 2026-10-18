@@ -236,6 +236,8 @@ class ModelRateLimitingCheck(CustomLogger):
             if io_reservation_made:
                 self._refund_io_token_reservation_if_any()
             raise
+        except (ValueError, TypeError):
+            raise
         except Exception as e:
             from litellm.proxy.hooks.parallel_request_limiter_v3 import (
                 RateLimitUnverifiableError,
@@ -339,6 +341,8 @@ class ModelRateLimitingCheck(CustomLogger):
         except litellm.RateLimitError:
             if io_reservation_made:
                 await self._async_refund_io_token_reservation_if_any(parent_otel_span=parent_otel_span)
+            raise
+        except (ValueError, TypeError):
             raise
         except Exception as e:
             from litellm.proxy.hooks.parallel_request_limiter_v3 import (

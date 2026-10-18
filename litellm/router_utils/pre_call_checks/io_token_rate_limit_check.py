@@ -453,6 +453,8 @@ def io_token_pre_call_check(
                 raise
     except litellm.RateLimitError:
         raise
+    except (ValueError, TypeError):
+        raise
     except Exception as e:
         from litellm.proxy.hooks.parallel_request_limiter_v3 import (
             RateLimitUnverifiableError,
@@ -535,6 +537,8 @@ async def async_io_token_pre_call_check(
                     )
                 raise
     except litellm.RateLimitError:
+        raise
+    except (ValueError, TypeError):
         raise
     except Exception as e:
         from litellm.proxy.hooks.parallel_request_limiter_v3 import (

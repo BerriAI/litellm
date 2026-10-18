@@ -3910,6 +3910,20 @@ def _resolve_budget_fail_closed_for_auth(
     general_settings: Mapping[str, object],
     has_billing_agent_policy: bool,
 ) -> bool:
+    """
+    Resolve whether budget reservation must fail closed on Redis failure.
+
+    Resolution order:
+    1. ``fail_closed_budget_enforcement`` if explicitly set in general_settings
+    2. ``fail_closed_rate_limit_enforcement`` if budget setting is unset
+       (defaults to ``True`` since that flag defaults fail-closed)
+    3. Billing-agent policies always force fail-closed regardless of both knobs.
+
+    Unset ``fail_closed_budget_enforcement`` now silently follows the rate-limit
+    knob, which means existing deployments that never touched either setting flip
+    from fail-open budget reservation to fail-closed on upgrade. Set
+    ``fail_closed_budget_enforcement=false`` explicitly to preserve prior behavior.
+    """
     from litellm.proxy.hooks.parallel_request_limiter_v3 import (
         fail_closed_rate_limit_enforcement_enabled,
     )

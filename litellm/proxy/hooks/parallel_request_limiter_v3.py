@@ -184,11 +184,11 @@ def fail_closed_rate_limit_enforcement_enabled(general_settings: Mapping[str, ob
         return _FAIL_CLOSED_RATE_LIMIT_ENFORCEMENT_FLAG.validate_python(raw_value) is not False
     except ValidationError:
         verbose_proxy_logger.warning(
-            "general_settings.%s=%r is not a boolean, treating it as disabled",
+            "general_settings.%s=%r is not a boolean, treating it as fail-closed (default safety posture)",
             FAIL_CLOSED_RATE_LIMIT_ENFORCEMENT_SETTING,
             raw_value,
         )
-        return False
+        return True
 
 
 def fail_closed_rate_limit_enforcement_from_general_settings() -> bool:
