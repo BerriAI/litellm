@@ -26,7 +26,7 @@ _REFERENCE_TABLES: Final = (
 )
 
 
-class _PlanNode(BaseModel):
+class _PlanNode(BaseModel, frozen=True):
     rows: float = Field(default=0, alias="Actual Rows")
     removed: float = Field(default=0, alias="Rows Removed by Filter")
     loops: float = Field(default=0, alias="Actual Loops")
@@ -36,7 +36,7 @@ class _PlanNode(BaseModel):
         return (self.rows + self.removed) * self.loops + sum(plan.examined_rows() for plan in self.plans)
 
 
-class _QueryPlan(BaseModel):
+class _QueryPlan(BaseModel, frozen=True):
     plan: _PlanNode = Field(alias="Plan")
 
 

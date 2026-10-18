@@ -679,7 +679,8 @@ model LiteLLM_EndUserTable {
   litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
   object_permission LiteLLM_ObjectPermissionTable?   @relation(fields: [object_permission_id], references: [object_permission_id])
   blocked Boolean @default(false)
-    @@index([budget_id])
+
+  @@index([budget_id])
 }
 
 // Budget and shared spend for a model access group. The groups themselves are not rows anywhere:

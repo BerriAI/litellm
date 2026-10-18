@@ -35,6 +35,7 @@ from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.user_api_key_cache import (
+    end_user_block_cache_key,
     end_user_cache_key,
     end_user_restricted_registry_cache_key,
 )
@@ -47,7 +48,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: 
 )
 from litellm.proxy.utils import handle_exception_on_proxy
 from litellm.repositories.budget_repository import BudgetRepository
-from litellm.repositories.chunked_in import find_many_in
+from litellm.repositories.chunked_in import find_many_in, update_many_in
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.repositories.table_repositories import EndUserRepository
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
@@ -134,6 +135,8 @@ if TYPE_CHECKING:
             data: Mapping[str, Mapping[str, object]],
         ) -> _RowT_co: ...
 
+        async def update_many(self, where: Mapping[str, object], data: Mapping[str, object]) -> int: ...
+
         async def delete_many(self, where: Mapping[str, object]) -> int: ...
 
 
@@ -164,7 +167,11 @@ async def _evict_end_user_cache_keys(cache_keys: Sequence[str]) -> None:
 
 def _end_user_cache_keys(user_ids: Sequence[str]) -> tuple[str, ...]:
     """The per-id entries plus the registry, which any restriction change can move ids in or out of."""
-    return (*(end_user_cache_key(user_id) for user_id in user_ids), end_user_restricted_registry_cache_key())
+    return (
+        *(end_user_cache_key(user_id) for user_id in user_ids),
+        end_user_restricted_registry_cache_key(),
+        *(end_user_block_cache_key(user_id) for user_id in user_ids),
+    )
 
 
 def _to_customer_response(record: BaseModel) -> CustomerResponse:
@@ -175,6 +182,34 @@ def _to_customer_response(record: BaseModel) -> CustomerResponse:
     cleanup.
     """
     return CustomerResponse.model_validate(record.model_dump())
+
+
+class _BlockedUserHook(Protocol):
+    @property
+    def blocked_user_list(self) -> Sequence[str] | None: ...
+
+
+def _configured_blocked_user_hook() -> _BlockedUserHook:
+    try:
+        from enterprise.enterprise_hooks.blocked_user_list import ENTERPRISE_BlockedUserList
+    except ImportError:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "Blocked user check was never set. This call has no effect."
+                + CommonProxyErrors.missing_enterprise_package_docker.value
+            },
+        )
+    configured_hook: Final = next(
+        (callback for callback in litellm.callbacks if isinstance(callback, ENTERPRISE_BlockedUserList)), None
+    )
+    if configured_hook is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "Blocked user check was never set. This call has no effect."},
+        )
+
+    return configured_hook
 
 
 @router.post(
@@ -189,7 +224,7 @@ def _to_customer_response(record: BaseModel) -> CustomerResponse:
     dependencies=[Depends(user_api_key_auth)],
     response_model=BlockUsersResponse,
 )
-async def block_user(data: BlockUsers):
+async def block_user(data: BlockUsers) -> BlockUsersResponse:
     """
     [BETA] Reject calls with this end-user id
 
@@ -208,26 +243,28 @@ async def block_user(data: BlockUsers):
     """
     from litellm.proxy.proxy_server import prisma_client
 
+    _configured_blocked_user_hook()
     try:
-        records: Final = []
-        if prisma_client is not None:
-            for id in data.user_ids:
-                record = await _typed_table(EndUserRepository(prisma_client)).upsert(
-                    where={"user_id": id},
-                    data={
-                        "create": {"user_id": id, "blocked": True},
-                        "update": {"blocked": True},
-                    },
-                )
-                records.append(record)
-            await _evict_end_user_cache_keys(_end_user_cache_keys(data.user_ids))
-        else:
+        if prisma_client is None:
             raise HTTPException(
                 status_code=500,
                 detail={"error": "Postgres DB Not connected"},
             )
-
-        return {"blocked_users": records}
+        table: Final = _typed_table(EndUserRepository(prisma_client))
+        records: Final = [
+            _to_customer_response(
+                await table.upsert(
+                    where={"user_id": user_id},
+                    data={
+                        "create": {"user_id": user_id, "blocked": True},
+                        "update": {"blocked": True},
+                    },
+                )
+            )
+            for user_id in data.user_ids
+        ]
+        await _evict_end_user_cache_keys(_end_user_cache_keys(data.user_ids))
+        return BlockUsersResponse.model_validate({"blocked_users": records})
     except Exception as e:
         verbose_proxy_logger.error("An error occurred - %s", e)
         raise HTTPException(status_code=500, detail={"error": str(e)})
@@ -245,7 +282,7 @@ async def block_user(data: BlockUsers):
     dependencies=[Depends(user_api_key_auth)],
     response_model=UnblockUsersResponse,
 )
-async def unblock_user(data: BlockUsers):
+async def unblock_user(data: BlockUsers) -> UnblockUsersResponse:
     """
     [BETA] Unblock calls with this user id
 
@@ -258,38 +295,35 @@ async def unblock_user(data: BlockUsers):
     }'
     ```
     """
-    try:
-        from enterprise.enterprise_hooks.blocked_user_list import (
-            ENTERPRISE_BlockedUserList,
-        )
-    except ImportError:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "Blocked user check was never set. This call has no effect."
-                + CommonProxyErrors.missing_enterprise_package_docker.value
-            },
-        )
+    from litellm.proxy.proxy_server import prisma_client
 
-    if (
-        not any(isinstance(x, ENTERPRISE_BlockedUserList) for x in litellm.callbacks)
-        or litellm.blocked_user_list is None
+    configured_hook: Final = _configured_blocked_user_hook()
+
+    requested_ids: Final = frozenset(data.user_ids)
+    if isinstance(litellm.blocked_user_list, str) and requested_ids.intersection(
+        configured_hook.blocked_user_list or ()
     ):
         raise HTTPException(
             status_code=400,
-            detail={"error": "Blocked user check was never set. This call has no effect."},
+            detail={
+                "error": "These customers are blocked by a file. Update the file and restart the proxy to unblock them."
+            },
         )
-
+    if prisma_client is not None:
+        await update_many_in(
+            _typed_table(EndUserRepository(prisma_client)),
+            "user_id",
+            data.user_ids,
+            data={"blocked": False},
+            atomicity="per_chunk_ok",
+        )
+    remaining_legacy_ids: Final = tuple(
+        user_id for user_id in configured_hook.blocked_user_list or () if user_id not in requested_ids
+    )
     if isinstance(litellm.blocked_user_list, list):
-        for id in data.user_ids:
-            litellm.blocked_user_list.remove(id)
-    else:
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "`blocked_user_list` must be set as a list. Filepaths can't be updated."},
-        )
-
-    return {"blocked_users": litellm.blocked_user_list}
+        litellm.blocked_user_list[:] = remaining_legacy_ids
+    await _evict_end_user_cache_keys(_end_user_cache_keys(data.user_ids))
+    return UnblockUsersResponse(blocked_users=list(remaining_legacy_ids))
 
 
 def new_budget_request(data: NewCustomerRequest) -> BudgetNewRequest | None:
