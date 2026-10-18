@@ -14,10 +14,15 @@ Routes covered:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
+from collections.abc import Callable
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
+from fastapi.testclient import TestClient
 
 from .conftest import VOLATILE_KEYS, normalize
 
@@ -46,6 +51,7 @@ def _install_litellm_config(mock_prisma: MagicMock) -> MagicMock:
     table.upsert = AsyncMock(return_value=None)
     table.delete = AsyncMock()
     mock_prisma.db.litellm_config = table
+    mock_prisma.writer_db.litellm_config = table
     return table
 
 
@@ -944,6 +950,228 @@ def test_config_callback_delete_not_found(client, auth_as, mock_prisma, monkeypa
     assert "langfuse" in str(response.json()).lower() or "not found" in str(response.json()).lower()
 
 
+def _delete_callback_roundtrip(
+    client: TestClient,
+    auth_as: Callable[..., contextlib.AbstractContextManager[None]],
+    mock_prisma: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+    litellm_settings: dict[str, object],
+    callback_name: str,
+    owned_by_config: frozenset[str] = frozenset(),
+) -> tuple[httpx.Response, dict[str, object]]:
+    """POST /config/callback/delete as admin against a stubbed config, and
+    return (response, saved litellm_settings) so each case pins the full body
+    plus the exact config persisted."""
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    _install_litellm_config(mock_prisma)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    monkeypatch.setattr(ps, "store_model_in_db", True)
+
+    fake_proxy_config: Final = MagicMock()
+    fake_proxy_config.get_config = AsyncMock(return_value={"litellm_settings": litellm_settings})
+    fake_proxy_config.save_config = AsyncMock()
+    fake_proxy_config.add_deployment = AsyncMock()
+    fake_proxy_config.litellm_settings.owned_by_config = owned_by_config.__contains__
+    monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response: Final = client.post("/config/callback/delete", json={"callback_name": callback_name})
+    saved: Final = fake_proxy_config.save_config.await_args.kwargs["new_config"]["litellm_settings"]
+    return response, saved
+
+
+def test_config_callback_delete_from_failure_callback(
+    client: TestClient,
+    auth_as: Callable[..., contextlib.AbstractContextManager[None]],
+    mock_prisma: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A callback configured only under litellm_settings.failure_callback is
+    listed by GET /get/config/callbacks, so the delete route must remove it."""
+    response, saved = _delete_callback_roundtrip(
+        client,
+        auth_as,
+        mock_prisma,
+        monkeypatch,
+        {"success_callback": ["slack"], "failure_callback": ["datadog", "sentry"]},
+        "datadog",
+    )
+    assert response.status_code == 200
+    assert response.json()["removed_callback"] == "datadog"
+    assert saved == {"success_callback": ["slack"], "failure_callback": ["sentry"]}
+    assert response.json()["remaining_callbacks"] == ["sentry"]
+
+
+def test_config_callback_delete_from_callbacks_list(
+    client: TestClient,
+    auth_as: Callable[..., contextlib.AbstractContextManager[None]],
+    mock_prisma: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A callback configured only under litellm_settings.callbacks is deleted
+    while unrelated lists pass through untouched."""
+    response, saved = _delete_callback_roundtrip(
+        client,
+        auth_as,
+        mock_prisma,
+        monkeypatch,
+        {"success_callback": ["langfuse"], "callbacks": ["datadog"], "drop_params": True},
+        "datadog",
+    )
+    assert response.status_code == 200
+    assert response.json()["removed_callback"] == "datadog"
+    assert saved == {"success_callback": ["langfuse"], "callbacks": [], "drop_params": True}
+    assert response.json()["remaining_callbacks"] == []
+
+
+def test_config_callback_delete_from_multiple_lists(
+    client: TestClient,
+    auth_as: Callable[..., contextlib.AbstractContextManager[None]],
+    mock_prisma: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A name present in both success_callback and callbacks is removed from
+    both, and remaining_callbacks reports the leftovers of the lists it left."""
+    response, saved = _delete_callback_roundtrip(
+        client,
+        auth_as,
+        mock_prisma,
+        monkeypatch,
+        {
+            "success_callback": ["datadog", "slack"],
+            "failure_callback": ["sentry"],
+            "callbacks": ["langfuse", "datadog"],
+        },
+        "datadog",
+    )
+    assert response.status_code == 200
+    assert saved == {
+        "success_callback": ["slack"],
+        "failure_callback": ["sentry"],
+        "callbacks": ["langfuse"],
+    }
+    assert response.json()["remaining_callbacks"] == ["slack", "langfuse"]
+
+
+def test_config_callback_delete_skips_lists_the_config_file_owns(
+    client: TestClient,
+    auth_as: Callable[..., contextlib.AbstractContextManager[None]],
+    mock_prisma: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A name in a database-owned list and a config-file-owned list is removed
+    from the database-owned one only, so the save is not refused."""
+    response, saved = _delete_callback_roundtrip(
+        client,
+        auth_as,
+        mock_prisma,
+        monkeypatch,
+        {"success_callback": ["datadog", "slack"], "failure_callback": ["datadog"]},
+        "datadog",
+        owned_by_config=frozenset({"failure_callback"}),
+    )
+    assert response.status_code == 200
+    assert saved == {"success_callback": ["slack"], "failure_callback": ["datadog"]}
+    assert response.json()["remaining_callbacks"] == ["slack"]
+
+
+def test_config_callback_delete_removes_database_copy_when_config_file_owns_success_callback(
+    client: TestClient,
+    auth_as: Callable[..., contextlib.AbstractContextManager[None]],
+    mock_prisma: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A name the config file sets in success_callback is left there while its
+    database-owned failure_callback copy is removed."""
+    response, saved = _delete_callback_roundtrip(
+        client,
+        auth_as,
+        mock_prisma,
+        monkeypatch,
+        {"success_callback": ["datadog"], "failure_callback": ["datadog", "sentry"]},
+        "datadog",
+        owned_by_config=frozenset({"success_callback"}),
+    )
+    assert response.status_code == 200
+    assert saved == {"success_callback": ["datadog"], "failure_callback": ["sentry"]}
+    assert response.json()["remaining_callbacks"] == ["sentry"]
+
+
+def test_config_callback_delete_from_string_valued_list(
+    client: TestClient,
+    auth_as: Callable[..., contextlib.AbstractContextManager[None]],
+    mock_prisma: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A list written as a single string is matched and saved back as an empty list."""
+    response, saved = _delete_callback_roundtrip(
+        client,
+        auth_as,
+        mock_prisma,
+        monkeypatch,
+        {"failure_callback": "datadog"},
+        "datadog",
+    )
+    assert response.status_code == 200
+    assert saved == {"failure_callback": []}
+
+
+def test_config_callback_delete_case_insensitive(
+    client: TestClient,
+    auth_as: Callable[..., contextlib.AbstractContextManager[None]],
+    mock_prisma: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A mixed-case entry is deleted by the name GET /get/config/callbacks shows for it."""
+    response, saved = _delete_callback_roundtrip(
+        client,
+        auth_as,
+        mock_prisma,
+        monkeypatch,
+        {"callbacks": ["DataDog", "otel"]},
+        "DataDog",
+    )
+    assert response.status_code == 200
+    assert response.json()["removed_callback"] == "datadog"
+    assert saved == {"callbacks": ["otel"]}
+
+
+def test_config_callback_delete_saves_against_the_baseline_it_read(
+    client: TestClient,
+    auth_as: Callable[..., contextlib.AbstractContextManager[None]],
+    mock_prisma: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """save_config gets the object get_config returned, so it diffs against the
+    settings as they were read and writes only the edited callback list."""
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    _install_litellm_config(mock_prisma)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    monkeypatch.setattr(ps, "store_model_in_db", True)
+
+    read_time: Final = {"litellm_settings": {"failure_callback": ["datadog", "sentry"], "max_budget": 10}}
+    loaded: Final = ps._ConfigWithBaseline(read_time)
+    fake_proxy_config: Final = MagicMock()
+    fake_proxy_config.get_config = AsyncMock(return_value=loaded)
+    fake_proxy_config.save_config = AsyncMock()
+    fake_proxy_config.add_deployment = AsyncMock()
+    fake_proxy_config.litellm_settings.owned_by_config = frozenset[str]().__contains__
+    monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response: Final = client.post("/config/callback/delete", json={"callback_name": "datadog"})
+
+    assert response.status_code == 200
+    saved: Final = fake_proxy_config.save_config.await_args.kwargs["new_config"]
+    assert saved is loaded
+    assert saved.baseline == read_time
+    assert saved["litellm_settings"] == {"failure_callback": ["sentry"], "max_budget": 10}
+
+
 # ---------------------------------------------------------------------------
 # GET /get/config/callbacks
 # ---------------------------------------------------------------------------
@@ -1508,7 +1736,7 @@ def test_get_config_callbacks_excludes_internal_runtime_callbacks(client, auth_a
     )
     monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
 
-    from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
+    from litellm_enterprise.proxy.hooks.managed_files import PROXY_LiteLLMManagedFiles
 
     import litellm
     from litellm._service_logger import ServiceLogging
@@ -1518,7 +1746,7 @@ def test_get_config_callbacks_excludes_internal_runtime_callbacks(client, auth_a
     from litellm.integrations.s3_v2 import S3Logger
     from litellm.integrations.sqs import SQSLogger
     from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import VectorStorePreCallHook
-    from litellm.proxy.hooks.cache_control_check import _PROXY_CacheControlCheck
+    from litellm.proxy.hooks.cache_control_check import PROXY_CacheControlCheck
     from litellm.router import Router
 
     class _InventoryTestGuardrail(CustomGuardrail):
@@ -1546,8 +1774,8 @@ def test_get_config_callbacks_excludes_internal_runtime_callbacks(client, auth_a
         litellm,
         "callbacks",
         [
-            _PROXY_CacheControlCheck(),
-            _PROXY_LiteLLMManagedFiles(internal_usage_cache=MagicMock(), prisma_client=MagicMock()),
+            PROXY_CacheControlCheck(),
+            PROXY_LiteLLMManagedFiles(internal_usage_cache=MagicMock(), prisma_client=MagicMock()),
             ServiceLogging(),
             VectorStorePreCallHook(),
             _InventoryTestGuardrail(guardrail_name="inventory-test-guardrail"),

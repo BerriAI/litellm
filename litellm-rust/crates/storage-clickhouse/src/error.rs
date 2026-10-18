@@ -1,4 +1,4 @@
-#[derive(Debug, thiserror::Error)]
+#[derive(Clone, Debug, thiserror::Error)]
 pub enum Error {
     #[error("invalid ClickHouse insert row")]
     InvalidRow,

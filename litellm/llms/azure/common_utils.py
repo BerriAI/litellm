@@ -2,10 +2,11 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 from collections.abc import Callable, Mapping
 from functools import lru_cache
 from types import MappingProxyType
-from typing import Any, Final, Literal, NamedTuple, cast
+from typing import Final, Literal, NamedTuple, cast
 
 import httpx
 from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
@@ -16,15 +17,16 @@ from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
 from litellm.constants import DEFAULT_MAX_RETRIES
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.llms.openai.common_utils import BaseOpenAILLM
+from litellm.llms.openai.common_utils import BaseOpenAILLM, OpenAIAsyncHTTPClient, OpenAIHTTPClient
 from litellm.secret_managers.get_azure_ad_token_provider import (
     get_azure_ad_token_provider,
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
-from litellm.utils import _add_path_to_api_base
+from litellm.utils import add_path_to_api_base
 
 azure_ad_cache: Final = DualCache()
+_LAST_OPENAI_PATH_SEGMENT: Final = re.compile(r"^(.*/openai)(?=/|$)")
 
 
 class _AzureAdTokenJson(TypedDict, total=False):
@@ -388,7 +390,7 @@ def get_azure_ad_token(
         # try to get DefaultAzureCredential provider
         #########################################################
         if azure_ad_token_provider is None and azure_ad_token is None:
-            azure_ad_token_provider = BaseAzureLLM._try_get_default_azure_credential_provider(
+            azure_ad_token_provider = BaseAzureLLM.try_get_default_azure_credential_provider(
                 scope=scope,
             )
 
@@ -477,6 +479,13 @@ class BaseAzureLLM(BaseOpenAILLM):
             verbose_logger.debug("DefaultAzureCredential failed: %s", e)
             return None
 
+    @classmethod
+    def try_get_default_azure_credential_provider(
+        cls,
+        scope: str,
+    ) -> Callable[[], str] | None:
+        return cls._try_get_default_azure_credential_provider(scope)
+
     def get_azure_openai_client(
         self,
         api_key: str | None,
@@ -511,10 +520,12 @@ class BaseAzureLLM(BaseOpenAILLM):
             if (
                 api_version is not None
                 and isinstance(client, (AzureOpenAI, AsyncAzureOpenAI))
-                and isinstance(client._custom_query, dict)
+                and isinstance(client._custom_query, dict)  # pyright: ignore[reportPrivateUsage]  # SDK query internals
             ):
                 # set api_version to version passed by user
-                client._custom_query.setdefault("api-version", api_version)
+                client._custom_query.setdefault(  # pyright: ignore[reportPrivateUsage]  # SDK query internals
+                    "api-version", api_version
+                )
             self.set_cached_openai_client(
                 openai_client=client,
                 client_initialization_params=client_initialization_params,
@@ -549,7 +560,7 @@ class BaseAzureLLM(BaseOpenAILLM):
             # on every request (via `_refresh_api_key`), so passing
             # `azure_ad_token_provider` directly preserves Azure AD token refresh
             # behavior that the regular AzureOpenAI client provides.
-            v1_api_key: str | Callable[[], Any] | None = (
+            v1_api_key: str | Callable[[], object] | None = (
                 azure_client_params.get("api_key")
                 or azure_client_params.get("azure_ad_token_provider")
                 or azure_client_params.get("azure_ad_token")
@@ -724,7 +735,11 @@ class BaseAzureLLM(BaseOpenAILLM):
             azure_client_params: Final[_AzureGatewayClientParams] = {
                 "api_version": api_version,
                 "base_url": f"{api_base}",
-                "http_client": litellm.client_session,
+                "http_client": (
+                    litellm.aclient_session or OpenAIAsyncHTTPClient()
+                    if acompletion
+                    else litellm.client_session or OpenAIHTTPClient()
+                ),
                 "max_retries": max_retries,
                 "timeout": timeout,
             }
@@ -777,6 +792,18 @@ class BaseAzureLLM(BaseOpenAILLM):
 
         return headers
 
+    @classmethod
+    def base_validate_azure_environment(
+        cls,
+        headers: dict[str, str],  # mutable-ok: mirrors override contract
+        litellm_params: GenericLiteLLMParams | None,
+    ) -> dict[str, str]:  # mutable-ok: mirrors override contract
+        return cls._base_validate_azure_environment(headers, litellm_params)
+
+    @staticmethod
+    def resolve_azure_api_base(api_base: str | None) -> str | None:
+        return api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
+
     @staticmethod
     def _get_base_azure_url(
         api_base: str | None,
@@ -794,7 +821,7 @@ class BaseAzureLLM(BaseOpenAILLM):
             default_api_version: The default API version to use if no api_version is provided. If 'latest', it will use `openai/v1/...` route.
         """
 
-        api_base = api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
+        api_base = BaseAzureLLM.resolve_azure_api_base(api_base)
         if api_base is None:
             raise ValueError(
                 f"api_base is required for Azure AI Studio. Please set the api_base parameter. Passed `api_base={api_base}`"
@@ -814,7 +841,7 @@ class BaseAzureLLM(BaseOpenAILLM):
 
         # Add the path to the base URL
         if route not in api_base:
-            new_url = _add_path_to_api_base(api_base=api_base, ending_path=route)
+            new_url = add_path_to_api_base(api_base=api_base, ending_path=route)
         else:
             new_url = api_base
 
@@ -822,12 +849,22 @@ class BaseAzureLLM(BaseOpenAILLM):
             # ensure the request go to /openai/v1 and not just /openai
             if "/openai/v1" not in new_url:
                 parsed_url: Final = httpx.URL(new_url)
-                new_url = str(parsed_url.copy_with(path=parsed_url.path.replace("/openai", "/openai/v1")))
+                new_url = str(parsed_url.copy_with(path=_LAST_OPENAI_PATH_SEGMENT.sub(r"\1/v1", parsed_url.path, 1)))
 
         # Use the new query_params dictionary
         final_url: Final = httpx.URL(new_url).copy_with(params=query_params)
 
         return str(final_url)
+
+    @classmethod
+    def get_base_azure_url(
+        cls,
+        api_base: str | None,
+        litellm_params: GenericLiteLLMParams | Mapping[str, object] | None,
+        route: Literal["/openai/responses", "/openai/vector_stores"] | str,
+        default_api_version: str | Literal["latest", "preview"] | None = None,
+    ) -> str:
+        return cls._get_base_azure_url(api_base, litellm_params, route, default_api_version)
 
     @staticmethod
     def get_azure_v1_image_url(api_base: str, api_version: str | None, route: str) -> str | None:

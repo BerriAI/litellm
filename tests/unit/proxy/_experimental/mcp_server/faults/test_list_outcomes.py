@@ -3,6 +3,7 @@ to exactly one category, wire values never carry upstream prose, and single-upst
 stay truthful to who failed."""
 
 import sys
+from typing import Final
 
 if sys.version_info < (3, 11):  # BaseExceptionGroup is a builtin only from 3.11
     from exceptiongroup import BaseExceptionGroup
@@ -23,6 +24,7 @@ from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
     list_fault_http_status,
     outcome_wire_value,
 )
+from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 
 
 def test_carried_fault_passes_through():
@@ -33,6 +35,11 @@ def test_carried_fault_passes_through():
 def test_upstream_auth_error_maps_to_auth_required_and_forbidden():
     assert classify_list_exception(MCPUpstreamAuthError(401, None, "srv")).tag == "auth_required"
     assert classify_list_exception(MCPUpstreamAuthError(403, None, "srv")).tag == "forbidden"
+
+
+def test_proxy_rate_limit_error_maps_to_rate_limited() -> None:
+    fault: Final = classify_list_exception(ProxyRateLimitError(detail="server RPM exceeded"))
+    assert fault == ServerListFault(tag="rate_limited", status_code=429)
 
 
 def test_timeout_and_connection_errors_classify_without_status():
@@ -100,6 +107,10 @@ def test_wire_value_carries_no_prose():
     assert outcome_wire_value(fault) == {"status": "upstream_error", "http_status": 500}
     assert outcome_wire_value(ServerListOk(tool_count=7)) == {"status": "ok", "tool_count": 7}
     assert outcome_wire_value(ServerListFault(tag="timeout")) == {"status": "timeout"}
+    assert outcome_wire_value(ServerListFault(tag="rate_limited", status_code=429)) == {
+        "status": "rate_limited",
+        "http_status": 429,
+    }
 
 
 @pytest.mark.parametrize(
@@ -108,6 +119,7 @@ def test_wire_value_carries_no_prose():
         ("auth_required", 401, 401),
         ("auth_required", None, 401),
         ("forbidden", 403, 403),
+        ("rate_limited", 429, 429),
         ("timeout", None, 504),
         ("unreachable", None, 502),
         ("upstream_error", 500, 502),
@@ -119,21 +131,51 @@ def test_single_upstream_http_status_is_truthful(tag, status_code, expected):
 
 
 @pytest.mark.asyncio
-async def test_cancelled_fetch_is_a_classified_fault_not_a_healthy_empty_server():
-    """A cancelled per-server fetch must not masquerade as ok(tool_count=0): cancellation was already
-    suppressed before the outcome plumbing existed, so it stays suppressed, but as an internal fault
-    the outcome reporting can see."""
+@pytest.mark.parametrize("cancel_message", [None, "client disconnected"])
+async def test_cancelled_fetch_propagates_instead_of_masquerading_as_a_healthy_empty_server(cancel_message: str | None):
+    """A cancelled per-server fetch must not masquerade as ok(tool_count=0), and it is not an upstream
+    fault either: the caller cancelled it (a sibling server already answered, or the request went
+    away), so the cancellation propagates instead of being logged as a listing failure."""
     import asyncio
-    from unittest.mock import AsyncMock, MagicMock
+    from unittest.mock import MagicMock
 
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
 
     manager = MCPServerManager()
     client = MagicMock()
-    client.list_tools = AsyncMock(side_effect=asyncio.CancelledError())
+    started = asyncio.Event()
+
+    async def list_tools(raise_on_error: bool = False) -> list[object]:
+        started.set()
+        await asyncio.Event().wait()
+        return []
+
+    client.list_tools = list_tools
+    listing = asyncio.create_task(manager._fetch_tools_with_timeout(client, "cancelled_srv"))
+    await started.wait()
+    listing.cancel(cancel_message)
+
+    with pytest.raises(asyncio.CancelledError):
+        await listing
+
+
+@pytest.mark.asyncio
+async def test_client_side_cancelled_error_is_a_classified_fault_not_a_cancellation():
+    """The MCP client raises its own CancelledError when a session's teardown outlives its cleanup
+    budget while the listing task keeps running. That is one server's fault, so it classifies as an
+    internal listing failure instead of cancelling the aggregate listing around it."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.experimental_mcp_client.client import SESSION_CLEANUP_TIMEOUT_MESSAGE
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+
+    manager = MCPServerManager()
+    client = MagicMock()
+    client.list_tools = AsyncMock(side_effect=asyncio.CancelledError(SESSION_CLEANUP_TIMEOUT_MESSAGE))
 
     with pytest.raises(MCPServerListError) as exc_info:
-        await manager._fetch_tools_with_timeout(client, "cancelled_srv")
+        await manager._fetch_tools_with_timeout(client, "slow_teardown_srv")
 
     assert exc_info.value.fault.tag == "internal"
 
@@ -255,3 +297,32 @@ def test_pure_non_auth_response_still_classifies_upstream_error():
     fault = classify_list_exception(exc)
     assert fault.tag == "upstream_error"
     assert fault.status_code == 502
+
+
+@pytest.mark.parametrize("status, challenge, expected", [
+    (403, 'Bearer error="insufficient_scope", scope="tools.write"', "tools.write"),
+    (403, 'bEaReR error=insufficient_scope, scope="tools.read tools.write"', "tools.read tools.write"),
+    (403, 'Bearer error="insufficient_scope"', ""),
+        (403, 'Bearer error="insufficient_scope", scope=', None),
+    (403, 'Bearer error="insufficient_scope", scope', None),
+    (401, 'Bearer error="insufficient_scope", scope="tools.write"', None),
+    (403, 'Bearer error="invalid_token", scope="tools.write"', None),
+    (403, '', None),
+    (403, 'Basic error="insufficient_scope", scope="tools.write"', None),
+    (403, 'Bearer error_description="error=insufficient_scope", scope="tools.write"', None),
+    (403, 'Bearer error="insufficient_scope", error="invalid_token"', None),
+    (403, 'Bearer error="insufficient_scope", scope="tools.write\r\ninjected"', None),
+    (403, 'Bearer error="insufficient_scope", scope="tools.write", Basic realm="other"', None),
+])
+@pytest.mark.parametrize("client", ["httpx", "httpx2"])
+def test_managed_scope_step_up_only_accepts_unambiguous_bearer_challenges(status, challenge, expected, client):
+    import httpx2
+
+    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import upstream_insufficient_scope
+
+    transport = httpx if client == "httpx" else httpx2
+    response = transport.Response(status, headers={"www-authenticate": challenge}, request=transport.Request("POST", "https://peer.test/mcp"))
+    cause = transport.HTTPStatusError("upstream rejected", request=response.request, response=response)
+    wrapped = RuntimeError("transport failure")
+    wrapped.__cause__ = cause
+    assert upstream_insufficient_scope(wrapped) == expected

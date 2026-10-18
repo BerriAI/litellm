@@ -17,6 +17,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Final, Protocol, TypedDict, overload
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth, user_api_key_has_admin_view
@@ -57,6 +58,8 @@ if TYPE_CHECKING:
     from litellm.types.router import Deployment
 
 router: Final = APIRouter()
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class _TagRecord(Protocol):
@@ -523,7 +526,7 @@ async def info_tag(
             model_info: object = {}
             if tag_record.model_info:
                 if isinstance(tag_record.model_info, str):
-                    model_info = json.loads(tag_record.model_info)
+                    model_info = _DECODED_JSON.validate_python(json.loads(tag_record.model_info))
                 else:
                     model_info = tag_record.model_info
 
@@ -646,7 +649,7 @@ async def list_tags(
             model_info: object = {}
             if tag_record.model_info:
                 if isinstance(tag_record.model_info, str):
-                    model_info = json.loads(tag_record.model_info)
+                    model_info = _DECODED_JSON.validate_python(json.loads(tag_record.model_info))
                 else:
                     model_info = tag_record.model_info
 
