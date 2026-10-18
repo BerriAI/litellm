@@ -1100,8 +1100,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         try:
             built = stream_chunk_builder(chunks=chunks)
             if built and built.choices and hasattr(built.choices[0], "message"):
-                self._cached_encrypted_reasoning_content = (
-                    LiteLLMCompletionResponsesConfig._encode_thinking_blocks(built.choices[0].message)
+                self._cached_encrypted_reasoning_content = LiteLLMCompletionResponsesConfig._encode_thinking_blocks(
+                    built.choices[0].message
                 )
                 return self._cached_encrypted_reasoning_content
         except Exception:
