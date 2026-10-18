@@ -2191,7 +2191,7 @@ def test_get_spend_routes_false_permission_denies_internal_user(route):
     request = MagicMock(spec=Request)
     request.query_params = {}
 
-    with pytest.raises(Exception):
+    with pytest.raises(Exception, match="Only proxy admin can be used to generate, delete, update") as exc_info:
         RouteChecks.non_proxy_admin_allowed_routes_check(
             user_obj=user_obj,
             _user_role=LitellmUserRoles.INTERNAL_USER.value,
@@ -2200,7 +2200,7 @@ def test_get_spend_routes_false_permission_denies_internal_user(route):
             valid_token=valid_token,
             request_data={},
         )
-
+    assert "Only proxy admin" in str(exc_info.value)
 
 
 @pytest.mark.parametrize("route", ["/audit", "/audit/some-log-id"])
