@@ -11704,3 +11704,71 @@ async def test_mcp_register_application_type_reaches_upstream_or_is_rejected(
             assert posted["application_type"] == application_type
     finally:
         mgmt_endpoints._temporary_mcp_servers.pop(server.server_id, None)
+
+
+@pytest.mark.asyncio
+async def test_get_mcp_access_groups_admin_sees_all_groups() -> None:
+    admin_auth = generate_mock_user_api_key_auth(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    config_server = MagicMock()
+    config_server.access_groups = ["config-group-1"]
+
+    db_server = MagicMock()
+    db_server.mcp_access_groups = ["db-group-1"]
+
+    mock_manager = MagicMock()
+    mock_manager.config_mcp_servers = {"server-1": config_server}
+
+    mock_repo = MagicMock()
+    mock_repo.table.find_many = AsyncMock(return_value=[db_server])
+
+    with (
+        patch("litellm.proxy.management_endpoints.mcp_management_endpoints.user_api_key_has_admin_view", return_value=True),
+        patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager", mock_manager),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.MCPServerRepository",
+            return_value=mock_repo,
+        ),
+    ):
+        result = await mgmt_endpoints.get_mcp_access_groups(user_api_key_dict=admin_auth)
+
+    assert result == {"access_groups": ["config-group-1", "db-group-1"]}
+
+
+@pytest.mark.asyncio
+async def test_get_mcp_access_groups_scoped_for_non_admin() -> None:
+    non_admin_auth = generate_mock_user_api_key_auth(user_role=LitellmUserRoles.INTERNAL_USER)
+
+    accessible_server = MagicMock()
+    accessible_server.mcp_access_groups = ["allowed-group"]
+    accessible_server.access_groups = None
+
+    with (
+        patch("litellm.proxy.management_endpoints.mcp_management_endpoints.user_api_key_has_admin_view", return_value=False),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints._resolve_accessible_mcp_servers",
+            AsyncMock(return_value=[accessible_server]),
+        ) as mock_resolve,
+    ):
+        result = await mgmt_endpoints.get_mcp_access_groups(user_api_key_dict=non_admin_auth)
+
+    mock_resolve.assert_awaited_once_with(non_admin_auth)
+    assert result == {"access_groups": ["allowed-group"]}
+
+
+@pytest.mark.asyncio
+async def test_get_mcp_access_groups_non_admin_empty_when_no_accessible_servers() -> None:
+    non_admin_auth = generate_mock_user_api_key_auth(user_role=LitellmUserRoles.INTERNAL_USER)
+
+    with (
+        patch("litellm.proxy.management_endpoints.mcp_management_endpoints.user_api_key_has_admin_view", return_value=False),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints._resolve_accessible_mcp_servers",
+            AsyncMock(return_value=[]),
+        ),
+    ):
+        result = await mgmt_endpoints.get_mcp_access_groups(user_api_key_dict=non_admin_auth)
+
+    assert result == {"access_groups": []}
+
