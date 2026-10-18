@@ -564,6 +564,7 @@ class LiteLLMRoutes(enum.Enum):
         "/team/metadata_schema",
         "/user/info",
         "/v2/user/info",
+        "/management/v1/users/me",
         "/model/info",
         "/v1/model/info",
         "/v2/model/info",
@@ -3682,6 +3683,7 @@ class SpendLogsMetadata(TypedDict):
     user_api_key_project_alias: str | None
     user_api_key_org_id: str | None
     user_api_key_user_id: str | None
+    user_api_key_user_email: ReadOnly[str | None]
     user_api_key_team_alias: str | None
     spend_logs_metadata: dict | None  # special param to log k,v pairs to spendlogs for a call
     requester_ip_address: str | None
@@ -4842,6 +4844,10 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
         "mcp_routes",
         "/v1/messages",
         "/v1/messages/count_tokens",
+        "/rag/ingest",
+        "/v1/rag/ingest",
+        "/rag/query",
+        "/v1/rag/query",
     ]
     team_id_default: str | None = Field(
         default=None,
