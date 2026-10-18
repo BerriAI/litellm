@@ -6,12 +6,51 @@ from types import MappingProxyType
 from typing import Final
 
 import litellm
-from litellm.types.router import holds_api_key_secret_reference
+from litellm._logging import verbose_logger
+from litellm.secret_managers.main import get_secret_str
+from litellm.types.router import holds_api_key_secret_reference, holds_secret_pointer
 from litellm.types.utils import (
     API_KEY_SECRET_REFERENCE_REJECTION,
     CredentialItem,
     credential_api_key_secret_reference,
 )
+
+_ENV_REF_PREFIX: Final = "os.environ/"
+
+
+def _resolved_credential_value(credential_name: str, key: str, value: object) -> object:
+    """The environment variable's value for an ``os.environ/<VAR>`` reference, or the value itself.
+
+    An unresolvable reference is kept and logged rather than dropped, so a provider with optional
+    params cannot silently fall back to another account's ambient credentials. ``*_ref`` federation
+    fields are pointers their identity source dereferences at use time, so they stay as written.
+    """
+    if not isinstance(value, str) or not value.startswith(_ENV_REF_PREFIX):
+        return value
+    if holds_secret_pointer(key):
+        return value
+    resolved: Final = get_secret_str(value)
+    if resolved is not None:
+        return resolved
+    verbose_logger.warning(
+        "credential '%s' value '%s' references unset environment variable %s; keeping the reference",
+        credential_name,
+        key,
+        value,
+    )
+    return value
+
+
+def expand_credential_env_refs(
+    credential_name: str, values: Mapping[str, object]
+) -> dict[str, object]:  # mutable-ok: CredentialItem.credential_values is a mutable dict by contract
+    """Resolve ``os.environ/<VAR>`` values against the environment.
+
+    Mirrors the config loader: references resolve once, when the credential enters the process, so
+    runtime reads stay plain and a rotated env var needs the credential to be re-saved or the proxy
+    restarted.
+    """
+    return {key: _resolved_credential_value(credential_name, key, value) for key, value in values.items()}
 
 
 class CredentialAccessor:
@@ -42,6 +81,11 @@ class CredentialAccessor:
     @staticmethod
     def upsert_credentials(credentials: list[CredentialItem]) -> None:
         """Replace the first loaded credential with each incoming name, append names not loaded at call start."""
+
+        for credential in credentials:
+            credential.credential_values = expand_credential_env_refs(
+                credential.credential_name, credential.credential_values
+            )
 
         first_index_by_name: Final = MappingProxyType(
             {cred.credential_name: i for i, cred in reversed(tuple(enumerate(litellm.credential_list)))}
