@@ -1939,7 +1939,7 @@ def _run_sync_success_hooks_held_for(logging_obj: object) -> None:
     """Ends the pairing of the async success the proxy just dropped, so the sync success hooks held back for it run."""
     hook_pairing: Final = getattr(logging_obj, "async_success_hook_pairing", None)
     if isinstance(hook_pairing, HookPairing):
-        hook_pairing.end()
+        hook_pairing.end_async_run()
 
 
 class ProxyBaseLLMRequestProcessing:

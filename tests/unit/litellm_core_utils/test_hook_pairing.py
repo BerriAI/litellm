@@ -13,24 +13,30 @@ class _Logger:
 @pytest.mark.parametrize(
     ("steps", "expected"),
     [
-        (("hold", "reach", "end"), []),
-        (("reach", "hold", "end"), []),
-        (("hold", "end"), ["ran"]),
-        (("end", "hold"), ["ran"]),
-        (("hold", "end", "reach"), ["ran"]),
-        (("hold",), []),
+        (("sync", "end"), ["ran"]),
+        (("end", "sync"), ["ran"]),
+        (("sync", "reach", "end"), []),
+        (("reach", "sync", "end"), []),
+        (("sync", "end", "reach"), ["ran"]),
+        (("sync",), []),
+        (("end",), []),
     ],
 )
-def test_held_sync_hook_runs_only_when_the_async_run_ends_without_reaching_its_logger(
+def test_held_sync_hook_runs_only_when_both_runs_end_without_the_async_run_reaching_its_logger(
     steps: tuple[str, ...], expected: list[str]
 ) -> None:
     ran: Final[list[str]] = []
     logger: Final = _Logger()
     pairing: Final = HookPairing(run_held_hook_now)
+
+    def holding_sync_run() -> None:
+        with pairing.sync_run():
+            pairing.hold(logger, lambda: ran.append("ran"))
+
     actions: Final[dict[str, Callable[[], None]]] = {
-        "hold": lambda: pairing.hold(logger, lambda: ran.append("ran")),
+        "sync": holding_sync_run,
         "reach": lambda: pairing.reach(logger),
-        "end": pairing.end,
+        "end": pairing.end_async_run,
     }
 
     for step in steps:
@@ -39,16 +45,31 @@ def test_held_sync_hook_runs_only_when_the_async_run_ends_without_reaching_its_l
     assert ran == expected
 
 
+def test_held_sync_hook_waits_for_every_open_sync_run_after_the_async_run_ends() -> None:
+    ran: Final[list[str]] = []
+    pairing: Final = HookPairing(run_held_hook_now)
+
+    with pairing.sync_run():
+        pairing.hold(_Logger(), lambda: ran.append("ran"))
+        pairing.end_async_run()
+        with pairing.sync_run():
+            pass
+        assert ran == []
+
+    assert ran == ["ran"]
+
+
 def test_async_run_reaching_one_logger_leaves_another_loggers_held_hook_to_run() -> None:
     ran: Final[list[str]] = []
     reached: Final = _Logger()
     unreached: Final = _Logger()
     pairing: Final = HookPairing(run_held_hook_now)
 
-    pairing.hold(reached, lambda: ran.append("reached"))
-    pairing.hold(unreached, lambda: ran.append("unreached"))
+    with pairing.sync_run():
+        pairing.hold(reached, lambda: ran.append("reached"))
+        pairing.hold(unreached, lambda: ran.append("unreached"))
     pairing.reach(reached)
-    pairing.end()
+    pairing.end_async_run()
 
     assert ran == ["unreached"]
 
@@ -61,9 +82,10 @@ def test_held_hooks_run_through_the_pairings_runner_and_a_raising_one_stays_non_
     def raising() -> None:
         raise RuntimeError("logger is down")
 
-    pairing.hold(_Logger(), raising)
-    pairing.hold(_Logger(), lambda: ran.append("ran"))
-    pairing.end()
+    with pairing.sync_run():
+        pairing.hold(_Logger(), raising)
+        pairing.hold(_Logger(), lambda: ran.append("ran"))
+    pairing.end_async_run()
 
     assert runner_calls == ["runner", "runner"]
     assert ran == ["ran"]

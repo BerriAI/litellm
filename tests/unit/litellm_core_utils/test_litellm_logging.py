@@ -7808,6 +7808,32 @@ def test_async_call_outside_the_async_flag_list_still_runs_sync_function_callbac
     assert recorder.hooks == []
 
 
+@pytest.mark.parametrize("outcome", ["success", "failure"])
+@pytest.mark.usefixtures("no_global_callbacks")
+def test_held_sync_hook_runs_after_the_sync_runs_other_callbacks_when_the_async_run_ends_mid_run(
+    monkeypatch: pytest.MonkeyPatch, outcome: str
+) -> None:
+    monkeypatch.setattr(litellm_logging, "customLogger", CustomLogger())
+    recorder: Final = _AsyncHookRecorder()
+    logging_obj: Final = _hook_count_logging_obj(
+        "aspeech", recorder, async_success_listed=True, async_failure_listed=True
+    )
+    pairing: Final = HookPairing(run_held_hook_now)
+
+    def async_run_ends_meanwhile(kwargs: object, response_obj: object, start_time: object, end_time: object) -> None:
+        pairing.end_async_run()
+        recorder.hooks.append(f"function_{outcome}")
+
+    if outcome == "success":
+        logging_obj.dynamic_success_callbacks = [recorder, async_run_ends_meanwhile]
+        logging_obj.success_handler(result=ModelResponse(), for_async_request=True, hook_pairing=pairing)
+    else:
+        logging_obj.dynamic_failure_callbacks = [recorder, async_run_ends_meanwhile]
+        logging_obj.failure_handler(ValueError("upstream rejected"), "traceback", hook_pairing=pairing)
+
+    assert recorder.hooks == [f"function_{outcome}", f"sync_{outcome}"]
+
+
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("no_global_callbacks")
 async def test_client_wrapped_failure_gives_a_logger_in_litellm_callbacks_one_hook(

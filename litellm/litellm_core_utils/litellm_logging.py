@@ -86,7 +86,7 @@ from litellm.litellm_core_utils.hidden_params import (
     served_from_cache,
     set_hidden_param,
 )
-from litellm.litellm_core_utils.hook_pairing import HookPairing, run_held_hook_in_executor
+from litellm.litellm_core_utils.hook_pairing import HookPairing, run_held_hook_in_executor, sync_run
 from litellm.litellm_core_utils.internal_call_metadata import (
     MODEL_ACCESS_GROUP_METADATA_KEY,
     is_unbilled_non_inference_call,
@@ -3000,7 +3000,7 @@ class Logging(LiteLLMLoggingBaseClass):
         """Restores trace_id/session_id contextvars once this attempt's own success
         logging (including any nested calls its callbacks trigger) is fully done."""
         try:
-            with post_response_phase():
+            with post_response_phase(), sync_run(hook_pairing):
                 return self._success_handler_body(
                     result=result,
                     start_time=start_time,
@@ -3502,7 +3502,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 )
         finally:
             if hook_pairing is not None:
-                hook_pairing.end()
+                hook_pairing.end_async_run()
             self._restore_correlation_context()
 
     async def _async_success_handler_body(
@@ -3998,13 +3998,14 @@ class Logging(LiteLLMLoggingBaseClass):
         """Restores trace_id/session_id contextvars once this attempt's own failure
         logging (including any nested calls its callbacks trigger) is fully done."""
         try:
-            return self._failure_handler_body(
-                exception=exception,
-                traceback_exception=traceback_exception,
-                start_time=start_time,
-                end_time=end_time,
-                hook_pairing=hook_pairing,
-            )
+            with sync_run(hook_pairing):
+                return self._failure_handler_body(
+                    exception=exception,
+                    traceback_exception=traceback_exception,
+                    start_time=start_time,
+                    end_time=end_time,
+                    hook_pairing=hook_pairing,
+                )
         finally:
             self._restore_correlation_context()
 
@@ -4212,7 +4213,7 @@ class Logging(LiteLLMLoggingBaseClass):
             )
         finally:
             if hook_pairing is not None:
-                hook_pairing.end()
+                hook_pairing.end_async_run()
             self._restore_correlation_context()
 
     async def _async_failure_handler_body(
