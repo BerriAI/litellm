@@ -1,11 +1,14 @@
 import os
-import pytest
 from unittest.mock import MagicMock, patch
+
+import httpx
+import pytest
+import respx
 
 import litellm
 from litellm.llms.baseten.chat import BasetenConfig
-from litellm.utils import ProviderConfigManager, get_valid_models
 from litellm.types.utils import LlmProviders
+from litellm.utils import ProviderConfigManager, get_valid_models
 
 
 class TestBasetenRouting:
@@ -110,14 +113,14 @@ class TestBasetenModelDiscovery:
         )
         assert models == ["baseten/zai-org/GLM-5", "baseten/moonshotai/Kimi-K2.5"]
 
-    def test_get_models_respects_custom_api_base(self):
-        mock_response = MagicMock(status_code=200)
-        mock_response.json.return_value = {"data": [{"id": "zai-org/GLM-5"}]}
+    def test_get_models_respects_custom_api_base(self, respx_mock: respx.MockRouter) -> None:
+        respx_mock.get("https://custom.baseten.example/v1/models").mock(
+            return_value=httpx.Response(200, json={"data": [{"id": "zai-org/GLM-5"}]})
+        )
 
-        with patch.object(litellm.module_level_client, "get", return_value=mock_response) as mock_get:
-            BasetenConfig().get_models(api_key="test-key", api_base="https://custom.baseten.example/v1/")
+        models = BasetenConfig().get_models(api_key="test-key", api_base="https://custom.baseten.example/v1/")
 
-        assert mock_get.call_args.kwargs["url"] == "https://custom.baseten.example/v1/models"
+        assert models == ["baseten/zai-org/GLM-5"]
 
     @patch.dict(os.environ, {}, clear=True)
     def test_get_models_requires_api_key(self):
