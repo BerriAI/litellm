@@ -1,5 +1,10 @@
 use std::future::Future;
 
+use crate::{
+    machine::MachineFault,
+    protocol::{InterceptRequest, Reply, reply},
+};
+
 use serde_json::Value;
 
 /// The provider request as it is about to leave, offered to the host for rewriting.
@@ -70,57 +75,79 @@ pub struct ExecutionFacts {
     pub cost: Cost,
 }
 
+/// Answers the hook points a call raises. `InterceptRequest` lists every point; an
+/// implementer handles the ones it cares about and passes the rest through.
 pub trait Interceptors<E>: Send + Sync {
-    fn result_ready(&self, _facts: ExecutionFacts) -> impl Future<Output = Result<(), E>> + Send {
+    fn handle(&self, request: InterceptRequest) -> impl Future<Output = Result<(), E>> + Send {
+        request.pass_through();
         async { Ok(()) }
     }
 
-    fn before_provider_request(
+    /// Raises one point and waits for its answer. A host channel yields it to the host.
+    fn intercept<A: Send>(
         &self,
-        wire: WireRequest,
-        context: RequestContext,
-    ) -> impl Future<Output = Result<WireRequest, E>> + Send;
-
-    fn after_provider_response(
-        &self,
-        raw: RawResponse,
-    ) -> impl Future<Output = Result<(), E>> + Send;
+        ask: impl FnOnce(Reply<A>) -> InterceptRequest + Send,
+    ) -> impl Future<Output = Result<A, E>> + Send
+    where
+        E: From<MachineFault>,
+    {
+        let (reply, answer) = reply();
+        let handled = self.handle(ask(reply));
+        async move {
+            handled.await?;
+            answer.await.map_err(|_| MachineFault::Abandoned.into())
+        }
+    }
 }
 
 impl<E, T: Interceptors<E> + ?Sized> Interceptors<E> for &T {
-    fn result_ready(&self, facts: ExecutionFacts) -> impl Future<Output = Result<(), E>> + Send {
-        (**self).result_ready(facts)
+    fn handle(&self, request: InterceptRequest) -> impl Future<Output = Result<(), E>> + Send {
+        (**self).handle(request)
     }
 
+    fn intercept<A: Send>(
+        &self,
+        ask: impl FnOnce(Reply<A>) -> InterceptRequest + Send,
+    ) -> impl Future<Output = Result<A, E>> + Send
+    where
+        E: From<MachineFault>,
+    {
+        (**self).intercept(ask)
+    }
+}
+
+impl<E> Interceptors<E> for () {}
+
+/// The typed form of each point, for the routes that raise them.
+pub trait InterceptPoints<E>: Interceptors<E>
+where
+    E: From<MachineFault>,
+{
     fn before_provider_request(
         &self,
         wire: WireRequest,
         context: RequestContext,
     ) -> impl Future<Output = Result<WireRequest, E>> + Send {
-        (**self).before_provider_request(wire, context)
+        self.intercept(|reply| InterceptRequest::BeforeProviderRequest {
+            wire: Box::new(wire),
+            context: Box::new(context),
+            reply,
+        })
     }
 
     fn after_provider_response(
         &self,
         raw: RawResponse,
     ) -> impl Future<Output = Result<(), E>> + Send {
-        (**self).after_provider_response(raw)
+        self.intercept(|reply| InterceptRequest::AfterProviderResponse { raw, reply })
+    }
+
+    fn result_ready(&self, facts: ExecutionFacts) -> impl Future<Output = Result<(), E>> + Send {
+        self.intercept(|reply| InterceptRequest::ResultReady { facts, reply })
     }
 }
 
-impl<E> Interceptors<E> for () {
-    async fn before_provider_request(
-        &self,
-        wire: WireRequest,
-        _: RequestContext,
-    ) -> Result<WireRequest, E> {
-        Ok(wire)
-    }
-
-    async fn after_provider_response(&self, _: RawResponse) -> Result<(), E> {
-        Ok(())
-    }
-}
+impl<E: From<MachineFault>, T: Interceptors<E> + ?Sized> InterceptPoints<E> for T {}
 
 #[cfg(test)]
 mod tests {
@@ -129,7 +156,6 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::protocol::InterceptRequest;
     use crate::{
         machine::{CallMachine, Machine, MachineFault, MachineStep},
         protocol::{HostRequest, Protocol},
@@ -178,13 +204,13 @@ mod tests {
     async fn the_channel_yields_each_hook_as_its_op_and_returns_the_answer() {
         let mut machine = CallMachine::<Unit>::new(None, |channel| {
             Box::pin(async move {
-                let sent = Interceptors::before_provider_request(
+                let sent = InterceptPoints::before_provider_request(
                     &channel.interceptors,
                     wire("prepared"),
                     context(),
                 )
                 .await?;
-                Interceptors::after_provider_response(
+                InterceptPoints::after_provider_response(
                     &channel.interceptors,
                     RawResponse { body: "raw".into() },
                 )
@@ -222,10 +248,47 @@ mod tests {
 
     #[rstest::rstest]
     #[tokio::test]
+    async fn handling_on_the_channel_suspends_for_the_host_and_answers_the_original_reply() {
+        let mut machine = CallMachine::<Unit>::new(None, |channel| {
+            Box::pin(async move {
+                let (reply, answer) = reply();
+                channel
+                    .interceptors
+                    .handle(InterceptRequest::BeforeProviderRequest {
+                        wire: Box::new(wire("prepared")),
+                        context: Box::new(context()),
+                        reply,
+                    })
+                    .await?;
+                Ok((answer.await.map_err(|_| Fault)?, ()))
+            })
+        });
+
+        let Ok(MachineStep::Suspended(HostRequest::Intercept(
+            InterceptRequest::BeforeProviderRequest { wire, reply, .. },
+        ))) = machine.resume().await
+        else {
+            panic!("handling on the channel yields the request to the host");
+        };
+        assert_eq!(wire.url, "prepared");
+        reply.send(WireRequest {
+            url: "rewritten".into(),
+            ..*wire
+        });
+
+        let Ok(MachineStep::Complete((sent, ()))) = machine.resume().await else {
+            panic!("the call completes with the host's answer");
+        };
+        assert_eq!(sent.url, "rewritten");
+    }
+
+    #[rstest::rstest]
+    #[tokio::test]
     async fn no_hooks_pass_the_wire_request_through() {
-        let sent = Interceptors::<Fault>::before_provider_request(&(), wire("prepared"), context())
-            .await
-            .unwrap();
+        let sent =
+            InterceptPoints::<Fault>::before_provider_request(&(), wire("prepared"), context())
+                .await
+                .unwrap();
         assert_eq!(sent.url, "prepared");
     }
 }

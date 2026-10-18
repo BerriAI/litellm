@@ -1,3 +1,4 @@
+use litellm_host::protocol::InterceptRequest;
 use std::{sync::OnceLock, time::Duration};
 
 use futures_util::{FutureExt, TryStreamExt};
@@ -40,6 +41,25 @@ impl LiveCall {
 }
 
 impl Interceptors<Error> for LiveCall {
+    async fn handle(&self, request: InterceptRequest) -> Result<(), Error> {
+        match request {
+            InterceptRequest::ResultReady { facts, reply } => {
+                reply.send(self.result_ready(facts).await?);
+            }
+            InterceptRequest::BeforeProviderRequest {
+                wire,
+                context,
+                reply,
+            } => reply.send(self.before_provider_request(*wire, *context).await?),
+            InterceptRequest::AfterProviderResponse { raw, reply } => {
+                reply.send(self.after_provider_response(raw).await?);
+            }
+        }
+        Ok(())
+    }
+}
+
+impl LiveCall {
     async fn result_ready(&self, facts: ExecutionFacts) -> Result<(), Error> {
         assert!(
             self.facts.set(facts).is_ok(),

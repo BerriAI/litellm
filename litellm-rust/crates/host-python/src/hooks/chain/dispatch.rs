@@ -19,10 +19,144 @@ type OwnedEvent = CallEvent<Py<PyAny>, Py<PyBaseException>, RawResponse>;
 #[derive(Default)]
 pub struct HookChain {
     hooks: Vec<Box<dyn ChainHooks>>,
-    arguments: Option<(usize, f64)>,
-    wire: Option<(usize, RequestContext)>,
-    response: Option<(usize, Timing)>,
+    pending: Option<Pending>,
     event: Option<(usize, OwnedEvent)>,
+}
+
+/// Where a suspended transformation resumes: the hook it waits on and the context the rest of
+/// the chain still needs.
+enum Pending {
+    Arguments(usize, f64),
+    Wire(usize, RequestContext),
+    Response(usize, Timing),
+}
+
+/// A stage that feeds each hook's result to the next hook.
+trait Transform {
+    type Value;
+    type Context;
+
+    fn call(
+        hooks: &mut dyn ChainHooks,
+        py: Python<'_>,
+        value: Self::Value,
+        context: &Self::Context,
+    ) -> PyResult<ChainStep<Self::Value>>;
+
+    fn resume(
+        hooks: &mut dyn ChainHooks,
+        py: Python<'_>,
+        result: PyResult<Py<PyAny>>,
+    ) -> PyResult<ChainStep<Self::Value>>;
+
+    fn suspend(index: usize, context: Self::Context) -> Pending;
+
+    fn resumed(pending: Pending) -> Option<(usize, Self::Context)>;
+}
+
+struct Arguments;
+
+impl Transform for Arguments {
+    type Value = Py<PyDict>;
+    type Context = f64;
+
+    fn call(
+        hooks: &mut dyn ChainHooks,
+        py: Python<'_>,
+        value: Py<PyDict>,
+        started_at: &f64,
+    ) -> PyResult<ChainStep<Py<PyDict>>> {
+        hooks.prepare_arguments(py, value, *started_at)
+    }
+
+    fn resume(
+        hooks: &mut dyn ChainHooks,
+        py: Python<'_>,
+        result: PyResult<Py<PyAny>>,
+    ) -> PyResult<ChainStep<Py<PyDict>>> {
+        hooks.resume_arguments(py, result)
+    }
+
+    fn suspend(index: usize, started_at: f64) -> Pending {
+        Pending::Arguments(index, started_at)
+    }
+
+    fn resumed(pending: Pending) -> Option<(usize, f64)> {
+        match pending {
+            Pending::Arguments(index, started_at) => Some((index, started_at)),
+            _ => None,
+        }
+    }
+}
+
+struct Wire;
+
+impl Transform for Wire {
+    type Value = Box<WireRequest>;
+    type Context = RequestContext;
+
+    fn call(
+        hooks: &mut dyn ChainHooks,
+        py: Python<'_>,
+        value: Box<WireRequest>,
+        context: &RequestContext,
+    ) -> PyResult<ChainStep<Box<WireRequest>>> {
+        hooks.before_provider_request(py, value, context)
+    }
+
+    fn resume(
+        hooks: &mut dyn ChainHooks,
+        py: Python<'_>,
+        result: PyResult<Py<PyAny>>,
+    ) -> PyResult<ChainStep<Box<WireRequest>>> {
+        hooks.resume_wire(py, result)
+    }
+
+    fn suspend(index: usize, context: RequestContext) -> Pending {
+        Pending::Wire(index, context)
+    }
+
+    fn resumed(pending: Pending) -> Option<(usize, RequestContext)> {
+        match pending {
+            Pending::Wire(index, context) => Some((index, context)),
+            _ => None,
+        }
+    }
+}
+
+struct Response;
+
+impl Transform for Response {
+    type Value = Py<PyAny>;
+    type Context = Timing;
+
+    fn call(
+        hooks: &mut dyn ChainHooks,
+        py: Python<'_>,
+        value: Py<PyAny>,
+        timing: &Timing,
+    ) -> PyResult<ChainStep<Py<PyAny>>> {
+        hooks.transform_response(py, value, *timing)
+    }
+
+    fn resume(
+        hooks: &mut dyn ChainHooks,
+        py: Python<'_>,
+        result: PyResult<Py<PyAny>>,
+    ) -> PyResult<ChainStep<Py<PyAny>>> {
+        hooks.resume_response(py, result)
+    }
+
+    fn suspend(index: usize, timing: Timing) -> Pending {
+        Pending::Response(index, timing)
+    }
+
+    fn resumed(pending: Pending) -> Option<(usize, Timing)> {
+        match pending {
+            Pending::Response(index, timing) => Some((index, timing)),
+            _ => None,
+        }
+    }
 }
 
 impl HookChain {
@@ -35,127 +169,49 @@ impl HookChain {
         self
     }
 
-    fn arguments_from(
+    fn transform_from<T: Transform>(
         &mut self,
         py: Python<'_>,
         index: usize,
-        arguments: Py<PyDict>,
-        started_at: f64,
-    ) -> PyResult<HookStep<Self, Py<PyDict>>> {
+        value: T::Value,
+        context: T::Context,
+    ) -> PyResult<HookStep<Self, T::Value>> {
         let Some(hooks) = self.hooks.get_mut(index) else {
-            return Ok(HookStep::Ready(arguments));
+            return Ok(HookStep::Ready(value));
         };
-        let step = hooks.prepare_arguments(py, arguments, started_at)?;
-        self.arguments_step(py, index, step, started_at)
+        let step = T::call(hooks.as_mut(), py, value, &context)?;
+        self.transform_step::<T>(py, index, step, context)
     }
 
-    fn arguments_step(
+    fn transform_step<T: Transform>(
         &mut self,
         py: Python<'_>,
         index: usize,
-        step: ChainStep<Py<PyDict>>,
-        started_at: f64,
-    ) -> PyResult<HookStep<Self, Py<PyDict>>> {
+        step: ChainStep<T::Value>,
+        context: T::Context,
+    ) -> PyResult<HookStep<Self, T::Value>> {
         match step {
-            ChainStep::Ready(value) => self.arguments_from(py, index + 1, value, started_at),
+            ChainStep::Ready(value) => self.transform_from::<T>(py, index + 1, value, context),
             ChainStep::Await(awaitable) => {
-                self.arguments = Some((index, started_at));
-                Ok(HookStep::Await(awaitable, Self::resume_arguments))
+                self.pending = Some(T::suspend(index, context));
+                Ok(HookStep::Await(awaitable, Self::resume_transform::<T>))
             }
         }
     }
 
-    fn resume_arguments(
+    fn resume_transform<T: Transform>(
         &mut self,
         py: Python<'_>,
         result: PyResult<Py<PyAny>>,
-    ) -> PyResult<HookStep<Self, Py<PyDict>>> {
-        let (index, context) = self.arguments.take().ok_or(Error::MissingState)?;
+    ) -> PyResult<HookStep<Self, T::Value>> {
+        let (index, context) = self
+            .pending
+            .take()
+            .and_then(T::resumed)
+            .ok_or(Error::MissingState)?;
         let result = resume_unless_cancelled(py, result)?;
-        let step = self.hooks[index].resume_arguments(py, result)?;
-        self.arguments_step(py, index, step, context)
-    }
-
-    fn wire_from(
-        &mut self,
-        py: Python<'_>,
-        index: usize,
-        wire: Box<WireRequest>,
-        context: &RequestContext,
-    ) -> PyResult<HookStep<Self, Box<WireRequest>>> {
-        let Some(hooks) = self.hooks.get_mut(index) else {
-            return Ok(HookStep::Ready(wire));
-        };
-        let step = hooks.before_provider_request(py, wire, context)?;
-        self.wire_step(py, index, step, context)
-    }
-
-    fn wire_step(
-        &mut self,
-        py: Python<'_>,
-        index: usize,
-        step: ChainStep<Box<WireRequest>>,
-        context: &RequestContext,
-    ) -> PyResult<HookStep<Self, Box<WireRequest>>> {
-        match step {
-            ChainStep::Ready(value) => self.wire_from(py, index + 1, value, context),
-            ChainStep::Await(awaitable) => {
-                self.wire = Some((index, context.clone()));
-                Ok(HookStep::Await(awaitable, Self::resume_wire))
-            }
-        }
-    }
-
-    fn resume_wire(
-        &mut self,
-        py: Python<'_>,
-        result: PyResult<Py<PyAny>>,
-    ) -> PyResult<HookStep<Self, Box<WireRequest>>> {
-        let (index, context) = self.wire.take().ok_or(Error::MissingState)?;
-        let result = resume_unless_cancelled(py, result)?;
-        let step = self.hooks[index].resume_wire(py, result)?;
-        self.wire_step(py, index, step, &context)
-    }
-
-    fn response_from(
-        &mut self,
-        py: Python<'_>,
-        index: usize,
-        response: Py<PyAny>,
-        timing: Timing,
-    ) -> PyResult<HookStep<Self, Py<PyAny>>> {
-        let Some(hooks) = self.hooks.get_mut(index) else {
-            return Ok(HookStep::Ready(response));
-        };
-        let step = hooks.transform_response(py, response, timing)?;
-        self.response_step(py, index, step, timing)
-    }
-
-    fn response_step(
-        &mut self,
-        py: Python<'_>,
-        index: usize,
-        step: ChainStep<Py<PyAny>>,
-        timing: Timing,
-    ) -> PyResult<HookStep<Self, Py<PyAny>>> {
-        match step {
-            ChainStep::Ready(value) => self.response_from(py, index + 1, value, timing),
-            ChainStep::Await(awaitable) => {
-                self.response = Some((index, timing));
-                Ok(HookStep::Await(awaitable, Self::resume_response))
-            }
-        }
-    }
-
-    fn resume_response(
-        &mut self,
-        py: Python<'_>,
-        result: PyResult<Py<PyAny>>,
-    ) -> PyResult<HookStep<Self, Py<PyAny>>> {
-        let (index, context) = self.response.take().ok_or(Error::MissingState)?;
-        let result = resume_unless_cancelled(py, result)?;
-        let step = self.hooks[index].resume_response(py, result)?;
-        self.response_step(py, index, step, context)
+        let step = T::resume(self.hooks[index].as_mut(), py, result)?;
+        self.transform_step::<T>(py, index, step, context)
     }
 
     fn event_from(
@@ -312,7 +368,7 @@ impl CallHooks<PythonRuntime> for HookChain {
         arguments: Py<PyDict>,
         started_at: f64,
     ) -> PyResult<HookStep<Self, Py<PyDict>>> {
-        self.arguments_from(py, 0, arguments, started_at)
+        self.transform_from::<Arguments>(py, 0, arguments, started_at)
     }
 
     fn arguments_prepared(&mut self, py: Python<'_>, arguments: &Py<PyDict>) -> PyResult<()> {
@@ -327,7 +383,7 @@ impl CallHooks<PythonRuntime> for HookChain {
         wire: Box<WireRequest>,
         context: &RequestContext,
     ) -> PyResult<HookStep<Self, Box<WireRequest>>> {
-        self.wire_from(py, 0, wire, context)
+        self.transform_from::<Wire>(py, 0, wire, context.clone())
     }
 
     fn transform_response(
@@ -336,7 +392,7 @@ impl CallHooks<PythonRuntime> for HookChain {
         response: Py<PyAny>,
         timing: Timing,
     ) -> PyResult<HookStep<Self, Py<PyAny>>> {
-        self.response_from(py, 0, response, timing)
+        self.transform_from::<Response>(py, 0, response, timing)
     }
 
     fn on_event(
@@ -372,9 +428,7 @@ impl CallHooks<PythonRuntime> for HookChain {
 
 impl PythonOwned for HookChain {
     fn close(&mut self, py: Python<'_>) {
-        self.arguments = None;
-        self.wire = None;
-        self.response = None;
+        self.pending = None;
         self.event = None;
         for hooks in &mut self.hooks {
             hooks.close(py);
