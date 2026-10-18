@@ -2,20 +2,79 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from typing import Final
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from e2e_http import NetworkError, Result, Success, UnknownApiError
-from setup.ui_queries import Contract, Document, Sample, database_failures, measure, summarize, ui_junit_properties
+from setup.ui_queries import (
+    Contract,
+    Document,
+    Sample,
+    database_failures,
+    measure,
+    query_path,
+    summarize,
+    ui_junit_properties,
+)
 from setup.ui_query_cases import Params, cases, next_page
 
 
-def test_facet_dates_use_the_ui_bracketed_filter_names() -> None:
-    case: Final = next(case for case in cases(datetime(2026, 1, 1, tzinfo=UTC), "key") if case.name == "facet_users")
-    assert case.params.model_dump(by_alias=True, exclude_none=True) == {
-        "filter[startTime][gte]": "2025-12-31 00:00:00",
-        "filter[startTime][lte]": "2026-01-01 00:00:00",
-        "page_size": 50,
-        "page": 1,
+def test_query_string_preserves_ui_arrays_and_boolean_strings() -> None:
+    requests: Final = cases(datetime(2026, 1, 1, tzinfo=UTC), "key")
+    cache: Final = next(case for case in requests if case.name == "cache_activity_filtered")
+    assert parse_qs(urlsplit(query_path(cache)).query) == {
+        "start_date": ["2025-12-25"],
+        "end_date": ["2026-01-01"],
+        "key_aliases": ["perf-key-0", "perf-key-1"],
+        "models": ["perf-chat"],
+    }
+    health: Final = next(case for case in requests if case.name == "logs_exclude_internal_health_checks_30d")
+    query: Final = parse_qs(urlsplit(query_path(health)).query)
+    assert query["exclude_internal_health_checks"] == ["true"]
+    assert query["group_by_session"] == ["true"]
+
+
+@pytest.mark.parametrize("entity", ("user", "team", "tag", "customer"))
+@pytest.mark.parametrize(
+    ("route", "extra"),
+    (
+        ("aggregated", {}),
+        ("aggregated/keys", {"offset": 0, "limit": 50}),
+        ("aggregated/search", {"search": "perf-key"}),
+        ("aggregated/model_top_keys", {"model_group": "perf-chat", "by_model_group": "true"}),
+    ),
+)
+def test_usage_requests_list_keys_without_a_single_key_filter(
+    entity: str, route: str, extra: dict[str, str | int]
+) -> None:
+    case: Final = next(
+        case
+        for case in cases(datetime(2026, 1, 1, tzinfo=UTC), "key")
+        if case.path == f"/{entity}/daily/activity/{route}"
+    )
+    assert case.params.model_dump(exclude_none=True) == {
+        "start_date": "2025-12-25",
+        "end_date": "2026-01-01",
+        "timezone": "0",
+        **({"exclude_team_ids": "litellm-dashboard"} if entity == "team" else {}),
+        **extra,
+    }
+
+
+@pytest.mark.parametrize(("name", "value"), (("api_key", "key"), ("key_alias", "perf-key-0")))
+def test_key_filters_request_30_days_of_logs(name: str, value: str) -> None:
+    case: Final = next(
+        case for case in cases(datetime(2026, 1, 1, tzinfo=UTC), "key") if case.name == f"logs_{name}_30d"
+    )
+    assert parse_qs(urlsplit(query_path(case)).query) == {
+        "start_date": ["2025-12-02 00:00:00"],
+        "end_date": ["2026-01-01 00:00:00"],
+        "page_size": ["25"],
+        "page": ["1"],
+        "sort_by": ["startTime"],
+        "sort_order": ["desc"],
+        "group_by_session": ["true"],
+        name: [value],
     }
 
 
@@ -33,19 +92,6 @@ def test_session_cursor_is_reused_and_repeated_rows_rejected() -> None:
     assert Params.model_validate(second.params).page == 2
     with pytest.raises(AssertionError, match="Repeated page-one row"):
         _ = second.contract.count(first)
-
-
-def test_prompt_cache_cursor_preserves_both_fields() -> None:
-    case: Final = next(case for case in cases(datetime(2026, 1, 1, tzinfo=UTC), "key") if case.cursor == "prompt_cache")
-    first: Final = Document.model_validate_json(
-        '{"requests":[{"request_id":"one"}],"next_cursor":{"start_time":"2026-01-01T00:00:00Z","request_id":"one"}}'
-    )
-    params: Final = Params.model_validate(next_page(case, first).params)
-    assert params.cursor_start_time == "2026-01-01T00:00:00Z"
-    assert params.cursor_request_id == "one"
-    assert params.page is None
-    with pytest.raises(AssertionError, match="Missing prompt-cache cursor"):
-        _ = next_page(case, Document.model_validate_json('{"requests":[{"request_id":"one"}],"next_cursor":null}'))
 
 
 def test_first_query_is_separate_from_repeated_latency() -> None:
@@ -82,6 +128,7 @@ def test_failed_first_request_emits_error_code_without_latency() -> None:
     assert dict(ui_junit_properties((sample,))) == {
         "perf_ui_requests": 1,
         "perf_ui_failures": 1,
+        "perf_ui_samples": 0,
         "perf_ui_repeated_samples": 0,
         "perf_ui_error_http_500": 1,
     }
@@ -98,6 +145,10 @@ def test_junit_counts_failures_but_only_measures_successful_latency() -> None:
     assert dict(ui_junit_properties(samples, Sample(seconds=4, status=200))) == {
         "perf_ui_requests": 6,
         "perf_ui_failures": 3,
+        "perf_ui_samples": 2,
+        "perf_ui_seconds_p50": 2.5,
+        "perf_ui_seconds_p90": 3,
+        "perf_ui_seconds_max": 3,
         "perf_ui_repeated_samples": 1,
         "perf_ui_error_timeout": 1,
         "perf_ui_error_http_503": 1,
@@ -111,6 +162,17 @@ def test_junit_counts_failures_but_only_measures_successful_latency() -> None:
 def test_failed_cursor_prerequisite_is_counted_once() -> None:
     sample: Final = Sample(seconds=30, status=503, error="HTTP 503")
     assert dict(ui_junit_properties((sample,), sample)) == dict(ui_junit_properties((sample,)))
+
+
+def test_all_request_percentiles_include_first_and_use_nearest_rank_p90() -> None:
+    samples: Final = tuple(Sample(seconds=seconds, status=200) for seconds in (10, 1, 9, 2, 8, 3, 7, 4, 6, 5))
+    metrics: Final = dict(ui_junit_properties(samples))
+    assert {key: value for key, value in metrics.items() if key.startswith("perf_ui_seconds_")} == {
+        "perf_ui_seconds_p50": 5.5,
+        "perf_ui_seconds_p90": 9,
+        "perf_ui_seconds_max": 10,
+    }
+    assert metrics["perf_ui_samples"] == 10
 
 
 @pytest.mark.parametrize("body", ("{}", '{"data": []}', '{"data": [{"spend": 1}]}', '{"data": [null]}'))
@@ -143,13 +205,6 @@ def test_zero_spend_rows_are_allowed_alongside_nonzero_fixture_data() -> None:
     assert contract.count(Document.model_validate_json('[{"spend":0},{"spend":2}]')) == 2
     with pytest.raises(AssertionError, match="positive spend"):
         _ = contract.count(Document.model_validate_json('[{"spend":0}]'))
-
-
-def test_daily_aggregate_must_return_recovered_spendlog_alias() -> None:
-    contract: Final = Contract(row_fields=("metadata",), recovered_alias="perf-ui-recovered")
-    assert contract.count(Document.model_validate_json('[{"metadata":{"key_alias":"perf-ui-recovered"}}]')) == 1
-    with pytest.raises(AssertionError, match="not recovered"):
-        _ = contract.count(Document.model_validate_json('[{"metadata":{"key_alias":null}}]'))
 
 
 @pytest.mark.parametrize(

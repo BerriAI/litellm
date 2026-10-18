@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import math
 import statistics
 import time
@@ -8,6 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from itertools import chain
 from typing import Final, Literal
+from urllib.parse import urlencode
 
 from e2e_http import (
     NetworkError,
@@ -39,12 +39,9 @@ class Contract:
     row_fields: tuple[str, ...] = ()
     positive: tuple[str, ...] = ()
     object_fields: tuple[str, ...] = ()
-    recovered_alias: str | None = None
     excluded_ids: frozenset[str] = frozenset()
 
     def count(self, document: Document) -> int:
-        if self.recovered_alias is not None:
-            assert contains_alias(document.root, self.recovered_alias), "SpendLog key metadata was not recovered"
         value: Final = descend(document.root, self.collection)
         if self.object_fields:
             assert isinstance(value, dict), "Expected a JSON object"
@@ -71,16 +68,6 @@ def _positive(row: JsonValue, name: str) -> bool:
     return number > 0
 
 
-def contains_alias(value: JsonValue, alias: str) -> bool:
-    if isinstance(value, dict):
-        return value.get("key_alias") == alias or any(contains_alias(child, alias) for child in value.values())
-    return isinstance(value, list) and any(contains_alias(child, alias) for child in value)
-
-
-def orphan_key(name: str) -> str:
-    return hashlib.sha256(f"ui-perf-orphan-{name}".encode()).hexdigest()
-
-
 def descend(value: JsonValue, path: tuple[str, ...]) -> JsonValue:
     if not path:
         return value
@@ -94,9 +81,9 @@ class UiQueryCase:
     path: str
     params: BaseModel
     contract: Contract
-    surface: Literal["current", "old_usage", "liteadmin", "key_recovery"] = "current"
+    surface: Literal["current"] = "current"
     body: BaseModel | None = None
-    cursor: Literal["none", "session", "prompt_cache"] = "none"
+    cursor: Literal["none", "session"] = "none"
 
 
 class Sample(BaseModel):
@@ -150,7 +137,11 @@ def ui_junit_properties(
     requests: Final = (prerequisite, *samples) if prerequisite is not None and not prerequisite.error else samples
     codes: Final = tuple(error_code(sample) for sample in requests if sample.error)
     timings: Final = summarize(samples)
+    successful: Final = tuple(sorted(sample.seconds for sample in samples if not sample.error))
     latency: Final = (
+        ("seconds_p50", statistics.median(successful) if successful else None),
+        ("seconds_p90", successful[math.ceil(len(successful) * 0.90) - 1] if successful else None),
+        ("seconds_max", max(successful) if successful else None),
         ("first_seconds", timings.first_seconds),
         ("repeated_seconds_p50", timings.repeated_p50_seconds),
         ("repeated_seconds_p95", timings.repeated_p95_seconds),
@@ -160,6 +151,7 @@ def ui_junit_properties(
     return (
         ("perf_ui_requests", len(requests)),
         ("perf_ui_failures", len(codes)),
+        ("perf_ui_samples", len(successful)),
         ("perf_ui_repeated_samples", timings.repeated_samples),
         *((f"perf_ui_error_{code}", codes.count(code)) for code in sorted(frozenset(codes))),
         *((f"perf_ui_{name}", value) for name, value in latency if value is not None),
@@ -203,6 +195,11 @@ def measure(
             return _failure(result, seconds), None
 
 
+def query_path(case: UiQueryCase) -> str:
+    query: Final = urlencode(case.params.model_dump(by_alias=True, exclude_none=True), doseq=True)
+    return f"{case.path}?{query}" if query else case.path
+
+
 @step("Measure UI query {case.name} at {case.path}")
 def issue_query(transport: HttpTransport, case: UiQueryCase, *, timeout: float) -> Result[Document]:
     if case.body is not None:
@@ -210,7 +207,7 @@ def issue_query(transport: HttpTransport, case: UiQueryCase, *, timeout: float) 
             case.path, headers=transport.master, json=case.body, response_type=Document, timeout=timeout
         )
     return transport.get(
-        case.path, headers=transport.master, params=case.params, response_type=Document, timeout=timeout
+        query_path(case), headers=transport.master, params=Query(), response_type=Document, timeout=timeout
     )
 
 
