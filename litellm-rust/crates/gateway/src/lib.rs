@@ -40,9 +40,9 @@ pub fn build_inference(config: &Config) -> Result<Arc<Gateway>, Error> {
         HttpSettingsLayer::from_environment(&lookup),
         HttpSettingsLayer {
             ssl_verify: settings.ssl_verify.as_ref().map(|value| match value {
-                litellm_config::Flag::Boolean(true) => SslVerify::Enabled,
-                litellm_config::Flag::Boolean(false) => SslVerify::Disabled,
-                litellm_config::Flag::String(value) => SslVerify::parse(value),
+                litellm_config::Spelled::Value(true) => SslVerify::Enabled,
+                litellm_config::Spelled::Value(false) => SslVerify::Disabled,
+                litellm_config::Spelled::Text(value) => SslVerify::parse(value),
             }),
             ssl_certificate: settings.ssl_certificate.as_ref().map(Into::into),
             ssl_security_level: settings.ssl_security_level.clone(),

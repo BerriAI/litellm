@@ -13,6 +13,7 @@ from openai import (
     BadRequestError,
     OpenAI,
 )
+from pydantic import BaseModel
 
 import litellm
 from litellm.constants import AZURE_OPERATION_POLLING_TIMEOUT, DEFAULT_MAX_RETRIES
@@ -41,6 +42,7 @@ from ..base import BaseLLM
 from ..openai.common_utils import (
     build_output_token_limit_response,
     is_output_token_limit_error,
+    model_dump_provider_response,
 )
 from .common_utils import (
     AzureOpenAIError,
@@ -112,7 +114,7 @@ class AzureOpenAIAssistantsAPIConfig:
         return optional_params
 
 
-def _check_dynamic_azure_params(
+def check_dynamic_azure_params(
     azure_client_params: dict,
     azure_client: AzureOpenAI | AsyncAzureOpenAI | None,
 ) -> bool:
@@ -127,10 +129,13 @@ def _check_dynamic_azure_params(
     dynamic_params: Final = ["api_version"]
     for k, v in azure_client_params.items():
         if k in dynamic_params and k == "api_version":
-            if v is not None and v != azure_client._custom_query["api-version"]:
+            if v is not None and v != azure_client._custom_query["api-version"]:  # pyright: ignore[reportPrivateUsage]  # SDK query internals
                 return True
 
     return False
+
+
+_check_dynamic_azure_params = check_dynamic_azure_params
 
 
 class AzureChatCompletion(BaseAzureLLM, BaseLLM):
@@ -349,12 +354,12 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 headers, response = self.make_sync_azure_openai_chat_completion_request(
                     azure_client=azure_client, data=data, timeout=timeout
                 )
-                if isinstance(response, str):
+                if not isinstance(response, BaseModel):
                     raise AzureOpenAIError(
                         status_code=500,
-                        message=f"Unexpected string response from Azure: {response[:500]}",
+                        message=f"Unexpected response from Azure: {response!r:.500}",
                     )
-                stringified_response: Final = response.model_dump()
+                stringified_response: Final = model_dump_provider_response(response)
                 ## LOGGING
                 logging_obj.post_call(
                     input=messages,
@@ -444,12 +449,12 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             )
             logging_obj.model_call_details["response_headers"] = headers
 
-            if isinstance(response, str):
+            if not isinstance(response, BaseModel):
                 raise AzureOpenAIError(
                     status_code=500,
-                    message=f"Unexpected string response from Azure: {response[:500]}",
+                    message=f"Unexpected response from Azure: {response!r:.500}",
                 )
-            stringified_response: Final = response.model_dump()
+            stringified_response: Final = model_dump_provider_response(response)
             logging_obj.post_call(
                 input=data["messages"],
                 api_key=api_key,

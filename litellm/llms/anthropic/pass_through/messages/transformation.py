@@ -1,11 +1,14 @@
 from collections.abc import AsyncIterator, Mapping, Sequence
-from typing import Any, ClassVar, Final
+from typing import ClassVar, Final
 
 import httpx
 
+import litellm
 from litellm._logging import verbose_logger
+from litellm.anthropic_beta_headers_manager import get_unsupported_headers, is_beta_header_supported_by_bundled_config
 from litellm.exceptions import AuthenticationError
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.anthropic.pass_through.safeguards import proxy_serves_safeguards
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
@@ -62,8 +65,11 @@ DROP_UNFITTING_REASONING_EFFORT_WARNING: Final = (
 )
 
 
-def _messages_carry_output_config(messages: Sequence[object]) -> bool:
+def messages_carry_output_config(messages: Sequence[object]) -> bool:
     return any(isinstance(message, Mapping) and "output_config" in message for message in messages)
+
+
+_messages_carry_output_config = messages_carry_output_config
 
 
 class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
@@ -95,6 +101,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             "output_format",
             "inference_geo",
             "speed",
+            "service_tier",
             "output_config",
             "reasoning_effort",
             "safeguards",
@@ -104,6 +111,27 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
 
     def should_filter_anthropic_beta_headers(self) -> bool:
         return self._resolved_provider != "anthropic"
+
+    def supports_safeguards(self) -> bool:
+        """
+        Whether the upstream platform answers the ``safeguards`` body field itself. A platform
+        whose beta header map column marks the dangerous-tool-use beta unsupported does not, and
+        a platform the map does not list is trusted to unless its config says otherwise.
+        """
+        return not self.should_filter_anthropic_beta_headers() or (
+            ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value
+            not in get_unsupported_headers(self._resolved_provider)
+        )
+
+    def drops_safeguards(self, safeguards: object, drop_params: bool) -> bool:
+        """
+        ``safeguards`` and the dangerous-tool-use beta leave together for a platform that does not
+        answer them, when the proxy classifies in its place or drop_params is set. Otherwise both
+        are forwarded as sent and the platform answers its own 400, like any unsupported param.
+        """
+        return not self.supports_safeguards() and (
+            drop_params or litellm.drop_params is True or proxy_serves_safeguards(safeguards)
+        )
 
     def _remove_scope_from_cache_control(self, anthropic_messages_request: dict) -> None:
         """
@@ -203,7 +231,8 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         ids were found without tool_result blocks immediately after") while
         consecutive user turns merge upstream.
         Billing-header system blocks are stripped from the top-level ``system``
-        field regardless of whether anything was hoisted.
+        field when ``should_strip_billing_metadata`` says so, regardless of
+        whether anything was hoisted.
 
         Subclasses whose upstream rejects the role opt in by calling this from
         their ``transform_anthropic_messages_request``; the first-party Anthropic
@@ -237,7 +266,11 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             )
             for block in as_system_content_blocks(source)
         ]
-        filtered_system: Final = self._filter_billing_headers_from_system(system_content)
+        filtered_system: Final = (
+            self._filter_billing_headers_from_system(system_content)
+            if self.should_strip_billing_metadata()
+            else system_content
+        )
         if filtered_system:
             anthropic_messages_request["system"] = filtered_system
         else:
@@ -261,7 +294,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         self,
         headers: dict,
         model: str,
-        messages: list[Any],
+        messages: list[object],
         optional_params: dict,
         litellm_params: dict,
         api_key: str | None = None,
@@ -289,7 +322,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         self,
         headers: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
         model: str,
-        messages: list[Any],  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
+        messages: list[object],  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
         optional_params: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
         litellm_params: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
         api_key: str | None = None,
@@ -395,7 +428,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             return
 
         try:
-            mapped_thinking: Final = AnthropicConfig._map_reasoning_effort(
+            mapped_thinking: Final = AnthropicConfig.map_reasoning_effort(
                 reasoning_effort=reasoning_effort,
                 model=model,
                 custom_llm_provider=custom_llm_provider,
@@ -414,7 +447,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             return
 
         optional_params.setdefault("thinking", fitted_thinking)
-        if AnthropicModelInfo._is_adaptive_thinking_model(model, custom_llm_provider):
+        if AnthropicModelInfo.is_adaptive_thinking_model(model, custom_llm_provider):
             mapped_effort: Final = REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(reasoning_effort)
             if mapped_effort is None:
                 raise AnthropicError(
@@ -425,7 +458,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                     ),
                     status_code=400,
                 )
-            gate_error: Final = AnthropicConfig._validate_effort_for_model(model, mapped_effort, custom_llm_provider)
+            gate_error: Final = AnthropicConfig.validate_effort_for_model(model, mapped_effort, custom_llm_provider)
             if gate_error is not None:
                 raise AnthropicError(message=gate_error, status_code=400)
             existing_output_config = optional_params.get("output_config")
@@ -479,7 +512,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         from litellm.exceptions import BadRequestError as _BadRequestError
         from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 
-        if AnthropicConfig._is_adaptive_thinking_model(model, custom_llm_provider):
+        if AnthropicConfig.is_adaptive_thinking_model(model, custom_llm_provider):
             return
 
         output_config: Final = optional_params.get("output_config")
@@ -494,20 +527,20 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         # reject. Effort-only requests pass through so provider subclasses (bedrock/vertex) keep
         # owning level clamping; an adaptive request only stays here when its effort level is one
         # the model supports, otherwise it falls through to the legacy budget translation below.
-        if AnthropicConfig._model_supports_effort_param(model, custom_llm_provider) and (
+        if AnthropicConfig.model_supports_effort_param(model, custom_llm_provider) and (
             not adaptive_thinking
-            or AnthropicConfig._validate_effort_for_model(model, effort, custom_llm_provider) is None
+            or AnthropicConfig.validate_effort_for_model(model, effort, custom_llm_provider) is None
         ):
             if adaptive_thinking:
                 optional_params.pop("thinking", None)
             return
 
-        supports_thinking: Final = AnthropicModelInfo._supports_model_capability(
+        supports_thinking: Final = AnthropicModelInfo.supports_model_capability(
             model, "supports_reasoning", custom_llm_provider
         )
         try:
             legacy_thinking: Final = (
-                AnthropicConfig._map_reasoning_effort(
+                AnthropicConfig.map_reasoning_effort(
                     reasoning_effort=effort or "medium",
                     model=model,
                     custom_llm_provider=custom_llm_provider,
@@ -554,7 +587,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
 
         Adaptive models (4.6+) own this natively and are left untouched.
         """
-        if AnthropicModelInfo._is_adaptive_thinking_model(model, custom_llm_provider):
+        if AnthropicModelInfo.is_adaptive_thinking_model(model, custom_llm_provider):
             return
         temperature: Final = optional_params.get("temperature")
         if temperature is None or temperature == 1:
@@ -587,6 +620,12 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                 status_code=400,
             )
 
+        if "safeguards" in anthropic_messages_optional_request_params and self.drops_safeguards(
+            anthropic_messages_optional_request_params["safeguards"],  # pyright: ignore[reportUnknownArgumentType]  # the request params arrive as a bare dict
+            litellm_params.drop_params is True,
+        ):
+            anthropic_messages_optional_request_params.pop("safeguards")  # pyright: ignore[reportUnknownMemberType]  # the request params arrive as a bare dict
+
         self._translate_reasoning_effort_to_anthropic(
             model=model,
             optional_params=anthropic_messages_optional_request_params,
@@ -604,6 +643,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             model=model,
             optional_params=anthropic_messages_optional_request_params,
             custom_llm_provider=self._resolved_provider,
+            drop_params=getattr(litellm_params, "drop_params", None) is True,
         )
 
         self._translate_adaptive_effort_for_non_adaptive_model(
@@ -678,9 +718,9 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         self,
         model: str,
         httpx_response: httpx.Response,
-        request_body: dict,
+        request_body: dict[str, object],  # mutable-ok: mirrors the base signature
         litellm_logging_obj: LiteLLMLoggingObj,
-    ) -> AsyncIterator:
+    ) -> AsyncIterator[bytes]:
         """Helper function to handle Anthropic streaming responses using the existing logging handlers"""
         from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
             BaseAnthropicMessagesStreamingIterator,
@@ -697,12 +737,14 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             litellm_logging_obj=litellm_logging_obj,
         )
 
-    @staticmethod
     def _update_headers_with_anthropic_beta(
+        self,
         headers: dict,
         optional_params: dict,
         custom_llm_provider: str = "anthropic",
         messages: Sequence[object] = (),
+        beta_map_provider: str | None = None,
+        drop_params: bool = False,
     ) -> dict:
         """
         Auto-inject anthropic-beta headers based on features used.
@@ -719,8 +761,10 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             optional_params: Optional parameters including tools, context_management, output_format, speed
             custom_llm_provider: Provider name for looking up correct tool search header
             messages: Request messages, scanned for per-message output_config
+            beta_map_provider: Provider whose beta map column gates safeguards, defaults to custom_llm_provider
+            drop_params: Whether the deployment or request set drop_params
         """
-        beta_values: Final[set] = set()
+        beta_values: Final[set[str]] = set()
 
         existing_beta: Final = tuple(
             piece.strip()
@@ -770,7 +814,13 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         if optional_params.get("speed") == "fast":
             beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.FAST_MODE_2026_02_01.value)
 
-        if _messages_carry_output_config(messages):
+        if optional_params.get("safeguards") is not None and is_beta_header_supported_by_bundled_config(
+            ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value,
+            beta_map_provider or custom_llm_provider,
+        ):
+            beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value)
+
+        if messages_carry_output_config(messages):
             beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.PER_TURN_CONTROL_2026_07_01.value)
 
         tools: Final = optional_params.get("tools")
@@ -791,9 +841,20 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             else ()
         )
         all_beta_values: Final = beta_values.union(thinking_display_betas, tool_change_betas)
+        dangerous_tool_use: Final = ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value
+        forwarded_beta_values: Final = (  # pyright: ignore[reportUnknownVariableType]  # derived from the bare beta set
+            all_beta_values - {dangerous_tool_use}
+            if dangerous_tool_use in all_beta_values
+            and self.drops_safeguards(
+                optional_params.get("safeguards"),  # pyright: ignore[reportUnknownArgumentType]  # the optional params arrive as a bare dict
+                drop_params,
+            )
+            else all_beta_values
+        )
 
         if not all_beta_values:
             return headers
         merged: Final = {key: value for key, value in headers.items() if key.lower() != "anthropic-beta"}
-        merged["anthropic-beta"] = ",".join(sorted(all_beta_values))
+        if forwarded_beta_values:
+            merged["anthropic-beta"] = ",".join(sorted(forwarded_beta_values))
         return merged

@@ -147,7 +147,7 @@ class RedisUpdateBuffer:
         self.redis_cache = redis_cache
 
     @staticmethod
-    def _should_commit_spend_updates_to_redis() -> bool:
+    def should_commit_spend_updates_to_redis() -> bool:
         """
         Checks if the Pod should commit spend updates to Redis
 
@@ -162,6 +162,8 @@ class RedisUpdateBuffer:
         if _use_redis_transaction_buffer is None:
             return False
         return _use_redis_transaction_buffer
+
+    _should_commit_spend_updates_to_redis = should_commit_spend_updates_to_redis
 
     @with_service_target(SPEND_QUEUE_TARGET)
     async def _store_transactions_in_redis(
@@ -556,7 +558,7 @@ class RedisUpdateBuffer:
         max_rows: int = REDIS_SPEND_LOGS_BUFFER_MAX_ROWS,
     ) -> bool:
         """Park spend-log rows in Redis so they outlive this pod, dropping the oldest past ``max_rows``."""
-        if self.redis_cache is None or len(rows) == 0 or not self._should_commit_spend_updates_to_redis():
+        if self.redis_cache is None or len(rows) == 0 or not self.should_commit_spend_updates_to_redis():
             return False
         try:
             buffer_size: Final = await self.redis_cache.async_rpush_and_trim(
@@ -582,7 +584,7 @@ class RedisUpdateBuffer:
     @with_service_target(SPEND_QUEUE_TARGET)
     async def get_spend_logs_from_redis_buffer(self, limit: int) -> tuple[dict[str, object], ...]:
         """Atomically take up to ``limit`` parked spend-log rows out of Redis."""
-        if self.redis_cache is None or not self._should_commit_spend_updates_to_redis():
+        if self.redis_cache is None or not self.should_commit_spend_updates_to_redis():
             return ()
         popped: Final[str | list[str] | None] = await self.redis_cache.async_lpop(
             key=REDIS_SPEND_LOGS_BUFFER_KEY,

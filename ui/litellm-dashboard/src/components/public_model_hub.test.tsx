@@ -28,6 +28,8 @@ vi.mock("./networking", async (importOriginal) => {
       litellm_version: "1.0.0",
       useful_links: {},
     }),
+    getProxyBaseUrl: vi.fn(() => "https://backend.example.com"),
+    getGatewayBaseUrl: vi.fn(() => "https://gateway.example.com"),
     agentHubPublicModelsCall: vi.fn().mockResolvedValue([]),
     mcpHubPublicServersCall: vi.fn().mockResolvedValue([]),
     skillHubPublicCall: vi.fn().mockResolvedValue({ plugins: [] }),
@@ -62,9 +64,14 @@ const model = (overrides: Partial<ModelGroupInfo> & { model_group: string }): Mo
 
 const DEFAULT_MODELS = [model({ model_group: "gpt-4" }), model({ model_group: "claude-3", providers: ["anthropic"] })];
 
-const respondWith = (rows: ModelGroupInfo[], totalCount: number = rows.length, pageSize: number = 50) =>
+const respondWith = (
+  rows: ModelGroupInfo[],
+  totalCount: number = rows.length,
+  pageSize: number = 50,
+  facetValues: Record<string, string[]> = FACET_VALUES,
+) =>
   apiGetMock.mockImplementation((path: string) => {
-    const facet = FACET_VALUES[path];
+    const facet = facetValues[path];
     if (facet) {
       return Promise.resolve({
         data: facet,
@@ -277,6 +284,45 @@ describe("PublicModelHub", () => {
     await waitFor(() => expect(lastModelQuery()["filter[mode][in]"]).toBe("embedding"));
   });
 
+  it("shows decision models as decisions and filters on every spelling the route stores", async () => {
+    respondWith([model({ model_group: "jev-latest", providers: ["typesafe"], mode: "evaluation" })], 1, 50, {
+      ...FACET_VALUES,
+      [`${MODEL_HUB_PATH}/modes`]: ["chat", "evaluation", "decisions"],
+    });
+    const user = userEvent.setup();
+    renderHub();
+    const row = (await screen.findByText("jev-latest")).closest("tr");
+    expect(row).toHaveTextContent("decisions");
+    expect(row).not.toHaveTextContent("evaluation");
+
+    await user.click(screen.getByPlaceholderText("Select modes"));
+    expect(screen.getAllByRole("option", { name: "decisions" })).toHaveLength(1);
+    expect(screen.queryByRole("option", { name: "evaluation" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("option", { name: "decisions" }));
+
+    await waitFor(() => expect(lastModelQuery()["filter[mode][in]"]).toBe("evaluation,decisions"));
+  });
+
+  it("shows a decision model's usage example on /v1/systemone instead of chat completions", async () => {
+    respondWith([model({ model_group: "jev-latest", providers: ["typesafe"], mode: "evaluation" })]);
+    renderHub();
+
+    fireEvent.click(await screen.findByRole("button", { name: "jev-latest" }));
+
+    const example = (await screen.findByText(/\/v1\/systemone/)).closest("pre");
+    expect(example).toHaveTextContent('"model": "jev-latest"');
+    expect(example).not.toHaveTextContent("chat.completions");
+  });
+
+  it("keeps the chat completions usage example for a chat model", async () => {
+    renderHub();
+
+    fireEvent.click(await screen.findByRole("button", { name: "gpt-4" }));
+
+    const example = (await screen.findByText(/chat\.completions\.create/)).closest("pre");
+    expect(example).toHaveTextContent('model="gpt-4"');
+  });
+
   it("filters by several providers at once, and returns to the first page", async () => {
     const user = userEvent.setup();
     respondWith(DEFAULT_MODELS, 300);
@@ -471,6 +517,29 @@ describe("public hub MCP details modal", () => {
     // so finding it proves the modal rendered and the url assertion is not vacuous.
     await screen.findByText("Server Overview");
     expect(screen.queryByText(PUBLIC_SERVER_URL)).not.toBeInTheDocument();
+  });
+
+  it("uses the backend URL in displayed and copied MCP examples", async () => {
+    const networkingModule = await import("./networking");
+    vi.mocked(networkingModule.mcpHubPublicServersCall).mockResolvedValue([mockMcpServer]);
+
+    const user = userEvent.setup();
+    const clipboardWriteText = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue(undefined);
+    renderHub();
+
+    await user.click(await screen.findByRole("tab", { name: /MCP Hub/i }));
+    await user.click(await screen.findByRole("button", { name: "exa_test" }));
+    await screen.findByText("Server Overview");
+
+    expect(screen.getByText(/https:\/\/backend\.example\.com\/exa_test\/mcp/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Copy to clipboard" }));
+
+    expect(clipboardWriteText).toHaveBeenCalledWith(
+      expect.stringContaining('"url": "https://backend.example.com/exa_test/mcp"'),
+    );
+    const copiedSnippet = clipboardWriteText.mock.calls[0]?.[0] as string;
+    expect(copiedSnippet).not.toContain("https://gateway.example.com");
+    clipboardWriteText.mockRestore();
   });
 
   it("closes the server details modal from its close control", async () => {

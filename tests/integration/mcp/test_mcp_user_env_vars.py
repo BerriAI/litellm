@@ -1,4 +1,3 @@
-import signal
 import uuid
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
@@ -14,6 +13,8 @@ from integration._support.database import read_rows
 from integration._support.mcp import McpPeer, call_tool, mcp_peer, register_mcp, tool_names
 from integration._support.process import owned_proxy_process
 from pydantic import JsonValue, TypeAdapter
+
+pytestmark: Final = pytest.mark.shares_worker_state
 
 TOKEN: Final = "USER_TOKEN"
 WORKSPACE: Final = "WORKSPACE"
@@ -311,8 +312,7 @@ def test_concurrent_users_across_processes_never_leak_and_survive_a_killed_proce
             outcomes: Final = burst(pool, (gateway, peer, doomed.gateway))
             assert all(code in {200, 412} for _, code in outcomes), outcomes
             assert all(code == 200 for index, code in outcomes if index % 4 != 2), outcomes
-            doomed.process.send_signal(signal.SIGKILL)
-            doomed.process.wait(timeout=10)
+            doomed.kill_supervisor()
             after_kill: Final = burst(pool, (gateway, peer))
             assert all(code in {200, 412} for _, code in after_kill), after_kill
             assert all(code == 200 for index, code in after_kill if index % 4 != 2), after_kill

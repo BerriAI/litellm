@@ -191,7 +191,7 @@ async def test_get_source_does_not_build_a_client(monkeypatch):
     with (
         patch("litellm.proxy.proxy_server.prisma_client", _prisma_with_general_settings({})),
         patch("litellm.proxy.proxy_server.proxy_config", _proxy_config()),
-        patch("litellm.proxy.proxy_server._build_redis_usage_cache") as mock_build,
+        patch("litellm.proxy.proxy_server.build_redis_usage_cache") as mock_build,
     ):
         response = await get_coordination_redis_settings(user_api_key_dict=_admin_auth())
 
@@ -480,7 +480,7 @@ async def test_connection_test_returns_healthy_on_successful_ping():
     with (
         patch("litellm.proxy.proxy_server.prisma_client", _prisma_with_general_settings({})),
         patch("litellm.proxy.proxy_server.proxy_config", _proxy_config()),
-        patch("litellm.proxy.proxy_server._build_redis_usage_cache", return_value=mock_client) as mock_build,
+        patch("litellm.proxy.proxy_server.build_redis_usage_cache", return_value=mock_client) as mock_build,
     ):
         response = await check_coordination_redis_connection(
             request=CoordinationRedisSettingsRequest(
@@ -509,7 +509,7 @@ async def test_connection_test_reports_unhealthy_without_leaking_the_password():
     with (
         patch("litellm.proxy.proxy_server.prisma_client", _prisma_with_general_settings({})),
         patch("litellm.proxy.proxy_server.proxy_config", _proxy_config()),
-        patch("litellm.proxy.proxy_server._build_redis_usage_cache", return_value=mock_client),
+        patch("litellm.proxy.proxy_server.build_redis_usage_cache", return_value=mock_client),
     ):
         response = await check_coordination_redis_connection(
             request=CoordinationRedisSettingsRequest(
@@ -543,7 +543,7 @@ async def test_connection_test_uses_the_saved_password_for_a_redacted_field():
             _prisma_with_general_settings({"coordination_redis": _SAVED_SETTINGS}),
         ),
         patch("litellm.proxy.proxy_server.proxy_config", _proxy_config()),
-        patch("litellm.proxy.proxy_server._build_redis_usage_cache", return_value=mock_client) as mock_build,
+        patch("litellm.proxy.proxy_server.build_redis_usage_cache", return_value=mock_client) as mock_build,
     ):
         response = await check_coordination_redis_connection(
             request=CoordinationRedisSettingsRequest(
@@ -568,7 +568,7 @@ async def test_connection_test_times_out_instead_of_hanging():
     with (
         patch("litellm.proxy.proxy_server.prisma_client", _prisma_with_general_settings({})),
         patch("litellm.proxy.proxy_server.proxy_config", _proxy_config()),
-        patch("litellm.proxy.proxy_server._build_redis_usage_cache", return_value=mock_client),
+        patch("litellm.proxy.proxy_server.build_redis_usage_cache", return_value=mock_client),
         patch(
             "litellm.proxy.management_endpoints.coordination_redis_endpoints._PING_TIMEOUT_SECONDS",
             0.01,

@@ -12,7 +12,7 @@ import copy
 import pytest
 
 import litellm
-from litellm.proxy.auth.auth_checks import _is_model_cost_zero
+from litellm.proxy.auth.auth_checks import is_model_cost_zero
 from litellm.router import Router
 
 
@@ -88,7 +88,7 @@ class TestUnmappedModelBudgetEnforcement:
                 },
             ]
         )
-        result = _is_model_cost_zero(model="custom-model", llm_router=router)
+        result = is_model_cost_zero(model="custom-model", llm_router=router)
         assert result is False, "Unmapped model should enforce budget (return False), not bypass it (return True)"
 
     def test_explicitly_free_model_bypasses_budget(self):
@@ -111,7 +111,7 @@ class TestUnmappedModelBudgetEnforcement:
                 },
             ]
         )
-        result = _is_model_cost_zero(model="free-model", llm_router=router)
+        result = is_model_cost_zero(model="free-model", llm_router=router)
         assert result is True, "Explicitly free model should bypass budget (return True)"
 
     def test_known_paid_model_enforces_budget(self):
@@ -127,7 +127,7 @@ class TestUnmappedModelBudgetEnforcement:
                 },
             ]
         )
-        result = _is_model_cost_zero(model="paid-model", llm_router=router)
+        result = is_model_cost_zero(model="paid-model", llm_router=router)
         assert result is False, "Known paid model should enforce budget (return False)"
 
     def test_unmapped_model_with_litellm_params_pricing(self):
@@ -145,7 +145,7 @@ class TestUnmappedModelBudgetEnforcement:
                 },
             ]
         )
-        result = _is_model_cost_zero(model="free-via-params", llm_router=router)
+        result = is_model_cost_zero(model="free-via-params", llm_router=router)
         assert result is True, "Model with explicit cost=0 in litellm_params should bypass budget"
 
     def test_cache_invalidates_on_in_place_pricing_update(self):
@@ -177,7 +177,7 @@ class TestUnmappedModelBudgetEnforcement:
             ]
         )
         # Warm the cache as zero-cost.
-        assert _is_model_cost_zero(model="ramping-model", llm_router=router) is True
+        assert is_model_cost_zero(model="ramping-model", llm_router=router) is True
         assert router._zero_cost_cache.get("ramping-model") is True
 
         # In-place pricing update: same deployment count, same router id,
@@ -203,7 +203,7 @@ class TestUnmappedModelBudgetEnforcement:
         # Cache must have been cleared by ``_invalidate_model_group_info_cache``.
         assert router._zero_cost_cache == {}
         # Subsequent call sees the new pricing and enforces budget.
-        assert _is_model_cost_zero(model="ramping-model", llm_router=router) is False
+        assert is_model_cost_zero(model="ramping-model", llm_router=router) is False
 
     def test_strategy_router_alias_with_zero_pricing_enforces_budget(self):
         """An auto-router alias is never the deployment that gets called or
@@ -231,7 +231,7 @@ class TestUnmappedModelBudgetEnforcement:
         )
 
         assert "input_cost_per_token" not in litellm.model_cost.get("alias-id", {})
-        assert _is_model_cost_zero(model="smart-router", llm_router=router) is False
+        assert is_model_cost_zero(model="smart-router", llm_router=router) is False
 
     def test_model_group_alias_to_free_model_bypasses_budget(self):
         """A zero-cost group reached through model_group_alias bypasses budget, like its own name.
@@ -255,8 +255,8 @@ class TestUnmappedModelBudgetEnforcement:
             model_group_alias={"free-model-alias": "free-model"},
         )
 
-        assert _is_model_cost_zero(model="free-model", llm_router=router) is True
-        assert _is_model_cost_zero(model="free-model-alias", llm_router=router) is True, (
+        assert is_model_cost_zero(model="free-model", llm_router=router) is True
+        assert is_model_cost_zero(model="free-model-alias", llm_router=router) is True, (
             "An alias pointing at an explicitly-zero-cost group must be read as free, like its own name"
         )
 
@@ -278,7 +278,7 @@ class TestUnmappedModelBudgetEnforcement:
             model_group_alias={"free-model-alias": {"model": "free-model", "hidden": False}},
         )
 
-        assert _is_model_cost_zero(model="free-model-alias", llm_router=router) is True
+        assert is_model_cost_zero(model="free-model-alias", llm_router=router) is True
 
     def test_model_group_alias_to_paid_model_enforces_budget(self):
         """An alias does not turn a priced group into a free one."""
@@ -293,7 +293,7 @@ class TestUnmappedModelBudgetEnforcement:
             model_group_alias={"paid-model-alias": "paid-model"},
         )
 
-        assert _is_model_cost_zero(model="paid-model-alias", llm_router=router) is False
+        assert is_model_cost_zero(model="paid-model-alias", llm_router=router) is False
 
     def test_model_group_alias_to_ptu_flat_cost_enforces_budget(self):
         """A PTU group keeps budget enforced through an alias.
@@ -323,8 +323,8 @@ class TestUnmappedModelBudgetEnforcement:
             model_group_alias={"ptu-model-alias": "ptu-model"},
         )
 
-        assert _is_model_cost_zero(model="ptu-model", llm_router=router) is False
-        assert _is_model_cost_zero(model="ptu-model-alias", llm_router=router) is False, (
+        assert is_model_cost_zero(model="ptu-model", llm_router=router) is False
+        assert is_model_cost_zero(model="ptu-model-alias", llm_router=router) is False, (
             "An aliased PTU group must not be read as free"
         )
 
@@ -350,7 +350,7 @@ class TestUnmappedModelBudgetEnforcement:
             model_group_alias={"hidden-alias": {"model": "free-model", "hidden": True}},
         )
 
-        assert _is_model_cost_zero(model="hidden-alias", llm_router=router) is True
+        assert is_model_cost_zero(model="hidden-alias", llm_router=router) is True
 
     def test_hidden_model_group_alias_to_paid_model_enforces_budget(self):
         """A hidden alias to a priced group keeps budget enforced."""
@@ -365,7 +365,7 @@ class TestUnmappedModelBudgetEnforcement:
             model_group_alias={"hidden-paid-alias": {"model": "paid-model", "hidden": True}},
         )
 
-        assert _is_model_cost_zero(model="hidden-paid-alias", llm_router=router) is False
+        assert is_model_cost_zero(model="hidden-paid-alias", llm_router=router) is False
 
     def test_dangling_model_group_alias_enforces_budget(self):
         """An alias pointing at a group that does not exist keeps budget enforced."""
@@ -385,7 +385,7 @@ class TestUnmappedModelBudgetEnforcement:
             model_group_alias={"dangling-alias": "model-that-does-not-exist"},
         )
 
-        assert _is_model_cost_zero(model="dangling-alias", llm_router=router) is False
+        assert is_model_cost_zero(model="dangling-alias", llm_router=router) is False
 
     def test_repointed_hidden_alias_does_not_reuse_cached_free_result(self):
         """Repointing a hidden alias from a free group to a paid group re-evaluates the cost.
@@ -415,9 +415,9 @@ class TestUnmappedModelBudgetEnforcement:
             model_group_alias={"hidden-alias": {"model": "free-model", "hidden": True}},
         )
 
-        assert _is_model_cost_zero(model="hidden-alias", llm_router=router) is True
+        assert is_model_cost_zero(model="hidden-alias", llm_router=router) is True
         router.update_settings(model_group_alias={"hidden-alias": {"model": "paid-model", "hidden": True}})
-        assert _is_model_cost_zero(model="hidden-alias", llm_router=router) is False
+        assert is_model_cost_zero(model="hidden-alias", llm_router=router) is False
 
     @pytest.mark.parametrize("alias_name_first", [True, False])
     def test_alias_shadowing_a_real_group_answers_for_its_target_in_either_order(self, alias_name_first: bool):
@@ -456,10 +456,10 @@ class TestUnmappedModelBudgetEnforcement:
         order = ("ptu-model", "free-model") if alias_name_first else ("free-model", "ptu-model")
         expected = {"ptu-model": True, "free-model": True}
 
-        assert [_is_model_cost_zero(model=name, llm_router=router) for name in order] == [
+        assert [is_model_cost_zero(model=name, llm_router=router) for name in order] == [
             expected[name] for name in order
         ]
-        assert [_is_model_cost_zero(model=name, llm_router=router) for name in order] == [
+        assert [is_model_cost_zero(model=name, llm_router=router) for name in order] == [
             expected[name] for name in order
         ], "the cached verdicts must match the first evaluation"
 
@@ -508,8 +508,8 @@ class TestUnmappedModelBudgetEnforcement:
             model_group_alias={"free-model": alias_entry},
         )
 
-        assert _is_model_cost_zero(model="unpriced-target", llm_router=router) is False
-        assert _is_model_cost_zero(model="free-model", llm_router=router) is False, (
+        assert is_model_cost_zero(model="unpriced-target", llm_router=router) is False
+        assert is_model_cost_zero(model="free-model", llm_router=router) is False, (
             "the alias routes to the unpriced target, so it must be refused like the target by name"
         )
 
@@ -546,8 +546,8 @@ class TestUnmappedModelBudgetEnforcement:
             model_group_alias={"ptu-model": {"model": "free-model", "hidden": True}},
         )
 
-        assert _is_model_cost_zero(model="free-model", llm_router=router) is True
-        assert _is_model_cost_zero(model="ptu-model", llm_router=router) is True, (
+        assert is_model_cost_zero(model="free-model", llm_router=router) is True
+        assert is_model_cost_zero(model="ptu-model", llm_router=router) is True, (
             "the alias routes to the free target, so it must bypass budget like the target by name"
         )
 
@@ -579,7 +579,7 @@ class TestUnmappedModelBudgetEnforcement:
             model_group_alias={"free-model": {"model": "paid-model", "hidden": True}},
         )
 
-        assert _is_model_cost_zero(model="free-model", llm_router=router) is False
+        assert is_model_cost_zero(model="free-model", llm_router=router) is False
 
     def test_alias_chain_through_a_priced_group_enforces_budget(self):
         """An alias to a group that is itself an alias key resolves one hop, like the router does.
@@ -613,7 +613,7 @@ class TestUnmappedModelBudgetEnforcement:
             model_group_alias={"chain-smart": "chain-legacy", "chain-legacy": "free-model"},
         )
 
-        assert _is_model_cost_zero(model="chain-smart", llm_router=router) is False
+        assert is_model_cost_zero(model="chain-smart", llm_router=router) is False
 
     @pytest.mark.parametrize("hidden", [False, True], ids=["plain_alias", "hidden_alias"])
     def test_alias_to_an_unpriced_group_that_is_also_an_alias_enforces_budget(self, hidden: bool):
@@ -634,8 +634,8 @@ class TestUnmappedModelBudgetEnforcement:
         )
 
         assert _served_model(router, "chain-entry") == UNPRICED_ZERO_COST_MODEL
-        assert _is_model_cost_zero(model="chain-entry", llm_router=router) is False
-        assert _is_model_cost_zero(model="chain-middle", llm_router=router) is True, (
+        assert is_model_cost_zero(model="chain-entry", llm_router=router) is False
+        assert is_model_cost_zero(model="chain-middle", llm_router=router) is True, (
             "asked by its own name, chain-middle routes to the explicitly free group"
         )
 
@@ -655,8 +655,8 @@ class TestUnmappedModelBudgetEnforcement:
         )
 
         assert _served_model(router, "chain-entry") == "gpt-3.5-turbo"
-        assert _is_model_cost_zero(model="chain-entry", llm_router=router) is True
-        assert _is_model_cost_zero(model="chain-middle", llm_router=router) is False, (
+        assert is_model_cost_zero(model="chain-entry", llm_router=router) is True
+        assert is_model_cost_zero(model="chain-middle", llm_router=router) is False, (
             "asked by its own name, chain-middle routes to the PTU group"
         )
 
@@ -676,7 +676,7 @@ class TestUnmappedModelBudgetEnforcement:
         )
 
         assert _served_model(router, "chain-entry") == "openai/gpt-4o-mini"
-        assert _is_model_cost_zero(model="chain-entry", llm_router=router) is False
+        assert is_model_cost_zero(model="chain-entry", llm_router=router) is False
 
     @pytest.mark.parametrize("alias_name", ["openai/smart", "smart"], ids=["alias_on_pattern", "alias_off_pattern"])
     def test_alias_chain_served_by_an_explicitly_priced_wildcard_route_enforces_budget(self, alias_name: str):
@@ -704,7 +704,7 @@ class TestUnmappedModelBudgetEnforcement:
         )
 
         assert _served_model(router, alias_name) == "openai/gpt-4o-mini"
-        assert _is_model_cost_zero(model=alias_name, llm_router=router) is False
+        assert is_model_cost_zero(model=alias_name, llm_router=router) is False
 
     def test_alias_shadowing_a_free_group_is_judged_by_its_unpriced_target_through_an_alias_chain(self):
         """A shadowing alias stays enforced when its unpriced target is itself an alias key to a free group."""
@@ -718,7 +718,7 @@ class TestUnmappedModelBudgetEnforcement:
         )
 
         assert _served_model(router, "shadowed-free") == UNPRICED_ZERO_COST_MODEL
-        assert _is_model_cost_zero(model="shadowed-free", llm_router=router) is False
+        assert is_model_cost_zero(model="shadowed-free", llm_router=router) is False
 
     @pytest.mark.parametrize("alias_name", ["ollama/fast", "fast"], ids=["alias_on_pattern", "alias_off_pattern"])
     def test_alias_to_a_name_served_by_an_explicitly_free_wildcard_route_bypasses_budget(self, alias_name: str):
@@ -729,8 +729,8 @@ class TestUnmappedModelBudgetEnforcement:
         )
 
         assert _served_model(router, alias_name) == "ollama/llama3"
-        assert _is_model_cost_zero(model="ollama/llama3", llm_router=router) is True
-        assert _is_model_cost_zero(model=alias_name, llm_router=router) is True
+        assert is_model_cost_zero(model="ollama/llama3", llm_router=router) is True
+        assert is_model_cost_zero(model=alias_name, llm_router=router) is True
 
     def test_alias_chain_to_a_name_served_by_an_explicitly_free_wildcard_route_bypasses_budget(self):
         """An alias to an alias key no deployment is named after reads the wildcard route serving it.
@@ -745,8 +745,8 @@ class TestUnmappedModelBudgetEnforcement:
         )
 
         assert _served_model(router, "ollama/fast") == "ollama/llama3"
-        assert _is_model_cost_zero(model="ollama/fast", llm_router=router) is True
-        assert _is_model_cost_zero(model="ollama/llama3", llm_router=router) is False, (
+        assert is_model_cost_zero(model="ollama/fast", llm_router=router) is True
+        assert is_model_cost_zero(model="ollama/llama3", llm_router=router) is False, (
             "asked by its own name, ollama/llama3 routes to the unpriced group"
         )
 
@@ -769,5 +769,5 @@ class TestUnmappedModelBudgetEnforcement:
         # Strip the attribute so the helper falls back to the no-cache path.
         del mock_router._zero_cost_cache
 
-        result = _is_model_cost_zero(model="paid-model", llm_router=mock_router)
+        result = is_model_cost_zero(model="paid-model", llm_router=mock_router)
         assert result is False

@@ -19,7 +19,7 @@ pytestmark: Final = pytest.mark.timeout(300)
 Provider: TypeAlias = Literal["chatgpt", "copilot"]
 
 _MODELS: Final[Mapping[Provider, str]] = MappingProxyType(
-    {"chatgpt": "chatgpt/gpt-5.6-terra", "copilot": "github_copilot/gpt-5.2"}
+    {"chatgpt": "chatgpt/gpt-5.6-terra", "copilot": "github_copilot/gpt-5.4"}
 )
 _REFUSALS: Final[Mapping[Provider, str]] = MappingProxyType(
     {"chatgpt": dl.CHATGPT_REFUSAL, "copilot": dl.COPILOT_REFUSAL}
@@ -44,9 +44,28 @@ _SCRIPT: Final = textwrap.dedent(
     def sync_completion():
         return litellm.completion(model=model, messages=messages, num_retries=0)
 
+    def server_tool_call_turns(marked):
+        call = {"id": "srvtoolu_01DeviceLogin", "type": "function", "function": {"name": "tool_search_tool_bm25", "arguments": "{}"}}
+        mark = {"cache_control": {"type": "ephemeral"}} if marked else {}
+        result = {"type": "tool_search_tool_result", "tool_use_id": call["id"], "content": {"type": "tool_search_tool_search_result", "tool_references": []}}
+        return [
+            {"role": "system", "content": "Answer in one sentence."},
+            *messages,
+            {"role": "assistant", "content": "", "tool_calls": [{**call, **mark}], "provider_specific_fields": {"tool_results": [result]}},
+            {"role": "tool", "tool_call_id": call["id"], "content": "found get_weather"},
+            {"role": "user", "content": "go on"},
+        ]
+
     def run():
         if variant == "completion":
             return sync_completion()
+        if variant in ("marked-server-tool-call", "unmarked-server-tool-call"):
+            return litellm.completion(
+                model=model,
+                messages=server_tool_call_turns(variant == "marked-server-tool-call"),
+                num_retries=0,
+                cache_control_injection_points=[{"location": "message", "role": "system"}, {"location": "message", "index": -1}],
+            )
         if variant == "responses":
             return litellm.responses(model=model, input=f"Reply to marker-{marker}", num_retries=0)
         if variant == "acompletion":
@@ -226,5 +245,25 @@ def test_sync_call_on_the_main_thread_fails_without_hanging_when_the_auth_host_d
     verdict: Final = outcome.verdict()
     assert verdict["ok"] is False, (verdict, outcome.stderr[-3000:])
     assert f"{dl.CHATGPT_AUTH_HOST if provider == 'chatgpt' else dl.GITHUB_HOST}:443" in clean.peers.auth_connections()
+    assert clean.peers.api.drain() == ()
+    assert clean.token_files() == ()
+
+
+def _auth_requests(peers: dl.Peers) -> list[tuple[str, str, str]]:
+    return [(request.headers.get("host", ""), request.method, request.target) for request in peers.auth.drain()]
+
+
+@pytest.mark.parametrize("provider", ("chatgpt", "copilot"))
+def test_a_marked_server_tool_call_reaches_the_auth_host_like_an_unmarked_one_when_the_login_is_denied(
+    clean: _Bench, provider: Provider
+) -> None:
+    unmarked: Final = clean.run("unmarked-server-tool-call", provider, uuid.uuid4().hex)
+    unmarked_auth: Final = _auth_requests(clean.peers)
+    marked: Final = clean.run("marked-server-tool-call", provider, uuid.uuid4().hex)
+    marked_auth: Final = _auth_requests(clean.peers)
+    assert unmarked.verdict()["ok"] is False, (unmarked.verdict(), unmarked.stderr[-3000:])
+    assert marked.verdict()["ok"] is False, (marked.verdict(), marked.stderr[-3000:])
+    assert unmarked_auth, unmarked.stderr[-3000:]
+    assert marked_auth == unmarked_auth
     assert clean.peers.api.drain() == ()
     assert clean.token_files() == ()

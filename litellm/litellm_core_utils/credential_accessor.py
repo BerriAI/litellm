@@ -15,7 +15,9 @@ class CredentialAccessor:
         )
 
     @staticmethod
-    def get_credential_values(credential_name: str) -> dict:
+    def get_credential_values(
+        credential_name: str,
+    ) -> dict[str, object]:  # mutable-ok: callers merge the returned credential map
         """Safe accessor for credentials."""
 
         credential: Final = CredentialAccessor.find_credential(credential_name)
