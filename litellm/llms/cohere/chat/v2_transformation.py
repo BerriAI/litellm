@@ -174,12 +174,12 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
         litellm_params: Mapping[str, object],
         headers: Mapping[str, object],
     ) -> dict[str, object]:
-        data: Final = super().transform_request(
+        data: Final[dict[str, object]] = super().transform_request(  # pyright: ignore[reportUnknownMemberType]  # untyped parent dictionary contract
             model, list(messages), dict(optional_params), dict(litellm_params), dict(headers)
         )
-        messages_to_send: Final = data.get("messages")
+        messages_to_send: Final[Sequence[AllMessageValues] | None] = data.get("messages")  # pyright: ignore[reportAssignmentType]  # legacy dict erases the message-list type
         if messages_to_send is not None:
-            litellm.remove_index_from_tool_calls(messages=messages_to_send)
+            litellm.remove_index_from_tool_calls(messages=list(messages_to_send))
 
         return data
 
@@ -191,12 +191,12 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
         litellm_params: Mapping[str, object],
         headers: Mapping[str, object],
     ) -> dict[str, object]:
-        data: Final = await super().async_transform_request(
+        data: Final[dict[str, object]] = await super().async_transform_request(  # pyright: ignore[reportUnknownMemberType]  # untyped parent dictionaries
             model, list(messages), dict(optional_params), dict(litellm_params), dict(headers)
         )
-        messages_to_send: Final = data.get("messages")
+        messages_to_send: Final[Sequence[AllMessageValues] | None] = data.get("messages")  # pyright: ignore[reportAssignmentType]  # legacy dict erases the message-list type
         if messages_to_send is not None:
-            litellm.remove_index_from_tool_calls(messages=messages_to_send)
+            litellm.remove_index_from_tool_calls(messages=list(messages_to_send))
 
         return data
 
