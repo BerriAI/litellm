@@ -19,9 +19,10 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Annotated, Final, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import AllMessageValues
 
 MODEL_ARMOR_MAX_FILE_SIZE_BYTES: Final = 4 * 1024 * 1024
@@ -72,26 +73,26 @@ class FileScanPlan:
     unscannable_count: int
 
 
-class _FileData(BaseModel):
+class _FileData(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore")
     file_data: str | None = None
     format: str | None = None
     filename: str | None = None
 
 
-class _FileBlock(BaseModel):
+class _FileBlock(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore")
     type: Literal["file"]
     file: _FileData
 
 
-class _DocumentSource(BaseModel):
+class _DocumentSource(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore")
     data: str | None = None
     media_type: str | None = None
 
 
-class _DocumentBlock(BaseModel):
+class _DocumentBlock(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore")
     type: Literal["document"]
     source: _DocumentSource

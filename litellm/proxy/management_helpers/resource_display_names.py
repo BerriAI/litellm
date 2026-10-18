@@ -20,7 +20,7 @@ async def mcp_server_display_names(
     if not server_ids:
         return MappingProxyType({})
     wanted: Final = frozenset(server_ids)
-    where: Final = {"server_id": {"in": tuple(wanted)}}  # mutable-ok: prisma where is a dict
+    where: Final = {"server_id": {"in": tuple(wanted)}}
     rows: Final = await MCPServerRepository(prisma_client).table.find_many(where=where)
     from_config: Final = {
         server_id: server.alias or server.server_name or server.name
@@ -40,7 +40,7 @@ async def agent_display_names(
     if not agent_ids:
         return MappingProxyType({})
     wanted: Final = frozenset(agent_ids)
-    where: Final = {"agent_id": {"in": tuple(wanted)}}  # mutable-ok: prisma where is a dict
+    where: Final = {"agent_id": {"in": tuple(wanted)}}
     rows: Final = await AgentsRepository(prisma_client).table.find_many(where=where)
     from_registry: Final = {
         alias_id: agent.agent_name
@@ -56,6 +56,6 @@ async def key_display_names(prisma_client: PrismaClient, tokens: Sequence[str]) 
     """token hash -> key_alias for the keys that have one."""
     if not tokens:
         return MappingProxyType({})
-    where: Final = {"token": {"in": tuple(frozenset(tokens))}}  # mutable-ok: prisma where is a dict
+    where: Final = {"token": {"in": tuple(frozenset(tokens))}}
     rows: Final = await VerificationTokenRepository(prisma_client).table.find_many(where=where)
     return MappingProxyType({row.token: row.key_alias for row in rows if row.key_alias})

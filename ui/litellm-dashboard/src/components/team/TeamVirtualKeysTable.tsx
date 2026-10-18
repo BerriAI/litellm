@@ -1,5 +1,7 @@
 "use client";
 import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
+import { useTeamMemberBudgets } from "@/app/(dashboard)/hooks/teams/useTeamMemberBudgets";
+import { teamMemberBudgetGate } from "@/components/shared/InheritedBudgetHint";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import {
   DateCell,
@@ -21,6 +23,7 @@ import { Input } from "@/components/ui/input";
 import { orgDetailHref, userDetailHref } from "@/utils/entityLinks";
 import { DEFAULT_PROXY_ADMIN_USER_ID } from "@/utils/sentinels";
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
+import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { ColumnDef, ColumnFiltersState, OnChangeFn, PaginationState, SortingState } from "@tanstack/react-table";
 import { ChevronDown, ChevronRight } from "lucide-react";
@@ -96,6 +99,12 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
       organization_id: (k.organization_id ?? k.org_id) || orgId,
     }));
   }, [keys?.keys, organization?.organization_id]);
+
+  const teamMemberBudgetTeamIds = useMemo(
+    () => (displayKeys.some((key) => key.max_budget == null && Boolean(key.user_id)) ? [teamId] : []),
+    [displayKeys, teamId],
+  );
+  const teamMemberBudgets = useTeamMemberBudgets(teamMemberBudgetTeamIds);
 
   const rowCount = keys?.total_count ?? 0;
   const [expandedAccordions, setExpandedAccordions] = useState<Record<string, boolean>>({});
@@ -285,7 +294,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
       {
         id: "spend",
         accessorKey: "spend",
-        meta: { title: "Spend (USD)" },
+        meta: { title: "Spend (USD)", numeric: true },
         header: ({ column }) => <DataTableSortHeader column={column} title="Spend (USD)" variant="header-cycle" />,
         size: 100,
         enableSorting: true,
@@ -294,13 +303,26 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
       {
         id: "max_budget",
         accessorKey: "max_budget",
-        meta: { title: "Budget (USD)" },
+        meta: { title: "Budget (USD)", numeric: true },
         header: ({ column }) => <DataTableSortHeader column={column} title="Budget (USD)" variant="header-cycle" />,
-        size: 110,
+        size: 160,
         enableSorting: true,
-        cell: (info) => (
-          <MoneyCell value={info.getValue() as number | null} decimals={0} emptyText="Unlimited" showZero />
-        ),
+        cell: (info) => {
+          const key = info.row.original;
+          const memberGate =
+            key.max_budget == null
+              ? teamMemberBudgetGate(teamMemberBudgets[teamId], key.user_id, key.user?.user_email)
+              : null;
+
+          return memberGate ? (
+            <span className="block w-full whitespace-nowrap text-right tabular-nums">
+              ${formatNumberWithCommas(memberGate.maxBudget, 0)}{" "}
+              <span className="text-muted-foreground">(team member)</span>
+            </span>
+          ) : (
+            <MoneyCell value={info.getValue() as number | null} decimals={0} emptyText="Unlimited" showZero />
+          );
+        },
       },
       {
         id: "budget_reset_at",
@@ -420,7 +442,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
         },
       },
     ],
-    [expandedAccordions],
+    [expandedAccordions, teamMemberBudgets, teamId],
   );
 
   const handleSortingChange = useCallback((updaterOrValue: React.SetStateAction<SortingState>) => {
