@@ -476,14 +476,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         """Report, once per session, that a later ``session.update`` reached nothing.
 
         Live accepts ``setup`` as the first-and-only client message, so a second one
-        closes the socket with 1007 and the update has to be dropped. That is
-        unavoidable; being quiet about it is not. This used to log at debug, which on
-        a proxy means the fields never arrive and nothing says so -- the caller sees
-        the model running on provider defaults and no instructions, voice or persona
-        of theirs (#44825).
-
-        Warned once because a GA client sends several ``session.update`` messages
-        while configuring; later drops stay at debug.
+        closes the socket with 1007 and the update must be dropped (#44825). Warned
+        once because a GA client sends several while configuring; later drops stay
+        at debug.
         """
         dropped: Final = sorted(key for key in session_payload if key != "type")
         if getattr(self, "_session_update_drop_warned", False):

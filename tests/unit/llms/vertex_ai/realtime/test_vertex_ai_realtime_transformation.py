@@ -418,30 +418,26 @@ def test_vertex_warns_when_dropping_guardrail_turn_detection_update(caplog):
     )
 
 
-def test_vertex_warns_once_when_dropping_a_session_update(caplog):
+def test_vertex_warns_once_when_dropping_a_session_update(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """A dropped session.update is reported, and reported once.
 
-    This inverts what the test here previously asserted. It held that dropping a
-    subsequent session.update was "a routine drop" that should stay at debug --
-    with ``{"instructions": "Be concise."}`` as its own fixture, which is exactly
-    the case reported in #44825: the caller's instructions never reach the model
-    and nothing on a default proxy log says so.
-
-    The drop itself is unavoidable (Live rejects a second setup with 1007). Only
-    the silence changes. It warns once because a GA client sends several
-    session.updates while configuring; the rest stay at debug.
+    Inverts what this test previously asserted: it held the drop was routine and
+    should stay at debug, which is the #44825 report. The drop is unavoidable;
+    only the silence changes.
     """
     import logging
 
-    cfg = VertexAIRealtimeConfig(
+    cfg: Final = VertexAIRealtimeConfig(
         access_token="tok", project="my-proj", location="us-central1"
     )
 
-    session_update = {
+    session_update: Final = {
         "type": "session.update",
         "session": {"instructions": "Be concise.", "voice": "Puck"},
     }
-    already_set_up = json.dumps({"setup": {"model": "x"}})
+    already_set_up: Final = json.dumps({"setup": {"model": "x"}})
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
         for _ in range(3):
@@ -451,7 +447,7 @@ def test_vertex_warns_once_when_dropping_a_session_update(caplog):
                 session_configuration_request=already_set_up,
             )
 
-    warnings = [
+    warnings: Final = [
         record
         for record in caplog.records
         if "Vertex AI Realtime" in record.message and "session.update" in record.message
