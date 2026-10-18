@@ -47,6 +47,9 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
     def _include_function_response_id(self) -> bool:
         return False
 
+    def _rejects_vad_tuning_with_detection_off(self) -> bool:
+        return False
+
     # ------------------------------------------------------------------
     # URL
     # ------------------------------------------------------------------
@@ -248,9 +251,12 @@ def vertex_realtime_config(
     resolve_access_token: Callable[[], Awaitable[str]],
     project: str,
     location: str | None,
+    drop_params: bool,
 ) -> VertexAIRealtimeConfig | VertexChirpRealtimeConfig:
     if is_vertex_speech_to_text_model(model):
-        return VertexChirpRealtimeConfig(resolve_access_token=resolve_access_token, project=project, location=location)
+        return VertexChirpRealtimeConfig(
+            resolve_access_token=resolve_access_token, project=project, location=location, drop_params=drop_params
+        )
     return VertexAIRealtimeConfig(
         access_token=access_token,
         project=project,

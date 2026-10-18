@@ -245,6 +245,7 @@ def _allow_model_level_clientside_configurable_parameters(
 reject_server_owned_wif_params = _reject_server_owned_wif_params
 
 _CREDENTIAL_VALUES: Final = TypeAdapter(dict[str, object])
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def reject_federated_credential_reference(body: Mapping[str, object]) -> None:
@@ -550,6 +551,29 @@ def _iter_fallback_targets(value: object, depth: int) -> Iterator[str | Mapping[
                     yield from _iter_fallback_targets(target_list, depth + 1)
 
 
+def _reject_client_chosen_federation(litellm_params: Mapping[str, object], *, manages_deployments: bool) -> None:
+    reject_server_owned_wif_params(litellm_params)
+    if not manages_deployments:
+        reject_federated_credential_reference(litellm_params)
+
+
+def _iter_user_config_litellm_params(user_config: object) -> Iterator[Mapping[str, object]]:
+    config: Final = _coerce_metadata_to_dict(user_config)
+    if config is None:
+        return
+    if (defaults := _coerce_metadata_to_dict(config.get("default_litellm_params"))) is not None:
+        yield defaults
+    model_list: Final = config.get("model_list")
+    if not isinstance(model_list, list):
+        return
+    for deployment in model_list:
+        if (
+            isinstance(deployment, Mapping)
+            and (params := _coerce_metadata_to_dict(deployment.get("litellm_params"))) is not None
+        ):
+            yield params
+
+
 def iter_request_fallback_targets(request_body: Mapping[str, object]) -> Iterator[str | Mapping[str, object]]:
     for value in _iter_fallback_field_values(request_body):
         yield from _iter_fallback_targets(value, 0)
@@ -657,11 +681,11 @@ def is_request_body_safe(
                 _reject_url_valued_fallback_target(target_model)
         elif isinstance(target, str):
             _reject_url_valued_fallback_target(target)
+    for user_config_params in _iter_user_config_litellm_params(request_body.get("user_config")):
+        _reject_client_chosen_federation(user_config_params, manages_deployments=manages_deployments)
     litellm_params: Final = _coerce_metadata_to_dict(request_body.get("litellm_params"))
     if litellm_params is not None:
-        reject_server_owned_wif_params(litellm_params)
-        if not manages_deployments:
-            reject_federated_credential_reference(litellm_params)
+        _reject_client_chosen_federation(litellm_params, manages_deployments=manages_deployments)
         litellm_params_metadata: Final = _coerce_metadata_to_dict(litellm_params.get("metadata"))
         if litellm_params_metadata is not None:
             _check_banned_params(
@@ -697,7 +721,7 @@ def _coerce_metadata_to_dict(value: object) -> dict[str, object] | None:
     if isinstance(value, str):
         from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 
-        parsed: Final = safe_json_loads(value)
+        parsed: Final = _DECODED_JSON.validate_python(safe_json_loads(value))
         if isinstance(parsed, dict):
             return parsed
     return None
@@ -1733,7 +1757,7 @@ def _coerce_user_id_to_str(value: object) -> str | None:
         # behind the flag preserves backwards compatibility for deployments
         # that intentionally pass JSON-encoded user identifiers.
         if litellm.validate_end_user_id_in_db and stripped[:1] in ("{", "["):
-            parsed: Final[object] = safe_json_loads(stripped)
+            parsed: Final[object] = _DECODED_JSON.validate_python(safe_json_loads(stripped))
             if isinstance(parsed, (dict, list)):
                 return None
         return stripped
@@ -1799,7 +1823,7 @@ def get_end_user_id_from_request_body(
         if isinstance(value, dict):
             return value
         if isinstance(value, str):
-            parsed: Final = safe_json_loads(value)
+            parsed: Final = _DECODED_JSON.validate_python(safe_json_loads(value))
             return parsed if isinstance(parsed, dict) else {}
         return {}
 

@@ -35,9 +35,9 @@ def list_value(value: JsonValue) -> Sequence[JsonValue]:
 
 def delete_key_if_present(candidate: Gateway, key: str) -> None:
     digest: Final = sha256(key.encode()).hexdigest()
-    if read_rows('SELECT token FROM "LiteLLM_VerificationToken" WHERE token=%s', (digest,)):
+    if candidate.rows('SELECT token FROM "LiteLLM_VerificationToken" WHERE token=%s', (digest,)):
         candidate.post("/key/delete", {"keys": [key]})
-    assert read_rows('SELECT token FROM "LiteLLM_VerificationToken" WHERE token=%s', (digest,)) == []
+    assert candidate.rows('SELECT token FROM "LiteLLM_VerificationToken" WHERE token=%s', (digest,)) == []
 
 
 def eventually(
@@ -54,6 +54,17 @@ def eventually(
         if return_last_on_timeout and time.monotonic() >= deadline:
             return observed
         assert time.monotonic() < deadline, f"State did not converge: {observed!r}"
+        time.sleep(0.1)
+
+
+def until_asserted(check: Callable[[], T], *, seconds: float = 10) -> T:
+    deadline: Final = time.monotonic() + seconds
+    while True:
+        try:
+            return check()
+        except AssertionError:
+            if time.monotonic() >= deadline:
+                raise
         time.sleep(0.1)
 
 
@@ -84,6 +95,10 @@ class Gateway:
     client: httpx.Client
     key: str
     upstream_url: str
+    database_url: str | None = None
+
+    def rows(self, query: str, parameters: tuple[str, ...]) -> list[dict[str, JsonValue]]:
+        return read_rows(query, parameters, database_url=self.database_url)
 
     def request(
         self,
@@ -164,7 +179,7 @@ class Scenario:
 
     def delete_team(self, identity: str) -> None:
         self.gateway.post("/team/delete", {"team_ids": [identity]})
-        assert read_rows('SELECT team_id FROM "LiteLLM_TeamTable" WHERE team_id = %s', (identity,)) == []
+        assert self.gateway.rows('SELECT team_id FROM "LiteLLM_TeamTable" WHERE team_id = %s', (identity,)) == []
 
     def project(self, team_id: str, **fields: JsonValue) -> str:
         created: Final = self.gateway.post(
@@ -177,7 +192,9 @@ class Scenario:
     def delete_project(self, identity: str) -> None:
         response: Final = self.gateway.request("DELETE", "/project/delete", {"project_ids": [identity]})
         assert response.status_code == 200, response.text
-        assert read_rows('SELECT project_id FROM "LiteLLM_ProjectTable" WHERE project_id = %s', (identity,)) == []
+        assert (
+            self.gateway.rows('SELECT project_id FROM "LiteLLM_ProjectTable" WHERE project_id = %s', (identity,)) == []
+        )
 
     def budget(self, **fields: JsonValue) -> str:
         created: Final = self.gateway.post("/budget/new", fields)
@@ -187,7 +204,7 @@ class Scenario:
 
     def delete_budget(self, identity: str) -> None:
         self.gateway.post("/budget/delete", {"id": identity})
-        assert read_rows('SELECT budget_id FROM "LiteLLM_BudgetTable" WHERE budget_id = %s', (identity,)) == []
+        assert self.gateway.rows('SELECT budget_id FROM "LiteLLM_BudgetTable" WHERE budget_id = %s', (identity,)) == []
 
     def organization(self, **fields: JsonValue) -> str:
         created: Final = self.gateway.post(
@@ -201,7 +218,9 @@ class Scenario:
         response: Final = self.gateway.request("DELETE", "/organization/delete", {"organization_ids": [identity]})
         assert response.status_code == 200, response.text
         assert (
-            read_rows('SELECT organization_id FROM "LiteLLM_OrganizationTable" WHERE organization_id = %s', (identity,))
+            self.gateway.rows(
+                'SELECT organization_id FROM "LiteLLM_OrganizationTable" WHERE organization_id = %s', (identity,)
+            )
             == []
         )
         self.delete_budget(budget_id)
@@ -225,7 +244,7 @@ class Scenario:
     def delete_user(self, identity: str) -> None:
         response: Final = self.gateway.request("POST", "/user/delete", {"user_ids": [identity]})
         assert response.status_code == 200 and response.json() == 1, response.text
-        assert read_rows('SELECT user_id FROM "LiteLLM_UserTable" WHERE user_id = %s', (identity,)) == []
+        assert self.gateway.rows('SELECT user_id FROM "LiteLLM_UserTable" WHERE user_id = %s', (identity,)) == []
 
     def member(self, team_id: str, role: str = "user") -> str:
         """Create an internal user and add them to ``team_id``; deleting the user later removes the membership."""
@@ -236,7 +255,7 @@ class Scenario:
     def delete_key(self, token: str) -> None:
         self.gateway.post("/key/delete", {"keys": [token]})
         hashed: Final = sha256(token.encode()).hexdigest()
-        assert read_rows('SELECT token FROM "LiteLLM_VerificationToken" WHERE token = %s', (hashed,)) == []
+        assert self.gateway.rows('SELECT token FROM "LiteLLM_VerificationToken" WHERE token = %s', (hashed,)) == []
         info: Final = object_value(self.gateway.get("/key/info", {"key": hashed})["info"])
         assert info["status"] == "deleted", f"Deleted key still served as live: {info['status']}"
 
@@ -254,7 +273,9 @@ class Scenario:
             lambda served: identity not in served,
             seconds=2 * PROXY_CONFIG_RELOAD_INTERVAL_SECONDS,
         )
-        assert read_rows('SELECT model_id FROM "LiteLLM_ProxyModelTable" WHERE model_id = %s', (identity,)) == []
+        assert (
+            self.gateway.rows('SELECT model_id FROM "LiteLLM_ProxyModelTable" WHERE model_id = %s', (identity,)) == []
+        )
 
     def model(self, *, model_info: Mapping[str, JsonValue] | None = None, **parameters: JsonValue) -> str:
         name: Final = f"integration-{uuid.uuid4().hex}"

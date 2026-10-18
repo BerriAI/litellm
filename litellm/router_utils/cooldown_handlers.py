@@ -47,7 +47,7 @@ if TYPE_CHECKING:
     from litellm.router import Router as _Router
 
     LitellmRouter = _Router
-    Span = _Span | Any
+    Span = _Span
 else:
     LitellmRouter = Any
     Span = Any
@@ -326,6 +326,12 @@ def _should_run_cooldown_logic(
     ):
         verbose_router_logger.debug(
             "Should Not Run Cooldown Logic: caller-credential errors are scoped to one user's connection"
+        )
+        return False
+
+    if isinstance(original_exception, litellm.MalformedRequestFieldError):
+        verbose_router_logger.debug(
+            "Should Not Run Cooldown Logic: litellm rejected the request before calling the deployment"
         )
         return False
 
