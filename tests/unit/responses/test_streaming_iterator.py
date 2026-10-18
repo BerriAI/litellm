@@ -2557,3 +2557,28 @@ def test_faked_stream_builds_each_refusal_summary_and_custom_tool_input_once_for
         (1, "content", 1): "No forecasts for Mars.",
         (2, "input", 0): "curl wttr.in/Berlin",
     }
+
+
+@pytest.mark.asyncio
+async def test_shutdown_drain_waits_for_a_pending_logging_task():
+    row_written = asyncio.Event()
+
+    async def write_row():
+        await asyncio.sleep(0.05)
+        row_written.set()
+
+    streaming_module.spawn_logging_task(asyncio.get_running_loop(), write_row(), task_name="row")
+
+    await streaming_module.drain_logging_tasks(timeout=1)
+
+    assert row_written.is_set()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_drain_gives_up_on_a_stuck_logging_task_at_its_timeout():
+    stuck = streaming_module.spawn_logging_task(asyncio.get_running_loop(), asyncio.Event().wait(), task_name="stuck")
+
+    await asyncio.wait_for(streaming_module.drain_logging_tasks(timeout=0.05), timeout=1)
+
+    assert not stuck.done()
+    stuck.cancel()

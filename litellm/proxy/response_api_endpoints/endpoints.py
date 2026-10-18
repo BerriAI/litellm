@@ -2107,29 +2107,35 @@ async def _responses_websocket_session(
             task_name="Responses WebSocket failure row",
         )
 
-    # Phase 2: route to upstream provider
-    try:
-        llm_call: Final = await route_request(
-            data=routed_data,
-            route_type="_aresponses_websocket",
-            llm_router=llm_router,
-            user_model=user_model,
-        )
+    async def relay_failure() -> Exception | None:
         try:
-            failure: Final = await llm_call
+            llm_call: Final = await route_request(
+                data=routed_data,
+                route_type="_aresponses_websocket",
+                llm_router=llm_router,
+                user_model=user_model,
+            )
+            outcome: Final = await llm_call
         except asyncio.CancelledError:
             if refused_turns.first is not None:
                 _ = bill_socket_failure(refused_turns.first)
             raise
-        if isinstance(failure, Exception):
-            await asyncio.shield(bill_socket_failure(failure))
-    except Exception as e:
-        with contextlib.suppress(Exception):
-            await websocket.send_text(_responses_ws_failure_frame(e))
-        await asyncio.shield(bill_socket_failure(e))
-        await websocket.close(code=1011, reason="Internal server error")
+        except Exception as e:
+            with contextlib.suppress(Exception):
+                await websocket.send_text(_responses_ws_failure_frame(e))
+            with contextlib.suppress(Exception):
+                await websocket.close(code=1011, reason="Internal server error")
+            return e
+        return outcome if isinstance(outcome, Exception) else None
+
+    # Phase 2: route to upstream provider
+    try:
+        failure: Final = await relay_failure()
     finally:
         await proxy_logging_obj.arelease_responses_websocket_slot(user_api_key_dict)
+    if failure is not None:
+        with contextlib.suppress(Exception):
+            await asyncio.shield(bill_socket_failure(failure))
 
 
 @router.websocket("/v1/responses")

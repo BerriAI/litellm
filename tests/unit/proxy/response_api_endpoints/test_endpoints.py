@@ -2544,6 +2544,88 @@ class TestResponsesWSFirstFrameModelAuth:
         assert proxy_logging_obj.post_call_failure_hook.await_args.kwargs["original_exception"] is refusal
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("ending", ["client_closed", "crash"])
+    async def test_a_closed_socket_frees_its_slot_before_its_failure_row_and_waits_for_the_row(self, ending: str):
+        from litellm.exceptions import RateLimitError
+        from litellm.proxy.response_api_endpoints.endpoints import responses_websocket_endpoint
+
+        ws = MagicMock()
+        ws.headers = {}
+        ws.query_params = {}
+        ws.scope = {"headers": []}
+        ws.url = "ws://testserver/v1/responses"
+        ws.accept = AsyncMock()
+        ws.receive_text = AsyncMock(
+            return_value=json.dumps({"type": "response.create", "model": "gpt-4o-mini", "input": []})
+        )
+        ws.close = AsyncMock()
+        processor = MagicMock()
+        processor.common_processing_pre_call_logic = AsyncMock(
+            return_value=({"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock())
+        )
+        refusal = RateLimitError(message="crossed budget", llm_provider="", model="")
+        crash = RuntimeError("relay crashed")
+        row_started = asyncio.Event()
+        row_may_finish = asyncio.Event()
+        row_written = asyncio.Event()
+
+        async def slow_failure_hook(**kwargs):
+            row_started.set()
+            await row_may_finish.wait()
+            row_written.set()
+
+        def route_request(data, **kwargs):
+            async def relay():
+                guarded = await data["responses_ws_frame_guard"](json.dumps({"type": "response.create", "input": "two"}))
+                guarded.bill_refusal(refusal)
+                if ending == "crash":
+                    raise crash
+                return refusal
+
+            return relay()
+
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.pre_call_hook = AsyncMock(
+            side_effect=lambda user_api_key_dict, data, call_type, guardrails_only: data
+        )
+        proxy_logging_obj.post_call_failure_hook = AsyncMock(side_effect=slow_failure_hook)
+        proxy_logging_obj.arelease_responses_websocket_slot = AsyncMock(return_value=None)
+
+        with (
+            patch(  # test-quality-ok: first-frame model auth needs a live router and key table and has its own tests above
+                "litellm.proxy.response_api_endpoints.endpoints._enforce_responses_ws_first_frame_model_auth",
+                new_callable=AsyncMock,
+            ),
+            patch(  # test-quality-ok: the pre-call processor needs a live proxy; what the endpoint does with the relay's outcome is under test
+                "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing",
+                return_value=processor,
+            ),
+            patch(  # test-quality-ok: routing is the seam that hands the relay its frame guard and returns its outcome
+                "litellm.proxy.route_llm_request.route_request",
+                new_callable=AsyncMock,
+                side_effect=route_request,
+            ),
+            patch(  # test-quality-ok: the failure hook is the proxy's only path to a failed spend log row
+                "litellm.proxy.proxy_server.proxy_logging_obj",
+                proxy_logging_obj,
+            ),
+        ):
+            endpoint = asyncio.ensure_future(
+                responses_websocket_endpoint(websocket=ws, model=None, user_api_key_dict=MagicMock())
+            )
+            await asyncio.wait_for(row_started.wait(), timeout=1)
+            proxy_logging_obj.arelease_responses_websocket_slot.assert_awaited_once()
+            finished_early, _ = await asyncio.wait({endpoint}, timeout=0.05)
+            assert endpoint not in finished_early
+            row_may_finish.set()
+            finished, _ = await asyncio.wait({endpoint}, timeout=1)
+            assert endpoint in finished
+            assert row_written.is_set()
+
+        booked = proxy_logging_obj.post_call_failure_hook.await_args.kwargs
+        assert booked["original_exception"] is (crash if ending == "crash" else refusal)
+
+    @pytest.mark.asyncio
     async def test_endpoint_sends_an_error_frame_when_routing_rejects_the_connection(self):
         from litellm.proxy.response_api_endpoints.endpoints import (
             responses_websocket_endpoint,
