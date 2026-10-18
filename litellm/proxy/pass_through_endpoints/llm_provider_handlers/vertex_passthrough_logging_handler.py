@@ -780,11 +780,17 @@ class VertexPassthroughLoggingHandler:
 
         """
 
+        # The logger returns this stamped cost before checking custom pricing, so price the deployment rates here
+        custom_pricing: Final = logging_obj._custom_pricing_for(  # pyright: ignore[reportPrivateUsage]
+            litellm_model_response
+        )
         response_cost: Final = litellm.completion_cost(
             completion_response=litellm_model_response,
             model=model,
             custom_llm_provider=custom_llm_provider,
             vertex_location=vertex_location,
+            custom_pricing=custom_pricing,
+            router_model_id=logging_obj.get_router_model_id() if custom_pricing else None,
         )
 
         kwargs["response_cost"] = response_cost

@@ -7,8 +7,8 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
-from litellm.litellm_core_utils.litellm_logging import Logging
 import litellm
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler import (
     VertexPassthroughLoggingHandler,
@@ -135,7 +135,7 @@ def _generate_content_payload() -> dict[str, object]:
     }
 
 
-def _cost_the_logger_records(location: str, *, stream: bool) -> float:
+def _cost_the_logger_records(location: str, *, stream: bool, litellm_params: dict[str, object] | None = None) -> float:
     method = "streamGenerateContent" if stream else "generateContent"
     url_route = (
         f"https://aiplatform.googleapis.com/v1/projects/p/locations/{location}"
@@ -151,6 +151,8 @@ def _cost_the_logger_records(location: str, *, stream: bool) -> float:
         function_id="fn-1",
     )
     logging_obj.optional_params = {}
+    if litellm_params is not None:
+        logging_obj.litellm_params = litellm_params
     if stream:
         result = VertexPassthroughLoggingHandler._handle_logging_vertex_collected_chunks(
             litellm_logging_obj=logging_obj,
@@ -184,6 +186,28 @@ def test_generate_content_spend_follows_the_vertex_location(regional_uplift_rate
     expected = (7 * _UPLIFT_INPUT_RATE + 1 * _UPLIFT_OUTPUT_RATE) * multiplier
 
     assert _cost_the_logger_records(location, stream=stream) == pytest.approx(expected), (location, stream)
+
+
+_CUSTOM_DEPLOYMENT_ID = "vertex-custom-priced-deployment"
+_CUSTOM_INPUT_RATE = 1e-09
+_CUSTOM_OUTPUT_RATE = 2e-09
+
+
+@pytest.mark.parametrize("stream", [True, False], ids=["streamed", "non-streamed"])
+def test_generate_content_spend_uses_the_deployment_custom_pricing(
+    regional_uplift_rate_card, monkeypatch: pytest.MonkeyPatch, stream
+):
+    custom_rates = {"input_cost_per_token": _CUSTOM_INPUT_RATE, "output_cost_per_token": _CUSTOM_OUTPUT_RATE}
+    monkeypatch.setitem(
+        litellm.model_cost,
+        _CUSTOM_DEPLOYMENT_ID,
+        {**custom_rates, "litellm_provider": "vertex_ai-language-models", "mode": "chat"},
+    )
+    litellm_params = {"metadata": {"model_info": {"id": _CUSTOM_DEPLOYMENT_ID, **custom_rates}}}
+
+    cost = _cost_the_logger_records("us", stream=stream, litellm_params=litellm_params)
+
+    assert cost == pytest.approx(7 * _CUSTOM_INPUT_RATE + 1 * _CUSTOM_OUTPUT_RATE), stream
 
 
 def test_build_complete_streaming_response_assembles_stream_generate_content_sse_chunks():
