@@ -266,6 +266,32 @@ def test_a_vertex_host_that_only_ends_with_the_gemini_host_name_keeps_the_vertex
     assert recorded == pytest.approx((7 * _UPLIFT_INPUT_RATE + 1 * _UPLIFT_OUTPUT_RATE) * _UPLIFT_MULTIPLIER), stream
 
 
+@pytest.mark.parametrize("stream", [True, False], ids=["streamed", "non-streamed"])
+def test_a_subdomain_of_the_gemini_host_bills_the_gemini_price(
+    regional_uplift_rate_card: None, monkeypatch: pytest.MonkeyPatch, stream: bool
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        f"gemini/{_UPLIFT_MODEL}",
+        {
+            "input_cost_per_token": _UPLIFT_INPUT_RATE,
+            "output_cost_per_token": _UPLIFT_OUTPUT_RATE,
+            "litellm_provider": "gemini",
+            "mode": "chat",
+        },
+    )
+    method: Final = "streamGenerateContent?alt=sse" if stream else "generateContent"
+
+    recorded: Final = _cost_the_logger_records_for(
+        f"https://eu.generativelanguage.googleapis.com/v1beta/models/{_UPLIFT_MODEL}:{method}",
+        stream=stream,
+        reply=_generate_content_payload(),
+        stream_events=[_generate_content_payload()],
+    )
+
+    assert recorded == pytest.approx(7 * _UPLIFT_INPUT_RATE + 1 * _UPLIFT_OUTPUT_RATE), stream
+
+
 @pytest.mark.parametrize("value", [123, ["gemini-2.5-flash-lite"], {"model": "gemini-2.5-flash-lite"}])
 @pytest.mark.parametrize("carrier", ["root", "model_info"])
 @pytest.mark.parametrize("stream", [True, False], ids=["streamed", "non-streamed"])
