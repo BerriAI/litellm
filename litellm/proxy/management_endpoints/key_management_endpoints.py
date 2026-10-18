@@ -3555,8 +3555,8 @@ async def _validate_update_key_data(
 
     # Reject NaN/±inf spend before it can reach the DB / spend counter.
     validate_finite_spend(data.spend)
-    if "permissions" in data.model_fields_set:
-        _refuse_get_spend_routes_unless_premium(data.permissions, premium_user)
+    # Default permissions={} is inert; only a truthy get_spend_routes trips the gate.
+    _refuse_get_spend_routes_unless_premium(data.permissions, premium_user)
     validate_budget_duration(data.budget_duration)
 
     _is_proxy_admin: Final = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
@@ -6381,8 +6381,7 @@ async def regenerate_key_fn(
                 data=data,
                 user_api_key_dict=user_api_key_dict,
             )
-            if "permissions" in data.model_fields_set:
-                _refuse_get_spend_routes_unless_premium(data.permissions, premium_user)
+            _refuse_get_spend_routes_unless_premium(data.permissions, premium_user)
             # Mirror /key/generate's post-handle_key_type recheck so a
             # non-admin can't elevate via a key_type preset that the
             # regenerate flow would otherwise carry through unchecked.
