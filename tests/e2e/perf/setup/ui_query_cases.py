@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from itertools import chain
 from typing import Final, Literal
 
-from pydantic import ConfigDict, Field
+from pydantic import ConfigDict
 
 from setup.ui_queries import Contract, Document, Query, UiQueryCase, descend
 
@@ -29,7 +29,6 @@ class Params(Query):
     team_id: str | None = None
     team_ids: str | None = None
     user_id: str | None = None
-    end_user: str | None = None
     model: str | None = None
     model_id: str | None = None
     key_alias: str | None = None
@@ -40,9 +39,6 @@ class Params(Query):
     error_message: str | None = None
     span_type: str | None = None
     exclude_internal_health_checks: Literal["true"] | None = None
-    lower: str | None = Field(default=None, alias="filter[startTime][gte]")
-    upper: str | None = Field(default=None, alias="filter[startTime][lte]")
-    q: str | None = None
     key_aliases: tuple[str, ...] | None = None
     models: tuple[str, ...] | None = None
     limit: int | None = None
@@ -80,11 +76,11 @@ def log_cases(anchor: datetime, api_key: str) -> tuple[UiQueryCase, ...]:
         group_by_session="true",
     )
     base: Final = UiQueryCase("logs_default_24h", "/spend/logs/ui", params, _LOGS)
+    filtered: Final = params.model_copy(update={"start_date": _timestamp(anchor - timedelta(days=30))})
     filters: Final = (
         ("api_key", api_key),
         ("team_id", "perf-team-0"),
         ("user_id", "perf-user-0"),
-        ("end_user", "perf-end-user-0"),
         ("model", "perf-chat"),
         ("model_id", "perf-model-0"),
         ("key_alias", "perf-key-0"),
@@ -109,39 +105,13 @@ def log_cases(anchor: datetime, api_key: str) -> tuple[UiQueryCase, ...]:
             params=params.model_copy(update={"start_date": _timestamp(anchor - timedelta(days=30))}),
         ),
         *(
-            replace(base, name=f"logs_{name}", params=params.model_copy(update={name: value}))
+            replace(base, name=f"logs_{name}_30d", params=filtered.model_copy(update={name: value}))
             for name, value in filters
         ),
         *(
             replace(base, name=f"logs_sort_{name}", params=params.model_copy(update={"sort_by": name}))
             for name in ("spend", "total_tokens", "request_duration_ms", "model", "ttft_ms")
         ),
-    )
-
-
-def facet_cases(anchor: datetime) -> tuple[UiQueryCase, ...]:
-    params: Final = Params.model_validate(
-        {"lower": _timestamp(anchor - timedelta(days=1)), "upper": _timestamp(anchor), "page_size": 50, "page": 1}
-    )
-    return tuple(
-        chain.from_iterable(
-            (
-                UiQueryCase(f"facet_{entity}", f"/management/v1/spend_logs/{entity}", params, Contract(("data",))),
-                UiQueryCase(
-                    f"facet_{entity}_page_2",
-                    f"/management/v1/spend_logs/{entity}",
-                    params.model_copy(update={"page": 2}),
-                    Contract(("data",)),
-                ),
-                UiQueryCase(
-                    f"facet_{entity}_search",
-                    f"/management/v1/spend_logs/{entity}",
-                    params.model_copy(update={"q": "perf-"}),
-                    Contract(("data",)),
-                ),
-            )
-            for entity in ("users", "end_users")
-        )
     )
 
 
@@ -231,7 +201,6 @@ def activity_cases(anchor: datetime) -> tuple[UiQueryCase, ...]:
 def cases(anchor: datetime, api_key: str) -> tuple[UiQueryCase, ...]:
     return (
         *log_cases(anchor, api_key),
-        *facet_cases(anchor),
         *analytics_cases(anchor),
         *activity_cases(anchor),
     )

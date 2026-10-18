@@ -28,7 +28,7 @@ def test_query_string_preserves_ui_arrays_and_boolean_strings() -> None:
         "key_aliases": ["perf-key-0", "perf-key-1"],
         "models": ["perf-chat"],
     }
-    health: Final = next(case for case in requests if case.name == "logs_exclude_internal_health_checks")
+    health: Final = next(case for case in requests if case.name == "logs_exclude_internal_health_checks_30d")
     query: Final = parse_qs(urlsplit(query_path(health)).query)
     assert query["exclude_internal_health_checks"] == ["true"]
     assert query["group_by_session"] == ["true"]
@@ -61,13 +61,20 @@ def test_usage_requests_list_keys_without_a_single_key_filter(
     }
 
 
-def test_facet_dates_use_the_ui_bracketed_filter_names() -> None:
-    case: Final = next(case for case in cases(datetime(2026, 1, 1, tzinfo=UTC), "key") if case.name == "facet_users")
-    assert case.params.model_dump(by_alias=True, exclude_none=True) == {
-        "filter[startTime][gte]": "2025-12-31 00:00:00",
-        "filter[startTime][lte]": "2026-01-01 00:00:00",
-        "page_size": 50,
-        "page": 1,
+@pytest.mark.parametrize(("name", "value"), (("api_key", "key"), ("key_alias", "perf-key-0")))
+def test_key_filters_request_30_days_of_logs(name: str, value: str) -> None:
+    case: Final = next(
+        case for case in cases(datetime(2026, 1, 1, tzinfo=UTC), "key") if case.name == f"logs_{name}_30d"
+    )
+    assert parse_qs(urlsplit(query_path(case)).query) == {
+        "start_date": ["2025-12-02 00:00:00"],
+        "end_date": ["2026-01-01 00:00:00"],
+        "page_size": ["25"],
+        "page": ["1"],
+        "sort_by": ["startTime"],
+        "sort_order": ["desc"],
+        "group_by_session": ["true"],
+        name: [value],
     }
 
 

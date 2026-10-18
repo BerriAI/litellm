@@ -2,7 +2,7 @@
 
 Run `test_ui_queries.py` against a dedicated proxy and a disposable database restored from the metadata-only performance seed. These tests do not call an LLM or measure browser rendering
 
-The suite measures 49 request shapes across 22 routes used by current dashboard screens. It replays direct HTTP requests against the existing bulk seed, with the seed anchor replacing the wall clock and a UTC browser timezone. It does not run a browser or claim to cover every dashboard request
+The suite measures 42 request shapes across 20 routes used by current dashboard screens. It replays direct HTTP requests against the existing bulk seed, with the seed anchor replacing the wall clock and a UTC browser timezone. It does not run a browser or claim to cover every dashboard request
 
 ## UI callers
 
@@ -11,13 +11,12 @@ All paths below are relative to `ui/litellm-dashboard/src/`. Each case requires 
 | Cases | UI action and source |
 | --- | --- |
 | `logs_*` | Logs > Request Logs, change date range, filter, sort or next page. `components/logs/request/useLogFilterLogic.ts` and `RequestLogsFilters.tsx` |
-| `facet_*` | Open, search or scroll the User / End User filter. `app/(dashboard)/hooks/spendLogs/useSpendLogUsers.ts` and `useSpendLogEndUsers.ts` |
 | `usage_*` | Usage overview or entity tab, open key activity, search keys, expand a model group. `app/(dashboard)/usage/_components/components/UsagePageView.tsx`, `EntityUsage/EntityUsage.tsx`, `EntityUsage/entityFetchFns.ts`, `components/UsagePage/components/KeyActivityPanel.tsx` |
 | `team_users_*` | Team Usage. `EntityUsage/EntityUsage.tsx` passes selected teams or all available non-dashboard teams to `TeamUserSpendCard.tsx` |
 | `cache_activity_*` | Caching > Cache Analytics, optionally filter aliases/models. `app/(dashboard)/hooks/caching/useCacheActivity.ts` |
 | `cache_leakage_keys` | Cost Optimization, switch cache leakage to Keys. `app/(dashboard)/cost-optimization/_components/useCacheLeakageKeys.ts` |
 
-Request serialization lives in `components/networking.tsx`. Logs use page size 25 and session grouping, including the next-session cursor returned by page one. The synthetic cursorless page-three request is excluded
+Request serialization lives in `components/networking.tsx`. Logs use page size 25 and session grouping, including the next-session cursor returned by page one. Individual Logs filters use a 30-day window to exercise larger matching datasets. Their case names end in `_30d` so the measurements do not share history with the old 24-hour filters. The synthetic cursorless page-three request is excluded
 
 Usage list, search and model drilldown requests do not inject an `api_key` filter. Team activity excludes `litellm-dashboard`. Cache leakage supplies `include_current_utc_day=true`. Dates and filter values are deterministic fixture values, not captured production traffic
 
@@ -27,14 +26,19 @@ This mapping is source-verified, not browser-recorded. Recheck the named callers
 
 ## Dataset scope
 
-Logs, user/end-user dropdowns, team-user spend and cache activity query the bulk SpendLogs data. User, team, tag and customer usage, plus cache leakage, query daily tables aggregated from that dataset. Daily table row counts have not yet been measured on the full-size snapshot. These are sequential large-dataset queries, not concurrent traffic or saturation tests
+Logs, team-user spend and cache activity query the bulk SpendLogs data. User, team, tag and customer usage, plus cache leakage, query daily tables aggregated from that dataset. These are sequential large-dataset queries, not concurrent traffic or saturation tests
+
+A read-only restore of `db-perf-v1-105-1tb` gave exact request totals from daily aggregates: 9,442,606 across 24 hours, 66,077,435 across seven days and 283,189,684 across 30 days. The retained 30-day key filter matches 1,134,559 requests, user filter 11,316,454, team filter 113,298,119 and model filter 94,395,473. These describe matching requests, not rows scanned or returned by the API, and are documentation rather than performance assertions
+
+PostgreSQL table-wide estimates (`pg_class.reltuples`) are approximately 2.70 million daily user rows, 2.70 million daily team rows, 5.40 million daily tag rows and 78.27 million daily end-user rows. These are not exact counts within each Usage case's seven-day window
+
+The individual end-user filter is excluded because it matched only 104 requests in 24 hours and 8,616 across all dates. User/end-user dropdown requests are also excluded because their queries cap the input at 10,000 matching SpendLogs before extracting distinct values. Neither is a broad matching-data workload in this seed
 
 Excluded because they only had tiny matching fixtures or individual-record lookups: organization/agent usage, guardrail/tool logs, request-ID lookup, payload/session drawers, session/search filters for `perf-ui-*`, the OAuth-token filter, and all prompt-caching request cases. The seed has response-cache hits but no prompt-cache usage or injection metadata, so the prompt-caching cases only matched the 320 added rows. No UI-specific rows are inserted anymore
 
 | Remaining cases | Count | Variations |
 | --- | ---: | --- |
-| Logs | 22 | 24h/7d/30d, page 2 with session cursor, 13 individual filters, five additional descending sorts |
-| User/end-user dropdowns | 6 | Page 1, page 2, search `perf-` for each |
+| Logs | 21 | 24h/7d/30d, page 2 with session cursor, 12 individual filters over 30 days, five additional descending sorts |
 | User/team/tag/customer usage | 16 | Aggregated totals, keys, key search, model top keys for each |
 | Team-user spend | 2 | All 100 seeded teams or `perf-team-0` |
 | Cache activity | 2 | All or selected aliases/model |
