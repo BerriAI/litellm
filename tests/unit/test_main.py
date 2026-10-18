@@ -50,6 +50,11 @@ from litellm.types.litellm_params import ControlOptions
 from litellm.types.llms.openai import AllMessageValues, HttpxBinaryResponseContent
 from litellm.types.prompts.init_prompts import PromptSpec
 from litellm.types.utils import Delta, ModelResponseStream, StandardCallbackDynamicParams, StreamingChoices, Usage
+from tests.unit.llms.bedrock.slow_upstream import (
+    STREAM_TIMEOUT_SECONDS,
+    UPSTREAM_FIRST_BYTE_SECONDS,
+    slow_upstream_sync_client,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -941,7 +946,6 @@ def test_breakpoints_on_converse_tool_history_beside_a_json_schema_response_form
 _RESPONSE_FORMATS_CONVERSE_SENDS_WITHOUT_A_TOOL: Final = [
     pytest.param({"response_format": {"type": "json_object"}}, id="json-object"),
     pytest.param({"response_format": {"type": "text"}}, id="text"),
-    pytest.param(_NATIVE_JSON_SCHEMA, id="native-json-schema"),
 ]
 
 
@@ -1333,6 +1337,60 @@ def test_a_five_minute_tool_config_cache_point_after_the_response_format_tool_sh
         ("system", None),
         ("message", None),
     )
+
+
+def _rejects_native_output(request: httpx.Request) -> httpx.Response:
+    if "outputConfig" not in json.loads(request.content):
+        return httpx.Response(200, json=_CONVERSE_REPLY)
+    return httpx.Response(
+        400,
+        json={
+            "message": "The model returned the following errors: output_config.format: Extra inputs are not permitted"
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    ("drop_params", "native_attempt", "json_tool_retry"),
+    [
+        pytest.param(
+            True,
+            (("system", None), ("message", None)),
+            (("tool", "5m"), ("system", None), ("message", None)),
+            id="drop-params-plans-for-the-retry",
+        ),
+        pytest.param(
+            False,
+            (("system", "1h"), ("message", "1h")),
+            (("tool", "5m"), ("system", "1h"), ("message", "1h")),
+            id="without-drop-params-plans-for-the-first-attempt",
+        ),
+    ],
+)
+def test_the_json_tool_retry_after_bedrock_rejects_native_output_is_planned_with_its_tool_config_cache_point(
+    respx_mock: respx.MockRouter,
+    drop_params: bool,
+    native_attempt: tuple[tuple[str, str | None], ...],
+    json_tool_retry: tuple[tuple[str, str | None], ...],
+):
+    route: Final = respx_mock.post(url__regex=_CONVERSE_ROUTE).mock(side_effect=_rejects_native_output)
+
+    litellm.completion(
+        **{**_NATIVE_JSON_SCHEMA, "model": "bedrock/converse/us.anthropic.claude-opus-4-8", **_FAKE_AWS},
+        messages=[
+            {"role": "system", "content": [{"type": "text", "text": "sys", "prompt_cache_breakpoint": _BREAKPOINT}]},
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "hi", "prompt_cache_breakpoint": _ONE_HOUR_BREAKPOINT}],
+            },
+        ],
+        cache_control_injection_points=_FIVE_MINUTE_TOOL_CONFIG,
+        drop_params=drop_params,
+    )
+
+    sent: Final = [json.loads(call.request.content) for call in route.calls]
+    assert ["outputConfig" in body for body in sent] == [True, False]
+    assert [_converse_cache_point_places(body) for body in sent] == [native_attempt, json_tool_retry]
 
 
 @pytest.mark.parametrize(
@@ -3178,6 +3236,60 @@ def test_responses_bridge_preserves_reasoning_effort_with_drop_params(
 
     request_body: Final = json.loads(response_route.calls[0].request.content)
     assert request_body["reasoning"] == {"effort": "high"}
+
+
+_BRIDGED_RESPONSE_ANSWER: Final = json.dumps(
+    {
+        "id": "resp_slow",
+        "object": "response",
+        "created_at": 1734366691,
+        "status": "completed",
+        "model": "slow-responses-model",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_1",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "hi", "annotations": []}],
+            }
+        ],
+        "parallel_tool_calls": True,
+        "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+        "tool_choice": "auto",
+        "tools": [],
+    }
+).encode()
+
+
+def test_responses_bridge_fake_stream_is_bounded_by_the_request_timeout_not_the_stream_timeout(
+    restore_model_registry: None,
+) -> None:
+    model: Final = "openai/slow-responses-model"
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": "openai",
+                "mode": "responses",
+                "supports_native_streaming": False,
+                "input_cost_per_token": 0.0,
+                "output_cost_per_token": 0.0,
+            }
+        },
+        persist_across_reloads=False,
+    )
+
+    response: Final = litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        stream_timeout=STREAM_TIMEOUT_SECONDS,
+        timeout=UPSTREAM_FIRST_BYTE_SECONDS * 2,
+        api_key="fake-key",
+        client=slow_upstream_sync_client(_BRIDGED_RESPONSE_ANSWER),
+    )
+
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in response) == "hi"
 
 
 _FOUNDRY_RESPONSES_FUNCTION_CALL_BODY: Final = {
@@ -8219,6 +8331,23 @@ def test_mock_request_with_mock_timeout_raises_litellm_timeout():
         )
 
     assert error.value.model == "gpt-5.6"
+
+
+@pytest.mark.asyncio
+async def test_async_mock_timeout_on_a_stream_waits_only_for_the_stream_timeout() -> None:
+    with pytest.raises(litellm.Timeout):
+        await asyncio.wait_for(
+            litellm.acompletion(
+                model="gpt-5.6",
+                messages=[{"role": "user", "content": "hello"}],
+                stream=True,
+                timeout=30.0,
+                stream_timeout=0.01,
+                mock_timeout=True,
+                num_retries=0,
+            ),
+            timeout=5,
+        )
 
 
 def test_router_mock_request_with_mock_timeout_raises_litellm_timeout():

@@ -2381,6 +2381,30 @@ def test_ProxyConfig__load_environment_variables_sets_env(monkeypatch):
     assert result == {"TEST_LOAD_ENV_X": "hello", "set": True, "len": 1}
 
 
+def test_ProxyConfig__load_environment_variables_warns_when_the_config_replaces_a_process_value(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+):
+    monkeypatch.setenv("TEST_LOAD_ENV_OVERRIDDEN", "from-process")
+    monkeypatch.setenv("TEST_LOAD_ENV_SAME", "same-value")
+    monkeypatch.delenv("TEST_LOAD_ENV_FRESH", raising=False)
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        ProxyConfig()._load_environment_variables(
+            {
+                "environment_variables": {
+                    "TEST_LOAD_ENV_OVERRIDDEN": "from-config",
+                    "TEST_LOAD_ENV_SAME": "same-value",
+                    "TEST_LOAD_ENV_FRESH": "fresh-value",
+                }
+            }
+        )
+    warnings = [record.getMessage() for record in caplog.records if record.levelno == logging.WARNING]
+    assert os.environ["TEST_LOAD_ENV_OVERRIDDEN"] == "from-config"
+    assert len(warnings) == 1
+    assert "TEST_LOAD_ENV_OVERRIDDEN" in warnings[0]
+    assert "from-process" not in warnings[0] and "from-config" not in warnings[0]
+    assert "TEST_LOAD_ENV_SAME" not in warnings[0] and "TEST_LOAD_ENV_FRESH" not in warnings[0]
+
+
 def test_ProxyConfig__load_environment_variables_blocks_dangerous_keys(monkeypatch):
     original_path = os.environ.get("PATH", "")
     pc = ProxyConfig()

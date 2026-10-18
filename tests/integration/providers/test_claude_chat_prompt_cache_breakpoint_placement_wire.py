@@ -4,7 +4,7 @@ from typing import Final, Literal
 
 import pytest
 from integration._support.client import Gateway
-from integration._support.wire import wire_server
+from integration._support.wire import Reply, Request, wire_server
 from integration.providers._cache_control_marks_support import (
     ASK,
     CITIES,
@@ -973,7 +973,7 @@ def test_a_five_minute_tool_config_cache_point_after_the_response_format_tool_sh
     ("deployment_drops", "expected"),
     (
         (["thinking"], (Mark("tool:json_tool_call", "5m"), Mark(_label(SYSTEM), None))),
-        ([], (Mark(_label(SYSTEM), "1h"),)),
+        ([], (Mark(_label(SYSTEM), None),)),
     ),
     ids=("deployment_drops_thinking", "deployment_keeps_thinking"),
 )
@@ -1009,6 +1009,52 @@ def test_a_native_json_schema_turns_into_the_json_tool_on_converse_when_the_depl
         assert status == 200, text
         request: Final = only_request(wire)
     assert sent_marks("bedrock_converse", request) == expected
+
+
+def _rejects_native_output(request: Request) -> Reply:
+    if b"outputConfig" not in request.body:
+        return respond("bedrock_converse", request)
+    return Reply(
+        status=400,
+        headers={"x-amzn-errortype": "ValidationException"},
+        body=json.dumps(
+            {"message": "The model returned the following errors: output_config.format: Extra inputs are not permitted"}
+        ).encode(),
+    )
+
+
+def test_the_json_tool_retry_after_converse_rejects_native_output_keeps_claudes_ttl_order_under_drop_params(
+    gateway: Gateway,
+) -> None:
+    marker: Final = new_marker()
+    turns: Final[list[JsonValue]] = [
+        {"role": "system", "content": [_text(SYSTEM, prompt_cache_breakpoint=_ONE_HOUR_BREAKPOINT)]},
+        _final(marker),
+    ]
+    with wire_server(_rejects_native_output) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model_info={"supports_bedrock_native_structured_output": True},
+            **litellm_params(gateway, wire, "bedrock_converse"),
+            cache_control_injection_points=[{"location": "tool_config", "control": {"type": "ephemeral", "ttl": "5m"}}],
+        )
+        status, _, text = post_chat(
+            gateway,
+            {
+                "model": model,
+                "messages": turns,
+                "max_tokens": 2048,
+                "drop_params": True,
+                "response_format": _JSON_SCHEMA,
+                "thinking": {"type": "enabled", "budget_tokens": 1024},
+            },
+        )
+        received: Final = wire.drain()
+    assert status == 200, text
+    assert [b"outputConfig" in request.body for request in received] == [True, False]
+    assert sent_marks("bedrock_converse", received[-1]) == (
+        Mark("tool:json_tool_call", "5m"),
+        Mark(_label(SYSTEM), None),
+    )
 
 
 @pytest.mark.parametrize("response_format", _MALFORMED, ids=_MALFORMED_IDS)
