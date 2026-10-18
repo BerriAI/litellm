@@ -110,6 +110,11 @@ def _window(duration: str, cap: float) -> Mapping[str, object]:
             KeyBudgetLoosened(),
         ),
         (
+            UpdateKeyRequest(key="sk-1", budget_limits=[_window("7d", 40.0), _window("24h", 5.0)]),
+            _key(budget_limits=[_window("7d", 30.0), _window("24h", 5.0), _window("7d", 50.0)]),
+            KeyBudgetLoosened(),
+        ),
+        (
             UpdateKeyRequest(key="sk-1", budget_limits=[_window("24h", 5.0)]),
             _key(budget_limits=[{"budget_duration": "24h"}]),
             KeyBudgetLoosened(),

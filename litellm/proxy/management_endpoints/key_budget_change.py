@@ -2,6 +2,7 @@
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from itertools import groupby
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
 
@@ -67,9 +68,13 @@ def _max_budget_change(data: UpdateKeyRequest, existing: LiteLLM_VerificationTok
     return "loosened"
 
 
+def _duration(window: BudgetLimitEntry) -> str:
+    return window.budget_duration
+
+
 def _caps_by_duration(windows: Sequence[BudgetLimitEntry]) -> Mapping[str, float]:
-    durations: Final = frozenset(w.budget_duration for w in windows)
-    return MappingProxyType({d: min(w.max_budget for w in windows if w.budget_duration == d) for d in durations})
+    grouped: Final = groupby(sorted(windows, key=_duration), key=_duration)
+    return MappingProxyType({duration: min(w.max_budget for w in group) for duration, group in grouped})
 
 
 def _stored_caps(existing: LiteLLM_VerificationToken) -> Mapping[str, float] | None:
