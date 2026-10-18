@@ -1077,3 +1077,17 @@ def test_azure_ai_sends_file_parts_instead_of_flattening_them_to_text():
     )
 
     assert request["messages"] == [{"role": "user", "content": content}]
+
+
+def test_azure_ai_passes_dict_message_content_through_for_the_provider_to_judge():
+    content: Final = {"type": "text", "text": "Say hi"}
+
+    request: Final = AzureAIStudioConfig().transform_request(
+        model="gpt-5.6-sol",
+        messages=[{"role": "user", "content": content}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["messages"] == [{"role": "user", "content": content}]

@@ -19,6 +19,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.llms.ollama.common_utils import OllamaResponseIdNormalizer
 from litellm.types.llms.databricks import DatabricksTool
 from litellm.types.llms.openai import (
+    ChatCompletionAnnotation,
     ChatCompletionReasoningItem,
     ChatCompletionThinkingBlock,
     ImageURLListItem,
@@ -57,6 +58,30 @@ from .get_headers import get_response_headers
 _MESSAGE_FIELDS: Final[frozenset] = frozenset(Message.model_fields.keys())
 _CHOICES_FIELDS: Final[frozenset] = frozenset(Choices.model_fields.keys())
 _MODEL_RESPONSE_FIELDS: Final[frozenset] = frozenset(ModelResponse.model_fields.keys()) | {"usage"}
+
+
+_ANNOTATION_ENTRIES: Final = TypeAdapter(tuple[object, ...])
+_URL_CITATIONS: Final = TypeAdapter(list[ChatCompletionAnnotation])
+
+
+def _is_url_citation(annotation: object) -> bool:
+    match annotation:
+        case {"type": "url_citation"}:
+            return True
+        case _:
+            return False
+
+
+def _annotation_entries(annotations: object) -> tuple[object, ...]:
+    return _ANNOTATION_ENTRIES.validate_python(annotations) if isinstance(annotations, list) else ()
+
+
+def _partition_annotations(annotations: object) -> tuple[object, tuple[object, ...]]:
+    entries: Final = _annotation_entries(annotations)
+    others: Final = tuple(annotation for annotation in entries if not _is_url_citation(annotation))
+    if not others:
+        return annotations, ()
+    return [annotation for annotation in entries if _is_url_citation(annotation)] or None, others
 
 
 def _normalize_images_for_message(
@@ -787,6 +812,9 @@ def convert_to_model_response_object(
                     provider_specific_fields = dict(choice["message"].get("provider_specific_fields", None) or {})
                     for f in choice["message"].keys() - _MESSAGE_FIELDS:
                         provider_specific_fields[f] = choice["message"][f]
+                    annotations, other_annotations = _partition_annotations(choice["message"].get("annotations", None))
+                    if other_annotations:
+                        provider_specific_fields["annotations"] = list(other_annotations)
 
                     # Handle reasoning models that display `reasoning_content` within `content`
                     reasoning_content, content = extract_reasoning_content(choice["message"])
@@ -809,7 +837,7 @@ def convert_to_model_response_object(
                         reasoning_content=reasoning_content,
                         thinking_blocks=thinking_blocks,
                         reasoning_items=choice["message"].get("reasoning_items", None),
-                        annotations=choice["message"].get("annotations", None),
+                        annotations=None if annotations is None else _URL_CITATIONS.validate_python(annotations),
                         images=_normalize_images_for_message(choice["message"].get("images", None)),
                     )
                     finish_reason = choice.get("finish_reason", None)

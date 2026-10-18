@@ -12620,6 +12620,7 @@
         "output_cost_per_token": 3.48e-06,
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_reasoning": true,
         "supports_tool_choice": true,
         "cache_read_input_token_cost": 1.45e-07,
@@ -12653,6 +12654,7 @@
         "output_cost_per_token": 1.32e-06,
         "source": "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure",
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true
@@ -12870,6 +12872,7 @@
             "text"
         ],
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_reasoning": true,
         "supports_tool_choice": true,
         "supports_vision": true,
@@ -72442,6 +72445,7 @@
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_regions": ["global"],
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,

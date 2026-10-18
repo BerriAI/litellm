@@ -1,16 +1,16 @@
 import copy
 import enum
 import re
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import TYPE_CHECKING, Final, cast
 
 import httpx
 from httpx import Response
-from pydantic import BaseModel, ConfigDict
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    content_parts,
     convert_content_list_to_str,
     filter_value_from_dict,
 )
@@ -48,23 +48,16 @@ NON_OPENAI_SPEC_MESSAGE_FIELDS: Final = (
 LIST_ONLY_CONTENT_PART_TYPES: Final = frozenset({"image_url", "input_audio", "file"})
 
 
-class _ContentPart(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    type: object = None
-
-
-class _MessageContent(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    content: str | tuple[_ContentPart, ...] | None = None
+def _is_list_only_content_part(part: object) -> bool:
+    match part:
+        case {"type": str() as part_type}:
+            return part_type in LIST_ONLY_CONTENT_PART_TYPES
+        case _:
+            return False
 
 
-def _has_list_only_content_part(message: AllMessageValues) -> bool:
-    content: Final = _MessageContent.model_validate(message).content
-    if content is None or isinstance(content, str):
-        return False
-    return any(part.type in LIST_ONLY_CONTENT_PART_TYPES for part in content)
+def _has_list_only_content_part(message: Mapping[str, object]) -> bool:
+    return any(_is_list_only_content_part(part) for part in content_parts(message))
 
 
 class AzureAIChatCompletionResponseIterator(OpenAIChatCompletionResponseIterator):

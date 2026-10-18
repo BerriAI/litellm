@@ -37,6 +37,15 @@ else:
 
 _EMPTY_FUNCTION: Final[Mapping[str, object]] = MappingProxyType({})
 _JSON_VALUE: Final = TypeAdapter(object)
+_CONTENT_PART: Final = TypeAdapter(Mapping[str, object])
+
+
+def _file_part_data(part: Mapping[str, object]) -> str | None:
+    match part:
+        case {"type": "file", "file": {"file_data": str() as file_data}} if file_data:
+            return file_data
+        case _:
+            return None
 
 
 def is_valid_json(value: str) -> bool:
@@ -295,7 +304,7 @@ class GigaChatConfig(BaseConfig):
 
     def _transform_list_content(self, content: Sequence) -> tuple[str, Sequence[str]]:
         """
-        Extract text and image attachments from a multimodal message content list.
+        Extract text, image and file attachments from a multimodal message content list.
 
         Args:
             content: List of content parts (OpenAI multimodal format)
@@ -320,6 +329,10 @@ class GigaChatConfig(BaseConfig):
                         file_id = self._upload_image(upload_url)
                         if file_id:
                             attachments.append(file_id)
+                elif (file_data := _file_part_data(_CONTENT_PART.validate_python(part))) and (
+                    uploaded_file_id := self._upload_image(file_data)
+                ):
+                    attachments.append(uploaded_file_id)
         text: Final = "\n".join(texts) if texts else ""
         return text, attachments
 

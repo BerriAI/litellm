@@ -8774,3 +8774,84 @@ async def test_atranscription_ignores_a_non_string_base_url_when_api_base_is_set
 
     assert route.called
     assert response.text == "four score"
+
+
+_PDF_FILE_PART: Final = {
+    "type": "file",
+    "file": {"filename": "report.pdf", "file_data": "data:application/pdf;base64,JVBERi0xLjQK"},
+}
+_SUMMARIZE_TEXT_PART: Final = {"type": "text", "text": "Summarize this."}
+
+
+def _pdf_messages() -> list[dict[str, object]]:
+    return [{"role": "user", "content": [_SUMMARIZE_TEXT_PART, _PDF_FILE_PART]}]
+
+
+def _mock_pdf_chat_route(respx_mock: respx.MockRouter, api_base: str) -> respx.Route:
+    return respx_mock.post(url__regex=rf"{api_base}/chat/completions.*").mock(
+        return_value=httpx.Response(
+            status_code=200,
+            json={
+                "id": "chatcmpl-pdf",
+                "object": "chat.completion",
+                "created": 1712697600,
+                "model": "qa-pdf-model",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+    )
+
+
+def test_drop_params_drops_a_pdf_the_model_cannot_read(respx_mock: respx.MockRouter) -> None:
+    api_base: Final = "http://localhost:12347/v1"
+    _mock_pdf_chat_route(respx_mock, api_base)
+
+    litellm.completion(
+        model="openai/qa-text-only-model",
+        messages=_pdf_messages(),
+        api_base=api_base,
+        api_key="fake_openai_api_key",
+        model_info={"supports_pdf_input": False},
+        drop_params=True,
+    )
+
+    sent: Final = json.loads(respx_mock.calls[0].request.content)
+    assert sent["messages"] == [{"role": "user", "content": [_SUMMARIZE_TEXT_PART]}]
+
+
+def test_pdf_to_a_model_that_cannot_read_it_is_rejected_without_drop_params(respx_mock: respx.MockRouter) -> None:
+    api_base: Final = "http://localhost:12348/v1"
+    route: Final = _mock_pdf_chat_route(respx_mock, api_base)
+
+    with pytest.raises(litellm.BadRequestError, match="does not accept PDF input"):
+        litellm.completion(
+            model="openai/qa-text-only-model",
+            messages=_pdf_messages(),
+            api_base=api_base,
+            api_key="fake_openai_api_key",
+            model_info={"supports_pdf_input": False},
+        )
+
+    assert not route.called
+
+
+def test_pdf_to_a_model_with_unknown_pdf_support_is_sent_even_with_drop_params(respx_mock: respx.MockRouter) -> None:
+    api_base: Final = "http://localhost:12349/v1"
+    _mock_pdf_chat_route(respx_mock, api_base)
+
+    litellm.completion(
+        model="openai/qa-unlisted-model",
+        messages=_pdf_messages(),
+        api_base=api_base,
+        api_key="fake_openai_api_key",
+        drop_params=True,
+    )
+
+    sent: Final = json.loads(respx_mock.calls[0].request.content)
+    assert sent["messages"] == _pdf_messages()
+
+
+def test_pdf_to_ollama_is_rejected_without_drop_params() -> None:
+    with pytest.raises(litellm.BadRequestError, match="does not accept PDF input"):
+        litellm.completion(model="ollama_chat/llama3.2", messages=_pdf_messages(), api_base="http://127.0.0.1:9")

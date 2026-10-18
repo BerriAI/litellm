@@ -8,9 +8,10 @@ from functools import cached_property
 from typing import TYPE_CHECKING, Any, Final, Union
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.prompt_templates.common_utils import content_parts
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 
@@ -61,6 +62,28 @@ def validate_dict(
     return model(**data).model_dump(by_alias=True, exclude_unset=True)
 
 
+_CONTENT_PART: Final = TypeAdapter(Mapping[str, object])
+
+
+def _file_part_as_image_url(part: object) -> object:
+    match part:
+        case {"type": "file", "file": {"file_data": str() as file_data}} if file_data:
+            fields: Final = _CONTENT_PART.validate_python(part)
+            return {key: value for key, value in fields.items() if key != "file"} | {
+                "type": "image_url",
+                "image_url": {"url": file_data},
+            }
+        case _:
+            return part
+
+
+def _file_parts_as_image_urls(message: Mapping[str, object]) -> Mapping[str, object]:
+    parts: Final = content_parts(message)
+    if not parts:
+        return message
+    return {**message, "content": [_file_part_as_image_url(part) for part in parts]}
+
+
 def _fold_message_cache_control(
     message: Mapping[str, object],
 ) -> Mapping[str, object]:
@@ -103,7 +126,7 @@ def _message_role_mapping(role: str) -> type[ChatMessage]:
 def _messages_to_sap_template(messages: list[AllMessageValues]) -> list:
     template: Final = []
     for message in messages:
-        folded_message = _fold_message_cache_control(message)
+        folded_message = _fold_message_cache_control(_file_parts_as_image_urls(message))
         message_role_class = _message_role_mapping(str(folded_message["role"]))
         validated_message = validate_dict(folded_message, message_role_class)
         template.append(validated_message)

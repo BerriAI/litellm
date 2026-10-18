@@ -295,6 +295,43 @@ def anthropic_inline_document(document: Mapping[str, object]) -> InlineDocument 
             return None
 
 
+def is_pdf_file_part(part: object) -> bool:
+    match part:
+        case {"type": "file", "file": {"file_data": str() as file_data}}:
+            return file_data.startswith("data:application/pdf")
+        case {"type": "file", "file": {"filename": str() as filename}}:
+            return filename.lower().endswith(".pdf")
+        case _:
+            return False
+
+
+_CONTENT_PARTS: Final = TypeAdapter(tuple[object, ...])
+
+
+def content_parts(message: Mapping[str, object]) -> Sequence[object]:
+    content: Final = message.get("content")
+    return _CONTENT_PARTS.validate_python(content) if isinstance(content, list) else ()
+
+
+def _has_pdf_file_part(message: Mapping[str, object]) -> bool:
+    return any(is_pdf_file_part(part) for part in content_parts(message))
+
+
+def messages_have_pdf_file_part(messages: Sequence[Mapping[str, object]]) -> bool:
+    return any(_has_pdf_file_part(message) for message in messages)
+
+
+def _message_without_pdf_file_parts(message: AllMessageValues) -> AllMessageValues:
+    if not _has_pdf_file_part(message):
+        return message
+    kept: Final = [part for part in content_parts(message) if not is_pdf_file_part(part)]
+    return cast(AllMessageValues, {**message, "content": kept})  # cast-ok: same message with fewer content parts
+
+
+def messages_without_pdf_file_parts(messages: Sequence[AllMessageValues]) -> tuple[AllMessageValues, ...]:
+    return tuple(_message_without_pdf_file_parts(message) for message in messages)
+
+
 def _image_part_url(part: Mapping[str, object]) -> str | None:
     """The image URL carried by one content part, whichever of the three dialects wrote it."""
     part_type: Final = part.get("type")
