@@ -633,6 +633,7 @@ class AsyncHTTPHandler:
         shared_session: Optional["ClientSession"] = None,
         transport: httpx.AsyncBaseTransport | None = None,
         follow_redirects: bool = True,
+        client: httpx.AsyncClient | None = None,
     ):
         self.timeout = timeout
         self.event_hooks = event_hooks
@@ -640,17 +641,41 @@ class AsyncHTTPHandler:
         self.shared_session = shared_session
         self.transport = transport
         self.follow_redirects = follow_redirects
-        self._owns_client = True
-        self._client = self.create_client(
-            timeout=timeout,
-            event_hooks=event_hooks,
-            ssl_verify=ssl_verify,
-            shared_session=shared_session,
+        resolved_client: Final = (
+            client
+            if client is not None
+            else (
+                litellm.aclient_session
+                if isinstance(litellm.aclient_session, httpx.AsyncClient)
+                and transport is None
+                and shared_session is None
+                and event_hooks is None
+                else None
+            )
+        )
+        self._owns_client = resolved_client is None
+        self._client = (
+            self.create_client(
+                timeout=timeout,
+                event_hooks=event_hooks,
+                ssl_verify=ssl_verify,
+                shared_session=shared_session,
+            )
+            if resolved_client is None
+            else resolved_client
         )
         self.client_alias = client_alias
 
     @property
     def client(self) -> httpx.AsyncClient:
+        if (
+            self._owns_client
+            and self.transport is None
+            and self.shared_session is None
+            and self.event_hooks is None
+            and isinstance(litellm.aclient_session, httpx.AsyncClient)
+        ):
+            return litellm.aclient_session
         if self._owns_client and self._client.is_closed:
             self._client = self.create_client(
                 timeout=self.timeout,
@@ -1419,9 +1444,14 @@ class HTTPHandler:
         self.ssl_verify = ssl_verify
         self.disable_default_headers = disable_default_headers
         self.follow_redirects = follow_redirects
-        self._owns_client = client is None
+        resolved_client: Final = (
+            client
+            if client is not None
+            else (litellm.client_session if isinstance(litellm.client_session, httpx.Client) else None)
+        )
+        self._owns_client = resolved_client is None
         self._heal_lock = threading.Lock()
-        self._client = self.create_client() if client is None else client
+        self._client = self.create_client() if resolved_client is None else resolved_client
 
     def create_client(self) -> httpx.Client:
         # Get unified SSL configuration
@@ -1449,6 +1479,8 @@ class HTTPHandler:
 
     @property
     def client(self) -> httpx.Client:
+        if self._owns_client and isinstance(litellm.client_session, httpx.Client):
+            return litellm.client_session
         if self._owns_client and self._client.is_closed:
             with self._heal_lock:
                 if self._owns_client and self._client.is_closed:
@@ -1762,7 +1794,9 @@ def get_async_httpx_client(
             except Exception:
                 pass
 
-    _cache_key_name: Final = "async_httpx_client" + _params_key_name + llm_provider
+    aclient_session: Final = litellm.aclient_session if isinstance(litellm.aclient_session, httpx.AsyncClient) else None
+    _session_key_name: Final = f"_aclient_session_{id(aclient_session)}" if aclient_session is not None else ""
+    _cache_key_name: Final = "async_httpx_client" + _params_key_name + llm_provider + _session_key_name
 
     # Lazily initialize the global in-memory client cache to avoid relying on
     # litellm globals being fully populated during import time.
@@ -1792,7 +1826,7 @@ def get_async_httpx_client(
         key=_cache_key_name,
         value=_new_client,
         ttl=_DEFAULT_TTL_FOR_HTTPX_CLIENTS,
-        litellm_owned_client=True,
+        litellm_owned_client=_new_client._owns_client,
     )
     return _new_client
 
@@ -1812,7 +1846,9 @@ def get_httpx_client(params: dict | None = None) -> HTTPHandler:
             except Exception:
                 pass
 
-    _cache_key_name: Final = "httpx_client" + _params_key_name
+    client_session: Final = litellm.client_session if isinstance(litellm.client_session, httpx.Client) else None
+    _session_key_name: Final = f"_client_session_{id(client_session)}" if client_session is not None else ""
+    _cache_key_name: Final = "httpx_client" + _params_key_name + _session_key_name
 
     # Lazily initialize the global in-memory client cache to avoid relying on
     # litellm globals being fully populated during import time.
@@ -1838,7 +1874,7 @@ def get_httpx_client(params: dict | None = None) -> HTTPHandler:
         key=_cache_key_name,
         value=_new_client,
         ttl=_DEFAULT_TTL_FOR_HTTPX_CLIENTS,
-        litellm_owned_client=True,
+        litellm_owned_client=_new_client._owns_client,
     )
     return _new_client
 
