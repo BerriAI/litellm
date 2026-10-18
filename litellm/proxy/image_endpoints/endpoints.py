@@ -103,7 +103,7 @@ async def image_generation(
         version,
     )
 
-    start_time: Final = datetime.now()
+    start_time: Final = datetime.now()  # noqa: DTZ005  # proxy standard naive datetime for request duration logging
     litellm_call_id: Final = resolve_litellm_call_id(request.headers.get("x-litellm-call-id"))
     data = {"litellm_call_id": litellm_call_id}
     try:
