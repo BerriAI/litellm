@@ -89,6 +89,23 @@ class LiteLLMCompletionTransformationHandler:
                 )
             )
 
+            if any(
+                kwargs.get(f)
+                for f in (
+                    "_websearch_interception_converted_stream",
+                    "_code_interpreter_interception_converted_stream",
+                    "_headroom_interception_converted_stream",
+                )
+            ):
+                from litellm.responses.streaming_iterator import MockResponsesAPIStreamingIterator
+
+                return MockResponsesAPIStreamingIterator(
+                    model=model,
+                    transformed_response=responses_api_response,
+                    custom_llm_provider=custom_llm_provider,
+                    litellm_metadata=kwargs.get("litellm_metadata", {}),
+                )
+
             return responses_api_response
 
         elif isinstance(litellm_completion_response, litellm.CustomStreamWrapper):
@@ -139,6 +156,23 @@ class LiteLLMCompletionTransformationHandler:
                     responses_api_request=responses_api_request,
                 )
             )
+
+            if any(
+                kwargs.get(f)
+                for f in (
+                    "_websearch_interception_converted_stream",
+                    "_code_interpreter_interception_converted_stream",
+                    "_headroom_interception_converted_stream",
+                )
+            ):
+                from litellm.responses.streaming_iterator import MockResponsesAPIStreamingIterator
+
+                return MockResponsesAPIStreamingIterator(
+                    model=litellm_completion_request.get("model") or "",
+                    transformed_response=responses_api_response,
+                    custom_llm_provider=litellm_completion_request.get("custom_llm_provider"),
+                    litellm_metadata=kwargs.get("litellm_metadata", {}),
+                )
 
             return responses_api_response
 
