@@ -8419,7 +8419,7 @@ def convert_list_message_to_dict(
     return [dict(cleanup_none_field_in_message(message=_as_message_value(message))) for message in messages]
 
 
-def validate_and_fix_openai_messages(messages: list):
+def validate_and_fix_openai_messages(messages: list[Any]):
     """
     Ensures all messages are valid OpenAI chat completion messages.
 
