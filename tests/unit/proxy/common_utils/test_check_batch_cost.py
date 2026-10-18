@@ -743,7 +743,7 @@ class TestCheckBatchCost:
 
             await check_batch_cost_instance.check_batch_cost()
 
-        assert mock_prisma_client.db.litellm_managedobjecttable.update_many.call_count >= 3, (
+        assert mock_prisma_client.db.litellm_managedobjecttable.update_many.call_count == 2, (
             "Expected update() to be called exactly once for the completed job"
         )
         update_data = mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args[1]["data"]
@@ -876,7 +876,7 @@ class TestCheckBatchCost:
 
         mock_update_database.assert_awaited_once()
         assert mock_update_database.call_args.kwargs["response_cost"] == 0.01
-        assert mock_prisma_client.db.litellm_managedobjecttable.update_many.call_count >= 3, (
+        assert mock_prisma_client.db.litellm_managedobjecttable.update_many.call_count == 2, (
             "the job must still be marked processed once cost tracking succeeds"
         )
 
@@ -1374,7 +1374,7 @@ class TestCheckBatchCost:
             f"{terminal_status} batch with an output file must fetch results and be billed"
         )
         mock_logging_obj.async_success_handler.assert_awaited_once()
-        assert mock_prisma_client.db.litellm_managedobjecttable.update_many.call_count >= 3
+        assert mock_prisma_client.db.litellm_managedobjecttable.update_many.call_count == 2
         update_data = mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args[1]["data"]
         assert update_data["batch_processed"] is True
         assert update_data["status"] == terminal_status, (
@@ -1946,7 +1946,7 @@ class TestUnmanagedVertexRouting:
         mock_logging_obj.async_success_handler.assert_awaited_once()
         assert mock_logging_obj.async_success_handler.call_args[1]["batch_cost"] == 0.01
 
-        assert prisma.db.litellm_managedobjecttable.update_many.call_count >= 3
+        assert prisma.db.litellm_managedobjecttable.update_many.call_count == 2
         update_data = prisma.db.litellm_managedobjecttable.update_many.call_args[1]["data"]
         assert update_data["batch_processed"] is True
         assert update_data["status"] == "complete"
@@ -2163,7 +2163,7 @@ class TestUnmanagedBedrockRouting:
         mock_logging_obj.async_success_handler.assert_awaited_once()
         assert mock_logging_obj.async_success_handler.call_args[1]["batch_cost"] == 0.02
 
-        assert prisma.db.litellm_managedobjecttable.update_many.call_count >= 3
+        assert prisma.db.litellm_managedobjecttable.update_many.call_count == 2
         update_data = prisma.db.litellm_managedobjecttable.update_many.call_args[1]["data"]
         assert update_data["batch_processed"] is True
         assert update_data["status"] == "complete"
@@ -2973,7 +2973,7 @@ class _FakeManagedObjectTable:
     async def _update_many(self, *, where: dict, data: dict) -> int:
         if not self._matches(where):
             return 0
-        if "status" in data and "file_object" in data:
+        if "updated_at" in where:
             self.journal.append("finalize")
         elif "batch_processed" in where:
             self.journal.append("claim" if data.get("batch_processed") else "release")
