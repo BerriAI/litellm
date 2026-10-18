@@ -2584,7 +2584,7 @@ def prepare_metadata_fields(data: BaseModel, non_default_values: dict, existing_
     # An explicit metadata=None means "clear this field"; the cast below holds
     # the dict-shaped value only, so the clear-to-none path is handled at the
     # tail via raw_metadata.
-    raw_metadata: Final = non_default_values["metadata"]
+    raw_metadata: Final[object] = non_default_values["metadata"]  # pyright: ignore[reportUnknownVariableType]  # key metadata is a db-shaped payload; the tail handles the explicit clear-to-none case
     casted_metadata: Final = cast(dict, raw_metadata)
 
     # Reserved metadata fields are immutable once set. Preserve the existing value
@@ -2627,7 +2627,7 @@ def prepare_metadata_fields(data: BaseModel, non_default_values: dict, existing_
     # update/regenerate cannot stamp it from caller data (R1-L12). An explicit
     # metadata=None stays None (clear-to-none), so skip both here.
     if raw_metadata is not None:
-        casted_metadata.pop(UI_SESSION_METADATA_MARKER_KEY, None)
+        casted_metadata.pop(UI_SESSION_METADATA_MARKER_KEY, None)  # pyright: ignore[reportUnknownMemberType]  # the cast above intentionally keeps the db-metadata shape untyped
         non_default_values["metadata"] = encrypt_callback_vars(casted_metadata)
     return non_default_values
 
@@ -4961,7 +4961,7 @@ UI_SESSION_METADATA_MARKER_KEY: Final = "ui_session_key"
 def metadata_json_with_limits(
     metadata: Mapping[str, object] | None,
     *,
-    allow_ui_session_marker: bool = False,
+    allow_ui_session_marker: object = False,
     model_rpm_limit: Mapping[str, object] | None,
     model_tpm_limit: Mapping[str, object] | None,
     mcp_rpm_limit: Mapping[str, int] | None,
@@ -5056,7 +5056,7 @@ async def generate_key_helper_fn(
     budget_limits: list | None = None,  # multiple concurrent budget windows
     *,
     llm_router: Router | None = None,
-    allow_ui_session_marker: bool = False,
+    allow_ui_session_marker: object = False,
 ):
     from litellm.proxy.proxy_server import premium_user, prisma_client
 
