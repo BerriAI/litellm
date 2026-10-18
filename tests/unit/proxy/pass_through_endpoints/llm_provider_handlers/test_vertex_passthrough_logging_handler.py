@@ -1,3 +1,4 @@
+import asyncio
 import json
 from collections.abc import Iterator
 from datetime import datetime
@@ -13,6 +14,7 @@ from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler import (
     VertexPassthroughLoggingHandler,
 )
+from litellm.proxy.pass_through_endpoints.streaming_handler import PassThroughStreamingHandler
 from litellm.proxy.pass_through_endpoints.success_handler import PassThroughEndpointLogging
 from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 from litellm.types.utils import EmbeddingResponse, ModelResponse
@@ -156,29 +158,30 @@ def _cost_the_logger_records_for(
     if model_info is not None:
         logging_obj.litellm_params = {"metadata": {"model_info": model_info}}
     if stream:
-        result = VertexPassthroughLoggingHandler._handle_logging_vertex_collected_chunks(
-            litellm_logging_obj=logging_obj,
-            passthrough_success_handler_obj=PassThroughEndpointLogging(),
-            url_route=url_route,
-            request_body={},
-            endpoint_type=EndpointType.VERTEX_AI,
-            start_time=datetime(2026, 1, 1),
-            all_chunks=[f"data: {json.dumps(event)}" for event in stream_events],
-            model=None,
-            end_time=datetime(2026, 1, 1),
+        asyncio.run(
+            PassThroughStreamingHandler.route_streaming_logging_to_handler(
+                litellm_logging_obj=logging_obj,
+                passthrough_success_handler_obj=PassThroughEndpointLogging(),
+                url_route=url_route,
+                request_body={},
+                endpoint_type=EndpointType.VERTEX_AI,
+                start_time=datetime(2026, 1, 1),
+                raw_bytes=[f"data: {json.dumps(event)}\n\n".encode() for event in stream_events],
+                end_time=datetime(2026, 1, 1),
+            )
         )
-    else:
-        response = httpx.Response(200, json=reply)
-        result = VertexPassthroughLoggingHandler.vertex_passthrough_handler(
-            httpx_response=response,
-            logging_obj=logging_obj,
-            url_route=url_route,
-            result=response.text,
-            start_time=datetime(2026, 1, 1),
-            end_time=datetime(2026, 1, 1),
-            cache_hit=False,
-            request_body={},
-        )
+        return logging_obj.model_call_details["response_cost"]
+    response = httpx.Response(200, json=reply)
+    result = VertexPassthroughLoggingHandler.vertex_passthrough_handler(
+        httpx_response=response,
+        logging_obj=logging_obj,
+        url_route=url_route,
+        result=response.text,
+        start_time=datetime(2026, 1, 1),
+        end_time=datetime(2026, 1, 1),
+        cache_hit=False,
+        request_body={},
+    )
     logging_obj._process_hidden_params_and_response_cost(
         result["result"], datetime(2026, 1, 1), datetime(2026, 1, 1), build_logging_payload=False
     )
@@ -296,6 +299,29 @@ def test_claude_raw_predict_spend_follows_the_vertex_location(
     )
 
     assert recorded == pytest.approx(expected), (location, stream)
+
+
+@pytest.mark.parametrize("stream", [True, False], ids=["streamed", "non-streamed"])
+def test_claude_raw_predict_spend_uses_the_deployment_custom_price(claude_regional_uplift_rate_card, monkeypatch, stream):
+    custom_rates = {"input_cost_per_token": _CUSTOM_INPUT_RATE, "output_cost_per_token": _CUSTOM_OUTPUT_RATE}
+    monkeypatch.setitem(
+        litellm.model_cost, _CUSTOM_PRICED_DEPLOYMENT, {**custom_rates, "litellm_provider": "vertex_ai", "mode": "chat"}
+    )
+    method = "streamRawPredict" if stream else "rawPredict"
+    url_route = (
+        "https://aiplatform.googleapis.com/v1/projects/p/locations/us-east5"
+        f"/publishers/anthropic/models/{_CLAUDE_UPLIFT_MODEL}:{method}"
+    )
+
+    recorded = _cost_the_logger_records_for(
+        url_route,
+        stream=stream,
+        reply=_claude_message(),
+        stream_events=_claude_stream_events(),
+        model_info={"id": _CUSTOM_PRICED_DEPLOYMENT, **custom_rates},
+    )
+
+    assert recorded == pytest.approx(7 * _CUSTOM_INPUT_RATE + 1 * _CUSTOM_OUTPUT_RATE), stream
 
 
 def test_build_complete_streaming_response_assembles_stream_generate_content_sse_chunks():
