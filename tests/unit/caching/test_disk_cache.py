@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-pytest.importorskip("diskcache")
+pytest.importorskip("diskcache_community")
 
 from litellm.caching.disk_cache import DiskCache
 from tests._wait_helpers import await_until
@@ -17,7 +17,10 @@ class _SlowInt(int):
 
 
 @pytest.fixture
-def cache(tmp_path):
+def cache(tmp_path, monkeypatch: pytest.MonkeyPatch):
+    import diskcache_community
+
+    monkeypatch.setattr(diskcache_community, "SafeDisk", diskcache_community.SafeDisk.with_types(_SlowInt))
     return DiskCache(disk_cache_dir=str(tmp_path))
 
 

@@ -14,15 +14,13 @@ else:
 class DiskCache(BaseCache):
     def __init__(self, disk_cache_dir: str | None = None):
         try:
-            import diskcache as dc
+            import diskcache_community as dc
         except ModuleNotFoundError as e:
             raise ModuleNotFoundError("Please install litellm with `litellm[caching]` to use disk caching.") from e
 
         # if users don't provider one, use the default litellm cache
-        if disk_cache_dir is None:
-            self.disk_cache = dc.Cache(".litellm_cache")
-        else:
-            self.disk_cache = dc.Cache(disk_cache_dir)
+        directory: Final = ".litellm_cache" if disk_cache_dir is None else disk_cache_dir
+        self.disk_cache = dc.Cache(directory, disk=dc.SafeDisk)
 
     def set_cache(self, key, value, **kwargs):
         if "ttl" in kwargs:

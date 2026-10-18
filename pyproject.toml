@@ -125,7 +125,7 @@ utils = [
     # Not in Docker or PyPI proxy extra.
     "numpydoc>=1.8.0,<2.0",
 ]
-caching = ["diskcache>=5.6.3,<6.0"]
+caching = ["diskcache-community>=5.8.0,<6.0"]
 mcp = ["mcp>=2.3.0,<3", "httpx2>=2.10.0,<3", "pydantic>=2.12.0,<3"]
 # Driver for the MongoDB Atlas vector store; Atlas Vector Search has no HTTP query API.
 # The floor is 4.9 because that is the release AsyncMongoClient landed in.
