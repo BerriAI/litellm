@@ -2140,8 +2140,9 @@ def test_stream_chunk_builder_joins_openai_audio_output_pieces() -> None:
     }
 
 
+@pytest.mark.parametrize("reported_total", [{"total_tokens": 9}, {}])
 @pytest.mark.parametrize("trailer_choices", [[], [{"text": None, "index": 0, "logprobs": None, "finish_reason": None}]])
-def test_stream_chunk_builder_text_completion_keeps_finish_reason_and_provider_usage(trailer_choices):
+def test_stream_chunk_builder_text_completion_keeps_finish_reason_and_provider_usage(trailer_choices, reported_total):
     """vLLM-style include_usage stream: finish_reason arrives on a text-less chunk, then a
     usage-only trailer. The rebuilt response must keep both, including the provider's token
     details, instead of reading chunks[-1] and recounting the prompt from `messages`."""
@@ -2162,7 +2163,7 @@ def test_stream_chunk_builder_text_completion_keeps_finish_reason_and_provider_u
             usage={
                 "prompt_tokens": 7,
                 "completion_tokens": 2,
-                "total_tokens": 9,
+                **reported_total,
                 "prompt_tokens_details": {"cached_tokens": 4},
             },
         ),
@@ -2176,7 +2177,8 @@ def test_stream_chunk_builder_text_completion_keeps_finish_reason_and_provider_u
     assert response.usage.prompt_tokens_details.cached_tokens == 4
 
 
-def test_stream_chunk_builder_rebuilds_dict_text_completion_chunks():
+@pytest.mark.parametrize("build", [litellm.stream_chunk_builder, litellm.stream_chunk_builder_text_completion])
+def test_stream_chunk_builder_rebuilds_dict_text_completion_chunks(build):
     from litellm.types.utils import TextChoices
 
     def chunk(choices, **extra):
@@ -2195,7 +2197,7 @@ def test_stream_chunk_builder_rebuilds_dict_text_completion_chunks():
         chunk([], usage={"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}),
     ]
 
-    response = litellm.stream_chunk_builder(chunks)
+    response = build(chunks=chunks)
 
     assert response.id == "cmpl-1"
     assert response.choices[0].text == "Hello world"
