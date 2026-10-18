@@ -422,10 +422,10 @@ def test_upstream_headers_for_vertex_route_filters_anthropic_beta_by_route():
     }
 
     count_tokens_headers = _upstream_headers_for_vertex_route(
-        f"{VERTEX_ANTHROPIC_MODELS_PREFIX}count-tokens:rawPredict", headers, frozenset()
+        f"{VERTEX_ANTHROPIC_MODELS_PREFIX}count-tokens:rawPredict", headers
     )
     model_headers = _upstream_headers_for_vertex_route(
-        f"{VERTEX_ANTHROPIC_MODELS_PREFIX}claude-sonnet-4-6:rawPredict", headers, frozenset()
+        f"{VERTEX_ANTHROPIC_MODELS_PREFIX}claude-sonnet-4-6:rawPredict", headers
     )
 
     assert dict(count_tokens_headers) == {
