@@ -520,14 +520,12 @@ def test_gemini_passthrough_through_a_gemini_api_base_gateway_logs_and_bills_as_
     assert spend == pytest.approx({action: _list_price(f"gemini/{_GEMINI}") for action in _GEMINI_ACTIONS})
 
 
-def test_a_configured_passthrough_to_a_non_google_host_bills_vertex_resource_paths_as_vertex_and_the_rest_as_gemini(
-    gateway_rig: _Rig,
-) -> None:
+def test_a_configured_passthrough_to_a_non_google_gateway_bills_as_vertex_whatever_the_path(gateway_rig: _Rig) -> None:
     body: Final[Mapping[str, JsonValue]] = {"contents": [{"role": "user", "parts": [{"text": "hi"}]}]}
     routes: Final = MappingProxyType(
         {
             "vertex resource": f"/v1/projects/{_PROJECT}/locations/us/publishers/google/models/{_GEMINI}",
-            "gemini api": f"/v1beta/models/{_GEMINI}",
+            "short gateway path": f"/vx/models/{_GEMINI}",
         }
     )
     cells: Final = tuple((route, action) for route in routes for action in _GEMINI_ACTIONS)
@@ -542,8 +540,12 @@ def test_a_configured_passthrough_to_a_non_google_host_bills_vertex_resource_pat
             )
         providers: Final = {cell: _provider_for_key(key) for cell, key in keys.items()}
         spend: Final = {cell: _spend_for_key(key) for cell, key in keys.items()}
-    regional: Final = _list_price(f"vertex_ai/{_GEMINI}") * _uplift(f"vertex_ai/{_GEMINI}")
-    assert providers == {cell: "vertex_ai" if cell[0] == "vertex resource" else "gemini" for cell in cells}
-    assert spend == pytest.approx(
-        {cell: regional if cell[0] == "vertex resource" else _list_price(f"gemini/{_GEMINI}") for cell in cells}
+    short_path_spend: Final = {action: spend[("short gateway path", action)] for action in _GEMINI_ACTIONS}
+    assert providers == {cell: "vertex_ai" for cell in cells}
+    assert {action: spend[("vertex resource", action)] for action in _GEMINI_ACTIONS} == pytest.approx(
+        {action: _list_price(f"vertex_ai/{_GEMINI}") * _uplift(f"vertex_ai/{_GEMINI}") for action in _GEMINI_ACTIONS}
+    )
+    assert min(short_path_spend.values()) > 0
+    assert short_path_spend == pytest.approx(
+        {action: short_path_spend[_GEMINI_ACTIONS[0]] for action in _GEMINI_ACTIONS}
     )

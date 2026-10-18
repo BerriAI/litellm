@@ -226,7 +226,7 @@ class VertexPassthroughLoggingHandler:
                 start_time=start_time,
                 end_time=end_time,
                 logging_obj=logging_obj,
-                custom_llm_provider=VertexPassthroughLoggingHandler._get_custom_llm_provider_from_url(url_route),
+                custom_llm_provider=VertexPassthroughLoggingHandler._get_custom_llm_provider(url_route, logging_obj),
                 vertex_location=vertex_location,
             )
 
@@ -550,7 +550,7 @@ class VertexPassthroughLoggingHandler:
                 response_json=response_json,
             )
 
-        custom_llm_provider: Final = VertexPassthroughLoggingHandler._get_custom_llm_provider_from_url(url_route)
+        custom_llm_provider: Final = VertexPassthroughLoggingHandler._get_custom_llm_provider(url_route, logging_obj)
 
         litellm_embedding_response.model = model
         logging_obj.model = model
@@ -622,7 +622,9 @@ class VertexPassthroughLoggingHandler:
             start_time=start_time,
             end_time=end_time,
             logging_obj=litellm_logging_obj,
-            custom_llm_provider=VertexPassthroughLoggingHandler._get_custom_llm_provider_from_url(url_route),
+            custom_llm_provider=VertexPassthroughLoggingHandler._get_custom_llm_provider(
+                url_route, litellm_logging_obj
+            ),
             vertex_location=vertex_location,
         )
 
@@ -732,22 +734,13 @@ class VertexPassthroughLoggingHandler:
         return None
 
     @staticmethod
-    def _get_custom_llm_provider_from_url(url: str) -> str:
-        parsed_url: Final = urlparse(url)
-        hostname: Final = parsed_url.hostname
-        if hostname is not None and hostname.endswith("generativelanguage.googleapis.com"):
-            return litellm.LlmProviders.GEMINI.value
-        if (
-            hostname is None
-            or hostname.endswith("googleapis.com")
-            or VertexPassthroughLoggingHandler._is_vertex_resource_path(parsed_url.path)
+    def _get_custom_llm_provider(url: str, logging_obj: LiteLLMLoggingObj) -> str:
+        hostname: Final = urlparse(url).hostname
+        if logging_obj.model_call_details.get("custom_llm_provider") == litellm.LlmProviders.GEMINI.value or (
+            hostname is not None and hostname.endswith("generativelanguage.googleapis.com")
         ):
-            return litellm.LlmProviders.VERTEX_AI.value
-        return litellm.LlmProviders.GEMINI.value
-
-    @staticmethod
-    def _is_vertex_resource_path(path: str) -> bool:
-        return "/projects/" in path or "/publishers/" in path
+            return litellm.LlmProviders.GEMINI.value
+        return litellm.LlmProviders.VERTEX_AI.value
 
     @staticmethod
     def _is_multimodal_embedding_response(json_response: dict) -> bool:

@@ -144,6 +144,8 @@ def _cost_the_logger_records_for(
     reply: dict[str, object],
     stream_events: list[dict[str, object]],
     model_info: dict[str, object] | None = None,
+    route_provider: str | None = None,
+    base_model: object = None,
 ) -> float:
     logging_obj: Final = Logging(
         model="unknown",
@@ -157,6 +159,10 @@ def _cost_the_logger_records_for(
     logging_obj.optional_params = {}
     if model_info is not None:
         logging_obj.litellm_params = {"metadata": {"model_info": model_info}}
+    if route_provider is not None:
+        logging_obj.model_call_details["custom_llm_provider"] = route_provider
+    if base_model is not None:
+        logging_obj.model_call_details["litellm_params"] = {"base_model": base_model}
     if stream:
         asyncio.run(
             PassThroughStreamingHandler.route_streaming_logging_to_handler(
@@ -217,7 +223,7 @@ def test_generate_content_spend_follows_the_vertex_location(
     "gemini_api_base", ["https://generativelanguage.googleapis.com", "https://llm-egress.internal.example/google"]
 )
 @pytest.mark.parametrize("stream", [True, False], ids=["streamed", "non-streamed"])
-def test_gemini_api_spend_has_no_vertex_uplift_whatever_host_serves_it(
+def test_gemini_route_spend_has_no_vertex_uplift_whatever_host_serves_it(
     regional_uplift_rate_card: None, monkeypatch: pytest.MonkeyPatch, gemini_api_base: str, stream: bool
 ) -> None:
     monkeypatch.setitem(
@@ -237,9 +243,28 @@ def test_gemini_api_spend_has_no_vertex_uplift_whatever_host_serves_it(
         stream=stream,
         reply=_generate_content_payload(),
         stream_events=[_generate_content_payload()],
+        route_provider="gemini",
     )
 
     assert recorded == pytest.approx(7 * _UPLIFT_INPUT_RATE + 1 * _UPLIFT_OUTPUT_RATE), (gemini_api_base, stream)
+
+
+@pytest.mark.parametrize("base_model", [123, ["gemini-2.5-flash-lite"], {"model": "gemini-2.5-flash-lite"}])
+@pytest.mark.parametrize("stream", [True, False], ids=["streamed", "non-streamed"])
+def test_a_non_string_base_model_bills_the_list_price(
+    regional_uplift_rate_card: None, stream: bool, base_model: object
+) -> None:
+    method: Final = "streamGenerateContent" if stream else "generateContent"
+
+    recorded: Final = _cost_the_logger_records_for(
+        f"https://aiplatform.googleapis.com/v1/projects/p/locations/us/publishers/google/models/{_UPLIFT_MODEL}:{method}",
+        stream=stream,
+        reply=_generate_content_payload(),
+        stream_events=[_generate_content_payload()],
+        base_model=base_model,
+    )
+
+    assert recorded == pytest.approx((7 * _UPLIFT_INPUT_RATE + 1 * _UPLIFT_OUTPUT_RATE) * _UPLIFT_MULTIPLIER), stream
 
 
 _CUSTOM_PRICED_DEPLOYMENT: Final = "vertex-custom-priced-deployment"
@@ -359,6 +384,31 @@ def test_claude_raw_predict_spend_uses_the_deployment_custom_price(
     )
 
     assert recorded == pytest.approx(7 * _CUSTOM_INPUT_RATE + 1 * _CUSTOM_OUTPUT_RATE), stream
+
+
+def test_a_claude_stream_through_a_configured_vertex_gateway_with_a_short_path_bills_the_vertex_price(
+    claude_regional_uplift_rate_card: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        f"vertex_ai/{_CLAUDE_UPLIFT_MODEL}",
+        {
+            "input_cost_per_token": _CLAUDE_INPUT_RATE,
+            "output_cost_per_token": _CLAUDE_OUTPUT_RATE,
+            "litellm_provider": "vertex_ai-anthropic_models",
+            "mode": "chat",
+        },
+    )
+    litellm.get_model_info.cache_clear()
+
+    recorded: Final = _cost_the_logger_records_for(
+        f"https://vertex-gateway.internal.example/vxc/models/{_CLAUDE_UPLIFT_MODEL}:streamRawPredict",
+        stream=True,
+        reply=_claude_message(),
+        stream_events=_claude_stream_events(),
+    )
+
+    assert recorded == pytest.approx(7 * _CLAUDE_INPUT_RATE + 1 * _CLAUDE_OUTPUT_RATE)
 
 
 def test_build_complete_streaming_response_assembles_stream_generate_content_sse_chunks():
