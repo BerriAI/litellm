@@ -8,10 +8,29 @@ from typing import Final
 import pytest
 from integration._support.wire import Reply, Request
 from integration.security.test_hide_secrets_tool_traffic import Rig, _provider, tool_rig
-from pydantic import JsonValue
+from pydantic import JsonValue, TypeAdapter
 
 KEYWORD: Final = "zebracornflux"
 FLAGGED: Final = "moderation-flagged-fragment"
+AZURE_FLAGGED: Final = "azure-flagged-fragment"
+AZURE_LIMIT: Final = 10_000
+AZURE_ANALYZE: Final = "/contentsafety/text:analyze"
+AZURE_REQUEST: Final = TypeAdapter(dict[str, JsonValue])
+
+
+def _azure(request: Request) -> Reply:
+    text: Final = AZURE_REQUEST.validate_json(request.body)["text"]
+    assert isinstance(text, str)
+    if len(text) > AZURE_LIMIT:
+        error: Final = {
+            "code": "InvalidRequestBody",
+            "message": f"The length of given text {len(text)} exceeds the limit",
+        }
+        return Reply(status=400, body=json.dumps({"error": error}).encode())
+    severity: Final = 6 if AZURE_FLAGGED in text else 0
+    categories: Final = ("Hate", "SelfHarm", "Sexual", "Violence")
+    analysis: Final = [{"category": name, "severity": severity if name == "Violence" else 0} for name in categories]
+    return Reply(body=json.dumps({"blocklistsMatch": [], "categoriesAnalysis": analysis}).encode())
 
 
 def _vendors(request: Request) -> Reply:
@@ -39,6 +58,8 @@ def _vendors(request: Request) -> Reply:
         return Reply(body=json.dumps([[] for _ in body["contents"]]).encode())
     if request.target.endswith("/api/v2/text/detection/content"):
         return Reply(body=b'{"detections": []}')
+    if AZURE_ANALYZE in request.target:
+        return _azure(request)
     return _provider(request)
 
 
@@ -60,7 +81,8 @@ def _consumers(configuration: dict[str, JsonValue]) -> None:
         }
     )
     settings["banned_keywords_list"] = [KEYWORD]
-    settings["callbacks"] = ["banned_keywords", "openai_moderations"]
+    settings["callbacks"] = ["banned_keywords", "openai_moderations", "azure_content_safety"]
+    settings["azure_content_safety_params"] = {"endpoint": base_url, "api_key": "synthetic-azure-key"}
     configuration["guardrails"] = [
         {
             "guardrail_name": f"ibm-{name}",
@@ -84,7 +106,7 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
         yield value
 
 
-def _chat(arguments: str, *, stream: bool = False) -> dict[str, JsonValue]:
+def _chat(arguments: str, *, stream: bool = False, prompt: str = "say hi") -> dict[str, JsonValue]:
     return {
         "model": "gpt",
         "stream": stream,
@@ -99,7 +121,7 @@ def _chat(arguments: str, *, stream: bool = False) -> dict[str, JsonValue]:
                 ],
             },
             {"role": "tool", "tool_call_id": "call_1", "content": "written"},
-            {"role": "user", "content": "say hi"},
+            {"role": "user", "content": prompt},
         ],
     }
 
@@ -135,7 +157,13 @@ def _messages(result: str) -> dict[str, JsonValue]:
 
 
 def _provider_calls(sent: tuple[Request, ...]) -> tuple[Request, ...]:
-    return tuple(request for request in sent if request.target.endswith(("/chat/completions", "/messages")))
+    return tuple(
+        request for request in sent if request.target.endswith(("/chat/completions", "/messages", "/responses"))
+    )
+
+
+def _analyzed(sent: tuple[Request, ...]) -> tuple[str, ...]:
+    return tuple(json.loads(request.body)["text"] for request in sent if AZURE_ANALYZE in request.target)
 
 
 @pytest.mark.parametrize("stream", (False, True), ids=("json", "stream"))
@@ -186,13 +214,13 @@ def test_deep_tool_result_chain_cannot_hide_a_later_keyword(rig: Rig) -> None:
         pytest.param(
             "/v1/messages",
             _messages("tool result"),
-            ("system note", "read notes", "notes.txt\ntool input", "tool result", "summarize"),
+            ("read notes", "summarize", "system note", "notes.txt\ntool input", "tool result"),
             id="messages",
         ),
         pytest.param(
             "/v1/chat/completions",
             _chat(json.dumps({"path": "n.txt", "content": "argument text"})),
-            ("write notes", "n.txt\nargument text", "written", "say hi"),
+            ("write notes", "written", "say hi", "n.txt\nargument text"),
             id="chat",
         ),
     ),
@@ -218,3 +246,48 @@ def test_moderation_flag_in_tool_result_blocks(rig: Rig) -> None:
     response: Final = rig.proxy.request("POST", "/v1/messages", _messages(FLAGGED))
     assert response.status_code == 403, response.text
     assert "Violated content safety policy" in response.text
+
+
+def test_azure_content_safety_checks_message_text_before_tool_text(rig: Rig) -> None:
+    rig.wire.drain()
+    response: Final = rig.proxy.request(
+        "POST", "/v1/chat/completions", _chat(json.dumps({"path": "n.txt", "content": "argument text"}))
+    )
+    assert response.status_code == 200, response.text
+    sent: Final = rig.wire.drain()
+    assert _analyzed(sent) == ("write notes", "written", "say hi", "n.txt\nargument text", "accepted")
+    assert len(_provider_calls(sent)) == 1
+
+
+@pytest.mark.parametrize(
+    ("path", "body", "analyzed"),
+    (
+        pytest.param(
+            "/v1/chat/completions",
+            _chat(json.dumps({"content": "x" * (AZURE_LIMIT + 1)}), prompt=f"say {AZURE_FLAGGED}"),
+            ("write notes", "written", f"say {AZURE_FLAGGED}"),
+            id="chat-tool-arguments",
+        ),
+        pytest.param(
+            "/v1/responses",
+            {
+                "model": "gpt",
+                "cache": {"no-cache": True},
+                "instructions": "x" * (AZURE_LIMIT + 1),
+                "input": f"say {AZURE_FLAGGED}",
+            },
+            (f"say {AZURE_FLAGGED}",),
+            id="responses-instructions",
+        ),
+    ),
+)
+def test_azure_content_safety_blocks_message_text_after_oversized_tool_or_system_text(
+    rig: Rig, path: str, body: dict[str, JsonValue], analyzed: tuple[str, ...]
+) -> None:
+    rig.wire.drain()
+    response: Final = rig.proxy.request("POST", path, body)
+    assert response.status_code == 400, response.text
+    assert "Violated content safety policy" in response.text
+    sent: Final = rig.wire.drain()
+    assert _analyzed(sent) == analyzed
+    assert _provider_calls(sent) == ()

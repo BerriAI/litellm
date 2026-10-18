@@ -1014,6 +1014,37 @@ def test_nested_tool_result_chain_leaves_later_messages_inspected() -> None:
     assert data["messages"][1]["content"] == "[MASKED]"
 
 
+def test_message_text_comes_before_system_instructions_and_tool_text() -> None:
+    data = {
+        "system": "system",
+        "instructions": "instructions",
+        "messages": [
+            {"role": "user", "content": "first"},
+            {
+                "role": "assistant",
+                "content": [{"type": "tool_use", "input": {"path": "tool input"}}],
+                "tool_calls": [{"function": {"arguments": '{"path":"arguments"}'}}],
+            },
+            {
+                "role": "user",
+                "content": [{"type": "tool_result", "content": "first"}, {"type": "text", "text": "second"}],
+            },
+        ],
+        "input": [{"type": "function_call", "arguments": '{"path":"call"}'}, {"role": "user", "content": "third"}],
+    }
+    assert tuple(iter_message_text(data)) == (
+        "first",
+        "second",
+        "third",
+        "system",
+        "instructions",
+        "tool input",
+        "arguments",
+        "first",
+        "call",
+    )
+
+
 @pytest.mark.parametrize(
     "arguments",
     ('{"token":"secret","limit":1e400}', '{"token":"secret","limit":-Infinity}', '{"token":"secret","ratio":NaN}'),

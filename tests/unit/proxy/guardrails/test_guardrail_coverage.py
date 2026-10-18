@@ -657,6 +657,58 @@ async def test_azure_content_safety_pre_call_fires_on_runtime_call_types(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "call_type, data",
+    [
+        ("aresponses", {"instructions": "x" * 10001, "input": [{"role": "user", "content": "flagged text"}]}),
+        (
+            "acompletion",
+            {
+                "messages": [
+                    {
+                        "role": "assistant",
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": "write_file", "arguments": json.dumps({"content": "x" * 10001})},
+                            }
+                        ],
+                    },
+                    {"role": "user", "content": "flagged text"},
+                ]
+            },
+        ),
+    ],
+    ids=("responses-instructions", "chat-tool-arguments"),
+)
+async def test_azure_content_safety_checks_message_text_before_oversized_tool_or_system_text(
+    user_api_key: UserAPIKeyAuth, call_type: str, data: dict[str, JsonValue]
+) -> None:
+    from litellm.proxy.hooks.azure_content_safety import PROXY_AzureContentSafety
+
+    guard: Final = PROXY_AzureContentSafety.__new__(PROXY_AzureContentSafety)
+    seen: Final[list[str]] = []
+
+    async def fake_test_violation(content: str, source: str | None = None) -> None:
+        seen.append(content)
+        if len(content) > 10000:
+            raise RuntimeError("(InvalidRequestBody) The length of given text exceeds the limit 10000.")
+        if "flagged" in content:
+            raise HTTPException(status_code=400, detail={"error": "Violated content safety policy"})
+
+    guard.test_violation = fake_test_violation
+    with pytest.raises(HTTPException):
+        await guard.async_pre_call_hook(
+            user_api_key_dict=user_api_key,
+            cache=DualCache(),
+            data=data,
+            call_type=call_type,
+        )
+    assert seen == ["flagged text"]
+
+
+@pytest.mark.asyncio
 async def test_azure_content_safety_post_call_checks_all_choices(user_api_key):
     """Krrish blocker: ``n>1`` responses must not bypass Azure Content Safety
     by placing the unsafe text in ``choices[1+]``."""
@@ -964,7 +1016,7 @@ class _GoogleRequest(NamedTuple):
                 "system": [{"type": "text", "text": "system blocked fragment"}],
                 "messages": [{"role": "user", "content": "ordinary control"}],
             },
-            "system blocked fragmentordinary control",
+            "ordinary controlsystem blocked fragment",
             id="native-system",
         ),
         pytest.param(

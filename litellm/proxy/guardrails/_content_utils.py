@@ -11,6 +11,7 @@ every text fragment.
 import json
 import math
 import re
+from collections import Counter
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Final
@@ -308,11 +309,30 @@ def _iter_inspection_messages(data: Mapping[str, object]) -> Iterator[object]:
 
 
 def iter_message_text(data: Mapping[str, object]) -> Iterator[str]:
-    """Yield every text fragment from ``system``, ``instructions``, ``messages`` AND ``input``.
+    """Yield every text fragment from ``messages``, ``input``, ``system``, ``instructions`` AND tool payloads.
 
-    Walks every role (user, assistant, system, …) — guardrails inspect
-    the entire conversation, not just user turns.
+    Message text parts come first, in conversation order, followed by the
+    system, instructions and tool text. Walks every role (user, assistant,
+    system, …) — guardrails inspect the entire conversation, not just user turns.
     """
+    message_text: Final = tuple(_iter_message_parts_text(data))
+    yield from message_text
+    pending: Final = Counter(message_text)
+    for text in _iter_request_text(data):
+        if pending[text]:
+            pending[text] -= 1
+        else:
+            yield text
+
+
+def _iter_message_parts_text(data: Mapping[str, object]) -> Iterator[str]:
+    for message in _iter_inspection_messages(data):
+        fields = _text_object(message)
+        if fields is not None:
+            yield from _iter_text_parts_in_content(fields.get("content"))
+
+
+def _iter_request_text(data: Mapping[str, object]) -> Iterator[str]:
     yield from _iter_native_content_text(data.get("system"))
     yield from _iter_native_content_text(data.get("instructions"))
     for message in _iter_inspection_messages(data):
