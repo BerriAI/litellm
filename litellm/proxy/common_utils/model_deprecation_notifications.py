@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Final, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import EMAIL_MODEL_DEPRECATION_LOCK_ID
 from litellm.integrations.email_alerting import (
@@ -288,6 +289,9 @@ def render_model_deprecation_email(
     return subject, body + EMAIL_FOOTER
 
 
+_DEPRECATION_EMAIL_TARGET: Final = "model_deprecation_emails"
+
+
 _ENTERPRISE_BASE_EMAIL_LOGGER: Final = (
     "litellm_enterprise.enterprise_callbacks.send_emails.base_email",
     "BaseEmailLogger",
@@ -351,6 +355,7 @@ async def _stamp_pass(cache: DeprecationEmailCache) -> None:
     )
 
 
+@with_service_target(_DEPRECATION_EMAIL_TARGET)
 async def email_pass_done_today(cache: DeprecationEmailCache) -> bool:
     return (await cache.async_get_cache(key=SlackAlertingCacheKeys.deprecation_email_pass_key.value)) is not None
 
@@ -390,6 +395,7 @@ async def _send_team_notification(notification: TeamNotification, ctx: Deprecati
     return True
 
 
+@with_service_target(_DEPRECATION_EMAIL_TARGET)
 async def send_model_deprecation_emails(ctx: DeprecationEmailContext) -> int:
     """One pass: resolve affected teams, claim the day only when there is something to send, deliver, then stamp
 

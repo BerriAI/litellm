@@ -10,6 +10,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from litellm._internal_context import current_service_target
 from litellm.caching.caching import DualCache
 from litellm.constants import EMAIL_MODEL_DEPRECATION_LOCK_ID
 from litellm.models.team import LiteLLM_TeamTable
@@ -469,6 +470,20 @@ class _RecordingCache:
         self.ttls[key] = ttl
 
 
+class _TargetRecordingCache(_RecordingCache):
+    def __init__(self):
+        super().__init__()
+        self.targets = []
+
+    async def async_get_cache(self, *, key: str) -> object:
+        self.targets.append(current_service_target())
+        return await super().async_get_cache(key=key)
+
+    async def async_set_cache(self, *, key: str, value: float, ttl: float) -> None:
+        self.targets.append(current_service_target())
+        await super().async_set_cache(key=key, value=value, ttl=ttl)
+
+
 def _team_row(team_id: str, alias: str = "Team") -> Mapping[str, object]:
     return {
         "team_id": team_id,
@@ -705,6 +720,18 @@ async def test_should_report_whether_the_daily_pass_already_ran():
     assert await email_pass_done_today(cache) is False
     await cache.async_set_cache(key=SlackAlertingCacheKeys.deprecation_email_pass_key.value, value=1.0)
     assert await email_pass_done_today(cache) is True
+
+
+@pytest.mark.asyncio
+async def test_should_tag_every_cache_read_and_write_with_the_deprecation_email_family():
+    cache: Final = _TargetRecordingCache()
+    ctx: Final = _context(_router([DEAD_DEPLOYMENT]), _prisma(TWO_TEAMS[:1], TWO_ADMINS), _Deliverer(), cache)
+
+    assert await email_pass_done_today(cache) is False
+    assert await send_model_deprecation_emails(ctx) == 1
+    assert len(cache.targets) >= 3
+    assert set(cache.targets) == {"model_deprecation_emails"}
+    assert current_service_target() is None
 
 
 class TestMakeEmailDeliverer:
