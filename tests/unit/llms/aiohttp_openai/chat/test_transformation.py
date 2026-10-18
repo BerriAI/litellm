@@ -99,3 +99,16 @@ async def test_transform_response_rejects_choices_that_are_not_a_list_of_objects
 async def test_transform_response_rejects_a_choice_whose_message_is_not_an_object():
     with pytest.raises(ValidationError, match="validation error for Choices"):
         await _transform({"choices": [{"message": "text"}]})
+
+
+@pytest.mark.parametrize("tier", ["flex", "priority", "default"])
+async def test_transform_response_forwards_service_tier(tier: str):
+    response = await _transform({"id": "chatcmpl-1", "choices": [{}], "service_tier": tier})
+
+    assert response.service_tier == tier
+
+
+async def test_transform_response_service_tier_is_none_when_omitted():
+    response = await _transform({"id": "chatcmpl-1", "choices": [{}]})
+
+    assert getattr(response, "service_tier", None) is None
