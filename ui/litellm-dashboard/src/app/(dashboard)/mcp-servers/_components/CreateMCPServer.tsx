@@ -149,6 +149,9 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   // section can warn that the saved app may not match the new upstream (the app is kept, not wiped).
   const [appMayNotMatchUpstream, setAppMayNotMatchUpstream] = useState(false);
 
+  const requiresDiscoveryToken =
+    prefillData?.auth_type === AUTH_TYPE.BEARER_TOKEN && formValues.auth_type === AUTH_TYPE.BEARER_TOKEN;
+
   // Single hook call shared by MCPConnectionStatus and MCPToolConfiguration to avoid duplicate requests.
   const {
     tools,
@@ -164,6 +167,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     oauthAccessToken,
     formValues,
     enabled: true,
+    requiresAuthValue: requiresDiscoveryToken,
   });
 
   const authSectionMounted = transportType !== "stdio" && transportType !== "";
@@ -894,8 +898,12 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                               </span>
                             }
                             name={["credentials", "auth_value"]}
+                            required={requiresDiscoveryToken}
                             rules={{
                               validate: {
+                                ...(requiresDiscoveryToken
+                                  ? { required: requiredRule("Enter your API token before adding this server") }
+                                  : {}),
                                 notWhitespace: notOnlyWhitespace("Authentication value cannot be empty whitespace"),
                               },
                             }}
@@ -908,6 +916,22 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                               />
                             )}
                           </MountedFormField>
+                        )}
+
+                        {requiresDiscoveryToken && (
+                          <p className="text-sm text-muted-foreground">
+                            Enter your API token to test this connection. Copy only the token, without Bearer or quotes.{" "}
+                            {prefillData?.credential_url && (
+                              <a
+                                href={prefillData.credential_url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="underline"
+                              >
+                                Get your API token
+                              </a>
+                            )}
+                          </p>
                         )}
 
                         {isOAuthAuthType && (

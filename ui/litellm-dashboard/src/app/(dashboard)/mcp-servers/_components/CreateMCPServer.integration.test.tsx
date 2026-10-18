@@ -1932,7 +1932,9 @@ describe("CreateMCPServer", () => {
   });
 
   describe("when prefillData is provided", () => {
-    it("opens the credential field for an authenticated discovery entry without supplying a token", async () => {
+    it("waits for a required discovery token before previewing or adding the server", async () => {
+      const credentialUrl =
+        "https://platform.acedata.cloud/console/applications?utm_source=opensource&utm_medium=referral&utm_campaign=evergreen&utm_content=litellm_suno_discovery_api_key";
       render(
         <CreateMCPServer
           {...defaultProps}
@@ -1944,6 +1946,7 @@ describe("CreateMCPServer", () => {
             transport: "http",
             url: "https://suno.mcp.acedata.cloud/mcp",
             auth_type: "bearer_token",
+            credential_url: credentialUrl,
           }}
         />,
       );
@@ -1954,8 +1957,34 @@ describe("CreateMCPServer", () => {
         "https://suno.mcp.acedata.cloud/mcp",
       );
       expect(getServerNameInput()).toHaveValue("suno_acedatacloud");
-      expect(screen.getByPlaceholderText("Enter token or secret")).toHaveValue("");
-      expect(screen.getByPlaceholderText("Enter token or secret")).toHaveAttribute("type", "password");
+      const tokenInput = screen.getByPlaceholderText("Enter token or secret");
+      expect(tokenInput).toHaveValue("");
+      expect(tokenInput).toHaveAttribute("type", "password");
+      expect(screen.getByRole("link", { name: "Get your API token" })).toHaveAttribute("href", credentialUrl);
+      expect(networking.testMCPToolsListRequest).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByRole("button", { name: "Add MCP Server" }));
+      expect(await screen.findByText("Enter your API token before adding this server")).toBeInTheDocument();
+      expect(networking.createMCPServer).not.toHaveBeenCalled();
+      expect(networking.testMCPToolsListRequest).not.toHaveBeenCalled();
+
+      fireEvent.change(tokenInput, { target: { value: "   " } });
+      expect(networking.testMCPToolsListRequest).not.toHaveBeenCalled();
+      fireEvent.change(tokenInput, { target: { value: "local-test-token" } });
+      await waitFor(() => expect(networking.testMCPToolsListRequest).toHaveBeenCalledTimes(1));
+      expect(networking.testMCPToolsListRequest).toHaveBeenCalledWith(
+        "test-token",
+        expect.objectContaining({
+          url: "https://suno.mcp.acedata.cloud/mcp",
+          auth_type: "bearer_token",
+          credentials: { auth_value: "local-test-token" },
+        }),
+        null,
+      );
+
+      fireEvent.change(tokenInput, { target: { value: "" } });
+      expect(tokenInput).toHaveValue("");
+      expect(networking.testMCPToolsListRequest).toHaveBeenCalledTimes(1);
       expect(networking.createMCPServer).not.toHaveBeenCalled();
     });
 

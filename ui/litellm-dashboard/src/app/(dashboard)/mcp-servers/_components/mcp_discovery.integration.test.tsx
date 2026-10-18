@@ -156,6 +156,7 @@ describe("MCPDiscovery", () => {
     const server = registry.servers.find((entry) => entry.title === title)!;
     expect(onSelectServer).toHaveBeenCalledWith(server);
     expect(server.auth_type).toBe("bearer_token");
+    expect(server.credential_url).toContain("https://platform.acedata.cloud/console/applications?");
     expect(screen.queryByText("GitHub")).not.toBeInTheDocument();
   });
 

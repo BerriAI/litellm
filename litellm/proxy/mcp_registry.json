@@ -439,6 +439,7 @@
       "transport": "http",
       "url": "https://suno.mcp.acedata.cloud/mcp",
       "auth_type": "bearer_token",
+      "credential_url": "https://platform.acedata.cloud/console/applications?utm_source=opensource&utm_medium=referral&utm_campaign=evergreen&utm_content=litellm_suno_discovery_api_key",
       "env_vars": []
     },
     {
@@ -451,6 +452,7 @@
       "transport": "http",
       "url": "https://seedance.mcp.acedata.cloud/mcp",
       "auth_type": "bearer_token",
+      "credential_url": "https://platform.acedata.cloud/console/applications?utm_source=opensource&utm_medium=referral&utm_campaign=evergreen&utm_content=litellm_seedance_discovery_api_key",
       "env_vars": []
     },
     {
@@ -463,6 +465,7 @@
       "transport": "http",
       "url": "https://happyhorse.mcp.acedata.cloud/mcp",
       "auth_type": "bearer_token",
+      "credential_url": "https://platform.acedata.cloud/console/applications?utm_source=opensource&utm_medium=referral&utm_campaign=evergreen&utm_content=litellm_happyhorse_discovery_api_key",
       "env_vars": []
     },
     {
@@ -475,6 +478,7 @@
       "transport": "http",
       "url": "https://openai.mcp.acedata.cloud/mcp",
       "auth_type": "bearer_token",
+      "credential_url": "https://platform.acedata.cloud/console/applications?utm_source=opensource&utm_medium=referral&utm_campaign=evergreen&utm_content=litellm_gpt_image_discovery_api_key",
       "env_vars": []
     },
     {
@@ -487,6 +491,7 @@
       "transport": "http",
       "url": "https://nanobanana.mcp.acedata.cloud/mcp",
       "auth_type": "bearer_token",
+      "credential_url": "https://platform.acedata.cloud/console/applications?utm_source=opensource&utm_medium=referral&utm_campaign=evergreen&utm_content=litellm_nano_banana_discovery_api_key",
       "env_vars": []
     }
   ]
