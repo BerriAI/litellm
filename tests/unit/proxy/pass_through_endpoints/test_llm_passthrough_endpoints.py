@@ -545,9 +545,13 @@ def test_openai_proxy_gate_allows_admin_everywhere():
 
     openai_proxy_gate = _openai_proxy_gate_module()
 
-    openai_proxy_gate(
-        user_api_key_dict=UserAPIKeyAuth(api_key="sk-admin", user_role=LitellmUserRoles.PROXY_ADMIN, user_id="u2"),
-        endpoint_path="/v1/files/file-abc123",
+    # the observable outcome of an allowed passthrough is a no-op return
+    assert (
+        openai_proxy_gate(
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-admin", user_role=LitellmUserRoles.PROXY_ADMIN, user_id="u2"),
+            endpoint_path="/v1/files/file-abc123",
+        )
+        is None
     )
 
 
@@ -556,14 +560,14 @@ def test_openai_proxy_gate_allows_inference_paths_for_any_key():
 
     openai_proxy_gate = _openai_proxy_gate_module()
 
-    openai_proxy_gate(
-        user_api_key_dict=UserAPIKeyAuth(api_key="sk-team", user_role=None, user_id="u1"),
-        endpoint_path="/v1/chat/completions",
-    )
-    openai_proxy_gate(
-        user_api_key_dict=UserAPIKeyAuth(api_key="sk-team", user_role=None, user_id="u1"),
-        endpoint_path="/v1/responses",
-    )
+    for inference in ("/v1/chat/completions", "/v1/responses"):
+        assert (
+            openai_proxy_gate(
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-team", user_role=None, user_id="u1"),
+                endpoint_path=inference,
+            )
+            is None
+        )
 
 
 def test_openai_proxy_gate_blocks_prefixless_versionless_management_paths():
@@ -593,14 +597,14 @@ def test_openai_proxy_gate_canonicalizes_the_v1_spelling_identically():
     openai_proxy_gate = _openai_proxy_gate_module()
 
     # both spellings of the inference surface stay open
-    openai_proxy_gate(
-        user_api_key_dict=UserAPIKeyAuth(api_key="sk-team", user_role=None, user_id="u1"),
-        endpoint_path="/chat/completions",
-    )
-    openai_proxy_gate(
-        user_api_key_dict=UserAPIKeyAuth(api_key="sk-team", user_role=None, user_id="u1"),
-        endpoint_path="/v1/chat/completions",
-    )
+    for inference in ("/chat/completions", "/v1/chat/completions"):
+        assert (
+            openai_proxy_gate(
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-team", user_role=None, user_id="u1"),
+                endpoint_path=inference,
+            )
+            is None
+        )
     # both spellings of the management surface are gated
     for path in ("/assistants", "/v1/assistants", "/files", "/v1/files"):
         try:
