@@ -124,6 +124,10 @@ func sample(m map[string]*family, name string) (float64, bool) {
 }
 
 func checkMetrics(r *report, side string, e expected, db dbTotals, m map[string]*family) {
+	if isBifrost(side) {
+		checkBifrostMetrics(r, side, e, db, m)
+		return
+	}
 	counts := []struct {
 		name string
 		want int64

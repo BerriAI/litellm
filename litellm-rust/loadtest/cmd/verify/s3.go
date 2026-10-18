@@ -15,8 +15,10 @@ import (
 // maxLogs bounds how many request logs one side's check downloads.
 const maxLogs = 20_000
 
-// s3Totals sums one side's request logs: one StandardLoggingPayload object per request.
+// s3Totals sums one side's request logs: one StandardLoggingPayload object per request, or one
+// Bifrost log row.
 type s3Totals struct {
+	bifrost    bool
 	Objects    int64
 	Read       int64
 	Success    int64
@@ -38,8 +40,8 @@ type listing struct {
 }
 
 // listLogs lists bucket objects under prefix (ListObjectsV2, no credentials: the bucket allows
-// anonymous reads) and reads up to maxLogs of them.
-func listLogs(bucket, prefix string) (*s3Totals, error) {
+// anonymous reads) and reads up to maxLogs of them, as Bifrost log rows when bifrost is set.
+func listLogs(bucket, prefix string, bifrost bool) (*s3Totals, error) {
 	client := &http.Client{Timeout: 60 * time.Second}
 	bucket = strings.TrimRight(bucket, "/")
 	var keys []string
@@ -74,7 +76,7 @@ func listLogs(bucket, prefix string) (*s3Totals, error) {
 		token = l.NextContinuationToken
 	}
 	sort.Strings(keys)
-	t := &s3Totals{Objects: int64(len(keys)), Fields: map[string]bool{}, Metadata: map[string]bool{}}
+	t := &s3Totals{bifrost: bifrost, Objects: int64(len(keys)), Fields: map[string]bool{}, Metadata: map[string]bool{}}
 	for i, key := range keys {
 		if i >= maxLogs {
 			break
@@ -110,6 +112,10 @@ func (t *s3Totals) add(raw []byte) error {
 	for k := range p {
 		t.Fields[k] = true
 	}
+	if t.bifrost {
+		t.addBifrost(p)
+		return nil
+	}
 	number := func(v any) float64 {
 		f, _ := v.(float64)
 		return f
@@ -135,6 +141,10 @@ func (t *s3Totals) add(raw []byte) error {
 }
 
 func checkLogs(r *report, side string, e expected, db dbTotals, t *s3Totals) {
+	if isBifrost(side) {
+		checkBifrostLogs(r, side, e, db, t)
+		return
+	}
 	ok := e.Total.Requests
 	exact(r, "S3 request logs", side, ok, t.Objects)
 	if t.Read < t.Objects {
