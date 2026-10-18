@@ -2096,15 +2096,16 @@ async def _responses_websocket_session(
         **_routing_hints_from_first_ws_frame(first_message),
     )
 
+    async def write_failure_row(exception: Exception) -> None:
+        await proxy_logging_obj.post_call_failure_hook(
+            user_api_key_dict=user_api_key_dict,
+            original_exception=exception,
+            request_data=dict(refused_turns.billed_on(routed_data)),
+        )
+
     def bill_socket_failure(exception: Exception) -> asyncio.Task[object]:
         return spawn_logging_task(
-            asyncio.get_running_loop(),
-            proxy_logging_obj.post_call_failure_hook(
-                user_api_key_dict=user_api_key_dict,
-                original_exception=exception,
-                request_data=dict(refused_turns.billed_on(routed_data)),
-            ),
-            task_name="Responses WebSocket failure row",
+            asyncio.get_running_loop(), write_failure_row(exception), task_name="Responses WebSocket failure row"
         )
 
     async def relay_and_bill_failure() -> asyncio.Task[object] | None:
