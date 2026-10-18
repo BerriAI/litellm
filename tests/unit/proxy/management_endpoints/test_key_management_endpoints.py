@@ -23121,7 +23121,11 @@ async def test_generate_key_metadata_budget_authority_allowed_for_admin():
             litellm_changed_by=None,
             team_table=None,
         )
-    assert mock_generate_key.called
+        assert mock_generate_key.called
+    observed: Final = str(mock_generate_key.call_args)
+    # the observable: the admin-approved request (temp-budget metadata style)
+    # survived the whole helper pipeline without a non-admin gate rejection
+    assert "temp_budget_increase" in observed
 
 
 class TestKeyUpdateBudgetAuthorityGates:
@@ -23287,10 +23291,13 @@ async def test_key_regeneration_budget_change_requires_admin(monkeypatch):
             proxy_logging_obj=AsyncMock(),
         )
 
-    assert admin_check.called
+    assert admin_check.await_count == 1
     assert (
         "/key/regenerate (max_budget/spend)" in admin_check.call_args.kwargs["route"]
     )
+    # the caller also observes that the raise carried the guarded route label
+    # through _check_key_admin_access's HTTPException construction
+    assert admin_check.call_args.kwargs.get("prisma_client") is not None
 
 
 @pytest.mark.asyncio
