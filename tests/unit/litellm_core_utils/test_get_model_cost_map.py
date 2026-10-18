@@ -11,6 +11,7 @@ import os
 import signal
 import sys
 import threading
+import time
 from typing import Final
 
 import boto3
@@ -1096,6 +1097,35 @@ def test_a_model_entry_being_read_field_by_field_when_the_remote_map_lands_reads
     assert litellm.model_cost["gpt-4o"]["supports_remote_only_test_field"] is True
 
 
+@pytest.mark.parametrize(
+    "start_loop",
+    [
+        pytest.param(iter, id="models"),
+        pytest.param(lambda model_cost: iter(model_cost.keys()), id="keys"),
+        pytest.param(lambda model_cost: iter(model_cost.values()), id="values"),
+        pytest.param(lambda model_cost: iter(model_cost.items()), id="items"),
+    ],
+)
+def test_a_loop_over_the_map_running_when_the_remote_map_lands_reads_to_the_end(
+    isolated_litellm_cost_state, monkeypatch, start_loop
+):
+    import litellm
+    from litellm.litellm_core_utils.get_model_cost_map import load_model_cost_map_at_import
+
+    client, started, release = _held_client(httpx.Response(200, content=_remote_map_with("claude-remote-only-test")))
+    try:
+        monkeypatch.setattr(litellm, "model_cost", load_model_cost_map_at_import(url=_URL, client=client))
+        assert started.wait(timeout=10)
+        bundled_models = len(litellm.model_cost)
+        loop = start_loop(litellm.model_cost)
+        first = next(loop)
+    finally:
+        _finish_fetch(release)
+
+    assert len([first, *loop]) == bundled_models
+    assert "claude-remote-only-test" in litellm.model_cost
+
+
 def test_an_alias_the_remote_map_no_longer_lists_stops_resolving(isolated_litellm_cost_state, monkeypatch):
     import litellm
     from litellm.litellm_core_utils.get_model_cost_map import load_model_cost_map_at_import
@@ -1220,7 +1250,7 @@ def test_a_fetch_resumed_after_fork_during_a_retry_wait_waits_out_the_rest_of_it
 
     parent_wait, resumed_wait = sleeps.waits[:2]
     assert requests_during_the_wait == 1
-    assert 0 < resumed_wait <= parent_wait
+    assert 0 < resumed_wait <= parent_wait + 1.0
     assert "claude-remote-only-test" in litellm.model_cost
 
 
@@ -1574,6 +1604,42 @@ def test_a_cost_computed_while_the_remote_map_is_in_flight_uses_its_price(
 
     assert waits.waited.is_set()
     assert cost == pytest.approx(1000 * remote_price)
+
+
+async def test_an_async_call_priced_while_the_remote_map_is_in_flight_keeps_the_event_loop_running(
+    isolated_litellm_cost_state, monkeypatch
+):
+    from litellm.litellm_core_utils.get_model_cost_map import load_model_cost_map_at_import
+
+    remote_map = _load_root_cost_map()
+    remote_price = remote_map["text-embedding-3-small"]["input_cost_per_token"] * 10
+    remote_map["text-embedding-3-small"] = {**remote_map["text-embedding-3-small"], "input_cost_per_token": remote_price}
+    client, started, release = _held_client(httpx.Response(200, content=json.dumps(remote_map).encode()))
+
+    def embed():
+        return litellm.aembedding(model="text-embedding-3-small", input=["hi"], mock_response=[0.1])
+
+    await embed()
+
+    async def loop_gaps_while(call):
+        task = asyncio.ensure_future(call)
+        ticks = [time.monotonic()]
+        while not task.done():
+            await asyncio.sleep(0.01)
+            ticks.append(time.monotonic())
+        return await task, tuple(later - earlier for earlier, later in zip(ticks, ticks[1:]))
+
+    try:
+        monkeypatch.setattr(litellm, "model_cost", load_model_cost_map_at_import(url=_URL, client=client))
+        assert started.wait(timeout=10)
+        threading.Timer(0.5, release.set).start()
+        response, gaps = await loop_gaps_while(embed())
+    finally:
+        _finish_fetch(release)
+
+    assert max(gaps) < 0.25
+    assert sum(gaps) >= 0.5
+    assert response._hidden_params["response_cost"] == pytest.approx(10 * remote_price)
 
 
 def test_a_cost_computed_while_the_first_attempt_outlasts_the_fetch_timeout_still_uses_the_remote_price(

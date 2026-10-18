@@ -4,7 +4,9 @@ import subprocess
 import sys
 import textwrap
 import threading
+import time
 from collections.abc import Iterator
+from queue import SimpleQueue
 from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
@@ -20,7 +22,7 @@ _CHILD_SECONDS: Final = 120
 
 _SCRIPT: Final = textwrap.dedent(
     """
-    import os, sys, threading
+    import os, sys, threading, time
     import litellm
     from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map_source_info
 
@@ -47,6 +49,18 @@ _SCRIPT: Final = textwrap.dedent(
             join_fetch()
             os._exit(0 if model in litellm.model_cost else 1)
         print(os.waitstatus_to_exitcode(os.waitpid(pid, 0)[1]), flush=True)
+    elif variant == "forks_during_retry_wait":
+        while get_model_cost_map_source_info()["fallback_reason"] == "Remote fetch in progress":
+            time.sleep(0.01)
+        children = []
+        for _ in range(6):
+            pid = os.fork()
+            if pid == 0:
+                join_fetch()
+                os._exit(0 if model in litellm.model_cost else 1)
+            children.append(pid)
+        join_fetch()
+        print(*(os.waitstatus_to_exitcode(os.waitpid(pid, 0)[1]) for pid in children), flush=True)
     else:
         raise SystemExit(f"unknown variant {variant}")
     """
@@ -144,3 +158,28 @@ def test_a_worker_forked_while_the_remote_map_is_in_flight_fetches_it_itself(
 
     assert child.after_import == "local Remote fetch in progress False"
     assert child.rest == ("0",)
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="needs os.fork")
+def test_workers_forked_during_a_rate_limited_retry_wait_spread_their_retries(tmp_path: Path) -> None:
+    body: Final = _remote_map()
+    arrivals: Final[SimpleQueue[float]] = SimpleQueue()
+
+    def respond(request: Request) -> Reply:
+        arrivals.put(time.monotonic())
+        if arrivals.qsize() == 1:
+            return Reply(status=429, headers={"Retry-After": "2"})
+        return Reply(body=body)
+
+    with wire_server(respond) as wire:
+        child: Final = _run_child(
+            _CostMapHost(wire=wire, first_request_answered=threading.Event()),
+            "forks_during_retry_wait",
+            tmp_path,
+            answer_after_import=False,
+        )
+    retries: Final = sorted(tuple(arrivals.get_nowait() for _ in range(arrivals.qsize()))[1:])
+
+    assert child.rest == ("0",) * 6
+    assert len(retries) == 7
+    assert retries[5] - retries[0] > 0.1

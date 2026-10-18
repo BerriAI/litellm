@@ -18,14 +18,19 @@ import sys
 import threading
 import time
 import urllib.parse
-from collections.abc import Awaitable, Callable, Mapping, MutableMapping
+from collections.abc import Awaitable, Callable, Iterator, Mapping, MutableMapping
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from importlib.resources import files
 from itertools import chain
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final, Protocol, cast  # noqa: TID251  # adapts boto3 and botocore's dynamic client responses
+from typing import (
+    TYPE_CHECKING,
+    Final,
+    Protocol,
+    cast,  # noqa: TID251  # adapts boto3 and botocore's dynamic client responses
+)
 
 import httpx
 from pydantic import ConfigDict, TypeAdapter
@@ -44,6 +49,9 @@ from litellm.constants import (
 from litellm.litellm_core_utils.fallback_generalizations import (
     set_fallback_generalizations,
 )
+
+if TYPE_CHECKING:
+    from _collections_abc import dict_items, dict_keys, dict_values
 
 FALLBACK_GENERALIZATIONS_KEY: Final = "fallback_generalizations"
 _CATALOG_ADAPTER: Final = TypeAdapter(dict[str, dict[str, object]])
@@ -576,6 +584,22 @@ class AliasedCostEntry(dict[str, object]):
         self.names: tuple[str, ...] = names
 
 
+class _SnapshotIteratingDict(dict[str, object]):
+    __slots__ = ()
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(tuple(super().keys()))
+
+    def keys(self) -> "dict_keys[str, object]":
+        return dict(super().items()).keys()
+
+    def values(self) -> "dict_values[str, object]":
+        return dict(super().items()).values()
+
+    def items(self) -> "dict_items[str, object]":
+        return dict(super().items()).items()
+
+
 def _alias_groups(alias_owners: Mapping[str, str]) -> Mapping[str, tuple[str, ...]]:
     return MappingProxyType(
         {
@@ -991,11 +1015,13 @@ def _resume_import_fetch_after_fork() -> None:
     if scheduled is None:
         _start_import_fetch(replace(pending, first_attempt_settled=threading.Event()))
         return
+    rng: Final = random.Random()
     _start_import_fetch(
         replace(
             pending,
+            rng=rng,
             first_attempt=scheduled.attempt,
-            first_attempt_at=scheduled.at,
+            first_attempt_at=scheduled.at + rng.uniform(0.0, 1.0),
             first_attempt_settled=_settled_event(),
         )
     )
@@ -1040,6 +1066,18 @@ def wait_for_pending_import_model_cost_map() -> None:
     if not pending.first_attempt_settled.is_set():
         verbose_logger.debug("LiteLLM: waiting for the remote map fetched at import")
     pending.first_attempt_settled.wait()
+
+
+def _import_fetch_may_block() -> bool:
+    pending: Final = _PendingImportFetch.fetch
+    return pending is not None and (
+        _PendingImportFetch.pid != os.getpid() or not pending.first_attempt_settled.is_set()
+    )
+
+
+async def await_pending_import_model_cost_map() -> None:
+    if _import_fetch_may_block():
+        await asyncio.to_thread(wait_for_pending_import_model_cost_map)
 
 
 def _settle_import_fetch_before_fork() -> None:
@@ -1088,7 +1126,7 @@ def load_model_cost_map_at_import(
     _cost_map_source_info.url = url
     _cost_map_source_info.is_env_forced = False
     _cost_map_source_info.fallback_reason = _IMPORT_FETCH_IN_PROGRESS
-    bundled: Final = _finalize_loaded_model_cost_map(local()).model_cost_map
+    bundled: Final = _SnapshotIteratingDict(_finalize_loaded_model_cost_map(local()).model_cost_map)
     _PendingImportFetch.next_attempt = None
     _start_import_fetch(
         _ImportFetch(
