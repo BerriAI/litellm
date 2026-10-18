@@ -2590,7 +2590,8 @@ def _vertex_dropped_anthropic_betas(
             status_code=500,
             detail=f"general_settings.{_VERTEX_DROPPED_ANTHROPIC_BETAS_SETTING} must be a list of strings",
         ) from error
-    return frozenset(beta.strip() for beta in configured or ())
+    listed_betas: Final = (beta.strip() for beta in ",".join(configured or ()).split(","))
+    return frozenset(beta for beta in listed_betas if beta)
 
 
 def _upstream_vertex_header_value(name: str, value: str, dropped_anthropic_betas: frozenset[str]) -> str | None:

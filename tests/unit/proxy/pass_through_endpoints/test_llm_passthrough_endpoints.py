@@ -447,14 +447,17 @@ def test_vertex_pass_through_drops_the_configured_anthropic_beta_before_calling_
 
 
 
-def test_vertex_pass_through_matches_a_configured_beta_written_with_spaces_around_it(
-    vertex_proxy: TestClient, respx_mock: "respx.MockRouter", monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    "configured",
+    [[f" {_VERTEX_REJECTED_BETA} "], [f"{_VERTEX_REJECTED_BETA},afk-mode-2026-01-31"]],
+    ids=["spaces-around-the-entry", "comma-separated-entry"],
+)
+def test_vertex_pass_through_matches_a_configured_beta_written_the_way_the_header_is(
+    vertex_proxy: TestClient, respx_mock: "respx.MockRouter", monkeypatch: pytest.MonkeyPatch, configured: list[str]
 ) -> None:
     from litellm.proxy import proxy_server
 
-    monkeypatch.setitem(
-        proxy_server.general_settings, "vertex_ai_pass_through_drop_anthropic_betas", [f" {_VERTEX_REJECTED_BETA} "]
-    )
+    monkeypatch.setitem(proxy_server.general_settings, "vertex_ai_pass_through_drop_anthropic_betas", configured)
     upstream: Final = respx_mock.post(f"https://aiplatform.googleapis.com/{_VERTEX_CALLER_PATH}").mock(
         return_value=httpx.Response(200, json=_VERTEX_CLAUDE_REPLY)
     )
