@@ -1848,7 +1848,7 @@ class TestWebSocketTurnAdmission:
     @pytest.mark.parametrize(
         ("guardrail_information", "billed"), [(({"guardrail_cost": 0.5},), True), ((), False)]
     )
-    async def test_native_relay_bills_the_guardrails_of_a_turn_the_deployment_refuses(
+    async def test_native_relay_bills_a_refused_turn_once_with_its_guardrail_cost(
         self, guardrail_information: tuple[Mapping[str, object], ...], billed: bool
     ):
         from unittest.mock import AsyncMock, call
@@ -1860,6 +1860,8 @@ class TestWebSocketTurnAdmission:
         bill_refusal: Final = AsyncMock()
         backend_ws: Final = MagicMock()
         backend_ws.send = AsyncMock()
+        backend_ws.close = AsyncMock()
+        backend_ws.recv = AsyncMock(side_effect=asyncio.Event().wait)
         handler: Final = _make_streaming(
             websocket=_ClientSocket(second, third),
             backend_ws=backend_ws,
@@ -1869,16 +1871,17 @@ class TestWebSocketTurnAdmission:
             turn_admission=AsyncMock(side_effect=[refusal, None]),
         )
 
-        await handler.client_to_backend()
+        close_time_failure: Final = await handler.bidirectional_forward()
 
         assert [json.loads(sent.args[0])["input"] for sent in backend_ws.send.await_args_list] == ["one", "three"]
         assert bill_refusal.await_args_list == ([call(refusal)] if billed else [])
+        assert close_time_failure is (None if billed else refusal)
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("guardrail_information", "billed"), [(({"guardrail_cost": 0.5},), True), ((), False)]
     )
-    async def test_managed_relay_bills_the_guardrails_of_a_turn_the_deployment_refuses(
+    async def test_managed_relay_bills_a_refused_turn_once_with_its_guardrail_cost(
         self,
         monkeypatch: pytest.MonkeyPatch,
         guardrail_information: tuple[Mapping[str, object], ...],
@@ -1923,10 +1926,11 @@ class TestWebSocketTurnAdmission:
             turn_admission=AsyncMock(side_effect=[refusal, None]),
         )
 
-        await handler.run()
+        close_time_failure: Final = await handler.run()
 
         assert answered == ["one", "three"]
         assert bill_refusal.await_args_list == ([call(refusal)] if billed else [])
+        assert close_time_failure is (None if billed else refusal)
 
     @pytest.mark.asyncio
     async def test_native_relay_answers_a_crashed_turn_check_with_a_500_and_keeps_serving(self):

@@ -2049,11 +2049,15 @@ ResponsesWsFrameGuard: TypeAlias = Callable[[str], Awaitable[GuardedResponsesWsF
 
 async def _reject_guarded_turn(
     websocket: ResponsesClientWebSocket, guarded: GuardedResponsesWsFrame, rejection: Exception
-) -> None:
+) -> Exception | None:
+    """Answers the refused turn and bills it once: on its own row when its guardrails recorded a cost, else it is
+    handed back for the connection's close-time failure row."""
     with contextlib.suppress(Exception):
         await websocket.send_text(_turn_rejection_frame(rejection))
-    if guarded.guardrail_information and guarded.bill_refusal is not None:
-        await guarded.bill_refusal(rejection)
+    if not guarded.guardrail_information or guarded.bill_refusal is None:
+        return rejection
+    await guarded.bill_refusal(rejection)
+    return None
 
 
 _RESPONSES_WS_TERMINAL_EVENT_TYPES: Final = _HISTORY_TERMINAL_EVENT_TYPES | _RESPONSES_WS_FAILURE_EVENT_TYPES
@@ -2721,9 +2725,9 @@ class ResponsesWebSocketStreaming:
         rejection: Final = await _admit_frame_turn(turn_admission, message)
         if rejection is None:
             return True
+        unbilled: Final = await _reject_guarded_turn(self.websocket, guarded, rejection)
         if self._failure is None:
-            self._failure = rejection
-        await _reject_guarded_turn(self.websocket, guarded, rejection)
+            self._failure = unbilled
         return False
 
     async def _send_turn_refusal(self, refusal: RateLimitError) -> None:
@@ -3297,9 +3301,9 @@ class ManagedResponsesWebSocketHandler:
             return
         rejection: Final = await _admit_frame_turn(turn_admission, raw_message)
         if rejection is not None:
+            unbilled: Final = await _reject_guarded_turn(self.websocket, guarded, rejection)
             if self._failure is None:
-                self._failure = rejection
-            await _reject_guarded_turn(self.websocket, guarded, rejection)
+                self._failure = unbilled
             return
         if guarded.pii_tokens:
             self._pii_tokens = {**self._pii_tokens, **guarded.pii_tokens}
