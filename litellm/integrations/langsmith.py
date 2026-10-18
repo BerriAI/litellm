@@ -138,30 +138,33 @@ class LangsmithLogger(CustomBatchLogger):
             "dotted_order": metadata.get("dotted_order", None),
         }
 
-    def _redact_metadata(self, metadata: dict) -> dict:
+    def _redact_metadata(self, metadata: dict[str, object]) -> dict[str, object]:
         # helper is shallow; also scrub nested requester_metadata and metadata
         # since LangSmith forwards both dicts into the run
-        redacted: Final = redact_user_api_key_info(metadata=dict(metadata))
+        redacted: Final[dict[str, object]] = redact_user_api_key_info(
+            metadata=dict(metadata)
+        )  # mutable-ok: scrubbed run metadata copy
         for nested_key in ("requester_metadata", "metadata"):
-            nested = redacted.get(nested_key)
+            nested: object = redacted.get(nested_key)
             if isinstance(nested, dict):
                 redacted[nested_key] = redact_user_api_key_info(metadata=nested)
         return redacted
 
-    def _build_extra_metadata(self, metadata: dict):
-        extra_metadata: Final = dict(metadata)
-        requester_metadata: Final = extra_metadata.get("requester_metadata")
-        if requester_metadata and isinstance(requester_metadata, dict):
+    def _build_extra_metadata(
+        self, metadata: dict[str, object]
+    ) -> dict[str, object]:  # mutable-ok: LangSmith extra metadata dict
+        extra_metadata: Final[dict[str, object]] = dict(metadata)  # mutable-ok: local copy mutated before redaction
+        requester_metadata: Final[object] = extra_metadata.get("requester_metadata")
+        if isinstance(requester_metadata, dict):
             for key in ("session_id", "thread_id", "conversation_id"):
                 if key in requester_metadata and key not in extra_metadata:
                     extra_metadata[key] = requester_metadata[key]
-            existing_run_metadata: Final = extra_metadata.get("metadata")
-            merged_run_metadata: Final = (
+            existing_run_metadata: Final[object] = extra_metadata.get("metadata")
+            extra_metadata["metadata"] = (
                 {**requester_metadata, **existing_run_metadata}
                 if isinstance(existing_run_metadata, dict)
                 else dict(requester_metadata)
             )
-            extra_metadata["metadata"] = merged_run_metadata
 
         return self._redact_metadata(extra_metadata)
 
