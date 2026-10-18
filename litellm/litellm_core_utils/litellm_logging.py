@@ -634,15 +634,15 @@ class Logging(LiteLLMLoggingBaseClass):
         self,
         model: str,
         messages,
-        stream,
+        stream: bool | None,
         call_type,
         start_time: datetime.datetime,
         litellm_call_id: str,
         function_id: str,
         litellm_trace_id: str | None = None,
         dynamic_input_callbacks: list[str | Callable | CustomLogger] | None = None,
-        dynamic_success_callbacks: list[str | Callable | CustomLogger] | None = None,
-        dynamic_async_success_callbacks: list[str | Callable | CustomLogger] | None = None,
+        dynamic_success_callbacks: list[str | Callable[..., object] | CustomLogger] | None = None,
+        dynamic_async_success_callbacks: list[str | Callable[..., object] | CustomLogger] | None = None,
         dynamic_failure_callbacks: list[str | Callable | CustomLogger] | None = None,
         dynamic_async_failure_callbacks: list[str | Callable | CustomLogger] | None = None,
         applied_guardrails: list[str] | None = None,
@@ -718,7 +718,9 @@ class Logging(LiteLLMLoggingBaseClass):
 
         # Initialize dynamic callbacks
         self.dynamic_input_callbacks: list[str | Callable | CustomLogger] | None = dynamic_input_callbacks
-        self.dynamic_success_callbacks: list[str | Callable | CustomLogger] | None = dynamic_success_callbacks
+        self.dynamic_success_callbacks: list[str | Callable[..., object] | CustomLogger] | None = (
+            dynamic_success_callbacks
+        )
         self.dynamic_async_success_callbacks: list[str | Callable[..., object] | CustomLogger] | None = (
             dynamic_async_success_callbacks
         )
@@ -786,6 +788,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.defer_async_logging: bool = False
         self.enqueue_deferred_logging: Callable[[], None] | None = None
         self._async_success_scheduled: bool = False
+        self._sync_success_scheduled: bool = False
         self.on_detached_stream_failure: Callable[[Exception], Awaitable[None]] | None = None
         self.shadow_eval_request_snapshot: GuardrailRequestSnapshot | None = None
 
@@ -2318,7 +2321,7 @@ class Logging(LiteLLMLoggingBaseClass):
             **kwargs,
         )
 
-        if not self._should_run_sync_callbacks_for_async_calls():
+        if not self.stream or not self._should_run_sync_callbacks_for_async_calls():
             return
 
         executor.submit(
@@ -2446,7 +2449,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self,
         event_type: Literal["async_success", "sync_success", "async_failure", "sync_failure"],
     ) -> None:
-        if self.stream is not None and self.stream is True and event_type in ["async_success", "sync_success"]:
+        if self.stream is True and event_type in ["async_success", "sync_success"]:
             """
             Ignore check on stream, as there can be multiple chunks
             """
@@ -2943,6 +2946,8 @@ class Logging(LiteLLMLoggingBaseClass):
         discarded as a duplicate of the in-progress create.
         """
         self.model_call_details.pop("has_logged_async_success", None)
+        self.model_call_details.pop("has_logged_sync_success", None)
+        self._sync_success_scheduled = False
         litellm_params = self.model_call_details.get("litellm_params")
         if not isinstance(litellm_params, dict):
             return
@@ -3131,6 +3136,11 @@ class Logging(LiteLLMLoggingBaseClass):
                 dynamic_success_callbacks=self.dynamic_success_callbacks,
                 global_callbacks=litellm.success_callback,
             )
+            delivery_callbacks: Final = (
+                self._get_completed_success_callbacks(asynchronous=False)
+                if for_async_request and not self.stream
+                else callbacks
+            )
 
             ## REDACT MESSAGES ##
             result = redact_message_input_output_from_logging(
@@ -3138,7 +3148,8 @@ class Logging(LiteLLMLoggingBaseClass):
                 result=result,
             )
             ## LOGGING HOOK ##
-            for callback in callbacks:
+            hook_callbacks: Final = tuple(dict.fromkeys((*callbacks, *delivery_callbacks)))
+            for callback in hook_callbacks:
                 if isinstance(callback, CustomGuardrail):
                     from litellm.types.guardrails import GuardrailEventHooks
 
@@ -3168,7 +3179,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
             call_details_view: Final = MappingProxyType[str, object](call_details)
             self.mark_logging_complete(event_type="sync_success")
-            for callback in callbacks:
+            for callback in delivery_callbacks:
                 try:
                     should_run = self.should_run_callback(
                         callback=callback,
@@ -3440,8 +3451,12 @@ class Logging(LiteLLMLoggingBaseClass):
                             )
                     if (
                         isinstance(callback, CustomLogger)
-                        and is_sync_request
-                        and not (for_async_request and callback in (self.dynamic_async_success_callbacks or ()))
+                        and (is_sync_request or (for_async_request and not self.stream))
+                        and not (
+                            for_async_request
+                            and self.stream
+                            and callback in (self.dynamic_async_success_callbacks or ())
+                        )
                         and self.call_type
                         != CallTypes.pass_through.value  # pass-through endpoints call async_log_success_event
                     ):  # custom logger class
@@ -3700,6 +3715,9 @@ class Logging(LiteLLMLoggingBaseClass):
             dynamic_success_callbacks=self.dynamic_async_success_callbacks,
             global_callbacks=litellm._async_success_callback,
         )
+        delivery_callbacks: Final = (
+            self._get_completed_success_callbacks(asynchronous=True) if not self.stream else callbacks
+        )
 
         result = redact_message_input_output_from_logging(
             model_call_details=(self.model_call_details if hasattr(self, "model_call_details") else {}),
@@ -3708,7 +3726,8 @@ class Logging(LiteLLMLoggingBaseClass):
 
         ## LOGGING HOOK ##
 
-        for callback in callbacks:
+        hook_callbacks: Final = tuple(dict.fromkeys((*callbacks, *delivery_callbacks)))
+        for callback in hook_callbacks:
             try:
                 if isinstance(callback, CustomGuardrail):
                     from litellm.types.guardrails import GuardrailEventHooks
@@ -3746,7 +3765,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
         self.mark_logging_complete(event_type="async_success")
 
-        for callback in callbacks:
+        for callback in delivery_callbacks:
             # check if callback can run for this request
             litellm_params = self.model_call_details.get("litellm_params", {})
             should_run = self.should_run_callback(
@@ -3881,6 +3900,13 @@ class Logging(LiteLLMLoggingBaseClass):
                     traceback.format_exc(),
                 )
                 self._handle_callback_failure(callback=callback)
+        if not self.stream:
+            try:
+                self.handle_sync_success_callbacks_for_async_calls(
+                    result=result, start_time=start_time, end_time=end_time, cache_hit=cache_hit
+                )
+            except RuntimeError:
+                verbose_logger.exception("Could not schedule synchronous success callbacks")
         await flush_post_call_redis_batches()
 
     def _handle_callback_failure(self, callback: object):
@@ -4304,6 +4330,10 @@ class Logging(LiteLLMLoggingBaseClass):
         if self._should_run_sync_callbacks_for_async_calls() is False:
             return
 
+        if not self.stream and self._sync_success_scheduled:
+            return
+        if not self.stream:
+            self._sync_success_scheduled = True
         executor.submit(
             self.success_handler,
             result,
@@ -4322,11 +4352,57 @@ class Logging(LiteLLMLoggingBaseClass):
     ) -> None:
         executor.submit(self.success_handler, result, start_time, end_time, cache_hit)
 
+    def _get_completed_success_callbacks(
+        self, *, asynchronous: bool
+    ) -> tuple[str | Callable[..., object] | CustomLogger, ...]:
+        sync_callbacks: Final = self.get_combined_callback_list(
+            self.dynamic_success_callbacks, litellm.success_callback
+        )
+        async_callbacks: Final = self.get_combined_callback_list(
+            self.dynamic_async_success_callbacks,
+            litellm._async_success_callback,  # pyright: ignore[reportPrivateUsage]  # shared logging registry
+        )
+        legacy_sync_callbacks: Final = self._remove_internal_litellm_callbacks(
+            self._remove_internal_custom_logger_callbacks(sync_callbacks)
+        )
+        selected: Final = async_callbacks if asynchronous else sync_callbacks
+        other: Final = sync_callbacks if asynchronous else async_callbacks
+        return tuple(
+            callback
+            for callback in self.get_combined_callback_list(selected, other)
+            if (
+                (
+                    (
+                        getattr(callback.async_log_success_event, "__func__", callback.async_log_success_event)
+                        is not CustomLogger.async_log_success_event
+                    )
+                    == asynchronous
+                    and (
+                        asynchronous
+                        or getattr(callback.log_success_event, "__func__", callback.log_success_event)
+                        is not CustomLogger.log_success_event
+                    )
+                )
+                if isinstance(callback, CustomLogger)
+                else callback in selected
+                and (
+                    asynchronous
+                    or (
+                        callback not in async_callbacks
+                        and callback in legacy_sync_callbacks
+                        and not (isinstance(callback, str) and callback in INTERNAL_CALLBACK_NAMES)
+                    )
+                )
+            )
+        )
+
     def _should_run_sync_callbacks_for_async_calls(self) -> bool:
         """
         Returns:
             - bool: True if sync callbacks should be run for async calls. eg. `langfuse`, `s3`
         """
+        if not self.stream:
+            return bool(self._get_completed_success_callbacks(asynchronous=False))
         _combined_sync_callbacks: Final = self.get_combined_callback_list(
             dynamic_success_callbacks=self.dynamic_success_callbacks,
             global_callbacks=litellm.success_callback,
@@ -4356,7 +4432,11 @@ class Logging(LiteLLMLoggingBaseClass):
         _filtered_failure_callbacks = self._remove_internal_litellm_callbacks(_filtered_failure_callbacks)
         return len(_filtered_failure_callbacks) > 0
 
-    def get_combined_callback_list(self, dynamic_success_callbacks: list | None, global_callbacks: list) -> list:
+    def get_combined_callback_list(
+        self,
+        dynamic_success_callbacks: list[str | Callable[..., object] | CustomLogger] | None,
+        global_callbacks: list[str | Callable[..., object] | CustomLogger],
+    ) -> list[str | Callable[..., object] | CustomLogger]:
         if dynamic_success_callbacks is None:
             return list(global_callbacks)
         return list(dict.fromkeys(dynamic_success_callbacks + global_callbacks))

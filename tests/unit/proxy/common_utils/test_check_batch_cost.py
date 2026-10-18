@@ -1651,10 +1651,9 @@ class TestCheckBatchCost:
             model_name="gpt-5-batch",
         )
         assert mock_hook.store_batch_output_file.await_count == 2
-        assert {
-            call.kwargs["model_name"]
-            for call in mock_hook.store_batch_output_file.await_args_list
-        } == {"gpt-5-batch"}
+        assert {call.kwargs["model_name"] for call in mock_hook.store_batch_output_file.await_args_list} == {
+            "gpt-5-batch"
+        }
         stored = {
             c.kwargs["provider_file_id"]: c.kwargs["unified_file_id"]
             for c in mock_hook.store_batch_output_file.call_args_list
@@ -2507,9 +2506,7 @@ class TestBatchCostAttribution:
     async def test_raw_cli_session_token_on_a_legacy_batch_row_is_not_treated_as_the_alias(self):
         instance = self._instance(key_row=None)
 
-        metadata = await instance.batch_metadata(
-            self._job(api_key="cli-session-Qm7xJ2kP9sLw4vT1nR8yAa"), "batch-1"
-        )
+        metadata = await instance.batch_metadata(self._job(api_key="cli-session-Qm7xJ2kP9sLw4vT1nR8yAa"), "batch-1")
 
         assert metadata.get("user_api_key_alias") is None
 
@@ -3686,9 +3683,7 @@ class TestBatchLineItemsFromThePoller:
         assert len(logger.payloads) == stored
 
     @pytest.mark.asyncio
-    async def test_a_batch_whose_output_file_is_gone_still_sends_its_error_lines_after_it_is_retired(
-        self, monkeypatch
-    ):
+    async def test_a_batch_whose_output_file_is_gone_still_sends_its_error_lines_after_it_is_retired(self, monkeypatch):
         import litellm
 
         journal: list = []
@@ -3788,7 +3783,6 @@ class TestBatchLineItemsFromThePoller:
         assert logger.payloads == []
         assert row.batch_processed is True
         assert f"so the line items of batch batch-456 (job {row.id}) were not stored" in caplog.text
-
 
     @pytest.mark.asyncio
     async def test_batches_store_their_lines_one_at_a_time_in_the_order_they_were_retired(self, monkeypatch):
@@ -4068,11 +4062,13 @@ class TestCreatorTurnedOffMessageLogging:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("kind", ["sync", "async", "custom", "overlapping", "general", "mixed", "executor_shutdown"])
+@pytest.mark.parametrize(
+    "kind", ["sync", "async", "custom", "overlapping", "general", "mixed", "sync_only", "executor_shutdown"]
+)
 @pytest.mark.parametrize("initialized", [False, True])
 @pytest.mark.parametrize("claimed", [False, True])
 async def test_batch_cost_reaches_configured_success_callbacks(
-    kind: Literal["sync", "async", "custom", "overlapping", "general", "mixed", "executor_shutdown"],
+    kind: Literal["sync", "async", "custom", "overlapping", "general", "mixed", "sync_only", "executor_shutdown"],
     initialized: bool,
     claimed: bool,
 ) -> None:
@@ -4117,7 +4113,13 @@ async def test_batch_cost_reaches_configured_success_callbacks(
         ) -> None:
             record(kwargs, response_obj, start_time, end_time, "custom")
 
-    callback: Final = BatchRecorder()
+    class SyncRecorder(CustomLogger):
+        def log_success_event(
+            self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+        ) -> None:
+            record(kwargs, response_obj, start_time, end_time, "custom")
+
+    callback: Final = SyncRecorder() if kind == "sync_only" else BatchRecorder()
     match kind:
         case "sync":
             litellm.logging_callback_manager.add_litellm_success_callback(record)
@@ -4126,7 +4128,7 @@ async def test_batch_cost_reaches_configured_success_callbacks(
         case "executor_shutdown":
             litellm.logging_callback_manager.add_litellm_success_callback(async_record)
             litellm.logging_callback_manager.add_litellm_success_callback(record)
-        case "custom" | "overlapping":
+        case "custom" | "overlapping" | "sync_only":
             litellm.logging_callback_manager.add_litellm_success_callback(callback)
             if kind == "overlapping":
                 litellm.logging_callback_manager.add_litellm_async_success_callback(callback)
@@ -4210,7 +4212,7 @@ async def test_batch_cost_reaches_configured_success_callbacks(
         ("custom", "function")
         if kind == "mixed"
         else ("custom",)
-        if kind in ("custom", "overlapping", "general")
+        if kind in ("custom", "overlapping", "general", "sync_only")
         else ("function",)
     )
     expected: Final = recipients if claimed else ()
