@@ -580,7 +580,7 @@ describe("Customers management", () => {
     await waitFor(() =>
       expect(post).toHaveBeenCalledExactlyOnceWith("/customer/update", {
         accessToken: "sk-test",
-        body: { user_id: activeCustomer.user_id, alias: "Updated Alice", models: [] },
+        body: { user_id: activeCustomer.user_id, alias: "Updated Alice" },
       }),
     );
     await waitFor(() =>
@@ -634,7 +634,7 @@ describe("Customers management", () => {
     await waitFor(() =>
       expect(post).toHaveBeenCalledExactlyOnceWith("/customer/update", {
         accessToken: "sk-test",
-        body: { user_id: activeCustomer.user_id, alias: "Updated Alice", models: [] },
+        body: { user_id: activeCustomer.user_id, alias: "Updated Alice" },
       }),
     );
   });
@@ -655,8 +655,6 @@ describe("Customers management", () => {
         accessToken: "sk-test",
         body: {
           user_id: activeCustomer.user_id,
-          alias: "Alice",
-          models: [],
           object_permission: {
             mcp_servers: ["no-mcp-servers"],
             mcp_access_groups: [],
@@ -868,7 +866,7 @@ describe("Customers management", () => {
     await waitFor(() =>
       expect(post).toHaveBeenCalledExactlyOnceWith("/customer/update", {
         accessToken: "sk-test",
-        body: { user_id: customer.user_id, alias: "Alice", models: [], max_budget: 25 },
+        body: { user_id: customer.user_id, max_budget: 25 },
       }),
     );
   });
@@ -921,7 +919,7 @@ describe("Customers management", () => {
     await waitFor(() =>
       expect(post).toHaveBeenCalledExactlyOnceWith("/customer/update", {
         accessToken: "sk-test",
-        body: { user_id: activeCustomer.user_id, alias: "Alice", models: [] },
+        body: { user_id: activeCustomer.user_id },
       }),
     );
   });
@@ -958,4 +956,116 @@ describe("Customers management", () => {
       });
     },
   );
+  it("keeps conflicting permission edits unsaved until Settings is reopened", async () => {
+    const refreshed: EndUser = {
+      ...activeCustomer,
+      object_permission: {
+        ...activeCustomer.object_permission!,
+        mcp_servers: ["server-1"],
+        mcp_access_groups: [],
+        mcp_toolsets: [],
+        mcp_tool_permissions: { "server-1": ["read_document"] },
+      },
+    };
+    const current = { customer: activeCustomer };
+    useQuery.mockImplementation((_method: string, path: string) => ({
+      data: path === "/customer/list" ? [current.customer] : current.customer,
+      isLoading: false,
+      isError: false,
+    }));
+    const user = userEvent.setup();
+    const view = renderWithProviders(
+      <>
+        <CustomersPanel />
+        <Toaster />
+      </>,
+      {
+        searchParams: "customer=alice%40example.test&edit=true",
+      },
+    );
+    const selectNoServers = async () => {
+      await user.click(await screen.findByLabelText("MCP Servers / Access Groups / Toolsets"));
+      await user.click(await screen.findByRole("option", { name: /No MCP Servers/ }));
+      await user.keyboard("{Escape}");
+    };
+    await selectNoServers();
+    current.customer = refreshed;
+    view.rerender(
+      <>
+        <CustomersPanel />
+        <Toaster />
+      </>,
+    );
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    expect(await screen.findByText(/Customer permissions or budget changed while editing/)).toBeInTheDocument();
+    expect(post).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    await user.click(screen.getByRole("button", { name: "Edit Settings" }));
+    await selectNoServers();
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledExactlyOnceWith("/customer/update", {
+        accessToken: "sk-test",
+        body: {
+          user_id: refreshed.user_id,
+          object_permission: {
+            mcp_servers: ["no-mcp-servers"],
+            mcp_access_groups: [],
+            mcp_toolsets: [],
+            mcp_tool_permissions: {},
+          },
+        },
+      }),
+    );
+  });
+
+  it("does not restore revoked permissions after an alias-only save and customer refresh", async () => {
+    const before: EndUser = {
+      ...activeCustomer,
+      models: ["old-model"],
+      allowed_model_region: "us",
+      default_model: "old-model",
+      budget_id: "old-budget",
+      object_permission: {
+        ...activeCustomer.object_permission!,
+        mcp_servers: ["server-1"],
+        mcp_access_groups: [],
+        mcp_toolsets: [],
+        mcp_tool_permissions: { "server-1": ["read_document"] },
+      },
+    };
+    const after: EndUser = {
+      ...before,
+      models: ["restricted-model"],
+      allowed_model_region: "eu",
+      default_model: "new-model",
+      budget_id: "new-budget",
+      object_permission: { ...before.object_permission!, mcp_servers: ["no-mcp-servers"], mcp_tool_permissions: {} },
+    };
+    let current = before;
+    useQuery.mockImplementation((_method: string, path: string) => ({
+      data: path === "/customer/list" ? [current] : current,
+      isLoading: false,
+      isError: false,
+    }));
+    fetchServers.mockResolvedValue([{ server_id: "server-1", server_name: "Research Server" }]);
+    listTools.mockResolvedValue({
+      error: false,
+      tools: [{ name: "read_document", description: "Read", inputSchema: {} }],
+    });
+    const user = userEvent.setup();
+    const view = renderWithProviders(<CustomersPanel />, { searchParams: "customer=alice%40example.test&edit=true" });
+    await screen.findByRole("radio", { name: "Flat List" });
+    fireEvent.change(screen.getByLabelText("Alias"), { target: { value: "Updated Alice" } });
+    current = after;
+    view.rerender(<CustomersPanel />);
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+    await waitFor(() => expect(post).toHaveBeenCalledOnce());
+    expect(post).toHaveBeenCalledExactlyOnceWith("/customer/update", {
+      accessToken: "sk-test",
+      body: { user_id: before.user_id, alias: "Updated Alice" },
+    });
+  });
 });

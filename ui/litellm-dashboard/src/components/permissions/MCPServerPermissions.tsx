@@ -165,7 +165,7 @@ export function MCPServerPermissions({
           {mergedItems.map((item, index) => {
             const toolsForServer = item.type === "server" ? getToolPermissionsFor(item.value) : undefined;
             const hasToolRestrictions = toolsForServer && toolsForServer.length > 0;
-            const allowsNoTools = toolsForServer?.length === 0;
+            const allowsNoTools = entityType === "customer" && toolsForServer?.length === 0;
             const isExpanded = expandedServers.has(item.value);
 
             return (

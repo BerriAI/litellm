@@ -60,15 +60,23 @@ export const toCustomerFormValues = (customer: EndUser | null): CustomerFormValu
   };
 };
 
+const stringsIdentity = (values: readonly string[]): string => JSON.stringify([...new Set(values)].sort());
+
 const optionalCustomerFields = (
   values: CustomerFormValues,
   existing: EndUser | null,
 ): Partial<UpdateCustomerRequest> => ({
-  ...(values.alias.trim() || existing?.alias ? { alias: values.alias.trim() } : {}),
-  ...(values.budget_id ? { budget_id: values.budget_id } : {}),
-  ...(values.max_budget.trim() ? { max_budget: Number(values.max_budget) } : {}),
-  ...(values.allowed_model_region ? { allowed_model_region: values.allowed_model_region } : {}),
-  ...(values.default_model.trim() ? { default_model: values.default_model.trim() } : {}),
+  ...(values.alias.trim() !== (existing?.alias ?? "") ? { alias: values.alias.trim() } : {}),
+  ...(values.budget_id && values.budget_id !== existing?.budget_id ? { budget_id: values.budget_id } : {}),
+  ...(values.max_budget.trim() && Number(values.max_budget) !== existing?.litellm_budget_table?.max_budget
+    ? { max_budget: Number(values.max_budget) }
+    : {}),
+  ...(values.allowed_model_region && values.allowed_model_region !== existing?.allowed_model_region
+    ? { allowed_model_region: values.allowed_model_region }
+    : {}),
+  ...(values.default_model.trim() && values.default_model.trim() !== existing?.default_model?.trim()
+    ? { default_model: values.default_model.trim() }
+    : {}),
 });
 
 export const buildCustomerPayload = (
@@ -81,9 +89,38 @@ export const buildCustomerPayload = (
   return {
     user_id: existing?.user_id ?? values.user_id.trim(),
     ...optionalCustomerFields(values, existing),
-    ...(existing || values.models.length > 0 ? { models: values.models } : {}),
+    ...(stringsIdentity(values.models) !== stringsIdentity(existing?.models ?? []) ? { models: values.models } : {}),
     ...(grant ? { object_permission: grant } : {}),
   };
+};
+
+const customerSecurityIdentity = (customer: EndUser): string => {
+  const grant = storedMcpGrant(customer);
+  const identity = {
+    models: stringsIdentity(customer.models ?? []),
+    allowed_model_region: customer.allowed_model_region ?? "",
+    default_model: customer.default_model ?? "",
+    budget_id: customer.budget_id ?? "",
+    max_budget: customer.litellm_budget_table?.max_budget ?? null,
+    mcp_servers: stringsIdentity(grant.mcp_servers),
+    mcp_access_groups: stringsIdentity(grant.mcp_access_groups),
+    mcp_toolsets: stringsIdentity(grant.mcp_toolsets),
+    mcp_tool_permissions: Object.keys(grant.mcp_tool_permissions)
+      .sort()
+      .map((key) => [key, stringsIdentity(grant.mcp_tool_permissions[key])]),
+  };
+  return JSON.stringify(identity);
+};
+
+export const hasCustomerEditConflict = (
+  payload: UpdateCustomerRequest,
+  baseline: EndUser | null,
+  current: EndUser | null,
+): boolean => {
+  if (!baseline || !current) return baseline !== current;
+  if (baseline.user_id !== current.user_id) return true;
+  const changesSecurity = Object.keys(payload).some((key) => key !== "user_id" && key !== "alias");
+  return changesSecurity && customerSecurityIdentity(baseline) !== customerSecurityIdentity(current);
 };
 
 export const directAndGroupServerIds = (grant: McpEntitlementUpdate, servers: MCPServer[]): ReadonlySet<string> => {

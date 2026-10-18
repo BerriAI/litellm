@@ -16,21 +16,15 @@ interface ModelsCellProps {
 
 const WILDCARD_MODEL = "all-proxy-models";
 
-const formatModel = (model: string, unrestrictedLabel: string): string => {
-  if (model === WILDCARD_MODEL || model === "*") {
-    return unrestrictedLabel;
+const formatModel = (model: string, unrestrictedLabel?: string): string => {
+  if (model === WILDCARD_MODEL || (model === "*" && unrestrictedLabel !== undefined)) {
+    return unrestrictedLabel ?? "All Proxy Models";
   }
   const name = getModelDisplayName(model);
   return name.length > 30 ? `${name.slice(0, 30)}...` : name;
 };
 
-export function ModelsCell({
-  models,
-  maxVisible = 3,
-  unrestrictedLabel = "All Proxy Models",
-  allowedRoutes,
-  keyType,
-}: ModelsCellProps) {
+export function ModelsCell({ models, maxVisible = 3, unrestrictedLabel, allowedRoutes, keyType }: ModelsCellProps) {
   if (!Array.isArray(models) || models.length === 0) {
     const scope = deriveKeyModelScope(allowedRoutes, keyType);
     if (!scope.hasModelAccess) {
@@ -45,7 +39,7 @@ export function ModelsCell({
         />
       );
     }
-    return <Badge variant="secondary">{unrestrictedLabel}</Badge>;
+    return <Badge variant="secondary">{unrestrictedLabel ?? "All Proxy Models"}</Badge>;
   }
 
   const visible = models.slice(0, maxVisible);
