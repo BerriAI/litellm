@@ -59,6 +59,12 @@ model_list:
       api_base: http://127.0.0.1:8191
       api_key: synthetic-agent-key
       aws_region_name: us-east-1
+  - model_name: bedrock/converse/global.anthropic.claude-sonnet-5-5
+    litellm_params:
+      model: bedrock/converse/global.anthropic.claude-sonnet-5-5
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-agent-key
+      aws_region_name: us-east-1
   - model_name: bedrock/converse/global.openai.gpt-5.6-sol
     litellm_params:
       model: bedrock/converse/global.openai.gpt-5.6-sol
