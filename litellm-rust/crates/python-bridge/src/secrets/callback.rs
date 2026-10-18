@@ -14,8 +14,7 @@ use pyo3::{
 use super::error::{external_error, read_error};
 
 const HANDLER_MODULE: &str = "litellm.secret_managers.secret_manager_handler";
-const ENVIRONMENT_FALLBACK_LOG: &str =
-    "Defaulting to os.environ value for key=%s. An exception occurred - %s.\n\n%s";
+const DIAGNOSTICS_MODULE: &str = "litellm.rust_bridge.host.diagnostics";
 
 /// A secret manager whose reads execute in Python: a custom manager, a legacy compatible
 /// client, or a manually assigned SDK client.
@@ -112,16 +111,9 @@ impl ExternalSecretManager for PythonSecretManager {
 }
 
 fn log_environment_fallback(py: Python<'_>, name: &str, error: &PyErr) -> PyResult<()> {
-    let traceback = py
-        .import("traceback")?
-        .call_method1("format_exception", (error.value(py),))?;
-    let traceback = "".into_pyobject(py)?.call_method1("join", (traceback,))?;
-    py.import("litellm._logging")?
-        .getattr("verbose_logger")?
-        .call_method1(
-            "error",
-            (ENVIRONMENT_FALLBACK_LOG, name, error.value(py), traceback),
-        )?;
+    py.import(DIAGNOSTICS_MODULE)?
+        .getattr("log_environment_fallback")?
+        .call1((name, error.value(py)))?;
     Ok(())
 }
 
@@ -139,7 +131,7 @@ mod tests {
 
     use litellm_host_python::PythonContext;
 
-    use super::{HANDLER_MODULE, PythonSecretManager, python_name};
+    use super::{DIAGNOSTICS_MODULE, HANDLER_MODULE, PythonSecretManager, python_name};
     use crate::secrets::python_error;
 
     /// `sys.modules` is interpreter-global, so tests that install or rely on the handler module
@@ -250,11 +242,22 @@ class Logger:
         self.calls.append(args)
 logging = types.ModuleType('litellm._logging')
 logging.verbose_logger = Logger()
-sys.modules.setdefault('litellm', types.ModuleType('litellm'))
+for module in ('litellm', 'litellm.rust_bridge', 'litellm.rust_bridge.host'):
+    sys.modules.setdefault(module, types.ModuleType(module))
 sys.modules.setdefault('litellm._logging', logging)
 ",
             None,
             None,
+        )
+        .unwrap();
+        pyo3::types::PyModule::from_code(
+            py,
+            &std::ffi::CString::new(include_str!(
+                "../../../../../litellm/rust_bridge/host/diagnostics.py"
+            ))
+            .unwrap(),
+            c"diagnostics.py",
+            &std::ffi::CString::new(DIAGNOSTICS_MODULE).unwrap(),
         )
         .unwrap();
         py.import("litellm._logging")

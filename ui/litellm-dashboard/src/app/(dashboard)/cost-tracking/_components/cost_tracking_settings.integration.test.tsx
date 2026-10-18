@@ -92,7 +92,21 @@ describe("CostTrackingSettings submit paths", () => {
 
     await waitFor(() => expect(stableDiscountCallbacks.handleAddProvider).toHaveBeenCalled());
     expect(stableDiscountCallbacks.handleAddProvider).toHaveBeenCalledTimes(1);
-    expect(stableDiscountCallbacks.handleAddProvider).toHaveBeenCalledWith("OpenAI", "5");
+    expect(stableDiscountCallbacks.handleAddProvider).toHaveBeenCalledWith("OpenAI", "5", "");
+  });
+
+  it("passes the model pattern through to the add handler", async () => {
+    const user = userEvent.setup();
+    await openDiscountModal(user);
+
+    await user.click(screen.getAllByRole("combobox")[0]);
+    await user.click((await screen.findAllByRole("option"))[0]);
+    fireEvent.change(screen.getByLabelText(/Model pattern/i), { target: { value: "claude-*" } });
+    fireEvent.change(screen.getByLabelText(/Discount Percentage/i), { target: { value: "20" } });
+    await user.click(submitDiscount());
+
+    await waitFor(() => expect(stableDiscountCallbacks.handleAddProvider).toHaveBeenCalled());
+    expect(stableDiscountCallbacks.handleAddProvider).toHaveBeenCalledWith("OpenAI", "20", "claude-*");
   });
 
   it("requests the margin exactly once per click", async () => {
@@ -127,7 +141,7 @@ describe("CostTrackingSettings submit paths", () => {
 
     await waitFor(() => expect(stableDiscountCallbacks.handleAddProvider).toHaveBeenCalled());
     expect(stableDiscountCallbacks.handleAddProvider).toHaveBeenCalledTimes(1);
-    expect(stableDiscountCallbacks.handleAddProvider).toHaveBeenCalledWith("OpenAI", "5");
+    expect(stableDiscountCallbacks.handleAddProvider).toHaveBeenCalledWith("OpenAI", "5", "");
   });
 
   it("requests the margin exactly once when Enter is pressed in the percentage field", async () => {

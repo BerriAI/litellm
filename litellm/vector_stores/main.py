@@ -307,9 +307,7 @@ async def asearch(
     embedding_executor: Final = _direct_vector_store_embedding_executor(
         kwargs.pop("_direct_vector_store_embedding_executor", None), router, kwargs
     )
-    local_vars: Final = {  # mutable-ok: exception logging requires a sanitized mutable snapshot
-        key: value for key, value in locals().items() if key != "embedding_executor"
-    }
+    local_vars: Final = {key: value for key, value in locals().items() if key != "embedding_executor"}
 
     try:
         loop: Final = asyncio.get_event_loop()
@@ -393,9 +391,7 @@ def search(
     embedding_executor: Final = _direct_vector_store_embedding_executor(
         kwargs.pop("_direct_vector_store_embedding_executor", None), router, kwargs
     )
-    local_vars: Final = {  # mutable-ok: exception logging requires a sanitized mutable snapshot
-        key: value for key, value in locals().items() if key != "embedding_executor"
-    }
+    local_vars: Final = {key: value for key, value in locals().items() if key != "embedding_executor"}
     try:
         litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)

@@ -79,11 +79,14 @@ async def anthropic_messages_with_mcp(
     from litellm.experimental_mcp_client.tools import (
         transform_mcp_tool_to_anthropic_tool,
     )
+    from litellm.llms.anthropic.pass_through.adapters.handler import request_safeguards_evaluator
+    from litellm.llms.anthropic.pass_through.messages.handler import proxy_classifies_tool_uses
+    from litellm.llms.anthropic.pass_through.safeguards import with_safeguard_results
     from litellm.responses.mcp.litellm_proxy_mcp_handler import (
         LiteLLM_Proxy_MCP_Handler,
     )
 
-    mcp_references, other_tools = await LiteLLM_Proxy_MCP_Handler._split_mcp_tools(tools)
+    mcp_references, other_tools = await LiteLLM_Proxy_MCP_Handler.split_mcp_tools(tools)
 
     if not mcp_references:
         return await _AnthropicMessagesCall(fn=litellm.anthropic_messages).fn(
@@ -100,7 +103,7 @@ async def anthropic_messages_with_mcp(
     (
         deduplicated_mcp_tools,
         tool_server_map,
-    ) = await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_without_openai_transform(
+    ) = await LiteLLM_Proxy_MCP_Handler.process_mcp_tools_without_openai_transform(
         context.user_api_key_auth,
         mcp_references,
         litellm_trace_id=context.litellm_trace_id,
@@ -114,7 +117,7 @@ async def anthropic_messages_with_mcp(
     )
     all_tools: Final = [*anthropic_tools, *(other_tools or ())]
 
-    should_auto_execute: Final = LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(
+    should_auto_execute: Final = LiteLLM_Proxy_MCP_Handler.should_auto_execute_tools(
         mcp_tools_with_litellm_proxy=mcp_references
     )
     stream: Final = bool(kwargs.pop("stream", False))
@@ -132,9 +135,18 @@ async def anthropic_messages_with_mcp(
             messages=list(messages), stream=stream, **base_call_args
         )
 
+    custom_llm_provider: Final = kwargs.get("custom_llm_provider")
+    classified_here: Final = proxy_classifies_tool_uses(
+        model, custom_llm_provider if isinstance(custom_llm_provider, str) else None, kwargs
+    )
+    loop_call_args: Final[Mapping[str, object]] = (
+        {key: value for key, value in base_call_args.items() if key != "safeguards"}
+        if classified_here
+        else base_call_args
+    )
     working_messages: Sequence[Mapping[str, object]] = tuple(messages)
     response: AnthropicMessagesResponse = await _AnthropicMessagesCall(fn=litellm.anthropic_messages).fn(
-        messages=list(working_messages), stream=False, **base_call_args
+        messages=list(working_messages), stream=False, **loop_call_args
     )
 
     for _ in range(MAX_MCP_TOOL_USE_ITERATIONS):
@@ -145,8 +157,9 @@ async def anthropic_messages_with_mcp(
         if not tool_use_blocks:
             break
 
-        tool_results = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+        tool_results = await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
             tool_server_map=tool_server_map,
+            served_tools=deduplicated_mcp_tools,
             tool_calls=list(tool_use_blocks),
             user_api_key_auth=context.user_api_key_auth,
             mcp_auth_header=context.mcp_auth_header,
@@ -170,7 +183,7 @@ async def anthropic_messages_with_mcp(
             _build_tool_result_message(tool_results),
         )
         response = await _AnthropicMessagesCall(fn=litellm.anthropic_messages).fn(
-            messages=list(working_messages), stream=False, **base_call_args
+            messages=list(working_messages), stream=False, **loop_call_args
         )
     else:
         verbose_logger.warning(
@@ -179,10 +192,15 @@ async def anthropic_messages_with_mcp(
             model,
         )
 
+    client_response: Final = (
+        await with_safeguard_results(response, request_safeguards_evaluator(kwargs, working_messages))
+        if classified_here
+        else response
+    )
     if stream:
         from litellm.llms.anthropic.pass_through.messages.fake_stream_iterator import (
             FakeAnthropicMessagesStreamIterator,
         )
 
-        return FakeAnthropicMessagesStreamIterator(response)
-    return response
+        return FakeAnthropicMessagesStreamIterator(client_response)
+    return client_response

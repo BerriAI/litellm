@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -34,8 +34,9 @@ from litellm.proxy.a2a.version_convert import (
     normalize_stream_event,
 )
 from litellm.proxy.agent_endpoints.databricks_oauth import (
-    DATABRICKS_OAUTH_PARAM,
-    resolve_databricks_app_auth_header,
+    AgentBackendAuth,
+    has_databricks_oauth,
+    resolve_databricks_backend_auth,
 )
 from litellm.proxy.agent_endpoints.utils import merge_agent_headers
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -78,6 +79,9 @@ _PASCAL_TO_WIRE: Final[Mapping[str, str]] = {
 }
 
 
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
 def _sse_event(payload: object) -> str:
     """Frame a JSON-RPC object as a single A2A SSE event (``data: <json>\\n\\n``)."""
     return f"data: {json.dumps(payload)}\n\n"
@@ -91,7 +95,7 @@ def _to_jsonrpc_object(chunk: object) -> object:
     """
     if isinstance(chunk, (str, bytes, bytearray)):
         try:
-            return json.loads(chunk)
+            return _DECODED_JSON.validate_python(json.loads(chunk))
         except (json.JSONDecodeError, UnicodeDecodeError):
             return chunk
     if hasattr(chunk, "model_dump"):
@@ -163,13 +167,17 @@ def _caller_identity_headers(user_api_key_dict: UserAPIKeyAuth) -> Mapping[str, 
     )
 
 
-async def _resolve_backend_auth_header(
+async def _resolve_backend_auth(
     litellm_params: dict[str, object],
     custom_llm_provider: object,
-) -> Mapping[str, str] | None:
-    if litellm_params.get(DATABRICKS_OAUTH_PARAM):
-        return await resolve_databricks_app_auth_header(litellm_params)
-    return await resolve_a2a_hop_auth_header(litellm_params, custom_llm_provider)
+) -> AgentBackendAuth:
+    databricks_auth: Final = await resolve_databricks_backend_auth(litellm_params)
+    if has_databricks_oauth(litellm_params):
+        return databricks_auth
+    return AgentBackendAuth(
+        litellm_params=databricks_auth.litellm_params,
+        header=await resolve_a2a_hop_auth_header(litellm_params, custom_llm_provider),
+    )
 
 
 def _forwarding_headers(
@@ -280,7 +288,7 @@ async def _a2a_sse_event_source(
     so the caller can relay them instead of breaking the stream.
     """
     from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-    from litellm.types.agents import _normalize_a2a_jsonrpc_response
+    from litellm.types.agents import normalize_a2a_jsonrpc_response
     from litellm.types.llms.custom_http import httpxSpecialProvider
 
     headers: Final = {
@@ -300,9 +308,9 @@ async def _a2a_sse_event_source(
             error_body: Final = await resp.aread()
             error_event: Mapping[str, object] | None = None
             try:
-                parsed: Final = json.loads(error_body)
+                parsed: Final = _DECODED_JSON.validate_python(json.loads(error_body))
                 if isinstance(parsed, dict) and "error" in parsed:
-                    error_event = _normalize_a2a_jsonrpc_response(parsed, request_id=request_id)
+                    error_event = normalize_a2a_jsonrpc_response(parsed, request_id=request_id)
             except Exception:
                 error_event = None
             yield error_event or {
@@ -671,7 +679,7 @@ async def invoke_agent_a2a(
     )
 
     body: dict[str, Any] = {}
-    request_data: dict[str, Any] = body
+    request_data: dict[str, object] = body
     try:
         body = await request.json()
         request_data = body
@@ -762,9 +770,7 @@ async def invoke_agent_a2a(
             body["metadata"] = {}
         body["metadata"]["agent_id"] = agent.agent_id
         body["metadata"]["model_group"] = f"a2a_agent/{agent_name}"
-        body["metadata"]["model_info"] = {  # mutable-ok: request hooks mutate metadata before JSON logging
-            "id": agent.agent_id
-        }
+        body["metadata"]["model_info"] = {"id": agent.agent_id}
         body["agent_id"] = agent.agent_id
 
         body.update(
@@ -818,6 +824,7 @@ async def invoke_agent_a2a(
                     if header_name:
                         dynamic_headers[header_name] = val
 
+        backend_auth: Final = await _resolve_backend_auth(litellm_params, custom_llm_provider)
         agent_extra_headers: Final = _forwarding_headers(
             caller_identity=caller_identity,
             request_data=data,
@@ -825,8 +832,9 @@ async def invoke_agent_a2a(
                 dynamic_headers=dynamic_headers or None,
                 static_headers=static_headers or None,
             ),
-            backend_auth_header=await _resolve_backend_auth_header(litellm_params, custom_llm_provider),
+            backend_auth_header=backend_auth.header,
         )
+        forwarded_litellm_params: Final = backend_auth.litellm_params
 
         # Merge agent-level guardrails into data so post_call_success_hook and
         # _handle_stream_message both pick them up.  A2A agents use model
@@ -866,12 +874,12 @@ async def invoke_agent_a2a(
             )
             # Defer spend-log until after post_call_success_hook so guardrail
             # results written by the unified_guardrail hook are captured.
-            logging_obj._defer_async_logging = True
+            logging_obj.defer_async_logging = True
             response = await asend_message(
                 model=f"a2a_agent/{agent_name}",
                 request=a2a_request,
                 api_base=agent_url,
-                litellm_params=litellm_params,
+                litellm_params=forwarded_litellm_params,
                 agent_id=agent.agent_id,
                 metadata=data.get("metadata", {}),
                 proxy_server_request=data.get("proxy_server_request"),
@@ -886,12 +894,12 @@ async def invoke_agent_a2a(
                     response=response,
                 )
             finally:
-                _enqueue_fn: Final = getattr(logging_obj, "_enqueue_deferred_logging", None)
+                _enqueue_fn: Final = getattr(logging_obj, "enqueue_deferred_logging", None)
                 if _enqueue_fn is not None:
-                    logging_obj._enqueue_deferred_logging = None
+                    logging_obj.enqueue_deferred_logging = None
                     _enqueue_fn()
 
-            response_dict: Final[dict[str, Any]] = (
+            response_dict: Final[dict[str, object]] = (
                 response.model_dump(mode="json", exclude_none=True)
                 if hasattr(response, "model_dump")
                 else response
@@ -911,7 +919,7 @@ async def invoke_agent_a2a(
                 api_base=agent_url,
                 request_id=request_id if request_id is not None else "",
                 params=params,
-                litellm_params=litellm_params,
+                litellm_params=forwarded_litellm_params,
                 agent_id=agent.agent_id,
                 metadata=data.get("metadata", {}),
                 proxy_server_request=data.get("proxy_server_request"),

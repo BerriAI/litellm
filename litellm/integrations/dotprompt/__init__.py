@@ -27,7 +27,7 @@ def set_global_prompt_directory(directory: str) -> None:
     litellm.global_prompt_directory = directory
 
 
-def _get_prompt_data_from_dotprompt_content(dotprompt_content: str) -> dict:
+def get_prompt_data_from_dotprompt_content(dotprompt_content: str) -> dict[str, object]:
     """
     Get the prompt data from the dotprompt content.
 
@@ -37,10 +37,13 @@ def _get_prompt_data_from_dotprompt_content(dotprompt_content: str) -> dict:
 
     # Parse the dotprompt content to extract frontmatter and content
     temp_manager: Final = PromptManager()
-    metadata, content = temp_manager._parse_frontmatter(dotprompt_content)
+    metadata, content = temp_manager.parse_frontmatter(dotprompt_content)
 
     # Convert to prompt_data format
     return {"content": content.strip(), "metadata": metadata}
+
+
+_get_prompt_data_from_dotprompt_content = get_prompt_data_from_dotprompt_content
 
 
 def prompt_initializer(litellm_params: "PromptLiteLLMParams", prompt_spec: "PromptSpec") -> "CustomPromptManagement":
@@ -60,7 +63,7 @@ def prompt_initializer(litellm_params: "PromptLiteLLMParams", prompt_spec: "Prom
     # Handle dotprompt_content from database
     dotprompt_content: Final = getattr(litellm_params, "dotprompt_content", None)
     if dotprompt_content and not prompt_data and not prompt_file:
-        prompt_data = _get_prompt_data_from_dotprompt_content(dotprompt_content)
+        prompt_data = get_prompt_data_from_dotprompt_content(dotprompt_content)
 
     from .prompt_manager import strip_version_suffix
 

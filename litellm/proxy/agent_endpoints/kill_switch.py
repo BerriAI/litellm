@@ -154,7 +154,7 @@ def default_kill_switch_http_client() -> KillSwitchHttpClient:
     return get_async_httpx_client(llm_provider=httpxSpecialProvider.AgentKillSwitch).client
 
 
-KillSwitchAuditLogWriter: TypeAlias = Callable[[LiteLLM_AuditLogs], Awaitable[None]]  # mutable-ok: Callable params
+KillSwitchAuditLogWriter: TypeAlias = Callable[[LiteLLM_AuditLogs], Awaitable[None]]
 
 
 def default_kill_switch_audit_log_writer() -> KillSwitchAuditLogWriter:

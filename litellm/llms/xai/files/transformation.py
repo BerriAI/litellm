@@ -10,13 +10,14 @@ from typing import Final
 
 import httpx
 from openai.types.file_deleted import FileDeleted
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.files.transformation import BaseFilesConfig, LiteLLMLoggingObj
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     CreateFileRequest,
     FileContentRequest,
@@ -43,7 +44,7 @@ class XAIMultipartUpload(TypedDict):
     purpose: ReadOnly[tuple[None, str]]
 
 
-class XAIFile(BaseModel):
+class XAIFile(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     id: str
@@ -54,14 +55,14 @@ class XAIFile(BaseModel):
     expires_at: int | None = None
 
 
-class XAIFileList(BaseModel):
+class XAIFileList(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     data: tuple[XAIFile, ...] = ()
     pagination_token: str | None = None
 
 
-class XAIFileDeleted(BaseModel):
+class XAIFileDeleted(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     id: str
@@ -126,7 +127,7 @@ class XAIFilesConfig(BaseFilesConfig):
     def get_supported_openai_params(
         self, model: str
     ) -> list[OpenAICreateFileRequestOptionalParams]:  # mutable-ok: BaseFilesConfig signature
-        return ["purpose"]  # mutable-ok: BaseFilesConfig signature
+        return ["purpose"]
 
     def map_openai_params(
         self,
@@ -153,7 +154,7 @@ class XAIFilesConfig(BaseFilesConfig):
             file=(filename, extracted["content"], content_type),
             purpose=(None, create_file_data.get("purpose") or _DEFAULT_PURPOSE),
         )
-        return dict(upload)  # mutable-ok: BaseFilesConfig signature
+        return dict(upload)
 
     def transform_create_file_response(
         self,
@@ -222,7 +223,7 @@ class XAIFilesConfig(BaseFilesConfig):
         logging_obj: LiteLLMLoggingObj,
         litellm_params: Mapping[str, object],
     ) -> list[OpenAIFileObject]:  # mutable-ok: BaseFilesConfig signature
-        return [  # mutable-ok: BaseFilesConfig signature
+        return [
             _to_openai_file_object(f)
             for f in XAIFileList.model_validate(raise_for_xai_status(raw_response).json()).data
         ]

@@ -6,9 +6,10 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-schema = ["dep:schemars"]
+schema = ["dep:schemars", "schemars/indexmap2"]
 
 [dependencies]
+indexmap = { version = "2.14.0", features = ["serde"] }
 macro_rules_attribute.workspace = true
 schemars = { workspace = true, optional = true }
 serde.workspace = true
