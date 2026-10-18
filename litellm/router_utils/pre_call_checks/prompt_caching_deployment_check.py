@@ -21,7 +21,11 @@ from litellm.litellm_core_utils.token_counter import offload_token_count
 from litellm.llms.bedrock.common_utils import bedrock_cache_point_ttl_supported, bedrock_capability_model
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import CallTypes, StandardLoggingPayload
-from litellm.utils import get_prompt_cache_min_tokens, is_prompt_caching_valid_prompt
+from litellm.utils import (
+    get_base_model_from_metadata,
+    get_prompt_cache_min_tokens,
+    is_prompt_caching_valid_prompt,
+)
 
 from ..prompt_caching_cache import PromptCachingCache
 
@@ -67,8 +71,11 @@ def _honors_one_hour_cache_ttl(
             if isinstance(model_info, Mapping)
             else None
         )
-        base_model: Final = litellm_params.get("base_model") or model_info_base_model
-        capability_model: Final = bedrock_capability_model(deployment_model, base_model)
+        base_model: Final = get_base_model_from_metadata({"litellm_params": litellm_params}) or model_info_base_model
+        capability_model: Final = bedrock_capability_model(
+            deployment_model,
+            base_model,
+        )
         return bedrock_cache_point_ttl_supported(capability_model, deployment_model)
     model_map_value: Final = standard_logging_object["model_map_information"]["model_map_value"]
     return model_map_value is not None and (model_map_value.get("cache_creation_input_token_cost_above_1hr") or 0) > 0

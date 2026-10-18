@@ -1,8 +1,9 @@
 import asyncio
+import copy
 import inspect
 import json
 import ssl
-from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Coroutine, Iterator, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Coroutine, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from functools import lru_cache, partial, reduce
 from types import MappingProxyType
@@ -469,6 +470,8 @@ async def _aiter_bytes_then_close(response: httpx.Response, *, chunk_size: int) 
 
 _DECODED_BODY_STALE_HEADERS: Final[frozenset[str]] = frozenset({"content-encoding", "content-length"})
 _OPTIONAL_PARAMS: Final = TypeAdapter(Mapping[str, object])
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object])
+_JSON_OBJECTS: Final = TypeAdapter(list[dict[str, object]])
 
 
 def _decoded_body_headers(response: httpx.Response) -> httpx.Headers:
@@ -2182,11 +2185,13 @@ class BaseLLMHTTPHandler:
         api_key: str | None,
         model: str,
         timeout: float | httpx.Timeout | None = None,
+        rebuild_without_native_output: Callable[[], Mapping[str, object]] | None = None,
     ) -> httpx.Response:
         max_attempts: Final = max(provider_config.max_retry_on_anthropic_messages_http_error, 1)
         litellm_params_dict: Final = dict(litellm_params)
         optional_params_dict: Final = dict(litellm_params)
-        for attempt_idx in range(max_attempts):
+        recovered_errors: tuple[httpx.HTTPStatusError, ...] = ()  # rebind-ok: a rebuilt body replays every recovery
+        while True:
             try:
                 response = await async_httpx_client.post(
                     url=request_url,
@@ -2199,39 +2204,53 @@ class BaseLLMHTTPHandler:
                 response.raise_for_status()
                 return response
             except httpx.HTTPStatusError as e:
-                hit_max_attempt = attempt_idx + 1 == max_attempts
+                rebuild_body = (
+                    rebuild_without_native_output
+                    if rebuild_without_native_output is not None
+                    and provider_config.should_retry_anthropic_messages_without_native_output(
+                        e=e, request_body=request_body, model=model
+                    )
+                    else None
+                )
+                hit_max_attempt = len(recovered_errors) + 1 == max_attempts
                 should_retry = provider_config.should_retry_anthropic_messages_on_http_error(
                     e=e, litellm_params=litellm_params_dict, request_body=request_body
                 )
-                if should_retry and not hit_max_attempt:
-                    if logging_obj.baseline_cache_context is not None:
-                        await logging_obj.invalidate_baseline_cache_estimate("retried_request")
+                if rebuild_body is None and (hit_max_attempt or not should_retry):
+                    raise self._handle_error(e=e, provider_config=provider_config)
+                if logging_obj.baseline_cache_context is not None:
+                    await logging_obj.invalidate_baseline_cache_estimate("retried_request")
+                if rebuild_body is not None:
+                    request_body.clear()
+                    request_body.update(rebuild_body())
+                    for recovered_error in recovered_errors:
+                        provider_config.transform_anthropic_messages_request_on_http_error(
+                            e=recovered_error, request_data=request_body
+                        )
+                else:
                     verbose_logger.debug(
                         "Anthropic /v1/messages: invalid thinking signature; "
                         "stripping thinking blocks and retrying (attempt %s/%s).",
-                        attempt_idx + 2,
+                        len(recovered_errors) + 2,
                         max_attempts,
                     )
                     provider_config.transform_anthropic_messages_request_on_http_error(e=e, request_data=request_body)
-                    headers, signed_json_body = await sign_request_off_loop_if_aws(
-                        provider_config,
-                        provider_config.sign_request,
-                        headers=headers,
-                        optional_params=optional_params_dict,
-                        request_data=request_body,
-                        api_base=request_url,
-                        api_key=api_key,
-                        stream=stream,
-                        fake_stream=False,
-                        model=model,
-                    )
-                    logging_obj.model_call_details.update(request_body)
-                    continue
-                raise self._handle_error(e=e, provider_config=provider_config)
+                    recovered_errors = (*recovered_errors, e)
+                headers, signed_json_body = await sign_request_off_loop_if_aws(
+                    provider_config,
+                    provider_config.sign_request,
+                    headers=headers,
+                    optional_params=optional_params_dict,
+                    request_data=request_body,
+                    api_base=request_url,
+                    api_key=api_key,
+                    stream=stream,
+                    fake_stream=False,
+                    model=model,
+                )
+                logging_obj.model_call_details.update(request_body)
             except Exception as e:
                 raise self._handle_error(e=e, provider_config=provider_config)
-
-        raise RuntimeError("unreachable: anthropic messages HTTP retry loop exited without return")
 
     @staticmethod
     def _resolve_anthropic_messages_timeout(
@@ -2239,24 +2258,25 @@ class BaseLLMHTTPHandler:
         stream: bool,
         custom_llm_provider: str,
     ) -> float | httpx.Timeout | None:
-        from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
+        from litellm.litellm_core_utils.completion_timeout import CompletionTimeout, StreamKind
         from litellm.litellm_core_utils.request_timeout_resolver import (
             get_configured_request_timeout,
         )
         from litellm.utils import supports_httpx_timeout
 
         stream_timeout: Final = litellm_params.get("stream_timeout") if stream else None
-        model_timeout: Final = stream_timeout if stream_timeout is not None else litellm_params.get("timeout")
+        model_timeout: Final = litellm_params.get("timeout")
         request_timeout: Final = litellm_params.get("request_timeout")
         global_timeout: Final = get_configured_request_timeout()
-        if model_timeout is None and request_timeout is None and global_timeout is None:
+        if stream_timeout is None and model_timeout is None and request_timeout is None and global_timeout is None:
             return None
         return CompletionTimeout.resolve(
             model_timeout,
-            {"request_timeout": request_timeout},
+            {"stream_timeout": stream_timeout, "request_timeout": request_timeout},
             custom_llm_provider,
             global_timeout=global_timeout,
             supports_httpx_timeout=supports_httpx_timeout,
+            stream_kind=StreamKind.LIVE if stream else StreamKind.NOT_STREAMED,
         )
 
     async def async_anthropic_messages_handler(
@@ -2354,6 +2374,24 @@ class BaseLLMHTTPHandler:
             custom_llm_provider=custom_llm_provider,
         )
 
+        native_output_fallback_params: Final = anthropic_messages_provider_config.native_output_fallback_litellm_params(
+            model=model,
+            anthropic_messages_optional_request_params=_OPTIONAL_PARAMS.validate_python(request_params),
+            litellm_params=litellm_params,
+        )
+        rebuild_without_native_output: Final = (
+            None
+            if native_output_fallback_params is None
+            else partial[Mapping[str, object]](
+                anthropic_messages_provider_config.transform_anthropic_messages_request,
+                model=model,
+                messages=copy.deepcopy(_JSON_OBJECTS.validate_python(messages)),
+                anthropic_messages_optional_request_params=copy.deepcopy(_JSON_OBJECT.validate_python(request_params)),
+                litellm_params=native_output_fallback_params,
+                headers=_JSON_OBJECT.validate_python(headers),
+            )
+        )
+
         # Prepare request body
         request_body: Final = anthropic_messages_provider_config.transform_anthropic_messages_request(
             model=model,
@@ -2410,6 +2448,13 @@ class BaseLLMHTTPHandler:
             },
         )
 
+        applied_timeout: Final = self._resolve_anthropic_messages_timeout(
+            litellm_params=litellm_params,
+            stream=stream or False,
+            custom_llm_provider=custom_llm_provider,
+        )
+        if applied_timeout is not None:
+            logging_obj.record_applied_timeout(applied_timeout)
         response: Final = await self._async_post_anthropic_messages_with_http_error_retry(
             async_httpx_client=async_httpx_client,
             request_url=request_url,
@@ -2422,11 +2467,8 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             api_key=api_key,
             model=model,
-            timeout=self._resolve_anthropic_messages_timeout(
-                litellm_params=litellm_params,
-                stream=stream or False,
-                custom_llm_provider=custom_llm_provider,
-            ),
+            timeout=applied_timeout,
+            rebuild_without_native_output=rebuild_without_native_output,
         )
 
         # used for logging + cost tracking

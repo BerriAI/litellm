@@ -6,7 +6,12 @@ import json
 from pathlib import Path
 from typing import Final
 
+from pydantic import TypeAdapter
+
 from litellm._logging import verbose_logger
+from litellm.types.utils import ProviderSpecificModelInfo
+
+_PROVIDER_INFO_ADAPTER: Final = TypeAdapter(ProviderSpecificModelInfo)
 
 
 class SimpleProviderConfig:
@@ -22,6 +27,9 @@ class SimpleProviderConfig:
         self.constraints = data.get("constraints", {})
         self.special_handling = data.get("special_handling", {})
         self.supported_endpoints = data.get("supported_endpoints", [])
+        self.provider_info: ProviderSpecificModelInfo = (
+            _PROVIDER_INFO_ADAPTER.validate_python(data["provider_info"]) if "provider_info" in data else {}
+        )
 
 
 class JSONProviderRegistry:
