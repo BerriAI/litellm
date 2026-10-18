@@ -265,6 +265,13 @@ class AmazonConverseConfig(BaseConfig):
         )
 
     @staticmethod
+    def adds_a_tool(optional_params: Mapping[str, object], messages: Sequence[object]) -> bool:
+        return any(
+            message_field(message_field(tool, "function"), "name") == RESPONSE_FORMAT_TOOL_NAME
+            for tool in parts_of(optional_params.get("tools"))
+        ) or ("tools" not in optional_params and AmazonConverseConfig._adds_a_dummy_tool(messages))
+
+    @staticmethod
     def _adds_a_dummy_tool(messages: Sequence[object]) -> bool:
         return (
             not litellm.bedrock_neutralize_orphaned_tool_blocks

@@ -25,6 +25,7 @@ def _cache(
     drop_params: bool = False,
     tool_config_cache_control: ChatCompletionCachedContent | None = None,
     route: ClaudeRoute = "anthropic",
+    adds_a_tool: bool = False,
     pairs_unanswered_tool_calls: bool = False,
 ) -> ClaudePromptCache | UnsupportedPromptCacheParam:
     return claude_prompt_cache(
@@ -35,6 +36,7 @@ def _cache(
         tool_history_as_text=False,
         tool_config_cache_control=tool_config_cache_control,
         route=route,
+        adds_a_tool=adds_a_tool,
         pairs_unanswered_tool_calls=pairs_unanswered_tool_calls,
     )
 
@@ -47,6 +49,7 @@ def _resolved(
     drop_params: bool = False,
     tool_config_cache_control: ChatCompletionCachedContent | None = None,
     route: ClaudeRoute = "anthropic",
+    adds_a_tool: bool = False,
     pairs_unanswered_tool_calls: bool = False,
 ) -> ClaudePromptCache:
     outcome: Final = _cache(
@@ -56,6 +59,7 @@ def _resolved(
         drop_params=drop_params,
         tool_config_cache_control=tool_config_cache_control,
         route=route,
+        adds_a_tool=adds_a_tool,
         pairs_unanswered_tool_calls=pairs_unanswered_tool_calls,
     )
     assert isinstance(outcome, ClaudePromptCache), outcome
@@ -1306,6 +1310,152 @@ def test_later_one_hour_breakpoints_are_shortened_only_when_converses_tool_confi
         {"role": "system", "content": [_part("s", cache_control=sent_later_mark)]},
         {"role": "user", "content": [_part("ask", cache_control=sent_later_mark)]},
     ]
+
+
+@pytest.mark.parametrize(
+    ("tools", "sent_tools"),
+    [
+        pytest.param(None, None, id="no-listed-tool"),
+        pytest.param(
+            [{"type": "web_fetch_20250910", "name": "web_fetch", "cache_control": _ONE_HOUR}],
+            [{"type": "web_fetch_20250910", "name": "web_fetch", "cache_control": _ONE_HOUR}],
+            id="a-listed-tool-converse-drops",
+        ),
+        pytest.param(
+            [{"type": "bash_20250124", "name": "bash", "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "1h"}}],
+            [{"type": "bash_20250124", "name": "bash", "cache_control": _EPHEMERAL}],
+            id="a-computer-use-tool-converse-sends-outside-the-tool-config",
+        ),
+    ],
+)
+def test_later_one_hour_breakpoints_are_shortened_after_the_five_minute_cache_point_beside_the_tool_converse_adds(
+    tools: list[object] | None, sent_tools: list[object] | None
+):
+    result: Final = _resolved(
+        [
+            {"role": "system", "content": [_part("s", prompt_cache_breakpoint=_EXPLICIT)]},
+            {"role": "user", "content": [_part("ask", prompt_cache_breakpoint={"mode": "explicit", "ttl": "1h"})]},
+        ],
+        tools,
+        drop_params=True,
+        tool_config_cache_control=ChatCompletionCachedContent(type="ephemeral", ttl="5m"),
+        route="converse",
+        adds_a_tool=True,
+    )
+
+    assert result.tools == (None if sent_tools is None else tuple(sent_tools))
+    assert list(result.messages) == [
+        {"role": "system", "content": [_part("s", cache_control=_EPHEMERAL)]},
+        {"role": "user", "content": [_part("ask", cache_control=_EPHEMERAL)]},
+    ]
+
+
+@pytest.mark.parametrize(
+    "tool_config",
+    [None, ChatCompletionCachedContent(type="ephemeral", ttl="5m")],
+    ids=["no-tool-config-cache-point", "five-minute-tool-config-cache-point"],
+)
+@pytest.mark.parametrize(
+    ("tool_breakpoint", "cache_point_ttl", "drop_params"),
+    [
+        pytest.param({"mode": "explicit", "ttl": "1h"}, "1h", False, id="same-ttl"),
+        pytest.param({"mode": "explicit", "ttl": "1h"}, "1h", True, id="same-ttl-with-drop-params"),
+        pytest.param(_EXPLICIT, "1h", False, id="breakpoint-without-a-ttl-before-an-hour"),
+        pytest.param(_EXPLICIT, "5m", False, id="breakpoint-without-a-ttl-before-five-minutes"),
+        pytest.param(_EXPLICIT, "5m", True, id="breakpoint-without-a-ttl-with-drop-params"),
+        pytest.param({"mode": "explicit", "ttl": "1h"}, "5m", True, id="another-ttl-with-drop-params"),
+    ],
+)
+def test_a_bedrock_cache_point_with_a_ttl_right_after_a_tool_breakpoint_is_the_only_one_sent_there(
+    tool_breakpoint: dict[str, object],
+    cache_point_ttl: str,
+    tool_config: ChatCompletionCachedContent | None,
+    drop_params: bool,
+):
+    cache_point: Final = {"cachePoint": {"type": "default", "ttl": cache_point_ttl}}
+
+    result: Final = _resolved(
+        [{"role": "user", "content": "hi"}],
+        [{"type": "function", "function": {"name": "t"}, "prompt_cache_breakpoint": tool_breakpoint}, cache_point],
+        drop_params=drop_params,
+        tool_config_cache_control=tool_config,
+        route="converse",
+    )
+
+    assert list(result.tools or ()) == [{"type": "function", "function": {"name": "t"}}, cache_point]
+
+
+@pytest.mark.parametrize(
+    "tool_config",
+    [None, ChatCompletionCachedContent(type="ephemeral", ttl="5m")],
+    ids=["no-tool-config-cache-point", "five-minute-tool-config-cache-point"],
+)
+@pytest.mark.parametrize(
+    ("tool_breakpoint", "sent_tool_mark", "cache_point_ttl"),
+    [
+        pytest.param({"mode": "explicit", "ttl": "1h"}, _ONE_HOUR, "5m", id="hour-before-five-minutes"),
+        pytest.param({"mode": "explicit", "ttl": "5m"}, _FIVE_MINUTES, "1h", id="five-minutes-before-an-hour"),
+    ],
+)
+def test_a_tool_breakpoint_and_a_bedrock_cache_point_right_after_it_with_another_ttl_are_both_sent_without_drop_params(
+    tool_breakpoint: dict[str, object],
+    sent_tool_mark: dict[str, object],
+    cache_point_ttl: str,
+    tool_config: ChatCompletionCachedContent | None,
+):
+    cache_point: Final = {"cachePoint": {"type": "default", "ttl": cache_point_ttl}}
+
+    result: Final = _resolved(
+        [{"role": "user", "content": "hi"}],
+        [{"type": "function", "function": {"name": "t"}, "prompt_cache_breakpoint": tool_breakpoint}, cache_point],
+        drop_params=False,
+        tool_config_cache_control=tool_config,
+        route="converse",
+    )
+
+    assert list(result.tools or ()) == [
+        {"type": "function", "function": {"name": "t"}, "cache_control": sent_tool_mark},
+        cache_point,
+    ]
+
+
+def test_a_bedrock_cache_point_with_a_ttl_after_a_tool_breakpoint_keeps_that_breakpoints_slot_of_the_four():
+    result: Final = _resolved(
+        [{"role": "user", "content": [_part(str(index), prompt_cache_breakpoint=_EXPLICIT) for index in range(4)]}],
+        [
+            {
+                "type": "function",
+                "function": {"name": "t"},
+                "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "1h"},
+            },
+            {"cachePoint": {"type": "default", "ttl": "1h"}},
+        ],
+        drop_params=True,
+        route="converse",
+    )
+
+    assert list(result.messages) == [
+        {
+            "role": "user",
+            "content": [_part("0"), *(_part(str(index), cache_control=_EPHEMERAL) for index in range(1, 4))],
+        }
+    ]
+
+
+def test_a_client_cache_control_on_a_tool_before_a_bedrock_cache_point_with_a_ttl_is_sent_as_written():
+    tools: Final = [
+        {"type": "function", "function": {"name": "t"}, "cache_control": _ONE_HOUR},
+        {"cachePoint": {"type": "default", "ttl": "1h"}},
+    ]
+
+    result: Final = _resolved(
+        [{"role": "user", "content": [_part("ask", prompt_cache_breakpoint=_EXPLICIT)]}],
+        tools,
+        drop_params=True,
+        route="converse",
+    )
+
+    assert list(result.tools or ()) == tools
 
 
 @pytest.mark.parametrize(

@@ -1302,6 +1302,39 @@ def test_a_five_minute_tool_config_cache_point_does_not_shorten_later_breakpoint
     )
 
 
+@pytest.mark.parametrize("response_format_args", _RESPONSE_FORMATS_CONVERSE_SENDS_AS_A_TOOL)
+def test_a_five_minute_tool_config_cache_point_after_the_response_format_tool_shortens_breakpoints_when_converse_drops_every_listed_tool(
+    respx_mock: respx.MockRouter, response_format_args: Mapping[str, object]
+):
+    route: Final = respx_mock.post(url__regex=_CONVERSE_ROUTE).respond(json=_CONVERSE_REPLY)
+
+    litellm.completion(
+        **{
+            "model": "bedrock/converse/us.anthropic.claude-opus-5-5",
+            "drop_params": True,
+            **_FAKE_AWS,
+            **response_format_args,
+        },
+        messages=[
+            {"role": "system", "content": [{"type": "text", "text": "sys", "prompt_cache_breakpoint": _BREAKPOINT}]},
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "hi", "prompt_cache_breakpoint": _ONE_HOUR_BREAKPOINT}],
+            },
+        ],
+        tools=[
+            {"type": "web_fetch_20250910", "name": "web_fetch", "cache_control": {"type": "ephemeral", "ttl": "1h"}}
+        ],
+        cache_control_injection_points=_FIVE_MINUTE_TOOL_CONFIG,
+    )
+
+    assert _converse_cache_point_places(json.loads(route.calls.last.request.content)) == (
+        ("tool", "5m"),
+        ("system", None),
+        ("message", None),
+    )
+
+
 @pytest.mark.parametrize(
     "system_tool_first", [True, False], ids=["system-tool-listed-first", "system-tool-listed-last"]
 )
@@ -1363,6 +1396,39 @@ def test_a_five_minute_tool_config_cache_point_is_not_sent_after_a_passed_throug
     )
 
 
+@pytest.mark.parametrize(
+    ("cache_point_ttl", "sent_later_ttl"), [("1h", "1h"), ("5m", None)], ids=["one-hour", "five-minutes"]
+)
+def test_a_passed_through_cache_point_with_a_ttl_behind_a_one_hour_tool_breakpoint_is_the_only_tool_cache_point_sent(
+    respx_mock: respx.MockRouter, cache_point_ttl: str, sent_later_ttl: str | None
+):
+    route: Final = respx_mock.post(url__regex=_CONVERSE_ROUTE).respond(json=_CONVERSE_REPLY)
+
+    litellm.completion(
+        model="bedrock/converse/us.anthropic.claude-opus-5-5",
+        messages=[
+            {"role": "system", "content": [{"type": "text", "text": "sys", "prompt_cache_breakpoint": _BREAKPOINT}]},
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "hi", "prompt_cache_breakpoint": _ONE_HOUR_BREAKPOINT}],
+            },
+        ],
+        tools=[
+            {**_WEATHER_TOOL, "prompt_cache_breakpoint": _ONE_HOUR_BREAKPOINT},
+            {"cachePoint": {"type": "default", "ttl": cache_point_ttl}},
+        ],
+        cache_control_injection_points=_FIVE_MINUTE_TOOL_CONFIG,
+        drop_params=True,
+        **_FAKE_AWS,
+    )
+
+    assert _converse_cache_point_places(json.loads(route.calls.last.request.content)) == (
+        ("tool", cache_point_ttl),
+        ("system", sent_later_ttl),
+        ("message", sent_later_ttl),
+    )
+
+
 def test_a_tool_config_cache_point_after_a_tool_mark_without_a_ttl_still_shortens_a_later_one_hour_breakpoint(
     respx_mock: respx.MockRouter,
 ):
@@ -1414,6 +1480,37 @@ def _sent_cache_ttls(body: Mapping[str, object]) -> tuple[str | None, ...]:
     blocks: Final = (*system, *chain.from_iterable(message["content"] for message in messages))
     marks: Final = tuple(block.get("cache_control") or block.get("cachePoint") for block in blocks)
     return tuple(mark.get("ttl") for mark in marks if mark is not None)
+
+
+@pytest.mark.parametrize(
+    ("model", "url", "credentials"),
+    [
+        pytest.param("anthropic/claude-opus-5-5", r"https://api\.anthropic\.com/v1/messages", {"api_key": "fake"}),
+        pytest.param("bedrock/invoke/us.anthropic.claude-opus-5-5", _INVOKE_ROUTE, _FAKE_AWS),
+    ],
+    ids=["anthropic", "bedrock-invoke"],
+)
+def test_a_five_minute_tool_config_cache_point_does_not_shorten_a_one_hour_breakpoint_on_a_route_that_never_sends_it(
+    respx_mock: respx.MockRouter, model: str, url: str, credentials: Mapping[str, str]
+):
+    route: Final = respx_mock.post(url__regex=url).respond(json=_CLAUDE_REPLY)
+
+    litellm.completion(
+        model=model,
+        messages=[
+            {"role": "system", "content": [{"type": "text", "text": "sys"}]},
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "hi", "prompt_cache_breakpoint": _ONE_HOUR_BREAKPOINT}],
+            },
+        ],
+        tools=[_WEATHER_TOOL],
+        cache_control_injection_points=_FIVE_MINUTE_TOOL_CONFIG,
+        drop_params=True,
+        **credentials,
+    )
+
+    assert _sent_cache_ttls(json.loads(route.calls.last.request.content)) == ("1h",)
 
 
 def test_a_string_additional_drop_params_on_bedrock_invoke_still_answers_unsupported_params_error(

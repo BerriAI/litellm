@@ -674,8 +674,7 @@ def _converse_tool_config_order(tools: Sequence[object], late_tools: frozenset[i
         for index, tool in enumerate(tools)
         if index not in late_tools and _in_converse_tool_config(_fields(tool) or {})
     )
-    system_tools: Final = tuple(index for index in sent if "systemTool" in (_fields(tools[index]) or {}))
-    return (*(index for index in sent if index not in system_tools), *system_tools)
+    return tuple(sorted(sent, key=lambda index: "systemTool" in (_fields(tools[index]) or {})))
 
 
 def _sets_a_ttl(cache_control: object) -> bool:
@@ -711,14 +710,28 @@ def _route_plan(
     drop_params: bool,
 ) -> _Plan:
     """Converse leaves out a ``tool_config`` cachePoint with a ttl that would join the ``tail`` of its tool config when
-    a cachePoint there sets a ttl too. That request is planned again with the tail's ttl kept in its place."""
+    a cachePoint there sets a ttl too. That request is planned again with the tail's ttl kept in its place. A passed
+    through cachePoint with a ttl takes the place of the translated mark on the tool just before it, which is not
+    sent, and of the ``tool_config`` cachePoint, which Bedrock joins to it, when that mark keeps its ttl or sets none,
+    or under ``drop_params``."""
+    passed_through: Final = next(filter(_sets_a_ttl, tail.cache_points), None)
+    covered: Final = next((mark for mark in marks if mark.path == tail.tool and mark.kind != "written"), None)
+    if (
+        passed_through is not None
+        and covered is not None
+        and (drop_params or covered.kind == "free" or covered.ttl == _ttl(passed_through))
+    ):
+        stand_in: Final = replace(covered, ttl=_ttl(passed_through), kind="written")
+        covered_plan: Final = _planned(
+            tuple(stand_in if mark is covered else mark for mark in marks if mark.path != _TOOL_CONFIG), drop_params
+        )
+        return replace(covered_plan, dropped=covered_plan.dropped | {covered.path})
     plan: Final = _planned(marks, drop_params)
     tool_mark: Final = (
         None
         if tail.tool is None
         else _planned_cache_control(plan, tail.tool, (_fields(tools[int(tail.tool[1])]) or {}).get("cache_control"))
     )
-    passed_through: Final = next(filter(_sets_a_ttl, tail.cache_points), None)
     tail_cache_control: Final = tool_mark if passed_through is None else passed_through
     if not (
         _sets_a_ttl(tail_cache_control)
@@ -759,13 +772,15 @@ def claude_prompt_cache(
     tool_history_as_text: bool,
     tool_config_cache_control: ChatCompletionCachedContent | None,
     route: ClaudeRoute,
+    adds_a_tool: bool,
     pairs_unanswered_tool_calls: bool,
 ) -> ClaudePromptCache | UnsupportedPromptCacheParam:
     """``prompt_cache_breakpoint`` marks renamed to ``cache_control``. A mark Claude cannot honor is reported unless
     ``drop_params``, which keeps what Claude can use and, when the request ends up with more than Claude's four
     breakpoints, drops the earliest translated ones. A request-level ``cache_control`` in ``params`` and the
     ``tool_config_cache_control`` cachePoint a route appends after the tools each take one of the four, unless Converse
-    leaves that cachePoint out, and marks on tool history a ``tool_history_as_text`` route flattens, marks on a tool the
+    leaves that cachePoint out or sends no tool in its tool config, counting the tool it adds itself when it
+    ``adds_a_tool``, and marks on tool history a ``tool_history_as_text`` route flattens, marks on a tool the
     ``route`` sends without one or under a tool's ``function`` on Converse, and marks on a tool_search call nobody
     answered, unless the route ``pairs_unanswered_tool_calls`` with a placeholder result, take none. A ``cache_control``
     on a ``namespace`` tool's member takes one off Converse and is never changed. A request carrying no breakpoint is
@@ -803,7 +818,7 @@ def claude_prompt_cache(
     unsent_call_ids: Final = frozenset() if pairs_unanswered_tool_calls else unanswered_tool_search_call_ids(messages)
     request_mark: Final = params.get("cache_control")
     tool_config_order: Final = _converse_tool_config_order(renamed_tools, late_tools)
-    sent_tool_config_cache_control: Final = tool_config_cache_control if tool_config_order or not listed_tools else None
+    sent_tool_config_cache_control: Final = tool_config_cache_control if tool_config_order or adds_a_tool else None
     placements: Final[tuple[tuple[_Path, object, _Kind], ...]] = (
         *(
             (path, block.get("cache_control"), _kind(path, block.get("cache_control"), translated))

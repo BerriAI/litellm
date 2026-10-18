@@ -868,6 +868,20 @@ _MARKED_TOOL: Final[dict[str, JsonValue]] = {**TOOL, "prompt_cache_breakpoint": 
             id="cache-point-with-five-minutes-listed-last",
         ),
         pytest.param(
+            [_MARKED_TOOL, {"cachePoint": {"type": "default", "ttl": "1h"}}],
+            True,
+            (Mark(_TOOL_LABEL, "1h"),),
+            "1h",
+            id="cache-point-with-an-hour-right-after-the-marked-tool",
+        ),
+        pytest.param(
+            [_MARKED_TOOL, {"cachePoint": {"type": "default", "ttl": "5m"}}],
+            True,
+            (Mark(_TOOL_LABEL, "5m"),),
+            None,
+            id="cache-point-with-five-minutes-right-after-the-marked-tool",
+        ),
+        pytest.param(
             [_MARKED_TOOL, {"cachePoint": {"type": "default"}}],
             True,
             (Mark(_TOOL_LABEL, "1h"), Mark("other", None)),
@@ -898,6 +912,60 @@ def test_a_five_minute_tool_config_cache_point_shortens_later_breakpoints_only_w
         *tool_marks,
         Mark(_label(SYSTEM), later_ttl),
         Mark(_label(final_text(marker)), later_ttl),
+    )
+
+
+@pytest.mark.parametrize(
+    ("tool_breakpoint", "cache_point_ttl"),
+    [
+        pytest.param(_ONE_HOUR_BREAKPOINT, "5m", id="hour-breakpoint-before-a-five-minute-cache-point"),
+        pytest.param(_FIVE_MINUTE_BREAKPOINT, "1h", id="five-minute-breakpoint-before-an-hour-cache-point"),
+    ],
+)
+def test_a_tool_breakpoint_before_a_cache_point_with_another_ttl_gets_bedrocks_400_without_drop_params(
+    gateway: Gateway, tool_breakpoint: dict[str, JsonValue], cache_point_ttl: str
+) -> None:
+    marker: Final = new_marker()
+    tools: Final[list[JsonValue]] = [
+        {**TOOL, "prompt_cache_breakpoint": tool_breakpoint},
+        {"cachePoint": {"type": "default", "ttl": cache_point_ttl}},
+    ]
+    with wire_server(lambda request: respond("bedrock_converse", request)) as wire, gateway.scenario() as scenario:
+        model: Final = deployment(gateway, scenario, wire, "bedrock_converse")
+        status, _, text = post_chat(gateway, chat_body(model, [_final(marker)], tools=tools))
+        request: Final = only_request(wire)
+    assert status == 400, text
+    assert "conflicts with the existing field ttl" in text, text
+    assert sent_marks("bedrock_converse", request) == (
+        Mark(_TOOL_LABEL, tool_breakpoint["ttl"]),
+        Mark("other", cache_point_ttl),
+    )
+
+
+def test_a_five_minute_tool_config_cache_point_after_the_response_format_tool_shortens_later_breakpoints(
+    gateway: Gateway,
+) -> None:
+    marker: Final = new_marker()
+    turns: Final[list[JsonValue]] = [
+        {"role": "system", "content": [_text(SYSTEM, prompt_cache_breakpoint=_EXPLICIT)]},
+        _final(marker, prompt_cache_breakpoint=_ONE_HOUR_BREAKPOINT),
+    ]
+    marks: Final = _marks_sent(
+        gateway,
+        "bedrock_converse",
+        lambda model: chat_body(
+            model,
+            turns,
+            tools=[{"type": "web_fetch_20250910", "name": "web_fetch", "cache_control": _ONE_HOUR}],
+            drop_params=True,
+            response_format=_JSON_SCHEMA,
+        ),
+        cache_control_injection_points=[{"location": "tool_config", "control": {"type": "ephemeral", "ttl": "5m"}}],
+    )
+    assert marks == (
+        Mark("tool:json_tool_call", "5m"),
+        Mark(_label(SYSTEM), None),
+        Mark(_label(final_text(marker)), None),
     )
 
 

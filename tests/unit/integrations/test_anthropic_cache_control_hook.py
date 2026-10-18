@@ -1286,6 +1286,7 @@ def _translated_for_claude(messages: list[AllMessageValues], modify_params: bool
         tool_history_as_text=False,
         tool_config_cache_control=None,
         route="anthropic",
+        adds_a_tool=False,
         pairs_unanswered_tool_calls=modify_params,
     )
     assert isinstance(outcome, ClaudePromptCache), outcome

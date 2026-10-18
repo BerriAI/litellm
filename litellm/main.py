@@ -1136,6 +1136,16 @@ def _claude_route(provider_config: BaseConfig | None, reaches_converse: bool) ->
     return "anthropic"
 
 
+def _converse_tools(converse_params: Mapping[str, object] | None, messages: Sequence[object]) -> tuple[bool, bool]:
+    """Whether Converse sends a tool in its tool config, and whether it adds one of its own there."""
+    if converse_params is None:
+        return False, False
+    return (
+        AmazonConverseConfig.sends_tools(converse_params, messages),
+        AmazonConverseConfig.adds_a_tool(converse_params, messages),
+    )
+
+
 def _listed_drop_params(additional_drop_params: object) -> tuple[str, ...]:
     if not isinstance(additional_drop_params, (list, tuple)):
         return ()
@@ -5763,18 +5773,16 @@ def completion(
             accepts_summary=provider_config is not None
             and provider_config.accepts_reasoning_summary_in_reasoning_effort,
         )
-        converse_sends_tools: Final = (
-            reaches_converse
-            and carries_prompt_cache_breakpoint(routed_messages, request_tools)
-            and AmazonConverseConfig.sends_tools(
-                _map_request_params(
-                    **{**request_param_args, "reasoning_effort": provider_reasoning_effort},
-                    model_info=validated_model_info,
-                    **non_default_params,
-                ),
-                routed_messages,
+        converse_params: Final = (
+            _map_request_params(
+                **{**request_param_args, "reasoning_effort": provider_reasoning_effort},
+                model_info=validated_model_info,
+                **non_default_params,
             )
+            if reaches_converse and carries_prompt_cache_breakpoint(routed_messages, request_tools)
+            else None
         )
+        converse_sends_tools, converse_adds_a_tool = _converse_tools(converse_params, routed_messages)
         claude_cache: Final = (
             resolved_claude_prompt_cache(
                 claude_prompt_cache(
@@ -5792,6 +5800,7 @@ def completion(
                         else None
                     ),
                     route=_claude_route(provider_config, reaches_converse),
+                    adds_a_tool=converse_adds_a_tool,
                     pairs_unanswered_tool_calls=litellm.modify_params is True,
                 ),
                 model=model,
