@@ -345,6 +345,7 @@ class TestTheNormalizedTierIsTheTierSent:
             ("azure_ai/gpt-6-astra", "azure_ai"),
             ("gpt-6-astra", "azure"),
             ("us/gpt-6-astra", "azure"),
+            ("eu/gpt-6-astra", "azure"),
         ],
     )
     def test_an_azure_hosted_astra_deployment_drops_to_the_tier_its_chat_route_accepts(

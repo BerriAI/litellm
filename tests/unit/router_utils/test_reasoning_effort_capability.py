@@ -395,6 +395,7 @@ class TestGpt6AstraAdvertisesItsDocumentedLevels:
         [
             ("azure/gpt-6-astra", "azure"),
             ("azure/us/gpt-6-astra", "azure"),
+            ("azure/eu/gpt-6-astra", "azure"),
             ("azure_ai/gpt-6-astra", "azure_ai"),
         ],
     )

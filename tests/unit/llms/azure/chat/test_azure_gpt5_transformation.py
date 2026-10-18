@@ -405,7 +405,7 @@ def _azure_chat_row_forwards(row: dict, level: str) -> bool:
     return flag is True if level in ("xhigh", "none") else flag is not False
 
 
-@pytest.mark.parametrize("model", ["azure/gpt-6-astra", "azure/us/gpt-6-astra"])
+@pytest.mark.parametrize("model", ["azure/gpt-6-astra", "azure/us/gpt-6-astra", "azure/eu/gpt-6-astra"])
 @pytest.mark.parametrize("level", ["none", "minimal", "low", "medium", "high", "xhigh", "max"])
 def test_azure_gpt6_astra_forwards_exactly_the_effort_levels_its_map_row_allows(
     config: AzureOpenAIGPT5Config, model: str, level: str
@@ -444,13 +444,14 @@ def test_azure_gpt6_astra_forwards_exactly_the_effort_levels_its_map_row_allows(
             )
 
 
-def test_azure_gpt6_astra_row_turns_none_and_minimal_off():
+@pytest.mark.parametrize("model", ["azure/gpt-6-astra", "azure/us/gpt-6-astra", "azure/eu/gpt-6-astra"])
+def test_azure_gpt6_astra_row_turns_none_and_minimal_off(model: str):
     """Pinned on purpose so the row-derived test above cannot go vacuous: a Foundry gpt-6-astra
     deployment refused none on chat and on Responses on 2026-10-01 (400 unsupported_value naming
     low, medium, high, xhigh), and minimal the same way; max it refused on chat while honoring it
     on Responses, so the route-blind flag stays off. When Azure adds a level, flip the row and
     this assertion together."""
-    row = litellm.model_cost["azure/gpt-6-astra"]
+    row = litellm.model_cost[model]
     assert row["supports_none_reasoning_effort"] is False
     assert row["supports_minimal_reasoning_effort"] is False
     assert row["supports_max_reasoning_effort"] is False
