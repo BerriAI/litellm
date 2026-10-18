@@ -953,6 +953,60 @@ def test_a_tool_breakpoint_before_a_cache_point_with_another_ttl_gets_bedrocks_4
     )
 
 
+@pytest.mark.parametrize(
+    ("cache_point", "cache_point_ttl"),
+    (
+        pytest.param({"type": "default"}, None, id="cache-point-without-a-ttl"),
+        pytest.param({"type": "default", "ttl": "1h"}, "1h", id="cache-point-with-an-hour"),
+    ),
+)
+@pytest.mark.parametrize(
+    ("deployment_fields", "breakpoints", "tool_config_marks", "marked_parts"),
+    (
+        pytest.param({}, 4, (), 3, id="no-tool-config-cache-point"),
+        pytest.param(
+            {"cache_control_injection_points": [{"location": "tool_config", "control": {"type": "ephemeral"}}]},
+            3,
+            (Mark("tool:get_time", None),),
+            2,
+            id="tool-config-cache-point",
+        ),
+    ),
+)
+def test_a_cache_point_between_two_unmarked_tools_takes_one_of_the_four_slots_under_drop_params(
+    gateway: Gateway,
+    cache_point: dict[str, JsonValue],
+    cache_point_ttl: str | None,
+    deployment_fields: dict[str, JsonValue],
+    breakpoints: int,
+    tool_config_marks: tuple[Mark, ...],
+    marked_parts: int,
+) -> None:
+    marker: Final = new_marker()
+    parts: Final = (*_NOTES, final_text(marker))
+    unmarked: Final = len(parts) - breakpoints
+    turns: Final[list[JsonValue]] = [
+        {
+            "role": "user",
+            "content": [
+                *(_text(part) for part in parts[:unmarked]),
+                *(_text(part, prompt_cache_breakpoint=_EXPLICIT) for part in parts[unmarked:]),
+            ],
+        }
+    ]
+    marks: Final = _marks_sent(
+        gateway,
+        "bedrock_converse",
+        lambda model: chat_body(model, turns, tools=[TOOL, {"cachePoint": cache_point}, _TIME_TOOL], drop_params=True),
+        **deployment_fields,
+    )
+    assert marks == (
+        Mark(_TOOL_LABEL, cache_point_ttl),
+        *tool_config_marks,
+        *(Mark(_label(part), None) for part in parts[len(parts) - marked_parts :]),
+    )
+
+
 def test_a_five_minute_tool_config_cache_point_after_the_response_format_tool_shortens_later_breakpoints(
     gateway: Gateway,
 ) -> None:

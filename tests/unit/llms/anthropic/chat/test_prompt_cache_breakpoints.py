@@ -1529,6 +1529,118 @@ def test_a_run_of_bedrock_cache_points_after_a_tool_breakpoint_stands_in_for_it_
     assert list(result.tools or ()) == [{"type": "function", "function": {"name": "t"}}, *cache_points, *later_tools]
 
 
+@pytest.mark.parametrize("cache_point", [{"type": "default"}, {"type": "default", "ttl": "1h"}], ids=["no-ttl", "hour"])
+@pytest.mark.parametrize(
+    ("later_tools", "tool_config", "marked_parts"),
+    [
+        pytest.param((), None, 3, id="cache-point-ends-the-tools"),
+        pytest.param((), ChatCompletionCachedContent(type="ephemeral"), 3, id="cache-point-joins-the-tool-config-one"),
+        pytest.param(({"type": "function", "function": {"name": "u"}},), None, 3, id="cache-point-between-two-tools"),
+        pytest.param(
+            ({"type": "function", "function": {"name": "u"}},),
+            ChatCompletionCachedContent(type="ephemeral"),
+            2,
+            id="cache-point-and-tool-config-one-apart",
+        ),
+    ],
+)
+def test_a_bedrock_cache_point_after_an_unmarked_tool_takes_one_of_the_four_slots(
+    cache_point: dict[str, object],
+    later_tools: tuple[dict[str, object], ...],
+    tool_config: ChatCompletionCachedContent | None,
+    marked_parts: int,
+):
+    result: Final = _resolved(
+        [{"role": "user", "content": [_part(str(index), prompt_cache_breakpoint=_EXPLICIT) for index in range(4)]}],
+        [{"type": "function", "function": {"name": "t"}}, {"cachePoint": cache_point}, *later_tools],
+        drop_params=True,
+        tool_config_cache_control=tool_config,
+        route="converse",
+    )
+
+    assert list(result.messages) == [
+        {
+            "role": "user",
+            "content": [
+                *(_part(str(index)) for index in range(4 - marked_parts)),
+                *(_part(str(index), cache_control=_EPHEMERAL) for index in range(4 - marked_parts, 4)),
+            ],
+        }
+    ]
+
+
+@_LATER_TOOLS
+def test_a_tool_breakpoint_bedrock_joins_to_a_cache_point_without_a_ttl_is_never_the_one_dropped(
+    later_tools: tuple[dict[str, object], ...],
+):
+    cache_point: Final = {"cachePoint": {"type": "default"}}
+
+    result: Final = _resolved(
+        [{"role": "user", "content": [_part(str(index), prompt_cache_breakpoint=_EXPLICIT) for index in range(4)]}],
+        [
+            {
+                "type": "function",
+                "function": {"name": "t"},
+                "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "1h"},
+            },
+            cache_point,
+            *later_tools,
+        ],
+        drop_params=True,
+        route="converse",
+    )
+
+    assert list(result.tools or ()) == [
+        {"type": "function", "function": {"name": "t"}, "cache_control": _ONE_HOUR},
+        cache_point,
+        *later_tools,
+    ]
+    assert list(result.messages) == [
+        {
+            "role": "user",
+            "content": [_part("0"), *(_part(str(index), cache_control=_EPHEMERAL) for index in range(1, 4))],
+        }
+    ]
+
+
+@pytest.mark.parametrize("drop_params", [False, True])
+def test_a_breakpoint_without_a_ttl_before_a_bedrock_cache_point_with_an_hour_takes_the_hour(drop_params: bool):
+    later_tools: Final = [
+        {"type": "function", "function": {"name": "u"}},
+        {"cachePoint": {"type": "default", "ttl": "1h"}},
+    ]
+
+    result: Final = _resolved(
+        [{"role": "user", "content": "hi"}],
+        [{"type": "function", "function": {"name": "t"}, "prompt_cache_breakpoint": _EXPLICIT}, *later_tools],
+        drop_params=drop_params,
+        route="converse",
+    )
+
+    assert list(result.tools or ()) == [
+        {"type": "function", "function": {"name": "t"}, "cache_control": _ONE_HOUR},
+        *later_tools,
+    ]
+
+
+def test_an_hour_breakpoint_after_a_bedrock_cache_point_without_a_ttl_goes_out_at_five_minutes_under_drop_params():
+    tools: Final = [
+        {"type": "function", "function": {"name": "t"}},
+        {"cachePoint": {"type": "default"}},
+        {"type": "function", "function": {"name": "u"}},
+    ]
+
+    result: Final = _resolved(
+        [{"role": "user", "content": [_part("hi", prompt_cache_breakpoint={"mode": "explicit", "ttl": "1h"})]}],
+        tools,
+        drop_params=True,
+        route="converse",
+    )
+
+    assert list(result.tools or ()) == tools
+    assert list(result.messages) == [{"role": "user", "content": [_part("hi", cache_control=_EPHEMERAL)]}]
+
+
 @_LATER_TOOLS
 def test_a_client_cache_control_on_a_tool_before_a_bedrock_cache_point_with_a_ttl_is_sent_as_written(
     later_tools: tuple[dict[str, object], ...],

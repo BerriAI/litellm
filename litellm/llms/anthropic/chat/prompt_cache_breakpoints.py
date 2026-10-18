@@ -61,6 +61,7 @@ class _Placed:
     kind: _Kind
     first_read: tuple[int, ...]
     last_read: tuple[int, ...]
+    joins_a_cache_point: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -637,7 +638,7 @@ def _route_marks(
 
 
 def _droppable(mark: _Placed) -> bool:
-    return mark.kind != "written" and mark.path != _TOOL_CONFIG
+    return mark.kind != "written" and mark.path != _TOOL_CONFIG and not mark.joins_a_cache_point
 
 
 def _planned(marks: Sequence[_Placed], drop_params: bool) -> _Plan:
@@ -668,6 +669,10 @@ def _in_converse_tool_config(tool: _Fields) -> bool:
     return "systemTool" in tool or "toolSpec" in tool or "cachePoint" in tool or _converse_sends_tool_mark(tool)
 
 
+def _is_cache_point(tool: object) -> bool:
+    return "cachePoint" in (_fields(tool) or {})
+
+
 def _converse_tool_config_order(tools: Sequence[object], late_tools: frozenset[int]) -> tuple[int, ...]:
     sent: Final = tuple(
         index
@@ -694,7 +699,7 @@ class _ToolConfigTail:
 def _tool_config_tail(tools: Sequence[object], order: Sequence[int]) -> _ToolConfigTail:
     """The run of cachePoints that ends Converse's tool config: the ones the request passes through last, and the
     mark of the tool just before them."""
-    cache_points: Final = tuple(takewhile(lambda index: "cachePoint" in (_fields(tools[index]) or {}), reversed(order)))
+    cache_points: Final = tuple(takewhile(lambda index: _is_cache_point(tools[index]), reversed(order)))
     before: Final = order[: len(order) - len(cache_points)]
     return _ToolConfigTail(
         ("tools", before[-1]) if before and _converse_sends_tool_mark(_fields(tools[before[-1]]) or {}) else None,
@@ -706,20 +711,56 @@ def _first_cache_point_with_a_ttl(tools: Sequence[object], run: Sequence[int]) -
     return next(filter(_sets_a_ttl, ((_fields(tools[index]) or {}).get("cachePoint") for index in run)), None)
 
 
-def _cache_points_inside_the_tool_config(tools: Sequence[object], order: Sequence[int]) -> Mapping[_Path, object]:
-    """The first passed-through cachePoint with a ttl in each run of them that another tool follows, by the tool just
-    before that run."""
+@dataclass(frozen=True, slots=True)
+class _CachePointRun:
+    tool_before: int | None
+    cache_points: tuple[int, ...]
+    ends_the_tool_config: bool
+
+
+def _cache_point_runs(tools: Sequence[object], order: Sequence[int]) -> tuple[_CachePointRun, ...]:
+    """Each run of passed-through cachePoints in Converse's tool config, which Bedrock joins into one."""
     runs: Final = tuple(
         (is_cache_point, tuple(run))
-        for is_cache_point, run in groupby(order, key=lambda index: "cachePoint" in (_fields(tools[index]) or {}))
+        for is_cache_point, run in groupby(order, key=lambda index: _is_cache_point(tools[index]))
     )
-    candidates: Final = tuple(
-        (before[-1], _first_cache_point_with_a_ttl(tools, run))
-        for (_, before), (is_cache_point, run), _ in zip(runs, runs[1:], runs[2:])
+    return tuple(
+        _CachePointRun(runs[position - 1][1][-1] if position else None, run, position == len(runs) - 1)
+        for position, (is_cache_point, run) in enumerate(runs)
         if is_cache_point
+    )
+
+
+def _cache_points_inside_the_tool_config(
+    tools: Sequence[object], runs: Sequence[_CachePointRun]
+) -> Mapping[_Path, object]:
+    """The first passed-through cachePoint with a ttl in each run of them that another tool follows, by the tool just
+    before that run."""
+    candidates: Final = tuple(
+        (run.tool_before, _first_cache_point_with_a_ttl(tools, run.cache_points))
+        for run in runs
+        if run.tool_before is not None and not run.ends_the_tool_config
     )
     return MappingProxyType(
         {("tools", tool): cache_point for tool, cache_point in candidates if cache_point is not None}
+    )
+
+
+def _joins_a_mark(run: _CachePointRun, marked_tools: frozenset[_Path], tool_config_sent: bool) -> bool:
+    return (run.tool_before is not None and ("tools", run.tool_before) in marked_tools) or (
+        run.ends_the_tool_config and tool_config_sent
+    )
+
+
+def _lone_cache_point_marks(
+    tools: Sequence[object], runs: Sequence[_CachePointRun], marked_tools: frozenset[_Path], tool_config_sent: bool
+) -> tuple[tuple[_Path, object, _Kind], ...]:
+    """Bedrock sends a run of passed-through cachePoints as a block of its own unless it follows a tool with a mark or
+    ends a tool config the route appends its cachePoint to."""
+    return tuple(
+        (("tools", run.cache_points[0]), _first_cache_point_with_a_ttl(tools, run.cache_points), "written")
+        for run in runs
+        if not _joins_a_mark(run, marked_tools, tool_config_sent)
     )
 
 
@@ -863,6 +904,7 @@ def claude_prompt_cache(
     request_mark: Final = params.get("cache_control")
     tool_config_order: Final = _converse_tool_config_order(renamed_tools, late_tools)
     sent_tool_config_cache_control: Final = tool_config_cache_control if tool_config_order or adds_a_tool else None
+    cache_point_runs: Final = _cache_point_runs(renamed_tools, tool_config_order)
     placements: Final[tuple[tuple[_Path, object, _Kind], ...]] = (
         *(
             (path, block.get("cache_control"), _kind(path, block.get("cache_control"), translated))
@@ -873,6 +915,10 @@ def claude_prompt_cache(
         *_namespace_member_marks(renamed_tools, route),
         *_route_marks(sent_tool_config_cache_control, request_mark),
     )
+    marked_tools: Final = frozenset(path for path, _, _ in placements if path[0] == "tools")
+    joined_tools: Final = frozenset(
+        ("tools", run.tool_before) for run in cache_point_runs if run.tool_before is not None
+    )
     marks: Final = sorted(
         (
             _Placed(
@@ -881,8 +927,14 @@ def claude_prompt_cache(
                 kind,
                 _wire_position(path, leading_system_count, late_tools),
                 _last_read(path, messages, leading_system_count, run_ends, late_tools),
+                path in joined_tools,
             )
-            for path, cache_control, kind in placements
+            for path, cache_control, kind in chain(
+                placements,
+                _lone_cache_point_marks(
+                    renamed_tools, cache_point_runs, marked_tools, sent_tool_config_cache_control is not None
+                ),
+            )
         ),
         key=lambda mark: mark.first_read,
     )
@@ -890,7 +942,7 @@ def claude_prompt_cache(
         marks,
         renamed_tools,
         _tool_config_tail(renamed_tools, tool_config_order),
-        _cache_points_inside_the_tool_config(renamed_tools, tool_config_order),
+        _cache_points_inside_the_tool_config(renamed_tools, cache_point_runs),
         sent_tool_config_cache_control,
         drop_params,
     )
