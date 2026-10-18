@@ -86,4 +86,7 @@ class AiohttpOpenAIChatConfig(OpenAILikeChatConfig):
         model_response.model = _json_response.get("model")
         model_response.object = _json_response.get("object")
         model_response.system_fingerprint = _json_response.get("system_fingerprint")
+        service_tier: Final = _json_response.get("service_tier")
+        if isinstance(service_tier, str) and service_tier:
+            setattr(model_response, "service_tier", service_tier)  # noqa: B010  # pydantic extra, not a declared field
         return model_response
