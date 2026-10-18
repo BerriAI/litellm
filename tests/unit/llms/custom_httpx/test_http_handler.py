@@ -25,6 +25,7 @@ from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
     MaskedHTTPStatusError,
+    get_async_httpx_client,
     get_httpx_client,
     get_shared_realtime_ssl_context,
     get_ssl_configuration,
@@ -2192,18 +2193,19 @@ async def test_aclient_session_is_used_by_http_handler_providers_and_not_closed(
     monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", client_cache)
     monkeypatch.setattr(litellm, "num_retries", 0)
 
-    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-
-    # Pre-warm cache without aclient_session to verify setting it bypasses stale default handlers
     default_handler: Final = get_async_httpx_client(llm_provider="anthropic")
-    assert default_handler._owns_client is True
+    assert default_handler.owns_client is True
 
     session: Final = httpx.AsyncClient(transport=httpx.MockTransport(handle), trust_env=False)
     try:
         monkeypatch.setattr(litellm, "aclient_session", session)
         session_handler: Final = get_async_httpx_client(llm_provider="anthropic")
         assert session_handler.client is session
-        assert session_handler._owns_client is False
+        assert session_handler.owns_client is False
+
+        module_level_handler: Final = get_async_httpx_client(llm_provider="litellm_module_level_client")
+        assert module_level_handler.client is not session
+        assert module_level_handler.owns_client is True
 
         with pytest.raises(litellm.BadRequestError):
             await litellm.acompletion(
@@ -2240,14 +2242,19 @@ def test_client_session_is_used_by_sync_http_handler_providers_and_not_closed(
     monkeypatch.setattr(litellm, "num_retries", 0)
 
     default_handler: Final = get_httpx_client()
-    assert default_handler._owns_client is True
+    assert default_handler.owns_client is True
 
     session: Final = httpx.Client(transport=httpx.MockTransport(handle), trust_env=False)
     try:
         monkeypatch.setattr(litellm, "client_session", session)
         session_handler: Final = get_httpx_client()
         assert session_handler.client is session
-        assert session_handler._owns_client is False
+        assert session_handler.owns_client is False
+
+        module_level_sync: Final = HTTPHandler()
+        assert module_level_sync.client is not session
+        assert module_level_sync.owns_client is True
+        module_level_sync.close()
 
         with pytest.raises(litellm.BadRequestError):
             litellm.completion(
