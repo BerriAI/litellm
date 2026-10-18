@@ -19,6 +19,8 @@ from pydantic import JsonValue, TypeAdapter
 from redis import Redis
 from redis.exceptions import ResponseError
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 _Turns = Callable[[str], tuple[list[JsonValue], list[JsonValue]]]
 _INDEXES: Final = TypeAdapter(tuple[bytes, ...])
 _COUNT: Final = TypeAdapter(tuple[int])

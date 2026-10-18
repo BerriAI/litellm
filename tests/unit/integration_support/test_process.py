@@ -8,11 +8,11 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from functools import reduce
 from pathlib import Path
-from types import ModuleType
+from types import MappingProxyType, ModuleType
 from typing import Final
 from unittest.mock import MagicMock
 
@@ -25,12 +25,18 @@ from pydantic import TypeAdapter
 from litellm.proxy.types_utils.utils import get_instance_fn
 from tests.integration._support.client import Gateway, eventually
 from tests.integration._support.process import (
+    OWNED_STATE_VARIABLE,
     OwnedProxy,
+    OwnedState,
+    PrivateState,
     WorkerHealthcheck,
     WorkerKill,
     _is_gone,
+    _proxy_environment,
+    boots_private_state,
     healthcheck_seconds,
     kill_stray_process,
+    owned_environment,
     owned_proxy_process,
     replacement_pid,
     stop_process_group,
@@ -383,6 +389,82 @@ def test_owned_runtime_configuration_preserves_custom_worker_startup_hooks(
         )
         if hook
     )
+
+
+WORKER_STATE: Final = MappingProxyType(
+    {"DATABASE_URL": "postgresql://admin@127.0.0.1/worker", "REDIS_HOST": "127.0.0.1", "REDIS_PORT": "6379"}
+)
+PRIVATE_DATABASE: Final = "postgresql://admin@127.0.0.1/owned_private"
+
+
+@contextmanager
+def _private_state(directory: Path, inherited: Mapping[str, str]) -> Iterator[PrivateState]:
+    yield PrivateState(
+        PRIVATE_DATABASE,
+        MappingProxyType({"DATABASE_URL": PRIVATE_DATABASE, "REDIS_HOST": "127.0.0.2", "REDIS_PORT": "6390"}),
+    )
+
+
+@pytest.mark.parametrize(
+    ("state", "overrides", "remove_environment", "marked", "private"),
+    (
+        (None, {}, (), False, True),
+        (None, {"DATABASE_URL": "postgresql://admin@127.0.0.1/scratch"}, (), False, False),
+        (None, {}, ("DATABASE_URL",), False, False),
+        (OwnedState.SHARED_WITH_WORKER, {}, (), False, False),
+        (None, {}, (), True, False),
+        (OwnedState.PRIVATE, {}, (), True, True),
+    ),
+    ids=("default", "explicit-database", "stripped-database", "shared", "marked-module", "private-in-marked-module"),
+)
+def test_an_owned_proxy_boots_private_state_unless_it_shares_or_brings_its_own_database(
+    state: OwnedState | None,
+    overrides: Mapping[str, str],
+    remove_environment: tuple[str, ...],
+    marked: bool,
+    private: bool,
+) -> None:
+    marker: Final = {OWNED_STATE_VARIABLE: OwnedState.SHARED_WITH_WORKER.value} if marked else {}
+    inherited: Final = {**WORKER_STATE, **marker}
+    assert boots_private_state(state, overrides, remove_environment, inherited) is private
+
+
+def test_a_default_owned_proxy_runs_on_its_own_database_and_redis(tmp_path: Path) -> None:
+    with (
+        httpx.Client(base_url="http://127.0.0.1:1", trust_env=False) as client,
+        owned_environment(tmp_path, {}, (), None, WORKER_STATE, _private_state) as owned,
+    ):
+        environment: Final = _proxy_environment(
+            Gateway(client, "owned-test-key", "http://127.0.0.1:1"), owned.overrides, (), WORKER_STATE
+        )
+    assert environment["DATABASE_URL"] == PRIVATE_DATABASE != WORKER_STATE["DATABASE_URL"]
+    assert (environment["REDIS_HOST"], environment["REDIS_PORT"]) == ("127.0.0.2", "6390")
+    assert owned.database_url == PRIVATE_DATABASE
+
+
+@pytest.mark.parametrize(
+    ("overrides", "remove_environment", "redis"),
+    (
+        ({}, ("REDIS_HOST", "REDIS_PORT"), (None, None)),
+        ({"REDIS_HOST": "redis.caller", "REDIS_PORT": "7000"}, (), ("redis.caller", "7000")),
+    ),
+    ids=("stripped", "caller-owned"),
+)
+def test_a_private_owned_proxy_leaves_redis_to_a_caller_that_chose_it(
+    tmp_path: Path,
+    overrides: Mapping[str, str],
+    remove_environment: tuple[str, ...],
+    redis: tuple[str | None, str | None],
+) -> None:
+    with (
+        httpx.Client(base_url="http://127.0.0.1:1", trust_env=False) as client,
+        owned_environment(tmp_path, overrides, remove_environment, None, WORKER_STATE, _private_state) as owned,
+    ):
+        environment: Final = _proxy_environment(
+            Gateway(client, "owned-test-key", "http://127.0.0.1:1"), owned.overrides, remove_environment, WORKER_STATE
+        )
+    assert environment["DATABASE_URL"] == PRIVATE_DATABASE
+    assert (environment.get("REDIS_HOST"), environment.get("REDIS_PORT")) == redis
 
 
 _SUPERVISOR: Final = """import multiprocessing
