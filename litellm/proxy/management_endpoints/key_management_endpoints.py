@@ -5288,13 +5288,16 @@ async def generate_key_helper_fn(
         if isinstance(saved_token["metadata"], str):
             saved_token["metadata"] = json.loads(saved_token["metadata"])
         if isinstance(saved_token["permissions"], str):
-            parsed_permissions: Final = cast(  # cast-ok: permissions column stores a JSON object of permission flags
-                dict[str, object], json.loads(saved_token["permissions"])
-            )
+            # Same json.loads → assign pattern as aliases/config/metadata above.
+            saved_token["permissions"] = json.loads(saved_token["permissions"])
             # Refuse only when the permission is requested (truthy). An explicit
             # false must not trip a substring check on the serialized JSON.
-            _refuse_get_spend_routes_unless_premium(parsed_permissions, premium_user)
-            saved_token["permissions"] = parsed_permissions
+            _refuse_get_spend_routes_unless_premium(
+                cast(  # cast-ok: permissions column stores a JSON object of permission flags
+                    dict[str, object], saved_token["permissions"]
+                ),
+                premium_user,
+            )
         if isinstance(saved_token["model_max_budget"], str):
             saved_token["model_max_budget"] = json.loads(saved_token["model_max_budget"])
         router_settings = cast(dict | None, saved_token.get("router_settings"))
