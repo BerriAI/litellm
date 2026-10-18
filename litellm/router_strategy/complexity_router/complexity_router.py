@@ -4304,6 +4304,29 @@ class ComplexityRouter(CustomLogger):
         caller_scope: Final = self._get_user_api_key_hash_from_request_kwargs(request_kwargs) or "unscoped"
         return f"complexity_router_session_affinity:v1:{self.model_name}:{caller_scope}:{session_id}"
 
+    async def _read_session_affinity_pin(self, cache_key: str) -> object | None:
+        """Read the session pin from Redis first when Redis is attached.
+
+        DualCache.async_get_cache checks the per-worker in-memory L1 first, and a
+        stale L1 copy survives a pin rewrite by any other worker, which is what let a
+        session flip tiers across proxy workers on continuation turns. Redis is the
+        authoritative store, so a Redis miss means there is no pin (do not fall back
+        to a stale L1 copy). The L1-first read stays for deployments without Redis
+        and for when the Redis read itself fails, so single-worker and Redis-down
+        deployments keep the old behavior.
+        """
+        cache: Final = self.litellm_router_instance.cache
+        redis_cache: Final = cache.redis_cache
+        if redis_cache is not None:
+            try:
+                return await redis_cache.async_get_cache(cache_key)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # cache values are untyped, same as the DualCache call below
+            except Exception as error:  # noqa: BLE001  # Redis faults fall back to the L1-first read
+                verbose_router_logger.debug(
+                    "ComplexityRouter: Redis session pin read failed, falling back to the in-memory read. error=%s",
+                    error,
+                )
+        return await cache.async_get_cache(key=cache_key)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # DualCache.async_get_cache is untyped
+
     @property
     def _uses_tier_pin(self) -> bool:
         """classification_mode 'user_turn' implies the tier pin machinery: the pin write after each
@@ -4379,7 +4402,7 @@ class ComplexityRouter(CustomLogger):
         )
 
         if cache_key is not None and pin_replay_allowed:
-            pinned_value: Final = await self.litellm_router_instance.cache.async_get_cache(key=cache_key)
+            pinned_value: Final = await self._read_session_affinity_pin(cache_key)
             pinned_pin: Final = _parse_session_affinity_pin(pinned_value, self.config.tier_names())
             if pinned_pin is not None:
                 user_message: Final = _newest_turn_ask(resolved_messages, marker_pairs) if resolved_messages else None

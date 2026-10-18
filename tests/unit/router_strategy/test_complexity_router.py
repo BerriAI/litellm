@@ -6746,6 +6746,21 @@ class TestRoutingDecisionCauseLogging:
         assert "cause=semantic_keyword_match" not in router_log_capture.text
 
 
+def _dual_cache_with_dict_redis(
+    store: dict[str, object],  # mutable-ok: fake Redis backing store
+) -> DualCache:
+    async def _get(key: str, **kwargs: object) -> object | None:  # kwargs-ok: cache passthrough
+        return store.get(key)
+
+    async def _set(key: str, value: object, **kwargs: object) -> None:  # kwargs-ok: cache passthrough
+        store[key] = value
+
+    redis: Final = AsyncMock()
+    redis.async_get_cache = AsyncMock(side_effect=_get)
+    redis.async_set_cache = AsyncMock(side_effect=_set)
+    return DualCache(redis_cache=redis)
+
+
 class TestTierModelAffinity:
     @staticmethod
     async def _route(
@@ -7033,7 +7048,7 @@ class TestTierModelAffinity:
         )
         metadata: Final = {"session_id": "same-session"}
         assert (await self._route(router, metadata, "higher", "visit_complex")).model == "higher"
-        cache_key: Final = router._get_session_affinity_cache_key("same-session", {"metadata": metadata})
+        cache_key: Final = router._get_session_affinity_cache_key("same-session", {"metadata": metadata})  # pyright: ignore[reportPrivateUsage, reportUnknownMemberType]  # unit test of the internal key scheme, same as the neighboring tests
         await cache.async_set_cache(cache_key, {"model": "base", "tier": "SIMPLE"}, ttl=600)
 
         result: Final = await self._route(router, metadata, "shared", "LITELLM ESCALATE")
@@ -7073,7 +7088,7 @@ class TestTierModelAffinity:
             },
         )
         metadata: Final = {"session_id": "same-session"}
-        cache_key: Final = router._get_session_affinity_cache_key("same-session", {"metadata": metadata})
+        cache_key: Final = router._get_session_affinity_cache_key("same-session", {"metadata": metadata})  # pyright: ignore[reportPrivateUsage, reportUnknownMemberType]  # unit test of the internal key scheme, same as the neighboring tests
         await cache.async_set_cache(cache_key, {"model": "model-a", "tier": stale_tier}, ttl=600)
 
         result: Final = await self._route(router, metadata, expected_model, prompt)
@@ -7082,6 +7097,44 @@ class TestTierModelAffinity:
         assert result.routing_decision["tier"] == expected_tier
         assert result.routing_decision["cause"] == "heuristic_scorer"
         assert await cache.async_get_cache(cache_key) == {"model": expected_model, "tier": expected_tier}
+
+    @pytest.mark.asyncio
+    async def test_pin_replay_follows_the_redis_pin_not_a_stale_l1_copy(self, mock_router_instance: MagicMock) -> None:
+        """Regression test for #47125 bug one: two proxy workers share Redis, and a
+        worker's stale in-memory L1 copy used to win the pin read, replaying its own
+        tier after the other worker reclassified the session. The replay read must
+        follow Redis, the authoritative store."""
+        store: Final[dict[str, object]] = {}  # mutable-ok: the dict is the fake Redis backing store
+        cache: Final = _dual_cache_with_dict_redis(store)
+        mock_router_instance.cache = cache  # rebind-ok: fixture setup
+        router: Final = ComplexityRouter(
+            model_name="affinity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {"SIMPLE": "model-a", "MEDIUM": "model-b"},
+                "session_affinity": True,
+            },
+        )
+        metadata: Final = {"session_id": "same-session"}
+        cache_key: Final = router._get_session_affinity_cache_key("same-session", {"metadata": metadata})  # pyright: ignore[reportPrivateUsage, reportUnknownMemberType]  # unit test of the internal key scheme, same as the neighboring tests
+        continuation: Final[list[dict[str, object]]] = [  # mutable-ok: request fixture
+            {"role": "user", "content": "compact"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "done"},
+        ]
+        # this worker's stale L1 copy; the other worker's fresh pin in Redis
+        await cache.in_memory_cache.async_set_cache(cache_key, {"model": "model-a", "tier": "SIMPLE"})  # pyright: ignore[reportUnknownMemberType]  # cache members are untyped
+        store[cache_key] = {"model": "model-b", "tier": "MEDIUM"}
+
+        replayed: Final = await self._route(router, metadata, "model-a", messages=continuation)
+
+        assert replayed.model == "model-b"
+        assert replayed.routing_decision is not None
+        assert replayed.routing_decision["cause"] == "session_affinity_pin"  # pyright: ignore[reportTypedDictNotRequiredAccess]  # a pinned replay always logs its cause
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("classification_mode", ["every_request", "user_turn"])
@@ -17303,3 +17356,69 @@ class TestNonReasoningTier:
             "complex",
             "reasoning",
         )
+
+
+class TestSessionPinRedisFirstRead:
+    """Regression tests for #47125 bug one: the session tier pin used to be read
+    L1-first, so a worker's stale in-memory copy replayed its own tier after another
+    worker reclassified the session, flipping the model between proxy workers."""
+
+    @staticmethod
+    def _router(mock_router_instance: MagicMock, cache: DualCache) -> ComplexityRouter:
+        mock_router_instance.cache = cache  # rebind-ok: fixture setup
+        mock_router_instance.model_list = []  # rebind-ok: fixture setup
+        mock_router_instance.model_name_to_deployment_indices = {}  # rebind-ok: fixture setup
+        return ComplexityRouter(
+            model_name="affinity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {"SIMPLE": "model-a", "MEDIUM": "model-b"},
+                "session_affinity": True,
+            },
+        )
+
+    @staticmethod
+    def _cache_key(router: ComplexityRouter) -> str:
+        return router._get_session_affinity_cache_key("same-session", {"metadata": {"session_id": "same-session"}})  # pyright: ignore[reportPrivateUsage, reportUnknownMemberType]  # unit test of the internal key scheme
+
+    @pytest.mark.asyncio
+    async def test_redis_pin_wins_over_a_stale_l1_copy(self, mock_router_instance: MagicMock) -> None:
+        store: Final[dict[str, object]] = {}  # mutable-ok: the dict is the fake Redis backing store
+        cache: Final = _dual_cache_with_dict_redis(store)
+        router: Final = self._router(mock_router_instance, cache)
+        cache_key: Final = self._cache_key(router)
+        await cache.in_memory_cache.async_set_cache(cache_key, {"model": "model-a", "tier": "SIMPLE"})  # pyright: ignore[reportUnknownMemberType]  # cache members are untyped
+        store[cache_key] = {"model": "model-b", "tier": "MEDIUM"}
+
+        assert await router._read_session_affinity_pin(cache_key) == {"model": "model-b", "tier": "MEDIUM"}  # pyright: ignore[reportPrivateUsage]  # unit test of the internal read
+
+    @pytest.mark.asyncio
+    async def test_redis_miss_means_no_pin_even_with_a_stale_l1_copy(self, mock_router_instance: MagicMock) -> None:
+        """A stale L1 copy must not resurrect a pin Redis considers gone (expired or
+        never written); the request reclassifies instead."""
+        cache: Final = _dual_cache_with_dict_redis({})
+        router: Final = self._router(mock_router_instance, cache)
+        cache_key: Final = self._cache_key(router)
+        await cache.in_memory_cache.async_set_cache(cache_key, {"model": "model-a", "tier": "SIMPLE"})  # pyright: ignore[reportUnknownMemberType]  # cache members are untyped
+
+        assert await router._read_session_affinity_pin(cache_key) is None  # pyright: ignore[reportPrivateUsage]  # unit test of the internal read
+
+    @pytest.mark.asyncio
+    async def test_redis_failure_falls_back_to_the_l1_first_read(self, mock_router_instance: MagicMock) -> None:
+        cache: Final = _dual_cache_with_dict_redis({})
+        assert cache.redis_cache is not None
+        cache.redis_cache.async_get_cache = AsyncMock(side_effect=ConnectionError("redis down"))
+        router: Final = self._router(mock_router_instance, cache)
+        cache_key: Final = self._cache_key(router)
+        await cache.in_memory_cache.async_set_cache(cache_key, {"model": "model-a", "tier": "SIMPLE"})  # pyright: ignore[reportUnknownMemberType]  # cache members are untyped
+
+        assert await router._read_session_affinity_pin(cache_key) == {"model": "model-a", "tier": "SIMPLE"}  # pyright: ignore[reportPrivateUsage]  # unit test of the internal read
+
+    @pytest.mark.asyncio
+    async def test_without_redis_the_l1_first_read_is_kept(self, mock_router_instance: MagicMock) -> None:
+        cache: Final = DualCache()
+        router: Final = self._router(mock_router_instance, cache)
+        cache_key: Final = self._cache_key(router)
+        await cache.async_set_cache(cache_key, {"model": "model-a", "tier": "SIMPLE"}, ttl=600)  # pyright: ignore[reportUnknownMemberType]  # cache members are untyped
+
+        assert await router._read_session_affinity_pin(cache_key) == {"model": "model-a", "tier": "SIMPLE"}  # pyright: ignore[reportPrivateUsage]  # unit test of the internal read
