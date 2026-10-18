@@ -498,6 +498,38 @@ def test_a_body_base_model_reprices_passthrough_spend_only_for_keys_that_allow_c
     assert spend == pytest.approx({cell: expected_price[cell[0]][cell[2]] for cell in cells})
 
 
+def test_a_non_string_body_base_model_bills_the_list_price_instead_of_nothing(rig: _Rig) -> None:
+    routes: Final = MappingProxyType(
+        {
+            "vertex_ai": f"/vertex_ai/v1/projects/{_PROJECT}/locations/global/publishers/google/models/{_GEMINI}",
+            "gemini": f"/gemini/v1beta/models/{_GEMINI}",
+            "v1beta": "/v1beta/models/audit-vertex-global",
+        }
+    )
+    cells: Final = tuple((route, action) for route in routes for action in _GEMINI_ACTIONS)
+    with rig.proxy.scenario() as scenario:
+        keys: Final = {
+            cell: scenario.key()
+            if cell[0] == "v1beta"
+            else scenario.key(metadata={"allow_client_pricing_override": True})
+            for cell in cells
+        }
+        for (route, action), key in keys.items():
+            _post_and_read(
+                rig,
+                f"{routes[route]}:{action}",
+                {"contents": [{"role": "user", "parts": [{"text": uuid.uuid4().hex}]}], "base_model": 123},
+                _caller_headers(route, key),
+            )
+        spend: Final = {cell: _spend_for_key(key) for cell, key in keys.items()}
+    list_price: Final = {
+        "vertex_ai": _list_price(f"vertex_ai/{_GEMINI}"),
+        "gemini": _list_price(f"gemini/{_GEMINI}"),
+        "v1beta": _list_price(f"vertex_ai/{_GEMINI}"),
+    }
+    assert spend == pytest.approx({cell: list_price[cell[0]] for cell in cells})
+
+
 def test_gemini_passthrough_through_a_gemini_api_base_gateway_logs_and_bills_as_gemini_in_both_modes(
     gateway_rig: _Rig,
 ) -> None:
