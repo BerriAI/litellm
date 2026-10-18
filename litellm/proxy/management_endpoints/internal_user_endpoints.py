@@ -1663,7 +1663,7 @@ _SELF_UPDATE_PROTECTED_FIELDS: Final[tuple[str, ...]] = (
 def _reject_ceiling_self_update(
     *,
     sent_fields: AbstractSet[str],
-    non_default_values: Mapping[str, Any],
+    non_default_values: Mapping[str, object],
     user_api_key_dict: UserAPIKeyAuth,
 ) -> None:
     """Raise 403 when a non-admin self-update touches a user-level ceiling.
