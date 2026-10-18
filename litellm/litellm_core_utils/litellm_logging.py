@@ -6841,13 +6841,18 @@ class StandardLoggingPayloadSetup:
         headers: Final = proxy_server_request.get("headers", {})
         if not isinstance(headers, dict):
             return None
-        request_headers: Final = cast(  # cast-ok: request headers are untyped framework data
-            dict[str, str], headers
-        )
 
-        header_tags: Final = []
+        # Headers are case-insensitive per RFC 7230 / RFC 9110.
+        # Normalize header keys to lowercase to ensure tags are captured regardless of request casing.
+        normalized_headers: Final[dict[str, str]] = {
+            str(k).lower(): str(v)
+            for k, v in headers.items()
+            if v is not None
+        }
+
+        header_tags: Final[list[str]] = []
         for header_name in extra_headers:
-            header_value = request_headers.get(header_name)
+            header_value = normalized_headers.get(header_name.lower())
             if header_value:
                 header_tags.append(f"{header_name}: {header_value}")
 

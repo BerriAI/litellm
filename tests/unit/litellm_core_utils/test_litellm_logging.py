@@ -3432,6 +3432,21 @@ def test_get_extra_header_tags():
         assert "x-custom: my-value" in result
         assert "x-empty:" not in str(result)
 
+        # Test case 8: Case-insensitive header matching (RFC 7230 / RFC 9110)
+        litellm.extra_spend_tag_headers = ["x-session-id", "X-Organization-ID"]
+        result = StandardLoggingPayloadSetup._get_extra_header_tags(
+            proxy_server_request={
+                "headers": {
+                    "X-Session-Id": "sess_123",
+                    "x-organization-id": "org_456",
+                }
+            }
+        )
+        assert result is not None
+        assert len(result) == 2
+        assert "x-session-id: sess_123" in result
+        assert "X-Organization-ID: org_456" in result
+
     finally:
         # Restore original value
         if original_extra_headers is not None:
