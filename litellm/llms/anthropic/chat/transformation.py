@@ -492,7 +492,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     def get_config(cls, *, model: str | None = None):
         # defaults configured on the base class (litellm.AnthropicConfig(max_tokens=...)) live on
         # AnthropicConfig itself and must keep reaching subclass requests (vertex/azure claude)
-        base: Final = {  # mutable-ok: get_config returns a plain dict, same contract as the base impl
+        base: Final = {
             k: v
             for k, v in AnthropicConfig.__dict__.items()
             if not k.startswith("_")
@@ -509,7 +509,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             and v is not None
             and not callable(v)
         }
-        config: Final = {**base, **super().get_config()}  # mutable-ok: one-shot merge, same dict contract
+        config: Final = {**base, **super().get_config()}
 
         # anthropic requires a default value for max_tokens
         if config.get("max_tokens") is None:
