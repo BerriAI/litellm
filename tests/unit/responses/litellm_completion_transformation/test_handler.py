@@ -13,9 +13,9 @@ kwargs lack the flag and these tests fail.
 """
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import AsyncIterable, Coroutine, Iterable, Mapping, Sequence
 from types import SimpleNamespace
-from typing import Final
+from typing import Final, cast
 from unittest.mock import patch
 
 import httpx
@@ -303,9 +303,7 @@ async def test_bridged_next_turn_replays_a_turn_stored_under_the_id_the_client_h
         )
 
     assert provider.request_body is not None, "the bridged turn never reached the provider"
-    assert [
-        (message["role"], json.dumps(message["content"])) for message in provider.request_body["messages"]
-    ] == [
+    assert [(message["role"], json.dumps(message["content"])) for message in provider.request_body["messages"]] == [
         ("user", json.dumps([{"type": "text", "text": "My favorite number is 7."}])),
         ("assistant", json.dumps([{"type": "text", "text": "Noted."}])),
         ("user", json.dumps([{"type": "text", "text": "Double it"}])),
@@ -321,13 +319,13 @@ async def test_bridged_next_turn_replays_a_turn_stored_under_the_id_the_client_h
     ],
 )
 @pytest.mark.asyncio
-async def test_async_fallback_wraps_converted_stream_as_synthetic_stream(converted_stream_flag):
+async def test_async_fallback_wraps_converted_stream_as_synthetic_stream(converted_stream_flag: str):
     from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
     from litellm.types.utils import Choices, Message, ModelResponse
 
     handler = LiteLLMCompletionTransformationHandler()
 
-    async def fake_acompletion(**kwargs):
+    async def fake_acompletion(**kwargs: object) -> ModelResponse:
         return ModelResponse(
             id="chatcmpl-test",
             created=1,
@@ -343,17 +341,21 @@ async def test_async_fallback_wraps_converted_stream_as_synthetic_stream(convert
         )
 
     with patch("litellm.acompletion", fake_acompletion):
-        response = await handler.response_api_handler(
-            model="gpt-4o",
-            input="Search for the weather",
-            responses_api_request={},
-            custom_llm_provider="hosted_vllm",
-            _is_async=True,
-            **{converted_stream_flag: True},
+        response = await cast(
+            Coroutine[object, object, BaseResponsesAPIStreamingIterator],
+            handler.response_api_handler(
+                model="gpt-4o",
+                input="Search for the weather",
+                responses_api_request={},
+                custom_llm_provider="hosted_vllm",
+                _is_async=True,
+                extra_headers=None,
+                **{converted_stream_flag: True},
+            ),
         )
 
     assert isinstance(response, BaseResponsesAPIStreamingIterator)
-    events = [event async for event in response]
+    events: Final[list[object]] = [event async for event in cast(AsyncIterable[object], response)]
     assert len(events) > 0
     assert getattr(events[-1], "type", None) == "response.completed"
 
@@ -366,13 +368,13 @@ async def test_async_fallback_wraps_converted_stream_as_synthetic_stream(convert
         "_headroom_interception_converted_stream",
     ],
 )
-def test_sync_fallback_wraps_converted_stream_as_synthetic_stream(converted_stream_flag):
+def test_sync_fallback_wraps_converted_stream_as_synthetic_stream(converted_stream_flag: str):
     from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
     from litellm.types.utils import Choices, Message, ModelResponse
 
     handler = LiteLLMCompletionTransformationHandler()
 
-    def fake_completion(**kwargs):
+    def fake_completion(**kwargs: object) -> ModelResponse:
         return ModelResponse(
             id="chatcmpl-test-sync",
             created=1,
@@ -388,17 +390,18 @@ def test_sync_fallback_wraps_converted_stream_as_synthetic_stream(converted_stre
         )
 
     with patch("litellm.completion", fake_completion):
-        response = handler.response_api_handler(
+        response: Final = handler.response_api_handler(
             model="gpt-4o",
             input="Search for the weather",
             responses_api_request={},
             custom_llm_provider="hosted_vllm",
             _is_async=False,
+            extra_headers=None,
             **{converted_stream_flag: True},
         )
 
     assert isinstance(response, BaseResponsesAPIStreamingIterator)
-    events = list(response)
+    events: Final[list[object]] = list(cast(Iterable[object], response))
     assert len(events) > 0
     assert getattr(events[-1], "type", None) == "response.completed"
 
@@ -406,6 +409,8 @@ def test_sync_fallback_wraps_converted_stream_as_synthetic_stream(converted_stre
 def test_mock_responses_streaming_iterator_validation_and_config_branches():
     import httpx
 
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
     from litellm.responses.streaming_iterator import MockResponsesAPIStreamingIterator
     from litellm.types.llms.openai import ResponsesAPIResponse
 
@@ -413,7 +418,7 @@ def test_mock_responses_streaming_iterator_validation_and_config_branches():
         MockResponsesAPIStreamingIterator()
 
     class _MockConfig:
-        def transform_response_api_response(self, **kwargs):
+        def transform_response_api_response(self, **kwargs: object) -> ResponsesAPIResponse:
             return ResponsesAPIResponse(
                 id="resp_cfg_test",
                 created_at=1,
@@ -425,22 +430,22 @@ def test_mock_responses_streaming_iterator_validation_and_config_branches():
 
     class _MockLoggingObj:
         def __init__(self):
-            self.model_call_details = {"litellm_params": {"api_key": "fake"}}
+            self.model_call_details: Final[dict[str, object]] = {"litellm_params": {"api_key": "fake"}}
 
-        async def async_success_handler(self, *args, **kwargs):
+        async def async_success_handler(self, *args: object, **kwargs: object) -> None:
             pass
 
-        def success_handler(self, *args, **kwargs):
+        def success_handler(self, *args: object, **kwargs: object) -> None:
             pass
 
-    logging_obj = _MockLoggingObj()
-    iterator = MockResponsesAPIStreamingIterator(
+    logging_obj: Final = cast(LiteLLMLoggingObj, _MockLoggingObj())
+    config_obj: Final = cast(BaseResponsesAPIConfig, _MockConfig())
+    iterator: Final = MockResponsesAPIStreamingIterator(
         response=httpx.Response(200),
         model="gpt-4o",
-        responses_api_provider_config=_MockConfig(),
+        responses_api_provider_config=config_obj,
         logging_obj=logging_obj,
     )
-    events = list(iterator)
+    events: Final[list[object]] = list(cast(Iterable[object], iterator))
     assert len(events) > 0
     assert getattr(events[-1], "type", None) == "response.completed"
-

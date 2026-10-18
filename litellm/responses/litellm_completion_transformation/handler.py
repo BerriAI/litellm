@@ -3,7 +3,7 @@ Handler for transforming responses api requests to litellm.completion requests
 """
 
 from collections.abc import Coroutine, Mapping
-from typing import Final
+from typing import Final, cast
 
 from pydantic import TypeAdapter
 
@@ -89,8 +89,9 @@ class LiteLLMCompletionTransformationHandler:
                 )
             )
 
+            kwargs_map: Final[Mapping[str, object]] = cast(Mapping[str, object], kwargs)
             if any(
-                kwargs.get(f)
+                bool(kwargs_map.get(f))
                 for f in (
                     "_websearch_interception_converted_stream",
                     "_code_interpreter_interception_converted_stream",
@@ -99,11 +100,16 @@ class LiteLLMCompletionTransformationHandler:
             ):
                 from litellm.responses.streaming_iterator import MockResponsesAPIStreamingIterator
 
+                meta: Final[dict[str, object] | None] = (
+                    cast(dict[str, object], val)
+                    if isinstance(val := kwargs_map.get("litellm_metadata"), dict)
+                    else None
+                )
                 return MockResponsesAPIStreamingIterator(
                     model=model,
                     transformed_response=responses_api_response,
                     custom_llm_provider=custom_llm_provider,
-                    litellm_metadata=kwargs.get("litellm_metadata", {}),
+                    litellm_metadata=meta,
                 )
 
             return responses_api_response
@@ -157,8 +163,9 @@ class LiteLLMCompletionTransformationHandler:
                 )
             )
 
+            kwargs_map: Final[Mapping[str, object]] = cast(Mapping[str, object], kwargs)
             if any(
-                kwargs.get(f)
+                bool(kwargs_map.get(f))
                 for f in (
                     "_websearch_interception_converted_stream",
                     "_code_interpreter_interception_converted_stream",
@@ -167,11 +174,21 @@ class LiteLLMCompletionTransformationHandler:
             ):
                 from litellm.responses.streaming_iterator import MockResponsesAPIStreamingIterator
 
+                req_map: Final[Mapping[str, object]] = cast(Mapping[str, object], litellm_completion_request)
+                req_model: Final[str] = val if isinstance(val := req_map.get("model"), str) else ""
+                req_provider: Final[str | None] = (
+                    val if isinstance(val := req_map.get("custom_llm_provider"), str) else None
+                )
+                meta: Final[dict[str, object] | None] = (
+                    cast(dict[str, object], val)
+                    if isinstance(val := kwargs_map.get("litellm_metadata"), dict)
+                    else None
+                )
                 return MockResponsesAPIStreamingIterator(
-                    model=litellm_completion_request.get("model") or "",
+                    model=req_model,
                     transformed_response=responses_api_response,
-                    custom_llm_provider=litellm_completion_request.get("custom_llm_provider"),
-                    litellm_metadata=kwargs.get("litellm_metadata", {}),
+                    custom_llm_provider=req_provider,
+                    litellm_metadata=meta,
                 )
 
             return responses_api_response

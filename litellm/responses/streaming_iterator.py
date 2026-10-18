@@ -381,15 +381,13 @@ class BaseResponsesAPIStreamingIterator:
 
         # set hidden params for response headers (e.g., x-litellm-model-id)
         # This matches the stream wrapper in litellm/litellm_core_utils/streaming_handler.py
-        _model_call_details: Final = getattr(self.logging_obj, "model_call_details", None)
-        _optional_params: Final = (
-            _typed_gets_litellm_params(_model_call_details.get)("litellm_params", {})
-            if isinstance(_model_call_details, dict)
-            else {}
-        )
         _api_base: Final = get_api_base(
             model=model or "",
-            optional_params=_optional_params,
+            optional_params=(
+                _typed_gets_litellm_params(self.logging_obj.model_call_details.get)("litellm_params", {})
+                if getattr(self, "logging_obj", None) is not None
+                else {}
+            ),
         )
         self._hidden_params: dict[str, object] = {
             "model_id": _model_id_from_metadata(litellm_metadata),
@@ -585,7 +583,7 @@ class BaseResponsesAPIStreamingIterator:
             raise
 
     def _log_completed_response(self, *, is_async: bool) -> None:
-        if self._completed_response_logged or self.logging_obj is None:
+        if self._completed_response_logged or getattr(self, "logging_obj", None) is None:
             return
         self._completed_response_logged = True
 
@@ -1273,7 +1271,7 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
                 responses_api_provider_config.transform_response_api_response(
                     model=model,
                     raw_response=response,
-                    logging_obj=logging_obj,
+                    logging_obj=cast(LiteLLMLoggingObj, logging_obj),
                 )
                 if responses_api_provider_config is not None and response is not None
                 else None
@@ -1287,7 +1285,7 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             response=response or httpx.Response(200),
             model=model,
             responses_api_provider_config=None,
-            logging_obj=logging_obj,
+            logging_obj=cast(LiteLLMLoggingObj, logging_obj),
             litellm_metadata=litellm_metadata,
             custom_llm_provider=custom_llm_provider,
             request_data=request_data,
@@ -1298,7 +1296,7 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
     def _set_events_from_response(
         self,
         transformed: ResponsesAPIResponse,
-        logging_obj: LiteLLMLoggingObj,
+        logging_obj: LiteLLMLoggingObj | None,
     ) -> None:
         self._events: Sequence[ResponsesAPIStreamingResponse] = build_synthetic_response_events(
             transformed=transformed,
