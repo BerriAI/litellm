@@ -13,6 +13,7 @@ from litellm._logging import verbose_logger
 from litellm.constants import AWS_ERROR_TYPE_HEADER
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig, PassthroughStreamCollector
+from litellm.llms.bedrock.chat.converse_to_openai import as_json_array, as_json_object
 from litellm.types.llms.openai import ChatCompletionSystemMessage, ChatCompletionUserMessage
 from litellm.types.utils import ModelResponseStream
 
@@ -120,6 +121,71 @@ def _with_invoke_request_metadata(
 ) -> tuple[Mapping[str, str], Mapping[str, object]]:
     owned_names, metadata_headers = bedrock_request_metadata_headers(litellm_params)
     return merge_bedrock_invoke_headers(dict(headers), (), metadata_headers, owned_names), body
+
+
+def _is_cache_point(entry: object) -> bool:
+    fields: Final = as_json_object(entry)
+    return fields is not None and "cachePoint" in fields
+
+
+def _tool_result_part(item: object) -> str | None:
+    fields: Final = as_json_object(item)
+    if fields is None:
+        return None
+    text: Final = fields.get("text")
+    if isinstance(text, str):
+        return text
+    return json.dumps(fields["json"]) if "json" in fields else None
+
+
+def _tool_result_text(tool_result: Mapping[str, object]) -> str:
+    parts: Final = as_json_array(tool_result.get("content")) or ()
+    rendered: Final = "\n".join(part for item in parts if (part := _tool_result_part(item)) is not None).strip()
+    return rendered or "<non-text tool result omitted>"
+
+
+def _block_field(block: object, key: str) -> Mapping[str, object] | None:
+    fields: Final = as_json_object(block)
+    return None if fields is None else as_json_object(fields.get(key))
+
+
+def _as_text_block(block: object) -> object:
+    tool_use: Final = _block_field(block, "toolUse")
+    if tool_use is not None:
+        arguments: Final = json.dumps(tool_use.get("input"))
+        return {"text": f"[tool call {tool_use.get('toolUseId')}: {tool_use.get('name')}({arguments})]"}
+    tool_result: Final = _block_field(block, "toolResult")
+    if tool_result is None:
+        return block
+    return {"text": f"[tool result for {tool_result.get('toolUseId')}: {_tool_result_text(tool_result)}]"}
+
+
+def _has_tool_block(content: Sequence[object]) -> bool:
+    return any(
+        _block_field(block, "toolUse") is not None or _block_field(block, "toolResult") is not None for block in content
+    )
+
+
+def _as_text_message(message: object) -> object:
+    fields: Final = as_json_object(message)
+    content: Final = None if fields is None else as_json_array(fields.get("content"))
+    if fields is None or content is None or not _has_tool_block(content):
+        return message
+    return {**fields, "content": [_as_text_block(block) for block in content]}
+
+
+def _converse_body_to_send(body: Mapping[str, object]) -> Mapping[str, object]:
+    """
+    ``body`` without a Converse ``toolConfig`` that holds no tool, with every ``toolUse`` and ``toolResult`` turned into
+    text, since Bedrock rejects tool blocks without a tool. Any other ``body`` comes back as it is.
+    """
+    tool_config: Final = as_json_object(body.get("toolConfig"))
+    tools: Final = None if tool_config is None else as_json_array(tool_config.get("tools"))
+    if tools is None or not all(map(_is_cache_point, tools)):
+        return body
+    messages: Final = as_json_array(body.get("messages"))
+    rest: Final = {key: value for key, value in body.items() if key != "toolConfig"}
+    return rest if messages is None else {**rest, "messages": [_as_text_message(message) for message in messages]}
 
 
 _TEXT_ONLY_DELTA_FIELDS: Final = frozenset({"content", "role"})
@@ -378,11 +444,13 @@ class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamD
         api_base: str,
         model: str | None = None,
     ) -> tuple[dict, bytes | None]:
+        action: Final = _bedrock_endpoint_action(api_base)
+        body: Final[Mapping[str, object]] = request_data or {}
         optional_params: Final = litellm_params.copy()
         signed_headers, signed_body = _with_request_metadata(
-            action=_bedrock_endpoint_action(api_base) if bedrock_request_metadata_is_owned() else None,
+            action=action if bedrock_request_metadata_is_owned() else None,
             headers=headers,
-            body=request_data or {},
+            body=_converse_body_to_send(body) if action in _BEDROCK_CONVERSE_ACTIONS else body,
             litellm_params=litellm_params,
         )
         return self._sign_request(

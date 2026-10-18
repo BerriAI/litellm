@@ -5533,6 +5533,11 @@ def _bedrock_tools_pt(
     return tool_block_list
 
 
+def bedrock_tool_blocks(tools: Sequence[Mapping[str, object]], model: str | None) -> tuple[BedrockToolBlock, ...]:
+    """Bedrock Converse ``toolConfig.tools`` entries for OpenAI or Anthropic tool definitions."""
+    return tuple(_bedrock_tools_pt([dict(tool) for tool in tools], model=model))
+
+
 def _is_system_message(message: Mapping[str, object]) -> bool:
     role: Final = message.get("role")
     return isinstance(role, str) and "system" in role
