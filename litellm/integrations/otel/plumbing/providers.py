@@ -705,7 +705,12 @@ class TenantFanOutSpanProcessor(SpanProcessor):
             if (
                 self._operator_already_writes(span, destination, suppressed)
                 or not _in_scope(span, destination.span_scope)
-                or _is_excluded_database_span(attributes, self._excluded_db_systems)
+                or _is_excluded_database_span(
+                    attributes,
+                    self._excluded_db_systems
+                    if destination.excluded_db_systems is None
+                    else destination.excluded_db_systems,
+                )
             ):
                 continue
             if not _is_sampled(destination):

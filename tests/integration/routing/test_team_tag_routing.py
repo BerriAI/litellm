@@ -49,7 +49,7 @@ def test_a_teams_tags_route_every_call_of_its_keys_to_the_matching_deployment(ca
     ):
         team_id: Final = scenario.team(tags=[tag])
         key: Final = scenario.key(team_id=team_id)
-        upstream.get("/__observations").raise_for_status()
+        upstream.delete("/__observations").raise_for_status()
         responses: Final = tuple(
             candidate.request(
                 "POST",

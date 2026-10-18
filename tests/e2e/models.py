@@ -67,6 +67,7 @@ class ObjectPermission(BaseModel):
     mcp_servers: list[str] | None = None
     mcp_access_groups: list[str] | None = None
     mcp_toolsets: list[str] | None = None
+    mcp_tool_search_enabled: bool | None = None
 
 
 class KeyGenerateBody(BaseModel):
@@ -233,6 +234,7 @@ ContentPart = TextContentPart | ImageContentPart
 class ChatMessage(BaseModel):
     role: str
     content: str | list[ContentPart]
+    cache_control: CacheControl | None = None
 
 
 class CacheControl(BaseModel):
@@ -337,7 +339,7 @@ class ChatAssistantTurn(BaseModel):
 class ChatToolResultTurn(BaseModel):
     role: Literal["tool"] = "tool"
     tool_call_id: str
-    content: str
+    content: str | list[ContentPart]
 
 
 type ChatTurn = ChatMessage | ChatAssistantTurn | ChatToolResultTurn
@@ -465,6 +467,7 @@ class ChatChoice(BaseModel):
 
 class PromptTokensDetails(BaseModel):
     cached_tokens: int | None = None
+    cache_write_tokens: int | None = None
 
 
 class CompletionTokensDetails(BaseModel):
@@ -635,6 +638,7 @@ class AnthropicMessagesBody(BaseModel):
     stream: bool | None = None
     tools: list[AnthropicTool] | None = None
     tool_choice: AnthropicToolChoice | None = None
+    thinking: ThinkingParam | None = None
     guardrails: list[str] | None = None
     cache: dict[str, bool] | None = {"no-cache": True}
 
@@ -673,11 +677,37 @@ class AnthropicMessagesResponse(BaseModel):
     usage: Usage | None = None
 
 
-class CountTokensResponse(BaseModel):
+TokenCountSource = Literal["provider", "token_count_model", "local_estimate"]
+
+
+class LitellmCountSource(BaseModel, frozen=True):
+    litellm_count_source: TokenCountSource | None = None
+    litellm_count_model: str | None = None
+
+
+class CountTokensResponse(LitellmCountSource, frozen=True):
     """`/v1/messages/count_tokens` answer. `input_tokens` is required so a 200
     whose body lacks it fails validation instead of passing vacuously."""
 
     input_tokens: int
+
+
+class ResponsesInputTokensResponse(LitellmCountSource, frozen=True):
+    object: str
+    input_tokens: int
+
+
+class TokenCounterBody(BaseModel, frozen=True):
+    model: str
+    messages: list[ChatMessage]
+
+
+class TokenCounterResponse(BaseModel, frozen=True):
+    total_tokens: int
+    request_model: str
+    model_used: str
+    tokenizer_type: str
+    count_source: TokenCountSource | None = None
 
 
 class AnthropicErrorBody(BaseModel):
@@ -702,28 +732,14 @@ class McpInfo(BaseModel):
     logo_url: str | None = None
 
 
-class McpOauthCredentials(BaseModel):
-    upstream_resource: str
-
-
 class McpServerCreateBody(BaseModel):
-    """POST /v1/mcp/server. For a gateway-managed OAuth server, `auth_type` is
-    `oauth2` and `oauth2_flow` is `authorization_code`; the upstream endpoints
-    are discovered and registered via DCR when left unset. `allow_all_keys`
-    false scopes the server to keys granted it through object_permission."""
+    """POST /v1/mcp/server. `allow_all_keys` false scopes the server to keys
+    granted it through object_permission."""
 
     alias: str
     url: str
     transport: str = "http"
     allow_all_keys: bool = True
-    auth_type: str | None = None
-    oauth2_flow: Literal["client_credentials", "authorization_code"] | None = None
-    per_server_oauth_discovery: bool | None = None
-    issuer: str | None = None
-    authorization_url: str | None = None
-    token_url: str | None = None
-    registration_url: str | None = None
-    credentials: McpOauthCredentials | None = Field(default=None, repr=False)
     server_name: str | None = None
     description: str | None = None
     mcp_info: McpInfo | None = None
@@ -761,26 +777,6 @@ class McpServerRow(McpServerInfo):
 
 class McpServerListResponse(RootModel[list[McpServerRow]]):
     """GET /v1/mcp/server answers with a bare array of servers."""
-
-
-class McpServerUserCredentialRow(BaseModel):
-    user_id: str
-    credential_type: Literal["oauth2", "byok"]
-    expires_at: str | None = None
-    connected_at: str | None = None
-    updated_at: str
-
-
-class McpServerUserCredentialListResponse(RootModel[tuple[McpServerUserCredentialRow, ...]]):
-    """GET /v1/mcp/server/{server_id}/user-credentials answers with a bare array."""
-
-
-class McpOauthUserCredentialStatus(BaseModel):
-    server_id: str
-    has_credential: bool
-    expires_at: str | None = None
-    is_expired: bool = False
-    connected_at: str | None = None
 
 
 class ToolsetTool(BaseModel):
@@ -1344,6 +1340,10 @@ class CacheControlInjectionPoint(BaseModel):
     index: int | None = None
 
 
+class PromptCacheOptions(BaseModel):
+    mode: Literal["implicit", "explicit"]
+
+
 class LiteLLMParamsBody(BaseModel):
     """POST /model/new litellm_params: `model` is the only required field; `api_key`
     et al may be an `os.environ/FOO` reference the proxy resolves at call time.
@@ -1358,6 +1358,7 @@ class LiteLLMParamsBody(BaseModel):
     litellm_credential_name: str | None = None
     api_base: str | None = Field(default=None, repr=False)
     api_version: str | None = None
+    responses_api_version: str | None = None
     realtime_protocol: str | None = None
     allowed_openai_params: list[str] | None = None
     drop_params: bool | None = None
@@ -1408,12 +1409,18 @@ class LiteLLMParamsBody(BaseModel):
     cooldown_time: float | None = None
     extra_body: DeploymentExtraBody | None = None
     cache_control_injection_points: list[CacheControlInjectionPoint] | None = None
+    prompt_cache_options: PromptCacheOptions | None = None
     tpm: int | None = None
     weight: int | None = None
     order: int | None = None
 
 
 ModelMode = Literal["chat", "batch", "realtime", "image_generation"]
+
+
+class TokenCountModelBody(BaseModel, frozen=True):
+    model: str
+    region: str | None = None
 
 
 class ModelInfoBody(BaseModel):
@@ -1428,6 +1435,7 @@ class ModelInfoBody(BaseModel):
     team_id: str | None = None
     allowed_fails: int | None = None
     allowed_fails_policy: dict[str, int] | None = None
+    token_count_model: TokenCountModelBody | None = None
 
 
 class ModelNewBody(BaseModel):
@@ -1665,6 +1673,7 @@ class UserNewBody(BaseModel):
     user_role: UserRole
     user_id: str | None = None
     auto_create_key: bool | None = None
+    max_budget: float | None = None
 
 
 class UserNewResponse(BaseModel):

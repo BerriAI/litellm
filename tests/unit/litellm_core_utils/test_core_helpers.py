@@ -1,6 +1,8 @@
 """Tests for litellm_core_utils.core_helpers module."""
 
 import logging
+import threading
+from collections.abc import Iterator, Mapping
 from typing import Final
 
 import httpx
@@ -14,8 +16,9 @@ from litellm.litellm_core_utils.core_helpers import (
     drop_params_env_flag,
     drop_params_flag,
     filter_internal_params,
-    get_parent_otel_span_from_kwargs,
+    get_litellm_metadata_from_kwargs,
     get_or_create_metadata_bucket,
+    get_parent_otel_span_from_kwargs,
     get_provider_response_headers_from_hidden_params,
     map_finish_reason,
     normalize_drop_params,
@@ -234,9 +237,7 @@ class TestMapFinishReasonAnthropic:
             ("content_filtered", "content_filter"),
         ],
     )
-    def test_anthropic_finish_reasons(
-        self, provider_reason: str, expected: str
-    ) -> None:
+    def test_anthropic_finish_reasons(self, provider_reason: str, expected: str) -> None:
         assert map_finish_reason(provider_reason) == expected
 
     def test_refusal(self):
@@ -268,6 +269,7 @@ class TestMapFinishReasonGemini:
             ("ESCALATION", "content_filter"),
             ("UNEXPECTED_TOOL_CALL", "stop"),
             ("MISSING_THOUGHT_SIGNATURE", "stop"),
+            ("CONTINUATION", "length"),
         ],
     )
     def test_gemini_finish_reasons(self, gemini_reason, expected):
@@ -307,9 +309,7 @@ class TestMapFinishReasonZhipu:
 
 
 class TestMapFinishReasonOpenAIPassthrough:
-    @pytest.mark.parametrize(
-        "reason", ["stop", "length", "tool_calls", "function_call", "content_filter"]
-    )
+    @pytest.mark.parametrize("reason", ["stop", "length", "tool_calls", "function_call", "content_filter"])
     def test_openai_values_pass_through(self, reason):
         assert map_finish_reason(reason) == reason
 
@@ -320,9 +320,7 @@ class TestMapFinishReasonGenericError:
         assert map_finish_reason("error") == "stop"
 
     def test_lowercase_error_does_not_warn(self, mocker):
-        warn = mocker.patch(
-            "litellm.litellm_core_utils.core_helpers.verbose_logger.warning"
-        )
+        warn = mocker.patch("litellm.litellm_core_utils.core_helpers.verbose_logger.warning")
         assert map_finish_reason("error") == "stop"
         warn.assert_not_called()
 
@@ -340,8 +338,7 @@ class TestFinishReasonMapOutputsAreValid:
         """Every value in _FINISH_REASON_MAP must be a valid OpenAI finish reason."""
         for provider_reason, openai_reason in _FINISH_REASON_MAP.items():
             assert openai_reason in VALID_OPENAI_FINISH_REASONS, (
-                f"Mapped value '{openai_reason}' (from '{provider_reason}') "
-                f"is not a valid OpenAI finish reason"
+                f"Mapped value '{openai_reason}' (from '{provider_reason}') is not a valid OpenAI finish reason"
             )
 
 
@@ -351,28 +348,18 @@ class TestRedactNestedMatchAndRegexKeys:
             "assessments": [
                 {
                     "sensitiveInformationPolicy": {
-                        "piiEntities": [
-                            {"type": "NAME", "match": "secret-name", "action": "BLOCKED"}
-                        ]
+                        "piiEntities": [{"type": "NAME", "match": "secret-name", "action": "BLOCKED"}]
                     },
-                    "wordPolicy": {
-                        "customWords": [{"match": "badword", "action": "BLOCKED"}]
-                    },
+                    "wordPolicy": {"customWords": [{"match": "badword", "action": "BLOCKED"}]},
                 }
             ],
             "regex": "should-redact-key-named-regex",
         }
         out = redact_nested_match_and_regex_keys(payload)
-        assert out["assessments"][0]["sensitiveInformationPolicy"]["piiEntities"][0][
-            "match"
-        ] == "[REDACTED]"
-        assert out["assessments"][0]["wordPolicy"]["customWords"][0]["match"] == (
-            "[REDACTED]"
-        )
+        assert out["assessments"][0]["sensitiveInformationPolicy"]["piiEntities"][0]["match"] == "[REDACTED]"
+        assert out["assessments"][0]["wordPolicy"]["customWords"][0]["match"] == ("[REDACTED]")
         assert out["regex"] == "[REDACTED]"
-        assert payload["assessments"][0]["sensitiveInformationPolicy"]["piiEntities"][
-            0
-        ]["match"] == "secret-name"
+        assert payload["assessments"][0]["sensitiveInformationPolicy"]["piiEntities"][0]["match"] == "secret-name"
 
     def test_passes_through_none_and_str(self):
         assert redact_nested_match_and_regex_keys(None) is None
@@ -535,13 +522,17 @@ class TestIsExpectedClientError:
         assert is_expected_client_error(over_budget) is True
 
         litellm_limit = RateLimitError(
-            message="key over rpm", llm_provider="anthropic", model="claude-haiku-4-5",
+            message="key over rpm",
+            llm_provider="anthropic",
+            model="claude-haiku-4-5",
             category=RateLimitErrorCategory.LITELLM_RATE_LIMIT,
         )
         assert is_expected_client_error(litellm_limit) is True
 
         vendor_limit = RateLimitError(
-            message="rate limited upstream", llm_provider="anthropic", model="claude-haiku-4-5",
+            message="rate limited upstream",
+            llm_provider="anthropic",
+            model="claude-haiku-4-5",
             category=RateLimitErrorCategory.VENDOR_RATE_LIMIT,
         )
         assert is_expected_client_error(vendor_limit) is False
@@ -608,3 +599,55 @@ class TestProviderResponseHeadersInHiddenParams:
 
         assert get_provider_response_headers_from_hidden_params(sibling) is None
         assert "additional_headers" not in sibling._hidden_params
+
+
+def test_spend_metadata_merge_survives_the_logging_thread_inserting_into_the_request_metadata() -> None:
+    metadata: Final[dict[str, object]] = {}
+
+    def logging_thread_records_hidden_params() -> None:
+        metadata["hidden_params"] = {"response_cost": 0.1}
+
+    class KeyCheckedWhileTheLoggingThreadRuns(str):
+        def __contains__(self, key: str) -> bool:
+            writer: Final = threading.Thread(target=logging_thread_records_hidden_params)
+            writer.start()
+            writer.join()
+            return super().__contains__(key)
+
+    metadata[KeyCheckedWhileTheLoggingThreadRuns("user_api_key_alias")] = "alias"
+    metadata["user_api_key_hash"] = "hash"
+    metadata["requester_ip_address"] = "10.0.0.1"
+    litellm_metadata: Final[dict[str, object]] = {"user_api_key_alias": "stale", "model_group": "claude"}
+
+    merged: Final = get_litellm_metadata_from_kwargs(
+        {"litellm_params": {"metadata": metadata, "litellm_metadata": litellm_metadata}}
+    )
+
+    assert "hidden_params" in metadata
+    assert merged == {"user_api_key_alias": "alias", "user_api_key_hash": "hash", "model_group": "claude"}
+
+
+def test_spend_metadata_merge_reads_request_metadata_that_is_a_read_only_mapping() -> None:
+    class ReadOnlyMetadata(Mapping[str, object]):
+        def __init__(self, values: dict[str, object]) -> None:
+            self._values: Final = values
+
+        def __getitem__(self, key: str) -> object:
+            return self._values[key]
+
+        def __iter__(self) -> Iterator[str]:
+            return iter(self._values)
+
+        def __len__(self) -> int:
+            return len(self._values)
+
+    merged: Final = get_litellm_metadata_from_kwargs(
+        {
+            "litellm_params": {
+                "metadata": ReadOnlyMetadata({"user_api_key_hash": "hash", "requester_ip_address": "10.0.0.1"}),
+                "litellm_metadata": {"model_group": "claude"},
+            }
+        }
+    )
+
+    assert merged == {"user_api_key_hash": "hash", "model_group": "claude"}
