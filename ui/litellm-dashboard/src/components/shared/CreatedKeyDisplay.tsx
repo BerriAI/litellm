@@ -11,18 +11,8 @@ interface CreatedKeyDisplayProps {
   apiKey: string;
 }
 
-export const buildAgentInstructions = (
-  agent: "claude-code" | "codex",
-  baseUrl: string,
-  apiKey: string,
-): string => {
+export const buildAgentInstructions = (baseUrl: string, apiKey: string): string => {
   const normalizedBaseUrl = baseUrl.replace(/\/+$/, "");
-  const agentLine =
-    agent === "claude-code"
-      ? `To run Claude Code through this gateway, set ANTHROPIC_BASE_URL=${normalizedBaseUrl} and ` +
-        `ANTHROPIC_AUTH_TOKEN=${apiKey}.`
-      : `To run Codex through this gateway, set OPENAI_BASE_URL=${normalizedBaseUrl}/v1 and ` +
-        `OPENAI_API_KEY=${apiKey}.`;
   const endpointIntroduction =
     "LiteLLM is a gateway that exposes OpenAI and Anthropic compatible APIs. " +
     `Send the virtual key as a Bearer token (Authorization: Bearer ${apiKey}) to:`;
@@ -39,7 +29,8 @@ export const buildAgentInstructions = (
     `- POST ${normalizedBaseUrl}/v1/messages (Anthropic Messages)`,
     `- GET ${normalizedBaseUrl}/v1/models (models this key can use)`,
     "",
-    agentLine,
+    `To run Claude Code through this gateway, set ANTHROPIC_BASE_URL=${normalizedBaseUrl} and ANTHROPIC_AUTH_TOKEN=${apiKey}.`,
+    `To run Codex through this gateway, set OPENAI_BASE_URL=${normalizedBaseUrl}/v1 and OPENAI_API_KEY=${apiKey}.`,
     "",
     "Docs for everything else LiteLLM supports: https://docs.litellm.ai/docs/",
   ].join("\n");
@@ -52,10 +43,9 @@ export const buildAgentInstructions = (
 const CreatedKeyDisplay: React.FC<CreatedKeyDisplayProps> = ({ apiKey }) => {
   const [copied, setCopied] = useState(false);
   const [instructionsCopied, setInstructionsCopied] = useState(false);
-  const [selectedAgent, setSelectedAgent] = useState<"claude-code" | "codex">("claude-code");
   const [showInstructions, setShowInstructions] = useState(false);
   const baseUrl = getProxyBaseUrl().replace(/\/+$/, "");
-  const instructions = buildAgentInstructions(selectedAgent, baseUrl, apiKey);
+  const instructions = buildAgentInstructions(baseUrl, apiKey);
 
   const handleCopy = () => {
     setCopied(true);
@@ -96,31 +86,13 @@ const CreatedKeyDisplay: React.FC<CreatedKeyDisplayProps> = ({ apiKey }) => {
         </CopyToClipboard>
       </div>
 
-      <p className="text-sm text-muted-foreground mt-4 mb-1">Set up your agent</p>
-      <div className="flex flex-wrap gap-2">
-        <Button
-          type="button"
-          variant={selectedAgent === "claude-code" ? "default" : "outline"}
-          aria-pressed={selectedAgent === "claude-code"}
-          onClick={() => setSelectedAgent("claude-code")}
-        >
-          <img src={anthropicLogo.src} alt="" className="size-4 object-contain" />
-          Claude Code
-        </Button>
-        <Button
-          type="button"
-          variant={selectedAgent === "codex" ? "default" : "outline"}
-          aria-pressed={selectedAgent === "codex"}
-          onClick={() => setSelectedAgent("codex")}
-        >
-          <img src={openaiLogo.src} alt="" className="size-4 object-contain" />
-          Codex
-        </Button>
-      </div>
-
-      <div className="mt-3 rounded-md border border-border p-3">
+      <div className="mt-4 rounded-md border border-border p-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className="text-sm font-medium">Instructions for your agent</p>
+          <div className="flex items-center gap-2">
+            <p className="text-sm font-medium">Agent instructions</p>
+            <img src={anthropicLogo.src} alt="Claude Code" title="Claude Code" className="size-5 object-contain" />
+            <img src={openaiLogo.src} alt="Codex" title="Codex" className="size-5 object-contain" />
+          </div>
           <div className="flex items-center gap-2">
             <CopyToClipboard text={instructions} onCopy={handleCopyInstructions}>
               <Button type="button">{instructionsCopied ? "Copied!" : "Copy instructions"}</Button>

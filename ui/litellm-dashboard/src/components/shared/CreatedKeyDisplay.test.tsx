@@ -111,34 +111,35 @@ describe("CreatedKeyDisplay", () => {
     expect(toast.success).toHaveBeenCalledWith("Gateway URL copied to clipboard");
   });
 
-  it("starts with collapsed Claude Code instructions and expands them", async () => {
+  it("shows one shared instruction card with both agent logos and expands on demand", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    render(<CreatedKeyDisplay apiKey="sk-test-123" />);
+
+    expect(screen.getByRole("img", { name: "Claude Code" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Codex" })).toBeInTheDocument();
+    expect(screen.getByText("Agent instructions")).toBeInTheDocument();
+    expect(screen.queryByText("Set up your agent")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Claude Code" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Codex" })).not.toBeInTheDocument();
+
+    const showButton = screen.getByRole("button", { name: "Show" });
+    expect(showButton).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText(/POST http:\/\/gw\.test:4000\/v1\/responses/)).not.toBeInTheDocument();
+
+    await user.click(showButton);
+
+    expect(screen.getByRole("button", { name: "Hide" })).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText(/POST http:\/\/gw\.test:4000\/v1\/responses/)).toBeInTheDocument();
+    expect(screen.getByText(/ANTHROPIC_BASE_URL=http:\/\/gw\.test:4000/)).toBeInTheDocument();
+    expect(screen.getByText(/OPENAI_BASE_URL=http:\/\/gw\.test:4000\/v1/)).toBeInTheDocument();
+  });
+
+  it("copies complete shared instructions while the card is collapsed", async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     render(<CreatedKeyDisplay apiKey="sk-test-123" />);
 
     expect(screen.getByRole("button", { name: "Show" })).toHaveAttribute("aria-expanded", "false");
     expect(screen.queryByText(/POST http:\/\/gw\.test:4000\/v1\/responses/)).not.toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: "Show" }));
-
-    expect(screen.getByRole("button", { name: "Hide" })).toHaveAttribute("aria-expanded", "true");
-    expect(screen.getByText(/POST http:\/\/gw\.test:4000\/v1\/responses/)).toBeInTheDocument();
-  });
-
-  it("shows Codex instructions with the OpenAI base URL setting", async () => {
-    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
-    render(<CreatedKeyDisplay apiKey="sk-test-123" />);
-
-    await user.click(screen.getByRole("button", { name: "Codex" }));
-    await user.click(screen.getByRole("button", { name: "Show" }));
-
-    expect(screen.getByText("Instructions for your agent")).toBeInTheDocument();
-    expect(screen.getByText(/OPENAI_BASE_URL=http:\/\/gw\.test:4000\/v1/)).toBeInTheDocument();
-  });
-
-  it("copies complete instructions while the instructions card is collapsed", async () => {
-    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
-    render(<CreatedKeyDisplay apiKey="sk-test-123" />);
-
     await user.click(screen.getByRole("button", { name: "Copy instructions" }));
 
     const copiedInstructions = mockCopy.mock.calls.at(-1)?.[0] ?? "";
@@ -148,14 +149,20 @@ describe("CreatedKeyDisplay", () => {
     expect(copiedInstructions).toContain("POST http://gw.test:4000/v1/responses");
     expect(copiedInstructions).toContain("POST http://gw.test:4000/v1/messages");
     expect(copiedInstructions).toContain("GET http://gw.test:4000/v1/models");
+    expect(copiedInstructions).toContain(
+      "To run Claude Code through this gateway, set ANTHROPIC_BASE_URL=http://gw.test:4000 and ANTHROPIC_AUTH_TOKEN=sk-test-123.",
+    );
+    expect(copiedInstructions).toContain(
+      "To run Codex through this gateway, set OPENAI_BASE_URL=http://gw.test:4000/v1 and OPENAI_API_KEY=sk-test-123.",
+    );
     expect(screen.getByRole("button", { name: "Copied!" })).toBeInTheDocument();
     expect(toast.success).toHaveBeenCalledWith("Instructions copied");
   });
 });
 
 describe("buildAgentInstructions", () => {
-  it("builds Claude Code setup instructions with a normalized URL", () => {
-    expect(buildAgentInstructions("claude-code", "http://gw.test:4000/", "sk-test-123")).toBe(
+  it("builds shared instructions with both agent settings and a normalized URL", () => {
+    expect(buildAgentInstructions("http://gw.test:4000/", "sk-test-123")).toBe(
       [
         "Use this LiteLLM AI gateway for model inference.",
         "",
@@ -169,18 +176,10 @@ describe("buildAgentInstructions", () => {
         "- GET http://gw.test:4000/v1/models (models this key can use)",
         "",
         "To run Claude Code through this gateway, set ANTHROPIC_BASE_URL=http://gw.test:4000 and ANTHROPIC_AUTH_TOKEN=sk-test-123.",
+        "To run Codex through this gateway, set OPENAI_BASE_URL=http://gw.test:4000/v1 and OPENAI_API_KEY=sk-test-123.",
         "",
         "Docs for everything else LiteLLM supports: https://docs.litellm.ai/docs/",
       ].join("\n"),
     );
-  });
-
-  it("builds Codex setup instructions with a normalized URL", () => {
-    const instructions = buildAgentInstructions("codex", "http://gw.test:4000/", "sk-test-123");
-
-    expect(instructions).toContain(
-      "To run Codex through this gateway, set OPENAI_BASE_URL=http://gw.test:4000/v1 and OPENAI_API_KEY=sk-test-123.",
-    );
-    expect(instructions).toContain("POST http://gw.test:4000/v1/responses (OpenAI Responses)");
   });
 });
