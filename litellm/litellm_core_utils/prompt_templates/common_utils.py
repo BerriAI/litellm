@@ -330,8 +330,15 @@ def _message_without_pdf_file_parts(message: AllMessageValues) -> AllMessageValu
     return cast(AllMessageValues, {**message, "content": kept})  # cast-ok: same message with fewer content parts
 
 
+def _is_pdf_only_user_turn(message: AllMessageValues) -> bool:
+    parts: Final = content_parts(message)
+    return message["role"] == "user" and bool(parts) and all(is_pdf_file_part(part) for part in parts)
+
+
 def messages_without_pdf_file_parts(messages: Sequence[AllMessageValues]) -> tuple[AllMessageValues, ...]:
-    return tuple(_message_without_pdf_file_parts(message) for message in messages)
+    return tuple(
+        _message_without_pdf_file_parts(message) for message in messages if not _is_pdf_only_user_turn(message)
+    )
 
 
 _CONTENT_PART: Final = TypeAdapter(Mapping[str, object])

@@ -8848,6 +8848,26 @@ def test_drop_params_drops_a_pdf_file_part_without_a_data_url(
     assert sent["messages"] == [{"role": "user", "content": [_SUMMARIZE_TEXT_PART]}]
 
 
+def test_drop_params_drops_a_user_turn_that_held_only_a_pdf(respx_mock: respx.MockRouter) -> None:
+    api_base: Final = "http://localhost:12352/v1"
+    _mock_pdf_chat_route(respx_mock, api_base)
+
+    litellm.completion(
+        model="openai/qa-text-only-model",
+        messages=[
+            {"role": "user", "content": [_PDF_FILE_PART]},
+            {"role": "user", "content": [_SUMMARIZE_TEXT_PART]},
+        ],
+        api_base=api_base,
+        api_key="fake_openai_api_key",
+        model_info={"supports_pdf_input": False},
+        drop_params=True,
+    )
+
+    sent: Final = json.loads(respx_mock.calls[0].request.content)
+    assert sent["messages"] == [{"role": "user", "content": [_SUMMARIZE_TEXT_PART]}]
+
+
 def test_drop_params_keeps_an_image_data_url_whose_filename_says_pdf(respx_mock: respx.MockRouter) -> None:
     api_base: Final = "http://localhost:12351/v1"
     _mock_pdf_chat_route(respx_mock, api_base)
