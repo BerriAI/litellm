@@ -474,6 +474,10 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
             or effective_skip_assistant_message_for_guardrail(self)
         )
 
+    @override
+    def supports_structured_messages(self) -> bool:
+        return False
+
     def _writeback_messages(
         self,
         structured_messages: list[AllMessageValues],

@@ -248,7 +248,7 @@ def owned_gateway(
         gateway_from_environment() as gateway,
         owned_proxy_process(gateway, directory, environment or {}, config=path, workers=workers) as owned,
     ):
-        yield Gateway(owned.gateway.client, owned.gateway.key, gateway.upstream_url)
+        yield owned.gateway
 
 
 def stream_finished(endpoint: str, lines: Sequence[str]) -> bool:
