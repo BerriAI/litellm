@@ -9,14 +9,11 @@ ARN unified_object_id) batches with no managed unified id.
 import asyncio
 import json
 import logging
-from collections.abc import Mapping, Sequence
 from contextlib import contextmanager
 from copy import copy
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from hashlib import sha256
-from itertools import chain
-from typing import TYPE_CHECKING, Final, cast
+from typing import TYPE_CHECKING, Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -26,7 +23,6 @@ from litellm.types.utils import LiteLLMBatch
 
 if TYPE_CHECKING:
     from litellm.batches.batch_utils import BatchCostUsageResult
-    from litellm_enterprise.proxy.common_utils.managed_object_attribution import ManagedObjectRow
 
 _IS_B64 = "litellm.proxy.openai_files_endpoints.common_utils._is_base64_encoded_unified_file_id"
 _CLAIM_UNIFIED_BATCH_ID = "dW5pZmllZF9iYXRjaF9pZA=="
@@ -240,13 +236,13 @@ class TestCheckBatchCost:
         mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(return_value=1)
         # First find_many (primary query) raises with a schema error; second (fallback) returns empty
         mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
-            side_effect=[Exception("column batch_processed does not exist"), [], []]
+            side_effect=[Exception("column batch_processed does not exist"), []]
         )
 
         await check_batch_cost_instance.check_batch_cost()
 
         calls = mock_prisma_client.db.litellm_managedobjecttable.find_many.call_args_list
-        assert len(calls) == 3
+        assert len(calls) == 2
         fallback_where = calls[1][1]["where"]
         assert "batch_processed" not in fallback_where
         assert "stale_expired" in fallback_where["status"]["not_in"]
@@ -267,7 +263,7 @@ class TestCheckBatchCost:
 
         await check_batch_cost_instance.check_batch_cost()
 
-        assert mock_prisma_client.db.litellm_managedobjecttable.find_many.call_count == 2
+        assert mock_prisma_client.db.litellm_managedobjecttable.find_many.call_count == 1
         fallback_where = mock_prisma_client.db.litellm_managedobjecttable.find_many.call_args[1]["where"]
         assert "batch_processed" not in fallback_where
 
@@ -4203,72 +4199,3 @@ async def test_failed_retirement_keeps_batch_available() -> None:
 
     assert row.batch_processed is False
     assert row.status == "in_progress"
-
-
-@dataclass(frozen=True, slots=True)
-class _PollingBatch:
-    id: str
-    created_at: datetime
-
-
-def _matches_poll_filter(row: _PollingBatch, where: Mapping[str, object]) -> bool:
-    for key, value in where.items():
-        if key == "OR":
-            if not any(_matches_poll_filter(row, branch) for branch in cast(Sequence[Mapping[str, object]], value)):
-                return False
-            continue
-        actual: Final = row.created_at if key == "created_at" else row.id
-        if not isinstance(value, Mapping):
-            if actual != value:
-                return False
-            continue
-        for operator, bound in cast(Mapping[str, datetime | str], value).items():
-            if isinstance(actual, datetime) and isinstance(bound, datetime):
-                if (operator == "gt" and actual <= bound) or (operator == "lte" and actual > bound):
-                    return False
-            elif isinstance(actual, str) and isinstance(bound, str) and operator == "gt" and actual <= bound:
-                return False
-    return True
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("page_size", [1, 3])
-async def test_new_batches_progress_without_waiting_for_retry_scan(
-    monkeypatch: pytest.MonkeyPatch, page_size: int
-) -> None:
-    from litellm_enterprise.proxy.common_utils import check_batch_cost as module
-
-    monkeypatch.setattr(module, "MAX_OBJECTS_PER_POLL_CYCLE", page_size)
-    backlog: Final = tuple(
-        _PollingBatch(f"old-{index:03}", datetime(2000, 1, 1, tzinfo=timezone.utc)) for index in range(page_size * 5)
-    )
-    arrivals: Final = tuple(
-        _PollingBatch(f"new-{index:03}", datetime(2020, index // page_size + 1, 1, tzinfo=timezone.utc))
-        for index in range(page_size * 3)
-    )
-
-    async def select_page(*, where: Mapping[str, object], take: int, order: object) -> tuple[_PollingBatch, ...]:
-        return tuple(row for row in (*backlog, *arrivals) if _matches_poll_filter(row, where))[:take]
-
-    prisma: Final = MagicMock()
-    prisma.db.litellm_managedobjecttable.find_many = AsyncMock(side_effect=select_page)
-    with patch.object(module, "datetime") as clock:
-        clock.now.return_value = datetime(2010, 1, 1, tzinfo=timezone.utc)
-        poller: Final = module.CheckBatchCost(MagicMock(), prisma, MagicMock())
-        first: Final = await poller._find_jobs({})
-        assert tuple(row.id for row in first) == tuple(row.id for row in backlog[:page_size])
-
-        async def poll_next_turn(turn: int) -> Sequence["ManagedObjectRow"]:
-            clock.now.return_value = datetime(2020, turn // 2 + 1, 2, tzinfo=timezone.utc)
-            return await poller._find_jobs({})
-
-        pages: Final = tuple([await poll_next_turn(turn) for turn in range(5)])
-        selected: Final = frozenset(row.id for row in chain.from_iterable(pages))
-        assert all(len(page) <= page_size for page in pages)
-        assert all(row.id in selected for row in arrivals)
-        assert all(row.id in selected for row in backlog[page_size : 3 * page_size])
-        clock.now.return_value = datetime(2021, 1, 1, tzinfo=timezone.utc)
-        restarted: Final = module.CheckBatchCost(MagicMock(), prisma, MagicMock())
-        recovered: Final = tuple([await restarted._find_jobs({}) for _ in range(10)])
-        recovered_ids: Final = frozenset(row.id for row in chain.from_iterable(recovered))
-        assert recovered_ids == frozenset(row.id for row in (*backlog, *arrivals))

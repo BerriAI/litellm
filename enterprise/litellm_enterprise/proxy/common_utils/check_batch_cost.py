@@ -111,8 +111,6 @@ class CheckBatchCost:
         self.batch_processed_support_confirmed: bool = False
         self._poll_cursor: tuple[datetime, str] | None = None
         self._poll_before: datetime | None = None
-        self._arrival_cursor: tuple[datetime, str] = (datetime.now(timezone.utc), "")
-        self._poll_arrivals: bool = False
         self._line_item_stores: Final[set[asyncio.Task[None]]] = set()
         self._line_item_store_turn: Final = asyncio.Lock()
         self._poll_idle: Final = asyncio.Event()
@@ -184,21 +182,13 @@ class CheckBatchCost:
         )
 
     async def _find_jobs(self, where: Mapping[str, object]) -> Sequence[ManagedObjectRow]:
-        arrivals: Final = self._poll_arrivals
-        page: Final = await self._find_job_page(where, arrivals=arrivals)
-        self._poll_arrivals = not arrivals if page else arrivals
-        if page:
-            return page
-        return await self._find_job_page(where, arrivals=not arrivals)
-
-    async def _find_job_page(self, where: Mapping[str, object], *, arrivals: bool) -> Sequence[ManagedObjectRow]:
-        cursor: Final = self._arrival_cursor if arrivals else self._poll_cursor
-        if not arrivals and cursor is None:
+        cursor: Final = self._poll_cursor
+        if cursor is None:
             self._poll_before = datetime.now(timezone.utc)
         page: Final = await _managed_object_table(self.prisma_client).find_many(
             where={
                 **where,
-                "created_at": {"lte": datetime.now(timezone.utc) if arrivals else self._poll_before},
+                "created_at": {"lte": self._poll_before},
                 **(
                     {
                         "OR": [
@@ -213,11 +203,7 @@ class CheckBatchCost:
             take=MAX_OBJECTS_PER_POLL_CYCLE,
             order=[{"created_at": "asc"}, {"id": "asc"}],
         )
-        if arrivals:
-            if page:
-                self._arrival_cursor = (page[-1].created_at, page[-1].id)
-        else:
-            self._poll_cursor = (page[-1].created_at, page[-1].id) if len(page) == MAX_OBJECTS_PER_POLL_CYCLE else None
+        self._poll_cursor = (page[-1].created_at, page[-1].id) if len(page) == MAX_OBJECTS_PER_POLL_CYCLE else None
         return page
 
     def _unprocessed_snapshot(self, job: ManagedObjectRow) -> Mapping[str, object]:

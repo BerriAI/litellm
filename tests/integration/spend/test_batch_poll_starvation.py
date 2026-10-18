@@ -1,12 +1,16 @@
 import json
 import os
+from datetime import datetime, timezone
 from functools import partial
 from hashlib import sha256
+from itertools import chain
 from typing import Final
+from uuid import uuid4
 
 import pytest
 from integration._support.client import JSON_OBJECT, Gateway, Scenario, eventually, object_value, string_value
 from integration._support.database import read_rows, write_rows
+from integration._support.prisma_clients import connected_proxy_prisma
 from integration._support.upstream import ScenarioHandle, delete_scenario, register_scenario
 from integration.cost_calculation.cost_tracking_case import JsonResponse, RoutedResponse, TextResponse
 from pydantic import JsonValue
@@ -249,3 +253,57 @@ def test_uncostable_batches_do_not_starve_billable_batches(
                 seconds=70,
             )
             assert balance == [{"spend": pytest.approx(expected_spend)}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tail", [0, 1])
+async def test_batch_scan_finishes_and_revisits_retries_despite_new_arrivals(tail: int) -> None:
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.router import Router
+    from litellm_enterprise.proxy.common_utils.check_batch_cost import CheckBatchCost
+
+    owner: Final = f"batch-scan-{uuid4().hex}"
+    count: Final = 2 * MAX_OBJECTS_PER_POLL_CYCLE + tail
+
+    def insert_rows(group: str, size: int, created_at: datetime) -> tuple[str, ...]:
+        prefix: Final = f"{owner}-{group}-"
+        write_rows(
+            'INSERT INTO "LiteLLM_ManagedObjectTable" '
+            '(id, unified_object_id, model_object_id, file_object, file_purpose, created_by, created_at, updated_at) '
+            "SELECT %s || lpad(n::text, 8, '0'), %s || n, %s || n, '{}'::jsonb, 'batch-scan-test', %s, "
+            "%s::timestamptz, NOW() FROM generate_series(0, %s::int - 1) n",
+            (prefix, prefix, prefix, owner, created_at.isoformat(), str(size)),
+        )
+        return tuple(f"{prefix}{index:08}" for index in range(size))
+
+    try:
+        old_ids: Final = insert_rows("old", count, datetime(2000, 1, 1, tzinfo=timezone.utc))
+        async with connected_proxy_prisma() as prisma:
+            logging: Final = ProxyLogging(UserApiKeyCache())
+            router: Final = Router()
+            poller: Final = CheckBatchCost(logging, prisma, router)
+            where: Final = {"created_by": owner, "batch_processed": False}
+            first: Final = await poller._find_jobs(where)
+            assert tuple(row.id for row in first) == old_ids[:MAX_OBJECTS_PER_POLL_CYCLE]
+
+            new_ids: Final = insert_rows("new", MAX_OBJECTS_PER_POLL_CYCLE, datetime.now(timezone.utc))
+            second: Final = await poller._find_jobs(where)
+            assert tuple(row.id for row in second) == old_ids[MAX_OBJECTS_PER_POLL_CYCLE : 2 * MAX_OBJECTS_PER_POLL_CYCLE]
+            insert_rows("later", MAX_OBJECTS_PER_POLL_CYCLE, datetime.now(timezone.utc))
+            last: Final = await poller._find_jobs(where)
+            assert tuple(row.id for row in last) == old_ids[2 * MAX_OBJECTS_PER_POLL_CYCLE :]
+
+            revisited: Final = await poller._find_jobs(where)
+            assert tuple(row.id for row in revisited) == old_ids[:MAX_OBJECTS_PER_POLL_CYCLE]
+            insert_rows("during-next-scan", MAX_OBJECTS_PER_POLL_CYCLE, datetime.now(timezone.utc))
+            pages: Final = tuple([await poller._find_jobs(where) for _ in range(3)])
+            assert all(len(page) <= MAX_OBJECTS_PER_POLL_CYCLE for page in pages)
+            selected: Final = frozenset(row.id for row in chain.from_iterable(pages))
+            assert frozenset(new_ids) <= selected
+
+            restarted: Final = CheckBatchCost(logging, prisma, router)
+            restart_page: Final = await restarted._find_jobs(where)
+            assert tuple(row.id for row in restart_page) == old_ids[:MAX_OBJECTS_PER_POLL_CYCLE]
+    finally:
+        write_rows('DELETE FROM "LiteLLM_ManagedObjectTable" WHERE created_by = %s', (owner,))
