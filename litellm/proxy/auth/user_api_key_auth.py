@@ -2956,7 +2956,7 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
                     team_member_budget: Final = team_member_info.litellm_budget_table.effective_max_budget(
                         now=datetime.now(timezone.utc),
                     )
-                    valid_token.team_member_budget = team_member_budget
+                    valid_token.team_member_budget = team_member_budget  # rebind-ok: carrier for router fallback checks
                     if team_member_budget is not None and team_member_budget > 0:
                         # Read from cross-pod counter (Redis-first) if available
                         from litellm.proxy.proxy_server import get_current_spend
