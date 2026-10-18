@@ -88,6 +88,7 @@ def test_jsonrpc_error_and_malformed_tool_result_remain_errors(gateway: Gateway)
             assert control.json()["content"][0]["text"] == "8"
 
 
+@pytest.mark.covers("other.mcp.transport.large_sse_tool_result_reaches_caller")
 def test_tool_result_larger_than_one_mib_in_a_single_sse_event_reaches_the_caller(gateway: Gateway) -> None:
     payload: Final = "x" * (3 * 1024 * 1024)
     server: Final = MCPServer("large-result")
