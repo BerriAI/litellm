@@ -1483,6 +1483,17 @@ async def get_guardrail_info(guardrail_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _undeclared_logging_only(
+    guardrail_class: type[CustomGuardrail], hooks: Sequence[GuardrailEventHooks]
+) -> tuple[GuardrailEventHooks, ...]:
+    """logging_only when the class accepts it at save time without declaring it in its hooks."""
+    return (
+        (GuardrailEventHooks.logging_only,)
+        if guardrail_class.accepts_logging_only_mode() and GuardrailEventHooks.logging_only not in hooks
+        else ()
+    )
+
+
 @router.get(
     "/guardrails/ui/add_guardrail_settings",
     tags=["Guardrails"],
@@ -1515,7 +1526,7 @@ async def get_guardrail_ui_settings() -> GuardrailUIAddGuardrailSettings:
     ]
 
     supported_modes_by_provider: Final = {
-        provider: [hook.value for hook in hooks]
+        provider: [hook.value for hook in (*hooks, *_undeclared_logging_only(guardrail_class, hooks))]
         for provider, guardrail_class in guardrail_class_registry.items()
         if (hooks := guardrail_class.get_supported_event_hooks()) is not None
     } | MappingProxyType(
@@ -2356,9 +2367,6 @@ class _GuardrailLoggingObj(Protocol):
     @property
     def async_success_handler(self) -> "Callable[..., Awaitable[object]]": ...
 
-    @property
-    def success_handler(self) -> "Callable[..., object]": ...
-
 
 class _GuardrailProxyLogging(Protocol):
     @property
@@ -2388,10 +2396,6 @@ async def _emit_guardrail_success_logs(
     caller from receiving the guardrail response.  Returns the (possibly
     hook-modified) response.
     """
-    from litellm.litellm_core_utils.thread_pool_executor import (
-        executor as thread_pool_executor,
-    )
-
     try:
         modified: Final = await proxy_logging_obj.post_call_success_hook(
             data=data,
@@ -2419,16 +2423,6 @@ async def _emit_guardrail_success_logs(
             )
         except Exception:
             verbose_proxy_logger.exception("apply_guardrail: async_success_handler failed")
-        try:
-            thread_pool_executor.submit(
-                litellm_logging_obj.success_handler,
-                response_for_logging,
-                start_time,
-                end_time,
-                False,
-            )
-        except Exception:
-            verbose_proxy_logger.exception("apply_guardrail: success_handler submit failed")
 
     return response
 

@@ -41,6 +41,8 @@ from litellm.proxy.guardrails.content_filter_data import DATA_ROOTS
 from litellm.proxy.guardrails.guardrail_endpoints import (
     test_custom_code_guardrail as run_custom_code_test_endpoint,
 )
+from litellm.proxy.guardrails.guardrail_hooks.azure.prompt_shield import AzureContentSafetyPromptShieldGuardrail
+from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import ContentFilterGuardrail
 
 MOCK_ADMIN_USER = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
 from litellm.proxy.guardrails.guardrail_registry import (
@@ -122,6 +124,7 @@ def test_get_guardrails_list_response() -> None:
     assert isinstance(minimal_response, ListGuardrailsResponse)
     assert minimal_response.guardrails[0].guardrail_name == "minimal-guard"
     assert minimal_response.guardrails[0].guardrail_info is None
+
 
 _INVALID_SCOPE_LITELLM_PARAMS: Final = MappingProxyType(
     {
@@ -653,6 +656,8 @@ async def test_get_guardrail_info_tolerates_invalid_stored_stream_scope(mocker, 
     response = await get_guardrail_info("test-db-guardrail")
 
     assert response.litellm_params.stream_scope is None
+
+
 async def test_get_guardrail_info_normalizes_invalid_scope_from_db(
     mocker, mock_guardrail_registry, mock_in_memory_handler
 ):
@@ -949,6 +954,17 @@ async def test_provider_specific_params_includes_embedding_toggle():
         field = provider_params[provider]["inspect_embeddings"]
         assert field["type"] == "bool"
         assert field["default_value"] is False
+
+
+@pytest.mark.asyncio
+async def test_provider_specific_params_offers_forward_messages_as_sent_off_by_default():
+    from litellm.proxy.guardrails.guardrail_endpoints import get_provider_specific_params
+
+    provider_params = await get_provider_specific_params()
+
+    field = provider_params["generic_guardrail_api"]["optional_params"]["fields"]["forward_messages_as_sent"]
+    assert field["type"] == "boolean"
+    assert field["default_value"] is False
 
 
 @pytest.mark.asyncio
@@ -2146,7 +2162,6 @@ async def test_apply_guardrail_invokes_logging_pipeline(mocker):
     mock_proxy_logging.post_call_success_hook.assert_awaited_once()
     mock_logging_obj.async_success_handler.assert_awaited_once()
     assert mock_logging_obj.call_type == "pass_through_endpoint"
-    mock_executor.submit.assert_called_once()
     assert mock_logging_obj.async_success_handler.await_args.kwargs["result"] == {
         "response": {"response_text": "masked"}
     }
@@ -3143,7 +3158,36 @@ async def test_ui_settings_map_matches_runtime_supported_event_hooks():
             continue
 
         assert provider in result.supported_modes_by_provider, provider
-        assert result.supported_modes_by_provider[provider] == [hook.value for hook in declared], provider
+        offered = result.supported_modes_by_provider[provider]
+        assert offered[: len(declared)] == [hook.value for hook in declared], provider
+        assert set(offered) - {hook.value for hook in declared} <= {"logging_only"}, provider
+        assert offered.count("logging_only") == (
+            1 if guardrail_class.accepts_logging_only_mode() or GuardrailEventHooks.logging_only in declared else 0
+        ), provider
+
+
+@pytest.mark.asyncio
+async def test_ui_settings_offer_logging_only_where_the_generic_scan_runs():
+    modes_by_provider = (await get_guardrail_ui_settings()).supported_modes_by_provider
+
+    assert modes_by_provider["litellm_content_filter"] == [
+        *(hook.value for hook in ContentFilterGuardrail.get_supported_event_hooks()),
+        "logging_only",
+    ]
+    assert modes_by_provider["akto"].count("logging_only") == 1
+    assert modes_by_provider["azure/prompt_shield"] == [
+        hook.value for hook in AzureContentSafetyPromptShieldGuardrail.get_supported_event_hooks()
+    ]
+    with pytest.raises(ValueError, match="not in the supported event hooks"):
+        AzureContentSafetyPromptShieldGuardrail(
+            guardrail_name="native-logging-only",
+            api_key="k",
+            api_base="https://example.invalid",
+            event_hook="logging_only",
+        )
+    assert (
+        ContentFilterGuardrail(guardrail_name="cf-logging-only", event_hook="logging_only").event_hook == "logging_only"
+    )
 
 
 def test_content_filter_runtime_rejects_unsupported_mcp_hook():
@@ -3582,3 +3626,68 @@ async def test_patch_guardrail_rejects_encrypted_marker_values(mocker, mock_guar
 
     assert exc_info.value.status_code == 400
     mock_guardrail_registry.update_guardrail_in_db.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_guardrail_success_delivers_sync_callback_once_with_overlapping_workers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    from unittest.mock import Mock
+
+    import litellm
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.litellm_core_utils import litellm_logging, thread_pool_executor
+    from litellm.proxy.guardrails.guardrail_endpoints import _emit_guardrail_success_logs
+    from litellm.types.guardrails import ApplyGuardrailResponse
+
+    class OverlappingHook(CustomLogger):
+        barrier: Barrier
+
+        def logging_hook(
+            self, kwargs: dict[str, object], result: object, call_type: str
+        ) -> tuple[dict[str, object], object]:
+            self.barrier.wait(timeout=5)
+            return kwargs, result
+
+    hook: Final = OverlappingHook()
+    callback: Final = Mock()
+    queued_executor: Final = Mock()
+    proxy_logging: Final = Mock(post_call_success_hook=AsyncMock(return_value=None))
+
+    def sync_callback(kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object) -> None:
+        callback(response_obj)
+
+    monkeypatch.setattr(litellm, "success_callback", [hook, sync_callback])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm_logging, "customLogger", CustomLogger())
+    monkeypatch.setattr(litellm_logging, "executor", queued_executor)
+    monkeypatch.setattr(thread_pool_executor, "executor", queued_executor)
+    start: Final = datetime(2026, 1, 1)
+    logging_obj: Final = litellm_logging.Logging(
+        model="guardrail",
+        messages=[],
+        stream=False,
+        call_type="pass_through_endpoint",
+        start_time=start,
+        litellm_call_id="guardrail-success",
+        function_id="guardrail-success",
+    )
+    logging_obj.update_environment_variables(litellm_params={"metadata": {}}, optional_params={})
+    response: Final = ApplyGuardrailResponse(response_text="masked")
+
+    returned: Final = await _emit_guardrail_success_logs(
+        proxy_logging, logging_obj, {}, UserAPIKeyAuth(), response, start
+    )
+    submissions: Final = tuple(queued_executor.submit.call_args_list)
+    assert submissions
+    hook.barrier = Barrier(len(submissions))
+    with ThreadPoolExecutor(max_workers=len(submissions)) as pool:
+        futures: Final = tuple(pool.submit(call.args[0], *call.args[1:], **call.kwargs) for call in submissions)
+        for future in futures:
+            future.result(timeout=10)
+
+    assert returned is response
+    callback.assert_called_once()
+    assert callback.call_args.args[0] == {"response": {"response_text": "masked"}}

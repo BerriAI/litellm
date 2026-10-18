@@ -21,6 +21,8 @@ from litellm.proxy.db.spend_log_tool_index import (
     flush_tool_usage_transactions,
     response_tool_call_names,
 )
+from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
+from litellm.types.llms.openai import ResponsesAPIResponse
 from tests.unit.proxy.db.fake_prisma_engine import engine_call
 
 
@@ -221,6 +223,37 @@ class TestResponseToolCallNames:
             ]
         }
         assert response_tool_call_names(response) == ("ant_get_weather",)
+
+    def test_auto_executed_mcp_tools_count_from_the_final_responses_api_response(self):
+        final_round = ResponsesAPIResponse.model_validate(
+            {
+                "id": "resp_final",
+                "object": "response",
+                "created_at": 1,
+                "status": "completed",
+                "model": "gpt-5.6",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg_1",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "done", "annotations": []}],
+                    }
+                ],
+            }
+        )
+        logged = LiteLLM_Proxy_MCP_Handler.add_mcp_output_elements_to_response(
+            final_round,
+            mcp_tools_fetched=[{"name": "demo-echo"}, {"name": "demo-add"}],
+            tool_results=[
+                {"tool_call_id": "call_1", "result": "x", "name": "demo-echo"},
+                {"tool_call_id": "call_2", "result": "3", "name": "demo-add"},
+            ],
+        )
+
+        assert response_tool_call_names(logged) == ("demo-echo", "demo-add")
+        assert response_tool_call_names(logged.model_dump()) == ("demo-echo", "demo-add")
 
 
 def _transaction(

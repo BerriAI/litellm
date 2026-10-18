@@ -136,7 +136,7 @@ async def anthropic_messages_with_mcp(
         )
 
     custom_llm_provider: Final = kwargs.get("custom_llm_provider")
-    classified_here: Final = proxy_classifies_tool_uses(
+    classified_here: Final = await proxy_classifies_tool_uses(
         model, custom_llm_provider if isinstance(custom_llm_provider, str) else None, kwargs
     )
     loop_call_args: Final[Mapping[str, object]] = (

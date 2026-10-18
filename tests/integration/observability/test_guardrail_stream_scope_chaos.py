@@ -25,6 +25,8 @@ from integration._support.wire import Reply, Request, Wire, wire_server
 from integration._support.ports import allocate_port
 from pydantic import TypeAdapter
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 ChaosEndpoint: TypeAlias = Literal["chat", "messages", "responses"]
 CHAOS_ENDPOINTS: Final[tuple[ChaosEndpoint, ...]] = ("chat", "messages", "responses")
 CHAOS_MODELS: Final = MappingProxyType(

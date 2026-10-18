@@ -1,4 +1,5 @@
 from importlib import import_module
+from typing import Final
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -402,3 +403,54 @@ async def test_anthropic_messages_with_mcp_classifies_only_the_response_the_clie
     assert result["safeguard_results"][0]["status"]["tool_uses"] == {
         "toolu_bash": {"type": "evaluated", "outcome": "flagged", "explanation": "unrequested"}
     }
+
+
+async def _mcp_safeguards_turn_recording_beta_map_loads(custom_llm_provider: str, model: str) -> tuple[int, ...]:
+    import threading
+
+    from litellm import anthropic_beta_headers_manager
+    from litellm.llms.anthropic.pass_through.messages import mcp_handler
+    from litellm.responses.mcp.request_context import MCPRequestContext
+
+    loader_threads: Final[list[int]] = []  # mutable-ok: records the thread each beta map load ran on
+
+    def recording_loader(url: str) -> object:
+        loader_threads.append(threading.get_ident())
+        return anthropic_beta_headers_manager.GetAnthropicBetaHeadersConfig.load_local_beta_headers_config()
+
+    with (
+        patch.object(anthropic_beta_headers_manager, "_BETA_HEADERS_CONFIG", None),
+        patch.object(anthropic_beta_headers_manager, "get_beta_headers_config", new=recording_loader),
+        patch.object(MCPRequestContext, "resolve", return_value=MCPRequestContext(user_api_key_auth=None)),
+        patch.object(
+            import_module("litellm.responses.mcp.litellm_proxy_mcp_handler").LiteLLM_Proxy_MCP_Handler,
+            "process_mcp_tools_without_openai_transform",
+            new=AsyncMock(return_value=([], {})),
+        ),
+        patch("litellm.anthropic_messages", new=AsyncMock(return_value={"stop_reason": "end_turn", "content": []})),
+        patch("litellm.proxy.proxy_server.general_settings", {"safeguards_classifier_model": "classifier"}),
+    ):
+        await mcp_handler.anthropic_messages_with_mcp(
+            max_tokens=100,
+            messages=[{"role": "user", "content": "hi"}],
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            tools=[MCP_REFERENCE],
+            safeguards=[{"type": "dangerous_tool_use", "classifier_context": {"permission_mode": "auto"}}],
+        )
+    return tuple(loader_threads)
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_with_mcp_loads_a_filtered_routes_beta_map_off_the_event_loop():
+    import threading
+
+    loader_threads: Final = await _mcp_safeguards_turn_recording_beta_map_loads("azure_ai", "claude-sonnet-4-6")
+
+    assert len(loader_threads) == 1
+    assert threading.get_ident() not in loader_threads
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_with_mcp_never_loads_the_beta_map_for_first_party_anthropic():
+    assert await _mcp_safeguards_turn_recording_beta_map_loads("anthropic", "claude-sonnet-4-6") == ()

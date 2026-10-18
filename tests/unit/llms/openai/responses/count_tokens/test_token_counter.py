@@ -54,6 +54,7 @@ async def test_count_reports_upstream_input_tokens_and_keeps_the_raw_payload(
             "request_model": "openai/gpt-4o",
             "model_used": "gpt-4o",
             "tokenizer_type": "openai_api",
+            "count_source": None,
             "original_response": payload,
             "error": False,
             "error_message": None,
@@ -98,6 +99,7 @@ async def test_non_integer_input_tokens_becomes_an_error_response_carrying_the_v
             "request_model": "openai/gpt-4o",
             "model_used": "gpt-4o",
             "tokenizer_type": "openai_api",
+            "count_source": None,
             "original_response": None,
             "error": True,
             "error_message": str(rejection.value),
@@ -126,6 +128,7 @@ async def test_count_payload_that_is_not_an_object_becomes_an_error_response_nam
             "request_model": "openai/gpt-4o",
             "model_used": "gpt-4o",
             "tokenizer_type": "openai_api",
+            "count_source": None,
             "original_response": None,
             "error": True,
             "error_message": str(failed_lookup.value),
@@ -156,6 +159,7 @@ async def test_upstream_error_status_becomes_an_error_response_with_that_status_
             "request_model": "openai/gpt-4o",
             "model_used": "gpt-4o",
             "tokenizer_type": "openai_api",
+            "count_source": None,
             "original_response": None,
             "error": True,
             "error_message": upstream_text,
@@ -382,9 +386,51 @@ async def test_undecodable_count_body_becomes_a_500_error_response_carrying_the_
             "request_model": "openai/gpt-4o",
             "model_used": "gpt-4o",
             "tokenizer_type": "openai_api",
+            "count_source": None,
             "original_response": None,
             "error": True,
             "error_message": f"CountTokens processing error: {undecodable.value}",
             "status_code": 500,
         }
     )
+
+
+@pytest.mark.asyncio
+async def test_count_uses_the_global_openai_key_chat_would_use(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "openai_key", "sk-from-litellm-settings")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    with respx.mock:
+        route: Final = respx.post(COUNT_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 9}))
+        result: Final = await OpenAITokenCounter().count_tokens(
+            model_to_use="gpt-4o",
+            messages=[{"role": "user", "content": "hi"}],
+            contents=None,
+            deployment={"litellm_params": {}},
+            request_model="openai/gpt-4o",
+        )
+    assert result is not None
+    assert result.total_tokens == 9
+    assert route.calls.last.request.headers["authorization"] == "Bearer sk-from-litellm-settings"
+
+
+@pytest.mark.asyncio
+async def test_count_sends_the_global_key_only_to_the_global_api_base(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "openai_key", "sk-private-gateway")
+    monkeypatch.setattr(litellm, "api_base", "https://gateway.internal.example/v1")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    with respx.mock:
+        route: Final = respx.post("https://gateway.internal.example/v1/responses/input_tokens").mock(
+            return_value=httpx.Response(200, json={"input_tokens": 4})
+        )
+        result: Final = await OpenAITokenCounter().count_tokens(
+            model_to_use="gpt-4o",
+            messages=[{"role": "user", "content": "hi"}],
+            contents=None,
+            deployment={"litellm_params": {}},
+            request_model="openai/gpt-4o",
+        )
+    assert result is not None
+    assert result.total_tokens == 4
+    assert route.calls.last.request.headers["authorization"] == "Bearer sk-private-gateway"
