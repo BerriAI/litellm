@@ -108,6 +108,9 @@ from litellm.litellm_core_utils.hidden_params import (
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.llm_cost_calc.utils import SERVICE_TIER_COST_KEY_SUFFIXES
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    request_contains_image_content,
+)
 from litellm.litellm_core_utils.ptu_pricing import (
     PTU_COST_ATTRIBUTION_ENV_VAR,
     declares_ptu,
@@ -14104,6 +14107,7 @@ class Router:
         _context_window_error = False
         _potential_error_str = ""
         _rate_limit_error = False
+        _vision_error = False
         parent_otel_span: Final = get_parent_otel_span_from_kwargs(request_kwargs)
 
         has_countable_input: Final = (messages is not None or input is not None) and not compaction_pending(
@@ -14127,6 +14131,7 @@ class Router:
             if request_kwargs is not None and litellm.drop_params is False
             else frozenset()
         )
+        requires_vision_support: Final = request_contains_image_content(messages=messages, input=input)
 
         ## get model group RPM ##
         dt: Final = get_utc_datetime()
@@ -14139,6 +14144,11 @@ class Router:
             # Cache nested dict access to avoid repeated temporary dict allocations
             _litellm_params = deployment.get("litellm_params", {})
             _model_info = deployment.get("model_info", {})
+
+            if requires_vision_support and _model_info.get("supports_vision") is False:
+                invalid_model_indices.add(idx)
+                _vision_error = True
+                continue
 
             max_input_tokens = deployment_max_input_tokens[idx]
             if (
@@ -14246,6 +14256,17 @@ class Router:
             elif _context_window_error is True:
                 raise litellm.ContextWindowExceededError(
                     message=f"litellm._pre_call_checks: Context Window exceeded for given call. No models have context window large enough for this call.\n{_potential_error_str}",
+                    model=model,
+                    llm_provider="",
+                )
+
+            elif _vision_error is True:
+                raise litellm.BadRequestError(
+                    message=(
+                        f"litellm._pre_call_checks: No deployment of model={model} supports image input. "
+                        "Declare vision support with `model_info: supports_vision: true` on a deployment, "
+                        "or remove the image from the request."
+                    ),
                     model=model,
                     llm_provider="",
                 )

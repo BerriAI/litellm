@@ -29733,3 +29733,106 @@ async def test_responses_fallback_wrapper_disconnect_billing_keeps_the_primary_s
     wrapped.adopt_fallback_headers(fallback)
 
     assert wrapped.partial_response_on_disconnect().response.usage.output_tokens == primary_tokens + fallback_tokens
+def test_pre_call_checks_drops_deployments_declaring_no_vision_for_image_requests():
+    model_list: Final = [
+        {
+            "model_name": "mixed",
+            "litellm_params": {"model": "gpt-4o"},
+            "model_info": {"id": "vision", "supports_vision": True},
+        },
+        {
+            "model_name": "mixed",
+            "litellm_params": {"model": "gpt-audio"},
+            "model_info": {"id": "text-only", "supports_vision": False},
+        },
+        {
+            "model_name": "mixed",
+            "litellm_params": {"model": "gpt-4o"},
+            "model_info": {"id": "unknown"},
+        },
+    ]
+    router: Final = Router(model_list=model_list, enable_pre_call_checks=True)
+
+    filtered: Final = router._pre_call_checks(
+        model="mixed",
+        healthy_deployments=model_list,
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "what is in this image?"},
+                    {"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}},
+                ],
+            }
+        ],
+    )
+
+    assert [d["model_info"]["id"] for d in filtered] == ["vision", "unknown"]
+
+
+def test_pre_call_checks_keeps_non_vision_deployments_for_text_requests():
+    model_list: Final = [
+        {
+            "model_name": "mixed",
+            "litellm_params": {"model": "gpt-audio"},
+            "model_info": {"id": "text-only", "supports_vision": False},
+        },
+    ]
+    router: Final = Router(model_list=model_list, enable_pre_call_checks=True)
+
+    filtered: Final = router._pre_call_checks(
+        model="mixed",
+        healthy_deployments=model_list,
+        messages=[{"role": "user", "content": "hello"}],
+    )
+
+    assert [d["model_info"]["id"] for d in filtered] == ["text-only"]
+
+
+def test_pre_call_checks_drops_non_vision_deployments_for_responses_image_input():
+    model_list: Final = [
+        {
+            "model_name": "mixed",
+            "litellm_params": {"model": "gpt-4o"},
+            "model_info": {"id": "vision", "supports_vision": True},
+        },
+        {
+            "model_name": "mixed",
+            "litellm_params": {"model": "gpt-audio"},
+            "model_info": {"id": "text-only", "supports_vision": False},
+        },
+    ]
+    router: Final = Router(model_list=model_list, enable_pre_call_checks=True)
+
+    filtered: Final = router._pre_call_checks(
+        model="mixed",
+        healthy_deployments=model_list,
+        input=[{"type": "input_image", "image_url": "https://example.com/cat.png"}],
+    )
+
+    assert [d["model_info"]["id"] for d in filtered] == ["vision"]
+
+
+def test_pre_call_checks_raises_bad_request_when_no_deployment_supports_vision():
+    model_list: Final = [
+        {
+            "model_name": "mixed",
+            "litellm_params": {"model": "gpt-audio"},
+            "model_info": {"id": "text-only", "supports_vision": False},
+        },
+    ]
+    router: Final = Router(model_list=model_list, enable_pre_call_checks=True)
+
+    with pytest.raises(litellm.BadRequestError, match="supports image input"):
+        router._pre_call_checks(
+            model="mixed",
+            healthy_deployments=model_list,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}},
+                    ],
+                }
+            ],
+        )
