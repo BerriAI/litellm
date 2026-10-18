@@ -40,9 +40,9 @@ class TestLangsmithLoggerInit:
             langsmith_sampling_rate=sampling_rate,
         )
 
-        assert (
-            logger.sampling_rate == sampling_rate
-        ), f"Expected sampling_rate to be {sampling_rate}, got {logger.sampling_rate}"
+        assert logger.sampling_rate == sampling_rate, (
+            f"Expected sampling_rate to be {sampling_rate}, got {logger.sampling_rate}"
+        )
 
     @patch.dict(os.environ, {"LANGSMITH_SAMPLING_RATE": "1"}, clear=False)
     def test_langsmith_sampling_rate_zero_parameter_falls_back_to_env(self):
@@ -53,104 +53,74 @@ class TestLangsmithLoggerInit:
             langsmith_sampling_rate=0.0,
         )
 
-        assert (
-            logger.sampling_rate == 1.0
-        ), f"Expected sampling_rate to fall back to 1.0 from env, got {logger.sampling_rate}"
+        assert logger.sampling_rate == 1.0, (
+            f"Expected sampling_rate to fall back to 1.0 from env, got {logger.sampling_rate}"
+        )
 
     @patch.dict(os.environ, {"LANGSMITH_SAMPLING_RATE": "1"}, clear=False)
     def test_langsmith_sampling_rate_from_integer_env_var(self):
         """Test that sampling rate uses environment variable when parameter not provided and env var is integer."""
-        logger = LangsmithLogger(
-            langsmith_api_key="test-key", langsmith_project="test-project"
-        )
+        logger = LangsmithLogger(langsmith_api_key="test-key", langsmith_project="test-project")
 
-        assert (
-            logger.sampling_rate == 1.0
-        ), f"Expected sampling_rate to be 1.0 from env var, got {logger.sampling_rate}"
+        assert logger.sampling_rate == 1.0, f"Expected sampling_rate to be 1.0 from env var, got {logger.sampling_rate}"
 
     @patch.dict(os.environ, {"LANGSMITH_SAMPLING_RATE": "0.8"}, clear=False)
     def test_langsmith_sampling_rate_decimal_env_var_ignored(self):
         """Test that decimal environment variables are ignored due to isdigit() check."""
-        logger = LangsmithLogger(
-            langsmith_api_key="test-key", langsmith_project="test-project"
-        )
+        logger = LangsmithLogger(langsmith_api_key="test-key", langsmith_project="test-project")
 
-        assert (
-            logger.sampling_rate == 1.0
-        ), f"Expected sampling_rate to default to 1.0 (decimal env ignored), got {logger.sampling_rate}"
+        assert logger.sampling_rate == 1.0, (
+            f"Expected sampling_rate to default to 1.0 (decimal env ignored), got {logger.sampling_rate}"
+        )
 
     @patch.dict(os.environ, {}, clear=True)
     def test_langsmith_sampling_rate_default_value(self):
         """Test that sampling rate defaults to 1.0 when no parameter or env var provided."""
-        logger = LangsmithLogger(
-            langsmith_api_key="test-key", langsmith_project="test-project"
-        )
+        logger = LangsmithLogger(langsmith_api_key="test-key", langsmith_project="test-project")
 
-        assert (
-            logger.sampling_rate == 1.0
-        ), f"Expected default sampling_rate to be 1.0, got {logger.sampling_rate}"
+        assert logger.sampling_rate == 1.0, f"Expected default sampling_rate to be 1.0, got {logger.sampling_rate}"
 
     @patch.dict(os.environ, {"LANGSMITH_SAMPLING_RATE": "invalid"}, clear=False)
     def test_langsmith_sampling_rate_invalid_env_var_defaults(self):
         """Test that invalid environment variable falls back to default value."""
-        logger = LangsmithLogger(
-            langsmith_api_key="test-key", langsmith_project="test-project"
-        )
+        logger = LangsmithLogger(langsmith_api_key="test-key", langsmith_project="test-project")
 
-        assert (
-            logger.sampling_rate == 1.0
-        ), f"Expected sampling_rate to default to 1.0 with invalid env var, got {logger.sampling_rate}"
+        assert logger.sampling_rate == 1.0, (
+            f"Expected sampling_rate to default to 1.0 with invalid env var, got {logger.sampling_rate}"
+        )
 
     @patch.dict(os.environ, {"LANGSMITH_SAMPLING_RATE": ""}, clear=False)
     def test_langsmith_sampling_rate_empty_env_var_defaults(self):
         """Test that empty environment variable falls back to default value."""
-        logger = LangsmithLogger(
-            langsmith_api_key="test-key", langsmith_project="test-project"
-        )
+        logger = LangsmithLogger(langsmith_api_key="test-key", langsmith_project="test-project")
 
-        assert (
-            logger.sampling_rate == 1.0
-        ), f"Expected sampling_rate to default to 1.0 with empty env var, got {logger.sampling_rate}"
+        assert logger.sampling_rate == 1.0, (
+            f"Expected sampling_rate to default to 1.0 with empty env var, got {logger.sampling_rate}"
+        )
 
     def test_langsmith_sampling_rate_attribute_exists(self):
         """Test that the sampling_rate attribute is always set on the logger instance."""
-        logger = LangsmithLogger(
-            langsmith_api_key="test-key", langsmith_project="test-project"
-        )
+        logger = LangsmithLogger(langsmith_api_key="test-key", langsmith_project="test-project")
 
-        assert hasattr(
-            logger, "sampling_rate"
-        ), "LangsmithLogger should have sampling_rate attribute"
-        assert isinstance(
-            logger.sampling_rate, float
-        ), f"sampling_rate should be a float, got {type(logger.sampling_rate)}"
-        assert (
-            logger.sampling_rate >= 0.0
-        ), f"sampling_rate should be non-negative, got {logger.sampling_rate}"
+        assert hasattr(logger, "sampling_rate"), "LangsmithLogger should have sampling_rate attribute"
+        assert isinstance(logger.sampling_rate, float), (
+            f"sampling_rate should be a float, got {type(logger.sampling_rate)}"
+        )
+        assert logger.sampling_rate >= 0.0, f"sampling_rate should be non-negative, got {logger.sampling_rate}"
 
     @patch.object(LangsmithLogger, "_start_periodic_flush_task", return_value=None)
-    def test_langsmith_init_skips_periodic_flush_without_running_loop(
-        self, mock_start_periodic_flush_task
-    ):
+    def test_langsmith_init_skips_periodic_flush_without_running_loop(self, mock_start_periodic_flush_task):
         """Test that sync initialization leaves the periodic flush task unset."""
-        logger = LangsmithLogger(
-            langsmith_api_key="test-key", langsmith_project="test-project"
-        )
+        logger = LangsmithLogger(langsmith_api_key="test-key", langsmith_project="test-project")
 
         assert logger is not None
         mock_start_periodic_flush_task.assert_called_once()
         assert logger._flush_task is None
 
-    @patch(
-        "asyncio.get_running_loop", side_effect=RuntimeError("no running event loop")
-    )
-    def test_start_periodic_flush_task_returns_none_without_running_loop(
-        self, mock_get_running_loop
-    ):
+    @patch("asyncio.get_running_loop", side_effect=RuntimeError("no running event loop"))
+    def test_start_periodic_flush_task_returns_none_without_running_loop(self, mock_get_running_loop):
         """Test that helper returns None when no running event loop exists."""
-        with patch.object(
-            LangsmithLogger, "_start_periodic_flush_task", return_value=None
-        ):
+        with patch.object(LangsmithLogger, "_start_periodic_flush_task", return_value=None):
             logger = LangsmithLogger(
                 langsmith_api_key="test-key",
                 langsmith_project="test-project",
@@ -164,9 +134,7 @@ class TestLangsmithLoggerInit:
     @pytest.mark.asyncio
     async def test_langsmith_init_starts_periodic_flush_with_running_loop(self):
         """Test that init schedules periodic flush when a running loop exists."""
-        logger = LangsmithLogger(
-            langsmith_api_key="test-key", langsmith_project="test-project", flush_interval=0.01
-        )
+        logger = LangsmithLogger(langsmith_api_key="test-key", langsmith_project="test-project", flush_interval=0.01)
         batch_sent = asyncio.Event()
         logger.async_send_batch = AsyncMock(side_effect=batch_sent.set)
         logger.log_queue.append({"id": "run-id"})
@@ -181,17 +149,13 @@ class TestLangsmithLoggerInit:
     @pytest.mark.asyncio
     async def test_async_log_success_event_lazily_starts_periodic_flush(self):
         """Test that async logging lazily starts periodic flush after sync init."""
-        with patch.object(
-            LangsmithLogger, "_start_periodic_flush_task", return_value=None
-        ):
+        with patch.object(LangsmithLogger, "_start_periodic_flush_task", return_value=None):
             logger = LangsmithLogger(
                 langsmith_api_key="test-key",
                 langsmith_project="test-project",
             )
         logger._get_sampling_rate_to_use_for_request = MagicMock(return_value=1.0)
-        logger._get_credentials_to_use_for_request = MagicMock(
-            return_value=logger.default_credentials
-        )
+        logger._get_credentials_to_use_for_request = MagicMock(return_value=logger.default_credentials)
         logger._prepare_log_data = MagicMock(return_value={"id": "run-id"})
         logger._start_periodic_flush_task = MagicMock(return_value=MagicMock())
 
@@ -203,17 +167,13 @@ class TestLangsmithLoggerInit:
     @pytest.mark.asyncio
     async def test_async_log_failure_event_lazily_starts_periodic_flush(self):
         """Test that async failure logging lazily starts periodic flush after sync init."""
-        with patch.object(
-            LangsmithLogger, "_start_periodic_flush_task", return_value=None
-        ):
+        with patch.object(LangsmithLogger, "_start_periodic_flush_task", return_value=None):
             logger = LangsmithLogger(
                 langsmith_api_key="test-key",
                 langsmith_project="test-project",
             )
         logger._get_sampling_rate_to_use_for_request = MagicMock(return_value=1.0)
-        logger._get_credentials_to_use_for_request = MagicMock(
-            return_value=logger.default_credentials
-        )
+        logger._get_credentials_to_use_for_request = MagicMock(return_value=logger.default_credentials)
         logger._prepare_log_data = MagicMock(return_value={"id": "run-id"})
         logger._start_periodic_flush_task = MagicMock(return_value=MagicMock())
 
@@ -235,9 +195,7 @@ class TestLangsmithBatchSerialization:
             logger._flush_task.cancel()
         handler = AsyncHTTPHandler()
         await handler.client.aclose()
-        handler.client = httpx.AsyncClient(
-            transport=httpx.MockTransport(transport_handler)
-        )
+        handler.client = httpx.AsyncClient(transport=httpx.MockTransport(transport_handler))
         logger.async_httpx_client = handler
         return logger
 
@@ -311,9 +269,7 @@ class TestLangsmithBatchSerialization:
     @pytest.mark.asyncio
     async def test_tenant_id_is_forwarded_on_the_batch_request(self):
         captured: list[httpx.Request] = []  # mutable-ok: transport capture buffer
-        logger = await self._logger(
-            self._capturing_transport(captured), tenant_id="tenant-1"
-        )
+        logger = await self._logger(self._capturing_transport(captured), tenant_id="tenant-1")
         logger.log_queue = self._queue(logger, {"model": "gpt-4.1-mini"})
 
         await logger.async_send_batch()
@@ -430,9 +386,7 @@ class TestLangsmithRedactUserApiKeyInfo:
         assert extra["user_api_key_team_id"] == "team-uuid"
         assert extra["requester_metadata"]["user_api_key_user_id"] == "default_user_id"
 
-    def test_redact_enabled_strips_top_level_user_api_key_fields(
-        self, reset_redact_flag
-    ):
+    def test_redact_enabled_strips_top_level_user_api_key_fields(self, reset_redact_flag):
         """Flag on: top-level user_api_key_* keys removed; other keys preserved."""
         litellm.redact_user_api_key_info = True
         logger = self._logger()
@@ -465,6 +419,27 @@ class TestLangsmithRedactUserApiKeyInfo:
         assert "user_api_key_user_id" not in nested
         assert nested["session_id"] == "sess-1"
         assert extra["session_id"] == "sess-1"
+        assert "user_api_key_team_id" not in extra["metadata"]
+        assert "user_api_key_user_id" not in extra["metadata"]
+        assert extra["metadata"]["session_id"] == "sess-1"
+
+    def test_requester_metadata_populated_into_extra_metadata_for_filtering(self, reset_redact_flag):
+        """Caller-supplied requester_metadata is mirrored into extra.metadata for LangSmith trace filtering (#47018)."""
+        litellm.redact_user_api_key_info = True
+        logger = self._logger()
+        metadata = {
+            "model": "gpt-4.1-mini",
+            "requester_metadata": {
+                "document_id": "doc-123",
+                "tenant": "acme",
+                "user_api_key_team_id": "secret-team",
+            },
+        }
+
+        extra = logger._build_extra_metadata(metadata)
+
+        assert extra["metadata"] == {"document_id": "doc-123", "tenant": "acme"}
+        assert extra["requester_metadata"] == {"document_id": "doc-123", "tenant": "acme"}
 
     def test_redact_enabled_strips_user_api_key_info_from_inputs(self, reset_redact_flag):
         """
@@ -659,9 +634,7 @@ async def test_events_appended_during_flush_are_not_dropped():
     logger = LangsmithLogger(langsmith_api_key="test-key", langsmith_project="test-project")
     try:
         sent_batches: Final[list[list[dict[str, str]]]] = []
-        late_event: Final = LangsmithQueueObject(
-            credentials=logger.default_credentials, data={"id": "late"}
-        )
+        late_event: Final = LangsmithQueueObject(credentials=logger.default_credentials, data={"id": "late"})
 
         async def fake_post(url: str, content: str, headers: dict[str, str]) -> MagicMock:
             if not sent_batches:
