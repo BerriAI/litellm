@@ -58,7 +58,6 @@ async def test_realtime_disconnect_after_session_creation_keeps_unexpected_error
     ]
 
 
-
 @pytest.mark.asyncio
 async def test_observations_read_without_draining_until_explicitly_reset(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[2]))
@@ -80,6 +79,7 @@ async def test_observations_read_without_draining_until_explicitly_reset(monkeyp
         reset: Final = await client.delete("/__observations")
         assert reset.status_code == 204
         assert (await client.get("/__observations")).json()["requests"] == []
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method,status", (("POST", 200), ("POST", 400), ("DELETE", 200)))
