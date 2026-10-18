@@ -4,6 +4,8 @@ Test to verify the Google GenAI generate_content adapter functionality
 """
 
 import json
+from collections.abc import Iterator
+from typing import Final
 
 import pytest
 
@@ -288,15 +290,19 @@ def test_vertex_generate_content_routes_by_deployment_base_model(base_model, use
     assert (setup.generate_content_provider_config is not None) is uses_native_api
 
 
-_UPLIFT_PROBE = "gemini-regional-uplift-probe"
-_UPLIFT_INPUT_RATE = 1e-06
-_UPLIFT_OUTPUT_RATE = 2e-06
-_UPLIFT_MULTIPLIER = 1.1
+_UPLIFT_PROBE: Final = "gemini-regional-uplift-probe"
+_UPLIFT_INPUT_RATE: Final = 1e-06
+_UPLIFT_OUTPUT_RATE: Final = 2e-06
+_UPLIFT_MULTIPLIER: Final = 1.1
 
 
 @pytest.fixture
-def vertex_regional_uplift_rate_card(monkeypatch: pytest.MonkeyPatch):
-    rates = {"input_cost_per_token": _UPLIFT_INPUT_RATE, "output_cost_per_token": _UPLIFT_OUTPUT_RATE, "mode": "chat"}
+def vertex_regional_uplift_rate_card(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    rates: Final = {
+        "input_cost_per_token": _UPLIFT_INPUT_RATE,
+        "output_cost_per_token": _UPLIFT_OUTPUT_RATE,
+        "mode": "chat",
+    }
     monkeypatch.setitem(litellm.model_cost, _UPLIFT_PROBE, {**rates, "litellm_provider": "vertex_ai-language-models"})
     monkeypatch.setattr(litellm, "vertex_language_models", {*litellm.vertex_language_models, _UPLIFT_PROBE})
     monkeypatch.setitem(
@@ -324,12 +330,12 @@ async def _logged_vertex_generate_content_cost(location: str, *, stream: bool) -
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.types.google_genai.main import GenerateContentResponse
 
-    reply = {
+    reply: Final = {
         "candidates": [{"content": {"role": "model", "parts": [{"text": "hi"}]}, "finishReason": "STOP"}],
         "usageMetadata": {"promptTokenCount": 7, "candidatesTokenCount": 1, "totalTokenCount": 8},
         "modelVersion": _UPLIFT_PROBE,
     }
-    logging_obj = Logging(
+    logging_obj: Final = Logging(
         model=f"vertex_ai/{_UPLIFT_PROBE}",
         messages=[],
         stream=stream,
@@ -338,7 +344,7 @@ async def _logged_vertex_generate_content_cost(location: str, *, stream: bool) -
         litellm_call_id="uplift-test",
         function_id="uplift-test",
     )
-    setup = GenerateContentHelper.setup_generate_content_call(
+    setup: Final = GenerateContentHelper.setup_generate_content_call(
         model=f"vertex_ai/{_UPLIFT_PROBE}",
         contents=[{"role": "user", "parts": [{"text": "hi"}]}],
         litellm_logging_obj=logging_obj,
@@ -346,7 +352,7 @@ async def _logged_vertex_generate_content_cost(location: str, *, stream: bool) -
         stream=stream,
     )
     if stream:
-        iterator = BaseGoogleGenAIGenerateContentStreamingIterator(
+        iterator: Final = BaseGoogleGenAIGenerateContentStreamingIterator(
             litellm_logging_obj=logging_obj,
             request_body={},
             model=setup.model,
@@ -369,10 +375,10 @@ async def _logged_vertex_generate_content_cost(location: str, *, stream: bool) -
 @pytest.mark.parametrize("stream", [True, False], ids=["streamed", "non-streamed"])
 @pytest.mark.parametrize("location, multiplier", [("global", 1.0), ("us", _UPLIFT_MULTIPLIER)])
 async def test_vertex_generate_content_spend_follows_the_deployment_location(
-    vertex_regional_uplift_rate_card, stream, location, multiplier
-):
-    expected = (7 * _UPLIFT_INPUT_RATE + 1 * _UPLIFT_OUTPUT_RATE) * multiplier
+    vertex_regional_uplift_rate_card: None, stream: bool, location: str, multiplier: float
+) -> None:
+    expected: Final = (7 * _UPLIFT_INPUT_RATE + 1 * _UPLIFT_OUTPUT_RATE) * multiplier
 
-    recorded = await _logged_vertex_generate_content_cost(location, stream=stream)
+    recorded: Final = await _logged_vertex_generate_content_cost(location, stream=stream)
 
     assert recorded == pytest.approx(expected), (location, stream)

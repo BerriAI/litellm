@@ -103,15 +103,15 @@ def test_interactions_usage_object_is_read_into_prompt_and_completion_tokens():
     assert result["kwargs"]["custom_llm_provider"] == "vertex_ai"
 
 
-_UPLIFT_MODEL = "gemini-regional-uplift-probe"
-_UPLIFT_INPUT_RATE = 1e-06
-_UPLIFT_OUTPUT_RATE = 4e-06
-_UPLIFT_MULTIPLIER = 1.1
+_UPLIFT_MODEL: Final = "gemini-regional-uplift-probe"
+_UPLIFT_INPUT_RATE: Final = 1e-06
+_UPLIFT_OUTPUT_RATE: Final = 4e-06
+_UPLIFT_MULTIPLIER: Final = 1.1
 
 
 @pytest.fixture
 def regional_uplift_rate_card(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    rates = {
+    rates: Final = {
         "input_cost_per_token": _UPLIFT_INPUT_RATE,
         "output_cost_per_token": _UPLIFT_OUTPUT_RATE,
         "litellm_provider": "vertex_ai-language-models",
@@ -145,7 +145,7 @@ def _cost_the_logger_records_for(
     stream_events: list[dict[str, object]],
     model_info: dict[str, object] | None = None,
 ) -> float:
-    logging_obj = Logging(
+    logging_obj: Final = Logging(
         model="unknown",
         messages=[{"role": "user", "content": "ping"}],
         stream=stream,
@@ -171,8 +171,8 @@ def _cost_the_logger_records_for(
             )
         )
         return logging_obj.model_call_details["response_cost"]
-    response = httpx.Response(200, json=reply)
-    result = VertexPassthroughLoggingHandler.vertex_passthrough_handler(
+    response: Final = httpx.Response(200, json=reply)
+    result: Final = VertexPassthroughLoggingHandler.vertex_passthrough_handler(
         httpx_response=response,
         logging_obj=logging_obj,
         url_route=url_route,
@@ -189,8 +189,8 @@ def _cost_the_logger_records_for(
 
 
 def _cost_the_logger_records(location: str, *, stream: bool, model_info: dict[str, object] | None = None) -> float:
-    method = "streamGenerateContent" if stream else "generateContent"
-    url_route = (
+    method: Final = "streamGenerateContent" if stream else "generateContent"
+    url_route: Final = (
         f"https://aiplatform.googleapis.com/v1/projects/p/locations/{location}"
         f"/publishers/google/models/{_UPLIFT_MODEL}:{method}"
     )
@@ -205,43 +205,49 @@ def _cost_the_logger_records(location: str, *, stream: bool, model_info: dict[st
 
 @pytest.mark.parametrize("stream", [True, False], ids=["streamed", "non-streamed"])
 @pytest.mark.parametrize("location, multiplier", [("global", 1.0), ("us", _UPLIFT_MULTIPLIER)])
-def test_generate_content_spend_follows_the_vertex_location(regional_uplift_rate_card, stream, location, multiplier):
-    expected = (7 * _UPLIFT_INPUT_RATE + 1 * _UPLIFT_OUTPUT_RATE) * multiplier
+def test_generate_content_spend_follows_the_vertex_location(
+    regional_uplift_rate_card: None, stream: bool, location: str, multiplier: float
+) -> None:
+    expected: Final = (7 * _UPLIFT_INPUT_RATE + 1 * _UPLIFT_OUTPUT_RATE) * multiplier
 
     assert _cost_the_logger_records(location, stream=stream) == pytest.approx(expected), (location, stream)
 
 
-_CUSTOM_PRICED_DEPLOYMENT = "vertex-custom-priced-deployment"
-_CUSTOM_INPUT_RATE = 2e-09
-_CUSTOM_OUTPUT_RATE = 3e-09
+_CUSTOM_PRICED_DEPLOYMENT: Final = "vertex-custom-priced-deployment"
+_CUSTOM_INPUT_RATE: Final = 2e-09
+_CUSTOM_OUTPUT_RATE: Final = 3e-09
 
 
 @pytest.mark.parametrize("stream", [True, False], ids=["streamed", "non-streamed"])
 @pytest.mark.parametrize("location", ["global", "us"])
 def test_generate_content_spend_uses_the_deployment_custom_price(
-    regional_uplift_rate_card, monkeypatch, stream, location
-):
-    custom_rates = {"input_cost_per_token": _CUSTOM_INPUT_RATE, "output_cost_per_token": _CUSTOM_OUTPUT_RATE}
+    regional_uplift_rate_card: None, monkeypatch: pytest.MonkeyPatch, stream: bool, location: str
+) -> None:
+    custom_rates: Final = {"input_cost_per_token": _CUSTOM_INPUT_RATE, "output_cost_per_token": _CUSTOM_OUTPUT_RATE}
     monkeypatch.setitem(
         litellm.model_cost, _CUSTOM_PRICED_DEPLOYMENT, {**custom_rates, "litellm_provider": "vertex_ai", "mode": "chat"}
     )
-    expected = 7 * _CUSTOM_INPUT_RATE + 1 * _CUSTOM_OUTPUT_RATE
+    expected: Final = 7 * _CUSTOM_INPUT_RATE + 1 * _CUSTOM_OUTPUT_RATE
 
-    recorded = _cost_the_logger_records(
+    recorded: Final = _cost_the_logger_records(
         location, stream=stream, model_info={"id": _CUSTOM_PRICED_DEPLOYMENT, **custom_rates}
     )
 
     assert recorded == pytest.approx(expected), (location, stream)
 
 
-_CLAUDE_UPLIFT_MODEL = "claude-regional-uplift-probe"
-_CLAUDE_INPUT_RATE = 3e-06
-_CLAUDE_OUTPUT_RATE = 1.5e-05
+_CLAUDE_UPLIFT_MODEL: Final = "claude-regional-uplift-probe"
+_CLAUDE_INPUT_RATE: Final = 3e-06
+_CLAUDE_OUTPUT_RATE: Final = 1.5e-05
 
 
 @pytest.fixture
 def claude_regional_uplift_rate_card(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    rates = {"input_cost_per_token": _CLAUDE_INPUT_RATE, "output_cost_per_token": _CLAUDE_OUTPUT_RATE, "mode": "chat"}
+    rates: Final = {
+        "input_cost_per_token": _CLAUDE_INPUT_RATE,
+        "output_cost_per_token": _CLAUDE_OUTPUT_RATE,
+        "mode": "chat",
+    }
     monkeypatch.setitem(litellm.model_cost, _CLAUDE_UPLIFT_MODEL, {**rates, "litellm_provider": "anthropic"})
     monkeypatch.setattr(litellm, "anthropic_models", {*litellm.anthropic_models, _CLAUDE_UPLIFT_MODEL})
     monkeypatch.setitem(
@@ -271,7 +277,7 @@ def _claude_message() -> dict[str, object]:
 
 
 def _claude_stream_events() -> list[dict[str, object]]:
-    message_start = {**_claude_message(), "content": [], "usage": {"input_tokens": 7, "output_tokens": 0}}
+    message_start: Final = {**_claude_message(), "content": [], "usage": {"input_tokens": 7, "output_tokens": 0}}
     return [
         {"type": "message_start", "message": message_start},
         {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
@@ -285,16 +291,16 @@ def _claude_stream_events() -> list[dict[str, object]]:
 @pytest.mark.parametrize("stream", [True, False], ids=["streamed", "non-streamed"])
 @pytest.mark.parametrize("location, multiplier", [("global", 1.0), ("us-east5", _UPLIFT_MULTIPLIER)])
 def test_claude_raw_predict_spend_follows_the_vertex_location(
-    claude_regional_uplift_rate_card, stream, location, multiplier
-):
-    method = "streamRawPredict" if stream else "rawPredict"
-    url_route = (
+    claude_regional_uplift_rate_card: None, stream: bool, location: str, multiplier: float
+) -> None:
+    method: Final = "streamRawPredict" if stream else "rawPredict"
+    url_route: Final = (
         f"https://aiplatform.googleapis.com/v1/projects/p/locations/{location}"
         f"/publishers/anthropic/models/{_CLAUDE_UPLIFT_MODEL}:{method}"
     )
-    expected = (7 * _CLAUDE_INPUT_RATE + 1 * _CLAUDE_OUTPUT_RATE) * multiplier
+    expected: Final = (7 * _CLAUDE_INPUT_RATE + 1 * _CLAUDE_OUTPUT_RATE) * multiplier
 
-    recorded = _cost_the_logger_records_for(
+    recorded: Final = _cost_the_logger_records_for(
         url_route, stream=stream, reply=_claude_message(), stream_events=_claude_stream_events()
     )
 
@@ -302,18 +308,20 @@ def test_claude_raw_predict_spend_follows_the_vertex_location(
 
 
 @pytest.mark.parametrize("stream", [True, False], ids=["streamed", "non-streamed"])
-def test_claude_raw_predict_spend_uses_the_deployment_custom_price(claude_regional_uplift_rate_card, monkeypatch, stream):
-    custom_rates = {"input_cost_per_token": _CUSTOM_INPUT_RATE, "output_cost_per_token": _CUSTOM_OUTPUT_RATE}
+def test_claude_raw_predict_spend_uses_the_deployment_custom_price(
+    claude_regional_uplift_rate_card: None, monkeypatch: pytest.MonkeyPatch, stream: bool
+) -> None:
+    custom_rates: Final = {"input_cost_per_token": _CUSTOM_INPUT_RATE, "output_cost_per_token": _CUSTOM_OUTPUT_RATE}
     monkeypatch.setitem(
         litellm.model_cost, _CUSTOM_PRICED_DEPLOYMENT, {**custom_rates, "litellm_provider": "vertex_ai", "mode": "chat"}
     )
-    method = "streamRawPredict" if stream else "rawPredict"
-    url_route = (
+    method: Final = "streamRawPredict" if stream else "rawPredict"
+    url_route: Final = (
         "https://aiplatform.googleapis.com/v1/projects/p/locations/us-east5"
         f"/publishers/anthropic/models/{_CLAUDE_UPLIFT_MODEL}:{method}"
     )
 
-    recorded = _cost_the_logger_records_for(
+    recorded: Final = _cost_the_logger_records_for(
         url_route,
         stream=stream,
         reply=_claude_message(),

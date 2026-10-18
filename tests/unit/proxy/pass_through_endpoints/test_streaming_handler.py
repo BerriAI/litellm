@@ -2,6 +2,7 @@ import json
 import logging
 from collections.abc import Iterator
 from datetime import datetime
+from typing import Final
 from unittest.mock import MagicMock
 
 import pytest
@@ -239,13 +240,13 @@ async def test_failed_anthropic_stream_records_partial_usage_off_the_event_loop(
 
 
 @pytest.mark.asyncio
-async def test_interrupted_vertex_stream_bills_the_deployment_custom_price(monkeypatch):
-    deployment_id = "vertex-custom-priced-deployment"
-    custom_rates = {"input_cost_per_token": 2e-09, "output_cost_per_token": 3e-09}
+async def test_interrupted_vertex_stream_bills_the_deployment_custom_price(monkeypatch: pytest.MonkeyPatch) -> None:
+    deployment_id: Final = "vertex-custom-priced-deployment"
+    custom_rates: Final = {"input_cost_per_token": 2e-09, "output_cost_per_token": 3e-09}
     monkeypatch.setitem(
         litellm.model_cost, deployment_id, {**custom_rates, "litellm_provider": "vertex_ai", "mode": "chat"}
     )
-    logging_obj = LiteLLMLoggingObj(
+    logging_obj: Final = LiteLLMLoggingObj(
         model="unknown",
         messages=[{"role": "user", "content": "ping"}],
         stream=True,
@@ -256,7 +257,10 @@ async def test_interrupted_vertex_stream_bills_the_deployment_custom_price(monke
     )
     logging_obj.optional_params = {}
     logging_obj.litellm_params = {"metadata": {"model_info": {"id": deployment_id, **custom_rates}}}
-    url_route = f"https://aiplatform.googleapis.com/v1/projects/p/locations/us/publishers/google/models/{MODEL}:streamGenerateContent?alt=sse"
+    url_route: Final = (
+        f"https://aiplatform.googleapis.com/v1/projects/p/locations/us"
+        f"/publishers/google/models/{MODEL}:streamGenerateContent?alt=sse"
+    )
 
     await PassThroughStreamingHandler.schedule_stream_failure_logging(
         litellm_logging_obj=logging_obj,
@@ -266,7 +270,7 @@ async def test_interrupted_vertex_stream_bills_the_deployment_custom_price(monke
         exception=RuntimeError("upstream closed the stream"),
         stream_context=PassThroughStreamContext(PassThroughEndpointLogging(), url_route, datetime.now()),
     )
-    recorded = logging_obj.model_call_details["response_cost"]
+    recorded: Final = logging_obj.model_call_details["response_cost"]
     await GLOBAL_LOGGING_WORKER.flush()
 
     assert recorded == pytest.approx(PROMPT_TOKENS * 2e-09 + COMPLETION_TOKENS * 3e-09)
