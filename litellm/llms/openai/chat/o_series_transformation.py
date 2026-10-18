@@ -12,7 +12,7 @@ Translations handled by LiteLLM:
 """
 
 from collections.abc import Coroutine
-from typing import Any, Final, Literal, cast, overload
+from typing import Final, Literal, cast, overload
 
 import litellm
 from litellm import verbose_logger
@@ -126,7 +126,7 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
     @overload
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, list[AllMessageValues]]: ...
+    ) -> Coroutine[object, object, list[AllMessageValues]]: ...
 
     @overload
     def _transform_messages(
@@ -138,7 +138,7 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
 
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: bool = False
-    ) -> list[AllMessageValues] | Coroutine[Any, Any, list[AllMessageValues]]:
+    ) -> list[AllMessageValues] | Coroutine[object, object, list[AllMessageValues]]:
         """
         Handles limitations of O-1 model family.
         - modalities: image => drop param (if user opts in to dropping param)

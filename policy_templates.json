@@ -1086,7 +1086,7 @@
           "categories": [
             {
               "category": "eu_ai_act_art5_manipulation",
-              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/eu_ai_act_art5_manipulation.yaml",
+              "category_file": "litellm/proxy/guardrails/content_filter_data/policy_templates/eu_ai_act_art5_manipulation.yaml",
               "enabled": true,
               "action": "BLOCK",
               "severity_threshold": "medium"
@@ -1105,7 +1105,7 @@
           "categories": [
             {
               "category": "eu_ai_act_art5_vulnerability",
-              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/eu_ai_act_art5_vulnerability.yaml",
+              "category_file": "litellm/proxy/guardrails/content_filter_data/policy_templates/eu_ai_act_art5_vulnerability.yaml",
               "enabled": true,
               "action": "BLOCK",
               "severity_threshold": "medium"
@@ -1124,7 +1124,7 @@
           "categories": [
             {
               "category": "eu_ai_act_art5_social_scoring",
-              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/eu_ai_act_art5_social_scoring.yaml",
+              "category_file": "litellm/proxy/guardrails/content_filter_data/policy_templates/eu_ai_act_art5_social_scoring.yaml",
               "enabled": true,
               "action": "BLOCK",
               "severity_threshold": "medium"
@@ -1143,7 +1143,7 @@
           "categories": [
             {
               "category": "eu_ai_act_art5_emotion_recognition",
-              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/eu_ai_act_art5_emotion_recognition.yaml",
+              "category_file": "litellm/proxy/guardrails/content_filter_data/policy_templates/eu_ai_act_art5_emotion_recognition.yaml",
               "enabled": true,
               "action": "BLOCK",
               "severity_threshold": "medium"
@@ -1162,7 +1162,7 @@
           "categories": [
             {
               "category": "eu_ai_act_art5_biometric_profiling",
-              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/eu_ai_act_art5_biometric_profiling.yaml",
+              "category_file": "litellm/proxy/guardrails/content_filter_data/policy_templates/eu_ai_act_art5_biometric_profiling.yaml",
               "enabled": true,
               "action": "BLOCK",
               "severity_threshold": "medium"
@@ -1181,7 +1181,7 @@
           "categories": [
             {
               "category": "eu_ai_act_art5_manipulation_fr",
-              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/eu_ai_act_art5_manipulation_fr.yaml",
+              "category_file": "litellm/proxy/guardrails/content_filter_data/policy_templates/eu_ai_act_art5_manipulation_fr.yaml",
               "enabled": true,
               "action": "BLOCK",
               "severity_threshold": "medium"
@@ -1200,7 +1200,7 @@
           "categories": [
             {
               "category": "eu_ai_act_art5_vulnerability_fr",
-              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/eu_ai_act_art5_vulnerability_fr.yaml",
+              "category_file": "litellm/proxy/guardrails/content_filter_data/policy_templates/eu_ai_act_art5_vulnerability_fr.yaml",
               "enabled": true,
               "action": "BLOCK",
               "severity_threshold": "medium"
@@ -1219,7 +1219,7 @@
           "categories": [
             {
               "category": "eu_ai_act_art5_social_scoring_fr",
-              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/eu_ai_act_art5_social_scoring_fr.yaml",
+              "category_file": "litellm/proxy/guardrails/content_filter_data/policy_templates/eu_ai_act_art5_social_scoring_fr.yaml",
               "enabled": true,
               "action": "BLOCK",
               "severity_threshold": "medium"
@@ -1238,7 +1238,7 @@
           "categories": [
             {
               "category": "eu_ai_act_art5_emotion_recognition_fr",
-              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/eu_ai_act_art5_emotion_recognition_fr.yaml",
+              "category_file": "litellm/proxy/guardrails/content_filter_data/policy_templates/eu_ai_act_art5_emotion_recognition_fr.yaml",
               "enabled": true,
               "action": "BLOCK",
               "severity_threshold": "medium"
@@ -1257,7 +1257,7 @@
           "categories": [
             {
               "category": "eu_ai_act_art5_biometric_profiling_fr",
-              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/eu_ai_act_art5_biometric_profiling_fr.yaml",
+              "category_file": "litellm/proxy/guardrails/content_filter_data/policy_templates/eu_ai_act_art5_biometric_profiling_fr.yaml",
               "enabled": true,
               "action": "BLOCK",
               "severity_threshold": "medium"
@@ -1614,7 +1614,7 @@
           "categories": [
             {
               "category": "aviation_safety_topics",
-              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/aviation_safety_topics.yaml",
+              "category_file": "litellm/proxy/guardrails/content_filter_data/policy_templates/aviation_safety_topics.yaml",
               "enabled": true,
               "action": "BLOCK",
               "severity_threshold": "medium"
@@ -1633,7 +1633,7 @@
           "categories": [
             {
               "category": "airline_brand_protection",
-              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/airline_brand_protection.yaml",
+              "category_file": "litellm/proxy/guardrails/content_filter_data/policy_templates/airline_brand_protection.yaml",
               "enabled": true,
               "action": "BLOCK",
               "severity_threshold": "medium"
@@ -1851,7 +1851,7 @@
           "categories": [
             {
               "category": "uae_cultural_sensitivity",
-              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/uae_cultural_sensitivity.yaml",
+              "category_file": "litellm/proxy/guardrails/content_filter_data/policy_templates/uae_cultural_sensitivity.yaml",
               "enabled": true,
               "action": "BLOCK",
               "severity_threshold": "medium"
@@ -1870,7 +1870,7 @@
           "categories": [
             {
               "category": "uae_anti_discrimination",
-              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/uae_anti_discrimination.yaml",
+              "category_file": "litellm/proxy/guardrails/content_filter_data/policy_templates/uae_anti_discrimination.yaml",
               "enabled": true,
               "action": "BLOCK",
               "severity_threshold": "medium"
@@ -2134,7 +2134,7 @@
           "categories": [
             {
               "category": "sg_pdpa_personal_identifiers",
-              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/sg_pdpa_personal_identifiers.yaml",
+              "category_file": "litellm/proxy/guardrails/content_filter_data/policy_templates/sg_pdpa_personal_identifiers.yaml",
               "enabled": true,
               "action": "BLOCK",
               "severity_threshold": "medium"
@@ -2153,7 +2153,7 @@
           "categories": [
             {
               "category": "sg_pdpa_sensitive_data",
-              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/sg_pdpa_sensitive_data.yaml",
+              "category_file": "litellm/proxy/guardrails/content_filter_data/policy_templates/sg_pdpa_sensitive_data.yaml",
               "enabled": true,
               "action": "BLOCK",
               "severity_threshold": "medium"
@@ -2172,7 +2172,7 @@
           "categories": [
             {
               "category": "sg_pdpa_do_not_call",
-              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/sg_pdpa_do_not_call.yaml",
+              "category_file": "litellm/proxy/guardrails/content_filter_data/policy_templates/sg_pdpa_do_not_call.yaml",
               "enabled": true,
               "action": "BLOCK",
               "severity_threshold": "medium"
@@ -2191,7 +2191,7 @@
           "categories": [
             {
               "category": "sg_pdpa_data_transfer",
-              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/sg_pdpa_data_transfer.yaml",
+              "category_file": "litellm/proxy/guardrails/content_filter_data/policy_templates/sg_pdpa_data_transfer.yaml",
               "enabled": true,
               "action": "BLOCK",
               "severity_threshold": "medium"
@@ -2210,7 +2210,7 @@
           "categories": [
             {
               "category": "sg_pdpa_profiling_automated_decisions",
-              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/sg_pdpa_profiling_automated_decisions.yaml",
+              "category_file": "litellm/proxy/guardrails/content_filter_data/policy_templates/sg_pdpa_profiling_automated_decisions.yaml",
               "enabled": true,
               "action": "BLOCK",
               "severity_threshold": "medium"
@@ -2269,7 +2269,7 @@
           "categories": [
             {
               "category": "sg_mas_fairness_bias",
-              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/sg_mas_fairness_bias.yaml",
+              "category_file": "litellm/proxy/guardrails/content_filter_data/policy_templates/sg_mas_fairness_bias.yaml",
               "enabled": true,
               "action": "BLOCK",
               "severity_threshold": "medium"
@@ -2288,7 +2288,7 @@
           "categories": [
             {
               "category": "sg_mas_transparency_explainability",
-              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/sg_mas_transparency_explainability.yaml",
+              "category_file": "litellm/proxy/guardrails/content_filter_data/policy_templates/sg_mas_transparency_explainability.yaml",
               "enabled": true,
               "action": "BLOCK",
               "severity_threshold": "medium"
@@ -2307,7 +2307,7 @@
           "categories": [
             {
               "category": "sg_mas_human_oversight",
-              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/sg_mas_human_oversight.yaml",
+              "category_file": "litellm/proxy/guardrails/content_filter_data/policy_templates/sg_mas_human_oversight.yaml",
               "enabled": true,
               "action": "BLOCK",
               "severity_threshold": "medium"
@@ -2326,7 +2326,7 @@
           "categories": [
             {
               "category": "sg_mas_data_governance",
-              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/sg_mas_data_governance.yaml",
+              "category_file": "litellm/proxy/guardrails/content_filter_data/policy_templates/sg_mas_data_governance.yaml",
               "enabled": true,
               "action": "BLOCK",
               "severity_threshold": "medium"
@@ -2345,7 +2345,7 @@
           "categories": [
             {
               "category": "sg_mas_model_security",
-              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/policy_templates/sg_mas_model_security.yaml",
+              "category_file": "litellm/proxy/guardrails/content_filter_data/policy_templates/sg_mas_model_security.yaml",
               "enabled": true,
               "action": "BLOCK",
               "severity_threshold": "medium"
@@ -2400,7 +2400,7 @@
           "categories": [
             {
               "category": "claims_fraud_coaching",
-              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/categories/claims_fraud_coaching.yaml",
+              "category_file": "litellm/proxy/guardrails/content_filter_data/categories/claims_fraud_coaching.yaml",
               "enabled": true,
               "action": "BLOCK",
               "severity_threshold": "medium"
@@ -2419,7 +2419,7 @@
           "categories": [
             {
               "category": "claims_phi_disclosure",
-              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/categories/claims_phi_disclosure.yaml",
+              "category_file": "litellm/proxy/guardrails/content_filter_data/categories/claims_phi_disclosure.yaml",
               "enabled": true,
               "action": "BLOCK",
               "severity_threshold": "medium"
@@ -2438,7 +2438,7 @@
           "categories": [
             {
               "category": "claims_prior_auth_gaming",
-              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/categories/claims_prior_auth_gaming.yaml",
+              "category_file": "litellm/proxy/guardrails/content_filter_data/categories/claims_prior_auth_gaming.yaml",
               "enabled": true,
               "action": "BLOCK",
               "severity_threshold": "medium"
@@ -2457,7 +2457,7 @@
           "categories": [
             {
               "category": "claims_system_override",
-              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/categories/claims_system_override.yaml",
+              "category_file": "litellm/proxy/guardrails/content_filter_data/categories/claims_system_override.yaml",
               "enabled": true,
               "action": "BLOCK",
               "severity_threshold": "medium"
@@ -2476,7 +2476,7 @@
           "categories": [
             {
               "category": "claims_medical_advice",
-              "category_file": "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/categories/claims_medical_advice.yaml",
+              "category_file": "litellm/proxy/guardrails/content_filter_data/categories/claims_medical_advice.yaml",
               "enabled": true,
               "action": "BLOCK",
               "severity_threshold": "medium"

@@ -87,21 +87,21 @@ class LiteLLMRouterEncoder(CustomDenseEncoder, AsymmetricDenseMixin):
         limit: Final = self.max_input_chars
         if limit <= 0:
             return docs
-        clamped: Final = [doc[:limit] for doc in docs]  # mutable-ok: embedding() takes `input: str | list`
+        clamped: Final = [doc[:limit] for doc in docs]
         if clamped != docs:
             verbose_router_logger.debug(
                 "LiteLLMRouterEncoder: cut input to %s chars for embedding model %s", limit, self.model_name
             )
         return clamped
 
-    def __call__(self, docs: list[Any], **kwargs) -> list[list[float]]:
+    def __call__(self, docs: list[str], **kwargs) -> list[list[float]]:
         """Encode a list of text documents into embeddings using LiteLLM.
 
         :param docs: List of text documents to encode.
         :return: List of embeddings for each document."""
         return self.encode_queries(docs, **kwargs)
 
-    async def acall(self, docs: list[Any], **kwargs) -> list[list[float]]:
+    async def acall(self, docs: list[str], **kwargs) -> list[list[float]]:
         """Encode a list of documents into embeddings using LiteLLM asynchronously.
 
         :param docs: List of documents to encode.
