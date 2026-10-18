@@ -197,20 +197,12 @@ def _a2a_jsonrpc_error_chunk(exc: HTTPException, request_id: str | None) -> Mapp
 def _ensure_litellm_metadata(data: dict, user_api_key_dict: UserAPIKeyAuth) -> None:
     """Merge the ``user_api_key_*`` metadata into the request's resolved bucket.
 
-    Writing ``data["litellm_metadata"]`` directly creates a second bucket on a
-    route whose bucket is ``metadata`` (chat completions). Every reader resolves
-    the bucket through ``get_metadata_variable_name_from_kwargs``, which answers
-    ``litellm_metadata`` as soon as that key merely exists, so from then on they
-    all read the new dict -- which holds only the ``user_api_key_*`` keys. The
-    tags and router fields stay behind in ``metadata``, unread:
-    ``get_deployments_for_tag`` finds no tags and routes the request to a
-    deployment of another model, and SpendLogs lose ``model_group`` and
-    ``model_id``. Nothing raises (#45543).
-
-    ``BaseTranslation.merge_user_api_key_metadata_into_request`` is the sanctioned
-    writer for exactly this -- it resolves the bucket via
-    ``get_or_create_metadata_bucket`` and ``setdefault``s each key, so an existing
-    value is never overwritten. The OpenAI chat guardrail handler already uses it.
+    Not ``data["litellm_metadata"]``: creating that key on a route whose bucket
+    is ``metadata`` flips every reader of
+    ``get_metadata_variable_name_from_kwargs`` onto the new dict and silently
+    strands the tags and router fields (#45543).
+    ``merge_user_api_key_metadata_into_request`` resolves the bucket and
+    ``setdefault``s, so an upstream value is never overwritten.
     """
     from litellm.llms.base_llm.guardrail_translation.base_translation import (
         BaseTranslation,
