@@ -2812,7 +2812,7 @@
         "responses": true,
         "embeddings": false,
         "image_generations": false,
-        "audio_transcriptions": true,
+        "audio_transcriptions": false,
         "audio_speech": false,
         "moderations": false,
         "batches": false,

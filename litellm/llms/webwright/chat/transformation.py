@@ -39,8 +39,9 @@ class WebwrightChatConfig(OpenAILikeChatConfig):
 
     def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: matches the base provider signature
         """
-        WebWright supports the standard OpenAI chat completion parameters.
-        Reference: https://webwright.ai/v1
+        WebWright supports the OpenAI-compatible chat completion parameters that
+        its published model abilities reference declares.
+        Reference: https://webwright.ai/models
         """
         return [
             "messages",  # Required
@@ -49,13 +50,9 @@ class WebwrightChatConfig(OpenAILikeChatConfig):
             "temperature",  # Optional
             "top_p",  # Optional
             "max_tokens",  # Optional
-            "frequency_penalty",  # Optional
-            "presence_penalty",  # Optional
             "stop",  # Optional
-            "n",  # Optional
             "tools",  # Optional
             "tool_choice",  # Optional
             "response_format",  # Optional
-            "seed",  # Optional
-            "user",  # Optional
+            "reasoning_effort",  # Optional
         ]

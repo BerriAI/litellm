@@ -80,11 +80,18 @@ def test_webwright_supported_params() -> None:
         "model",
         "stream",
         "temperature",
+        "top_p",
         "max_tokens",
+        "stop",
         "tools",
         "tool_choice",
+        "response_format",
+        "reasoning_effort",
     ):
         assert param in supported_params
+
+    for unsupported in ("frequency_penalty", "presence_penalty", "n", "seed", "user"):
+        assert unsupported not in supported_params
 
 
 def test_webwright_completion_call() -> None:
