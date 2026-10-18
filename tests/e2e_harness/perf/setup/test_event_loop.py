@@ -78,6 +78,16 @@ def test_a_hold_well_past_its_collector_pass_stays_on_the_task() -> None:
     assert [(row.coroutine, row.offending) for row in rows] == [("TaskHandle._run_coro()", True)]
 
 
+def test_a_hold_is_charged_to_the_longest_collector_pass_that_fits_it_not_to_their_sum() -> None:
+    thread_side_pass: Final = _GC_PASS.replace("0.711", "0.627")
+    rows: Final = summarize(
+        _SPEC, parse_stalls((thread_side_pass, _GC_PASS.replace("0.711", "0.605"), _STREAM.replace("0.412", "0.614")))
+    )
+    assert [(row.coroutine, row.where, row.max_seconds, row.offending) for row in rows] == [
+        ("garbage collection", "gen=2", 0.614, False)
+    ]
+
+
 def test_a_collector_pass_explains_only_the_next_hold_and_only_one_at_least_as_long() -> None:
     rows: Final = summarize(_SPEC, parse_stalls((_GC_PASS, _STARTUP, _HANDLER)))
     assert sorted((row.coroutine, row.offending) for row in rows) == [

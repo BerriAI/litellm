@@ -13,6 +13,8 @@ from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 
 @pytest.mark.covers(
     "other.routing.retries.several_attempts_reach_success_without_hidden_retries",

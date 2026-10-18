@@ -174,6 +174,10 @@ takes precedence over `timeout_by_service_tier`.
 Caller timeouts, including the proxy's `x-litellm-timeout` header, still take
 precedence. Missing or unmatched tiers keep the existing timeout behavior
 
+Live streams apply the selected stream timeout to each read. Providers that
+simulate streaming with a non-streaming call use the longer request or stream
+timeout
+
 Both maps accept positive, finite durations and stay local to LiteLLM.
 Each fallback deployment resolves its own tier timeout. These settings control
 per-attempt upstream timeouts, not a deadline across retries and fallbacks

@@ -3,6 +3,7 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
 
+import httpx
 from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.request_timeout_resolver import get_configured_request_timeout
@@ -45,7 +46,7 @@ def resolve_llm_passthrough_timeout(
     router_timeout: float | str | None = None,
     router_stream_timeout: float | str | None = None,
     *,
-    service_tier_timeout: float | str | None = None,
+    service_tier_timeout: float | str | httpx.Timeout | None = None,
 ) -> float:
     """
     Resolve upstream httpx timeout for SDK native passthrough (e.g. Bedrock /converse,
