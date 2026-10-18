@@ -1318,7 +1318,10 @@ class _CustomerBatchDatabase:
                 [
                     dict(row)
                     for row in database.execute(
-                        query, {str(index): value for index, value in enumerate(parameters, 1)}
+                        query.replace("@> to_jsonb($1::text)", "= json_quote($1)")
+                        .replace("jsonb_typeof", "json_type")
+                        .replace("= 'string'", "= 'text'"),
+                        {str(index): value for index, value in enumerate(parameters, 1)},
                     ).fetchall()
                 ]
             )
