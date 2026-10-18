@@ -257,16 +257,6 @@ def _setup_timezone(current_time: datetime, timezone_str: str = "UTC") -> tuple[
     return current_time, tz
 
 
-def _parse_duration(duration: str) -> tuple[int | None, str | None]:
-    """Parse the duration string into value and unit."""
-    match: Final = re.match(r"(\d+)([a-z]+)", duration)
-    if not match:
-        return None, None
-
-    value, unit = match.groups()
-    return int(value), unit
-
-
 def _apply_time_of_day(dt: datetime, reset_time_of_day: time) -> datetime:
     """Set the wall-clock time of `dt` to `reset_time_of_day`, keeping its date and tzinfo."""
     return dt.replace(
