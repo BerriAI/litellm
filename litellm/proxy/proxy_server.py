@@ -1207,6 +1207,11 @@ async def _flush_spend_logs_queue_on_shutdown() -> None:
         verbose_proxy_logger.exception("Error flushing spend logs queue on shutdown: %s", e)
 
 
+async def _flush_spend_on_shutdown() -> None:
+    await flush_spend_counters_on_shutdown()
+    await _flush_spend_logs_queue_on_shutdown()
+
+
 async def _drain_audit_tasks_on_shutdown() -> None:
     try:
         from litellm.proxy.management_helpers.audit_logs import drain_audit_tasks
@@ -1811,11 +1816,10 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
                 except Exception as e:
                     verbose_proxy_logger.error("Error stopping in-flight scheduled jobs: %s", e)
 
-            await drain_logging_tasks()
+            await _flush_spend_on_shutdown()
 
-            await flush_spend_counters_on_shutdown()
-
-            await _flush_spend_logs_queue_on_shutdown()
+            if await drain_logging_tasks():
+                await _flush_spend_on_shutdown()
 
             await proxy_config.stop_config_sync_subscriber()
 
