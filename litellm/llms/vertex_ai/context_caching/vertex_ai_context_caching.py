@@ -1,5 +1,7 @@
 import hashlib
+import hmac
 import re
+import secrets
 import time
 from collections.abc import Sequence
 from datetime import datetime
@@ -82,19 +84,27 @@ def _parse_expire_time(expire_time: str | None) -> float | None:
         return None
 
 
+# Keyed per process, so a credential tag cannot be precomputed from a guessed
+# key or compared across processes. The memo it scopes lives no longer than the
+# process, so there is nothing to gain from a stable tag.
+_CREDENTIAL_TAG_KEY: Final = secrets.token_bytes(32)
+
+
 def _credential_fingerprint(api_key: str | None) -> str:
-    """A non-reversible tag for the credential a memo entry belongs to.
+    """A non-reversible, per-process tag for the credential a memo entry belongs to.
 
     Provider, project, location and base URL do not identify a tenant on the
     Gemini API path -- the key does. Two keys sharing a memo entry would hand
     one of them a cachedContents name it cannot read, and it would keep failing
-    until the entry expired. Only a truncated SHA-256 is kept: enough to tell
-    tenants apart, and no part of the secret itself held in a process-lifetime
-    dict.
+    until the entry expired.
+
+    Keyed HMAC rather than a bare digest: no part of the secret is held in a
+    process-lifetime dict either way, but without the process key a tag is
+    reproducible by anyone who can guess the credential.
     """
     if not api_key:
         return ""
-    return hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:16]
+    return hmac.new(_CREDENTIAL_TAG_KEY, api_key.encode("utf-8"), hashlib.sha256).hexdigest()[:16]
 
 
 def _memo_scope(
