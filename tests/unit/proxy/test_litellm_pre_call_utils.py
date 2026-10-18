@@ -1199,6 +1199,7 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
         "model": "gpt-3.5-turbo",
         "messages": [{"role": "user", "content": "hello"}],
         "mock_response": "free response",
+        "secret_fields": {"_headroom_prompt_logging_allowed": True},
         "mock_tool_calls": [{"id": "call_1"}],
         "is_streaming_request": "caller-value",
         "disable_global_guardrails": True,
@@ -1221,6 +1222,7 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
     )
 
     assert "mock_response" not in updated
+    assert "_headroom_prompt_logging_allowed" not in updated["secret_fields"]
     assert "mock_tool_calls" not in updated
     assert "disable_global_guardrails" not in updated
     assert "enable_prompt_caching" not in updated

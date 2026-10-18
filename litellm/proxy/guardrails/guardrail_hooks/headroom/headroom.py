@@ -530,7 +530,7 @@ class HeadroomGuardrail(CustomGuardrail):
         )
         self.timeout = self._resolve_timeout(timeout)
 
-    def _should_bypass(self, request_data: dict) -> bool:
+    def _should_bypass(self, request_data: Mapping[str, object]) -> bool:
         psr: Final = request_data.get("proxy_server_request")
         if not _is_str_object_dict(psr):
             return False
@@ -777,7 +777,7 @@ class HeadroomGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
         logging_obj: LiteLLMLoggingObj | None = None,
     ) -> GenericGuardrailAPIInputs:
@@ -853,8 +853,30 @@ class HeadroomGuardrail(CustomGuardrail):
             protected_indices=protected_indices,
         )
 
+        from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
+        from litellm.proxy.spend_tracking.spend_tracking_utils import (
+            sanitize_request_body_for_spend_logs_payload,
+            should_store_prompts_and_responses_in_spend_logs,
+        )
+
+        response_state: Final = request_data.get("secret_fields")
+        logging_details: Final = (
+            logging_obj.model_call_details if logging_obj is not None else {"litellm_params": request_data}
+        )
+        capture_prompt: Final = (
+            _is_str_object_dict(response_state)
+            and response_state.get("_headroom_prompt_logging_allowed") is not False
+            and should_store_prompts_and_responses_in_spend_logs()
+            and not should_redact_message_logging(logging_details)
+        )
+        guardrail_response: Final = (
+            sanitize_request_body_for_spend_logs_payload({**result.stats, "compressed_messages": compressed})
+            if capture_prompt
+            else result.stats
+        )
+
         self.add_standard_logging_guardrail_information_to_request_data(
-            guardrail_json_response=result.stats,
+            guardrail_json_response=guardrail_response,
             request_data=request_data,
             guardrail_status="success",
             guardrail_provider=HEADROOM_GUARDRAIL_PROVIDER,

@@ -349,3 +349,60 @@ def test_guardrail_ignores_non_canonical_provider_keys():
     assert d.guardrail_name == "guardrail"  # fell back to the default
     assert d.status is None
     assert d.mode is None
+
+
+@pytest.mark.parametrize("capture_mode", ["no_content", "event_only", "span_only", "span_and_event"])
+def test_guardrail_compressed_snapshot_obeys_capture_policy(capture_mode: str) -> None:
+    from litellm.types.utils import StandardLoggingGuardrailInformation
+
+    config: Final = OpenTelemetryV2Config.model_validate(
+        {"exporter": "in_memory", "capture_message_content": capture_mode}
+    )
+    exporter: Final = InMemorySpanExporter()
+    provider: Final = providers.build_tracer_provider(config, exporter=exporter)
+    logger: Final = OpenTelemetryV2(config=config, tracer_provider=provider)
+    entry: Final = StandardLoggingGuardrailInformation(
+        guardrail_name="headroom",
+        guardrail_response={
+            "tokens_saved": 42,
+            "compressed_messages": [{"role": "user", "content": "Private snapshot"}],
+        },
+    )
+    try:
+        logger.emit_guardrail_span(entry)
+        (span,) = exporter.get_finished_spans()
+        assert span.attributes is not None
+        response: Final = span.attributes[LiteLLM.GUARDRAIL_RESPONSE]
+        assert isinstance(response, str)
+        assert ("Private snapshot" in response) is (capture_mode in ("span_only", "span_and_event"))
+        assert '"tokens_saved": 42' in response
+        assert "Private snapshot" in str(entry)
+        filtered: Final = providers.without_message_content(span)
+        assert filtered.attributes is not None
+        filtered_response: Final = filtered.attributes[LiteLLM.GUARDRAIL_RESPONSE]
+        assert isinstance(filtered_response, str)
+        assert "Private snapshot" not in filtered_response
+        assert '"tokens_saved": 42' in filtered_response
+        assert span.attributes[LiteLLM.GUARDRAIL_RESPONSE] == response
+    finally:
+        provider.shutdown()
+
+
+@pytest.mark.parametrize("response", ['{"tokens_saved": 42}', "invalid json", 42])
+def test_guardrail_content_filter_preserves_stats_and_redacts_invalid_payloads(response: str | int) -> None:
+    from litellm.constants import REDACTED_BY_LITELLM
+
+    config: Final = OpenTelemetryV2Config(exporter="in_memory")
+    exporter: Final = InMemorySpanExporter()
+    provider: Final = providers.build_tracer_provider(config, exporter=exporter)
+    try:
+        with provider.get_tracer(__name__).start_as_current_span("guardrail") as active:
+            active.set_attribute(LiteLLM.GUARDRAIL_RESPONSE, response)
+        (span,) = exporter.get_finished_spans()
+        filtered: Final = providers.without_message_content(span)
+        assert filtered.attributes is not None
+        assert filtered.attributes[LiteLLM.GUARDRAIL_RESPONSE] == (
+            response if response == '{"tokens_saved": 42}' else REDACTED_BY_LITELLM
+        )
+    finally:
+        provider.shutdown()

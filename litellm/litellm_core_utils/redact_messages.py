@@ -14,6 +14,8 @@ from collections.abc import Mapping
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Final
 
+from pydantic import TypeAdapter
+
 import litellm
 from litellm.constants import REDACTED_BY_LITELLM
 from litellm.integrations.custom_logger import CustomLogger
@@ -204,6 +206,33 @@ def _redact_responses_api_output_dict(output_items, redacted_str: str):
             output_item["input"] = redacted_str
 
 
+_GUARDRAIL_ENTRIES_ADAPTER: Final = TypeAdapter(list[object])
+
+
+def redacted_guardrail_response(value: object) -> object:
+    response: Final = _as_mapping(value)
+    if response is None or "compressed_messages" not in response:
+        return value
+    return {**response, "compressed_messages": REDACTED_BY_LITELLM}
+
+
+def _redacted_guardrail_entry(value: object) -> object:
+    entry: Final = _as_mapping(value)
+    if entry is None:
+        return value
+    response: Final = entry.get("guardrail_response")
+    redacted_response: Final = redacted_guardrail_response(response)
+    if response is redacted_response:
+        return value
+    return {**entry, "guardrail_response": redacted_response}
+
+
+def redacted_guardrail_information(value: object) -> object:
+    if isinstance(value, (list, tuple)):
+        return [_redacted_guardrail_entry(entry) for entry in _GUARDRAIL_ENTRIES_ADAPTER.validate_python(value)]
+    return _redacted_guardrail_entry(value)
+
+
 def redacted_standard_logging_payload(payload: Mapping[str, object]) -> Mapping[str, object]:
     """
     Return a copy of a ``StandardLoggingPayload`` with its messages and response redacted.
@@ -215,8 +244,14 @@ def redacted_standard_logging_payload(payload: Mapping[str, object]) -> Mapping[
     return _redact_standard_logging_object(payload)
 
 
-def _redact_standard_logging_object(payload: Mapping[str, object]) -> dict[str, object]:
+def _redact_standard_logging_object(
+    payload: Mapping[str, object], *, redact_guardrail_messages: bool = True
+) -> dict[str, object]:
     standard_logging_object: Final = copy.deepcopy(without_classifier_audit(payload))
+    if redact_guardrail_messages and "guardrail_information" in standard_logging_object:
+        standard_logging_object["guardrail_information"] = redacted_guardrail_information(
+            standard_logging_object["guardrail_information"]
+        )
     redacted_str: Final = REDACTED_BY_LITELLM
 
     if standard_logging_object.get("messages") is not None:
@@ -285,11 +320,29 @@ def _redact_model_response_dict_choices(choices, redacted_str: str):
             _redact_choice_content(choice)
 
 
-def _redacted_baseline_metadata(metadata: Mapping[str, object]) -> Mapping[str, object]:
+def _redacted_logging_metadata(
+    metadata: Mapping[str, object], *, redact_guardrail_messages: bool
+) -> Mapping[str, object]:
     route: Final = metadata.get("_autorouter_baseline_route")
-    if not isinstance(route, BaselineRouteStamp):
+    if not isinstance(route, BaselineRouteStamp) and "standard_logging_guardrail_information" not in metadata:
         return metadata
-    return {**metadata, "_autorouter_baseline_route": replace(route, request_parameters=None)}
+    return {
+        **metadata,
+        **(
+            {"_autorouter_baseline_route": replace(route, request_parameters=None)}
+            if isinstance(route, BaselineRouteStamp)
+            else {}
+        ),
+        **(
+            {
+                "standard_logging_guardrail_information": redacted_guardrail_information(
+                    metadata["standard_logging_guardrail_information"]
+                )
+            }
+            if redact_guardrail_messages and "standard_logging_guardrail_information" in metadata
+            else {}
+        ),
+    }
 
 
 def _redacted_proxy_server_request(request: Mapping[str, object], *, redact_body: bool) -> Mapping[str, object]:
@@ -317,7 +370,9 @@ def _redact_hidden_provider_specific_fields(params: Mapping[str, object]) -> Non
             }
 
 
-def redacted_litellm_params(params: Mapping[str, object], *, redact_request_body: bool = True) -> dict[str, object]:
+def redacted_litellm_params(
+    params: Mapping[str, object], *, redact_request_body: bool = True, redact_guardrail_messages: bool = True
+) -> dict[str, object]:
     """
     Copy of litellm_params without classifier audit fields or baseline route request parameters.
     redact_request_body also redacts the nested proxy_server_request body.
@@ -326,7 +381,7 @@ def redacted_litellm_params(params: Mapping[str, object], *, redact_request_body
     return {
         **params,
         **{
-            key: _redacted_baseline_metadata(value)
+            key: _redacted_logging_metadata(value, redact_guardrail_messages=redact_guardrail_messages)
             for key, value in params.items()
             if key in ("metadata", "litellm_metadata") and isinstance(value, Mapping)
         },
@@ -353,7 +408,9 @@ def perform_redaction(model_call_details: dict, result, redact_streaming_respons
         if redact_streaming_responses:
             _redact_hidden_provider_specific_fields(params)
         model_call_details["litellm_params"] = redacted_litellm_params(
-            params, redact_request_body=redact_streaming_responses
+            params,
+            redact_request_body=redact_streaming_responses,
+            redact_guardrail_messages=redact_streaming_responses,
         )
     model_call_details["messages"] = [{"role": "user", "content": REDACTED_BY_LITELLM}]
     model_call_details["prompt"] = ""
@@ -361,7 +418,9 @@ def perform_redaction(model_call_details: dict, result, redact_streaming_respons
     model_call_details.pop(SERVED_OUTPUT_TEXTS_KEY, None)
     standard_logging_object: Final = model_call_details.get("standard_logging_object")
     if isinstance(standard_logging_object, Mapping):
-        model_call_details["standard_logging_object"] = _redact_standard_logging_object(standard_logging_object)
+        model_call_details["standard_logging_object"] = _redact_standard_logging_object(
+            standard_logging_object, redact_guardrail_messages=redact_streaming_responses
+        )
     redact_vertex_ai_metadata_from_litellm_params(model_call_details)
 
     # Redact streaming response

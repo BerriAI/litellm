@@ -888,7 +888,7 @@ class OpenTelemetryV2(CustomLogger):
         # before the LLM call rather than at emission time. One entry in, one span
         # out — the module-level entry point routes each entry to this single
         # registered logger so a guardrail is never emitted more than once.
-        data: Final = GuardrailSpanData.from_logging_entry(entry)
+        data: Final = GuardrailSpanData.from_logging_entry(entry, capture_content=self._capture_span_content())
         self._emitter.emit(
             SpanRole.GUARDRAIL,
             data,

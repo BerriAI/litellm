@@ -1798,3 +1798,39 @@ async def test_redaction_with_metadata_completion_api():
     response = standard_logging_payload["response"]
     assert response["choices"][0]["message"]["content"] == "redacted-by-litellm"
     assert standard_logging_payload["messages"][0]["content"] == "redacted-by-litellm"
+
+
+@pytest.mark.parametrize("metadata_field", ["metadata", "litellm_metadata"])
+@pytest.mark.parametrize("entry_shape", ["single", "list", "tuple"])
+@pytest.mark.parametrize("global_redaction", [False, True])
+def test_callback_redaction_preserves_authorized_compressed_snapshots(
+    metadata_field: str, entry_shape: str, global_redaction: bool
+) -> None:
+    entry: Final = {
+        "guardrail_response": {
+            "compressed_messages": [{"role": "user", "content": "Compressed private canary"}],
+            "tokens_saved": 42,
+        }
+    }
+    entries: Final = entry if entry_shape == "single" else ([entry] if entry_shape == "list" else (entry,))
+    details: Final = {
+        "standard_logging_object": {"guardrail_information": entries},
+        "litellm_params": {metadata_field: {"standard_logging_guardrail_information": entries}},
+    }
+    perform_redaction(details, None, redact_streaming_responses=global_redaction)
+    logger: Final = CustomLogger()
+    logger.message_logging = False
+    private_payload: Final = logger.redact_standard_logging_payload_from_model_call_details(details)
+    permitted_payload: Final = CustomLogger().redact_standard_logging_payload_from_model_call_details(details)
+    assert "Compressed private canary" not in str(private_payload)
+    assert ("Compressed private canary" in str(permitted_payload)) is (not global_redaction)
+    assert "tokens_saved" in str(private_payload)
+    assert "Compressed private canary" in str(entry)
+
+
+@pytest.mark.parametrize("response", [None, "allow", {"tokens_saved": 42}])
+def test_guardrail_redaction_preserves_records_without_a_compressed_snapshot(response: object) -> None:
+    from litellm.litellm_core_utils.redact_messages import redacted_guardrail_information
+
+    entry: Final = {"guardrail_response": response}
+    assert redacted_guardrail_information([None, entry]) == [None, entry]

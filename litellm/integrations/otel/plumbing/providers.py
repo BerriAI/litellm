@@ -37,9 +37,11 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 from opentelemetry.trace import Span, SpanContext, SpanKind, Status, StatusCode, Tracer
 from opentelemetry.util.re import parse_env_headers
 from opentelemetry.util.types import Attributes, AttributeValue
+from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm._version import version as litellm_version
+from litellm.constants import REDACTED_BY_LITELLM
 from litellm.integrations.otel.mappers.langfuse import (
     LANGFUSE_OBSERVATION_INPUT,
     LANGFUSE_OBSERVATION_OUTPUT,
@@ -69,6 +71,7 @@ from litellm.integrations.otel.plumbing.context import (
     suppressed_backends,
 )
 from litellm.integrations.otel.plumbing.otlp_tls import resolve_otlp_http_tls
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
 if TYPE_CHECKING:
     from opentelemetry.metrics import Meter
@@ -450,12 +453,34 @@ def _is_message_content(key: str) -> bool:
     return key in _MESSAGE_CONTENT_KEYS or key.startswith(_INDEXED_MESSAGE_PREFIXES)
 
 
+_GUARDRAIL_RESPONSE_ADAPTER: Final = TypeAdapter(object)
+
+
+def _without_guardrail_message_content(value: AttributeValue) -> AttributeValue:
+    from litellm.litellm_core_utils.redact_messages import redacted_guardrail_response
+
+    if not isinstance(value, str):
+        return REDACTED_BY_LITELLM
+    try:
+        response: Final = _GUARDRAIL_RESPONSE_ADAPTER.validate_json(value)
+    except ValidationError:
+        return REDACTED_BY_LITELLM
+    redacted: Final = redacted_guardrail_response(response)
+    return value if redacted is response else safe_dumps(redacted)
+
+
 def without_message_content(span: ReadableSpan) -> ReadableSpan:
     """``span`` without its prompt and response content, everything else left as it was."""
     attributes: Final = span.attributes or _NO_ATTRIBUTES
-    if not any(_is_message_content(key) for key in attributes):
+    if not any(_is_message_content(key) or key == LiteLLM.GUARDRAIL_RESPONSE for key in attributes):
         return span
-    kept: Final = MappingProxyType({key: value for key, value in attributes.items() if not _is_message_content(key)})
+    kept: Final = MappingProxyType(
+        {
+            key: _without_guardrail_message_content(value) if key == LiteLLM.GUARDRAIL_RESPONSE else value
+            for key, value in attributes.items()
+            if not _is_message_content(key)
+        }
+    )
     return _SpanView(span, span.resource, kept, span.events, span.status, parent=span.parent)
 
 
@@ -626,7 +651,11 @@ def _for_destination(
     redacted: Final = not destination.captures_content(default_capture)
     kept: Final = MappingProxyType(
         {
-            key: _without_query(key, value)
+            key: (
+                _without_guardrail_message_content(value)
+                if redacted and key == LiteLLM.GUARDRAIL_RESPONSE
+                else _without_query(key, value)
+            )
             for key, value in attributes.items()
             if _tenant_visible(key, database, owned, unreachable) and not (redacted and _is_message_content(key))
         }

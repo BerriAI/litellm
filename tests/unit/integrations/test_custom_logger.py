@@ -497,3 +497,25 @@ def setup_and_teardown():
         if hasattr(litellm, "in_memory_llm_clients_cache"):
             litellm.in_memory_llm_clients_cache.flush_cache()
     yield
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_callback_redaction_removes_compressed_prompt_without_mutating_other_sinks(legacy: bool) -> None:
+    logger: Final = CustomLogger(turn_off_message_logging=not legacy, message_logging=not legacy)
+    entry: Final = {
+        "guardrail_provider": "headroom",
+        "guardrail_name": "compression",
+        "guardrail_response": {
+            "compressed_messages": [{"role": "user", "content": "Private compressed canary"}],
+            "tokens_saved": 42,
+        },
+    }
+    details: Final = {
+        "standard_logging_object": {"guardrail_information": [entry]},
+        "litellm_params": {"metadata": {"standard_logging_guardrail_information": [entry]}},
+    }
+    redacted: Final = logger.redact_standard_logging_payload_from_model_call_details(details)
+    assert "Private compressed canary" not in str(redacted)
+    assert redacted["standard_logging_object"]["guardrail_information"][0]["guardrail_response"]["tokens_saved"] == 42
+    assert "Private compressed canary" in str(details)
+    assert CustomLogger().redact_standard_logging_payload_from_model_call_details(details) is details

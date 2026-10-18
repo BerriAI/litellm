@@ -2937,3 +2937,51 @@ def test_langfuse_logging_without_request_response(monkeypatch: pytest.MonkeyPat
         "tool_calls": None,
         "provider_specific_fields": None,
     }
+
+
+@pytest.mark.parametrize("mask_setting", ["none", "mask_input", "mask_output", "custom"])
+def test_guardrail_compressed_snapshot_respects_langfuse_masking(mask_setting: str) -> None:
+    def mask_canary(value: object) -> object:
+        return value.replace("Private snapshot", "masked snapshot") if isinstance(value, str) else value
+
+    logger, exporter = _steering_logger()
+    now: Final = datetime.datetime.now()
+    response: Final = {
+        "tokens_saved": 42,
+        "compressed_messages": [{"role": "user", "content": "Private snapshot"}],
+    }
+    entry: Final = {"guardrail_name": "headroom", "guardrail_response": response}
+    metadata: Final = {
+        **({mask_setting: True} if mask_setting in ("mask_input", "mask_output") else {}),
+        "standard_logging_guardrail_information": [entry],
+    }
+    logger.log_event_on_langfuse(
+        kwargs={
+            "call_type": "completion",
+            "litellm_params": {
+                "metadata": metadata,
+                **({"_langfuse_masking_function": mask_canary} if mask_setting == "custom" else {}),
+            },
+            "messages": [{"role": "user", "content": "Private snapshot"}],
+            "optional_params": {},
+            "standard_logging_object": {"metadata": {}, "guardrail_information": [entry]},
+        },
+        response_obj=ModelResponse(choices=[{"message": {"role": "assistant", "content": "answer"}}]),
+        start_time=now,
+        end_time=now,
+    )
+    logger.flush()
+    (span,) = tuple(span for span in exporter.get_finished_spans() if span.name == "guardrail")
+    assert span.attributes is not None
+    output: Final = span.attributes["langfuse.observation.output"]
+    assert isinstance(output, str)
+    assert ("Private snapshot" in output) is (mask_setting == "none")
+    assert '"tokens_saved": 42' in output
+    if mask_setting == "custom":
+        assert "masked snapshot" in output
+    assert "Private snapshot" in str(response)
+
+
+@pytest.mark.parametrize("response", [None, "allow", {"tokens_saved": 42}])
+def test_langfuse_custom_mask_preserves_guardrail_responses_without_snapshots(response: object) -> None:
+    assert LangFuseLogger._masked_guardrail_response(response, False, lambda value: "masked") == response

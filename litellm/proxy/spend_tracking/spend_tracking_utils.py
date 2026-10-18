@@ -1187,12 +1187,12 @@ def _is_spend_log_content(parent: Mapping[str, object], key: str) -> bool:
     )
 
 
-def _sanitize_request_body_for_spend_logs_payload(
+def sanitize_request_body_for_spend_logs_payload(
     request_body: Mapping[str, object],
-    visited: set | None = None,
+    visited: set[int] | None = None,
     max_string_length_prompt_in_db: int | None = None,
     mask_credentials: bool = True,
-) -> dict:
+) -> dict[str, object]:
     """
     Recursively sanitize request body to prevent logging large base64 strings or other large values.
     Truncates strings longer than MAX_STRING_LENGTH_PROMPT_IN_DB characters and handles nested dictionaries.
@@ -1220,7 +1220,7 @@ def _sanitize_request_body_for_spend_logs_payload(
 
     def _sanitize_value(value: object, mask_credentials: bool) -> object:
         if isinstance(value, Mapping):
-            return _sanitize_request_body_for_spend_logs_payload(
+            return sanitize_request_body_for_spend_logs_payload(
                 value, visited, max_string_length_prompt_in_db, mask_credentials
             )
         elif isinstance(value, list):
@@ -1516,7 +1516,7 @@ def sanitize_error_information_for_spend_logs(
             if isinstance(value, str):
                 sanitized[field] = _redact_prompt_leaks_in_error_string(value)
 
-    sanitized = _sanitize_request_body_for_spend_logs_payload(sanitized)
+    sanitized = sanitize_request_body_for_spend_logs_payload(sanitized)
     return cast(
         StandardLoggingPayloadErrorInformation,
         _error_information_without_ip_addresses(_OBJECT_MAPPING.validate_python(sanitized))
@@ -1824,7 +1824,7 @@ def _get_proxy_server_request_for_spend_logs_payload(
                     _request_body = _convert_mapping_to_json_serializable(without_classifier_audit(_request_body))
                     perform_redaction(model_call_details=_request_body, result=None)
 
-            _request_body = _sanitize_request_body_for_spend_logs_payload(_request_body)
+            _request_body = sanitize_request_body_for_spend_logs_payload(_request_body)
             stored_request_body: Final = _OBJECT_MAPPING.validate_python(_request_body)
             _request_body_json_str: Final = safe_dumps(
                 _stored_request_without_requester_ip_address(stored_request_body)
@@ -1899,7 +1899,7 @@ def _get_response_for_spend_logs_payload(
                 response_obj = _convert_to_json_serializable_dict(response_obj)
                 response_obj = perform_redaction(model_call_details={}, result=response_obj)
 
-        sanitized_wrapper: Final = _sanitize_request_body_for_spend_logs_payload({"response": response_obj})
+        sanitized_wrapper: Final = sanitize_request_body_for_spend_logs_payload({"response": response_obj})
 
         sanitized_response: Final = sanitized_wrapper.get("response", response_obj)
 

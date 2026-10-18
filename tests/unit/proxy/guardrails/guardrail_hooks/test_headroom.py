@@ -33,6 +33,7 @@ from fastapi import HTTPException
 
 import litellm
 
+from litellm.proxy._types import LitellmUserRoles
 from litellm.proxy.guardrails.guardrail_hooks.headroom.headroom import (
     HeadroomGuardrail,
     has_headroom_retrieve_tool,
@@ -1546,6 +1547,9 @@ def test_bypass_header_case_insensitive():
 
     data = {}
     assert guardrail._should_bypass(data) is False
+
+    invalid_headers: Final = {"proxy_server_request": {"headers": None}}
+    assert guardrail._should_bypass(invalid_headers) is False
 
 
 @pytest.mark.asyncio
@@ -3075,3 +3079,194 @@ def test_unusable_timeout_falls_back_to_the_default(configured: float):
 
     assert guardrail.timeout.read == 60.0
     assert guardrail.timeout.connect == 5.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "role", [LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY]
+)
+@pytest.mark.parametrize("managed", [True, False])
+async def test_compressed_prompt_log_respects_managed_template_visibility(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, role: LitellmUserRoles, managed: bool
+) -> None:
+    from datetime import datetime
+
+    from litellm.caching.caching import DualCache
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.common_utils.callback_utils import get_logging_caching_headers
+    from litellm.proxy.prompts import prompt_registry
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.types.prompts.init_prompts import PromptLiteLLMParams, PromptSpec
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"store_prompts_in_spend_logs": True})
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    monkeypatch.setattr(litellm, "callbacks", [])
+    registry: Final = prompt_registry.InMemoryPromptRegistry()
+    monkeypatch.setattr(prompt_registry, "IN_MEMORY_PROMPT_REGISTRY", registry)
+    registry.initialize_prompt(
+        PromptSpec(
+            prompt_id="private-template",
+            litellm_params=PromptLiteLLMParams(
+                prompt_id="private-template",
+                prompt_integration="dotprompt",
+                dotprompt_content="System: Private system canary",
+            ),
+        )
+    )
+    guardrail: Final = HeadroomGuardrail(
+        api_base=FAKE_API_BASE, guardrail_name="headroom", default_on=True, event_hook="pre_call"
+    )
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    route: Final = respx_mock.post(f"{FAKE_API_BASE}/v1/compress").respond(
+        200, json={"messages": COMPRESSED_MESSAGES, "tokens_before": 1000, "tokens_after": 10}
+    )
+    logging_obj: Final = Logging(
+        model="openai/test",
+        messages=ORIGINAL_MESSAGES,
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id="prompt-visibility",
+        function_id="prompt-visibility",
+    )
+    request_data: Final = {
+        "model": "openai/test",
+        "messages": ORIGINAL_MESSAGES,
+        "litellm_logging_obj": logging_obj,
+        "secret_fields": {"raw_headers": {}},
+        "proxy_server_request": {"headers": {"x-litellm-return-compressed-prompt": "true"}},
+        **({"prompt_id": "private-template"} if managed else {}),
+    }
+    proxy_logging: Final = ProxyLogging(user_api_key_cache=DualCache())
+    result: Final = await proxy_logging.pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(user_role=role), data=request_data, call_type="acompletion"
+    )
+    assert result is not None
+    assert route.call_count == 1
+    assert "A" * 5000 not in json.dumps(result["messages"])
+    assert ("Private system canary" in json.dumps(result["messages"])) is managed
+    headers: Final = get_logging_caching_headers(result) or {}
+    assert "x-litellm-compressed-prompt" not in headers
+    from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket
+
+    _, metadata = get_or_create_metadata_bucket(result)
+    entry: Final = metadata["standard_logging_guardrail_information"][0]["guardrail_response"]
+    if managed and role == LitellmUserRoles.INTERNAL_USER:
+        assert "compressed_messages" not in entry
+        assert "Private system canary" not in json.dumps(entry)
+    else:
+        assert entry["compressed_messages"] == result["messages"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("trusted_context", [True, False])
+@pytest.mark.parametrize("store_prompts", [True, False])
+@pytest.mark.parametrize("redact", [True, False])
+async def test_compressed_prompt_log_capture_respects_storage_and_redaction(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    store_prompts: bool,
+    redact: bool,
+    trusted_context: bool,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.common_utils.callback_utils import get_logging_caching_headers
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "turn_off_message_logging", redact)
+    monkeypatch.setattr(proxy_server, "general_settings", {"store_prompts_in_spend_logs": store_prompts})
+    monkeypatch.delenv("STORE_PROMPTS_IN_SPEND_LOGS", raising=False)
+    guardrail: Final = HeadroomGuardrail(api_base=FAKE_API_BASE, guardrail_name="headroom")
+    compressed: Final = [{"role": "user", "content": "Résumé 日本語 summary"}]
+    respx_mock.post(f"{FAKE_API_BASE}/v1/compress").respond(
+        200, json={"messages": compressed, "tokens_before": 1000, "tokens_after": 10}
+    )
+    request_data: Final = {
+        **({"secret_fields": {}} if trusted_context else {}),
+        "proxy_server_request": {"headers": {"x-litellm-return-compressed-prompt": "true"}},
+    }
+    result: Final = await guardrail.apply_guardrail(
+        inputs=GenericGuardrailAPIInputs(texts=[], structured_messages=ORIGINAL_MESSAGES),
+        request_data=request_data,
+        input_type="request",
+    )
+    entry: Final = request_data["metadata"]["standard_logging_guardrail_information"][0]["guardrail_response"]
+    assert entry["tokens_saved"] == 990
+    if store_prompts and not redact and trusted_context:
+        assert entry["compressed_messages"] == result["structured_messages"]
+        result["structured_messages"][1]["content"] = "Later guardrail rewrite"
+        assert entry["compressed_messages"][1]["content"] != "Later guardrail rewrite"
+    else:
+        assert "compressed_messages" not in entry
+        assert "Résumé" not in json.dumps(request_data, ensure_ascii=False)
+    assert "x-litellm-compressed-prompt" not in (get_logging_caching_headers(request_data) or {})
+
+
+@pytest.mark.asyncio
+async def test_compressed_prompt_log_uses_existing_storage_truncation(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    monkeypatch.setattr(proxy_server, "general_settings", {"store_prompts_in_spend_logs": True})
+    monkeypatch.setenv("MAX_STRING_LENGTH_PROMPT_IN_DB", "100")
+    guardrail: Final = HeadroomGuardrail(api_base=FAKE_API_BASE, guardrail_name="headroom")
+    respx_mock.post(f"{FAKE_API_BASE}/v1/compress").respond(200, json={"messages": COMPRESSED_MESSAGES})
+    request_data: Final = {"secret_fields": {}}
+    result: Final = await guardrail.apply_guardrail(
+        inputs=GenericGuardrailAPIInputs(texts=[], structured_messages=ORIGINAL_MESSAGES),
+        request_data=request_data,
+        input_type="request",
+    )
+    entry: Final = request_data["metadata"]["standard_logging_guardrail_information"][0]["guardrail_response"]
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in entry["compressed_messages"][1]["content"]
+    assert result["structured_messages"][1]["content"] == COMPRESSED_MESSAGES[0]["content"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("redaction_source", ["header", "dynamic"])
+async def test_compressed_prompt_log_respects_request_redaction(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, redaction_source: str
+) -> None:
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    monkeypatch.setattr(proxy_server, "general_settings", {"store_prompts_in_spend_logs": True})
+    guardrail: Final = HeadroomGuardrail(api_base=FAKE_API_BASE, guardrail_name="headroom")
+    respx_mock.post(f"{FAKE_API_BASE}/v1/compress").respond(200, json={"messages": COMPRESSED_MESSAGES})
+    logging_obj: Final = Logging(
+        model="openai/test",
+        messages=ORIGINAL_MESSAGES,
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id="redaction",
+        function_id="redaction",
+    )
+    if redaction_source == "header":
+        logging_obj.model_call_details["litellm_params"] = {
+            "metadata": {"headers": {"x-litellm-enable-message-redaction": "true"}}
+        }
+    else:
+        logging_obj.model_call_details["standard_callback_dynamic_params"] = {"turn_off_message_logging": True}
+    request_data: Final = {"secret_fields": {}}
+    result: Final = await guardrail.apply_guardrail(
+        inputs=GenericGuardrailAPIInputs(texts=[], structured_messages=ORIGINAL_MESSAGES),
+        request_data=request_data,
+        input_type="request",
+        logging_obj=logging_obj,
+    )
+    entry: Final = request_data["metadata"]["standard_logging_guardrail_information"][0]["guardrail_response"]
+    assert "compressed_messages" not in entry
+    assert result["structured_messages"][1] == COMPRESSED_MESSAGES[0]

@@ -35,6 +35,7 @@ from litellm.integrations.otel.model.semconv import LiteLLM, Metric
 from litellm.integrations.otel.plumbing.otlp_tls import resolve_otlp_http_tls
 from litellm.integrations.otel.routing import routing_decision_attributes
 from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call_from_params
+from litellm.litellm_core_utils.redact_messages import redacted_guardrail_response
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.secret_redaction import redact_string
 from litellm.litellm_core_utils.service_tier_utils import (
@@ -2096,7 +2097,14 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
             guardrail_response = guardrail_information.get("guardrail_response")
             if guardrail_response is not None:
-                guardrail_span.set_attribute("guardrail_response", safe_dumps(guardrail_response))
+                guardrail_span.set_attribute(
+                    "guardrail_response",
+                    safe_dumps(
+                        guardrail_response
+                        if self._capture_in_span()
+                        else redacted_guardrail_response(guardrail_response)
+                    ),
+                )
 
             # Surface guardrail_status (success / guardrail_intervened /
             # guardrail_failed_to_respond / not_run) as a top-level span
