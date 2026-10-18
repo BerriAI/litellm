@@ -1524,3 +1524,97 @@ async def test_caller_function_named_like_the_search_tool_streams_as_function_ca
 
     assert [(item["type"], item["name"]) for item in output] == [("function_call", "tool_search_tool_regex")]
     assert "response.function_call_arguments.done" in [event["type"] for event in events]
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_reasoning_output_item_done_carries_encrypted_content_and_status(sync_mode: bool):
+    """
+    Issue #44657: output_item.done for reasoning must carry encrypted_content and status: completed,
+    matching response.completed, so replay clients do not lose signatures across tool turns.
+    """
+    chunk: Final = _chunk("Hello!", finish_reason="stop")
+    signed_block: Final = {"type": "thinking", "thinking": "Let me think", "signature": "sig_abc123"}
+    delta: Final = Delta(**{**chunk.choices[0].delta.model_dump(), "thinking_blocks": [signed_block]})
+    chunks: Final = (
+        chunk.model_copy(update={"choices": [StreamingChoices(index=0, delta=delta, finish_reason="stop")]}),
+    )
+    iterator: Final = _build_iterator(chunks)
+    events: Final = await _collect_events(iterator, sync_mode)
+
+    reasoning_done_events: Final = [
+        event
+        for event in events
+        if getattr(event, "type", None) == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE
+        and getattr(event.item, "type", None) == "reasoning"
+    ]
+    assert len(reasoning_done_events) == 1
+    reasoning_item: Final = reasoning_done_events[0].item
+    assert getattr(reasoning_item, "status", None) == "completed"
+    assert getattr(reasoning_item, "encrypted_content", None) == '[{"type":"thinking","thinking":"Let me think","signature":"sig_abc123"}]'
+
+    # Verify response.completed carries the exact same encrypted_content and id
+    completed_event: Final = next(e for e in events if getattr(e, "type", None) == ResponsesAPIStreamEvents.RESPONSE_COMPLETED)
+    completed_reasoning: Final = next(item for item in completed_event.response.output if item.type == "reasoning")
+    assert completed_reasoning.id == getattr(reasoning_item, "id", None)
+    assert completed_reasoning.status == "completed"
+    assert completed_reasoning.encrypted_content == getattr(reasoning_item, "encrypted_content", None)
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_reasoning_output_item_done_encrypted_content_incremental_stream(sync_mode: bool):
+    """
+    Verify thinking blocks fragmented across streaming chunks are assembled into complete
+    encrypted_content on output_item.done.
+    """
+    chunk1: Final = _chunk("", finish_reason=None)
+    delta1: Final = Delta(**{**chunk1.choices[0].delta.model_dump(), "thinking_blocks": [{"type": "thinking", "thinking": "Step 1 "}]})
+
+    chunk2: Final = _chunk("", finish_reason=None)
+    delta2: Final = Delta(**{**chunk2.choices[0].delta.model_dump(), "thinking_blocks": [{"type": "thinking", "thinking": "Step 2"}]})
+
+    chunk3: Final = _chunk("Hello!", finish_reason="stop")
+    delta3: Final = Delta(**{**chunk3.choices[0].delta.model_dump(), "thinking_blocks": [{"type": "thinking", "thinking": "", "signature": "sig_done"}]})
+
+    chunks: Final = (
+        chunk1.model_copy(update={"choices": [StreamingChoices(index=0, delta=delta1, finish_reason=None)]}),
+        chunk2.model_copy(update={"choices": [StreamingChoices(index=0, delta=delta2, finish_reason=None)]}),
+        chunk3.model_copy(update={"choices": [StreamingChoices(index=0, delta=delta3, finish_reason="stop")]}),
+    )
+    iterator: Final = _build_iterator(chunks)
+    events: Final = await _collect_events(iterator, sync_mode)
+
+    reasoning_done_events: Final = [
+        event
+        for event in events
+        if getattr(event, "type", None) == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE
+        and getattr(event.item, "type", None) == "reasoning"
+    ]
+    assert len(reasoning_done_events) == 1
+    reasoning_item: Final = reasoning_done_events[0].item
+    assert getattr(reasoning_item, "status", None) == "completed"
+    assert getattr(reasoning_item, "encrypted_content", None) == '[{"type":"thinking","thinking":"Step 1 Step 2","signature":"sig_done"}]'
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_reasoning_output_item_done_without_signed_thinking_omits_encrypted_content(sync_mode: bool):
+    """
+    Verify reasoning without signed thinking blocks has status: completed and omits encrypted_content.
+    """
+    chunks: Final = _reasoning_then_text_chunks()
+    iterator: Final = _build_iterator(chunks)
+    events: Final = await _collect_events(iterator, sync_mode)
+
+    reasoning_done_events: Final = [
+        event
+        for event in events
+        if getattr(event, "type", None) == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE
+        and getattr(event.item, "type", None) == "reasoning"
+    ]
+    assert len(reasoning_done_events) == 1
+    reasoning_item: Final = reasoning_done_events[0].item
+    assert getattr(reasoning_item, "status", None) == "completed"
+    assert getattr(reasoning_item, "encrypted_content", None) is None
+
