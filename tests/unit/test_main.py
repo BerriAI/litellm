@@ -9000,3 +9000,94 @@ def test_pdf_to_a_model_with_unknown_pdf_support_is_sent_even_with_drop_params(r
 def test_pdf_to_ollama_is_rejected_without_drop_params() -> None:
     with pytest.raises(litellm.BadRequestError, match="does not accept PDF input"):
         litellm.completion(model="ollama_chat/llama3.2", messages=_pdf_messages(), api_base="http://127.0.0.1:9")
+
+
+def _azure_ai_model_without_pdf_input() -> str:
+    return next(
+        name
+        for name, entry in litellm.model_cost.items()
+        if entry.get("litellm_provider") == "azure_ai" and entry.get("supports_pdf_input") is False
+    )
+
+
+def test_pdf_to_a_deployment_whose_base_model_cannot_read_it_is_rejected() -> None:
+    with pytest.raises(litellm.BadRequestError, match="does not accept PDF input"):
+        litellm.completion(
+            model="azure_ai/qa-custom-deployment",
+            messages=_pdf_messages(),
+            api_base="http://127.0.0.1:9",
+            api_key="fake_azure_ai_api_key",
+            model_info={"base_model": _azure_ai_model_without_pdf_input()},
+        )
+
+
+def test_drop_params_drops_a_pdf_a_deployments_base_model_cannot_read(respx_mock: respx.MockRouter) -> None:
+    api_base: Final = "http://localhost:12353"
+    _mock_pdf_chat_route(respx_mock, api_base)
+
+    litellm.completion(
+        model="azure_ai/qa-custom-deployment",
+        messages=_pdf_messages(),
+        api_base=api_base,
+        api_key="fake_azure_ai_api_key",
+        model_info={"base_model": _azure_ai_model_without_pdf_input()},
+        drop_params=True,
+    )
+
+    sent: Final = json.loads(respx_mock.calls[0].request.content)
+    assert sent["messages"] == [{"role": "user", "content": _SUMMARIZE_TEXT_PART["text"]}]
+
+
+def test_drop_params_rejects_a_request_whose_only_user_turn_was_a_pdf(respx_mock: respx.MockRouter) -> None:
+    api_base: Final = "http://localhost:12354/v1"
+    route: Final = _mock_pdf_chat_route(respx_mock, api_base)
+
+    with pytest.raises(litellm.BadRequestError, match="no user message is left"):
+        litellm.completion(
+            model="openai/qa-text-only-model",
+            messages=[
+                {"role": "system", "content": "You read documents."},
+                {"role": "user", "content": [_PDF_FILE_PART]},
+            ],
+            api_base=api_base,
+            api_key="fake_openai_api_key",
+            model_info={"supports_pdf_input": False},
+            drop_params=True,
+        )
+
+    assert not route.called
+
+
+def test_drop_params_drops_a_pdf_an_unlisted_azure_ai_model_never_declared_it_reads(
+    respx_mock: respx.MockRouter,
+) -> None:
+    api_base: Final = "http://localhost:12355"
+    _mock_pdf_chat_route(respx_mock, api_base)
+
+    litellm.completion(
+        model="azure_ai/qa-unlisted-deployment",
+        messages=_pdf_messages(),
+        api_base=api_base,
+        api_key="fake_azure_ai_api_key",
+        drop_params=True,
+    )
+
+    sent: Final = json.loads(respx_mock.calls[0].request.content)
+    assert sent["messages"] == [{"role": "user", "content": _SUMMARIZE_TEXT_PART["text"]}]
+
+
+def test_drop_params_keeps_a_pdf_an_azure_ai_deployment_declares_it_reads(respx_mock: respx.MockRouter) -> None:
+    api_base: Final = "http://localhost:12356"
+    _mock_pdf_chat_route(respx_mock, api_base)
+
+    litellm.completion(
+        model="azure_ai/qa-unlisted-deployment",
+        messages=_pdf_messages(),
+        api_base=api_base,
+        api_key="fake_azure_ai_api_key",
+        model_info={"supports_pdf_input": True},
+        drop_params=True,
+    )
+
+    sent: Final = json.loads(respx_mock.calls[0].request.content)
+    assert sent["messages"] == _pdf_messages()

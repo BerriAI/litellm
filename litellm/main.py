@@ -190,6 +190,7 @@ from litellm.utils import (
     read_config_args,
     should_run_mock_completion,
     supports_httpx_timeout,
+    supports_pdf_input,
     validate_and_fix_openai_messages,
     validate_and_fix_openai_tools,
     validate_and_fix_thinking_param,
@@ -381,18 +382,53 @@ def _resolve_control_options(kwargs: Mapping[str, object], model: str) -> Contro
 
 
 PROVIDERS_WITHOUT_DOCUMENT_INPUT: Final = frozenset({"ollama", "ollama_chat"})
+PROVIDERS_DROPPING_UNDECLARED_PDF_INPUT: Final = frozenset({"azure_ai"})
 
 
-def _pdf_input_explicitly_disabled(
+def _cost_map_pdf_input_support(model: str, custom_llm_provider: str) -> bool | None:
+    if custom_llm_provider in PROVIDERS_WITHOUT_DOCUMENT_INPUT or is_explicitly_disabled_factory(
+        model, custom_llm_provider, "supports_pdf_input"
+    ):
+        return False
+    if supports_pdf_input(model, custom_llm_provider):
+        return True
+    return None
+
+
+def _deployment_pdf_input_support(model: str, base_model: str, custom_llm_provider: str) -> bool | None:
+    supports: Final = (
+        _cost_map_pdf_input_support(model, custom_llm_provider),
+        _cost_map_pdf_input_support(base_model, custom_llm_provider),
+    )
+    if False in supports:
+        return False
+    if True in supports:
+        return True
+    return None
+
+
+def _declared_pdf_input_support(
     model: str, custom_llm_provider: str, model_info: Mapping[str, object] | None
-) -> bool:
+) -> bool | None:
     match model_info:
         case {"supports_pdf_input": bool() as declared}:
-            return not declared
+            return declared
+        case {"base_model": str() as base_model} if base_model:
+            return _deployment_pdf_input_support(model, base_model, custom_llm_provider)
         case _:
-            return custom_llm_provider in PROVIDERS_WITHOUT_DOCUMENT_INPUT or is_explicitly_disabled_factory(
-                model, custom_llm_provider, "supports_pdf_input"
-            )
+            return _cost_map_pdf_input_support(model, custom_llm_provider)
+
+
+def _pdf_input_unreadable(
+    model: str, custom_llm_provider: str, model_info: Mapping[str, object] | None, drop_params: bool
+) -> bool:
+    match _declared_pdf_input_support(model, custom_llm_provider, model_info):
+        case False:
+            return True
+        case None:
+            return drop_params and custom_llm_provider in PROVIDERS_DROPPING_UNDECLARED_PDF_INPUT
+        case True:
+            return False
 
 
 def _messages_without_unreadable_pdfs(
@@ -402,20 +438,30 @@ def _messages_without_unreadable_pdfs(
     model_info: Mapping[str, object] | None,
     drop_params: bool,
 ) -> tuple[AllMessageValues, ...] | None:
-    if not messages_have_pdf_file_part(messages) or not _pdf_input_explicitly_disabled(
-        model, custom_llm_provider, model_info
+    if not messages_have_pdf_file_part(messages) or not _pdf_input_unreadable(
+        model, custom_llm_provider, model_info, drop_params
     ):
         return None
-    if drop_params:
-        return messages_without_pdf_file_parts(messages)
-    raise litellm.BadRequestError(
-        message=(
-            f"{custom_llm_provider}/{model} does not accept PDF input. "
-            "Remove the PDF, or set drop_params=True to send the request without it"
-        ),
-        model=model,
-        llm_provider=custom_llm_provider,
-    )
+    if not drop_params:
+        raise litellm.BadRequestError(
+            message=(
+                f"{custom_llm_provider}/{model} does not accept PDF input. "
+                "Remove the PDF, or set drop_params=True to send the request without it"
+            ),
+            model=model,
+            llm_provider=custom_llm_provider,
+        )
+    readable_messages: Final = messages_without_pdf_file_parts(messages)
+    if not any(message["role"] == "user" for message in readable_messages):
+        raise litellm.BadRequestError(
+            message=(
+                f"{custom_llm_provider}/{model} does not accept PDF input, "
+                "and no user message is left once the PDF is dropped"
+            ),
+            model=model,
+            llm_provider=custom_llm_provider,
+        )
+    return readable_messages
 
 
 ####### COMPLETION ENDPOINTS ################

@@ -20,6 +20,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_OCI_CHAT_MAX_TOKENS
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
+from litellm.litellm_core_utils.prompt_templates.common_utils import messages_with_file_parts_as_image_urls
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
@@ -679,7 +680,9 @@ class OCIChatConfig(BaseConfig):
                 servingMode=serving_mode,
                 chatRequest=OCIChatRequestPayload(
                     apiFormat=vendor.value,
-                    messages=adapt_messages_to_generic_oci_standard(messages),
+                    messages=adapt_messages_to_generic_oci_standard(
+                        list(messages_with_file_parts_as_image_urls(messages))
+                    ),
                     **self._get_optional_params(vendor, optional_params, model),
                 ),
             )

@@ -51650,6 +51650,7 @@
         ],
         "supports_assistant_prefill": false,
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true
@@ -51671,6 +51672,7 @@
         ],
         "supports_assistant_prefill": false,
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true
@@ -52439,6 +52441,7 @@
         "output_cost_per_token": 2.5e-06,
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_tool_choice": true,
         "supports_web_search": true
     },
@@ -52457,6 +52460,7 @@
             "global"
         ],
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_reasoning": true,
         "supports_tool_choice": true
     },
@@ -52475,6 +52479,7 @@
             "global"
         ],
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true
@@ -52667,6 +52672,7 @@
         "output_cost_per_token": 3.6e-07,
         "output_cost_per_token_batches": 1.8e-07,
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
+        "supports_pdf_input": false,
         "supports_reasoning": true
     },
     "vertex_ai/openai/gpt-oss-20b-maas": {
@@ -52679,6 +52685,7 @@
         "mode": "chat",
         "output_cost_per_token": 2.5e-07,
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
+        "supports_pdf_input": false,
         "supports_reasoning": true,
         "cache_read_input_token_cost": 7e-09,
         "input_cost_per_token_batches": 3.5e-08,
@@ -52817,6 +52824,7 @@
             "us-south1"
         ],
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_tool_choice": true
     },
     "vertex_ai/qwen/qwen3-coder-480b-a35b-instruct-maas": {
@@ -52836,6 +52844,7 @@
             "global"
         ],
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_tool_choice": true
     },
     "vertex_ai/qwen/qwen3-next-80b-a3b-instruct-maas": {
@@ -52852,6 +52861,7 @@
             "global"
         ],
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_tool_choice": true
     },
     "vertex_ai/qwen/qwen3-next-80b-a3b-thinking-maas": {
@@ -52868,6 +52878,7 @@
             "global"
         ],
         "supports_function_calling": true,
+        "supports_pdf_input": false,
         "supports_tool_choice": true
     },
     "vertex_ai/veo-3.1-generate-preview": {
