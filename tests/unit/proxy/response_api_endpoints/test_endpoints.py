@@ -2457,7 +2457,7 @@ class TestResponsesWSFirstFrameModelAuth:
         }
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("relay_outcome", ["still_relaying", "already_returned"])
+    @pytest.mark.parametrize("relay_outcome", ["still_relaying", "already_returned", "returns_despite_the_cancel"])
     async def test_session_limit_frees_the_slot_at_once_and_never_cuts_the_failure_row(self, relay_outcome: str):
         from litellm.exceptions import RateLimitError
         from litellm.proxy.response_api_endpoints.endpoints import responses_websocket_endpoint
@@ -2471,7 +2471,10 @@ class TestResponsesWSFirstFrameModelAuth:
         ws.receive_text = AsyncMock(
             return_value=json.dumps({"type": "response.create", "model": "gpt-4o-mini", "input": []})
         )
-        ws.close = AsyncMock()
+        async def close_over_the_network(**kwargs):
+            await asyncio.sleep(0)
+
+        ws.close = AsyncMock(side_effect=close_over_the_network)
         processor = MagicMock()
         processor.common_processing_pre_call_logic = AsyncMock(
             return_value=({"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock())
@@ -2490,6 +2493,9 @@ class TestResponsesWSFirstFrameModelAuth:
                 guarded.bill_refusal(refusal)
                 if relay_outcome == "still_relaying":
                     await asyncio.Event().wait()
+                if relay_outcome == "returns_despite_the_cancel":
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await asyncio.Event().wait()
                 return refusal
 
             return relay()
@@ -2524,9 +2530,11 @@ class TestResponsesWSFirstFrameModelAuth:
                 proxy_logging_obj,
             ),
         ):
-            await asyncio.wait_for(
-                responses_websocket_endpoint(websocket=ws, model=None, user_api_key_dict=MagicMock()), timeout=1
+            endpoint = asyncio.ensure_future(
+                responses_websocket_endpoint(websocket=ws, model=None, user_api_key_dict=MagicMock())
             )
+            finished, _ = await asyncio.wait({endpoint}, timeout=1)
+            assert endpoint in finished
             ws.close.assert_awaited_once_with(code=1000, reason="Session duration limit reached")
             proxy_logging_obj.arelease_responses_websocket_slot.assert_awaited_once()
             assert not row_written.is_set()
