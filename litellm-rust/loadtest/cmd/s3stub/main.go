@@ -3,10 +3,16 @@
 // credentials, so gateways can sign their uploads as they would for AWS and verify can read them
 // back without any. Objects live until the process exits.
 //
-//	s3stub -addr :9100
+// -max-string N shortens every JSON string longer than N bytes in a stored object to its first N
+// bytes, so request logs keep their fields and numbers but not whole prompts, and a long run's logs
+// fit in memory. Objects that are not JSON are stored as sent.
+//
+//	s3stub -addr :9100 -max-string 256
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"encoding/xml"
 	"flag"
 	"io"
@@ -19,8 +25,9 @@ import (
 )
 
 type store struct {
-	mu      sync.RWMutex
-	objects map[string][]byte // "<bucket>/<key>"
+	mu        sync.RWMutex
+	objects   map[string][]byte // "<bucket>/<key>"
+	maxString int
 }
 
 type listResult struct {
@@ -42,8 +49,9 @@ const page = 1000
 
 func main() {
 	addr := flag.String("addr", ":9100", "listen address")
+	maxString := flag.Int("max-string", 0, "shorten JSON strings longer than this many bytes (0 keeps objects as sent)")
 	flag.Parse()
-	s := &store{objects: map[string][]byte{}}
+	s := &store{objects: map[string][]byte{}, maxString: *maxString}
 	http.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "ok") })
 	http.HandleFunc("/", s.serve)
 	log.Printf("s3stub listening on %s", *addr)
@@ -63,6 +71,9 @@ func (s *store) serve(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
+		}
+		if s.maxString > 0 {
+			body = shorten(body, s.maxString)
 		}
 		s.mu.Lock()
 		s.objects[bucket+"/"+key] = body
@@ -115,4 +126,37 @@ func (s *store) list(w http.ResponseWriter, r *http.Request, bucket string) {
 	w.Header().Set("content-type", "application/xml")
 	io.WriteString(w, xml.Header)
 	xml.NewEncoder(w).Encode(res)
+}
+
+// shorten re-encodes a JSON object with every string cut to max bytes; numbers keep their text.
+func shorten(body []byte, max int) []byte {
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.UseNumber()
+	var v any
+	if err := dec.Decode(&v); err != nil || dec.More() {
+		return body
+	}
+	out, err := json.Marshal(cut(v, max))
+	if err != nil {
+		return body
+	}
+	return out
+}
+
+func cut(v any, max int) any {
+	switch v := v.(type) {
+	case string:
+		if len(v) > max {
+			return v[:max]
+		}
+	case []any:
+		for i := range v {
+			v[i] = cut(v[i], max)
+		}
+	case map[string]any:
+		for k := range v {
+			v[k] = cut(v[k], max)
+		}
+	}
+	return v
 }
