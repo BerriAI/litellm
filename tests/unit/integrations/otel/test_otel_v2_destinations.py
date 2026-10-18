@@ -5067,3 +5067,38 @@ class TestArizeProjectRouting:
         monkeypatch.setenv("ARIZE_PROJECT_NAME", "gateway-prod")
 
         assert self._forwarded_projects() == {"gateway-prod"}
+
+
+@pytest.mark.parametrize("capture_mode", ["no_content", "event_only", "span_only", "span_and_event"])
+def test_tenant_guardrail_snapshot_respects_destination_capture(capture_mode: str) -> None:
+    from litellm.types.utils import StandardLoggingGuardrailInformation
+
+    destination: Final = NO_CONTENT_DEST.model_copy(update={"capture_message_content": capture_mode})
+    operator, tenant = InMemorySpanExporter(), InMemorySpanExporter()
+    provider: Final = TestCaptureMessageContent._fan_out(operator, {destination.endpoint: tenant})
+    logger: Final = OpenTelemetryV2(
+        config=OpenTelemetryV2Config(exporter="in_memory", capture_message_content=CaptureMessageContent.SPAN_ONLY),
+        tracer_provider=provider,
+    )
+    entry: Final = StandardLoggingGuardrailInformation(
+        guardrail_name="headroom",
+        guardrail_response={"tokens_saved": 42, "compressed_messages": [{"role": "user", "content": _SECRET}]},
+    )
+
+    def run() -> None:
+        set_request_destinations((destination,))
+        logger.emit_guardrail_span(entry)
+
+    try:
+        in_fresh_context(run)
+        (exported,) = tenant.get_finished_spans()
+        (original,) = operator.get_finished_spans()
+        assert exported.attributes is not None
+        response: Final = exported.attributes["litellm.guardrail.response"]
+        assert isinstance(response, str)
+        assert (_SECRET in response) is (capture_mode in ("span_only", "span_and_event"))
+        assert '"tokens_saved": 42' in response
+        assert carries_content(original)
+        assert _SECRET in str(entry)
+    finally:
+        provider.shutdown()

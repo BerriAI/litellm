@@ -651,7 +651,11 @@ def _for_destination(
     redacted: Final = not destination.captures_content(default_capture)
     kept: Final = MappingProxyType(
         {
-            key: _without_query(key, value)
+            key: (
+                _without_guardrail_message_content(value)
+                if redacted and key == LiteLLM.GUARDRAIL_RESPONSE
+                else _without_query(key, value)
+            )
             for key, value in attributes.items()
             if _tenant_visible(key, database, owned, unreachable) and not (redacted and _is_message_content(key))
         }
