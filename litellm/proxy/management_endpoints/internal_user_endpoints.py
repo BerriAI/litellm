@@ -1515,8 +1515,8 @@ async def _update_single_user_helper(
         # precisely the clear-my-own-ceiling case this must refuse.
         _sent_fields: Final = user_request.fields_set() if hasattr(user_request, "fields_set") else set()
         _reject_ceiling_self_update(
-            sent_fields=_sent_fields,
-            non_default_values=non_default_values,
+            sent_fields=_sent_fields,  # pyright: ignore[reportUnknownArgumentType]  # pydantic's fields_set() is untyped on this request model
+            non_default_values=non_default_values,  # pyright: ignore[reportUnknownArgumentType]  # payload is the raw sent-fields mapping, shape-checked inside the guard
             user_api_key_dict=user_api_key_dict,
         )
 
