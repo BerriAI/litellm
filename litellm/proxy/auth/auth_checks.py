@@ -5411,22 +5411,12 @@ async def can_key_call_model(
             prisma_client=prisma_client,
         )
         if models_from_groups is not None:
-            if not models_from_groups:
-                raise ModelAccessDeniedProxyException(
-                    message=model_access_denied_client_message(model=model),
-                    internal_message=(
-                        f"key not allowed to access model. Key has access_group_ids={key_access_group_ids} "
-                        f"which resolved to no models. Tried to access {model}"
-                    ),
-                    type=ProxyErrorTypes.get_model_access_error_type_for_object(object_type="key"),
-                    param="model",
-                    code=status.HTTP_403_FORBIDDEN,
-                )
-            if key_models:
-                allowed_models = list(dict.fromkeys([*key_models, *models_from_groups]))
-            elif models_from_groups:
-                allowed_models = models_from_groups
-            else:
+            allowed_models: Final = (
+                list(dict.fromkeys([*key_models, *models_from_groups]))
+                if key_models
+                else models_from_groups
+            )
+            if not allowed_models:
                 raise ModelAccessDeniedProxyException(
                     message=model_access_denied_client_message(model=model),
                     internal_message=(
@@ -5654,11 +5644,12 @@ async def can_team_access_model(
             prisma_client=prisma_client,
         )
         if models_from_groups is not None:
-            if team_models:
-                allowed_models = list(dict.fromkeys([*team_models, *models_from_groups]))
-            elif models_from_groups:
-                allowed_models = models_from_groups
-            else:
+            allowed_models: Final = (
+                list(dict.fromkeys([*team_models, *models_from_groups]))
+                if team_models
+                else models_from_groups
+            )
+            if not allowed_models:
                 raise ModelAccessDeniedProxyException(
                     message=model_access_denied_client_message(model=model),
                     internal_message=(
