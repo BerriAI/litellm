@@ -134,6 +134,7 @@ const independentToolPermissions = (
   allServers: MCPServer[],
   allToolsets: MCPToolset[],
 ): Record<string, string[]> => {
+  if (storedGrant.mcp_servers.includes(NO_MCP_SERVERS_SENTINEL)) return {};
   const storedSelection = {
     allServers,
     selectedServers: storedGrant.mcp_servers,
