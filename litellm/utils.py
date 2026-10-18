@@ -1482,7 +1482,14 @@ def _get_wrapper_num_retries(kwargs: dict[str, Any], exception: Exception) -> tu
     return num_retries, kwargs
 
 
-def _get_wrapper_timeout(kwargs: dict[str, object]) -> object:
+def stamp_async_failure(error: Exception, kwargs: Mapping[str, object]) -> None:
+    num_retries: Final = kwargs.get("num_retries")
+    if num_retries is not None:
+        setattr(error, "num_retries", num_retries)
+    setattr(error, "timeout", _get_wrapper_timeout(kwargs=kwargs))
+
+
+def _get_wrapper_timeout(kwargs: Mapping[str, object]) -> object:
     from litellm.litellm_core_utils.litellm_logging import Logging
 
     if kwargs.get("stream") is not True:
@@ -2350,12 +2357,7 @@ def client(original_function):
                     else:
                         return result
 
-            deployment_num_retries: Final = kwargs.get("num_retries")
-            if deployment_num_retries is not None:
-                setattr(e, "num_retries", deployment_num_retries)
-
-            timeout: Final = _get_wrapper_timeout(kwargs=kwargs)
-            setattr(e, "timeout", timeout)
+            stamp_async_failure(e, kwargs)
             raise e
 
         finally:
