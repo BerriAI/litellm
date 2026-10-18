@@ -661,7 +661,7 @@ async def create_model_group(
             )
 
         # Update deployments using provided model_ids and/or model_names
-        updated_dict: Final[dict[str, str]] = {}  # mutable-ok: accumulator for unique deployment updates
+        updated_dict: Final[dict[str, object]] = {}  # mutable-ok: accumulator for unique deployment updates
         if has_model_ids:
             assert data.model_ids is not None
             for pair in await update_specific_deployments_with_access_group(
@@ -680,7 +680,7 @@ async def create_model_group(
             ):
                 updated_dict[pair[0]] = pair[1]
 
-        updated_pairs: Final = list(updated_dict.items())
+        updated_pairs: Final = tuple(updated_dict.items())
         models_updated: Final = len(updated_pairs)
 
         live_before_reload: Final = live_model_ids_snapshot()
@@ -928,7 +928,7 @@ async def update_access_group(
         stripped_pairs: Final = tuple(pair for pair in stripped if pair is not None)
 
         # Step 2: Add access group using provided model_ids and/or model_names
-        updated_dict: Final[dict[str, str]] = {}  # mutable-ok: accumulator for unique deployment updates
+        updated_dict: Final[dict[str, object]] = {}  # mutable-ok: accumulator for unique deployment updates
         if has_model_ids:
             assert data.model_ids is not None
             for pair in await update_specific_deployments_with_access_group(
@@ -947,7 +947,7 @@ async def update_access_group(
             ):
                 updated_dict[pair[0]] = pair[1]
 
-        updated_pairs: Final = list(updated_dict.items())
+        updated_pairs: Final = tuple(updated_dict.items())
         models_updated: Final = len(updated_pairs)
 
         # Clear cache and reload models to pick up the access group changes
