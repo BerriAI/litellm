@@ -17,13 +17,13 @@ vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
   useOrganizations: useOrganizationsMock,
 }));
 
-vi.mock("@/components/view_logs/RequestLogsPanel", () => ({
+vi.mock("@/components/logs/request/RequestLogsPanel", () => ({
   default: function RequestLogsPanelMock({ isActive }: { isActive: boolean }) {
     return <div data-testid="request-logs-panel">{isActive ? "active" : "inactive"}</div>;
   },
 }));
 
-vi.mock("@/components/view_logs/AuditLogsPanel", () => ({
+vi.mock("@/components/logs/audit/AuditLogsPanel", () => ({
   default: function AuditLogsPanelMock({ isActive }: { isActive: boolean }) {
     return <div data-testid="audit-logs-panel">{isActive ? "active" : "inactive"}</div>;
   },

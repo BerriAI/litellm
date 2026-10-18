@@ -4,14 +4,19 @@ Tests for Vertex AI Agent Engine transformation.
 Tests the request transformation and streaming chunk parsing without making real API calls.
 """
 
+import json
 from copy import deepcopy
+from datetime import datetime
 from typing import Final
 
+import httpx
 import pytest
 from typing_extensions import ReadOnly
 
 from litellm import BadRequestError
 from litellm.litellm_core_utils.exception_mapping_utils import exception_type
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.vertex_ai.agent_engine.sse_iterator import (
     VertexAgentEngineResponseIterator,
 )
@@ -25,6 +30,8 @@ from litellm.types.llms.openai import (
     OpenAIMessageContentListBlock,
 )
 from litellm.types.llms.vertex_ai import ContentType
+from litellm.types.utils import LlmProviders
+from litellm.utils import CustomStreamWrapper
 
 
 class TestVertexAgentEngineTransformRequest:
@@ -438,3 +445,39 @@ def test_search_results_are_preserved_without_message_content() -> None:
         model="agent_engine/123", messages=[message], optional_params={"user_id": "user"}, litellm_params={}, headers={}
     )
     assert result == {"class_method": "stream_query", "input": {"message": _SEARCH_TEXT, "user_id": "user"}}
+
+
+async def test_async_stream_wrapper_without_a_client_posts_through_the_cached_vertex_ai_client():
+    api_base: Final = "https://us-central1-aiplatform.googleapis.com/v1/reasoningEngines/123:streamQuery"
+    sent_requests: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent_requests.append(request)
+        return httpx.Response(200, text='{"content": {"parts": [{"text": "hi"}], "role": "model"}}')
+
+    cached_client: Final = get_async_httpx_client(llm_provider=LlmProviders.VERTEX_AI, params={})
+    cached_client.client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    messages: Final = [{"role": "user", "content": "hi"}]
+
+    wrapper: Final = await VertexAgentEngineConfig().get_async_custom_stream_wrapper(
+        model="agent_engine/123",
+        custom_llm_provider="vertex_ai",
+        logging_obj=Logging(
+            model="agent_engine/123",
+            messages=messages,
+            stream=True,
+            call_type="acompletion",
+            start_time=datetime(2026, 1, 1),
+            litellm_call_id="call-1",
+            function_id="fn-1",
+        ),
+        api_base=api_base,
+        headers={},
+        data={"class_method": "stream_query"},
+        messages=messages,
+        litellm_params={},
+    )
+
+    assert type(wrapper) is CustomStreamWrapper
+    assert [str(request.url) for request in sent_requests] == [api_base]
+    assert json.loads(sent_requests[0].content) == {"class_method": "stream_query"}

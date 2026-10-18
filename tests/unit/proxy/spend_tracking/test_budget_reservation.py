@@ -11,6 +11,8 @@ from litellm.caching import DualCache
 from litellm.models.budget import LiteLLM_BudgetTable
 from litellm.proxy import proxy_server
 from litellm.proxy._types import (
+    LiteLLM_OrganizationTable,
+    LiteLLM_ProjectTableCachedObj,
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
@@ -18,11 +20,13 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
+    project_cache_key,
     team_membership_reservation_cache_key,
 )
 from litellm.proxy.spend_tracking.budget_reservation import (
     _get_team_member_budget_counter,
     estimate_request_max_cost,
+    get_budget_window_start,
     release_unbound_budget_reservation,
     reserve_budget_for_request,
 )
@@ -342,3 +346,83 @@ async def test_release_unbound_budget_reservation_leaves_a_bound_one_to_its_call
 
     assert spend_counter_cache.in_memory_cache.get_cache(key=counter_key) == pytest.approx(reservation["reserved_cost"])
     assert reservation["finalized"] is False
+
+
+@pytest.mark.asyncio
+async def test_reservation_holds_cost_against_cached_org_and_project_budgets(spend_counter_cache: DualCache):
+    cache: Final = UserApiKeyCache()
+    await cache.async_set_cache(
+        key="org_id:org-budgeted:with_budget",
+        value=LiteLLM_OrganizationTable(
+            organization_id="org-budgeted",
+            budget_id="org-budget",
+            spend=1.5,
+            models=[],
+            created_by="admin",
+            updated_by="admin",
+            litellm_budget_table=LiteLLM_BudgetTable(max_budget=10.0),
+        ),
+        model_type=LiteLLM_OrganizationTable,
+    )
+    await cache.async_set_cache(
+        key=project_cache_key("project-budgeted"),
+        value=LiteLLM_ProjectTableCachedObj(
+            project_id="project-budgeted", spend=2.5, litellm_budget_table=LiteLLM_BudgetTable(max_budget=20.0)
+        ),
+        model_type=LiteLLM_ProjectTableCachedObj,
+    )
+
+    reservation: Final = await reserve_budget_for_request(
+        request_body={"model": "gpt-4o", "input": "hello"},
+        route="/v1/responses",
+        llm_router=None,
+        valid_token=UserAPIKeyAuth(token="hashed-org-project", org_id="org-budgeted", project_id="project-budgeted"),
+        team_object=None,
+        user_object=None,
+        prisma_client=None,
+        user_api_key_cache=cache,
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+    )
+
+    assert reservation is not None
+    reserved_cost: Final = reservation["reserved_cost"]
+    assert reserved_cost > 0
+    assert reservation["entries"] == [
+        {
+            "counter_key": "spend:org:org-budgeted",
+            "entity_type": "Organization",
+            "entity_id": "org-budgeted",
+            "reserved_cost": reserved_cost,
+            "applied_adjustment": 0.0,
+        },
+        {
+            "counter_key": "spend:project:project-budgeted",
+            "entity_type": "Project",
+            "entity_id": "project-budgeted",
+            "reserved_cost": reserved_cost,
+            "applied_adjustment": 0.0,
+        },
+    ]
+    assert spend_counter_cache.in_memory_cache.get_cache(key="spend:org:org-budgeted") == pytest.approx(reserved_cost)
+    assert spend_counter_cache.in_memory_cache.get_cache(key="spend:project:project-budgeted") == pytest.approx(
+        reserved_cost
+    )
+
+
+@pytest.mark.parametrize(
+    ("window", "expected"),
+    [
+        (
+            '{"budget_duration": "1h", "reset_at": "2030-01-01T01:00:00Z"}',
+            datetime(2030, 1, 1, 0, 0, tzinfo=timezone.utc),
+        ),
+        ('{"reset_at": "2030-01-01T01:00:00Z"}', None),
+        ("{}", None),
+        ('["budget_duration", "1h"]', None),
+        ('"1h"', None),
+        ("null", None),
+        ("not json", None),
+    ],
+)
+def test_budget_window_start_reads_json_encoded_windows(window: str, expected: datetime | None) -> None:
+    assert get_budget_window_start(window) == expected

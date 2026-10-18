@@ -4,7 +4,7 @@ import json
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from typing import Final, TypeVar, cast  # noqa: TID251  # a rebuilt chat row has no typed constructor across roles
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicUsage
 from litellm.types.llms.openai import AllMessageValues, ResponseAPIUsage
@@ -192,7 +192,7 @@ def blocked_responses_stream_usage(original_response: object) -> ResponseAPIUsag
 
 
 def effective_skip_system_message_for_guardrail(guardrail_to_apply: object) -> bool:
-    per: Final = getattr(guardrail_to_apply, "skip_system_message_in_guardrail", None)
+    per: Final[object] = getattr(guardrail_to_apply, "skip_system_message_in_guardrail", None)
     if per is not None:
         return bool(per)
     import litellm
@@ -201,7 +201,7 @@ def effective_skip_system_message_for_guardrail(guardrail_to_apply: object) -> b
 
 
 def effective_skip_tool_message_for_guardrail(guardrail_to_apply: object) -> bool:
-    per: Final = getattr(guardrail_to_apply, "skip_tool_message_in_guardrail", None)
+    per: Final[object] = getattr(guardrail_to_apply, "skip_tool_message_in_guardrail", None)
     if per is not None:
         return bool(per)
     import litellm
@@ -290,6 +290,17 @@ def openai_tool_name(tool: object) -> str | None:
         return function_name if isinstance(function_name, str) else None
     flat_name: Final = tool.get("name")
     return flat_name if isinstance(flat_name, str) else None
+
+
+_FIELDS: Final = TypeAdapter(Mapping[object, object], config=ConfigDict(strict=True))
+_ITEMS: Final = TypeAdapter(Sequence[object], config=ConfigDict(strict=True))
+
+
+def list_field(data: object, key: str) -> Sequence[object]:
+    try:
+        return _ITEMS.validate_python(_FIELDS.validate_python(data).get(key))
+    except ValidationError:
+        return ()
 
 
 def anthropic_tool_names(tool: object) -> tuple[str, ...]:

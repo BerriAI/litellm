@@ -14,11 +14,12 @@ Anthropic Files API endpoints:
 
 import calendar
 import time
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import Final, cast
 
 import httpx
 from openai.types.file_deleted import FileDeleted
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
@@ -46,6 +47,9 @@ from ..common_utils import (
 ANTHROPIC_FILES_API_BASE: Final = "https://api.anthropic.com"
 ANTHROPIC_FILES_BETA_HEADER: Final = "files-api-2025-04-14"
 ANTHROPIC_MESSAGE_BATCH_ID_PREFIX: Final = "msgbatch_"
+
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_ITEMS: Final = TypeAdapter(Iterable[object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class AnthropicFilesConfig(BaseFilesConfig):
@@ -125,13 +129,12 @@ class AnthropicFilesConfig(BaseFilesConfig):
         return self._finalize_headers(headers, auth_header)
 
     @staticmethod
-    def _resolve_params(
-        litellm_params: dict, api_base: str | None
-    ) -> tuple[dict | None, str | None]:  # mutable-ok: mirrors the sync validate_environment contract this overrides
+    def _resolve_params(litellm_params: dict, api_base: str | None) -> tuple[Mapping[str, object] | None, str | None]:
         params_mapping: Final = litellm_params if isinstance(litellm_params, dict) else None
-        if api_base is None and params_mapping is not None:
-            api_base = params_mapping.get("api_base")
-        return params_mapping, api_base
+        resolved_api_base: Final = (
+            api_base if api_base is not None or params_mapping is None else params_mapping.get("api_base")
+        )
+        return params_mapping, resolved_api_base
 
     @staticmethod
     def _finalize_headers(headers: dict, auth_header: Mapping[str, str] | None) -> dict:  # mutable-ok: out-param
@@ -212,7 +215,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
             "created_at": "2025-01-01T00:00:00Z"
         }
         """
-        response_json: Final = raw_response.json()
+        response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
         return self._parse_anthropic_file(response_json)
 
     def transform_retrieve_file_request(
@@ -231,7 +234,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
         logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
     ) -> OpenAIFileObject:
-        response_json: Final = raw_response.json()
+        response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
         return self._parse_anthropic_file(response_json)
 
     def transform_delete_file_request(
@@ -250,13 +253,9 @@ class AnthropicFilesConfig(BaseFilesConfig):
         logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
     ) -> FileDeleted:
-        response_json: Final = raw_response.json()
+        response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
         file_id: Final = response_json.get("id", "")
-        return FileDeleted(
-            id=file_id,
-            deleted=True,
-            object="file",
-        )
+        return FileDeleted.model_validate({"id": file_id, "deleted": True, "object": "file"})
 
     def transform_list_files_request(
         self,
@@ -286,9 +285,9 @@ class AnthropicFilesConfig(BaseFilesConfig):
             "last_id": "..."
         }
         """
-        response_json: Final = raw_response.json()
-        files_data: Final = response_json.get("data", [])
-        return [self._parse_anthropic_file(f) for f in files_data]
+        response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
+        files_data: Final = _JSON_ITEMS.validate_python(response_json.get("data", []))
+        return [self._parse_anthropic_file(_JSON_OBJECT.validate_python(f)) for f in files_data]
 
     def transform_file_content_request(
         self,

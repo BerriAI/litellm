@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.proxy_server import app
+from tests._master_key import MASTER_KEY
 
 client = TestClient(app)
 
@@ -60,7 +61,7 @@ def _mock_prisma(monkeypatch, record=None):
 class TestGetUserBanner:
     def test_requires_auth(self, monkeypatch):
         _mock_prisma(monkeypatch)
-        monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-1234")
+        monkeypatch.setattr("litellm.proxy.proxy_server.master_key", MASTER_KEY)
         response = client.get("/get/user_banner")
         assert response.status_code in (401, 403)
 

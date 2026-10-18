@@ -11,11 +11,14 @@ flate2.workspace = true
 litellm-http.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+serde_with.workspace = true
+sqlx = { workspace = true, features = ["migrate"] }
 thiserror.workspace = true
 url.workspace = true
 
 [dev-dependencies]
 litellm-http = { workspace = true, features = ["test-support"] }
 rstest.workspace = true
+testcontainers-modules = { version = "0.15.0", features = ["clickhouse"] }
 tokio.workspace = true
 wiremock.workspace = true

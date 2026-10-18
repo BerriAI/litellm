@@ -20,13 +20,15 @@ from litellm.proxy._types import (
     ProxyException,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_utils import (
-    _get_request_ip_address,
+from litellm.proxy.auth.auth_utils import (  # noqa: F401  # legacy module exports
+    _get_request_ip_address,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    get_request_ip_address,
     is_invalid_virtual_key_error,
     mark_invalid_virtual_key_error,
     normalize_request_route,
 )
 from litellm.proxy.auth.model_access_denied import ModelAccessDeniedHTTPException
+from litellm.proxy.auth.resolvers.exceptions import KeyNotFoundError
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.types.services import ServiceTypes
 
@@ -123,9 +125,18 @@ def _identity_log_suffix(resolved_identity: UserAPIKeyAuth | None) -> str:
     return f"\nKey Identity: {known}" if known else ""
 
 
+def _auth_failure_log_message(e: Exception) -> str:
+    if not isinstance(e, KeyNotFoundError):
+        return str(e)
+    return (
+        "Authentication Error, Invalid proxy server token passed. "
+        f"key={_escape_control_chars(e.hashed_token)}, not found in db. Create key via `/key/generate` call."
+    )
+
+
 class UserAPIKeyAuthExceptionHandler:
     @staticmethod
-    async def _handle_authentication_error(
+    async def handle_authentication_error(
         e: Exception,
         request: Request,
         request_data: dict[str, object],
@@ -180,7 +191,7 @@ class UserAPIKeyAuthExceptionHandler:
             )
         else:
             # raise the exception to the caller
-            requester_ip: Final = _get_request_ip_address(
+            requester_ip: Final = get_request_ip_address(
                 request=request,
                 use_x_forwarded_for=general_settings.get("use_x_forwarded_for") is True,
             )
@@ -196,7 +207,7 @@ class UserAPIKeyAuthExceptionHandler:
             logger.log(
                 logging.WARNING if is_quiet_log else logging.ERROR,
                 "litellm.proxy.proxy_server.user_api_key_auth(): Exception occured - %s\nRequester IP Address:%s%s",
-                e,
+                _auth_failure_log_message(e),
                 requester_ip,
                 _identity_log_suffix(resolved_identity),
                 exc_info=True if litellm.log_client_error_tracebacks or not is_expected_client_error(e) else None,
@@ -258,3 +269,5 @@ class UserAPIKeyAuthExceptionHandler:
                     extra=log_extra,
                 )
             raise final_exception
+
+    _handle_authentication_error = handle_authentication_error

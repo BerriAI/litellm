@@ -10,7 +10,10 @@ Covers:
 - call_tool_rest_api intercepts mcp_tool_call calls
 """
 
+import asyncio
 import json
+import os
+import sys
 from collections.abc import Mapping, Sequence
 from types import SimpleNamespace
 from typing import Any, Final
@@ -23,6 +26,7 @@ from mcp.types import Tool
 import litellm
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.proxy._experimental.mcp_server.faults.list_outcomes import AggregateToolListing
+from litellm.proxy._experimental.mcp_server.mcp_server_manager import ListedToolsCaller
 from litellm.proxy._experimental.mcp_server.tool_search import (
     AGENT_SEARCH_TOOL_NAME,
     MCP_TOOL_CALL_TOOL_NAME,
@@ -32,12 +36,15 @@ from litellm.proxy._experimental.mcp_server.tool_search import (
     ToolSearchResult,
     coerce_top_k,
     get_virtual_tool_definitions,
+    handle_mcp_tool_search,
+    rank_mcp_tools,
     search_mcp_tools,
     search_tools,
 )
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.common_utils.semantic_text_index import EmbeddingFailed, SemanticTextIndex, Vector
-from litellm.types.mcp import MCPToolSearchSettings
+from litellm.types.mcp import MCPToolSearchSettings, MCPTransport
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 
 def _make_tools(specs: list[tuple[str, str]]) -> tuple[Tool, ...]:
@@ -187,6 +194,19 @@ class RecordingEmbedder:
         return tuple(FAKE_VECTORS[text] for text in texts)
 
 
+class OversizedRecordingEmbedder:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, ...]] = []  # mutable-ok: test spy recording embed inputs
+
+    async def __call__(self, texts: Sequence[str]) -> Sequence[Vector]:
+        self.calls.append(tuple(texts))
+        if any("OVERSIZED" in text for text in texts):
+            raise litellm.ContextWindowExceededError(
+                message="input is too long", model="text-embedding-3-large", llm_provider="openai"
+            )
+        return tuple((1.0, 0.0) if "weather" in text.lower() else (0.0, 1.0) for text in texts)
+
+
 def _ranker(embedder: RecordingEmbedder | None = None) -> SemanticToolRanker:
     return SemanticToolRanker(embed=embedder or RecordingEmbedder(), embedding_model="emb", index=SemanticTextIndex())
 
@@ -197,6 +217,26 @@ def _names(results: Sequence[ToolSearchResult] | EmbeddingFailed) -> list[str]:
 
 
 class TestSearchMcpTools:
+    @pytest.mark.asyncio
+    async def test_rank_mcp_tools_omits_oversized_description(self) -> None:
+        tools: Final = _make_tools(
+            [
+                ("get_weather", "Get the current weather forecast for a city"),
+                ("send_email", "Send an email to a recipient"),
+                ("list_files", "List files in a directory"),
+                ("huge_tool", "OVERSIZED description"),
+            ]
+        )
+        embedder = OversizedRecordingEmbedder()
+        ranker = SemanticToolRanker(embed=embedder, embedding_model="emb", index=SemanticTextIndex())
+
+        hits: Final = await rank_mcp_tools("weather", tools, 5, MCPToolSearchSettings(embedding_model="emb"), ranker)
+
+        assert not isinstance(hits, EmbeddingFailed)
+        names: Final = [hit.tool.name for hit in hits]
+        assert names[0] == "get_weather"
+        assert "huge_tool" not in names
+
     @pytest.mark.asyncio
     async def test_semantic_mode_finds_foreign_exchange_tool_for_fx(self) -> None:
         keyword_only = await search_mcp_tools("FX", CATALOG, 5, MCPToolSearchSettings(), ranker=None)
@@ -1244,7 +1284,12 @@ class TestCaptureHostProgressCallback:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("token", ["tok12345", 12345, 0])
-    async def test_forwards_wire_progress_token(self, _mcp_request_ctx, token) -> None:
+    @pytest.mark.parametrize("message", [None, "halfway"])
+    @pytest.mark.parametrize("delivery_error", [None, RuntimeError("request stream closed")])
+    async def test_forwards_progress_on_originating_request(self, _mcp_request_ctx, token, message, delivery_error) -> None:
+        from mcp.server.connection import Connection
+        from mcp.server.session import ServerSession
+        from mcp.shared.dispatcher import DispatchContext
         from mcp.types import CallToolRequestParams
 
         from litellm.proxy._experimental.mcp_server.server import _capture_host_progress_callback
@@ -1252,13 +1297,14 @@ class TestCaptureHostProgressCallback:
         params = CallToolRequestParams.model_validate(
             {"name": "tool", "_meta": {"progressToken": token}}, by_name=False
         )
-        session = AsyncMock()
+        channel = AsyncMock(spec=DispatchContext, progress=AsyncMock(side_effect=delivery_error))
+        connection = MagicMock(spec=Connection, protocol_version="2025-11-25", outbound=AsyncMock())
+        session = ServerSession(channel, connection, request_meta=params.meta)
         callback = _capture_host_progress_callback(_mcp_request_ctx(meta=params.meta, session=session))
         assert callback is not None
-        await callback(0.5, 1.0)
-        session.send_progress_notification.assert_awaited_once_with(
-            progress_token=token, progress=0.5, total=1.0
-        )
+        await callback(0.5, 1.0, message)
+        channel.progress.assert_awaited_once_with(0.5, 1.0, message)
+        connection.outbound.notify.assert_not_awaited()
 
 
 class TestHandleListToolsVirtual:
@@ -1353,3 +1399,72 @@ async def test_handle_mcp_tool_call_scoped_denial_names_the_binding_agent() -> N
     assert exc_info.value.status_code == 403
     assert "MCP server 'github'" in exc_info.value.detail["error"]
     assert "agent 'agent-123'" in exc_info.value.detail["error"]
+
+
+@pytest.mark.asyncio
+async def test_mcp_tool_search_leaves_the_listed_tools_slot_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The search lists the whole catalog but serves only its hits, so the listing must not fill the
+    caller's listed-tools slot: a later call to a tool the search never returned is not a listed tool."""
+    monkeypatch.setattr(litellm, "mcp_tool_search", None)
+    manager = mcp_operations.global_mcp_server_manager
+    server = MCPServer(server_id="search-slot", name="search-slot", transport=MCPTransport.http, url="http://slot")
+    user = UserAPIKeyAuth(api_key="sk-search-slot", user_id="searcher")
+    upstream = [
+        Tool(name="echo", description="Echo text back", inputSchema={"type": "object"}),
+        Tool(name="delete_note", description="Delete a note", inputSchema={"type": "object"}),
+    ]
+    with (
+        patch.dict(manager.tool_name_to_mcp_server_name_mapping),
+        patch.object(mcp_operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[server])),
+        patch.object(manager, "create_mcp_client", AsyncMock(return_value=object())),
+        patch.object(manager, "_fetch_tools_with_timeout", AsyncMock(return_value=upstream)),
+    ):
+        try:
+            result = await handle_mcp_tool_search(query="echo", top_k=1, user_api_key_dict=user)
+            caller = ListedToolsCaller(user_api_key_auth=user)
+            listed = [manager.get_listed_tool(server, tool.name, caller) for tool in upstream]
+        finally:
+            manager._drop_listed_tools(server.server_id)
+
+    assert result.is_error is False
+    assert [hit["name"] for hit in json.loads(result.content[0].text)] == ["search-slot-echo"]
+    assert listed == [None, None]
+
+
+@pytest.mark.asyncio
+async def test_cold_concurrent_schema_validation_accepts_valid_arguments() -> None:
+    import psutil
+
+    from litellm.proxy._experimental.mcp_server.tool_search import (
+        _MAX_VALIDATION_WORKERS,
+        _tool_argument_validation_error,
+    )
+
+    schema: Final = {
+        "type": "object",
+        "$defs": {"amount": {"type": "number", "multipleOf": 0.25}},
+        "properties": {"amount": {"$ref": "#/$defs/amount"}},
+    }
+    original_affinity: Final = os.sched_getaffinity(0) if sys.platform == "linux" else None
+    existing_children: Final = frozenset(child.pid for child in psutil.Process().children())
+    try:
+        if original_affinity is not None:
+            os.sched_setaffinity(0, {min(original_affinity)})
+        for _ in range(2):
+            results: Final = await asyncio.gather(
+                *(_tool_argument_validation_error(schema, {"amount": 0.75}, timeout_seconds=90.0) for _ in range(8))
+            )
+            assert results == [None] * 8, "Cold and warm workers must accept valid concurrent tool arguments"
+        workers: Final = tuple(
+            child
+            for child in psutil.Process().children()
+            if child.pid not in existing_children and "anyio.to_process" in child.cmdline()
+        )
+        assert 1 <= len(workers) <= (1 if original_affinity is not None else _MAX_VALIDATION_WORKERS), (
+            "Validation must not start more cold workers than the CPUs it can run on"
+        )
+    finally:
+        if original_affinity is not None:
+            os.sched_setaffinity(0, original_affinity)
+
+

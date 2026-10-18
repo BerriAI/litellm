@@ -20,20 +20,14 @@ import { StatusBadge } from "@/components/shared/table_cells";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import {
-  Combobox,
-  ComboboxContent,
-  ComboboxEmpty,
-  ComboboxInput,
-  ComboboxItem,
-  ComboboxList,
-} from "@/components/ui/combobox";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useZodForm } from "@/lib/forms/useZodForm";
+import { SearchSelect } from "@/components/shared/SearchSelect";
+import { credentialOptions } from "@/components/shared/credentialOptions";
 
 interface VectorStoreInfoViewProps {
   vectorStoreId: string;
@@ -67,11 +61,6 @@ const toFormValues = (vectorStore: VectorStore): VectorStoreEditValues => ({
   custom_llm_provider: vectorStore.custom_llm_provider ?? "",
   litellm_credential_name: vectorStore.litellm_credential_name,
 });
-
-interface CredentialOption {
-  label: string;
-  value: string | null;
-}
 
 const labelWithHint = (label: string, hint: string): React.ReactNode => (
   <>
@@ -174,14 +163,6 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
       toast.fromError("Error updating vector store: " + error);
     }
   };
-
-  const credentialOptions: CredentialOption[] = [
-    { value: null, label: "None" },
-    ...credentials.map((credential) => ({
-      value: credential.credential_name,
-      label: credential.credential_name,
-    })),
-  ];
 
   if (loadFailed) {
     return (
@@ -321,43 +302,16 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
                         </p>
 
                         <FormField control={form.control} name="litellm_credential_name" label="Existing Credentials">
-                          {({
-                            id,
-                            value,
-                            onChange,
-                            "aria-invalid": ariaInvalid,
-                            "aria-describedby": ariaDescribedBy,
-                          }) => (
-                            <Combobox
-                              items={credentialOptions}
-                              value={credentialOptions.find((option) => option.value === value) ?? null}
-                              onValueChange={(option: CredentialOption | null) =>
-                                onChange(option ? option.value : undefined)
+                          {({ id, value, onChange }) => (
+                            <SearchSelect
+                              inputId={id}
+                              placeholder="Select or search for existing credentials"
+                              options={credentialOptions(credentials)}
+                              value={value ?? ""}
+                              onValueChange={(selected) =>
+                                onChange(selected === "" || selected === null ? undefined : selected)
                               }
-                              itemToStringLabel={(option: CredentialOption) => option.label}
-                              isItemEqualToValue={(option: CredentialOption, selected: CredentialOption) =>
-                                option.value === selected.value
-                              }
-                            >
-                              <ComboboxInput
-                                id={id}
-                                aria-invalid={ariaInvalid}
-                                aria-describedby={ariaDescribedBy}
-                                placeholder="Select or search for existing credentials"
-                                className="w-full"
-                                showClear={value !== undefined}
-                              />
-                              <ComboboxContent>
-                                <ComboboxEmpty>No matching credentials</ComboboxEmpty>
-                                <ComboboxList>
-                                  {(option: CredentialOption) => (
-                                    <ComboboxItem key={option.label} value={option}>
-                                      {option.label}
-                                    </ComboboxItem>
-                                  )}
-                                </ComboboxList>
-                              </ComboboxContent>
-                            </Combobox>
+                            />
                           )}
                         </FormField>
 
