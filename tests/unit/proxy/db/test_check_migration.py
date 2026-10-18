@@ -60,7 +60,7 @@ def test_migrate_diff_stops_at_its_budget_and_takes_its_process_tree_with_it(fak
 
     assert check_prisma_schema_diff_helper("postgresql://u:p@localhost:9/x") == (False, [])
     [call] = fake_prisma_cli.calls
-    assert call[:5] == ["migrate", "diff", "--from-url", "postgresql://u:p@localhost:9/x", "--to-schema-datamodel"]
+    assert call[:5] == ["migrate", "diff", "--from-schema-datasource", "./schema.prisma", "--to-schema-datamodel"]
     assert call[6:] == ["--script"]
     assert fake_prisma_cli.grandchild_is_gone(within_seconds=5)
 
@@ -139,3 +139,29 @@ def test_a_skipped_migration_diff_is_one_json_record_in_json_mode(
         "Skipping the migration diff: litellm-proxy-extras has no Prisma runner. "
         "Error: import of litellm_proxy_extras.prisma_toolchain halted; None in sys.modules",
     )
+
+
+def test_migrate_diff_passes_the_database_url_through_env_not_argv(monkeypatch):
+    """
+    argv is world-readable through ps and /proc/<pid>/cmdline, so the URL (password
+    included) has to reach `prisma migrate diff` through DATABASE_URL instead.
+    """
+    from litellm_proxy_extras import prisma_toolchain
+
+    from litellm.proxy.db.check_migration import check_prisma_schema_diff_helper
+
+    db_url = "postgresql://user:s3cret@db:5432/litellm"
+    monkeypatch.setenv("DATABASE_URL", "postgresql://other@elsewhere/db")
+    captured = {}
+
+    def fake_run_prisma(argv, **kwargs):
+        captured["argv"] = list(argv)
+        captured["env"] = kwargs["env"]
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(prisma_toolchain, "run_prisma", fake_run_prisma)
+
+    assert check_prisma_schema_diff_helper(db_url) == (False, [])
+    assert not any("s3cret" in arg for arg in captured["argv"])
+    assert "--from-schema-datasource" in captured["argv"]
+    assert captured["env"]["DATABASE_URL"] == db_url
