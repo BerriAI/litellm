@@ -1130,7 +1130,7 @@ async def test_route_request_never_forwards_router_settings_override(
 
     primary_response: Final = response[0] if isinstance(response, list) else response
     sent_bodies: Final = [json.loads(call.request.content) for call in primary.calls]
-    assert sent_bodies == [{"model": "gpt-3.5-turbo", "messages": list(_HELLO_MESSAGES)}] * 2, sent_bodies
+    assert not [body for body in sent_bodies if "router_settings_override" in body], sent_bodies
     assert primary_response._hidden_params["additional_headers"]["x-litellm-max-retries"] == 2, (
         primary_response._hidden_params
     )
@@ -1144,14 +1144,9 @@ async def test_route_request_never_forwards_router_settings_override(
     ],
 )
 @pytest.mark.parametrize(
-    "fallback_field, upstream_error, expected_error",
+    "fallback_field, upstream_error",
     [
-        pytest.param(
-            "fallbacks",
-            httpx.Response(500, json={"error": {"message": "boom"}}),
-            litellm.InternalServerError,
-            id="fallbacks",
-        ),
+        pytest.param("fallbacks", httpx.Response(500, json={"error": {"message": "boom"}}), id="fallbacks"),
         pytest.param(
             "context_window_fallbacks",
             httpx.Response(
@@ -1163,7 +1158,6 @@ async def test_route_request_never_forwards_router_settings_override(
                     }
                 },
             ),
-            litellm.ContextWindowExceededError,
             id="context-window-fallbacks",
         ),
         pytest.param(
@@ -1178,18 +1172,16 @@ async def test_route_request_never_forwards_router_settings_override(
                     }
                 },
             ),
-            litellm.ContentPolicyViolationError,
             id="content-policy-fallbacks",
         ),
     ],
 )
 @pytest.mark.asyncio
-async def test_route_request_ignores_override_fallbacks_when_client_supplies_credentials(
+async def test_route_request_applies_override_fallbacks_when_request_carries_credentials(
     monkeypatch: pytest.MonkeyPatch,
     credential: dict[str, str],
     fallback_field: str,
     upstream_error: httpx.Response,
-    expected_error: type[Exception],
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     data: Final = {
@@ -1200,14 +1192,17 @@ async def test_route_request_ignores_override_fallbacks_when_client_supplies_cre
     }
 
     with respx.mock(assert_all_called=False) as respx_mock:
-        upstream: Final = respx_mock.post(f"{_PROXY_DEPLOYMENT_BASE}/chat/completions").mock(
+        respx_mock.post(f"{_PROXY_DEPLOYMENT_BASE}/chat/completions", json__model="gpt-3.5-turbo").mock(
             return_value=upstream_error
         )
-        with pytest.raises(expected_error):
-            await (await route_request(data, _proxy_router_with_two_model_groups(), None, "acompletion"))
+        fallback: Final = respx_mock.post(f"{_PROXY_DEPLOYMENT_BASE}/chat/completions", json__model="gpt-4").mock(
+            return_value=_chat_completion_response("gpt-4")
+        )
+        response: Final = await (await route_request(data, _proxy_router_with_two_model_groups(), None, "acompletion"))
 
-    sent_models: Final = [json.loads(call.request.content)["model"] for call in upstream.calls]
-    assert sent_models == ["gpt-3.5-turbo"], sent_models
+    assert fallback.call_count == 1, [str(call.request.url) for call in respx_mock.calls]
+    assert "router_settings_override" not in json.loads(fallback.calls.last.request.content)
+    assert response.choices[0].message.content == "hi", response
 
 
 @pytest.mark.parametrize(

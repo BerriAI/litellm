@@ -38,12 +38,10 @@ else:
     LitellmRouter = Any
 
 
-_ROUTER_FALLBACK_SETTINGS: Final = (
+_PER_REQUEST_ROUTER_SETTINGS: Final = (
     "fallbacks",
     "context_window_fallbacks",
     "content_policy_fallbacks",
-)
-_ROUTER_NON_FALLBACK_SETTINGS: Final = (
     "num_retries",
     "timeout",
     "model_group_retry_policy",
@@ -671,16 +669,11 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
         if "router_settings_override" in data
         else None
     )
-    mergeable_router_settings: Final = (
-        _ROUTER_NON_FALLBACK_SETTINGS
-        if "api_key" in data or "api_base" in data
-        else _ROUTER_FALLBACK_SETTINGS + _ROUTER_NON_FALLBACK_SETTINGS
-    )
     if router_settings_override is not None:
         data.update(
             {
                 key: router_settings_override[key]
-                for key in mergeable_router_settings
+                for key in _PER_REQUEST_ROUTER_SETTINGS
                 if router_settings_override.get(key) is not None and key not in data
             }
         )
