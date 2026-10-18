@@ -5266,7 +5266,7 @@ async def generate_key_helper_fn(
         if isinstance(saved_token["metadata"], str):
             saved_token["metadata"] = json.loads(saved_token["metadata"])
         if isinstance(saved_token["permissions"], str):
-            parsed_permissions = json.loads(saved_token["permissions"])
+            parsed_permissions: Final = json.loads(saved_token["permissions"])
             # Refuse only when the permission is requested (truthy). An explicit
             # false must not trip a substring check on the serialized JSON.
             _refuse_get_spend_routes_unless_premium(parsed_permissions, premium_user)
