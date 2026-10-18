@@ -251,10 +251,10 @@ export const toModelEditFormValues = (localModelData: any, isWildcardModel: bool
   litellm_credential_name: localModelData.litellm_params?.litellm_credential_name ?? null,
   litellm_extra_params: JSON.stringify(
     Object.fromEntries(
-      Object.entries(localModelData.litellm_params || {}).filter(
-        ([key, value]) =>
-          key !== "litellm_credential_name" && key !== "weight" && key !== "order" && !isMaskedSecret(value),
-      ),
+      Object.entries(localModelData.litellm_params || {}).filter(([key, value]) => {
+        const ownedByDedicatedField = key === "weight" || key === "order";
+        return !ownedByDedicatedField && key !== "litellm_credential_name" && !isMaskedSecret(value);
+      }),
     ),
     null,
     2,
