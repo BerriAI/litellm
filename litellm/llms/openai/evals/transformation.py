@@ -4,6 +4,7 @@ OpenAI Evals API configuration and transformations
 
 from collections.abc import Mapping
 from typing import Final
+from urllib.parse import urlparse
 
 import httpx
 
@@ -33,6 +34,30 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 
 
+OPENAI_EVALS_SHUTDOWN_DATE: Final = "2026-11-30"
+OPENAI_EVALS_SHUTDOWN_MESSAGE: Final = (
+    "OpenAI is shutting down the Evals API on 2026-11-30 (existing evals become read-only on 2026-10-31). "
+    "Requests to api.openai.com/v1/evals will fail after that date, and OpenAI names no API replacement. "
+    "See https://developers.openai.com/api/docs/deprecations"
+)
+_openai_evals_shutdown_warned = False
+
+
+def _warn_openai_evals_shutdown_once(api_base: str | None) -> None:
+    """Log the shutdown notice once per process, only for OpenAI's own API host.
+
+    Azure and other OpenAI-compatible bases keep their own lifecycles, so they don't get the warning.
+    """
+    global _openai_evals_shutdown_warned
+    if _openai_evals_shutdown_warned:
+        return
+    host: Final = urlparse(api_base).hostname if api_base else "api.openai.com"
+    if host != "api.openai.com":
+        return
+    _openai_evals_shutdown_warned = True
+    verbose_logger.warning(OPENAI_EVALS_SHUTDOWN_MESSAGE)
+
+
 def _parsed_response_json(raw_response: httpx.Response) -> Mapping[str, object]:
     return raw_response.json()
 
@@ -51,6 +76,7 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
         )
         if not bearer_token:
             raise ValueError("OPENAI_API_KEY is required for Evals API")
+        _warn_openai_evals_shutdown_once(params.api_base)
         headers["Authorization"] = f"Bearer {bearer_token}"
         headers["Content-Type"] = "application/json"
         return headers

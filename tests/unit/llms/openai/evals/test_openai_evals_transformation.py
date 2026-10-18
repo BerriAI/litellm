@@ -47,6 +47,40 @@ def test_validate_environment_sets_headers(config: OpenAIEvalsConfig):
     assert result["Content-Type"] == "application/json"
 
 
+@pytest.fixture()
+def reset_shutdown_warning(monkeypatch):
+    import litellm.llms.openai.evals.transformation as evals_transformation
+
+    monkeypatch.setattr(evals_transformation, "_openai_evals_shutdown_warned", False)
+    return evals_transformation
+
+
+def test_validate_environment_warns_once_about_openai_evals_shutdown(
+    config: OpenAIEvalsConfig, reset_shutdown_warning, monkeypatch
+):
+    """OpenAI shuts down the Evals API on 2026-11-30; callers on api.openai.com are told once."""
+    warnings: list[str] = []
+    monkeypatch.setattr(reset_shutdown_warning.verbose_logger, "warning", lambda msg, *a, **k: warnings.append(msg))
+
+    for _ in range(3):
+        config.validate_environment(headers={}, litellm_params=GenericLiteLLMParams(api_key=_API_KEY))
+
+    assert len(warnings) == 1
+    assert "2026-11-30" in warnings[0]
+
+
+@pytest.mark.parametrize("api_base", ["https://my-resource.openai.azure.com", "http://localhost:4000"])
+def test_validate_environment_does_not_warn_for_other_api_bases(
+    config: OpenAIEvalsConfig, reset_shutdown_warning, monkeypatch, api_base: str
+):
+    warnings: list[str] = []
+    monkeypatch.setattr(reset_shutdown_warning.verbose_logger, "warning", lambda msg, *a, **k: warnings.append(msg))
+
+    config.validate_environment(headers={}, litellm_params=GenericLiteLLMParams(api_key=_API_KEY, api_base=api_base))
+
+    assert warnings == []
+
+
 def test_validate_environment_requires_api_key(config: OpenAIEvalsConfig, monkeypatch):
     """Test that validate_environment raises error when no API key is provided"""
 
