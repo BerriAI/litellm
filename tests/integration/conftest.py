@@ -5,7 +5,7 @@ import json
 import os
 import re
 from collections.abc import AsyncIterator, Generator, Iterator, Mapping, Sequence
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from copy import copy
 from functools import partial
 from importlib.metadata import version
@@ -297,14 +297,30 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
         session.exitstatus = pytest.ExitCode.OK
 
 
-@pytest.fixture(scope="module", autouse=True)
-def owned_state(request: pytest.FixtureRequest) -> Iterator[None]:
-    if request.node.get_closest_marker("shares_worker_state") is None:
-        yield
-        return
+@contextmanager
+def _owned_state(item: pytest.Item) -> Iterator[None]:
     with pytest.MonkeyPatch.context() as environment:
-        environment.setenv(OWNED_STATE_VARIABLE, OwnedState.SHARED_WITH_WORKER.value)
+        if item.get_closest_marker("shares_worker_state") is not None:
+            environment.setenv(OWNED_STATE_VARIABLE, OwnedState.SHARED_WITH_WORKER.value)
         yield
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_setup(item: pytest.Item) -> Generator[None, None, None]:
+    with _owned_state(item):
+        return (yield)
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_call(item: pytest.Item) -> Generator[None, None, None]:
+    with _owned_state(item):
+        return (yield)
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_teardown(item: pytest.Item, nextitem: pytest.Item | None) -> Generator[None, None, None]:
+    with _owned_state(item):
+        return (yield)
 
 
 @pytest.fixture

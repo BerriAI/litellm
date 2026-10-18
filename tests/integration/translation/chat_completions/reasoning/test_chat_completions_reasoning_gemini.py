@@ -41,7 +41,7 @@ from pydantic import JsonValue
 
 __all__ = ("thoughts_off",)
 
-pytestmark = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
+pytestmark = [pytest.mark.timeout(2 * graceful_stop_seconds() + 120), pytest.mark.shares_worker_state]
 
 GEMINI_3_8_FLASH_THINKING_SHOWN_THOUGHT: Final = "**My Inspection Strategy: Validation First**\n\nOkay, here's how I'm approaching this project review. The instruction specifically mentions considering zero, negative, and non-integer quantities. To efficiently address that, I'm going to start with `shop/validation.py`. My reasoning is simple: the validation logic is the first line of defense. Understanding how the system *expects* to handle these edge cases will inform everything else. It's the logical place to begin my investigation to understand the code. I'll use the `read_file` tool to examine that file. I am **not** changing any files. I will call the `chat_completions` client for this project review. I am now proceeding with reading `shop/validation.py`.\n\n\n"
 

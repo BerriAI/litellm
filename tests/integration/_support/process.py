@@ -707,6 +707,32 @@ def _proxy_root() -> Path:
     return Path(os.environ.get("INTEGRATION_PROXY_ROOT") or Path(__file__).resolve().parents[3])
 
 
+def _configuration_copy(config: Path, directory: Path, prefix: str) -> Path:
+    checkouts: Final = (_harness_root(), _proxy_root().resolve())
+    inside_checkout: Final = any(config.resolve().is_relative_to(checkout) for checkout in checkouts)
+    target: Final = directory if inside_checkout else config.parent
+    target.mkdir(parents=True, exist_ok=True)
+    return target / f"{prefix}-{uuid.uuid4().hex}.yaml"
+
+
+def private_configuration(config: Path, directory: Path) -> Path:
+    loaded: Final[object] = yaml.safe_load(config.read_text())
+    if not isinstance(loaded, dict):
+        return config
+    settings: Final = CONFIGURATION.validate_python(loaded)
+    router: Final = settings.get("router_settings") or {}
+    if not isinstance(router, dict) or "num_retries" in router:
+        return config
+    destination: Final = _configuration_copy(config, directory, "private-config")
+    destination.write_text(
+        yaml.safe_dump(
+            {**settings, "router_settings": {**CONFIGURATION.validate_python(router), "num_retries": 0}},
+            sort_keys=False,
+        )
+    )
+    return destination
+
+
 def worker_configuration(config: Path, directory: Path, inherited: Mapping[str, str] = os.environ) -> Path:
     if inherited.get("INTEGRATION_WORKER_ISOLATION") != "1":
         return config
@@ -717,11 +743,7 @@ def worker_configuration(config: Path, directory: Path, inherited: Mapping[str, 
         return f"http://127.0.0.1:{inherited['INTEGRATION_PROVIDER_PORT']}"
 
     contents: Final = re.sub(r"http://127[.]0[.]0[.]1:(8190|8191)(?![0-9])", endpoint, config.read_text())
-    checkouts: Final = (_harness_root(), _proxy_root().resolve())
-    inside_checkout: Final = any(config.resolve().is_relative_to(checkout) for checkout in checkouts)
-    target: Final = directory if inside_checkout else config.parent
-    target.mkdir(parents=True, exist_ok=True)
-    destination: Final = target / f"worker-config-{uuid.uuid4().hex}.yaml"
+    destination: Final = _configuration_copy(config, directory, "worker-config")
     loaded: Final[object] = yaml.safe_load(contents)
     if not isinstance(loaded, dict):
         destination.write_text(contents)
@@ -831,6 +853,12 @@ def owned_proxy_process(
     assert "--timeout_worker_healthcheck" not in extra_arguments, "Choose the worker healthcheck with `healthcheck`"
     root: Final = _proxy_root()
     with owned_environment(directory, overrides, remove_environment, state, inherited) as owned:
+        configured: Final = worker_configuration(
+            config or root / "tests/integration/proxy_config.yaml", directory, inherited
+        )
+        owned_configuration: Final = (
+            configured if owned.database_url is None else private_configuration(configured, directory)
+        )
         environment: Final = _proxy_environment(
             gateway,
             {**owned.overrides, **({"COVERAGE_FILE": str(coverage_file)} if coverage_file else {})},
@@ -845,7 +873,7 @@ def owned_proxy_process(
             *(("coverage", "run", f"--rcfile={MCP_COVERAGE_CONFIG}", "-m") if coverage_file else ()),
             "integration._support.proxy",
             "--config",
-            str(worker_configuration(config or root / "tests/integration/proxy_config.yaml", directory, inherited)),
+            str(owned_configuration),
             "--host",
             "127.0.0.1",
             "--num_workers",

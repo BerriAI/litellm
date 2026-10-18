@@ -38,6 +38,7 @@ from tests.integration._support.process import (
     kill_stray_process,
     owned_environment,
     owned_proxy_process,
+    private_configuration,
     replacement_pid,
     stop_process_group,
     worker_configuration,
@@ -465,6 +466,22 @@ def test_a_private_owned_proxy_leaves_redis_to_a_caller_that_chose_it(
         )
     assert environment["DATABASE_URL"] == PRIVATE_DATABASE
     assert (environment.get("REDIS_HOST"), environment.get("REDIS_PORT")) == redis
+
+
+@pytest.mark.parametrize(
+    ("router_settings", "retries"),
+    (({"allowed_fails": 3}, 0), ({"num_retries": 2}, 2), (None, 0)),
+    ids=("inherits-worker-default", "keeps-explicit", "no-router-settings"),
+)
+def test_a_private_owned_proxy_keeps_the_worker_retry_default_unless_its_config_sets_one(
+    tmp_path: Path, router_settings: dict[str, int] | None, retries: int
+) -> None:
+    source: Final = tmp_path / "source.yaml"
+    router: Final = {"router_settings": router_settings} if router_settings else {}
+    source.write_text(yaml.safe_dump({"model_list": [], **router}))
+    configured: Final = yaml.safe_load(private_configuration(source, tmp_path / "proxy").read_text())
+    assert configured["router_settings"]["num_retries"] == retries
+    assert configured["model_list"] == []
 
 
 _SUPERVISOR: Final = """import multiprocessing
