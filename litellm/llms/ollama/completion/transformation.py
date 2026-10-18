@@ -321,6 +321,18 @@ class OllamaConfig(BaseConfig):
         json_mode: bool | None = None,
     ) -> ModelResponse:
         response_json: Final = _OLLAMA_GENERATE_RESPONSE.validate_python(raw_response.json())
+        if "error" in response_json:
+            raise OllamaError(
+                status_code=raw_response.status_code,
+                message=f"Ollama returned an error body with status {raw_response.status_code}: {response_json['error']}",
+                headers=dict(raw_response.headers),
+            )
+        if "response" not in response_json and "message" not in response_json:
+            raise OllamaError(
+                status_code=raw_response.status_code,
+                message=f"Ollama response body is not a completion: {raw_response.text}",
+                headers=dict(raw_response.headers),
+            )
         ## RESPONSE OBJECT
         model_response.choices[0].finish_reason = "stop"
         if request_data.get("format", "") == "json":
