@@ -1648,9 +1648,6 @@ async def cancel_response(
     return response
 
 
-_RESPONSES_WS_SESSION_CLOSE_GRACE_SECONDS: Final = 5.0
-
-
 def _resolve_responses_ws_session_limit_seconds() -> float:
     from litellm.proxy.proxy_server import general_settings
 
@@ -1849,7 +1846,7 @@ def _responses_ws_frame_guard(
     admitted: Mapping[str, object],
     user_api_key_dict: UserAPIKeyAuth,
     proxy_logging_obj: _PreCallGuardrailWalk,
-    record_refused_turn: Callable[[tuple[Mapping[str, object], ...]], None],
+    record_refused_turn: Callable[[tuple[Mapping[str, object], ...], Exception], None],
 ) -> ResponsesWsFrameGuard:
     """Socket admission skips guardrails (the first frame's ``input`` is not part of the admitted request), so every
     ``response.create`` frame gets the pre_call guardrail walk the HTTP ``/v1/responses`` path runs on its body."""
@@ -1960,14 +1957,18 @@ _NO_PII_TOKENS: Final[Mapping[str, str]] = MappingProxyType({})
 
 
 @dataclass(slots=True)
-class _RefusedTurnGuardrails:
-    """Guardrail records of turns the deployment refused after their guardrails passed. The socket's close-time
-    failure row bills them, so its failure hooks, model group and call type cover those turns too."""
+class _RefusedTurns:
+    """Turns the deployment refused after their guardrails passed. The socket's close-time failure row bills their
+    guardrail records, so its failure hooks, model group and call type cover those turns too, and the first refusal
+    is that row's exception when the session limit cancels the relay before it returns one."""
 
+    first: Exception | None = None
     records: tuple[Mapping[str, object], ...] = ()
 
-    def add(self, records: tuple[Mapping[str, object], ...]) -> None:
+    def add(self, records: tuple[Mapping[str, object], ...], refusal: Exception) -> None:
         self.records = (*self.records, *records)
+        if self.first is None:
+            self.first = refusal
 
     def billed_on(self, request_data: Mapping[str, object]) -> Mapping[str, object]:
         if not self.records:
@@ -2085,15 +2086,23 @@ async def _responses_websocket_session(
         await websocket.close(code=1008, reason="Pre-call error")
         return
 
-    refused_turn_guardrails: Final = _RefusedTurnGuardrails()
+    refused_turns: Final = _RefusedTurns()
     routed_data: Final = dict(
         data,
         user_api_key_dict=user_api_key_dict,
         responses_ws_frame_guard=_responses_ws_frame_guard(
-            data, user_api_key_dict, proxy_logging_obj, refused_turn_guardrails.add
+            data, user_api_key_dict, proxy_logging_obj, refused_turns.add
         ),
         **_routing_hints_from_first_ws_frame(first_message),
     )
+
+    async def bill_socket_failure(exception: Exception) -> None:
+        await proxy_logging_obj.post_call_failure_hook(
+            user_api_key_dict=user_api_key_dict,
+            original_exception=exception,
+            request_data=dict(refused_turns.billed_on(routed_data)),
+        )
+
     # Phase 2: route to upstream provider
     try:
         llm_call: Final = await route_request(
@@ -2102,21 +2111,18 @@ async def _responses_websocket_session(
             llm_router=llm_router,
             user_model=user_model,
         )
-        failure: Final = await llm_call
+        try:
+            failure: Final = await llm_call
+        except asyncio.CancelledError:
+            if refused_turns.first is not None:
+                await bill_socket_failure(refused_turns.first)
+            raise
         if isinstance(failure, Exception):
-            await proxy_logging_obj.post_call_failure_hook(
-                user_api_key_dict=user_api_key_dict,
-                original_exception=failure,
-                request_data=dict(refused_turn_guardrails.billed_on(routed_data)),
-            )
+            await bill_socket_failure(failure)
     except Exception as e:
         with contextlib.suppress(Exception):
             await websocket.send_text(_responses_ws_failure_frame(e))
-        await proxy_logging_obj.post_call_failure_hook(
-            user_api_key_dict=user_api_key_dict,
-            original_exception=e,
-            request_data=dict(refused_turn_guardrails.billed_on(routed_data)),
-        )
+        await bill_socket_failure(e)
         await websocket.close(code=1011, reason="Internal server error")
     finally:
         await proxy_logging_obj.arelease_responses_websocket_slot(user_api_key_dict)
@@ -2166,8 +2172,6 @@ async def responses_websocket_endpoint(
         verbose_proxy_logger.info("Responses WebSocket closed: session duration limit reached")
         with contextlib.suppress(Exception):
             await websocket.close(code=1000, reason="Session duration limit reached")
-        with contextlib.suppress(Exception):
-            await asyncio.wait_for(asyncio.shield(session_task), timeout=_RESPONSES_WS_SESSION_CLOSE_GRACE_SECONDS)
     finally:
         if not session_task.done():
             session_task.cancel()

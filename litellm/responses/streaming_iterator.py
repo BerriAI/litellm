@@ -2041,7 +2041,7 @@ class GuardedResponsesWsFrame:
     frame: str
     guardrail_information: tuple[Mapping[str, object], ...] = ()
     pii_tokens: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
-    bill_refusal: Callable[[], None] | None = None
+    bill_refusal: Callable[[Exception], None] | None = None
 
 
 ResponsesWsFrameGuard: TypeAlias = Callable[[str], Awaitable[GuardedResponsesWsFrame]]
@@ -2055,7 +2055,7 @@ async def _reject_guarded_turn(
     with contextlib.suppress(Exception):
         await websocket.send_text(_turn_rejection_frame(rejection))
     if guarded.bill_refusal is not None:
-        guarded.bill_refusal()
+        guarded.bill_refusal(rejection)
 
 
 _RESPONSES_WS_TERMINAL_EVENT_TYPES: Final = _HISTORY_TERMINAL_EVENT_TYPES | _RESPONSES_WS_FAILURE_EVENT_TYPES

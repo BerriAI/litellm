@@ -1869,7 +1869,7 @@ class TestWebSocketTurnAdmission:
         close_time_failure: Final = await handler.bidirectional_forward()
 
         assert [json.loads(sent.args[0])["input"] for sent in backend_ws.send.await_args_list] == ["one", "three"]
-        bill_refusal.assert_called_once_with()
+        bill_refusal.assert_called_once_with(refusal)
         assert close_time_failure is refusal
 
     @pytest.mark.asyncio
@@ -1918,7 +1918,7 @@ class TestWebSocketTurnAdmission:
         close_time_failure: Final = await handler.run()
 
         assert answered == ["one", "three"]
-        bill_refusal.assert_called_once_with()
+        bill_refusal.assert_called_once_with(refusal)
         assert close_time_failure is refusal
 
     @pytest.mark.asyncio

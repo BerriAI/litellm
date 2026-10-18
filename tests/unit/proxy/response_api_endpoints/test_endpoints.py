@@ -2382,14 +2382,14 @@ class TestResponsesWSFirstFrameModelAuth:
         ws.receive_text = AsyncMock(
             return_value=json.dumps({"type": "response.create", "model": "gpt-4o-mini", "input": []})
         )
-        closed = asyncio.Event()
-        ws.close = AsyncMock(side_effect=lambda **kwargs: closed.set())
+        ws.close = AsyncMock()
         processor = MagicMock()
         processor.common_processing_pre_call_logic = AsyncMock(
             return_value=({"model": "gpt-4o-mini", "litellm_metadata": {"model_group": "gpt-4o-mini"}}, MagicMock())
         )
         guardrail_costs = {"two": 0.2, "three": 0.3, "four": 0.4}
         refusal = RateLimitError(message="crossed budget", llm_provider="", model="")
+        later_refusal = RateLimitError(message="still over budget", llm_provider="", model="")
         crash = RuntimeError("relay crashed")
 
         async def pre_call_hook(user_api_key_dict, data, call_type, guardrails_only):
@@ -2406,11 +2406,11 @@ class TestResponsesWSFirstFrameModelAuth:
                         json.dumps({"type": "response.create", "input": turn})
                     )
                     if turn != "three":
-                        guarded.bill_refusal()
+                        guarded.bill_refusal(refusal if turn == "two" else later_refusal)
                 if ending == "crash":
                     raise crash
                 if ending == "session_limit":
-                    await closed.wait()
+                    await asyncio.Event().wait()
                 return refusal
 
             return relay()
@@ -2446,6 +2446,7 @@ class TestResponsesWSFirstFrameModelAuth:
             await responses_websocket_endpoint(websocket=ws, model=None, user_api_key_dict=MagicMock())
 
         proxy_logging_obj.post_call_failure_hook.assert_awaited_once()
+        proxy_logging_obj.arelease_responses_websocket_slot.assert_awaited_once()
         booked = proxy_logging_obj.post_call_failure_hook.await_args.kwargs
         assert booked["original_exception"] is (crash if ending == "crash" else refusal)
         assert booked["request_data"]["litellm_metadata"] == {
