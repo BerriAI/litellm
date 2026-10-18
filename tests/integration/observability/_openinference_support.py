@@ -413,7 +413,12 @@ def _responses_caller_stream(reply: Reply, model: str) -> tuple[dict[str, JsonVa
             **event,
             "model": model,
             **(
-                {"response": _responses_stream_caller_body(_json_object_value(event["response"]))}
+                {
+                    "response": {
+                        **_responses_stream_caller_body(_json_object_value(event["response"])),
+                        "model": model,
+                    }
+                }
                 if "response" in event
                 else {}
             ),
