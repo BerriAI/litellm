@@ -2334,6 +2334,59 @@ def test_success_handler_runs_sync_callbacks_for_sync_requests(
     dummy_logger.log_stream_event.assert_not_called()
 
 
+@pytest.mark.parametrize("for_async_request", [False, True])
+@pytest.mark.parametrize("private_first", [False, True])
+def test_sync_success_redacts_only_opted_out_loggers(
+    monkeypatch: pytest.MonkeyPatch, for_async_request: bool, private_first: bool
+) -> None:
+    from queue import SimpleQueue
+
+    events: Final[SimpleQueue[tuple[bool, str]]] = SimpleQueue()
+
+    class PayloadRecorder(CustomLogger):
+        def log_success_event(
+            self,
+            kwargs: dict[str, object],
+            response_obj: object,
+            start_time: datetime.datetime,
+            end_time: datetime.datetime,
+        ) -> None:
+            events.put((self.turn_off_message_logging, json.dumps(kwargs["standard_logging_object"])))
+
+    private_logger: Final = PayloadRecorder(turn_off_message_logging=True)
+    public_logger: Final = PayloadRecorder()
+    callbacks: Final = [private_logger, public_logger] if private_first else [public_logger, private_logger]
+    monkeypatch.setattr(litellm, "success_callback", callbacks)
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    logging_obj: Final = LitellmLogging(
+        model="openai/gpt-6.1-sol",
+        messages=[{"role": "user", "content": "private-request-marker"}],
+        stream=False,
+        call_type="aget_responses",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="callback-redaction",
+        function_id="callback-redaction",
+    )
+    logging_obj.update_environment_variables(litellm_params={}, optional_params={}, custom_llm_provider="openai")
+    response: Final = _responses_api_response_with_text("private-response-marker")
+    logging_obj.success_handler(result=response, for_async_request=for_async_request)
+
+    assert events.qsize() == 2
+    payloads: Final = dict(events.get_nowait() for _ in range(2))
+    assert "private-request-marker" not in payloads[True]
+    assert "private-response-marker" not in payloads[True]
+    assert REDACTED_BY_LITELLM in payloads[True]
+    assert "private-request-marker" in payloads[False]
+    assert "private-response-marker" in payloads[False]
+    private_payload, public_payload = json.loads(payloads[True]), json.loads(payloads[False])
+    assert private_payload["total_tokens"] == public_payload["total_tokens"]
+    assert private_payload["response"]["usage"] == public_payload["response"]["usage"]
+    assert private_payload["response"]["usage"]["total_tokens"] == response.usage.total_tokens
+    assert private_payload["response_cost"] == public_payload["response_cost"]
+    assert "private-response-marker" in response.model_dump_json()
+
+
 class _PhaseRecordingLogger(CustomLogger):
     """Records whether each success callback ran inside the post-response phase."""
 

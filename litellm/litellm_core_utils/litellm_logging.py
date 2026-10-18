@@ -3458,7 +3458,7 @@ class Logging(LiteLLMLoggingBaseClass):
                                 result = call_details_view["complete_response"]
 
                             callback.log_success_event(
-                                kwargs=call_details,
+                                kwargs=callback.redact_standard_logging_payload_from_model_call_details(call_details),
                                 response_obj=result,
                                 start_time=start_time,
                                 end_time=end_time,
