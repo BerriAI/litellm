@@ -1273,26 +1273,24 @@ def stream_chunk_builder_text_completion(chunks: list, messages: Sequence | None
 _CALCULATOR_PRICED_REPORTED_COST_PROVIDERS: Final = frozenset({LlmProviders.XAI.value})
 
 
-def _reported_cost_is_priced_by_calculator(logging_obj: Optional["Logging"]) -> bool:
+def _reported_cost_is_priced_by_calculator(response: ModelResponse, logging_obj: Optional["Logging"]) -> bool:
     if logging_obj is None:
         return False
-    from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
-
     provider: Final[object] = logging_obj.model_call_details.get("custom_llm_provider")
     return provider in _CALCULATOR_PRICED_REPORTED_COST_PROVIDERS or (
-        provider == LlmProviders.AZURE_AI.value
-        and use_custom_pricing_for_model(litellm_params=logging_obj.litellm_params)
+        provider == LlmProviders.AZURE_AI.value and logging_obj.custom_pricing_for(result=response)
     )
 
 
 def _stream_builder_response_cost(response: ModelResponse, logging_obj: Optional["Logging"]) -> float | None:
     usage_cost: Final = getattr(getattr(response, "usage", None), "cost", None)
-    if isinstance(usage_cost, (int, float)) and not _reported_cost_is_priced_by_calculator(logging_obj):
+    if isinstance(usage_cost, (int, float)) and not _reported_cost_is_priced_by_calculator(response, logging_obj):
         return float(usage_cost)
     if logging_obj is not None:
         return None
-    provider_hint_value: Final = response.hidden_params.get("custom_llm_provider")
-    provider_hint: Final = provider_hint_value if isinstance(provider_hint_value, str) else None
+    provider_hint: Final = response._hidden_params.get(  # pyright: ignore[reportPrivateUsage]  # no public accessor
+        "custom_llm_provider"
+    )
     try:
         return litellm.completion_cost(completion_response=response, custom_llm_provider=provider_hint)
     except Exception:

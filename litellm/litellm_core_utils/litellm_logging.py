@@ -2162,7 +2162,7 @@ class Logging(LiteLLMLoggingBaseClass):
             usage=usage,
         )
 
-    def _custom_pricing_for(self, result: object) -> bool:
+    def custom_pricing_for(self, result: object) -> bool:
         litellm_params: Final = getattr(self, "litellm_params", None)
         result_hidden_params: Final = getattr(result, HIDDEN_PARAMS_ATTR, None) or MappingProxyType({})
         additional_headers: Final = (
@@ -2176,6 +2176,8 @@ class Logging(LiteLLMLoggingBaseClass):
             additional_headers=additional_headers,
         )
         return False if spilled_over else use_custom_pricing_for_model(litellm_params=litellm_params)
+
+    _custom_pricing_for = custom_pricing_for
 
     def _prompt_for_cost_calculation(self) -> str:
         """
