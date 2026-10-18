@@ -15,7 +15,7 @@ These are members of a Team on LiteLLM
 import asyncio
 import json
 import traceback
-from collections.abc import Awaitable, Mapping, Sequence
+from collections.abc import Awaitable, Mapping, Sequence, Set as AbstractSet
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Any, Final, Literal, Protocol, cast, overload
@@ -1661,8 +1661,8 @@ _SELF_UPDATE_PROTECTED_FIELDS: Final[tuple[str, ...]] = (
 
 def _reject_ceiling_self_update(
     *,
-    sent_fields: set[str],
-    non_default_values: dict,
+    sent_fields: AbstractSet[str],
+    non_default_values: Mapping[str, Any],
     user_api_key_dict: UserAPIKeyAuth,
 ) -> None:
     """Raise 403 when a non-admin self-update touches a user-level ceiling.
