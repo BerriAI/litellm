@@ -103,6 +103,7 @@ async def image_generation(
         version,
     )
 
+    start_time: Final = datetime.now()
     litellm_call_id: Final = resolve_litellm_call_id(request.headers.get("x-litellm-call-id"))
     data = {"litellm_call_id": litellm_call_id}
     try:
@@ -134,7 +135,6 @@ async def image_generation(
             data["model"] = litellm.model_alias_map[data["model"]]
 
         ### LOGGING OBJECT SETUP ### - ensures router rejected requests are dispatched to failure callbacks
-        start_time: Final = datetime.now()
         logging_obj, data = litellm.utils.function_setup(
             original_function="aimage_generation",
             rules_obj=litellm.utils.Rules(),
@@ -158,7 +158,13 @@ async def image_generation(
 
         messages: Final = data.get("messages")
         if isinstance(messages, list) and messages:
-            data["prompt"] = get_str_from_messages(messages)
+            sanitized_prompt: Final = get_str_from_messages(messages)
+            data["prompt"] = sanitized_prompt
+            if logging_obj is not None:
+                logging_obj.messages = sanitized_prompt
+                if hasattr(logging_obj, "model_call_details") and isinstance(logging_obj.model_call_details, dict):
+                    logging_obj.model_call_details["prompt"] = sanitized_prompt
+                    logging_obj.model_call_details["messages"] = sanitized_prompt
         data.pop("messages", None)
 
         ## ROUTE TO CORRECT ENDPOINT ##

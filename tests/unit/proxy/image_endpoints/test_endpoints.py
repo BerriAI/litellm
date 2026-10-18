@@ -116,8 +116,103 @@ async def test_image_generation_prompt_rerouting(monkeypatch):
     assert pre_call_input["messages"][0]["content"] == "original prompt"
     assert captured_route_request_data["prompt"] == "sanitized prompt"
     assert "messages" not in captured_route_request_data
-    assert captured_route_request_data.get("litellm_logging_obj") is not None
+    logging_obj = captured_route_request_data.get("litellm_logging_obj")
+    assert logging_obj is not None
+    assert logging_obj.messages == "sanitized prompt"
+    assert logging_obj.model_call_details["prompt"] == "sanitized prompt"
     assert response.headers.get("x-callback-test") == "value"
+
+
+@pytest.mark.asyncio
+async def test_image_generation_router_rejection_dispatches_failure_callback(monkeypatch):
+    """Ensure router rejection (budget, cooldown, etc.) triggers failure handlers on litellm_logging_obj."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    async def fake_add_litellm_data_to_request(**kwargs):
+        return kwargs["data"]
+
+    fake_proxy_logger = SimpleNamespace(
+        pre_call_hook=AsyncMock(side_effect=lambda user_api_key_dict, data, call_type: data),
+        post_call_failure_hook=AsyncMock(),
+    )
+
+    # Mock router whose async_get_available_deployment rejects the request
+    mock_router = MagicMock()
+    mock_failure_dispatch = AsyncMock()
+
+    class RejectingRouter:
+        model_names = ["dall-e-3"]
+        team_public_model_names = []
+
+        def is_recognized_model(self, model: str) -> bool:
+            return True
+
+        async def aimage_generation(self, *args, **kwargs):
+            logging_obj = kwargs.get("litellm_logging_obj")
+            if logging_obj is not None:
+                # Simulate Router.async_get_available_deployment failure handling
+                await logging_obj.dispatch_failure_handlers(
+                    exception=Exception("No deployment available"),
+                    traceback_exception="Traceback...",
+                    prefer_async_handlers=True,
+                )
+            raise Exception("No deployment available")
+
+    rejecting_router = RejectingRouter()
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/v1/images/generations",
+        "headers": [],
+    }
+    body = orjson.dumps({"prompt": "generate a sunset", "model": "dall-e-3"})
+
+    async def receive():
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    request = Request(scope, receive)
+    response = Response()
+    user_api_key = UserAPIKeyAuth()
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.add_litellm_data_to_request",
+        fake_add_litellm_data_to_request,
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", rejecting_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", {})
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", fake_proxy_logger)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_model", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.version", "test-version")
+
+    # Spy on dispatch_failure_handlers in litellm.litellm_core_utils.litellm_logging.Logging
+    dispatched_exceptions = []
+    orig_function_setup = endpoints.litellm.utils.function_setup
+
+    def spy_function_setup(*args, **kwargs):
+        logging_obj, data = orig_function_setup(*args, **kwargs)
+        orig_dispatch = logging_obj.dispatch_failure_handlers
+
+        async def spy_dispatch(*d_args, **d_kwargs):
+            dispatched_exceptions.append(d_kwargs.get("exception"))
+            return await orig_dispatch(*d_args, **d_kwargs)
+
+        logging_obj.dispatch_failure_handlers = spy_dispatch
+        return logging_obj, data
+
+    monkeypatch.setattr("litellm.utils.function_setup", spy_function_setup)
+
+    with pytest.raises(ProxyException, match="No deployment available"):
+        await endpoints.image_generation(
+            request=request,
+            fastapi_response=response,
+            user_api_key_dict=user_api_key,
+        )
+
+    assert len(dispatched_exceptions) == 1
+    assert str(dispatched_exceptions[0]) == "No deployment available"
+
 
 
 def _image_edit_client(monkeypatch, captured: Dict[str, Any]) -> TestClient:
