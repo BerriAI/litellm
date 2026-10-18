@@ -33,7 +33,6 @@ from litellm.types.llms.openai_evals import (
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 
-
 OPENAI_EVALS_SHUTDOWN_DATE: Final = "2026-11-30"
 OPENAI_EVALS_SHUTDOWN_MESSAGE: Final = (
     "OpenAI is shutting down the Evals API on 2026-11-30 (existing evals become read-only on 2026-10-31). "
