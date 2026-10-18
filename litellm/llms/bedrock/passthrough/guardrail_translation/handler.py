@@ -105,12 +105,7 @@ class _Remove:
     holder: _StringHolder
 
 
-@dataclass(frozen=True, slots=True)
-class _DropToolConfig:
-    pass
-
-
-_Write: TypeAlias = _Assign | _DropToolConfig
+_Write: TypeAlias = _Assign
 _ContentHolder: TypeAlias = tuple[object, str]
 _BlankDrop: TypeAlias = tuple[_ContentHolder, frozenset[int]]
 _BODY_BY_REFERENCE: Final = TypeAdapter(InstanceOf[dict[str, object]])
@@ -332,8 +327,8 @@ def _replaced_tools_write(body: Mapping[str, object], edit: ReplacedTools) -> _W
     """
     Rebuild ``toolConfig.tools`` in the order the guardrail returned. Entries it was never sent (cache points, system
     tools) stay right after the tool they followed, and a cache point goes away with its tool. Refuses when
-    ``toolChoice`` names a tool that is no longer there, drops ``toolConfig`` when nothing is left, and creates it
-    when the request had none.
+    ``toolChoice`` names a tool that is no longer there, and creates ``toolConfig`` when the request had none. A
+    ``toolConfig`` left with no tool stays until the request is sent, so later guardrails still see the tool history.
     """
     tool_config: Final = _child(body, "toolConfig")
     tools: Final = () if tool_config is None else as_json_array(_child(tool_config, "tools"))
@@ -357,7 +352,7 @@ def _replaced_tools_write(body: Mapping[str, object], edit: ReplacedTools) -> _W
         return None
     if tool_config is None:
         return None if all(map(_is_cache_point, rebuilt)) else _Assign((body, "toolConfig"), {"tools": rebuilt})
-    return _DropToolConfig() if all(map(_is_cache_point, rebuilt)) else _Assign((tool_config, "tools"), rebuilt)
+    return _Assign((tool_config, "tools"), rebuilt)
 
 
 def _resolved(body: Mapping[str, object], edit: Edit) -> _Write | None:
@@ -372,11 +367,7 @@ def _resolved(body: Mapping[str, object], edit: Edit) -> _Write | None:
 
 
 def _kept_write(write: _Write, flat_changes: frozenset[_LeafIdentity]) -> bool:
-    match write:
-        case _Assign():
-            return _leaf_identity(write.holder) not in flat_changes
-        case _DropToolConfig():
-            return True
+    return _leaf_identity(write.holder) not in flat_changes
 
 
 def _holder_edits(
@@ -397,52 +388,6 @@ def _apply(writes: Sequence[_Assign | _Remove]) -> None:
                 del container[key]
 
 
-def _tool_result_part(item: object) -> str | None:
-    text: Final = _child(item, "text")
-    if isinstance(text, str):
-        return text
-    fields: Final = as_json_object(item)
-    return json.dumps(fields["json"]) if fields is not None and "json" in fields else None
-
-
-def _tool_result_text(tool_result: object) -> str:
-    parts: Final = as_json_array(_child(tool_result, "content")) or ()
-    rendered: Final = "\n".join(part for item in parts if (part := _tool_result_part(item)) is not None).strip()
-    return rendered or "<non-text tool result omitted>"
-
-
-def _neutralized(block: object) -> object:
-    tool_use: Final = _child(block, "toolUse")
-    if as_json_object(tool_use) is not None:
-        arguments: Final = json.dumps(_child(tool_use, "input"))
-        return {"text": f"[tool call {_child(tool_use, 'toolUseId')}: {_child(tool_use, 'name')}({arguments})]"}
-    tool_result: Final = _child(block, "toolResult")
-    if as_json_object(tool_result) is None:
-        return block
-    return {"text": f"[tool result for {_child(tool_result, 'toolUseId')}: {_tool_result_text(tool_result)}]"}
-
-
-def _has_tool_block(content: Sequence[object]) -> bool:
-    return any(_child(block, "toolUse") is not None or _child(block, "toolResult") is not None for block in content)
-
-
-def _tool_config_drop(body: Mapping[str, object]) -> tuple[_Assign | _Remove, ...]:
-    """Remove ``toolConfig`` and turn every ``toolUse`` and ``toolResult`` block into text."""
-    turns: Final = as_json_array(body.get("messages")) or ()
-    neutralized: Final = tuple(
-        _Assign((message, "content"), [_neutralized(block) for block in content])
-        for message in turns
-        if (content := as_json_array(_child(message, "content"))) is not None and _has_tool_block(content)
-    )
-    return (*neutralized, _Remove((body, "toolConfig")))
-
-
-def _write_back_structured_edits(body: Mapping[str, object], writes: Sequence[_Write]) -> None:
-    _apply(tuple(write for write in writes if isinstance(write, _Assign)))
-    if any(isinstance(write, _DropToolConfig) for write in writes):
-        _apply(_tool_config_drop(body))
-
-
 def _block_text_holder(block: object) -> _ContentHolder | None:
     if isinstance(_child(block, "text"), str):
         return block, "text"
@@ -454,7 +399,7 @@ def _final_texts(
     holders: Sequence[_StringHolder], applied_texts: Sequence[str], writes: Sequence[_Write]
 ) -> Mapping[_LeafIdentity, object]:
     flat: Final = {_leaf_identity(holder): text for holder, text in zip(holders, applied_texts)}
-    structured: Final = {_leaf_identity(write.holder): write.value for write in writes if isinstance(write, _Assign)}
+    structured: Final = {_leaf_identity(write.holder): write.value for write in writes}
     return MappingProxyType({**flat, **structured})
 
 
@@ -478,16 +423,15 @@ def _empties_turn(drop: _BlankDrop) -> bool:
     return bool(dropped) and all(id(block) in dropped or _is_cache_point(block) for block in blocks)
 
 
-def _blank_drops(body: Mapping[str, object], final: Mapping[_LeafIdentity, object]) -> tuple[_BlankDrop, ...] | None:
-    """The system and message text blocks the guardrail left blank, or None when dropping them empties a turn."""
-    turns: Final = tuple(
-        ((message, "content"), _blank_blocks(final, (message, "content")))
-        for message in as_json_array(body.get("messages")) or ()
-    )
-    if any(_empties_turn(turn) for turn in turns):
-        return None
+def _turn_drop(final: Mapping[_LeafIdentity, object], message: object) -> _BlankDrop:
+    return (message, "content"), _blank_blocks(final, (message, "content"))
+
+
+def _blank_drops(body: Mapping[str, object], final: Mapping[_LeafIdentity, object]) -> tuple[_BlankDrop, ...]:
+    """The system and message text blocks the guardrail left blank, except in a turn they would leave empty."""
+    turns: Final = (_turn_drop(final, message) for message in as_json_array(body.get("messages")) or ())
     system: Final = ((body, "system"), _blank_blocks(final, (body, "system")))
-    return tuple(drop for drop in (system, *turns) if drop[1])
+    return tuple(drop for drop in (system, *(turn for turn in turns if not _empties_turn(turn))) if drop[1])
 
 
 def _blank_drop_write(drop: _BlankDrop) -> _Assign | _Remove:
@@ -519,7 +463,7 @@ def _edits_drop_a_text_change(
     writes: Final = _holder_edits(rewritten, edits, frozenset())
     if writes is None:
         return True
-    _write_back_structured_edits(rewritten, writes)
+    _apply(writes)
     edited: Final = [container[key] for container, key in holders]
     return any(
         returned != before and after == before for before, returned, after in zip(texts, guardrailed_texts, edited)
@@ -1375,7 +1319,7 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
         sent_messages: Final = [rows[index].message for index in scoped_indices]
         inputs: Final = GenericGuardrailAPIInputs(texts=list(texts))
         if sent_messages:
-            inputs["structured_messages"] = copy.deepcopy(sent_messages)
+            inputs["structured_messages"] = json.loads(json.dumps(sent_messages))
         tools: Final = converse_tools(request) if request and not scope.scan_only_tool_results else ()
         if tools:
             inputs["tools"] = copy.deepcopy([tool.param for tool in tools])
@@ -1437,17 +1381,14 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
                 request_body, (*row_edits, *tool_changes), _changed_leaves(holders, texts, applied_texts)
             )
         )
-        blank_drops: Final = (
-            None
-            if holder_edits is None
-            else _blank_drops(request_body, _final_texts(holders, applied_texts, holder_edits))
-        )
-        if holder_edits is None or blank_drops is None:
+        if holder_edits is None:
             raise unappliable_request_rewrite(guardrail_to_apply.guardrail_name)
-        if applied_texts:
-            _write_back_texts(applied_texts, holders)
-        _write_back_structured_edits(request_body, holder_edits)
-        _apply(tuple(_blank_drop_write(drop) for drop in blank_drops))
+        if holder_edits or (applied_texts and list(applied_texts) != texts):
+            blank_drops: Final = _blank_drops(request_body, _final_texts(holders, applied_texts, holder_edits))
+            if applied_texts:
+                _write_back_texts(applied_texts, holders)
+            _apply(holder_edits)
+            _apply(tuple(_blank_drop_write(drop) for drop in blank_drops))
 
         return data
 

@@ -21,6 +21,7 @@ from itertools import chain
 from typing import ClassVar, Literal, TypeAlias
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 import respx
 from pydantic import JsonValue
@@ -30,6 +31,7 @@ import litellm
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.airia.airia import AiriaGuardrail
 from litellm.proxy.guardrails.guardrail_hooks.akto.akto import AktoGuardrail
@@ -1425,6 +1427,42 @@ def _converse_request(body: dict) -> dict:
     return {"endpoint": "model/anthropic.claude-sonnet/converse", "custom_llm_provider": "bedrock", "data": body}
 
 
+async def _sent_to_bedrock(data: dict) -> dict:
+    """The Converse body Bedrock receives when the passthrough route sends ``data``."""
+    received: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        received.append(request)
+        reply = {
+            "output": {"message": {"role": "assistant", "content": [{"text": "ok"}]}},
+            "stopReason": "end_turn",
+            "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+        }
+        return httpx.Response(200, json=reply, request=request)
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "bedrock-model",
+                "litellm_params": {
+                    "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+                    "aws_access_key_id": "AKIATESTKEY",
+                    "aws_secret_access_key": "test-secret",
+                    "aws_region_name": "us-west-2",
+                },
+            }
+        ]
+    )
+    await router.allm_passthrough_route(
+        model="bedrock-model",
+        method="POST",
+        endpoint="/model/bedrock-model/converse",
+        data=data["data"],
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(respond)),
+    )
+    return json.loads(received[0].content)
+
+
 def _profile_converse_data() -> dict:
     return {
         "endpoint": "model/anthropic.claude-sonnet/converse",
@@ -1599,6 +1637,33 @@ class TestConverseGuardrailInputs:
         ]
 
     @pytest.mark.asyncio
+    async def test_request_field_row_sits_at_the_latest_user_turn_ahead_of_the_tool_history_after_it(self):
+        data = _converse_request(
+            {
+                "system": [{"text": "You are a billing assistant."}],
+                "messages": [
+                    {"role": "user", "content": [{"image": {"format": "png", "source": {"bytes": "AA=="}}}]},
+                    {
+                        "role": "assistant",
+                        "content": [{"toolUse": {"toolUseId": "t1", "name": "lookup", "input": {"id": "42"}}}],
+                    },
+                    {
+                        "role": "user",
+                        "content": [{"toolResult": {"toolUseId": "t1", "content": [{"text": "card on file 4111"}]}}],
+                    },
+                ],
+                "additionalModelRequestFields": {"thinking": {"type": "enabled", "budget_tokens": 1024}},
+            }
+        )
+        guardrail = _replying({})
+
+        await BedrockPassthroughGuardrailHandler().process_input_messages(data, guardrail)
+
+        rows = guardrail.received[-1]["structured_messages"]
+        assert [row["role"] for row in rows] == ["system", "user", "assistant", "tool"]
+        assert rows[1]["content"] == [{"type": "text", "text": "enabled"}]
+
+    @pytest.mark.asyncio
     async def test_tool_only_guardrail_gets_only_tool_results_as_texts_and_rows(self):
         data = _converse_request(
             {
@@ -1771,11 +1836,6 @@ class TestConverseRowEditWriteBack:
                 [{"role": "tool", "tool_call_id": "t2", "content": "found [CARD]"}],
                 id="tool-result-id-changed",
             ),
-            pytest.param(
-                [{"role": "user", "content": [{"text": "card 4111"}, {"cachePoint": {"type": "default"}}]}],
-                [{"role": "user", "content": ""}],
-                id="turn-emptied",
-            ),
         ],
     )
     async def test_row_edit_that_cannot_be_placed_fails_closed_without_mutation(self, messages, rows):
@@ -1811,6 +1871,28 @@ class TestConverseRowEditWriteBack:
         assert result["data"]["messages"] == [
             {"role": "user", "content": [{"text": "card [CARD]"}, cache_point, masked_last_block]}
         ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("content", "blanked", "forwarded"),
+        [
+            ([{"text": " 4111 1111 1111 1111 "}], "  ", [{"text": "  "}]),
+            (
+                [{"text": "card 4111"}, {"cachePoint": {"type": "default"}}],
+                "",
+                [{"text": ""}, {"cachePoint": {"type": "default"}}],
+            ),
+        ],
+        ids=["whitespace-left", "nothing-left-before-a-cache-point"],
+    )
+    async def test_turn_the_guardrail_blanks_entirely_is_forwarded_as_written(self, content, blanked, forwarded):
+        data = _converse_request({"messages": [{"role": "user", "content": content}]})
+
+        result = await BedrockPassthroughGuardrailHandler().process_input_messages(
+            data, _replying({"structured_messages": [{"role": "user", "content": blanked}]})
+        )
+
+        assert result["data"]["messages"] == [{"role": "user", "content": forwarded}]
 
     @pytest.mark.asyncio
     async def test_single_block_row_keeps_a_newline_the_guardrail_wrote(self):
@@ -2026,7 +2108,7 @@ class TestConverseToolListRewrites:
         assert result["data"]["toolConfig"] == {"tools": [_REFUND, system_tool], "toolChoice": {"auto": {}}}
 
     @pytest.mark.asyncio
-    async def test_every_tool_removed_drops_the_tool_config_and_turns_tool_history_into_text(self):
+    async def test_every_tool_removed_reaches_bedrock_without_tool_config_and_with_tool_history_as_text(self):
         data = _tool_config_data()
         data["data"]["messages"] = [
             {
@@ -2055,7 +2137,8 @@ class TestConverseToolListRewrites:
 
         result = await BedrockPassthroughGuardrailHandler().process_input_messages(data, guardrail)
 
-        assert result["data"] == {
+        assert result["data"]["toolConfig"] == {"tools": [], "toolChoice": {"auto": {}}}
+        assert await _sent_to_bedrock(result) == {
             "messages": [
                 {
                     "role": "assistant",
@@ -2371,9 +2454,46 @@ class TestConverseGuardContent:
         result = await handler.process_input_messages(
             without_tools, masker_class(lambda inputs: {"texts": _masked_texts(inputs)})
         )
+        sent = await _sent_to_bedrock(result)
 
-        assert "toolConfig" not in result["data"]
-        assert "4111" not in json.dumps(result["data"])
+        assert "toolConfig" not in sent
+        assert "4111" not in json.dumps(sent)
+
+    @pytest.mark.asyncio
+    async def test_tool_result_of_a_removed_tool_is_masked_by_a_later_tool_results_only_guardrail(self):
+        data = _converse_request(
+            {
+                "messages": [
+                    {"role": "user", "content": [{"text": "look up my order"}]},
+                    {
+                        "role": "assistant",
+                        "content": [{"toolUse": {"toolUseId": "t1", "name": "lookup", "input": {"q": "7"}}}],
+                    },
+                    {
+                        "role": "user",
+                        "content": [
+                            {"toolResult": {"toolUseId": "t1", "content": [{"text": "card on file 4111"}]}},
+                            {"text": "summarize that"},
+                        ],
+                    },
+                ],
+                "toolConfig": {
+                    "tools": [{"toolSpec": {"name": "lookup", "inputSchema": {"json": {"type": "object"}}}}]
+                },
+            }
+        )
+        handler = BedrockPassthroughGuardrailHandler()
+        tool_remover = _ScriptedGuardrail(lambda inputs: {"texts": inputs["texts"], "tools": []})
+        results_masker = _ScriptedGuardrail(lambda inputs: {"texts": _masked_texts(inputs)}, scan_only_tool_results=True)
+
+        without_tools = await handler.process_input_messages(data, tool_remover)
+        result = await handler.process_input_messages(without_tools, results_masker)
+
+        assert results_masker.received[-1]["texts"] == ["card on file 4111"]
+        assert (await _sent_to_bedrock(result))["messages"][-1] == {
+            "role": "user",
+            "content": [{"text": "[tool result for t1: card on file [CARD]]"}, {"text": "summarize that"}],
+        }
 
     @pytest.mark.asyncio
     async def test_tool_history_written_as_text_adds_no_guard_content_block(self):
@@ -2382,8 +2502,9 @@ class TestConverseGuardContent:
         tool_remover = _ScriptedGuardrail(lambda inputs: {"texts": inputs["texts"], "tools": []})
 
         result = await BedrockPassthroughGuardrailHandler().process_input_messages(data, tool_remover)
+        sent = await _sent_to_bedrock(result)
 
-        blocks = tuple(chain.from_iterable(message["content"] for message in result["data"]["messages"]))
+        blocks = tuple(chain.from_iterable(message["content"] for message in sent["messages"]))
         assert all(block.keys() == {"text"} for block in blocks), (
             "a guardContent block makes Bedrock's own guardrail skip every plain text block",
             blocks,

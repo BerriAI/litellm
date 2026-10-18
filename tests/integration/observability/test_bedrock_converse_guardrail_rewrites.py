@@ -261,6 +261,7 @@ def _guardrails(vendor_url: str) -> tuple[dict[str, JsonValue], ...]:
             _guardrail(_generic(vendor), {**generic, "api_base": f"{vendor_url}/gga/{vendor.value}"})
             for vendor in _Vendor
         ),
+        _guardrail("mcp-end-user", {"guardrail": "mcp_end_user_permission"}),
         _guardrail(
             "gga-block-skip-tool",
             {**generic, "api_base": f"{vendor_url}/gga/{_Vendor.BLOCKS.value}", "skip_tool_message_in_guardrail": True},
@@ -274,7 +275,6 @@ def _guardrails(vendor_url: str) -> tuple[dict[str, JsonValue], ...]:
             },
         ),
         _guardrail("tool-policy", {"guardrail": "tool_policy"}),
-        _guardrail("mcp-end-user", {"guardrail": "mcp_end_user_permission"}),
     )
 
 
@@ -329,7 +329,14 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Rig]:
             owned_proxy(gateway, directory, {}, config=_config(directory, guardrails, bedrock), workers=2) as owned,
             owned.scenario() as scenario,
         ):
-            yield _Rig(owned, vendor, bedrock, {name: scenario.key(guardrails=[name]) for name in names})
+            keys: Final = {name: scenario.key(guardrails=[name]) for name in names}
+            tool_remover_then_masker: Final = ["mcp-end-user", "gga-mask-tool-only"]
+            yield _Rig(
+                owned,
+                vendor,
+                bedrock,
+                {**keys, "+".join(tool_remover_then_masker): scenario.key(guardrails=tool_remover_then_masker)},
+            )
 
 
 @pytest.fixture(autouse=True)
@@ -579,9 +586,10 @@ def test_text_block_the_guardrail_cleared_is_dropped_before_bedrock(rig: _Rig) -
     assert sent["messages"] == [_user({"text": "Order details below."})]
 
 
-def test_turn_the_guardrail_cleared_entirely_is_refused_before_bedrock(rig: _Rig) -> None:
+def test_turn_the_guardrail_cleared_entirely_is_sent_as_written(rig: _Rig) -> None:
     body: Final = {"messages": [_user({"text": f"Card {_CARD} please."})]}
-    assert _UNAPPLIABLE in _refused(rig, _converse(rig, _generic(_Vendor.CLEARS_CARD_TEXTS), body))
+    sent: Final = _forwarded(rig, _converse(rig, _generic(_Vendor.CLEARS_CARD_TEXTS), body))
+    assert sent["messages"] == [_user({"text": ""})]
 
 
 def test_deeply_nested_tool_result_json_reaches_bedrock_with_the_message_mask(rig: _Rig) -> None:
@@ -644,18 +652,12 @@ def test_mcp_end_user_permission_drops_tools_of_servers_the_end_user_cannot_use(
 
 
 @pytest.mark.parametrize(
-    ("guardrail_config", "result_block"),
-    [
-        ({}, {"text": "[tool result for tooluse_post: posted to #ops]"}),
-        (
-            {"guardrailConfig": {"guardrailIdentifier": "gr-scripted", "guardrailVersion": "1"}},
-            {"guardContent": {"text": {"text": "[tool result for tooluse_post: posted to #ops]"}}},
-        ),
-    ],
+    "guardrail_config",
+    [{}, {"guardrailConfig": {"guardrailIdentifier": "gr-scripted", "guardrailVersion": "1"}}],
     ids=["plain", "with-guardrail-config"],
 )
 def test_mcp_end_user_permission_removing_every_tool_drops_the_tool_config_and_turns_tool_history_into_text(
-    rig: _Rig, guardrail_config: Mapping[str, JsonValue], result_block: Mapping[str, JsonValue]
+    rig: _Rig, guardrail_config: Mapping[str, JsonValue]
 ) -> None:
     tool_use: Final = {"toolUseId": "tooluse_post", "name": "slack-post_message", "input": {"channel": "#ops"}}
     body: Final = {
@@ -682,6 +684,35 @@ def test_mcp_end_user_permission_removing_every_tool_drops_the_tool_config_and_t
         "messages": [
             _user({"text": "Post the update."}),
             _assistant({"text": '[tool call tooluse_post: slack-post_message({"channel": "#ops"})]'}),
-            _user(dict(result_block), {"text": "Again."}),
+            _user({"text": "[tool result for tooluse_post: posted to #ops]"}, {"text": "Again."}),
         ],
     }
+
+
+def test_tool_result_of_a_tool_mcp_end_user_permission_removed_is_masked_by_a_later_tool_results_only_guardrail(
+    rig: _Rig,
+) -> None:
+    tool_use: Final = {"toolUseId": "tooluse_post", "name": "slack-post_message", "input": {"channel": "#ops"}}
+    body: Final = {
+        "messages": [
+            _user({"text": "Post the update."}),
+            _assistant({"toolUse": tool_use}),
+            _user(
+                {"toolResult": {"toolUseId": "tooluse_post", "content": [{"text": f"posted card {_CARD}"}]}},
+                {"text": "Again."},
+            ),
+        ],
+        "toolConfig": _named_tools("slack-post_message"),
+    }
+    response: Final = rig.gateway.request(
+        "POST",
+        f"/bedrock/model/{_MODEL}/converse",
+        body,
+        key=rig.keys["mcp-end-user+gga-mask-tool-only"],
+        headers=_end_user_on_github_only(rig),
+    )
+    sent: Final = _forwarded(rig, response)
+    assert "toolConfig" not in sent
+    assert sent["messages"][-1] == _user(
+        {"text": f"[tool result for tooluse_post: posted card {_MASK}]"}, {"text": "Again."}
+    )

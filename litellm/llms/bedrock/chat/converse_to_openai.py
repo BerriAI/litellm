@@ -295,26 +295,37 @@ def _user_row(slots: Sequence[Slot]) -> ConverseRow:
     return ConverseRow(ChatCompletionUserMessage(role="user", content=parts), tuple(slots))
 
 
-def _with_request_fields(rows: tuple[ConverseRow, ...], value: object) -> tuple[ConverseRow, ...]:
+def _with_request_fields(rows: tuple[ConverseRow, ...], value: object, user_turn: int) -> tuple[ConverseRow, ...]:
     """
     ``rows`` with the ``additionalModelRequestFields`` strings after the text of the latest user row, so a guardrail
-    that judges only the latest user message reads both. They get a user row of their own when there is none.
+    that judges only the latest user message reads both. When no user row has text they get a user row of their own
+    at ``user_turn``, where the rows of the latest user turn that is not only tool results start.
     """
     slots: Final = _string_leaves(("additionalModelRequestFields",), value)
     if not slots:
         return rows
     latest: Final = next((index for index in reversed(range(len(rows))) if rows[index].message["role"] == "user"), None)
     if latest is None:
-        return (*rows, _user_row(slots))
+        return (*rows[:user_turn], _user_row(slots), *rows[user_turn:])
     return (*rows[:latest], _user_row((*rows[latest].content, *slots)), *rows[latest + 1 :])
 
 
+def _is_user_turn(message: _Message) -> bool:
+    return message.role != "assistant" and any(block.tool_result is None for block in message.content)
+
+
 def converse_rows(request: ConverseRequest, include_tool_calls: bool) -> tuple[ConverseRow, ...]:
-    messages: Final = (
+    system: Final = _system_rows(request.system)
+    messages: Final = tuple(
         _message_rows(index, message, include_tool_calls) for index, message in enumerate(request.messages)
     )
-    rows: Final = (*_system_rows(request.system), *chain.from_iterable(messages))
-    return _with_request_fields(rows, request.additional_model_request_fields)
+    starts: Final = tuple(accumulate(map(len, messages), initial=len(system)))
+    rows: Final = (*system, *chain.from_iterable(messages))
+    user_turn: Final = next(
+        (starts[index] for index in reversed(range(len(messages))) if _is_user_turn(request.messages[index])),
+        len(rows),
+    )
+    return _with_request_fields(rows, request.additional_model_request_fields, user_turn)
 
 
 @dataclass(frozen=True, slots=True)
