@@ -2172,3 +2172,97 @@ async def test_async_ollama_ssl_verify_false_builds_a_client_that_skips_certific
     assert route.call_count == 1
     assert text == "Sunny"
     assert _cached_clients_verify_modes(client_cache, AsyncHTTPHandler) == (ssl.CERT_NONE,)
+
+
+def _recording_transport(seen: list[str]) -> httpx.MockTransport:
+    def record(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return httpx.Response(200, json={})
+
+    return httpx.MockTransport(record)
+
+
+@pytest.mark.asyncio
+async def test_get_async_httpx_client_sends_through_litellm_aclient_session(monkeypatch):
+    """A configured ``litellm.aclient_session`` is the client the handler sends with, and
+    closing the handler leaves the caller's session open."""
+    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+    from litellm.types.utils import LlmProviders
+
+    seen: list[str] = []
+    session = httpx.AsyncClient(transport=_recording_transport(seen))
+    monkeypatch.setattr(litellm, "aclient_session", session)
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+
+    handler = get_async_httpx_client(llm_provider=LlmProviders.ANTHROPIC)
+    assert handler.client is session
+    await handler.post("https://example.invalid/v1/messages", json={})
+    assert seen == ["https://example.invalid/v1/messages"]
+
+    await handler.close()
+    assert session.is_closed is False
+    await session.aclose()
+
+
+def test_get_httpx_client_sends_through_litellm_client_session(monkeypatch):
+    """Same for the sync side: ``litellm.client_session`` is what ``HTTPHandler`` sends with."""
+    from litellm.llms.custom_httpx.http_handler import get_httpx_client
+
+    seen: list[str] = []
+    session = httpx.Client(transport=_recording_transport(seen))
+    monkeypatch.setattr(litellm, "client_session", session)
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+
+    handler = get_httpx_client()
+    assert handler.client is session
+    handler.post("https://example.invalid/v1/messages", json={})
+    assert seen == ["https://example.invalid/v1/messages"]
+
+    handler.close()
+    assert session.is_closed is False
+    session.close()
+
+
+@pytest.mark.asyncio
+async def test_swapping_litellm_aclient_session_gets_a_fresh_handler(monkeypatch):
+    """The session is part of the cache key, so a session set after the first call is picked up."""
+    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+    from litellm.types.utils import LlmProviders
+
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    monkeypatch.setattr(litellm, "aclient_session", None)
+    own = get_async_httpx_client(llm_provider=LlmProviders.ANTHROPIC)
+
+    session = httpx.AsyncClient(transport=_recording_transport([]))
+    monkeypatch.setattr(litellm, "aclient_session", session)
+    through_session = get_async_httpx_client(llm_provider=LlmProviders.ANTHROPIC)
+
+    assert own.client is not session
+    assert through_session.client is session
+    await own.close()
+    await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_acompletion_anthropic_goes_through_litellm_aclient_session(monkeypatch):
+    """Providers on the HTTP handler path (here Anthropic) send through the configured session,
+    not through a connection of their own: the mock answers, so nothing reaches 127.0.0.1:9."""
+    seen: list[str] = []
+
+    def record(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return httpx.Response(400, json={"error": {"type": "invalid_request_error", "message": "mock"}})
+
+    session = httpx.AsyncClient(transport=httpx.MockTransport(record))
+    monkeypatch.setattr(litellm, "aclient_session", session)
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+
+    with pytest.raises(litellm.BadRequestError):
+        await litellm.acompletion(
+            model="anthropic/claude-3-5-haiku-20241022",
+            messages=[{"role": "user", "content": "hi"}],
+            api_key="sk-test",
+            api_base="http://127.0.0.1:9",
+        )
+    assert seen == ["http://127.0.0.1:9/v1/messages"]
+    await session.aclose()
