@@ -75,10 +75,12 @@ class TestGetBaseModelFromLitellmCallMetadata:
         )
         assert result == "gpt-4"
 
-    def test_returns_non_string_base_model_without_filtering(self):
-        result = get_base_model_from_litellm_call_metadata({"model_info": {"base_model": 123}})
-
-        assert result == 123
+    @pytest.mark.parametrize(
+        "model_info",
+        [{"base_model": 123}, {"base_model": ["gpt-4"]}, {"base_model": {"model": "gpt-4"}}],
+    )
+    def test_ignores_a_non_string_base_model(self, model_info: object):
+        assert get_base_model_from_litellm_call_metadata({"model_info": model_info}) is None
 
 
 class TestGetLitellmParamsKwargsExtraction:

@@ -156,9 +156,9 @@ def _cost_the_logger_records_for(
         litellm_call_id="call-1",
         function_id="fn-1",
     )
-    logging_obj.optional_params = {}
-    if model_info is not None:
-        logging_obj.litellm_params = {"metadata": {"model_info": model_info}}
+    logging_obj.update_environment_variables(
+        litellm_params={"metadata": {"model_info": model_info}} if model_info is not None else {}, optional_params={}
+    )
     if route_provider is not None:
         logging_obj.model_call_details["custom_llm_provider"] = route_provider
     if base_model is not None:
@@ -249,10 +249,11 @@ def test_gemini_route_spend_has_no_vertex_uplift_whatever_host_serves_it(
     assert recorded == pytest.approx(7 * _UPLIFT_INPUT_RATE + 1 * _UPLIFT_OUTPUT_RATE), (gemini_api_base, stream)
 
 
-@pytest.mark.parametrize("base_model", [123, ["gemini-2.5-flash-lite"], {"model": "gemini-2.5-flash-lite"}])
+@pytest.mark.parametrize("value", [123, ["gemini-2.5-flash-lite"], {"model": "gemini-2.5-flash-lite"}])
+@pytest.mark.parametrize("carrier", ["root", "model_info"])
 @pytest.mark.parametrize("stream", [True, False], ids=["streamed", "non-streamed"])
 def test_a_non_string_base_model_bills_the_list_price(
-    regional_uplift_rate_card: None, stream: bool, base_model: object
+    regional_uplift_rate_card: None, stream: bool, carrier: str, value: object
 ) -> None:
     method: Final = "streamGenerateContent" if stream else "generateContent"
 
@@ -261,7 +262,8 @@ def test_a_non_string_base_model_bills_the_list_price(
         stream=stream,
         reply=_generate_content_payload(),
         stream_events=[_generate_content_payload()],
-        base_model=base_model,
+        model_info={"base_model": value} if carrier == "model_info" else None,
+        base_model=value if carrier == "root" else None,
     )
 
     assert recorded == pytest.approx((7 * _UPLIFT_INPUT_RATE + 1 * _UPLIFT_OUTPUT_RATE) * _UPLIFT_MULTIPLIER), stream

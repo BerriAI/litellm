@@ -163,6 +163,11 @@ _DECODED_JSON: Final = TypeAdapter(object)
 _KEPT_OUT_OF_LITELLM_PARAMS: Final = _METADATA_KEYS | frozenset(wire_names(ProxyRequestState))
 _PRICING_MODEL_OVERRIDE_PARAMS: Final = frozenset(("base_model",))
 
+
+def _is_mergeable_client_metadata(key: str, value: object) -> bool:
+    return not key.startswith("user_api_key_") and (key != "model_info" or isinstance(value, Mapping))
+
+
 # Global registry to track registered pass-through routes and prevent memory leaks
 _registered_pass_through_routes: Final[dict[str, dict[str, str | bool | list[str] | Mapping[str, object]]]] = {}
 
@@ -651,7 +656,13 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         metadata: Final = litellm_keys_in_body.get("metadata")
         for client_metadata in (litellm_metadata, metadata):
             if isinstance(client_metadata, dict):
-                _metadata.update({k: v for k, v in client_metadata.items() if not k.startswith("user_api_key_")})
+                _metadata.update(
+                    {
+                        k: v
+                        for k, v in cast(Mapping[str, object], client_metadata).items()  # cast-ok: json
+                        if _is_mergeable_client_metadata(k, v)
+                    }
+                )
 
         _metadata = _apply_key_team_project_controls(user_api_key_dict=user_api_key_dict, metadata=_metadata)
         _metadata = _update_metadata_with_tags_in_header(

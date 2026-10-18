@@ -523,8 +523,9 @@ def _cost_the_logger_records_for_gemini(*, stream: bool, model_info: dict[str, o
         litellm_call_id="call-1",
         function_id="fn-1",
     )
-    logging_obj.optional_params = {}
-    logging_obj.litellm_params = {"metadata": {"model_info": model_info}} if model_info is not None else {}
+    logging_obj.update_environment_variables(
+        litellm_params={"metadata": {"model_info": model_info}} if model_info is not None else {}, optional_params={}
+    )
     if stream:
         asyncio.run(
             PassThroughStreamingHandler.route_streaming_logging_to_handler(
@@ -580,3 +581,13 @@ def test_gemini_passthrough_spend_matches_whether_or_not_the_call_streams(
     recorded: Final = _cost_the_logger_records_for_gemini(stream=stream, model_info=model_info)
 
     assert recorded == pytest.approx(7 * input_rate + 1 * output_rate), stream
+
+
+@pytest.mark.parametrize("stream", [True, False], ids=["streamed", "non-streamed"])
+@pytest.mark.parametrize("base_model", [123, [f"gemini/{_PROBE_MODEL}"], {"model": f"gemini/{_PROBE_MODEL}"}])
+def test_gemini_passthrough_bills_the_list_price_when_the_model_info_base_model_is_not_a_string(
+    probe_rate_card: None, stream: bool, base_model: object
+) -> None:
+    recorded: Final = _cost_the_logger_records_for_gemini(stream=stream, model_info={"base_model": base_model})
+
+    assert recorded == pytest.approx(7 * _LIST_INPUT_RATE + 1 * _LIST_OUTPUT_RATE), stream

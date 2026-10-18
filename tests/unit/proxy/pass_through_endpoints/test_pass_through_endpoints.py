@@ -8550,6 +8550,24 @@ def test_passthrough_prices_with_a_client_base_model_only_for_keys_that_allow_cl
     assert split.forwarded_body == json.loads(GEMINI_BODY)
 
 
+@pytest.mark.parametrize("model_info", ["malformed", ["malformed"], 123])
+def test_passthrough_drops_a_client_model_info_that_is_not_an_object(model_info: object) -> None:
+    key: Final = UserAPIKeyAuth(api_key="hashed-key", metadata={"allow_client_pricing_override": True})
+    plain_metadata: Final = _metadata_of(_split_pass_through_body(json.dumps({"metadata": {"tag": "a"}}), key))
+
+    split: Final = _split_pass_through_body(json.dumps({"metadata": {"tag": "a", "model_info": model_info}}), key)
+
+    assert _metadata_of(split) == plain_metadata
+
+
+def test_passthrough_keeps_a_client_model_info_object_for_keys_that_allow_client_pricing() -> None:
+    key: Final = UserAPIKeyAuth(api_key="hashed-key", metadata={"allow_client_pricing_override": True})
+
+    split: Final = _split_pass_through_body(json.dumps({"metadata": {"model_info": {"base_model": "gemini/x"}}}), key)
+
+    assert _metadata_of(split)["model_info"] == {"base_model": "gemini/x"}
+
+
 @pytest.mark.parametrize("name", sorted(PROXY_STAMPED_NAMES))
 def test_passthrough_drops_a_client_supplied_proxy_stamped_name(name: str) -> None:
     split: Final = _split_pass_through_body(json.dumps({name: {"forged": "by-client"}, **json.loads(GEMINI_BODY)}))
