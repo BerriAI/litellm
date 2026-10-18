@@ -392,7 +392,8 @@ class OllamaConfig(BaseConfig):
         completion_tokens: Final = response_json.get(
             "eval_count", len((response_json.get("message") or {}).get("content", ""))
         )
-        cached_tokens: Final[int] = int(response_json.get("prompt_eval_cached_count") or 0)
+        raw_cached = response_json.get("prompt_eval_cached_count")
+        cached_tokens: Final = raw_cached if isinstance(raw_cached, int) else 0
         setattr(
             model_response,
             "usage",
@@ -591,7 +592,8 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
 
                 usage: ChatCompletionUsageBlock | None = None
                 if prompt_eval_count is not None and eval_count is not None:
-                    cached_tokens: Final[int] = int(chunk.get("prompt_eval_cached_count") or 0)
+                    raw_cached = chunk.get("prompt_eval_cached_count")
+                    cached_tokens: Final = raw_cached if isinstance(raw_cached, int) else 0
                     usage = ChatCompletionUsageBlock(
                         prompt_tokens=prompt_eval_count,
                         completion_tokens=eval_count,
