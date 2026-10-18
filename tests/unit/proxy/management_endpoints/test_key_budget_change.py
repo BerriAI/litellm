@@ -201,6 +201,22 @@ async def _update(
     )
 
 
+async def _denial(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    policy: str | None,
+    data: UpdateKeyRequest,
+    existing: LiteLLM_VerificationToken,
+    team: LiteLLM_TeamTableCachedObj | None = None,
+    caller: UserAPIKeyAuth | None = None,
+) -> HTTPException | None:
+    try:
+        await _update(monkeypatch, policy=policy, data=data, existing=existing, team=team, caller=caller)
+    except HTTPException as exc:
+        return exc
+    return None
+
+
 _ADD_DAILY_WINDOW: Final = UpdateKeyRequest(key="sk-1", budget_limits=[_WEEKLY, _window("24h", 5.0)])
 _RAISE_WEEKLY_WINDOW: Final = UpdateKeyRequest(key="sk-1", budget_limits=[_window("7d", 80.0)])
 
@@ -221,12 +237,15 @@ def _team_key_with_weekly(*, user_id: str = _OWNER, created_by: str = _OWNER) ->
 async def test_owner_changes_team_key_budget_when_policy_allows(
     monkeypatch: pytest.MonkeyPatch, policy: str, data: UpdateKeyRequest, member_permissions: Sequence[str]
 ) -> None:
-    await _update(
-        monkeypatch,
-        policy=policy,
-        data=data,
-        existing=_team_key_with_weekly(),
-        team=_team(member_permissions),
+    assert (
+        await _denial(
+            monkeypatch,
+            policy=policy,
+            data=data,
+            existing=_team_key_with_weekly(),
+            team=_team(member_permissions),
+        )
+        is None
     )
 
 
@@ -284,11 +303,14 @@ async def test_team_member_without_update_permission_is_still_rejected(monkeypat
 
 @pytest.mark.asyncio
 async def test_ceiling_lets_owner_raise_personal_key_budget(monkeypatch: pytest.MonkeyPatch) -> None:
-    await _update(
-        monkeypatch,
-        policy="ceiling",
-        data=UpdateKeyRequest(key="sk-1", max_budget=30.0),
-        existing=_key(max_budget=10.0),
+    assert (
+        await _denial(
+            monkeypatch,
+            policy="ceiling",
+            data=UpdateKeyRequest(key="sk-1", max_budget=30.0),
+            existing=_key(max_budget=10.0),
+        )
+        is None
     )
 
 
@@ -308,13 +330,16 @@ async def test_ceiling_caps_owner_raise_at_callers_own_budget(monkeypatch: pytes
 
 @pytest.mark.asyncio
 async def test_ceiling_does_not_cap_a_team_admin_raising_their_own_team_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    await _update(
-        monkeypatch,
-        policy="ceiling",
-        data=UpdateKeyRequest(key="sk-1", max_budget=30.0),
-        existing=_key(user_id=_TEAM_ADMIN, created_by=_TEAM_ADMIN, team_id=_TEAM, max_budget=10.0),
-        team=_team(["/key/update"]),
-        caller=_caller(user_id=_TEAM_ADMIN, max_budget=20.0),
+    assert (
+        await _denial(
+            monkeypatch,
+            policy="ceiling",
+            data=UpdateKeyRequest(key="sk-1", max_budget=30.0),
+            existing=_key(user_id=_TEAM_ADMIN, created_by=_TEAM_ADMIN, team_id=_TEAM, max_budget=10.0),
+            team=_team(["/key/update"]),
+            caller=_caller(user_id=_TEAM_ADMIN, max_budget=20.0),
+        )
+        is None
     )
 
 
@@ -356,11 +381,14 @@ async def test_lower_only_lets_owner_lower_personal_key_budget_without_generate_
         "litellm.key_generation_settings",
         {"personal_key_generation": {"allowed_user_roles": [LitellmUserRoles.PROXY_ADMIN.value]}},
     )
-    await _update(
-        monkeypatch,
-        policy="lower_only",
-        data=UpdateKeyRequest(key="sk-1", max_budget=5.0),
-        existing=_key(max_budget=10.0),
+    assert (
+        await _denial(
+            monkeypatch,
+            policy="lower_only",
+            data=UpdateKeyRequest(key="sk-1", max_budget=5.0),
+            existing=_key(max_budget=10.0),
+        )
+        is None
     )
 
 

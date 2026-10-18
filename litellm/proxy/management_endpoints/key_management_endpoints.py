@@ -27,7 +27,7 @@ import fastapi
 import yaml
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from pydantic import TypeAdapter
-from typing_extensions import ReadOnly, TypedDict, assert_never
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._internal_context import service_target, with_service_target
@@ -3432,8 +3432,6 @@ async def _owner_may_change_key_budget(
                 user_api_key_dict=user_api_key_dict,
             )
             return True
-        case _:
-            return assert_never(budget_change)
 
 
 async def _validate_update_key_data(
