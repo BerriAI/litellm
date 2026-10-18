@@ -111,7 +111,7 @@ class Sample(BaseModel):
 class Timings(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    first_seconds: float
+    first_seconds: float | None
     repeated_samples: int
     repeated_p50_seconds: float | None
     repeated_p95_seconds: float | None
@@ -123,12 +123,46 @@ def summarize(samples: tuple[Sample, ...]) -> Timings:
     assert samples, "No UI requests were measured"
     repeated: Final = tuple(sorted(sample.seconds for sample in samples[1:] if not sample.error))
     return Timings(
-        first_seconds=samples[0].seconds,
+        first_seconds=samples[0].seconds if not samples[0].error else None,
         repeated_samples=len(repeated),
         repeated_p50_seconds=statistics.median(repeated) if repeated else None,
         repeated_p95_seconds=repeated[math.ceil(len(repeated) * 0.95) - 1] if len(repeated) >= 20 else None,
         repeated_p99_seconds=repeated[math.ceil(len(repeated) * 0.99) - 1] if len(repeated) >= 100 else None,
         repeated_max_seconds=max(repeated) if repeated else None,
+    )
+
+
+def error_code(sample: Sample) -> str:
+    if not sample.error:
+        return ""
+    if sample.status > 0 and sample.status != 200:
+        return f"http_{sample.status}"
+    if sample.error in ("timeout", "network"):
+        return sample.error
+    if sample.error == "Response is not valid JSON":
+        return "invalid_json"
+    return "contract"
+
+
+def ui_junit_properties(
+    samples: tuple[Sample, ...], prerequisite: Sample | None = None
+) -> tuple[tuple[str, float], ...]:
+    requests: Final = (prerequisite, *samples) if prerequisite is not None and not prerequisite.error else samples
+    codes: Final = tuple(error_code(sample) for sample in requests if sample.error)
+    timings: Final = summarize(samples)
+    latency: Final = (
+        ("first_seconds", timings.first_seconds),
+        ("repeated_seconds_p50", timings.repeated_p50_seconds),
+        ("repeated_seconds_p95", timings.repeated_p95_seconds),
+        ("repeated_seconds_p99", timings.repeated_p99_seconds),
+        ("repeated_seconds_max", timings.repeated_max_seconds),
+    )
+    return (
+        ("perf_ui_requests", len(requests)),
+        ("perf_ui_failures", len(codes)),
+        ("perf_ui_repeated_samples", timings.repeated_samples),
+        *((f"perf_ui_error_{code}", codes.count(code)) for code in sorted(frozenset(codes))),
+        *((f"perf_ui_{name}", value) for name, value in latency if value is not None),
     )
 
 
@@ -184,8 +218,12 @@ def database_failures(text: str) -> float:
     families: Final = tuple(text_string_to_metric_families(text))
     required: Final = frozenset(("litellm_postgres_failed_requests", "litellm_batch_write_to_db_failed_requests"))
     missing: Final = required - frozenset(family.name for family in families)
-    assert not missing, f"Missing PostgreSQL failure counters {missing}"
     all_samples: Final = tuple(chain.from_iterable(family.samples for family in families))
+    has_activity: Final = any(
+        sample.name == "litellm_postgres_total_requests_total" and math.isfinite(sample.value) and sample.value > 0
+        for sample in all_samples
+    )
+    assert not missing or has_activity, f"Missing PostgreSQL failure counters {missing}"
     names: Final = frozenset(f"{name}_total" for name in required)
     values: Final = tuple(sample.value for sample in all_samples if sample.name in names)
     assert all(math.isfinite(value) and value >= 0 for value in values), "Invalid PostgreSQL failure counter"

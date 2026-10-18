@@ -5,7 +5,7 @@ from typing import Final
 
 import pytest
 from e2e_http import NetworkError, Result, Success, UnknownApiError
-from setup.ui_queries import Contract, Document, Sample, database_failures, measure, summarize
+from setup.ui_queries import Contract, Document, Sample, database_failures, measure, summarize, ui_junit_properties
 from setup.ui_query_cases import Params, cases, next_page
 
 
@@ -74,6 +74,43 @@ def test_small_sample_does_not_report_tail_percentiles() -> None:
     assert result.repeated_p50_seconds == 1
     assert result.repeated_p95_seconds is None
     assert result.repeated_p99_seconds is None
+
+
+def test_failed_first_request_emits_error_code_without_latency() -> None:
+    sample: Final = Sample(seconds=30, status=500, error="HTTP 500")
+    assert summarize((sample,)).first_seconds is None
+    assert dict(ui_junit_properties((sample,))) == {
+        "perf_ui_requests": 1,
+        "perf_ui_failures": 1,
+        "perf_ui_repeated_samples": 0,
+        "perf_ui_error_http_500": 1,
+    }
+
+
+def test_junit_counts_failures_but_only_measures_successful_latency() -> None:
+    samples: Final = (
+        Sample(seconds=2, status=200),
+        Sample(seconds=3, status=200),
+        Sample(seconds=30, status=-1, error="timeout"),
+        Sample(seconds=30, status=503, error="HTTP 503"),
+        Sample(seconds=1, status=200, error="Empty collection"),
+    )
+    assert dict(ui_junit_properties(samples, Sample(seconds=4, status=200))) == {
+        "perf_ui_requests": 6,
+        "perf_ui_failures": 3,
+        "perf_ui_repeated_samples": 1,
+        "perf_ui_error_timeout": 1,
+        "perf_ui_error_http_503": 1,
+        "perf_ui_error_contract": 1,
+        "perf_ui_first_seconds": 2,
+        "perf_ui_repeated_seconds_p50": 3,
+        "perf_ui_repeated_seconds_max": 3,
+    }
+
+
+def test_failed_cursor_prerequisite_is_counted_once() -> None:
+    sample: Final = Sample(seconds=30, status=503, error="HTTP 503")
+    assert dict(ui_junit_properties((sample,), sample)) == dict(ui_junit_properties((sample,)))
 
 
 @pytest.mark.parametrize("body", ("{}", '{"data": []}', '{"data": [{"spend": 1}]}', '{"data": [null]}'))
@@ -146,6 +183,15 @@ def _metrics(postgres: str, batch: str) -> str:
 def test_postgres_failures_include_background_batch_writes() -> None:
     assert database_failures(_metrics("0", "0")) == 0
     assert database_failures(_metrics("2", "3")) == 5
+
+
+def test_lazy_failure_counters_require_evidence_of_database_activity() -> None:
+    assert (
+        database_failures(
+            "# TYPE litellm_postgres_total_requests_total counter\nlitellm_postgres_total_requests_total 3\n"
+        )
+        == 0
+    )
 
 
 @pytest.mark.parametrize(

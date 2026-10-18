@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import os
+import time
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Final
@@ -12,6 +16,8 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, TypeAdapter
 
 from setup.ui_queries import orphan_key
 from setup.ui_query_cases import recovery_cases
+from setup.ui_query_isolation import validate_target
+from setup.upgrade_worker import read_state, release_indexes
 
 
 class UiFixture(BaseModel):
@@ -22,9 +28,11 @@ class UiFixture(BaseModel):
 
 
 def prepare_fixture() -> UiFixture:
-    assert os.environ.get("E2E_UI_PERF_DISPOSABLE") == "1", "UI fixtures require an explicitly disposable database"
-    assert os.environ.get("E2E_RESET_SPEND_LOGS") != "1", "Never truncate the performance baseline"
+    validate_target(os.environ["DATABASE_URL"])
+    _finish_upgrade()
     with psycopg.connect(os.environ["DATABASE_URL"], connect_timeout=10) as connection:
+        _ = connection.execute("SET statement_timeout='30s'")
+        asyncio.run(_create_views(connection))
         row: Final = connection.execute("SELECT spec->>'anchor', rows FROM litellm_perf_seed.checkpoint").fetchone()
         assert row is not None and TypeAdapter(int).validate_python(row[1]) > 0, "Missing completed seed rows"
         fixture: Final = UiFixture(
@@ -50,6 +58,46 @@ def prepare_fixture() -> UiFixture:
         assert count is not None and count[0] == 320, "Incomplete UI fixture"
         _recovery_rows(connection, fixture)
         return fixture
+
+
+def _finish_upgrade() -> None:
+    if os.environ.get("E2E_DATABASE_UPGRADE") != "1":
+        return
+    with psycopg.connect(os.environ["DATABASE_URL"], autocommit=True, connect_timeout=10) as connection:
+        release_indexes(connection)
+        deadline: Final = time.monotonic() + 6 * 3600
+        while time.monotonic() < deadline:
+            match read_state(connection).phase:
+                case "failed":
+                    raise AssertionError("Snapshot upgrade failed")
+                case "complete":
+                    return
+                case _:
+                    pass
+            time.sleep(5)
+    raise AssertionError("Snapshot indexes did not finish before UI measurements")
+
+
+@dataclass(frozen=True, slots=True)
+class _Views:
+    connection: psycopg.Connection[tuple[object, ...]]
+
+    async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]:
+        assert not args and "LIMIT 1" in query, "Expected a bounded view existence probe"
+        with self.connection.transaction():
+            _ = self.connection.execute(query.replace("LIMIT 1", "LIMIT 0").encode())
+        return ()
+
+    async def execute_raw(self, query: str, *args: object) -> int:
+        assert not args
+        _ = self.connection.execute(query.encode())
+        return 0
+
+
+async def _create_views(connection: psycopg.Connection[tuple[object, ...]]) -> None:
+    from litellm.proxy.db.create_views import create_missing_views
+
+    await create_missing_views(_Views(connection))
 
 
 def _recovery_rows(connection: psycopg.Connection[tuple[object, ...]], fixture: UiFixture) -> None:
