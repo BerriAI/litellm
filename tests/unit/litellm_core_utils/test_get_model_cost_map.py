@@ -1324,6 +1324,32 @@ def test_an_edit_to_an_aliased_model_made_before_the_remote_map_lands_stays_shar
     assert entry["output_cost_per_token"] == 9.0
 
 
+def test_an_alias_the_remote_map_adds_shares_the_prices_its_model_kept(isolated_litellm_cost_state, monkeypatch):
+    import litellm
+    from litellm.litellm_core_utils.get_model_cost_map import load_model_cost_map_at_import
+
+    bundled_map = json.loads(_cost_map_with_aliased_model(1.0))
+    del bundled_map["my-aliased-model"]["aliases"]
+    client, started, release = _held_client(httpx.Response(200, content=_cost_map_with_aliased_model(5.0)))
+    try:
+        monkeypatch.setattr(
+            litellm,
+            "model_cost",
+            load_model_cost_map_at_import(
+                url=_URL, client=client, local=lambda: ModelCostMapReloaded(model_cost_map=bundled_map)
+            ),
+        )
+        assert started.wait(timeout=10)
+        litellm.register_model({"my-aliased-model": {"output_cost_per_token": 9.0}}, persist_across_reloads=False)
+    finally:
+        _finish_fetch(release)
+
+    assert litellm.model_cost["my-aliased-model-alias"]["output_cost_per_token"] == 9.0
+    assert litellm.model_cost["my-aliased-model-alias"]["input_cost_per_token"] == 5.0
+    litellm.register_model({"my-aliased-model": {"input_cost_per_token": 7.0}}, persist_across_reloads=False)
+    assert litellm.model_cost["my-aliased-model-alias"]["input_cost_per_token"] == 7.0
+
+
 class _ReleaseWhenALookupWaits(logging.Handler):
     """Lets the held fetch answer only once a lookup is blocked waiting on it, so the lookup provably missed first."""
 

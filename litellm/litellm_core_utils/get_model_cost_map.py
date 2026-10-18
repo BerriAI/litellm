@@ -743,9 +743,19 @@ def _merged_entry(
         **{name: value for name, value in remote.items() if name not in written},
         **{name: value for name, value in current.items() if name in written},
     }
+    if isinstance(remote, AliasedCostEntry):
+        return AliasedCostEntry(fields, remote.names)
     if isinstance(current, AliasedCostEntry):
         return AliasedCostEntry(fields, current.names)
     return fields
+
+
+def _alias_names(entry: Mapping[str, object]) -> tuple[str, ...] | None:
+    return entry.names if isinstance(entry, AliasedCostEntry) else None
+
+
+def _same_entry(merged: Mapping[str, object], current: Mapping[str, object]) -> bool:
+    return merged == current and _alias_names(merged) == _alias_names(current)
 
 
 def _untouched_since_import(current: object, loaded: Mapping[str, object], parsed: Mapping[str, object]) -> bool:
@@ -769,9 +779,18 @@ def _merge_into_import_map(fetch: _ImportFetch, finalized: Mapping[str, object])
         )
         for entry_id, (current, key, entry) in shared_once.items()
     }
-    changed: Final = {entry_id: entry for entry_id, entry in merged.items() if entry != shared_once[entry_id][0]}
+    changed: Final = {
+        entry_id: entry for entry_id, entry in merged.items() if not _same_entry(entry, shared_once[entry_id][0])
+    }
     replaced: Final = {key: changed[id(value)] for key, value in tuple(fetch.bundled.items()) if id(value) in changed}
-    added: Final = {key: entry for key, entry in remote if key not in fetch.loaded and key not in fetch.bundled}
+    kept_for_remote: Final = {
+        id(entry): changed.get(entry_id, current) for entry_id, (current, _, entry) in shared_once.items()
+    }
+    added: Final = {
+        key: kept_for_remote.get(id(entry), entry)
+        for key, entry in remote
+        if key not in fetch.loaded and key not in fetch.bundled
+    }
     dropped: Final = tuple(
         key
         for key in fetch.loaded.keys() - finalized.keys()
