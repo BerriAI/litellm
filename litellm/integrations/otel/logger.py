@@ -1097,8 +1097,16 @@ def build_otel_v2_logger(
 
 
 def _logger_class(config: OpenTelemetryV2Config) -> type[OpenTelemetryV2]:
-    if "langfuse" not in config.mapper_names:
-        return OpenTelemetryV2
-    from litellm.integrations.otel.langfuse_logger import LangfuseContentOpenTelemetryV2
+    """The logger for the configured vocabularies. Langfuse, Arize AX and Phoenix show a trace's input and output
+    from its root span, so their loggers stamp the request root. A Weave config composes OpenInference and keeps the
+    plain logger."""
+    names: Final = config.mapper_names
+    if "langfuse" in names:
+        from litellm.integrations.otel.langfuse_logger import LangfuseContentOpenTelemetryV2
 
-    return LangfuseContentOpenTelemetryV2
+        return LangfuseContentOpenTelemetryV2
+    if "openinference" in names and "weave" not in names:
+        from litellm.integrations.otel.root_io_logger import OpenInferenceRootIOOpenTelemetryV2
+
+        return OpenInferenceRootIOOpenTelemetryV2
+    return OpenTelemetryV2
