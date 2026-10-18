@@ -668,14 +668,17 @@ def test_large_request_no_truncation_threshold():
     assert "skipped" in truncated_content
 
 
-@pytest.mark.parametrize("max_string_length_prompt_in_db", [0, 1])
-def test_a_limit_under_two_still_stores_the_whole_value_after_the_marker(max_string_length_prompt_in_db: int):
+@pytest.mark.parametrize(
+    ("max_string_length_prompt_in_db", "stored_tail"),
+    [(0, "claude-sonnet-5-5"), (1, "claude-sonnet-5-5"), (-1, "laude-sonnet-5-5"), (-2, "aude-sonnet-5-5")],
+)
+def test_a_limit_under_two_keeps_mains_tail_after_the_marker(max_string_length_prompt_in_db: int, stored_tail: str):
     sanitized: Final = _sanitize_request_body_for_spend_logs_payload(
         {"model": "claude-sonnet-5-5"}, max_string_length_prompt_in_db=max_string_length_prompt_in_db
     )
 
     assert sanitized["model"].startswith("...")
-    assert sanitized["model"].endswith("claude-sonnet-5-5")
+    assert sanitized["model"].endswith(f") ...{stored_tail}")
 
 
 def test_small_request_no_truncation():
