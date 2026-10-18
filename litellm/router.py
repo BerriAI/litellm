@@ -1152,9 +1152,13 @@ def _base_model_widened_window(
 
 def _deployment_declares_no_vision(deployment: DeploymentTypedDict) -> bool:
     """Whether the deployment's model_info explicitly declares no vision support."""
-    if "model_info" not in deployment or deployment["model_info"] is None:
+    if "model_info" not in deployment:
         return False
-    model_info: Final = cast(dict[str, object], deployment["model_info"])  # cast-ok: model_info is a string-keyed dict
+    model_info: Final = cast(  # cast-ok: model_info is a string-keyed dict, None at runtime
+        dict[str, object] | None, deployment["model_info"]
+    )
+    if model_info is None:
+        return False
     return model_info.get("supports_vision") is False
 
 
