@@ -98,6 +98,9 @@ class AmazonAnthropicClaudeMessagesConfig(
     def beta_headers_provider(self) -> str:
         return self.custom_llm_provider or "bedrock"
 
+    def should_strip_billing_metadata(self) -> bool:
+        return True
+
     def drops_dangerous_tool_use_beta_without_safeguards(self) -> bool:
         return True
 
