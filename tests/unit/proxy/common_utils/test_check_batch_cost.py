@@ -4159,6 +4159,8 @@ async def test_batch_cost_reaches_configured_success_callbacks(
     job: Final = SimpleNamespace(
         id="job",
         unified_object_id="batch-record",
+        status="in_progress",
+        file_object={},
         created_by=None,
         team_id=None,
         api_key=None,
