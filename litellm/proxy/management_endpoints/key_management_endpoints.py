@@ -2620,9 +2620,11 @@ def prepare_metadata_fields(data: BaseModel, non_default_values: dict, existing_
         )
 
     # The ui-session marker is reserved for the minted dashboard sessions;
-    # update/regenerate cannot stamp it from caller data (R1-L12).
-    casted_metadata.pop(UI_SESSION_METADATA_MARKER_KEY, None)
-    non_default_values["metadata"] = encrypt_callback_vars(casted_metadata)
+    # update/regenerate cannot stamp it from caller data (R1-L12). An explicit
+    # metadata=None stays None (clear-to-none), so skip both here.
+    if casted_metadata is not None:
+        casted_metadata.pop(UI_SESSION_METADATA_MARKER_KEY, None)
+        non_default_values["metadata"] = encrypt_callback_vars(casted_metadata)
     return non_default_values
 
 
