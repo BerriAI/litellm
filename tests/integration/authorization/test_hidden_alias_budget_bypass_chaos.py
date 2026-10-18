@@ -32,7 +32,7 @@ from integration.authorization._hidden_alias_budget import (
     upstream_requests,
 )
 
-pytestmark: Final = pytest.mark.timeout(240)
+pytestmark: Final = [pytest.mark.timeout(240), pytest.mark.shares_worker_state]
 
 _STARTED_WORKER: Final = re.compile(r"Started server process \[(\d+)\]")
 _WAVE: Final = 8

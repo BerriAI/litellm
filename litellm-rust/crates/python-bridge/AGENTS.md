@@ -48,8 +48,8 @@ Each step needs focused regression tests in the owning crate and Python integrat
   - Preserve provider-specific upload/submission/poll observation and encoding boundaries. Signed/build-captured bytes must not be silently reserialized
 - Conversion errors and every failure after the call starts are terminal
   - Disabled/unavailable native execution may select legacy once. Callback exceptions never authorize fallback or replay
-- Use one ordinary inline `async def` driver in `litellm/rust_bridge/lifecycle.py`, with the native handle and call driver in `litellm-host-python`
-  - Contract: `start`, `resume_value`, `resume_error`, idempotent `close`. Explicitly tagged `Await`/`Complete` preserve awaitable final values
+- Use one ordinary inline `async def` driver in `litellm/rust_bridge/execution.py`, with the native handle and call driver in `litellm-host-python`
+  - Contract: generator-style `send` (`send(None)` starts), `throw`, idempotent `close`. Explicitly tagged `Await`/`Complete` preserve awaitable final values
   - Validate Created/Running/Suspended/Closed protocol states. The machine yields ops, the driver emits one terminal event, the adapter chooses dispatch policy
   - Defer effectful setup/context reads/timestamps until start. Unstarted-handle destruction releases inputs independently of Python `finally`
   - Catch only the selected await's errors. Start/resume errors propagate, `GeneratorExit` closes without further awaits

@@ -34,6 +34,7 @@ from litellm import get_llm_provider
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
     ALLOWED_VERTEX_AI_PASSTHROUGH_HEADERS,
+    AWS_ERROR_TYPE_HEADER,
     AZURE_SPEECH_BATCH_PATH_PREFIX,
     AZURE_SPEECH_COGNITIVE_SERVICES_DOMAIN,
     AZURE_SPEECH_CUSTOM_LLM_PROVIDER,
@@ -43,8 +44,10 @@ from litellm.constants import (
     AZURE_SPEECH_STT_DOMAIN,
     AZURE_SPEECH_SUBSCRIPTION_KEY_HEADER,
     BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES,
+    TYPESAFE_DANGER_ZONE_HEADER_PREFIX,
 )
-from litellm.integrations.custom_guardrail import guardrail_request_data_with_streaming
+from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
+from litellm.integrations.custom_guardrail import guardrail_request_data_with_streaming, is_guardrail_intervention
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo, merge_anthropic_beta_headers
 from litellm.llms.azure.passthrough.transformation import (
@@ -66,7 +69,7 @@ from litellm.llms.openai.common_utils import OpenAIError as LiteLLMOpenAIError
 from litellm.llms.openai.workload_identity import get_workload_identity_bearer_token_for_api_base
 from litellm.llms.oss_decision import OssDecisionProvider, oss_connection, validate_oss_request
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
-from litellm.passthrough.main import AsyncPassthroughStreamingResponse
+from litellm.passthrough.main import AsyncPassthroughStreamingResponse, is_provider_error
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import enforced_model_allowlists
 from litellm.proxy.auth.handle_jwt import JWTHandler
@@ -79,7 +82,11 @@ from litellm.proxy.auth.user_api_key_auth import (  # noqa: F401  # legacy modul
     user_api_key_auth_websocket,
     user_api_key_auth_websocket_for_model,
 )
-from litellm.proxy.common_request_processing import open_sse_before_first_byte
+from litellm.proxy.common_request_processing import (
+    ProxyBaseLLMRequestProcessing,
+    model_deployments_support_stream_options,
+    open_sse_before_first_byte,
+)
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
     _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -96,6 +103,10 @@ from litellm.proxy.common_utils.sse_keepalive import (
     wrap_passthrough_sse_bytes_with_keepalive_pings,
 )
 from litellm.proxy.pass_through_endpoints.common_utils import get_litellm_virtual_key
+from litellm.proxy.pass_through_endpoints.injected_stream_usage import (
+    stream_usage_relay,
+    without_injected_usage_frames,
+)
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     HttpPassThroughEndpointHelpers,
     create_pass_through_route,
@@ -140,6 +151,7 @@ else:
 
 vertex_llm_base: Final = VertexBase()
 router: Final = APIRouter()
+_DECODED_JSON: Final = TypeAdapter(object)
 default_vertex_config: Final = None
 passthrough_endpoint_router: Final = PassthroughEndpointRouter()
 
@@ -509,6 +521,17 @@ async def vllm_proxy_route(
     is_router_model: Final = is_passthrough_request_using_router_model(request_body, llm_router)
     is_streaming_request: Final = is_passthrough_request_streaming(request_body)
     if is_router_model and llm_router:
+        is_json_request: Final = is_json_content_type(request.headers.get("content-type", ""))
+        relay: Final = stream_usage_relay(
+            endpoint=endpoint,
+            request_body=request_body,
+            general_settings=_proxy_general_settings(),
+            supports_stream_options=lambda: model_deployments_support_stream_options(
+                model=request_body.get("model"),
+                llm_router=llm_router,
+                team_id=user_api_key_dict.team_id,
+            ),
+        )
         result: Final = cast(
             httpx.Response,
             await llm_router.allm_passthrough_route(
@@ -521,7 +544,7 @@ async def vllm_proxy_route(
                 content=None,
                 data=None,
                 files=None,
-                json=(request_body if is_json_content_type(request.headers.get("content-type", "")) else None),
+                json=(relay.body if is_json_request else None),
                 params=None,
                 headers=None,
                 cookies=None,
@@ -530,8 +553,13 @@ async def vllm_proxy_route(
         )
 
         if is_streaming_request:
+            upstream_bytes: Final = _relay_response_bytes(result)
             return StreamingResponse(
-                content=result.aiter_bytes(),
+                content=(
+                    without_injected_usage_frames(upstream_bytes)
+                    if relay.strips_usage and is_json_request
+                    else upstream_bytes
+                ),
                 status_code=result.status_code,
                 headers=HttpPassThroughEndpointHelpers.get_response_headers(
                     headers=result.headers,
@@ -634,10 +662,16 @@ async def typesafe_proxy_route(
         custom_llm_provider="typesafe",
         region_name=None,
     )
+    danger_zone_headers: Final = {
+        name: value
+        for name, value in request.headers.items()
+        if name.lower().startswith(TYPESAFE_DANGER_ZONE_HEADER_PREFIX)
+    }
     endpoint_func: Final = create_pass_through_route(
         endpoint=endpoint,
         target=str(updated_url),
         custom_headers={
+            **danger_zone_headers,
             "Authorization": f"Bearer {typesafe_api_key}",
             "Content-Type": "application/json",
         },
@@ -1036,6 +1070,78 @@ def extract_model_from_bedrock_endpoint(endpoint: str) -> str:
 _extract_model_from_bedrock_endpoint: Final = extract_model_from_bedrock_endpoint
 
 
+def _guardrail_refusal_status(error: Exception) -> int | None:
+    """The status a guardrail blocked the request with. None for a request check that answers with the same 400, 403
+    or 422, for a guardrail that failed closed because it could not get a verdict, and for a guardrail block raised
+    with a plain-string detail.
+
+    Guardrail hooks stamp ``guardrail_name`` onto the dict detail of an HTTPException they raise."""
+    match error:
+        case HTTPException():
+            detail: Final[object] = error.detail
+            stamped: Final = isinstance(detail, dict) and "guardrail_name" in detail
+            return error.status_code if stamped and is_guardrail_intervention(error) else None
+        case GuardrailRaisedException(blocked_content=True) | BlockedPiiEntityError():
+            return error.status_code
+        case _:
+            return None
+
+
+def _aws_error_type(error: Exception, handled: ProxyException) -> str | None:
+    """The AWS error type to answer the handled error with: ValidationException for a guardrail block, else the type
+    the error carried, as LiteLLM's own Bedrock request checks set it. None when the shared handler changed the
+    guardrail block's status."""
+    refusal_status: Final = _guardrail_refusal_status(error)
+    if refusal_status is not None:
+        return "ValidationException" if str(refusal_status) == handled.code else None
+    return next((value for name, value in handled.headers.items() if name.lower() == AWS_ERROR_TYPE_HEADER), None)
+
+
+def _bedrock_error_response(error: Exception, handled: HTTPException) -> Response | None:
+    """Bedrock's own error response, for an error Bedrock answered the passthrough request with an AWS error
+    type."""
+    if not isinstance(error, httpx.HTTPStatusError) or not is_provider_error(error):
+        return None
+    upstream: Final = error.response
+    if AWS_ERROR_TYPE_HEADER not in upstream.headers:
+        return None
+    passed_through: Final = {
+        name: upstream.headers[name] for name in (AWS_ERROR_TYPE_HEADER, "content-type") if name in upstream.headers
+    }
+    return Response(
+        content=upstream.content,
+        status_code=upstream.status_code,
+        headers={**(handled.headers or {}), **passed_through},
+    )
+
+
+async def bedrock_passthrough_error_response(
+    processor: ProxyBaseLLMRequestProcessing,
+    error: Exception,
+    user_api_key_dict: UserAPIKeyAuth,
+    proxy_logging_obj: ProxyLoggingType,
+) -> Response:
+    """Run the shared error handling for a Bedrock passthrough request, then answer a guardrail block, an error
+    Bedrock returned, or an error carrying an AWS error type the way Bedrock does, so an AWS SDK reads its code and
+    message. Anything else is raised as the shared handler raises it."""
+    try:
+        await processor.handle_llm_api_exception(
+            e=error,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except HTTPException as handled:
+        response: Final = _bedrock_error_response(error, handled)
+        if response is None:
+            raise
+        return response
+    except ProxyException as handled:
+        aws_error_type: Final = _aws_error_type(error, handled)
+        if aws_error_type is not None:
+            raise AwsErrorTypeProxyException(handled, aws_error_type) from handled
+        raise
+
+
 async def handle_bedrock_passthrough_router_model(
     model: str,
     endpoint: str,
@@ -1120,11 +1226,8 @@ async def handle_bedrock_passthrough_router_model(
         )
         return result
     except Exception as e:
-        # Use common exception handling
-        raise await base_llm_response_processor.handle_llm_api_exception(
-            e=e,
-            user_api_key_dict=user_api_key_dict,
-            proxy_logging_obj=proxy_logging_obj,
+        return await bedrock_passthrough_error_response(
+            base_llm_response_processor, e, user_api_key_dict, proxy_logging_obj
         )
 
 
@@ -1323,10 +1426,8 @@ async def bedrock_llm_proxy_route(
 
         return result
     except Exception as e:
-        raise await base_llm_response_processor.handle_llm_api_exception(
-            e=e,
-            user_api_key_dict=user_api_key_dict,
-            proxy_logging_obj=proxy_logging_obj,
+        return await bedrock_passthrough_error_response(
+            base_llm_response_processor, e, user_api_key_dict, proxy_logging_obj
         )
 
 
@@ -2053,6 +2154,14 @@ def is_azure_ai_search_service_level_index_create(method: str, endpoint: str) ->
 async def _relay_upstream_bytes(upstream: AsyncGenerator[bytes, bytes]) -> AsyncGenerator[bytes, None]:
     try:
         async for chunk in upstream:
+            yield chunk
+    finally:
+        await upstream.aclose()
+
+
+async def _relay_response_bytes(upstream: httpx.Response) -> AsyncGenerator[bytes, None]:
+    try:
+        async for chunk in upstream.aiter_bytes():
             yield chunk
     finally:
         await upstream.aclose()
@@ -3514,7 +3623,7 @@ async def _tinyfish_json_object_field_names(request: Request) -> frozenset[str] 
     if not raw_body:
         return frozenset()
     try:
-        parsed: Final[object] = json.loads(raw_body)  # any-ok: json.loads -> Any
+        parsed: Final = _DECODED_JSON.validate_python(json.loads(raw_body))
     except (json.JSONDecodeError, UnicodeDecodeError):
         return None
     return frozenset(parsed) if isinstance(parsed, dict) else None

@@ -17,6 +17,11 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.proxy.litellm_pre_call_utils import SecretFields
 from litellm.types.utils import ModelResponse
 from litellm.utils import token_counter
+from tests.unit.llms.bedrock.slow_upstream import (
+    STREAM_TIMEOUT_SECONDS,
+    UPSTREAM_FIRST_BYTE_SECONDS,
+    slow_upstream_answer,
+)
 
 _MODEL: Final = "microsoft_365_copilot/chat"
 _MESSAGES_ADAPTER: Final = TypeAdapter(list[AllMessageValues])
@@ -550,6 +555,28 @@ def test_streaming_wraps_full_reply_as_fake_stream() -> None:
         count_response_tokens=True,
     )
     assert usage_chunk.usage.total_tokens == (usage_chunk.usage.prompt_tokens + usage_chunk.usage.completion_tokens)
+
+
+def test_streaming_is_bounded_by_the_request_timeout_not_the_stream_timeout() -> None:
+    slow_chat: Final = slow_upstream_answer(json.dumps(_DEFAULT_CHAT_RESPONSE).encode())
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/chat"):
+            return slow_chat(request)
+        return httpx.Response(status_code=201, json={"id": "conversation/42", "state": "active"}, request=request)
+
+    response: Final = litellm.completion(
+        model=_MODEL,
+        messages=_messages(),
+        api_key="delegated-stream-token-9306",
+        stream=True,
+        timeout=UPSTREAM_FIRST_BYTE_SECONDS * 2,
+        stream_timeout=STREAM_TIMEOUT_SECONDS,
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond))),
+    )
+
+    assert isinstance(response, CustomStreamWrapper)
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in response if chunk.choices) == "Copilot response"
 
 
 @pytest.mark.asyncio

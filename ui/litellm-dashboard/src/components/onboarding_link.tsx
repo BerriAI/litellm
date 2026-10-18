@@ -4,6 +4,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { Label } from "@/components/ui/label";
 import { copyToClipboard } from "@/utils/dataUtils";
+import { getUiPageUrl } from "@/components/networking";
 
 export interface InvitationLink {
   id: string;
@@ -62,12 +63,14 @@ export default function OnboardingModal({
   const linkFieldId = useId();
   const copyButtonRef = useRef<HTMLButtonElement>(null);
   const isInvitation = modalType === "invitation";
-  const invitationUrl = buildOnboardingUrl({
-    baseUrl,
-    invitationId: invitationLinkData?.id,
-    hasUserSetupSso: invitationLinkData?.has_user_setup_sso ?? false,
-    resetPassword: !isInvitation,
-  });
+  const invitationUrl = getUiPageUrl(
+    buildOnboardingUrl({
+      baseUrl,
+      invitationId: invitationLinkData?.id,
+      hasUserSetupSso: invitationLinkData?.has_user_setup_sso ?? false,
+      resetPassword: !isInvitation,
+    }),
+  );
 
   return (
     <Dialog
