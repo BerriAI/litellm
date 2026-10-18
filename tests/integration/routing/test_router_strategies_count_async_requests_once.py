@@ -21,7 +21,7 @@ import pytest
 import yaml
 from integration._support.client import Gateway, eventually, gateway_from_environment, held
 from integration._support.hook_counts import PNG_BYTES, WAV_BYTES, HookRecords
-from integration._support.process import owned_proxy
+from integration._support.process import OwnedState, owned_proxy
 from integration._support.wire import Reply, Request, wire_server
 from redis import Redis
 
@@ -122,6 +122,7 @@ def _router_proxy(tmp_path: Path, strategy: str, model: str) -> Iterator[_Rig]:
                 {"HOOK_COUNT_PROBE_URL": sink.url, "STORE_MODEL_IN_DB": "False"},
                 config=config,
                 workers=2,
+                state=OwnedState.SHARED_WITH_WORKER,
             ) as proxy:
                 yield _Rig(proxy, HookRecords(sink, function_callbacks=True), release, deployment_id)
         finally:

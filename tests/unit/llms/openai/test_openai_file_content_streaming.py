@@ -95,7 +95,7 @@ async def test_afile_content_streaming_builds_standard_logging_object_on_complet
     monkeypatch.setattr(
         LiteLLMLoggingObj,
         "handle_sync_success_callbacks_for_async_calls",
-        lambda self, result, start_time, end_time, cache_hit=None: None,
+        lambda self, result, start_time, end_time, cache_hit=None, hook_pairing=None: None,
     )
 
     stream_result = cast(
