@@ -3,8 +3,14 @@ import type { EndUser } from "@/app/(dashboard)/hooks/customers/useCustomers";
 
 import type { MCPServer, MCPToolset } from "@/components/mcp_tools/types";
 import { extractMcpEntitlement, extractMcpEntitlementUpdate } from "@/components/mcp_server_management/mcpEntitlement";
+import { mcpServersForIdentifier } from "@/components/mcp_server_management/effectiveMcpServers";
 
-import { hasSharedCustomerBudget, storedMcpGrant } from "./customerPayload";
+import {
+  hasSharedCustomerBudget,
+  serversLosingToolLimits,
+  storedMcpGrant,
+  toCustomerFormValues,
+} from "./customerPayload";
 
 export const MAX_BULK_CUSTOMERS = 500;
 
@@ -65,14 +71,10 @@ const validateBulkCustomerEdits = (
   return null;
 };
 
-const retainedToolPermissions = (
-  customer: EndUser,
-  edits: BulkCustomerEdits,
-  servers: MCPServer[],
-  toolsets: MCPToolset[],
-): Record<string, string[]> => {
+const bulkCustomerFormValues = (customer: EndUser, edits: BulkCustomerEdits) => {
   const stored = storedMcpGrant(customer);
-  const values = {
+  return {
+    ...toCustomerFormValues(customer),
     mcp_servers_and_groups: {
       servers: edits.mcpServers.enabled ? edits.mcpServers.value : stored.mcp_servers,
       accessGroups: edits.mcpAccessGroups.enabled ? edits.mcpAccessGroups.value : stored.mcp_access_groups,
@@ -80,6 +82,16 @@ const retainedToolPermissions = (
     },
     mcp_tool_permissions: stored.mcp_tool_permissions,
   };
+};
+
+const retainedToolPermissions = (
+  customer: EndUser,
+  edits: BulkCustomerEdits,
+  servers: MCPServer[],
+  toolsets: MCPToolset[],
+): Record<string, string[]> => {
+  const stored = storedMcpGrant(customer);
+  const values = bulkCustomerFormValues(customer, edits);
   const grant = edits.mcpServers.enabled
     ? extractMcpEntitlement(values, servers, toolsets)
     : extractMcpEntitlementUpdate(values, stored, servers, toolsets);
@@ -100,6 +112,28 @@ export const buildBulkCustomerPayload = (
     ...(edits.mcpAccessGroups.enabled ? { mcp_access_groups: edits.mcpAccessGroups.value } : {}),
     ...(edits.mcpToolsets.enabled ? { mcp_toolsets: edits.mcpToolsets.value } : {}),
   };
+  if (
+    Object.keys(objectPermission).length > 0 &&
+    customers.some((customer) => {
+      const directServerIds = new Set(
+        storedMcpGrant(customer).mcp_servers.flatMap((identifier) =>
+          mcpServersForIdentifier(catalogs.servers, identifier).map((server) => server.server_id),
+        ),
+      );
+      return serversLosingToolLimits(
+        bulkCustomerFormValues(customer, edits),
+        customer,
+        catalogs.servers,
+        catalogs.toolsets,
+      ).some((server) => directServerIds.has(server.server_id));
+    })
+  ) {
+    return {
+      ok: false,
+      error:
+        "This change would give a retained MCP server every tool. Edit individual customer tool permissions before applying this change",
+    };
+  }
   const updates: Omit<UpdateCustomerRequest, "user_id"> = {
     ...(edits.budget.enabled && edits.budget.mode === "link" ? { budget_id: edits.budget.budgetId.trim() } : {}),
     ...(edits.budget.enabled && edits.budget.mode === "max" ? { max_budget: Number(edits.budget.maxBudget) } : {}),

@@ -29,7 +29,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { extractProxyErrorMessage, unwrapProxyErrorMessage } from "@/lib/http/client";
 import { toast } from "@/lib/toast";
 import { buildBulkCustomerPayload, emptyBulkCustomerEdits, type BulkCustomerEdits } from "./bulkCustomerPayload";
-import { getCustomerBudgetCounts, hasSharedCustomerBudget } from "./customerPayload";
+import { getCustomerBudgetCounts, hasSharedCustomerBudget, storedMcpGrant } from "./customerPayload";
 
 type BulkEditCustomersModalProps = {
   allCustomers: readonly EndUser[];
@@ -233,7 +233,22 @@ export function BulkEditCustomersModal({
   onCancel,
   onCompleted,
 }: BulkEditCustomersModalProps) {
-  const [customers, setCustomers] = useState(() => selectedCustomers);
+  const [customerIds, setCustomerIds] = useState(() => selectedCustomers.map((customer) => customer.user_id));
+  const [initialGrants] = useState(
+    () => new Map(selectedCustomers.map((customer) => [customer.user_id, JSON.stringify(storedMcpGrant(customer))])),
+  );
+  const customersById = useMemo(
+    () => new Map(allCustomers.map((customer) => [customer.user_id, customer])),
+    [allCustomers],
+  );
+  const customers = useMemo(
+    () =>
+      customerIds.flatMap((id) => {
+        const customer = customersById.get(id);
+        return customer ? [customer] : [];
+      }),
+    [customerIds, customersById],
+  );
   const [edits, setEdits] = useState(emptyBulkCustomerEdits);
   const [error, setError] = useState<string | null>(null);
   const [results, setResults] = useState<BulkUpdateCustomersResponse | null>(null);
@@ -274,6 +289,20 @@ export function BulkEditCustomersModal({
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (inFlight.current) return;
+    if (customers.length !== customerIds.length) {
+      setError("A selected customer is no longer available. Close and reopen bulk edit before applying changes");
+      return;
+    }
+    const mcpEdited = edits.mcpServers.enabled || edits.mcpAccessGroups.enabled || edits.mcpToolsets.enabled;
+    if (
+      mcpEdited &&
+      customers.some((customer) => JSON.stringify(storedMcpGrant(customer)) !== initialGrants.get(customer.user_id))
+    ) {
+      setError(
+        "Customer MCP permissions changed while this editor was open. Close and reopen bulk edit before changing MCP access",
+      );
+      return;
+    }
     const payload = buildBulkCustomerPayload(
       customers,
       edits,
@@ -284,7 +313,6 @@ export function BulkEditCustomersModal({
       setError(payload.error);
       return;
     }
-    const mcpEdited = edits.mcpServers.enabled || edits.mcpAccessGroups.enabled || edits.mcpToolsets.enabled;
     const unavailable = [
       { enabled: edits.budget.enabled && edits.budget.mode === "link", catalog: budgets, label: "Budgets" },
       { enabled: edits.models.enabled || edits.defaultModel.enabled, catalog: models, label: "Models" },
@@ -301,8 +329,8 @@ export function BulkEditCustomersModal({
     try {
       const response = await mutation.mutateAsync(payload.payload);
       const successfulIds = response.results.filter((result) => result.success).map((result) => result.user_id);
-      const remaining = customers.filter((customer) => !successfulIds.includes(customer.user_id));
-      setCustomers(remaining);
+      const remaining = customerIds.filter((id) => !successfulIds.includes(id));
+      setCustomerIds(remaining);
       setResults(response);
       if (successfulIds.length > 0) onCompleted(successfulIds);
       if (remaining.length === 0) {
@@ -327,15 +355,15 @@ export function BulkEditCustomersModal({
         <DialogHeader>
           <DialogTitle>Edit selected customers</DialogTitle>
           <DialogDescription>
-            {customers.length} customer{customers.length === 1 ? "" : "s"} to update. Check each field you want to
+            {customerIds.length} customer{customerIds.length === 1 ? "" : "s"} to update. Check each field you want to
             replace. Unchecked fields stay unchanged. Region and default model cannot be cleared in bulk.
           </DialogDescription>
         </DialogHeader>
         <section aria-label="Customers to update" className="rounded-lg border p-3">
           <ul className="max-h-24 overflow-y-auto text-sm">
-            {customers.map((customer) => (
-              <li key={customer.user_id}>
-                <code>{customer.user_id}</code>
+            {customerIds.map((id) => (
+              <li key={id}>
+                <code>{id}</code>
               </li>
             ))}
           </ul>

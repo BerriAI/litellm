@@ -617,4 +617,63 @@ describe("bulk customer edits", () => {
       error: `Select at most ${MAX_BULK_CUSTOMERS} customers`,
     });
   });
+  it.each([
+    { toolsets: [], replaceServers: false },
+    { toolsets: ["replacement-tools"], replaceServers: false },
+    { toolsets: [], replaceServers: true },
+    { toolsets: ["replacement-tools"], replaceServers: true },
+  ])("rejects widening a retained direct server when replacing toolsets: %j", ({ toolsets, replaceServers }) => {
+    const row: EndUser = {
+      ...customers[0],
+      object_permission: {
+        mcp_servers: ["server-a"],
+        mcp_toolsets: ["original-tools"],
+        mcp_tool_permissions: {},
+      },
+    };
+    const servers: MCPServer[] = ["server-a", "server-b"].map((server_id) => ({
+      server_id,
+      created_at: "",
+      created_by: "",
+      updated_at: "",
+      updated_by: "",
+    }));
+    const catalog: MCPToolset[] = [
+      { toolset_id: "original-tools", toolset_name: "Original", tools: [{ server_id: "server-a", tool_name: "read" }] },
+      {
+        toolset_id: "replacement-tools",
+        toolset_name: "Replacement",
+        tools: [{ server_id: "server-b", tool_name: "read" }],
+      },
+    ];
+    const edits = {
+      ...emptyBulkCustomerEdits(),
+      mcpServers: { enabled: replaceServers, value: ["server-a"] },
+      mcpToolsets: { enabled: true, value: toolsets },
+    };
+    expect(buildBulkCustomerPayload([row], edits, { servers, toolsets: catalog }, new Map())).toEqual({
+      ok: false,
+      error:
+        "This change would give a retained MCP server every tool. Edit individual customer tool permissions before applying this change",
+    });
+    const limited = {
+      ...row,
+      object_permission: { ...row.object_permission, mcp_tool_permissions: { "server-a": ["read"] } },
+    };
+    expect(buildBulkCustomerPayload([limited], edits, { servers, toolsets: catalog }, new Map())).toEqual({
+      ok: true,
+      payload: {
+        customers: [
+          {
+            user_id: row.user_id,
+            object_permission: {
+              ...(replaceServers ? { mcp_servers: ["server-a"] } : {}),
+              mcp_toolsets: toolsets,
+              mcp_tool_permissions: { "server-a": ["read"] },
+            },
+          },
+        ],
+      },
+    });
+  });
 });

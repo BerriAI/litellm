@@ -493,4 +493,73 @@ describe("Bulk customer editor", () => {
     await user.click(screen.getByRole("button", { name: "Cancel" }));
     expect(onCancel).toHaveBeenCalledOnce();
   });
+  it("refuses a retry after the customer's MCP permissions change", async () => {
+    const original: EndUser = {
+      ...customers[0],
+      object_permission: { mcp_servers: ["server-new"], mcp_tool_permissions: { "server-new": ["read", "write"] } },
+    };
+    const refreshed: EndUser = {
+      ...original,
+      object_permission: { ...original.object_permission, mcp_tool_permissions: { "server-new": ["read"] } },
+    };
+    post.mockResolvedValueOnce(response([original.user_id], [original]));
+    const user = userEvent.setup();
+    const { rerender, onCancel, onCompleted } = mountModal([original]);
+    await optIntoToolsets(user);
+    await user.click(screen.getByRole("button", { name: "Apply changes" }));
+    await screen.findByRole("alert", { name: "Bulk update results" });
+    rerender(
+      <BulkEditCustomersModal
+        selectedCustomers={[refreshed]}
+        allCustomers={[refreshed]}
+        onCancel={onCancel}
+        onCompleted={onCompleted}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Retry failed customers" }));
+    expect(await screen.findByRole("alert", { name: "Bulk update error" })).toHaveTextContent(
+      "Customer MCP permissions changed while this editor was open. Close and reopen bulk edit before changing MCP access",
+    );
+    expect(post).toHaveBeenCalledOnce();
+    expect(onCompleted).not.toHaveBeenCalled();
+    expect(screen.getByRole("region", { name: "Customers to update" })).toHaveTextContent(original.user_id);
+
+    await user.click(screen.getByRole("checkbox", { name: "Update MCP toolsets" }));
+    await user.click(screen.getByRole("checkbox", { name: "Update allowed region" }));
+    await chooseSelectOption(user, screen.getByRole("combobox", { name: "Allowed region" }), "EU");
+    post.mockResolvedValueOnce(response([], [refreshed]));
+    await user.click(screen.getByRole("button", { name: "Retry failed customers" }));
+    await waitFor(() => expect(onCancel).toHaveBeenCalledOnce());
+    expect(post).toHaveBeenLastCalledWith("/customer/bulk_update", {
+      accessToken: "sk-test",
+      body: { customers: [{ user_id: original.user_id, allowed_model_region: "eu" }] },
+    });
+  });
+
+  it("refuses a toolset replacement that would unlimit a retained direct server", async () => {
+    const original: EndUser = {
+      ...customers[0],
+      object_permission: { mcp_servers: ["server-a"], mcp_toolsets: ["toolset-old"], mcp_tool_permissions: {} },
+    };
+    fetchServers.mockResolvedValue([
+      { server_id: "server-a", server_name: "A" },
+      { server_id: "server-b", server_name: "B" },
+    ]);
+    fetchToolsets.mockResolvedValue([
+      { toolset_id: "toolset-old", toolset_name: "Old A tools", tools: [{ server_id: "server-a", tool_name: "read" }] },
+      {
+        toolset_id: "toolset-new",
+        toolset_name: "Research tools",
+        tools: [{ server_id: "server-b", tool_name: "read" }],
+      },
+    ]);
+    const user = userEvent.setup();
+    mountModal([original]);
+    await optIntoToolsets(user);
+    await user.click(screen.getByRole("button", { name: "Apply changes" }));
+    expect(await screen.findByRole("alert", { name: "Bulk update error" })).toHaveTextContent(
+      "This change would give a retained MCP server every tool",
+    );
+    expect(post).not.toHaveBeenCalled();
+  });
 });
