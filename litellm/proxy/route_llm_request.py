@@ -38,6 +38,20 @@ else:
     LitellmRouter = Any
 
 
+_ROUTER_FALLBACK_SETTINGS: Final = (
+    "fallbacks",
+    "context_window_fallbacks",
+    "content_policy_fallbacks",
+)
+_ROUTER_NON_FALLBACK_SETTINGS: Final = (
+    "num_retries",
+    "timeout",
+    "model_group_retry_policy",
+    "routing_strategy",
+    "enable_tag_filtering",
+)
+
+
 def _route_user_config_request(data: dict, route_type: str):
     """Route a request using the user-provided router config."""
     router_config: Final = data.pop("user_config")
@@ -652,6 +666,24 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
     raise_if_mock_testing_params_disallowed(data, allowed=mock_testing_params_allowed())
 
     data.pop("enable_tag_filtering", None)
+    router_settings_override: Final = (
+        JSON_OBJECT_ADAPTER.validate_python(data.pop("router_settings_override"))
+        if "router_settings_override" in data
+        else None
+    )
+    mergeable_router_settings: Final = (
+        _ROUTER_NON_FALLBACK_SETTINGS
+        if "api_key" in data or "api_base" in data
+        else _ROUTER_FALLBACK_SETTINGS + _ROUTER_NON_FALLBACK_SETTINGS
+    )
+    if router_settings_override is not None:
+        data.update(
+            {
+                key: router_settings_override[key]
+                for key in mergeable_router_settings
+                if router_settings_override.get(key) is not None and key not in data
+            }
+        )
     if "user_config" in data and data["user_config"] is None:
         data.pop("user_config")  # pyright: ignore[reportUnknownMemberType]  # route_request takes an untyped dict body
 
@@ -687,29 +719,7 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
     elif "user_config" in data:
         return _route_user_config_request(data, route_type)
 
-    elif "router_settings_override" in data:
-        # Apply per-request router settings overrides from key/team config
-        # Instead of creating a new Router (expensive), merge settings into kwargs
-        # The Router already supports per-request overrides for these settings
-        override_settings: Final = data.pop("router_settings_override")
-
-        # Settings that the Router accepts as per-request kwargs
-        # These override the global router settings for this specific request
-        per_request_settings: Final = [
-            "fallbacks",
-            "context_window_fallbacks",
-            "content_policy_fallbacks",
-            "num_retries",
-            "timeout",
-            "model_group_retry_policy",
-            "routing_strategy",
-            "enable_tag_filtering",
-        ]
-
-        for key in per_request_settings:
-            if override_settings.get(key) is not None and key not in data:
-                data[key] = override_settings[key]
-
+    elif router_settings_override is not None:
         # Use main router with overridden kwargs
         if llm_router is not None:
             return getattr(llm_router, f"{route_type}")(**data)

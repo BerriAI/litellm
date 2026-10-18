@@ -1,4 +1,5 @@
 import httpx
+import json
 import litellm
 import pytest
 import respx
@@ -390,7 +391,7 @@ async def test_route_request_with_router_settings_override():
             "timeout": 30,
             "model_group_retry_policy": {"gpt-3.5-turbo": {"RateLimitErrorRetries": 3}},
             "routing_strategy": "least-busy",
-            # This setting should be ignored (not in per_request_settings list)
+            # This setting should be ignored (not a per-request router setting in route_llm_request)
             "model_group_alias": {"alias": "real_model"},
         },
     }
@@ -1037,6 +1038,176 @@ async def test_route_request_override_enable_tag_filtering_beats_body_value():
 
     call_kwargs = llm_router.acompletion.call_args[1]
     assert call_kwargs["enable_tag_filtering"] is True
+
+
+_PROXY_DEPLOYMENT_BASE: Final = "https://proxy-deployment.example/v1"
+_HELLO_MESSAGES: Final = ({"role": "user", "content": "Hello"},)
+
+
+def _chat_completion_response(model: str) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "id": "chatcmpl-1",
+            "object": "chat.completion",
+            "created": 1,
+            "model": model,
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        },
+    )
+
+
+def _proxy_router_with_two_model_groups() -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {
+                    "model": f"openai/{model}",
+                    "api_key": "sk-proxy",
+                    "api_base": _PROXY_DEPLOYMENT_BASE,
+                },
+            }
+            for model in ("gpt-3.5-turbo", "gpt-4")
+        ],
+        num_retries=0,
+    )
+
+
+@pytest.mark.parametrize(
+    "extra_body, upstream_base",
+    [
+        pytest.param({"api_key": "sk-from-pre-call-hook"}, _PROXY_DEPLOYMENT_BASE, id="clientside-api-key"),
+        pytest.param(
+            {"api_base": "https://clientside.example/v1"}, "https://clientside.example/v1", id="clientside-api-base"
+        ),
+        pytest.param({"model": "gpt-3.5-turbo,gpt-4"}, _PROXY_DEPLOYMENT_BASE, id="comma-separated-batch"),
+        pytest.param(
+            {
+                "user_config": {
+                    "num_retries": 0,
+                    "model_list": [
+                        {
+                            "model_name": "gpt-3.5-turbo",
+                            "litellm_params": {
+                                "model": "openai/gpt-3.5-turbo",
+                                "api_key": "sk-user-config",
+                                "api_base": "https://user-config.example/v1",
+                            },
+                        }
+                    ],
+                }
+            },
+            "https://user-config.example/v1",
+            id="user-config",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_route_request_never_forwards_router_settings_override(
+    monkeypatch: pytest.MonkeyPatch, extra_body: dict[str, object], upstream_base: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    data: Final = {
+        "model": "gpt-3.5-turbo",
+        "messages": list(_HELLO_MESSAGES),
+        "router_settings_override": {"num_retries": 2, "timeout": None},
+        **extra_body,
+    }
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        primary: Final = respx_mock.post(f"{upstream_base}/chat/completions", json__model="gpt-3.5-turbo").mock(
+            side_effect=[
+                httpx.Response(500, json={"error": {"message": "boom"}}),
+                _chat_completion_response("gpt-3.5-turbo"),
+            ]
+        )
+        respx_mock.post(f"{upstream_base}/chat/completions", json__model="gpt-4").mock(
+            return_value=_chat_completion_response("gpt-4")
+        )
+        response: Final = await (await route_request(data, _proxy_router_with_two_model_groups(), None, "acompletion"))
+
+    primary_response: Final = response[0] if isinstance(response, list) else response
+    sent_bodies: Final = [json.loads(call.request.content) for call in primary.calls]
+    assert sent_bodies == [{"model": "gpt-3.5-turbo", "messages": list(_HELLO_MESSAGES)}] * 2, sent_bodies
+    assert primary_response._hidden_params["additional_headers"]["x-litellm-max-retries"] == 2, (
+        primary_response._hidden_params
+    )
+
+
+@pytest.mark.parametrize(
+    "credential",
+    [
+        pytest.param({"api_key": "sk-from-pre-call-hook"}, id="clientside-api-key"),
+        pytest.param({"api_base": _PROXY_DEPLOYMENT_BASE}, id="clientside-api-base"),
+    ],
+)
+@pytest.mark.parametrize(
+    "fallback_field, upstream_error, expected_error",
+    [
+        pytest.param(
+            "fallbacks",
+            httpx.Response(500, json={"error": {"message": "boom"}}),
+            litellm.InternalServerError,
+            id="fallbacks",
+        ),
+        pytest.param(
+            "context_window_fallbacks",
+            httpx.Response(
+                400,
+                json={
+                    "error": {
+                        "message": "This model's maximum context length is 16385 tokens",
+                        "code": "context_length_exceeded",
+                    }
+                },
+            ),
+            litellm.ContextWindowExceededError,
+            id="context-window-fallbacks",
+        ),
+        pytest.param(
+            "content_policy_fallbacks",
+            httpx.Response(
+                400,
+                json={
+                    "error": {
+                        "message": "Your request was rejected by the content filter",
+                        "type": "invalid_request_error",
+                        "code": "content_policy_violation",
+                    }
+                },
+            ),
+            litellm.ContentPolicyViolationError,
+            id="content-policy-fallbacks",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_route_request_ignores_override_fallbacks_when_client_supplies_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+    credential: dict[str, str],
+    fallback_field: str,
+    upstream_error: httpx.Response,
+    expected_error: type[Exception],
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    data: Final = {
+        "model": "gpt-3.5-turbo",
+        "messages": list(_HELLO_MESSAGES),
+        "router_settings_override": {fallback_field: [{"gpt-3.5-turbo": ["gpt-4"]}]},
+        **credential,
+    }
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        upstream: Final = respx_mock.post(f"{_PROXY_DEPLOYMENT_BASE}/chat/completions").mock(
+            return_value=upstream_error
+        )
+        with pytest.raises(expected_error):
+            await (await route_request(data, _proxy_router_with_two_model_groups(), None, "acompletion"))
+
+    sent_models: Final = [json.loads(call.request.content)["model"] for call in upstream.calls]
+    assert sent_models == ["gpt-3.5-turbo"], sent_models
 
 
 @pytest.mark.parametrize(
