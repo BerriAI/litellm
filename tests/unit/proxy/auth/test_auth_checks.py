@@ -1641,12 +1641,11 @@ async def test_can_key_call_model_empty_models_empty_access_groups_denied():
 
 
 @pytest.mark.asyncio
-async def test_can_key_call_model_disjoint_models_and_access_groups_denied():
-    """Test can_key_call_model denies when key models and access_group_ids models are disjoint."""
+async def test_can_key_call_model_union_preserves_both_key_and_group_models():
+    """Test can_key_call_model preserves union semantics when key models and access_group_ids are both set."""
     from unittest.mock import AsyncMock, patch
 
     from litellm.proxy.auth.auth_checks import can_key_call_model
-    from litellm.proxy._types import ProxyException
 
     user_api_key_object = UserAPIKeyAuth(
         token="test-token",
@@ -1658,7 +1657,11 @@ async def test_can_key_call_model_disjoint_models_and_access_groups_denied():
             {
                 "model_name": "claude-3",
                 "litellm_params": {"model": "anthropic/claude-3", "api_key": "test"},
-            }
+            },
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "openai/gpt-3.5-turbo", "api_key": "test"},
+            },
         ]
     )
 
@@ -1667,13 +1670,21 @@ async def test_can_key_call_model_disjoint_models_and_access_groups_denied():
         new_callable=AsyncMock,
         return_value=["claude-3"],
     ):
-        with pytest.raises(ProxyException):
-            await can_key_call_model(
-                model="claude-3",
-                llm_model_list=[],
-                valid_token=user_api_key_object,
-                llm_router=router,
-            )
+        # Access gpt-3.5-turbo (from key_models)
+        assert await can_key_call_model(
+            model="gpt-3.5-turbo",
+            llm_model_list=[],
+            valid_token=user_api_key_object,
+            llm_router=router,
+        ) is True
+
+        # Access claude-3 (from access_group_ids)
+        assert await can_key_call_model(
+            model="claude-3",
+            llm_model_list=[],
+            valid_token=user_api_key_object,
+            llm_router=router,
+        ) is True
 
 
 @pytest.mark.asyncio

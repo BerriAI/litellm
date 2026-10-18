@@ -5423,20 +5423,20 @@ async def can_key_call_model(
                     code=status.HTTP_403_FORBIDDEN,
                 )
             if key_models:
-                allowed_models = [m for m in key_models if m in models_from_groups]
-                if not allowed_models:
-                    raise ModelAccessDeniedProxyException(
-                        message=model_access_denied_client_message(model=model),
-                        internal_message=(
-                            f"key not allowed to access model. Key models={key_models} have no intersection "
-                            f"with access_group_ids models={models_from_groups}. Tried to access {model}"
-                        ),
-                        type=ProxyErrorTypes.get_model_access_error_type_for_object(object_type="key"),
-                        param="model",
-                        code=status.HTTP_403_FORBIDDEN,
-                    )
-            else:
+                allowed_models = list(dict.fromkeys([*key_models, *models_from_groups]))
+            elif models_from_groups:
                 allowed_models = models_from_groups
+            else:
+                raise ModelAccessDeniedProxyException(
+                    message=model_access_denied_client_message(model=model),
+                    internal_message=(
+                        f"key not allowed to access model. Key has access_group_ids={key_access_group_ids} "
+                        f"which resolved to no models. Tried to access {model}"
+                    ),
+                    type=ProxyErrorTypes.get_model_access_error_type_for_object(object_type="key"),
+                    param="model",
+                    code=status.HTTP_403_FORBIDDEN,
+                )
 
             return can_object_call_model(
                 model=model,
