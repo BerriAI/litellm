@@ -21,6 +21,7 @@ from litellm.integrations.otel.mappers import (
     resolve_mappers,
 )
 from litellm.integrations.otel.mappers.openinference import fit_indexed_messages
+from litellm.integrations.otel.model.baggage import DEFAULT_BAGGAGE_METADATA_KEYS
 from litellm.integrations.otel.model.payloads import (
     EmbeddingOutput,
     LLMCallSpanData,
@@ -777,33 +778,40 @@ def test_resolve_mappers_rejects_unknown_name():
         resolve_mappers(["genai", "nope"])
 
 
-def test_langfuse_mapper_emits_request_metadata_and_identity():
+def _langfuse_attrs(
+    metadata: Mapping[str, object], metadata_keys: tuple[str, ...] = DEFAULT_BAGGAGE_METADATA_KEYS
+) -> Mapping[str, object]:
     payload: Final[dict[str, object]] = {
         "call_type": "acompletion",
         "custom_llm_provider": "openai",
         "model": "gpt-4o",
-        "metadata": {
+        "metadata": metadata,
+        "response": {},
+    }
+    return LangfuseMapper().map(LLMCallSpanData.from_standard_logging_payload(payload, metadata_keys=metadata_keys))
+
+
+def test_langfuse_mapper_emits_request_metadata_and_identity():
+    attrs: Final = _langfuse_attrs(
+        {
             "user_api_key_alias": "prod-key",
             "user_api_key_user_id": "user-1",
             "user_api_key_end_user_id": "end-1",
             "user_api_key_team_id": "team-9",
             "user_api_key_team_alias": "team nine",
             "user_api_key_max_budget": None,
+            "requester_ip_address": "10.0.0.1",
             "spend_logs_metadata": {"ticket": "LIT-8283"},
             "requester_metadata": {"headers": {"x-tenant": "acme"}},
-        },
-        "response": {},
-    }
-    attrs: Final = LangfuseMapper().map(LLMCallSpanData.from_standard_logging_payload(payload))
+        }
+    )
 
     assert json.loads(attrs["langfuse.observation.metadata"]) == {
-        "user_api_key_alias": "prod-key",
-        "user_api_key_user_id": "user-1",
-        "user_api_key_end_user_id": "end-1",
         "user_api_key_team_id": "team-9",
         "user_api_key_team_alias": "team nine",
-        "spend_logs_metadata": {"ticket": "LIT-8283"},
-        "requester_metadata": {"headers": {"x-tenant": "acme"}},
+        "user_api_key_user_id": "user-1",
+        "user_api_key_alias": "prod-key",
+        "user_api_key_end_user_id": "end-1",
     }
     assert attrs["langfuse.trace.metadata.user_api_key_alias"] == "prod-key"
     assert attrs["langfuse.trace.metadata.user_api_key_user_id"] == "user-1"
@@ -815,69 +823,69 @@ def test_langfuse_mapper_emits_request_metadata_and_identity():
     assert attrs["langfuse.observation.metadata.provider"] == "openai"
 
 
-def test_langfuse_mapper_omits_prompt_mcp_and_vector_store_content():
-    payload: Final[dict[str, object]] = {
-        "call_type": "acompletion",
-        "custom_llm_provider": "openai",
-        "model": "gpt-4o",
-        "metadata": {
-            "prompt_management_metadata": {
-                "prompt_id": "prompt-1",
-                "prompt_variables": {"input": "prompt-variables-secret"},
-                "prompt_integration": "prompt-service",
-            },
-            "mcp_tool_call_metadata": {
-                "name": "lookup_weather",
-                "mcp_server_name": "weather-server",
-                "arguments": {"location": "mcp-arguments-secret"},
-                "result": {"forecast": "mcp-result-secret"},
-            },
-            "vector_store_request_metadata": [
-                {
-                    "vector_store_id": "vs-1",
-                    "custom_llm_provider": "openai",
-                    "query": "vector-query-secret",
-                    "vector_store_search_response": {"text": "vector-response-secret"},
-                    "start_time": 1.0,
-                    "end_time": 2.0,
-                }
-            ],
-        },
-        "response": {},
-    }
-    attrs: Final = LangfuseMapper().map(LLMCallSpanData.from_standard_logging_payload(payload))
-    observation_metadata: Final = attrs["langfuse.observation.metadata"]
-    serialized: Final = json.dumps(observation_metadata)
-    parsed: Final = json.loads(observation_metadata)
+def test_langfuse_mapper_exports_only_the_promoted_metadata_and_the_team():
+    attrs: Final = _langfuse_attrs(
+        {
+            "user_api_key_alias": "prod-key",
+            "user_api_key_team_id": "team-9",
+            "requester_ip_address": "10.0.0.1",
+            "user_api_key_user_email": "caller-email-secret",
+            "user_api_key_auth_metadata": {"note": "auth-metadata-secret"},
+            "user_agent": "user-agent-secret",
+            "headers": {"x-tenant-secret": "header-secret"},
+            "requester_custom_headers": {"x-tenant-secret": "custom-header-secret"},
+            "requester_metadata": {"note": "requester-metadata-secret"},
+            "spend_logs_metadata": {"note": "spend-logs-secret"},
+            "prompt_management_metadata": {"prompt_variables": {"input": "prompt-variables-secret"}},
+            "mcp_tool_call_metadata": {"arguments": {"location": "mcp-arguments-secret"}},
+            "vector_store_request_metadata": [{"query": "vector-query-secret"}],
+            "routing_decision": {"matched_keyword": "routing-prompt-secret"},
+        }
+    )
 
-    assert "prompt-variables-secret" not in serialized
-    assert "mcp-arguments-secret" not in serialized
-    assert "mcp-result-secret" not in serialized
-    assert "vector-query-secret" not in serialized
-    assert "vector-response-secret" not in serialized
-    assert parsed["prompt_management_metadata"]["prompt_id"] == "prompt-1"
-    assert parsed["prompt_management_metadata"]["prompt_integration"] == "prompt-service"
-    assert parsed["mcp_tool_call_metadata"]["name"] == "lookup_weather"
-    assert parsed["mcp_tool_call_metadata"]["mcp_server_name"] == "weather-server"
-    assert parsed["vector_store_request_metadata"][0]["vector_store_id"] == "vs-1"
-    assert parsed["vector_store_request_metadata"][0]["custom_llm_provider"] == "openai"
-    assert parsed["vector_store_request_metadata"][0]["start_time"] == 1.0
-    assert parsed["vector_store_request_metadata"][0]["end_time"] == 2.0
+    assert "secret" not in json.dumps(attrs)
+    assert json.loads(attrs["langfuse.observation.metadata"]) == {
+        "user_api_key_team_id": "team-9",
+        "user_api_key_alias": "prod-key",
+    }
+
+
+@pytest.mark.parametrize(
+    ("metadata_keys", "expected"),
+    [
+        ((), {"user_api_key_team_id": "team-9"}),
+        (("user_api_key_user_id",), {"user_api_key_team_id": "team-9", "user_api_key_user_id": "user-1"}),
+        (("requester_metadata.trace_id", "requester_ip_address"), {"user_api_key_team_id": "team-9"}),
+    ],
+)
+def test_langfuse_mapper_follows_the_operator_metadata_allowlist(
+    metadata_keys: tuple[str, ...], expected: Mapping[str, str]
+) -> None:
+    attrs: Final = _langfuse_attrs(
+        {
+            "user_api_key_alias": "prod-key",
+            "user_api_key_user_id": "user-1",
+            "user_api_key_team_id": "team-9",
+            "requester_ip_address": "10.0.0.1",
+            "requester_metadata": {"trace_id": "trace-7", "note": "requester-metadata-secret"},
+        },
+        metadata_keys=metadata_keys,
+    )
+
+    assert json.loads(attrs["langfuse.observation.metadata"]) == expected
+    assert {key for key in attrs if key.startswith("langfuse.trace.metadata.user_api_key_")} == {
+        f"langfuse.trace.metadata.{key}" for key in expected if key.startswith("user_api_key_")
+    }
 
 
 def test_langfuse_mapper_skips_empty_identity_values():
-    payload: Final[dict[str, object]] = {
-        "call_type": "acompletion",
-        "custom_llm_provider": "openai",
-        "model": "gpt-4o",
-        "metadata": {
+    attrs: Final = _langfuse_attrs(
+        {
             "user_api_key_alias": None,
             "user_api_key_user_id": "",
             "user_api_key_end_user_id": "end-1",
-        },
-        "response": {},
-    }
-    attrs: Final = LangfuseMapper().map(LLMCallSpanData.from_standard_logging_payload(payload))
+        }
+    )
 
     assert "langfuse.trace.metadata.user_api_key_alias" not in attrs
     assert "langfuse.trace.metadata.user_api_key_user_id" not in attrs
@@ -888,37 +896,23 @@ def test_langfuse_mapper_redacts_user_api_key_fields(monkeypatch: pytest.MonkeyP
     import litellm
 
     monkeypatch.setattr(litellm, "redact_user_api_key_info", True)
-    payload: Final[dict[str, object]] = {
-        "call_type": "acompletion",
-        "custom_llm_provider": "openai",
-        "model": "gpt-4o",
-        "metadata": {
+    attrs: Final = _langfuse_attrs(
+        {
             "user_api_key_alias": "prod-key",
             "user_api_key_team_id": "team-9",
-            "spend_logs_metadata": {"ticket": "LIT-8283"},
-        },
-        "response": {},
-    }
-    attrs: Final = LangfuseMapper().map(LLMCallSpanData.from_standard_logging_payload(payload))
+            "requester_ip_address": "10.0.0.1",
+        }
+    )
 
-    exported: Final = json.loads(attrs["langfuse.observation.metadata"])
-    assert not [key for key in exported if key.startswith("user_api_key")]
-    assert exported["spend_logs_metadata"] == {"ticket": "LIT-8283"}
+    assert "langfuse.observation.metadata" not in attrs
     assert not [key for key in attrs if key.startswith("langfuse.trace.metadata.user_api_key_")]
     assert attrs["langfuse.trace.metadata.team_id"] == "team-9"
 
 
 def test_langfuse_mapper_omits_observation_metadata_without_payload_metadata():
-    payload: Final[dict[str, object]] = {
-        "call_type": "acompletion",
-        "custom_llm_provider": "openai",
-        "model": "gpt-4o",
-        "metadata": {},
-        "response": {},
-    }
-    attrs: Final = LangfuseMapper().map(LLMCallSpanData.from_standard_logging_payload(payload))
+    attrs: Final = _langfuse_attrs({})
 
-    assert json.loads(attrs["langfuse.observation.metadata"]) == {"requester_metadata": {}}
+    assert "langfuse.observation.metadata" not in attrs
 
 
 @pytest.mark.parametrize(
@@ -933,43 +927,6 @@ def test_langfuse_mapper_omits_observation_metadata_without_payload_metadata():
     ],
 )
 def test_span_data_builds_from_request_metadata_of_unexpected_shape(unexpected_shape: dict[str, object]) -> None:
-    payload: Final[dict[str, object]] = {
-        "call_type": "acompletion",
-        "custom_llm_provider": "openai",
-        "model": "gpt-4o",
-        "metadata": {**unexpected_shape, "spend_logs_metadata": {"ticket": "LIT-8283"}},
-        "response": {},
-    }
-    attrs: Final = LangfuseMapper().map(LLMCallSpanData.from_standard_logging_payload(payload))
+    attrs: Final = _langfuse_attrs({**unexpected_shape, "user_api_key_alias": "prod-key"})
 
-    assert json.loads(attrs["langfuse.observation.metadata"])["spend_logs_metadata"] == {"ticket": "LIT-8283"}
-
-
-def test_langfuse_mapper_omits_prompt_quoting_routing_fields():
-    payload: Final[dict[str, object]] = {
-        "call_type": "acompletion",
-        "custom_llm_provider": "openai",
-        "model": "gpt-4o",
-        "metadata": {
-            "routing_decision": {
-                "router_model_name": "smart-router",
-                "router_type": "complexity",
-                "cause": "literal_keyword_match",
-                "tier": "REASONING",
-                "signals": ["keyword (routing-prompt-secret)"],
-                "matched_keyword": "routing-prompt-secret",
-                "escalation_keyword": "routing-prompt-secret",
-                "classifier_crux": "routing-prompt-secret",
-            }
-        },
-        "response": {},
-    }
-    attrs: Final = LangfuseMapper().map(LLMCallSpanData.from_standard_logging_payload(payload))
-
-    assert "routing-prompt-secret" not in json.dumps(attrs)
-    assert json.loads(attrs["langfuse.observation.metadata"])["routing_decision"] == {
-        "router_model_name": "smart-router",
-        "router_type": "complexity",
-        "cause": "literal_keyword_match",
-        "tier": "REASONING",
-    }
+    assert json.loads(attrs["langfuse.observation.metadata"]) == {"user_api_key_alias": "prod-key"}

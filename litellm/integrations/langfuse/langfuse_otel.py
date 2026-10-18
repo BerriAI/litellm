@@ -14,8 +14,7 @@ from litellm.integrations.langfuse.langfuse_otel_attributes import (
 )
 from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
 from litellm.integrations.otel.mappers.langfuse import TRACE_IDENTITY_FIELDS
-from litellm.integrations.otel.model.metadata import exported_request_metadata
-from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.integrations.otel.model.metadata import IDENTITY_METADATA_FIELDS, exported_request_metadata
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.types.integrations.langfuse_otel import (
     LangfuseSpanAttributes,
@@ -30,7 +29,7 @@ else:
     Span = Any
 
 
-_STANDARD_LOGGING_OBJECT_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+_MAPPING_ADAPTER: Final[TypeAdapter[Mapping[object, object]]] = TypeAdapter(Mapping[object, object])
 
 LANGFUSE_CLOUD_EU_ENDPOINT: Final = "https://cloud.langfuse.com/api/public/otel"
 LANGFUSE_CLOUD_US_ENDPOINT: Final = "https://us.cloud.langfuse.com/api/public/otel"
@@ -136,20 +135,23 @@ class LangfuseOtelLogger(OpenTelemetry):
     @staticmethod
     def _set_request_metadata_attributes(
         span: Span,
-        kwargs: dict[str, object],  # mutable-ok: required callback signature accepts kwargs as a dict
+        kwargs: Mapping[object, object],
     ) -> None:
         raw_standard_logging_object: Final = kwargs.get("standard_logging_object")
         if not isinstance(raw_standard_logging_object, dict):
             return
-        standard_logging_object: Final = _STANDARD_LOGGING_OBJECT_ADAPTER.validate_python(raw_standard_logging_object)
-        if not isinstance(standard_logging_object.get("metadata"), dict):
+        raw_metadata: Final = _MAPPING_ADAPTER.validate_python(raw_standard_logging_object).get("metadata")
+        if not isinstance(raw_metadata, dict):
             return
-        observation_metadata: Final = exported_request_metadata(standard_logging_object)
+        metadata: Final = _MAPPING_ADAPTER.validate_python(raw_metadata)
+        observation_metadata: Final = exported_request_metadata(
+            {field: metadata.get(field) for field in IDENTITY_METADATA_FIELDS}
+        )
         if observation_metadata:
             _utils.safe_set_attribute(
                 span,
                 LangfuseSpanAttributes.OBSERVATION_METADATA.value,
-                safe_dumps(dict(observation_metadata)),
+                json.dumps(dict(observation_metadata)),
             )
         trace_prefix: Final = LangfuseSpanAttributes.TRACE_METADATA.value
         for field in TRACE_IDENTITY_FIELDS:
@@ -276,7 +278,7 @@ class LangfuseOtelLogger(OpenTelemetry):
 
         metadata: Final = LangfuseOtelLogger._extract_langfuse_metadata(kwargs)
         LangfuseOtelLogger._set_metadata_attributes(span=span, metadata=metadata)
-        LangfuseOtelLogger._set_request_metadata_attributes(span=span, kwargs=kwargs)
+        LangfuseOtelLogger._set_request_metadata_attributes(span=span, kwargs=_MAPPING_ADAPTER.validate_python(kwargs))
 
         messages: Final = kwargs.get("messages")
         if messages:
