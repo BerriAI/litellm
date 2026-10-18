@@ -1205,7 +1205,7 @@ def _truncated_for_db(value: str, max_length: int) -> str:
         f"{value[:start_chars]}"
         f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {len(value) - start_chars - end_chars} chars. "
         f"{LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE}) ..."
-        f"{value[len(value) - end_chars :]}"
+        f"{value[-end_chars:]}"
     )
 
 
