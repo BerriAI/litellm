@@ -15,7 +15,7 @@ export function UserReference({ userId }: { userId: string }) {
     return <DefaultProxyAdminTag userId={userId} />;
   }
 
-  const name = user?.user_alias || user?.user_email || null;
+  const name = user?.user_alias?.trim() || user?.user_email?.trim() || null;
   const href = userDetailHref(userId);
 
   if (!name) {

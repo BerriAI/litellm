@@ -178,6 +178,18 @@ describe("AccessGroupDetail", () => {
       );
     });
 
+    it("falls back to the email when the alias contains only whitespace", () => {
+      mockUseUserLookup.mockReturnValue({
+        data: { user_alias: "   ", user_email: "alice@example.com" },
+      } as ReturnType<typeof useUserLookup>);
+      renderWith({ created_by: "user-789" });
+
+      expect(screen.getByRole("link", { name: "alice@example.com" })).toHaveAttribute(
+        "href",
+        expect.stringContaining("/users?user=user-789"),
+      );
+    });
+
     it("links the user id when lookup has no user details", () => {
       renderWith({ updated_by: "missing-user" });
 
