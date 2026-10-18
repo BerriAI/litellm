@@ -23,6 +23,7 @@ from litellm.proxy import client as proxy_client
 pytestmark: Final = [
     pytest.mark.timeout(2 * graceful_stop_seconds() + 120),
     pytest.mark.xdist_group("chat-stream-guardrail-error-events"),
+    pytest.mark.shares_worker_state,
 ]
 
 _MODEL: Final = "stream-error-events"

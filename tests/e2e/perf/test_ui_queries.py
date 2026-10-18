@@ -66,9 +66,7 @@ class Prepared:
 def _page_two(transport: HttpTransport, case: UiQueryCase, timeout: float) -> Prepared:
     if case.cursor == "none":
         return Prepared(case)
-    params: Final = Params.model_validate(case.params.model_dump()).model_copy(
-        update={"page": 1 if case.cursor == "session" else None}
-    )
+    params: Final = Params.model_validate(case.params.model_dump()).model_copy(update={"page": 1})
     first: Final = replace(case, params=params)
     sample, document = measure(lambda: issue_query(transport, first, timeout=timeout), case.contract)
     if sample.error or document is None:
@@ -93,7 +91,7 @@ def test_ui_query_performance(ui_case_name: str, ui_fixture: UiFixture, request:
     case: Final = next(case for case in cases(ui_fixture.anchor, ui_fixture.api_key) if case.name == ui_case_name)
     transport: Final = HttpTransport(base_url=CONTROL_PLANE_BASE_URL, master_key=MASTER_KEY)
     timeout: Final = float(os.environ.get("E2E_UI_QUERY_TIMEOUT_SECONDS", "120"))
-    repeats: Final = int(os.environ.get("E2E_UI_QUERY_REPEATS", "5"))
+    repeats: Final = int(os.environ.get("E2E_UI_QUERY_REPEATS", "9"))
     assert 0 < timeout <= 600 and 1 <= repeats <= 1000, "Invalid UI performance sample settings"
     target: Final = Path(os.environ["E2E_ARTIFACT_DIR"])
     assert target.is_dir(), "E2E_ARTIFACT_DIR must exist"
