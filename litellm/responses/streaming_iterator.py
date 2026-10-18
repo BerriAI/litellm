@@ -1271,7 +1271,9 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
                 responses_api_provider_config.transform_response_api_response(
                     model=model,
                     raw_response=response,
-                    logging_obj=cast(LiteLLMLoggingObj, logging_obj),
+                    logging_obj=cast(
+                        LiteLLMLoggingObj, logging_obj
+                    ),  # cast-ok: mock iterator receives optional logging_obj
                 )
                 if responses_api_provider_config is not None and response is not None
                 else None
@@ -1285,7 +1287,7 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             response=response or httpx.Response(200),
             model=model,
             responses_api_provider_config=None,
-            logging_obj=cast(LiteLLMLoggingObj, logging_obj),
+            logging_obj=cast(LiteLLMLoggingObj, logging_obj),  # cast-ok: mock iterator receives optional logging_obj
             litellm_metadata=litellm_metadata,
             custom_llm_provider=custom_llm_provider,
             request_data=request_data,

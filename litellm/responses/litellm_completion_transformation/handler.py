@@ -3,7 +3,7 @@ Handler for transforming responses api requests to litellm.completion requests
 """
 
 from collections.abc import Coroutine, Mapping
-from typing import Final, cast
+from typing import Final, cast  # noqa: TID251  # see cast-ok markers
 
 from pydantic import TypeAdapter
 
@@ -89,20 +89,18 @@ class LiteLLMCompletionTransformationHandler:
                 )
             )
 
-            kwargs_map: Final[Mapping[str, object]] = cast(Mapping[str, object], kwargs)
-            if any(
-                bool(kwargs_map.get(f))
-                for f in (
-                    "_websearch_interception_converted_stream",
-                    "_code_interpreter_interception_converted_stream",
-                    "_headroom_interception_converted_stream",
-                )
+            kwargs_map: Final = cast(Mapping[str, object], kwargs)  # cast-ok: untyped request kwargs
+            if (
+                bool(kwargs_map.get("_websearch_interception_converted_stream"))
+                or bool(kwargs_map.get("_code_interpreter_interception_converted_stream"))
+                or bool(kwargs_map.get("_headroom_interception_converted_stream"))
             ):
                 from litellm.responses.streaming_iterator import MockResponsesAPIStreamingIterator
 
-                meta: Final[dict[str, object] | None] = (
-                    cast(dict[str, object], val)
-                    if isinstance(val := kwargs_map.get("litellm_metadata"), dict)
+                metadata_val: Final = kwargs_map.get("litellm_metadata")
+                meta: Final[dict[str, object] | None] = (  # mutable-ok: metadata dict forwarded to stream
+                    cast("dict[str, object]", metadata_val)  # cast-ok: plain dict when present
+                    if isinstance(metadata_val, dict)
                     else None
                 )
                 return MockResponsesAPIStreamingIterator(
@@ -163,32 +161,30 @@ class LiteLLMCompletionTransformationHandler:
                 )
             )
 
-            kwargs_map: Final[Mapping[str, object]] = cast(Mapping[str, object], kwargs)
-            if any(
-                bool(kwargs_map.get(f))
-                for f in (
-                    "_websearch_interception_converted_stream",
-                    "_code_interpreter_interception_converted_stream",
-                    "_headroom_interception_converted_stream",
-                )
+            kwargs_map: Final = cast(Mapping[str, object], kwargs)  # cast-ok: untyped request kwargs
+            if (
+                bool(kwargs_map.get("_websearch_interception_converted_stream"))
+                or bool(kwargs_map.get("_code_interpreter_interception_converted_stream"))
+                or bool(kwargs_map.get("_headroom_interception_converted_stream"))
             ):
                 from litellm.responses.streaming_iterator import MockResponsesAPIStreamingIterator
 
-                req_map: Final[Mapping[str, object]] = cast(Mapping[str, object], litellm_completion_request)
-                req_model: Final[str] = val if isinstance(val := req_map.get("model"), str) else ""
-                req_provider: Final[str | None] = (
-                    val if isinstance(val := req_map.get("custom_llm_provider"), str) else None
-                )
-                meta: Final[dict[str, object] | None] = (
-                    cast(dict[str, object], val)
-                    if isinstance(val := kwargs_map.get("litellm_metadata"), dict)
+                req_map: Final = cast(Mapping[str, object], litellm_completion_request)  # cast-ok: untyped request dict
+                model_val: Final = req_map.get("model")
+                req_model: Final[str] = model_val if isinstance(model_val, str) else ""
+                provider_val: Final = req_map.get("custom_llm_provider")
+                req_provider: Final[str | None] = provider_val if isinstance(provider_val, str) else None
+                metadata_val_async: Final = kwargs_map.get("litellm_metadata")
+                meta_async: Final[dict[str, object] | None] = (  # mutable-ok: metadata dict forwarded to stream
+                    cast("dict[str, object]", metadata_val_async)  # cast-ok: plain dict when present
+                    if isinstance(metadata_val_async, dict)
                     else None
                 )
                 return MockResponsesAPIStreamingIterator(
                     model=req_model,
                     transformed_response=responses_api_response,
                     custom_llm_provider=req_provider,
-                    litellm_metadata=meta,
+                    litellm_metadata=meta_async,
                 )
 
             return responses_api_response
