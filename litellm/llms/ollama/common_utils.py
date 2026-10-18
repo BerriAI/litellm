@@ -197,7 +197,7 @@ class OllamaModelInfo(BaseLLMModelInfo):
             "ollama/" + stripped_model,
             "ollama_chat/" + stripped_model,
         }
-        model_cost_keys: Final = {key.lower() for key in model_cost}
+        model_cost_keys: Final = {key.lower() for key in (*model_cost,)}
         return any(name.lower() in model_cost_keys for name in potential_model_names)
 
     @staticmethod

@@ -197,6 +197,7 @@ MESSAGES_OPTIONAL: Final = MappingProxyType(
                 "server_tool_use",
                 "service_tier",
                 "inference_geo",
+                "speed",
             )
         ),
     }

@@ -31,6 +31,8 @@ from integration._support.wire import Reply, Request, Wire, wire_server
 from integration._support.ports import allocate_port
 from pydantic import JsonValue, TypeAdapter
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 _JSON_TOOL: Final = "json_tool_call"
 _USER_TOOL: Final = "lookup"
 _STRUCTURED_OUTPUTS_BETA: Final = "structured-outputs-2025-11-13"
@@ -757,12 +759,15 @@ def _vertex_deployment(gateway: Gateway, scenario: Scenario, api_base: str, back
     )
 
 
-def _bedrock_invoke_deployment(scenario: Scenario, api_base: str, backend: str) -> str:
+def _bedrock_invoke_deployment(
+    scenario: Scenario, api_base: str, backend: str, model_info: Mapping[str, JsonValue] | None = None
+) -> str:
     return scenario.model(
         model=f"bedrock/invoke/{backend}",
         api_base=api_base,
         api_key=_BEDROCK_TOKEN,
         aws_region_name="us-east-1",
+        model_info=model_info,
     )
 
 
@@ -1521,7 +1526,9 @@ def _json_tool_deployment(gateway: Gateway, scenario: Scenario, api_base: str, p
         case "vertex_ai":
             return _vertex_deployment(gateway, scenario, api_base, _TOOL_MODEL)
         case "bedrock_invoke":
-            return _bedrock_invoke_deployment(scenario, api_base, _BEDROCK_JSON_TOOL_MODEL)
+            return _bedrock_invoke_deployment(
+                scenario, api_base, _BEDROCK_JSON_TOOL_MODEL, {"supports_bedrock_native_structured_output": False}
+            )
         case _:
             raise AssertionError(provider)
 

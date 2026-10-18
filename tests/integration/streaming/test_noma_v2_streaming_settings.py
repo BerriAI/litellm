@@ -21,6 +21,8 @@ from integration._support.process import OwnedProxy, WorkerHealthcheck, owned_pr
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 Endpoint: TypeAlias = Literal["chat", "messages", "responses"]
 Spelling: TypeAlias = Literal["noma_v2", "noma_use_v2", "stored", "custom"]
 Variant: TypeAlias = Literal[

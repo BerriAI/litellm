@@ -1,4 +1,5 @@
 import os
+from typing import Final
 import pytest
 from unittest.mock import patch
 from litellm.llms.baseten.chat import BasetenConfig
@@ -9,7 +10,7 @@ class TestBasetenRouting:
 
     def test_routing_logic(self):
         """Test routing between Model API and dedicated deployments"""
-        config = BasetenConfig()
+        config: Final = BasetenConfig()
 
         # Dedicated deployment (8-character alphanumeric)
         assert (
@@ -18,10 +19,7 @@ class TestBasetenRouting:
         )
 
         # Model API (non-8-character)
-        assert (
-            config.get_api_base_for_model("openai/gpt-oss-120b")
-            == "https://inference.baseten.co/v1"
-        )
+        assert config.get_api_base_for_model("openai/gpt-oss-120b") == "https://inference.baseten.co/v1"
 
 
 class TestBasetenModelAPI:
@@ -30,12 +28,12 @@ class TestBasetenModelAPI:
     @patch.dict(os.environ, {"BASETEN_API_KEY": "test-key"})
     def test_model_api_inference(self):
         """Test Model API inference with basic parameters"""
-        config = BasetenConfig()
+        config: Final = BasetenConfig()
 
         # Test parameter mapping
-        non_default_params = {"max_tokens": 100, "temperature": 0.7, "top_p": 0.9}
+        non_default_params: Final = {"max_tokens": 100, "temperature": 0.7, "top_p": 0.9}
 
-        result = config.map_openai_params(
+        result: Final = config.map_openai_params(
             non_default_params=non_default_params,
             optional_params={},
             model="openai/gpt-oss-120b",
@@ -47,11 +45,36 @@ class TestBasetenModelAPI:
         assert result["top_p"] == 0.9
 
         # Test provider info
-        api_base, api_key = config._get_openai_compatible_provider_info(
-            None, "test-key"
-        )
+        api_base, api_key = config._get_openai_compatible_provider_info(None, "test-key")
         assert api_base == "https://inference.baseten.co/v1"
         assert api_key == "test-key"
+
+
+class TestBasetenReasoningEffort:
+    def test_reasoning_effort_passthrough_with_drop_params(self):
+        config: Final = BasetenConfig()
+
+        result: Final = config.map_openai_params(
+            non_default_params={"reasoning_effort": "high", "max_tokens": 100},
+            optional_params={},
+            model="deepseek-ai/DeepSeek-V4-Flash-0731",
+            drop_params=True,
+        )
+
+        assert result["reasoning_effort"] == "high"
+        assert result["max_tokens"] == 100
+
+    def test_reasoning_effort_none_passthrough(self):
+        config: Final = BasetenConfig()
+
+        result: Final = config.map_openai_params(
+            non_default_params={"reasoning_effort": "none"},
+            optional_params={},
+            model="moonshotai/Kimi-K3",
+            drop_params=True,
+        )
+
+        assert result["reasoning_effort"] == "none"
 
 
 if __name__ == "__main__":

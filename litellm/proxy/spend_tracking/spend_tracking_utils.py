@@ -179,8 +179,14 @@ _STAMPED_METADATA_KEYS: Final = frozenset(
         "autorouter_baseline_observation",
         "used_client_oauth_token",
         "litellm_roi_estimator",
+        "user_api_key_user_email",
     )
 )
+
+
+def _stored_user_email(metadata: Mapping[str, object]) -> str | None:
+    email: Final = metadata.get("user_api_key_user_email")
+    return email if isinstance(email, str) and email.strip() else None
 
 
 def _get_spend_logs_metadata(
@@ -214,6 +220,7 @@ def _get_spend_logs_metadata(
             user_api_key_project_alias=None,
             user_api_key_org_id=None,
             user_api_key_user_id=None,
+            user_api_key_user_email=None,
             user_api_key_team_alias=None,
             spend_logs_metadata=None,
             requester_ip_address=None,
@@ -251,9 +258,7 @@ def _get_spend_logs_metadata(
             azure_spillover=azure_spillover,
             used_client_oauth_token=used_client_oauth_token,
         )
-    verbose_proxy_logger.debug(
-        "getting payload for SpendLogs, available keys in metadata: " + str(list(metadata.keys()))
-    )
+    verbose_proxy_logger.debug("getting payload for SpendLogs, available keys in metadata: %s", [*metadata])
 
     # Filter the metadata dictionary to include only the specified keys
     clean_metadata: Final = SpendLogsMetadata(
@@ -267,6 +272,7 @@ def _get_spend_logs_metadata(
         azure_spillover=azure_spillover,
         used_client_oauth_token=used_client_oauth_token,
         litellm_roi_estimator=metadata.get("litellm_roi_estimator") is True,
+        user_api_key_user_email=_stored_user_email(metadata),
     )
     _raw_key: Final = clean_metadata.get("user_api_key")
     _trusted_hash: Final = metadata.get("user_api_key_hash")

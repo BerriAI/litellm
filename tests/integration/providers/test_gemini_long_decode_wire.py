@@ -88,6 +88,8 @@ from integration.providers._gemini_long_decode_support import (
 )
 from pydantic import BaseModel, JsonValue, TypeAdapter
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 Client = Literal["sdk_sync", "sdk_async", "httpx"]
 Failure = Literal["400", "500", "drop", "notjson", "errorframe"]
 Dropped = Literal["first", "continued"]

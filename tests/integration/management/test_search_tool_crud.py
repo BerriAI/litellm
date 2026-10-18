@@ -5,11 +5,14 @@ from types import MappingProxyType
 from typing import Final
 
 import yaml
+import pytest
 from integration._support.client import Gateway, string_value
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue
+
+pytestmark: Final = pytest.mark.shares_worker_state
 
 _PROXY_CONFIG: Final = Path(__file__).resolve().parents[1] / "proxy_config.yaml"
 _ORIGINAL_KEY: Final = "exa-original-provider-key"

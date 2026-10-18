@@ -32,7 +32,7 @@ from litellm.constants import PTU_SENTINEL_API_KEY
 if TYPE_CHECKING:
     from litellm.llms.azure.ptu_capacity import PTUCapacity
 
-pytestmark: Final = pytest.mark.timeout(4 * graceful_stop_seconds() + 240)
+pytestmark: Final = [pytest.mark.timeout(4 * graceful_stop_seconds() + 240), pytest.mark.shares_worker_state]
 
 _GROUP: Final = "ptu-ledger"
 _SHARED_DEPLOYMENT: Final = "ledger-shared-gpt41"

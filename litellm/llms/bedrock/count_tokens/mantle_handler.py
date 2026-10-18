@@ -52,7 +52,7 @@ class BedrockMantleCountTokensHandler(BaseAWSLLM):
     ) -> dict[str, JsonValue]:
         try:
             request: Final = _COUNT_REQUEST.validate_python(request_data)
-            aws_region_name: Final = self._get_aws_region_name(
+            aws_region_name: Final = self.get_aws_region_name(
                 optional_params=litellm_params, model=resolved_model, model_id=None
             )
             endpoint_url: Final = self.get_mantle_count_tokens_endpoint(aws_region_name)

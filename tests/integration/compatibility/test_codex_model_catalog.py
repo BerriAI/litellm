@@ -32,6 +32,8 @@ from tests.integration._support.database import read_rows
 from tests.integration._support.process import owned_proxy
 from tests.integration._support.wire import Reply, Request, Wire, wire_server
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 T = TypeVar("T")
 
 CLIENT_VERSION: Final = "0.159.3"

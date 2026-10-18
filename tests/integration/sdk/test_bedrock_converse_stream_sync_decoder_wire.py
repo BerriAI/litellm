@@ -98,3 +98,17 @@ def test_k03_sync_stream_with_normal_frames_delivers_the_text_and_a_stop() -> No
         assert consumed.text == _ANSWER, consumed
         assert consumed.finish_reasons[-1] == "stop", consumed
         assert len(wire.drain()) == 1
+
+
+def test_k04_sync_stream_open_400_carries_the_bedrock_body_as_text() -> None:
+    body: Final = '{"message":"The request is invalid."}'
+
+    def reject(_: Request) -> Reply:
+        return Reply(status=400, body=body.encode())
+
+    with wire_server(reject) as wire:
+        with pytest.raises(BadRequestError) as raised:
+            _consume_sync_stream(wire)
+        assert raised.value.status_code == 400, raised.value
+        assert f"BedrockException - {body}" in raised.value.message, raised.value.message
+        assert len(wire.drain()) == 1

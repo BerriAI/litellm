@@ -19,6 +19,8 @@ from integration._support.worker_readiness import wait_for_worker_readiness
 from openai.types.responses import ResponseInputParam
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 _MODEL: Final = "gpt-5"
 _API_KEY: Final = "synthetic-responses-key"
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])

@@ -4,28 +4,35 @@ with no verdicts."""
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Iterator, Mapping
+from itertools import chain
 from typing import Final
 
 import pytest
-from integration._support.client import object_value
+from integration._support.anthropic_refusal import DOCS_STOP_DETAILS
+from integration._support.client import list_value, object_value
 from integration._support.mcp import McpPeer, mcp_peer, tool_calls
 from integration._support.process import graceful_stop_seconds
 from integration._support.safeguards_rig import (
     BASH_TOOL,
     CHAT_MODEL,
+    CLAUDE_MODEL,
     Responder,
     Rig,
     auto_mode_body,
     available,
     chat_backend,
     json_body,
+    native_message,
     nonce,
     request_json,
     safeguards_rig,
+    sse_events,
     stream_results,
     stream_tool_use_ids,
     tool_id,
+    tool_use_block,
     tool_use_ids,
 )
 from integration._support.wire import Reply, Request
@@ -115,3 +122,45 @@ def test_auto_executed_mcp_tool_costs_no_classifier_call(rig: Rig, peer: McpPeer
     received: Final = rig.received(request_nonce)
     assert rig.classifier_calls(received) == (), [request.target for request in received]
     assert len(rig.backend_calls(received)) == 2, [request.target for request in received]
+
+
+def carries_a_tool_result_block(request: Request) -> bool:
+    messages: Final = list_value(request_json(request).get("messages", []))
+    contents: Final = tuple(object_value(message).get("content") for message in messages)
+    blocks: Final = chain.from_iterable(content for content in contents if isinstance(content, list))
+    return any(object_value(block).get("type") == "tool_result" for block in blocks)
+
+
+def claude_mcp_tool_then_refusal(request_nonce: str) -> Responder:
+    identity: Final = tool_id(request_nonce)
+    tool_turn: Final = native_message(
+        identity,
+        content=(tool_use_block(f"{identity}m", name=f"{MCP_ALIAS}-add", arguments={"a": 2, "b": 3}),),
+        model="claude-sonnet-4-6",
+    )
+    refusal_turn: Final = {
+        **native_message(f"{identity}r", content=(), stop_reason="refusal", model="claude-sonnet-4-6"),
+        "stop_details": DOCS_STOP_DETAILS,
+    }
+
+    def respond(request: Request) -> Reply:
+        turn: Final = refusal_turn if carries_a_tool_result_block(request) else tool_turn
+        return Reply(body=json.dumps(turn).encode())
+
+    return respond
+
+
+def test_auto_executed_mcp_loop_streams_the_final_turn_refusal_stop_details(rig: Rig, peer: McpPeer) -> None:
+    request_nonce: Final = nonce()
+    rig.register(request_nonce, claude_mcp_tool_then_refusal(request_nonce))
+    peer.drain()
+    status, raw = rig.stream(auto_mode_body(CLAUDE_MODEL, request_nonce, tools=[dict(AUTO_EXECUTED), dict(BASH_TOOL)]))
+    assert status == 200, raw
+    assert executed_tools(peer) == ("add",)
+    deltas: Final = tuple(
+        object_value(event["delta"]) for event in sse_events(raw) if event.get("type") == "message_delta"
+    )
+    assert len(deltas) == 1, raw
+    assert deltas[0]["stop_reason"] == "refusal", raw
+    assert deltas[0].get("stop_details") == DOCS_STOP_DETAILS, raw
+    assert len(rig.backend_calls(rig.received(request_nonce))) == 2

@@ -172,6 +172,28 @@ def test_native_receives_normalized_request_and_original_call_shape() -> None:
     assert call_kwargs["litellm_metadata"] is metadata
 
 
+@pytest.mark.parametrize("stream, expected_timeout", ((True, 0.5), (False, 30.0)))
+def test_native_streams_are_bounded_by_stream_timeout(stream: bool, expected_timeout: float) -> None:
+    captured: Final[list[NativeCall]] = []
+
+    def python(*call_args: object, **call_kwargs: object) -> AnthropicMessagesResponse:  # kwargs-ok: rejected fallback
+        pytest.fail("Required Rust dispatch must not call Python")
+
+    def native(request: NativeCall) -> AnthropicMessagesResponse:
+        captured.append(request)
+        return response()
+
+    _ = _DISPATCH.run(
+        (16, MESSAGES, "anthropic/claude-sonnet-4-5"),
+        {"stream": stream, "timeout": 30.0, "stream_timeout": 0.5},
+        python=python,
+        binding=messages_binding(native),
+        native=lambda hook, request, call_args, call_kwargs: hook(request),
+        rules=RUST_RULES,
+    )
+    assert captured[0].resolved["timeout"] == expected_timeout
+
+
 def test_internal_async_marker_bypasses_native() -> None:
     args: Final[tuple[object, ...]] = (16, MESSAGES, "claude-sonnet-4-5")
     kwargs: Final[Mapping[str, object]] = {"is_async": True}

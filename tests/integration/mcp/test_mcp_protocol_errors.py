@@ -9,6 +9,8 @@ from integration._support.client import Gateway
 from integration._support.mcp import McpPeer, call_tool, register_mcp, tool_names
 from integration._support.wire import Reply, Request, wire_server
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 
 @pytest.mark.covers("other.mcp.errors.protocol_and_malformed_results_cannot_be_empty_success")
 def test_jsonrpc_error_and_malformed_tool_result_remain_errors(gateway: Gateway) -> None:

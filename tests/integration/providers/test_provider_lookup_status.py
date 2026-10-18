@@ -159,7 +159,7 @@ class _ObservationBuffer:
             payload: Final = JSON_OBJECT.validate_python(client.get(f"{self._url}/__observations").json())
         requests: Final = payload.get("requests")
         assert isinstance(requests, list)
-        self._items = (*self._items, *(object_value(item) for item in requests if isinstance(item, dict)))
+        self._items = tuple(object_value(item) for item in requests if isinstance(item, dict))
         return self._items
 
     def route(self, scenario_id: str, suffix: str) -> tuple[dict[str, JsonValue], ...]:

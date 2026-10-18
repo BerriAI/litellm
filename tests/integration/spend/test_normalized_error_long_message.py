@@ -22,6 +22,8 @@ from integration._support.timing import assert_not_delayed_by, assert_within_fac
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 CRAFTED_MODEL: Final = ("exceeded " * 32_000)[:288_000]
 HOSTILE_5KB_MODEL: Final = ("exceeded budget " * 400)[:5_000]
 BENIGN_288KB_MODEL: Final = "x" * len(CRAFTED_MODEL)

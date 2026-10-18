@@ -12,6 +12,8 @@ from integration._support.upstream import delete_scenario, register_scenario
 from integration.cost_calculation.cost_tracking_case import JsonResponse
 from pydantic import JsonValue
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 INPUT_COST_PER_TOKEN: Final = 0.000001
 OUTPUT_COST_PER_TOKEN: Final = 0.001
 PROMPT_TOKENS: Final = 10

@@ -13,7 +13,7 @@ def test_zero_parallel_slots_refuse_before_the_provider_and_one_slot_serves(gate
         model: Final = scenario.model()
         blocked: Final = scenario.key(models=[model], max_parallel_requests=0)
         allowed: Final = scenario.key(models=[model], max_parallel_requests=1)
-        upstream.get("/__observations").raise_for_status()
+        upstream.delete("/__observations").raise_for_status()
         refused: Final = gateway.request(
             "POST",
             "/v1/chat/completions",

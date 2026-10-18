@@ -22,17 +22,28 @@ Environment Variables:
 - LITELLM_ANTHROPIC_BETA_HEADERS_URL: Custom URL for remote config (optional)
 """
 
+import asyncio
 import json
 import os
+import threading
+from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
+from functools import cache
 from importlib.resources import files
-from typing import Final
+from typing import Final, TypeAlias
 
 import httpx
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
 
 # Cache for the loaded configuration
 _BETA_HEADERS_CONFIG: dict | None = None
+_BETA_HEADERS_CONFIG_LOCK: Final = threading.Lock()
+_BETA_HEADERS_CONFIG_LOADER: Final = ThreadPoolExecutor(max_workers=1, thread_name_prefix="litellm-beta-headers-config")
+
+BetaHeadersConfig: TypeAlias = Mapping[str, str | Mapping[str, str | None]]
+_BETA_HEADERS_CONFIG_ADAPTER: Final = TypeAdapter(BetaHeadersConfig)
 
 
 class GetAnthropicBetaHeadersConfig:
@@ -174,13 +185,27 @@ def _load_beta_headers_config() -> dict:
     if _BETA_HEADERS_CONFIG is not None:
         return _BETA_HEADERS_CONFIG
 
-    # Get the URL from environment or use default
-    from litellm import anthropic_beta_headers_url
+    with _BETA_HEADERS_CONFIG_LOCK:
+        if _BETA_HEADERS_CONFIG is not None:
+            return _BETA_HEADERS_CONFIG
 
-    _BETA_HEADERS_CONFIG = get_beta_headers_config(url=anthropic_beta_headers_url)
-    verbose_logger.debug("Loaded and cached beta headers config")
+        # Get the URL from environment or use default
+        from litellm import anthropic_beta_headers_url
 
-    return _BETA_HEADERS_CONFIG
+        _BETA_HEADERS_CONFIG = get_beta_headers_config(url=anthropic_beta_headers_url)
+        verbose_logger.debug("Loaded and cached beta headers config")
+
+        return _BETA_HEADERS_CONFIG
+
+
+async def aload_beta_headers_config() -> None:
+    if _BETA_HEADERS_CONFIG is None:
+        await asyncio.get_running_loop().run_in_executor(_BETA_HEADERS_CONFIG_LOADER, _load_beta_headers_config)
+
+
+@cache
+def _bundled_beta_headers_config() -> BetaHeadersConfig:
+    return _BETA_HEADERS_CONFIG_ADAPTER.validate_python(GetAnthropicBetaHeadersConfig.load_local_beta_headers_config())
 
 
 def reload_beta_headers_config() -> dict:
@@ -286,6 +311,14 @@ def is_beta_header_supported(
 
     # Header is supported if it's in the mapping and has a non-null value
     return beta_header in provider_mapping and provider_mapping[beta_header] is not None
+
+
+def is_beta_header_supported_by_bundled_config(beta_header: str, provider: str) -> bool:
+    config: Final = _bundled_beta_headers_config()
+    aliases: Final = config.get("provider_aliases", {})
+    canonical_provider: Final = (aliases.get(provider) if isinstance(aliases, Mapping) else None) or provider
+    provider_mapping: Final = config.get(canonical_provider, {})
+    return isinstance(provider_mapping, Mapping) and provider_mapping.get(beta_header) is not None
 
 
 def get_provider_beta_header(

@@ -516,3 +516,26 @@ def test_request_strips_ttl_only_where_the_messages_api_defines_cache_control(co
     assert tool_result["content"][0]["cache_control"] == {"type": "ephemeral"}
     assert payload["messages"][1]["content"][1]["cache_control"] == {"type": "ephemeral"}
     assert payload["messages"][2] == {"role": "user", "content": "a plain string message"}
+
+
+@pytest.mark.usefixtures("local_beta_headers_config")
+@pytest.mark.parametrize(
+    ("client_headers", "expected_beta"),
+    [
+        ({}, None),
+        ({"anthropic-beta": "dangerous-tool-use-2026-09-03"}, "dangerous-tool-use-2026-09-03"),
+    ],
+)
+def test_safeguards_reach_an_openai_like_host_with_only_the_client_betas(
+    config: OpenAILikeAnthropicMessagesConfig, client_headers: dict[str, str], expected_beta: str | None
+) -> None:
+    headers, _ = config.validate_anthropic_messages_environment(
+        headers=client_headers,
+        model="some-model",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={"safeguards": ({"type": "dangerous_tool_use"},)},
+        litellm_params={},
+        api_key="sk-test",
+        api_base="https://host/v1",
+    )
+    assert headers.get("anthropic-beta") == expected_beta, headers

@@ -51,6 +51,8 @@ from integration.providers._mantle_gpt_prompt_cache_support import (
 )
 from pydantic import JsonValue
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 _STARTED_WORKER: Final = re.compile(r"Started server process \[(\d+)\]")
 _FOUNDRY_BASE: Final = "http://prompt-cache-breakpoint-audit.services.ai.azure.com"
 _FOUNDRY_HOST: Final = urlsplit(_FOUNDRY_BASE).netloc

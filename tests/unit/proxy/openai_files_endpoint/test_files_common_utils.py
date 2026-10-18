@@ -1,14 +1,20 @@
+from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastapi import HTTPException
 from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
 
+from litellm import Router
 from litellm.caching.caching import DualCache
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.openai_files_endpoints.common_utils import (
+    apply_team_provider_credentials,
     apply_unified_file_ids,
     get_credentials_for_model,
+    get_team_provider_credentials,
     is_litellm_executed_batch,
     map_raw_file_ids_to_unified,
 )
@@ -461,9 +467,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
 )
 
 
-def _completed_batch_for_retire(
-    output_file_id: str | None, counts: BatchRequestCounts | None = None
-) -> LiteLLMBatch:
+def _completed_batch_for_retire(output_file_id: str | None, counts: BatchRequestCounts | None = None) -> LiteLLMBatch:
     kwargs = dict(
         id="batch-1",
         completion_window="24h",
@@ -652,3 +656,198 @@ async def test_batch_cancel_updates_database(caplog: pytest.LogCaptureFixture):
     assert "batch_processed" not in written
     assert json.loads(written["file_object"])["cancelled_at"] == 1234567999
     assert f"Updating batch {batch_id} status to cancelled after cancel" in caplog.messages
+
+
+def _team_openai_router(team_public_model_name: str, deployment_model: str) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": team_public_model_name,
+                "litellm_params": {"model": deployment_model, "api_key": "team-openai-key"},
+                "model_info": {
+                    "id": "team-a-openai",
+                    "team_id": "team-a",
+                    "team_public_model_name": team_public_model_name,
+                },
+            },
+            {
+                "model_name": "claude-opus-4-6",
+                "litellm_params": {"model": "anthropic/claude-opus-4-6", "api_key": "anthropic-key"},
+            },
+        ]
+    )
+
+
+def _team_only_openai_credentials(
+    team_public_model_name: str, deployment_model: str, key_models: list[str]
+) -> dict | None:
+    return get_team_provider_credentials(
+        llm_router=_team_openai_router(team_public_model_name, deployment_model),
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key="test-key",
+            user_id="test-user",
+            team_id="team-a",
+            team_models=[team_public_model_name, "claude-opus-4-6"],
+            models=key_models,
+        ),
+        custom_llm_provider="openai",
+        include_accessible_deployments=False,
+    )
+
+
+@pytest.mark.parametrize(
+    "team_public_model_name, deployment_model, key_models",
+    [
+        ("openai/*", "openai/*", ["gpt-4o"]),
+        ("openai/*", "openai/*", ["openai/gpt-4o"]),
+        ("gpt-4o", "openai/gpt-4o", ["openai/*"]),
+    ],
+)
+def test_a_restricted_key_resolves_the_team_deployment_its_wildcard_or_model_covers(
+    team_public_model_name: str, deployment_model: str, key_models: list[str]
+):
+    credentials = _team_only_openai_credentials(team_public_model_name, deployment_model, key_models)
+
+    assert credentials is not None
+    assert credentials["api_key"] == "team-openai-key"
+
+
+@pytest.mark.parametrize("key_models", [["claude-opus-4-6"], ["anthropic/*"]])
+def test_a_restricted_key_outside_the_team_wildcard_never_resolves_its_credentials(key_models: list[str]):
+    assert _team_only_openai_credentials("openai/*", "openai/*", key_models) is None
+
+
+@pytest.mark.parametrize(
+    "request_credentials, sent_api_key, sent_api_base",
+    [
+        ({}, "team-openai-key", "https://team.example/v1"),
+        ({"api_key": ""}, "team-openai-key", "https://team.example/v1"),
+        ({"api_key": "   "}, "team-openai-key", "https://team.example/v1"),
+        ({"api_key": "\n"}, "team-openai-key", "https://team.example/v1"),
+        ({"api_key": "sk-forwarded"}, "sk-forwarded", "https://team.example/v1"),
+        ({"api_base": "https://caller.example/v1"}, "team-openai-key", "https://team.example/v1"),
+        (
+            {"api_key": "sk-forwarded", "api_base": "https://caller.example/v1"},
+            "sk-forwarded",
+            "https://caller.example/v1",
+        ),
+        ({"api_key": 123}, "team-openai-key", "https://team.example/v1"),
+        (
+            {"api_key": "sk-forwarded", "api_base": ["https://caller.example/v1"]},
+            "sk-forwarded",
+            "https://team.example/v1",
+        ),
+        ({"api_key": "sk-forwarded", "api_base": "  "}, "sk-forwarded", "https://team.example/v1"),
+        ({"litellm_credential_name": "no-such-credential"}, "team-openai-key", "https://team.example/v1"),
+        ({"api_key": "sk-forwarded\n", "drop_params": True}, "team-openai-key", "https://team.example/v1"),
+        ({"api_key": "sk-for warded"}, "sk-for warded", "https://team.example/v1"),
+    ],
+)
+def test_the_team_key_only_goes_to_the_team_host_unless_the_request_brings_its_own_key(
+    request_credentials: dict[str, object], sent_api_key: str, sent_api_base: str
+):
+    data: Final[dict[str, object]] = dict(request_credentials)
+
+    _apply_team_a_openai_credentials(data)
+
+    assert (data.get("api_key"), data.get("api_base")) == (sent_api_key, sent_api_base)
+
+
+@pytest.mark.parametrize("api_key", ["sk-forwarded\n", " sk-forwarded", "\u200b", "sk-forwarded\u00a0"])
+def test_a_request_key_that_cannot_be_an_http_header_is_a_bad_request(api_key: str):
+    data: Final[dict[str, object]] = {"api_key": api_key}
+
+    with pytest.raises(HTTPException) as refused:
+        _apply_team_a_openai_credentials(data)
+
+    assert refused.value.status_code == 400
+    assert api_key not in str(refused.value.detail)
+
+
+def _apply_team_a_openai_credentials(data: dict[str, object]) -> None:
+    apply_team_provider_credentials(
+        data=data,
+        llm_router=Router(
+            model_list=[
+                {
+                    "model_name": "openai/*",
+                    "litellm_params": {
+                        "model": "openai/*",
+                        "api_key": "team-openai-key",
+                        "api_base": "https://team.example/v1",
+                    },
+                    "model_info": {"id": "team-a-openai", "team_id": "team-a"},
+                }
+            ]
+        ),
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key="test-key", user_id="test-user", team_id="team-a", team_models=["openai/*"], models=["gpt-4o"]
+        ),
+        custom_llm_provider="openai",
+    )
+
+
+def _team_openai_deployment(
+    deployment_id: str, api_key: str, created_at: datetime | None = None, db_model: bool = True
+) -> dict[str, object]:
+    return {
+        "model_name": f"team-gpt-{deployment_id}",
+        "litellm_params": {"model": "openai/gpt-4o", "api_key": api_key},
+        "model_info": {"id": deployment_id, "team_id": "team-a", "db_model": db_model}
+        | ({} if created_at is None else {"created_at": created_at}),
+    }
+
+
+@pytest.mark.parametrize("deployment_ids", [("deployment-a", "deployment-b"), ("deployment-b", "deployment-a")])
+def test_a_team_with_two_openai_deployments_resolves_the_same_one_in_any_router_order(
+    deployment_ids: tuple[str, str],
+):
+    router: Final = Router(
+        model_list=[_team_openai_deployment(deployment_id, f"{deployment_id}-key") for deployment_id in deployment_ids]
+    )
+
+    credentials: Final = get_team_provider_credentials(
+        llm_router=router,
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key", user_id="test-user", team_id="team-a"),
+        custom_llm_provider="openai",
+        include_accessible_deployments=False,
+    )
+
+    assert credentials is not None
+    assert credentials["api_key"] == "deployment-a-key"
+
+
+@pytest.mark.parametrize("newer_first", [True, False])
+def test_a_team_keeps_its_older_openai_deployment_when_a_newer_one_has_a_lower_id(newer_first: bool):
+    older: Final = _team_openai_deployment("deployment-z", "older-key", datetime(2026, 1, 1, tzinfo=timezone.utc))
+    newer: Final = _team_openai_deployment("deployment-a", "newer-key", datetime(2026, 6, 1, tzinfo=timezone.utc))
+    router: Final = Router(model_list=[newer, older] if newer_first else [older, newer])
+
+    credentials: Final = get_team_provider_credentials(
+        llm_router=router,
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key", user_id="test-user", team_id="team-a"),
+        custom_llm_provider="openai",
+        include_accessible_deployments=False,
+    )
+
+    assert credentials is not None
+    assert credentials["api_key"] == "older-key"
+
+
+def test_a_team_keeps_its_first_config_file_openai_deployment_over_older_db_ones():
+    db_deployment: Final = _team_openai_deployment("deployment-a", "db-key", datetime(2020, 1, 1, tzinfo=timezone.utc))
+    config_deployments: Final = tuple(
+        _team_openai_deployment(deployment_id, f"{deployment_id}-key", db_model=False)
+        for deployment_id in ("deployment-z", "deployment-b")
+    )
+    router: Final = Router(model_list=[db_deployment, *config_deployments])
+
+    credentials: Final = get_team_provider_credentials(
+        llm_router=router,
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key", user_id="test-user", team_id="team-a"),
+        custom_llm_provider="openai",
+        include_accessible_deployments=False,
+    )
+
+    assert credentials is not None
+    assert credentials["api_key"] == "deployment-z-key"

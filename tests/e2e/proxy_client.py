@@ -100,6 +100,8 @@ from models import (
     TeamNewBody,
     TeamNewResponse,
     TeamUpdateBody,
+    TokenCounterBody,
+    TokenCounterResponse,
     ToolsetCreateBody,
     ToolsetRow,
     ToolsetUpdateBody,
@@ -1047,6 +1049,15 @@ class ProxyClient:
             headers=self._anthropic_headers(key),
             json=body,
             response_type=CountTokensResponse,
+        )
+
+    @step("Count tokens with /utils/token_counter for {body.model}")
+    def token_counter(self, key: str, body: TokenCounterBody) -> Result[TokenCounterResponse]:
+        return self.transport.post(
+            "/utils/token_counter",
+            headers=self.transport.bearer(key),
+            json=body,
+            response_type=TokenCounterResponse,
         )
 
     @step("Send a /v1/messages request to {body.model}")

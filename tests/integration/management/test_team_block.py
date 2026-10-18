@@ -38,8 +38,7 @@ class _ErrorResponse(BaseModel):
 @pytest.fixture
 def upstream(gateway: Gateway) -> Iterator[httpx.Client]:
     with httpx.Client(base_url=gateway.upstream_url, timeout=15, trust_env=False) as client:
-        response: Final = client.get("/__observations")
-        assert response.status_code == 200, response.text
+        client.delete("/__observations").raise_for_status()
         yield client
 
 
@@ -74,6 +73,7 @@ def test_team_block_and_unblock_update_endpoint_info_and_db_state(
         assert peer_before.status_code == 200, peer_before.text
         observed_before_block: Final = _models(upstream)
         assert observed_before_block == (provider_model, provider_model), repr(observed_before_block)
+        upstream.delete("/__observations").raise_for_status()
 
         blocked_response: Final = gateway.request("POST", "/team/block", {"team_id": team})
         assert blocked_response.status_code == 200, blocked_response.text
@@ -96,6 +96,7 @@ def test_team_block_and_unblock_update_endpoint_info_and_db_state(
         assert _ErrorResponse.model_validate_json(cold_denied.text).error.type == "auth_error", cold_denied.text
         after_cold_denied: Final = _models(upstream)
         assert after_cold_denied == (), repr(after_cold_denied)
+        upstream.delete("/__observations").raise_for_status()
 
         unblocked_response: Final = gateway.request("POST", "/team/unblock", {"team_id": team})
         assert unblocked_response.status_code == 200, unblocked_response.text
@@ -139,6 +140,7 @@ def test_unblocking_a_team_restores_warmed_keys_on_both_proxies(
         assert peer_before.status_code == 200, peer_before.text
         observed_before_block: Final = _models(upstream)
         assert observed_before_block == (provider_model, provider_model), repr(observed_before_block)
+        upstream.delete("/__observations").raise_for_status()
 
         blocked_response: Final = gateway.request("POST", "/team/block", {"team_id": team})
         assert blocked_response.status_code == 200, blocked_response.text
@@ -148,6 +150,7 @@ def test_unblocking_a_team_restores_warmed_keys_on_both_proxies(
         assert _ErrorResponse.model_validate_json(cold_denied.text).error.type == "auth_error", cold_denied.text
         after_cold_denied: Final = _models(upstream)
         assert after_cold_denied == (), repr(after_cold_denied)
+        upstream.delete("/__observations").raise_for_status()
 
         unblocked_response: Final = gateway.request("POST", "/team/unblock", {"team_id": team})
         assert unblocked_response.status_code == 200, unblocked_response.text
@@ -177,6 +180,7 @@ def test_warmed_team_keys_are_refused_on_both_proxies_after_block(
         assert peer_before.status_code == 200, peer_before.text
         observed_before_block: Final = _models(upstream)
         assert observed_before_block == (provider_model, provider_model), repr(observed_before_block)
+        upstream.delete("/__observations").raise_for_status()
 
         blocked_response: Final = gateway.request("POST", "/team/block", {"team_id": team})
         assert blocked_response.status_code == 200, blocked_response.text
@@ -210,6 +214,7 @@ def test_a_new_team_key_is_refused_on_a_peer_that_cached_the_team_before_block(
         assert peer_before.status_code == 200, peer_before.text
         observed_before_block: Final = _models(upstream)
         assert observed_before_block == (provider_model,), repr(observed_before_block)
+        upstream.delete("/__observations").raise_for_status()
 
         blocked_response: Final = gateway.request("POST", "/team/block", {"team_id": team})
         assert blocked_response.status_code == 200, blocked_response.text

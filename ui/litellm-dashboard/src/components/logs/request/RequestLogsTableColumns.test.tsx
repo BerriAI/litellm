@@ -147,6 +147,41 @@ describe("Internal User column", () => {
     expect(await screen.findByText("alice@example.com (106514937785257944828)")).toBeInTheDocument();
   });
 
+  it("shows the email stored in the log metadata when the user list has no entry for that user", async () => {
+    const user = userEvent.setup();
+    renderRows(
+      [
+        logEntry({
+          request_id: "req-sso-user",
+          user: "okta|abc123",
+          metadata: { user_api_key_user_email: "sso-user@example.com" },
+        }),
+      ],
+      deps,
+    );
+
+    const emailCell = screen.getByText("sso-user@example.com");
+    expect(screen.queryByText("okta|abc123")).not.toBeInTheDocument();
+    await user.hover(emailCell);
+    expect(await screen.findByText("sso-user@example.com (okta|abc123)")).toBeInTheDocument();
+  });
+
+  it("prefers the user list email over the one stored in the log metadata", () => {
+    renderRows(
+      [
+        logEntry({
+          request_id: "req-renamed-user",
+          user: "106514937785257944828",
+          metadata: { user_api_key_user_email: "old@example.com" },
+        }),
+      ],
+      deps,
+    );
+
+    expect(screen.getByText("alice@example.com")).toBeInTheDocument();
+    expect(screen.queryByText("old@example.com")).not.toBeInTheDocument();
+  });
+
   it("falls back to the raw id when no email is known for the user", () => {
     renderRows([logEntry({ request_id: "req-unknown-user", user: "unknown-user-id" })], deps);
 

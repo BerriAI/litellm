@@ -42,7 +42,7 @@ from pydantic import JsonValue
 
 from litellm.proxy.spend_tracking.budget_reservation import DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK
 
-pytestmark: Final = pytest.mark.timeout(900)
+pytestmark: Final = [pytest.mark.timeout(900), pytest.mark.shares_worker_state]
 
 _MODEL: Final = "gemini/gemini-3.8-flash"
 _INPUT_TOKENS: Final = 300
@@ -394,7 +394,11 @@ def _await_key_spend(replica: Gateway, key: str, expected: float) -> None:
     eventually(lambda: _key_spend(replica, key), lambda spend: math.isclose(spend, expected, rel_tol=1e-9), seconds=30)
 
 
-def _drain(rig: Rig) -> list[JsonValue]:
+def _reset_observations(rig: Rig) -> None:
+    httpx.delete(f"{rig.upstream.url}/__observations", trust_env=False, timeout=15).raise_for_status()
+
+
+def _observations(rig: Rig) -> list[JsonValue]:
     observed: Final = httpx.get(f"{rig.upstream.url}/__observations", trust_env=False, timeout=15)
     observed.raise_for_status()
     requests: Final = JSON_OBJECT.validate_json(observed.content)["requests"]
@@ -406,7 +410,7 @@ def _calls(rig: Rig, *interaction_ids: str) -> tuple[tuple[str, str], ...]:
     suffixes: Final = tuple(f"/v1beta/interactions/{interaction_id}" for interaction_id in interaction_ids)
     return tuple(
         (string_value(object_value(entry)["method"]), string_value(object_value(entry)["api_key"]))
-        for entry in _drain(rig)
+        for entry in _observations(rig)
         if string_value(object_value(entry)["path"]).endswith(suffixes)
     )
 
@@ -475,7 +479,7 @@ def test_delete_on_another_replica_bills_the_creators_interaction_once(rig: Rig,
         key: Final = scenario.key()
         created: Final = _create(rig.creator, model, key, path=path)
         _state(rig, created, _completed())
-        _drain(rig)
+        _reset_observations(rig)
         deleted: Final = _delete(rig.settler, created, key, path=path)
         assert deleted.status_code == 200, deleted.text
         spend: Final = _assert_billed(_await_spend_row(created), _rates(rig.creator, model))
@@ -623,7 +627,7 @@ def test_a_late_restart_retries_a_failed_fetch_within_a_full_poll_window(rig: Ri
         _registered(created)
         write_rows(_CREATED_AN_HOUR_AGO, (created,))
         _state(rig, created, InteractionState(status="completed", usage=_USAGE, get_status=503))
-        _drain(rig)
+        _reset_observations(rig)
         with owned_proxy_process(
             rig.gateway, rig.directory, rig.environment(**_LATE_RESUMER_POLL), config=rig.config, workers=2
         ):
@@ -668,13 +672,13 @@ def test_cancel_then_delete_on_another_replica_releases_without_a_spend_row(rig:
         key: Final = scenario.key()
         created: Final = _create(rig.creator, model, key)
         _state(rig, created, InteractionState(status="in_progress"))
-        _drain(rig)
+        _reset_observations(rig)
         cancelled: Final = rig.settler.request("POST", f"/v1beta/interactions/{created}/cancel", {}, key=key)
         assert cancelled.status_code == 200, cancelled.text
         assert JSON_OBJECT.validate_json(cancelled.content)["status"] == "cancelled", cancelled.text
         posted: Final = tuple(
             string_value(object_value(entry)["path"])
-            for entry in _drain(rig)
+            for entry in _observations(rig)
             if string_value(object_value(entry)["method"]) == "POST"
         )
         assert len(posted) == 1 and posted[0].endswith(f"/v1beta/interactions/{created}/cancel"), posted
@@ -692,7 +696,7 @@ def test_delete_fails_closed_when_the_settling_replica_cannot_fetch(rig: Rig) ->
         key: Final = scenario.key()
         created: Final = _create(rig.creator, model, key)
         _state(rig, created, InteractionState(status="completed", usage=_USAGE, get_status=500))
-        _drain(rig)
+        _reset_observations(rig)
         refused: Final = _delete(rig.settler, created, key)
         assert refused.status_code >= 500, refused.text
         assert "Scripted interaction fetch failure" in refused.text, refused.text
@@ -712,7 +716,7 @@ def test_delete_of_an_interaction_the_vendor_purged_sends_no_delete_and_keeps_th
         key: Final = scenario.key()
         created: Final = _create(rig.creator, model, key)
         clear_interaction_state(rig.upstream.url, created)
-        _drain(rig)
+        _reset_observations(rig)
         deleted: Final = _delete(rig.settler, created, key)
         assert deleted.status_code == 404, deleted.text
         assert _calls(rig, created) == (("GET", _ENV_KEY),)

@@ -202,7 +202,7 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
     : null;
 
   const isAdmin = all_admin_roles.includes(userRole);
-  const isTeamAdmin = isUserTeamAdminForAnyTeam(teams, userId);
+  const isTeamAdmin = isUserTeamAdminForAnyTeam(teams, userId ?? "");
   // Same owner the Auto-Routers tab uses, so the two creation forms cannot disagree about
   // who has to name a team. This form is only reachable when creation is allowed at all.
   const createScope = modelCreationScope(

@@ -28,7 +28,9 @@ def _catalogue_declares_default_effort() -> bool:
     the one litellm gave before it existed. Scanning costs ~80us on the largest published map and
     only on the fallback path, which is noise beside the request it precedes.
     """
-    return any(isinstance(entry, dict) and "default_reasoning_effort" in entry for entry in litellm.model_cost.values())
+    return any(
+        isinstance(entry, dict) and "default_reasoning_effort" in entry for entry in (*litellm.model_cost.values(),)
+    )
 
 
 def _normalize_reasoning_effort_for_chat_completion(

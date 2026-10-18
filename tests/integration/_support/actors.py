@@ -15,7 +15,7 @@ from pydantic import JsonValue
 from litellm.proxy.utils import PrismaClient, hash_token
 from tests.integration._support.client import Gateway, Scenario, string_value
 from tests.integration._support.prisma_clients import connected_proxy_prisma
-from tests.integration._support.process import owned_proxy
+from tests.integration._support.process import OwnedState, owned_proxy
 
 TEAM_ALPHA: Final = "behavior-pin-team-alpha"
 TEAM_BETA: Final = "behavior-pin-team-beta"
@@ -124,7 +124,7 @@ def owned_settings_client(
     config: Final = {**base, "litellm_settings": {**base["litellm_settings"], **litellm_settings}}
     path: Final = directory / "owned-settings.yaml"
     path.write_text(yaml.safe_dump(config))
-    with owned_proxy(client.gateway, directory, {}, config=path) as candidate:
+    with owned_proxy(client.gateway, directory, {}, config=path, state=OwnedState.SHARED_WITH_WORKER) as candidate:
         yield GatewayClient(candidate, client.replacements)
 
 

@@ -7,6 +7,8 @@ const { mockUseAuthorized, mockUseUISettings, mockReplace, mockUiHref, state } =
   const state = {
     enableChatUI: false,
     isUISettingsLoading: false,
+    isIdentityLoading: false,
+    isAuthorized: true,
   };
   return {
     state,
@@ -18,6 +20,8 @@ const { mockUseAuthorized, mockUseUISettings, mockReplace, mockUiHref, state } =
       userId: "user-1",
       userEmail: "user@example.com",
       premiumUser: false,
+      isLoading: state.isIdentityLoading,
+      isAuthorized: state.isAuthorized,
     })),
     mockUseUISettings: vi.fn(() => ({
       data: { values: { enable_chat_ui: state.enableChatUI } },
@@ -47,6 +51,8 @@ describe("ChatLayout", () => {
   afterEach(() => {
     state.enableChatUI = false;
     state.isUISettingsLoading = false;
+    state.isIdentityLoading = false;
+    state.isAuthorized = true;
     mockReplace.mockClear();
     mockUiHref.mockClear();
   });
@@ -83,5 +89,29 @@ describe("ChatLayout", () => {
     );
     expect(screen.queryByTestId("chat-shell")).not.toBeInTheDocument();
     expect(mockReplace).not.toHaveBeenCalled();
+  });
+
+  it("renders nothing until the signed-in user's identity has loaded", () => {
+    state.enableChatUI = true;
+    state.isIdentityLoading = true;
+    render(
+      <ChatLayout>
+        <div data-testid="page-content" />
+      </ChatLayout>,
+    );
+    expect(screen.queryByTestId("chat-shell")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("page-content")).not.toBeInTheDocument();
+  });
+
+  it("renders nothing when the signed-in user's identity could not be confirmed", () => {
+    state.enableChatUI = true;
+    state.isAuthorized = false;
+    render(
+      <ChatLayout>
+        <div data-testid="page-content" />
+      </ChatLayout>,
+    );
+    expect(screen.queryByTestId("chat-shell")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("page-content")).not.toBeInTheDocument();
   });
 });

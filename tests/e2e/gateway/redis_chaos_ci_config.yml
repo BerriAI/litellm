@@ -5,6 +5,7 @@ general_settings:
 
 litellm_settings:
   callbacks: ["prometheus"]
+  service_callback: ["prometheus_system"]
   require_auth_for_metrics_endpoint: false
   enable_redis_auth_cache: true
   cache: true

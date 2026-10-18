@@ -324,10 +324,16 @@ def _classify_fetch_content(content: bytes, url: str, etag: str | None) -> _Fetc
     return ModelCostMapReloaded(model_cost_map=model_cost_map, revision=git_blob_id(content), etag=etag)
 
 
-def _attempt_fetch_s3(url: str, timeout: int) -> _FetchAttemptOutcome:
+def _split_url(url: str) -> urllib.parse.SplitResult | ModelCostMapReloadUnavailable:
+    try:
+        return urllib.parse.urlsplit(url)
+    except ValueError as error:
+        return ModelCostMapReloadUnavailable(reason=f"invalid URL {url}: {error}")
+
+
+def _attempt_fetch_s3(parts: urllib.parse.SplitResult, url: str, timeout: int) -> _FetchAttemptOutcome:
     from botocore.exceptions import BotoCoreError, ClientError
 
-    parts: Final = urllib.parse.urlsplit(url)
     bucket: Final = parts.netloc
     key: Final = parts.path.lstrip("/")
     if not bucket or not key:
@@ -343,9 +349,11 @@ def _attempt_fetch_s3(url: str, timeout: int) -> _FetchAttemptOutcome:
 
 
 async def _attempt_fetch(client: _AsyncGetClient, url: str, timeout: int) -> _FetchAttemptOutcome:
-    parts: Final = urllib.parse.urlsplit(url)
+    parts: Final = _split_url(url)
+    if isinstance(parts, ModelCostMapReloadUnavailable):
+        return parts
     if parts.scheme == "s3":
-        return await asyncio.to_thread(_attempt_fetch_s3, url, timeout)
+        return await asyncio.to_thread(_attempt_fetch_s3, parts, url, timeout)
     try:
         response: Final = await client.get(url, timeout=timeout)
     except (httpx.HTTPError, httpx.InvalidURL) as e:
@@ -354,9 +362,11 @@ async def _attempt_fetch(client: _AsyncGetClient, url: str, timeout: int) -> _Fe
 
 
 def _attempt_fetch_sync(client: _SyncGetClient, url: str, timeout: int) -> _FetchAttemptOutcome:
-    parts: Final = urllib.parse.urlsplit(url)
+    parts: Final = _split_url(url)
+    if isinstance(parts, ModelCostMapReloadUnavailable):
+        return parts
     if parts.scheme == "s3":
-        return _attempt_fetch_s3(url, timeout)
+        return _attempt_fetch_s3(parts, url, timeout)
     try:
         response: Final = client.get(url, timeout=timeout)
     except (httpx.HTTPError, httpx.InvalidURL) as e:
@@ -547,22 +557,39 @@ def get_model_cost_map_loaded_at() -> "datetime | None":
     return _cost_map_source_info.loaded_at
 
 
-def _expand_model_aliases(model_cost: dict) -> dict:
+class AliasedCostEntry(dict[str, object]):
+    __slots__ = ("names",)
+
+    def __init__(self, entry: Mapping[str, object], names: tuple[str, ...]) -> None:
+        super().__init__(entry)
+        self.names: tuple[str, ...] = names
+
+
+def _alias_groups(alias_owners: Mapping[str, str]) -> Mapping[str, tuple[str, ...]]:
+    return MappingProxyType(
+        {
+            owner: (owner, *(alias for alias, alias_owner in alias_owners.items() if alias_owner == owner))
+            for owner in dict.fromkeys(alias_owners.values())
+        }
+    )
+
+
+def _expand_model_aliases(model_cost: dict[str, dict[str, object]]) -> dict[str, dict[str, object]]:
     """
     Expand ``aliases`` lists in model cost entries into top-level entries.
 
-    Each alias gets a reference to the **same** dict object as the canonical
-    entry (zero memory overhead).  The ``aliases`` key is removed from the
-    entry so downstream code never sees it.
+    Each alias gets a reference to the **same** ``AliasedCostEntry`` as the
+    canonical entry, which carries every name it is served under.  The
+    ``aliases`` key is removed from the entry so downstream code never sees it.
 
     If an alias collides with an existing canonical entry the alias is
     skipped and a warning is logged.
     """
-    aliases_to_add: Final[dict[str, dict]] = {}
+    alias_owners: Final[dict[str, str]] = {}
     keys_with_aliases: Final[list[str]] = []
 
     for model_name, model_info in model_cost.items():
-        aliases: list | None = model_info.get("aliases")
+        aliases: object = model_info.get("aliases")
         if aliases is None:
             continue
         keys_with_aliases.append(model_name)
@@ -584,7 +611,7 @@ def _expand_model_aliases(model_cost: dict) -> dict:
                     model_name,
                 )
                 continue
-            if alias in aliases_to_add:
+            if alias in alias_owners:
                 verbose_logger.warning(
                     "LiteLLM model alias conflict: alias '%s' (from '%s') "
                     "was already claimed by another entry — skipping.",
@@ -592,13 +619,14 @@ def _expand_model_aliases(model_cost: dict) -> dict:
                     model_name,
                 )
                 continue
-            aliases_to_add[alias] = model_info  # same dict reference
+            alias_owners[alias] = model_name
 
     # Remove the ``aliases`` key from entries so it doesn't pollute model info
     for key in keys_with_aliases:
         model_cost[key].pop("aliases", None)
 
-    model_cost.update(aliases_to_add)
+    for owner, names in _alias_groups(alias_owners).items():
+        model_cost.update(dict.fromkeys(names, AliasedCostEntry(model_cost[owner], names)))
     return model_cost
 
 

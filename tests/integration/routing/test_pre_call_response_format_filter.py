@@ -76,7 +76,7 @@ def _json_mode_chat(group: str, text: str, **extra: JsonValue) -> dict[str, Json
     }
 
 
-def _drain(upstream: httpx.Client) -> list[dict[str, JsonValue]]:
+def _observed_bodies(upstream: httpx.Client) -> list[dict[str, JsonValue]]:
     response: Final = upstream.get("/__observations")
     response.raise_for_status()
     return [request["body"] for request in response.json()["requests"]]
@@ -85,7 +85,7 @@ def _drain(upstream: httpx.Client) -> list[dict[str, JsonValue]]:
 @pytest.fixture
 def upstream(candidate: Gateway) -> Iterator[httpx.Client]:
     with httpx.Client(base_url=candidate.upstream_url, timeout=5, trust_env=False) as client:
-        _drain(client)
+        client.delete("/__observations").raise_for_status()
         yield client
 
 
@@ -98,7 +98,7 @@ def test_json_mode_answers_400_without_an_upstream_call_when_no_deployment_takes
     )
 
     assert response.status_code == 400, response.text
-    assert _drain(upstream) == []
+    assert _observed_bodies(upstream) == []
 
 
 @pytest.mark.parametrize(
@@ -121,7 +121,7 @@ def test_json_mode_reaches_a_deployment_that_lacks_it_once_drop_or_allow_is_set(
     )
 
     assert response.status_code == 200, response.text
-    received: Final = _drain(upstream)
+    received: Final = _observed_bodies(upstream)
     assert [body["model"] for body in received] == [LACKS_JSON_MODE]
     assert received[0].get("response_format") == forwarded_format
 
@@ -135,7 +135,7 @@ def test_json_mode_in_a_mixed_group_always_reaches_the_deployment_that_takes_it(
     )
 
     assert [response.status_code for response in responses] == [200] * CALLS, [r.text for r in responses]
-    received: Final = _drain(upstream)
+    received: Final = _observed_bodies(upstream)
     assert [(body["model"], body.get("response_format")) for body in received] == [
         (TAKES_JSON_MODE, dict(JSON_MODE))
     ] * CALLS
@@ -156,6 +156,6 @@ def test_json_mode_falls_back_to_a_group_that_takes_it(
     )
 
     assert response.status_code == 200, response.text
-    assert [(body["model"], body.get("response_format")) for body in _drain(upstream)] == [
+    assert [(body["model"], body.get("response_format")) for body in _observed_bodies(upstream)] == [
         (TAKES_JSON_MODE, dict(JSON_MODE))
     ]

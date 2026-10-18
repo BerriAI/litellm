@@ -229,14 +229,22 @@ def test_every_native_messages_provider_is_classified(rig: Rig, model: str, targ
     classifier_call, backend_calls = one_classifier_call(rig, request_nonce)
     assert ids_under_review(classifier_call) == (identity,), classifier_call.body
     assert [call.target for call in backend_calls] == [target], backend_calls
-    assert request_json(backend_calls[0])["safeguards"] == list(SAFEGUARDS), backend_calls[0].body
+    assert request_json(backend_calls[0]).get("safeguards") == forwarded_safeguards(model), backend_calls[0].body
 
 
+JSON_PROVIDER_MODELS: Final = frozenset({"safeguards-edenai"})
 NATIVE_TARGETS: Final[Mapping[str, str]] = {NATIVE_MODEL: NATIVE_TARGET, **OTHER_NATIVE_MODELS}
+SAFEGUARDS_FORWARDING_TARGETS: Final[Mapping[str, str]] = {
+    model: target for model, target in NATIVE_TARGETS.items() if model not in JSON_PROVIDER_MODELS
+}
+
+
+def forwarded_safeguards(model: str) -> JsonValue:
+    return None if model in JSON_PROVIDER_MODELS else list(SAFEGUARDS)
 
 
 @pytest.mark.parametrize("stream", (False, True), ids=("non_stream", "stream"))
-@pytest.mark.parametrize(("model", "target"), tuple(NATIVE_TARGETS.items()))
+@pytest.mark.parametrize(("model", "target"), tuple(SAFEGUARDS_FORWARDING_TARGETS.items()))
 def test_native_backend_receives_the_request_safeguards_unchanged(
     rig: Rig, model: str, target: str, stream: bool
 ) -> None:

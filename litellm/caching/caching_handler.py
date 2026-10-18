@@ -346,6 +346,7 @@ class LLMCachingHandler:
 
             if litellm.cache is not None and self._is_call_type_supported_by_cache(original_function=original_function):
                 verbose_logger.debug("Checking Async Cache")
+                logging_obj.reset_caching_details()
                 cached_result = await self._retrieve_from_cache(
                     call_type=call_type,
                     kwargs=kwargs,
@@ -357,7 +358,7 @@ class LLMCachingHandler:
                     verbose_logger.debug("Cache Hit!")
                     cache_hit: Final = True
                     end_time: Final = datetime.datetime.now()
-                    model, custom_llm_provider, _, _ = litellm.get_llm_provider(
+                    provider_model, custom_llm_provider, _, _ = litellm.get_llm_provider(
                         model=model,
                         custom_llm_provider=kwargs.get("custom_llm_provider", None),
                         api_base=kwargs.get("api_base", None),
@@ -366,7 +367,7 @@ class LLMCachingHandler:
                     cache_duration_ms: Final = (cache_check_end_time - cache_check_start_time) * 1000
                     self._update_litellm_logging_obj_environment(
                         logging_obj=logging_obj,
-                        model=model,
+                        model=provider_model,
                         kwargs=kwargs,
                         cached_result=cached_result,
                         is_async=True,
@@ -381,7 +382,7 @@ class LLMCachingHandler:
                         call_type=call_type,
                         kwargs=kwargs,
                         logging_obj=logging_obj,
-                        model=model,
+                        model=provider_model,
                         custom_llm_provider=kwargs.get("custom_llm_provider", None),
                         args=args,
                     )
@@ -467,6 +468,7 @@ class LLMCachingHandler:
                 new_kwargs["cache_key"] = litellm.cache.get_cache_key(**new_kwargs)
             self.request_kwargs = _drop_logging_obj_from_kwargs(new_kwargs)
             print_verbose("Checking Sync Cache")
+            logging_obj.reset_caching_details()
             with response_cache_phase("get"):
                 cached_result = litellm.cache.get_cache(**new_kwargs)
             if is_response_without_output(cached_result):

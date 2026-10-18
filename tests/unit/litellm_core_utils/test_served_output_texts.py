@@ -1,3 +1,7 @@
+from typing import Final
+
+import pytest
+
 from litellm.litellm_core_utils.served_output_texts import (
     SERVED_OUTPUT_TEXTS_KEY,
     overlay_served_output_texts,
@@ -77,6 +81,29 @@ def test_served_stream_output_texts_joins_chat_chunks_and_reads_anthropic_sse():
 def test_served_stream_output_texts_keeps_every_choice_index_when_chunks_carry_one_choice_each():
     chunks = [_stream_chunk("first ", 0), _stream_chunk(MASKED, 1), _stream_chunk("choice", 0)]
     assert served_stream_output_texts(chunks) == ("first choice", MASKED)
+
+
+@pytest.mark.parametrize("content", (None, "", "first"))
+def test_null_choice_index_joins_choice_zero_without_changing_other_choices(content: str | None) -> None:
+    chunks: Final = (
+        _stream_chunk("other", 1),
+        ModelResponseStream(
+            choices=[StreamingChoices(index=None, delta=Delta(content=content, reasoning_content="loading"))]
+        ),
+        _stream_chunk(" answer"),
+    )
+    assert served_stream_output_texts(chunks) == ((content or "") + " answer", "other")
+    assert chunks[1].choices[0].index is None
+
+
+@pytest.mark.parametrize("content, expected", ((None, None), ("", ("",)), ("answer", ("answer",))))
+def test_null_choice_index_preserves_empty_text_and_ignores_reasoning(
+    content: str | None, expected: tuple[str, ...] | None
+) -> None:
+    chunk: Final = ModelResponseStream(
+        choices=[StreamingChoices(index=None, delta=Delta(content=content, reasoning_content="loading"))]
+    )
+    assert served_stream_output_texts((chunk,)) == expected
 
 
 def test_blanked_output_is_served_as_empty_text_and_overlaid():

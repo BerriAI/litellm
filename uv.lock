@@ -4999,12 +4999,12 @@ provides-extras = ["test"]
 
 [[package]]
 name = "litellm-enterprise"
-version = "0.1.77"
+version = "0.1.78"
 source = { editable = "enterprise" }
 
 [[package]]
 name = "litellm-proxy-extras"
-version = "0.4.109"
+version = "0.4.110"
 source = { editable = "litellm-proxy-extras" }
 dependencies = [
     { name = "psycopg" },

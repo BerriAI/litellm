@@ -91,6 +91,7 @@ async def test_vertex_passthrough_load_balancing():
             request=mock_request,
             fastapi_response=mock_response,
             get_vertex_pass_through_handler=mock_handler,
+            general_settings={},
         )
 
         # Verify
@@ -404,6 +405,7 @@ async def test_vertex_passthrough_drops_anthropic_beta_only_on_count_tokens(
             request=MagicMock(),
             fastapi_response=MagicMock(),
             get_vertex_pass_through_handler=VertexAIPassThroughHandler(),
+            general_settings={},
         )
 
         upstream_headers = mock_create_route.call_args.kwargs["custom_headers"]
@@ -747,6 +749,7 @@ async def test_vertex_passthrough_custom_model_name_replaced_in_url():
             request=mock_request,
             fastapi_response=mock_response,
             get_vertex_pass_through_handler=mock_handler,
+            general_settings={},
         )
 
         # Verify the router was called with the custom model name (extracted from URL)
@@ -836,6 +839,7 @@ async def test_vertex_passthrough_attributes_the_call_to_the_resolved_deployment
             request=mock_request,
             fastapi_response=MagicMock(),
             get_vertex_pass_through_handler=mock_handler,
+            general_settings={},
         )
 
     assert logging_kwargs["litellm_params"]["metadata"]["model_info"]["id"] == "vertex-gemini-38-flash-dep"

@@ -1210,6 +1210,36 @@
             "additionalProperties": false
           }
         },
+        "token_count_framing": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Tokens added once per request to a local count estimate, for the provider's chat framing."
+        },
+        "token_count_model": {
+          "type": "object",
+          "required": [
+            "model"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "model": {
+              "type": "string",
+              "pattern": "\\S"
+            },
+            "region": {
+              "type": "string",
+              "pattern": "\\S"
+            }
+          },
+          "description": "Model that counts tokens for this one, and the AWS region its count API runs in."
+        },
+        "token_count_tokenizer": {
+          "type": "string",
+          "description": "Tokenizer litellm counts this model's requests with when the provider cannot count them.",
+          "enum": [
+            "kimi_k3"
+          ]
+        },
         "tpm": {
           "type": "integer",
           "minimum": 0,

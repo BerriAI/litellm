@@ -25,7 +25,7 @@ from integration._support.process import OwnedProxy, owned_proxy_process
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
 
-pytestmark: Final = pytest.mark.timeout(900)
+pytestmark: Final = [pytest.mark.timeout(900), pytest.mark.shares_worker_state]
 
 _STARTED_WORKER: Final = re.compile(r"Started server process \[(\d+)\]")
 _DROPPED: Final = re.compile(r"original model: (\S+), ignoring and continuing")
