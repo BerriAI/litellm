@@ -2,7 +2,7 @@ import json
 import re
 import time
 from collections.abc import AsyncIterator, Iterator, Mapping
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, cast  # noqa: TID251  # untyped stream chunk
 
 from httpx._models import Headers, Response
 from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
