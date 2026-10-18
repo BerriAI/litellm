@@ -16,12 +16,15 @@ import litellm
 from litellm import AmazonInvokeConfig
 from litellm.exceptions import MidStreamFallbackError
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.litellm_logging import _get_provider_request_id
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.bedrock.chat.invoke_handler import (
     AmazonOpenAICompatibleStreamDecoder,
     AWSEventStreamDecoder,
+    _stream_decoder,
     make_call,
     make_sync_call,
+    response_format_schema_from_request,
 )
 from litellm.llms.bedrock.common_utils import BedrockError, get_bedrock_stream_event_statuses
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -39,13 +42,43 @@ def bedrock_transformer() -> AmazonInvokeConfig:
     return AmazonInvokeConfig()
 
 
-def test_transform_thinking_blocks_with_redacted_content():
-    thinking_block = {"redactedContent": "This is a redacted content"}
-    decoder = AWSEventStreamDecoder(model="test")
-    transformed_thinking_blocks = decoder.translate_thinking_blocks(thinking_block)
-    assert len(transformed_thinking_blocks) == 1
-    assert transformed_thinking_blocks[0]["type"] == "redacted_thinking"
-    assert transformed_thinking_blocks[0]["data"] == "This is a redacted content"
+def test_transform_thinking_blocks_unwraps_converse_redacted_content_to_claude_native_data():
+    """Converse streams Claude's redacted data base64-wrapped. Handing it out as is made the Anthropic API and
+    Bedrock Invoke 400 with "Invalid `data` in `redacted_thinking` block" when the history was replayed there."""
+    native_data: Final = "EmwKAhgBEgy3va3pzix/LafPsn4aDFIT2Xlxh0L5L8rLVyIwxtE3rAFBa8cr3qpP"
+    decoder: Final = AWSEventStreamDecoder(model="test")
+
+    thinking_blocks: Final = decoder.translate_thinking_blocks(
+        {"redactedContent": base64.b64encode(native_data.encode()).decode()}
+    )
+
+    assert thinking_blocks == [{"type": "redacted_thinking", "data": native_data, "index": 0}]
+
+
+def test_converse_reasoning_deltas_index_thinking_blocks_by_reasoning_block_for_the_openai_sdk():
+    """The OpenAI SDK's `.stream()` accumulator needs a list-position `index` on every streamed `thinking_blocks`
+    entry, stable across one reasoning block's fragments and sequential across blocks even when a text block sits
+    between them (Converse `contentBlockIndex` 0 and 2 become thinking indexes 0 and 1)"""
+    decoder: Final = AWSEventStreamDecoder(model="test")
+    chunks: Final = (
+        {"delta": {"reasoningContent": {"text": "Step 1. "}}, "contentBlockIndex": 0},
+        {"delta": {"reasoningContent": {"text": "Step 2."}}, "contentBlockIndex": 0},
+        {"delta": {"reasoningContent": {"signature": "sig-a"}}, "contentBlockIndex": 0},
+        {"delta": {"text": "Paris"}, "contentBlockIndex": 1},
+        {"delta": {"reasoningContent": {"text": "Step 3."}}, "contentBlockIndex": 2},
+        {"delta": {"reasoningContent": {"signature": "sig-b"}}, "contentBlockIndex": 2},
+    )
+
+    deltas: Final = tuple(decoder.chunk_parser(chunk).choices[0].delta for chunk in chunks)
+    streamed: Final = tuple(block for delta in deltas for block in (getattr(delta, "thinking_blocks", None) or []))
+
+    assert streamed == (
+        {"type": "thinking", "thinking": "Step 1. ", "index": 0},
+        {"type": "thinking", "thinking": "Step 2.", "index": 0},
+        {"type": "thinking", "thinking": "", "signature": "sig-a", "index": 0},
+        {"type": "thinking", "thinking": "Step 3.", "index": 1},
+        {"type": "thinking", "thinking": "", "signature": "sig-b", "index": 1},
+    )
 
 
 def test_transform_tool_calls_index():
@@ -832,14 +865,16 @@ async def test_async_invoke_streaming_non_200_forwards_bedrock_response_headers(
 
 
 def _event_stream_frame(event_type: str, payload: bytes) -> bytes:
+    return _typed_event_stream_frame(
+        {":event-type": event_type, ":content-type": "application/json", ":message-type": "event"}, payload
+    )
+
+
+def _typed_event_stream_frame(frame_headers: Mapping[str, str], payload: bytes) -> bytes:
     def header(name: str, value: str) -> bytes:
         return bytes([len(name)]) + name.encode() + bytes([7]) + struct.pack(">H", len(value)) + value.encode()
 
-    headers: Final = (
-        header(":event-type", event_type)
-        + header(":content-type", "application/json")
-        + header(":message-type", "event")
-    )
+    headers: Final = b"".join(header(name, value) for name, value in frame_headers.items())
     prelude: Final = struct.pack(">II", 12 + len(headers) + len(payload) + 4, len(headers))
     body: Final = prelude + struct.pack(">I", binascii.crc32(prelude)) + headers + payload
     return body + struct.pack(">I", binascii.crc32(body))
@@ -1335,6 +1370,87 @@ def test_iter_bytes_keeps_a_stream_whose_unknown_event_sits_beside_known_frames(
     assert "stop" in finish_reasons
 
 
+_STREAM_FAILURE_BODIES: Final = (
+    pytest.param(
+        _converse_event_frame("internalServerException", {"message": _UPSTREAM_REJECTION}), 500, id="exception-event"
+    ),
+    pytest.param(
+        _typed_event_stream_frame(
+            {
+                ":exception-type": "throttlingException",
+                ":content-type": "application/json",
+                ":message-type": "exception",
+            },
+            json.dumps({"message": _UPSTREAM_REJECTION}).encode(),
+        ),
+        429,
+        id="exception-message",
+    ),
+    pytest.param(_unknown_event_frame(), 502, id="no-known-event"),
+    pytest.param(b"", 502, id="no-events"),
+    pytest.param(_CONVERSE_CONTENT_FRAMES[0] + _truncated_frame(), 502, id="undecoded-tail"),
+)
+
+
+def _stream_headers(request_id: str | None) -> httpx.Headers:
+    request_id_header: Final = {} if request_id is None else {"x-amzn-RequestId": request_id}
+    return httpx.Headers(
+        {"content-type": "application/vnd.amazon.eventstream", "retry-after": "7", **request_id_header}
+    )
+
+
+def _assert_carries_only_the_request_id(error: BedrockError, status: int, request_id: str | None) -> None:
+    assert error.status_code == status
+    assert _get_provider_request_id(error) == request_id
+    if request_id is None:
+        assert error.headers is None
+        return
+    assert dict(error.headers or {}) == {"x-amzn-requestid": request_id}
+    assert dict(error.response.headers) == {"x-amzn-requestid": request_id}
+
+
+@pytest.mark.parametrize("request_id", ("req-stream-1", None))
+@pytest.mark.parametrize(("body", "status"), _STREAM_FAILURE_BODIES)
+def test_iter_bytes_stream_error_carries_only_the_provider_request_id_header(
+    body: bytes, status: int, request_id: str | None
+) -> None:
+    decoder: Final = AWSEventStreamDecoder(model="us.moonshotai.kimi-k3")
+
+    with pytest.raises(BedrockError) as exc_info:
+        list(decoder.iter_bytes(iter([body]), response_headers=_stream_headers(request_id)))
+
+    _assert_carries_only_the_request_id(exc_info.value, status, request_id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("body", "status"), _STREAM_FAILURE_BODIES)
+async def test_aiter_bytes_stream_error_carries_only_the_provider_request_id_header(body: bytes, status: int) -> None:
+    async def _chunks() -> AsyncIterator[bytes]:
+        yield body
+
+    decoder: Final = AWSEventStreamDecoder(model="us.moonshotai.kimi-k3")
+
+    with pytest.raises(BedrockError) as exc_info:
+        _ = [chunk async for chunk in decoder.aiter_bytes(_chunks(), response_headers=_stream_headers("req-stream-2"))]
+
+    _assert_carries_only_the_request_id(exc_info.value, status, "req-stream-2")
+
+
+@pytest.mark.parametrize("request_id", ("req-\u00fc-1", "req-\udcfc-1"), ids=("latin-1", "surrogate-escaped"))
+def test_iter_bytes_streams_and_fails_normally_with_a_non_ascii_provider_request_id(request_id: str) -> None:
+    decoder: Final = AWSEventStreamDecoder(model="us.moonshotai.kimi-k3")
+    headers: Final = {"content-type": "application/vnd.amazon.eventstream", "x-amzn-RequestId": request_id}
+
+    chunks: Final = list(decoder.iter_bytes(iter(_CONVERSE_CONTENT_FRAMES), response_headers=headers))
+    with pytest.raises(BedrockError) as exc_info:
+        list(decoder.iter_bytes(iter([_unknown_event_frame()]), response_headers=headers))
+
+    texts: Final = [chunk.choices[0].delta.content for chunk in chunks if isinstance(chunk, ModelResponseStream)]
+    assert "".join(text or "" for text in texts) == "hi"
+    assert exc_info.value.status_code == 502
+    assert exc_info.value.headers is None
+
+
 def _assert_exception_event_surfaced_with_its_modeled_status(error: BaseException, event_type: str) -> None:
     assert not isinstance(error, litellm.BadGatewayError)
     assert getattr(error, "status_code", None) == _modeled_status(event_type)
@@ -1616,6 +1732,91 @@ def test_invoke_decoder_reports_only_missing_aws_dependency(missing):
         assert error.value.__cause__ is failure
     else:
         assert error.value is failure
+
+
+_INVOKE_RISK_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"tier": {"type": "integer"}, "summary": {"type": "string"}},
+    "required": ["tier", "summary"],
+}
+_INVOKE_RISK_OBJECT: Final = {"tier": 2, "summary": "Weekend database migration with a tested rollback"}
+
+
+def _invoke_json_mode_request(tools: Sequence[Mapping[str, object]]) -> str:
+    return json.dumps(
+        {
+            "anthropic_version": "bedrock-2023-05-31",
+            "messages": [{"role": "user", "content": "Assess this change request"}],
+            "tools": list(tools),
+            "tool_choice": {"type": "tool", "name": "json_tool_call"},
+        }
+    )
+
+
+def _invoke_json_tool_events(fragments: Sequence[str]) -> tuple[dict[str, object], ...]:
+    deltas = tuple(
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": fragment}}
+        for fragment in fragments
+    )
+    return (
+        {"type": "message_start", "message": {"id": "msg_1", "usage": {"input_tokens": 1, "output_tokens": 0}}},
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "tool_use", "id": "t1", "name": "json_tool_call", "input": {}},
+        },
+        *deltas,
+        {"type": "content_block_stop", "index": 0},
+        {"type": "message_delta", "delta": {"stop_reason": "tool_use"}, "usage": {"output_tokens": 9}},
+    )
+
+
+def _invoke_streamed_json_mode_contents(data: str, fragments: Sequence[str], json_mode: bool = True) -> tuple[str, ...]:
+    decoder = _stream_decoder(
+        "anthropic",
+        model="anthropic.claude-sonnet-4",
+        json_mode=True,
+        sync_stream=True,
+        response_format_schema=response_format_schema_from_request(data, json_mode),
+    )
+    chunks = tuple(decoder._chunk_parser(event) for event in _invoke_json_tool_events(fragments))
+    assert all(not chunk.choices[0].delta.tool_calls for chunk in chunks)
+    return tuple(chunk.choices[0].delta.content or "" for chunk in chunks)
+
+
+def test_invoke_streamed_json_mode_envelope_is_unwrapped_with_the_schema_from_the_request_body():
+    envelope: Final = json.dumps({"tool_name": "json_tool_call", "parameters": _INVOKE_RISK_OBJECT})
+    data: Final = _invoke_json_mode_request([{"name": "json_tool_call", "input_schema": _INVOKE_RISK_SCHEMA}])
+
+    contents = _invoke_streamed_json_mode_contents(data, (envelope[:17], envelope[17:48], envelope[48:]))
+
+    assert json.loads("".join(contents)) == _INVOKE_RISK_OBJECT
+
+
+@pytest.mark.parametrize(
+    ("data", "json_mode"),
+    [
+        pytest.param("not json", True, id="unparseable_body"),
+        pytest.param(json.dumps([1, 2]), True, id="body_is_not_an_object"),
+        pytest.param(
+            _invoke_json_mode_request([{"name": "other_tool", "input_schema": _INVOKE_RISK_SCHEMA}]),
+            True,
+            id="no_json_tool",
+        ),
+        pytest.param(
+            _invoke_json_mode_request([{"name": "json_tool_call", "input_schema": _INVOKE_RISK_SCHEMA}]),
+            False,
+            id="json_mode_off",
+        ),
+    ],
+)
+def test_invoke_stream_keeps_the_wrapper_when_the_request_body_carries_no_json_tool_schema(data: str, json_mode: bool):
+    envelope: Final = json.dumps({"tool_name": "json_tool_call", "parameters": _INVOKE_RISK_OBJECT})
+
+    assert response_format_schema_from_request(data, json_mode) is None
+    contents = _invoke_streamed_json_mode_contents(data, (envelope[:17], envelope[17:]), json_mode)
+
+    assert json.loads("".join(contents)) == {"tool_name": "json_tool_call", "parameters": _INVOKE_RISK_OBJECT}
 
 
 @pytest.mark.asyncio

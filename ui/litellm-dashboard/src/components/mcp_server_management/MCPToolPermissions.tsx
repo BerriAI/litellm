@@ -15,9 +15,12 @@ import {
   applyToolPermissionWrite,
   emptyMcpAccessGroups,
   mcpAllowedToolsFor,
+  mcpServersForIdentifier,
   mcpGrantsAllTools,
   resolveEffectiveMcpServers,
 } from "./effectiveMcpServers";
+
+export type ToolPermissionsChangeOrigin = "default" | "edit";
 
 interface MCPToolPermissionsProps {
   accessToken: string;
@@ -25,8 +28,9 @@ interface MCPToolPermissionsProps {
   selectedAccessGroups?: readonly string[];
   selectedToolsets?: readonly string[];
   toolPermissions: Record<string, string[]>;
-  onChange: (toolPermissions: Record<string, string[]>) => void;
+  onChange: (toolPermissions: Record<string, string[]>, origin: ToolPermissionsChangeOrigin) => void;
   disabled?: boolean;
+  preserveUnrestrictedServers?: readonly string[];
 }
 
 const NO_SELECTION: readonly string[] = [];
@@ -57,6 +61,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
   toolPermissions,
   onChange,
   disabled = false,
+  preserveUnrestrictedServers = NO_SELECTION,
 }) => {
   const {
     data: allServers = [],
@@ -96,6 +101,16 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
 
   // Fetch tools for a specific server; applies delete-blocked-by-default for new servers.
   // `token` is passed explicitly so the closure never captures a stale accessToken.
+  const preservedServerIds = useMemo(
+    () =>
+      new Set(
+        preserveUnrestrictedServers.flatMap((identifier) =>
+          mcpServersForIdentifier(allServers, identifier).map((server) => server.server_id),
+        ),
+      ),
+    [allServers, preserveUnrestrictedServers],
+  );
+
   const fetchToolsForServer = async (entry: EffectiveMcpServer, token: string) => {
     const serverId = entry.server.server_id;
     setLoadingTools((prev) => ({ ...prev, [serverId]: true }));
@@ -118,11 +133,20 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
         const unrestricted =
           mcpAllowedToolsFor(entry.server, latestPermissions, allServers) === undefined &&
           entry.toolsetTools === undefined;
-        if (isDirect && unrestricted && (selectedToolsets.length === 0 || !toolsetsFailed) && fetchedTools.length > 0) {
+        if (
+          !preservedServerIds.has(serverId) &&
+          isDirect &&
+          unrestricted &&
+          (selectedToolsets.length === 0 || !toolsetsFailed) &&
+          fetchedTools.length > 0
+        ) {
           const nonDeleteTools = fetchedTools
             .filter((t) => classifyToolOp(t.name, t.description || "") !== "delete")
             .map((t) => t.name);
-          onChange(applyToolPermissionWrite({ toolPermissions: latestPermissions, entry, allowed: nonDeleteTools }));
+          onChange(
+            applyToolPermissionWrite({ toolPermissions: latestPermissions, entry, allowed: nonDeleteTools }),
+            "default",
+          );
         }
       }
     } catch (err) {
@@ -156,7 +180,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
       entry.source.kind !== "toolset" && names.length > 0 && names.every((n) => allowed.includes(n))
         ? [MCP_ALL_TOOLS_WILDCARD]
         : allowed;
-    onChange(applyToolPermissionWrite({ toolPermissions, entry, allowed: next }));
+    onChange(applyToolPermissionWrite({ toolPermissions, entry, allowed: next }), "edit");
   };
 
   const handleSelectAll = (entry: EffectiveMcpServer) => {

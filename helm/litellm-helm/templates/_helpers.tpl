@@ -163,12 +163,84 @@ taken before the change, which by that point no longer exists.
 {{- end -}}
 
 {{/*
+Whether the existing Postgres is reached with a short-lived token (AWS RDS IAM
+or Microsoft Entra ID) instead of a password.
+*/}}
+{{- define "litellm.db.tokenAuth" -}}
+{{- if or .Values.db.useIAMAuth .Values.db.useAzureEntraAuth -}}true{{- end -}}
+{{- end -}}
+
+{{- define "litellm.validateDbTokenAuth" -}}
+{{- if and .Values.db.useIAMAuth .Values.db.useAzureEntraAuth -}}
+{{- fail "db.useIAMAuth and db.useAzureEntraAuth are mutually exclusive: the database password can only come from one token source" -}}
+{{- end -}}
+{{- if and (include "litellm.db.tokenAuth" .) (or (not .Values.db.useExisting) .Values.db.deployStandalone) -}}
+{{- fail "db.useIAMAuth and db.useAzureEntraAuth need db.useExisting: true and db.deployStandalone: false (token auth targets an existing RDS or Azure Database for PostgreSQL; the bundled postgresql subchart only supports password auth)" -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Database env for an existing Postgres, shared by the proxy container, the
+collector sidecar and the migrations Job. Under token auth every entrypoint
+mints its own token and assembles DATABASE_URL itself, so db.url is left out.
+*/}}
+{{- define "litellm.existingDbEnv" -}}
+{{- $tokenAuth := include "litellm.db.tokenAuth" . -}}
+- name: DATABASE_USERNAME
+  {{- if .Values.db.username }}
+  value: {{ .Values.db.username | quote }}
+  {{- else }}
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.db.secret.name }}
+      key: {{ .Values.db.secret.usernameKey }}
+  {{- end }}
+{{- if .Values.db.useIAMAuth }}
+- name: IAM_TOKEN_DB_AUTH
+  value: "true"
+{{- else if .Values.db.useAzureEntraAuth }}
+- name: AZURE_POSTGRESQL_AUTH
+  value: "true"
+{{- else }}
+- name: DATABASE_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.db.secret.name }}
+      key: {{ .Values.db.secret.passwordKey }}
+{{- end }}
+- name: DATABASE_HOST
+  {{- if .Values.db.secret.endpointKey }}
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.db.secret.name }}
+      key: {{ .Values.db.secret.endpointKey }}
+  {{- else }}
+  value: {{ .Values.db.endpoint }}
+  {{- end }}
+{{- if $tokenAuth }}
+- name: DATABASE_PORT
+  value: {{ .Values.db.port | quote }}
+{{- end }}
+- name: DATABASE_NAME
+  value: {{ .Values.db.database }}
+{{- if and $tokenAuth .Values.db.schema }}
+- name: DATABASE_SCHEMA
+  value: {{ .Values.db.schema | quote }}
+{{- end }}
+{{- if not $tokenAuth }}
+- name: DATABASE_URL
+  value: {{ .Values.db.url | quote }}
+{{- end }}
+{{- end -}}
+
+{{/*
 Environment shared by the proxy container and the opt-in collector sidecar:
 database, pgbouncer, master key, redis, user envVars. Both containers must see
 the same DATABASE_URL and REDIS_* so the sidecar reaches the pod's pgbouncer
 and the same spend transaction buffer.
 */}}
 {{- define "litellm.proxyEnv" -}}
+{{- include "litellm.validateDbTokenAuth" . -}}
 - name: HOST
   value: "{{ .Values.listen | default "0.0.0.0" }}"
 - name: PORT
@@ -189,29 +261,7 @@ and the same spend transaction buffer.
 - name: DATABASE_NAME
   value: litellm
 {{- else if .Values.db.useExisting }}
-- name: DATABASE_USERNAME
-  valueFrom:
-    secretKeyRef:
-      name: {{ .Values.db.secret.name }}
-      key: {{ .Values.db.secret.usernameKey }}
-- name: DATABASE_PASSWORD
-  valueFrom:
-    secretKeyRef:
-      name: {{ .Values.db.secret.name }}
-      key: {{ .Values.db.secret.passwordKey }}
-- name: DATABASE_HOST
-  {{- if .Values.db.secret.endpointKey }}
-  valueFrom:
-    secretKeyRef:
-      name: {{ .Values.db.secret.name }}
-      key: {{ .Values.db.secret.endpointKey }}
-  {{- else }}
-  value: {{ .Values.db.endpoint }}
-  {{- end }}
-- name: DATABASE_NAME
-  value: {{ .Values.db.database }}
-- name: DATABASE_URL
-  value: {{ .Values.db.url | quote }}
+{{ include "litellm.existingDbEnv" . }}
 {{- end }}
 {{- if and .Values.db.useExisting .Values.db.readReplicaUrl .Values.db.secret.readReplicaEndpointKey (not .Values.db.secret.readReplicaUrlKey) }}
 - name: DATABASE_READER_HOST

@@ -20,16 +20,23 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 import respx
-from openai import APITimeoutError
+from openai import APITimeoutError, AsyncOpenAI
+from openai._legacy_response import LegacyAPIResponse
 from openai.types.chat.chat_completion import ChatCompletion
 
 import litellm
-from litellm import acompletion, completion
-from litellm import acompletion_with_retries, aresponses_with_retries, completion_with_retries, responses_with_retries
+from litellm import (
+    acompletion,
+    acompletion_with_retries,
+    aresponses_with_retries,
+    completion,
+    completion_with_retries,
+    responses_with_retries,
+)
 from litellm import main as litellm_main
-from litellm.constants import CONTROL_OPTIONS_KEY
 from litellm.caching.base_cache import BaseCache
 from litellm.caching.caching import Cache
+from litellm.constants import CONTROL_OPTIONS_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
@@ -41,6 +48,11 @@ from litellm.types.litellm_params import ControlOptions
 from litellm.types.llms.openai import AllMessageValues, HttpxBinaryResponseContent
 from litellm.types.prompts.init_prompts import PromptSpec
 from litellm.types.utils import Delta, ModelResponseStream, StandardCallbackDynamicParams, StreamingChoices, Usage
+from tests.unit.llms.bedrock.slow_upstream import (
+    STREAM_TIMEOUT_SECONDS,
+    UPSTREAM_FIRST_BYTE_SECONDS,
+    slow_upstream_sync_client,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -130,7 +142,7 @@ def test_completion_missing_role(openai_api_response):
 
     client = OpenAI(api_key="test_api_key")
 
-    mock_raw_response = MagicMock()
+    mock_raw_response = MagicMock(spec=LegacyAPIResponse)
     mock_raw_response.headers = {
         "x-request-id": "123",
         "openai-organization": "org-123",
@@ -142,7 +154,7 @@ def test_completion_missing_role(openai_api_response):
     print(f"openai_api_response: {openai_api_response}")
 
     with patch.object(
-        client.chat.completions.with_raw_response, "create", MagicMock(return_value=mock_raw_response)
+        client, "post", MagicMock(return_value=mock_raw_response)
     ) as mock_create:
         litellm.completion(
             model="gpt-4o-mini",
@@ -218,7 +230,7 @@ async def test_url_with_format_param_openai(model, sync_mode):
             }
         ],
     }
-    with patch.object(client.chat.completions.with_raw_response, "create") as mock_client:
+    with patch.object(client, "post") as mock_client:
         try:
             if sync_mode:
                 response = completion(**args, client=client)
@@ -232,7 +244,7 @@ async def test_url_with_format_param_openai(model, sync_mode):
 
         print(mock_client.call_args.kwargs)
 
-        json_str = json.dumps(mock_client.call_args.kwargs)
+        json_str = json.dumps(mock_client.call_args.kwargs["body"])
 
         assert "format" not in json_str
 
@@ -413,6 +425,233 @@ def test_completion_strips_eager_input_streaming_before_openai(respx_mock: respx
     sent_tool: Final = json.loads(respx_mock.calls[0].request.content)["tools"][0]
     assert "eager_input_streaming" not in sent_tool
     assert sent_tool["function"]["name"] == "write_file"
+
+
+_CLAUDE_TOOL_SEARCH_CALL: Final = {
+    "id": "srvtoolu_01search",
+    "type": "function",
+    "function": {"name": "tool_search_tool_regex", "arguments": '{"pattern": "weather"}'},
+}
+_LOADED_FUNCTION_CALL: Final = {
+    "id": "toolu_01weather",
+    "type": "function",
+    "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+}
+_USER_TURN: Final = {"role": "user", "content": "What is the weather in Paris?"}
+_WEATHER_RESULT: Final = {"role": "tool", "tool_call_id": "toolu_01weather", "content": "18C"}
+_SEARCH_RESULT: Final = {"role": "tool", "tool_call_id": "srvtoolu_01search", "content": "searched"}
+
+
+@pytest.mark.parametrize(
+    ("claude_turn", "sent_after_user"),
+    [
+        pytest.param(
+            [
+                {"role": "assistant", "content": None, "tool_calls": [_CLAUDE_TOOL_SEARCH_CALL, _LOADED_FUNCTION_CALL]},
+                _WEATHER_RESULT,
+            ],
+            [{"role": "assistant", "tool_calls": [_LOADED_FUNCTION_CALL]}, _WEATHER_RESULT],
+            id="search-beside-a-function-call",
+        ),
+        pytest.param(
+            [
+                litellm.Message(content="Looking", tool_calls=[_CLAUDE_TOOL_SEARCH_CALL, _LOADED_FUNCTION_CALL]),
+                _WEATHER_RESULT,
+            ],
+            [{"role": "assistant", "content": "Looking", "tool_calls": [_LOADED_FUNCTION_CALL]}, _WEATHER_RESULT],
+            id="sdk-message-object",
+        ),
+        pytest.param(
+            [{"role": "assistant", "content": None, "tool_calls": [_CLAUDE_TOOL_SEARCH_CALL]}],
+            [],
+            id="unanswered-search-alone",
+        ),
+        pytest.param(
+            [
+                {"role": "assistant", "content": None, "tool_calls": [_CLAUDE_TOOL_SEARCH_CALL, _LOADED_FUNCTION_CALL]},
+                _SEARCH_RESULT,
+                _WEATHER_RESULT,
+            ],
+            [
+                {"role": "assistant", "tool_calls": [_CLAUDE_TOOL_SEARCH_CALL, _LOADED_FUNCTION_CALL]},
+                _SEARCH_RESULT,
+                _WEATHER_RESULT,
+            ],
+            id="answered-search-kept",
+        ),
+    ],
+)
+def test_completion_drops_unanswered_claude_tool_search_calls_from_history_sent_to_openai(
+    respx_mock: respx.MockRouter, openai_api_response, claude_turn, sent_after_user
+):
+    api_base: Final = "http://localhost:12346/v1"
+    respx_mock.post(url__regex=rf"{api_base}/chat/completions.*").mock(
+        return_value=httpx.Response(status_code=200, json=openai_api_response)
+    )
+
+    litellm.completion(
+        model="openai/gpt-5.6",
+        messages=[_USER_TURN, *claude_turn, {"role": "user", "content": "And tomorrow?"}],
+        api_base=api_base,
+        api_key="fake_openai_api_key",
+    )
+
+    sent: Final = json.loads(respx_mock.calls[0].request.content)["messages"]
+    assert [
+        {key: message[key] for key in ("role", "content", "tool_calls", "tool_call_id") if key in message}
+        for message in sent
+    ] == [_USER_TURN, *sent_after_user, {"role": "user", "content": "And tomorrow?"}]
+
+
+def test_completion_drops_unanswered_claude_tool_search_calls_before_the_responses_bridge_sends_history_to_openai(
+    respx_mock: respx.MockRouter,
+):
+    route: Final = respx_mock.post("https://api.openai.com/v1/responses").respond(
+        json={
+            "id": "resp_turn2",
+            "object": "response",
+            "created_at": 1,
+            "status": "completed",
+            "model": "gpt-5.6",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_turn2",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": "18C and clear", "annotations": []}],
+                }
+            ],
+            "usage": {"input_tokens": 40, "output_tokens": 5, "total_tokens": 45},
+        }
+    )
+
+    litellm.completion(
+        model="openai/gpt-5.6",
+        api_key="sk-test",
+        api_base="https://api.openai.com/v1",
+        messages=[
+            _USER_TURN,
+            {"role": "assistant", "content": None, "tool_calls": [_CLAUDE_TOOL_SEARCH_CALL, _LOADED_FUNCTION_CALL]},
+            _WEATHER_RESULT,
+        ],
+        tools=[{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}],
+    )
+
+    sent_input: Final = json.loads(route.calls.last.request.content)["input"]
+    assert [(item.get("type"), item.get("call_id")) for item in sent_input if "call_id" in item] == [
+        ("function_call", "toolu_01weather"),
+        ("function_call_output", "toolu_01weather"),
+    ]
+
+
+def _openai_called_names(body: Mapping[str, object]) -> tuple[str, ...]:
+    messages: Final = body["messages"]
+    assert isinstance(messages, list)
+    return tuple(call["function"]["name"] for message in messages for call in message.get("tool_calls") or ())
+
+
+def _converse_called_names(body: Mapping[str, object]) -> tuple[str, ...]:
+    messages: Final = body["messages"]
+    assert isinstance(messages, list)
+    blocks: Final = tuple(block for message in messages for block in message["content"])
+    return tuple(block["toolUse"]["name"] for block in blocks if "toolUse" in block)
+
+
+def _gemini_called_names(body: Mapping[str, object]) -> tuple[str, ...]:
+    contents: Final = body["contents"]
+    assert isinstance(contents, list)
+    parts: Final = tuple(part for content in contents for part in content["parts"])
+    return tuple(part["function_call"]["name"] for part in parts if "function_call" in part)
+
+
+_OPENAI_CHAT_REPLY: Final = {
+    "id": "chatcmpl-turn2",
+    "object": "chat.completion",
+    "created": 1,
+    "model": "gpt-4o",
+    "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "18C"}}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+
+@pytest.mark.parametrize(
+    ("model", "route_kwargs", "url_pattern", "reply", "called_names", "sent_names"),
+    [
+        pytest.param(
+            "azure/gpt-4o",
+            {"api_base": "https://turn2.openai.azure.com", "api_key": "fake", "api_version": "2024-10-21"},
+            r"https://turn2\.openai\.azure\.com/openai/deployments/gpt-4o/chat/completions.*",
+            _OPENAI_CHAT_REPLY,
+            _openai_called_names,
+            ("get_weather",),
+            id="azure-openai-strips",
+        ),
+        pytest.param(
+            "bedrock/us.anthropic.claude-opus-5-5",
+            {"aws_access_key_id": "fake", "aws_secret_access_key": "fake", "aws_region_name": "us-east-1"},
+            r"https://bedrock-runtime\.us-east-1\.amazonaws\.com/model/.*/converse",
+            {
+                "output": {"message": {"role": "assistant", "content": [{"text": "18C"}]}},
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+            },
+            _converse_called_names,
+            ("get_weather",),
+            id="bedrock-converse-strips",
+        ),
+        pytest.param(
+            "gemini/gemini-3.8-flash",
+            {"api_key": "fake"},
+            r"https://generativelanguage\.googleapis\.com/.*:generateContent.*",
+            {
+                "candidates": [{"content": {"role": "model", "parts": [{"text": "18C"}]}, "finishReason": "STOP"}],
+                "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
+            },
+            _gemini_called_names,
+            ("tool_search_tool_regex", "get_weather"),
+            id="gemini-keeps",
+        ),
+    ],
+)
+def test_completion_strips_an_unanswered_claude_tool_search_call_only_for_routes_that_reject_it(
+    respx_mock: respx.MockRouter, model, route_kwargs, url_pattern, reply, called_names, sent_names
+):
+    route: Final = respx_mock.post(url__regex=url_pattern).respond(json=reply)
+
+    litellm.completion(
+        model=model,
+        messages=[
+            _USER_TURN,
+            {"role": "assistant", "content": None, "tool_calls": [_CLAUDE_TOOL_SEARCH_CALL, _LOADED_FUNCTION_CALL]},
+            _WEATHER_RESULT,
+        ],
+        tools=[{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}],
+        **route_kwargs,
+    )
+
+    assert called_names(json.loads(route.calls.last.request.content)) == sent_names
+
+
+def test_completion_keeps_a_function_call_whose_id_only_looks_like_a_claude_server_tool(
+    respx_mock: respx.MockRouter, openai_api_response
+):
+    api_base: Final = "http://localhost:12346/v1"
+    respx_mock.post(url__regex=rf"{api_base}/chat/completions.*").mock(
+        return_value=httpx.Response(status_code=200, json=openai_api_response)
+    )
+    lookalike_call: Final = {**_LOADED_FUNCTION_CALL, "id": "srvtoolu_01weather"}
+    history: Final = [
+        _USER_TURN,
+        {"role": "assistant", "content": None, "tool_calls": [lookalike_call]},
+        {"role": "tool", "tool_call_id": "srvtoolu_01weather", "content": "18C"},
+    ]
+
+    litellm.completion(model="openai/gpt-5.6", messages=history, api_base=api_base, api_key="fake_openai_api_key")
+
+    sent: Final = json.loads(respx_mock.calls[0].request.content)["messages"]
+    assert [message["role"] for message in sent] == ["user", "assistant", "tool"]
+    assert sent[1]["tool_calls"][0]["id"] == "srvtoolu_01weather"
 
 
 def test_embedding_keeps_an_internal_prefixed_kwarg_out_of_the_provider_request(respx_mock: respx.MockRouter) -> None:
@@ -1244,6 +1483,37 @@ def test_responses_api_bridge_check_blank_api_base_is_default_openai(blank_api_b
     assert model_info.get("mode") == "responses"
 
 
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "reasoning_effort", "api_base", "expected_mode"),
+    [
+        ("openai", "none", None, "responses"),
+        ("openai", {"effort": "none"}, None, "responses"),
+        ("azure", "none", "https://example.openai.azure.com", "responses"),
+        ("openai", "none", "http://vllm.internal:8000/v1", None),
+    ],
+    ids=["openai-effort-none", "openai-dict-effort-none", "azure-effort-none", "chat-only-custom-base"],
+)
+def test_responses_api_bridge_check_tool_search_routes_to_responses_on_openai_endpoints(
+    custom_llm_provider, reasoning_effort, api_base, expected_mode
+):
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.responses.bridge_check.get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 128000}
+        model_info, _ = responses_api_bridge_check(
+            model="gpt-5.5",
+            custom_llm_provider=custom_llm_provider,
+            tools=[
+                {"type": "tool_search"},
+                {"type": "function", "function": {"name": "get_weather"}, "defer_loading": True},
+            ],
+            reasoning_effort=reasoning_effort,
+            api_base=api_base,
+        )
+
+    assert model_info.get("mode") == expected_mode
+
+
 def test_responses_api_bridge_check_custom_api_base_with_unset_effort_stays_chat():
     """
     Chat-only OpenAI-compatible backends registered under the openai provider with a
@@ -1670,6 +1940,60 @@ def test_responses_bridge_preserves_reasoning_effort_with_drop_params(
 
     request_body: Final = json.loads(response_route.calls[0].request.content)
     assert request_body["reasoning"] == {"effort": "high"}
+
+
+_BRIDGED_RESPONSE_ANSWER: Final = json.dumps(
+    {
+        "id": "resp_slow",
+        "object": "response",
+        "created_at": 1734366691,
+        "status": "completed",
+        "model": "slow-responses-model",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_1",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "hi", "annotations": []}],
+            }
+        ],
+        "parallel_tool_calls": True,
+        "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+        "tool_choice": "auto",
+        "tools": [],
+    }
+).encode()
+
+
+def test_responses_bridge_fake_stream_is_bounded_by_the_request_timeout_not_the_stream_timeout(
+    restore_model_registry: None,
+) -> None:
+    model: Final = "openai/slow-responses-model"
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": "openai",
+                "mode": "responses",
+                "supports_native_streaming": False,
+                "input_cost_per_token": 0.0,
+                "output_cost_per_token": 0.0,
+            }
+        },
+        persist_across_reloads=False,
+    )
+
+    response: Final = litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        stream_timeout=STREAM_TIMEOUT_SECONDS,
+        timeout=UPSTREAM_FIRST_BYTE_SECONDS * 2,
+        api_key="fake-key",
+        client=slow_upstream_sync_client(_BRIDGED_RESPONSE_ANSWER),
+    )
+
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in response) == "hi"
 
 
 _FOUNDRY_RESPONSES_FUNCTION_CALL_BODY: Final = {
@@ -2747,8 +3071,9 @@ def test_stream_chunk_builder_thinking_blocks():
     assert response.choices[0].message.thinking_blocks is not None
 
 
-from litellm.llms.openai.openai import OpenAIChatCompletion
 import traceback
+
+from litellm.llms.openai.openai import OpenAIChatCompletion
 
 user_message = "Write a short poem about the sky"
 messages = [{"content": user_message, "role": "user"}]
@@ -3519,7 +3844,7 @@ def test_completion_forwards_store_and_prompt_cache_key_to_openai():
 
     client = OpenAI(api_key="fake-api-key")
 
-    with patch.object(client.chat.completions.with_raw_response, "create") as mock_client:
+    with patch.object(client, "post") as mock_client:
         try:
             litellm.completion(
                 model="openai/gpt-4o",
@@ -3532,7 +3857,7 @@ def test_completion_forwards_store_and_prompt_cache_key_to_openai():
             print(e)
 
         mock_client.assert_called_once()
-        request_body = mock_client.call_args.kwargs
+        request_body = mock_client.call_args.kwargs["body"]
         assert request_body["store"] is False
         assert request_body["prompt_cache_key"] == "test-cache-key"
 
@@ -3547,7 +3872,7 @@ async def test_acompletion_forwards_store_and_prompt_cache_key_to_openai():
 
     client = AsyncOpenAI(api_key="fake-api-key")
 
-    with patch.object(client.chat.completions.with_raw_response, "create") as mock_client:
+    with patch.object(client, "post") as mock_client:
         try:
             await litellm.acompletion(
                 model="openai/gpt-4o",
@@ -3560,7 +3885,7 @@ async def test_acompletion_forwards_store_and_prompt_cache_key_to_openai():
             print(e)
 
         mock_client.assert_called_once()
-        request_body = mock_client.call_args.kwargs
+        request_body = mock_client.call_args.kwargs["body"]
         assert request_body["store"] is False
         assert request_body["prompt_cache_key"] == "test-cache-key"
 
@@ -3574,7 +3899,7 @@ def test_completion_omits_store_and_prompt_cache_key_when_not_passed():
 
     client = OpenAI(api_key="fake-api-key")
 
-    with patch.object(client.chat.completions.with_raw_response, "create") as mock_client:
+    with patch.object(client, "post") as mock_client:
         try:
             litellm.completion(
                 model="openai/gpt-4o",
@@ -3585,7 +3910,7 @@ def test_completion_omits_store_and_prompt_cache_key_when_not_passed():
             print(e)
 
         mock_client.assert_called_once()
-        request_body = mock_client.call_args.kwargs
+        request_body = mock_client.call_args.kwargs["body"]
         assert "store" not in request_body
         assert "prompt_cache_key" not in request_body
 
@@ -3780,8 +4105,7 @@ def test_openai_model_without_a_provider_still_routes_to_openai():
     from openai import OpenAI
 
     client = OpenAI(api_key="fake-key")
-    raw_response = client.chat.completions.with_raw_response
-    with patch.object(raw_response, "create") as mock_create, contextlib.suppress(Exception):
+    with patch.object(client, "post") as mock_create, contextlib.suppress(Exception):
         litellm.completion(
             model="gpt-4o",
             messages=[{"role": "user", "content": "hello"}],
@@ -3792,7 +4116,7 @@ def test_openai_model_without_a_provider_still_routes_to_openai():
 
 
 def _openai_chat_create_kwargs(client, **completion_kwargs):
-    with patch.object(client.chat.completions.with_raw_response, "create") as mock_client:
+    with patch.object(client, "post") as mock_client:
         with contextlib.suppress(Exception):
             litellm.completion(
                 messages=[{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}],
@@ -3817,7 +4141,7 @@ def test_completion_custom_api_base_sends_no_prompt_cache_breakpoint_for_gpt_5_6
     from openai import OpenAI
 
     client = OpenAI(api_key="fake-api-key", base_url="http://127.0.0.1:9/v1")
-    request_body = _openai_chat_create_kwargs(client, model="gpt-5.6", api_base="http://127.0.0.1:9/v1")
+    request_body = _openai_chat_create_kwargs(client, model="gpt-5.6", api_base="http://127.0.0.1:9/v1")["body"]
 
     assert request_body["messages"][0] == {"role": "system", "content": "sys", "cache_control": {"type": "ephemeral"}}
     assert "prompt_cache_breakpoint" not in json.dumps(request_body["messages"])
@@ -3829,7 +4153,7 @@ def test_completion_custom_base_url_sends_no_prompt_cache_breakpoint_for_gpt_5_6
     from openai import OpenAI
 
     client = OpenAI(api_key="fake-api-key", base_url="http://127.0.0.1:9/v1")
-    request_body = _openai_chat_create_kwargs(client, model="gpt-5.6", base_url="http://127.0.0.1:9/v1")
+    request_body = _openai_chat_create_kwargs(client, model="gpt-5.6", base_url="http://127.0.0.1:9/v1")["body"]
 
     assert request_body["messages"][0] == {"role": "system", "content": "sys", "cache_control": {"type": "ephemeral"}}
     assert "prompt_cache_breakpoint" not in json.dumps(request_body["messages"])
@@ -3842,7 +4166,7 @@ async def test_acompletion_custom_base_url_sends_no_prompt_cache_breakpoint_for_
     from openai import AsyncOpenAI
 
     client = AsyncOpenAI(api_key="fake-api-key", base_url="http://127.0.0.1:9/v1")
-    with patch.object(client.chat.completions.with_raw_response, "create") as mock_create:
+    with patch.object(client, "post") as mock_create:
         with contextlib.suppress(Exception):
             await litellm.acompletion(
                 model="gpt-5.6",
@@ -3853,7 +4177,7 @@ async def test_acompletion_custom_base_url_sends_no_prompt_cache_breakpoint_for_
             )
 
         mock_create.assert_called_once()
-        request_body = mock_create.call_args.kwargs
+        request_body = mock_create.call_args.kwargs["body"]
 
     assert request_body["messages"][0] == {"role": "system", "content": "sys", "cache_control": {"type": "ephemeral"}}
     assert "prompt_cache_breakpoint" not in json.dumps(request_body["messages"])
@@ -3865,12 +4189,12 @@ def test_completion_default_api_base_sends_prompt_cache_breakpoint_for_gpt_5_6()
     from openai import OpenAI
 
     client = OpenAI(api_key="fake-api-key")
-    request_body = _openai_chat_create_kwargs(client, model="gpt-5.6")
+    request = _openai_chat_create_kwargs(client, model="gpt-5.6")
 
-    assert request_body["messages"][0]["content"] == [
+    assert request["body"]["messages"][0]["content"] == [
         {"type": "text", "text": "sys", "prompt_cache_breakpoint": {"mode": "explicit"}}
     ]
-    assert request_body["extra_body"]["prompt_cache_options"] == {"mode": "implicit"}
+    assert request["options"]["extra_json"]["prompt_cache_options"] == {"mode": "implicit"}
 
 
 _SUBSCRIPTION_OAUTH_CREDENTIAL = "Bearer sk-ant-oat01-fake-subscription-token-for-testing-0123456789"
@@ -4250,13 +4574,55 @@ def test_stream_chunk_builder_stamps_streaming_usage_cost_by_default(monkeypatch
     assert response._hidden_params["response_cost"] == pytest.approx(usage_cost)
 
 
+def test_stream_chunk_builder_stamped_cost_is_not_re_read_as_xai_reported_cost():
+    import time as time_module
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+
+    logging_obj: Final = LiteLLMLogging(
+        model="xai/grok-4.7",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="completion",
+        start_time=time_module.time(),
+        litellm_call_id="stream-builder-xai-stamped-cost",
+        function_id="1",
+    )
+    logging_obj.model_call_details["custom_llm_provider"] = "xai"
+    logging_obj.optional_params = {}
+    usage_chunk: Final = _stream_builder_text_chunk("grok-4.7", "")
+    usage_chunk.usage = Usage(prompt_tokens=1840, completion_tokens=412, total_tokens=2252)
+    chunks: Final = [
+        _stream_builder_text_chunk("grok-4.7", "Hello.", finish_reason="stop"),
+        usage_chunk,
+    ]
+
+    response: Final = litellm.stream_chunk_builder(
+        chunks=chunks, messages=[{"role": "user", "content": "hi"}], logging_obj=logging_obj
+    )
+
+    assert response is not None
+    usage_cost: Final = getattr(response.usage, "cost", None)
+    assert usage_cost is not None
+    assert usage_cost > 0
+
+    spend_row_cost: Final = logging_obj._response_cost_calculator(result=response)
+    breakdown: Final = logging_obj.cost_breakdown
+    assert breakdown is not None
+    assert breakdown["input_cost"] > 0
+    assert breakdown["output_cost"] > 0
+    assert breakdown["input_cost"] + breakdown["output_cost"] == pytest.approx(usage_cost)
+    assert spend_row_cost == pytest.approx(usage_cost)
+    assert response._hidden_params.get("response_cost") == pytest.approx(usage_cost)
+
+
 def test_stream_chunk_builder_skips_stamp_when_cost_is_unpriceable():
     import time as time_module
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 
     logging_obj: Final = LiteLLMLogging(
-        model="us.anthropic.claude-opus-5",
+        model="us.anthropic.claude-unpriced-999",
         messages=[{"role": "user", "content": "hi"}],
         stream=True,
         call_type="completion",
@@ -4280,6 +4646,41 @@ def test_stream_chunk_builder_skips_stamp_when_cost_is_unpriceable():
     assert response is not None
     assert getattr(response.usage, "cost", None) is None
     assert response._hidden_params.get("response_cost") is None
+
+
+def test_stream_chunk_builder_prices_alias_response_at_its_deployment_model():
+    import time as time_module
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+
+    deployment_model: Final = "us.anthropic.claude-opus-5"
+    logging_obj: Final = LiteLLMLogging(
+        model=deployment_model,
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="completion",
+        start_time=time_module.time(),
+        litellm_call_id="stream-builder-alias-priced",
+        function_id="1",
+    )
+    logging_obj.model_call_details["custom_llm_provider"] = "bedrock"
+    logging_obj.optional_params = {}
+    usage_chunk: Final = _stream_builder_text_chunk("bedrock-claude-opus-5", "")
+    usage_chunk.usage = Usage(prompt_tokens=40, completion_tokens=5, total_tokens=45)
+    chunks: Final = [
+        _stream_builder_text_chunk("bedrock-claude-opus-5", "Hello ", finish_reason="stop"),
+        usage_chunk,
+    ]
+
+    response: Final = litellm.stream_chunk_builder(
+        chunks=chunks, messages=[{"role": "user", "content": "hi"}], logging_obj=logging_obj
+    )
+
+    entry: Final = litellm.model_cost[deployment_model]
+    expected_cost: Final = 40 * entry["input_cost_per_token"] + 5 * entry["output_cost_per_token"]
+    assert response is not None
+    assert getattr(response.usage, "cost", None) == pytest.approx(expected_cost)
+    assert response._hidden_params.get("response_cost") == pytest.approx(expected_cost)
 
 
 def test_stream_chunk_builder_keeps_provider_reported_usage_cost():
@@ -4841,6 +5242,7 @@ def test_drop_params_false_still_rejects_an_invalid_stream_chunk_size() -> None:
 
 def test_acompletion_params():
     import inspect
+
     from litellm.types.completion import CompletionRequest
 
     acompletion_params_odict = inspect.signature(acompletion).parameters
@@ -4871,7 +5273,7 @@ def test_acompletion_params():
 
 
 def _openai_mock_response(*args: object, **kwargs: object) -> MagicMock:
-    new_response: Final = MagicMock()
+    new_response: Final = MagicMock(spec=LegacyAPIResponse)
     new_response.headers = {"hello": "world"}
     response_object: Final = {
         "id": "chatcmpl-123",
@@ -4906,7 +5308,7 @@ def test_null_role_response():
 
     openai_client = openai.OpenAI()
     with patch.object(
-        openai_client.chat.completions, "create", side_effect=_openai_mock_response
+        openai_client, "post", side_effect=_openai_mock_response
     ) as mock_response:
         response = litellm.completion(
             model="gpt-3.5-turbo",
@@ -4996,7 +5398,7 @@ def test_completion_perplexity_api():
         pydantic_obj = ChatCompletion(**response_object)
 
         def _return_pydantic_obj(*args, **kwargs):
-            new_response = MagicMock()
+            new_response = MagicMock(spec=LegacyAPIResponse)
             new_response.headers = {"hello": "world"}
 
             new_response.parse.return_value = pydantic_obj
@@ -5005,8 +5407,7 @@ def test_completion_perplexity_api():
         openai_client = OpenAI()
 
         with patch.object(
-            openai_client.chat.completions.with_raw_response,
-            "create",
+            openai_client, "post",
             side_effect=_return_pydantic_obj,
         ) as mock_client:
             # litellm.set_verbose= True
@@ -5050,7 +5451,7 @@ async def test_openai_compatible_custom_api_base(provider):
     openai_client = OpenAI(api_key="fake-key")
 
     with patch.object(
-        openai_client.chat.completions, "create", new=MagicMock()
+        openai_client, "post", new=MagicMock()
     ) as mock_call:
         try:
             completion(
@@ -5068,7 +5469,7 @@ async def test_openai_compatible_custom_api_base(provider):
 
         print("Call KWARGS - {}".format(mock_call.call_args.kwargs))
 
-        assert "hello" in mock_call.call_args.kwargs["extra_body"]
+        assert "hello" in mock_call.call_args.kwargs["options"]["extra_json"]
 
 
 @pytest.mark.parametrize(
@@ -5101,7 +5502,7 @@ async def test_openai_compatible_custom_api_video(provider):
     openai_client = OpenAI(api_key="fake-key")
 
     with patch.object(
-        openai_client.chat.completions, "create", new=MagicMock()
+        openai_client, "post", new=MagicMock()
     ) as mock_call:
         try:
             completion(
@@ -6636,6 +7037,23 @@ def test_mock_request_with_mock_timeout_raises_litellm_timeout():
     assert error.value.model == "gpt-5.6"
 
 
+@pytest.mark.asyncio
+async def test_async_mock_timeout_on_a_stream_waits_only_for_the_stream_timeout() -> None:
+    with pytest.raises(litellm.Timeout):
+        await asyncio.wait_for(
+            litellm.acompletion(
+                model="gpt-5.6",
+                messages=[{"role": "user", "content": "hello"}],
+                stream=True,
+                timeout=30.0,
+                stream_timeout=0.01,
+                mock_timeout=True,
+                num_retries=0,
+            ),
+            timeout=5,
+        )
+
+
 def test_router_mock_request_with_mock_timeout_raises_litellm_timeout():
     router: Final = litellm.Router(
         model_list=[
@@ -6964,7 +7382,7 @@ def _openai_hallucinated_tool_call_mock_response(
     *args: object,
     **kwargs: object,
 ) -> MagicMock:
-    new_response: Final = MagicMock()
+    new_response: Final = MagicMock(spec=LegacyAPIResponse)
     new_response.headers = {"hello": "world"}
     response_object: Final = {
         "id": "chatcmpl-123",
@@ -7022,8 +7440,8 @@ def test_openai_hallucinated_tool_call():
 
     openai_client = openai.OpenAI()
     with patch.object(
-        openai_client.chat.completions,
-        "create",
+        openai_client,
+        "post",
         side_effect=_openai_hallucinated_tool_call_mock_response,
     ) as mock_response:
         response = litellm.completion(
@@ -7145,7 +7563,7 @@ def test_completion_novita_ai():
     openai_client = OpenAI(api_key="fake-key")
 
     with patch.object(
-        openai_client.chat.completions.with_raw_response, "create"
+        openai_client, "post", return_value=MagicMock(spec=LegacyAPIResponse)
     ) as mock_call:
         mock_call.return_value.headers = {}
         mock_call.return_value.parse.return_value = litellm.ModelResponse(
@@ -7164,11 +7582,11 @@ def test_completion_novita_ai():
 
             # Verify model is passed correctly
             assert (
-                mock_call.call_args.kwargs["model"]
+                mock_call.call_args.kwargs["body"]["model"]
                 == "meta-llama/llama-3.3-70b-instruct"
             )
             # Verify messages are passed correctly
-            assert mock_call.call_args.kwargs["messages"] == messages
+            assert mock_call.call_args.kwargs["body"]["messages"] == messages
 
         except Exception as e:
             pytest.fail(f"Error occurred: {e}")
@@ -7191,8 +7609,8 @@ def test_completion_novita_ai_dynamic_params(api_key):
         openai_client = OpenAI(api_key="fake-key")
 
         with patch.object(
-            openai_client.chat.completions,
-            "create",
+            openai_client,
+            "post",
             side_effect=Exception("Invalid API key"),
         ) as mock_call:
             with pytest.raises(Exception, match="Invalid API key") as exc_info:
@@ -7224,7 +7642,7 @@ def test_completion_openai_metadata(monkeypatch, enable_preview_features):
 
     monkeypatch.setattr(litellm, "enable_preview_features", enable_preview_features)
     with patch.object(
-        client.chat.completions.with_raw_response, "create", return_value=MagicMock()
+        client, "post", return_value=MagicMock()
     ) as mock_completion:
         try:
             resp = litellm.completion(
@@ -7238,11 +7656,11 @@ def test_completion_openai_metadata(monkeypatch, enable_preview_features):
 
         mock_completion.assert_called_once()
         if enable_preview_features:
-            assert mock_completion.call_args.kwargs["metadata"] == {
+            assert mock_completion.call_args.kwargs["body"]["metadata"] == {
                 "my-test-key": "my-test-value"
             }
         else:
-            assert "metadata" not in mock_completion.call_args.kwargs
+            assert "metadata" not in mock_completion.call_args.kwargs["body"]
 
 
 AZURE_TTS_BASE: Final = "https://tts.example.azure.com"
@@ -8272,3 +8690,163 @@ def test_model_alias_map_resolves_the_outbound_model(
 
     assert response.model == "resolved-model"
     assert json.loads(route.calls[0].request.content)["model"] == "resolved-model"
+
+
+@pytest.mark.asyncio
+async def test_aspeech_routes_a_bare_model_name_to_its_explicit_provider(respx_mock: respx.MockRouter) -> None:
+    api_base: Final = "http://localhost:12351/v1"
+    route: Final = respx_mock.post(f"{api_base}/audio/speech").mock(
+        return_value=httpx.Response(status_code=200, content=b"ID3-speech")
+    )
+
+    response: Final = await litellm.aspeech(
+        model="kokoro",
+        input="hello",
+        voice="alloy",
+        custom_llm_provider="openai",
+        api_base=api_base,
+        api_key="fake_openai_api_key",
+        client=AsyncOpenAI(api_key="fake_openai_api_key", base_url=api_base, http_client=httpx.AsyncClient()),
+    )
+
+    assert route.called
+    assert json.loads(route.calls[0].request.content)["model"] == "kokoro"
+    assert response.content == b"ID3-speech"
+
+
+@pytest.mark.asyncio
+async def test_atranscription_routes_a_bare_model_name_to_its_explicit_provider(
+    respx_mock: respx.MockRouter,
+) -> None:
+    api_base: Final = "http://localhost:12352/v1"
+    route: Final = respx_mock.post(f"{api_base}/audio/transcriptions").mock(
+        return_value=httpx.Response(status_code=200, json={"text": "four score"})
+    )
+
+    response: Final = await litellm.atranscription(
+        model="my-whisper",
+        file=("speech.wav", b"RIFF-audio", "audio/wav"),
+        custom_llm_provider="openai",
+        api_base=api_base,
+        api_key="fake_openai_api_key",
+        client=AsyncOpenAI(api_key="fake_openai_api_key", base_url=api_base, http_client=httpx.AsyncClient()),
+    )
+
+    assert route.called
+    assert b'name="model"\r\n\r\nmy-whisper' in route.calls[0].request.content
+    assert response.text == "four score"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("hint", ["custom_llm_provider", "api_base", "base_url"])
+async def test_aspeech_answers_a_non_string_provider_hint_with_a_bad_request(
+    hint: str, respx_mock: respx.MockRouter
+) -> None:
+    with pytest.raises(litellm.BadRequestError) as raised:
+        await litellm.aspeech(model="kokoro", input="hello", voice="alloy", api_key="fake_openai_api_key", **{hint: 123})
+
+    assert raised.value.status_code == 400
+    assert f"Invalid {hint}" in raised.value.message
+    assert not respx_mock.calls
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("hint", ["custom_llm_provider", "api_base", "base_url"])
+async def test_atranscription_answers_a_non_string_provider_hint_with_a_bad_request(
+    hint: str, respx_mock: respx.MockRouter
+) -> None:
+    with pytest.raises(litellm.BadRequestError) as raised:
+        await litellm.atranscription(
+            model="my-whisper",
+            file=("speech.wav", b"RIFF-audio", "audio/wav"),
+            api_key="fake_openai_api_key",
+            **{hint: 123},
+        )
+
+    assert raised.value.status_code == 400
+    assert f"Invalid {hint}" in raised.value.message
+    assert not respx_mock.calls
+
+
+@pytest.mark.asyncio
+async def test_aspeech_infers_the_provider_from_base_url(respx_mock: respx.MockRouter) -> None:
+    base_url: Final = "https://api.groq.com/openai/v1"
+    route: Final = respx_mock.post(f"{base_url}/audio/speech").mock(
+        return_value=httpx.Response(status_code=200, content=b"ID3-speech")
+    )
+
+    response: Final = await litellm.aspeech(
+        model="my-tts",
+        input="hello",
+        voice="alloy",
+        base_url=base_url,
+        api_key="fake_groq_api_key",
+        client=AsyncOpenAI(api_key="fake_groq_api_key", base_url=base_url, http_client=httpx.AsyncClient()),
+    )
+
+    assert route.called
+    assert response.content == b"ID3-speech"
+
+
+@pytest.mark.asyncio
+async def test_atranscription_infers_the_provider_from_base_url(respx_mock: respx.MockRouter) -> None:
+    base_url: Final = "https://api.groq.com/openai/v1"
+    route: Final = respx_mock.post(f"{base_url}/audio/transcriptions").mock(
+        return_value=httpx.Response(status_code=200, json={"text": "four score"})
+    )
+
+    response: Final = await litellm.atranscription(
+        model="my-whisper",
+        file=("speech.wav", b"RIFF-audio", "audio/wav"),
+        base_url=base_url,
+        api_key="fake_groq_api_key",
+        client=AsyncOpenAI(api_key="fake_groq_api_key", base_url=base_url, http_client=httpx.AsyncClient()),
+    )
+
+    assert route.called
+    assert response.text == "four score"
+
+
+@pytest.mark.asyncio
+async def test_aspeech_ignores_a_non_string_base_url_when_api_base_is_set_like_the_sync_path(
+    respx_mock: respx.MockRouter,
+) -> None:
+    api_base: Final = "http://localhost:12353/v1"
+    route: Final = respx_mock.post(f"{api_base}/audio/speech").mock(
+        return_value=httpx.Response(status_code=200, content=b"ID3-speech")
+    )
+
+    response: Final = await litellm.aspeech(
+        model="tts-1",
+        input="hello",
+        voice="alloy",
+        api_base=api_base,
+        base_url=httpx.URL(api_base),
+        api_key="fake_openai_api_key",
+        client=AsyncOpenAI(api_key="fake_openai_api_key", base_url=api_base, http_client=httpx.AsyncClient()),
+    )
+
+    assert route.called
+    assert response.content == b"ID3-speech"
+
+
+@pytest.mark.asyncio
+async def test_atranscription_ignores_a_non_string_base_url_when_api_base_is_set_like_the_sync_path(
+    respx_mock: respx.MockRouter,
+) -> None:
+    api_base: Final = "http://localhost:12354/v1"
+    route: Final = respx_mock.post(f"{api_base}/audio/transcriptions").mock(
+        return_value=httpx.Response(status_code=200, json={"text": "four score"})
+    )
+
+    response: Final = await litellm.atranscription(
+        model="whisper-1",
+        file=("speech.wav", b"RIFF-audio", "audio/wav"),
+        api_base=api_base,
+        base_url=httpx.URL(api_base),
+        api_key="fake_openai_api_key",
+        client=AsyncOpenAI(api_key="fake_openai_api_key", base_url=api_base, http_client=httpx.AsyncClient()),
+    )
+
+    assert route.called
+    assert response.text == "four score"

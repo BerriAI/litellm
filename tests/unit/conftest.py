@@ -2,11 +2,11 @@ import asyncio
 import base64
 import importlib
 import os
-from collections.abc import Coroutine, Iterator
+from collections.abc import Callable, Coroutine, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final
+from typing import Final, Literal, TypeAlias
 
 import boto3
 import httpx
@@ -306,6 +306,22 @@ def local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     litellm.get_model_info.cache_clear()
     yield
     litellm.get_model_info.cache_clear()
+
+
+NativeStructuredOutputKey: TypeAlias = Literal["legacy", "bedrock"] | None
+
+
+@pytest.fixture
+def set_native_structured_output(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> Callable[[str, NativeStructuredOutputKey], None]:
+    def set_flags(model_cost_key: str, native_key: NativeStructuredOutputKey) -> None:
+        entry: Final = litellm.model_cost[model_cost_key]
+        monkeypatch.setitem(entry, "supports_native_structured_output", native_key == "legacy")
+        monkeypatch.setitem(entry, "supports_bedrock_native_structured_output", native_key == "bedrock")
+        litellm.get_model_info.cache_clear()
+
+    return set_flags
 
 
 @pytest.fixture
