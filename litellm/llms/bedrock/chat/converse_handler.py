@@ -42,14 +42,22 @@ def make_sync_call(
     if client is None:
         client = get_httpx_client()  # Create a new client if none provided
 
-    response: Final = client.post(
-        api_base,
-        headers=headers,
-        data=data,
-        stream=not fake_stream,
-        logging_obj=logging_obj,
-        timeout=timeout,
-    )
+    try:
+        response: Final = client.post(
+            api_base,
+            headers=headers,
+            data=data,
+            stream=not fake_stream,
+            logging_obj=logging_obj,
+            timeout=timeout,
+        )
+    except httpx.HTTPStatusError as err:
+        raise BedrockError(
+            status_code=err.response.status_code,
+            message=error_response_text(err.response),
+            headers=err.response.headers,
+            response=err.response,
+        ) from err
 
     if response.status_code != 200:
         raise BedrockError(

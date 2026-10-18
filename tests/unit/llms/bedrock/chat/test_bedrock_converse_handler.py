@@ -549,6 +549,73 @@ async def test_failed_fake_stream_reports_the_request_timeout_it_was_bounded_by(
     assert getattr(excinfo.value, "timeout", None) == request_timeout
 
 
+_NATIVE_OUTPUT_REJECTION: Final = json.dumps(
+    {"message": "The model returned the following errors: output_config.format: Extra inputs are not permitted"}
+).encode()
+
+
+_ANSWER_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"answer": {"type": "string"}},
+    "required": ["answer"],
+    "additionalProperties": False,
+}
+
+
+def _rejects_native_output_then_answers_slowly(request: httpx.Request) -> httpx.Response:
+    if request.url.path.endswith("/converse-stream"):
+        return httpx.Response(400, content=_NATIVE_OUTPUT_REJECTION, request=request)
+    return slow_upstream_answer(CONVERSE_ANSWER)(request)
+
+
+async def _stream_json_schema_with_thinking(router: litellm.Router) -> str:
+    response: Final = await router.acompletion(
+        model="bedrock",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        thinking={"type": "adaptive"},
+        response_format={"type": "json_schema", "json_schema": {"name": "answer", "schema": _ANSWER_SCHEMA}},
+    )
+    return "".join([chunk.choices[0].delta.content or "" async for chunk in response])
+
+
+def _sent_paths(respx_mock: respx.MockRouter) -> list[str]:
+    return [call.request.url.path.rsplit("/", 1)[-1] for call in respx_mock.calls]
+
+
+@pytest.mark.asyncio
+async def test_native_output_retry_is_bounded_by_the_request_timeout_not_the_stream_timeout(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post(url__regex=_BEDROCK_RUNTIME_URL).mock(side_effect=_rejects_native_output_then_answers_slowly)
+    router: Final = _bedrock_router(
+        "bedrock/converse/us.anthropic.claude-opus-4-8",
+        timeout=UPSTREAM_FIRST_BYTE_SECONDS * 2,
+        stream_timeout=STREAM_TIMEOUT_SECONDS,
+    )
+
+    assert await _stream_json_schema_with_thinking(router) == "hi"
+    assert _sent_paths(respx_mock) == ["converse-stream", "converse"]
+
+
+@pytest.mark.asyncio
+async def test_failed_native_output_retry_reports_the_request_timeout_it_was_bounded_by(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post(url__regex=_BEDROCK_RUNTIME_URL).mock(side_effect=_rejects_native_output_then_answers_slowly)
+    request_timeout: Final = UPSTREAM_FIRST_BYTE_SECONDS / 2
+    router: Final = _bedrock_router(
+        "bedrock/converse/us.anthropic.claude-opus-4-8", timeout=request_timeout, stream_timeout=STREAM_TIMEOUT_SECONDS
+    )
+
+    with pytest.raises(litellm.Timeout) as excinfo:
+        await _stream_json_schema_with_thinking(router)
+    assert getattr(excinfo.value, "timeout", None) == request_timeout
+    assert _sent_paths(respx_mock) == ["converse-stream", "converse"]
+
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
@@ -805,3 +872,49 @@ def test_fake_streamed_json_mode_answer_closes_merged_reasoning_before_the_answe
     assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == (
         f"<think>{answer.choices[0].message.reasoning_content}</think>{answer.choices[0].message.content}"
     )
+
+
+_UPSTREAM_ERROR_BODY: Final = '{"message":"The request is invalid."}'
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    "model", ["us.anthropic.claude-sonnet-4-5-20250929-v1:0", "us.anthropic.claude-opus-4-8"], ids=["sonnet", "opus"]
+)
+@pytest.mark.parametrize(
+    ("upstream_status", "error_class", "status_code"),
+    [
+        (400, litellm.BadRequestError, 400),
+        (429, litellm.RateLimitError, 429),
+        (500, litellm.ServiceUnavailableError, 503),
+        (503, litellm.ServiceUnavailableError, 503),
+    ],
+)
+def test_sync_converse_streaming_upstream_error_carries_the_upstream_body_as_text(
+    model: str,
+    upstream_status: int,
+    error_class: type[litellm.BadRequestError | litellm.RateLimitError | litellm.ServiceUnavailableError],
+    status_code: int,
+) -> None:
+    client: Final = HTTPHandler(
+        client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(upstream_status, content=_UPSTREAM_ERROR_BODY.encode())
+            )
+        )
+    )
+
+    with pytest.raises(error_class) as raised:
+        litellm.completion(
+            model=f"bedrock/converse/{model}",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            num_retries=0,
+            aws_access_key_id="fake",
+            aws_secret_access_key="fake",
+            aws_region_name="us-east-1",
+            client=client,
+        )
+
+    assert raised.value.status_code == status_code
+    assert raised.value.message == f"litellm.{error_class.__name__}: BedrockException - {_UPSTREAM_ERROR_BODY}"

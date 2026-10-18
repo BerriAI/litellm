@@ -6,6 +6,7 @@ import os
 import struct
 import zlib
 from collections.abc import AsyncIterator, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from types import SimpleNamespace
 from typing import Final
@@ -4009,3 +4010,162 @@ def test_bedrock_removed_tool_change_does_not_add_beta(explicit_beta: bool) -> N
 
     assert result["messages"] == [{"role": "user", "content": "Reply with OK"}]
     assert result.get("anthropic_beta", []).count(beta) == int(explicit_beta)
+
+
+_NATIVE_OUTPUT_REJECTION: Final = {
+    "message": "The model returned the following errors: compilation exceeded limits: Schema is too complex."
+}
+_STALE_SIGNATURE_ERROR: Final = {"message": "messages.1.content.0: Invalid `signature` in `thinking` block"}
+_OPTED_OUT: Final = {"supports_bedrock_native_structured_output": False}
+_CONSTRAINED_SCHEMA: Final = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string", "maxLength": 50},
+        "kind": {"oneOf": [{"type": "string"}, {"type": "integer"}]},
+    },
+    "required": ["summary", "kind"],
+    "additionalProperties": False,
+}
+_ANTHROPIC_MESSAGE: Final = {
+    "id": "msg_scripted",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-scripted",
+    "content": [{"type": "text", "text": '{"summary": "sunny", "kind": 1}'}],
+    "stop_reason": "end_turn",
+    "stop_sequence": None,
+    "usage": {"input_tokens": 1, "output_tokens": 1},
+}
+_THINKING_HISTORY: Final = (
+    {"role": "user", "content": "Describe the weather."},
+    {
+        "role": "assistant",
+        "content": [
+            {"type": "thinking", "thinking": "checking", "signature": "stale"},
+            {"type": "text", "text": "Sunny."},
+        ],
+    },
+    {"role": "user", "content": "Summarise it as JSON."},
+)
+
+
+@dataclass(slots=True)
+class ScriptedBedrockInvoke:
+    replies: tuple[tuple[int, Mapping[str, object]], ...]
+    bodies: tuple[dict[str, object], ...] = ()
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.bodies = (*self.bodies, REASONING_BODY_ADAPTER.validate_json(request.content))
+        status_code, body = self.replies[len(self.bodies) - 1]
+        return httpx.Response(status_code, json=body)
+
+
+async def _send_bedrock_messages(
+    model: str,
+    model_info: Mapping[str, object] | None,
+    replies: Sequence[tuple[int, Mapping[str, object]]],
+    messages: Sequence[Mapping[str, object]] = ({"role": "user", "content": "Summarise the weather as JSON."},),
+) -> tuple[ScriptedBedrockInvoke, Exception | None]:
+    bedrock: Final = ScriptedBedrockInvoke(replies=tuple(replies))
+    try:
+        await litellm.anthropic_messages(
+            model=f"bedrock/invoke/{model}",
+            messages=[dict(message) for message in messages],
+            max_tokens=4000,
+            system="Answer in French.",
+            thinking={"type": "adaptive"},
+            output_config={"format": {"type": "json_schema", "schema": _CONSTRAINED_SCHEMA}},
+            aws_access_key_id="test-access-key",
+            aws_secret_access_key="test-secret-key",
+            aws_region_name="us-east-1",
+            client=AsyncHTTPHandler(transport=httpx.MockTransport(bedrock)),
+            **({} if model_info is None else {"model_info": model_info}),
+        )
+    except Exception as error:
+        return bedrock, error
+    return bedrock, None
+
+
+_OPT_IN_DEPLOYMENTS: Final = pytest.mark.parametrize(
+    ("model", "model_info"),
+    [
+        ("us.anthropic.claude-opus-4-8", None),
+        ("us.anthropic.claude-opus-5-5", {"supports_bedrock_native_structured_output": True}),
+    ],
+    ids=["mapped_opt_in", "deployment_opt_in"],
+)
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@_OPT_IN_DEPLOYMENTS
+async def test_bedrock_messages_native_output_rejection_resends_the_body_an_opted_out_deployment_sends(
+    model: str, model_info: Mapping[str, object] | None
+) -> None:
+    opt_in, opt_in_error = await _send_bedrock_messages(
+        model, model_info, [(400, _NATIVE_OUTPUT_REJECTION), (200, _ANTHROPIC_MESSAGE)]
+    )
+    opted_out, opted_out_error = await _send_bedrock_messages(model, _OPTED_OUT, [(200, _ANTHROPIC_MESSAGE)])
+
+    assert opt_in_error is None and opted_out_error is None
+    native, retried = opt_in.bodies
+    assert "format" in REASONING_BODY_ADAPTER.validate_python(native["output_config"])
+    assert opted_out.bodies == (retried,)
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize("model_info", [None, _OPTED_OUT], ids=["native_output", "opted_out"])
+async def test_bedrock_messages_thinking_signature_400_that_persists_reaches_bedrock_twice_as_before(
+    model_info: Mapping[str, object] | None,
+) -> None:
+    bedrock, error = await _send_bedrock_messages(
+        "us.anthropic.claude-opus-4-8", model_info, [(400, _STALE_SIGNATURE_ERROR)] * 3, _THINKING_HISTORY
+    )
+
+    assert isinstance(error, litellm.BadRequestError)
+    assert len(bedrock.bodies) == 2
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    "first_error, second_error",
+    [(_NATIVE_OUTPUT_REJECTION, _STALE_SIGNATURE_ERROR), (_STALE_SIGNATURE_ERROR, _NATIVE_OUTPUT_REJECTION)],
+    ids=["rejection_first", "signature_first"],
+)
+async def test_bedrock_messages_native_output_rejection_and_signature_400_each_get_one_retry_like_an_opted_out_deployment(
+    first_error: Mapping[str, object], second_error: Mapping[str, object]
+) -> None:
+    opt_in, opt_in_error = await _send_bedrock_messages(
+        "us.anthropic.claude-opus-4-8",
+        None,
+        [(400, first_error), (400, second_error), (200, _ANTHROPIC_MESSAGE)],
+        _THINKING_HISTORY,
+    )
+    opted_out, opted_out_error = await _send_bedrock_messages(
+        "us.anthropic.claude-opus-4-8",
+        _OPTED_OUT,
+        [(400, _STALE_SIGNATURE_ERROR), (200, _ANTHROPIC_MESSAGE)],
+        _THINKING_HISTORY,
+    )
+
+    assert opt_in_error is None and opted_out_error is None
+    assert len(opt_in.bodies) == 3
+    assert opt_in.bodies[-1] == opted_out.bodies[-1]
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    ("model", "model_info", "error"),
+    [
+        ("us.anthropic.claude-opus-4-8", None, {"message": "messages.0.content: Field required"}),
+        ("us.anthropic.claude-sonnet-4-6", None, _NATIVE_OUTPUT_REJECTION),
+        ("us.anthropic.claude-opus-4-8", _OPTED_OUT, _NATIVE_OUTPUT_REJECTION),
+    ],
+    ids=["other_400", "native_model", "deployment_opt_out"],
+)
+async def test_bedrock_messages_400_is_not_retried_unless_it_rejects_opt_in_native_output(
+    model: str, model_info: Mapping[str, object] | None, error: Mapping[str, object]
+) -> None:
+    bedrock, raised = await _send_bedrock_messages(model, model_info, [(400, error), (200, _ANTHROPIC_MESSAGE)])
+
+    assert isinstance(raised, litellm.BadRequestError)
+    assert len(bedrock.bodies) == 1
