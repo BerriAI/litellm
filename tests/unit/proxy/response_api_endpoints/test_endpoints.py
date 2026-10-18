@@ -3454,10 +3454,11 @@ class TestResponsesInputTokens:
         body: dict[str, Any],
         path: str = "/v1/responses/input_tokens",
         counter: AsyncMock | None = None,
+        llm_router: litellm.Router | None = None,
     ) -> tuple[Response, AsyncMock]:
         from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-        from litellm.proxy.response_api_endpoints.endpoints import _proxy_token_counter
+        from litellm.proxy.response_api_endpoints.endpoints import _proxy_llm_router, _proxy_token_counter
         from litellm.types.utils import TokenCountResponse
 
         token_counter_mock = (
@@ -3474,6 +3475,7 @@ class TestResponsesInputTokens:
         )
         app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(api_key="sk-test", request_route=path)
         app.dependency_overrides[_proxy_token_counter] = lambda: token_counter_mock
+        app.dependency_overrides[_proxy_llm_router] = lambda: llm_router
         try:
             client = TestClient(app)
             response = client.post(path, json=body, headers={"Authorization": "Bearer sk-9876"})
@@ -3481,6 +3483,7 @@ class TestResponsesInputTokens:
         finally:
             app.dependency_overrides.pop(user_api_key_auth, None)
             app.dependency_overrides.pop(_proxy_token_counter, None)
+            app.dependency_overrides.pop(_proxy_llm_router, None)
 
     def test_string_input_returns_openai_input_tokens_shape(self):
         response, counter = self._post_input_tokens({"model": "gpt-4o", "input": "Hello, how are you?"})
@@ -3594,6 +3597,48 @@ class TestResponsesInputTokens:
         assert response.status_code == 400, response.text
         error = response.json()["error"]
         assert error["type"] == "invalid_request_error"
+        assert error["param"] == "tools"
+        assert error["message"].startswith("tools: ")
+        counter.assert_not_awaited()
+
+    def test_invalid_tools_are_dropped_under_drop_params(self) -> None:
+        response, counter = self._post_input_tokens(
+            {"model": "gpt-4o", "input": "hi", "tools": [5, {"type": "web_search"}], "drop_params": True}
+        )
+
+        assert response.status_code == 200, response.text
+        assert counter.await_args.kwargs["request"].tools == [{"type": "web_search"}]
+
+    def test_malformed_tools_follow_the_counted_deployment_even_when_fallbacks_are_configured(self) -> None:
+        router: Final = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt-5.2",
+                    "litellm_params": {"model": "openai/gpt-5.2", "api_key": "sk-test", "additional_drop_params": ["tools"]},
+                },
+                {"model_name": "backup", "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "sk-test"}},
+            ],
+            fallbacks=[{"gpt-5.2": ["backup"]}],
+        )
+
+        response, counter = self._post_input_tokens(
+            {"model": "gpt-5.2", "input": "hi", "tools": 5}, llm_router=router
+        )
+
+        assert response.status_code == 200, response.text
+        assert counter.await_args.kwargs["request"].tools is None
+
+    def test_malformed_tools_for_a_model_outside_the_router_get_a_clean_400(self) -> None:
+        router: Final = litellm.Router(
+            model_list=[{"model_name": "gpt-5.2", "litellm_params": {"model": "openai/gpt-5.2", "api_key": "sk-test"}}]
+        )
+
+        response, counter = self._post_input_tokens(
+            {"model": "openai/gpt-5.4-mini", "input": "hi", "tools": 5}, llm_router=router
+        )
+
+        assert response.status_code == 400, response.text
+        assert response.json()["error"]["param"] == "tools"
         counter.assert_not_awaited()
 
     def test_provider_error_maps_status_code(self):
@@ -3611,6 +3656,219 @@ class TestResponsesInputTokens:
 
         assert response.status_code == 429, response.text
         assert response.json()["error"]["message"] == "rate limited"
+
+    @pytest.mark.parametrize(
+        "provider_body, status_code, expected_error",
+        [
+            pytest.param(
+                {
+                    "error": {
+                        "message": "Missing required parameter: 'tools[0].name'.",
+                        "type": "invalid_request_error",
+                        "param": "tools[0].name",
+                        "code": "missing_required_parameter",
+                    }
+                },
+                400,
+                {
+                    "message": "Missing required parameter: 'tools[0].name'.",
+                    "type": "invalid_request_error",
+                    "param": "tools[0].name",
+                    "code": "missing_required_parameter",
+                },
+                id="openai_error_passes_through",
+            ),
+            pytest.param(
+                {
+                    "error": {
+                        "message": "Missing required parameter: 'tools[0].name'.",
+                        "type": "invalid_request_error",
+                        "param": "tools[0].name",
+                    }
+                },
+                400,
+                {
+                    "message": "Missing required parameter: 'tools[0].name'.",
+                    "type": "invalid_request_error",
+                    "param": "tools[0].name",
+                    "code": None,
+                },
+                id="openai_error_without_code_keeps_type_and_param",
+            ),
+            pytest.param(
+                {
+                    "type": "error",
+                    "error": {"type": "invalid_request_error", "message": "tools.0: Input tag 'function' is invalid"},
+                    "request_id": "req_vrtx_1",
+                },
+                400,
+                {
+                    "message": "tools.0: Input tag 'function' is invalid",
+                    "type": "invalid_request_error",
+                    "param": None,
+                    "code": None,
+                },
+                id="anthropic_error_message_unwrapped",
+            ),
+            pytest.param(
+                {
+                    "type": "error",
+                    "error": {"type": "not_found_error", "message": "model: claude-typo"},
+                    "request_id": "req_vrtx_2",
+                },
+                404,
+                {"message": "model: claude-typo", "type": "invalid_request_error", "param": None, "code": None},
+                id="anthropic_error_type_follows_the_status",
+            ),
+            pytest.param(
+                {"error": {"code": 404, "message": "Publisher model not found.", "status": "NOT_FOUND"}},
+                404,
+                {"message": "Publisher model not found.", "type": "invalid_request_error", "param": None, "code": None},
+                id="google_error_message_unwrapped",
+            ),
+            pytest.param(
+                "litellm.APIError: Google Gen AI Studio API error: 404 - "
+                + json.dumps(
+                    {"error": {"code": 404, "message": "models/gemini-typo is not found.", "status": "NOT_FOUND"}}
+                ),
+                404,
+                {
+                    "message": "models/gemini-typo is not found.",
+                    "type": "invalid_request_error",
+                    "param": None,
+                    "code": None,
+                },
+                id="prefixed_gemini_error_message_unwrapped",
+            ),
+            pytest.param(
+                "litellm.BadRequestError: AzureException - "
+                + json.dumps(
+                    {
+                        "error": {
+                            "message": "Unrecognized request argument supplied: foo",
+                            "type": "invalid_request_error",
+                            "param": "foo",
+                            "code": "unknown_parameter",
+                        }
+                    }
+                ),
+                400,
+                {
+                    "message": "Unrecognized request argument supplied: foo",
+                    "type": "invalid_request_error",
+                    "param": "foo",
+                    "code": "unknown_parameter",
+                },
+                id="prefixed_openai_error_passes_through",
+            ),
+            pytest.param(
+                {"message": "The provided model doesn't support counting tokens."},
+                400,
+                {
+                    "message": "The provided model doesn't support counting tokens.",
+                    "type": "invalid_request_error",
+                    "param": None,
+                    "code": None,
+                },
+                id="bedrock_error_message_unwrapped",
+            ),
+            pytest.param(
+                "BedrockException - " + json.dumps({"message": "The provided model doesn't support counting tokens."}),
+                400,
+                {
+                    "message": "The provided model doesn't support counting tokens.",
+                    "type": "invalid_request_error",
+                    "param": None,
+                    "code": None,
+                },
+                id="prefixed_bedrock_error_message_unwrapped",
+            ),
+            pytest.param(
+                "tool schema {unclosed is invalid",
+                400,
+                {
+                    "message": "tool schema {unclosed is invalid",
+                    "type": "invalid_request_error",
+                    "param": None,
+                    "code": None,
+                },
+                id="plain_text_with_a_brace_kept_whole",
+            ),
+            pytest.param(
+                "upstream count service unavailable",
+                503,
+                {
+                    "message": "upstream count service unavailable",
+                    "type": "internal_server_error",
+                    "param": None,
+                    "code": None,
+                },
+                id="plain_text_error",
+            ),
+        ],
+    )
+    def test_provider_count_error_answers_in_openai_error_shape(
+        self,
+        provider_body: str | Mapping[str, object],
+        status_code: int,
+        expected_error: Mapping[str, str | None],
+    ) -> None:
+        from litellm.proxy._types import ProxyException
+
+        failing_counter: Final = AsyncMock(
+            side_effect=ProxyException(
+                message=provider_body if isinstance(provider_body, str) else json.dumps(provider_body),
+                type="token_counting_error",
+                param="model",
+                code=str(status_code),
+            )
+        )
+        response, _ = self._post_input_tokens({"model": "gpt-4o", "input": "hi"}, counter=failing_counter)
+
+        assert response.status_code == status_code, response.text
+        assert response.json() == {"error": expected_error}
+
+    def test_non_provider_count_error_keeps_its_own_type(self) -> None:
+        from litellm.proxy._types import ProxyException
+
+        failing_counter: Final = AsyncMock(
+            side_effect=ProxyException(
+                message="Token counting is disabled and no provider API result available",
+                type="token_counting_disabled",
+                param="model",
+                code=503,
+            )
+        )
+        response, _ = self._post_input_tokens({"model": "gpt-4o", "input": "hi"}, counter=failing_counter)
+
+        assert response.status_code == 503, response.text
+        assert response.json()["error"]["type"] == "token_counting_disabled"
+
+    def test_provider_count_error_names_the_call_id_when_opted_in(self) -> None:
+        from litellm.proxy._types import ProxyException
+
+        failing_counter: Final = AsyncMock(
+            side_effect=ProxyException(
+                message="LiteLLM does not support counting tokens for Vertex AI model zai-org/glm-5.2-maas.",
+                type="token_counting_error",
+                param="model",
+                code="400",
+                headers={"x-litellm-call-id": "call-9564"},
+            )
+        )
+        with patch("litellm.proxy.proxy_server.general_settings", {"include_call_id_in_error_body": True}):
+            response, _ = self._post_input_tokens({"model": "gpt-4o", "input": "hi"}, counter=failing_counter)
+
+        assert response.status_code == 400, response.text
+        assert response.json() == {
+            "error": {
+                "message": "LiteLLM does not support counting tokens for Vertex AI model zai-org/glm-5.2-maas.",
+                "type": "invalid_request_error",
+                "param": None,
+                "code": None,
+                "litellm_call_id": "call-9564",
+            }
+        }
 
 
 class TestGuardrailBlockedResponsesShape:
