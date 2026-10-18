@@ -40,6 +40,7 @@ from litellm.litellm_core_utils.litellm_logging import (
     StandardLoggingPayloadSetup,
     _extract_response_obj_and_hidden_params,
     _get_status_fields,
+    get_standard_logging_object_payload,
     set_callbacks,
 )
 from litellm.litellm_core_utils.hook_pairing import HookPairing, run_held_hook_now
@@ -53,6 +54,7 @@ from litellm.proxy.utils import InternalUsageCache
 from litellm.types.llms.openai import ResponseAPIUsage, ResponseCompletedEvent, ResponsesAPIResponse
 from litellm.types.utils import (
     CallTypes,
+    CostBreakdown,
     ImageResponse,
     LiteLLMRealtimeStreamLoggingObject,
     ModelResponse,
@@ -7403,6 +7405,75 @@ def test_payload_guardrail_cost_merges_into_existing_cost_breakdown(logging_obj)
     assert logging_obj.cost_breakdown["total_cost"] == pytest.approx(0.0000429)
 
 
+def test_cache_hit_payload_keeps_zero_components_beside_guardrail_cost(logging_obj):
+    logging_obj.set_cost_breakdown(
+        input_cost=0.00003,
+        output_cost=0.0000129,
+        total_cost=0.0000429,
+        cost_for_built_in_tools_cost_usd_dollar=0.0,
+    )
+    payload: Final = _build_success_payload(logging_obj, {**_guardrail_kwargs(response_cost=0.0), "cache_hit": True})
+
+    assert payload is not None
+    assert payload["response_cost"] == pytest.approx(0.0003)
+    assert payload["cost_breakdown"] == {
+        "input_cost": 0.0,
+        "output_cost": 0.0,
+        "tool_usage_cost": 0.0,
+        "service_tier": None,
+        "data_residency": None,
+        "vertex_location": None,
+        "guardrail_cost": pytest.approx(0.0003),
+        "total_cost": pytest.approx(0.0003),
+    }
+
+
+def test_cache_hit_payload_keeps_the_served_pricing_basis_with_every_amount_at_zero(logging_obj):
+    logging_obj.set_cost_breakdown(
+        input_cost=0.00003,
+        output_cost=0.0000129,
+        total_cost=0.0000474,
+        cost_for_built_in_tools_cost_usd_dollar=0.0000011,
+        additional_costs={"azure_model_router_flat_cost": 0.00014},
+        original_cost=0.00005,
+        discount_percent=0.1,
+        discount_amount=0.000005,
+        margin_percent=0.05,
+        margin_fixed_amount=0.000001,
+        margin_total_amount=0.0000035,
+        cache_read_cost=0.000002,
+        cache_creation_cost=0.000003,
+        reasoning_cost=0.000004,
+        service_tier="priority",
+        data_residency="eu",
+        vertex_location="europe-west4",
+    )
+    kwargs: Final = {"litellm_call_id": "hit-basis-call", "model": "gpt-4o", "messages": [], "cache_hit": True}
+
+    payload: Final = _build_success_payload(logging_obj, kwargs)
+
+    assert payload is not None
+    assert payload["cost_breakdown"] == {
+        "input_cost": 0.0,
+        "output_cost": 0.0,
+        "total_cost": 0.0,
+        "tool_usage_cost": 0.0,
+        "additional_costs": {"azure_model_router_flat_cost": 0.0},
+        "original_cost": 0.0,
+        "discount_percent": 0.1,
+        "discount_amount": 0.0,
+        "margin_percent": 0.05,
+        "margin_fixed_amount": 0.0,
+        "margin_total_amount": 0.0,
+        "cache_read_cost": 0.0,
+        "cache_creation_cost": 0.0,
+        "reasoning_cost": 0.0,
+        "service_tier": "priority",
+        "data_residency": "eu",
+        "vertex_location": "europe-west4",
+    }
+
+
 def test_payload_without_guardrail_cost_is_unchanged(logging_obj):
     kwargs = {
         "litellm_call_id": "no-guardrail-call",
@@ -10588,6 +10659,245 @@ def test_signoz_dispatch_requires_an_endpoint(monkeypatch):
         is_otel_v2_enabled.cache_clear()
 
 
+def _lit8679_priced_logging_obj(deployment_id: str, litellm_call_id: str) -> LitellmLogging:
+    logging_obj: Final = LitellmLogging(
+        model="gpt-5.4-nano",
+        messages=[{"role": "user", "content": "Hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=time.time(),
+        litellm_call_id=litellm_call_id,
+        function_id="fn",
+    )
+    logging_obj.update_environment_variables(
+        model="gpt-5.4-nano",
+        user="",
+        optional_params={},
+        litellm_params={"metadata": {"model_group": "lit8679-group", "model_info": {"id": deployment_id}}},
+        custom_llm_provider="openai",
+    )
+    return logging_obj
+
+
+def test_uncached_price_recomputes_price_past_a_zero_stamp():
+    """A probe for the price a cache-served response would have had ignores the 0.0 stamped on it."""
+    deployment_id: Final = "lit8679-uncached-cost-deployment"
+    litellm.register_model(
+        model_cost={
+            deployment_id: {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": 1e-06,
+                "output_cost_per_token": 2e-06,
+            }
+        },
+        persist_across_reloads=False,
+    )
+    try:
+        logging_obj: Final = _lit8679_priced_logging_obj(deployment_id, "lit8679-uncached")
+        oracle_logging_obj: Final = _lit8679_priced_logging_obj(deployment_id, "lit8679-oracle")
+        cached_response: Final = ModelResponse(
+            model="gpt-5.4-nano",
+            choices=[litellm.Choices(message=litellm.Message(role="assistant", content="cached"))],
+            usage=litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30),
+        )
+        cached_response._hidden_params = {"cache_hit": True, "cache_key": "lit8679-key", "response_cost": 0.0}
+        fresh_response: Final = ModelResponse(
+            model="gpt-5.4-nano",
+            choices=[litellm.Choices(message=litellm.Message(role="assistant", content="cached"))],
+            usage=litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30),
+        )
+
+        cost: Final = logging_obj.uncached_price(result=cached_response).cost
+        uncached_price: Final = oracle_logging_obj._response_cost_calculator(result=fresh_response)
+
+        assert cost == uncached_price
+        assert cost is not None and cost > 0.0
+        assert logging_obj.cost_breakdown is None
+    finally:
+        litellm.model_cost.pop(deployment_id, None)
+
+
+def test_uncached_price_leaves_no_pricing_state_on_the_call():
+    """The uncached price probe leaves no cost breakdown or billed rates behind on the cache-hit call."""
+    deployment_id: Final = "lit8679-probe-state-deployment"
+    litellm.register_model(
+        model_cost={
+            deployment_id: {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": 1e-06,
+                "output_cost_per_token": 2e-06,
+            }
+        },
+        persist_across_reloads=False,
+    )
+    try:
+        logging_obj: Final = _lit8679_priced_logging_obj(deployment_id, "lit8679-probe-state")
+        cached_response: Final = ModelResponse(
+            model="gpt-5.4-nano",
+            choices=[litellm.Choices(message=litellm.Message(role="assistant", content="cached"))],
+            usage=litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30),
+        )
+        cached_response._hidden_params = {"cache_hit": True, "cache_key": "lit8679-key", "response_cost": 0.0}
+        assert (logging_obj.cost_breakdown, logging_obj.billed_token_rates) == (None, None)
+
+        cost: Final = logging_obj.uncached_price(result=cached_response).cost
+
+        assert cost is not None and cost > 0.0
+        assert (logging_obj.cost_breakdown, logging_obj.billed_token_rates) == (None, None)
+    finally:
+        litellm.model_cost.pop(deployment_id, None)
+
+
+def _assert_zeroed_copy(hit_breakdown: CostBreakdown | None, fresh_breakdown: CostBreakdown) -> None:
+    basis_and_rates: Final = ("service_tier", "data_residency", "vertex_location", "discount_percent", "margin_percent")
+    assert hit_breakdown is not None and hit_breakdown.keys() == fresh_breakdown.keys()
+    assert all(hit_breakdown[key] == fresh_breakdown[key] for key in basis_and_rates if key in hit_breakdown)
+    assert all(value == 0.0 for key, value in hit_breakdown.items() if key not in basis_and_rates)
+
+
+def test_payload_saved_cache_cost_keeps_uncached_price_when_result_stamped_zero():
+    """A cache-hit payload still reports what the call would have cost, not the 0.0 stamped on the served response."""
+    deployment_id: Final = "lit8679-saved-cost-deployment"
+    litellm.register_model(
+        model_cost={
+            deployment_id: {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": 1e-06,
+                "output_cost_per_token": 2e-06,
+            }
+        },
+        persist_across_reloads=False,
+    )
+    try:
+        logging_obj: Final = _lit8679_priced_logging_obj(deployment_id, "lit8679-payload")
+        oracle_logging_obj: Final = _lit8679_priced_logging_obj(deployment_id, "lit8679-payload-oracle")
+        response: Final = ModelResponse(
+            model="gpt-5.4-nano",
+            choices=[litellm.Choices(message=litellm.Message(role="assistant", content="cached"))],
+            usage=litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30),
+        )
+        response._hidden_params = {"cache_hit": True, "cache_key": "lit8679-key", "response_cost": 0.0}
+        fresh_response: Final = ModelResponse(
+            model="gpt-5.4-nano",
+            choices=[litellm.Choices(message=litellm.Message(role="assistant", content="cached"))],
+            usage=litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30),
+        )
+        logging_obj.model_call_details["cache_hit"] = True
+        now: Final = datetime.datetime.now()
+        payload: Final = get_standard_logging_object_payload(
+            kwargs={
+                "model": "gpt-5.4-nano",
+                "messages": [],
+                "cache_hit": True,
+                "litellm_params": logging_obj.litellm_params,
+            },
+            init_response_obj=response,
+            start_time=now,
+            end_time=now,
+            logging_obj=logging_obj,
+            status="success",
+        )
+        uncached_price: Final = oracle_logging_obj._response_cost_calculator(result=fresh_response)
+
+        assert payload is not None
+        assert payload["saved_cache_cost"] == uncached_price
+        assert payload["saved_cache_cost"] > 0.0
+        assert payload["response_cost"] == 0.0
+        assert logging_obj.cost_breakdown is None
+        assert oracle_logging_obj.cost_breakdown is not None
+        _assert_zeroed_copy(payload["cost_breakdown"], oracle_logging_obj.cost_breakdown)
+    finally:
+        litellm.model_cost.pop(deployment_id, None)
+
+
+def test_cache_hit_payload_reports_zero_cost_though_the_call_priced_the_response_as_fresh():
+    """The proxy prices a /v1/messages body for its cost header before the success callback learns it was a cache
+    hit, and a replayed stream's assembled response carries its original price, so the call holds full-price numbers
+    that the hit's payload must not export."""
+    deployment_id: Final = "lit8679-stale-breakdown-deployment"
+    litellm.register_model(
+        model_cost={
+            deployment_id: {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": 1e-06,
+                "output_cost_per_token": 2e-06,
+            }
+        },
+        persist_across_reloads=False,
+    )
+    try:
+        logging_obj: Final = _lit8679_priced_logging_obj(deployment_id, "lit8679-stale-breakdown")
+        response: Final = ModelResponse(
+            model="gpt-5.4-nano",
+            choices=[litellm.Choices(message=litellm.Message(role="assistant", content="cached"))],
+            usage=litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30),
+        )
+        header_price: Final = logging_obj.response_cost_calculator(result=response)
+        response._hidden_params["response_cost"] = header_price
+        logging_obj.model_call_details["cache_hit"] = True
+        now: Final = datetime.datetime.now()
+        payload: Final = get_standard_logging_object_payload(
+            kwargs={
+                "model": "gpt-5.4-nano",
+                "messages": [],
+                "cache_hit": True,
+                "response_cost": 0.0,
+                "litellm_params": logging_obj.litellm_params,
+            },
+            init_response_obj=response,
+            start_time=now,
+            end_time=now,
+            logging_obj=logging_obj,
+            status="success",
+        )
+
+        assert header_price is not None and header_price > 0.0
+        assert logging_obj.cost_breakdown is not None
+        assert payload is not None
+        assert payload["response_cost"] == 0.0
+        assert payload["hidden_params"]["response_cost"] == 0.0
+        _assert_zeroed_copy(payload["cost_breakdown"], logging_obj.cost_breakdown)
+        assert payload["saved_cache_cost"] == header_price
+    finally:
+        litellm.model_cost.pop(deployment_id, None)
+
+
+def test_uncached_price_leaves_no_failure_debug_info_for_unpriced_model():
+    """A probe that cannot price the model returns None without stamping the pricing failure on the cache-hit call."""
+    logging_obj: Final = LitellmLogging(
+        model="lit8679-model-with-no-price",
+        messages=[{"role": "user", "content": "Hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=time.time(),
+        litellm_call_id="lit8679-unpriced-probe",
+        function_id="fn",
+    )
+    logging_obj.update_environment_variables(
+        model="lit8679-model-with-no-price",
+        user="",
+        optional_params={},
+        litellm_params={"metadata": {}},
+        custom_llm_provider="openai",
+    )
+    cached_response: Final = ModelResponse(
+        model="lit8679-model-with-no-price",
+        choices=[litellm.Choices(message=litellm.Message(role="assistant", content="cached"))],
+        usage=litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30),
+    )
+    cached_response._hidden_params = {"cache_hit": True, "cache_key": "lit8679-key", "response_cost": 0.0}
+    assert "response_cost_failure_debug_information" not in logging_obj.model_call_details
+
+    cost: Final = logging_obj.uncached_price(result=cached_response).cost
+
+    assert cost is None
+    assert "response_cost_failure_debug_information" not in logging_obj.model_call_details
+
+
 def test_enterprise_alerting_loggers_resolves_real_classes():
     from litellm_enterprise.enterprise_callbacks.pagerduty.pagerduty import PagerDutyAlerting
     from litellm_enterprise.enterprise_callbacks.send_emails.resend_email import ResendEmailLogger
@@ -12687,3 +12997,40 @@ def test_a_websocket_turn_row_is_keyed_by_the_response_id_or_else_its_call_id(
     )
     assert payload is not None
     assert payload["id"] == expected_row_id
+
+
+@pytest.mark.parametrize("for_async_request, expected_s3_writes", [(True, 1), (False, 0)])
+def test_legacy_s3_logs_a_streamed_anthropic_messages_call_handed_off_from_the_async_side(
+    logging_obj: LitellmLogging, monkeypatch: pytest.MonkeyPatch, for_async_request: bool, expected_s3_writes: int
+) -> None:
+    """LIT-9834: the /v1/messages stream handler stores ``complete_streaming_response`` before any logger runs.
+
+    The one hand-off from the async side (``for_async_request=True``) must still reach the legacy ``s3`` writer,
+    while the chunk-by-chunk sync path (``for_async_request=False``) keeps treating a stored response as logged."""
+    complete_response: Final = ModelResponse(
+        id="msg_fake_stream_001",
+        model="claude-sonnet-4-5",
+        choices=[
+            {
+                "message": {"role": "assistant", "content": "Hello from the fake upstream"},
+                "finish_reason": "stop",
+                "index": 0,
+            }
+        ],
+        usage={"prompt_tokens": 8, "completion_tokens": 6, "total_tokens": 14},
+    )
+    logging_obj.stream = True
+    logging_obj.call_type = "anthropic_messages"
+    logging_obj.model_call_details["litellm_params"] = {"aanthropic_messages": True}
+    logging_obj.litellm_params = logging_obj.model_call_details["litellm_params"]
+    logging_obj.model_call_details["complete_streaming_response"] = complete_response
+    s3_writer: Final = MagicMock()
+    monkeypatch.setattr(litellm_logging, "s3Logger", s3_writer)
+    monkeypatch.setattr(litellm, "success_callback", ["s3"])
+    now: Final = datetime_unit_test(2026, 1, 1, 12, 0, 0)
+
+    logging_obj.success_handler(complete_response, start_time=now, end_time=now, for_async_request=for_async_request)
+
+    assert s3_writer.log_event.call_count == expected_s3_writes
+    if expected_s3_writes:
+        assert s3_writer.log_event.call_args.kwargs["response_obj"] is complete_response

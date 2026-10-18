@@ -62,7 +62,7 @@ from integration.authorization._hidden_alias_budget import (
 )
 from pydantic import JsonValue, TypeAdapter
 
-pytestmark: Final = pytest.mark.timeout(240)
+pytestmark: Final = [pytest.mark.timeout(240), pytest.mark.shares_worker_state]
 
 PAID_INPUT_COST_PER_TOKEN: Final = 0.001
 PAID_OUTPUT_COST_PER_TOKEN: Final = 0.002

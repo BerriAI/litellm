@@ -13,12 +13,13 @@ import sys
 import time
 import traceback
 from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime as dt_object
 from functools import lru_cache
 from types import MappingProxyType, TracebackType
 from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, cast
 
-from httpx import Response
+from httpx import Response, Timeout
 from pydantic import BaseModel, JsonValue, TypeAdapter
 
 import litellm
@@ -559,6 +560,12 @@ def mask_api_base_credentials(api_base: str) -> str:
     return api_base[:key_end] + "*" * 5 + api_base[-4:]
 
 
+@dataclass(frozen=True, slots=True)
+class UncachedPrice:
+    cost: float | None
+    cost_breakdown: CostBreakdown | None
+
+
 def _timestamp_seconds(moment: object) -> float | None:
     if isinstance(moment, datetime.datetime):
         return moment.timestamp()
@@ -665,6 +672,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.message_copy_duration_ms: float = (time.time() - _copy_start) * 1000
         self.callback_duration_ms: float = 0.0
         self.stream = stream
+        self.applied_timeout: float | Timeout | None = None
         self.start_time = start_time  # log the call start time
         self.call_type = call_type
         self.relays_llm_passthrough: Final = call_type in (
@@ -812,6 +820,10 @@ class Logging(LiteLLMLoggingBaseClass):
         new_call.streaming_chunks = []
         new_call.sync_streaming_chunks = []
         return new_call
+
+    def reset_caching_details(self) -> None:
+        """Forget an earlier cache lookup's result, so a call that looks up again reports only its latest."""
+        self.caching_details = None
 
     def set_response_timing_metrics(self, timing_metrics: Mapping[str, float]) -> None:
         """Keep ``_response_ms`` / ``litellm_overhead_time_ms`` for a result that has no ``_hidden_params``."""
@@ -1046,6 +1058,11 @@ class Logging(LiteLLMLoggingBaseClass):
 
         if "custom_llm_provider" in self.model_call_details:
             self.custom_llm_provider = self.model_call_details["custom_llm_provider"]
+
+    def record_applied_timeout(self, timeout: float | Timeout) -> None:
+        self.applied_timeout = timeout
+        self.litellm_params["timeout"] = timeout
+        self.model_call_details["litellm_params"] = self.litellm_params
 
     def update_from_kwargs(
         self,
@@ -1892,6 +1909,7 @@ class Logging(LiteLLMLoggingBaseClass):
         cache_hit: bool | None = None,
         litellm_model_name: str | None = None,
         router_model_id: str | None = None,
+        ignore_stamped_cost: bool = False,
     ) -> float | None:
         """
         Calculate response cost using result + logging object variables.
@@ -1927,7 +1945,9 @@ class Logging(LiteLLMLoggingBaseClass):
         ):
             hidden_params: Final = result_hidden_params
             if (
-                "response_cost" in hidden_params and hidden_params["response_cost"] is not None
+                not ignore_stamped_cost
+                and "response_cost" in hidden_params
+                and hidden_params["response_cost"] is not None
             ):  # use cost if already calculated
                 self._record_zero_cost_diagnostic(
                     priced_result,
@@ -2052,6 +2072,20 @@ class Logging(LiteLLMLoggingBaseClass):
         return None
 
     _response_cost_calculator = response_cost_calculator
+
+    def uncached_price(self, result: object) -> UncachedPrice:
+        previous_cost_breakdown: Final = self.cost_breakdown
+        previous_billed_token_rates: Final = self.billed_token_rates
+        debug_key: Final = "response_cost_failure_debug_information"
+        had_failure_debug_info: Final = debug_key in self.model_call_details
+        try:
+            cost: Final = self.response_cost_calculator(result=result, cache_hit=False, ignore_stamped_cost=True)
+            return UncachedPrice(cost=cost, cost_breakdown=self.cost_breakdown)
+        finally:
+            self.cost_breakdown = previous_cost_breakdown
+            self.billed_token_rates = previous_billed_token_rates
+            if not had_failure_debug_info:
+                self.model_call_details.pop(debug_key, None)
 
     def _record_zero_cost_diagnostic(
         self,
@@ -3042,7 +3076,7 @@ class Logging(LiteLLMLoggingBaseClass):
             complete_streaming_response: (
                 ModelResponse | TextCompletionResponse | ResponsesAPIResponse | InteractionsAPIResponse | None
             ) = None
-            if "complete_streaming_response" in self.model_call_details:
+            if "complete_streaming_response" in self.model_call_details and not for_async_request:
                 return  # break out of this.
             complete_streaming_response = self._get_assembled_streaming_response(
                 result=result,
@@ -6978,6 +7012,36 @@ def _autorouter_savings_for_payload(
         return None
 
 
+_CACHE_HIT_ZEROED_AMOUNTS: Final = MappingProxyType(
+    {
+        "cache_read_cost": CostBreakdown(cache_read_cost=0.0),
+        "cache_creation_cost": CostBreakdown(cache_creation_cost=0.0),
+        "reasoning_cost": CostBreakdown(reasoning_cost=0.0),
+        "original_cost": CostBreakdown(original_cost=0.0),
+        "discount_amount": CostBreakdown(discount_amount=0.0),
+        "margin_fixed_amount": CostBreakdown(margin_fixed_amount=0.0),
+        "margin_total_amount": CostBreakdown(margin_total_amount=0.0),
+    }
+)
+
+
+def _cache_hit_cost_breakdown(served: CostBreakdown | None) -> CostBreakdown:
+    """Every amount at 0, keeping the pricing basis and rates a fresh call would have had, which savings reports read."""
+    zero_costs: Final = CostBreakdown(input_cost=0.0, output_cost=0.0, total_cost=0.0, tool_usage_cost=0.0)
+    if served is None:
+        return zero_costs
+    zeroed_additional_costs: Final = (
+        CostBreakdown(additional_costs=dict.fromkeys(served["additional_costs"], 0.0))
+        if "additional_costs" in served
+        else CostBreakdown()
+    )
+    return functools.reduce(
+        lambda breakdown, zeroed: breakdown | zeroed,
+        (_CACHE_HIT_ZEROED_AMOUNTS[key] for key in served if key in _CACHE_HIT_ZEROED_AMOUNTS),
+        served | zero_costs | zeroed_additional_costs,
+    )
+
+
 def get_standard_logging_object_payload(
     kwargs: dict | None,
     init_response_obj: object,
@@ -7061,17 +7125,10 @@ def get_standard_logging_object_payload(
             "user", None
         )  # maintain backwards compatibility with old request body check
 
-        saved_cache_cost: float = 0.0
         if cache_hit is True or served_from_cache(init_response_obj):
             id = f"{id}_cache_hit{time.time()}"  # do not duplicate the request id
-        if cache_hit is True:
-            saved_cache_cost = (
-                logging_obj.response_cost_calculator(
-                    result=init_response_obj,
-                    cache_hit=False,
-                )
-                or 0.0
-            )
+        uncached_price: Final = logging_obj.uncached_price(result=init_response_obj) if cache_hit is True else None
+        saved_cache_cost: Final = (uncached_price.cost if uncached_price is not None else None) or 0.0
 
         ## Get model cost information ##
         base_model = get_base_model_from_metadata(model_call_details=kwargs)
@@ -7088,7 +7145,7 @@ def get_standard_logging_object_payload(
 
         # clean up litellm hidden params
         clean_hidden_params: Final = StandardLoggingPayloadSetup.get_hidden_params(hidden_params)
-        if clean_hidden_params["response_cost"] is None and raw_response_cost is not None:
+        if cache_hit is True or (clean_hidden_params["response_cost"] is None and raw_response_cost is not None):
             clean_hidden_params["response_cost"] = llm_response_cost
         if clean_hidden_params["litellm_overhead_time_ms"] is None and status == "success":
             # /v1/messages dict results and the bridge stream wrappers keep it on the logging object;
@@ -7150,7 +7207,14 @@ def get_standard_logging_object_payload(
         ):
             model_name = response_model_name
 
-        request_cost_breakdown: Final = cost_breakdown_with_guardrail(logging_obj.cost_breakdown, guardrail_cost)
+        request_cost_breakdown: Final = cost_breakdown_with_guardrail(
+            (
+                _cache_hit_cost_breakdown(uncached_price.cost_breakdown)
+                if uncached_price is not None
+                else logging_obj.cost_breakdown
+            ),
+            guardrail_cost,
+        )
         captured_baseline: Final = logging_obj.baseline_observation
         autorouter_savings: Final = (
             None

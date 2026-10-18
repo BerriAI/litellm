@@ -41,6 +41,7 @@ from litellm.constants import (
     SESSION_ID_GENERATED_METADATA_KEY,
     SESSION_ID_OMITTED_METADATA_KEY,
     TYPESAFE_DANGER_ZONE_HEADER_PREFIX,
+    VECTOR_STORE_CALLER_METADATA_KWARG,
     X_LITELLM_DISABLE_CALLBACKS,
 )
 from litellm.integrations.custom_guardrail import without_server_streaming_classification
@@ -2160,7 +2161,7 @@ def refresh_proxy_server_request_body_snapshot(
     if not isinstance(proxy_server_request, dict):
         return
     _body_snapshot_exclude: Final = (
-        frozenset({"secret_fields", "proxy_server_request", "litellm_logging_obj"})
+        frozenset({"secret_fields", "proxy_server_request", "litellm_logging_obj", VECTOR_STORE_CALLER_METADATA_KWARG})
         | _TRANSPORT_ONLY_CREDENTIAL_KEYS
         | _CALLBACK_CREDENTIAL_KEYS
     )
@@ -4088,13 +4089,25 @@ def add_provider_specific_headers_to_request(
     }
 
     scoped_headers: Final = [
-        ProviderSpecificHeader(custom_llm_provider=providers, extra_headers=extra_headers)
-        for providers, extra_headers in (
-            (_ANTHROPIC_API_HEADER_PROVIDERS, anthropic_api_headers),
-            (_ANTHROPIC_OAUTH_CREDENTIAL_PROVIDERS, anthropic_oauth_credential_headers),
-            (LlmProviders.TYPESAFE.value, typesafe_danger_zone_headers),
+        scoped_header
+        for scoped_header in (
+            ProviderSpecificHeader(
+                custom_llm_provider=_ANTHROPIC_API_HEADER_PROVIDERS, extra_headers=anthropic_api_headers
+            ),
+            ProviderSpecificHeader(
+                custom_llm_provider=LlmProviders.DATABRICKS.value,
+                extra_headers=anthropic_api_headers,
+                native_anthropic_messages_only=True,
+            ),
+            ProviderSpecificHeader(
+                custom_llm_provider=_ANTHROPIC_OAUTH_CREDENTIAL_PROVIDERS,
+                extra_headers=anthropic_oauth_credential_headers,
+            ),
+            ProviderSpecificHeader(
+                custom_llm_provider=LlmProviders.TYPESAFE.value, extra_headers=typesafe_danger_zone_headers
+            ),
         )
-        if extra_headers
+        if scoped_header["extra_headers"]
     ]
 
     if scoped_headers:

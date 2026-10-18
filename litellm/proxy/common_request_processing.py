@@ -637,7 +637,7 @@ def serialize_http_exception_detail(
         msg: Final = detail.get("message")
         if isinstance(msg, str):
             return msg, detail
-        return json.dumps(detail), detail
+        return json.dumps(detail, default=str), detail
     return str(detail), None
 
 
@@ -1118,7 +1118,7 @@ def sse_error_payload(exc: BaseException) -> tuple[int, Mapping[str, object]]:
 
 def _sse_error_frames(error_obj: Mapping[str, object]) -> tuple[str, str]:
     """The two frames an SSE stream ends with once it can no longer raise."""
-    return f"data: {json.dumps({'error': error_obj})}\n\n", "data: [DONE]\n\n"
+    return f"data: {json.dumps({'error': error_obj}, default=str)}\n\n", "data: [DONE]\n\n"
 
 
 def _sse_stream_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
@@ -1664,19 +1664,26 @@ def _totals_to_zero(response_cost: float | str | None) -> bool:
         return False
 
 
+def _is_cache_hit(litellm_logging_obj: LiteLLMLoggingObj) -> bool:
+    caching_details: Final = litellm_logging_obj.caching_details
+    return caching_details is not None and caching_details.get("cache_hit") is True
+
+
 def _get_cost_breakdown_from_logging_obj(
     litellm_logging_obj: LiteLLMLoggingObj | None,
     response_cost: float | str | None = None,
 ) -> CostBreakdownHeaderValues:
     """Extract discount, margin, and per-component cost information from logging object's cost breakdown.
 
-    A non-inference call that priced at zero never records a breakdown, so its components are
-    reported as zero here. Any such call that did price normally (retrieving a background response,
-    and the cost poller's read of one) reports the breakdown it stored, or nothing at all when the
-    breakdown has not landed yet.
+    A cache hit reports every component as zero. A non-inference call that priced at zero never
+    records a breakdown, so its components are reported as zero too. Any such call that did price
+    normally (retrieving a background response, and the cost poller's read of one) reports the
+    breakdown it stored, or nothing at all when the breakdown has not landed yet.
     """
     if not litellm_logging_obj or not hasattr(litellm_logging_obj, "cost_breakdown"):
         return CostBreakdownHeaderValues()
+    if _is_cache_hit(litellm_logging_obj):
+        return _ZERO_COST_BREAKDOWN
 
     cost_breakdown: Final = litellm_logging_obj.cost_breakdown
     if not cost_breakdown:
@@ -1704,6 +1711,13 @@ def _get_cost_breakdown_from_logging_obj(
 
 def _header_value(value: float | None) -> str | None:
     return str(value) if value is not None else None
+
+
+def _response_cost_header_value(hidden_params: Mapping[str, object]) -> float | str:
+    if hidden_params.get("cache_hit") is True:
+        return 0.0
+    response_cost: Final = hidden_params.get("response_cost")
+    return response_cost if isinstance(response_cost, (int, float, str)) and response_cost else ""
 
 
 def cost_headers(
@@ -2092,18 +2106,12 @@ class ProxyBaseLLMRequestProcessing:
         Build LiteLLM proxy response headers for routes that call the LLM directly
         (e.g. Google native :generateContent) instead of base_process_llm_request.
         """
-        if isinstance(response, dict):
-            hidden_params = get_hidden_params_dict(response)
-        else:
-            hidden_params = getattr(response, "_hidden_params", None) or {}
-        if not isinstance(hidden_params, dict):
-            hidden_params = {}
-
+        hidden_params: Final = get_hidden_params_dict(response)
         model_id: Final = ProxyBaseLLMRequestProcessing._get_model_id_from_response(hidden_params, request_data)
 
         cache_key: Final = hidden_params.get("cache_key", None) or ""
         api_base: Final = hidden_params.get("api_base", None) or ""
-        response_cost: Final = hidden_params.get("response_cost", None) or ""
+        response_cost: Final = _response_cost_header_value(hidden_params)
         fastest_response_batch_completion: Final = hidden_params.get("fastest_response_batch_completion", None)
         additional_headers: Final = hidden_params.get("additional_headers", {}) or {}
 
@@ -2648,7 +2656,7 @@ class ProxyBaseLLMRequestProcessing:
                     cache_key=hidden_params.get("cache_key") or "",
                     api_base=hidden_params.get("api_base") or "",
                     version=version,
-                    response_cost=hidden_params.get("response_cost") or "",
+                    response_cost=_response_cost_header_value(hidden_params),
                     model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
                     fastest_response_batch_completion=hidden_params.get("fastest_response_batch_completion"),
                     request_data=self.data,
@@ -2693,13 +2701,17 @@ class ProxyBaseLLMRequestProcessing:
         hold the attribute at all, and Google :generateContent carries
         ``_hidden_params`` but no synchronously-populated ``response_cost``. In both
         cases the cost is read back from the logging object instead, recomputing from
-        the same calculator only when it has not been stored yet.
+        the same calculator only when it has not been stored yet. A response served
+        from the cache costs 0, which the calculator cannot tell from a fresh call, and any
+        other zero or unknown cost comes back empty so no cost header is sent.
         """
+        if _is_cache_hit(logging_obj):
+            return 0.0
         stored_cost: Final = logging_obj.model_call_details.get("response_cost")
         if isinstance(stored_cost, (int, float)):
-            return float(stored_cost)
+            return float(stored_cost) or ""
         recomputed_cost: Final = logging_obj.response_cost_calculator(result=response)
-        return recomputed_cost if isinstance(recomputed_cost, (int, float)) else ""
+        return recomputed_cost or "" if isinstance(recomputed_cost, (int, float)) else ""
 
     def _debug_log_request_payload(self) -> None:
         """Log request payload at DEBUG level, truncating if too large."""
@@ -2908,7 +2920,7 @@ class ProxyBaseLLMRequestProcessing:
             cache_key, api_base, response_cost = (
                 hidden_params.get("cache_key", None) or "",
                 hidden_params.get("api_base", None) or "",
-                hidden_params.get("response_cost", None) or "",
+                _response_cost_header_value(hidden_params),
             )
             fastest_response_batch_completion, additional_headers = (
                 hidden_params.get("fastest_response_batch_completion", None),
@@ -3178,7 +3190,7 @@ class ProxyBaseLLMRequestProcessing:
 
         recover_response_cost: Final = not response_cost and hidden_params.get("response_cost") is None
         computed_cost_for_headers: Final = (
-            self._response_cost_from_logging_obj(response=response, logging_obj=logging_obj) or ""
+            self._response_cost_from_logging_obj(response=response, logging_obj=logging_obj)
             if recover_response_cost
             else response_cost
         )
