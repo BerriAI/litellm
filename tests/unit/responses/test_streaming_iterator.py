@@ -333,7 +333,8 @@ _READ_TIMEOUT_PREFIXES: Final = [
 @pytest.mark.parametrize("prefix", _READ_TIMEOUT_PREFIXES)
 async def test_transport_read_timeout_raises_litellm_timeout(prefix):
     logging_obj: Final = _failure_tracking_logging_obj()
-    iterator: Final = _make_iterator(sse_events=prefix, logging_obj=logging_obj, trailing_error=httpx.ReadTimeout(""))
+    stall: Final = httpx.ReadTimeout("")
+    iterator: Final = _make_iterator(sse_events=prefix, logging_obj=logging_obj, trailing_error=stall)
 
     with pytest.raises(litellm.Timeout) as exc_info:
         async for _ in iterator:
@@ -341,7 +342,8 @@ async def test_transport_read_timeout_raises_litellm_timeout(prefix):
 
     assert exc_info.value.status_code == 408
     assert "Request timed out. Error_str: ReadTimeout" in str(exc_info.value)
-    _assert_failure_logged_once(logging_obj, exc_info.value)
+    assert exc_info.value.__cause__ is stall
+    _assert_failure_logged_once(logging_obj, stall)
 
 
 @pytest.mark.parametrize("prefix", _READ_TIMEOUT_PREFIXES)

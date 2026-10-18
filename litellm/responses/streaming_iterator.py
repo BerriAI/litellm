@@ -1055,11 +1055,8 @@ class BaseResponsesAPIStreamingIterator:
 
     def _raise_for_transport_timeout(self, error: httpx.TimeoutException) -> NoReturn:
         self.finished = True
-        mapped_timeout: Final = _mapped_exception(
-            error, self.model or "", self.custom_llm_provider or "", self.logging_obj
-        )
-        self._handle_failure(mapped_timeout)
-        raise mapped_timeout from error
+        self._handle_failure(error)
+        raise _mapped_exception(error, self.model or "", self.custom_llm_provider or "", self.logging_obj) from error
 
     def _raise_for_transport_error(self, error: httpx.ReadError | httpx.RemoteProtocolError) -> NoReturn:
         self._handle_failure(error)

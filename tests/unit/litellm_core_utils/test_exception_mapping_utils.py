@@ -2790,7 +2790,7 @@ def test_non_aws_import_failure_keeps_provider_mapping(failure):
         (httpx.ReadTimeout("Timeout on reading data from socket"), "Timeout on reading data from socket"),
         (httpx.TimeoutException(""), "TimeoutException"),
     ],
-    ids=["httpx_read_timeout", "aiohttp_read_timeout", "aiohttp_socket_timeout"],
+    ids=["httpx_read_timeout", "aiohttp_read_timeout", "timeout_base_class"],
 )
 @pytest.mark.parametrize("provider", ["hosted_vllm", "openai", "anthropic"])
 def test_transport_timeout_maps_to_timeout(
