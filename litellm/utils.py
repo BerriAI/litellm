@@ -5243,22 +5243,12 @@ _apply_openai_param_overrides = apply_openai_param_overrides
 PROVIDER_UNVALIDATED_PARAMS: Final = frozenset({"user", "stream_options", "stream", "max_retries"})
 
 # A param in PROVIDER_UNVALIDATED_PARAMS that the provider does not support is
-# the one case that is neither sent nor refused: `_check_valid_arg` skips it
-# before it can reach `unsupported_params`, so no `UnsupportedParamsError` is
-# raised, and `map_openai_params` only copies supported names, so it never
-# reaches the wire either. The caller sees success and a param that did nothing.
+# neither sent nor refused: `_check_valid_arg` skips it before it can reach
+# `unsupported_params`, and `map_openai_params` only copies supported names, so
+# the caller sees success and a param that did nothing (#45015).
 #
-# That is reported as issue #45015: `user` is only a supported param for models
-# in OpenAI's own catalog (`gpt_transformation.py` adds it behind
-# `is_openai_catalog_model`), so passing `user=` to a self-hosted
-# OpenAI-compatible model silently drops it, and the proxy's per-customer spend
-# attribution -- which reads `request_body["user"]` -- records nothing. The
-# reporter found the `x-litellm-end-user-id` header by trial and error, because
-# it bypasses param mapping entirely.
-#
-# Only params listed here warn. `stream`, `stream_options` and `max_retries`
-# are transport controls rather than things a caller tracks the effect of, and
-# warning on them would be noise on every request that sets one.
+# Only params listed here warn. `stream`, `stream_options` and `max_retries` are
+# transport controls rather than things a caller tracks the effect of.
 UNVALIDATED_PARAM_DROP_HINTS: Final = {
     "user": (
         "`user` is only a supported param for models in OpenAI's catalog, so it is dropped here "
@@ -5278,6 +5268,19 @@ _unvalidated_param_warned: Final = set[tuple[str, str, str]]()
 # limit. Past this many distinct (param, provider, model) triples the message
 # has stopped being news, so warning simply stops rather than repeating.
 _UNVALIDATED_PARAM_WARN_CAP: Final = 64
+
+# `model` and `custom_llm_provider` arrive from the request, so a caller could
+# embed carriage returns, newlines or terminal escapes and forge whole log
+# entries off the back of this warning (CodeQL py/log-injection), or repeat an
+# oversized value on every line. Same treatment `_sanitize_correlation_id`
+# gives a caller-set trace id.
+_MAX_LOGGED_VALUE_LENGTH: Final = 128
+
+
+def _log_safe(value: object) -> str:
+    """Bound and strip a caller-controlled value before it reaches a log line."""
+    printable: Final = "".join(ch for ch in str(value) if ch.isprintable())
+    return printable[:_MAX_LOGGED_VALUE_LENGTH]
 
 
 def warn_unvalidated_param_dropped(param: str, custom_llm_provider: object, model: object) -> None:
@@ -5300,8 +5303,8 @@ def warn_unvalidated_param_dropped(param: str, custom_llm_provider: object, mode
         "supported param, and it is exempt from the unsupported-param error, so it is dropped "
         "silently. %s",
         param,
-        custom_llm_provider,
-        model,
+        _log_safe(custom_llm_provider),
+        _log_safe(model),
         hint,
     )
 

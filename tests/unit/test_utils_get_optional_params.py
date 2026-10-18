@@ -1,4 +1,5 @@
 import json
+from collections.abc import Iterator
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -2099,7 +2100,7 @@ def test_supports_system_message_merges_system_prompt_into_user_message() -> Non
     assert map_system_message_pt(messages=messages) == [{"role": "user", "content": "Listen here! Hello there!"}]
 
 
-def _drop_warnings(mock_warning):
+def _drop_warnings(mock_warning: MagicMock) -> list[str]:
     """The formatted drop warnings only.
 
     `verbose_logger.warning` is shared, so asserting on a raw call count would
@@ -2107,17 +2108,11 @@ def _drop_warnings(mock_warning):
     logs a warning. Filter to this message and format it, since the assertions
     are about what the message tells the caller.
     """
-    messages = []
-    for call in mock_warning.call_args_list:
-        template = call.args[0]
-        if "is not sending" not in template:
-            continue
-        messages.append(template % call.args[1:])
-    return messages
+    return [call.args[0] % call.args[1:] for call in mock_warning.call_args_list if "is not sending" in call.args[0]]
 
 
 @pytest.fixture
-def reset_unvalidated_param_warnings():
+def reset_unvalidated_param_warnings() -> Iterator[None]:
     """The drop warning is deduped for the life of the process.
 
     A test that asserts it fires has to start from an empty set, and must not
@@ -2130,7 +2125,7 @@ def reset_unvalidated_param_warnings():
     _unvalidated_param_warned.clear()
 
 
-def test_user_param_dropped_warns_for_non_catalog_model(reset_unvalidated_param_warnings):
+def test_user_param_dropped_warns_for_non_catalog_model(reset_unvalidated_param_warnings: None) -> None:
     """A param that is exempt from the unsupported-param error is still dropped.
 
     `user` is only a supported param for models in OpenAI's catalog, and it is in
@@ -2156,7 +2151,7 @@ def test_user_param_dropped_warns_for_non_catalog_model(reset_unvalidated_param_
     assert "x-litellm-end-user-id" in messages[0]
 
 
-def test_user_param_drop_warning_is_deduped(reset_unvalidated_param_warnings):
+def test_user_param_drop_warning_is_deduped(reset_unvalidated_param_warnings: None) -> None:
     """Once per (param, provider, model), not once per request."""
     with patch("litellm.utils.verbose_logger.warning") as mock_warning:
         for _ in range(3):
@@ -2169,7 +2164,7 @@ def test_user_param_drop_warning_is_deduped(reset_unvalidated_param_warnings):
     assert len(_drop_warnings(mock_warning)) == 1
 
 
-def test_user_param_not_warned_when_the_model_supports_it(reset_unvalidated_param_warnings):
+def test_user_param_not_warned_when_the_model_supports_it(reset_unvalidated_param_warnings: None) -> None:
     """A catalog model sends `user`, so there is nothing to warn about."""
     with patch("litellm.utils.verbose_logger.warning") as mock_warning:
         optional_params = get_optional_params(
@@ -2183,8 +2178,8 @@ def test_user_param_not_warned_when_the_model_supports_it(reset_unvalidated_para
 
 
 def test_warn_helper_stays_silent_for_an_exempt_param_with_no_hint(
-    reset_unvalidated_param_warnings,
-):
+    reset_unvalidated_param_warnings: None,
+) -> None:
     """The exempt transport params must stay silent.
 
     `stream`, `stream_options` and `max_retries` are exempt from the same
@@ -2209,7 +2204,7 @@ def test_warn_helper_stays_silent_for_an_exempt_param_with_no_hint(
     assert _unvalidated_param_warned == set()
 
 
-def test_warning_stops_once_the_cap_is_reached(reset_unvalidated_param_warnings):
+def test_warning_stops_once_the_cap_is_reached(reset_unvalidated_param_warnings: None) -> None:
     """Past the cap the warning stops rather than growing the dedup set.
 
     A proxy serving a large model fleet would otherwise add a triple per
@@ -2230,3 +2225,29 @@ def test_warning_stops_once_the_cap_is_reached(reset_unvalidated_param_warnings)
     assert _drop_warnings(mock_warning) == []
     assert ("user", "openai", "model-past-the-cap") not in _unvalidated_param_warned
     assert len(_unvalidated_param_warned) == _UNVALIDATED_PARAM_WARN_CAP
+
+
+def test_drop_warning_cannot_forge_a_log_line() -> None:
+    """A caller-controlled `model` must not be able to add log lines.
+
+    `model` comes straight off the request and the warning puts it in a log
+    entry, so a carriage return or newline in it used to produce a second line
+    that reads as its own log record (CodeQL py/log-injection). The control
+    characters are composed with chr() so the intent survives any reformatting.
+    """
+    from litellm.utils import _unvalidated_param_warned, warn_unvalidated_param_dropped
+
+    crafted: Final = "gpt-4o" + chr(13) + chr(10) + "WARNING: [auth] admin login succeeded"
+
+    _unvalidated_param_warned.clear()
+    with patch("litellm.utils.verbose_logger.warning") as mock_warning:
+        warn_unvalidated_param_dropped("user", "openai", crafted)
+    _unvalidated_param_warned.clear()
+
+    messages: Final = _drop_warnings(mock_warning)
+    assert len(messages) == 1
+    # The assertion that matters: the record stays one line.
+    assert chr(10) not in messages[0]
+    assert chr(13) not in messages[0]
+    # Still names the model, so sanitising has not made the warning useless.
+    assert "gpt-4o" in messages[0]
