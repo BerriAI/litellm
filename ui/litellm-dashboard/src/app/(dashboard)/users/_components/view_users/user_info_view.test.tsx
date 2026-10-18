@@ -13,6 +13,7 @@ const mockTeamInfoCall = vi.fn();
 const mockUserUpdateUserCall = vi.fn();
 const mockFetchMCPServers = vi.fn();
 const mockListMCPTools = vi.fn();
+const mockMCPServerCatalog = vi.fn();
 
 const MCP_SERVER = { server_id: "srv-1", server_name: "GitHub MCP", alias: "GitHub MCP" };
 
@@ -70,7 +71,7 @@ vi.mock("@/components/networking", () => {
 });
 
 vi.mock("@/app/(dashboard)/hooks/mcpServers/useMCPServers", () => ({
-  useMCPServers: () => ({ data: [MCP_SERVER], isLoading: false }),
+  useMCPServers: () => mockMCPServerCatalog(),
 }));
 vi.mock("@/app/(dashboard)/hooks/mcpServers/useMCPAccessGroups", () => ({
   useMCPAccessGroups: () => ({ data: ["dev-group"], isLoading: false }),
@@ -108,6 +109,7 @@ describe("UserInfoView", () => {
     mockTeamMemberDeleteCall.mockResolvedValue({});
     mockUserUpdateUserCall.mockResolvedValue({});
     mockFetchMCPServers.mockResolvedValue([MCP_SERVER]);
+    mockMCPServerCatalog.mockReturnValue({ data: [MCP_SERVER], isLoading: false });
     mockListMCPTools.mockResolvedValue({ tools: [{ name: "list_issues", description: "List issues" }] });
   });
 
@@ -331,6 +333,43 @@ describe("UserInfoView", () => {
   });
 
   describe("MCP permissions", () => {
+    it.each([
+      { field: "user_email", label: "Email", value: "renamed@example.com", catalogLoaded: true },
+      { field: "user_alias", label: "User Alias", value: "Renamed user", catalogLoaded: false },
+    ])(
+      "preserves shared-alias grants when only $field changes with catalogLoaded=$catalogLoaded",
+      async ({ field, label, value, catalogLoaded }) => {
+        const servers = [
+          { server_id: "server-a", server_name: "Server A", alias: "shared" },
+          { server_id: "server-b", server_name: "Server B", alias: "shared" },
+        ];
+        const permission = {
+          mcp_servers: ["server-a"],
+          mcp_access_groups: [],
+          mcp_toolsets: [],
+          mcp_tool_permissions: { shared: ["list_issues"] },
+        };
+        mockUserGetInfoV2.mockResolvedValue({ ...MOCK_USER_DATA, object_permission: permission });
+        mockMCPServerCatalog.mockReturnValue({ data: catalogLoaded ? servers : [], isLoading: !catalogLoaded });
+        if (catalogLoaded) mockFetchMCPServers.mockResolvedValue(servers);
+        else mockFetchMCPServers.mockReturnValue(new Promise<MCPServer[]>(() => {}));
+        render(<UserInfoView {...defaultProps} userRole="proxy_admin" initialTab={1} startInEditMode />);
+
+        fireEvent.change(await screen.findByRole("textbox", { name: label, exact: true }), { target: { value } });
+        await userEvent.click(screen.getByRole("button", { name: "Save Changes", exact: true }));
+        await waitFor(() => expect(mockUserUpdateUserCall).toHaveBeenCalledOnce());
+
+        const [, payload] = mockUserUpdateUserCall.mock.calls[0];
+        expect(payload[field]).toBe(value);
+        expect(payload).not.toHaveProperty("object_permission");
+        await userEvent.click(await screen.findByRole("button", { name: "Edit Settings", exact: true }));
+        expect(await screen.findByRole("textbox", { name: label, exact: true })).toHaveValue(value);
+        await userEvent.click(screen.getByRole("button", { name: "Save Changes", exact: true }));
+        await waitFor(() => expect(mockUserUpdateUserCall).toHaveBeenCalledTimes(2));
+        expect(mockUserUpdateUserCall.mock.calls[1][1]).not.toHaveProperty("object_permission");
+      },
+    );
+
     it("should render the user's MCP entitlements in read mode", async () => {
       const user = userEvent.setup();
       render(<UserInfoView {...defaultProps} userRole="proxy_admin" initialTab={1} />);
@@ -348,7 +387,7 @@ describe("UserInfoView", () => {
       expect(await screen.findByText("list_issues")).toBeInTheDocument();
     });
 
-    it("should nest MCP entitlements under object_permission when an admin saves", async () => {
+    it("omits unchanged MCP entitlements when an admin saves", async () => {
       const user = userEvent.setup();
       render(<UserInfoView {...defaultProps} userRole="proxy_admin" initialTab={1} startInEditMode />);
 
@@ -363,13 +402,7 @@ describe("UserInfoView", () => {
       expect(token).toBe("test-token");
       expect(roleArg).toBeNull();
       expect(payload.user_id).toBe("user-123");
-      const expectedObjectPermission = {
-        mcp_servers: ["srv-1"],
-        mcp_access_groups: ["dev-group"],
-        mcp_toolsets: [],
-        mcp_tool_permissions: { "srv-1": ["list_issues"] },
-      };
-      expect(payload.object_permission).toEqual(expectedObjectPermission);
+      expect(payload).not.toHaveProperty("object_permission");
       expect(payload).not.toHaveProperty("mcp_servers_and_groups");
       expect(payload).not.toHaveProperty("mcp_tool_permissions");
       expect(payload).not.toHaveProperty("mcp_servers");
@@ -418,9 +451,35 @@ describe("UserInfoView", () => {
       });
 
       const [, payload] = mockUserUpdateUserCall.mock.calls[0];
-      expect(payload.object_permission.mcp_tool_permissions).toEqual({
-        "srv-1": ["list_issues"],
-        "srv-via-group": ["read_only"],
+      expect(payload).not.toHaveProperty("object_permission");
+    });
+
+    it("retains an independent tool-only server grant when another server's tools are edited", async () => {
+      const user = userEvent.setup();
+      const servers = [MCP_SERVER, { server_id: "server-b", server_name: "Server B" }];
+      const permission = {
+        mcp_servers: ["srv-1"],
+        mcp_access_groups: [],
+        mcp_toolsets: [],
+        mcp_tool_permissions: { "srv-1": ["read_direct"], "server-b": ["read_independent"] },
+      };
+      mockUserGetInfoV2.mockResolvedValue({ ...MOCK_USER_DATA, object_permission: permission });
+      mockFetchMCPServers.mockResolvedValue(servers);
+      mockMCPServerCatalog.mockReturnValue({ data: servers, isLoading: false });
+      mockListMCPTools.mockImplementation((_token: string, serverId: string) =>
+        Promise.resolve({ tools: [{ name: serverId === "srv-1" ? "read_direct" : "read_independent" }] }),
+      );
+      render(<UserInfoView {...defaultProps} userRole="proxy_admin" initialTab={1} startInEditMode />);
+
+      await user.click((await screen.findAllByRole("radio", { name: "Flat List" }))[0]);
+      await user.click(await screen.findByRole("checkbox", { name: "read_direct", exact: true }));
+      await user.click(screen.getByRole("button", { name: "Save Changes", exact: true }));
+      await waitFor(() => expect(mockUserUpdateUserCall).toHaveBeenCalledOnce());
+
+      const [, payload] = mockUserUpdateUserCall.mock.calls[0];
+      expect(payload.object_permission).toEqual({
+        ...permission,
+        mcp_tool_permissions: { "srv-1": [], "server-b": ["read_independent"] },
       });
     });
 

@@ -2,9 +2,9 @@ import type { BulkUpdateCustomersRequest, UpdateCustomerRequest } from "@/app/(d
 import type { EndUser } from "@/app/(dashboard)/hooks/customers/useCustomers";
 
 import type { MCPServer, MCPToolset } from "@/components/mcp_tools/types";
-import { extractMcpEntitlement } from "@/components/mcp_server_management/mcpEntitlement";
+import { extractMcpEntitlement, extractMcpEntitlementUpdate } from "@/components/mcp_server_management/mcpEntitlement";
 
-import { extractEditedMcpGrant, hasSharedCustomerBudget, storedMcpGrant } from "./customerPayload";
+import { hasSharedCustomerBudget, storedMcpGrant } from "./customerPayload";
 
 export const MAX_BULK_CUSTOMERS = 500;
 
@@ -82,8 +82,8 @@ const retainedToolPermissions = (
   };
   const grant = edits.mcpServers.enabled
     ? extractMcpEntitlement(values, servers, toolsets)
-    : extractEditedMcpGrant(values, stored, servers, toolsets);
-  return grant?.mcp_tool_permissions ?? {};
+    : extractMcpEntitlementUpdate(values, stored, servers, toolsets);
+  return grant?.mcp_tool_permissions ?? stored.mcp_tool_permissions;
 };
 
 export const buildBulkCustomerPayload = (
