@@ -2581,7 +2581,11 @@ def prepare_metadata_fields(data: BaseModel, non_default_values: dict, existing_
     if "metadata" not in non_default_values:  # allow user to set metadata to none
         non_default_values["metadata"] = existing_metadata.copy()
 
-    casted_metadata: Final = cast(dict, non_default_values["metadata"])
+    # An explicit metadata=None means "clear this field"; the cast below holds
+    # the dict-shaped value only, so the clear-to-none path is handled at the
+    # tail via raw_metadata.
+    raw_metadata: Final = non_default_values["metadata"]
+    casted_metadata: Final = cast(dict, raw_metadata)
 
     # Reserved metadata fields are immutable once set. Preserve the existing value
     # when omitted, reject any explicit attempt to change it (including null).
@@ -2622,7 +2626,7 @@ def prepare_metadata_fields(data: BaseModel, non_default_values: dict, existing_
     # The ui-session marker is reserved for the minted dashboard sessions;
     # update/regenerate cannot stamp it from caller data (R1-L12). An explicit
     # metadata=None stays None (clear-to-none), so skip both here.
-    if casted_metadata is not None:
+    if raw_metadata is not None:
         casted_metadata.pop(UI_SESSION_METADATA_MARKER_KEY, None)
         non_default_values["metadata"] = encrypt_callback_vars(casted_metadata)
     return non_default_values
@@ -3388,13 +3392,13 @@ def _reject_non_admin_budget_authority_metadata(
     request fields are already admin-gated; without this check the same
     values ride the free-form metadata dict past those gates.
     """
-    incoming: Final = data.metadata if isinstance(data.metadata, Mapping) else {}
-    existing: Final = existing_metadata if isinstance(existing_metadata, Mapping) else {}
+    incoming: Final = data.metadata if isinstance(data.metadata, Mapping) else {}  # pyright: ignore[reportUnknownVariableType]  # pydantic metadata fields arrive without a static type; reads stay gated below
+    existing: Final = existing_metadata if isinstance(existing_metadata, Mapping) else {}  # pyright: ignore[reportUnknownVariableType]  # row metadata is db-shaped; only membership and .get are read
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
         return
     sets_temp_budget: Final = any(key in incoming for key in _TEMP_BUDGET_METADATA_KEYS)
-    incoming_throttle: Final = incoming.get("throttle_on_budget_exceeded")
-    existing_throttle: Final = existing.get("throttle_on_budget_exceeded")
+    incoming_throttle: Final = incoming.get("throttle_on_budget_exceeded")  # pyright: ignore[reportUnknownMemberType]  # see above: untyped metadata payload
+    existing_throttle: Final = existing.get("throttle_on_budget_exceeded")  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # see above: untyped metadata payload
     escalates_throttle: Final = incoming_throttle is True and existing_throttle is not True
     if not (sets_temp_budget or escalates_throttle):
         return
@@ -3576,7 +3580,7 @@ async def _validate_update_key_data(
         )
     _reject_non_admin_budget_authority_metadata(
         data=data,
-        existing_metadata=_existing_metadata,
+        existing_metadata=_existing_metadata,  # pyright: ignore[reportUnknownArgumentType]  # row metadata is db-shaped; the callee only reads membership and .get
         user_api_key_dict=user_api_key_dict,
     )
 
