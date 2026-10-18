@@ -141,8 +141,8 @@ class RedisClusterCache(RedisCache):
 
     async def disconnect(self) -> None:
         try:
-            if self.redis_async_client is not None:
-                await self.redis_async_client.aclose()
+            if self.redis_async_client is not None:  # pyright: ignore[reportUnknownMemberType]  # redis generics
+                await self.redis_async_client.aclose()  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue]  # redis stubs leave aclose unknown
         finally:
             await super().disconnect()
 
