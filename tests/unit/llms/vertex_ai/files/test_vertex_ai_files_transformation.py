@@ -1289,6 +1289,33 @@ class TestVertexEmbeddingsBatchInputTranslation:
 
         assert set(row["request"]) == {"content"}
 
+    def test_should_translate_a_file_block_with_video_metadata(self) -> None:
+        (row,) = _wrap_entries(
+            [
+                _embeddings_entry(
+                    body={
+                        "model": "gemini-embedding-2",
+                        "input": [
+                            {
+                                "type": "file",
+                                "file": {
+                                    "file_id": "gs://my-bucket/clip.mp4",
+                                    "video_metadata": {"start_offset": "3s", "end_offset": "6s"},
+                                },
+                            }
+                        ],
+                    }
+                )
+            ]
+        )
+
+        assert row["request"]["content"]["parts"] == [
+            {
+                "file_data": {"mime_type": "video/mp4", "file_uri": "gs://my-bucket/clip.mp4"},
+                "video_metadata": {"startOffset": "3s", "endOffset": "6s"},
+            }
+        ]
+
     def test_should_translate_multimodal_gcs_input(self):
         (row,) = _wrap_entries(
             [

@@ -9,7 +9,7 @@ import {
 import { Page } from "../../fixtures/pages";
 import { navigateToPage, clickTeamId } from "../../helpers/navigation";
 import { CHAT_MODEL_A, MOCK_RESPONSE_TEXT, masterKey } from "../../helpers/traffic";
-import { keySourceSelect, onlyVisible, openPlayground, selectModel, sendMessage } from "../../helpers/playground";
+import { openPlayground, selectModel, sendMessage, enterVirtualKey } from "../../helpers/playground";
 
 test.describe("Internal User", () => {
   test.use({ storageState: INTERNAL_USER_STORAGE_PATH });
@@ -73,12 +73,7 @@ test.describe("Internal User", () => {
 
     try {
       await openPlayground(page);
-      await keySourceSelect(page).click();
-      await onlyVisible(page.getByRole("option", { name: "Virtual Key" })).click({ timeout: 15_000 });
-
-      const keyInput = onlyVisible(page.getByPlaceholder("Enter custom Virtual Key"));
-      await expect(keyInput).toBeVisible({ timeout: 10_000 });
-      await keyInput.fill(apiKey);
+      await enterVirtualKey(page, apiKey);
 
       await selectModel(page, CHAT_MODEL_A);
       await sendMessage(page, `internal user team key ping ${keyName}`);

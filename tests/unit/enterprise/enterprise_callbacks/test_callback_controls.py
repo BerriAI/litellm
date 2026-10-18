@@ -412,3 +412,15 @@ class TestEnterpriseCallbackControls:
                 "langfuse", litellm_params, standard_callback_dynamic_params
             )
             assert result is True
+
+    def test_non_premium_dynamic_callback_warning_uses_common_proxy_error(self, caplog):
+        from litellm.proxy._types import CommonProxyErrors
+
+        caplog.set_level("WARNING")
+        with patch("litellm.allow_dynamic_callback_disabling", True):
+            with patch("litellm.proxy.proxy_server.premium_user", False):
+                assert (
+                    EnterpriseCallbackControls._should_allow_dynamic_callback_disabling()
+                    is False
+                )
+        assert CommonProxyErrors.not_premium_user.value in caplog.text

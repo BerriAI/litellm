@@ -115,7 +115,7 @@ def harness():
 
     router = MagicMock(spec=Router)
     resolve_model = MagicMock(
-        side_effect=lambda model_id: RESOLVED_MODELS.get(model_id)
+        side_effect=lambda model_id, custom_llm_provider=None: RESOLVED_MODELS.get(model_id)
     )
     router.resolve_model_name_from_model_id = resolve_model
 
@@ -138,11 +138,11 @@ def harness():
         stack.enter_context(
             patch.object(
                 ProxyBaseLLMRequestProcessing,
-                "_handle_llm_api_exception",
+                "handle_llm_api_exception",
                 handle_exc,
             )
         )
-        stack.enter_context(patch.object(endpoints, "_read_request_body", read_body))
+        stack.enter_context(patch.object(endpoints, "read_request_body", read_body))
         stack.enter_context(
             patch.object(endpoints, "batch_to_bytesio", batch_to_bytesio)
         )
@@ -276,7 +276,7 @@ async def test_status__model_encoded_id_full_contract(harness):
     assert resp is SENTINEL
     assert harness.route_type() == "avideo_status"
     # provider comes from the decoded id; model_id resolved to a model name.
-    harness.resolve_model.assert_called_once_with(VIDEO_MODEL_ID)
+    harness.resolve_model.assert_called_once_with(VIDEO_MODEL_ID, "azure")
     assert harness.processor_data() == {
         "video_id": AZURE_VIDEO_ID,
         "custom_llm_provider": "azure",
@@ -357,12 +357,34 @@ async def test_content__model_encoded_id(harness):
 
     await call_content(harness, AZURE_VIDEO_ID)
 
-    harness.resolve_model.assert_called_once_with(VIDEO_MODEL_ID)
+    harness.resolve_model.assert_called_once_with(VIDEO_MODEL_ID, "azure")
     assert harness.processor_data() == {
         "video_id": AZURE_VIDEO_ID,
         "custom_llm_provider": "azure",
         "model": "azure-sora",
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call", [call_status, call_content])
+async def test_status_and_content__hand_the_served_member_to_the_request_processor(harness, call):
+    """The id names the routing group a key may be scoped to, and the member that served the task, which is
+    the only one holding it. The processor pins the member once key and team aliases have been applied."""
+    router = Router(
+        model_list=[
+            {"model_name": name, "litellm_params": {"model": "dashscope/wan3.0-video", "api_key": "k"}}
+            for name in ("wan3-a", "wan3-b")
+        ],
+        routing_groups=[{"group_name": "wan3", "models": ["wan3-a", "wan3-b"], "routing_strategy": "simple-shuffle"}],
+    )
+    harness.base_process.return_value = b"x"
+    video_id = encode_video_id_with_provider("task1", "dashscope", "wan3", served_model="wan3-b")
+
+    with patch.object(proxy_server, "llm_router", router):
+        await call(harness, video_id)
+
+    assert harness.processor_data()["model"] == "wan3"
+    assert harness.base_process.call_args.args[0].served_model == "wan3-b"
 
 
 # =========================================================================== #
@@ -389,7 +411,7 @@ async def test_edit__extracts_nested_video_id_full_contract(harness):
 
     assert resp is SENTINEL
     assert harness.route_type() == "avideo_edit"
-    harness.resolve_model.assert_called_once_with(VIDEO_MODEL_ID)
+    harness.resolve_model.assert_called_once_with(VIDEO_MODEL_ID, "azure")
     # nested video object is popped; its id becomes video_id; provider/model
     # derived from the encoded id.
     assert harness.processor_data() == {
@@ -534,7 +556,7 @@ async def test_remix__model_encoded_id_full_contract(harness):
 
     assert resp is SENTINEL
     assert harness.route_type() == "avideo_remix"
-    harness.resolve_model.assert_called_once_with(VIDEO_MODEL_ID)
+    harness.resolve_model.assert_called_once_with(VIDEO_MODEL_ID, "azure")
     assert harness.processor_data() == {
         "prompt": "new colors",
         "video_id": AZURE_VIDEO_ID,
@@ -644,7 +666,7 @@ async def test_get_character__encoded_id_full_contract(harness):
     resp = await call_get_character(harness, AZURE_CHARACTER_ID)
 
     assert harness.route_type() == "avideo_get_character"
-    harness.resolve_model.assert_called_once_with(VIDEO_MODEL_ID)
+    harness.resolve_model.assert_called_once_with(VIDEO_MODEL_ID, "azure")
     # character_id decoded to its inner value; provider/model from the encoded id.
     assert harness.processor_data() == {
         "character_id": "char_orig",
@@ -694,7 +716,7 @@ async def test_extension__extracts_nested_video_id_full_contract(harness):
 
     assert resp is SENTINEL
     assert harness.route_type() == "avideo_extension"
-    harness.resolve_model.assert_called_once_with(VIDEO_MODEL_ID)
+    harness.resolve_model.assert_called_once_with(VIDEO_MODEL_ID, "azure")
     assert harness.processor_data() == {
         "prompt": "continue",
         "video_id": AZURE_VIDEO_ID,

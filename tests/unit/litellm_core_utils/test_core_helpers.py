@@ -1,6 +1,9 @@
 """Tests for litellm_core_utils.core_helpers module."""
 
 import logging
+import threading
+from collections.abc import Iterator, Mapping
+from typing import Final
 
 import httpx
 import pytest
@@ -12,10 +15,13 @@ from litellm.litellm_core_utils.core_helpers import (
     budget_reservation_from_metadata,
     drop_params_env_flag,
     drop_params_flag,
+    get_litellm_metadata_from_kwargs,
+    get_parent_otel_span_from_kwargs,
     get_or_create_metadata_bucket,
     get_provider_response_headers_from_hidden_params,
     map_finish_reason,
     normalize_drop_params,
+    process_response_headers,
     reconstruct_model_name,
     redact_nested_match_and_regex_keys,
     set_provider_response_headers_in_hidden_params,
@@ -23,6 +29,32 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.utils import ImageResponse, TranscriptionResponse
+
+
+def test_parent_otel_span_reads_dict_like_metadata_by_index():
+    from typing import cast
+
+    span = object()
+
+    class Metadata:
+        def __contains__(self, key: object) -> bool:
+            return key == "litellm_parent_otel_span"
+
+        def __getitem__(self, key: str) -> object:
+            assert key == "litellm_parent_otel_span"
+            return span
+
+    result = get_parent_otel_span_from_kwargs({"metadata": cast(object, Metadata())})
+
+    assert result is span
+
+
+@pytest.mark.parametrize("header", ("request-id", "x-request-id", "llm_provider-request-id"))
+def test_native_request_id_survives_stream_header_processing(header: str) -> None:
+    processed: Final = process_response_headers(httpx.Headers({header: "req_native"}))
+
+    assert processed["request-id"] == "req_native"
+    assert processed[header if header.startswith("llm_provider-") else "llm_provider-" + header] == "req_native"
 
 
 class TestBudgetReservationBinding:
@@ -217,6 +249,7 @@ class TestMapFinishReasonGemini:
             ("ESCALATION", "content_filter"),
             ("UNEXPECTED_TOOL_CALL", "stop"),
             ("MISSING_THOUGHT_SIGNATURE", "stop"),
+            ("CONTINUATION", "length"),
         ],
     )
     def test_gemini_finish_reasons(self, gemini_reason, expected):
@@ -557,3 +590,55 @@ class TestProviderResponseHeadersInHiddenParams:
 
         assert get_provider_response_headers_from_hidden_params(sibling) is None
         assert "additional_headers" not in sibling._hidden_params
+
+
+def test_spend_metadata_merge_survives_the_logging_thread_inserting_into_the_request_metadata() -> None:
+    metadata: Final[dict[str, object]] = {}
+
+    def logging_thread_records_hidden_params() -> None:
+        metadata["hidden_params"] = {"response_cost": 0.1}
+
+    class KeyCheckedWhileTheLoggingThreadRuns(str):
+        def __contains__(self, key: str) -> bool:
+            writer: Final = threading.Thread(target=logging_thread_records_hidden_params)
+            writer.start()
+            writer.join()
+            return super().__contains__(key)
+
+    metadata[KeyCheckedWhileTheLoggingThreadRuns("user_api_key_alias")] = "alias"
+    metadata["user_api_key_hash"] = "hash"
+    metadata["requester_ip_address"] = "10.0.0.1"
+    litellm_metadata: Final[dict[str, object]] = {"user_api_key_alias": "stale", "model_group": "claude"}
+
+    merged: Final = get_litellm_metadata_from_kwargs(
+        {"litellm_params": {"metadata": metadata, "litellm_metadata": litellm_metadata}}
+    )
+
+    assert "hidden_params" in metadata
+    assert merged == {"user_api_key_alias": "alias", "user_api_key_hash": "hash", "model_group": "claude"}
+
+
+def test_spend_metadata_merge_reads_request_metadata_that_is_a_read_only_mapping() -> None:
+    class ReadOnlyMetadata(Mapping[str, object]):
+        def __init__(self, values: dict[str, object]) -> None:
+            self._values: Final = values
+
+        def __getitem__(self, key: str) -> object:
+            return self._values[key]
+
+        def __iter__(self) -> Iterator[str]:
+            return iter(self._values)
+
+        def __len__(self) -> int:
+            return len(self._values)
+
+    merged: Final = get_litellm_metadata_from_kwargs(
+        {
+            "litellm_params": {
+                "metadata": ReadOnlyMetadata({"user_api_key_hash": "hash", "requester_ip_address": "10.0.0.1"}),
+                "litellm_metadata": {"model_group": "claude"},
+            }
+        }
+    )
+
+    assert merged == {"user_api_key_hash": "hash", "model_group": "claude"}

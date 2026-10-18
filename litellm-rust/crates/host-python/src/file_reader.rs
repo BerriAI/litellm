@@ -3,12 +3,13 @@
 
 use bytes::Bytes;
 use pyo3::{
-    exceptions::PyTypeError,
     gc::{PyTraverseError, PyVisit},
     prelude::*,
     pybacked::PyBackedBytes,
     types::{PyBytes, PyString},
 };
+
+use crate::Error;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FileContent {
@@ -50,10 +51,10 @@ impl PythonFileReader {
         } else if value.is_instance_of::<PyBytes>() {
             py_bytes(&value)?
         } else {
-            return Err(PyTypeError::new_err(format!(
-                "file read must return bytes or str, got {}",
-                value.get_type(),
-            )));
+            return Err(Error::FileContentType {
+                got: value.get_type().to_string(),
+            }
+            .into());
         };
         Ok(FileContent {
             bytes,

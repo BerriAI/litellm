@@ -48,7 +48,7 @@ class BedrockCountTokensHandler(BedrockCountTokensConfig):
             verbose_logger.debug("Processing CountTokens request for resolved model: %s", resolved_model)
 
             # Get AWS region using existing LiteLLM function
-            aws_region_name: Final = self._get_aws_region_name(
+            aws_region_name: Final = self.get_aws_region_name(
                 optional_params=litellm_params,
                 model=resolved_model,
                 model_id=None,
@@ -125,7 +125,7 @@ class BedrockCountTokensHandler(BedrockCountTokensConfig):
             raise
         except httpx.HTTPStatusError as e:
             # HTTP errors - preserve the actual status code
-            verbose_logger.error("HTTP error in CountTokens handler: %s", e)
+            verbose_logger.debug("HTTP error in CountTokens handler: %s", e)
             raise BedrockError(
                 status_code=e.response.status_code,
                 message=e.response.text,

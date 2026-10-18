@@ -72,7 +72,7 @@ class BaseInteractionsAPIStreamingIterator:
             return None
 
         # Handle SSE format (data: {...})
-        stripped_chunk: Final = CustomStreamWrapper._strip_sse_data_from_chunk(chunk)
+        stripped_chunk: Final = CustomStreamWrapper.strip_sse_data_from_chunk(chunk)
         if stripped_chunk is None:
             return None
 

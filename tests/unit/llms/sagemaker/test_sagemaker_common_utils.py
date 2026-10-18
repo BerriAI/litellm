@@ -4,7 +4,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from litellm.llms.sagemaker.common_utils import AWSEventStreamDecoder
+from botocore.exceptions import ClientError, ConnectionClosedError
+
+from litellm.llms.sagemaker.common_utils import AWSEventStreamDecoder, client_error_details
 from litellm.llms.sagemaker.completion.transformation import SagemakerConfig
 
 
@@ -32,9 +34,7 @@ def test_sagemaker_response_stream_shape_lazy_loads_once():
     import litellm.llms.sagemaker.common_utils as mod
 
     sentinel = MagicMock()
-    with patch.object(
-        mod, "_load_sagemaker_response_stream_shape", return_value=sentinel
-    ) as mock_load:
+    with patch.object(mod, "_load_sagemaker_response_stream_shape", return_value=sentinel) as mock_load:
         assert mod.get_sagemaker_response_stream_shape() is sentinel
         assert mod.get_sagemaker_response_stream_shape() is sentinel
         mock_load.assert_called_once()
@@ -70,6 +70,19 @@ def test_sagemaker_response_stream_shape_load_failure_returns_none():
         assert shape is None
 
 
+@pytest.mark.parametrize("service_model", [["shapes"], None])
+def test_sagemaker_response_stream_shape_is_none_for_a_service_model_that_is_not_a_mapping(
+    service_model: object,
+):
+    pytest.importorskip("botocore")
+    from unittest.mock import patch
+
+    import litellm.llms.sagemaker.common_utils as mod
+
+    with patch("botocore.loaders.Loader.load_service_model", return_value=service_model):
+        assert mod._load_sagemaker_response_stream_shape() is None
+
+
 def test_sagemaker_response_stream_shape_is_structure_shape():
     """
     The loaded shape should be the botocore StructureShape for
@@ -81,9 +94,7 @@ def test_sagemaker_response_stream_shape_is_structure_shape():
     from litellm.llms.sagemaker.common_utils import get_sagemaker_response_stream_shape
 
     shape = get_sagemaker_response_stream_shape()
-    assert (
-        shape is not None
-    ), "get_sagemaker_response_stream_shape() is None — botocore may not be installed"
+    assert shape is not None, "get_sagemaker_response_stream_shape() is None — botocore may not be installed"
     assert isinstance(shape, StructureShape)
     assert shape.name == "InvokeEndpointWithResponseStreamOutput"
 
@@ -261,3 +272,38 @@ class TestSagemakerTransform:
 
         # The function should properly map max_tokens if max_completion_tokens is not provided
         assert result == {"temperature": 0.7, "max_new_tokens": 200}
+
+
+NULL_MESSAGE_ERROR = ClientError(
+    {"Error": {"Code": "InternalFailure", "Message": None}, "ResponseMetadata": {"HTTPStatusCode": 500}},
+    "InvokeEndpoint",
+)
+DROPPED_CONNECTION_ERROR = ConnectionClosedError(endpoint_url="https://runtime.sagemaker.test/x")
+HTTPX_STATUS_ERROR = httpx.HTTPStatusError(
+    "boom", request=httpx.Request("POST", "https://runtime.sagemaker.test/x"), response=httpx.Response(400)
+)
+PLAIN_ERROR = RuntimeError("plain failure")
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_status", "expected_message"),
+    [
+        (
+            ClientError(
+                {
+                    "Error": {"Code": "ValidationError", "Message": "bad input"},
+                    "ResponseMetadata": {"HTTPStatusCode": 400},
+                },
+                "InvokeEndpoint",
+            ),
+            400,
+            "bad input",
+        ),
+        (NULL_MESSAGE_ERROR, 500, str(NULL_MESSAGE_ERROR)),
+        (DROPPED_CONNECTION_ERROR, 500, str(DROPPED_CONNECTION_ERROR)),
+        (HTTPX_STATUS_ERROR, 500, str(HTTPX_STATUS_ERROR)),
+        (PLAIN_ERROR, 500, str(PLAIN_ERROR)),
+    ],
+)
+def test_client_error_details_reads_every_error_shape(error, expected_status, expected_message):
+    assert client_error_details(error) == (expected_status, expected_message)

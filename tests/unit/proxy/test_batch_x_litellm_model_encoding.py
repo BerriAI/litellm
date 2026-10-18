@@ -10,6 +10,7 @@ from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from starlette.datastructures import Headers, QueryParams
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.openai_files_endpoints.common_utils import (
@@ -23,8 +24,8 @@ from litellm.types.utils import LiteLLMBatch
 def _make_mock_request(headers: dict) -> MagicMock:
     """Create a mock FastAPI Request with the given headers."""
     mock_request = MagicMock()
-    mock_request.headers = headers
-    mock_request.query_params = {}
+    mock_request.headers = Headers(headers=headers)
+    mock_request.query_params = QueryParams({})
     mock_request.url = MagicMock()
     mock_request.url.port = 4000
     mock_request.method = "POST"
@@ -91,7 +92,7 @@ async def test_create_batch_with_x_litellm_model_encodes_batch_id():
 
     with (
         patch(
-            "litellm.proxy.batches_endpoints.endpoints._read_request_body",
+            "litellm.proxy.batches_endpoints.endpoints.read_request_body",
             new=AsyncMock(
                 return_value={
                     "input_file_id": "file-input456",
@@ -206,7 +207,7 @@ async def test_create_batch_with_x_litellm_model_encodes_output_and_error_file_i
 
     with (
         patch(
-            "litellm.proxy.batches_endpoints.endpoints._read_request_body",
+            "litellm.proxy.batches_endpoints.endpoints.read_request_body",
             new=AsyncMock(
                 return_value={
                     "input_file_id": "file-input456",
@@ -293,7 +294,7 @@ async def test_create_batch_without_x_litellm_model_returns_raw_ids(monkeypatch)
 
     with (
         patch(
-            "litellm.proxy.batches_endpoints.endpoints._read_request_body",
+            "litellm.proxy.batches_endpoints.endpoints.read_request_body",
             new=AsyncMock(
                 return_value={
                     "input_file_id": "file-input456",
