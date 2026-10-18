@@ -1813,7 +1813,7 @@ def get_async_httpx_client(
         return _cached_client
 
     if aclient_session is not None:
-        _new_client = AsyncHTTPHandler.from_client(
+        _new_client = AsyncHTTPHandler.from_client(  # rebind-ok: branch-specific handler initialization
             client=aclient_session,
             timeout=_default_cached_client_timeout(),
         )
@@ -1874,7 +1874,7 @@ def get_httpx_client(params: dict | None = None) -> HTTPHandler:
         return _cached_client
 
     if client_session is not None:
-        _new_client = HTTPHandler(
+        _new_client = HTTPHandler(  # rebind-ok: branch-specific handler initialization
             timeout=_default_cached_client_timeout(),
             client=client_session,
         )
