@@ -201,9 +201,10 @@ async def test_create_access_group_with_model_names_tags_all_deployments():
 
 
 @pytest.mark.asyncio
-async def test_create_access_group_model_ids_takes_priority_over_model_names():
+async def test_create_access_group_applies_both_model_names_and_model_ids():
     """
-    Test that when both model_ids and model_names are provided, model_ids is used.
+    Test that when both model_ids and model_names are provided, both are applied with deduplication.
+    Fixes: #47012
     """
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy.management_endpoints.model_access_group_management_endpoints import (
@@ -214,9 +215,27 @@ async def test_create_access_group_model_ids_takes_priority_over_model_names():
     )
 
     deploy_a = MagicMock(model_id="deploy-A", model_name="gpt-4o", model_info={})
+    deploy_b = MagicMock(model_id="deploy-B", model_name="gpt-4o", model_info={})
+
+    mock_router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {"model": "gpt-4o", "api_key": "fake-key"},
+                "model_info": {"id": "deploy-A", "db_model": True},
+            },
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {"model": "gpt-4o", "api_key": "fake-key"},
+                "model_info": {"id": "deploy-B", "db_model": True},
+            },
+        ]
+    )
 
     mock_prisma = MagicMock()
-    mock_prisma.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_proxymodeltable.find_many = AsyncMock(
+        side_effect=[[], [deploy_a, deploy_b]]
+    )
     mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(
         return_value=deploy_a
     )
@@ -227,6 +246,7 @@ async def test_create_access_group_model_ids_takes_priority_over_model_names():
         user_role=LitellmUserRoles.PROXY_ADMIN,
     )
 
+    # deploy-A is in model_ids AND in model_names (gpt-4o), deploy-B is only from model_names
     request_data = NewModelGroupRequest(
         access_group="production-models",
         model_names=["gpt-4o"],
@@ -234,7 +254,7 @@ async def test_create_access_group_model_ids_takes_priority_over_model_names():
     )
 
     with (
-        patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
+        patch("litellm.proxy.proxy_server.llm_router", mock_router),
         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
         patch(
             "litellm.proxy.management_endpoints.model_access_group_management_endpoints.clear_cache",
@@ -245,10 +265,124 @@ async def test_create_access_group_model_ids_takes_priority_over_model_names():
             data=request_data, user_api_key_dict=mock_user
         )
 
-    assert response.models_updated == 1
-    mock_prisma.db.litellm_proxymodeltable.find_unique.assert_called_once_with(
-        where={"model_id": "deploy-A"}
+    # Both deploy-A and deploy-B should be updated without duplicate pairs
+    assert response.models_updated == 2
+    assert response.model_names == ["gpt-4o"]
+    assert response.model_ids == ["deploy-A"]
+
+
+@pytest.mark.asyncio
+async def test_update_access_group_not_found_raises_404():
+    """
+    Test that updating a non-existent access group raises HTTPException 404.
+    """
+    from fastapi import HTTPException
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.model_access_group_management_endpoints import (
+        update_access_group,
     )
+    from litellm.types.proxy.management_endpoints.model_management_endpoints import (
+        UpdateModelGroupRequest,
+    )
+
+    mock_prisma = MagicMock()
+    # find_many returns empty list -> access group not found
+    mock_prisma.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+
+    mock_user = UserAPIKeyAuth(
+        user_id="test_admin",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+
+    request_data = UpdateModelGroupRequest(
+        model_names=["gpt-4o"],
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+        with pytest.raises(HTTPException) as exc_info:
+            await update_access_group(
+                access_group="non-existent-group",
+                data=request_data,
+                user_api_key_dict=mock_user,
+            )
+
+    assert exc_info.value.status_code == 404
+    assert "not found" in str(exc_info.value.detail).lower()
+
+
+@pytest.mark.asyncio
+async def test_update_access_group_applies_both_model_names_and_model_ids():
+    """
+    Test that update_access_group updates deployments for both model_names and model_ids.
+    """
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.model_access_group_management_endpoints import (
+        update_access_group,
+    )
+    from litellm.types.proxy.management_endpoints.model_management_endpoints import (
+        UpdateModelGroupRequest,
+    )
+
+    existing_deploy = MagicMock(
+        model_id="deploy-existing",
+        model_name="gpt-4o",
+        model_info={"access_groups": ["my-group"]},
+    )
+    deploy_a = MagicMock(model_id="deploy-A", model_name="gpt-4o", model_info={})
+    deploy_b = MagicMock(model_id="deploy-B", model_name="gpt-4o", model_info={})
+
+    mock_router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {"model": "gpt-4o", "api_key": "fake-key"},
+                "model_info": {"id": "deploy-A", "db_model": True},
+            },
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {"model": "gpt-4o", "api_key": "fake-key"},
+                "model_info": {"id": "deploy-B", "db_model": True},
+            },
+        ]
+    )
+
+    mock_prisma = MagicMock()
+    # 1. get_all_access_groups_from_db -> [existing_deploy] (has "my-group")
+    # 2. Step 1: find_many for stripping -> [existing_deploy]
+    # 3. Step 2: update_deployments_with_access_group -> [deploy_a, deploy_b]
+    mock_prisma.db.litellm_proxymodeltable.find_many = AsyncMock(
+        side_effect=[[existing_deploy], [existing_deploy], [deploy_a, deploy_b]]
+    )
+    mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=deploy_a)
+    mock_prisma.db.litellm_proxymodeltable.update = AsyncMock()
+
+    mock_user = UserAPIKeyAuth(
+        user_id="test_admin",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+
+    request_data = UpdateModelGroupRequest(
+        model_names=["gpt-4o"],
+        model_ids=["deploy-A"],
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.llm_router", mock_router),
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch(
+            "litellm.proxy.management_endpoints.model_access_group_management_endpoints.clear_cache",
+            new=AsyncMock(return_value=ReconcileOutcome(still_desired=None, live_after=None)),
+        ),
+    ):
+        response = await update_access_group(
+            access_group="my-group",
+            data=request_data,
+            user_api_key_dict=mock_user,
+        )
+
+    assert response.models_updated == 2
+    assert response.model_names == ["gpt-4o"]
+    assert response.model_ids == ["deploy-A"]
 
 
 @pytest.mark.asyncio

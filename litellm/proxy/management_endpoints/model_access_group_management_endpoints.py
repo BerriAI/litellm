@@ -882,6 +882,22 @@ async def update_access_group(
             detail={"error": "Either model_names or model_ids must be provided and non-empty"},
         )
 
+    # Validation: Check if access group exists
+    try:
+        access_groups_map: Final = await get_all_access_groups_from_db(prisma_client=prisma_client)
+        if access_group not in access_groups_map:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": f"Access group '{access_group}' not found"},
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": f"Failed to check access group existence: {e}"},
+        )
+
     # Validation: Check if all new models exist whenever model_names is provided
     if has_model_names:
         assert data.model_names is not None
