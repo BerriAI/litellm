@@ -44,6 +44,7 @@ from litellm.constants import (
     AZURE_SPEECH_STT_DOMAIN,
     AZURE_SPEECH_SUBSCRIPTION_KEY_HEADER,
     BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES,
+    PASS_THROUGH_HEADER_PREFIX,
     TYPESAFE_DANGER_ZONE_HEADER_PREFIX,
 )
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
@@ -2572,9 +2573,14 @@ def _is_vertex_anthropic_count_tokens_route(endpoint: str) -> bool:
 
 _VERTEX_DROPPED_ANTHROPIC_BETAS_SETTING: Final = "vertex_ai_pass_through_drop_anthropic_betas"
 _VERTEX_DROPPED_ANTHROPIC_BETAS: Final[TypeAdapter[frozenset[str] | None]] = TypeAdapter(frozenset[str] | None)
+_ANTHROPIC_BETA_REQUEST_HEADERS: Final = ("anthropic-beta", f"{PASS_THROUGH_HEADER_PREFIX}anthropic-beta")
 
 
-def _vertex_dropped_anthropic_betas(general_settings: Mapping[str, object]) -> frozenset[str]:
+def _vertex_dropped_anthropic_betas(
+    general_settings: Mapping[str, object], request_headers: Mapping[str, str]
+) -> frozenset[str]:
+    if not any(name in request_headers for name in _ANTHROPIC_BETA_REQUEST_HEADERS):
+        return frozenset()
     try:
         configured: Final = _VERTEX_DROPPED_ANTHROPIC_BETAS.validate_python(
             general_settings.get(_VERTEX_DROPPED_ANTHROPIC_BETAS_SETTING)
@@ -2596,15 +2602,19 @@ def _upstream_vertex_header_value(name: str, value: str, dropped_anthropic_betas
     return ",".join(beta for beta in betas if beta and beta not in dropped_anthropic_betas) or None
 
 
-def _upstream_headers_for_vertex_route(
-    endpoint: str, headers: Mapping[str, str], dropped_anthropic_betas: frozenset[str]
+def _without_dropped_anthropic_betas(
+    dropped_anthropic_betas: frozenset[str], headers: Mapping[str, str]
 ) -> Mapping[str, str]:
-    if _is_vertex_anthropic_count_tokens_route(endpoint):
-        return MappingProxyType({name: value for name, value in headers.items() if name.lower() != "anthropic-beta"})
     upstream_values: Final = (
         (name, _upstream_vertex_header_value(name, value, dropped_anthropic_betas)) for name, value in headers.items()
     )
     return MappingProxyType({name: value for name, value in upstream_values if value is not None})
+
+
+def _upstream_headers_for_vertex_route(endpoint: str, headers: Mapping[str, str]) -> Mapping[str, str]:
+    if not _is_vertex_anthropic_count_tokens_route(endpoint):
+        return headers
+    return MappingProxyType({name: value for name, value in headers.items() if name.lower() != "anthropic-beta"})
 
 
 def get_vertex_pass_through_handler(
@@ -3053,10 +3063,11 @@ async def _base_vertex_proxy_route(
     endpoint_func: Final = create_pass_through_route(
         endpoint=endpoint,
         target=target,
-        custom_headers=_upstream_headers_for_vertex_route(
-            endpoint, headers, _vertex_dropped_anthropic_betas(general_settings)
-        ),
+        custom_headers=_upstream_headers_for_vertex_route(endpoint, headers),
         is_streaming_request=is_streaming_request,
+        upstream_headers_filter=partial(
+            _without_dropped_anthropic_betas, _vertex_dropped_anthropic_betas(general_settings, request.headers)
+        ),
     )  # dynamically construct pass-through endpoint based on incoming path
 
     try:

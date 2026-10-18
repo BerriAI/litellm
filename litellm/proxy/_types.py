@@ -2775,7 +2775,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     )
     vertex_ai_pass_through_drop_anthropic_betas: tuple[str, ...] | None = Field(
         default=None,
-        description="anthropic-beta values the Vertex AI pass-through routes (/vertex_ai/* and /vertex-ai/*) remove before calling Vertex, for a beta a Vertex Claude model rejects. Every other value the client sent is forwarded unchanged, and the header is left out when no value remains. Unset forwards the header as sent.",
+        description="anthropic-beta header values the Vertex AI pass-through routes (/vertex_ai/* and /vertex-ai/*) remove before calling Vertex, for a beta a Vertex Claude model rejects, whether the client sent them as anthropic-beta or x-pass-anthropic-beta. Every other value the client sent is forwarded unchanged, and the header is left out when no value remains. Unset forwards the header as sent.",
     )
     transcribe_media_buckets: list[str] | None = Field(
         default=None,
