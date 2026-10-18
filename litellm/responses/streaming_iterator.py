@@ -293,6 +293,15 @@ def _map_stream_error_to_exception(
         body=error_body,
         headers=headers,
     )
+    return _mapped_exception(provider_exception, model, custom_llm_provider, logging_obj)
+
+
+def _mapped_exception(
+    original_exception: Exception,
+    model: str,
+    custom_llm_provider: str,
+    logging_obj: LiteLLMLoggingObj | None,
+) -> Exception:
     litellm_params: Final = (
         None
         if logging_obj is None
@@ -302,7 +311,7 @@ def _map_stream_error_to_exception(
         return litellm.exception_type(
             model=model,
             custom_llm_provider=custom_llm_provider,
-            original_exception=provider_exception,
+            original_exception=original_exception,
             completion_kwargs={},
             extra_kwargs=with_deployment_api_base(litellm_params),
         )
@@ -1044,6 +1053,14 @@ class BaseResponsesAPIStreamingIterator:
             raise error
         raise self._fallback_error(error) from error
 
+    def _raise_for_transport_timeout(self, error: httpx.TimeoutException) -> NoReturn:
+        self.finished = True
+        mapped_timeout: Final = _mapped_exception(
+            error, self.model or "", self.custom_llm_provider or "", self.logging_obj
+        )
+        self._handle_failure(mapped_timeout)
+        raise mapped_timeout from error
+
     def _raise_for_transport_error(self, error: httpx.ReadError | httpx.RemoteProtocolError) -> NoReturn:
         self._handle_failure(error)
         if self._output_started:
@@ -1140,6 +1157,8 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             if self.completed_response is not None:
                 raise StopAsyncIteration from e
             self._raise_for_transport_error(e)
+        except httpx.TimeoutException as e:
+            self._raise_for_transport_timeout(e)
         except httpx.HTTPError as e:
             # Handle HTTP errors
             self.finished = True
@@ -1223,6 +1242,8 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             if self.completed_response is not None:
                 raise StopIteration from e
             self._raise_for_transport_error(e)
+        except httpx.TimeoutException as e:
+            self._raise_for_transport_timeout(e)
         except httpx.HTTPError as e:
             # Handle HTTP errors
             self.finished = True

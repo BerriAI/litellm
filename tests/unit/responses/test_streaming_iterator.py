@@ -323,6 +323,41 @@ async def test_transport_error_after_output_started_is_not_fallback_eligible():
     _assert_failure_logged_once(logging_obj, trailing_error)
 
 
+_READ_TIMEOUT_PREFIXES: Final = [
+    pytest.param([], id="before-output"),
+    pytest.param(_PARTIAL_OUTPUT_EVENTS, id="after-output"),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prefix", _READ_TIMEOUT_PREFIXES)
+async def test_transport_read_timeout_raises_litellm_timeout(prefix):
+    logging_obj: Final = _failure_tracking_logging_obj()
+    iterator: Final = _make_iterator(sse_events=prefix, logging_obj=logging_obj, trailing_error=httpx.ReadTimeout(""))
+
+    with pytest.raises(litellm.Timeout) as exc_info:
+        async for _ in iterator:
+            pass
+
+    assert exc_info.value.status_code == 408
+    assert "Request timed out. Error_str: ReadTimeout" in str(exc_info.value)
+    _assert_failure_logged_once(logging_obj, exc_info.value)
+
+
+@pytest.mark.parametrize("prefix", _READ_TIMEOUT_PREFIXES)
+def test_sync_transport_read_timeout_raises_litellm_timeout(prefix):
+    iterator: Final = _make_sync_iterator(
+        sse_events=prefix, logging_obj=_logging_obj_stub(), trailing_error=httpx.ReadTimeout("")
+    )
+
+    with pytest.raises(litellm.Timeout) as exc_info:
+        for _ in iterator:
+            pass
+
+    assert exc_info.value.status_code == 408
+    assert "Request timed out. Error_str: ReadTimeout" in str(exc_info.value)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("trailer", [[], [_DONE_MARKER]], ids=["eof", "done-marker"])
 async def test_stream_ending_after_partial_output_without_terminal_event_raises(trailer):
