@@ -942,24 +942,37 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             }
         }
         """
-        item_dict: Final[dict[str, object]] = {
-            "id": reasoning_item_id,
-            "type": "reasoning",
-            "status": "completed",
-            "summary": [
-                {
-                    "type": "summary_text",
-                    "text": reasoning_content,
-                }
-            ],
-        }
-        if encrypted_content:
-            item_dict["encrypted_content"] = encrypted_content
+        reasoning_item: Final = (
+            BaseLiteLLMOpenAIResponseObject(
+                id=reasoning_item_id,
+                type="reasoning",
+                status="completed",
+                summary=[
+                    {
+                        "type": "summary_text",
+                        "text": reasoning_content,
+                    }
+                ],
+                encrypted_content=encrypted_content,
+            )
+            if encrypted_content
+            else BaseLiteLLMOpenAIResponseObject(
+                id=reasoning_item_id,
+                type="reasoning",
+                status="completed",
+                summary=[
+                    {
+                        "type": "summary_text",
+                        "text": reasoning_content,
+                    }
+                ],
+            )
+        )
         return OutputItemDoneEvent(
             type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
             output_index=self._reasoning_index(),
             sequence_number=sequence_number,
-            item=BaseLiteLLMOpenAIResponseObject(**item_dict),
+            item=reasoning_item,
         )
 
     def return_default_done_events(
@@ -1091,20 +1104,19 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
     def _extract_streamed_thinking_blocks_encrypted(self) -> str | None:
         if self._cached_encrypted_reasoning_content is not None:
             return self._cached_encrypted_reasoning_content
-        chunks = [c for c in self.collected_chat_completion_chunks if c.get("choices")]
+        chunks: Final = [c for c in self.collected_chat_completion_chunks if c.get("choices")]
         if not any((c["choices"][0].get("delta") or {}).get("thinking_blocks") for c in chunks):
             return None
-        for c in chunks:
-            if not c.get("model"):
-                c["model"] = self.model or "unknown"
+        model_name: Final = self.model or "unknown"
+        prepared_chunks: Final = [c if c.get("model") else {**c, "model": model_name} for c in chunks]
         try:
-            built = stream_chunk_builder(chunks=chunks)
+            built: Final = stream_chunk_builder(chunks=prepared_chunks)
             if built and built.choices and hasattr(built.choices[0], "message"):
                 self._cached_encrypted_reasoning_content = LiteLLMCompletionResponsesConfig._encode_thinking_blocks(
                     built.choices[0].message
                 )
                 return self._cached_encrypted_reasoning_content
-        except Exception:
+        except (KeyError, ValueError, TypeError, AttributeError, IndexError):
             return None
         return None
 
