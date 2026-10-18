@@ -107,28 +107,31 @@ def _one_callback_proxy(gateway: Gateway, tmp_path: Path, stack: ExitStack) -> G
 
 
 @pytest.mark.parametrize("block_route", ("/customer/block", "/end_user/block"))
-def test_block_route_marks_the_customer_blocked_and_update_unblocks(gateway: Gateway, block_route: str) -> None:
-    with gateway.scenario() as scenario:
+def test_block_route_marks_the_customer_blocked_and_update_unblocks(
+    gateway: Gateway, tmp_path: Path, block_route: str
+) -> None:
+    with ExitStack() as stack:
+        proxy: Final = _one_callback_proxy(gateway, tmp_path, stack)
         end_user: Final = f"integration-end-user-{uuid.uuid4().hex}"
-        created: Final = gateway.request("POST", "/customer/new", {"user_id": end_user, "max_budget": 100.0})
+        created: Final = proxy.request("POST", "/customer/new", {"user_id": end_user, "max_budget": 100.0})
         assert created.status_code == 200, created.text
-        scenario.cleanups.callback(gateway.request, "POST", "/customer/delete", {"user_ids": [end_user]})
+        stack.callback(proxy.request, "POST", "/customer/delete", {"user_ids": [end_user]})
 
-        blocked: Final = gateway.request("POST", block_route, {"user_ids": [end_user]})
+        blocked: Final = proxy.request("POST", block_route, {"user_ids": [end_user]})
         assert blocked.status_code == 200, blocked.text
         assert eventually(lambda: _blocked_row(end_user), lambda value: value == [{"blocked": True}], seconds=15) == [
             {"blocked": True}
         ]
-        info: Final = gateway.get("/customer/info", {"end_user_id": end_user})
+        info: Final = proxy.get("/customer/info", {"end_user_id": end_user})
         assert _BlockedCustomerInfo.model_validate(info).blocked is True
 
-        updated: Final = gateway.request("POST", "/customer/update", {"user_id": end_user, "blocked": False})
+        updated: Final = proxy.request("POST", "/customer/update", {"user_id": end_user, "blocked": False})
         assert updated.status_code == 200, updated.text
         assert eventually(lambda: _blocked_row(end_user), lambda value: value == [{"blocked": False}], seconds=15) == [
             {"blocked": False}
         ]
         assert (
-            _BlockedCustomerInfo.model_validate(gateway.get("/customer/info", {"end_user_id": end_user})).blocked
+            _BlockedCustomerInfo.model_validate(proxy.get("/customer/info", {"end_user_id": end_user})).blocked
             is False
         )
 
