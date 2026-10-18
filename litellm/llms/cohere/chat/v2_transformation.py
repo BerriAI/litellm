@@ -1,5 +1,5 @@
 import time
-from collections.abc import AsyncIterator, Iterator, Mapping
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
@@ -169,12 +169,14 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
     def transform_request(
         self,
         model: str,
-        messages: list[AllMessageValues],
-        optional_params: dict[str, object],
-        litellm_params: dict[str, object],
-        headers: dict[str, object],
+        messages: Sequence[AllMessageValues],
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+        headers: Mapping[str, object],
     ) -> dict[str, object]:
-        data: Final = super().transform_request(model, messages, optional_params, litellm_params, headers)
+        data: Final = super().transform_request(
+            model, list(messages), dict(optional_params), dict(litellm_params), dict(headers)
+        )
         messages_to_send: Final = data.get("messages")
         if messages_to_send is not None:
             litellm.remove_index_from_tool_calls(messages=messages_to_send)
@@ -184,12 +186,14 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
     async def async_transform_request(
         self,
         model: str,
-        messages: list[AllMessageValues],
-        optional_params: dict[str, object],
-        litellm_params: dict[str, object],
-        headers: dict[str, object],
+        messages: Sequence[AllMessageValues],
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+        headers: Mapping[str, object],
     ) -> dict[str, object]:
-        data: Final = await super().async_transform_request(model, messages, optional_params, litellm_params, headers)
+        data: Final = await super().async_transform_request(
+            model, list(messages), dict(optional_params), dict(litellm_params), dict(headers)
+        )
         messages_to_send: Final = data.get("messages")
         if messages_to_send is not None:
             litellm.remove_index_from_tool_calls(messages=messages_to_send)
