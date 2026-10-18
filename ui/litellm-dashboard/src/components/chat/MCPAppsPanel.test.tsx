@@ -58,8 +58,8 @@ describe("MCPAppsPanel logos", () => {
     renderPanel();
 
     expect(await screen.findByText("external_logo")).toBeInTheDocument();
-    expect(screen.getByAltText("external_logo logo").getAttribute("src")).toBe("https://cdn.example.com/ext.png");
-    expect(screen.getByAltText("local_logo logo").getAttribute("src")).toBe("/litellm/ui/assets/logos/github.svg");
+    expect(screen.getByAltText("external_logo logo")).toHaveAttribute("src", "https://cdn.example.com/ext.png");
+    expect(screen.getByAltText("local_logo logo")).toHaveAttribute("src", "/litellm/ui/assets/logos/github.svg");
   });
 
   it("renders a colored letter avatar for servers without logo_url", async () => {
@@ -83,11 +83,18 @@ describe("MCPAppsPanel logos", () => {
     fireEvent.click(await screen.findByText("local_logo"));
 
     expect(await screen.findByRole("heading", { name: "local_logo" })).toBeInTheDocument();
-    expect(screen.getByAltText("local_logo logo").getAttribute("src")).toBe("/litellm/ui/assets/logos/github.svg");
+    expect(screen.getByAltText("local_logo logo")).toHaveAttribute("src", "/litellm/ui/assets/logos/github.svg");
   });
 });
 
 const connectServers = [
+  {
+    server_id: "s-m2m",
+    server_name: "service_tool",
+    auth_type: "oauth2",
+    oauth2_flow: "client_credentials",
+    connected_app_reachable: true,
+  },
   {
     server_id: "s-reach",
     server_name: "reachable_srv",
@@ -124,6 +131,8 @@ describe("MCPAppsPanel connected-app reachability (LIT-4861)", () => {
     expect(vi.mocked(fetchMCPServers)).toHaveBeenCalledWith("tok", undefined, true);
     expect(screen.queryByText("unreachable_srv")).not.toBeInTheDocument();
     expect(screen.getByText("Connected (1)")).toBeInTheDocument();
+    expect(screen.getByText("service_tool")).toBeInTheDocument();
+    expect(screen.queryByText("Connect", { exact: true })).not.toBeInTheDocument();
     const toolCountFetchedIds = vi.mocked(listMCPTools).mock.calls.map((call) => call[1]);
     expect(toolCountFetchedIds).toContain("s-reach");
     expect(toolCountFetchedIds).not.toContain("s-unreach");
@@ -239,7 +248,7 @@ describe("MCPAppsPanel connected-app reachability (LIT-4861)", () => {
 
     expect(onChange).not.toHaveBeenCalled();
     expect(screen.queryByText("revoked_srv")).not.toBeInTheDocument();
-    expect(screen.getByText("Connected", { exact: false }).textContent).toBe("Connected");
+    expect(screen.getByText("Connected", { exact: false })).toHaveTextContent("Connected");
   });
 
   it("does not select a server when Connect resolves in the same tick the refetch drops it", async () => {

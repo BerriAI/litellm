@@ -4,6 +4,7 @@
 #
 # +-------------------------------------------------------------+
 import os
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final, Literal, Optional
 
 from fastapi import HTTPException
@@ -22,9 +23,10 @@ from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.guardrails import LitellmParams
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
-GUARDRAIL_TIMEOUT: Final = 5
+DEFAULT_GUARDRAIL_TIMEOUT: Final = 5.0
 
 
 class ZscalerAIGuard(CustomGuardrail):
@@ -43,6 +45,7 @@ class ZscalerAIGuard(CustomGuardrail):
         send_user_api_key_alias: bool | None = None,
         send_user_api_key_user_id: bool | None = None,
         send_user_api_key_team_id: bool | None = None,
+        timeout: float | None = None,
         **kwargs,
     ):
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
@@ -68,7 +71,6 @@ class ZscalerAIGuard(CustomGuardrail):
             if send_user_api_key_team_id is not None
             else os.getenv("SEND_USER_API_KEY_TEAM_ID", "False").lower() in ("true", "1")
         )
-
         verbose_proxy_logger.debug(
             "send_user_api_key_alias: %s, \n            send_user_api_key_user_id:%s, \n            send_user_api_key_team_id:%s",
             self.send_user_api_key_alias,
@@ -77,8 +79,37 @@ class ZscalerAIGuard(CustomGuardrail):
         )
 
         super().__init__(**kwargs)
+        self.timeout = self._resolve_timeout(timeout)
 
         verbose_proxy_logger.debug("ZscalerAIGuard Initializing ...")
+
+    @staticmethod
+    def _resolve_timeout(timeout: float | None) -> float:
+        """
+        Resolve the effective per-request timeout, falling back to the default
+        when it is unset or non-positive.
+        """
+        if timeout is None:
+            return DEFAULT_GUARDRAIL_TIMEOUT
+
+        if timeout <= 0:
+            verbose_proxy_logger.warning(
+                "Ignoring non-positive Zscaler AI Guard timeout %s, using %s seconds",
+                timeout,
+                DEFAULT_GUARDRAIL_TIMEOUT,
+            )
+            return DEFAULT_GUARDRAIL_TIMEOUT
+
+        return timeout
+
+    def update_in_memory_litellm_params(self, litellm_params: "LitellmParams") -> None:
+        super().update_in_memory_litellm_params(litellm_params)
+        self.timeout = self._resolve_timeout(litellm_params.timeout)
+
+    @staticmethod
+    def _resolve_request_user(request_data: Mapping[str, object]) -> str | None:
+        request_user: Final = request_data.get("user")
+        return request_user if isinstance(request_user, str) and request_user else None
 
     @staticmethod
     def _resolve_metadata_value(request_data: dict | None, key: str) -> str | None:
@@ -182,6 +213,8 @@ class ZscalerAIGuard(CustomGuardrail):
                 )
             verbose_proxy_logger.debug("inside apply_guardrail kwargs: %s", kwargs)
 
+            user_for_payload: Final = self._resolve_request_user(request_data)
+
             zscaler_ai_guard_result = None
             direction: Final = "OUT" if input_type == "response" else "IN"
             verbose_proxy_logger.debug("direction: %s", direction)
@@ -194,6 +227,7 @@ class ZscalerAIGuard(CustomGuardrail):
                     policy_id=policy_id,
                     direction=direction,
                     content=concatenated_text,
+                    user=user_for_payload,
                     **kwargs,
                 )
                 verbose_proxy_logger.debug("response from zscaler ai guards: %s", zscaler_ai_guard_result)
@@ -267,7 +301,7 @@ class ZscalerAIGuard(CustomGuardrail):
             f"{url}",
             headers=headers,
             json=data,
-            timeout=GUARDRAIL_TIMEOUT,
+            timeout=self.timeout,
         )
         response.raise_for_status()
         return response
@@ -332,7 +366,14 @@ class ZscalerAIGuard(CustomGuardrail):
             raise HTTPException(status_code=response.status_code, detail=user_facing_error)
 
     async def make_zscaler_ai_guard_api_call(
-        self, zscaler_ai_guard_url, api_key, policy_id, direction, content, **kwargs
+        self,
+        zscaler_ai_guard_url: str,
+        api_key: str | None,
+        policy_id,
+        direction: str,
+        content: str,
+        user: str | None = None,
+        **kwargs,
     ):
         """
         Makes an API call to the Zscaler AI Guard service and handles retries, errors, and response parsing.
@@ -349,6 +390,8 @@ class ZscalerAIGuard(CustomGuardrail):
         # the policy from headers (e.g., user-api-key-alias)
         if policy_id is not None and policy_id >= 1:
             data["policyId"] = policy_id
+        if user:
+            data["user"] = user
         try:
             response: Final = await self._send_request(zscaler_ai_guard_url, extra_headers, data)
             return self._handle_response(response, direction)

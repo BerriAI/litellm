@@ -5,7 +5,8 @@ Provides guardrail translation support for the OCR endpoint.
 Processes the extracted markdown text from OCR pages.
 """
 
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
@@ -13,6 +14,7 @@ from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.llms.base_llm.ocr.transformation import OCRResponse
 
 
@@ -33,8 +35,8 @@ class OCRHandler(BaseTranslation):
         self,
         data: dict,
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Any | None = None,
-    ) -> Any:
+        litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
+    ) -> Mapping[str, object]:
         """
         Process OCR input by applying guardrails to the document reference.
 
@@ -87,10 +89,10 @@ class OCRHandler(BaseTranslation):
         self,
         response: "OCRResponse",
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Any | None = None,
-        user_api_key_dict: Any | None = None,
+        litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
+        user_api_key_dict: object | None = None,
         request_data: dict | None = None,
-    ) -> Any:
+    ) -> "OCRResponse":
         """
         Process OCR output by applying guardrails to extracted page text.
 
@@ -137,7 +139,7 @@ class OCRHandler(BaseTranslation):
             if user_metadata:
                 # Preserve original behavior: inject metadata into inputs for
                 # third-party guardrail providers that read it from there
-                inputs.update(user_metadata)  # type: ignore
+                inputs.update(user_metadata)
                 # Also store in request_data for the logging pipeline
                 if "litellm_metadata" not in request_data:
                     request_data["litellm_metadata"] = user_metadata

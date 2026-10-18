@@ -1,6 +1,10 @@
-import { Alert, Card, Descriptions, Input, Modal, Typography, theme } from "antd";
-import { ExclamationCircleOutlined } from "@ant-design/icons";
+import { CircleAlert } from "lucide-react";
 import React, { useState, useEffect } from "react";
+import { Alert, AlertTitle } from "@/components/shared/Alert";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 
 interface DeleteResourceModalProps {
   isOpen: boolean;
@@ -8,12 +12,11 @@ interface DeleteResourceModalProps {
   alertMessage?: string;
   message: string;
   resourceInformationTitle?: string;
-  resourceInformation?: Array<
-    {
-      label: string;
-      value: string | number | undefined | null;
-    } & Omit<React.ComponentProps<typeof Typography.Text>, "children">
-  >;
+  resourceInformation?: Array<{
+    label: string;
+    value: string | number | undefined | null;
+    code?: boolean;
+  }>;
   onCancel: () => void;
   onOk: () => void;
   confirmLoading: boolean;
@@ -32,8 +35,6 @@ export default function DeleteResourceModal({
   confirmLoading,
   requiredConfirmation,
 }: DeleteResourceModalProps) {
-  const { Title, Text } = Typography;
-  const { token } = theme.useToken();
   const [requiredConfirmationInput, setRequiredConfirmationInput] = useState("");
 
   useEffect(() => {
@@ -43,69 +44,69 @@ export default function DeleteResourceModal({
   }, [isOpen]);
 
   return (
-    <Modal
-      title={title}
-      open={isOpen}
-      onOk={onOk}
-      onCancel={onCancel}
-      confirmLoading={confirmLoading}
-      okText={confirmLoading ? "Deleting..." : "Delete"}
-      cancelText="Cancel"
-      okButtonProps={{
-        danger: true,
-        disabled: (!!requiredConfirmation && requiredConfirmationInput !== requiredConfirmation) || confirmLoading,
-      }}
-      cancelButtonProps={{ disabled: confirmLoading }}
-    >
-      <div className="space-y-4">
-        {alertMessage && <Alert message={alertMessage} type="warning" />}
-        <Card
-          title={resourceInformationTitle}
-          className="mt-4"
-          styles={{
-            body: { padding: "16px" },
-            header: {
-              backgroundColor: token.colorErrorBg,
-              borderColor: token.colorErrorBorder,
-            },
-          }}
-          style={{
-            backgroundColor: token.colorErrorBg,
-            borderColor: token.colorErrorBorder,
-          }}
-        >
-          <Descriptions column={1} size="small">
-            {resourceInformation &&
-              resourceInformation.map(({ label, value, ...textProps }) => (
-                <Descriptions.Item key={label} label={<span className="font-semibold">{label}</span>}>
-                  <Text {...textProps}>{value ?? "-"}</Text>
-                </Descriptions.Item>
-              ))}
-          </Descriptions>
-        </Card>
-        <div>
-          <Text>{message}</Text>
-        </div>
-        {requiredConfirmation && (
-          <div className="mb-6 mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
-            <Text className="block text-base font-medium text-gray-700 dark:text-gray-300 mb-2">
-              <Text>Type </Text>
-              <Text strong type="danger">
-                {requiredConfirmation}
-              </Text>
-              <Text> to confirm deletion:</Text>
-            </Text>
-            <Input
-              value={requiredConfirmationInput}
-              onChange={(e) => setRequiredConfirmationInput(e.target.value)}
-              placeholder={requiredConfirmation}
-              className="rounded-md"
-              prefix={<ExclamationCircleOutlined style={{ color: token.colorError }} />}
-              autoFocus
-            />
+    <Dialog open={isOpen} onOpenChange={(open) => !open && !confirmLoading && onCancel()}>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>{title}</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4">
+          {alertMessage && (
+            <Alert variant="warning">
+              <AlertTitle>{alertMessage}</AlertTitle>
+            </Alert>
+          )}
+          <Card size="sm" className="mt-4">
+            {resourceInformationTitle && (
+              <CardHeader className="border-b">
+                <CardTitle>{resourceInformationTitle}</CardTitle>
+              </CardHeader>
+            )}
+            <CardContent>
+              <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1">
+                {resourceInformation?.map(({ label, value, code }) => (
+                  <React.Fragment key={label}>
+                    <dt className="font-semibold">{label}</dt>
+                    <dd className="min-w-0 break-words">{code ? <code>{value ?? "-"}</code> : value ?? "-"}</dd>
+                  </React.Fragment>
+                ))}
+              </dl>
+            </CardContent>
+          </Card>
+          <div>
+            <span>{message}</span>
           </div>
-        )}
-      </div>
-    </Modal>
+          {requiredConfirmation && (
+            <div className="mb-6 mt-4 pt-4 border-t border-border">
+              <p className="block text-base font-medium text-foreground mb-2">
+                Type <span className="font-semibold text-destructive">{requiredConfirmation}</span> to confirm deletion:
+              </p>
+              <InputGroup className="rounded-md">
+                <InputGroupAddon>
+                  <CircleAlert className="size-3.5 text-destructive" />
+                </InputGroupAddon>
+                <InputGroupInput
+                  value={requiredConfirmationInput}
+                  onChange={(e) => setRequiredConfirmationInput(e.target.value)}
+                  placeholder={requiredConfirmation}
+                  autoFocus
+                />
+              </InputGroup>
+            </div>
+          )}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onCancel} disabled={confirmLoading}>
+            Cancel
+          </Button>
+          <Button
+            variant="destructive"
+            onClick={onOk}
+            disabled={(!!requiredConfirmation && requiredConfirmationInput !== requiredConfirmation) || confirmLoading}
+          >
+            {confirmLoading ? "Deleting..." : "Delete"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

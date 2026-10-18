@@ -1,5 +1,11 @@
 import json
-from typing import Final
+from collections.abc import Mapping
+from typing import (
+    TYPE_CHECKING,
+    Final,
+    Protocol,
+    cast,  # noqa: TID251  # the config repository's table protocol omits find_first
+)
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -12,8 +18,12 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
-from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # legacy module exports
+    _user_has_admin_view,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    user_api_key_has_admin_view,
+)
 from litellm.repositories.config_repository import ConfigRepository
+from litellm.repositories.prisma_protocols import TableActions
 from litellm.types.proxy.vantage_endpoints import (
     VantageDryRunRequest,
     VantageExportRequest,
@@ -24,11 +34,26 @@ from litellm.types.proxy.vantage_endpoints import (
     VantageSettingsView,
 )
 
+if TYPE_CHECKING:
+    from litellm.proxy.proxy_server import PrismaClient
+
 router: Final = APIRouter()
 
 _sensitive_masker: Final = SensitiveDataMasker()
 
 VANTAGE_SETTINGS_PARAM_NAME: Final = "vantage_settings"
+
+
+class _VantageConfigRow(Protocol):
+    """The ``LiteLLM_Config`` row holding ``vantage_settings``, as this module reads it."""
+
+    @property
+    def param_value(self) -> str | Mapping[str, str] | None: ...
+
+
+def _config_table(prisma_client: "PrismaClient") -> TableActions[_VantageConfigRow]:
+    repository_table: Final = ConfigRepository(prisma_client).table
+    return cast(TableActions[_VantageConfigRow], repository_table)  # cast-ok: repo protocol omits find_first
 
 
 def _get_registered_vantage_logger():
@@ -82,7 +107,7 @@ async def _get_vantage_settings():
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    vantage_config: Final = await ConfigRepository(prisma_client).table.find_first(
+    vantage_config: Final = await _config_table(prisma_client).find_first(
         where={"param_name": VANTAGE_SETTINGS_PARAM_NAME}
     )
     if vantage_config is None or vantage_config.param_value is None:
@@ -138,7 +163,7 @@ async def get_vantage_settings(
     Only admin users (Proxy Admin or Admin Viewer) can view Vantage settings.
     """
     # Admin Viewer follows the read-parity rule.
-    if not _user_has_admin_view(user_api_key_dict):
+    if not user_api_key_has_admin_view(user_api_key_dict):
         raise HTTPException(
             status_code=403,
             detail={"error": CommonProxyErrors.not_allowed_access.value},
@@ -251,7 +276,7 @@ async def is_vantage_setup_in_db() -> bool:
         if prisma_client is None:
             return False
 
-        vantage_config: Final = await ConfigRepository(prisma_client).table.find_first(
+        vantage_config: Final = await _config_table(prisma_client).find_first(
             where={"param_name": VANTAGE_SETTINGS_PARAM_NAME}
         )
 
@@ -388,14 +413,14 @@ async def vantage_dry_run_export(
 
         # Use the same pre-transform column names as
         # FocusExportEngine.dry_run_export_usage_data for consistency.
-        total_spend: Final = FocusExportEngine._sum_column(data, "spend")
-        total_tokens: Final = FocusExportEngine._sum_column(data, "total_tokens")
+        total_spend: Final = FocusExportEngine.sum_column(data, "spend")
+        total_tokens: Final = FocusExportEngine.sum_column(data, "total_tokens")
         summary: Final = {
             "total_records": len(normalized),
             "total_spend": float(total_spend) if total_spend is not None else 0,
             "total_tokens": float(total_tokens) if total_tokens is not None else 0,
-            "unique_teams": FocusExportEngine._count_unique(data, "team_id"),
-            "unique_models": FocusExportEngine._count_unique(data, "model"),
+            "unique_teams": FocusExportEngine.count_unique(data, "team_id"),
+            "unique_models": FocusExportEngine.count_unique(data, "model"),
         }
 
         dry_run_result: Final = {
@@ -525,7 +550,7 @@ async def delete_vantage_settings(
                 detail={"error": CommonProxyErrors.db_not_connected_error.value},
             )
 
-        vantage_config: Final = await ConfigRepository(prisma_client).table.find_first(
+        vantage_config: Final = await _config_table(prisma_client).find_first(
             where={"param_name": VANTAGE_SETTINGS_PARAM_NAME}
         )
 

@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Any, Final, TypeVar
 
 from litellm.llms.base_llm.containers.transformation import BaseContainerConfig
@@ -19,7 +20,7 @@ def decode_managed_container_id_for_request(
     Returns:
         (original_container_id, resolved_provider, updated_litellm_params)
     """
-    decoded: Final = ResponsesAPIRequestUtils._decode_container_id(container_id)
+    decoded: Final = ResponsesAPIRequestUtils.decode_container_id(container_id)
     original_container_id: Final = decoded.get("response_id", container_id)
 
     decoded_provider: Final = decoded.get("custom_llm_provider")
@@ -53,7 +54,7 @@ class ContainerRequestUtils:
 
         for param in valid_params:
             if param in passed_params and passed_params[param] is not None:
-                container_create_optional_params[param] = passed_params[param]  # type: ignore
+                container_create_optional_params[param] = passed_params[param]
 
         return container_create_optional_params
 
@@ -69,7 +70,7 @@ class ContainerRequestUtils:
         filtered_params: Final = {k: v for k, v in container_create_optional_params.items() if k in supported_params}
 
         return container_provider_config.map_openai_params(
-            container_create_optional_params=filtered_params,  # type: ignore
+            container_create_optional_params=filtered_params,
             drop_params=False,
         )
 
@@ -90,7 +91,7 @@ class ContainerRequestUtils:
 
         for param in valid_params:
             if param in passed_params and passed_params[param] is not None:
-                container_list_optional_params[param] = passed_params[param]  # type: ignore
+                container_list_optional_params[param] = passed_params[param]
 
         return container_list_optional_params
 
@@ -99,7 +100,7 @@ class ContainerRequestUtils:
         response_obj: T,
         custom_llm_provider: str | None,
         litellm_metadata: dict[str, Any] | None = None,
-        extra_body: dict[str, Any] | None = None,
+        extra_body: Mapping[str, object] | None = None,
     ) -> T:
         """
         Encode container_id in response object with provider/model metadata for routing.
@@ -148,7 +149,7 @@ class ContainerRequestUtils:
 
         # Only encode if we have routing metadata
         if should_encode and response_obj and hasattr(response_obj, "id"):
-            encoded_id: Final = ResponsesAPIRequestUtils._build_container_id(
+            encoded_id: Final = ResponsesAPIRequestUtils.build_container_id(
                 custom_llm_provider=custom_llm_provider,
                 model_id=model_id,
                 container_id=response_obj.id,

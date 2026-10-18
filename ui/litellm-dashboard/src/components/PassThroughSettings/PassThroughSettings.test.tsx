@@ -21,11 +21,6 @@ vi.mock("../pass_through_info", () => ({
   ),
 }));
 
-vi.mock("../molecules/notifications_manager", () => ({
-  __esModule: true,
-  default: { success: vi.fn(), fromBackend: vi.fn() },
-}));
-
 vi.mock("./PassThroughEndpointsTable", () => ({
   PassThroughEndpointsTable: (props: React.ComponentProps<typeof PassThroughEndpointsTable>) => (
     <div data-testid="endpoints-table" data-loading={props.isLoading}>

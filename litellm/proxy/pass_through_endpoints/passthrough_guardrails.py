@@ -7,7 +7,7 @@ Handles guardrail execution for passthrough endpoints with:
 - Automatic inheritance from org/team/key levels when enabled
 """
 
-from typing import Any, Final, Union
+from typing import Any, Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
@@ -19,10 +19,10 @@ from litellm.proxy.pass_through_endpoints.jsonpath_extractor import JsonPathExtr
 
 # Type for raw guardrails config input (before normalization)
 # Can be a list of names or a dict with settings
-PassThroughGuardrailsConfigInput = Union[
-    list[str],  # Simple list: ["guard-1", "guard-2"]
-    PassThroughGuardrailsConfig,  # Dict: {"guard-1": {"request_fields": [...]}}
-]
+PassThroughGuardrailsConfigInput = (
+    list[str]  # Simple list: ["guard-1", "guard-2"]
+    | PassThroughGuardrailsConfig  # Dict: {"guard-1": {"request_fields": [...]}}
+)
 
 
 class PassthroughGuardrailHandler:
@@ -228,7 +228,7 @@ class PassthroughGuardrailHandler:
             Dict of guardrail names to run (format: {guardrail_name: True}), or None
         """
         from litellm.proxy.litellm_pre_call_utils import (
-            _add_guardrails_from_key_or_team_metadata,
+            add_guardrails_from_key_or_team_metadata,
         )
 
         # Normalize config to dict format (handles both list and dict)
@@ -246,13 +246,13 @@ class PassthroughGuardrailHandler:
         guardrails_to_run: Final[dict[str, bool]] = {}
 
         # Add passthrough-specific guardrails
-        for guardrail_name in normalized_config.keys():
+        for guardrail_name in normalized_config:
             guardrails_to_run[guardrail_name] = True
             verbose_proxy_logger.debug("Added passthrough-specific guardrail: %s", guardrail_name)
 
         # Add org/team/key level guardrails using shared helper
         temp_data: Final[dict[str, Any]] = {"metadata": {}}
-        _add_guardrails_from_key_or_team_metadata(
+        add_guardrails_from_key_or_team_metadata(
             key_metadata=user_api_key_dict.metadata,
             team_metadata=user_api_key_dict.team_metadata,
             data=temp_data,

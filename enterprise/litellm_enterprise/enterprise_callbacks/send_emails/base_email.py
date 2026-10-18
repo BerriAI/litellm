@@ -6,7 +6,7 @@ Base class for sending emails to user after creating keys or invite links
 import html
 import json
 import os
-from typing import List, Literal, Optional
+from typing import Final, List, Literal, Optional
 
 from litellm_enterprise.types.enterprise_callbacks.send_emails import (
     EmailEvent,
@@ -15,6 +15,7 @@ from litellm_enterprise.types.enterprise_callbacks.send_emails import (
     SendKeyRotatedEmailEvent,
 )
 
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.constants import (
@@ -32,6 +33,7 @@ from litellm.integrations.email_templates.key_rotated_email import (
 from litellm.integrations.email_templates.templates import (
     MAX_BUDGET_ALERT_EMAIL_TEMPLATE,
     SOFT_BUDGET_ALERT_EMAIL_TEMPLATE,
+    TEAM_MEMBER_MAX_BUDGET_ALERT_EMAIL_TEMPLATE,
     TEAM_SOFT_BUDGET_ALERT_EMAIL_TEMPLATE,
 )
 from litellm.integrations.email_templates.user_invitation_email import (
@@ -44,8 +46,18 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
     WebhookEvent,
 )
+from litellm.repositories.table_repositories import InvitationLinkRepository
+from litellm.repositories.user_repository import UserRepository
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.integrations.slack_alerting import LITELLM_LOGO_URL
+
+_BUDGET_ALERT_CLAIMS_TARGET: Final = "budget_alert_claims"
+
+
+def _max_budget_alert_id(user_info: CallInfo) -> str:
+    if user_info.event_group == Litellm_EntityType.TEAM_MEMBER:
+        return f"team_member:{user_info.user_id}:{user_info.team_id}"
+    return user_info.token or user_info.user_id or "default_id"
 
 
 def _parse_email_list(raw) -> List[str]:
@@ -99,6 +111,7 @@ class BaseEmailLogger(CustomLogger):
         email_html_content = USER_INVITATION_EMAIL_TEMPLATE.format(
             email_logo_url=email_params.logo_url,
             recipient_email=email_params.recipient_email,
+            invitation_link=email_params.base_url,
             base_url=email_params.base_url,
             email_support_contact=email_params.support_contact,
             email_footer=email_params.signature,
@@ -372,17 +385,31 @@ class BaseEmailLogger(CustomLogger):
             greeting = html.escape(
                 event.user_email or event.key_alias or event.token or ""
             )
-            email_html_content = MAX_BUDGET_ALERT_EMAIL_TEMPLATE.format(
-                email_logo_url=email_params.logo_url,
-                recipient_email=greeting,
-                percentage=percentage,
-                spend=spend_str,
-                max_budget=max_budget_str,
-                alert_threshold=alert_threshold_str,
-                base_url=email_params.base_url,
-                email_support_contact=email_params.support_contact,
-                email_footer=email_params.signature,
-            )
+            if event.event_group == Litellm_EntityType.TEAM_MEMBER:
+                email_html_content = TEAM_MEMBER_MAX_BUDGET_ALERT_EMAIL_TEMPLATE.format(
+                    email_logo_url=email_params.logo_url,
+                    member=html.escape(event.user_email or event.user_id or ""),
+                    team_alias=html.escape(event.team_alias or event.team_id or ""),
+                    percentage=percentage,
+                    spend=spend_str,
+                    max_budget=max_budget_str,
+                    alert_threshold=alert_threshold_str,
+                    base_url=email_params.base_url,
+                    email_support_contact=email_params.support_contact,
+                    email_footer=email_params.signature,
+                )
+            else:
+                email_html_content = MAX_BUDGET_ALERT_EMAIL_TEMPLATE.format(
+                    email_logo_url=email_params.logo_url,
+                    recipient_email=greeting,
+                    percentage=percentage,
+                    spend=spend_str,
+                    max_budget=max_budget_str,
+                    alert_threshold=alert_threshold_str,
+                    base_url=email_params.base_url,
+                    email_support_contact=email_params.support_contact,
+                    email_footer=email_params.signature,
+                )
             await self.send_email(
                 from_email=self.DEFAULT_LITELLM_EMAIL,
                 to_email=recipient_emails,
@@ -415,6 +442,7 @@ class BaseEmailLogger(CustomLogger):
                 html_body=email_html_content,
             )
 
+    @with_service_target(_BUDGET_ALERT_CLAIMS_TARGET)
     async def budget_alerts(
         self,
         type: Literal[
@@ -584,6 +612,7 @@ class BaseEmailLogger(CustomLogger):
                             await self._release_budget_alert_claim(_cache, _cache_key)
             return
 
+    @with_service_target(_BUDGET_ALERT_CLAIMS_TARGET)
     async def _handle_multi_threshold_max_budget_alert(
         self,
         user_info: CallInfo,
@@ -606,7 +635,7 @@ class BaseEmailLogger(CustomLogger):
             if user_info.spend < threshold_amount:
                 continue
 
-            _id = user_info.token or user_info.user_id or "default_id"
+            _id = _max_budget_alert_id(user_info)
             _cache_key = (
                 f"email_budget_alerts:max_budget_alert:{threshold_pct}:{_id}"
             )
@@ -617,7 +646,7 @@ class BaseEmailLogger(CustomLogger):
                 emails.append(user_info.user_email)
             if not emails:
                 verbose_proxy_logger.warning(
-                    "No recipients for %d%% threshold on key %s, skipping alert",
+                    "No recipients for %d%% threshold on %s, skipping alert",
                     threshold_pct,
                     _id,
                 )
@@ -632,7 +661,11 @@ class BaseEmailLogger(CustomLogger):
             if send_count is not None and send_count > 1:
                 continue
 
-            event_message = f"Max Budget Alert - {threshold_pct}% of Maximum Budget Reached"
+            event_message = (
+                f"Team Member Budget Alert - {threshold_pct}% of Team Member Budget Reached"
+                if user_info.event_group == Litellm_EntityType.TEAM_MEMBER
+                else f"Max Budget Alert - {threshold_pct}% of Maximum Budget Reached"
+            )
             webhook_event = WebhookEvent(
                 event="max_budget_alert",
                 event_message=event_message,
@@ -665,6 +698,7 @@ class BaseEmailLogger(CustomLogger):
                 )
                 await self._release_budget_alert_claim(_cache, _cache_key)
 
+    @with_service_target(_BUDGET_ALERT_CLAIMS_TARGET)
     async def _release_budget_alert_claim(self, cache: DualCache, cache_key: str) -> None:
         try:
             await cache.async_delete_cache(key=cache_key)
@@ -812,7 +846,7 @@ class BaseEmailLogger(CustomLogger):
             )
             return None
 
-        user_row = await prisma_client.db.litellm_usertable.find_unique(
+        user_row = await UserRepository(prisma_client).table.find_unique(
             where={"user_id": user_id}
         )
 
@@ -826,10 +860,15 @@ class BaseEmailLogger(CustomLogger):
         """
         # Early validation
         if not user_id:
-            verbose_proxy_logger.debug("No user_id provided for invitation link")
+            verbose_proxy_logger.warning(
+                "No user_id provided for invitation link. Email will link to base URL instead of onboarding page"
+            )
             return base_url
 
         if not await self._is_prisma_client_available():
+            verbose_proxy_logger.warning(
+                "Prisma client not available. Email will link to base URL instead of onboarding page"
+            )
             return base_url
 
         # Wait for any concurrent invitation creation to complete
@@ -839,11 +878,15 @@ class BaseEmailLogger(CustomLogger):
         invitation = await self._get_or_create_invitation(user_id)
         if not invitation:
             verbose_proxy_logger.warning(
-                f"Failed to get/create invitation for user_id: {user_id}"
+                f"Failed to get/create invitation for user_id: {user_id}. Email will link to base URL instead of onboarding page"
             )
             return base_url
 
-        return self._construct_invitation_link(invitation.id, base_url)
+        invitation_link = self._construct_invitation_link(invitation.id, base_url)
+        verbose_proxy_logger.info(
+            f"Successfully created invitation link for user_id: {user_id}"
+        )
+        return invitation_link
 
     async def _is_prisma_client_available(self) -> bool:
         """Check if Prisma client is available"""
@@ -888,7 +931,7 @@ class BaseEmailLogger(CustomLogger):
         try:
             # Try to get existing invitation
             existing_invitations = (
-                await prisma_client.db.litellm_invitationlink.find_many(
+                await InvitationLinkRepository(prisma_client).table.find_many(
                     where={"user_id": user_id},
                     order={"created_at": "desc"},
                 )
@@ -921,7 +964,9 @@ class BaseEmailLogger(CustomLogger):
 
         # http://localhost:4000/ui/onboarding?invitation_id=7a096b3a-37c6-440f-9dd1-ba22e8043f6b
         """
-        return f"{base_url}/ui/onboarding?invitation_id={invitation_id}"
+        base_url = base_url.rstrip("/")
+        invitation_link = f"{base_url}/ui/onboarding?invitation_id={invitation_id}"
+        return invitation_link
 
     async def send_email(
         self,

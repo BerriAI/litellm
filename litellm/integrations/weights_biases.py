@@ -4,24 +4,17 @@ imported_openAIResponse = True
 try:
     import io
     import logging
-    import sys
-    from typing import Any, TypeVar
+    from collections.abc import Mapping
+    from typing import Any, Literal, Protocol, TypeVar
 
     from wandb.sdk.data_types import trace_tree
-
-    if sys.version_info >= (3, 8):
-        from typing import Literal, Protocol
-    else:
-        from typing import Literal
-
-        from typing_extensions import Protocol
 
     logger: Final = logging.getLogger(__name__)
 
     K = TypeVar("K", bound=str)
     V = TypeVar("V")
 
-    class OpenAIResponse(Protocol[K, V]):  # type: ignore
+    class OpenAIResponse(Protocol[K, V]):
         # contains a (known) object attribute
         object: Literal["chat.completion", "edit", "text_completion"]
 
@@ -51,7 +44,7 @@ try:
 
         @staticmethod
         def results_to_trace_tree(
-            request: dict[str, Any],
+            request: Mapping[str, object],
             response: OpenAIResponse,
             results: list[trace_tree.Result],
             time_elapsed: float,
@@ -70,7 +63,7 @@ try:
             end_time_ms: Final = start_time_ms + int(round(time_elapsed * 1000))
             span: Final = trace_tree.Span(
                 name=f"{response.get('model', 'openai')}_{response['object']}_{response.get('created')}",
-                attributes=dict(response),  # type: ignore
+                attributes=dict(response),
                 start_time_ms=start_time_ms,
                 end_time_ms=end_time_ms,
                 span_kind=trace_tree.SpanKind.LLM,
@@ -81,7 +74,7 @@ try:
 
         def _resolve_edit(
             self,
-            request: dict[str, Any],
+            request: Mapping[str, object],
             response: OpenAIResponse,
             time_elapsed: float,
         ) -> trace_tree.WBTraceTree:
@@ -99,7 +92,7 @@ try:
 
         def _resolve_completion(
             self,
-            request: dict[str, Any],
+            request: Mapping[str, object],
             response: OpenAIResponse,
             time_elapsed: float,
         ) -> trace_tree.WBTraceTree:
@@ -142,7 +135,7 @@ try:
 
         def _request_response_result_to_trace(
             self,
-            request: dict[str, Any],
+            request: Mapping[str, object],
             response: OpenAIResponse,
             request_str: str,
             choices: list[str],

@@ -49,8 +49,15 @@ class AmazonTitanMultimodalEmbeddingG1Config:
             transformed_request = AmazonTitanMultimodalEmbeddingRequest(inputText=input)
 
         for k, v in inference_params.items():
-            transformed_request[k] = v  # type: ignore
+            transformed_request[k] = v
         return transformed_request
+
+    def transform_request(
+        self,
+        input: str,
+        inference_params: dict[str, object],  # mutable-ok: mirrors override contract
+    ) -> AmazonTitanMultimodalEmbeddingRequest:
+        return self._transform_request(input, inference_params)
 
     def _transform_response(
         self,
@@ -61,7 +68,7 @@ class AmazonTitanMultimodalEmbeddingG1Config:
         total_prompt_tokens = 0
         transformed_responses: Final[list[Embedding]] = []
         for index, response in enumerate(response_list):
-            _parsed_response = AmazonTitanMultimodalEmbeddingResponse(**response)  # type: ignore
+            _parsed_response = AmazonTitanMultimodalEmbeddingResponse(**response)
             transformed_responses.append(
                 Embedding(
                     embedding=_parsed_response["embedding"],
@@ -91,3 +98,11 @@ class AmazonTitanMultimodalEmbeddingG1Config:
             prompt_tokens_details=prompt_tokens_details,
         )
         return EmbeddingResponse(model=model, usage=usage, data=transformed_responses)
+
+    def transform_response(
+        self,
+        response_list: list[dict[str, object]],  # mutable-ok: mirrors override contract
+        model: str,
+        batch_data: list[dict[str, object]] | None = None,  # mutable-ok: mirrors override contract
+    ) -> EmbeddingResponse:
+        return self._transform_response(response_list, model, batch_data)

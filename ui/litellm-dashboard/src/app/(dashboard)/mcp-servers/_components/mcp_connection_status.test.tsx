@@ -21,7 +21,7 @@ describe("MCPConnectionStatus", () => {
 
   it("should render nothing when canFetchTools is false and no URL is set", () => {
     const { container } = render(<MCPConnectionStatus {...defaultProps} formValues={{}} />);
-    expect(container.firstChild).toBeNull();
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("should show 'Complete required fields' message when URL is set but canFetchTools is false", () => {

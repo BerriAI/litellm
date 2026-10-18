@@ -30,7 +30,7 @@ def get_watsonx_iam_url():
 
 
 def generate_iam_token(api_key=None, **params) -> str:
-    result: str | None = iam_token_cache.get_cache(api_key)  # type: ignore
+    result: str | None = iam_token_cache.get_cache(api_key)
 
     if result is None:
         headers: Final = {}
@@ -70,14 +70,17 @@ def generate_iam_token(api_key=None, **params) -> str:
     return cast(str, result)
 
 
-def _generate_watsonx_token(api_key: str | None, token: str | None) -> str:
+def generate_watsonx_token(api_key: str | None, token: str | None) -> str:
     if token is not None:
         return token
     token = generate_iam_token(api_key)
     return token
 
 
-def _get_api_params(params: dict, model: str | None = None) -> WatsonXAPIParams:
+_generate_watsonx_token = generate_watsonx_token
+
+
+def get_api_params(params: dict, model: str | None = None) -> WatsonXAPIParams:
     """
     Find watsonx.ai credentials in the params or environment variables and return the headers for authentication.
     """
@@ -120,6 +123,9 @@ def _get_api_params(params: dict, model: str | None = None) -> WatsonXAPIParams:
     )
 
 
+_get_api_params = get_api_params
+
+
 async def _aconvert_watsonx_messages_core(
     model: str,
     messages: list[AllMessageValues],
@@ -135,7 +141,7 @@ async def _aconvert_watsonx_messages_core(
         model_prompt_dict: Final = custom_prompt_dict[model]
         return ptf.custom_prompt(
             messages=messages,
-            role_dict=model_prompt_dict.get("role_dict", model_prompt_dict.get("roles")),
+            role_dict=model_prompt_dict.get("role_dict", model_prompt_dict.get("roles", {})),
             initial_prompt_value=model_prompt_dict.get("initial_prompt_value", ""),
             final_prompt_value=model_prompt_dict.get("final_prompt_value", ""),
             bos_token=model_prompt_dict.get("bos_token", ""),
@@ -149,7 +155,7 @@ async def _aconvert_watsonx_messages_core(
         if result:
             return result
         # Fallback to default
-        return ptf.prompt_factory(model=model, messages=messages, custom_llm_provider="watsonx")  # type: ignore
+        return ptf.prompt_factory(model=model, messages=messages, custom_llm_provider="watsonx")
 
 
 def _convert_watsonx_messages_core(
@@ -167,7 +173,7 @@ def _convert_watsonx_messages_core(
         model_prompt_dict: Final = custom_prompt_dict[model]
         return ptf.custom_prompt(
             messages=messages,
-            role_dict=model_prompt_dict.get("role_dict", model_prompt_dict.get("roles")),
+            role_dict=model_prompt_dict.get("role_dict", model_prompt_dict.get("roles", {})),
             initial_prompt_value=model_prompt_dict.get("initial_prompt_value", ""),
             final_prompt_value=model_prompt_dict.get("final_prompt_value", ""),
             bos_token=model_prompt_dict.get("bos_token", ""),
@@ -181,7 +187,7 @@ def _convert_watsonx_messages_core(
         if result:
             return result
         # Fallback to default
-        return ptf.prompt_factory(model=model, messages=messages, custom_llm_provider="watsonx")  # type: ignore
+        return ptf.prompt_factory(model=model, messages=messages, custom_llm_provider="watsonx")
 
 
 async def aconvert_watsonx_messages_to_prompt(
@@ -252,7 +258,7 @@ class IBMWatsonXMixin:
         elif zen_api_key:
             headers["Authorization"] = f"ZenApiKey {zen_api_key}"
         else:
-            token = _generate_watsonx_token(api_key=api_key, token=token)
+            token = generate_watsonx_token(api_key=api_key, token=token)
             # build auth headers
             headers["Authorization"] = f"Bearer {token}"
         return {**default_headers, **headers}
@@ -343,3 +349,10 @@ class IBMWatsonXMixin:
         else:
             payload["space_id"] = api_params["space_id"]
         return payload
+
+    def prepare_payload(
+        self,
+        model: str,
+        api_params: WatsonXAPIParams,
+    ) -> dict[str, object]:  # mutable-ok: mirrors override contract
+        return self._prepare_payload(model, api_params)

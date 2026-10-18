@@ -1,6 +1,9 @@
+from collections.abc import Sequence
 from typing import Final, Literal
 
 import httpx
+from pydantic import ConfigDict, RootModel, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -13,10 +16,6 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
 )
 from litellm.llms.openai.openai import AllMessageValues
-from litellm.types.llms.vertex_ai import (
-    CachedContentListAllResponseBody,
-    VertexAICachedContentResponseObject,
-)
 from litellm.utils import is_prompt_caching_valid_prompt
 
 from ..common_utils import VertexAIError, get_vertex_base_url
@@ -30,6 +29,42 @@ from .transformation import (
 local_cache_obj: Final = Cache(type=LiteLLMCacheType.LOCAL)  # only used for calling 'get_cache_key' function
 
 MAX_PAGINATION_PAGES: Final = 100  # Reasonable upper bound for pagination
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _CachedContentItem(TypedDict):
+    displayName: ReadOnly[NotRequired[object]]
+    name: ReadOnly[NotRequired[str | None]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _CachedContentListBody(TypedDict):
+    cachedContents: ReadOnly[NotRequired[Sequence[_CachedContentItem]]]
+    nextPageToken: ReadOnly[NotRequired[str | None]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _CachedContentUsageMetadata(TypedDict):
+    totalTokenCount: ReadOnly[NotRequired[int | None]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _CreatedCachedContent(TypedDict):
+    name: ReadOnly[NotRequired[str | None]]
+    usageMetadata: ReadOnly[NotRequired[_CachedContentUsageMetadata | None]]
+
+
+class _CachedContentListBodyRoot(RootModel[_CachedContentListBody]):
+    model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
+
+
+class _CreatedCachedContentRoot(RootModel[_CreatedCachedContent]):
+    model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
+
+
+def _record_cache_creation_tokens(logging_obj: Logging, created: _CreatedCachedContent) -> None:
+    tokens: Final = (created.get("usageMetadata") or {}).get("totalTokenCount") or 0
+    logging_obj.vertex_ai_cache_creation_input_tokens = max(tokens, 0)  # rebind-ok: set provider count
 
 
 class ContextCachingEndpoints(VertexBase):
@@ -62,7 +97,7 @@ class ContextCachingEndpoints(VertexBase):
         """
         auth_header: str | None
         if custom_llm_provider == "gemini":
-            auth_header = {"x-goog-api-key": gemini_api_key}  # type: ignore[assignment]
+            auth_header = {"x-goog-api-key": gemini_api_key}
             endpoint = "cachedContents"
             url = f"https://generativelanguage.googleapis.com/v1beta/{endpoint}"
         elif custom_llm_provider == "vertex_ai":
@@ -157,25 +192,20 @@ class ContextCachingEndpoints(VertexBase):
             except Exception as e:
                 raise VertexAIError(status_code=500, message=str(e))
 
-            raw_response = resp.json()
+            raw_response = _CachedContentListBodyRoot.model_validate(resp.json()).root
             logging_obj.post_call(original_response=raw_response)
 
             if "cachedContents" not in raw_response:
                 return None
 
-            all_cached_items = CachedContentListAllResponseBody(**raw_response)
-
-            if "cachedContents" not in all_cached_items:
-                return None
-
             # Check current page for matching cache_key
-            for cached_item in all_cached_items["cachedContents"]:
+            for cached_item in raw_response["cachedContents"]:
                 display_name = cached_item.get("displayName")
                 if display_name is not None and display_name == cache_key:
                     return cached_item.get("name")
 
             # Check if there are more pages
-            page_token = all_cached_items.get("nextPageToken")
+            page_token = raw_response.get("nextPageToken")
             if not page_token:
                 # No more pages, cache not found
                 break
@@ -249,25 +279,20 @@ class ContextCachingEndpoints(VertexBase):
             except Exception as e:
                 raise VertexAIError(status_code=500, message=str(e))
 
-            raw_response = resp.json()
+            raw_response = _CachedContentListBodyRoot.model_validate(resp.json()).root
             logging_obj.post_call(original_response=raw_response)
 
             if "cachedContents" not in raw_response:
                 return None
 
-            all_cached_items = CachedContentListAllResponseBody(**raw_response)
-
-            if "cachedContents" not in all_cached_items:
-                return None
-
             # Check current page for matching cache_key
-            for cached_item in all_cached_items["cachedContents"]:
+            for cached_item in raw_response["cachedContents"]:
                 display_name = cached_item.get("displayName")
                 if display_name is not None and display_name == cache_key:
                     return cached_item.get("name")
 
             # Check if there are more pages
-            page_token = all_cached_items.get("nextPageToken")
+            page_token = raw_response.get("nextPageToken")
             if not page_token:
                 # No more pages, cache not found
                 break
@@ -322,6 +347,7 @@ class ContextCachingEndpoints(VertexBase):
         if not is_prompt_caching_valid_prompt(
             model=model,
             messages=cached_messages,
+            tools=optional_params.get("tools"),
             custom_llm_provider=custom_llm_provider,
         ):
             verbose_logger.debug(
@@ -361,7 +387,7 @@ class ContextCachingEndpoints(VertexBase):
                 if isinstance(timeout, float) or isinstance(timeout, int):
                     timeout = httpx.Timeout(timeout)
                 _params["timeout"] = timeout
-            client = HTTPHandler(**_params)  # type: ignore
+            client = HTTPHandler(**_params)
         else:
             client = client
 
@@ -414,7 +440,7 @@ class ContextCachingEndpoints(VertexBase):
             response: Final = client.post(
                 url=url,
                 headers=headers,
-                json=cached_content_request_body,  # type: ignore
+                json=cached_content_request_body,
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
@@ -423,14 +449,12 @@ class ContextCachingEndpoints(VertexBase):
         except httpx.TimeoutException:
             raise VertexAIError(status_code=408, message="Timeout error occurred.")
 
-        raw_response_cached: Final = response.json()
-        cached_content_response_obj: Final = VertexAICachedContentResponseObject(
-            name=raw_response_cached.get("name"), model=raw_response_cached.get("model")
-        )
+        raw_response_cached: Final = _CreatedCachedContentRoot.model_validate(response.json()).root
+        _record_cache_creation_tokens(logging_obj, raw_response_cached)
         return (
             non_cached_messages,
             optional_params,
-            cached_content_response_obj["name"],
+            raw_response_cached.get("name"),
         )
 
     async def async_check_and_create_cache(
@@ -481,6 +505,7 @@ class ContextCachingEndpoints(VertexBase):
         if not is_prompt_caching_valid_prompt(
             model=model,
             messages=cached_messages,
+            tools=optional_params.get("tools"),
             custom_llm_provider=custom_llm_provider,
         ):
             verbose_logger.debug(
@@ -569,7 +594,7 @@ class ContextCachingEndpoints(VertexBase):
             response: Final = await client.post(
                 url=url,
                 headers=headers,
-                json=cached_content_request_body,  # type: ignore
+                json=cached_content_request_body,
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
@@ -578,14 +603,12 @@ class ContextCachingEndpoints(VertexBase):
         except httpx.TimeoutException:
             raise VertexAIError(status_code=408, message="Timeout error occurred.")
 
-        raw_response_cached: Final = response.json()
-        cached_content_response_obj: Final = VertexAICachedContentResponseObject(
-            name=raw_response_cached.get("name"), model=raw_response_cached.get("model")
-        )
+        raw_response_cached: Final = _CreatedCachedContentRoot.model_validate(response.json()).root
+        _record_cache_creation_tokens(logging_obj, raw_response_cached)
         return (
             non_cached_messages,
             optional_params,
-            cached_content_response_obj["name"],
+            raw_response_cached.get("name"),
         )
 
     def get_cache(self):

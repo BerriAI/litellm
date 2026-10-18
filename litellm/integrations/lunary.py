@@ -3,9 +3,14 @@
 import importlib
 import traceback
 from datetime import datetime, timezone
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 import packaging
+
+if TYPE_CHECKING:
+    from openai.types.chat.chat_completion_message_custom_tool_call import Custom
+
+    from litellm.types.utils import ChatCompletionCustomToolCallPayload, ChatCompletionDeltaCustomToolCallPayload
 
 
 # convert to {completion: xx, tokens: xx}
@@ -21,7 +26,9 @@ def parse_tool_calls(tool_calls):
         return None
 
     def clean_tool_call(tool_call):
-        custom: Final = getattr(tool_call, "custom", None)
+        custom: Final[
+            ChatCompletionCustomToolCallPayload | ChatCompletionDeltaCustomToolCallPayload | Custom | None
+        ] = getattr(tool_call, "custom", None)
         if custom is not None:
             name, arguments = custom.name, custom.input
         else:
@@ -80,9 +87,9 @@ class LunaryLogger:
         try:
             import lunary
 
-            version: Final = importlib.metadata.version("lunary")  # type: ignore
+            version: Final = importlib.metadata.version("lunary")
             # if version < 0.1.43 then raise ImportError
-            if packaging.version.Version(version) < packaging.version.Version("0.1.43"):  # type: ignore
+            if packaging.version.Version(version) < packaging.version.Version("0.1.43"):
                 print(  # noqa: T201
                     "Lunary version outdated. Required: >= 0.1.43. Upgrade via 'pip install lunary --upgrade'"
                 )
@@ -151,7 +158,7 @@ class LunaryLogger:
             else:
                 error_obj = None
 
-            self.lunary_client.track_event(  # type: ignore
+            self.lunary_client.track_event(
                 type,
                 "start",
                 run_id,
@@ -167,7 +174,7 @@ class LunaryLogger:
                 params=extra,
             )
 
-            self.lunary_client.track_event(  # type: ignore
+            self.lunary_client.track_event(
                 type,
                 event,
                 run_id,

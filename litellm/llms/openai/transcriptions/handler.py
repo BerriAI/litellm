@@ -1,14 +1,14 @@
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final, Optional, cast
 
 import httpx
 from openai import AsyncOpenAI, OpenAI
 from pydantic import BaseModel
 
-import litellm
-
 if TYPE_CHECKING:
     from aiohttp import ClientSession
 from litellm.litellm_core_utils.audio_utils.utils import get_audio_file_name
+from litellm.litellm_core_utils.core_helpers import set_provider_response_headers_in_hidden_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.audio_transcription.transformation import (
     BaseAudioTranscriptionConfig,
@@ -31,13 +31,8 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
         data: dict,
         timeout: float | httpx.Timeout,
     ):
-        """
-        Helper to:
-        - call openai_aclient.audio.transcriptions.with_raw_response when litellm.return_response_headers is True
-        - call openai_aclient.audio.transcriptions.create by default
-        """
         try:
-            raw_response = await openai_aclient.audio.transcriptions.with_raw_response.create(**data, timeout=timeout)  # type: ignore
+            raw_response = await openai_aclient.audio.transcriptions.with_raw_response.create(**data, timeout=timeout)
             headers: Final = dict(raw_response.headers)
             response: Final = raw_response.parse()
 
@@ -51,20 +46,11 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
         data: dict,
         timeout: float | httpx.Timeout,
     ):
-        """
-        Helper to:
-        - call openai_aclient.audio.transcriptions.with_raw_response when litellm.return_response_headers is True
-        - call openai_aclient.audio.transcriptions.create by default
-        """
         try:
-            if litellm.return_response_headers is True:
-                raw_response = openai_client.audio.transcriptions.with_raw_response.create(**data, timeout=timeout)  # type: ignore
-                headers: Final = dict(raw_response.headers)
-                response = raw_response.parse()
-                return headers, response
-            else:
-                response = openai_client.audio.transcriptions.create(**data, timeout=timeout)  # type: ignore
-                return None, response
+            raw_response: Final = openai_client.audio.transcriptions.with_raw_response.create(**data, timeout=timeout)
+            headers: Final = dict(raw_response.headers)
+            response: Final = raw_response.parse()
+            return headers, response
         except Exception as e:
             raise e
 
@@ -101,7 +87,7 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
             data = {"model": model, "file": audio_file, **optional_params}
 
         if atranscription is True:
-            return self.async_audio_transcriptions(  # type: ignore
+            return self.async_audio_transcriptions(
                 audio_file=audio_file,
                 data=data,
                 model_response=model_response,
@@ -112,15 +98,17 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
                 max_retries=max_retries,
                 logging_obj=logging_obj,
                 shared_session=shared_session,
+                litellm_params=litellm_params,
             )
 
-        openai_client: Final[OpenAI] = self._get_openai_client(  # type: ignore
+        openai_client: Final[OpenAI] = self._get_openai_client(
             is_async=False,
             api_key=api_key,
             api_base=api_base,
             timeout=timeout,
             max_retries=max_retries,
             client=client,
+            litellm_params=litellm_params,
         )
 
         ## LOGGING
@@ -128,16 +116,17 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
             input=None,
             api_key=openai_client.api_key,
             additional_args={
-                "api_base": openai_client._base_url._uri_reference,
+                "api_base": openai_client._base_url._uri_reference,  # pyright: ignore[reportPrivateUsage]  # SDK URL internals
                 "atranscription": True,
                 "complete_input_dict": data,
             },
         )
-        _, response = self.make_sync_openai_audio_transcriptions_request(
+        headers, response = self.make_sync_openai_audio_transcriptions_request(
             openai_client=openai_client,
             data=data,
             timeout=timeout,
         )
+        logging_obj.model_call_details["response_headers"] = headers
 
         if isinstance(response, BaseModel):
             stringified_response = response.model_dump()
@@ -157,7 +146,8 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
             model_response_object=model_response,
             hidden_params=hidden_params,
             response_type="audio_transcription",
-        )  # type: ignore
+        )
+        set_provider_response_headers_in_hidden_params(final_response, headers)
         return final_response
 
     async def async_audio_transcriptions(
@@ -172,9 +162,10 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
         client=None,
         max_retries=None,
         shared_session: Optional["ClientSession"] = None,
+        litellm_params: Mapping[str, object] | None = None,
     ):
         try:
-            openai_aclient: Final[AsyncOpenAI] = self._get_openai_client(  # type: ignore
+            openai_aclient: Final[AsyncOpenAI] = self._get_openai_client(
                 is_async=True,
                 api_key=api_key,
                 api_base=api_base,
@@ -182,6 +173,7 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
                 max_retries=max_retries,
                 client=client,
                 shared_session=shared_session,
+                litellm_params=litellm_params,
             )
 
             ## LOGGING
@@ -189,7 +181,7 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
                 input=None,
                 api_key=openai_aclient.api_key,
                 additional_args={
-                    "api_base": openai_aclient._base_url._uri_reference,
+                    "api_base": openai_aclient._base_url._uri_reference,  # pyright: ignore[reportPrivateUsage]  # SDK URL internals
                     "atranscription": True,
                     "complete_input_dict": data,
                 },
@@ -217,12 +209,14 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
             actual_model: Final = data.get("model", "whisper-1")
             hidden_params: Final = {"model": actual_model, "custom_llm_provider": "openai"}
 
-            return convert_to_model_response_object(
+            final_response: Final[TranscriptionResponse] = convert_to_model_response_object(
                 response_object=stringified_response,
                 model_response_object=model_response,
                 hidden_params=hidden_params,
                 response_type="audio_transcription",
-            )  # type: ignore
+            )
+            set_provider_response_headers_in_hidden_params(final_response, headers)
+            return final_response
         except Exception as e:
             ## LOGGING
             logging_obj.post_call(

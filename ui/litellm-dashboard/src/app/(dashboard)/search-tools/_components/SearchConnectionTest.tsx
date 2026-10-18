@@ -1,6 +1,6 @@
 import { AlertTriangle, CheckCircle2, Info } from "lucide-react";
 import React, { useEffect, useState } from "react";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { testSearchToolConnection } from "@/components/networking";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -30,7 +30,7 @@ const SearchConnectionTest: React.FC<SearchConnectionTestProps> = ({ litellmPara
         const result = await testSearchToolConnection(accessToken, litellmParams);
         setTestResult(result);
         if (result.status === "success") {
-          NotificationsManager.success("Connection test successful!");
+          toast.success("Connection test successful!");
         }
       } catch (error) {
         setTestResult({
@@ -99,9 +99,9 @@ const SearchConnectionTest: React.FC<SearchConnectionTestProps> = ({ litellmPara
     <div className="rounded-lg bg-card p-6">
       {testResult.status === "success" ? (
         <div className="flex items-center justify-center px-5 py-8">
-          <CheckCircle2 className="size-6 text-emerald-600" />
+          <CheckCircle2 className="size-6 text-success" />
           <div className="ml-3">
-            <p className="text-lg font-medium text-emerald-600">
+            <p className="text-lg font-medium text-success">
               Connection to {litellmParams.search_provider} successful!
             </p>
             {testResult.test_query && (
@@ -156,9 +156,9 @@ const SearchConnectionTest: React.FC<SearchConnectionTestProps> = ({ litellmPara
             </div>
           )}
 
-          <div className="rounded-lg border border-amber-200 border-l-4 border-l-amber-500 bg-amber-50 p-4">
-            <p className="mb-2 font-semibold text-amber-700">Troubleshooting tips:</p>
-            <ul className="my-2 list-disc pl-5 text-amber-800">
+          <div className="rounded-lg border border-warning/20 border-l-4 border-l-amber-500 bg-warning/10 p-4">
+            <p className="mb-2 font-semibold text-warning">Troubleshooting tips:</p>
+            <ul className="my-2 list-disc pl-5 text-warning">
               <li className="mb-1.5">Verify your API key is correct and active</li>
               <li className="mb-1.5">Check if the search provider service is operational</li>
               <li className="mb-1.5">Ensure you have sufficient credits/quota with the provider</li>

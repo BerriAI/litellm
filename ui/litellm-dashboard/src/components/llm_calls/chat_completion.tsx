@@ -1,9 +1,12 @@
-import openai from "openai";
 import { ChatCompletion, ChatCompletionChunk, ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { TokenUsage } from "../chat_ui/ResponseMetrics";
 import { VectorStoreSearchResponse } from "../chat_ui/types";
-import { getProxyBaseUrl } from "@/components/networking";
 import { MCPServer, MCPToolset, type MCPEvent } from "@/components/mcp_tools/types";
+import { extractPromptCacheTokens } from "@/utils/promptCacheUsage";
+import { parseUsageCost } from "./usage_cost";
+import { buildPlaygroundHeaders, type CustomHeaders } from "./request_headers";
+import { createGatewayClient } from "./gateway_client";
+import { observeResponseHeaders, type ResponseHeadersListener } from "@/lib/http/observeResponseHeaders";
 
 const completionAsSingleChunk = (completion: ChatCompletion): ChatCompletionChunk =>
   ({
@@ -48,34 +51,29 @@ export async function makeOpenAIChatCompletionRequest(
   mockTestFallbacks?: boolean,
   mcpToolsets?: MCPToolset[],
   streamingEnabled: boolean = true,
+  customHeaders?: CustomHeaders,
+  onResponseHeaders?: ResponseHeadersListener,
 ) {
   // base url should be the current base_url
   const isLocal = process.env.NODE_ENV === "development";
   if (isLocal !== true) {
     console.log = function () {};
   }
-  const proxyBaseUrl = customBaseUrl || getProxyBaseUrl();
-  // Prepare headers with tags and trace ID
-  const headers: Record<string, string> = {};
-  if (tags && tags.length > 0) {
-    headers["x-litellm-tags"] = tags.join(",");
-  }
+  const headers = buildPlaygroundHeaders(tags, customHeaders);
 
-  const client = new openai.OpenAI({
-    apiKey: accessToken,
-    baseURL: proxyBaseUrl,
-    dangerouslyAllowBrowser: true,
+  const clientOptions = {
+    accessToken,
+    baseURL: customBaseUrl,
     defaultHeaders: headers,
-  });
+    ...(onResponseHeaders ? { fetch: observeResponseHeaders(onResponseHeaders) } : {}),
+  };
+  const client = createGatewayClient(clientOptions);
 
   try {
     const startTime = Date.now();
     let firstTokenReceived = false;
     let timeToFirstToken: number | undefined = undefined;
-
-    // For collecting complete response text
-    let fullResponseContent = "";
-    let fullReasoningContent = "";
+    let servedFromResponseCache = false;
 
     // Track MCP metadata cumulatively across chunks
     let mcpMetadata: {
@@ -92,12 +90,13 @@ export async function makeOpenAIChatCompletionRequest(
     if (selectedMCPServers && selectedMCPServers.length > 0) {
       if (selectedMCPServers.includes("__all__")) {
         // All MCP Servers selected
-        tools.push({
+        const allServersTool = {
           type: "mcp",
           server_label: "litellm",
           server_url: "litellm_proxy/mcp",
           require_approval: "never",
-        });
+        };
+        tools.push(allServersTool);
       } else {
         // Individual servers/toolsets selected - create one entry per item
         selectedMCPServers.forEach((serverId) => {
@@ -105,24 +104,26 @@ export async function makeOpenAIChatCompletionRequest(
             const toolsetId = serverId.slice("toolset:".length);
             const toolset = mcpToolsets?.find((t) => t.toolset_id === toolsetId);
             const toolsetName = toolset?.toolset_name || toolsetId;
-            tools.push({
+            const toolsetTool = {
               type: "mcp",
               server_label: toolsetName,
               server_url: `litellm_proxy/mcp/${encodeURIComponent(toolsetName)}`,
               require_approval: "never",
-            });
+            };
+            tools.push(toolsetTool);
           } else {
             const server = mcpServers?.find((s) => s.server_id === serverId);
             const serverName = server?.alias || server?.server_name || serverId;
             const allowedTools = mcpServerToolRestrictions?.[serverId] || [];
 
-            tools.push({
+            const serverTool = {
               type: "mcp",
               server_label: "litellm",
               server_url: `litellm_proxy/mcp/${serverName}`,
               require_approval: "never",
               ...(allowedTools.length > 0 ? { allowed_tools: allowedTools } : {}),
-            });
+            };
+            tools.push(serverTool);
           }
         });
       }
@@ -146,7 +147,13 @@ export async function makeOpenAIChatCompletionRequest(
           { ...requestBody, stream: true, stream_options: { include_usage: true } },
           { signal },
         )
-      : [completionAsSingleChunk(await client.chat.completions.create({ ...requestBody, stream: false }, { signal }))];
+      : await (async () => {
+          const nonStreamingResponse = await client.chat.completions
+            .create({ ...requestBody, stream: false }, { signal })
+            .withResponse();
+          servedFromResponseCache = nonStreamingResponse.response.headers.get("x-litellm-cache-key") !== null;
+          return [completionAsSingleChunk(nonStreamingResponse.data)];
+        })();
 
     for await (const chunk of response) {
       // Process content and measure time to first token
@@ -167,7 +174,6 @@ export async function makeOpenAIChatCompletionRequest(
       if (chunk.choices[0]?.delta?.content) {
         const content = chunk.choices[0].delta.content;
         updateUI(content, chunk.model);
-        fullResponseContent += content;
       }
 
       // Process image generation if present
@@ -181,7 +187,6 @@ export async function makeOpenAIChatCompletionRequest(
         if (onReasoningContent) {
           onReasoningContent(reasoningContent);
         }
-        fullReasoningContent += reasoningContent;
       }
 
       // Check for search results in provider_specific_fields
@@ -232,6 +237,8 @@ export async function makeOpenAIChatCompletionRequest(
           completionTokens: chunkWithUsage.usage.completion_tokens,
           promptTokens: chunkWithUsage.usage.prompt_tokens,
           totalTokens: chunkWithUsage.usage.total_tokens,
+          ...extractPromptCacheTokens(chunkWithUsage.usage),
+          ...(servedFromResponseCache ? { servedFromResponseCache: true } : {}),
         };
 
         // Check for reasoning tokens
@@ -239,9 +246,9 @@ export async function makeOpenAIChatCompletionRequest(
           usageData.reasoningTokens = chunkWithUsage.usage.completion_tokens_details.reasoning_tokens;
         }
 
-        // Extract cost from usage object if available
-        if (chunkWithUsage.usage.cost !== undefined && chunkWithUsage.usage.cost !== null) {
-          usageData.cost = parseFloat(chunkWithUsage.usage.cost);
+        const parsedCost = parseUsageCost(chunkWithUsage.usage.cost);
+        if (parsedCost !== undefined) {
+          usageData.cost = parsedCost;
         }
 
         onUsageData(usageData);

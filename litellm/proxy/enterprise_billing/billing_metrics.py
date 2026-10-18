@@ -16,7 +16,7 @@ payload; the secret license key is never sent as an attribute or header.
 import os
 import tempfile
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final, Optional, Union
+from typing import TYPE_CHECKING, Final, Optional
 
 from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
 from opentelemetry.metrics import Counter
@@ -53,7 +53,7 @@ _CA_CERT_FILENAME: Final = "ca.crt"
 METRIC_NAME: Final = "litellm.enterprise.billable_requests"
 METER_NAME: Final = "litellm.enterprise.billing"
 
-AttributeValue = Union[str, int]
+AttributeValue = str | int
 
 
 @dataclass(frozen=True, slots=True)

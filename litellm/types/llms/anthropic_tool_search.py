@@ -4,7 +4,9 @@ Tool Search Beta Header Configuration
 Reference: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool
 """
 
-from typing import Dict, Final
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import Final
 
 from litellm.types.utils import LlmProviders
 
@@ -15,14 +17,16 @@ TOOL_SEARCH_BETA_HEADER_BEDROCK: Final = "tool-search-tool-2025-10-19"
 
 
 # Mapping of custom_llm_provider -> tool search beta header
-TOOL_SEARCH_BETA_HEADER_BY_PROVIDER: Final[Dict[str, str]] = {
-    LlmProviders.ANTHROPIC.value: TOOL_SEARCH_BETA_HEADER_ANTHROPIC,
-    LlmProviders.AZURE.value: TOOL_SEARCH_BETA_HEADER_ANTHROPIC,
-    LlmProviders.AZURE_AI.value: TOOL_SEARCH_BETA_HEADER_ANTHROPIC,
-    LlmProviders.VERTEX_AI.value: TOOL_SEARCH_BETA_HEADER_VERTEX,
-    LlmProviders.VERTEX_AI_BETA.value: TOOL_SEARCH_BETA_HEADER_VERTEX,
-    LlmProviders.BEDROCK.value: TOOL_SEARCH_BETA_HEADER_BEDROCK,
-}
+TOOL_SEARCH_BETA_HEADER_BY_PROVIDER: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        LlmProviders.ANTHROPIC.value: TOOL_SEARCH_BETA_HEADER_ANTHROPIC,
+        LlmProviders.AZURE.value: TOOL_SEARCH_BETA_HEADER_ANTHROPIC,
+        LlmProviders.AZURE_AI.value: TOOL_SEARCH_BETA_HEADER_ANTHROPIC,
+        LlmProviders.VERTEX_AI.value: TOOL_SEARCH_BETA_HEADER_VERTEX,
+        LlmProviders.VERTEX_AI_BETA.value: TOOL_SEARCH_BETA_HEADER_VERTEX,
+        LlmProviders.BEDROCK.value: TOOL_SEARCH_BETA_HEADER_BEDROCK,
+    }
+)
 
 
 def get_tool_search_beta_header(custom_llm_provider: str) -> str:

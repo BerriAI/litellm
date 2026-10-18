@@ -11,11 +11,21 @@ These endpoints use optimized single SQL queries with joins to efficiently calcu
 user metrics from tag activity data and return time series for dashboard visualization.
 """
 
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta
-from typing import Any, Final
+from typing import TYPE_CHECKING, Final, Protocol, TypeVar, overload
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import TypeAdapter
+
+from litellm.types.llms.base import LiteLLMBaseModel
+
+if TYPE_CHECKING:
+    from prisma.models import LiteLLM_DailyTagSpend as PrismaDailyTagSpendRow
+    from prisma.models import LiteLLM_UserTable as PrismaUserRow
+    from prisma.models import LiteLLM_VerificationToken as PrismaVerificationTokenRow
+
+    from litellm.proxy.utils import PrismaClient
 
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -34,7 +44,7 @@ MAX_TAGS: Final = 250  # Maximum number of distinct tags to return
 router: Final = APIRouter()
 
 
-class TagActiveUsersResponse(BaseModel):
+class TagActiveUsersResponse(LiteLLMBaseModel):
     """Response for tag active users metrics"""
 
     tag: str
@@ -44,13 +54,13 @@ class TagActiveUsersResponse(BaseModel):
     period_end: str | None = None  # For WAU/MAU, this will be the end of the period
 
 
-class ActiveUsersAnalyticsResponse(BaseModel):
+class ActiveUsersAnalyticsResponse(LiteLLMBaseModel):
     """Response for active users analytics"""
 
     results: list[TagActiveUsersResponse]
 
 
-class TagSummaryMetrics(BaseModel):
+class TagSummaryMetrics(LiteLLMBaseModel):
     """Summary metrics for a tag"""
 
     tag: str
@@ -62,25 +72,25 @@ class TagSummaryMetrics(BaseModel):
     total_spend: float
 
 
-class TagSummaryResponse(BaseModel):
+class TagSummaryResponse(LiteLLMBaseModel):
     """Response for tag summary analytics"""
 
     results: list[TagSummaryMetrics]
 
 
-class DistinctTagResponse(BaseModel):
+class DistinctTagResponse(LiteLLMBaseModel):
     """Response for distinct user agent tags"""
 
     tag: str
 
 
-class DistinctTagsResponse(BaseModel):
+class DistinctTagsResponse(LiteLLMBaseModel):
     """Response for all distinct user agent tags"""
 
     results: list[DistinctTagResponse]
 
 
-class PerUserMetrics(BaseModel):
+class PerUserMetrics(LiteLLMBaseModel):
     """Metrics for individual user"""
 
     user_id: str
@@ -93,7 +103,7 @@ class PerUserMetrics(BaseModel):
     spend: float = 0.0
 
 
-class PerUserAnalyticsResponse(BaseModel):
+class PerUserAnalyticsResponse(LiteLLMBaseModel):
     """Response for per-user analytics"""
 
     results: list[PerUserMetrics]
@@ -101,6 +111,54 @@ class PerUserAnalyticsResponse(BaseModel):
     page: int
     page_size: int
     total_pages: int
+
+
+class _DistinctTagRow(LiteLLMBaseModel):
+    tag: str
+
+
+class _ActiveUsersRow(LiteLLMBaseModel):
+    tag: str
+    active_users: int
+    date: str
+    period_start: str | None = None
+    period_end: str | None = None
+
+
+class _TagSummaryRow(LiteLLMBaseModel):
+    tag: str
+    unique_users: int | None = None
+    total_requests: float | int | str | None = None
+    successful_requests: float | int | str | None = None
+    failed_requests: float | int | str | None = None
+    total_tokens: float | int | str | None = None
+    total_spend: float | int | str | None = None
+
+
+_DISTINCT_TAG_ROWS: Final = TypeAdapter(list[_DistinctTagRow])
+_ACTIVE_USERS_ROWS: Final = TypeAdapter(list[_ActiveUsersRow])
+_TAG_SUMMARY_ROWS: Final = TypeAdapter(list[_TagSummaryRow])
+
+_RowT_co: Final = TypeVar("_RowT_co", covariant=True)
+
+if TYPE_CHECKING:
+
+    class _TableOps(Protocol[_RowT_co]):
+        async def find_many(self, where: Mapping[str, object] | None = None) -> Sequence[_RowT_co]: ...
+
+
+@overload
+def _typed_table(repo: DailyTagSpendRepository) -> "_TableOps[PrismaDailyTagSpendRow]": ...
+@overload
+def _typed_table(repo: VerificationTokenRepository) -> "_TableOps[PrismaVerificationTokenRow]": ...
+@overload
+def _typed_table(repo: UserRepository) -> "_TableOps[PrismaUserRow]": ...
+def _typed_table(repo: DailyTagSpendRepository | VerificationTokenRepository | UserRepository) -> object:
+    return repo.table
+
+
+async def _query_raw(prisma_client: "PrismaClient", sql_query: str, *params: object) -> object:
+    return await prisma_client.db.query_raw(sql_query, *params)
 
 
 @router.get(
@@ -141,9 +199,9 @@ async def get_distinct_user_agent_tags(
         LIMIT {MAX_TAGS}
         """
 
-        db_response: Final = await prisma_client.db.query_raw(sql_query)
+        db_response: Final = _DISTINCT_TAG_ROWS.validate_python(await _query_raw(prisma_client, sql_query))
 
-        results: Final = [DistinctTagResponse(tag=row["tag"]) for row in db_response]
+        results: Final = [DistinctTagResponse(tag=row.tag) for row in db_response]
 
         return DistinctTagsResponse(results=results)
 
@@ -231,11 +289,10 @@ async def get_daily_active_users(
         ORDER BY dts.date DESC, active_users DESC
         """
 
-        db_response: Final = await prisma_client.db.query_raw(sql_query, *params)
+        db_response: Final = _ACTIVE_USERS_ROWS.validate_python(await _query_raw(prisma_client, sql_query, *params))
 
         results: Final = [
-            TagActiveUsersResponse(tag=row["tag"], active_users=row["active_users"], date=row["date"])
-            for row in db_response
+            TagActiveUsersResponse(tag=row.tag, active_users=row.active_users, date=row.date) for row in db_response
         ]
 
         return ActiveUsersAnalyticsResponse(results=results)
@@ -346,15 +403,15 @@ async def get_weekly_active_users(
         ORDER BY week_offset DESC, active_users DESC
         """
 
-        db_response: Final = await prisma_client.db.query_raw(sql_query, *params)
+        db_response: Final = _ACTIVE_USERS_ROWS.validate_python(await _query_raw(prisma_client, sql_query, *params))
 
         results: Final = [
             TagActiveUsersResponse(
-                tag=row["tag"],
-                active_users=row["active_users"],
-                date=row["date"],  # This will be "Week 1 (Jan 15)", "Week 2 (Jan 8)", etc.
-                period_start=row["period_start"],
-                period_end=row["period_end"],
+                tag=row.tag,
+                active_users=row.active_users,
+                date=row.date,  # This will be "Week 1 (Jan 15)", "Week 2 (Jan 8)", etc.
+                period_start=row.period_start,
+                period_end=row.period_end,
             )
             for row in db_response
         ]
@@ -467,15 +524,15 @@ async def get_monthly_active_users(
         ORDER BY month_offset DESC, active_users DESC
         """
 
-        db_response: Final = await prisma_client.db.query_raw(sql_query, *params)
+        db_response: Final = _ACTIVE_USERS_ROWS.validate_python(await _query_raw(prisma_client, sql_query, *params))
 
         results: Final = [
             TagActiveUsersResponse(
-                tag=row["tag"],
-                active_users=row["active_users"],
-                date=row["date"],  # This will be "Month 1 (Jan)", "Month 2 (Dec)", etc.
-                period_start=row["period_start"],
-                period_end=row["period_end"],
+                tag=row.tag,
+                active_users=row.active_users,
+                date=row.date,  # This will be "Month 1 (Jan)", "Month 2 (Dec)", etc.
+                period_start=row.period_start,
+                period_end=row.period_end,
             )
             for row in db_response
         ]
@@ -565,17 +622,17 @@ async def get_tag_summary(
         ORDER BY total_requests DESC
         """
 
-        db_response: Final = await prisma_client.db.query_raw(sql_query, *params)
+        db_response: Final = _TAG_SUMMARY_ROWS.validate_python(await _query_raw(prisma_client, sql_query, *params))
 
         results: Final = [
             TagSummaryMetrics(
-                tag=row["tag"],
-                unique_users=row["unique_users"] or 0,
-                total_requests=int(row["total_requests"] or 0),
-                successful_requests=int(row["successful_requests"] or 0),
-                failed_requests=int(row["failed_requests"] or 0),
-                total_tokens=int(row["total_tokens"] or 0),
-                total_spend=float(row["total_spend"] or 0.0),
+                tag=row.tag,
+                unique_users=row.unique_users or 0,
+                total_requests=int(row.total_requests or 0),
+                successful_requests=int(row.successful_requests or 0),
+                failed_requests=int(row.failed_requests or 0),
+                total_tokens=int(row.total_tokens or 0),
+                total_spend=float(row.total_spend or 0.0),
             )
             for row in db_response
         ]
@@ -648,7 +705,7 @@ async def get_per_user_analytics(
         start_date: Final = start_dt.strftime("%Y-%m-%d")
 
         # Build where clause with date range
-        where_clause: Final[dict[str, Any]] = {"date": {"gte": start_date, "lte": end_date}}
+        where_clause: Final[dict[str, object]] = {"date": {"gte": start_date, "lte": end_date}}
 
         # Add tag filtering if provided
         if tag_filters and len(tag_filters) > 0:
@@ -657,7 +714,7 @@ async def get_per_user_analytics(
             where_clause["tag"] = {"contains": tag_filter}
 
         # Get all tag records in the date range with optional tag filtering
-        tag_records: Final = await DailyTagSpendRepository(prisma_client).table.find_many(where=where_clause)
+        tag_records: Final = await _typed_table(DailyTagSpendRepository(prisma_client)).find_many(where=where_clause)
 
         # Get unique api_keys
         api_keys: Final = set(record.api_key for record in tag_records if record.api_key)
@@ -672,7 +729,7 @@ async def get_per_user_analytics(
             )
 
         # Lookup user_id for each api_key
-        api_key_records: Final = await VerificationTokenRepository(prisma_client).table.find_many(
+        api_key_records: Final = await _typed_table(VerificationTokenRepository(prisma_client)).find_many(
             where={"token": {"in": list(api_keys)}}
         )
 
@@ -681,7 +738,9 @@ async def get_per_user_analytics(
 
         # Get user emails for the user_ids
         user_ids: Final = list(set(api_key_to_user_id.values()))
-        user_records: Final = await UserRepository(prisma_client).table.find_many(where={"user_id": {"in": user_ids}})
+        user_records: Final = await _typed_table(UserRepository(prisma_client)).find_many(
+            where={"user_id": {"in": user_ids}}
+        )
 
         # Create mapping from user_id to user_email
         user_id_to_email: Final = {record.user_id: record.user_email for record in user_records}

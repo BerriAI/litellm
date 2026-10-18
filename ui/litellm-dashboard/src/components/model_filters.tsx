@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
-import { Card, Text } from "@tremor/react";
+import { Card } from "@/components/ui/card";
+import { displayMode } from "@/lib/decisionModels";
+import { matchesSearchTerm } from "@/utils/searchUtils";
 
 interface ModelGroupInfo {
   model_group: string;
@@ -24,6 +26,8 @@ interface ModelFiltersProps {
   onFilteredDataChange: (filteredData: ModelGroupInfo[]) => void;
   showFiltersCard?: boolean;
   className?: string;
+  extraModes?: readonly string[];
+  onModeChange?: (mode: string) => void;
 }
 
 const ModelFilters: React.FC<ModelFiltersProps> = ({
@@ -31,6 +35,8 @@ const ModelFilters: React.FC<ModelFiltersProps> = ({
   onFilteredDataChange,
   showFiltersCard = true,
   className = "",
+  extraModes = [],
+  onModeChange,
 }) => {
   const [searchTerm, setSearchTerm] = useState<string>("");
   const [selectedProvider, setSelectedProvider] = useState<string>("");
@@ -48,11 +54,17 @@ const ModelFilters: React.FC<ModelFiltersProps> = ({
   };
 
   const getUniqueModes = (data: ModelGroupInfo[]) => {
-    const modes = new Set<string>();
+    const modes = new Set<string>(extraModes);
     data.forEach((model) => {
-      if (model.mode) modes.add(model.mode);
+      const mode = displayMode(model.mode);
+      if (mode) modes.add(mode);
     });
     return Array.from(modes);
+  };
+
+  const changeMode = (mode: string) => {
+    setSelectedMode(mode);
+    onModeChange?.(mode);
   };
 
   const getUniqueFeatures = (data: ModelGroupInfo[]) => {
@@ -76,9 +88,9 @@ const ModelFilters: React.FC<ModelFiltersProps> = ({
   const filteredData = useMemo(() => {
     return (
       modelHubData?.filter((model) => {
-        const matchesSearch = model.model_group.toLowerCase().includes(searchTerm.toLowerCase());
+        const matchesSearch = matchesSearchTerm(searchTerm, [model.model_group]);
         const matchesProvider = selectedProvider === "" || model.providers.includes(selectedProvider);
-        const matchesMode = selectedMode === "" || model.mode === selectedMode;
+        const matchesMode = selectedMode === "" || displayMode(model.mode) === selectedMode;
 
         // Check if model has the selected feature
         const matchesFeature =
@@ -116,23 +128,16 @@ const ModelFilters: React.FC<ModelFiltersProps> = ({
   const resetFilters = () => {
     setSearchTerm("");
     setSelectedProvider("");
-    setSelectedMode("");
+    changeMode("");
     setSelectedFeature("");
   };
 
   // Expose filter values and reset function
-  const filterValues = {
-    searchTerm,
-    selectedProvider,
-    selectedMode,
-    selectedFeature,
-    resetFilters,
-  };
 
   const filtersContent = (
     <div className="flex flex-wrap gap-4 items-center">
       <div>
-        <Text className="text-sm font-medium mb-2">Search Models:</Text>
+        <p className="text-sm font-medium mb-2">Search Models:</p>
         <input
           type="text"
           placeholder="Search model names..."
@@ -142,54 +147,54 @@ const ModelFilters: React.FC<ModelFiltersProps> = ({
         />
       </div>
       <div>
-        <Text className="text-sm font-medium mb-2">Provider:</Text>
+        <p className="text-sm font-medium mb-2">Provider:</p>
         <select
           value={selectedProvider}
           onChange={(e) => setSelectedProvider(e.target.value)}
-          className="border rounded-sm px-3 py-2 text-sm text-gray-600 w-40 h-10"
+          className="border rounded-sm px-3 py-2 text-sm text-muted-foreground w-40 h-10"
         >
-          <option value="" className="text-sm text-gray-600">
+          <option value="" className="text-sm text-muted-foreground">
             All Providers
           </option>
           {modelHubData &&
             getUniqueProviders(modelHubData).map((provider) => (
-              <option key={provider} value={provider} className="text-sm text-gray-800">
+              <option key={provider} value={provider} className="text-sm text-foreground">
                 {provider}
               </option>
             ))}
         </select>
       </div>
       <div>
-        <Text className="text-sm font-medium mb-2">Mode:</Text>
+        <p className="text-sm font-medium mb-2">Mode:</p>
         <select
           value={selectedMode}
-          onChange={(e) => setSelectedMode(e.target.value)}
-          className="border rounded-sm px-3 py-2 text-sm text-gray-600 w-32 h-10"
+          onChange={(e) => changeMode(e.target.value)}
+          className="border rounded-sm px-3 py-2 text-sm text-muted-foreground w-32 h-10"
         >
-          <option value="" className="text-sm text-gray-600">
+          <option value="" className="text-sm text-muted-foreground">
             All Modes
           </option>
           {modelHubData &&
             getUniqueModes(modelHubData).map((mode) => (
-              <option key={mode} value={mode} className="text-sm text-gray-800">
+              <option key={mode} value={mode} className="text-sm text-foreground">
                 {mode}
               </option>
             ))}
         </select>
       </div>
       <div>
-        <Text className="text-sm font-medium mb-2">Features:</Text>
+        <p className="text-sm font-medium mb-2">Features:</p>
         <select
           value={selectedFeature}
           onChange={(e) => setSelectedFeature(e.target.value)}
-          className="border rounded-sm px-3 py-2 text-sm text-gray-600 w-48 h-10"
+          className="border rounded-sm px-3 py-2 text-sm text-muted-foreground w-48 h-10"
         >
-          <option value="" className="text-sm text-gray-600">
+          <option value="" className="text-sm text-muted-foreground">
             All Features
           </option>
           {modelHubData &&
             getUniqueFeatures(modelHubData).map((feature) => (
-              <option key={feature} value={feature} className="text-sm text-gray-800">
+              <option key={feature} value={feature} className="text-sm text-foreground">
                 {feature}
               </option>
             ))}
@@ -201,7 +206,7 @@ const ModelFilters: React.FC<ModelFiltersProps> = ({
         <div className="flex items-end">
           <button
             onClick={resetFilters}
-            className="text-blue-600 hover:text-blue-800 text-sm underline h-10 flex items-center"
+            className="text-info hover:text-info/80 text-sm underline h-10 flex items-center"
           >
             Clear Filters
           </button>
@@ -211,7 +216,7 @@ const ModelFilters: React.FC<ModelFiltersProps> = ({
   );
 
   if (showFiltersCard) {
-    return <Card className={`mb-6 ${className}`}>{filtersContent}</Card>;
+    return <Card className={`mb-6 px-6 ${className}`}>{filtersContent}</Card>;
   }
 
   return <div className={className}>{filtersContent}</div>;

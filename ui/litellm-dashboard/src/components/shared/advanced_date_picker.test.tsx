@@ -1,4 +1,6 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import moment from "moment";
 import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
 import AdvancedDatePicker from "./advanced_date_picker";
 
@@ -28,9 +30,10 @@ describe("AdvancedDatePicker", () => {
     mockOnValueChange.mockClear();
   });
 
+  const getTrigger = (container: HTMLElement) => container.querySelector('[data-slot="advanced-date-picker-trigger"]');
+
   const openDropdown = (container: HTMLElement) => {
-    // Find the clickable div that contains the clock icon
-    const trigger = container.querySelector('[role="img"][aria-label="clock-circle"]')?.closest("div.cursor-pointer");
+    const trigger = getTrigger(container);
     if (trigger) {
       fireEvent.click(trigger);
     }
@@ -47,10 +50,8 @@ describe("AdvancedDatePicker", () => {
   });
 
   it("should display formatted date range", () => {
-    render(<AdvancedDatePicker value={defaultValue} onValueChange={mockOnValueChange} />);
-    // The component displays date range in the format "D MMM, HH:mm - D MMM, HH:mm"
-    // Just check that the clock icon is present
-    expect(screen.getByLabelText("clock-circle")).toBeInTheDocument();
+    const { container } = render(<AdvancedDatePicker value={defaultValue} onValueChange={mockOnValueChange} />);
+    expect(getTrigger(container)).toHaveTextContent(/\d{1,2} \w{3}, \d{2}:\d{2} - \d{1,2} \w{3}, \d{2}:\d{2}/);
   });
 
   it("should open dropdown when clicked", () => {
@@ -74,6 +75,39 @@ describe("AdvancedDatePicker", () => {
     expect(screen.getByText("Last 30 days")).toBeInTheDocument();
     expect(screen.getByText("Month to date")).toBeInTheDocument();
     expect(screen.getByText("Year to date")).toBeInTheDocument();
+  });
+
+  it("anchors the panel to the trigger edge named by align", () => {
+    const { container, unmount } = render(
+      <AdvancedDatePicker value={defaultValue} onValueChange={mockOnValueChange} align="left" />,
+    );
+    openDropdown(container);
+    const leftPanel = container.querySelector('[data-slot="advanced-date-picker-panel"]');
+    expect(leftPanel).toHaveAttribute("data-align", "left");
+    unmount();
+
+    const { container: defaultContainer } = render(
+      <AdvancedDatePicker value={defaultValue} onValueChange={mockOnValueChange} />,
+    );
+    openDropdown(defaultContainer);
+    const rightPanel = defaultContainer.querySelector('[data-slot="advanced-date-picker-panel"]');
+    expect(rightPanel).toHaveAttribute("data-align", "right");
+  });
+
+  it("opens the dropdown from the keyboard alone", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<AdvancedDatePicker value={defaultValue} onValueChange={mockOnValueChange} />);
+
+    await user.tab();
+
+    const trigger = getTrigger(container);
+    expect(trigger).toHaveFocus();
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+
+    await user.keyboard("{Enter}");
+
+    expect(screen.getByText("Relative time")).toBeInTheDocument();
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
   });
 
   it("should show date inputs in dropdown", () => {
@@ -133,6 +167,82 @@ describe("AdvancedDatePicker", () => {
     });
   });
 
+  it("passes the clicked preset label when applying", async () => {
+    const { container } = render(<AdvancedDatePicker value={defaultValue} onValueChange={mockOnValueChange} />);
+
+    openDropdown(container);
+    fireEvent.click(screen.getByText("Today"));
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+
+    expect(mockOnValueChange).toHaveBeenNthCalledWith(1, expect.anything(), "today");
+    await waitFor(() => {
+      expect(mockOnValueChange).toHaveBeenNthCalledWith(2, expect.anything(), "today");
+    });
+  });
+
+  it("passes a null preset label when typed dates match today", async () => {
+    const { container } = render(<AdvancedDatePicker value={defaultValue} onValueChange={mockOnValueChange} />);
+    const today = moment().format("YYYY-MM-DD");
+
+    openDropdown(container);
+    fireEvent.change(screen.getByDisplayValue("2025-01-01"), { target: { value: today } });
+    fireEvent.change(screen.getByDisplayValue("2025-01-31"), { target: { value: today } });
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+
+    expect(mockOnValueChange).toHaveBeenNthCalledWith(1, expect.anything(), null);
+    await waitFor(() => {
+      expect(mockOnValueChange).toHaveBeenNthCalledWith(2, expect.anything(), null);
+    });
+  });
+
+  it("resets the preset label when the parent switches to a custom range", async () => {
+    const { container, rerender } = render(
+      <AdvancedDatePicker value={defaultValue} onValueChange={mockOnValueChange} />,
+    );
+
+    openDropdown(container);
+    fireEvent.click(screen.getByText("Today"));
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+
+    expect(mockOnValueChange).toHaveBeenNthCalledWith(1, expect.anything(), "today");
+    await waitFor(() => {
+      expect(mockOnValueChange).toHaveBeenNthCalledWith(2, expect.anything(), "today");
+    });
+
+    mockOnValueChange.mockClear();
+    const customValue = {
+      from: new Date("2025-02-01T00:00:00.000Z"),
+      to: new Date("2025-02-10T23:59:59.999Z"),
+    };
+    rerender(<AdvancedDatePicker value={customValue} onValueChange={mockOnValueChange} presetShortLabel={null} />);
+
+    openDropdown(container);
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+
+    expect(mockOnValueChange).toHaveBeenNthCalledWith(1, expect.anything(), null);
+    await waitFor(() => {
+      expect(mockOnValueChange).toHaveBeenNthCalledWith(2, expect.anything(), null);
+    });
+  });
+
+  it("preserves the parent preset label when applying an unchanged range", async () => {
+    const value = {
+      from: moment().subtract(30, "days").startOf("day").toDate(),
+      to: moment().endOf("day").toDate(),
+    };
+    const { container } = render(
+      <AdvancedDatePicker value={value} onValueChange={mockOnValueChange} presetShortLabel="30d" />,
+    );
+
+    openDropdown(container);
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+
+    expect(mockOnValueChange).toHaveBeenNthCalledWith(1, expect.anything(), "30d");
+    await waitFor(() => {
+      expect(mockOnValueChange).toHaveBeenNthCalledWith(2, expect.anything(), "30d");
+    });
+  });
+
   it("should select relative time option", () => {
     const { container } = render(<AdvancedDatePicker value={defaultValue} onValueChange={mockOnValueChange} />);
 
@@ -141,8 +251,30 @@ describe("AdvancedDatePicker", () => {
     const todayOption = screen.getByText("Today");
     fireEvent.click(todayOption);
 
-    // The option should be highlighted (bg-blue-50)
-    expect(todayOption.closest("div")).toHaveClass("bg-blue-50");
+    // The option should be highlighted (bg-info/10)
+    expect(todayOption.closest("button")).toHaveClass("bg-info/10");
+  });
+
+  it("selects a relative range from the keyboard alone", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<AdvancedDatePicker value={defaultValue} onValueChange={mockOnValueChange} />);
+
+    await user.tab();
+    await user.keyboard("{Enter}");
+
+    const presets = Array.from(container.querySelectorAll('[data-slot="advanced-date-picker-preset"]'));
+    expect(presets).toHaveLength(5);
+
+    await user.tab();
+    expect(presets[0]).toHaveFocus();
+    expect(presets[0]).toHaveAttribute("aria-pressed", "false");
+
+    await user.tab();
+    expect(presets[1]).toHaveFocus();
+
+    await user.keyboard("{Enter}");
+    expect(presets[1]).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("Last 7 days").closest("button")).toHaveClass("bg-info/10");
   });
 
   it("should show validation error for invalid date range", async () => {

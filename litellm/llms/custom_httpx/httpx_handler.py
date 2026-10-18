@@ -55,7 +55,7 @@ class HTTPHandler:
                 url,
                 data=data,
                 params=params,
-                headers=headers,  # type: ignore
+                headers=headers,
             )
             return response
         except Exception as e:

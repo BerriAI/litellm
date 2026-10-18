@@ -105,7 +105,7 @@ describe("BudgetTable", () => {
     const list = makeList({ rows: [makeBudget({ budget_id: budgetId })] });
     renderWithProviders(<BudgetTable {...defaultProps} list={list} />);
     const idCell = screen.getByText(budgetId);
-    expect(idCell.className).not.toContain("truncate");
+    expect(idCell).not.toHaveClass("truncate");
     expect(idCell.className).not.toMatch(/max-w-\[\d+(ch|rem|px)\]/);
   });
 
@@ -113,7 +113,7 @@ describe("BudgetTable", () => {
     const budgetId = "ecc1869c-6231-4380-a56d-1a0be457477d";
     const list = makeList({ rows: [makeBudget({ budget_id: budgetId })] });
     renderWithProviders(<BudgetTable {...defaultProps} list={list} />);
-    expect(screen.getByText(budgetId).className).toContain("whitespace-nowrap");
+    expect(screen.getByText(budgetId)).toHaveClass("whitespace-nowrap");
   });
 
   it("should copy the budget id from the cell's copy button", async () => {
@@ -129,7 +129,7 @@ describe("BudgetTable", () => {
     const user = userEvent.setup();
     renderWithProviders(<BudgetTable {...defaultProps} list={makeList()} />);
     await showColumn(user, "created_at");
-    for (const field of ["budget_id", "max_budget", "tpm_limit", "rpm_limit", "created_at"]) {
+    for (const field of ["budget_id", "max_budget", "tpm_limit", "rpm_limit", "tpd_limit", "created_at"]) {
       expect(screen.getByTestId(`sort-header-${field}`)).toBeInTheDocument();
     }
   });
@@ -152,9 +152,10 @@ describe("BudgetTable", () => {
   });
 
   it("should show n/a for missing rate limits and Unlimited for a missing max budget", () => {
-    const list = makeList({ rows: [makeBudget({ max_budget: null, tpm_limit: null, rpm_limit: null })] });
+    const noLimits = { max_budget: null, tpm_limit: null, rpm_limit: null, tpd_limit: null };
+    const list = makeList({ rows: [makeBudget(noLimits)] });
     renderWithProviders(<BudgetTable {...defaultProps} list={list} />);
-    expect(screen.getAllByText("n/a")).toHaveLength(2);
+    expect(screen.getAllByText("n/a")).toHaveLength(3);
     expect(screen.getByText("Unlimited")).toBeInTheDocument();
   });
 

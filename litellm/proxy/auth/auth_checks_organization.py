@@ -128,12 +128,12 @@ def get_user_organization_info(
         for _membership in user_object.organization_memberships:
             if _membership.organization_id is not None:
                 _user_organizations.append(_membership.organization_id)
-                _user_organization_role_mapping[_membership.organization_id] = _membership.user_role  # type: ignore
+                _user_organization_role_mapping[_membership.organization_id] = _membership.user_role
 
     return _user_organizations, _user_organization_role_mapping
 
 
-def _user_is_org_admin(
+def user_is_org_admin(
     request_data: dict,
     user_object: LiteLLM_UserTable | None = None,
 ) -> bool:
@@ -171,6 +171,9 @@ def _user_is_org_admin(
 
     # User must be admin of ALL requested orgs, not just any one
     return all(org_id in admin_org_ids for org_id in candidate_org_ids)
+
+
+_user_is_org_admin: Final = user_is_org_admin
 
 
 TEAM_ORG_CONTEXT_ROUTES: Final = frozenset({"/team/update"})

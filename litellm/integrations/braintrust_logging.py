@@ -28,9 +28,9 @@ def get_utc_datetime():
     import datetime as dt
 
     if hasattr(dt, "UTC"):
-        return datetime.now(dt.UTC)  # type: ignore
+        return datetime.now(dt.UTC)
     else:
-        return datetime.utcnow()  # type: ignore
+        return datetime.utcnow()
 
 
 class BraintrustLogger(CustomLogger):
@@ -43,7 +43,7 @@ class BraintrustLogger(CustomLogger):
         self.validate_environment(api_key=api_key)
         self.api_base = api_base or os.getenv("BRAINTRUST_API_BASE") or API_BASE
         self.default_project_id = None
-        self.api_key: str = api_key or os.getenv("BRAINTRUST_API_KEY")  # type: ignore
+        self.api_key: str = api_key or os.getenv("BRAINTRUST_API_KEY")
         self.headers = {
             "Authorization": "Bearer " + self.api_key,
             "Content-Type": "application/json",
@@ -139,13 +139,13 @@ class BraintrustLogger(CustomLogger):
             ):
                 output = None
             elif response_obj is not None and isinstance(response_obj, litellm.ModelResponse):
-                output = response_obj["choices"][0]["message"].json()
+                output = response_obj.choices[0].message.json()
                 choices = response_obj["choices"]
             elif response_obj is not None and isinstance(response_obj, litellm.TextCompletionResponse):
                 output = response_obj.choices[0].text
                 choices = response_obj.choices
             elif response_obj is not None and isinstance(response_obj, litellm.ImageResponse):
-                output = response_obj["data"]
+                output = response_obj.data
 
             litellm_params: Final = kwargs.get("litellm_params", {}) or {}
             dynamic_metadata: Final = litellm_params.get("metadata", {}) or {}
@@ -264,13 +264,13 @@ class BraintrustLogger(CustomLogger):
             ):
                 output = None
             elif response_obj is not None and isinstance(response_obj, litellm.ModelResponse):
-                output = response_obj["choices"][0]["message"].json()
+                output = response_obj.choices[0].message.json()
                 choices = response_obj["choices"]
             elif response_obj is not None and isinstance(response_obj, litellm.TextCompletionResponse):
                 output = response_obj.choices[0].text
                 choices = response_obj.choices
             elif response_obj is not None and isinstance(response_obj, litellm.ImageResponse):
-                output = response_obj["data"]
+                output = response_obj.data
 
             litellm_params: Final = kwargs.get("litellm_params", {})
             dynamic_metadata: Final = litellm_params.get("metadata", {}) or {}

@@ -34,7 +34,7 @@ class FileContentStreamingResponse:
         self.custom_llm_provider = custom_llm_provider
         self.logging_obj = logging_obj
         self.standard_logging_object: StandardLoggingPayload | None = None
-        self._hidden_params: dict[str, Any] = {}
+        self._hidden_params: dict[str, object] = {}
         self._logging_completed = False
         self._close_completed = False
         self._start_time = (
@@ -93,9 +93,9 @@ class FileContentStreamingResponse:
         # are released promptly on client disconnects.
         with anyio.CancelScope(shield=True):
             if hasattr(stream_to_close, "aclose"):
-                await cast(AsyncIterator[bytes], stream_to_close).aclose()  # type: ignore[attr-defined]
+                await cast(AsyncIterator[bytes], stream_to_close).aclose()
             elif hasattr(stream_to_close, "close"):
-                result: Final = cast(Iterator[bytes], stream_to_close).close()  # type: ignore[attr-defined]
+                result: Final = cast(Iterator[bytes], stream_to_close).close()
                 if result is not None:
                     await result
 
@@ -109,7 +109,7 @@ class FileContentStreamingResponse:
         self.stream_iterator = cast(Iterator[bytes] | AsyncIterator[bytes], iter(()))
 
         if hasattr(stream_to_close, "close"):
-            cast(Iterator[bytes], stream_to_close).close()  # type: ignore[attr-defined]
+            cast(Iterator[bytes], stream_to_close).close()
 
     def _build_logging_response(self) -> dict[str, str]:
         response: Final = {
@@ -121,7 +121,7 @@ class FileContentStreamingResponse:
         return response
 
     def _sync_hidden_params(self) -> None:
-        litellm_params: dict[str, Any] = {}
+        litellm_params: dict[str, object] = {}
         if self.logging_obj is not None:
             litellm_params = self.logging_obj.model_call_details.get("litellm_params", {}) or {}
 

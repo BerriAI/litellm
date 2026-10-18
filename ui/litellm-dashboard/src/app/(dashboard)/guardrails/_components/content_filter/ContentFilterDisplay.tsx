@@ -1,5 +1,6 @@
 import React from "react";
-import { Card, Text, Badge } from "@tremor/react";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent } from "@/components/ui/card";
 import PatternTable from "./PatternTable";
 import KeywordTable from "./KeywordTable";
 import CategoryTable from "./CategoryTable";
@@ -66,45 +67,51 @@ const ContentFilterDisplay: React.FC<ContentFilterDisplayProps> = ({
     <>
       {categories.length > 0 && (
         <Card className="mt-6">
-          <div className="flex justify-between items-center mb-4">
-            <Text className="text-lg font-semibold">Content Categories</Text>
-            <Badge color="blue">{categories.length} categories configured</Badge>
-          </div>
-          <CategoryTable
-            categories={categories}
-            onActionChange={readOnly ? undefined : onCategoryActionChange}
-            onSeverityChange={readOnly ? undefined : onCategorySeverityChange}
-            onRemove={readOnly ? undefined : onCategoryRemove}
-            readOnly={readOnly}
-          />
+          <CardContent>
+            <div className="mb-4 flex items-center justify-between">
+              <p className="text-lg font-semibold">Content Categories</p>
+              <Badge variant="secondary">{categories.length} categories configured</Badge>
+            </div>
+            <CategoryTable
+              categories={categories}
+              onActionChange={readOnly ? undefined : onCategoryActionChange}
+              onSeverityChange={readOnly ? undefined : onCategorySeverityChange}
+              onRemove={readOnly ? undefined : onCategoryRemove}
+              readOnly={readOnly}
+            />
+          </CardContent>
         </Card>
       )}
 
       {patterns.length > 0 && (
         <Card className="mt-6">
-          <div className="flex justify-between items-center mb-4">
-            <Text className="text-lg font-semibold">Pattern Detection</Text>
-            <Badge color="blue">{patterns.length} patterns configured</Badge>
-          </div>
-          <PatternTable
-            patterns={patterns}
-            onActionChange={readOnly ? noOp : onPatternActionChange || noOp}
-            onRemove={readOnly ? noOp : onPatternRemove || noOp}
-          />
+          <CardContent>
+            <div className="mb-4 flex items-center justify-between">
+              <p className="text-lg font-semibold">Pattern Detection</p>
+              <Badge variant="secondary">{patterns.length} patterns configured</Badge>
+            </div>
+            <PatternTable
+              patterns={patterns}
+              onActionChange={readOnly ? noOp : onPatternActionChange || noOp}
+              onRemove={readOnly ? noOp : onPatternRemove || noOp}
+            />
+          </CardContent>
         </Card>
       )}
 
       {blockedWords.length > 0 && (
         <Card className="mt-6">
-          <div className="flex justify-between items-center mb-4">
-            <Text className="text-lg font-semibold">Blocked Keywords</Text>
-            <Badge color="blue">{blockedWords.length} keywords configured</Badge>
-          </div>
-          <KeywordTable
-            keywords={blockedWords}
-            onActionChange={readOnly ? noOp : onBlockedWordUpdate || noOp}
-            onRemove={readOnly ? noOp : onBlockedWordRemove || noOp}
-          />
+          <CardContent>
+            <div className="mb-4 flex items-center justify-between">
+              <p className="text-lg font-semibold">Blocked Keywords</p>
+              <Badge variant="secondary">{blockedWords.length} keywords configured</Badge>
+            </div>
+            <KeywordTable
+              keywords={blockedWords}
+              onActionChange={readOnly ? noOp : onBlockedWordUpdate || noOp}
+              onRemove={readOnly ? noOp : onBlockedWordRemove || noOp}
+            />
+          </CardContent>
         </Card>
       )}
     </>

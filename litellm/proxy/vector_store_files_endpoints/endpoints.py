@@ -1,11 +1,14 @@
-from typing import TYPE_CHECKING, Final, Optional
+import re
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Final, Optional, cast
 
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import ORJSONResponse
 
 import litellm
+from litellm.llms.base_llm.managed_resources.utils import is_base64_encoded_unified_id
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.auth.auth_checks import _can_object_call_model, can_key_call_model
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.openai_endpoint_utils import (
@@ -14,14 +17,22 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
     get_custom_llm_provider_from_request_query,
 )
 from litellm.proxy.openai_files_endpoints.common_utils import (
+    ManagedFileIdResolver,
+    authorize_model_for_key,
+    get_credentials_for_model,
     handle_model_based_routing,
     prepare_data_with_credentials,
 )
+from litellm.proxy.rag_endpoints.upload_security import safe_download_headers
 from litellm.proxy.vector_store_endpoints.utils import (
     assert_user_can_access_vector_store_id,
     is_allowed_to_call_vector_store_files_endpoint,
 )
 from litellm.types.utils import LlmProviders
+from litellm.types.vector_store_files import (
+    VectorStoreFileListResponse,
+    VectorStoreFileObject,
+)
 from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
 
 if TYPE_CHECKING:
@@ -30,10 +41,99 @@ if TYPE_CHECKING:
 router: Final = APIRouter()
 
 
-def _update_request_data_with_managed_file_id(
+def _provider_file_id_from_managed_id(managed_file_id: str | None) -> str | None:
+    if managed_file_id is None:
+        return None
+
+    decoded_id: Final = is_base64_encoded_unified_id(managed_file_id)
+    if not decoded_id:
+        return managed_file_id
+
+    match: Final = re.search(r"(?:^|;)llm_output_file_id,([^;]+)", decoded_id)
+    return match.group(1).strip() if match else managed_file_id
+
+
+def _with_provider_file_id_cursors(
+    query_params: Mapping[str, str],
+) -> Mapping[str, str | None]:
+    return MappingProxyType(
+        {
+            key: (_provider_file_id_from_managed_id(value) if key in {"after", "before"} else value)
+            for key, value in query_params.items()
+        }
+    )
+
+
+def _managed_file_id_or_original(
+    file_id: str | None,
+    id_map: Mapping[str, str],
+) -> str | None:
+    return id_map.get(file_id, file_id) if file_id is not None else None
+
+
+def _with_managed_file_id(
+    file: VectorStoreFileObject,
+    id_map: Mapping[str, str],
+) -> VectorStoreFileObject:
+    file_id: Final = file.get("id")
+    if not isinstance(file_id, str) or file_id not in id_map:
+        return file
+    managed_file: Final[VectorStoreFileObject] = {**file, "id": id_map[file_id]}
+    return managed_file
+
+
+def _with_managed_file_ids(
+    response: VectorStoreFileListResponse,
+    id_map: Mapping[str, str],
+) -> VectorStoreFileListResponse:
+    data: Final = response.get("data")
+    if not data:
+        return response
+
+    first_id: Final = response.get("first_id")
+    last_id: Final = response.get("last_id")
+    mapped_data: Final = [_with_managed_file_id(file, id_map) for file in data]
+    mapped_response: Final[VectorStoreFileListResponse] = {
+        **response,
+        "data": mapped_data,
+        "first_id": _managed_file_id_or_original(first_id, id_map),
+        "last_id": _managed_file_id_or_original(last_id, id_map),
+    }
+    return mapped_response
+
+
+async def _with_managed_file_list_ids(
+    response: VectorStoreFileListResponse,
+    managed_files_obj: object | None,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> VectorStoreFileListResponse:
+    data: Final = response.get("data")
+    if not data or not isinstance(managed_files_obj, ManagedFileIdResolver):
+        return response
+
+    provider_file_ids: Final = tuple(
+        dict.fromkeys(provider_file_id for file in data if isinstance(provider_file_id := file.get("id"), str))
+    )
+    id_map: Final = await managed_files_obj.get_unified_file_ids_for_provider_file_ids(
+        provider_file_ids=provider_file_ids,
+        user_api_key_dict=user_api_key_dict,
+    )
+    round_trippable_id_map: Final = MappingProxyType(
+        {
+            provider_file_id: managed_file_id
+            for provider_file_id, managed_file_id in id_map.items()
+            if _provider_file_id_from_managed_id(managed_file_id) == provider_file_id
+        }
+    )
+    return _with_managed_file_ids(response, round_trippable_id_map)
+
+
+async def _update_request_data_with_managed_file_id(
     data: dict,
     file_id: str,
     request: Request,
+    user_api_key_dict: UserAPIKeyAuth,
+    managed_files_obj: object | None,
     llm_router: Optional["Router"] = None,
 ) -> tuple[dict, str | None]:
     """
@@ -58,12 +158,19 @@ def _update_request_data_with_managed_file_id(
         Tuple of (updated request data, original_managed_file_id)
         - original_managed_file_id is the original file_id if it was managed/encoded, None otherwise
     """
-    import re
-
     from litellm import verbose_logger
     from litellm.llms.base_llm.managed_resources.utils import (
-        is_base64_encoded_unified_id,
         parse_unified_id,
+    )
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        validate_managed_id_requirement,
+    )
+
+    await validate_managed_id_requirement(
+        resource_id=file_id,
+        resource_kind="file",
+        user_api_key_dict=user_api_key_dict,
+        managed_files_obj=managed_files_obj,
     )
 
     # First, check if this is a unified managed file ID (base64 encoded)
@@ -131,11 +238,12 @@ def _update_request_data_with_managed_file_id(
         model_used,
         original_file_id,
         credentials,
-    ) = handle_model_based_routing(
+    ) = await handle_model_based_routing(
         file_id=file_id,
         request=request,
         llm_router=llm_router,
         data=data,
+        user_api_key_dict=user_api_key_dict,
         check_file_id_encoding=True,
     )
 
@@ -143,7 +251,7 @@ def _update_request_data_with_managed_file_id(
         # Use model-based routing with credentials from config
         prepare_data_with_credentials(
             data=data,
-            credentials=credentials,  # type: ignore
+            credentials=credentials,
             file_id=original_file_id,  # Use decoded file ID if from encoded ID
         )
 
@@ -197,26 +305,7 @@ async def _authorize_model_routing_hint(
 ) -> None:
     if user_api_key_dict is None:
         return
-
-    key_models: Final = getattr(user_api_key_dict, "models", None)
-    if not (isinstance(key_models, list) and "all-team-models" in key_models):
-        await can_key_call_model(
-            model=model,
-            llm_model_list=None,
-            valid_token=user_api_key_dict,
-            llm_router=llm_router,
-        )
-
-    team_models: Final = getattr(user_api_key_dict, "team_models", None)
-    if isinstance(team_models, list) and len(team_models) > 0:
-        _can_object_call_model(
-            model=model,
-            llm_router=llm_router,
-            models=team_models,
-            team_model_aliases=user_api_key_dict.team_model_aliases,
-            team_id=user_api_key_dict.team_id,
-            object_type="team",
-        )
+    await authorize_model_for_key(model_id=model, llm_router=llm_router, user_api_key_dict=user_api_key_dict)
 
 
 async def _update_request_data_with_model_routing_hint(
@@ -248,25 +337,15 @@ async def _update_request_data_with_model_routing_hint(
                 model_id=model_hint, team_id=caller_team_id
             )
             should_route = credentials is not None
-    else:
-        if isinstance(model_hint, str) and should_authorize_model_hint:
+    elif isinstance(model_hint, str):
+        if should_authorize_model_hint:
             await _authorize_model_routing_hint(
                 model=model_hint,
                 llm_router=llm_router,
                 user_api_key_dict=user_api_key_dict,
             )
-        (
-            should_route,
-            _model_used,
-            _original_file_id,
-            credentials,
-        ) = handle_model_based_routing(
-            file_id="",
-            request=request,
-            llm_router=llm_router,
-            data=data,
-            check_file_id_encoding=False,
-        )
+        credentials = get_credentials_for_model(llm_router=llm_router, model_id=model_hint)
+        should_route = True
 
     if should_route and credentials is not None:
         prepare_data_with_credentials(
@@ -485,11 +564,11 @@ async def vector_store_file_create(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     from litellm.proxy.proxy_server import (
-        _read_request_body,
         general_settings,
         llm_router,
         proxy_config,
         proxy_logging_obj,
+        read_request_body,
         select_data_generator,
         user_api_base,
         user_max_tokens,
@@ -499,7 +578,7 @@ async def vector_store_file_create(
         version,
     )
 
-    data = await _read_request_body(request=request)
+    data = await read_request_body(request=request)  # rebind-ok: pre-existing rebinding on a rename-only line
     data["vector_store_id"] = vector_store_id
     managed_vector_store: Final = await assert_user_can_access_vector_store_id(
         vector_store_id=vector_store_id,
@@ -509,8 +588,13 @@ async def vector_store_file_create(
     # Handle managed file IDs if present in request body
     original_managed_file_id = None
     if "file_id" in data:
-        data, original_managed_file_id = _update_request_data_with_managed_file_id(
-            data=data, file_id=data["file_id"], request=request, llm_router=llm_router
+        data, original_managed_file_id = await _update_request_data_with_managed_file_id(
+            data=data,
+            file_id=data["file_id"],
+            request=request,
+            user_api_key_dict=user_api_key_dict,
+            managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
+            llm_router=llm_router,
         )
 
     # Then handle managed vector store IDs
@@ -535,7 +619,7 @@ async def vector_store_file_create(
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        response = await processor.base_process_llm_request(
+        response: object = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -560,7 +644,7 @@ async def vector_store_file_create(
 
         return response
     except Exception as e:  # noqa: BLE001
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -600,7 +684,7 @@ async def vector_store_file_list(
         version,
     )
 
-    query_params: Final = dict(request.query_params)
+    query_params: Final = _with_provider_file_id_cursors(request.query_params)
     data: dict[str, str | None] = {"vector_store_id": vector_store_id}
     data.update(query_params)
     data["vector_store_id"] = vector_store_id
@@ -637,7 +721,7 @@ async def vector_store_file_list(
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        return await processor.base_process_llm_request(
+        response: Final[object] = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -655,8 +739,19 @@ async def vector_store_file_list(
             user_api_base=user_api_base,
             version=version,
         )
+        if not isinstance(response, dict):
+            return response
+        managed_files_obj: Final[object | None] = proxy_logging_obj.get_proxy_hook("managed_files")
+        return await _with_managed_file_list_ids(
+            response=cast(  # cast-ok: [LIT006] this route returns the provider's file-list response shape
+                VectorStoreFileListResponse,
+                response,
+            ),
+            managed_files_obj=managed_files_obj,
+            user_api_key_dict=user_api_key_dict,
+        )
     except Exception as e:  # noqa: BLE001
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -707,8 +802,13 @@ async def vector_store_file_retrieve(
     )
 
     # Handle managed file IDs first
-    data, original_managed_file_id = _update_request_data_with_managed_file_id(
-        data=data, file_id=file_id, request=request, llm_router=llm_router
+    data, original_managed_file_id = await _update_request_data_with_managed_file_id(
+        data=data,
+        file_id=file_id,
+        request=request,
+        user_api_key_dict=user_api_key_dict,
+        managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
+        llm_router=llm_router,
     )
 
     # Then handle managed vector store IDs
@@ -733,7 +833,7 @@ async def vector_store_file_retrieve(
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        response = await processor.base_process_llm_request(
+        response: object = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -758,7 +858,7 @@ async def vector_store_file_retrieve(
 
         return response
     except Exception as e:  # noqa: BLE001
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -809,8 +909,13 @@ async def vector_store_file_content(
     )
 
     # Handle managed file IDs first
-    data, original_managed_file_id = _update_request_data_with_managed_file_id(
-        data=data, file_id=file_id, request=request, llm_router=llm_router
+    data, original_managed_file_id = await _update_request_data_with_managed_file_id(
+        data=data,
+        file_id=file_id,
+        request=request,
+        user_api_key_dict=user_api_key_dict,
+        managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
+        llm_router=llm_router,
     )
 
     # Then handle managed vector store IDs
@@ -835,7 +940,7 @@ async def vector_store_file_content(
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        response = await processor.base_process_llm_request(
+        response: object = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -858,9 +963,12 @@ async def vector_store_file_content(
         if original_managed_file_id:
             response = _replace_file_id_in_response(response, original_managed_file_id)
 
+        for header_name, header_value in safe_download_headers(file_id).items():
+            fastapi_response.headers[header_name] = header_value
+
         return response
     except Exception as e:  # noqa: BLE001
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -888,11 +996,11 @@ async def vector_store_file_update(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     from litellm.proxy.proxy_server import (
-        _read_request_body,
         general_settings,
         llm_router,
         proxy_config,
         proxy_logging_obj,
+        read_request_body,
         select_data_generator,
         user_api_base,
         user_max_tokens,
@@ -902,7 +1010,7 @@ async def vector_store_file_update(
         version,
     )
 
-    data = await _read_request_body(request=request)
+    data = await read_request_body(request=request)  # rebind-ok: pre-existing rebinding on a rename-only line
     data["vector_store_id"] = vector_store_id
     data["file_id"] = file_id
     managed_vector_store: Final = await assert_user_can_access_vector_store_id(
@@ -911,8 +1019,13 @@ async def vector_store_file_update(
     )
 
     # Handle managed file IDs first
-    data, original_managed_file_id = _update_request_data_with_managed_file_id(
-        data=data, file_id=file_id, request=request, llm_router=llm_router
+    data, original_managed_file_id = await _update_request_data_with_managed_file_id(
+        data=data,
+        file_id=file_id,
+        request=request,
+        user_api_key_dict=user_api_key_dict,
+        managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
+        llm_router=llm_router,
     )
 
     # Then handle managed vector store IDs
@@ -937,7 +1050,7 @@ async def vector_store_file_update(
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        response = await processor.base_process_llm_request(
+        response: object = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -962,7 +1075,7 @@ async def vector_store_file_update(
 
         return response
     except Exception as e:  # noqa: BLE001
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -1013,8 +1126,13 @@ async def vector_store_file_delete(
     )
 
     # Handle managed file IDs first
-    data, original_managed_file_id = _update_request_data_with_managed_file_id(
-        data=data, file_id=file_id, request=request, llm_router=llm_router
+    data, original_managed_file_id = await _update_request_data_with_managed_file_id(
+        data=data,
+        file_id=file_id,
+        request=request,
+        user_api_key_dict=user_api_key_dict,
+        managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
+        llm_router=llm_router,
     )
 
     # Then handle managed vector store IDs
@@ -1039,7 +1157,7 @@ async def vector_store_file_delete(
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        response = await processor.base_process_llm_request(
+        response: object = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -1064,7 +1182,7 @@ async def vector_store_file_delete(
 
         return response
     except Exception as e:  # noqa: BLE001
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,

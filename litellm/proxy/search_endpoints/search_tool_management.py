@@ -2,20 +2,25 @@
 CRUD ENDPOINTS FOR SEARCH TOOLS
 """
 
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime
-from typing import Any, Final
+from typing import Any, Final, TypeAlias
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
 from litellm.proxy._types import (
     LiteLLM_TeamTable,
     LitellmUserRoles,
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.search_endpoints.search_tool_registry import SearchToolRegistry
+from litellm.proxy.search_endpoints.search_tool_registry import (
+    SearchToolRegistry,
+    keep_loaded_search_tools_that_do_not_decrypt,
+)
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.search import (
     ListSearchToolsResponse,
     SearchTool,
@@ -46,50 +51,105 @@ def _convert_datetime_to_str(value: datetime | str | None) -> str | None:
     return value
 
 
-async def _filter_visible_search_tools(
-    search_tools: list[SearchToolInfoResponse],
-    user_api_key_dict: UserAPIKeyAuth,
-) -> list[SearchToolInfoResponse]:
-    """
-    Drop search tools the caller is not authorized to invoke, applying the same
-    key/team object_permission allowlists enforced on /search. Admins see all tools.
-    """
-    if user_api_key_dict.user_role in (
-        LitellmUserRoles.PROXY_ADMIN,
-        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
-    ):
-        return search_tools
+TeamObjectLookup: TypeAlias = Callable[[str, UserAPIKeyAuth], Awaitable[LiteLLM_TeamTable]]
 
-    from litellm.proxy.auth.auth_checks import (
-        can_user_view_search_tool,
-        get_team_object,
+
+async def _refresh_router_search_tools() -> None:
+    """Push the search tools table into this worker's router.
+
+    Best-effort: the row is already committed, so a refresh failure must not surface as a 500 and
+    push the caller into a retry that creates duplicates.
+    """
+    from litellm.proxy.proxy_server import proxy_config
+
+    try:
+        await proxy_config.reload_search_tools_from_db()
+    except Exception as e:  # noqa: BLE001  # the row is committed; no refresh failure may reach the caller
+        verbose_proxy_logger.exception("Search tool router refresh failed after a management write: %s", e)
+
+
+def _with_loaded_tools_where_undecryptable(db_search_tools: Sequence[dict[str, object]]) -> list[dict[str, Any]]:
+    from litellm.proxy.proxy_server import llm_router
+
+    kept_search_tools: Final = keep_loaded_search_tools_that_do_not_decrypt(
+        db_search_tools, loaded_search_tools=llm_router.search_tools if llm_router is not None else ()
     )
+    return [
+        {**db_tool, "litellm_params": kept_tool.get("litellm_params")}
+        for db_tool, kept_tool in zip(db_search_tools, kept_search_tools, strict=True)
+    ]
+
+
+async def _team_object_from_db(team_id: str, user_api_key_dict: UserAPIKeyAuth) -> LiteLLM_TeamTable:
+    from litellm.proxy.auth.auth_checks import get_team_object
     from litellm.proxy.proxy_server import (
         prisma_client,
         proxy_logging_obj,
         user_api_key_cache,
     )
 
-    team_object: LiteLLM_TeamTable | None = None
-    if user_api_key_dict.team_id:
-        team_object = await get_team_object(
-            team_id=user_api_key_dict.team_id,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            parent_otel_span=user_api_key_dict.parent_otel_span,
-            proxy_logging_obj=proxy_logging_obj,
-        )
+    return await get_team_object(
+        team_id=team_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=user_api_key_dict.parent_otel_span,
+        proxy_logging_obj=proxy_logging_obj,
+    )
 
-    visible: Final[list[SearchToolInfoResponse]] = []
-    for tool in search_tools:
-        tool_name = tool.get("search_tool_name")
-        if tool_name and await can_user_view_search_tool(
-            search_tool_name=tool_name,
-            valid_token=user_api_key_dict,
-            team_object=team_object,
-        ):
-            visible.append(tool)
-    return visible
+
+def _allowlist_team_id(user_api_key_dict: UserAPIKeyAuth) -> str | None:
+    """
+    The team whose object_permission allowlist scopes this caller, or None when there is none.
+
+    Every Admin UI session key is stamped with UI_SESSION_TOKEN_TEAM_ID, a reserved sentinel that
+    never has a row in LiteLLM_TeamTable (`/team/new` rejects it as a real team id), so looking it
+    up would raise 404 instead of resolving a team. It carries no allowlist of its own, so the
+    caller is scoped by its key-level allowlist alone. Any other team id is looked up for real and
+    a failed lookup still surfaces.
+    """
+    team_id: Final = user_api_key_dict.team_id
+    if not team_id or team_id == UI_SESSION_TOKEN_TEAM_ID:
+        return None
+    return team_id
+
+
+async def _filter_visible_search_tools(
+    search_tools: list[SearchToolInfoResponse],
+    user_api_key_dict: UserAPIKeyAuth,
+    lookup_team_object: TeamObjectLookup = _team_object_from_db,
+    general_settings: Mapping[str, object] | None = None,
+) -> list[SearchToolInfoResponse]:
+    """
+    Drop search tools the caller is not authorized to invoke, applying the same
+    key/team/user grants enforced on /search. Admins see all tools unless
+    search_tool_deny_by_default applies to their credential.
+    """
+    from litellm.proxy.auth.auth_checks import (
+        can_grants_view_search_tool,
+        is_search_tool_deny_by_default_applied,
+        resolve_search_tool_grants,
+        typed_general_settings,
+    )
+    from litellm.proxy.proxy_server import general_settings as proxy_general_settings
+
+    settings: Final = typed_general_settings(proxy_general_settings) if general_settings is None else general_settings
+    if user_api_key_dict.user_role in (
+        LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+    ) and not is_search_tool_deny_by_default_applied(user_api_key_dict, settings):
+        return search_tools
+
+    allowlist_team_id: Final = _allowlist_team_id(user_api_key_dict)
+
+    async def _load_team_object() -> LiteLLM_TeamTable | None:
+        return await lookup_team_object(allowlist_team_id, user_api_key_dict) if allowlist_team_id else None
+
+    grants: Final = await resolve_search_tool_grants(user_api_key_dict, settings, _load_team_object)
+    return [
+        tool
+        for tool in search_tools
+        if (tool_name := tool.get("search_tool_name")) and can_grants_view_search_tool(tool_name, grants)
+    ]
 
 
 @router.get(
@@ -140,14 +200,16 @@ async def list_search_tools(
     }
     ```
     """
-    from litellm.litellm_core_utils.litellm_logging import _get_masked_values
+    from litellm.litellm_core_utils.litellm_logging import get_masked_values
     from litellm.proxy.proxy_server import prisma_client, proxy_config
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
 
     try:
-        search_tools_from_db = await SEARCH_TOOL_REGISTRY.get_all_search_tools_from_db(prisma_client=prisma_client)
+        search_tools_from_db = _with_loaded_tools_where_undecryptable(
+            await SEARCH_TOOL_REGISTRY.get_all_search_tools_from_db(prisma_client=prisma_client)
+        )
 
         db_tool_names: Final = {tool.get("search_tool_name") for tool in search_tools_from_db}
 
@@ -167,7 +229,7 @@ async def list_search_tools(
             tool_name = config_search_tool.get("search_tool_name")
             if tool_name:
                 litellm_params_dict = dict(config_search_tool.get("litellm_params", {}))
-                masked_litellm_params_dict = _get_masked_values(
+                masked_litellm_params_dict = get_masked_values(
                     litellm_params_dict,
                     unmasked_length=4,
                     number_of_asterisks=4,
@@ -192,7 +254,7 @@ async def list_search_tools(
 
         for db_search_tool in search_tools_from_db:
             litellm_params_dict = dict(db_search_tool.get("litellm_params", {}))
-            masked_litellm_params_dict = _get_masked_values(
+            masked_litellm_params_dict = get_masked_values(
                 litellm_params_dict,
                 unmasked_length=4,
                 number_of_asterisks=4,
@@ -213,12 +275,14 @@ async def list_search_tools(
         visible_search_tools: Final = await _filter_visible_search_tools(search_tool_configs, user_api_key_dict)
 
         return ListSearchToolsResponse(search_tools=visible_search_tools)
+    except HTTPException:
+        raise
     except Exception as e:
         verbose_proxy_logger.exception("Error getting search tools: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
-class CreateSearchToolRequest(BaseModel):
+class CreateSearchToolRequest(LiteLLMBaseModel):
     search_tool: SearchTool
 
 
@@ -277,8 +341,10 @@ async def create_search_tool(request: CreateSearchToolRequest):
             search_tool=request.search_tool, prisma_client=prisma_client
         )
 
+        await _refresh_router_search_tools()
+
         verbose_proxy_logger.debug(
-            "Successfully added search tool '%s' to database. Router will be updated by the cron job.",
+            "Successfully added search tool '%s' to database.",
             result.get("search_tool_name"),
         )
 
@@ -288,7 +354,7 @@ async def create_search_tool(request: CreateSearchToolRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-class UpdateSearchToolRequest(BaseModel):
+class UpdateSearchToolRequest(LiteLLMBaseModel):
     search_tool: SearchTool
 
 
@@ -360,8 +426,10 @@ async def update_search_tool(search_tool_id: str, request: UpdateSearchToolReque
             prisma_client=prisma_client,
         )
 
+        await _refresh_router_search_tools()
+
         verbose_proxy_logger.debug(
-            "Successfully updated search tool '%s' in database. Router will be updated by the cron job.",
+            "Successfully updated search tool '%s' in database.",
             result.get("search_tool_name"),
         )
 
@@ -417,9 +485,9 @@ async def delete_search_tool(search_tool_id: str):
             search_tool_id=search_tool_id, prisma_client=prisma_client
         )
 
-        verbose_proxy_logger.debug(
-            "Successfully deleted search tool from database. Router will be updated by the cron job."
-        )
+        await _refresh_router_search_tools()
+
+        verbose_proxy_logger.debug("Successfully deleted search tool from database.")
 
         return result
     except HTTPException as e:
@@ -461,26 +529,27 @@ async def get_search_tool_info(search_tool_id: str):
     }
     ```
     """
-    from litellm.litellm_core_utils.litellm_logging import _get_masked_values
+    from litellm.litellm_core_utils.litellm_logging import get_masked_values
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
 
     try:
-        result: Final = await SEARCH_TOOL_REGISTRY.get_search_tool_by_id_from_db(
+        db_result: Final = await SEARCH_TOOL_REGISTRY.get_search_tool_by_id_from_db(
             search_tool_id=search_tool_id, prisma_client=prisma_client
         )
 
-        if result is None:
+        if db_result is None:
             raise HTTPException(
                 status_code=404,
                 detail=f"Search tool with ID {search_tool_id} not found",
             )
+        result: Final = _with_loaded_tools_where_undecryptable((db_result,))[0]
 
         # Mask sensitive data
         litellm_params_dict: Final = dict(result.get("litellm_params", {}))
-        masked_litellm_params_dict: Final = _get_masked_values(
+        masked_litellm_params_dict: Final = get_masked_values(
             litellm_params_dict,
             unmasked_length=4,
             number_of_asterisks=4,
@@ -502,7 +571,7 @@ async def get_search_tool_info(search_tool_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-class TestSearchToolConnectionRequest(BaseModel):
+class TestSearchToolConnectionRequest(LiteLLMBaseModel):
     litellm_params: dict[str, Any]
 
 

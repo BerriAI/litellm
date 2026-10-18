@@ -56,7 +56,7 @@ def initialize_guardrail(
         custom_routes_file=getattr(litellm_params, "custom_routes_file", None),
         custom_routes=getattr(litellm_params, "custom_routes", None),
         on_flagged_action=getattr(litellm_params, "on_flagged_action", "block"),
-        event_hook=litellm_params.mode,  # type: ignore
+        event_hook=litellm_params.mode,
         default_on=litellm_params.default_on or False,
     )
 

@@ -3,12 +3,24 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders, screen, waitFor } from "../../../../tests/test-utils";
 import UserDropdown from "./UserDropdown";
 
-let mockUseAuthorizedImpl = () => ({
+let mockUseAuthorizedImpl: () => {
+  userId: string | null;
+  userEmail: string | null;
+  userRoleLabel: string;
+  premiumUser: boolean;
+  loginMethod?: string | null;
+} = () => ({
   userId: "test-user-id",
   userEmail: "test@example.com",
-  userRole: "Admin",
+  userRoleLabel: "Admin",
   premiumUser: false,
 });
+
+const mockRouterPush = vi.fn();
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: mockRouterPush }),
+}));
 
 let mockUseDisableShowPromptsImpl = () => false;
 
@@ -44,7 +56,7 @@ describe("UserDropdown", () => {
     mockUseAuthorizedImpl = () => ({
       userId: "test-user-id",
       userEmail: "test@example.com",
-      userRole: "Admin",
+      userRoleLabel: "Admin",
       premiumUser: false,
     });
     mockUseDisableShowPromptsImpl = () => false;
@@ -115,7 +127,7 @@ describe("UserDropdown", () => {
     mockUseAuthorizedImpl = () => ({
       userId: "test-user-id",
       userEmail: "test@example.com",
-      userRole: "Admin",
+      userRoleLabel: "Admin",
       premiumUser: true,
     });
 
@@ -141,6 +153,44 @@ describe("UserDropdown", () => {
     await user.click(screen.getByText("Logout"));
 
     expect(mockOnLogout).toHaveBeenCalledTimes(1);
+  });
+
+  it("should navigate to the change-password page for username/password sessions", async () => {
+    mockUseAuthorizedImpl = () => ({
+      userId: "test-user-id",
+      userEmail: "test@example.com",
+      userRoleLabel: "Admin",
+      premiumUser: false,
+      loginMethod: "username_password",
+    });
+    const user = userEvent.setup();
+    renderWithProviders(<UserDropdown onLogout={mockOnLogout} />);
+
+    await user.click(getAccountTrigger());
+
+    await user.click(await screen.findByText("Change Password"));
+
+    expect(mockRouterPush).toHaveBeenCalledWith(expect.stringContaining("change-password"));
+  });
+
+  it("should hide the change-password entry for SSO sessions", async () => {
+    mockUseAuthorizedImpl = () => ({
+      userId: "test-user-id",
+      userEmail: "test@example.com",
+      userRoleLabel: "Admin",
+      premiumUser: false,
+      loginMethod: "sso",
+    });
+    const user = userEvent.setup();
+    renderWithProviders(<UserDropdown onLogout={mockOnLogout} />);
+
+    await user.click(getAccountTrigger());
+
+    await waitFor(() => {
+      expect(screen.getAllByText("test@example.com").length).toBeGreaterThan(0);
+    });
+
+    expect(screen.queryByText("Change Password")).not.toBeInTheDocument();
   });
 
   it("should toggle hide new feature indicators switch", async () => {
@@ -238,7 +288,7 @@ describe("UserDropdown", () => {
     mockUseAuthorizedImpl = () => ({
       userId: "default_user_id",
       userEmail: null as any,
-      userRole: "Admin",
+      userRoleLabel: "Admin",
       premiumUser: false,
     });
     renderWithProviders(<UserDropdown onLogout={mockOnLogout} />);
@@ -250,7 +300,7 @@ describe("UserDropdown", () => {
     mockUseAuthorizedImpl = () => ({
       userId: "test-user-id",
       userEmail: null as any,
-      userRole: "Admin",
+      userRoleLabel: "Admin",
       premiumUser: false,
     });
 
@@ -268,7 +318,7 @@ describe("UserDropdown", () => {
     mockUseAuthorizedImpl = () => ({
       userId: null as any,
       userEmail: "test@example.com",
-      userRole: "Admin",
+      userRoleLabel: "Admin",
       premiumUser: false,
     });
 

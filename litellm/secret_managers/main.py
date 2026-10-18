@@ -6,7 +6,7 @@ import traceback
 from typing import Final
 
 import httpx
-from pydantic import BaseModel, ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_logger
@@ -16,14 +16,17 @@ from litellm.secret_managers.get_azure_ad_token_provider import (
     get_azure_ad_token_provider,
 )
 from litellm.secret_managers.secret_manager_handler import get_secret_from_manager
+from litellm.types.llms.base import LiteLLMBaseModel
 
 oidc_cache: Final = DualCache()
+
+_PARSED_LITERAL: Final = TypeAdapter(object)
 
 
 _OIDC_TOKEN_EXPIRY_MARGIN_SECONDS: Final = 60
 
 
-class _OidcTokenClaims(BaseModel):
+class _OidcTokenClaims(LiteLLMBaseModel):
     exp: float | None = None
 
 
@@ -47,6 +50,10 @@ def _oidc_token_cache_ttl(oidc_token: str, max_ttl: int) -> int:
 
 
 _DEFAULT_OIDC_ALLOWED_CREDENTIAL_DIRS: Final = ("/var/run/secrets", "/run/secrets")
+
+
+class OidcPathNotAllowedError(ValueError):
+    """An ``oidc/file/`` path was rejected by the credential-directory allowlist."""
 
 
 def _get_oidc_allowed_credential_dirs() -> list[str]:
@@ -73,7 +80,7 @@ def _resolve_oidc_file_path(requested_path: str) -> str:
     credential directories. Raises ``ValueError`` otherwise.
     """
     if not os.path.isabs(requested_path):
-        raise ValueError(
+        raise OidcPathNotAllowedError(
             "oidc/file path must be absolute. Use the format "
             "'oidc/file//var/run/secrets/<name>' (note the leading slash "
             "after 'oidc/file/')."
@@ -87,7 +94,7 @@ def _resolve_oidc_file_path(requested_path: str) -> str:
             # commonpath raises when paths are on different drives (Windows);
             # treat as not-matching and continue.
             continue
-    raise ValueError(
+    raise OidcPathNotAllowedError(
         "oidc/file path is outside the allowed credential directories. "
         "Set LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS to extend the allowlist."
     )
@@ -344,7 +351,7 @@ def get_secret(
                 secret = os.getenv(secret_name)
             try:
                 if isinstance(secret, str):
-                    secret_value_as_bool = ast.literal_eval(secret)
+                    secret_value_as_bool = _PARSED_LITERAL.validate_python(ast.literal_eval(secret))
                     if isinstance(secret_value_as_bool, bool):
                         return secret_value_as_bool
                     else:
@@ -365,6 +372,22 @@ def get_secret(
             raise e
 
 
+def secret_manager_would_be_consulted(secret_name: str) -> bool:
+    """
+    Returns True if a `get_secret` read for `secret_name` would actually reach the hosted manager.
+
+    Mirrors the gating `get_secret` applies below: the manager has to be up and readable, and
+    `hosted_keys`, when set, is an allowlist of the names it is consulted for. Callers use this to
+    tell "the manager does not have this key" apart from "the manager was never asked".
+    """
+    if not _should_read_secret_from_secret_manager():
+        return False
+    key_management_settings: Final = litellm._key_management_settings
+    if key_management_settings is None or key_management_settings.hosted_keys is None:
+        return True
+    return secret_name.removeprefix("os.environ/") in key_management_settings.hosted_keys
+
+
 def _should_read_secret_from_secret_manager() -> bool:
     """
     Returns True if the secret manager should be used to read the secret, False otherwise
@@ -373,11 +396,7 @@ def _should_read_secret_from_secret_manager() -> bool:
     - If the `_key_management_settings` access mode is "read_only" or "read_and_write", return True
     - Otherwise, return False
     """
-    if litellm.secret_manager_client is not None:
-        if litellm._key_management_settings is not None:
-            if (
-                litellm._key_management_settings.access_mode == "read_only"
-                or litellm._key_management_settings.access_mode == "read_and_write"
-            ):
-                return True
-    return False
+    key_management_settings: Final = litellm._key_management_settings
+    if litellm.secret_manager_client is None or key_management_settings is None:
+        return False
+    return key_management_settings.access_mode in ("read_only", "read_and_write")
