@@ -318,7 +318,7 @@ def _responses_input_item_contains_image(item: object) -> bool:
         return False
     if item.get("type") in _IMAGE_CONTENT_PART_TYPES:
         return True
-    content = item.get("content")
+    content: Final = item.get("content")
     return isinstance(content, list) and _content_parts_contain_image(content)
 
 
