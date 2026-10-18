@@ -15,7 +15,7 @@ from pydantic import ConfigDict, TypeAdapter
 
 from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import Choices, ModelResponse
+from litellm.types.utils import Choices, ModelResponse, Usage
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -86,4 +86,7 @@ class AiohttpOpenAIChatConfig(OpenAILikeChatConfig):
         model_response.model = _json_response.get("model")
         model_response.object = _json_response.get("object")
         model_response.system_fingerprint = _json_response.get("system_fingerprint")
+        usage: Final[object] = _json_response.get("usage")  # pyright: ignore[reportAny]  # aiohttp .json() resolves to Any
+        if isinstance(usage, dict):
+            setattr(model_response, "usage", Usage.model_validate(usage))  # noqa: B010  # usage is a pydantic extra, not a declared field
         return model_response

@@ -99,3 +99,98 @@ async def test_transform_response_rejects_choices_that_are_not_a_list_of_objects
 async def test_transform_response_rejects_a_choice_whose_message_is_not_an_object():
     with pytest.raises(ValidationError, match="validation error for Choices"):
         await _transform({"choices": [{"message": "text"}]})
+
+
+async def test_transform_response_forwards_usage_including_prompt_tokens_details():
+    """Regression test for https://github.com/BerriAI/litellm/issues/33967:
+    the provider's usage - prompt_tokens_details.cached_tokens included -
+    must reach the client response."""
+    response = await _transform(
+        {
+            "id": "chatcmpl-1",
+            "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "Hi"}}],
+            "usage": {
+                "prompt_tokens": 2000,
+                "completion_tokens": 10,
+                "total_tokens": 2010,
+                "prompt_tokens_details": {"cached_tokens": 1088},
+                "completion_tokens_details": {"reasoning_tokens": 4},
+            },
+        }
+    )
+
+    usage = response.usage
+    assert usage.prompt_tokens == 2000
+    assert usage.completion_tokens == 10
+    assert usage.total_tokens == 2010
+    assert usage.prompt_tokens_details is not None
+    assert usage.prompt_tokens_details.cached_tokens == 1088
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens == 4
+
+
+async def test_transform_response_without_usage_key_keeps_usage_unset():
+    response = await _transform(
+        {
+            "id": "chatcmpl-1",
+            "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "Hi"}}],
+        }
+    )
+
+    assert response.id == "chatcmpl-1"
+    assert getattr(response, "usage", None) is None
+
+
+async def test_transform_response_with_null_usage_keeps_usage_unset():
+    response = await _transform(
+        {
+            "id": "chatcmpl-1",
+            "usage": None,
+            "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "Hi"}}],
+        }
+    )
+
+    assert response.id == "chatcmpl-1"
+    assert getattr(response, "usage", None) is None
+
+
+async def test_transform_response_coerces_null_token_values_to_zero():
+    """Providers that send null token counts get the same 0 coercion the
+    openai-like path applies in _sanitize_usage_obj."""
+    response = await _transform(
+        {
+            "id": "chatcmpl-1",
+            "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "Hi"}}],
+            "usage": {
+                "prompt_tokens": None,
+                "completion_tokens": None,
+                "total_tokens": None,
+                "prompt_tokens_details": {"cached_tokens": 1088},
+            },
+        }
+    )
+
+    usage = response.usage
+    assert usage.prompt_tokens == 0
+    assert usage.completion_tokens == 0
+    assert usage.total_tokens == 0
+    assert usage.prompt_tokens_details is not None
+    assert usage.prompt_tokens_details.cached_tokens == 1088
+
+
+async def test_transform_response_maps_provider_cache_extras_into_prompt_tokens_details():
+    """Providers that report cache hits outside prompt_tokens_details
+    (DeepSeek's prompt_cache_hit_tokens, Anthropic's cache_read_input_tokens)
+    get the same Usage normalization every other chat path gets."""
+    for extra in ({"prompt_cache_hit_tokens": 8}, {"cache_read_input_tokens": 7}):
+        response = await _transform(
+            {
+                "id": "chatcmpl-1",
+                "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "Hi"}}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15, **extra},
+            }
+        )
+
+        expected = extra[next(iter(extra))]
+        assert response.usage.prompt_tokens_details is not None
+        assert response.usage.prompt_tokens_details.cached_tokens == expected
