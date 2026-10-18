@@ -3163,10 +3163,15 @@ async def test_compressed_prompt_log_respects_managed_template_visibility(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("trusted_context", [True, False])
 @pytest.mark.parametrize("store_prompts", [True, False])
 @pytest.mark.parametrize("redact", [True, False])
 async def test_compressed_prompt_log_capture_respects_storage_and_redaction(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, store_prompts: bool, redact: bool
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    store_prompts: bool,
+    redact: bool,
+    trusted_context: bool,
 ) -> None:
     from litellm.proxy import proxy_server
     from litellm.proxy.common_utils.callback_utils import get_logging_caching_headers
@@ -3181,7 +3186,7 @@ async def test_compressed_prompt_log_capture_respects_storage_and_redaction(
         200, json={"messages": compressed, "tokens_before": 1000, "tokens_after": 10}
     )
     request_data: Final = {
-        "secret_fields": {},
+        **({"secret_fields": {}} if trusted_context else {}),
         "proxy_server_request": {"headers": {"x-litellm-return-compressed-prompt": "true"}},
     }
     result: Final = await guardrail.apply_guardrail(
@@ -3191,7 +3196,7 @@ async def test_compressed_prompt_log_capture_respects_storage_and_redaction(
     )
     entry: Final = request_data["metadata"]["standard_logging_guardrail_information"][0]["guardrail_response"]
     assert entry["tokens_saved"] == 990
-    if store_prompts and not redact:
+    if store_prompts and not redact and trusted_context:
         assert entry["compressed_messages"] == result["structured_messages"]
         result["structured_messages"][1]["content"] = "Later guardrail rewrite"
         assert entry["compressed_messages"][1]["content"] != "Later guardrail rewrite"
@@ -3214,7 +3219,7 @@ async def test_compressed_prompt_log_uses_existing_storage_truncation(
     monkeypatch.setenv("MAX_STRING_LENGTH_PROMPT_IN_DB", "100")
     guardrail: Final = HeadroomGuardrail(api_base=FAKE_API_BASE, guardrail_name="headroom")
     respx_mock.post(f"{FAKE_API_BASE}/v1/compress").respond(200, json={"messages": COMPRESSED_MESSAGES})
-    request_data: Final = {}
+    request_data: Final = {"secret_fields": {}}
     result: Final = await guardrail.apply_guardrail(
         inputs=GenericGuardrailAPIInputs(texts=[], structured_messages=ORIGINAL_MESSAGES),
         request_data=request_data,
@@ -3255,7 +3260,7 @@ async def test_compressed_prompt_log_respects_request_redaction(
         }
     else:
         logging_obj.model_call_details["standard_callback_dynamic_params"] = {"turn_off_message_logging": True}
-    request_data: Final = {}
+    request_data: Final = {"secret_fields": {}}
     result: Final = await guardrail.apply_guardrail(
         inputs=GenericGuardrailAPIInputs(texts=[], structured_messages=ORIGINAL_MESSAGES),
         request_data=request_data,

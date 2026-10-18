@@ -864,11 +864,10 @@ class HeadroomGuardrail(CustomGuardrail):
             logging_obj.model_call_details if logging_obj is not None else {"litellm_params": request_data}
         )
         capture_prompt: Final = (
-            should_store_prompts_and_responses_in_spend_logs()
+            _is_str_object_dict(response_state)
+            and response_state.get("_headroom_prompt_logging_allowed") is not False
+            and should_store_prompts_and_responses_in_spend_logs()
             and not should_redact_message_logging(logging_details)
-            and not (
-                _is_str_object_dict(response_state) and response_state.get("_headroom_prompt_logging_allowed") is False
-            )
         )
         guardrail_response: Final = (
             sanitize_request_body_for_spend_logs_payload({**result.stats, "compressed_messages": compressed})

@@ -595,7 +595,7 @@ def test_get_logging_payload_maps_responses_api_cache_write_tokens_from_usage_ob
     assert additional_usage_values["cache_creation_input_tokens"] == 800
 
 
-def testsanitize_request_body_for_spend_logs_payload_basic():
+def test_sanitize_request_body_for_spend_logs_payload_basic():
     request_body = {
         "messages": [{"role": "user", "content": "Hello, how are you?"}],
     }
@@ -761,7 +761,7 @@ def test_truncation_preserves_beginning_and_end():
     assert str(expected_skipped) in truncated_content
 
 
-def testsanitize_request_body_for_spend_logs_payload_long_string():
+def test_sanitize_request_body_for_spend_logs_payload_long_string():
     from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB
 
     # Create a string longer than MAX_STRING_LENGTH_PROMPT_IN_DB (2048)
@@ -787,7 +787,7 @@ def testsanitize_request_body_for_spend_logs_payload_long_string():
     assert sanitized["normal_text"] == "short text"
 
 
-def testsanitize_request_body_for_spend_logs_payload_nested_dict():
+def test_sanitize_request_body_for_spend_logs_payload_nested_dict():
     from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB
 
     # Create a string longer than MAX_STRING_LENGTH_PROMPT_IN_DB
@@ -810,7 +810,7 @@ def testsanitize_request_body_for_spend_logs_payload_nested_dict():
     assert sanitized["outer"]["inner"]["normal"] == "short"
 
 
-def testsanitize_request_body_for_spend_logs_payload_nested_list():
+def test_sanitize_request_body_for_spend_logs_payload_nested_list():
     from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB
 
     # Create a string longer than MAX_STRING_LENGTH_PROMPT_IN_DB
@@ -834,19 +834,19 @@ def testsanitize_request_body_for_spend_logs_payload_nested_list():
     assert len(sanitized["items"][2][0]["text"]) == expected_length
 
 
-def testsanitize_request_body_for_spend_logs_payload_non_string_values():
+def test_sanitize_request_body_for_spend_logs_payload_non_string_values():
     request_body = {"number": 42, "boolean": True, "none": None, "float": 3.14}
     sanitized = sanitize_request_body_for_spend_logs_payload(request_body)
     assert sanitized == request_body
 
 
-def testsanitize_request_body_for_spend_logs_payload_empty():
+def test_sanitize_request_body_for_spend_logs_payload_empty():
     request_body: dict[str, Any] = {}
     sanitized = sanitize_request_body_for_spend_logs_payload(request_body)
     assert sanitized == request_body
 
 
-def testsanitize_request_body_for_spend_logs_payload_mixed_types():
+def test_sanitize_request_body_for_spend_logs_payload_mixed_types():
     from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB
 
     # Create a string longer than MAX_STRING_LENGTH_PROMPT_IN_DB
@@ -876,7 +876,7 @@ def testsanitize_request_body_for_spend_logs_payload_mixed_types():
     assert len(sanitized["nested"]["dict"]["value"]) == expected_length
 
 
-def testsanitize_request_body_for_spend_logs_payload_uses_runtime_env_override(
+def test_sanitize_request_body_for_spend_logs_payload_uses_runtime_env_override(
     monkeypatch: pytest.MonkeyPatch,
 ):
     from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB
@@ -891,7 +891,7 @@ def testsanitize_request_body_for_spend_logs_payload_uses_runtime_env_override(
     assert sanitized["text"] == test_string
 
 
-def testsanitize_request_body_for_spend_logs_payload_circular_reference():
+def test_sanitize_request_body_for_spend_logs_payload_circular_reference():
     # Create a circular reference
     a: dict[str, Any] = {}
     b: dict[str, Any] = {"a": a}
