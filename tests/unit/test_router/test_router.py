@@ -29836,3 +29836,16 @@ def test_pre_call_checks_raises_bad_request_when_no_deployment_supports_vision()
                 }
             ],
         )
+
+
+def test_vision_excluded_deployment_indices():
+    from litellm.router import _vision_excluded_deployment_indices
+
+    deployments: Final = [
+        {"model_info": {"id": "vision", "supports_vision": True}},
+        {"model_info": {"id": "text-only", "supports_vision": False}},
+        {"model_info": {"id": "unknown"}},
+    ]
+
+    assert _vision_excluded_deployment_indices(True, deployments) == frozenset({1})
+    assert _vision_excluded_deployment_indices(False, deployments) == frozenset()

@@ -1150,15 +1150,17 @@ def _base_model_widened_window(
     return MappingProxyType({"max_input_tokens": base_max_input_tokens})
 
 
-def _vision_excluded_deployment_indices(requires_vision_support: bool, deployments: list) -> set[int]:
+def _vision_excluded_deployment_indices(
+    requires_vision_support: bool, deployments: Sequence[DeploymentTypedDict]
+) -> frozenset[int]:
     """Indices of deployments to skip because the request needs vision support they lack."""
     if not requires_vision_support:
-        return set()
-    return {
+        return frozenset()
+    return frozenset(
         idx
         for idx, deployment in enumerate(deployments)
         if deployment.get("model_info", {}).get("supports_vision") is False
-    }
+    )
 
 
 class Router:
