@@ -1,9 +1,11 @@
+import textwrap
 from collections.abc import Callable
 from typing import Final
 
 import pytest
 
 from litellm.litellm_core_utils.hook_pairing import HookPairing, run_held_hook_now
+from tests.test_litellm_rust.support.child_interpreter import run_child_interpreter
 
 
 class _Logger:
@@ -71,6 +73,38 @@ def test_async_run_discarded_before_it_starts_still_runs_the_held_hook() -> None
     pairing.async_run(never_started()).close()
 
     assert ran == ["ran"]
+
+
+def test_async_run_still_queued_at_exit_is_left_to_the_exit_flush() -> None:
+    script: Final = textwrap.dedent(
+        """
+        import asyncio
+        import atexit
+
+        from litellm.litellm_core_utils.hook_pairing import HookPairing, run_held_hook_now
+
+        logger = object()
+        pairing = HookPairing(run_held_hook_now)
+        queued = []
+
+
+        async def async_run():
+            pairing.reach(logger)
+            print("async_hook")
+            pairing.end_async_run()
+
+
+        atexit.register(lambda: asyncio.run(queued.pop()))
+        with pairing.sync_run():
+            pairing.hold(logger, lambda: print("sync_hook"))
+        queued.append(pairing.async_run(async_run()))
+        """
+    )
+
+    completed: Final = run_child_interpreter(script, timeout=120)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.split() == ["async_hook"]
 
 
 def test_async_run_reaching_one_logger_leaves_another_loggers_held_hook_to_run() -> None:

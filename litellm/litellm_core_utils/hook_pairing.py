@@ -71,8 +71,9 @@ class HookPairing:
 
     def async_run(self, coroutine: Coroutine[object, object, None]) -> Coroutine[object, object, None]:
         """Returns the async run's ``coroutine``, set to end the async run once it is discarded, so held hooks still run
-        when a full or stopping logging queue drops it before it starts."""
-        weakref.finalize(coroutine, self.end_async_run)
+        when a full or stopping logging queue drops it before it starts. Interpreter exit leaves a still-queued run to
+        the logging worker's exit flush."""
+        weakref.finalize(coroutine, self.end_async_run).atexit = False
         return coroutine
 
     def end_async_run(self) -> None:
