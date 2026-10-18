@@ -21,6 +21,7 @@ from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.databricks.decisions.transformation import DATABRICKS_DECISIONS_CONFIG, is_ai_decide_model
 from litellm.llms.laya.common_utils import laya_response_model
+from litellm.llms.nadir.common_utils import nadir_bucket_request, nadir_bucket_url, nadir_classifier_response
 from litellm.llms.pass_through.typesafe_logging_handler import TypeSafePassthroughLoggingHandler
 from litellm.router_strategy.complexity_router.config import DEFAULT_JEV_INSTRUCTIONS as _DEFAULT_JEV_INSTRUCTIONS
 from litellm.types.decisions import DecisionsResponse
@@ -31,7 +32,7 @@ if TYPE_CHECKING:
     from litellm.router import Router
 
 JevProbability: TypeAlias = Annotated[float, Field(ge=0.0, le=1.0)]
-ClassifierProvider: TypeAlias = Literal["typesafe", "laya", "bespoke", "databricks"]
+ClassifierProvider: TypeAlias = Literal["typesafe", "laya", "bespoke", "databricks", "nadir"]
 DEFAULT_JEV_INSTRUCTIONS: Final = _DEFAULT_JEV_INSTRUCTIONS
 _WITHOUT_MODEL: Final = MappingProxyType({"model": True})
 
@@ -50,6 +51,8 @@ class JevSystemOneRequest(LiteLLMBaseModel):
     state: str
     model: str
     questions: Mapping[str, JevChoiceQuestion]
+    # Native input for a classifier that reads the conversation itself (nadir); never sent to a System One server.
+    messages: tuple[Mapping[str, str], ...] | None = Field(default=None, exclude=True)
 
 
 class JevChoiceAnswer(LiteLLMBaseModel):
@@ -182,7 +185,7 @@ class HttpJevClassifierClient:
         )
         response: Final = await self._http_client.post(  # pyright: ignore[reportUnknownMemberType]  # AsyncHTTPHandler has a dynamic post signature
             self._request_url(request.model),
-            json=request.model_dump(mode="json", exclude=self._excluded_fields(request.model)),
+            json=dict(self._request_body(request)),
             headers=MappingProxyType({**authorization, "Content-Type": "application/json"}),  # pyright: ignore[reportArgumentType]  # HTTP headers are not mutated by AsyncHTTPHandler
             timeout=timeout_s,
         )
@@ -195,12 +198,19 @@ class HttpJevClassifierClient:
             verbose_router_logger.warning("JEV response logging failed (%s)", type(exc).__name__)
         return TypeAdapter(JevSystemOneResponse).validate_python(normalized_body)
 
+    def _request_body(self, request: JevSystemOneRequest) -> Mapping[str, object]:
+        if self._provider == "nadir":
+            return nadir_bucket_request(request.state, request.messages)
+        return request.model_dump(mode="json", exclude=self._excluded_fields(request.model))
+
     def _excluded_fields(self, model: str) -> Mapping[str, bool] | None:
         return _WITHOUT_MODEL if self._provider == "databricks" and is_ai_decide_model(model) else None
 
     def _request_url(self, model: str) -> str:
         if self._provider == "databricks":
             return DATABRICKS_DECISIONS_CONFIG.get_complete_url(self._api_base, model)
+        if self._provider == "nadir":
+            return nadir_bucket_url(self._api_base)
         return f"{self._api_base}/v1/systemone"
 
     def _normalized_body(self, body: Mapping[str, object], requested_model: str) -> Mapping[str, object]:
@@ -209,6 +219,8 @@ class HttpJevClassifierClient:
                 return MappingProxyType({**body, "model": laya_response_model(body, requested_model)})
             case "databricks":
                 return DATABRICKS_DECISIONS_CONFIG.classifier_response(body, requested_model)
+            case "nadir":
+                return nadir_classifier_response(body, requested_model)
             case "typesafe" | "bespoke":
                 return body
 
@@ -310,10 +322,13 @@ def build_jev_request(
     model: str,
     instructions: str,
     criteria: Mapping[str, str],
+    messages: tuple[Mapping[str, str], ...] | None = None,
 ) -> JevSystemOneRequest:
     state: Final = prompt if system_prompt is None else f"System prompt:\n{system_prompt}\n\nRequest:\n{prompt}"
     question: Final = JevChoiceQuestion(instructions=instructions, criteria=criteria)
-    return JevSystemOneRequest(state=state, model=model, questions=MappingProxyType({"tier": question}))
+    return JevSystemOneRequest(
+        state=state, model=model, questions=MappingProxyType({"tier": question}), messages=messages
+    )
 
 
 def jev_classifier_cost(

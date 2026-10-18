@@ -459,6 +459,7 @@ def test_jev_config_requires_classifier_config() -> None:
         ("bespoke", "nimble-latest", "bespoke"),
         ("databricks", "databricks-openjev-qwen35-4b", "databricks"),
         ("databricks", "ai_decide", "databricks"),
+        ("nadir", "bucket", "nadir"),
     ],
 )
 def test_classifier_aliases_load_and_serialize_one_canonical_config(
@@ -741,6 +742,168 @@ def test_databricks_api_base_without_its_own_key_is_rejected_so_the_workspace_to
         {"provider": "databricks", "model": "ai_decide", "api_base": "https://workspace.invalid", "api_key": "dapi-own"}
     )
     assert (paired.api_base, paired.api_key) == ("https://workspace.invalid", "dapi-own")
+
+
+_NADIR_VERDICT: Final = {
+    "bucket": "medium",
+    "routing_tier": "simple",
+    "confidence": 0.81,
+    "probabilities": {"simple": 0.81, "medium": 0.15, "complex": 0.04},
+    "selected_model": None,
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("connection", "url", "authorization"),
+    [
+        ({}, "https://api.getnadir.com/v1/bucket", "Bearer ndr-env"),
+        ({"api_key": "ndr-own"}, "https://api.getnadir.com/v1/bucket", "Bearer ndr-own"),
+        (
+            {"api_base": "https://nadir.internal/v1", "api_key": "ndr-own"},
+            "https://nadir.internal/v1/bucket",
+            "Bearer ndr-own",
+        ),
+        ({"api_base": "https://nadir.internal"}, "https://nadir.internal/v1/bucket", None),
+    ],
+)
+async def test_nadir_routes_on_the_bucket_verdict_and_keeps_the_environment_key_home(
+    monkeypatch: pytest.MonkeyPatch, connection: Mapping[str, str], url: str, authorization: str | None
+) -> None:
+    monkeypatch.setenv("TYPESAFE_API_KEY", "never-send-typesafe-key")
+    monkeypatch.delenv("NADIR_API_BASE", raising=False)
+    monkeypatch.setenv("NADIR_API_KEY", "ndr-env")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    recorder: Final = _UsageRecorder("nadir/bucket")
+    monkeypatch.setattr(litellm, "_async_success_callback", [recorder])
+    router: Final = ComplexityRouter(
+        "nadir-route",
+        litellm.Router(model_list=[]),
+        {
+            "classifier_type": "oss_classifier",
+            "opensource_classifier_config": {"provider": "nadir", **connection},
+            "tiers": {"SIMPLE": "cheap", "MEDIUM": "mid", "COMPLEX": "strong"},
+        },
+        derive_savings_baseline=False,
+    )
+    with respx.mock(assert_all_called=True) as upstream:
+        route: Final = upstream.post(url).respond(200, json=_NADIR_VERDICT)
+        outcome: Final = await router.aclassify("What is two plus two?")
+        await GLOBAL_LOGGING_WORKER.flush()
+
+    assert outcome.cause == "jev_classifier"
+    assert outcome.jev_verdict is not None
+    assert (outcome.jev_verdict.provider, outcome.jev_verdict.model) == ("nadir", "bucket")
+    assert (outcome.jev_verdict.label, outcome.jev_verdict.confidence) == ("SIMPLE", 0.81)
+    assert outcome.classifier_cost is None
+    assert "nadir-classifier:SIMPLE" in outcome.signals
+    sent: Final = route.calls.last.request
+    assert sent.headers.get("authorization") == authorization
+    assert json.loads(sent.content) == {
+        "messages": [{"role": "user", "content": "What is two plus two?"}],
+        "source": "litellm",
+    }
+    assert len(recorder.calls) == 1
+    assert recorder.calls[0]["response_cost"] == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "response",
+    [
+        httpx.Response(200, json={"bucket": None, "routing_tier": None}),
+        httpx.Response(200, json={**_NADIR_VERDICT, "routing_tier": "reasoning"}),
+        httpx.Response(403, json={"detail": "anonymous_disabled"}),
+    ],
+)
+async def test_nadir_verdict_the_router_cannot_use_falls_back(
+    monkeypatch: pytest.MonkeyPatch, response: httpx.Response
+) -> None:
+    monkeypatch.delenv("NADIR_API_BASE", raising=False)
+    monkeypatch.delenv("NADIR_API_KEY", raising=False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = ComplexityRouter(
+        "nadir-route",
+        litellm.Router(model_list=[]),
+        {
+            "classifier_type": "oss_classifier",
+            "opensource_classifier_config": {"provider": "nadir"},
+            "tiers": {"SIMPLE": "cheap", "COMPLEX": "strong"},
+        },
+        derive_savings_baseline=False,
+    )
+    with respx.mock(assert_all_called=True) as upstream:
+        _ = upstream.post("https://api.getnadir.com/v1/bucket").mock(return_value=response)
+        outcome: Final = await router.aclassify("What is two plus two?")
+
+    assert outcome.cause == "heuristic_scorer"
+    assert outcome.jev_verdict is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("window", "expected_prior"),
+    [(None, [{"role": "user", "content": "Refactor the tokenizer into its own module"}]), (0, [])],
+)
+async def test_nadir_gets_the_budgeted_conversation_without_the_judge_framing(
+    monkeypatch: pytest.MonkeyPatch, window: int | None, expected_prior: list[dict[str, str]]
+) -> None:
+    monkeypatch.delenv("NADIR_API_BASE", raising=False)
+    monkeypatch.delenv("NADIR_API_KEY", raising=False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = ComplexityRouter(
+        "nadir-route",
+        litellm.Router(model_list=[]),
+        {
+            "classifier_type": "oss_classifier",
+            "opensource_classifier_config": {"provider": "nadir"},
+            "tiers": {"SIMPLE": "cheap", "COMPLEX": "strong"},
+            **({"classifier_context_window_size": window} if window is not None else {}),
+        },
+        derive_savings_baseline=False,
+    )
+    conversation: Final = [
+        {"role": "system", "content": "You are a senior Python reviewer"},
+        {"role": "user", "content": "Refactor the tokenizer into its own module"},
+        {"role": "assistant", "content": "Done, moved it to tokenizer.py"},
+        {"role": "user", "content": "now add tests"},
+    ]
+    with respx.mock(assert_all_called=True) as upstream:
+        route: Final = upstream.post("https://api.getnadir.com/v1/bucket").respond(200, json=_NADIR_VERDICT)
+        _ = await router.aclassify(
+            "now add tests", system_prompt="You are a senior Python reviewer", messages=conversation
+        )
+
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert sent["messages"] == [
+        {"role": "system", "content": "You are a senior Python reviewer"},
+        *expected_prior,
+        {"role": "user", "content": "now add tests"},
+    ]
+    assert "Classify this message" not in route.calls.last.request.content.decode()
+
+
+def test_nadir_messages_never_reach_a_system_one_server() -> None:
+    request: Final = build_jev_request(
+        "Classify this message:\nhi",
+        None,
+        "jev-latest",
+        "Pick a tier",
+        {"SIMPLE": "easy"},
+        messages=({"role": "user", "content": "hi"},),
+    )
+    assert "messages" not in request.model_dump(mode="json")
+
+
+def test_nadir_defaults_its_model_and_allows_a_keyless_base() -> None:
+    assert JevClassifierConfig.model_validate({"provider": "nadir"}).model == "bucket"
+    keyless: Final = JevClassifierConfig.model_validate({"provider": "nadir", "api_base": "https://nadir.internal"})
+    assert (keyless.api_base, keyless.api_key) == ("https://nadir.internal", None)
+
+
+def test_nadir_rejects_instructions_it_would_ignore() -> None:
+    with pytest.raises(ValueError, match="instructions has no effect for provider 'nadir'"):
+        JevClassifierConfig.model_validate({"provider": "nadir", "instructions": "Pick a tier"})
 
 
 @pytest.mark.parametrize(
