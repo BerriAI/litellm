@@ -1014,7 +1014,13 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
     """
     _populate_provider_model_sets(model_cost_map if model_cost_map is not None else model_cost)
     models_by_provider.update(_build_models_by_provider())
-    added: Final = _known_model_names() - model_list_set
+
+
+def add_known_models_to_model_list() -> None:
+    """``add_known_models``, plus listing every model name it newly made known in ``model_list``."""
+    known_before: Final = _known_model_names()
+    add_known_models()
+    added: Final = _known_model_names() - known_before - model_list_set
     model_list.extend(added)
     model_list_set.update(added)
 

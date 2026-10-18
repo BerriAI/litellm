@@ -29,7 +29,12 @@ from typing import Final, Protocol, cast  # noqa: TID251  # adapts boto3 and bot
 
 import httpx
 from pydantic import ConfigDict, TypeAdapter
-from typing_extensions import NotRequired, ReadOnly, TypedDict
+from typing_extensions import (
+    NotRequired,
+    ReadOnly,
+    TypedDict,
+    TypeIs,  # noqa: TID251  # narrows live cost map entries without copying them
+)
 
 from litellm import verbose_logger
 from litellm.constants import (
@@ -43,7 +48,6 @@ from litellm.litellm_core_utils.fallback_generalizations import (
 FALLBACK_GENERALIZATIONS_KEY: Final = "fallback_generalizations"
 _CATALOG_ADAPTER: Final = TypeAdapter(dict[str, dict[str, object]])
 _BUNDLED_CATALOG_ADAPTER: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
-_COST_ENTRY_ADAPTER: Final = TypeAdapter(dict[str, object])
 _CLI_ENTRYPOINT_NAMES: Final = frozenset({"lite", "litellm-proxy"})
 _ABSENT: Final = object()
 _IMPORT_FETCH_IN_PROGRESS: Final = "Remote fetch in progress"
@@ -675,15 +679,28 @@ class _ImportFetch:
     sleep: Callable[[float], None]
     rng: random.Random
     client: _SyncGetClient
-    bundled: Mapping[str, object]
+    bundled: dict[str, object]  # mutable-ok: litellm.model_cost itself, which the remote map is merged into
+    loaded: Mapping[str, Mapping[str, object]]
     local: Callable[[], ModelCostMapReloaded]
+    first_attempt: int = 1
+    first_attempt_at: float = 0.0
     first_attempt_settled: threading.Event = field(default_factory=threading.Event)
+
+
+@dataclass(frozen=True, slots=True)
+class _ScheduledAttempt:
+    attempt: int
+    at: float
 
 
 class _PendingImportFetch:
     fetch: _ImportFetch | None = None
     thread: threading.Thread | None = None
+    next_attempt: _ScheduledAttempt | None = None
     adoptions: int = 0
+
+
+_NO_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 def _litellm_model_cost_is(expected: Mapping[str, object]) -> bool:
@@ -696,6 +713,12 @@ def _model_cost_replaced_since_import(fetch: _ImportFetch | None) -> bool:
     return fetch is not None and not _litellm_model_cost_is(fetch.bundled)
 
 
+def _is_cost_entry(
+    value: object,
+) -> TypeIs[dict[str, object]]:  # guard-ok: cost map keys are str  # mutable-ok: entries are merged in place
+    return isinstance(value, dict)
+
+
 def _bundled_as_loaded(fetch: _ImportFetch) -> Mapping[str, Mapping[str, object]]:
     raw: Final = fetch.local().model_cost_map
     catalog: Final = _CATALOG_ADAPTER.validate_python(
@@ -704,72 +727,59 @@ def _bundled_as_loaded(fetch: _ImportFetch) -> Mapping[str, Mapping[str, object]
     return MappingProxyType(_expand_model_aliases(catalog))
 
 
-def _entries_changed_since_import(
-    fetch: _ImportFetch, as_loaded: Mapping[str, Mapping[str, object]]
-) -> Mapping[str, object]:
-    current: Final = tuple(fetch.bundled.items())
-    return MappingProxyType({key: value for key, value in current if as_loaded.get(key) != value})
-
-
-def _keys_removed_since_import(fetch: _ImportFetch, as_loaded: Mapping[str, Mapping[str, object]]) -> frozenset[str]:
-    return frozenset(key for key in as_loaded if key not in fetch.bundled)
-
-
-def _edit_overlaid_on(
-    remote: Mapping[str, object], edited: Mapping[str, object], as_loaded: Mapping[str, object]
-) -> dict[str, object]:  # mutable-ok: becomes a litellm.model_cost entry, a plain mutable dict by contract
-    removed: Final = as_loaded.keys() - edited.keys()
-    changed: Final = {name: value for name, value in edited.items() if as_loaded.get(name, _ABSENT) != value}
-    return {name: value for name, value in {**remote, **changed}.items() if name not in removed}
-
-
-def _edit_writes(
-    onto: Mapping[str, object], key: str, edited: object, as_loaded: Mapping[str, object] | None
-) -> Mapping[str, object]:
-    remote: Final = onto.get(key)
-    if as_loaded is None or not isinstance(remote, Mapping) or not isinstance(edited, Mapping):
-        return MappingProxyType({key: edited})
-    overlaid: Final = _edit_overlaid_on(
-        _COST_ENTRY_ADAPTER.validate_python(remote), _COST_ENTRY_ADAPTER.validate_python(edited), as_loaded
+def _fields_written_since_import(
+    current: Mapping[str, object], loaded: Mapping[str, object], parsed: Mapping[str, object]
+) -> frozenset[str]:
+    rewritten: Final = (
+        name
+        for name, value in tuple(current.items())
+        if loaded.get(name, _ABSENT) is not value or (isinstance(value, (dict, list)) and value != parsed.get(name))
     )
-    if not isinstance(remote, AliasedCostEntry):
-        return MappingProxyType({key: overlaid})
-    shared: Final = AliasedCostEntry(overlaid, remote.names)
-    return MappingProxyType(dict.fromkeys((name for name in (key, *remote.names) if onto.get(name) is remote), shared))
+    return frozenset(chain(rewritten, loaded.keys() - current.keys()))
 
 
-def _edits_overlaid_on(
-    as_loaded: Mapping[str, Mapping[str, object]], onto: Mapping[str, object], edits: Mapping[str, object]
-) -> Mapping[str, object]:
-    writes: Final = (_edit_writes(onto, key, edited, as_loaded.get(key)).items() for key, edited in edits.items())
-    return MappingProxyType(dict(chain.from_iterable(writes)))
-
-
-def _carry_edits_made_during_adoption(
-    fetch: _ImportFetch,
-    as_loaded: Mapping[str, Mapping[str, object]],
-    adopted: dict[str, object],  # mutable-ok: the dict just adopted as litellm.model_cost, updated in place
-    carried: Mapping[str, object],
-    removed: frozenset[str],
-    as_adopted: Mapping[str, object],
+def _merge_remote_fields(
+    current: dict[str, object],  # mutable-ok: a live litellm.model_cost entry, so references to it see the remote map
+    remote: Mapping[str, object],
+    written: frozenset[str],
 ) -> None:
-    changed: Final = tuple(_entries_changed_since_import(fetch, as_loaded).items())
-    late: Final = {
-        key: value
-        for key, value in changed
-        if value is not carried.get(key) and adopted.get(key) is as_adopted.get(key)
-    }
-    late_removed: Final = tuple(
-        key for key in _keys_removed_since_import(fetch, as_loaded) - removed if adopted.get(key) is as_adopted.get(key)
-    )
-    if not (late or late_removed) or not _litellm_model_cost_is(adopted):
-        return
+    current.update({name: value for name, value in remote.items() if name not in written})
+    for name in current.keys() - remote.keys() - written:
+        current.pop(name, None)
+
+
+def _untouched_since_import(current: object, loaded: Mapping[str, object], parsed: Mapping[str, object]) -> bool:
+    return _is_cost_entry(current) and not _fields_written_since_import(current, loaded, parsed)
+
+
+def _merge_into_import_map(fetch: _ImportFetch, finalized: Mapping[str, object]) -> None:
+    import litellm
     from litellm import utils
 
-    adopted.update(_edits_overlaid_on(as_loaded, as_adopted, late))
-    for key in late_removed:
-        adopted.pop(key, None)
+    parsed: Final = _bundled_as_loaded(fetch)
+    remote: Final = tuple(finalized.items())
+    shared_once: Final = {
+        id(current): (current, key, entry)
+        for key, entry in remote
+        if key in fetch.loaded and _is_cost_entry(current := fetch.bundled.get(key)) and _is_cost_entry(entry)
+    }
+    for current, key, entry in shared_once.values():
+        _merge_remote_fields(
+            current, entry, _fields_written_since_import(current, fetch.loaded[key], parsed.get(key, _NO_FIELDS))
+        )
+    fetch.bundled.update({key: entry for key, entry in remote if key not in fetch.loaded and key not in fetch.bundled})
+    dropped: Final = tuple(
+        key
+        for key in fetch.loaded.keys() - finalized.keys()
+        if _untouched_since_import(fetch.bundled.get(key), fetch.loaded[key], parsed.get(key, _NO_FIELDS))
+    )
+    for key in dropped:
+        fetch.bundled.pop(key, None)
+    _record_remote_adoption()
     utils._invalidate_model_cost_lowercase_map()  # pyright: ignore[reportPrivateUsage]  # required cache invalidation
+    litellm.add_known_models_to_model_list()
+    utils.reapply_runtime_model_cost_registrations()
+    _PendingImportFetch.adoptions += 1
 
 
 def _adopt_remote_model_cost_map(
@@ -818,31 +828,13 @@ def _adopt_remote_model_cost_map(
         _record_remote_adoption()
         adopt_model_cost_map(finalized)
         return
-    _adopt_keeping_edits_since_import(import_fetch, finalized)
+    _merge_into_import_map(import_fetch, finalized)
 
 
 def _record_remote_adoption() -> None:
     _cost_map_source_info.source = "remote"
     _cost_map_source_info.fallback_reason = None
     _cost_map_source_info.loaded_at = datetime.now(timezone.utc)
-
-
-def _adopt_keeping_edits_since_import(fetch: _ImportFetch, finalized: Mapping[str, object]) -> None:
-    as_loaded: Final = _bundled_as_loaded(fetch)
-    edits: Final = _entries_changed_since_import(fetch, as_loaded)
-    removed: Final = _keys_removed_since_import(fetch, as_loaded)
-    adopted: Final = {
-        key: value
-        for key, value in {**finalized, **_edits_overlaid_on(as_loaded, finalized, edits)}.items()
-        if key not in removed
-    }
-    as_adopted: Final = MappingProxyType(dict(adopted))
-    _record_remote_adoption()
-    adopt_model_cost_map(adopted)
-    _carry_edits_made_during_adoption(
-        fetch, as_loaded, adopted=adopted, carried=edits, removed=removed, as_adopted=as_adopted
-    )
-    _PendingImportFetch.adoptions += 1
 
 
 def _retry_remote_fetch_in_background(
@@ -874,14 +866,21 @@ def _retry_remote_fetch_in_background(
 
 def _run_import_fetch(fetch: _ImportFetch) -> None:
     def settle_then_sleep(seconds: float) -> None:
+        scheduled: Final = _PendingImportFetch.next_attempt
+        _PendingImportFetch.next_attempt = _ScheduledAttempt(
+            attempt=(scheduled.attempt if scheduled is not None else fetch.first_attempt) + 1,
+            at=time.monotonic() + seconds,
+        )
         fetch.first_attempt_settled.set()
         fetch.sleep(seconds)
 
     try:
+        if fetch.first_attempt > 1:
+            fetch.sleep(max(0.0, fetch.first_attempt_at - time.monotonic()))
         _adopt_remote_model_cost_map(
             url=fetch.url,
             timeout=fetch.timeout,
-            attempts=range(1, fetch.max_attempts + 1),
+            attempts=range(fetch.first_attempt, fetch.max_attempts + 1),
             sleep=settle_then_sleep,
             rng=fetch.rng,
             client=fetch.client,
@@ -909,10 +908,28 @@ def _start_import_fetch(fetch: _ImportFetch) -> None:
     thread.start()
 
 
+def _settled_event() -> threading.Event:
+    settled: Final = threading.Event()
+    settled.set()
+    return settled
+
+
 def _resume_import_fetch_after_fork() -> None:
     pending: Final = _PendingImportFetch.fetch
-    if pending is not None:
+    scheduled: Final = _PendingImportFetch.next_attempt
+    if pending is None:
+        return
+    if scheduled is None:
         _start_import_fetch(replace(pending, first_attempt_settled=threading.Event()))
+        return
+    _start_import_fetch(
+        replace(
+            pending,
+            first_attempt=scheduled.attempt,
+            first_attempt_at=scheduled.at,
+            first_attempt_settled=_settled_event(),
+        )
+    )
 
 
 def import_model_cost_map_generation() -> int:
@@ -924,9 +941,9 @@ def wait_for_import_model_cost_map(since: int) -> bool:
     """
     Called by a lookup that missed the cost map, with the generation it read before looking up.
     While the remote map fetched at import is still in flight, blocks until that fetch's first
-    attempt settles, at most one fetch timeout, so a model the bundled map lacks resolves the way
-    it did when import waited for the fetch. True means the remote map was adopted since
-    ``since`` and the lookup should be tried once more.
+    attempt settles, so a model the bundled map lacks resolves the way it did when import waited
+    for the fetch. True means the remote map was adopted since ``since`` and the lookup should be
+    tried once more.
     """
     wait_for_pending_import_model_cost_map()
     return _PendingImportFetch.adoptions != since
@@ -942,7 +959,7 @@ def wait_for_pending_import_model_cost_map() -> None:
         return
     if not pending.first_attempt_settled.is_set():
         verbose_logger.debug("LiteLLM: waiting for the remote map fetched at import")
-    pending.first_attempt_settled.wait(timeout=pending.timeout)
+    pending.first_attempt_settled.wait()
 
 
 def _settle_import_fetch_before_fork() -> None:
@@ -970,11 +987,13 @@ def load_model_cost_map_at_import(
 ) -> dict:  # mutable-ok: becomes litellm.model_cost, a plain mutable dict by contract
     """
     Return the bundled map right away and fetch the remote one in a background thread,
-    so ``import litellm`` never waits on the network. The remote map replaces
-    ``litellm.model_cost`` once it passes the integrity check, keeping every entry
-    written since import, unless the caller has replaced ``litellm.model_cost`` outright.
-    A lookup that misses the bundled map while the fetch is in flight waits for it, see
-    ``wait_for_import_model_cost_map``. A process forked before the fetch finishes starts its own fetch.
+    so ``import litellm`` never waits on the network. Once the remote map passes the
+    integrity check it is merged into the returned dict in place, so references taken
+    at import see it too, and every field written since import keeps its value. A caller
+    that replaced ``litellm.model_cost`` outright keeps its own map. Costs and model info
+    looked up while the first attempt is in flight wait for it, see
+    ``wait_for_pending_import_model_cost_map``. A process forked during a retry wait
+    resumes the retry schedule on its own.
     """
     if os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", "").lower() == "true" or _is_cli_process():
         return get_model_cost_map(url=url, timeout=timeout)
@@ -984,6 +1003,7 @@ def load_model_cost_map_at_import(
     _cost_map_source_info.is_env_forced = False
     _cost_map_source_info.fallback_reason = _IMPORT_FETCH_IN_PROGRESS
     bundled: Final = _finalize_loaded_model_cost_map(local()).model_cost_map
+    _PendingImportFetch.next_attempt = None
     _start_import_fetch(
         _ImportFetch(
             url=url,
@@ -993,6 +1013,7 @@ def load_model_cost_map_at_import(
             rng=rng if rng is not None else random.Random(),
             client=client if client is not None else httpx,
             bundled=bundled,
+            loaded=GetModelCostMap.loaded_model_cost_map(),
             local=local,
         )
     )

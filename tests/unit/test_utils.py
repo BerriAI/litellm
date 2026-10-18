@@ -2471,6 +2471,24 @@ def test_registered_chat_model_lists_under_its_provider_wildcard(
         litellm.add_known_models(model_cost_map={})
 
 
+def test_a_registered_azure_o_series_deployment_name_keeps_reasoning_effort_supported():
+    model_name: Final = "my-o3-deployment-regression"
+    try:
+        litellm.register_model(
+            {model_name: {"litellm_provider": "azure", "mode": "chat"}}, persist_across_reloads=False
+        )
+
+        supported: Final = litellm.get_supported_openai_params(model=model_name, custom_llm_provider="azure")
+
+        assert supported is not None
+        assert "reasoning_effort" in supported
+    finally:
+        litellm.model_cost.pop(model_name, None)
+        litellm.azure_models.discard(model_name)
+        litellm.model_list_set.discard(model_name)
+        litellm.add_known_models(model_cost_map={})
+
+
 def test_priced_router_deployment_id_stays_out_of_wildcard_model_listing():
     from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
 

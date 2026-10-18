@@ -982,48 +982,143 @@ def test_a_fetch_resumed_after_fork_adopts_the_remote_map_while_the_inherited_on
     assert len(served) == 2
 
 
-def test_an_edit_written_through_a_stale_reference_during_adoption_survives_it(
-    isolated_litellm_cost_state, monkeypatch
-):
-    import litellm
-    from litellm import utils as litellm_utils
-    from litellm.litellm_core_utils.get_model_cost_map import load_model_cost_map_at_import
-
-    client, started, release = _held_client(httpx.Response(200, content=_remote_map_with("claude-remote-only-test")))
-    monkeypatch.setattr(litellm_utils, "_runtime_registered_model_cost", {})
-    bundled = load_model_cost_map_at_import(url=_URL, client=client)
-    monkeypatch.setattr(litellm, "model_cost", bundled)
-    original_replay = litellm_utils._LiveDeploymentReplay.callback
-    late_entry = {"litellm_provider": "openai", "mode": "chat"}
-    late_removal = next(key for key in bundled if key not in ("gpt-4o", "gpt-4o-mini"))
-
-    def write_through_the_reference_read_before_the_swap():
-        bundled["my-late-edit"] = late_entry
-        del bundled[late_removal]
-        bundled["gpt-4o-mini"] = {**bundled["gpt-4o-mini"], "input_cost_per_token": 42.0}
-        bundled["gpt-4o"] = {**bundled["gpt-4o"], "input_cost_per_token": 42.0}
-        litellm.model_cost["gpt-4o"] = {**litellm.model_cost["gpt-4o"], "input_cost_per_token": 7.0}
-
-    litellm_utils.set_live_deployment_replay(write_through_the_reference_read_before_the_swap)
-    try:
-        assert started.wait(timeout=10)
-    finally:
-        _finish_fetch(release)
-        litellm_utils.set_live_deployment_replay(original_replay)
-
-    assert litellm.model_cost is not bundled
-    assert "claude-remote-only-test" in litellm.model_cost
-    assert litellm.model_cost["my-late-edit"] is late_entry
-    assert late_removal not in litellm.model_cost
-    assert litellm.model_cost["gpt-4o-mini"]["input_cost_per_token"] == 42.0
-    assert litellm.model_cost["gpt-4o"]["input_cost_per_token"] == 7.0
-
-
 def _remote_map_repricing_gpt_4o() -> tuple[bytes, float]:
     remote_map = _load_root_cost_map()
     remote_price = remote_map["gpt-4o"]["input_cost_per_token"] * 10
     remote_map["gpt-4o"] = {**remote_map["gpt-4o"], "input_cost_per_token": remote_price}
     return json.dumps(remote_map).encode(), remote_price
+
+
+def _remote_map_repricing_gpt_4o_and_adding(model: str) -> tuple[bytes, float]:
+    body, remote_price = _remote_map_repricing_gpt_4o()
+    remote_map = json.loads(body)
+    remote_map[model] = {"litellm_provider": "anthropic", "mode": "chat"}
+    return json.dumps(remote_map).encode(), remote_price
+
+
+def test_references_to_the_map_taken_at_import_see_the_remote_map_once_it_lands(
+    isolated_litellm_cost_state, monkeypatch
+):
+    import litellm
+    from litellm.litellm_core_utils.get_model_cost_map import load_model_cost_map_at_import
+
+    body, remote_price = _remote_map_repricing_gpt_4o_and_adding("claude-remote-only-test")
+    client, started, release = _held_client(httpx.Response(200, content=body))
+    try:
+        monkeypatch.setattr(litellm, "model_cost", load_model_cost_map_at_import(url=_URL, client=client))
+        held_map = litellm.model_cost
+        held_entry = litellm.model_cost["gpt-4o"]
+        assert started.wait(timeout=10)
+    finally:
+        _finish_fetch(release)
+
+    held_map["my-direct-edit"] = {"litellm_provider": "openai", "mode": "chat"}
+    assert held_map["gpt-4o"]["input_cost_per_token"] == remote_price
+    assert held_entry["input_cost_per_token"] == remote_price
+    assert "claude-remote-only-test" in held_map
+    assert "my-direct-edit" in litellm.model_cost
+
+
+def test_a_price_pinned_to_its_bundled_value_before_the_remote_map_lands_keeps_it(
+    isolated_litellm_cost_state, monkeypatch
+):
+    import litellm
+    from litellm.litellm_core_utils.get_model_cost_map import load_model_cost_map_at_import
+
+    body, remote_price = _remote_map_repricing_gpt_4o()
+    client, started, release = _held_client(httpx.Response(200, content=body))
+    try:
+        monkeypatch.setattr(litellm, "model_cost", load_model_cost_map_at_import(url=_URL, client=client))
+        assert started.wait(timeout=10)
+        bundled_price = litellm.model_cost["gpt-4o"]["input_cost_per_token"]
+        litellm.model_cost["gpt-4o"]["input_cost_per_token"] = float(repr(bundled_price))
+    finally:
+        _finish_fetch(release)
+
+    assert remote_price != bundled_price
+    assert litellm.model_cost["gpt-4o"]["input_cost_per_token"] == bundled_price
+
+
+def test_a_model_cost_the_caller_replaces_while_the_remote_map_is_merged_stays_theirs(
+    isolated_litellm_cost_state, monkeypatch
+):
+    import litellm
+    from litellm.litellm_core_utils.get_model_cost_map import load_model_cost_map_at_import
+
+    caller_map = {"my-model": {"litellm_provider": "openai", "mode": "chat"}}
+    local_loads = []
+
+    def local_replacing_the_map_once_the_merge_starts():
+        local_loads.append(None)
+        if len(local_loads) == 2:
+            monkeypatch.setattr(litellm, "model_cost", caller_map)
+        return GetModelCostMap.load_local_model_cost_map_with_revision()
+
+    client, started, release = _held_client(httpx.Response(200, content=_remote_map_with("claude-remote-only-test")))
+    try:
+        monkeypatch.setattr(
+            litellm,
+            "model_cost",
+            load_model_cost_map_at_import(url=_URL, client=client, local=local_replacing_the_map_once_the_merge_starts),
+        )
+        assert started.wait(timeout=10)
+    finally:
+        _finish_fetch(release)
+
+    assert len(local_loads) == 2
+    assert litellm.model_cost is caller_map
+    assert "claude-remote-only-test" not in litellm.model_cost
+
+
+class _BlockingSleeps:
+    def __init__(self):
+        self.waits = []
+        self.called = threading.Semaphore(0)
+        self.release = threading.Event()
+
+    def __call__(self, seconds: float) -> None:
+        self.waits.append(seconds)
+        self.called.release()
+        self.release.wait(timeout=10)
+
+
+def test_a_fetch_resumed_after_fork_during_a_retry_wait_waits_out_the_rest_of_it(
+    isolated_litellm_cost_state, monkeypatch
+):
+    import litellm
+    from litellm.litellm_core_utils import get_model_cost_map as module
+
+    served = []
+
+    def handler(request):
+        served.append(request)
+        if len(served) == 1:
+            return httpx.Response(429, headers={"Retry-After": "30"})
+        return httpx.Response(200, content=_remote_map_with("claude-remote-only-test"))
+
+    sleeps = _BlockingSleeps()
+    try:
+        monkeypatch.setattr(
+            litellm,
+            "model_cost",
+            module.load_model_cost_map_at_import(
+                url=_URL,
+                client=httpx.Client(transport=httpx.MockTransport(handler)),
+                sleep=sleeps,
+                rng=random.Random(0),
+            ),
+        )
+        assert sleeps.called.acquire(timeout=10)
+        module._resume_import_fetch_after_fork()
+        assert sleeps.called.acquire(timeout=10)
+        requests_during_the_wait = len(served)
+    finally:
+        _finish_fetch(sleeps.release)
+
+    parent_wait, resumed_wait = sleeps.waits[:2]
+    assert requests_during_the_wait == 1
+    assert 0 < resumed_wait <= parent_wait
+    assert "claude-remote-only-test" in litellm.model_cost
 
 
 def test_a_router_built_before_the_remote_map_lands_prices_its_models_from_the_remote_map(
@@ -1300,6 +1395,10 @@ def test_a_lookup_that_missed_before_the_fetch_settled_retries_only_once_the_rem
             ),
             id="completion_cost",
         ),
+        pytest.param(
+            lambda: 1000 * litellm.get_model_info("gpt-4o")["input_cost_per_token"],
+            id="get_model_info",
+        ),
     ],
 )
 def test_a_cost_computed_while_the_remote_map_is_in_flight_uses_its_price(
@@ -1314,6 +1413,25 @@ def test_a_cost_computed_while_the_remote_map_is_in_flight_uses_its_price(
         monkeypatch.setattr(litellm, "model_cost", load_model_cost_map_at_import(url=_URL, client=client))
         assert started.wait(timeout=10)
         cost = price_a_thousand_prompt_tokens()
+    finally:
+        _finish_fetch(release)
+
+    assert waits.waited.is_set()
+    assert cost == pytest.approx(1000 * remote_price)
+
+
+def test_a_cost_computed_while_the_first_attempt_outlasts_the_fetch_timeout_still_uses_the_remote_price(
+    isolated_litellm_cost_state, monkeypatch, release_when_a_lookup_waits
+):
+    from litellm.litellm_core_utils.get_model_cost_map import load_model_cost_map_at_import
+
+    body, remote_price = _remote_map_repricing_gpt_4o()
+    client, started, release = _held_client(httpx.Response(200, content=body))
+    waits = release_when_a_lookup_waits(release)
+    try:
+        monkeypatch.setattr(litellm, "model_cost", load_model_cost_map_at_import(url=_URL, client=client, timeout=0))
+        assert started.wait(timeout=10)
+        cost = litellm.cost_per_token(model="gpt-4o", prompt_tokens=1000, completion_tokens=0)[0]
     finally:
         _finish_fetch(release)
 
