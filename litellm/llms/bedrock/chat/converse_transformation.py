@@ -12,6 +12,7 @@ from itertools import chain
 from typing import TYPE_CHECKING, Final, Literal, cast, overload
 
 import httpx
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_logger
@@ -54,7 +55,9 @@ from litellm.llms.bedrock.common_utils import (
     bedrock_chat_uses_native_structured_output,
     bedrock_cleaned_output_schema,
     bedrock_native_output_format,
+    bedrock_native_output_is_opt_in,
     deployment_model_info,
+    requests_output_config_format,
 )
 from litellm.llms.bedrock.request_metadata import (
     bedrock_request_metadata_headers,
@@ -133,6 +136,18 @@ UNSUPPORTED_BEDROCK_CONVERSE_BETA_PATTERNS: Final = [
     "prompt-caching",  # Prompt caching not supported in Converse API
     "compact-2026-01-12",  # The compact beta feature is not currently supported on the Converse and ConverseStream APIs
 ]
+
+
+_OUTPUT_CONFIG_BLOCK: Final = TypeAdapter(OutputConfigBlock)
+
+
+def _has_native_text_format(output_config: object) -> bool:
+    if not isinstance(output_config, Mapping):
+        return False
+    try:
+        return _OUTPUT_CONFIG_BLOCK.validate_python(output_config).get("textFormat") is not None
+    except ValidationError:
+        return False
 
 
 class AmazonConverseConfig(BaseConfig):
@@ -1322,6 +1337,22 @@ class AmazonConverseConfig(BaseConfig):
 
         optional_params["json_mode"] = True
         return optional_params
+
+    @staticmethod
+    def sends_native_text_format(optional_params: Mapping[str, object]) -> bool:
+        return _has_native_text_format(optional_params.get("outputConfig"))
+
+    def uses_opt_in_native_output(
+        self, model: str, optional_params: Mapping[str, object], litellm_params: Mapping[str, object]
+    ) -> bool:
+        native_output_requested: Final = (
+            optional_params.get("json_mode") is True and self.sends_native_text_format(optional_params)
+        ) or requests_output_config_format(optional_params)
+        return native_output_requested and bedrock_native_output_is_opt_in(
+            bedrock_capability_model(model, litellm_params.get("base_model")),
+            self.custom_llm_provider or "bedrock_converse",
+            deployment_model_info(litellm_params),
+        )
 
     def update_optional_params_with_thinking_tokens(self, non_default_params: dict, optional_params: dict):
         """
