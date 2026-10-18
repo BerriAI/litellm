@@ -1291,9 +1291,8 @@ def _stream_builder_response_cost(response: ModelResponse, logging_obj: Optional
         return float(usage_cost)
     if logging_obj is not None:
         return None
-    provider_hint: Final = response._hidden_params.get(  # pyright: ignore[reportPrivateUsage]  # no public accessor
-        "custom_llm_provider"
-    )
+    provider_hint_value: Final = response.hidden_params.get("custom_llm_provider")
+    provider_hint: Final = provider_hint_value if isinstance(provider_hint_value, str) else None
     try:
         return litellm.completion_cost(completion_response=response, custom_llm_provider=provider_hint)
     except Exception:
