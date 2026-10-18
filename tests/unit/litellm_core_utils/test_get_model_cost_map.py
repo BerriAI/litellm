@@ -9,7 +9,6 @@ import logging
 import os
 import sys
 import threading
-import time
 from typing import Final
 
 import boto3
@@ -816,8 +815,7 @@ def _held_client(outcome):
 
     def handler(request):
         started.set()
-        release.wait(timeout=10)
-        return outcome
+        return outcome if release.wait(timeout=10) else httpx.Response(503)
 
     return httpx.Client(transport=httpx.MockTransport(handler)), started, release
 
@@ -950,13 +948,16 @@ def test_import_load_reports_why_the_remote_fetch_failed(isolated_litellm_cost_s
 def test_import_load_under_uwsgi_returns_the_remote_map_once_fetched(isolated_litellm_cost_state):
     from litellm.litellm_core_utils.get_model_cost_map import load_model_cost_map_at_import
 
-    client, _, release = _held_client(httpx.Response(200, content=_remote_map_with("claude-remote-only-test")))
-    threading.Timer(0.2, release.set).start()
-    try:
-        loaded = load_model_cost_map_at_import(url=_URL, client=client, fetch_before_returning=lambda: True)
-    finally:
-        _finish_fetch(release)
+    fetched_on = []
 
+    def handler(request):
+        fetched_on.append(threading.current_thread())
+        return httpx.Response(200, content=_remote_map_with("claude-remote-only-test"))
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    loaded = load_model_cost_map_at_import(url=_URL, client=client, fetch_before_returning=lambda: True)
+
+    assert fetched_on == [threading.current_thread()]
     assert "claude-remote-only-test" in loaded
     assert get_model_cost_map_source_info()["source"] == "remote"
 
@@ -990,19 +991,34 @@ def test_a_retry_scheduled_while_import_is_still_running_is_not_pushed_back_by_t
 
     monkeypatch.setattr(module, "_litellm_import_complete", threading.Event())
     sleeps = _BlockingSleeps()
+    clock = _SteppedClock()
     client = httpx.Client(
         transport=httpx.MockTransport(lambda request: httpx.Response(429, headers={"Retry-After": "2"}))
     )
     try:
-        bundled = module.load_model_cost_map_at_import(url=_URL, client=client, sleep=sleeps, rng=random.Random(0))
+        bundled = module.load_model_cost_map_at_import(
+            url=_URL, client=client, sleep=sleeps, rng=random.Random(0), clock=clock
+        )
         monkeypatch.setattr(litellm, "model_cost", bundled)
-        time.sleep(0.5)
+        assert clock.read.wait(timeout=10)
+        clock.now = 0.5
         module.mark_litellm_import_complete()
         assert sleeps.called.acquire(timeout=10)
     finally:
         _finish_fetch(sleeps.release)
 
-    assert sleeps.waits[0] < 1.6
+    assert sleeps.waits[0] == pytest.approx(1.5)
+
+
+class _SteppedClock:
+    def __init__(self):
+        self.now = 0.0
+        self.read = threading.Event()
+
+    def __call__(self) -> float:
+        now = self.now
+        self.read.set()
+        return now
 
 
 def test_a_fetch_resumed_after_fork_adopts_the_remote_map_while_the_inherited_one_hangs(
@@ -1737,7 +1753,7 @@ def test_a_cost_computed_while_the_remote_map_is_in_flight_uses_its_price(
 
 
 async def test_an_async_call_priced_while_the_remote_map_is_in_flight_keeps_the_event_loop_running(
-    isolated_litellm_cost_state, monkeypatch
+    isolated_litellm_cost_state, monkeypatch, release_when_a_lookup_waits
 ):
     from litellm.litellm_core_utils.get_model_cost_map import load_model_cost_map_at_import
 
@@ -1751,24 +1767,19 @@ async def test_an_async_call_priced_while_the_remote_map_is_in_flight_keeps_the_
 
     await embed()
 
-    async def loop_gaps_while(call):
-        task = asyncio.ensure_future(call)
-        ticks = [time.monotonic()]
-        while not task.done():
-            await asyncio.sleep(0.01)
-            ticks.append(time.monotonic())
-        return await task, tuple(later - earlier for earlier, later in zip(ticks, ticks[1:]))
-
     try:
-        monkeypatch.setattr(litellm, "model_cost", load_model_cost_map_at_import(url=_URL, client=client))
+        monkeypatch.setattr(
+            litellm, "model_cost", load_model_cost_map_at_import(url=_URL, client=client, max_attempts=1)
+        )
         assert started.wait(timeout=10)
-        threading.Timer(0.5, release.set).start()
-        response, gaps = await loop_gaps_while(embed())
+        lookup = release_when_a_lookup_waits(threading.Event())
+        priced = asyncio.ensure_future(embed())
+        assert await asyncio.to_thread(lookup.waited.wait, 10)
+        release.set()
+        response = await priced
     finally:
         _finish_fetch(release)
 
-    assert max(gaps) < 0.25
-    assert sum(gaps) >= 0.5
     assert response._hidden_params["response_cost"] == pytest.approx(10 * remote_price)
 
 

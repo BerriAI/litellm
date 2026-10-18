@@ -713,6 +713,7 @@ class _ImportFetch:
     bundled: dict[str, object]  # mutable-ok: litellm.model_cost itself, which the remote map is merged into
     loaded: Mapping[str, Mapping[str, object]]
     local: Callable[[], ModelCostMapReloaded]
+    clock: Callable[[], float]
     first_attempt: int = 1
     first_attempt_at: float = 0.0
     first_attempt_settled: threading.Event = field(default_factory=threading.Event)
@@ -972,16 +973,16 @@ def _run_import_fetch(fetch: _ImportFetch) -> None:
         scheduled: Final = _PendingImportFetch.next_attempt
         retry: Final = _ScheduledAttempt(
             attempt=(scheduled.attempt if scheduled is not None else fetch.first_attempt) + 1,
-            at=time.monotonic() + seconds,
+            at=fetch.clock() + seconds,
         )
         _PendingImportFetch.next_attempt = retry
         _report_import_fetch_failure(fetch, f"Remote fetch failed: {failed.reason}")
         fetch.first_attempt_settled.set()
-        fetch.sleep(max(0.0, retry.at - time.monotonic()))
+        fetch.sleep(max(0.0, retry.at - fetch.clock()))
 
     try:
         if fetch.first_attempt > 1:
-            fetch.sleep(max(0.0, fetch.first_attempt_at - time.monotonic()))
+            fetch.sleep(max(0.0, fetch.first_attempt_at - fetch.clock()))
         _adopt_remote_model_cost_map(
             url=fetch.url,
             timeout=fetch.timeout,
@@ -1116,6 +1117,7 @@ def load_model_cost_map_at_import(
     client: "_SyncGetClient | None" = None,
     local: Callable[[], ModelCostMapReloaded] = GetModelCostMap.load_local_model_cost_map_with_revision,
     fetch_before_returning: Callable[[], bool] = _is_uwsgi_process,
+    clock: Callable[[], float] = time.monotonic,
 ) -> dict:  # mutable-ok: becomes litellm.model_cost, a plain mutable dict by contract
     """
     Return the bundled map right away and fetch the remote one in a background thread,
@@ -1152,6 +1154,7 @@ def load_model_cost_map_at_import(
             bundled=bundled,
             loaded=GetModelCostMap.loaded_model_cost_map(),
             local=local,
+            clock=clock,
         )
     )
     return bundled
