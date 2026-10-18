@@ -17,7 +17,7 @@ from integration._support.forward_proxy import tunnelling_forward_proxy
 from integration._support.process import graceful_stop_seconds, owned_proxy
 from integration._support.tls import server_context, write_self_signed_cert
 from integration._support.vertex import service_account_json
-from integration._support.wire import Reply, Request, wire_server
+from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
@@ -49,11 +49,14 @@ _GEMINI_USAGE: Final = {
     "totalTokenCount": _PROMPT_TOKENS + _COMPLETION_TOKENS,
 }
 _DEPLOYMENT_LOCATIONS: Final = MappingProxyType({"audit-vertex-global": "global", "audit-vertex-us": "us"})
+_GEMINI_ACTIONS: Final = ("generateContent", "streamGenerateContent?alt=sse")
+_CONFIGURED_GATEWAY_PATH: Final = "/google-egress"
 
 
 @dataclass(frozen=True, slots=True)
 class _Rig:
     proxy: Gateway
+    upstream: Wire
 
 
 def _gemini_reply(request: Request) -> Reply:
@@ -243,20 +246,69 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Rig]:
             workers=2,
         ) as proxy,
     ):
-        yield _Rig(proxy)
+        yield _Rig(proxy, upstream)
 
 
-def _spend_for_key(key: str) -> float:
+def _gateway_config(directory: Path, upstream_url: str) -> Path:
+    base: Final = _JSON_OBJECT.validate_python(yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text()))
+    general_settings: Final = base.get("general_settings")
+    assert isinstance(general_settings, dict), base
+    configured_endpoint: Final = {
+        "path": _CONFIGURED_GATEWAY_PATH,
+        "target": f"{upstream_url}/egress",
+        "include_subpath": True,
+        "auth": True,
+    }
+    path: Final = directory / "config.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {**base, "general_settings": {**general_settings, "pass_through_endpoints": [configured_endpoint]}}
+        )
+    )
+    return path
+
+
+@pytest.fixture(scope="module")
+def gateway_rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Rig]:
+    directory: Final = tmp_path_factory.mktemp("passthrough-google-gateway")
+    with (
+        wire_server(_gemini_reply) as upstream,
+        gateway_from_environment() as base,
+        owned_proxy(
+            base,
+            directory,
+            {
+                "GEMINI_API_BASE": f"{upstream.url}/google",
+                "GEMINI_API_KEY": "scripted-gemini-key",
+                "LITELLM_LOCAL_MODEL_COST_MAP": "True",
+            },
+            config=_gateway_config(directory, upstream.url),
+            workers=2,
+        ) as proxy,
+    ):
+        yield _Rig(proxy, upstream)
+
+
+def _spend_row(key: str) -> dict[str, JsonValue]:
     rows: Final = eventually(
         lambda: read_rows(
-            'SELECT spend FROM "LiteLLM_SpendLogs" WHERE api_key=%s', (sha256(key.encode()).hexdigest(),)
+            'SELECT spend, custom_llm_provider FROM "LiteLLM_SpendLogs" WHERE api_key=%s',
+            (sha256(key.encode()).hexdigest(),),
         ),
         lambda found: len(found) == 1,
         seconds=70,
     )
-    spend: Final = rows[0]["spend"]
-    assert isinstance(spend, float), rows
+    return rows[0]
+
+
+def _spend_for_key(key: str) -> float:
+    spend: Final = _spend_row(key)["spend"]
+    assert isinstance(spend, float), key
     return spend
+
+
+def _provider_for_key(key: str) -> JsonValue:
+    return _spend_row(key)["custom_llm_provider"]
 
 
 def _post_and_read(rig: _Rig, path: str, body: Mapping[str, JsonValue], headers: Mapping[str, str]) -> None:
@@ -392,3 +444,106 @@ def test_openai_passthrough_stream_cut_off_after_its_usage_bills_what_the_finish
         spend: Final = {"finished": _spend_for_key(finished_key), "cut off": _spend_for_key(cut_key)}
     list_price: Final = _list_price(_OPENAI_MODEL)
     assert spend == pytest.approx({"finished": list_price, "cut off": list_price})
+
+
+def _caller_headers(route: str, key: str) -> Mapping[str, str]:
+    if route == "vertex_ai":
+        return {"x-litellm-api-key": f"Bearer {key}", "Authorization": f"Bearer {_CALLER_GOOGLE_TOKEN}"}
+    return {"x-goog-api-key": key}
+
+
+def test_a_body_base_model_reprices_passthrough_spend_only_for_keys_that_allow_client_pricing(rig: _Rig) -> None:
+    routes: Final = MappingProxyType(
+        {
+            "vertex_ai": (
+                f"/vertex_ai/v1/projects/{_PROJECT}/locations/global/publishers/google/models/{_GEMINI}",
+                "gemini-2.5-flash-lite",
+            ),
+            "gemini": (f"/gemini/v1beta/models/{_GEMINI}", "gemini/gemini-2.5-flash-lite"),
+        }
+    )
+    cells: Final = tuple(
+        (route, action, grant) for route in routes for action in _GEMINI_ACTIONS for grant in ("allowed", "plain")
+    )
+    markers: Final = {cell: uuid.uuid4().hex for cell in cells}
+    with rig.proxy.scenario() as scenario:
+        keys: Final = {
+            cell: scenario.key(metadata={"allow_client_pricing_override": True})
+            if cell[2] == "allowed"
+            else scenario.key()
+            for cell in cells
+        }
+        for (route, action, grant), key in keys.items():
+            path, base_model = routes[route]
+            _post_and_read(
+                rig,
+                f"{path}:{action}",
+                {
+                    "contents": [{"role": "user", "parts": [{"text": markers[(route, action, grant)]}]}],
+                    "base_model": base_model,
+                },
+                _caller_headers(route, key),
+            )
+        spend: Final = {cell: _spend_for_key(key) for cell, key in keys.items()}
+    forwarded: Final = rig.upstream.drain()
+    marked_bodies: Final = {
+        cell: tuple(request.body for request in forwarded if marker.encode() in request.body)
+        for cell, marker in markers.items()
+    }
+    assert all(len(bodies) == 1 and b"base_model" not in bodies[0] for bodies in marked_bodies.values()), marked_bodies
+    expected_price: Final = {
+        "vertex_ai": {"allowed": _list_price("gemini-2.5-flash-lite"), "plain": _list_price(f"vertex_ai/{_GEMINI}")},
+        "gemini": {"allowed": _list_price("gemini/gemini-2.5-flash-lite"), "plain": _list_price(f"gemini/{_GEMINI}")},
+    }
+    assert spend == pytest.approx({cell: expected_price[cell[0]][cell[2]] for cell in cells})
+
+
+def test_gemini_passthrough_through_a_gemini_api_base_gateway_logs_and_bills_as_gemini_in_both_modes(
+    gateway_rig: _Rig,
+) -> None:
+    body: Final[Mapping[str, JsonValue]] = {"contents": [{"role": "user", "parts": [{"text": "hi"}]}]}
+    with gateway_rig.proxy.scenario() as scenario:
+        keys: Final = {action: scenario.key() for action in _GEMINI_ACTIONS}
+        for action, key in keys.items():
+            _post_and_read(gateway_rig, f"/gemini/v1beta/models/{_GEMINI}:{action}", body, {"x-goog-api-key": key})
+        providers: Final = {action: _provider_for_key(key) for action, key in keys.items()}
+        spend: Final = {action: _spend_for_key(key) for action, key in keys.items()}
+    forwarded: Final = tuple(
+        path
+        for path in (urlsplit(request.target).path for request in gateway_rig.upstream.drain())
+        if path.startswith("/google/")
+    )
+    assert sorted(forwarded) == sorted(
+        f"/google/v1beta/models/{_GEMINI}:{action.split('?')[0]}" for action in _GEMINI_ACTIONS
+    )
+    assert providers == {action: "gemini" for action in _GEMINI_ACTIONS}
+    assert spend == pytest.approx({action: _list_price(f"gemini/{_GEMINI}") for action in _GEMINI_ACTIONS})
+
+
+def test_a_configured_passthrough_to_a_non_google_host_bills_vertex_resource_paths_as_vertex_and_the_rest_as_gemini(
+    gateway_rig: _Rig,
+) -> None:
+    body: Final[Mapping[str, JsonValue]] = {"contents": [{"role": "user", "parts": [{"text": "hi"}]}]}
+    routes: Final = MappingProxyType(
+        {
+            "vertex resource": f"/v1/projects/{_PROJECT}/locations/us/publishers/google/models/{_GEMINI}",
+            "gemini api": f"/v1beta/models/{_GEMINI}",
+        }
+    )
+    cells: Final = tuple((route, action) for route in routes for action in _GEMINI_ACTIONS)
+    with gateway_rig.proxy.scenario() as scenario:
+        keys: Final = {cell: scenario.key(allowed_passthrough_routes=[_CONFIGURED_GATEWAY_PATH]) for cell in cells}
+        for (route, action), key in keys.items():
+            _post_and_read(
+                gateway_rig,
+                f"{_CONFIGURED_GATEWAY_PATH}{routes[route]}:{action}",
+                body,
+                {"Authorization": f"Bearer {key}"},
+            )
+        providers: Final = {cell: _provider_for_key(key) for cell, key in keys.items()}
+        spend: Final = {cell: _spend_for_key(key) for cell, key in keys.items()}
+    regional: Final = _list_price(f"vertex_ai/{_GEMINI}") * _uplift(f"vertex_ai/{_GEMINI}")
+    assert providers == {cell: "vertex_ai" if cell[0] == "vertex resource" else "gemini" for cell in cells}
+    assert spend == pytest.approx(
+        {cell: regional if cell[0] == "vertex resource" else _list_price(f"gemini/{_GEMINI}") for cell in cells}
+    )
