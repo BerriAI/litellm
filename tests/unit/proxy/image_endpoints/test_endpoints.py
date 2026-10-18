@@ -3,7 +3,7 @@ import copy
 import logging
 from collections.abc import Iterator, Mapping
 from types import SimpleNamespace
-from typing import Any, Dict
+from typing import Any
 
 import orjson
 import pytest
@@ -28,7 +28,7 @@ async def test_image_generation_prompt_rerouting(monkeypatch):
     async def fake_update_request_status(**_: Any) -> None:
         await asyncio.sleep(0)
 
-    proxy_logger_calls: Dict[str, Any] = {}
+    proxy_logger_calls: dict[str, Any] = {}
 
     async def fake_pre_call_hook(*, user_api_key_dict, data, call_type):  # type: ignore[override]
         proxy_logger_calls["pre_call_input"] = copy.deepcopy(data)
@@ -60,7 +60,7 @@ async def test_image_generation_prompt_rerouting(monkeypatch):
         post_call_response_headers_hook=fake_post_call_response_headers_hook,
     )
 
-    captured_route_request_data: Dict[str, Any] = {}
+    captured_route_request_data: dict[str, Any] = {}
 
     async def fake_route_request(*, data, **kwargs):  # type: ignore[override]
         captured_route_request_data.update(data)
@@ -126,7 +126,7 @@ async def test_image_generation_prompt_rerouting(monkeypatch):
 @pytest.mark.asyncio
 async def test_image_generation_router_rejection_dispatches_failure_callback(monkeypatch):
     """Ensure router rejection (budget, cooldown, etc.) triggers failure handlers on litellm_logging_obj."""
-    from unittest.mock import AsyncMock, MagicMock
+    from unittest.mock import AsyncMock
 
     async def fake_add_litellm_data_to_request(**kwargs):
         return kwargs["data"]
@@ -135,10 +135,6 @@ async def test_image_generation_router_rejection_dispatches_failure_callback(mon
         pre_call_hook=AsyncMock(side_effect=lambda user_api_key_dict, data, call_type: data),
         post_call_failure_hook=AsyncMock(),
     )
-
-    # Mock router whose async_get_available_deployment rejects the request
-    mock_router = MagicMock()
-    mock_failure_dispatch = AsyncMock()
 
     class RejectingRouter:
         model_names = ["dall-e-3"]
@@ -214,13 +210,12 @@ async def test_image_generation_router_rejection_dispatches_failure_callback(mon
     assert str(dispatched_exceptions[0]) == "No deployment available"
 
 
-
-def _image_edit_client(monkeypatch, captured: Dict[str, Any]) -> TestClient:
+def _image_edit_client(monkeypatch, captured: dict[str, Any]) -> TestClient:
     class CaptureProcessing:
-        def __init__(self, data: Dict[str, Any]) -> None:
+        def __init__(self, data: dict[str, Any]) -> None:
             captured.update(data)
 
-        async def base_process_llm_request(self, **_: Any) -> Dict[str, Any]:
+        async def base_process_llm_request(self, **_: Any) -> dict[str, Any]:
             return {"data": [{"b64_json": "aGk="}]}
 
     monkeypatch.setattr(endpoints, "ProxyBaseLLMRequestProcessing", CaptureProcessing)
@@ -235,7 +230,7 @@ def _image_edit_client(monkeypatch, captured: Dict[str, Any]) -> TestClient:
 
 def test_image_edit_image_array_alias_is_not_forwarded(monkeypatch):
     """The documented `image[]` alias must reach the provider only as `image`."""
-    captured: Dict[str, Any] = {}
+    captured: dict[str, Any] = {}
 
     response = _image_edit_client(monkeypatch, captured).post(
         "/v1/images/edits",
@@ -251,7 +246,7 @@ def test_image_edit_image_array_alias_is_not_forwarded(monkeypatch):
 
 def test_image_edit_mask_array_alias_is_not_forwarded(monkeypatch):
     """`mask[]` has the same shape as `image[]` and must be dropped the same way."""
-    captured: Dict[str, Any] = {}
+    captured: dict[str, Any] = {}
 
     response = _image_edit_client(monkeypatch, captured).post(
         "/v1/images/edits",
@@ -270,7 +265,7 @@ def test_image_edit_mask_array_alias_is_not_forwarded(monkeypatch):
 
 def test_image_edit_canonical_file_fields_still_reach_the_provider(monkeypatch):
     """Dropping the bracketed aliases must not touch the canonical fields."""
-    captured: Dict[str, Any] = {}
+    captured: dict[str, Any] = {}
 
     response = _image_edit_client(monkeypatch, captured).post(
         "/v1/images/edits",
@@ -289,7 +284,7 @@ def test_image_edit_canonical_file_fields_still_reach_the_provider(monkeypatch):
 
 def test_image_edit_multipart_n_reaches_the_provider_as_an_int(monkeypatch):
     """A multipart `n` must not arrive as the string Starlette parsed it into."""
-    captured: Dict[str, Any] = {}
+    captured: dict[str, Any] = {}
 
     response = _image_edit_client(monkeypatch, captured).post(
         "/v1/images/edits",
@@ -306,7 +301,7 @@ def test_image_edit_multipart_n_reaches_the_provider_as_an_int(monkeypatch):
 
 def test_image_edit_multipart_n_that_is_not_a_number_is_left_alone(monkeypatch):
     """An unparseable `n` still reaches the provider, which rejects it as before."""
-    captured: Dict[str, Any] = {}
+    captured: dict[str, Any] = {}
 
     response = _image_edit_client(monkeypatch, captured).post(
         "/v1/images/edits",
@@ -332,7 +327,7 @@ def test_image_edit_multipart_n_that_is_not_a_number_is_left_alone(monkeypatch):
 def test_image_edit_without_an_optional_field_reaches_the_provider_with_it_set_to_none(
     monkeypatch, files, form, missing
 ):
-    captured: Dict[str, Any] = {}
+    captured: dict[str, Any] = {}
 
     response = _image_edit_client(monkeypatch, captured).post("/v1/images/edits", files=files or None, data=form)
 

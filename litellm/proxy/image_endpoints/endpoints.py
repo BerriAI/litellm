@@ -1,7 +1,7 @@
 import asyncio
-from datetime import datetime
 import io
 from collections.abc import Sequence
+from datetime import datetime
 from itertools import chain
 from types import MappingProxyType
 from typing import Final, get_type_hints
