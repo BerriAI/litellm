@@ -1,3 +1,4 @@
+use litellm_host::protocol::InterceptRequest;
 use std::{
     sync::{Arc, Mutex},
     time::Duration,
@@ -162,6 +163,26 @@ impl litellm_host::lifecycle::CallObserver for LocalMessagesHost {
 impl litellm_host::interceptors::Interceptors<<Messages as litellm_host::protocol::Protocol>::Error>
     for LocalMessagesHost
 {
+    async fn handle(
+        &self,
+        request: InterceptRequest,
+    ) -> Result<(), <Messages as litellm_host::protocol::Protocol>::Error> {
+        match request {
+            InterceptRequest::BeforeProviderRequest {
+                wire,
+                context,
+                reply,
+            } => reply.send(self.before_provider_request(*wire, *context).await?),
+            InterceptRequest::AfterProviderResponse { raw, reply } => {
+                reply.send(self.after_provider_response(raw).await?);
+            }
+            other => other.pass_through(),
+        }
+        Ok(())
+    }
+}
+
+impl LocalMessagesHost {
     async fn before_provider_request(
         &self,
         wire: litellm_host::interceptors::WireRequest,
