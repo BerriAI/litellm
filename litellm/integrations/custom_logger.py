@@ -914,19 +914,22 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         import litellm
         from litellm import Choices, Message, ModelResponse
         from litellm.litellm_core_utils.classifier_logging import CLASSIFIER_AUDIT_FIELDS
-        from litellm.litellm_core_utils.redact_messages import redacted_litellm_params
+        from litellm.litellm_core_utils.redact_messages import redacted_guardrail_information, redacted_litellm_params
 
         turn_off_message_logging: Final[bool] = getattr(self, "turn_off_message_logging", False)
+        redact_prompt_content: Final = turn_off_message_logging or getattr(self, "message_logging", True) is False
         excluded_fields: Final[list[str] | None] = getattr(litellm, "standard_logging_payload_excluded_fields", None)
 
         # Early return if no processing needed
-        if turn_off_message_logging is False and not excluded_fields:
+        if not redact_prompt_content and not excluded_fields:
             return model_call_details
 
         params: Final = model_call_details.get("litellm_params")
         redacted_params: Final = (
-            MappingProxyType({"litellm_params": redacted_litellm_params(params)})
-            if turn_off_message_logging and isinstance(params, Mapping)
+            MappingProxyType(
+                {"litellm_params": redacted_litellm_params(params, redact_request_body=turn_off_message_logging)}
+            )
+            if redact_prompt_content and isinstance(params, Mapping)
             else EMPTY_MAPPING
         )
         standard_logging_object: Final = model_call_details.get("standard_logging_object")
@@ -935,7 +938,9 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
 
         # Make a copy of just the standard_logging_object to avoid modifying the original
         standard_logging_object_copy: Final = {
-            key: value
+            key: redacted_guardrail_information(value)
+            if redact_prompt_content and key == "guardrail_information"
+            else value
             for key, value in standard_logging_object.items()
             if key not in (excluded_fields or ()) and not (turn_off_message_logging and key in CLASSIFIER_AUDIT_FIELDS)
         }

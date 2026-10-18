@@ -1798,3 +1798,33 @@ async def test_redaction_with_metadata_completion_api():
     response = standard_logging_payload["response"]
     assert response["choices"][0]["message"]["content"] == "redacted-by-litellm"
     assert standard_logging_payload["messages"][0]["content"] == "redacted-by-litellm"
+
+
+@pytest.mark.parametrize("metadata_field", ["metadata", "litellm_metadata"])
+@pytest.mark.parametrize("entry_shape", ["single", "list", "tuple"])
+def test_legacy_redaction_removes_compressed_snapshots_from_all_logging_copies(
+    metadata_field: str, entry_shape: str
+) -> None:
+    entry: Final = {
+        "guardrail_response": {
+            "compressed_messages": [{"role": "user", "content": "Compressed private canary"}],
+            "tokens_saved": 42,
+        }
+    }
+    entries: Final = entry if entry_shape == "single" else ([entry] if entry_shape == "list" else (entry,))
+    details: Final = {
+        "standard_logging_object": {"guardrail_information": entries},
+        "litellm_params": {metadata_field: {"standard_logging_guardrail_information": entries}},
+    }
+    perform_redaction(details, None, redact_streaming_responses=False)
+    assert "Compressed private canary" not in str(details)
+    assert "tokens_saved" in str(details)
+    assert "Compressed private canary" in str(entry)
+
+
+@pytest.mark.parametrize("response", [None, "allow", {"tokens_saved": 42}])
+def test_guardrail_redaction_preserves_records_without_a_compressed_snapshot(response: object) -> None:
+    from litellm.litellm_core_utils.redact_messages import redacted_guardrail_information
+
+    entry: Final = {"guardrail_response": response}
+    assert redacted_guardrail_information([None, entry]) == [None, entry]
