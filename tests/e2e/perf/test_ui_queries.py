@@ -66,9 +66,7 @@ class Prepared:
 def _page_two(transport: HttpTransport, case: UiQueryCase, timeout: float) -> Prepared:
     if case.cursor == "none":
         return Prepared(case)
-    params: Final = Params.model_validate(case.params.model_dump()).model_copy(
-        update={"page": 1 if case.cursor == "session" else None}
-    )
+    params: Final = Params.model_validate(case.params.model_dump()).model_copy(update={"page": 1})
     first: Final = replace(case, params=params)
     sample, document = measure(lambda: issue_query(transport, first, timeout=timeout), case.contract)
     if sample.error or document is None:

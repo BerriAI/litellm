@@ -83,7 +83,7 @@ class UiQueryCase:
     contract: Contract
     surface: Literal["current"] = "current"
     body: BaseModel | None = None
-    cursor: Literal["none", "session", "prompt_cache"] = "none"
+    cursor: Literal["none", "session"] = "none"
 
 
 class Sample(BaseModel):

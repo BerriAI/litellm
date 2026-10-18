@@ -19,17 +19,6 @@ from setup.ui_queries import (
 from setup.ui_query_cases import Params, cases, next_page
 
 
-def test_request_id_lookup_includes_the_logs_window() -> None:
-    case: Final = next(case for case in cases(datetime(2026, 1, 1, tzinfo=UTC), "key") if case.name == "log_id_lookup")
-    assert case.params.model_dump(exclude_none=True) == {
-        "start_date": "2025-12-31 00:00:00",
-        "end_date": "2026-01-01 00:00:00",
-        "page": 1,
-        "page_size": 1,
-        "request_id": "perf-ui-1",
-    }
-
-
 def test_query_string_preserves_ui_arrays_and_boolean_strings() -> None:
     requests: Final = cases(datetime(2026, 1, 1, tzinfo=UTC), "key")
     cache: Final = next(case for case in requests if case.name == "cache_activity_filtered")
@@ -39,13 +28,13 @@ def test_query_string_preserves_ui_arrays_and_boolean_strings() -> None:
         "key_aliases": ["perf-key-0", "perf-key-1"],
         "models": ["perf-chat"],
     }
-    credentials: Final = next(case for case in requests if case.name == "logs_used_client_oauth_token")
-    query: Final = parse_qs(urlsplit(query_path(credentials)).query)
-    assert query["used_client_oauth_token"] == ["false"]
+    health: Final = next(case for case in requests if case.name == "logs_exclude_internal_health_checks")
+    query: Final = parse_qs(urlsplit(query_path(health)).query)
+    assert query["exclude_internal_health_checks"] == ["true"]
     assert query["group_by_session"] == ["true"]
 
 
-@pytest.mark.parametrize("entity", ("user", "team", "tag", "organization", "customer", "agent"))
+@pytest.mark.parametrize("entity", ("user", "team", "tag", "customer"))
 @pytest.mark.parametrize(
     ("route", "extra"),
     (
@@ -69,18 +58,6 @@ def test_usage_requests_list_keys_without_a_single_key_filter(
         "timezone": "0",
         **({"exclude_team_ids": "litellm-dashboard"} if entity == "team" else {}),
         **extra,
-    }
-
-
-def test_prompt_cache_requests_cover_the_selected_calendar_days() -> None:
-    case: Final = next(
-        case for case in cases(datetime(2026, 1, 1, tzinfo=UTC), "key") if case.name == "prompt_cache_all"
-    )
-    assert case.params.model_dump(exclude_none=True) == {
-        "start_date": "2025-12-02T00:00:00.000Z",
-        "end_date": "2026-01-01T23:59:59.999Z",
-        "filter": "all",
-        "page_size": 10,
     }
 
 
@@ -108,19 +85,6 @@ def test_session_cursor_is_reused_and_repeated_rows_rejected() -> None:
     assert Params.model_validate(second.params).page == 2
     with pytest.raises(AssertionError, match="Repeated page-one row"):
         _ = second.contract.count(first)
-
-
-def test_prompt_cache_cursor_preserves_both_fields() -> None:
-    case: Final = next(case for case in cases(datetime(2026, 1, 1, tzinfo=UTC), "key") if case.cursor == "prompt_cache")
-    first: Final = Document.model_validate_json(
-        '{"requests":[{"request_id":"one"}],"next_cursor":{"start_time":"2026-01-01T00:00:00Z","request_id":"one"}}'
-    )
-    params: Final = Params.model_validate(next_page(case, first).params)
-    assert params.cursor_start_time == "2026-01-01T00:00:00Z"
-    assert params.cursor_request_id == "one"
-    assert params.page is None
-    with pytest.raises(AssertionError, match="Missing prompt-cache cursor"):
-        _ = next_page(case, Document.model_validate_json('{"requests":[{"request_id":"one"}],"next_cursor":null}'))
 
 
 def test_first_query_is_separate_from_repeated_latency() -> None:

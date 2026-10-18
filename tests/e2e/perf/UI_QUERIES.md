@@ -2,7 +2,7 @@
 
 Run `test_ui_queries.py` against a dedicated proxy and a disposable database restored from the metadata-only performance seed. These tests do not call an LLM or measure browser rendering
 
-The suite measures 69 request shapes across 35 routes used by current dashboard screens. It replays direct HTTP requests, with the seed anchor replacing the wall clock and a UTC browser timezone. It does not run a browser or claim to cover every dashboard request
+The suite measures 49 request shapes across 22 routes used by current dashboard screens. It replays direct HTTP requests against the existing bulk seed, with the seed anchor replacing the wall clock and a UTC browser timezone. It does not run a browser or claim to cover every dashboard request
 
 ## UI callers
 
@@ -11,24 +11,34 @@ All paths below are relative to `ui/litellm-dashboard/src/`. Each case requires 
 | Cases | UI action and source |
 | --- | --- |
 | `logs_*` | Logs > Request Logs, change date range, filter, sort or next page. `components/logs/request/useLogFilterLogic.ts` and `RequestLogsFilters.tsx` |
-| `log_id_lookup` | Open a request-ID deep link. `components/logs/request/RequestLogsPanel.tsx` supplies both dates, page 1 and page size 1 |
-| `log_payload`, `session_logs` | Open a log or session drawer. `components/logs/detail/LogDetailsDrawer.tsx`, `app/(dashboard)/hooks/logDetails/useLogDetails.ts` |
 | `facet_*` | Open, search or scroll the User / End User filter. `app/(dashboard)/hooks/spendLogs/useSpendLogUsers.ts` and `useSpendLogEndUsers.ts` |
 | `usage_*` | Usage overview or entity tab, open key activity, search keys, expand a model group. `app/(dashboard)/usage/_components/components/UsagePageView.tsx`, `EntityUsage/EntityUsage.tsx`, `EntityUsage/entityFetchFns.ts`, `components/UsagePage/components/KeyActivityPanel.tsx` |
 | `team_users_*` | Team Usage. `EntityUsage/EntityUsage.tsx` passes selected teams or all available non-dashboard teams to `TeamUserSpendCard.tsx` |
 | `cache_activity_*` | Caching > Cache Analytics, optionally filter aliases/models. `app/(dashboard)/hooks/caching/useCacheActivity.ts` |
-| `prompt_cache_*` | Cost Optimization > Prompt Caching, select All caching / LiteLLM injected / Cache hits or next page. `app/(dashboard)/cost-optimization/_components/PromptCachingRequestsTable.tsx` |
 | `cache_leakage_keys` | Cost Optimization, switch cache leakage to Keys. `app/(dashboard)/cost-optimization/_components/useCacheLeakageKeys.ts` |
-| `guardrail_logs` | Guardrails Monitor, select a guardrail. `app/(dashboard)/guardrails-monitor/_components/GuardrailDetail.tsx` |
-| `tool_logs` | Tool Policies, select a tool. `components/ToolDetail.tsx` |
 
-Request serialization lives in `components/networking.tsx`. Logs use page size 25 and session grouping, including the next-session cursor returned by page one. The synthetic cursorless page-three request is excluded. Prompt-caching uses complete UTC calendar days and the returned timestamp/request-ID cursor
+Request serialization lives in `components/networking.tsx`. Logs use page size 25 and session grouping, including the next-session cursor returned by page one. The synthetic cursorless page-three request is excluded
 
 Usage list, search and model drilldown requests do not inject an `api_key` filter. Team activity excludes `litellm-dashboard`. Cache leakage supplies `include_current_utc_day=true`. Dates and filter values are deterministic fixture values, not captured production traffic
 
 Old Usage is excluded because its expensive-query gate normally hides those calls at this database size. LiteAdmin's agent-selected reports are excluded from this deterministic dashboard set. Missing-token alias recovery is backend functional coverage, not a separate UI action, and its artificial requests and orphan fixtures are removed
 
 This mapping is source-verified, not browser-recorded. Recheck the named callers when changing cases. Neither browser capture nor an automatic UI-drift checker is installed by this suite
+
+## Dataset scope
+
+Logs, user/end-user dropdowns, team-user spend and cache activity query the bulk SpendLogs data. User, team, tag and customer usage, plus cache leakage, query daily tables aggregated from that dataset. Daily table row counts have not yet been measured on the full-size snapshot. These are sequential large-dataset queries, not concurrent traffic or saturation tests
+
+Excluded because they only had tiny matching fixtures or individual-record lookups: organization/agent usage, guardrail/tool logs, request-ID lookup, payload/session drawers, session/search filters for `perf-ui-*`, the OAuth-token filter, and all prompt-caching request cases. The seed has response-cache hits but no prompt-cache usage or injection metadata, so the prompt-caching cases only matched the 320 added rows. No UI-specific rows are inserted anymore
+
+| Remaining cases | Count | Variations |
+| --- | ---: | --- |
+| Logs | 22 | 24h/7d/30d, page 2 with session cursor, 13 individual filters, five additional descending sorts |
+| User/end-user dropdowns | 6 | Page 1, page 2, search `perf-` for each |
+| User/team/tag/customer usage | 16 | Aggregated totals, keys, key search, model top keys for each |
+| Team-user spend | 2 | All 100 seeded teams or `perf-team-0` |
+| Cache activity | 2 | All or selected aliases/model |
+| Cache leakage keys | 1 | 30-day window |
 
 ## Deployment prerequisites
 
@@ -42,7 +52,7 @@ The cases use explicit dates from the seed anchor where the UI supplies dates. A
 
 ## Run
 
-Set `DATABASE_URL` and `LITELLM_MASTER_KEY` securely for this disposable deployment. The URL must name the same database used by the proxy, with hostname `db-perf-perf-<run>.litellm.svc`. The explicit disposable confirmation permits bounded fixture inserts and cancellation of leftover queries in this database. The fixtures add 320 specialized logs, six daily rows using an existing key, and guardrail/tool index rows. Destroy the disposable database after the run
+Set `DATABASE_URL` and `LITELLM_MASTER_KEY` securely for this disposable deployment. The URL must name the same database used by the proxy, with hostname `db-perf-perf-<run>.litellm.svc`. The explicit disposable confirmation permits cancellation of leftover queries in this database. Setup reads the existing seed checkpoint without adding UI-specific rows. Destroy the disposable database after the run
 
 ```bash
 export LITELLM_PROXY_URL=http://localhost:4000

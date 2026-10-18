@@ -25,8 +25,6 @@ class Params(Query):
     sort_order: str | None = None
     group_by_session: Literal["true"] | None = None
     session_cursor: str | None = None
-    session_id: str | None = None
-    request_id: str | None = None
     api_key: str | None = None
     team_id: str | None = None
     team_ids: str | None = None
@@ -42,16 +40,11 @@ class Params(Query):
     error_message: str | None = None
     span_type: str | None = None
     exclude_internal_health_checks: Literal["true"] | None = None
-    used_client_oauth_token: Literal["true", "false"] | None = None
     lower: str | None = Field(default=None, alias="filter[startTime][gte]")
     upper: str | None = Field(default=None, alias="filter[startTime][lte]")
     q: str | None = None
     key_aliases: tuple[str, ...] | None = None
     models: tuple[str, ...] | None = None
-    filter: Literal["all", "injected", "hits"] | None = None
-    cursor_start_time: str | None = None
-    cursor_request_id: str | None = None
-    guardrail_id: str | None = None
     limit: int | None = None
     tags: str | None = None
     exclude_team_ids: str | None = None
@@ -68,25 +61,12 @@ def next_page(case: UiQueryCase, document: Document) -> UiQueryCase:
     assert isinstance(rows, list), "Missing page-one rows"
     ids: Final = frozenset(str(row["request_id"]) for row in rows if isinstance(row, dict))
     contract: Final = replace(case.contract, excluded_ids=ids)
-    if case.cursor == "session":
-        cursor: Final = descend(document.root, ("next_session_cursor",))
-        assert isinstance(cursor, str) and cursor, "Missing session cursor"
-        return replace(case, params=params.model_copy(update={"page": 2, "session_cursor": cursor}), contract=contract)
-    cursor_data: Final = descend(document.root, ("next_cursor",))
-    assert isinstance(cursor_data, dict), "Missing prompt-cache cursor"
-    start: Final = cursor_data.get("start_time")
-    request_id: Final = cursor_data.get("request_id")
-    assert isinstance(start, str) and isinstance(request_id, str), "Invalid prompt-cache cursor"
-    return replace(
-        case,
-        contract=contract,
-        params=params.model_copy(update={"page": None, "cursor_start_time": start, "cursor_request_id": request_id}),
-    )
+    cursor: Final = descend(document.root, ("next_session_cursor",))
+    assert isinstance(cursor, str) and cursor, "Missing session cursor"
+    return replace(case, params=params.model_copy(update={"page": 2, "session_cursor": cursor}), contract=contract)
 
 
 _LOGS: Final = Contract(("data",), ("request_id", "startTime", "metadata"))
-_REQUESTS: Final = Contract(("requests",), ("request_id", "start_time", "cache_read_tokens", "gateway_injected"))
-_ROWS: Final = Contract(("logs",), ("id", "timestamp", "model"))
 
 
 def log_cases(anchor: datetime, api_key: str) -> tuple[UiQueryCase, ...]:
@@ -108,15 +88,12 @@ def log_cases(anchor: datetime, api_key: str) -> tuple[UiQueryCase, ...]:
         ("model", "perf-chat"),
         ("model_id", "perf-model-0"),
         ("key_alias", "perf-key-0"),
-        ("session_id", "perf-ui-session"),
         ("status_filter", "failure"),
         ("cache_hit_filter", "hit"),
         ("error_code", "429"),
         ("error_message", "Synthetic"),
         ("span_type", "llm"),
-        ("search", "perf-ui-1"),
         ("exclude_internal_health_checks", "true"),
-        ("used_client_oauth_token", "false"),
     )
     return (
         base,
@@ -138,21 +115,6 @@ def log_cases(anchor: datetime, api_key: str) -> tuple[UiQueryCase, ...]:
         *(
             replace(base, name=f"logs_sort_{name}", params=params.model_copy(update={"sort_by": name}))
             for name in ("spend", "total_tokens", "request_duration_ms", "model", "ttft_ms")
-        ),
-        UiQueryCase(
-            "log_id_lookup",
-            "/spend/logs/ui",
-            Params(start_date=params.start_date, end_date=params.end_date, page=1, request_id="perf-ui-1", page_size=1),
-            _LOGS,
-        ),
-        UiQueryCase(
-            "log_payload",
-            "/spend/logs/ui/perf-ui-1",
-            Params(start_date=_timestamp(anchor - timedelta(seconds=10))),
-            Contract(object_fields=("messages", "response", "proxy_server_request")),
-        ),
-        UiQueryCase(
-            "session_logs", "/spend/logs/session/ui", Params(session_id="perf-ui-session", page=1, page_size=100), _LOGS
         ),
     )
 
@@ -187,12 +149,6 @@ def analytics_cases(anchor: datetime) -> tuple[UiQueryCase, ...]:
     dates: Final = Params(
         start_date=(anchor - timedelta(days=7)).date().isoformat(), end_date=anchor.date().isoformat()
     )
-    prompt_dates: Final = Params(
-        start_date=f"{(anchor - timedelta(days=30)).date().isoformat()}T00:00:00.000Z",
-        end_date=f"{anchor.date().isoformat()}T23:59:59.999Z",
-        filter="all",
-        page_size=10,
-    )
     cache: Final = UiQueryCase(
         "cache_activity_7d", "/global/activity/cache_hits", dates, Contract(("groups",), ("call_type",))
     )
@@ -214,36 +170,6 @@ def analytics_cases(anchor: datetime) -> tuple[UiQueryCase, ...]:
             cache,
             name="cache_activity_filtered",
             params=dates.model_copy(update={"key_aliases": ("perf-key-0", "perf-key-1"), "models": ("perf-chat",)}),
-        ),
-        *(
-            UiQueryCase(
-                f"prompt_cache_{filter}",
-                "/cost_optimization/prompt_caching/requests",
-                prompt_dates.model_copy(update={"filter": filter}),
-                _REQUESTS,
-            )
-            for filter in ("all", "injected", "hits")
-        ),
-        UiQueryCase(
-            "prompt_cache_page_2",
-            "/cost_optimization/prompt_caching/requests",
-            prompt_dates,
-            _REQUESTS,
-            cursor="prompt_cache",
-        ),
-        UiQueryCase(
-            "guardrail_logs",
-            "/guardrails/usage/logs",
-            dates.model_copy(update={"guardrail_id": "perf-ui-guardrail", "page": 1, "page_size": 50}),
-            _ROWS,
-        ),
-        UiQueryCase(
-            "tool_logs",
-            "/v1/tool/perf-ui-tool/logs",
-            Params(
-                start_date=_timestamp(anchor - timedelta(days=90)), end_date=_timestamp(anchor), page=1, page_size=50
-            ),
-            _ROWS,
         ),
     )
 
@@ -285,10 +211,7 @@ def _entity_activity_cases(anchor: datetime, entity: str) -> tuple[UiQueryCase, 
 
 
 def activity_cases(anchor: datetime) -> tuple[UiQueryCase, ...]:
-    groups: Final = tuple(
-        _entity_activity_cases(anchor, entity)
-        for entity in ("user", "team", "tag", "organization", "customer", "agent")
-    )
+    groups: Final = tuple(_entity_activity_cases(anchor, entity) for entity in ("user", "team", "tag", "customer"))
     return (
         *chain.from_iterable(groups),
         UiQueryCase(
