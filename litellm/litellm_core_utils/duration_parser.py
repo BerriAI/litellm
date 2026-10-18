@@ -259,14 +259,11 @@ def _setup_timezone(current_time: datetime, timezone_str: str = "UTC") -> tuple[
 
 def _parse_duration(duration: str) -> tuple[int | None, str | None]:
     """Parse the duration string into value and unit."""
-    match: Final = re.fullmatch(r"(\d+)([a-z]+)", duration)
+    match: Final = re.match(r"(\d+)([a-z]+)", duration)
     if not match:
         return None, None
 
-    value, raw_unit = match.groups()
-    unit = _DURATION_UNIT_ALIASES.get(raw_unit)
-    if unit is None:
-        return None, None
+    value, unit = match.groups()
     return int(value), unit
 
 
