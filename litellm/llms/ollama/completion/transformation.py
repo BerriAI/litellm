@@ -1,8 +1,8 @@
 import json
 import re
 import time
-from collections.abc import AsyncIterator, Iterator
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import AsyncIterator, Iterator, Mapping
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from httpx._models import Headers, Response
 from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
@@ -93,6 +93,7 @@ class _OllamaGenerateMessage(TypedDict):
 class _OllamaGenerateResponse(TypedDict):
     message: ReadOnly[NotRequired[_OllamaGenerateMessage]]
     prompt_eval_count: ReadOnly[NotRequired[int]]
+    prompt_eval_cached_count: ReadOnly[NotRequired[int]]
     eval_count: ReadOnly[NotRequired[int]]
 
 
@@ -592,7 +593,7 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
 
                 usage: ChatCompletionUsageBlock | None = None
                 if prompt_eval_count is not None and eval_count is not None:
-                    raw_cached: Final = chunk.get("prompt_eval_cached_count")
+                    raw_cached: Final = cast(Mapping[str, object], chunk).get("prompt_eval_cached_count")
                     cached_tokens: Final = raw_cached if isinstance(raw_cached, int) else 0
                     usage = ChatCompletionUsageBlock(
                         prompt_tokens=prompt_eval_count,
