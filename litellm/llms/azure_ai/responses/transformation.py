@@ -30,7 +30,7 @@ class AzureAIResponsesAPIConfig(AzureOpenAIResponsesAPIConfig):
 
     @staticmethod
     def _supports_reasoning_effort_none(model: str) -> bool:
-        return AzureAIGPT5Config._supports_reasoning_effort_level(model, "none")
+        return AzureAIGPT5Config.supports_reasoning_effort_level(model, "none")
 
     @staticmethod
     def _effort_level_is_disabled(model: str, level: str) -> bool:
