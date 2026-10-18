@@ -1,5 +1,6 @@
 use litellm_host::interceptors::RawResponse;
 use litellm_host::lifecycle::ExecutionEvent;
+use litellm_host::protocol::InterceptRequest;
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicUsize, Ordering},
@@ -256,6 +257,26 @@ impl litellm_host::lifecycle::CallObserver for CallerTokenHost {
 impl litellm_host::interceptors::Interceptors<<Ocr as litellm_host::protocol::Protocol>::Error>
     for CallerTokenHost
 {
+    async fn handle(
+        &self,
+        request: InterceptRequest,
+    ) -> Result<(), <Ocr as litellm_host::protocol::Protocol>::Error> {
+        match request {
+            InterceptRequest::BeforeProviderRequest {
+                wire,
+                context,
+                reply,
+            } => reply.send(self.before_provider_request(*wire, *context).await?),
+            InterceptRequest::AfterProviderResponse { raw, reply } => {
+                reply.send(self.after_provider_response(raw).await?);
+            }
+            other => other.pass_through(),
+        }
+        Ok(())
+    }
+}
+
+impl CallerTokenHost {
     async fn before_provider_request(
         &self,
         wire: WireRequest,
@@ -338,6 +359,23 @@ async fn direct_execution_uses_hooks_without_a_machine() {
     struct Hooks;
 
     impl Interceptors<Error> for Hooks {
+        async fn handle(&self, request: InterceptRequest) -> Result<(), Error> {
+            match request {
+                InterceptRequest::BeforeProviderRequest {
+                    wire,
+                    context,
+                    reply,
+                } => reply.send(self.before_provider_request(*wire, *context).await?),
+                InterceptRequest::AfterProviderResponse { raw, reply } => {
+                    reply.send(self.after_provider_response(raw).await?);
+                }
+                other => other.pass_through(),
+            }
+            Ok(())
+        }
+    }
+
+    impl Hooks {
         async fn before_provider_request(
             &self,
             wire: WireRequest,

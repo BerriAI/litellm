@@ -3,7 +3,7 @@ use std::ops::ControlFlow;
 use litellm_host::{
     interceptors::Interceptors,
     machine::{HostFailure, Machine, MachineStep},
-    protocol::{HostRequest, InterceptRequest, Protocol, Reply, StreamDelivery},
+    protocol::{HostRequest, Protocol, Reply, StreamDelivery},
 };
 
 use crate::services::HostCallHandler;
@@ -66,27 +66,8 @@ where
                 MachineStep::Suspended(request) => request,
             };
             let answered = match request {
-                HostRequest::Intercept(InterceptRequest::ResultReady { facts, reply }) => self
-                    .interceptors
-                    .result_ready(facts)
-                    .await
-                    .map(|()| reply.send(())),
+                HostRequest::Intercept(request) => self.interceptors.handle(request).await,
                 HostRequest::HostCall(call) => self.services.handle_host_call(call).await,
-                HostRequest::Intercept(InterceptRequest::BeforeProviderRequest {
-                    wire,
-                    context,
-                    reply,
-                }) => self
-                    .interceptors
-                    .before_provider_request(*wire, *context)
-                    .await
-                    .map(|wire| reply.send(wire)),
-                HostRequest::Intercept(InterceptRequest::AfterProviderResponse { raw, reply }) => {
-                    self.interceptors
-                        .after_provider_response(raw)
-                        .await
-                        .map(|()| reply.send(()))
-                }
                 HostRequest::Stream(StreamDelivery::Open(head, reply)) => {
                     self.demand = Some(reply);
                     return Ok(Boundary::Open(head));

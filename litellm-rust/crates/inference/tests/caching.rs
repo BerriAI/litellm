@@ -1,3 +1,4 @@
+use litellm_host::protocol::InterceptRequest;
 use std::{
     convert::Infallible,
     num::NonZeroUsize,
@@ -468,6 +469,25 @@ struct CacheHitAccounting {
 }
 
 impl Interceptors<RouteError> for CacheHitAccounting {
+    async fn handle(&self, request: InterceptRequest) -> Result<(), RouteError> {
+        match request {
+            InterceptRequest::ResultReady { facts, reply } => {
+                reply.send(self.result_ready(facts).await?);
+            }
+            InterceptRequest::BeforeProviderRequest {
+                wire,
+                context,
+                reply,
+            } => reply.send(self.before_provider_request(*wire, *context).await?),
+            InterceptRequest::AfterProviderResponse { raw, reply } => {
+                reply.send(self.after_provider_response(raw).await?);
+            }
+        }
+        Ok(())
+    }
+}
+
+impl CacheHitAccounting {
     async fn result_ready(&self, facts: ExecutionFacts) -> Result<(), RouteError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         let ResultSource::Cache { key } = facts.source else {

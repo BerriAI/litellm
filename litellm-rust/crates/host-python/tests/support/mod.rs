@@ -1,11 +1,12 @@
 #![allow(dead_code)] // each test binary compiles this module on its own and uses a different subset
 
+use litellm_host::interceptors::InterceptPoints;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use litellm_host::{
     call::{CallOutput, HostedMachine, hosted_call},
     hooks::CallHooks,
-    interceptors::{Interceptors, RawResponse, RequestContext, WireRequest},
+    interceptors::{RawResponse, RequestContext, WireRequest},
     lifecycle::{ExecutionEvent, Timing},
     machine::{CallMachine, MachineFault},
     protocol::{Protocol, Reply},
