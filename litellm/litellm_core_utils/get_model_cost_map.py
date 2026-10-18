@@ -57,6 +57,10 @@ def _is_cli_process() -> bool:
     return Path(sys.argv[0]).stem in _CLI_ENTRYPOINT_NAMES
 
 
+def _is_uwsgi_process() -> bool:
+    return "uwsgi" in sys.modules
+
+
 # Reserved top-level keys that are not model entries. They must be excluded
 # from the model-count integrity check so a real upstream shrink can't be masked.
 RESERVED_TOP_LEVEL_KEYS: Final = frozenset({"sample_spec", FALLBACK_GENERALIZATIONS_KEY})
@@ -1060,6 +1064,7 @@ def load_model_cost_map_at_import(
     rng: random.Random | None = None,
     client: "_SyncGetClient | None" = None,
     local: Callable[[], ModelCostMapReloaded] = GetModelCostMap.load_local_model_cost_map_with_revision,
+    fetch_before_returning: Callable[[], bool] = _is_uwsgi_process,
 ) -> dict:  # mutable-ok: becomes litellm.model_cost, a plain mutable dict by contract
     """
     Return the bundled map right away and fetch the remote one in a background thread,
@@ -1071,9 +1076,13 @@ def load_model_cost_map_at_import(
     while the first attempt is in flight wait for it, see
     ``wait_for_pending_import_model_cost_map``. A process forked while the fetch is
     pending, by ``os.fork`` or by a server forking at the C level, resumes it on its own.
+    Under uWSGI, whose workers forked while a thread holds the GIL deadlock, the remote
+    map is fetched before returning instead.
     """
-    if os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", "").lower() == "true" or _is_cli_process():
-        return get_model_cost_map(url=url, timeout=timeout)
+    if os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", "").lower() == "true" or _is_cli_process() or fetch_before_returning():
+        return get_model_cost_map(
+            url=url, timeout=timeout, max_attempts=max_attempts, sleep=sleep, rng=rng, client=client
+        )
     _cost_map_source_info.loaded_at = datetime.now(timezone.utc)
     _cost_map_source_info.source = "local"
     _cost_map_source_info.url = url

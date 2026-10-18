@@ -948,6 +948,20 @@ def test_import_load_reports_why_the_remote_fetch_failed(isolated_litellm_cost_s
     assert source["fallback_reason"].startswith("Remote fetch failed: HTTP 404")
 
 
+def test_import_load_under_uwsgi_returns_the_remote_map_once_fetched(isolated_litellm_cost_state):
+    from litellm.litellm_core_utils.get_model_cost_map import load_model_cost_map_at_import
+
+    client, _, release = _held_client(httpx.Response(200, content=_remote_map_with("claude-remote-only-test")))
+    threading.Timer(0.2, release.set).start()
+    try:
+        loaded = load_model_cost_map_at_import(url=_URL, client=client, fetch_before_returning=lambda: True)
+    finally:
+        _finish_fetch(release)
+
+    assert "claude-remote-only-test" in loaded
+    assert get_model_cost_map_source_info()["source"] == "remote"
+
+
 def test_import_load_reports_why_the_last_attempt_failed_while_a_retry_waits(isolated_litellm_cost_state, monkeypatch):
     import litellm
     from litellm.litellm_core_utils import get_model_cost_map as module
