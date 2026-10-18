@@ -452,9 +452,7 @@ def _converse_request(
     if not all(_text_only(message) for message in messages):
         return None
     try:
-        chat_tools: Final = tuple(
-            chat_tool for tool in tools or () for chat_tool in _as_converse_input(tool)
-        )  # comprehension-ok: flattens each tool's translation
+        chat_tools: Final = tuple(chain.from_iterable(_as_converse_input(tool) for tool in tools or ()))
         return _ConverseRequest.model_validate(
             litellm.AmazonConverseConfig().transform_request(
                 model=model,

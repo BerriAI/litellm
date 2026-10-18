@@ -189,7 +189,6 @@ def _load_beta_headers_config() -> dict:
         if _BETA_HEADERS_CONFIG is not None:
             return _BETA_HEADERS_CONFIG
 
-        # Get the URL from environment or use default
         from litellm import anthropic_beta_headers_url
 
         _BETA_HEADERS_CONFIG = get_beta_headers_config(url=anthropic_beta_headers_url)

@@ -5853,7 +5853,6 @@ def completion(
                 return resolve_timeout(stream_kind=StreamKind.NOT_STREAMED)
             return resolve_timeout(stream_kind=StreamKind.FAKED if fakes_stream(attempt_params) else StreamKind.LIVE)
 
-        ### TIMEOUT LOGIC ###
         timeout = timeout_for_optional_params(optional_params)
         logging.record_applied_timeout(timeout)
         processed_non_default_params: Final = pre_process_non_default_params(
