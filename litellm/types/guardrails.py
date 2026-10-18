@@ -2,7 +2,7 @@ from collections.abc import Mapping
 from datetime import datetime
 from enum import Enum
 from types import MappingProxyType
-from typing import Final, Literal, cast
+from typing import Annotated, Final, Literal, TypeAlias, cast
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
 from pydantic.fields import FieldInfo
@@ -1012,6 +1012,22 @@ def _default_if_blank(field: FieldInfo | None, value: object) -> object:
     return field.get_default(call_default_factory=True)
 
 
+GuardrailNumRetries: TypeAlias = Annotated[
+    int | None,
+    Field(
+        ge=0,
+        le=5,
+        description=(
+            "How many more times to send a guardrail check whose connection timed out waiting for the answer "
+            "or was dropped after the request went out. Each retry opens a fresh connection and gets the full "
+            "timeout. Connect failures, HTTP error statuses and BLOCKED verdicts are not retried. Unset or 0 "
+            "sends each check once, and the most allowed is 5. Implemented by guardrail='generic_guardrail_api', "
+            "other guardrails ignore it."
+        ),
+    ),
+]
+
+
 class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch update guardrails
     api_key: str | None = Field(default=None, description="API key for the guardrail service")
     api_base: str | None = Field(default=None, description="Base URL for the guardrail service API")
@@ -1230,6 +1246,8 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         description="Python-like code containing the apply_guardrail function for custom guardrail logic",
     )
 
+    num_retries: GuardrailNumRetries = None
+
     timeout: float | None = Field(
         default=None,
         description=(
@@ -1447,7 +1465,7 @@ class LitellmParams(  # pyright: ignore[reportIncompatibleVariableOverride]  # o
 
         super().__init__(**kwargs)  # pyright: ignore[reportArgumentType]  # pydantic validates each field's type at runtime
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
