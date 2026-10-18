@@ -66,11 +66,12 @@ class VertexAIAnthropicConfig(AnthropicConfig):
     @staticmethod
     def get_max_tokens_for_model(model: str | None = None) -> int:
         if model is not None:
-            vertex_key: Final = f"vertex_ai/{model}"
-            if vertex_key in litellm.model_cost:
-                vertex_max: Final = get_max_tokens(vertex_key)
+            try:
+                vertex_max: Final = get_max_tokens(f"vertex_ai/{model}")
                 if vertex_max is not None:
                     return vertex_max
+            except Exception:
+                return AnthropicConfig.get_max_tokens_for_model(model)
         return AnthropicConfig.get_max_tokens_for_model(model)
 
     def _add_context_management_beta_headers(self, beta_set: set, context_management: dict) -> None:
