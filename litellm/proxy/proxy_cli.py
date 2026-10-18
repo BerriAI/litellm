@@ -203,6 +203,14 @@ def deprecated_v2_flag_passed_on_cli() -> bool:
     return ctx.get_parameter_source("use_v2_migration_resolver") is ParameterSource.COMMANDLINE
 
 
+def _print_enforce_prisma_migration_check_notice() -> None:
+    print_startup_message(
+        "\033[1;33mLiteLLM Proxy: --enforce_prisma_migration_check is "
+        "deprecated and has no effect, because the proxy always exits "
+        "when database setup fails at startup. You can safely remove it.\033[0m",
+    )
+
+
 class ProxyInitializationHelpers:
     @staticmethod
     def echo_litellm_version():
@@ -1177,6 +1185,9 @@ def run_server(
         return
     if model and "ollama" in model and api_base is None:
         ProxyInitializationHelpers.run_ollama_serve()
+    if enforce_prisma_migration_check and (health is True or test is True):
+        # --health and --test return before the config is read, where a server start emits the notice
+        _print_enforce_prisma_migration_check_notice()
     if health is True:
         ProxyInitializationHelpers.run_health_check(host, port)
         return
@@ -1360,11 +1371,7 @@ def run_server(
 
         # After the config is read, so a json_logs set only in the config applies to this notice too.
         if enforce_prisma_migration_check:
-            print_startup_message(
-                "\033[1;33mLiteLLM Proxy: --enforce_prisma_migration_check is "
-                "deprecated and has no effect, because the proxy always exits "
-                "when database setup fails at startup. You can safely remove it.\033[0m",
-            )
+            _print_enforce_prisma_migration_check_notice()
         # Handle database URL construction when no config file is used
         if config is None and os.getenv("DATABASE_URL") is None:
             # Use helper function to construct DATABASE_URL from individual variables

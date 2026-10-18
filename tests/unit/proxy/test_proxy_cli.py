@@ -2872,6 +2872,22 @@ class TestRunServerDbSetup:
         mock_setup_database.assert_called_once_with(use_migrate=True, use_v2_resolver=True)
         assert ("--enforce_prisma_migration_check is deprecated and has no effect" in capsys.readouterr().out) is warned
 
+    @pytest.mark.parametrize("argument", ("--health", "--test"), ids=("health", "test"))
+    def test_the_retired_enforce_prisma_migration_check_opt_in_warns_on_health_and_test(self, argument, capsys):
+        """`--health` and `--test` return before the config is read, where a server start emits the
+        deprecation line; they still print it, as they did when the notice came before those returns."""
+        from litellm.proxy.proxy_cli import ProxyInitializationHelpers, run_server
+
+        with (
+            patch.object(ProxyInitializationHelpers, "run_health_check") as mock_health_check,
+            patch.object(ProxyInitializationHelpers, "run_test_chat_completion") as mock_test_chat,
+        ):
+            run_server.main([argument, "--enforce_prisma_migration_check"], standalone_mode=False)
+
+        expected_calls = (1, 0) if argument == "--health" else (0, 1)
+        assert (mock_health_check.call_count, mock_test_chat.call_count) == expected_calls
+        assert "--enforce_prisma_migration_check is deprecated and has no effect" in capsys.readouterr().out
+
     @patch("subprocess.run")
     @patch("atexit.register")
     @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database", return_value=True)
