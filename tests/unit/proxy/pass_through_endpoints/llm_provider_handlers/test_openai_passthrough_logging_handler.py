@@ -2350,7 +2350,7 @@ class TestOpenAIPassthroughResponsesSubRouteBilling:
             ),
         ],
     )
-    async def test_billed_background_read_spend_log_survives_next_to_its_create_row(
+    async def test_billed_background_read_spend_log_survives_next_to_its_create_and_poll_rows(
         self, local_model_cost_map, method: str, sub_route: str, response_body: dict[str, object]
     ):
         create_row: Final = await self._spend_row(
@@ -2360,13 +2360,21 @@ class TestOpenAIPassthroughResponsesSubRouteBilling:
             _stored_response("queued", True, None),
             "3a4f0c1e-2b7d-4c55-8e0e-0d7a51d9f6a1",
         )
+        poll_row: Final = await self._spend_row(
+            "GET",
+            f"/{STORED_RESPONSE_ID}",
+            {},
+            _stored_response("in_progress", True, None),
+            "5d8c2f71-0e4b-4a9d-b3c6-7f1e2a9d0c44",
+        )
         read_row: Final = await self._spend_row(
             method, sub_route, {}, response_body, "9b2e6d40-71c3-4f8a-a5d2-4e3c8f0b7d12"
         )
 
-        assert read_row["request_id"] != create_row["request_id"]
+        assert read_row["request_id"] not in {create_row["request_id"], poll_row["request_id"]}
         assert read_row["request_id"].startswith(STORED_RESPONSE_ID)
         assert read_row["spend"] > 0
+        assert not poll_row["spend"]
 
     @pytest.mark.parametrize(
         "base_url",

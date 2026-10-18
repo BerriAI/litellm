@@ -107,6 +107,10 @@ _is_openai_compatible_url: Final = is_openai_compatible_url
 ResponsesCallBilling: TypeAlias = Literal["unbilled", "billed", "background_settlement"]
 
 
+def _is_finished_background_response(response_body: Mapping[str, object]) -> bool:
+    return is_background_response(response_body) and response_body.get("usage") is not None
+
+
 def _responses_sub_route(path: str) -> tuple[str, ...] | None:
     segments: Final = path.rstrip("/").split("/")
     anchor: Final = max((index for index, segment in enumerate(segments) if segment == "responses"), default=None)
@@ -207,7 +211,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
             case ("POST", ("input_tokens",)) | ("GET", (_, "input_items")) | ("DELETE", (_,)):
                 return "unbilled"
             case ("GET", (_,)) | ("POST", (_, "cancel")):
-                return "background_settlement" if is_background_response(response_body) else "unbilled"
+                return "background_settlement" if _is_finished_background_response(response_body) else "unbilled"
             case _:
                 return "billed"
 
