@@ -15,6 +15,8 @@ from integration._support.process import owned_proxy_process
 from integration.authorization._guardrail_opt_out import upstream_hits
 from pydantic import JsonValue
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 PATCH_OP_SCHEMA: Final = "urn:ietf:params:scim:api:messages:2.0:PatchOp"
 GROUP_SCHEMA: Final = "urn:ietf:params:scim:schemas:core:2.0:Group"
 BURST_TEAMS: Final = 10

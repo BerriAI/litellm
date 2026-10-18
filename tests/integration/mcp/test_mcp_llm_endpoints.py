@@ -41,7 +41,7 @@ from openai.types.responses.tool_param import Mcp
 from pydantic import JsonValue, TypeAdapter
 
 
-pytestmark: Final = pytest.mark.xdist_group("mcp_llm_private_gateway")
+pytestmark: Final = [pytest.mark.xdist_group("mcp_llm_private_gateway"), pytest.mark.shares_worker_state]
 
 
 @pytest.fixture(scope="session")

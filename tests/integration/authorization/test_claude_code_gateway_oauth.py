@@ -23,6 +23,8 @@ from integration._support.process import owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 _CLIENT_ID: Final = "scripted-cli-client"
 _CLIENT_SECRET: Final = "scripted-cli-secret"
 _AUTHORIZATION_CODE: Final = "scripted-auth-code"
