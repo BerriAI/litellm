@@ -56,9 +56,6 @@ const CreatedKeyDisplay: React.FC<CreatedKeyDisplayProps> = ({ apiKey }) => {
   const [showInstructions, setShowInstructions] = useState(false);
   const baseUrl = getProxyBaseUrl().replace(/\/+$/, "");
   const instructions = buildAgentInstructions(selectedAgent, baseUrl, apiKey);
-  const previewText = instructions.split("\n").slice(0, 3).join("\n");
-  const instructionsTitle =
-    selectedAgent === "claude-code" ? "Instructions for Claude Code" : "Instructions for Codex";
 
   const handleCopy = () => {
     setCopied(true);
@@ -123,7 +120,7 @@ const CreatedKeyDisplay: React.FC<CreatedKeyDisplayProps> = ({ apiKey }) => {
 
       <div className="mt-3 rounded-md border border-border p-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className="text-sm font-medium">{instructionsTitle}</p>
+          <p className="text-sm font-medium">Instructions for your agent</p>
           <div className="flex items-center gap-2">
             <CopyToClipboard text={instructions} onCopy={handleCopyInstructions}>
               <Button type="button">{instructionsCopied ? "Copied!" : "Copy instructions"}</Button>
@@ -143,9 +140,9 @@ const CreatedKeyDisplay: React.FC<CreatedKeyDisplayProps> = ({ apiKey }) => {
             </Button>
           </div>
         </div>
-        <pre className="mt-3 whitespace-pre-wrap break-words text-sm text-foreground">
-          {showInstructions ? instructions : <span className="text-muted-foreground opacity-70">{previewText}</span>}
-        </pre>
+        {showInstructions && (
+          <pre className="mt-3 whitespace-pre-wrap break-words text-sm text-foreground">{instructions}</pre>
+        )}
       </div>
     </div>
   );

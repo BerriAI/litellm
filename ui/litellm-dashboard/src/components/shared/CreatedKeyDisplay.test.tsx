@@ -131,7 +131,7 @@ describe("CreatedKeyDisplay", () => {
     await user.click(screen.getByRole("button", { name: "Codex" }));
     await user.click(screen.getByRole("button", { name: "Show" }));
 
-    expect(screen.getByText("Instructions for Codex")).toBeInTheDocument();
+    expect(screen.getByText("Instructions for your agent")).toBeInTheDocument();
     expect(screen.getByText(/OPENAI_BASE_URL=http:\/\/gw\.test:4000\/v1/)).toBeInTheDocument();
   });
 
