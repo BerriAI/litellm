@@ -160,6 +160,7 @@ from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2
 from litellm.router_strategy.simple_shuffle import simple_shuffle
 from litellm.router_strategy.tag_based_routing import (
     get_deployments_for_tag,
+    get_routing_tags_from_request_kwargs,
     get_tags_from_request_kwargs,
     is_valid_deployment_tag,
 )
@@ -14917,7 +14918,7 @@ class Router:
         if not candidates:
             return None
 
-        request_tags: Final = get_tags_from_request_kwargs(request_kwargs)
+        request_tags: Final = get_routing_tags_from_request_kwargs(request_kwargs)
         if request_tags:
             for tagged in candidates:
                 if tagged.tags and is_valid_deployment_tag(
@@ -15150,7 +15151,7 @@ class Router:
             llm_router=self,
             model_alias=registered_model_name,
             request_kwargs=request_kwargs,
-            request_tags=get_tags_from_request_kwargs(request_kwargs),
+            request_tags=get_routing_tags_from_request_kwargs(request_kwargs),
         )
         # Shared compression already ran in the pre-call hook, so reuse it rather than
         # compressing twice. Conditional on arming having actually happened: only the
@@ -15199,7 +15200,7 @@ class Router:
             value=self._consumed_request_tags_stamp(
                 selected_strategy=selected_strategy,
                 pre_routing_hook_response=pre_routing_hook_response,
-                request_tags=get_tags_from_request_kwargs(request_kwargs),
+                request_tags=get_routing_tags_from_request_kwargs(request_kwargs),
             ),
         )
 

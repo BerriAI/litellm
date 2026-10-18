@@ -723,3 +723,21 @@ def get_tags_from_request_kwargs(
 
 
 _get_tags_from_request_kwargs = get_tags_from_request_kwargs
+
+
+def _request_metadata(request_kwargs: Mapping[str, object]) -> object:
+    metadata_variable_name: Final = get_metadata_variable_name_from_kwargs(request_kwargs)
+    if metadata_variable_name in request_kwargs:
+        return request_kwargs[metadata_variable_name]
+    litellm_params: Final = request_kwargs.get("litellm_params")
+    if not isinstance(litellm_params, Mapping):
+        return None
+    typed_litellm_params: Final[Mapping[str, object]] = litellm_params
+    return typed_litellm_params.get(metadata_variable_name)
+
+
+def get_routing_tags_from_request_kwargs(request_kwargs: Mapping[str, object]) -> Sequence[str]:
+    return (
+        without_baggage_mapped_tags(get_tags_from_request_kwargs(request_kwargs), _request_metadata(request_kwargs))
+        or ()
+    )
