@@ -737,7 +737,11 @@ class VertexPassthroughLoggingHandler:
     def _get_custom_llm_provider(url: str, logging_obj: LiteLLMLoggingObj) -> str:
         hostname: Final = urlparse(url).hostname
         if logging_obj.model_call_details.get("custom_llm_provider") == litellm.LlmProviders.GEMINI.value or (
-            hostname is not None and hostname.endswith("generativelanguage.googleapis.com")
+            hostname is not None
+            and (
+                hostname == "generativelanguage.googleapis.com"
+                or hostname.endswith(".generativelanguage.googleapis.com")
+            )
         ):
             return litellm.LlmProviders.GEMINI.value
         return litellm.LlmProviders.VERTEX_AI.value

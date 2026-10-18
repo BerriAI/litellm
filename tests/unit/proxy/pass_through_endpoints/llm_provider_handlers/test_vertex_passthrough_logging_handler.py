@@ -249,6 +249,23 @@ def test_gemini_route_spend_has_no_vertex_uplift_whatever_host_serves_it(
     assert recorded == pytest.approx(7 * _UPLIFT_INPUT_RATE + 1 * _UPLIFT_OUTPUT_RATE), (gemini_api_base, stream)
 
 
+@pytest.mark.parametrize("stream", [True, False], ids=["streamed", "non-streamed"])
+def test_a_vertex_host_that_only_ends_with_the_gemini_host_name_keeps_the_vertex_uplift(
+    regional_uplift_rate_card: None, stream: bool
+) -> None:
+    method: Final = "streamGenerateContent" if stream else "generateContent"
+
+    recorded: Final = _cost_the_logger_records_for(
+        "https://vertex-generativelanguage.googleapis.com/v1/projects/p/locations/us/publishers/google/models/"
+        f"{_UPLIFT_MODEL}:{method}",
+        stream=stream,
+        reply=_generate_content_payload(),
+        stream_events=[_generate_content_payload()],
+    )
+
+    assert recorded == pytest.approx((7 * _UPLIFT_INPUT_RATE + 1 * _UPLIFT_OUTPUT_RATE) * _UPLIFT_MULTIPLIER), stream
+
+
 @pytest.mark.parametrize("value", [123, ["gemini-2.5-flash-lite"], {"model": "gemini-2.5-flash-lite"}])
 @pytest.mark.parametrize("carrier", ["root", "model_info"])
 @pytest.mark.parametrize("stream", [True, False], ids=["streamed", "non-streamed"])
