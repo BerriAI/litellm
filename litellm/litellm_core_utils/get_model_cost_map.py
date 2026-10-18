@@ -955,13 +955,14 @@ def _retry_remote_fetch_in_background(
 def _run_import_fetch(fetch: _ImportFetch) -> None:
     def settle_then_sleep(failed: _FetchAttemptRetryable, seconds: float) -> None:
         scheduled: Final = _PendingImportFetch.next_attempt
-        _PendingImportFetch.next_attempt = _ScheduledAttempt(
+        retry: Final = _ScheduledAttempt(
             attempt=(scheduled.attempt if scheduled is not None else fetch.first_attempt) + 1,
             at=time.monotonic() + seconds,
         )
+        _PendingImportFetch.next_attempt = retry
         _report_import_fetch_failure(fetch, f"Remote fetch failed: {failed.reason}")
         fetch.first_attempt_settled.set()
-        fetch.sleep(seconds)
+        fetch.sleep(max(0.0, retry.at - time.monotonic()))
 
     try:
         if fetch.first_attempt > 1:

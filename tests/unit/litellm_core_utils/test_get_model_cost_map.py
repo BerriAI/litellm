@@ -984,6 +984,29 @@ def test_import_load_reports_why_the_last_attempt_failed_while_a_retry_waits(iso
     assert source["fallback_reason"].startswith("Remote fetch failed: HTTP 429")
 
 
+def test_a_retry_scheduled_while_import_is_still_running_is_not_pushed_back_by_the_import(
+    isolated_litellm_cost_state, monkeypatch
+):
+    import litellm
+    from litellm.litellm_core_utils import get_model_cost_map as module
+
+    monkeypatch.setattr(module, "_litellm_import_complete", threading.Event())
+    sleeps = _BlockingSleeps()
+    client = httpx.Client(
+        transport=httpx.MockTransport(lambda request: httpx.Response(429, headers={"Retry-After": "2"}))
+    )
+    try:
+        bundled = module.load_model_cost_map_at_import(url=_URL, client=client, sleep=sleeps, rng=random.Random(0))
+        monkeypatch.setattr(litellm, "model_cost", bundled)
+        time.sleep(0.5)
+        module.mark_litellm_import_complete()
+        assert sleeps.called.acquire(timeout=10)
+    finally:
+        _finish_fetch(sleeps.release)
+
+    assert sleeps.waits[0] < 1.6
+
+
 def test_a_fetch_resumed_after_fork_adopts_the_remote_map_while_the_inherited_one_hangs(
     isolated_litellm_cost_state, monkeypatch
 ):
