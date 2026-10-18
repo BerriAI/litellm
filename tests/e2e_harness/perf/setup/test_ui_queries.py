@@ -128,6 +128,7 @@ def test_failed_first_request_emits_error_code_without_latency() -> None:
     assert dict(ui_junit_properties((sample,))) == {
         "perf_ui_requests": 1,
         "perf_ui_failures": 1,
+        "perf_ui_samples": 0,
         "perf_ui_repeated_samples": 0,
         "perf_ui_error_http_500": 1,
     }
@@ -144,6 +145,10 @@ def test_junit_counts_failures_but_only_measures_successful_latency() -> None:
     assert dict(ui_junit_properties(samples, Sample(seconds=4, status=200))) == {
         "perf_ui_requests": 6,
         "perf_ui_failures": 3,
+        "perf_ui_samples": 2,
+        "perf_ui_seconds_p50": 2.5,
+        "perf_ui_seconds_p90": 3,
+        "perf_ui_seconds_max": 3,
         "perf_ui_repeated_samples": 1,
         "perf_ui_error_timeout": 1,
         "perf_ui_error_http_503": 1,
@@ -157,6 +162,17 @@ def test_junit_counts_failures_but_only_measures_successful_latency() -> None:
 def test_failed_cursor_prerequisite_is_counted_once() -> None:
     sample: Final = Sample(seconds=30, status=503, error="HTTP 503")
     assert dict(ui_junit_properties((sample,), sample)) == dict(ui_junit_properties((sample,)))
+
+
+def test_all_request_percentiles_include_first_and_use_nearest_rank_p90() -> None:
+    samples: Final = tuple(Sample(seconds=seconds, status=200) for seconds in (10, 1, 9, 2, 8, 3, 7, 4, 6, 5))
+    metrics: Final = dict(ui_junit_properties(samples))
+    assert {key: value for key, value in metrics.items() if key.startswith("perf_ui_seconds_")} == {
+        "perf_ui_seconds_p50": 5.5,
+        "perf_ui_seconds_p90": 9,
+        "perf_ui_seconds_max": 10,
+    }
+    assert metrics["perf_ui_samples"] == 10
 
 
 @pytest.mark.parametrize("body", ("{}", '{"data": []}', '{"data": [{"spend": 1}]}', '{"data": [null]}'))

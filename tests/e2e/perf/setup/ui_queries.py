@@ -137,7 +137,11 @@ def ui_junit_properties(
     requests: Final = (prerequisite, *samples) if prerequisite is not None and not prerequisite.error else samples
     codes: Final = tuple(error_code(sample) for sample in requests if sample.error)
     timings: Final = summarize(samples)
+    successful: Final = tuple(sorted(sample.seconds for sample in samples if not sample.error))
     latency: Final = (
+        ("seconds_p50", statistics.median(successful) if successful else None),
+        ("seconds_p90", successful[math.ceil(len(successful) * 0.90) - 1] if successful else None),
+        ("seconds_max", max(successful) if successful else None),
         ("first_seconds", timings.first_seconds),
         ("repeated_seconds_p50", timings.repeated_p50_seconds),
         ("repeated_seconds_p95", timings.repeated_p95_seconds),
@@ -147,6 +151,7 @@ def ui_junit_properties(
     return (
         ("perf_ui_requests", len(requests)),
         ("perf_ui_failures", len(codes)),
+        ("perf_ui_samples", len(successful)),
         ("perf_ui_repeated_samples", timings.repeated_samples),
         *((f"perf_ui_error_{code}", codes.count(code)) for code in sorted(frozenset(codes))),
         *((f"perf_ui_{name}", value) for name, value in latency if value is not None),

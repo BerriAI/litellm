@@ -71,13 +71,15 @@ uv run pytest tests/e2e/perf/test_ui_queries.py --reruns 0 --junitxml="$E2E_ARTI
 
 Do not enable SpendLog retention or run other traffic on this stack. The `quiet_stack` marker coordinates local pytest callers but cannot stop external traffic. Use one pytest worker for comparable timings
 
-`E2E_UI_QUERY_REPEATS` defaults to 5 and `E2E_UI_QUERY_TIMEOUT_SECONDS` to 120. Every request is issued once without transport retries. A failed first request stops that case's repeated samples. Cursor prerequisites are recorded separately, and failed prerequisites stop that case's measurements
+`E2E_UI_QUERY_REPEATS` defaults to 9, giving ten measured requests including the first, and `E2E_UI_QUERY_TIMEOUT_SECONDS` defaults to 120. Every request is issued once without transport retries. A failed first request stops that case's repeated samples. Cursor prerequisites are recorded separately, and failed prerequisites stop that case's measurements
 
 ## Reading results
 
 Each case writes `ui-query-<name>.json` with its exact method, path, parameters and body, response status counts, elapsed times, row counts, errors and before/after PostgreSQL failure counters. Response bodies and authentication headers are not saved
 
-The first request is reported separately from repeated requests. This is not a cold-cache claim: previous cases, fixture creation and previous runs can warm database buffers or application caches. Restart the disposable proxy between independent runs when comparing independent runs
+The dashboard's `perf_ui_seconds_p50`, `_p90` and `_max` include all successful measured requests, including the first. `perf_ui_samples` is their sample count. p50 is the median and p90 uses nearest rank, the ninth sorted value with ten successes. Failures and cursor prerequisites contribute no latency. Pass percentage is `(perf_ui_requests - perf_ui_failures) / perf_ui_requests * 100`, including cursor prerequisites in the request counts
+
+The first-request and repeated-request metrics are retained for existing consumers. This is not a cold-cache claim: previous cases and previous runs can warm database buffers or application caches. Restart the disposable proxy between independent runs when comparing independent runs
 
 Repeated p50 is reported for successful samples, p95 only with at least 20 and p99 only with at least 100. First-request latency is omitted when that request fails. HTTP, JSON, response-shape, nonempty-result, cursor failures are recorded, never asserted. Endpoint failures, database counter increases and latency do not fail CI
 
