@@ -4258,7 +4258,7 @@ async def test_new_batches_progress_without_waiting_for_retry_scan(
         first: Final = await poller._find_jobs({})
         assert tuple(row.id for row in first) == tuple(row.id for row in backlog[:page_size])
 
-        async def poll_next_turn(turn: int) -> Sequence[ManagedObjectRow]:
+        async def poll_next_turn(turn: int) -> Sequence["ManagedObjectRow"]:
             clock.now.return_value = datetime(2020, turn // 2 + 1, 2, tzinfo=timezone.utc)
             return await poller._find_jobs({})
 
