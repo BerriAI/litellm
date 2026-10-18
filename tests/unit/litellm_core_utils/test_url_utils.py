@@ -1,6 +1,7 @@
 import asyncio
 import socket
 import threading
+from typing import Final
 
 import httpx
 import pytest
@@ -113,6 +114,30 @@ class TestEncodeUrlPathSegment:
 
 
 class TestValidateUrl:
+    @pytest.mark.parametrize("scheme", ["http", "https"])
+    @pytest.mark.parametrize("resolved_ip", ["10.0.0.25", "127.0.0.1", "169.254.169.254", "fd00::25"])
+    def test_blocked_hostname_error_does_not_disclose_resolved_ip(
+        self, monkeypatch: pytest.MonkeyPatch, scheme: str, resolved_ip: str
+    ) -> None:
+        def resolve(
+            host: str, port: int, *, proto: int
+        ) -> list[tuple[int, int, int, str, tuple[str, int] | tuple[str, int, int, int]]]:
+            family: Final = socket.AF_INET6 if ":" in resolved_ip else socket.AF_INET
+            address: Final = (resolved_ip, port, 0, 0) if family == socket.AF_INET6 else (resolved_ip, port)
+            return [(family, socket.SOCK_STREAM, proto, "", address)]
+
+        monkeypatch.setattr(url_utils.socket, "getaddrinfo", resolve)
+        monkeypatch.setattr(litellm, "user_url_allowed_hosts", [])
+
+        with pytest.raises(SSRFError) as error:
+            validate_url(f"{scheme}://private-name.example.invalid/document.txt")
+
+        assert str(error.value) == (
+            "URL targets a blocked address. "
+            "If this is a legitimate internal service, add the host "
+            "to `user_url_allowed_hosts` in litellm_settings."
+        )
+
     def test_blocks_loopback(self):
         with pytest.raises(SSRFError):
             validate_url("http://127.0.0.1/test")

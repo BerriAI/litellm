@@ -334,7 +334,7 @@ def validate_url(url: str) -> tuple[str, str]:
             resolved_ip = _sockaddr_host(addrinfo_entry[4])
             if _is_blocked_ip(resolved_ip):
                 raise SSRFError(
-                    f"URL targets a blocked address ({resolved_ip}). "
+                    "URL targets a blocked address. "
                     "If this is a legitimate internal service, add the host "
                     "to `user_url_allowed_hosts` in litellm_settings."
                 )
