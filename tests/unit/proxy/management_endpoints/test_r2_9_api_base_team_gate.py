@@ -44,9 +44,7 @@ async def test_team_admin_bring_your_own_key_move_allowed():
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 
     stored = GenericLiteLLMParams(api_key="server-owned-key")
-    incoming = GenericLiteLLMParams(
-        api_base="https://my-team-proxy.example", api_key="my-team-key"
-    )
+    incoming = GenericLiteLLMParams(api_base="https://my-team-proxy.example", api_key="my-team-key")
     model_params = MagicMock()
     model_params.litellm_params = stored
 
@@ -80,9 +78,7 @@ async def test_team_admin_wif_association_still_guarded():
     model_params.litellm_params = stored
 
     with (
-        patch.object(
-            mme, "effective_server_owned_wif_fields", AsyncMock(return_value=("oidc_token_url",))
-        ),
+        patch.object(mme, "effective_server_owned_wif_fields", AsyncMock(return_value=("oidc_token_url",))),
     ):
         try:
             await ModelManagementAuthChecks._reject_non_admin_wif_write(
@@ -96,8 +92,6 @@ async def test_team_admin_wif_association_still_guarded():
         except Exception as guard_error:
             # On this stack both the static-key harvest gate and the WIF
             # rule can fire for the same shape; accept either interdiction.
-            assert ("api_key stays server-owned" in str(guard_error)) or (
-                "workload identity" in str(guard_error)
-            )
+            assert ("api_key stays server-owned" in str(guard_error)) or ("workload identity" in str(guard_error))
             return
         raise AssertionError("expected a server-owned-key interdiction to fire")
