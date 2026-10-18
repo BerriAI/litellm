@@ -3087,7 +3087,10 @@ async def test_compressed_prompt_response_header_requires_request_opt_in(
 ) -> None:
     import base64
 
+    from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+    from litellm.litellm_core_utils.redact_messages import perform_redaction
     from litellm.proxy.common_utils.callback_utils import get_logging_caching_headers
+    from litellm.proxy.litellm_pre_call_utils import refresh_proxy_server_request_body_snapshot
 
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     guardrail: Final = HeadroomGuardrail(api_base=FAKE_API_BASE, guardrail_name="headroom")
@@ -3096,6 +3099,7 @@ async def test_compressed_prompt_response_header_requires_request_opt_in(
         200, json={"messages": compressed, "tokens_before": 1000, "tokens_after": 10}
     )
     request_data: Final = {
+        "secret_fields": {"raw_headers": {"x-preserved": "kept"}},
         "proxy_server_request": {
             "headers": {} if opt_in is None else {"x-litellm-return-compressed-prompt": opt_in}
         }
@@ -3106,10 +3110,17 @@ async def test_compressed_prompt_response_header_requires_request_opt_in(
         input_type="request",
     )
     headers: Final = get_logging_caching_headers(request_data) or {}
+    assert request_data["secret_fields"]["raw_headers"] == {"x-preserved": "kept"}
     assert route.call_count == 1
     assert result["structured_messages"] == [ORIGINAL_MESSAGES[0], compressed[0], *ORIGINAL_MESSAGES[2:]]
     if opt_in is not None and opt_in.lower() == "true":
         assert json.loads(base64.b64decode(headers["x-litellm-compressed-prompt"])) == result["structured_messages"]
+        refresh_proxy_server_request_body_snapshot(request_data)
+        logged: Final = {"litellm_params": get_litellm_params(**request_data)}
+        assert headers["x-litellm-compressed-prompt"] not in json.dumps(logged)
+        perform_redaction(logged, result=None)
+        assert headers["x-litellm-compressed-prompt"] not in json.dumps(logged)
+        assert get_logging_caching_headers(request_data) == headers
     else:
         assert "x-litellm-compressed-prompt" not in headers
     assert "x-litellm-compressed-prompt-omitted" not in headers
@@ -3130,7 +3141,10 @@ async def test_compressed_prompt_header_byte_limit_never_truncates(
     overhead: Final = len(json.dumps(empty, ensure_ascii=False, separators=(",", ":")).encode())
     compressed: Final = [{"role": "user", "content": "a" * (json_bytes - overhead)}]
     respx_mock.post(f"{FAKE_API_BASE}/v1/compress").respond(200, json={"messages": compressed})
-    data: Final = {"proxy_server_request": {"headers": {"x-litellm-return-compressed-prompt": "true"}}}
+    data: Final = {
+        "secret_fields": {},
+        "proxy_server_request": {"headers": {"x-litellm-return-compressed-prompt": "true"}},
+    }
     result: Final = await guardrail.apply_guardrail(
         inputs=GenericGuardrailAPIInputs(texts=[], structured_messages=ORIGINAL_MESSAGES),
         request_data=data,
@@ -3163,7 +3177,7 @@ async def test_compressed_prompt_header_does_not_survive_an_uncompressed_attempt
         texts=[], structured_messages=ORIGINAL_MESSAGES[-1:] if scenario == "skip" else ORIGINAL_MESSAGES
     )
     data: Final = {
-        "metadata": {"_headroom_compressed_prompt": "c3RhbGU="},
+        "secret_fields": {"_headroom_compressed_prompt": "c3RhbGU="},
         "proxy_server_request": {
             "headers": {
                 "x-litellm-return-compressed-prompt": "false" if scenario == "no_opt_in" else "true",

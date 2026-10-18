@@ -1179,7 +1179,6 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
         "opted_out_global_guardrails": ["pii"],
         "pillar_response_headers": {"set-cookie": "session=evil"},
         "_pillar_response_headers_trusted": True,
-        "_headroom_compressed_prompt": "Zm9yZ2Vk",
         "pillar_flagged": True,
         "pillar_scanners": {"jailbreak": True},
         "pillar_evidence": [{"evidence": "spoofed"}],
@@ -1200,6 +1199,7 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
         "model": "gpt-3.5-turbo",
         "messages": [{"role": "user", "content": "hello"}],
         "mock_response": "free response",
+        "secret_fields": {"_headroom_compressed_prompt": "Zm9yZ2Vk"},
         "mock_tool_calls": [{"id": "call_1"}],
         "is_streaming_request": "caller-value",
         "disable_global_guardrails": True,
@@ -1222,6 +1222,7 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
     )
 
     assert "mock_response" not in updated
+    assert "_headroom_compressed_prompt" not in updated["secret_fields"]
     assert "mock_tool_calls" not in updated
     assert "disable_global_guardrails" not in updated
     assert "enable_prompt_caching" not in updated
@@ -1238,7 +1239,6 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
         "opted_out_global_guardrails",
         "pillar_response_headers",
         "_pillar_response_headers_trusted",
-        "_headroom_compressed_prompt",
         "pillar_flagged",
         "pillar_scanners",
         "pillar_evidence",

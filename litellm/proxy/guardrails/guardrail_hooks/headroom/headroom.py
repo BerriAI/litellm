@@ -23,7 +23,6 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
-from litellm.litellm_core_utils import core_helpers
 from litellm.litellm_core_utils.prompt_templates.factory import (
     get_attribute_or_key,
     get_tool_calls_from_response,
@@ -788,10 +787,11 @@ class HeadroomGuardrail(CustomGuardrail):
         if input_type != "request":
             return inputs
 
-        from litellm.proxy.common_utils.callback_utils import HEADROOM_COMPRESSED_PROMPT_METADATA_KEY
+        from litellm.proxy.common_utils.callback_utils import HEADROOM_COMPRESSED_PROMPT_KEY
 
-        response_metadata: Final = core_helpers.get_or_create_metadata_bucket(request_data)[1]
-        response_metadata.pop(HEADROOM_COMPRESSED_PROMPT_METADATA_KEY, None)
+        response_state: Final = request_data.get("secret_fields")
+        if _is_str_object_dict(response_state):
+            response_state.pop(HEADROOM_COMPRESSED_PROMPT_KEY, None)
         if self._request_header_enabled(request_data, BYPASS_HEADER):
             verbose_proxy_logger.debug("Headroom: %s header set; skipping compression", BYPASS_HEADER)
             return inputs
@@ -861,11 +861,11 @@ class HeadroomGuardrail(CustomGuardrail):
             protected_indices=protected_indices,
         )
 
-        if self._request_header_enabled(request_data, _RETURN_PROMPT_HEADER):
+        if _is_str_object_dict(response_state) and self._request_header_enabled(request_data, _RETURN_PROMPT_HEADER):
             encoded_prompt: Final = base64.b64encode(
                 json.dumps(compressed, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
             ).decode("ascii")
-            response_metadata[HEADROOM_COMPRESSED_PROMPT_METADATA_KEY] = (
+            response_state[HEADROOM_COMPRESSED_PROMPT_KEY] = (
                 encoded_prompt if len(encoded_prompt) <= _MAX_PROMPT_HEADER_BYTES else "too_large"
             )
 

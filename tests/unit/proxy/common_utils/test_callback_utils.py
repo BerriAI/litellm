@@ -764,9 +764,9 @@ def test_initialize_callbacks_on_proxy_accepts_instance_non_list_value(probe_con
     assert isinstance(litellm.callbacks[0], CustomLogger)
 
 
-@pytest.mark.parametrize("bucket", ["metadata", "litellm_metadata"])
+@pytest.mark.parametrize("bucket", ["secret_fields", "metadata", "litellm_metadata"])
 @pytest.mark.parametrize("value", ["W10=", "too_large", None, "", 42])
-def test_headroom_response_headers_use_internal_request_metadata(bucket: str, value: object) -> None:
+def test_headroom_response_headers_use_private_request_state(bucket: str, value: object) -> None:
     data: Final = {bucket: {"_headroom_compressed_prompt": value}}
     headers: Final = get_logging_caching_headers(data)
     expected: Final = (
@@ -774,7 +774,4 @@ def test_headroom_response_headers_use_internal_request_metadata(bucket: str, va
         if value == "W10="
         else {"x-litellm-compressed-prompt-omitted": "too_large"} if value == "too_large" else {}
     )
-    assert headers == expected
-    assert sanitize_openai_provider_metadata({"_headroom_compressed_prompt": value, "user": "kept"}) == {
-        "user": "kept"
-    }
+    assert headers == (expected if bucket == "secret_fields" else {})
