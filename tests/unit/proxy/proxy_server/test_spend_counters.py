@@ -1326,14 +1326,57 @@ async def test_ensure_spend_counter_initialized_cold_seeds_from_source_cache(
 
     observed = {
         "source_cache_called": fake_user_cache.async_get_cache.called,
-        "seed_increment_called": fake_cache.redis_cache.async_increment.called,
+        "seed_set_cache_called": fake_cache.redis_cache.async_set_cache.called,
         "warm_check_done": fake_cache.redis_cache.async_get_cache.called,
     }
     assert normalize(observed) == {
         "source_cache_called": True,
-        "seed_increment_called": True,
+        "seed_set_cache_called": True,
         "warm_check_done": True,
     }
+    fake_cache.redis_cache.async_set_cache.assert_awaited_once_with(
+        key="spend:user:u",
+        value=7.0,
+        nx=True,
+    )
+    assert not fake_cache.redis_cache.async_increment.called
+
+
+@pytest.mark.asyncio
+async def test_ensure_spend_counter_initialized_concurrent_cold_seeds_do_not_double_spend(
+    monkeypatch,
+):
+    redis_store: dict[str, float] = {}
+
+    async def _fake_async_get_cache(key, **kwargs):
+        return redis_store.get(key)
+
+    async def _fake_async_set_cache(key, value, nx=False, **kwargs):
+        if nx and key in redis_store:
+            return False
+        redis_store[key] = float(value)
+        return True
+
+    fake_cache = _make_spend_counter_cache()
+    fake_cache.redis_cache.async_get_cache = AsyncMock(side_effect=_fake_async_get_cache)
+    fake_cache.redis_cache.async_set_cache = AsyncMock(side_effect=_fake_async_set_cache)
+
+    fake_user_cache = _make_user_api_key_cache(get_value={"spend": 6.0})
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+    monkeypatch.setattr(ps, "user_api_key_cache", fake_user_cache)
+    monkeypatch.setattr(ps, "prisma_client", None)
+    monkeypatch.setattr(ps.SpendCounterReseed, "coalesced", AsyncMock(return_value=None))
+
+    counter_key = "spend:end_user:customer-1"
+    await asyncio.gather(
+        ps._ensure_spend_counter_initialized(counter_key=counter_key, source_cache_key="customer-1"),
+        ps._ensure_spend_counter_initialized(counter_key=counter_key, source_cache_key="customer-1"),
+        ps._ensure_spend_counter_initialized(counter_key=counter_key, source_cache_key="customer-1"),
+    )
+
+    assert redis_store[counter_key] == 6.0
+    assert fake_cache.redis_cache.async_increment.call_count == 0
+
 
 
 # ---------------------------------------------------------------------------
