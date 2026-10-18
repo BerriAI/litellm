@@ -2299,12 +2299,8 @@ class ModelManagementAuthChecks:
         repoints_endpoint: Final = incoming_params is not None and not incoming_params.keys().isdisjoint(
             ("api_base", "base_url")
         )
-        brings_own_key: Final = (
-            incoming_params is not None and incoming_params.get("api_key") is not None
-        )
-        server_key_stays: Final = (
-            stored.get("api_key") not in (None, "") and not brings_own_key
-        )
+        brings_own_key: Final = incoming_params is not None and incoming_params.get("api_key") is not None
+        server_key_stays: Final = stored.get("api_key") not in (None, "") and not brings_own_key
         if repoints_endpoint and server_key_stays:
             raise ProxyException(
                 message=(
