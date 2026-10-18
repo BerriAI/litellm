@@ -282,16 +282,19 @@ def redis_store() -> Redis:
     return Redis(host=os.environ["REDIS_HOST"], port=int(os.environ["REDIS_PORT"]))
 
 
-def entry_key(store: Redis, needle: str) -> str | None:
-    """The response cache key (a bare sha256) whose stored value names ``needle``, or ``None``."""
+def entry_keys(store: Redis, needle: str) -> Iterator[str]:
     for raw_key in store.scan_iter(count=1000):
         key: Final = raw_key.decode()
         if not CACHE_KEY.match(key) or store.type(key) != b"string":
             continue
         value: Final = store.get(key)
         if value is not None and needle.encode() in value:
-            return key
-    return None
+            yield key
+
+
+def entry_key(store: Redis, needle: str) -> str | None:
+    """The response cache key (a bare sha256) whose stored value names ``needle``, or ``None``."""
+    return next(entry_keys(store, needle), None)
 
 
 def await_entry(store: Redis, needle: str) -> str:
