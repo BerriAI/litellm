@@ -126,6 +126,14 @@ class RedisClusterCache(RedisCache):
             return call()
         return self._connection_gate.run(call, self._get_async_client_cache_key())
 
+    def _processing_list_key(self, namespaced_key: str, worker_id: str) -> str:
+        namespace_prefix: Final = f"{self.namespace}:" if self.namespace else ""
+        return f"{namespace_prefix}{{{namespaced_key}}}:processing:{worker_id}"
+
+    def _processing_registry_key(self, namespaced_key: str) -> str:
+        namespace_prefix: Final = f"{self.namespace}:" if self.namespace else ""
+        return f"{namespace_prefix}{{{namespaced_key}}}:processing-lists"
+
     def _run_redis_mget_operation(self, keys: list[str]) -> Sequence[bytes | str | None]:
         """
         Overrides `_run_redis_mget_operation` in redis_cache.py

@@ -36,7 +36,7 @@ from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
     build_window_spend_transaction,
 )
 from litellm.proxy.db.rollup_lock_timeout import ROLLUP_LOCK_TIMEOUT_SQL
-from litellm.types.caching import RedisPipelineLpopOperation, RedisPipelineRpushOperation
+from litellm.types.caching import RedisPipelineRpushOperation
 from tests.unit.proxy.db.fake_prisma_engine import engine_call
 
 
@@ -2390,8 +2390,13 @@ class _InMemoryRedis:
             self.lists.setdefault(op["key"], []).extend(op["values"])
         return [len(self.lists[op["key"]]) for op in rpush_list]
 
-    async def async_lpop_pipeline(self, lpop_list: list[RedisPipelineLpopOperation]) -> list[list[object] | None]:
-        return [self.lists.pop(op["key"], None) for op in lpop_list]
+    async def async_drain_list_to_processing(
+        self, key: str, worker_id: str, count: int, ttl_seconds: int, recovery_seconds: int = 0
+    ) -> list[object]:
+        return self.lists.pop(key, [])
+
+    async def async_ack_processing_list(self, key: str, worker_id: str, ttl_seconds: int) -> bool:
+        return True
 
 
 @pytest.mark.asyncio

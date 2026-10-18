@@ -6,9 +6,13 @@ This is to prevent deadlocks and improve reliability
 
 import asyncio
 import json
-from collections.abc import Mapping, Sequence
+import os
+import uuid
+from collections.abc import Callable, Collection, Mapping, Sequence
+from contextlib import AsyncExitStack
 from datetime import datetime
 from functools import reduce
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypeVar, cast
 
 from redis.exceptions import RedisError
@@ -18,6 +22,8 @@ from litellm._logging import verbose_proxy_logger
 from litellm.caching import RedisCache
 from litellm.constants import (
     MAX_REDIS_BUFFER_DEQUEUE_COUNT,
+    REDIS_BUFFER_PROCESSING_LIST_RECOVERY_SECONDS,
+    REDIS_BUFFER_PROCESSING_LIST_TTL_SECONDS,
     REDIS_DAILY_AGENT_SPEND_UPDATE_BUFFER_KEY,
     REDIS_DAILY_END_USER_SPEND_UPDATE_BUFFER_KEY,
     REDIS_DAILY_ORG_SPEND_UPDATE_BUFFER_KEY,
@@ -55,7 +61,6 @@ from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
 from litellm.proxy.db.spend_log_batching import SpendLogRow
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.caching import (
-    RedisPipelineLpopOperation,
     RedisPipelineRpushOperation,
 )
 from litellm.types.services import ServiceTypes
@@ -133,6 +138,13 @@ def _merged_entity_transactions(
     )
 
 
+def _warn_claimed_by_another_worker(key: str) -> None:
+    verbose_proxy_logger.warning(
+        "Spend tracking - another worker restored the unacknowledged Redis buffer rows (key=%s) before this one acknowledged them",
+        key,
+    )
+
+
 class RedisUpdateBuffer:
     """
     Handles buffering database `UPDATE` transactions in Redis before committing them to the database
@@ -143,8 +155,37 @@ class RedisUpdateBuffer:
     def __init__(
         self,
         redis_cache: RedisCache | None = None,
+        process_id: Callable[[], int] = os.getpid,
+        processing_list_recovery_seconds: int = REDIS_BUFFER_PROCESSING_LIST_RECOVERY_SECONDS,
     ):
         self.redis_cache = redis_cache
+        self._drain_owner_id: Final = str(uuid.uuid4())
+        self._process_id: Final = process_id
+        self._processing_list_recovery_seconds: Final = processing_list_recovery_seconds
+        self._unacknowledged_drains: MappingProxyType[str, tuple[str, ...]] = MappingProxyType({})
+        self._pipeline_drain_keys: Final = (
+            REDIS_UPDATE_BUFFER_KEY,
+            REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY,
+            REDIS_DAILY_TEAM_SPEND_UPDATE_BUFFER_KEY,
+            REDIS_DAILY_ORG_SPEND_UPDATE_BUFFER_KEY,
+            REDIS_DAILY_END_USER_SPEND_UPDATE_BUFFER_KEY,
+            REDIS_DAILY_AGENT_SPEND_UPDATE_BUFFER_KEY,
+            REDIS_WINDOW_SPEND_UPDATE_BUFFER_KEY,
+        )
+        self._drain_locks: Final = MappingProxyType(
+            {
+                key: asyncio.Lock()
+                for key in (
+                    *self._pipeline_drain_keys,
+                    REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY,
+                    REDIS_SPEND_LOGS_BUFFER_KEY,
+                )
+            }
+        )
+
+    @property
+    def _drain_worker_id(self) -> str:
+        return f"{self._drain_owner_id}:{self._process_id()}"
 
     @staticmethod
     def should_commit_spend_updates_to_redis() -> bool:
@@ -509,11 +550,11 @@ class RedisUpdateBuffer:
         window_spend_update_transactions: Sequence[WindowSpendTransaction] | None = None,
     ) -> None:
         """
-        Re-push transactions that were popped from Redis but not committed to the DB.
+        Re-push transactions drained from Redis but not committed to the DB.
 
-        The leader drains the buffers with a destructive ``lpop`` before committing to
-        the database. When a commit fails after its retries are exhausted, the popped
-        transactions must be pushed back so a later scheduler tick can retry them;
+        The leader removes drained transactions from Redis before committing to the
+        database. When a commit fails after its retries are exhausted, the transactions
+        must be pushed back so a later scheduler tick can retry them;
         otherwise the aggregated spend is lost permanently. The re-pushed payloads use
         the same JSON encoding as the store path, so the next drain parses them normally.
         """
@@ -587,19 +628,77 @@ class RedisUpdateBuffer:
         verbose_proxy_logger.info("Spend tracking - parked %d spend log rows in Redis for a later flush", len(rows))
         return True
 
+    async def _drain_to_processing(
+        self,
+        key: str,
+        count: int,
+    ) -> list[str] | None:  # mutable-ok: preserve the Redis list drain contract
+        if self.redis_cache is None:
+            return None
+        drained_items: Final = await self.redis_cache.async_drain_list_to_processing(
+            key=key,
+            worker_id=self._drain_worker_id,
+            count=count,
+            ttl_seconds=REDIS_BUFFER_PROCESSING_LIST_TTL_SECONDS,
+            recovery_seconds=self._processing_list_recovery_seconds,
+        )
+        return drained_items if drained_items else None
+
+    async def _take_drained_items(
+        self,
+        key: str,
+        count: int,
+    ) -> list[str] | None:  # mutable-ok: preserve the Redis list drain contract
+        """Hand back rows whose acknowledgement reply was lost once Redis shows the acknowledgement landed."""
+        unacknowledged: Final = self._unacknowledged_drains.get(key)
+        if unacknowledged is None or self.redis_cache is None:
+            return await self._drain_to_processing(key=key, count=count)
+        state: Final = await self.redis_cache.async_processing_list_state(key=key, worker_id=self._drain_worker_id)
+        if state == "acknowledged":
+            return list(unacknowledged)
+        if state == "missing":
+            verbose_proxy_logger.warning(
+                "Spend tracking - unacknowledged Redis buffer rows (key=%s) were restored by another worker", key
+            )
+        return await self._drain_to_processing(key=key, count=count)
+
+    def _remember_unacknowledged(self, key: str, items: Sequence[str]) -> None:
+        self._unacknowledged_drains = MappingProxyType({**self._unacknowledged_drains, key: tuple(items)})
+
+    def _forget_unacknowledged(self, keys: Collection[str]) -> None:
+        self._unacknowledged_drains = MappingProxyType(
+            {key: rows for key, rows in self._unacknowledged_drains.items() if key not in keys}
+        )
+
+    async def _drain(self, key: str, count: int) -> list[str] | None:
+        if self.redis_cache is None:
+            return None
+        async with self._drain_locks[key]:
+            drained_items: Final = await self._take_drained_items(key=key, count=count)
+            if drained_items is None:
+                self._forget_unacknowledged((key,))
+                return None
+            self._remember_unacknowledged(key, drained_items)
+            acknowledged: Final = await self.redis_cache.async_ack_processing_list(
+                key=key,
+                worker_id=self._drain_worker_id,
+                ttl_seconds=REDIS_BUFFER_PROCESSING_LIST_TTL_SECONDS,
+            )
+            self._forget_unacknowledged((key,))
+            if not acknowledged:
+                _warn_claimed_by_another_worker(key)
+                return None
+            return drained_items
+
     @with_service_target(SPEND_QUEUE_TARGET)
     async def get_spend_logs_from_redis_buffer(self, limit: int) -> tuple[dict[str, object], ...]:
-        """Atomically take up to ``limit`` parked spend-log rows out of Redis."""
+        """Drain up to ``limit`` parked spend-log rows from Redis."""
         if self.redis_cache is None or not self.should_commit_spend_updates_to_redis():
             return ()
-        popped: Final[str | list[str] | None] = await self.redis_cache.async_lpop(
-            key=REDIS_SPEND_LOGS_BUFFER_KEY,
-            count=limit,
-        )
-        if popped is None:
+        drained_items: Final = await self._drain(key=REDIS_SPEND_LOGS_BUFFER_KEY, count=limit)
+        if drained_items is None:
             return ()
-        encoded_rows: Final = tuple(popped) if isinstance(popped, list) else (popped,)
-        decoded_rows: Final = (_decode_spend_log_row(encoded) for encoded in encoded_rows)
+        decoded_rows: Final = (_decode_spend_log_row(encoded) for encoded in drained_items)
         return tuple(row for row in decoded_rows if row is not None)
 
     @staticmethod
@@ -662,7 +761,7 @@ class RedisUpdateBuffer:
         """
         if self.redis_cache is None:
             return None
-        list_of_transactions: Final[str | list[str] | None] = await self.redis_cache.async_lpop(
+        list_of_transactions: Final = await self._drain(
             key=REDIS_UPDATE_BUFFER_KEY,
             count=MAX_REDIS_BUFFER_DEQUEUE_COUNT,
         )
@@ -672,7 +771,7 @@ class RedisUpdateBuffer:
         verbose_proxy_logger.info(
             "Spend tracking - popped %d spend update batches from Redis buffer (key=%s). "
             "These items are now removed from Redis and must be committed to DB.",
-            len(list_of_transactions) if isinstance(list_of_transactions, list) else 1,
+            len(list_of_transactions),
             REDIS_UPDATE_BUFFER_KEY,
         )
 
@@ -701,7 +800,7 @@ class RedisUpdateBuffer:
         tuple[WindowSpendTransaction, ...] | None,
     ]:
         """
-        Drains the main 7 Redis buffer queues in a single pipeline round-trip.
+        Concurrently drains the main 7 Redis buffer queues.
 
         Returns a 7-tuple of parsed results in this order:
             0: DBSpendUpdateTransactions
@@ -715,63 +814,97 @@ class RedisUpdateBuffer:
         if self.redis_cache is None:
             return None, None, None, None, None, None, None
 
-        lpop_list: Final[list[RedisPipelineLpopOperation]] = [
-            RedisPipelineLpopOperation(key=REDIS_UPDATE_BUFFER_KEY, count=MAX_REDIS_BUFFER_DEQUEUE_COUNT),
-            RedisPipelineLpopOperation(
-                key=REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY,
-                count=MAX_REDIS_BUFFER_DEQUEUE_COUNT,
-            ),
-            RedisPipelineLpopOperation(
-                key=REDIS_DAILY_TEAM_SPEND_UPDATE_BUFFER_KEY,
-                count=MAX_REDIS_BUFFER_DEQUEUE_COUNT,
-            ),
-            RedisPipelineLpopOperation(
-                key=REDIS_DAILY_ORG_SPEND_UPDATE_BUFFER_KEY,
-                count=MAX_REDIS_BUFFER_DEQUEUE_COUNT,
-            ),
-            RedisPipelineLpopOperation(
-                key=REDIS_DAILY_END_USER_SPEND_UPDATE_BUFFER_KEY,
-                count=MAX_REDIS_BUFFER_DEQUEUE_COUNT,
-            ),
-            RedisPipelineLpopOperation(
-                key=REDIS_DAILY_AGENT_SPEND_UPDATE_BUFFER_KEY,
-                count=MAX_REDIS_BUFFER_DEQUEUE_COUNT,
-            ),
-            RedisPipelineLpopOperation(
-                key=REDIS_WINDOW_SPEND_UPDATE_BUFFER_KEY,
-                count=MAX_REDIS_BUFFER_DEQUEUE_COUNT,
-            ),
-        ]
+        async with AsyncExitStack() as drain_lock_stack:
+            for key in self._pipeline_drain_keys:
+                await drain_lock_stack.enter_async_context(self._drain_locks[key])
+            drain_results_with_errors: Final = tuple(
+                await asyncio.gather(
+                    *(
+                        self._take_drained_items(key=key, count=MAX_REDIS_BUFFER_DEQUEUE_COUNT)
+                        for key in self._pipeline_drain_keys
+                    ),
+                    return_exceptions=True,
+                )
+            )
+            drain_errors: Final = tuple(
+                result for result in drain_results_with_errors if isinstance(result, BaseException)
+            )
+            if drain_errors:
+                raise drain_errors[0]
+            raw_results: Final = tuple(
+                result for result in drain_results_with_errors if not isinstance(result, BaseException)
+            )
+            acknowledgement_indexes: Final = tuple(
+                index for index, items in enumerate(raw_results) if items is not None
+            )
+            self._forget_unacknowledged(
+                tuple(key for key, items in zip(self._pipeline_drain_keys, raw_results) if items is None)
+            )
+            for index in acknowledgement_indexes:
+                self._remember_unacknowledged(self._pipeline_drain_keys[index], raw_results[index] or ())
+            acknowledgement_results: Final = tuple(
+                await asyncio.gather(
+                    *(
+                        self.redis_cache.async_ack_processing_list(
+                            key=self._pipeline_drain_keys[index],
+                            worker_id=self._drain_worker_id,
+                            ttl_seconds=REDIS_BUFFER_PROCESSING_LIST_TTL_SECONDS,
+                        )
+                        for index in acknowledgement_indexes
+                    ),
+                    return_exceptions=True,
+                )
+            )
+            failed_acknowledgements: Final = tuple(
+                (index, result)
+                for index, result in zip(acknowledgement_indexes, acknowledgement_results)
+                if isinstance(result, BaseException)
+            )
+            self._forget_unacknowledged(
+                tuple(
+                    self._pipeline_drain_keys[index]
+                    for index, result in zip(acknowledgement_indexes, acknowledgement_results)
+                    if not isinstance(result, BaseException)
+                )
+            )
+            for index, error in failed_acknowledgements:
+                verbose_proxy_logger.warning(
+                    "Spend tracking - failed to acknowledge Redis buffer drain (key=%s). Items will be retried: %s",
+                    self._pipeline_drain_keys[index],
+                    error,
+                )
+            claimed_indexes: Final = tuple(
+                index for index, result in zip(acknowledgement_indexes, acknowledgement_results) if result is False
+            )
+            for index in claimed_indexes:
+                _warn_claimed_by_another_worker(self._pipeline_drain_keys[index])
+            failed_acknowledgement_indexes: Final = frozenset(
+                (*(index for index, _ in failed_acknowledgements), *claimed_indexes)
+            )
+            results_ready_for_parse: Final = tuple(
+                None if index in failed_acknowledgement_indexes else items for index, items in enumerate(raw_results)
+            )
 
-        raw_results: Final = await self.redis_cache.async_lpop_pipeline(lpop_list=lpop_list)
-
-        # Pad with None if pipeline returned fewer results than expected
-        while len(raw_results) < 7:
-            raw_results.append(None)
-
-        # Slot 0: DBSpendUpdateTransactions
-        db_spend: DBSpendUpdateTransactions | None = None
-        if raw_results[0] is not None:
-            parsed: Final = self._parse_list_of_transactions(raw_results[0])
-            if len(parsed) > 0:
-                db_spend = self._combine_list_of_transactions(parsed)
-
-        # Slots 1-5: daily spend categories
-        daily_results: Final[list[dict[str, BaseDailySpendTransaction] | None]] = []
-        for slot in range(1, 6):
-            slot_result = raw_results[slot]
-            if slot_result is None:
-                daily_results.append(None)
-            else:
-                list_of_daily = [json.loads(t) for t in slot_result]
-                aggregated = DailySpendUpdateQueue.get_aggregated_daily_spend_update_transactions(list_of_daily)
-                daily_results.append(aggregated)
-
+        parsed_transactions: Final = (
+            self._parse_list_of_transactions(results_ready_for_parse[0])
+            if results_ready_for_parse[0] is not None
+            else ()
+        )
+        db_spend: Final = self._combine_list_of_transactions(parsed_transactions) if parsed_transactions else None
+        daily_results: Final = tuple(
+            None
+            if transactions is None
+            else DailySpendUpdateQueue.get_aggregated_daily_spend_update_transactions(
+                [json.loads(transaction) for transaction in transactions]
+            )
+            for transactions in results_ready_for_parse[1:6]
+        )
+        window_transactions: Final = results_ready_for_parse[6]
         window_spend: Final = (
             WindowSpendUpdateQueue.get_aggregated_window_spend_transactions(
-                tuple(json.loads(transaction) for transaction in raw_results[6])
+                tuple(json.loads(transaction) for transaction in window_transactions)
             )
-            if raw_results[6] is not None
+            if window_transactions is not None
             else None
         )
 
@@ -808,11 +941,11 @@ class RedisUpdateBuffer:
         redis_key: str,
     ) -> list[dict[str, BaseDailySpendTransaction]] | None:
         """
-        Drains a daily spend buffer key and parses each popped item as JSON.
+        Drains a daily spend buffer key and parses each item as JSON.
         """
         if self.redis_cache is None:
             return None
-        list_of_transactions: Final[list[str] | None] = await self.redis_cache.async_lpop(
+        list_of_transactions: Final = await self._drain(
             key=redis_key,
             count=MAX_REDIS_BUFFER_DEQUEUE_COUNT,
         )

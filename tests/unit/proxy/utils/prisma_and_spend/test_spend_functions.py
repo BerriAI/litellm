@@ -887,6 +887,9 @@ async def test_recover_parked_spend_logs_re_parks_rows_when_the_enqueue_is_cance
     mock_prisma_client._spend_log_transactions_lock.release()
 
     assert _parked_request_ids(fake_redis) == ["parked"]
+    recovered_rows: Final = await buffer.get_spend_logs_from_redis_buffer(limit=10)
+    assert [row["request_id"] for row in recovered_rows] == ["parked"]
+    assert await buffer.get_spend_logs_from_redis_buffer(limit=10) == ()
     assert mock_prisma_client.spend_log_transactions == []
 
 
