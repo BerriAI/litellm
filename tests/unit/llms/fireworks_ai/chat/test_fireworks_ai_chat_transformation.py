@@ -12,7 +12,10 @@ from litellm.constants import SESSION_ID_GENERATED_METADATA_KEY
 from litellm.litellm_core_utils.get_supported_openai_params import get_supported_openai_params
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
-from litellm.llms.fireworks_ai.common_utils import get_fireworks_session_id
+from litellm.llms.fireworks_ai.common_utils import (
+    FireworksAIException,
+    get_fireworks_session_id,
+)
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
     Function,
@@ -2358,3 +2361,36 @@ def test_global_disable_flag_with_transform_messages_helper(
     )
 
     assert json.loads(route.calls.last.request.content)["messages"] == [{"role": "user", "content": content}]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {},
+        {"choices": None},
+        {"error": {"message": "upstream broke"}},
+    ],
+)
+def test_transform_response_non_completion_body_raises(body):
+    # A 200 whose body is not a chat completion must raise instead of
+    # returning an empty successful completion.
+    config = FireworksAIConfig()
+
+    raw_response = MagicMock()
+    raw_response.status_code = 200
+    raw_response.text = json.dumps(body)
+    raw_response.headers = {}
+    raw_response.json.return_value = body
+
+    with pytest.raises(FireworksAIException):
+        config.transform_response(
+            model="accounts/fireworks/models/llama-v3p1-8b-instruct",
+            raw_response=raw_response,
+            model_response=ModelResponse(),
+            logging_obj=MagicMock(),
+            request_data={},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding=MagicMock(),
+        )
