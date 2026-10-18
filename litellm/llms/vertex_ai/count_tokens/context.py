@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Final, Literal
 from pydantic import JsonValue, TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
+from litellm.litellm_core_utils.prompt_templates.factory import chat_completion_tools_for
 from litellm.types.llms.anthropic import AnthropicMessagesTextParam
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.llms.vertex_ai import ContentType
@@ -75,27 +76,6 @@ def _is_function_tool(tool: Mapping[str, JsonValue]) -> bool:
     return isinstance(tool.get("name"), str) or "input_schema" in tool or "function" in tool
 
 
-def _is_responses_function_tool(tool: Mapping[str, JsonValue]) -> bool:
-    return tool.get("type") == "function" and "function" not in tool and "input_schema" not in tool
-
-
-def _chat_tool(tool: Mapping[str, JsonValue]) -> tuple[Mapping[str, object], ...]:
-    from litellm.llms.anthropic.pass_through.adapters.transformation import LiteLLMAnthropicMessagesAdapter
-    from litellm.responses.litellm_completion_transformation.transformation import (
-        LiteLLMCompletionResponsesConfig,
-    )
-
-    if _is_responses_function_tool(tool):
-        chat_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-            [dict(tool)]  # pyright: ignore[reportArgumentType]  # validated JSON dict in the Responses function tool shape
-        )
-        return tuple(chat_tools)
-    anthropic_tools, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_tools_to_openai(
-        [dict(tool)]  # pyright: ignore[reportArgumentType]  # validated JSON dict in an Anthropic or chat tool shape
-    )
-    return tuple(anthropic_tools)
-
-
 def _map_function_tools(
     tools: object | None,
 ) -> tuple[Mapping[str, object], ...] | None | VertexGeminiCountContextError:
@@ -112,7 +92,7 @@ def _map_function_tools(
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
 
     chat_tools: Final = tuple(
-        chat_tool for tool in function_tools for chat_tool in _chat_tool(tool)
+        chat_tool for tool in function_tools for chat_tool in chat_completion_tools_for(tool)
     )  # comprehension-ok: flattens each tool's translation
     try:
         mapped_tools: Final = VertexGeminiConfig().map_function(
@@ -163,6 +143,7 @@ def count_context_error_response(
         error=True,
         error_message=error.error_message,
         status_code=error.status_code,
+        rejected_before_provider_call=True,
     )
 
 
