@@ -13,6 +13,7 @@ from typing import Final, cast  # noqa: TID251  # narrows untyped credential val
 
 import litellm
 from litellm.litellm_core_utils.clientside_credential_handler import clientside_credential_keys
+from litellm.litellm_core_utils.credential_accessor import expand_credential_env_refs
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.credentials_repository import CredentialsRepository
@@ -78,7 +79,7 @@ def decrypted_credential(db_credential: CredentialItem) -> CredentialItem:
     )
     return CredentialItem(
         credential_name=db_credential.credential_name,
-        credential_values=decrypted_values,  # pyright: ignore[reportArgumentType]  # declared dict[str, str], and pydantic copies this mapping into one on validation; LIT002 rules out building that dict here
+        credential_values=expand_credential_env_refs(db_credential.credential_name, decrypted_values),  # pyright: ignore[reportArgumentType]  # declared dict[str, str], and pydantic copies this mapping into one on validation; LIT002 rules out building that dict here
         credential_info=db_credential.credential_info,
     )
 
