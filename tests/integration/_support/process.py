@@ -17,7 +17,7 @@ from ipaddress import IPv4Address
 from itertools import accumulate
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final
+from typing import TYPE_CHECKING, Final
 from urllib.parse import urlsplit
 
 import httpx
@@ -30,8 +30,12 @@ from cryptography.x509.oid import NameOID
 from pydantic import TypeAdapter
 
 from tests.integration._support.budget import import_seconds, readiness_for, readiness_seconds
-from tests.integration._support.client import GATEWAY_LIMITS, Gateway
+from tests.integration._support.client import GATEWAY_LIMITS, Gateway, gateway_from_environment
+from tests.integration._support.database import scratch_database
 from tests.integration._support.ports import allocate_port
+
+if TYPE_CHECKING:
+    import pytest
 
 DB_PUSH: Final = ("--use_prisma_db_push",)
 MIGRATE_DEPLOY: Final = ()
@@ -111,7 +115,7 @@ def _is_serving_worker(process: psutil.Process) -> bool:
 
 def _is_gone(process: psutil.Process) -> bool:
     try:
-        return process.status() == psutil.STATUS_ZOMBIE
+        return process.status() == psutil.STATUS_ZOMBIE and process.num_threads() <= 1
     except psutil.NoSuchProcess:
         return True
 
@@ -150,9 +154,9 @@ def _is_reaped(process: psutil.Process) -> bool:
     return False
 
 
-def _wait_until_reaped(process: psutil.Process, supervisor: psutil.Process, seconds: float) -> None:
+def _wait_until_reaped(process: psutil.Process, seconds: float) -> None:
     deadline: Final = time.monotonic() + seconds
-    while not _is_reaped(process) and not _is_stopped(supervisor):
+    while not _is_reaped(process):
         assert time.monotonic() < deadline, f"The supervisor did not reap worker {process.pid} within {seconds:.0f}s"
         time.sleep(0.05)
 
@@ -160,8 +164,6 @@ def _wait_until_reaped(process: psutil.Process, supervisor: psutil.Process, seco
 @dataclass(frozen=True, slots=True)
 class WorkerKill:
     victim: psutil.Process
-    supervisor: psutil.Process
-    reap_seconds: float
     fired: threading.Event
 
     def freeze(self) -> psutil.Process:
@@ -173,7 +175,6 @@ class WorkerKill:
         with suppress(psutil.NoSuchProcess):
             self.victim.kill()
         _wait_until_gone(self.victim, STRICT_HEALTHCHECK_SECONDS)
-        _wait_until_reaped(self.victim, self.supervisor, self.reap_seconds)
         self.fired.set()
 
 
@@ -250,22 +251,22 @@ class OwnedProxy:
         assert pid in before, f"{pid} is not a serving worker of this proxy: {sorted(before)}"
         return psutil.Process(pid), before
 
-    def _worker_kill(self, victim: psutil.Process) -> WorkerKill:
-        reap_seconds: Final = healthcheck_seconds(self.healthcheck) + STRICT_HEALTHCHECK_SECONDS
-        return WorkerKill(victim, psutil.Process(self.process.pid), reap_seconds, threading.Event())
+    def _replacement_of(self, victim: psutil.Process, before: frozenset[int]) -> int:
+        _wait_until_reaped(victim, healthcheck_seconds(self.healthcheck) + STRICT_HEALTHCHECK_SECONDS)
+        return self._await_replacement(before)
 
     @contextmanager
     def replacing_worker(self, pid: int) -> Iterator[WorkerKill]:
         victim, before = self._victim(pid)
-        kill: Final = self._worker_kill(victim)
+        kill: Final = WorkerKill(victim, threading.Event())
         yield kill
         assert kill.fired.is_set(), f"replacing_worker({pid}) exited without killing the worker"
-        self._await_replacement(before)
+        self._replacement_of(victim, before)
 
     def kill_worker(self, pid: int) -> int:
         victim, before = self._victim(pid)
-        self._worker_kill(victim)()
-        return self._await_replacement(before)
+        WorkerKill(victim, threading.Event())()
+        return self._replacement_of(victim, before)
 
     @contextmanager
     def suspended(self, pid: int) -> Iterator[psutil.Process]:
@@ -380,6 +381,18 @@ def owned_proxy(
         inherited=inherited,
     ) as owned:
         yield owned.gateway
+
+
+@contextmanager
+def isolated_gateway(directory: Path, environment: "pytest.MonkeyPatch") -> Iterator[Gateway]:
+    with gateway_from_environment() as shared, scratch_database() as database:
+        environment.setenv("DATABASE_URL", database)
+        environment.setenv("INTEGRATION_PROXY_DATABASE_URL", database)
+        environment.delenv("INTEGRATION_PROXY_READ_REPLICA_URL", raising=False)
+        environment.delenv("DATABASE_URL_READ_REPLICA", raising=False)
+        with owned_proxy(shared, directory, {}) as owned:
+            owned.post("/config/update", {"router_settings": {"num_retries": 0}})
+            yield owned
 
 
 def _stop(process: subprocess.Popen[bytes]) -> None:
@@ -631,8 +644,11 @@ def worker_configuration(config: Path, directory: Path, inherited: Mapping[str, 
         return f"http://127.0.0.1:{inherited['INTEGRATION_PROVIDER_PORT']}"
 
     contents: Final = re.sub(r"http://127[.]0[.]0[.]1:(8190|8191)(?![0-9])", endpoint, config.read_text())
-    directory.mkdir(parents=True, exist_ok=True)
-    destination: Final = directory / f"worker-config-{uuid.uuid4().hex}.yaml"
+    checkouts: Final = (_harness_root(), _proxy_root().resolve())
+    inside_checkout: Final = any(config.resolve().is_relative_to(checkout) for checkout in checkouts)
+    target: Final = directory if inside_checkout else config.parent
+    target.mkdir(parents=True, exist_ok=True)
+    destination: Final = target / f"worker-config-{uuid.uuid4().hex}.yaml"
     loaded: Final[object] = yaml.safe_load(contents)
     if not isinstance(loaded, dict):
         destination.write_text(contents)
