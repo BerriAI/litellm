@@ -15,6 +15,8 @@ from openai.types.chat import ChatCompletionChunk
 from pydantic import BaseModel, JsonValue, TypeAdapter
 from redis import Redis
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 _CHAT_BODY: Final = TypeAdapter(dict[str, JsonValue])
 _CHANNEL: Final = "litellm_proxy.auth_cache_invalidation"
 _EXPECTED_MODEL_DISCOVERY: Final = ("GET", "/v1/models")

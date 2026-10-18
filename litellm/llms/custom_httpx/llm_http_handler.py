@@ -1,8 +1,9 @@
 import asyncio
+import copy
 import inspect
 import json
 import ssl
-from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Coroutine, Iterator, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Coroutine, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from functools import lru_cache, partial, reduce
 from types import MappingProxyType
@@ -216,6 +217,7 @@ if TYPE_CHECKING:
         FakeAnthropicMessagesStreamIterator,
     )
     from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
+    from litellm.responses.streaming_iterator import ResponsesWsFrameGuard
     from litellm.types.google_genai.main import GenerateContentResponse
     from litellm.types.llms.openai_evals import (
         CancelEvalResponse,
@@ -468,6 +470,8 @@ async def _aiter_bytes_then_close(response: httpx.Response, *, chunk_size: int) 
 
 _DECODED_BODY_STALE_HEADERS: Final[frozenset[str]] = frozenset({"content-encoding", "content-length"})
 _OPTIONAL_PARAMS: Final = TypeAdapter(Mapping[str, object])
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object])
+_JSON_OBJECTS: Final = TypeAdapter(list[dict[str, object]])
 
 
 def _decoded_body_headers(response: httpx.Response) -> httpx.Headers:
@@ -2181,11 +2185,13 @@ class BaseLLMHTTPHandler:
         api_key: str | None,
         model: str,
         timeout: float | httpx.Timeout | None = None,
+        rebuild_without_native_output: Callable[[], Mapping[str, object]] | None = None,
     ) -> httpx.Response:
         max_attempts: Final = max(provider_config.max_retry_on_anthropic_messages_http_error, 1)
         litellm_params_dict: Final = dict(litellm_params)
         optional_params_dict: Final = dict(litellm_params)
-        for attempt_idx in range(max_attempts):
+        recovered_errors: tuple[httpx.HTTPStatusError, ...] = ()  # rebind-ok: a rebuilt body replays every recovery
+        while True:
             try:
                 response = await async_httpx_client.post(
                     url=request_url,
@@ -2198,39 +2204,53 @@ class BaseLLMHTTPHandler:
                 response.raise_for_status()
                 return response
             except httpx.HTTPStatusError as e:
-                hit_max_attempt = attempt_idx + 1 == max_attempts
+                rebuild_body = (
+                    rebuild_without_native_output
+                    if rebuild_without_native_output is not None
+                    and provider_config.should_retry_anthropic_messages_without_native_output(
+                        e=e, request_body=request_body, model=model
+                    )
+                    else None
+                )
+                hit_max_attempt = len(recovered_errors) + 1 == max_attempts
                 should_retry = provider_config.should_retry_anthropic_messages_on_http_error(
                     e=e, litellm_params=litellm_params_dict, request_body=request_body
                 )
-                if should_retry and not hit_max_attempt:
-                    if logging_obj.baseline_cache_context is not None:
-                        await logging_obj.invalidate_baseline_cache_estimate("retried_request")
+                if rebuild_body is None and (hit_max_attempt or not should_retry):
+                    raise self._handle_error(e=e, provider_config=provider_config)
+                if logging_obj.baseline_cache_context is not None:
+                    await logging_obj.invalidate_baseline_cache_estimate("retried_request")
+                if rebuild_body is not None:
+                    request_body.clear()
+                    request_body.update(rebuild_body())
+                    for recovered_error in recovered_errors:
+                        provider_config.transform_anthropic_messages_request_on_http_error(
+                            e=recovered_error, request_data=request_body
+                        )
+                else:
                     verbose_logger.debug(
                         "Anthropic /v1/messages: invalid thinking signature; "
                         "stripping thinking blocks and retrying (attempt %s/%s).",
-                        attempt_idx + 2,
+                        len(recovered_errors) + 2,
                         max_attempts,
                     )
                     provider_config.transform_anthropic_messages_request_on_http_error(e=e, request_data=request_body)
-                    headers, signed_json_body = await sign_request_off_loop_if_aws(
-                        provider_config,
-                        provider_config.sign_request,
-                        headers=headers,
-                        optional_params=optional_params_dict,
-                        request_data=request_body,
-                        api_base=request_url,
-                        api_key=api_key,
-                        stream=stream,
-                        fake_stream=False,
-                        model=model,
-                    )
-                    logging_obj.model_call_details.update(request_body)
-                    continue
-                raise self._handle_error(e=e, provider_config=provider_config)
+                    recovered_errors = (*recovered_errors, e)
+                headers, signed_json_body = await sign_request_off_loop_if_aws(
+                    provider_config,
+                    provider_config.sign_request,
+                    headers=headers,
+                    optional_params=optional_params_dict,
+                    request_data=request_body,
+                    api_base=request_url,
+                    api_key=api_key,
+                    stream=stream,
+                    fake_stream=False,
+                    model=model,
+                )
+                logging_obj.model_call_details.update(request_body)
             except Exception as e:
                 raise self._handle_error(e=e, provider_config=provider_config)
-
-        raise RuntimeError("unreachable: anthropic messages HTTP retry loop exited without return")
 
     @staticmethod
     def _resolve_anthropic_messages_timeout(
@@ -2238,24 +2258,25 @@ class BaseLLMHTTPHandler:
         stream: bool,
         custom_llm_provider: str,
     ) -> float | httpx.Timeout | None:
-        from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
+        from litellm.litellm_core_utils.completion_timeout import CompletionTimeout, StreamKind
         from litellm.litellm_core_utils.request_timeout_resolver import (
             get_configured_request_timeout,
         )
         from litellm.utils import supports_httpx_timeout
 
         stream_timeout: Final = litellm_params.get("stream_timeout") if stream else None
-        model_timeout: Final = stream_timeout if stream_timeout is not None else litellm_params.get("timeout")
+        model_timeout: Final = litellm_params.get("timeout")
         request_timeout: Final = litellm_params.get("request_timeout")
         global_timeout: Final = get_configured_request_timeout()
-        if model_timeout is None and request_timeout is None and global_timeout is None:
+        if stream_timeout is None and model_timeout is None and request_timeout is None and global_timeout is None:
             return None
         return CompletionTimeout.resolve(
             model_timeout,
-            {"request_timeout": request_timeout},
+            {"stream_timeout": stream_timeout, "request_timeout": request_timeout},
             custom_llm_provider,
             global_timeout=global_timeout,
             supports_httpx_timeout=supports_httpx_timeout,
+            stream_kind=StreamKind.LIVE if stream else StreamKind.NOT_STREAMED,
         )
 
     async def async_anthropic_messages_handler(
@@ -2293,6 +2314,7 @@ class BaseLLMHTTPHandler:
         provider_specific_headers: Final = ProviderSpecificHeaderUtils.get_provider_specific_headers(
             provider_specific_header=provider_specific_header,
             custom_llm_provider=custom_llm_provider,
+            native_anthropic_messages=anthropic_messages_provider_config.is_native_messages_route(),
         )
         forwarded_headers: Final = kwargs.get("headers", None)
         # Also check for extra_headers in kwargs (from config or direct calls)
@@ -2353,6 +2375,24 @@ class BaseLLMHTTPHandler:
             custom_llm_provider=custom_llm_provider,
         )
 
+        native_output_fallback_params: Final = anthropic_messages_provider_config.native_output_fallback_litellm_params(
+            model=model,
+            anthropic_messages_optional_request_params=_OPTIONAL_PARAMS.validate_python(request_params),
+            litellm_params=litellm_params,
+        )
+        rebuild_without_native_output: Final = (
+            None
+            if native_output_fallback_params is None
+            else partial[Mapping[str, object]](
+                anthropic_messages_provider_config.transform_anthropic_messages_request,
+                model=model,
+                messages=copy.deepcopy(_JSON_OBJECTS.validate_python(messages)),
+                anthropic_messages_optional_request_params=copy.deepcopy(_JSON_OBJECT.validate_python(request_params)),
+                litellm_params=native_output_fallback_params,
+                headers=_JSON_OBJECT.validate_python(headers),
+            )
+        )
+
         # Prepare request body
         request_body: Final = anthropic_messages_provider_config.transform_anthropic_messages_request(
             model=model,
@@ -2409,6 +2449,13 @@ class BaseLLMHTTPHandler:
             },
         )
 
+        applied_timeout: Final = self._resolve_anthropic_messages_timeout(
+            litellm_params=litellm_params,
+            stream=stream or False,
+            custom_llm_provider=custom_llm_provider,
+        )
+        if applied_timeout is not None:
+            logging_obj.record_applied_timeout(applied_timeout)
         response: Final = await self._async_post_anthropic_messages_with_http_error_retry(
             async_httpx_client=async_httpx_client,
             request_url=request_url,
@@ -2421,11 +2468,8 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             api_key=api_key,
             model=model,
-            timeout=self._resolve_anthropic_messages_timeout(
-                litellm_params=litellm_params,
-                stream=stream or False,
-                custom_llm_provider=custom_llm_provider,
-            ),
+            timeout=applied_timeout,
+            rebuild_without_native_output=rebuild_without_native_output,
         )
 
         # used for logging + cost tracking
@@ -6867,6 +6911,7 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str | None = None,
         first_message: str | None = None,
         request_defaults: ResponsesWebSocketRequestDefaults | None = None,
+        frame_guard: "ResponsesWsFrameGuard | None" = None,
         **kwargs: object,
     ) -> Exception | None:
         """
@@ -6881,6 +6926,35 @@ class BaseLLMHTTPHandler:
         - Forwards events over the websocket connection
         """
         _ws_quota_callbacks: Final = _collect_ws_project_quota_callbacks()
+
+        _ws_guardrail_callbacks: list = []
+        _ws_output_guardrail_callbacks: list = []
+        try:
+            import litellm as _litellm
+
+            # Use duck-typing so any guardrail that exposes the PII
+            # masking interface works, not just _OPTIONAL_PresidioPIIMasking.
+            # This avoids a layering violation (SDK importing from proxy).
+            _ws_guardrail_callbacks = [
+                cb
+                for cb in _litellm.callbacks
+                if callable(getattr(cb, "check_pii", None))
+                and callable(getattr(cb, "get_presidio_settings_from_request_data", None))
+                and callable(getattr(cb, "_unmask_pii_text", None))
+                and getattr(cb, "output_parse_pii", False)
+            ]
+            _ws_output_guardrail_callbacks = [
+                cb
+                for cb in _litellm.callbacks
+                if callable(getattr(cb, "check_pii", None))
+                and callable(getattr(cb, "get_presidio_settings_from_request_data", None))
+                and getattr(cb, "apply_to_output", False)
+            ]
+        except Exception as _guardrail_exc:
+            verbose_logger.warning(
+                "Responses WebSocket: failed to collect guardrail callbacks — PII masking will be skipped. Error: %s",
+                _guardrail_exc,
+            )
 
         if responses_api_provider_config is None or not responses_api_provider_config.supports_native_websocket():
             from litellm.responses.streaming_iterator import (
@@ -6899,6 +6973,8 @@ class BaseLLMHTTPHandler:
                 custom_llm_provider=custom_llm_provider,
                 first_message=first_message,
                 quota_callbacks=_ws_quota_callbacks,
+                guardrail_callbacks=_ws_guardrail_callbacks,  # pyright: ignore[reportUnknownArgumentType]  # duck-typed callbacks from litellm.callbacks
+                frame_guard=frame_guard,
                 **kwargs,
             )
             await handler.run()
@@ -6980,36 +7056,6 @@ class BaseLLMHTTPHandler:
                 if litellm_metadata:
                     _request_data["litellm_metadata"] = litellm_metadata
 
-                _ws_guardrail_callbacks: list = []
-                _ws_output_guardrail_callbacks: list = []
-                try:
-                    import litellm as _litellm
-
-                    # Use duck-typing so any guardrail that exposes the PII
-                    # masking interface works, not just _OPTIONAL_PresidioPIIMasking.
-                    # This avoids a layering violation (SDK importing from proxy).
-                    _ws_guardrail_callbacks = [
-                        cb
-                        for cb in _litellm.callbacks
-                        if callable(getattr(cb, "check_pii", None))
-                        and callable(getattr(cb, "get_presidio_settings_from_request_data", None))
-                        and callable(getattr(cb, "_unmask_pii_text", None))
-                        and getattr(cb, "output_parse_pii", False)
-                    ]
-                    _ws_output_guardrail_callbacks = [
-                        cb
-                        for cb in _litellm.callbacks
-                        if callable(getattr(cb, "check_pii", None))
-                        and callable(getattr(cb, "get_presidio_settings_from_request_data", None))
-                        and getattr(cb, "apply_to_output", False)
-                    ]
-                except Exception as _guardrail_exc:
-                    verbose_logger.warning(
-                        "Responses WebSocket: failed to collect guardrail "
-                        "callbacks — PII masking will be skipped. Error: %s",
-                        _guardrail_exc,
-                    )
-
                 streaming: Final = ResponsesWebSocketStreaming(
                     websocket=websocket,
                     backend_ws=cast(ClientConnection, backend_ws),
@@ -7023,6 +7069,7 @@ class BaseLLMHTTPHandler:
                     authorized_model=model,
                     custom_llm_provider=custom_llm_provider,
                     request_defaults=request_defaults,
+                    frame_guard=frame_guard,
                 )
                 return await streaming.bidirectional_forward()
 

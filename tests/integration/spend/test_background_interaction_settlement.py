@@ -42,7 +42,7 @@ from pydantic import JsonValue
 
 from litellm.proxy.spend_tracking.budget_reservation import DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK
 
-pytestmark: Final = pytest.mark.timeout(900)
+pytestmark: Final = [pytest.mark.timeout(900), pytest.mark.shares_worker_state]
 
 _MODEL: Final = "gemini/gemini-3.8-flash"
 _INPUT_TOKENS: Final = 300
