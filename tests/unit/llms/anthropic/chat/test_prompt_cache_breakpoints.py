@@ -1112,7 +1112,7 @@ def test_a_tool_config_cache_point_settles_after_the_tools_under_drop_params(
             ChatCompletionCachedContent(type="ephemeral", ttl="5m"),
             _EXPLICIT,
             {"cache_control": _EPHEMERAL},
-            None,
+            _EPHEMERAL,
             _EPHEMERAL,
             id="sent-after-a-tool-mark-without-a-ttl",
         ),
@@ -1121,7 +1121,7 @@ def test_a_tool_config_cache_point_settles_after_the_tools_under_drop_params(
             ChatCompletionCachedContent(type="ephemeral"),
             _EXPLICIT,
             {"cache_control": _ONE_HOUR},
-            None,
+            _EPHEMERAL,
             _EPHEMERAL,
             id="sent-without-a-ttl-after-a-tool-mark-with-one",
         ),
@@ -1129,10 +1129,10 @@ def test_a_tool_config_cache_point_settles_after_the_tools_under_drop_params(
             {"prompt_cache_breakpoint": {"mode": "explicit", "ttl": "1h"}},
             ChatCompletionCachedContent(type="ephemeral", ttl="5m"),
             _EXPLICIT,
-            {},
+            {"cache_control": _ONE_HOUR},
             _EPHEMERAL,
             _EPHEMERAL,
-            id="sent-after-a-dropped-tool-mark",
+            id="left-out-after-a-one-hour-tool-breakpoint",
         ),
         pytest.param(
             {"cache_control": _ONE_HOUR},
@@ -1145,12 +1145,12 @@ def test_a_tool_config_cache_point_settles_after_the_tools_under_drop_params(
         ),
     ],
 )
-def test_a_tool_config_cache_point_takes_one_of_claudes_four_only_when_converse_sends_it(
+def test_a_tool_config_cache_point_after_a_marked_last_tool_keeps_every_breakpoint_under_drop_params(
     tool_fields: dict[str, object],
     tool_config: ChatCompletionCachedContent,
     first_ask_marker: dict[str, object],
     sent_tool_fields: dict[str, object],
-    sent_system: dict[str, object] | None,
+    sent_system: dict[str, object],
     sent_first_ask: dict[str, object],
 ):
     tool: Final = {"type": "function", "function": {"name": "t"}}
@@ -1174,7 +1174,7 @@ def test_a_tool_config_cache_point_takes_one_of_claudes_four_only_when_converse_
 
     assert list(result.tools or ()) == [{**tool, **sent_tool_fields}]
     assert list(result.messages) == [
-        {"role": "system", "content": [_part("s") if sent_system is None else _part("s", cache_control=sent_system)]},
+        {"role": "system", "content": [_part("s", cache_control=sent_system)]},
         {"role": "user", "content": [_part("0", cache_control=sent_first_ask), _part("1", cache_control=_EPHEMERAL)]},
     ]
 
@@ -1599,6 +1599,47 @@ def test_a_tool_breakpoint_bedrock_joins_to_a_cache_point_without_a_ttl_is_never
         {
             "role": "user",
             "content": [_part("0"), *(_part(str(index), cache_control=_EPHEMERAL) for index in range(1, 4))],
+        }
+    ]
+
+
+@pytest.mark.parametrize("breakpoints", [2, 3])
+@pytest.mark.parametrize(
+    "tool_mark",
+    [{"prompt_cache_breakpoint": _EXPLICIT}, {"cache_control": _EPHEMERAL}],
+    ids=["breakpoint", "client-cache-control"],
+)
+@pytest.mark.parametrize(
+    "tail", [(), ({"cachePoint": {"type": "default"}},)], ids=["tool-config-follows-the-tool", "cache-point-between"]
+)
+def test_the_tool_config_cache_point_shares_one_slot_with_the_mark_on_the_last_tool(
+    tail: tuple[dict[str, object], ...], tool_mark: dict[str, object], breakpoints: int
+):
+    result: Final = _resolved(
+        [
+            {
+                "role": "user",
+                "content": [_part(str(index), prompt_cache_breakpoint=_EXPLICIT) for index in range(breakpoints)],
+            }
+        ],
+        [
+            {"type": "function", "function": {"name": "t"}},
+            {"cachePoint": {"type": "default"}},
+            {"type": "function", "function": {"name": "u"}, **tool_mark},
+            *tail,
+        ],
+        drop_params=True,
+        tool_config_cache_control=ChatCompletionCachedContent(type="ephemeral", ttl="5m"),
+        route="converse",
+    )
+
+    assert list(result.messages) == [
+        {
+            "role": "user",
+            "content": [
+                *(_part(str(index)) for index in range(breakpoints - 2)),
+                *(_part(str(index), cache_control=_EPHEMERAL) for index in range(breakpoints - 2, breakpoints)),
+            ],
         }
     ]
 

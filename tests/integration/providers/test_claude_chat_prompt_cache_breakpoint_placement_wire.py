@@ -1007,6 +1007,45 @@ def test_a_cache_point_between_two_unmarked_tools_takes_one_of_the_four_slots_un
     )
 
 
+@pytest.mark.parametrize(
+    ("last_tools", "last_tool_marks"),
+    (
+        pytest.param(
+            [{**_TIME_TOOL, "prompt_cache_breakpoint": _EXPLICIT}, {"cachePoint": {"type": "default"}}],
+            (Mark("tool:get_time", None), Mark("other", None)),
+            id="breakpoint-then-cache-point",
+        ),
+        pytest.param(
+            [{**_TIME_TOOL, "cache_control": EPHEMERAL}],
+            (Mark("tool:get_time", None),),
+            id="client-cache-control",
+        ),
+    ),
+)
+def test_the_tool_config_cache_point_and_the_last_tool_mark_take_one_of_the_four_slots_under_drop_params(
+    gateway: Gateway, last_tools: list[JsonValue], last_tool_marks: tuple[Mark, ...]
+) -> None:
+    marker: Final = new_marker()
+    parts: Final = (_NOTES[0], final_text(marker))
+    turns: Final[list[JsonValue]] = [
+        {"role": "user", "content": [_text(part, prompt_cache_breakpoint=_EXPLICIT) for part in parts]}
+    ]
+    marks: Final = _marks_sent(
+        gateway,
+        "bedrock_converse",
+        lambda model: chat_body(
+            model, turns, tools=[TOOL, {"cachePoint": {"type": "default"}}, *last_tools], drop_params=True
+        ),
+        cache_control_injection_points=[{"location": "tool_config", "control": {"type": "ephemeral"}}],
+    )
+    assert marks == (
+        Mark(_TOOL_LABEL, None),
+        *last_tool_marks,
+        Mark("other", None),
+        *(Mark(_label(part), None) for part in parts),
+    )
+
+
 def test_a_five_minute_tool_config_cache_point_after_the_response_format_tool_shortens_later_breakpoints(
     gateway: Gateway,
 ) -> None:

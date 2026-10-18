@@ -62,6 +62,7 @@ class _Placed:
     first_read: tuple[int, ...]
     last_read: tuple[int, ...]
     joins_a_cache_point: bool = False
+    takes_a_slot: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -642,7 +643,7 @@ def _droppable(mark: _Placed) -> bool:
 
 
 def _planned(marks: Sequence[_Placed], drop_params: bool) -> _Plan:
-    excess: Final = len(marks) - MAX_CACHE_CONTROL_BLOCKS
+    excess: Final = sum(mark.takes_a_slot for mark in marks) - MAX_CACHE_CONTROL_BLOCKS
     dropped: Final[frozenset[_Path]] = (
         frozenset(tuple(mark.path for mark in marks if _droppable(mark))[:excess])
         if excess > 0 and drop_params
@@ -864,12 +865,12 @@ def claude_prompt_cache(
     ``drop_params``, which keeps what Claude can use and, when the request ends up with more than Claude's four
     breakpoints, drops the earliest translated ones. A request-level ``cache_control`` in ``params`` and the
     ``tool_config_cache_control`` cachePoint a route appends after the tools each take one of the four, unless Converse
-    leaves that cachePoint out or sends no tool in its tool config, counting the tool it adds itself when it
-    ``adds_a_tool``, and marks on tool history a ``tool_history_as_text`` route flattens, marks on a tool the
-    ``route`` sends without one or under a tool's ``function`` on Converse, and marks on a tool_search call nobody
-    answered, unless the route ``pairs_unanswered_tool_calls`` with a placeholder result, take none. A ``cache_control``
-    on a ``namespace`` tool's member takes one off Converse and is never changed. A request carrying no breakpoint is
-    returned as written."""
+    leaves that cachePoint out, joins it to the mark on its last tool, or sends no tool in its tool config, counting
+    the tool it adds itself when it ``adds_a_tool``, and marks on tool history a ``tool_history_as_text`` route
+    flattens, marks on a tool the ``route`` sends without one or under a tool's ``function`` on Converse, and marks on a
+    tool_search call nobody answered, unless the route ``pairs_unanswered_tool_calls`` with a placeholder result, take
+    none. A ``cache_control`` on a ``namespace`` tool's member takes one off Converse and is never changed. A request
+    carrying no breakpoint is returned as written."""
     if not carries_prompt_cache_breakpoint(messages, tools):
         return ClaudePromptCache(tuple(messages), None if tools is None else tuple(tools))
     listed_tools: Final = tools or ()
@@ -905,6 +906,7 @@ def claude_prompt_cache(
     tool_config_order: Final = _converse_tool_config_order(renamed_tools, late_tools)
     sent_tool_config_cache_control: Final = tool_config_cache_control if tool_config_order or adds_a_tool else None
     cache_point_runs: Final = _cache_point_runs(renamed_tools, tool_config_order)
+    tool_config_tail: Final = _tool_config_tail(renamed_tools, tool_config_order)
     placements: Final[tuple[tuple[_Path, object, _Kind], ...]] = (
         *(
             (path, block.get("cache_control"), _kind(path, block.get("cache_control"), translated))
@@ -916,9 +918,14 @@ def claude_prompt_cache(
         *_route_marks(sent_tool_config_cache_control, request_mark),
     )
     marked_tools: Final = frozenset(path for path, _, _ in placements if path[0] == "tools")
+    tool_mark_the_tool_config_joins: Final = (
+        tool_config_tail.tool
+        if sent_tool_config_cache_control is not None and tool_config_tail.tool in marked_tools
+        else None
+    )
     joined_tools: Final = frozenset(
         ("tools", run.tool_before) for run in cache_point_runs if run.tool_before is not None
-    )
+    ) | frozenset(filter(None, (tool_mark_the_tool_config_joins,)))
     marks: Final = sorted(
         (
             _Placed(
@@ -928,6 +935,7 @@ def claude_prompt_cache(
                 _wire_position(path, leading_system_count, late_tools),
                 _last_read(path, messages, leading_system_count, run_ends, late_tools),
                 path in joined_tools,
+                path != _TOOL_CONFIG or tool_mark_the_tool_config_joins is None,
             )
             for path, cache_control, kind in chain(
                 placements,
@@ -941,7 +949,7 @@ def claude_prompt_cache(
     plan: Final = _route_plan(
         marks,
         renamed_tools,
-        _tool_config_tail(renamed_tools, tool_config_order),
+        tool_config_tail,
         _cache_points_inside_the_tool_config(renamed_tools, cache_point_runs),
         sent_tool_config_cache_control,
         drop_params,
