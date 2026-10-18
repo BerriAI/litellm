@@ -551,6 +551,7 @@ class LiteLLMRoutes(enum.Enum):
         + list(agent_inference_routes)
         + model_info_routes
     )
+    llm_api_routes_without_mcp = sorted(set(llm_api_routes) - set(mcp_inference_routes))
     info_routes = [
         "/key/info",
         "/key/health",
@@ -562,6 +563,7 @@ class LiteLLMRoutes(enum.Enum):
         "/team/metadata_schema",
         "/user/info",
         "/v2/user/info",
+        "/management/v1/users/me",
         "/model/info",
         "/v1/model/info",
         "/v2/model/info",
@@ -3666,6 +3668,7 @@ class SpendLogsMetadata(TypedDict):
     user_api_key_project_alias: str | None
     user_api_key_org_id: str | None
     user_api_key_user_id: str | None
+    user_api_key_user_email: ReadOnly[str | None]
     user_api_key_team_alias: str | None
     spend_logs_metadata: dict | None  # special param to log k,v pairs to spendlogs for a call
     requester_ip_address: str | None
@@ -4762,6 +4765,26 @@ class JWTIssuerConfig(LiteLLMBaseModel):
 DEFAULT_JWKS_STALE_TTL: Final = 3600
 
 
+class IdJagRequestingApp(LiteLLMBaseModel):
+    """A requesting application the operator lets redeem an ID-JAG (Identity Assertion
+    Authorization Grant) at the MCP gateway's ``POST /token``. ``client_id`` is the value
+    the identity provider puts in the assertion's ``client_id`` claim and the app sends as
+    the ``client_id`` form field. A ``client_secret`` makes the app a confidential client
+    that must authenticate with it (HTTP Basic or the ``client_secret`` form field); without
+    one the app is a public client."""
+
+    model_config = ConfigDict(frozen=True)
+
+    client_id: str = Field(
+        min_length=1, description="The requesting app's client_id as the identity provider asserts it."
+    )
+    client_secret: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Shared secret the app must present at the gateway's token endpoint. Omit for a public client.",
+    )
+
+
 class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     """
     A class to define the roles and permissions for a LiteLLM Proxy w/ JWT Auth.
@@ -4806,6 +4829,10 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
         "mcp_routes",
         "/v1/messages",
         "/v1/messages/count_tokens",
+        "/rag/ingest",
+        "/v1/rag/ingest",
+        "/rag/query",
+        "/v1/rag/query",
     ]
     team_id_default: str | None = Field(
         default=None,
@@ -4941,6 +4968,10 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     issuers: list[JWTIssuerConfig] | None = Field(
         default=None,
         description="Optional issuer-bound JWT validation rules. When a token's `iss` matches a configured issuer, validation uses that issuer's JWKS, audience, and claim mappings. Tokens with an unlisted `iss` fall back to the global JWT_AUDIENCE/JWT_ISSUER validation path — this is additive routing, not an allow-list.",
+    )
+    id_jag_requesting_apps: tuple[IdJagRequestingApp, ...] | None = Field(
+        default=None,
+        description="Requesting apps allowed to redeem an ID-JAG at the MCP gateway's POST /token with the RFC 7523 jwt-bearer grant. Unset or empty turns that grant off.",
     )
     #########################################################
 

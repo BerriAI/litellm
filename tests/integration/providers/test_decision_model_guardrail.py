@@ -23,6 +23,8 @@ from pydantic import JsonValue
 
 from tests.integration.cost_calculation.cost_tracking_case import JsonResponse, RoutedResponse
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 _PROBABILITY_ABOVE: Final = 0.99
 _PROBABILITY_BELOW: Final = 0.01
 _THRESHOLD: Final = 0.5

@@ -1346,6 +1346,74 @@ def test_opus_uses_native_structured_output(model_name):
     assert optional_params.get("json_mode") is True
 
 
+@pytest.mark.parametrize(
+    ("field_schema", "native"),
+    [
+        ({"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}, True),
+        ({"type": "object", "additionalProperties": {"type": "integer"}}, False),
+        ({"anyOf": [{"type": "object"}, {"type": "null"}]}, False),
+    ],
+    ids=["closed-object", "dict-field", "nullable-dict-field"],
+)
+def test_dict_fields_take_the_json_tool_on_a_native_structured_output_model(field_schema, native):
+    optional_params: Final = AnthropicConfig().map_openai_params(
+        non_default_params={
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "out",
+                    "schema": {"type": "object", "properties": {"field": field_schema}, "required": ["field"]},
+                },
+            }
+        },
+        optional_params={},
+        model="claude-opus-4-8",
+        drop_params=False,
+    )
+
+    assert ("output_format" in optional_params) is native
+    assert ([tool["name"] for tool in optional_params.get("tools", [])] == ["json_tool_call"]) is not native
+
+
+
+@pytest.mark.parametrize(
+    ("model", "thinking_params"),
+    [
+        ("claude-opus-4-8", {"thinking": {"type": "adaptive"}}),
+        ("claude-opus-4-8", {"reasoning_effort": "low"}),
+        ("claude-opus-4-8", {"reasoning_effort": "none"}),
+        ("claude-sonnet-5-5", {}),
+        (
+            "claude-opus-4-8",
+            {"tools": [{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}]},
+        ),
+    ],
+    ids=["adaptive-thinking", "reasoning-effort", "reasoning-effort-none", "model-without-forced-tools", "caller-tools"],
+)
+def test_dict_fields_keep_native_output_when_the_json_tool_would_not_be_forced(model, thinking_params):
+    optional_params: Final = AnthropicConfig().map_openai_params(
+        non_default_params={
+            **thinking_params,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "out",
+                    "schema": {
+                        "type": "object",
+                        "properties": {"field": {"type": "object", "additionalProperties": {"type": "integer"}}},
+                        "required": ["field"],
+                    },
+                },
+            },
+        },
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert "output_format" in optional_params
+    assert "json_tool_call" not in [tool["name"] for tool in optional_params.get("tools", [])]
+
 def test_native_structured_output_uses_bundled_capability_when_remote_map_lags(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -6071,6 +6139,12 @@ def test_translate_system_message_strips_billing_header_for_bedrock_invoke():
             True,
         ),
         (
+            "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation",
+            "AmazonAnthropicClaudeMessagesConfig",
+            True,
+        ),
+        ("litellm.llms.databricks.messages.transformation", "DatabricksAnthropicMessagesConfig", False),
+        (
             "litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation",
             "VertexAIAnthropicConfig",
             True,
@@ -9377,17 +9451,26 @@ def test_map_openai_params_lets_a_native_anthropic_search_tool_replace_the_opena
 
 
 @pytest.mark.parametrize(
-    ("config", "model", "provider"),
+    ("config", "model", "provider", "model_cost_key"),
     [
-        pytest.param(AmazonAnthropicClaudeConfig(), "us.anthropic.claude-sonnet-5-5", "bedrock", id="bedrock-invoke"),
-        pytest.param(VertexAIAnthropicConfig(), "claude-sonnet-5-5", "vertex_ai", id="vertex_ai"),
+        pytest.param(
+            AmazonAnthropicClaudeConfig(),
+            "us.anthropic.claude-sonnet-5-5",
+            "bedrock",
+            "us.anthropic.claude-sonnet-5-5",
+            id="bedrock-invoke",
+        ),
+        pytest.param(
+            VertexAIAnthropicConfig(), "claude-sonnet-5-5", "vertex_ai", "vertex_ai/claude-sonnet-5-5", id="vertex_ai"
+        ),
     ],
 )
 def test_map_openai_params_judges_tool_search_on_the_real_model_when_tool_based_response_format_swaps_it(
-    config, model, provider
+    set_native_structured_output, config, model, provider, model_cost_key
 ):
     from litellm.responses.litellm_completion_transformation.tool_search import anthropic_tool_search_chat_tool
 
+    set_native_structured_output(model_cost_key, None)
     assert litellm.supports_tool_search(model, provider)
     mapped: Final = config.map_openai_params(
         non_default_params={
@@ -9547,6 +9630,17 @@ def test_json_mode_tool_use_turn_adds_no_stop_fields_to_the_message():
     message: Final = result.choices[0].message
     assert json.loads(message.content) == {"answer": "Hello"}
     assert not message.provider_specific_fields
+
+
+def test_json_mode_keeps_the_thinking_that_preceded_the_json_tool_call():
+    thinking_block: Final = {"type": "thinking", "thinking": "The user wants a greeting.", "signature": "sig-1"}
+    body: Final = _json_mode_message_body("tool_use", None)
+    result: Final = _transform_json_mode_body({**body, "content": [thinking_block, *body["content"]]})
+
+    message: Final = result.choices[0].message
+    assert json.loads(message.content) == {"answer": "Hello"}
+    assert message.reasoning_content == thinking_block["thinking"]
+    assert [block["signature"] for block in message.thinking_blocks] == [thinking_block["signature"]]
 
 
 def test_non_dict_upstream_body_still_transforms_without_refusal_fields() -> None:

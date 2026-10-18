@@ -13,6 +13,8 @@ from integration._support.process import owned_proxy
 from integration._support.upstream import JsonResponse, SseResponse, delete_scenario, register_scenario
 from pydantic import BaseModel, JsonValue, TypeAdapter
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 
 
