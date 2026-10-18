@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { EndUser } from "@/app/(dashboard)/hooks/customers/useCustomers";
 import type { MCPServer, MCPToolset } from "@/components/mcp_tools/types";
+import { NO_MCP_SERVERS_SENTINEL } from "@/components/mcp_tools/constants";
 import {
   buildCustomerPayload,
   getCustomerBudgetCounts,
@@ -124,6 +125,33 @@ describe("customer form values", () => {
 });
 
 describe("customer payload", () => {
+  it("does not revive stale tool grants when replacing No MCP Servers", () => {
+    const anotherServer = { ...server, server_id: "another-server" };
+    const stored = {
+      ...customer,
+      object_permission: {
+        ...permission,
+        mcp_servers: [NO_MCP_SERVERS_SENTINEL],
+        mcp_access_groups: [],
+        mcp_toolsets: [],
+        mcp_tool_permissions: { [anotherServer.server_id]: ["read"] },
+      },
+    };
+    const values = {
+      ...toCustomerFormValues(stored),
+      mcp_servers_and_groups: { servers: [server.server_id], accessGroups: [], toolsets: [] },
+      mcp_tool_permissions: { ...stored.object_permission.mcp_tool_permissions, [server.server_id]: ["read"] },
+    };
+
+    const expected = {
+      mcp_servers: [server.server_id],
+      mcp_access_groups: [],
+      mcp_toolsets: [],
+      mcp_tool_permissions: { [server.server_id]: ["read"] },
+    };
+    expect(buildCustomerPayload(values, stored, [server, anotherServer], []).object_permission).toEqual(expected);
+  });
+
   it("creates a customer with only the fields that are set", () => {
     const values = { ...toCustomerFormValues(null), user_id: " customer-id " };
     expect(buildCustomerPayload(values, null, [], [])).toEqual({ user_id: customer.user_id });
