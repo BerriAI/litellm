@@ -2627,7 +2627,7 @@ async def _load_team_membership_on_cache_miss(
     parent_otel_span: Span | None,
     proxy_logging_obj: ProxyLogging | None,
 ) -> LiteLLM_TeamMembership | None:
-    redis_cached: Final[object] = await user_api_key_cache.async_get_cache(key=cache_key)
+    redis_cached: Final = await _raw_cache(user_api_key_cache).async_get_cache(key=cache_key)
     redis_membership: Final = _membership_from_cached_payload(redis_cached)
     if not isinstance(redis_membership, _TeamMembershipCacheMiss):
         return redis_membership

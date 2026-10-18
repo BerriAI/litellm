@@ -3,10 +3,13 @@ from collections.abc import Mapping
 from typing import Any, Final
 
 import requests
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.secret_redaction import redact_string
 
 from .exceptions import UnauthorizedError
+
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
 
 
 class KeysManagementClient:
@@ -179,7 +182,7 @@ class KeysManagementClient:
         try:
             response: Final = session.send(request.prepare(), timeout=self._timeout)
             response.raise_for_status()
-            return response.json()
+            return _JSON_OBJECT.validate_python(response.json())
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 401:
                 raise UnauthorizedError(e)
@@ -223,7 +226,7 @@ class KeysManagementClient:
         try:
             response: Final = session.send(request.prepare(), timeout=self._timeout)
             response.raise_for_status()
-            return response.json()
+            return _JSON_OBJECT.validate_python(response.json())
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 401:
                 raise UnauthorizedError(e)
@@ -239,7 +242,7 @@ class KeysManagementClient:
         key_alias: str | None = None,
         team_id: str | None = None,
         user_id: str | None = None,
-    ) -> dict[str, object] | requests.Request:
+    ) -> dict[str, object]:
         """
         Update an existing API key's parameters.
 
@@ -285,7 +288,7 @@ class KeysManagementClient:
             response: Final = session.send(request.prepare(), timeout=self._timeout)
             response_text = response.text
             response.raise_for_status()
-            return response.json()
+            return _JSON_OBJECT.validate_python(response.json())
         except Exception:
             raise Exception(f"Error updating key: {response_text}")
 
@@ -314,7 +317,7 @@ class KeysManagementClient:
         try:
             response: Final = session.send(request.prepare(), timeout=self._timeout)
             response.raise_for_status()
-            return response.json()
+            return _JSON_OBJECT.validate_python(response.json())
         except requests.exceptions.HTTPError as e:
             redacted_message: Final = redact_string(str(e))
             if e.response.status_code == 401:

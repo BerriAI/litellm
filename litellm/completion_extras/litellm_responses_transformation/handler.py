@@ -2,12 +2,10 @@
 Handler for transforming /chat/completions api requests to litellm.responses requests
 """
 
-from collections.abc import AsyncIterable, Coroutine, Iterable, Mapping
+from collections.abc import AsyncIterable, Iterable, Mapping
 from typing import (
     TYPE_CHECKING,
-    Any,
     Final,
-    Union,
     cast,  # noqa: TID251  # optional_params reaches the bridge as an untyped dict
 )
 
@@ -160,13 +158,7 @@ class ResponsesToCompletionBridgeHandler:
             encoding=typed_kwargs.get("encoding"),
         )
 
-    def completion(
-        self, *args, **kwargs
-    ) -> Union[
-        Coroutine[None, None, Union["ModelResponse", "CustomStreamWrapper"]],
-        "ModelResponse",
-        "CustomStreamWrapper",
-    ]:
+    def completion(self, *args, **kwargs) -> object:
         if kwargs.get("acompletion") is True:
             return self.acompletion(**kwargs)
 
@@ -269,7 +261,7 @@ class ResponsesToCompletionBridgeHandler:
             )
             return self._apply_post_stream_processing(streamwrapper, model, custom_llm_provider)
 
-    async def acompletion(self, *args, **kwargs) -> Union["ModelResponse", "CustomStreamWrapper"]:
+    async def acompletion(self, *args, **kwargs) -> object:
         from litellm import aresponses
         from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 
@@ -379,7 +371,7 @@ class ResponsesToCompletionBridgeHandler:
         custom_llm_provider: str,
         logging_obj: "LiteLLMLoggingObj",
         json_mode: bool | None,
-    ) -> "CustomStreamWrapper":
+    ) -> object:
         from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
         from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 
@@ -396,7 +388,7 @@ class ResponsesToCompletionBridgeHandler:
         stream: "CustomStreamWrapper",
         model: str,
         custom_llm_provider: str,
-    ) -> Any:
+    ) -> object:
         """Apply provider-specific post-stream processing if available."""
         from litellm.types.utils import LlmProviders
         from litellm.utils import ProviderConfigManager

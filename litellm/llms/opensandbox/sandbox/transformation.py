@@ -41,6 +41,7 @@ MAX_OUTPUT_BYTES: Final = SANDBOX_MAX_OUTPUT_BYTES
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _JSON_VALUE: Final = TypeAdapter(object)
+_JSON_DICT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True, strict=True))
 
 
 class OpenSandboxSandboxConfig(BaseSandboxConfig):
@@ -491,21 +492,22 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
         if not data:
             return None
         try:
-            parsed: Final = json.loads(data)
+            parsed: Final = _JSON_VALUE.validate_python(json.loads(data))
         except json.JSONDecodeError:
             return None
         if not isinstance(parsed, dict):
             return None
-        if "type" not in parsed and "code" in parsed and "message" in parsed:
+        parsed_object: Final = _JSON_DICT.validate_python(parsed)
+        if "type" not in parsed_object and "code" in parsed_object and "message" in parsed_object:
             return {
                 "type": "error",
                 "error": {
-                    "ename": str(parsed["code"]),
-                    "evalue": str(parsed["message"]),
+                    "ename": str(parsed_object["code"]),
+                    "evalue": str(parsed_object["message"]),
                     "traceback": [],
                 },
             }
-        return parsed
+        return parsed_object
 
     @staticmethod
     def _normalize_result(message: dict[str, object]) -> dict[str, object]:

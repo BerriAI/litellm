@@ -11,7 +11,7 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Literal, Optional
 
 import httpx
-from pydantic import JsonValue, TypeAdapter, ValidationError
+from pydantic import ConfigDict, JsonValue, TypeAdapter, ValidationError
 from pydantic_core import PydanticSerializationError
 
 from litellm._logging import verbose_proxy_logger
@@ -45,6 +45,7 @@ _CHAT_ROW: Final[TypeAdapter[AllMessageValues]] = TypeAdapter(AllMessageValues)
 _SENT_ROW: Final = TypeAdapter(Mapping[str, object])
 _SENT_ROWS: Final = TypeAdapter(Sequence[Mapping[str, object]])
 _JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
 
 # Headers whose values are forwarded as-is (case-insensitive). Glob patterns supported (e.g. x-stainless-*, x-litellm*).
 _HEADER_VALUE_ALLOWLIST: Final = frozenset(
@@ -600,7 +601,7 @@ class GenericGuardrailAPI(CustomGuardrail):
             )
 
             response.raise_for_status()
-            response_json: Final = response.json()
+            response_json: Final = _JSON_OBJECT.validate_python(response.json())
 
             verbose_proxy_logger.debug("Generic Guardrail API response: %s", response_json)
 

@@ -6,11 +6,14 @@ from collections.abc import AsyncIterator, Iterator
 from typing import Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.openai import OpenAIChatCompletionChunk
 
 from ...custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+
+_STREAM_EVENT_ADAPTER: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
 
 
 # -------------------------------
@@ -107,6 +110,14 @@ class _StreamParser:
         return None
 
 
+def _parse_stream_event(payload: str) -> OpenAIChatCompletionChunk | None:
+    try:
+        event_object: Final[object] = json.loads(payload)
+    except Exception:
+        return None
+    return _StreamParser.to_openai_chunk(_STREAM_EVENT_ADAPTER.validate_python(event_object))
+
+
 # -------------------------------
 # Iterators
 # -------------------------------
@@ -146,12 +157,7 @@ class SAPStreamIterator:
                 raise StopIteration
 
             try:
-                obj = json.loads(payload)
-            except Exception:
-                continue
-
-            try:
-                chunk = _StreamParser.to_openai_chunk(obj)
+                chunk = _parse_stream_event(payload)
             except ValueError as e:
                 self._safe_close()
                 raise e
@@ -217,12 +223,7 @@ class AsyncSAPStreamIterator:
                 await self._aclose()
                 raise StopAsyncIteration
             try:
-                obj = json.loads(payload)
-            except Exception:
-                continue
-
-            try:
-                chunk = _StreamParser.to_openai_chunk(obj)
+                chunk = _parse_stream_event(payload)
             except ValueError as e:
                 await self._aclose()
                 raise GenAIHubOrchestrationError(502, str(e))

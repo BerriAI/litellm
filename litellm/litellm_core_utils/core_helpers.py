@@ -8,7 +8,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast, runtime_checkable
 
 import httpx
-from pydantic import TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.llm_response_utils.get_headers import get_provider_request_id
@@ -25,6 +25,7 @@ else:
 
 
 _CODEX_CLIENT_PREFIX_RE: Final = re.compile(r"^codex[-_ /]", re.IGNORECASE)
+_MODEL_DUMP: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(strict=True))
 
 
 def is_codex_user_agent(user_agent: str) -> bool:
@@ -559,7 +560,8 @@ def preserve_upstream_non_openai_attributes(
     """
     # Access model_fields on the class, not the instance, to avoid Pydantic 2.11+ deprecation warnings
     expected_keys: Final = set(type(model_response).model_fields.keys()).union({"usage"})
-    for key, value in original_chunk.model_dump().items():
+    original_attributes: Final = _MODEL_DUMP.validate_python(original_chunk.model_dump())
+    for key, value in original_attributes.items():
         if key not in expected_keys:
             setattr(model_response, key, value)
 

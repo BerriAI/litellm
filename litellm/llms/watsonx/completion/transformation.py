@@ -1,9 +1,11 @@
 import time
-from collections.abc import AsyncIterator, Iterator, Mapping
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUsageBlock
@@ -27,6 +29,25 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _WatsonXTextGenResponse(TypedDict):
+    results: ReadOnly[Sequence[object]]
+    model_id: NotRequired[ReadOnly[str | None]]
+    created_at: NotRequired[ReadOnly[str | None]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _WatsonXTextGenResult(TypedDict):
+    generated_text: ReadOnly[str]
+    input_token_count: ReadOnly[int]
+    generated_token_count: ReadOnly[int]
+    stop_reason: ReadOnly[str]
+
+
+_WATSONX_TEXT_GEN_RESPONSE: Final = TypeAdapter(_WatsonXTextGenResponse)
+_WATSONX_TEXT_GEN_RESULT: Final = TypeAdapter(_WatsonXTextGenResult)
 
 
 class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
@@ -297,19 +318,22 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
                 status_code=500,
                 message=f"Error: Invalid response from Watsonx.ai API: {json_resp}",
             )
+        payload: Final = _WATSONX_TEXT_GEN_RESPONSE.validate_python(json_resp)
         if model_response is None:
-            model_response = ModelResponse(model=json_resp.get("model_id", None))
-        generated_text: Final = json_resp["results"][0]["generated_text"]
-        prompt_tokens: Final = json_resp["results"][0]["input_token_count"]
-        completion_tokens: Final = json_resp["results"][0]["generated_token_count"]
+            model_response = ModelResponse(model=payload.get("model_id", None))
+        first_result: Final = _WATSONX_TEXT_GEN_RESULT.validate_python(payload["results"][0])
+        generated_text: Final = first_result["generated_text"]
+        prompt_tokens: Final = first_result["input_token_count"]
+        completion_tokens: Final = first_result["generated_token_count"]
         model_response.choices[0].message.content = generated_text
-        model_response.choices[0].finish_reason = map_finish_reason(json_resp["results"][0]["stop_reason"])
-        if json_resp.get("created_at"):
+        model_response.choices[0].finish_reason = map_finish_reason(first_result["stop_reason"])
+        created_at: Final = payload.get("created_at")
+        if created_at:
             try:
-                created_datetime = datetime.fromisoformat(json_resp["created_at"])
+                created_datetime = datetime.fromisoformat(created_at)
             except ValueError:
                 # datetime.fromisoformat cannot handle 'Z' in Python 3.10
-                created_datetime = datetime.fromisoformat(f"{json_resp['created_at'].rstrip('Z')}+00:00")
+                created_datetime = datetime.fromisoformat(f"{created_at.rstrip('Z')}+00:00")
             model_response.created = int(created_datetime.timestamp())
         else:
             model_response.created = int(time.time())

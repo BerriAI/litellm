@@ -67,6 +67,8 @@ ToolCallLike: TypeAlias = (
     | ChatCompletionToolCallChunk
 )
 
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True))
+
 
 class _ToolCallFunctionSlice(LiteLLMBaseModel):
     model_config = ConfigDict(from_attributes=True, extra="ignore")
@@ -452,7 +454,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             )
             response.raise_for_status()
 
-            result: Final[dict[str, object]] = response.json()
+            result: Final = _JSON_OBJECT.validate_python(response.json())
 
             # Validate response format
             if "action" not in result:

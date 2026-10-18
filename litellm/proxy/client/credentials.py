@@ -3,8 +3,11 @@ from typing import Any, Final
 from urllib.parse import quote
 
 import requests
+from pydantic import ConfigDict, TypeAdapter
 
 from .exceptions import UnauthorizedError
+
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
 
 
 class CredentialsManagementClient:
@@ -75,7 +78,7 @@ class CredentialsManagementClient:
         credential_values: Mapping[str, object],
         return_request: bool = False,
         display_name: str | None = None,
-    ) -> dict[str, Any] | requests.Request:
+    ) -> dict[str, object] | requests.Request:
         """
         Create a new credential.
 
@@ -111,7 +114,7 @@ class CredentialsManagementClient:
         try:
             response: Final = session.send(request.prepare(), timeout=self._timeout)
             response.raise_for_status()
-            return response.json()
+            return _JSON_OBJECT.validate_python(response.json())
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 401:
                 raise UnauthorizedError(e)
@@ -121,7 +124,7 @@ class CredentialsManagementClient:
         self,
         credential_name: str,
         return_request: bool = False,
-    ) -> dict[str, Any] | requests.Request:
+    ) -> dict[str, object] | requests.Request:
         """
         Delete a credential by name.
 
@@ -148,7 +151,7 @@ class CredentialsManagementClient:
         try:
             response: Final = session.send(request.prepare(), timeout=self._timeout)
             response.raise_for_status()
-            return response.json()
+            return _JSON_OBJECT.validate_python(response.json())
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 401:
                 raise UnauthorizedError(e)
@@ -172,7 +175,7 @@ class CredentialsManagementClient:
         try:
             response: Final = session.send(request.prepare(), timeout=self._timeout)
             response.raise_for_status()
-            return response.json()
+            return _JSON_OBJECT.validate_python(response.json())
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 401:
                 raise UnauthorizedError(e)
@@ -182,7 +185,7 @@ class CredentialsManagementClient:
         self,
         credential_name: str,
         return_request: bool = False,
-    ) -> dict[str, Any] | requests.Request:
+    ) -> dict[str, object] | requests.Request:
         """
         Get a credential by name.
 
@@ -209,7 +212,7 @@ class CredentialsManagementClient:
         try:
             response: Final = session.send(request.prepare(), timeout=self._timeout)
             response.raise_for_status()
-            return response.json()
+            return _JSON_OBJECT.validate_python(response.json())
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 401:
                 raise UnauthorizedError(e)

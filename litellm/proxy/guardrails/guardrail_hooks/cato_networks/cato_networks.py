@@ -14,8 +14,8 @@ from ssl import SSLContext
 from typing import TYPE_CHECKING, Any, Final
 
 from fastapi import HTTPException
-from pydantic import BaseModel
-from typing_extensions import NotRequired, TypedDict
+from pydantic import BaseModel, ConfigDict, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import ConnectionClosed
 
@@ -58,38 +58,51 @@ class _WsSslKwargs(TypedDict, total=False):
     ssl: bool | str | SSLContext
 
 
+_CATO_JSON_CONFIG: Final = ConfigDict(extra="allow", strict=True)
+
+
+@with_config(_CATO_JSON_CONFIG)
 class _CatoRequiredAction(TypedDict, total=False):
-    action_type: str
-    detection_message: str
+    action_type: ReadOnly[str]
+    detection_message: ReadOnly[str]
 
 
+@with_config(_CATO_JSON_CONFIG)
 class _CatoRedactedMessage(TypedDict):
-    role: NotRequired[str]
-    content: str | None
+    content: NotRequired[ReadOnly[str | None]]
 
 
+@with_config(_CATO_JSON_CONFIG)
 class _CatoRedactedChat(TypedDict, total=False):
-    all_redacted_messages: Sequence[_CatoRedactedMessage]
+    all_redacted_messages: ReadOnly[Sequence[_CatoRedactedMessage]]
 
 
+@with_config(_CATO_JSON_CONFIG)
 class _CatoAnalysisResult(TypedDict, total=False):
-    policy_drill_down: Mapping[str, object]
+    policy_drill_down: ReadOnly[Mapping[str, object]]
 
 
+@with_config(_CATO_JSON_CONFIG)
 class _CatoAnalyzeResponse(TypedDict):
-    required_action: NotRequired[_CatoRequiredAction | None]
-    analysis_result: NotRequired[_CatoAnalysisResult]
-    redacted_chat: NotRequired[_CatoRedactedChat]
+    required_action: NotRequired[ReadOnly[_CatoRequiredAction | None]]
+    analysis_result: NotRequired[ReadOnly[_CatoAnalysisResult]]
+    redacted_chat: NotRequired[ReadOnly[_CatoRedactedChat]]
 
 
+@with_config(_CATO_JSON_CONFIG)
 class _CatoOutputRedaction(TypedDict):
-    redacted_output: str
+    redacted_output: ReadOnly[str]
 
 
+@with_config(_CATO_JSON_CONFIG)
 class _CatoStreamMessage(TypedDict, total=False):
-    verified_chunk: Mapping[str, object]
-    done: bool
-    blocking_message: str
+    verified_chunk: ReadOnly[Mapping[str, object]]
+    done: ReadOnly[object]
+    blocking_message: ReadOnly[str]
+
+
+_CATO_ANALYZE_RESPONSE_ADAPTER: Final = TypeAdapter(_CatoAnalyzeResponse)
+_CATO_STREAM_MESSAGE_ADAPTER: Final = TypeAdapter(_CatoStreamMessage)
 
 
 class CatoNetworksGuardrail(CustomGuardrail):
@@ -308,7 +321,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
             timeout=self.timeout,
         )
         response.raise_for_status()
-        res: Final[_CatoAnalyzeResponse] = response.json()
+        res: Final = _CATO_ANALYZE_RESPONSE_ADAPTER.validate_python(response.json())
         required_action: Final = res.get("required_action")
         action_type: Final = required_action and required_action.get("action_type", None)
         if action_type is None:
@@ -358,7 +371,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
         if original_messages:
             data["messages"] = [
                 (
-                    {**original, "content": redacted_messages[idx]["content"]}
+                    {**original, "content": redacted_messages[idx].get("content")}
                     if idx < len(redacted_messages) and redacted_messages[idx].get("content") is not None
                     else original
                 )
@@ -449,7 +462,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
             timeout=self.timeout,
         )
         response.raise_for_status()
-        res: Final[_CatoAnalyzeResponse] = response.json()
+        res: Final = _CATO_ANALYZE_RESPONSE_ADAPTER.validate_python(response.json())
         required_action: Final = res.get("required_action")
         action_type: Final = required_action and required_action.get("action_type", None)
         if action_type == "block_action" and required_action is not None:
@@ -637,7 +650,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
             try:
                 while True:
                     raw_message = await self._await_cato_message(websocket, sender)
-                    result: _CatoStreamMessage = json.loads(raw_message)
+                    result = _CATO_STREAM_MESSAGE_ADAPTER.validate_python(json.loads(raw_message))
                     if verified_chunk := result.get("verified_chunk"):
                         yield ModelResponseStream.model_validate(verified_chunk)
                         continue

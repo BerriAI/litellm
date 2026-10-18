@@ -17,7 +17,9 @@ from collections.abc import Mapping, Sequence
 from enum import Enum
 from typing import Any, Final, Protocol, TypedDict
 
+from pydantic import ConfigDict, TypeAdapter, with_config
 from typing_extensions import ReadOnly
+from typing_extensions import TypedDict as _TypedDict
 
 from litellm._logging import verbose_logger
 
@@ -50,8 +52,12 @@ class _AnthropicToolSpec(TypedDict, total=False):
     input_schema: ReadOnly[_ToolArgumentSchema]
 
 
-class _CodeExecutionArguments(TypedDict, total=False):
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _CodeExecutionArguments(_TypedDict, total=False):
     code: ReadOnly[str]
+
+
+_CODE_EXECUTION_ARGUMENTS: Final = TypeAdapter(_CodeExecutionArguments)
 
 
 class _GeneratedFile(TypedDict, total=False):
@@ -115,7 +121,7 @@ class _CodeExecutionOutcome(TypedDict, total=False):
 
 
 def _parse_code_execution_arguments(serialized_arguments: str) -> _CodeExecutionArguments:
-    return json.loads(serialized_arguments)
+    return _CODE_EXECUTION_ARGUMENTS.validate_python(json.loads(serialized_arguments))
 
 
 class LiteLLMInternalTools(str, Enum):

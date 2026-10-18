@@ -6,7 +6,8 @@ import traceback
 from typing import Final
 
 import httpx
-from pydantic import TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -28,6 +29,14 @@ _OIDC_TOKEN_EXPIRY_MARGIN_SECONDS: Final = 60
 
 class _OidcTokenClaims(LiteLLMBaseModel):
     exp: float | None = None
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _GitHubOidcTokenResponse(TypedDict):
+    value: NotRequired[ReadOnly[str | None]]
+
+
+_GITHUB_OIDC_TOKEN_RESPONSE: Final = TypeAdapter(_GitHubOidcTokenResponse)
 
 
 def _oidc_token_cache_ttl(oidc_token: str, max_ttl: int) -> int:
@@ -271,7 +280,8 @@ def get_secret(
                 },
             )
             if response.status_code == 200:
-                oidc_token = response.json().get("value", None)
+                response_data: Final = _GITHUB_OIDC_TOKEN_RESPONSE.validate_python(response.json())
+                oidc_token = response_data.get("value", None)
                 oidc_cache.set_cache(key=secret_name, value=oidc_token, ttl=300 - 5)
                 return oidc_token
             else:

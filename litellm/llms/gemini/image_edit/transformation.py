@@ -1,10 +1,12 @@
 import base64
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from io import BufferedReader, BytesIO
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 from httpx._types import RequestFiles
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.images.utils import ImageEditRequestUtils
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
@@ -31,6 +33,35 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _GeminiInlineData(TypedDict):
+    data: NotRequired[ReadOnly[str | None]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _GeminiPart(TypedDict):
+    inlineData: NotRequired[ReadOnly[_GeminiInlineData | None]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _GeminiContent(TypedDict):
+    parts: NotRequired[ReadOnly[Sequence[_GeminiPart]]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _GeminiCandidate(TypedDict):
+    content: NotRequired[ReadOnly[_GeminiContent]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _GeminiImageEditResponse(TypedDict):
+    candidates: NotRequired[ReadOnly[Sequence[_GeminiCandidate]]]
+    usageMetadata: NotRequired[ReadOnly[Mapping[str, object]]]
+
+
+_GEMINI_IMAGE_EDIT_RESPONSE: Final = TypeAdapter(_GeminiImageEditResponse)
 
 
 class GeminiImageEditConfig(BaseImageEditConfig):
@@ -133,7 +164,8 @@ class GeminiImageEditConfig(BaseImageEditConfig):
                 headers=raw_response.headers,
             )
 
-        candidates: Final = response_json.get("candidates", [])
+        response_body: Final = _GEMINI_IMAGE_EDIT_RESPONSE.validate_python(response_json)
+        candidates: Final = response_body.get("candidates", [])
         data_list: Final[list[ImageObject]] = []
 
         for candidate in candidates:
@@ -141,17 +173,18 @@ class GeminiImageEditConfig(BaseImageEditConfig):
             parts = content.get("parts", [])
             for part in parts:
                 inline_data = part.get("inlineData")
-                if inline_data and inline_data.get("data"):
+                image_data = inline_data.get("data") if inline_data else None
+                if image_data:
                     data_list.append(
                         ImageObject(
-                            b64_json=inline_data["data"],
+                            b64_json=image_data,
                             url=None,
                         )
                     )
 
         model_response.data = cast(list[OpenAIImage], data_list)
-        if "usageMetadata" in response_json:
-            model_response.usage = transform_gemini_image_usage(response_json["usageMetadata"])
+        if "usageMetadata" in response_body:
+            model_response.usage = transform_gemini_image_usage(dict(response_body["usageMetadata"]))
         return model_response
 
     def _prepare_inline_image_parts(self, image: FileTypes | list[FileTypes]) -> list[dict[str, object]]:
