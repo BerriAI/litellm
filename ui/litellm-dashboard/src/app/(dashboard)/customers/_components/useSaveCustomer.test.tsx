@@ -282,6 +282,116 @@ describe("useSaveCustomer", () => {
     expect(mocks.update).toHaveBeenCalledOnce();
   });
 
+  it.each([["group-a"], [{ name: "group-a" }]])(
+    "preserves the last toolset ceiling on a retained group server with membership %j",
+    async (membership) => {
+      const stored: EndUser = {
+        ...customer,
+        object_permission: {
+          ...permission,
+          mcp_servers: [],
+          mcp_access_groups: ["group-a"],
+          mcp_toolsets: [toolset.toolset_id],
+          mcp_tool_permissions: {},
+        },
+      };
+      mocks.servers.mockReturnValue({ data: [{ ...server, mcp_access_groups: [membership] }], isSuccess: true });
+      mocks.toolsets.mockReturnValue({ data: [toolset], isSuccess: true });
+      mocks.accessGroups.mockReturnValue({ data: ["group-a"], isSuccess: true });
+      const { result } = renderHook(() => useSaveCustomer(stored));
+      const values = {
+        ...toCustomerFormValues(stored),
+        mcp_servers_and_groups: { servers: [], accessGroups: ["group-a"], toolsets: [] },
+      };
+
+      await expect(result.current.saveCustomer(values)).rejects.toThrow("Choose allowed tools");
+      expect(mocks.update).not.toHaveBeenCalled();
+      await result.current.saveCustomer({ ...values, mcp_tool_permissions: { [server.server_id]: ["read"] } });
+      expect(mocks.update).toHaveBeenCalledExactlyOnceWith({
+        user_id: stored.user_id,
+        object_permission: {
+          ...clearedGrant,
+          mcp_access_groups: ["group-a"],
+          mcp_tool_permissions: { [server.server_id]: ["read"] },
+        },
+      });
+    },
+  );
+
+  it.each([
+    {
+      scenario: "removing only the group",
+      storedGroups: ["group-a"],
+      storedToolsets: [toolset.toolset_id],
+      servers: [],
+      groups: [],
+      toolsets: [toolset.toolset_id],
+    },
+    {
+      scenario: "granting a new full-access group",
+      storedGroups: [],
+      storedToolsets: [],
+      servers: [],
+      groups: ["group-a"],
+      toolsets: [],
+    },
+    {
+      scenario: "denying every server",
+      storedGroups: ["group-a"],
+      storedToolsets: [toolset.toolset_id],
+      servers: ["no-mcp-servers"],
+      groups: ["group-a"],
+      toolsets: [],
+    },
+    {
+      scenario: "clearing all grants",
+      storedGroups: ["group-a"],
+      storedToolsets: [toolset.toolset_id],
+      servers: [],
+      groups: [],
+      toolsets: [],
+    },
+    {
+      scenario: "removing an unknown empty group",
+      storedGroups: ["unknown-group"],
+      storedToolsets: [toolset.toolset_id],
+      servers: [],
+      groups: [],
+      toolsets: [toolset.toolset_id],
+    },
+  ])(
+    "allows $scenario without adding a tool map",
+    async ({ storedGroups, storedToolsets, servers, groups, toolsets }) => {
+      const stored: EndUser = {
+        ...customer,
+        object_permission: {
+          ...permission,
+          mcp_servers: [],
+          mcp_access_groups: storedGroups,
+          mcp_toolsets: storedToolsets,
+          mcp_tool_permissions: {},
+        },
+      };
+      mocks.servers.mockReturnValue({ data: [{ ...server, mcp_access_groups: ["group-a"] }], isSuccess: true });
+      mocks.toolsets.mockReturnValue({ data: [toolset], isSuccess: true });
+      mocks.accessGroups.mockReturnValue({ data: ["group-a"], isSuccess: true });
+      const { result } = renderHook(() => useSaveCustomer(stored));
+      await result.current.saveCustomer({
+        ...toCustomerFormValues(stored),
+        mcp_servers_and_groups: { servers, accessGroups: groups, toolsets },
+      });
+      expect(mocks.update).toHaveBeenCalledExactlyOnceWith({
+        user_id: stored.user_id,
+        object_permission: {
+          mcp_servers: servers,
+          mcp_access_groups: groups,
+          mcp_toolsets: toolsets,
+          mcp_tool_permissions: {},
+        },
+      });
+    },
+  );
+
   it("refuses a permission edit while a stored access group's catalog has failed, then saves after it loads", async () => {
     const added: MCPServer = { ...server, server_id: "added-server" };
     const stored: EndUser = { ...customer, object_permission: { ...permission, mcp_access_groups: ["group-a"] } };

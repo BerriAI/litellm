@@ -2,6 +2,7 @@ import { ALL_PROXY_MCP_SERVERS_SENTINEL, NO_MCP_SERVERS_SENTINEL } from "@/compo
 import { MCPServer, MCPToolset } from "@/components/mcp_tools/types";
 import type { ObjectPermission } from "@/components/object_permission_types";
 import {
+  accessGroupNamesOf,
   mcpAllowedToolsFor,
   mcpServersForIdentifier,
   mcpToolPermissionKeysFor,
@@ -67,7 +68,7 @@ export const extractMcpEntitlement = (
 
   const grants = (server: MCPServer): boolean =>
     directServerIds.has(server.server_id) ||
-    (server.mcp_access_groups ?? []).some((group) => mcpAccessGroups.includes(group)) ||
+    accessGroupNamesOf(server).some((group) => mcpAccessGroups.includes(group)) ||
     toolsetServerIds.has(server.server_id);
 
   const grantsServerNamedBy = (permissionKey: string): boolean => {
