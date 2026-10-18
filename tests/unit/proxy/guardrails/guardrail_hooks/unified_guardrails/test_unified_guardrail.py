@@ -19,6 +19,9 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
+from litellm.litellm_core_utils.core_helpers import (
+    get_metadata_variable_name_from_kwargs,
+)
 from litellm.llms import discover_guardrail_translation_mappings, load_guardrail_translation_mappings
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
 from litellm.llms.base_llm.guardrail_translation.utils import (
@@ -3053,3 +3056,72 @@ async def test_pre_call_hook_skips_attachment_scan_when_guardrail_has_none():
     )
 
     assert len(guardrail.apply_calls) == 1
+
+
+class TestEnsureLitellmMetadataBucket:
+    """``_ensure_litellm_metadata`` must merge into the bucket the request
+    already resolves to, not plant ``litellm_metadata``. Creating that key on a
+    chat-completions request flips every reader onto a dict holding only the
+    ``user_api_key_*`` keys, so tags and router fields are left unread: tag
+    routing picks a deployment of another model and SpendLogs lose
+    ``model_group``/``model_id``, without raising (#45543). Same bucket-flip
+    shape as TestStreamingGuardrailInformationBucket above."""
+
+    @pytest.fixture
+    def user_api_key_dict(self) -> UserAPIKeyAuth:
+        return UserAPIKeyAuth(api_key="sk-test-45543", user_id="user-1", team_id="team-1")
+
+    def test_chat_completions_request_keeps_its_metadata_bucket(self, user_api_key_dict: UserAPIKeyAuth) -> None:
+        data: Final = {
+            "model": "all-models",
+            "metadata": {"tags": ["model:glm-5"], "model_group": "all-models"},
+        }
+
+        unified_module._ensure_litellm_metadata(data, user_api_key_dict)
+
+        # Creating the key at all is the bug; its presence is what flips the readers.
+        assert "litellm_metadata" not in data
+        assert get_metadata_variable_name_from_kwargs(data) == "metadata"
+        assert data["metadata"]["tags"] == ["model:glm-5"]
+        assert data["metadata"]["model_group"] == "all-models"
+        assert data["metadata"]["user_api_key_team_id"] == "team-1"
+        assert data["metadata"]["user_api_key_user_id"] == "user-1"
+
+    def test_existing_metadata_values_are_not_overwritten(self, user_api_key_dict: UserAPIKeyAuth) -> None:
+        data: Final = {
+            "model": "all-models",
+            "metadata": {"user_api_key_user_id": "resolved-upstream"},
+        }
+
+        unified_module._ensure_litellm_metadata(data, user_api_key_dict)
+
+        assert data["metadata"]["user_api_key_user_id"] == "resolved-upstream"
+        assert data["metadata"]["user_api_key_team_id"] == "team-1"
+
+    def test_litellm_metadata_route_still_uses_litellm_metadata(self, user_api_key_dict: UserAPIKeyAuth) -> None:
+        """Batch and file routes do keep proxy state in ``litellm_metadata``, so
+        the bucket is resolved rather than hardcoded in either direction."""
+        data: Final = {"model": "m", "litellm_metadata": {"tags": ["keep-me"]}}
+
+        unified_module._ensure_litellm_metadata(data, user_api_key_dict)
+
+        assert "metadata" not in data
+        assert get_metadata_variable_name_from_kwargs(data) == "litellm_metadata"
+        assert data["litellm_metadata"]["tags"] == ["keep-me"]
+        assert data["litellm_metadata"]["user_api_key_team_id"] == "team-1"
+
+    def test_request_without_any_metadata_gets_the_default_bucket(self, user_api_key_dict: UserAPIKeyAuth) -> None:
+        data: Final = {"model": "m"}
+
+        unified_module._ensure_litellm_metadata(data, user_api_key_dict)
+
+        assert "litellm_metadata" not in data
+        assert data["metadata"]["user_api_key_team_id"] == "team-1"
+
+    def test_no_user_api_key_metadata_creates_no_bucket(self) -> None:
+        data: Final = {"model": "m"}
+
+        unified_module._ensure_litellm_metadata(data, None)  # pyright: ignore[reportArgumentType]  # the hook is reached with no key on unauthenticated routes
+
+        assert "litellm_metadata" not in data
+        assert "metadata" not in data
