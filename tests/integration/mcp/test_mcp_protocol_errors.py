@@ -4,12 +4,10 @@ import uuid
 from typing import Final
 
 import pytest
-from integration._support.asgi import asgi_server
 from integration._support.client import Gateway
 from integration._support.mcp import McpPeer, call_tool, register_mcp, tool_names
 from integration._support.wire import Reply, Request, wire_server
-from mcp.server.mcpserver import MCPServer
-from mcp.server.transport_security import TransportSecuritySettings
+from pydantic import JsonValue, TypeAdapter
 
 
 @pytest.mark.covers("other.mcp.errors.protocol_and_malformed_results_cannot_be_empty_success")
@@ -91,22 +89,58 @@ def test_jsonrpc_error_and_malformed_tool_result_remain_errors(gateway: Gateway)
 @pytest.mark.covers("other.mcp.transport.large_sse_tool_result_reaches_caller")
 def test_tool_result_larger_than_one_mib_in_a_single_sse_event_reaches_the_caller(gateway: Gateway) -> None:
     payload: Final = "x" * (3 * 1024 * 1024)
-    server: Final = MCPServer("large-result")
+    request_json: Final = TypeAdapter(dict[str, JsonValue])
 
-    @server.tool()
-    def dump() -> str:
-        return payload
+    def provider(request: Request) -> Reply:
+        if request.method != "POST":
+            return Reply(status=405)
+        body: Final = request_json.validate_json(request.body)
+        if "id" not in body:
+            return Reply(status=202)
+        method: Final = body["method"]
+        if method == "initialize":
+            params: Final = request_json.validate_python(body["params"])
+            return Reply(
+                body=json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": body["id"],
+                        "result": {
+                            "protocolVersion": params["protocolVersion"],
+                            "capabilities": {"tools": {}},
+                            "serverInfo": {"name": "large-result", "version": "1"},
+                        },
+                    }
+                ).encode()
+            )
+        if method == "tools/list":
+            return Reply(
+                body=json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": body["id"],
+                        "result": {
+                            "tools": [{"name": "add", "inputSchema": {"type": "object"}}],
+                        },
+                    }
+                ).encode()
+            )
+        assert method == "tools/call"
+        response: Final = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": body["id"],
+                "result": {"content": [{"type": "text", "text": payload}], "isError": False},
+            }
+        )
+        return Reply(content_type="text/event-stream", body=f"event: message\ndata: {response}\n\n".encode())
 
-    app: Final = server.streamable_http_app(
-        stateless_http=True,
-        json_response=False,
-        transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
-    )
-    with asgi_server(app) as url, gateway.scenario() as scenario:
-        peer: Final = McpPeer(url + "/mcp", queue.Queue())
+    with wire_server(provider) as wire, gateway.scenario() as scenario:
+        peer: Final = McpPeer(wire.url + "/mcp", queue.Queue())
         identity: Final = register_mcp(scenario, peer, "bigsse" + uuid.uuid4().hex[:8])
         key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
-        response: Final = call_tool(gateway, key, identity, "dump", {})
+        names: Final = tool_names(gateway, key, identity)
+        response: Final = call_tool(gateway, key, identity, names["add"], {})
         assert response.status_code == 200, response.text[:500]
         body: Final = response.json()
         assert body["isError"] is False, response.text[:500]
