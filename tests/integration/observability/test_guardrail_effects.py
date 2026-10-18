@@ -27,6 +27,8 @@ from openai import APIError, AsyncOpenAI, OpenAI
 from openai.types.chat import ChatCompletionChunk
 from pydantic import BaseModel, JsonValue
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 
 @pytest.mark.covers("other.observability.guardrails.rewrite_reaches_correct_anthropic_positions")
 def test_guardrail_rewrites_system_and_user_in_actual_anthropic_request(gateway: Gateway, tmp_path: Path) -> None:
