@@ -1940,11 +1940,10 @@ class MCPRequestHandler:
 
                     # Always apply intersection: key/team AND end_user
                     # This ensures end_user can only access servers that both they AND their key/team are authorized for
-                    filtered_servers: Final = []
-                    for _mcp_server in allowed_mcp_servers:
-                        if _mcp_server in allowed_mcp_servers_for_end_user:
-                            filtered_servers.append(_mcp_server)
-                    allowed_mcp_servers = filtered_servers
+                    end_user_servers: Final = frozenset(allowed_mcp_servers_for_end_user)
+                    allowed_mcp_servers = [
+                        server_id for server_id in allowed_mcp_servers if server_id in end_user_servers
+                    ]
                     verbose_logger.debug(
                         "Applied end_user intersection filter. Final allowed servers: %s", allowed_mcp_servers
                     )
@@ -3482,9 +3481,7 @@ class MCPRequestHandler:
                 global_mcp_server_manager,
             )
 
-            direct_mcp_servers: Final = global_mcp_server_manager.expand_permission_list(
-                permission.mcp_servers or []
-            )
+            direct_mcp_servers: Final = global_mcp_server_manager.expand_permission_list(permission.mcp_servers or [])
 
             # Get MCP servers from access groups
             access_group_servers: Final = await MCPRequestHandler.get_mcp_servers_from_access_groups(
