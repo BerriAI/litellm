@@ -1029,7 +1029,7 @@ impl Hook for RateLimiter {
             let mut tokens = None;
             if let Some(min_tpm) = limited.iter().map(|(_, limit)| *limit).min() {
                 let body: Map<String, Value> =
-                    serde_json::from_slice(request.body()).unwrap_or_default();
+                    serde_json::from_slice(&request.body()).unwrap_or_default();
                 let estimate = estimate(
                     &body,
                     request.key.as_deref(),
