@@ -48,8 +48,12 @@ func checkHeaders(r *report, side string, e expected, headers map[string]map[str
 	atLeast("upstream requests with x-request-origin forwarded", arrived)
 	exact(r, "upstream requests with x-trace-* forwarded", side, arrived,
 		count("x-trace-id", func(v string) bool { return v == prefix+"-trace" }))
-	exact(r, "upstream requests with x-caller-team added", side, arrived,
-		count("x-caller-team", func(v string) bool { return strings.HasPrefix(v, prefix+"-team-") }))
+	if isBifrost(side) {
+		notApplicable(r, "upstream requests with x-caller-team added", side, "Bifrost cannot add headers from the key's team")
+	} else {
+		exact(r, "upstream requests with x-caller-team added", side, arrived,
+			count("x-caller-team", func(v string) bool { return strings.HasPrefix(v, prefix+"-team-") }))
+	}
 	for _, name := range []string{"x-cost-center", "x-litellm-spend-logs-metadata"} {
 		exact(r, "upstream requests still carrying "+name, side, 0,
 			count(name, func(v string) bool { return strings.Contains(v, prefix) }))

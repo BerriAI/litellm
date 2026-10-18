@@ -81,6 +81,8 @@ func (s *store) serve(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("ETag", `"stub"`)
 	case r.Method == http.MethodGet && key == "":
 		s.list(w, r, bucket)
+	case r.Method == http.MethodHead && key == "":
+		// HeadBucket: every bucket exists. Bifrost checks its log bucket at startup.
 	case (r.Method == http.MethodGet || r.Method == http.MethodHead) && key != "":
 		s.mu.RLock()
 		body, ok := s.objects[bucket+"/"+key]

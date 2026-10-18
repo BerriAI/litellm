@@ -103,3 +103,60 @@ func TestHeaderChecksSeeForwardedAndStrippedHeaders(t *testing.T) {
 		t.Fatalf("want 3 failures, got %d:\n%s", n, r.markdown())
 	}
 }
+
+func TestBifrostQueryScopesToTheKeySet(t *testing.T) {
+	q := bifrostQuery("bifrost")
+	for _, want := range []string{"virtual_key_id LIKE 'loadtest-bifrost-%'", "id ~ '^b-loadtest-bifrost-[0-9]+$'",
+		"id = 'b-loadtest-bifrost-customer'", "'dialect', 'bifrost'"} {
+		if !strings.Contains(q, want) {
+			t.Fatalf("query lacks %q", want)
+		}
+	}
+}
+
+func TestBifrostChecksReportMissingLevelsAsNotApplicable(t *testing.T) {
+	e := expected{Sent: 2, Total: tokens{Requests: 2, Prompt: 20, Completion: 10},
+		Groups: map[string]*tokens{"g": {Requests: 2, Prompt: 20, Completion: 10}}}
+	db := dbTotals{Dialect: "bifrost", Rows: 2, Success: 2, Prompt: 20, Completion: 10, Spend: 0.5, WithTeam: 2,
+		WithUser: 2, WithModel: 2, Metadata: 2, Groups: map[string]*groupTotals{"g": {Rows: 2, Prompt: 20, Completion: 10}},
+		KeySpend: 0.5, TeamSpend: 0.5, UserSpend: 0.5}
+	var r report
+	checkDB(&r, bifrostSide, e, db)
+	if n := r.failed(); n != 0 {
+		t.Fatalf("%d checks failed:\n%s", n, r.markdown())
+	}
+	if md := r.markdown(); !strings.Contains(md, "| team member spend = spend logs | bifrost | - | n/a |") {
+		t.Fatalf("member spend not reported as n/a:\n%s", md)
+	}
+	db.UserSpend = 0.25
+	r = report{}
+	checkDB(&r, bifrostSide, e, db)
+	if n := r.failed(); n != 1 {
+		t.Fatalf("want 1 failure, got %d:\n%s", n, r.markdown())
+	}
+}
+
+func TestBifrostLogObjectsReadCutTokenUsage(t *testing.T) {
+	tot := &s3Totals{bifrost: true, Fields: map[string]bool{}, Metadata: map[string]bool{}}
+	obj := `{"status":"success","cost":"0.00055","team_id":"loadtest-bifrost-team-3",` +
+		`"token_usage":"{\"prompt_tokens\":100,\"completion_tokens\":5,\"total_tokens\":105,\"cost\":{\"inp",` +
+		`"input_history":"[]","responses_input_history":"[{\"type\":\"message\"}]","output_message":"",` +
+		`"responses_output":"[{\"id\":\"x\"}]","metadata":"{\"x-cost-center\":\"loadtest-bifrost\"}"}`
+	if err := tot.add([]byte(obj)); err != nil {
+		t.Fatal(err)
+	}
+	if tot.Prompt != 100 || tot.Completion != 5 || !near(tot.Cost, 0.00055) || tot.WithBodies != 1 || tot.WithTeam != 1 ||
+		tot.Success != 1 || !tot.Metadata["x-cost-center"] {
+		t.Fatalf("totals %+v", tot)
+	}
+}
+
+func TestComparisonsWithBifrostSkipTelemetrySchemas(t *testing.T) {
+	d := &dbTotals{Deployments: map[string]*deploymentTotals{}}
+	m := map[string]*family{"litellm_spend_metric_total": {labels: map[string]bool{}}}
+	var r report
+	compareSides(&r, "rust", bifrostSide, d, d, m, map[string]*family{}, nil, nil)
+	if md := r.markdown(); strings.Contains(md, "metrics only on") {
+		t.Fatalf("compared metric names with Bifrost:\n%s", md)
+	}
+}

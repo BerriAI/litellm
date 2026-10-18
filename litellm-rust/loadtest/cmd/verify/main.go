@@ -1,7 +1,8 @@
 // verify checks that a load test's requests were recorded correctly by each gateway: spend logs,
 // the key, team, user and membership spend and the daily tables in Postgres, the Prometheus
 // counters, and the S3 request logs. Run with genconfig -features full and one key set per side,
-// so every side's records can be told apart in the shared database.
+// so every side's records can be told apart in the shared database. A side named bifrost is read
+// in Bifrost's schema (see bifrost.go); with three sides each pair is compared.
 //
 //	verify expect -out expected-python.json results/python-*.jsonl probes-python.jsonl
 //	verify sql -set python                   # the query whose one JSON row is db-python.json
@@ -226,7 +227,7 @@ func checkCmd(args []string) {
 			}
 		}
 		if *s3 != "" {
-			t, err := listLogs(*s3, s.s3Prefix)
+			t, err := listLogs(*s3, s.s3Prefix, isBifrost(s.name))
 			if err != nil {
 				r.add(check{Name: "S3 logs listed", Side: s.name, Want: "a listing", Got: err.Error()})
 			} else {
@@ -235,9 +236,11 @@ func checkCmd(args []string) {
 			}
 		}
 	}
-	if len(sides) == 2 {
-		a, b := sides[0].name, sides[1].name
-		compareSides(&r, a, b, dbs[a], dbs[b], metrics[a], metrics[b], logs[a], logs[b])
+	for i := range sides {
+		for _, other := range sides[i+1:] {
+			a, b := sides[i].name, other.name
+			compareSides(&r, a, b, dbs[a], dbs[b], metrics[a], metrics[b], logs[a], logs[b])
+		}
 	}
 	md := r.markdown()
 	if err := os.WriteFile(*reportPath, []byte(md), 0o644); err != nil {
