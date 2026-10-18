@@ -1632,12 +1632,12 @@ def _guard_blocking(word: str):
     return guard
 
 
-def _guard_recording(guardrail_information: tuple[Mapping[str, object], ...], bill_refusal: object):
+def _guard_recording(bill_refusal: MagicMock):
     from litellm.responses.streaming_iterator import GuardedResponsesWsFrame
 
     async def guard(frame: str) -> GuardedResponsesWsFrame:
         return GuardedResponsesWsFrame(
-            frame=frame, guardrail_information=guardrail_information, bill_refusal=bill_refusal
+            frame=frame, guardrail_information=({"guardrail_cost": 0.5},), bill_refusal=bill_refusal
         )
 
     return guard
@@ -1845,19 +1845,14 @@ class TestWebSocketTurnAdmission:
 
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        ("guardrail_information", "billed"), [(({"guardrail_cost": 0.5},), True), ((), False)]
-    )
-    async def test_native_relay_bills_a_refused_turn_once_with_its_guardrail_cost(
-        self, guardrail_information: tuple[Mapping[str, object], ...], billed: bool
-    ):
-        from unittest.mock import AsyncMock, call
+    async def test_native_relay_leaves_a_refused_turn_s_guardrail_records_to_the_close_time_failure_row(self):
+        from unittest.mock import AsyncMock
 
         from litellm.exceptions import RateLimitError
 
         first, second, third = _turn_frames()
         refusal: Final = RateLimitError(message="crossed budget", llm_provider="", model="")
-        bill_refusal: Final = AsyncMock()
+        bill_refusal: Final = MagicMock()
         backend_ws: Final = MagicMock()
         backend_ws.send = AsyncMock()
         backend_ws.close = AsyncMock()
@@ -1867,27 +1862,21 @@ class TestWebSocketTurnAdmission:
             backend_ws=backend_ws,
             request_data={},
             first_message=first,
-            frame_guard=_guard_recording(guardrail_information, bill_refusal),
+            frame_guard=_guard_recording(bill_refusal),
             turn_admission=AsyncMock(side_effect=[refusal, None]),
         )
 
         close_time_failure: Final = await handler.bidirectional_forward()
 
         assert [json.loads(sent.args[0])["input"] for sent in backend_ws.send.await_args_list] == ["one", "three"]
-        assert bill_refusal.await_args_list == ([call(refusal)] if billed else [])
-        assert close_time_failure is (None if billed else refusal)
+        bill_refusal.assert_called_once_with()
+        assert close_time_failure is refusal
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        ("guardrail_information", "billed"), [(({"guardrail_cost": 0.5},), True), ((), False)]
-    )
-    async def test_managed_relay_bills_a_refused_turn_once_with_its_guardrail_cost(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        guardrail_information: tuple[Mapping[str, object], ...],
-        billed: bool,
+    async def test_managed_relay_leaves_a_refused_turn_s_guardrail_records_to_the_close_time_failure_row(
+        self, monkeypatch: pytest.MonkeyPatch
     ):
-        from unittest.mock import AsyncMock, call
+        from unittest.mock import AsyncMock
 
         import litellm
         from litellm.exceptions import RateLimitError
@@ -1908,7 +1897,7 @@ class TestWebSocketTurnAdmission:
         monkeypatch.setattr(litellm, "aresponses", fake_aresponses)
         first, second, third = _turn_frames()
         refusal: Final = RateLimitError(message="crossed budget", llm_provider="", model="")
-        bill_refusal: Final = AsyncMock()
+        bill_refusal: Final = MagicMock()
         handler: Final = ManagedResponsesWebSocketHandler(
             websocket=_ClientSocket(second, third),
             model="test-model",
@@ -1922,15 +1911,15 @@ class TestWebSocketTurnAdmission:
                 function_id="test-func",
             ),
             first_message=first,
-            frame_guard=_guard_recording(guardrail_information, bill_refusal),
+            frame_guard=_guard_recording(bill_refusal),
             turn_admission=AsyncMock(side_effect=[refusal, None]),
         )
 
         close_time_failure: Final = await handler.run()
 
         assert answered == ["one", "three"]
-        assert bill_refusal.await_args_list == ([call(refusal)] if billed else [])
-        assert close_time_failure is (None if billed else refusal)
+        bill_refusal.assert_called_once_with()
+        assert close_time_failure is refusal
 
     @pytest.mark.asyncio
     async def test_native_relay_answers_a_crashed_turn_check_with_a_500_and_keeps_serving(self):

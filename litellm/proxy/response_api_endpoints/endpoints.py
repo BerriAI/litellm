@@ -1843,7 +1843,10 @@ class _PreCallGuardrailWalk(Protocol):
 
 
 def _responses_ws_frame_guard(
-    admitted: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth, proxy_logging_obj: _PreCallGuardrailWalk
+    admitted: Mapping[str, object],
+    user_api_key_dict: UserAPIKeyAuth,
+    proxy_logging_obj: _PreCallGuardrailWalk,
+    record_refused_turn: Callable[[tuple[Mapping[str, object], ...]], None],
 ) -> ResponsesWsFrameGuard:
     """Socket admission skips guardrails (the first frame's ``input`` is not part of the admitted request), so every
     ``response.create`` frame gets the pre_call guardrail walk the HTTP ``/v1/responses`` path runs on its body."""
@@ -1858,7 +1861,7 @@ def _responses_ws_frame_guard(
     }
     model: Final = admitted.get("model")
 
-    # blocked and refused frames bill as their own failed requests; only the first turn settles the reservation
+    # a blocked frame is billed as its own failed request; only the first turn settles the admission reservation
     rejected_frame_auth: Final = user_api_key_dict.model_copy(update={"budget_reservation": None})
 
     async def guard(frame: str) -> GuardedResponsesWsFrame:
@@ -1902,11 +1905,12 @@ def _responses_ws_frame_guard(
             if isinstance(nested, dict)
             else {**kept, **guarded_fields}
         )
+        guardrail_information: Final = _recorded_guardrail_information(guarded_data.get(metadata_key))
         return GuardedResponsesWsFrame(
             frame=json.dumps(rewritten),
-            guardrail_information=_recorded_guardrail_information(guarded_data.get(metadata_key)),
+            guardrail_information=guardrail_information,
             pii_tokens=_recorded_pii_tokens(guarded_data.get("metadata")),
-            bill_refusal=partial(_bill_rejected_frame, rejected_frame_auth, frame_data=guarded_data),
+            bill_refusal=partial(record_refused_turn, guardrail_information),
         )
 
     return guard
@@ -1950,6 +1954,29 @@ def _recorded_pii_tokens(metadata: object) -> Mapping[str, str]:
 
 
 _NO_PII_TOKENS: Final[Mapping[str, str]] = MappingProxyType({})
+
+
+@dataclass(slots=True)
+class _RefusedTurnGuardrails:
+    """Guardrail records of turns the deployment refused after their guardrails passed. The socket's close-time
+    failure row bills them, so its failure hooks, model group and call type cover those turns too."""
+
+    records: tuple[Mapping[str, object], ...] = ()
+
+    def add(self, records: tuple[Mapping[str, object], ...]) -> None:
+        self.records = (*self.records, *records)
+
+    def billed_on(self, request_data: Mapping[str, object]) -> Mapping[str, object]:
+        if not self.records:
+            return request_data
+        metadata_key: Final = get_metadata_variable_name_from_kwargs(request_data)
+        bucket: Final = request_data.get(metadata_key)
+        fields: Final = _WS_FRAME.validate_python(bucket) if isinstance(bucket, dict) else {}
+        recorded: Final = (*_recorded_guardrail_information(fields), *self.records)
+        return {
+            **request_data,
+            metadata_key: {**fields, _GUARDRAIL_INFORMATION_KEY: [dict(record) for record in recorded]},
+        }
 
 
 def _recorded_guardrail_information(bucket: object) -> tuple[Mapping[str, object], ...]:
@@ -2055,10 +2082,13 @@ async def _responses_websocket_session(
         await websocket.close(code=1008, reason="Pre-call error")
         return
 
+    refused_turn_guardrails: Final = _RefusedTurnGuardrails()
     routed_data: Final = dict(
         data,
         user_api_key_dict=user_api_key_dict,
-        responses_ws_frame_guard=_responses_ws_frame_guard(data, user_api_key_dict, proxy_logging_obj),
+        responses_ws_frame_guard=_responses_ws_frame_guard(
+            data, user_api_key_dict, proxy_logging_obj, refused_turn_guardrails.add
+        ),
         **_routing_hints_from_first_ws_frame(first_message),
     )
     # Phase 2: route to upstream provider
@@ -2074,7 +2104,7 @@ async def _responses_websocket_session(
             await proxy_logging_obj.post_call_failure_hook(
                 user_api_key_dict=user_api_key_dict,
                 original_exception=failure,
-                request_data=routed_data,
+                request_data=dict(refused_turn_guardrails.billed_on(routed_data)),
             )
     except Exception as e:
         with contextlib.suppress(Exception):
@@ -2082,7 +2112,7 @@ async def _responses_websocket_session(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
             original_exception=e,
-            request_data=routed_data,
+            request_data=dict(refused_turn_guardrails.billed_on(routed_data)),
         )
         await websocket.close(code=1011, reason="Internal server error")
     finally:
