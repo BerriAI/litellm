@@ -196,9 +196,9 @@ export default function CustomerInfoView({
   ...actions
 }: CustomerInfoViewProps) {
   const { saveCustomer, isSaving } = useSaveCustomer(customer);
-  const handleSave = async (values: CustomerFormValues) => {
+  const handleSave = async (values: CustomerFormValues, baseline: EndUser | null) => {
     try {
-      await saveCustomer(values);
+      await saveCustomer(values, baseline);
       toast.success("Customer updated");
       onCancelEdit();
     } catch (error) {
@@ -269,6 +269,7 @@ export default function CustomerInfoView({
               </div>
               {showEdit ? (
                 <CustomerForm
+                  key={customer.user_id}
                   customer={customer}
                   isEdit
                   isSaving={isSaving}

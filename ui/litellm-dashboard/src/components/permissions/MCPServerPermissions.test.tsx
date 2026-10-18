@@ -157,6 +157,21 @@ describe("MCPServerPermissions", () => {
     expect(screen.queryByText(/tool/)).not.toBeInTheDocument();
   });
 
+  it("keeps the existing key display for empty tool allowlists", async () => {
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([
+      { server_id: mockServerId1, server_name: mockServerName1, alias: mockServerName1 },
+    ]);
+    render(
+      <MCPServerPermissions
+        mcpServers={[mockServerId1]}
+        mcpToolPermissions={{ [mockServerId1]: [] }}
+        accessToken={mockAccessToken}
+      />,
+    );
+    expect(await screen.findByText(/DW_MCP/)).toBeInTheDocument();
+    expect(screen.queryByText("No tools allowed")).not.toBeInTheDocument();
+  });
+
   it("labels an empty tool allowlist as allowing no tools", async () => {
     vi.mocked(networking.fetchMCPServers).mockResolvedValue([
       { server_id: mockServerId1, server_name: mockServerName1, alias: mockServerName1 },

@@ -92,7 +92,72 @@ describe("useSaveCustomer", () => {
 
     await result.current.saveCustomer({ ...toCustomerFormValues(stored), alias: "New alias" });
 
-    expect(mocks.update).toHaveBeenCalledExactlyOnceWith({ user_id: stored.user_id, alias: "New alias", models: [] });
+    expect(mocks.update).toHaveBeenCalledExactlyOnceWith({ user_id: stored.user_id, alias: "New alias" });
+  });
+
+  it.each([
+    {
+      field: "MCP grant",
+      current: {
+        ...customer,
+        object_permission: { ...permission, mcp_servers: ["no-mcp-servers"], mcp_tool_permissions: {} },
+      },
+    },
+    { field: "models", current: { ...customer, models: ["model-a"] } },
+    { field: "region", current: { ...customer, allowed_model_region: "eu" as const } },
+    { field: "default model", current: { ...customer, default_model: "model-a" } },
+    { field: "budget link", current: { ...customer, budget_id: "new-budget" } },
+    {
+      field: "maximum budget",
+      current: { ...customer, litellm_budget_table: { max_budget: 25, created_at: "2026-01-01T00:00:00Z" } },
+    },
+  ])("refuses a deliberate permission edit after the stored $field changes", async ({ current }) => {
+    mocks.servers.mockReturnValue({ data: [server], isSuccess: true });
+    const { result, rerender } = renderHook(({ current }) => useSaveCustomer(current), {
+      initialProps: { current: customer },
+    });
+    const values = {
+      ...toCustomerFormValues(customer),
+      mcp_tool_permissions: { [server.server_id]: ["read", "write"] },
+    };
+    rerender({ current });
+
+    await expect(result.current.saveCustomer(values, customer)).rejects.toThrow("changed while editing");
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+
+  it("allows deliberate permission edits after an unrelated refresh or reordered grants", async () => {
+    mocks.servers.mockReturnValue({ data: [server], isSuccess: true });
+    const baseline: EndUser = {
+      ...customer,
+      models: ["model-a", "model-b"],
+      object_permission: { ...permission, mcp_tool_permissions: { [server.server_id]: ["read", "write"] } },
+    };
+    const current: EndUser = {
+      ...baseline,
+      alias: "Changed elsewhere",
+      spend: 10,
+      models: ["model-b", "model-a"],
+      object_permission: { ...permission, mcp_tool_permissions: { [server.server_id]: ["write", "read"] } },
+    };
+    const { result } = renderHook(() => useSaveCustomer(current));
+
+    await result.current.saveCustomer(
+      {
+        ...toCustomerFormValues(baseline),
+        mcp_tool_permissions: { [server.server_id]: ["read"] },
+      },
+      baseline,
+    );
+
+    expect(mocks.update).toHaveBeenCalledExactlyOnceWith({
+      user_id: customer.user_id,
+      object_permission: {
+        ...clearedGrant,
+        mcp_servers: [server.server_id],
+        mcp_tool_permissions: { [server.server_id]: ["read"] },
+      },
+    });
   });
 
   it("revokes a direct server once its catalog loads, without requiring an unused toolset catalog", async () => {
@@ -107,7 +172,6 @@ describe("useSaveCustomer", () => {
 
     expect(mocks.update).toHaveBeenCalledExactlyOnceWith({
       user_id: customer.user_id,
-      models: [],
       object_permission: clearedGrant,
     });
   });
@@ -161,7 +225,6 @@ describe("useSaveCustomer", () => {
 
     expect(mocks.update).toHaveBeenCalledExactlyOnceWith({
       user_id: stored.user_id,
-      models: [],
       object_permission: clearedGrant,
     });
   });
@@ -187,7 +250,6 @@ describe("useSaveCustomer", () => {
 
     expect(mocks.update).toHaveBeenCalledExactlyOnceWith({
       user_id: customer.user_id,
-      models: [],
       object_permission: {
         mcp_servers: [server.server_id, added.server_id],
         mcp_access_groups: [],

@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { z } from "zod";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useBudgetOptions } from "@/app/(dashboard)/hooks/budgets/useBudgetOptions";
@@ -74,7 +75,7 @@ type CustomerFormProps = {
   isEdit?: boolean;
   isSaving?: boolean;
   hasSharedBudget?: boolean;
-  onSubmit: (values: CustomerFormValues) => void | Promise<void>;
+  onSubmit: (values: CustomerFormValues, baseline: EndUser | null) => void | Promise<void>;
   onCancel: () => void;
 };
 
@@ -89,7 +90,11 @@ export function CustomerForm({
   const { accessToken } = useAuthorized();
   const { data: budgets = [] } = useBudgetOptions(accessToken);
   const { data: models = [] } = useUserModels();
-  const initialValues = { ...toCustomerFormValues(customer), ...(isEdit ? { budget_id: "" } : {}) };
+  const [baseline] = useState(customer);
+  const [initialValues] = useState(() => ({
+    ...toCustomerFormValues(baseline),
+    ...(isEdit ? { budget_id: "" } : {}),
+  }));
   const form = useZodForm(isEdit ? editCustomerSchema : customerSchema, {
     defaultValues: initialValues,
   });
@@ -106,7 +111,7 @@ export function CustomerForm({
       });
       return;
     }
-    await onSubmit(values);
+    await onSubmit(values, baseline);
   });
   const selectedBudgetId = form.watch("budget_id");
   const budgetOptions = [

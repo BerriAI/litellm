@@ -177,8 +177,49 @@ describe("customer payload", () => {
 
     expect(buildCustomerPayload(values, stored, [server, anotherServer], [])).toEqual({
       user_id: customer.user_id,
-      models: [],
     });
+  });
+
+  it("omits unchanged model, region, default and budget settings on an alias edit", () => {
+    const stored: EndUser = {
+      ...customer,
+      models: ["model-a", "model-b"],
+      allowed_model_region: "eu",
+      default_model: "model-a",
+      litellm_budget_table: { max_budget: 50, created_at: "2026-01-01T00:00:00Z" },
+    };
+    const values = { ...toCustomerFormValues(stored), alias: "Updated alias", models: ["model-b", "model-a"] };
+
+    expect(buildCustomerPayload(values, stored, [], [])).toEqual({
+      user_id: stored.user_id,
+      alias: values.alias,
+    });
+  });
+
+  it("includes intentional model, region, default and budget changes", () => {
+    const stored: EndUser = {
+      ...customer,
+      models: ["model-a"],
+      allowed_model_region: "eu",
+      default_model: "model-a",
+      litellm_budget_table: { max_budget: 50, created_at: "2026-01-01T00:00:00Z" },
+    };
+    const values = {
+      ...toCustomerFormValues(stored),
+      models: [],
+      allowed_model_region: "us" as const,
+      default_model: "model-b",
+      max_budget: "25",
+    };
+
+    const expected = {
+      user_id: stored.user_id,
+      models: [],
+      allowed_model_region: "us",
+      default_model: "model-b",
+      max_budget: 25,
+    };
+    expect(buildCustomerPayload(values, stored, [], [])).toEqual(expected);
   });
 
   it("keeps zero budgets and trims optional text fields", () => {
@@ -217,7 +258,6 @@ describe("customer payload", () => {
     expect(buildCustomerPayload(values, stored, [], [])).toEqual({
       user_id: stored.user_id,
       alias: "",
-      models: [],
     });
   });
 
@@ -260,7 +300,6 @@ describe("customer payload", () => {
     expect(buildCustomerPayload(values, stored, [server], [])).toEqual({
       user_id: customer.user_id,
       alias: values.alias,
-      models: [],
     });
   });
 
@@ -273,7 +312,6 @@ describe("customer payload", () => {
     expect(buildCustomerPayload(values, stored, [server], [])).toEqual({
       user_id: customer.user_id,
       alias: values.alias,
-      models: [],
     });
   });
 
@@ -298,7 +336,6 @@ describe("customer payload", () => {
 
     expect(buildCustomerPayload(values, stored, [server], [])).toEqual({
       user_id: customer.user_id,
-      models: [],
       object_permission: grant,
     });
   });
@@ -344,7 +381,6 @@ describe("customer payload", () => {
 
     expect(buildCustomerPayload(values, stored, [server, anotherServer], toolsets)).toEqual({
       user_id: customer.user_id,
-      models: [],
       object_permission: grant,
     });
   });
@@ -377,7 +413,6 @@ describe("customer payload", () => {
 
     expect(buildCustomerPayload(values, stored, [sharedServer, anotherSharedServer, addedServer], [])).toEqual({
       user_id: customer.user_id,
-      models: [],
       object_permission: grant,
     });
   });
@@ -470,7 +505,6 @@ describe("customer payload", () => {
     const grant = { mcp_servers: [], mcp_access_groups: [], mcp_toolsets: [], mcp_tool_permissions: {} };
     expect(buildCustomerPayload(values, stored, [server], [])).toEqual({
       user_id: customer.user_id,
-      models: [],
       object_permission: grant,
     });
   });
