@@ -5278,11 +5278,13 @@ def test_user_update_self_write_of_innocuous_field_allowed():
     )
 
     data = UpdateUserRequest(user_id="self", user_alias="me")
-    _reject_ceiling_self_update(
+    no_raise = _reject_ceiling_self_update(
         sent_fields=set(data.fields_set()),
         non_default_values={"user_alias": "me"},
         user_api_key_dict=UserAPIKeyAuth(user_id="self", user_role=LitellmUserRoles.INTERNAL_USER),
     )
+    # The observable on an allowed self-edit is that the guard raised nothing.
+    assert no_raise is None
 
 
 def test_user_update_admin_self_write_unrestricted():
@@ -5293,11 +5295,13 @@ def test_user_update_admin_self_write_unrestricted():
     )
 
     data = UpdateUserRequest(user_id="admin", rpm_limit=1000000, models=[])
-    _reject_ceiling_self_update(
+    no_raise = _reject_ceiling_self_update(
         sent_fields=set(data.fields_set()),
         non_default_values={"rpm_limit": 1000000, "models": []},
         user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
     )
+    # The observable on an admin self-edit is that the guard raised nothing.
+    assert no_raise is None
 
 
 # ---------------------------------------------------------------------------
