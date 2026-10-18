@@ -16,7 +16,7 @@ from concurrent import futures
 from functools import wraps
 from inspect import iscoroutinefunction
 from threading import Thread
-from typing import Final
+from typing import Final, cast
 
 from litellm.exceptions import Timeout
 
@@ -65,13 +65,11 @@ def timeout(timeout_duration: float = 0.0, exception_to_raise=Timeout):
 
         @wraps(func)
         async def async_wrapper(*args, **kwargs):
-            local_timeout_duration: Final = (
-                kwargs["force_timeout"]
-                if kwargs.get("force_timeout") is not None
-                else kwargs["request_timeout"]
-                if kwargs.get("request_timeout") is not None
-                else timeout_duration
-            )
+            local_timeout_duration: float | None = timeout_duration
+            if "force_timeout" in kwargs and kwargs["force_timeout"] is not None:
+                local_timeout_duration = cast(float | None, kwargs["force_timeout"])
+            elif "request_timeout" in kwargs and kwargs["request_timeout"] is not None:
+                local_timeout_duration = cast(float | None, kwargs["request_timeout"])
             try:
                 value: Final = await asyncio.wait_for(func(*args, **kwargs), timeout=local_timeout_duration)
                 return value
