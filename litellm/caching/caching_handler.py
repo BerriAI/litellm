@@ -27,7 +27,7 @@ import litellm
 from litellm._internal_context import is_internal_call, post_response_phase
 from litellm._logging import print_verbose, verbose_logger
 from litellm.caching import InMemoryCache
-from litellm.caching.caching import S3Cache, _is_cache_call_type_supported, response_cache_phase
+from litellm.caching.caching import S3Cache, is_cache_call_type_supported, response_cache_phase
 from litellm.constants import CACHE_WRITE_SHUTDOWN_FLUSH_TIMEOUT_SECONDS, RESPONSE_CACHE_EXCLUDED_PROVIDERS
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
@@ -1292,7 +1292,7 @@ class LLMCachingHandler:
         """
         if litellm.cache is None:
             return False
-        return _is_cache_call_type_supported(original_function.__name__, litellm.cache.supported_call_types)
+        return is_cache_call_type_supported(original_function.__name__, litellm.cache.supported_call_types)
 
     async def add_streaming_response_to_cache(self, processed_chunk: ModelResponse) -> None:
         """

@@ -94,7 +94,7 @@ def _request_message_count(kwargs: Mapping[str, object]) -> int:
     return sum(1 for item in items if _is_conversation_item(item))
 
 
-def _is_cache_call_type_supported(call_type: str, supported_call_types: Sequence[str] | None) -> bool:
+def is_cache_call_type_supported(call_type: str, supported_call_types: Sequence[str] | None) -> bool:
     if supported_call_types is None:
         return True
     normalised_call_type: Final = call_type.lstrip("_")
@@ -994,7 +994,7 @@ class Cache:
             if raw_source is not None:
                 raw_name: Final[object] = getattr(raw_source, "value", None) or getattr(raw_source, "__name__", None)
                 call_type_name: Final = raw_name if isinstance(raw_name, str) else str(raw_source)
-                if not _is_cache_call_type_supported(call_type_name, self.supported_call_types):
+                if not is_cache_call_type_supported(call_type_name, self.supported_call_types):
                     return False
         if self.max_messages is not None and _request_message_count(kwargs) > self.max_messages:
             return False
