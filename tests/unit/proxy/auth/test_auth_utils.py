@@ -3018,6 +3018,7 @@ class TestIsRequestBodySafeBlocksEndpointTargetingFields:
         "field",
         [
             "aws_bedrock_runtime_endpoint",
+            "aws_bedrock_control_plane_endpoint",
             "langsmith_base_url",
             "langfuse_host",
             "posthog_host",

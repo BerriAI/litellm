@@ -66,6 +66,89 @@ def test_get_complete_batch_url_uses_region(config):
     assert url == "https://bedrock.eu-central-1.amazonaws.com/model-invocation-job"
 
 
+CONTROL_PLANE_ENDPOINT = "https://vpce-0abc.bedrock.us-west-2.vpce.amazonaws.com/"
+
+
+def test_get_complete_batch_url_uses_configured_control_plane_endpoint(config):
+    url = config.get_complete_batch_url(
+        api_base=None,
+        api_key=None,
+        model="anthropic.claude-3",
+        optional_params={"aws_region_name": "us-west-2"},
+        litellm_params={"aws_bedrock_control_plane_endpoint": CONTROL_PLANE_ENDPOINT},
+        data={"input_file_id": "s3://b/k"},
+    )
+    assert url == "https://vpce-0abc.bedrock.us-west-2.vpce.amazonaws.com/model-invocation-job"
+
+
+def test_proxy_deployment_credentials_carry_the_control_plane_endpoint(config):
+    # the proxy hands batch calls the deployment's credentials through the strict CredentialLiteLLMParams filter
+    from litellm import Router
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "claude-batch",
+                "litellm_params": {
+                    "model": "bedrock/anthropic.claude-3",
+                    "aws_region_name": "us-west-2",
+                    "aws_bedrock_control_plane_endpoint": CONTROL_PLANE_ENDPOINT,
+                },
+            }
+        ]
+    )
+    credentials = router.get_deployment_credentials_with_provider("claude-batch")
+
+    url = config.get_complete_batch_url(
+        api_base=None,
+        api_key=None,
+        model="anthropic.claude-3",
+        optional_params={},
+        litellm_params=credentials,
+        data={"input_file_id": "s3://b/k"},
+    )
+    assert url == "https://vpce-0abc.bedrock.us-west-2.vpce.amazonaws.com/model-invocation-job"
+
+
+def test_get_complete_batch_url_ignores_runtime_api_base(config):
+    # api_base on a Bedrock deployment points at the runtime host, which does not serve batch jobs
+    url = config.get_complete_batch_url(
+        api_base="https://bedrock-runtime.us-west-2.amazonaws.com",
+        api_key=None,
+        model="anthropic.claude-3",
+        optional_params={"aws_region_name": "us-west-2"},
+        litellm_params={"api_base": "https://bedrock-runtime.us-west-2.amazonaws.com"},
+        data={"input_file_id": "s3://b/k"},
+    )
+    assert url == "https://bedrock.us-west-2.amazonaws.com/model-invocation-job"
+
+
+def test_create_request_sends_and_signs_for_configured_control_plane_endpoint(config):
+    with patch.object(
+        config.common_utils,
+        "generate_unique_job_name",
+        return_value="litellm-batch-deadbeef",
+    ), patch.object(config.common_utils, "sign_aws_request") as mock_sign:
+        mock_sign.return_value = ({"Authorization": "signed"}, b"{}")
+        result = config.transform_create_batch_request(
+            model="anthropic.claude-3-5-sonnet",
+            create_batch_data={
+                "input_file_id": "s3://in-bucket/input.jsonl",
+                "endpoint": "/v1/chat/completions",
+                "completion_window": "24h",
+            },
+            optional_params={"aws_region_name": "us-west-2"},
+            litellm_params={
+                "aws_batch_role_arn": "arn:aws:iam::123:role/my-batch-role",
+                "aws_bedrock_control_plane_endpoint": CONTROL_PLANE_ENDPOINT,
+            },
+        )
+
+    expected = "https://vpce-0abc.bedrock.us-west-2.vpce.amazonaws.com/model-invocation-job"
+    assert result["url"] == expected
+    assert mock_sign.call_args.kwargs["endpoint_url"] == expected
+
+
 # --------------------------------------------------------------------------- #
 # transform_create_batch_request - request construction (sign_aws_request mocked)
 # --------------------------------------------------------------------------- #
@@ -606,6 +689,23 @@ def test_retrieve_request_builds_encoded_arn_url(config):
     assert "%2F" in result["url"]  # slash encoded
     assert mock_sign.call_args.kwargs["method"] == "GET"
     assert mock_sign.call_args.kwargs["data"] == {}
+
+
+def test_retrieve_request_sends_and_signs_for_configured_control_plane_endpoint(config):
+    with patch.object(config.common_utils, "sign_aws_request") as mock_sign:
+        mock_sign.return_value = ({"Authorization": "signed"}, b"")
+        result = config.transform_retrieve_batch_request(
+            batch_id=ARN,
+            optional_params={},
+            litellm_params={"aws_bedrock_control_plane_endpoint": CONTROL_PLANE_ENDPOINT},
+        )
+
+    expected = (
+        "https://vpce-0abc.bedrock.us-west-2.vpce.amazonaws.com/model-invocation-job/"
+        "arn%3Aaws%3Abedrock%3Aus-west-2%3A123456789012%3Amodel-invocation-job%2Fabc1234567"
+    )
+    assert result["url"] == expected
+    assert mock_sign.call_args.kwargs["endpoint_url"] == expected
 
 
 def test_retrieve_request_rejects_non_arn(config):
