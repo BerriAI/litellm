@@ -79,7 +79,7 @@ func buildBody(pool textPool, r *rand.Rand, res result, outTokens int, nonce str
 		remaining -= n
 		if remaining <= 0 && role == "user" {
 			// The directive goes last so mockllm finds it by scanning only the tail.
-			fmt.Fprintf(&b, " [[mock ttft_ms=%d dur_ms=%d out=%d]]", res.TTFTPlanMs, res.DurPlanMs, outTokens)
+			fmt.Fprintf(&b, " [[mock ttft_ms=%d dur_ms=%d out=%d in=%d]]", res.TTFTPlanMs, res.DurPlanMs, outTokens, res.CtxTokens)
 			b.WriteString(`"}`)
 			break
 		}

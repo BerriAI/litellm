@@ -11,6 +11,8 @@ machines.
 | `genconfig` | Gateway `config.yaml` with many model groups and deployments pointing at the mocks, plus `keys.txt` and `keys.sql` (rows for `LiteLLM_VerificationToken`). `-key-seed` makes every machine generate the same keys. |
 | `summarize` | Merges result files and prints proxy overhead (observed minus planned time) by stage, class and context size. |
 | `procmon` | Samples the gateway process's CPU, RSS, fds and TCP connections from `/proc`. |
+| `verify` | Checks what each gateway recorded for a run against what loadgen sent: spend logs, key/team/user/member spend, daily tables, Prometheus counters, S3 request logs and the headers the provider received. See [Full-feature runs](#full-feature-runs). |
+| `s3stub` | In-memory path-style S3 (PUT, GET, ListObjectsV2) for the `s3_v2` logs of a full-feature run. |
 
 Workloads live in `workloads/`: `smoke`, `realistic-ramp`, `long-streams`, `large-context`,
 `key-churn` and `soak`.
@@ -106,6 +108,36 @@ gateway samples and mock hit counts, and prints the summary.
 - `GET /health/readiness` turns 503 on SIGTERM. The listener closes after
   `LITELLM_UNREADY_DELAY_SECONDS` (default 0), then open requests and streams get up to
   `LITELLM_DRAIN_SECONDS` (default 900, the NLB deregistration delay) to finish
+
+## Full-feature runs
+
+`genconfig -features full -key-sets python,rust` turns on everything both gateways do per request,
+with limits no load-test rate reaches, so every check runs and nothing is refused:
+
+- every key has a user and a team (with a membership budget), and keys, users, teams and members
+  carry rpm, tpm and budgets; keys carry `max_parallel_requests`; deployments carry rpm and tpm
+- callbacks `dynamic_rate_limiter_v3`, `prometheus` and `s3_v2` (S3 settings from `LOADTEST_S3_*`),
+  plus the Rust gateway's four request hooks under `litellm_settings.hooks` and their Python
+  stand-ins in `custom_callbacks.py`, written beside the config
+- `headers-<set>.txt`: the request headers the hooks act on, one loadgen `-header` per line
+
+Each key set (one per gateway) has its own keys, users and teams, so both gateways can share one
+Postgres and one mock and still be told apart. Every request names its input token count to the
+mock (`in=`), so both sides must record the same tokens. Set `DEFAULT_S3_FLUSH_INTERVAL_SECONDS` on
+both gateways to control the S3 batch interval. After the run and the spend flush:
+
+```sh
+verify expect -out col/expected-rust.json res/rust-*.jsonl
+verify sql -set rust | psql "$DATABASE_URL" -At > col/db-rust.json   # same for python
+verify check -dir col -s3 http://s3stub:9100/logs -mock http://mockllm:9000 \
+  -side python=python-gateway:4000,python -side rust=rust-gateway:4000,rust -report report.md
+```
+
+`check` scrapes `/metrics` on every address the host name resolves to (one per replica) and
+exits 1 when any check fails. Across sides it compares each deployment's fitted input and output
+price rather than total spend, since routing spreads requests over differently priced
+deployments, and it lists the metrics, labels and S3 fields one side records and the other lacks.
+mockllm needs `-count-headers x-request-origin,x-trace-id,x-caller-team,x-cost-center,x-litellm-spend-logs-metadata`.
 
 ## Bedrock deployments
 

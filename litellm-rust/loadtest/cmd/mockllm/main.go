@@ -2,15 +2,19 @@
 // messages and Bedrock's Anthropic invoke API, streaming and non-streaming, and takes its timing from a directive
 // the load generator embeds in the prompt, so the proxy in between forwards it untouched:
 //
-//	[[mock ttft_ms=800 dur_ms=300000 out=2000 status=200]]
+//	[[mock ttft_ms=800 dur_ms=300000 out=2000 in=10000 status=200]]
 //
 // ttft_ms is the delay before the first byte, dur_ms the total response time, out the
-// number of output tokens, status an HTTP status to fail with. Without a directive the
+// number of output tokens, in the input tokens to report (a quarter of the body's bytes when
+// absent, which varies with how each proxy serializes the request), status an HTTP status to
+// fail with. Without a directive the
 // mock answers at once.
 //
 // Paths may carry a deployment prefix, /d/<id>/..., which is how one mock process stands in
 // for many deployments. Hits are counted per deployment at GET /stats, and -faults makes
-// chosen deployments fail, e.g. -faults "chat-0-3=429:1.0,msg-1-0=500:0.2".
+// chosen deployments fail, e.g. -faults "chat-0-3=429:1.0,msg-1-0=500:0.2". -count-headers
+// counts the requests carrying each named header, by value, so a test can check what a proxy
+// forwarded, added or stripped.
 package main
 
 import (
@@ -43,6 +47,8 @@ type stats struct {
 	faults   map[string]int64
 	inflight atomic.Int64
 	bytesIn  atomic.Int64
+	// headers counts requests by header name, then value, for the -count-headers names.
+	headers map[string]map[string]int64
 }
 
 func (s *stats) hit(dep string, faulted bool) {
@@ -58,10 +64,17 @@ type directive struct {
 	ttft   time.Duration
 	dur    time.Duration
 	out    int
+	in     int
 	status int
 }
 
 var directiveMarker = []byte("[[mock ")
+
+// responseSeq numbers responses; responseRun keeps ids unique across mock restarts.
+var (
+	responseSeq atomic.Uint64
+	responseRun = rand.Uint32()
+)
 
 // findDirective looks in the tail first, where the load generator puts it, and only scans the
 // whole body when a proxy has reordered fields.
@@ -100,6 +113,8 @@ func findDirective(body []byte) directive {
 			d.dur = time.Duration(n) * time.Millisecond
 		case "out":
 			d.out = max(n, 1)
+		case "in":
+			d.in = max(n, 0)
 		case "status":
 			d.status = n
 		}
@@ -139,6 +154,7 @@ func main() {
 	addr := flag.String("addr", ":9000", "listen address")
 	faultSpec := flag.String("faults", "", "deployment=status:rate,... failures to inject")
 	tokensPerChunk := flag.Int("tokens-per-chunk", 4, "output tokens per streamed chunk")
+	countHeaders := flag.String("count-headers", "", "comma-separated request headers to count by value at /stats")
 	flag.Parse()
 
 	faults := map[string]fault{}
@@ -156,14 +172,21 @@ func main() {
 		faults[dep] = fault{status: status, rate: r}
 	}
 
-	st := &stats{hits: map[string]int64{}, faults: map[string]int64{}}
+	st := &stats{hits: map[string]int64{}, faults: map[string]int64{}, headers: map[string]map[string]int64{}}
+	var counted []string
+	for _, name := range strings.Split(*countHeaders, ",") {
+		if name = strings.ToLower(strings.TrimSpace(name)); name != "" {
+			counted = append(counted, name)
+			st.headers[name] = map[string]int64{}
+		}
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /stats", func(w http.ResponseWriter, r *http.Request) {
 		st.mu.Lock()
 		defer st.mu.Unlock()
 		w.Header().Set("content-type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
-			"hits": st.hits, "faults": st.faults,
+			"hits": st.hits, "faults": st.faults, "headers": st.headers,
 			"inflight": st.inflight.Load(), "bytes_in": st.bytesIn.Load(),
 		})
 	})
@@ -185,6 +208,15 @@ func main() {
 		f, faulty := faults[dep]
 		injected := faulty && rand.Float64() < f.rate
 		st.hit(dep, injected)
+		if len(counted) > 0 {
+			st.mu.Lock()
+			for _, name := range counted {
+				for _, value := range r.Header.Values(name) {
+					st.headers[name][value]++
+				}
+			}
+			st.mu.Unlock()
+		}
 
 		bedrockStream := strings.HasSuffix(path, "/invoke-with-response-stream")
 		bedrock := bedrockStream || strings.HasSuffix(path, "/invoke")
@@ -206,6 +238,12 @@ func main() {
 		stream := bedrockStream || bytes.Contains(body, []byte(`"stream":true`)) || bytes.Contains(body, []byte(`"stream": true`))
 		usage := bytes.Contains(body, []byte(`"include_usage":true`)) || bytes.Contains(body, []byte(`"include_usage": true`))
 		inputTokens := len(body) / 4
+		// Unique per response, as providers' are: the Python proxy keys spend logs on it.
+		seq := responseSeq.Add(1)
+		msgID, chatID := fmt.Sprintf("msg_mock%08x%d", responseRun, seq), fmt.Sprintf("chatcmpl-mock%08x%d", responseRun, seq)
+		if d.in > 0 {
+			inputTokens = d.in
+		}
 
 		if !stream {
 			if !sleep(r, d.dur) {
@@ -215,14 +253,14 @@ func main() {
 			text := strings.Repeat(word, d.out)
 			if anthropic {
 				json.NewEncoder(w).Encode(map[string]any{
-					"id": "msg_mock", "type": "message", "role": "assistant", "model": "mock",
+					"id": msgID, "type": "message", "role": "assistant", "model": "mock",
 					"content":     []any{map[string]any{"type": "text", "text": text}},
 					"stop_reason": "end_turn", "stop_sequence": nil,
 					"usage": map[string]any{"input_tokens": inputTokens, "output_tokens": d.out},
 				})
 			} else {
 				json.NewEncoder(w).Encode(map[string]any{
-					"id": "chatcmpl-mock", "object": "chat.completion", "created": time.Now().Unix(), "model": "mock",
+					"id": chatID, "object": "chat.completion", "created": time.Now().Unix(), "model": "mock",
 					"choices": []any{map[string]any{"index": 0, "finish_reason": "stop",
 						"message": map[string]any{"role": "assistant", "content": text}}},
 					"usage": map[string]any{"prompt_tokens": inputTokens, "completion_tokens": d.out, "total_tokens": inputTokens + d.out},
@@ -270,14 +308,14 @@ func main() {
 		}
 		if anthropic {
 			event("message_start", map[string]any{"type": "message_start", "message": map[string]any{
-				"id": "msg_mock", "type": "message", "role": "assistant", "model": "mock", "content": []any{},
+				"id": msgID, "type": "message", "role": "assistant", "model": "mock", "content": []any{},
 				"stop_reason": nil, "stop_sequence": nil, "usage": map[string]any{"input_tokens": inputTokens, "output_tokens": 1}}})
 			event("content_block_start", map[string]any{"type": "content_block_start", "index": 0,
 				"content_block": map[string]any{"type": "text", "text": ""}})
 		}
 		created := time.Now().Unix()
 		openaiChunk := func(delta map[string]any, finish any) map[string]any {
-			return map[string]any{"id": "chatcmpl-mock", "object": "chat.completion.chunk", "created": created, "model": "mock",
+			return map[string]any{"id": chatID, "object": "chat.completion.chunk", "created": created, "model": "mock",
 				"choices": []any{map[string]any{"index": 0, "delta": delta, "finish_reason": finish}}}
 		}
 		for i := range chunks {
@@ -305,7 +343,7 @@ func main() {
 		}
 		event("", openaiChunk(map[string]any{}, "stop"))
 		if usage {
-			event("", map[string]any{"id": "chatcmpl-mock", "object": "chat.completion.chunk", "created": created, "model": "mock",
+			event("", map[string]any{"id": chatID, "object": "chat.completion.chunk", "created": created, "model": "mock",
 				"choices": []any{}, "usage": map[string]any{"prompt_tokens": inputTokens, "completion_tokens": d.out, "total_tokens": inputTokens + d.out}})
 		}
 		io.WriteString(w, "data: [DONE]\n\n")
