@@ -236,13 +236,13 @@ class TestCheckBatchCost:
         mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(return_value=1)
         # First find_many (primary query) raises with a schema error; second (fallback) returns empty
         mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
-            side_effect=[Exception("column batch_processed does not exist"), []]
+            side_effect=[Exception("column batch_processed does not exist"), [], []]
         )
 
         await check_batch_cost_instance.check_batch_cost()
 
         calls = mock_prisma_client.db.litellm_managedobjecttable.find_many.call_args_list
-        assert len(calls) == 2
+        assert len(calls) == 3
         fallback_where = calls[1][1]["where"]
         assert "batch_processed" not in fallback_where
         assert "stale_expired" in fallback_where["status"]["not_in"]
@@ -263,7 +263,7 @@ class TestCheckBatchCost:
 
         await check_batch_cost_instance.check_batch_cost()
 
-        assert mock_prisma_client.db.litellm_managedobjecttable.find_many.call_count == 1
+        assert mock_prisma_client.db.litellm_managedobjecttable.find_many.call_count == 2
         fallback_where = mock_prisma_client.db.litellm_managedobjecttable.find_many.call_args[1]["where"]
         assert "batch_processed" not in fallback_where
 

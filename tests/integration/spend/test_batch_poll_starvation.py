@@ -3,7 +3,6 @@ import os
 from datetime import datetime, timezone
 from functools import partial
 from hashlib import sha256
-from itertools import chain
 from typing import Final
 from uuid import uuid4
 
@@ -256,15 +255,14 @@ def test_uncostable_batches_do_not_starve_billable_batches(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("tail", [0, 1])
-async def test_batch_scan_finishes_and_revisits_retries_despite_new_arrivals(tail: int) -> None:
+@pytest.mark.parametrize("count", [2 * MAX_OBJECTS_PER_POLL_CYCLE, 2 * MAX_OBJECTS_PER_POLL_CYCLE + 1, 1000])
+async def test_arrivals_progress_while_retry_scan_advances_and_wraps(count: int) -> None:
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy.utils import ProxyLogging
     from litellm.router import Router
     from litellm_enterprise.proxy.common_utils.check_batch_cost import CheckBatchCost
 
     owner: Final = f"batch-scan-{uuid4().hex}"
-    count: Final = 2 * MAX_OBJECTS_PER_POLL_CYCLE + tail
 
     def insert_rows(group: str, size: int, created_at: datetime) -> tuple[str, ...]:
         prefix: Final = f"{owner}-{group}-"
@@ -287,20 +285,18 @@ async def test_batch_scan_finishes_and_revisits_retries_despite_new_arrivals(tai
             first: Final = await poller._find_jobs(where)
             assert tuple(row.id for row in first) == old_ids[:MAX_OBJECTS_PER_POLL_CYCLE]
 
-            new_ids: Final = insert_rows("new", MAX_OBJECTS_PER_POLL_CYCLE, datetime.now(timezone.utc))
-            second: Final = await poller._find_jobs(where)
-            assert tuple(row.id for row in second) == old_ids[MAX_OBJECTS_PER_POLL_CYCLE : 2 * MAX_OBJECTS_PER_POLL_CYCLE]
-            insert_rows("later", MAX_OBJECTS_PER_POLL_CYCLE, datetime.now(timezone.utc))
-            last: Final = await poller._find_jobs(where)
-            assert tuple(row.id for row in last) == old_ids[2 * MAX_OBJECTS_PER_POLL_CYCLE :]
+            for start in range(MAX_OBJECTS_PER_POLL_CYCLE, count + 1, MAX_OBJECTS_PER_POLL_CYCLE):
+                new_ids: Final = insert_rows(str(start), MAX_OBJECTS_PER_POLL_CYCLE, datetime.now(timezone.utc))
+                arrivals: Final = await poller._find_jobs(where)
+                assert tuple(row.id for row in arrivals) == new_ids
+                retries: Final = await poller._find_jobs(where)
+                assert tuple(row.id for row in retries) == old_ids[start : start + MAX_OBJECTS_PER_POLL_CYCLE]
 
             revisited: Final = await poller._find_jobs(where)
             assert tuple(row.id for row in revisited) == old_ids[:MAX_OBJECTS_PER_POLL_CYCLE]
-            insert_rows("during-next-scan", MAX_OBJECTS_PER_POLL_CYCLE, datetime.now(timezone.utc))
-            pages: Final = tuple([await poller._find_jobs(where) for _ in range(3)])
-            assert all(len(page) <= MAX_OBJECTS_PER_POLL_CYCLE for page in pages)
-            selected: Final = frozenset(row.id for row in chain.from_iterable(pages))
-            assert frozenset(new_ids) <= selected
+            latest_ids: Final = insert_rows("latest", MAX_OBJECTS_PER_POLL_CYCLE, datetime.now(timezone.utc))
+            latest: Final = await poller._find_jobs(where)
+            assert tuple(row.id for row in latest) == latest_ids
 
             restarted: Final = CheckBatchCost(logging, prisma, router)
             restart_page: Final = await restarted._find_jobs(where)
