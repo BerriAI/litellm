@@ -199,7 +199,7 @@ def _running_loop() -> asyncio.AbstractEventLoop | None:
         return None
 
 
-def _spawn_logging_task(
+def spawn_logging_task(
     running_loop: asyncio.AbstractEventLoop, coroutine: Coroutine[object, object, object], *, task_name: str
 ) -> asyncio.Task[object]:
     task: Final = running_loop.create_task(coroutine)
@@ -922,7 +922,7 @@ class BaseResponsesAPIStreamingIterator:
         running_loop: Final = _running_loop()
         if running_loop is not None:
             self._record_pending_logging_task(
-                _spawn_logging_task(
+                spawn_logging_task(
                     running_loop,
                     async_post_call_success_deployment_hook(
                         request_data=request_payload,
@@ -958,7 +958,7 @@ class BaseResponsesAPIStreamingIterator:
         running_loop: Final = _running_loop()
         if running_loop is not None:
             self._record_pending_logging_task(
-                _spawn_logging_task(
+                spawn_logging_task(
                     running_loop,
                     self._run_failure_handlers_in_order(exception, traceback_exception, end_time),
                     task_name="Responses stream failure logging",
@@ -2052,10 +2052,10 @@ async def _reject_guarded_turn(
 ) -> None:
     """Answers the refused turn and leaves its guardrail records to the connection's close-time failure row, which
     runs every failure hook once per socket, like the first refusal it records."""
-    with contextlib.suppress(Exception):
-        await websocket.send_text(_turn_rejection_frame(rejection))
     if guarded.bill_refusal is not None:
         guarded.bill_refusal(rejection)
+    with contextlib.suppress(Exception):
+        await websocket.send_text(_turn_rejection_frame(rejection))
 
 
 _RESPONSES_WS_TERMINAL_EVENT_TYPES: Final = _HISTORY_TERMINAL_EVENT_TYPES | _RESPONSES_WS_FAILURE_EVENT_TYPES

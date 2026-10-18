@@ -2415,9 +2415,10 @@ class TestResponsesWSFirstFrameModelAuth:
 
             return relay()
 
+        row_written = asyncio.Event()
         proxy_logging_obj = MagicMock()
         proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=pre_call_hook)
-        proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+        proxy_logging_obj.post_call_failure_hook = AsyncMock(side_effect=lambda **kwargs: row_written.set())
         proxy_logging_obj.arelease_responses_websocket_slot = AsyncMock(return_value=None)
 
         with (
@@ -2444,6 +2445,7 @@ class TestResponsesWSFirstFrameModelAuth:
             ),
         ):
             await responses_websocket_endpoint(websocket=ws, model=None, user_api_key_dict=MagicMock())
+            await asyncio.wait_for(row_written.wait(), timeout=1)
 
         proxy_logging_obj.post_call_failure_hook.assert_awaited_once()
         proxy_logging_obj.arelease_responses_websocket_slot.assert_awaited_once()
@@ -2453,6 +2455,85 @@ class TestResponsesWSFirstFrameModelAuth:
             "model_group": "gpt-4o-mini",
             "standard_logging_guardrail_information": [{"guardrail_cost": 0.2}, {"guardrail_cost": 0.4}],
         }
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("relay_outcome", ["still_relaying", "already_returned"])
+    async def test_session_limit_frees_the_slot_at_once_and_never_cuts_the_failure_row(self, relay_outcome: str):
+        from litellm.exceptions import RateLimitError
+        from litellm.proxy.response_api_endpoints.endpoints import responses_websocket_endpoint
+
+        ws = MagicMock()
+        ws.headers = {}
+        ws.query_params = {}
+        ws.scope = {"headers": []}
+        ws.url = "ws://testserver/v1/responses"
+        ws.accept = AsyncMock()
+        ws.receive_text = AsyncMock(
+            return_value=json.dumps({"type": "response.create", "model": "gpt-4o-mini", "input": []})
+        )
+        ws.close = AsyncMock()
+        processor = MagicMock()
+        processor.common_processing_pre_call_logic = AsyncMock(
+            return_value=({"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock())
+        )
+        refusal = RateLimitError(message="crossed budget", llm_provider="", model="")
+        row_may_finish = asyncio.Event()
+        row_written = asyncio.Event()
+
+        async def slow_failure_hook(**kwargs):
+            await row_may_finish.wait()
+            row_written.set()
+
+        def route_request(data, **kwargs):
+            async def relay():
+                guarded = await data["responses_ws_frame_guard"](json.dumps({"type": "response.create", "input": "two"}))
+                guarded.bill_refusal(refusal)
+                if relay_outcome == "still_relaying":
+                    await asyncio.Event().wait()
+                return refusal
+
+            return relay()
+
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.pre_call_hook = AsyncMock(
+            side_effect=lambda user_api_key_dict, data, call_type, guardrails_only: data
+        )
+        proxy_logging_obj.post_call_failure_hook = AsyncMock(side_effect=slow_failure_hook)
+        proxy_logging_obj.arelease_responses_websocket_slot = AsyncMock(return_value=None)
+
+        with (
+            patch(  # test-quality-ok: first-frame model auth needs a live router and key table and has its own tests above
+                "litellm.proxy.response_api_endpoints.endpoints._enforce_responses_ws_first_frame_model_auth",
+                new_callable=AsyncMock,
+            ),
+            patch(  # test-quality-ok: the pre-call processor needs a live proxy; what the endpoint does with the relay's outcome is under test
+                "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing",
+                return_value=processor,
+            ),
+            patch(  # test-quality-ok: routing is the seam that hands the relay its frame guard and returns its outcome
+                "litellm.proxy.route_llm_request.route_request",
+                new_callable=AsyncMock,
+                side_effect=route_request,
+            ),
+            patch(  # test-quality-ok: a short session limit stands in for the configured one so the cap fires mid-session
+                "litellm.proxy.response_api_endpoints.endpoints._resolve_responses_ws_session_limit_seconds",
+                return_value=0.05,
+            ),
+            patch(  # test-quality-ok: the failure hook is the proxy's only path to a failed spend log row
+                "litellm.proxy.proxy_server.proxy_logging_obj",
+                proxy_logging_obj,
+            ),
+        ):
+            await asyncio.wait_for(
+                responses_websocket_endpoint(websocket=ws, model=None, user_api_key_dict=MagicMock()), timeout=1
+            )
+            ws.close.assert_awaited_once_with(code=1000, reason="Session duration limit reached")
+            proxy_logging_obj.arelease_responses_websocket_slot.assert_awaited_once()
+            assert not row_written.is_set()
+            row_may_finish.set()
+            await asyncio.wait_for(row_written.wait(), timeout=1)
+
+        assert proxy_logging_obj.post_call_failure_hook.await_args.kwargs["original_exception"] is refusal
 
     @pytest.mark.asyncio
     async def test_endpoint_sends_an_error_frame_when_routing_rejects_the_connection(self):

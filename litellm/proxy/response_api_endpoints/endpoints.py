@@ -71,7 +71,7 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attributio
 )
 from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
 from litellm.proxy.utils import handle_exception_on_proxy
-from litellm.responses.streaming_iterator import GuardedResponsesWsFrame, ResponsesWsFrameGuard
+from litellm.responses.streaming_iterator import GuardedResponsesWsFrame, ResponsesWsFrameGuard, spawn_logging_task
 from litellm.router import Router
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
@@ -2096,11 +2096,15 @@ async def _responses_websocket_session(
         **_routing_hints_from_first_ws_frame(first_message),
     )
 
-    async def bill_socket_failure(exception: Exception) -> None:
-        await proxy_logging_obj.post_call_failure_hook(
-            user_api_key_dict=user_api_key_dict,
-            original_exception=exception,
-            request_data=dict(refused_turns.billed_on(routed_data)),
+    def bill_socket_failure(exception: Exception) -> asyncio.Task[object]:
+        return spawn_logging_task(
+            asyncio.get_running_loop(),
+            proxy_logging_obj.post_call_failure_hook(
+                user_api_key_dict=user_api_key_dict,
+                original_exception=exception,
+                request_data=dict(refused_turns.billed_on(routed_data)),
+            ),
+            task_name="Responses WebSocket failure row",
         )
 
     # Phase 2: route to upstream provider
@@ -2115,14 +2119,14 @@ async def _responses_websocket_session(
             failure: Final = await llm_call
         except asyncio.CancelledError:
             if refused_turns.first is not None:
-                await bill_socket_failure(refused_turns.first)
+                _ = bill_socket_failure(refused_turns.first)
             raise
         if isinstance(failure, Exception):
-            await bill_socket_failure(failure)
+            await asyncio.shield(bill_socket_failure(failure))
     except Exception as e:
         with contextlib.suppress(Exception):
             await websocket.send_text(_responses_ws_failure_frame(e))
-        await bill_socket_failure(e)
+        await asyncio.shield(bill_socket_failure(e))
         await websocket.close(code=1011, reason="Internal server error")
     finally:
         await proxy_logging_obj.arelease_responses_websocket_slot(user_api_key_dict)
@@ -2170,8 +2174,11 @@ async def responses_websocket_endpoint(
         await asyncio.wait_for(asyncio.shield(session_task), timeout=limit_seconds)
     except asyncio.TimeoutError:
         verbose_proxy_logger.info("Responses WebSocket closed: session duration limit reached")
+        session_task.cancel()
         with contextlib.suppress(Exception):
             await websocket.close(code=1000, reason="Session duration limit reached")
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await session_task
     finally:
         if not session_task.done():
             session_task.cancel()

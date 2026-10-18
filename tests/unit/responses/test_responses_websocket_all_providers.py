@@ -1615,6 +1615,18 @@ class _ClientSocket:
         self.close_code = code
 
 
+class _StalledClientSocket(_ClientSocket):
+    """A client socket whose sends never finish, like a client that stopped reading."""
+
+    def __init__(self, *frames: str) -> None:
+        super().__init__(*frames)
+        self.send_started: Final = asyncio.Event()
+
+    async def send_text(self, data: str) -> None:
+        self.send_started.set()
+        await asyncio.Event().wait()
+
+
 def _admission_crashing_the_next_turn():
     from unittest.mock import AsyncMock
 
@@ -1871,6 +1883,37 @@ class TestWebSocketTurnAdmission:
         assert [json.loads(sent.args[0])["input"] for sent in backend_ws.send.await_args_list] == ["one", "three"]
         bill_refusal.assert_called_once_with(refusal)
         assert close_time_failure is refusal
+
+    @pytest.mark.asyncio
+    async def test_a_refused_turn_is_recorded_even_when_the_relay_is_cancelled_while_answering_it(self):
+        from unittest.mock import AsyncMock
+
+        from litellm.exceptions import RateLimitError
+
+        first, second, third = _turn_frames()
+        refusal: Final = RateLimitError(message="crossed budget", llm_provider="", model="")
+        bill_refusal: Final = MagicMock()
+        backend_ws: Final = MagicMock()
+        backend_ws.send = AsyncMock()
+        backend_ws.close = AsyncMock()
+        backend_ws.recv = AsyncMock(side_effect=asyncio.Event().wait)
+        client: Final = _StalledClientSocket(second, third)
+        handler: Final = _make_streaming(
+            websocket=client,
+            backend_ws=backend_ws,
+            request_data={},
+            first_message=first,
+            frame_guard=_guard_recording(bill_refusal),
+            turn_admission=AsyncMock(side_effect=[refusal, None]),
+        )
+        relay: Final = asyncio.ensure_future(handler.bidirectional_forward())
+        await asyncio.wait_for(client.send_started.wait(), timeout=1)
+
+        relay.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await relay
+
+        bill_refusal.assert_called_once_with(refusal)
 
     @pytest.mark.asyncio
     async def test_managed_relay_leaves_a_refused_turn_s_guardrail_records_to_the_close_time_failure_row(
