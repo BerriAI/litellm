@@ -9312,6 +9312,7 @@ def _openai_gpt_5_entry_disabling(level: str) -> str:
         ("openai/gpt-5-in-house", "high", ["low", "xhigh"], "xhigh"),
         ("openai/gpt-5-in-house", "xhigh", ["xhigh"], "xhigh"),
         ("azure/gpt-5-in-house", "none", ["none", "high"], "none"),
+        ("azure_ai/gpt-5-in-house", "xhigh", ["xhigh"], "xhigh"),
     ],
 )
 def test_a_gpt_5_deployment_receives_a_level_it_declares_that_the_model_map_does_not_list(

@@ -463,15 +463,25 @@ def _fetch_anthropic_model_ids(
     raise Exception(f"Anthropic /v1/models did not terminate within {_MODEL_LIST_PAGE_CAP} pages.")
 
 
-def _legacy_budget_tokens(budget_tokens: object, *, drop_params: bool) -> int | None:
+def _numeric_budget_tokens(budget_tokens: object) -> int | None:
+    if isinstance(budget_tokens, bool):
+        return None
+    if isinstance(budget_tokens, (int, float)):
+        return int(budget_tokens)
     if not isinstance(budget_tokens, str):
-        return int(budget_tokens) if isinstance(budget_tokens, (int, float)) else 0
+        return None
     try:
         return int(budget_tokens)
     except ValueError:
-        if drop_params or litellm.drop_params is True:
-            return None
-        raise non_numeric_thinking_budget_error(budget_tokens) from None
+        return None
+
+
+def _legacy_budget_tokens(budget_tokens: object, *, drop_params: bool) -> int | None:
+    if (numeric := _numeric_budget_tokens(budget_tokens)) is not None:
+        return numeric
+    if drop_params or litellm.drop_params is True:
+        return None
+    raise non_numeric_thinking_budget_error(budget_tokens)
 
 
 class AnthropicModelInfo(BaseLLMModelInfo):

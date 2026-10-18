@@ -5303,11 +5303,21 @@ def get_optional_params(
                 drop_params=bool(drop_params),
             )
     elif provider_config is not None:
-        optional_params = provider_config.map_openai_params(
-            non_default_params=non_default_params,
-            optional_params=optional_params,
-            model=model,
-            drop_params=bool(drop_params),
+        optional_params = (
+            provider_config.map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model=model,
+                drop_params=bool(drop_params),
+                declared_reasoning_efforts=_declared_reasoning_efforts(model_info),
+            )
+            if custom_llm_provider == "azure_ai" and isinstance(provider_config, litellm.AzureAIStudioConfig)
+            else provider_config.map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model=model,
+                drop_params=bool(drop_params),
+            )
         )
     else:  # assume passing in params for openai-like api
         optional_params = litellm.OpenAILikeChatConfig().map_openai_params(
