@@ -1858,7 +1858,7 @@ def _responses_ws_frame_guard(
     }
     model: Final = admitted.get("model")
 
-    # a blocked frame is billed as its own failed request; only the first turn settles the admission reservation
+    # blocked and refused frames bill as their own failed requests; only the first turn settles the reservation
     rejected_frame_auth: Final = user_api_key_dict.model_copy(update={"budget_reservation": None})
 
     async def guard(frame: str) -> GuardedResponsesWsFrame:
@@ -1906,6 +1906,7 @@ def _responses_ws_frame_guard(
             frame=json.dumps(rewritten),
             guardrail_information=_recorded_guardrail_information(guarded_data.get(metadata_key)),
             pii_tokens=_recorded_pii_tokens(guarded_data.get("metadata")),
+            bill_refusal=partial(_bill_rejected_frame, rejected_frame_auth, frame_data=guarded_data),
         )
 
     return guard

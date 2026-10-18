@@ -2055,6 +2055,44 @@ class TestResponsesWSFirstFrameModelAuth:
         assert len(failure["request_data"]["litellm_call_id"]) == 36
 
     @pytest.mark.asyncio
+    async def test_frame_guard_bills_a_passed_frame_the_deployment_refuses_with_its_guardrail_records(self):
+        from litellm.exceptions import RateLimitError
+        from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
+        from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
+
+        async def pre_call_hook(user_api_key_dict, data, call_type, guardrails_only):
+            data["litellm_metadata"]["standard_logging_guardrail_information"] = [{"guardrail_cost": 0.5}]
+            return {**data, "input": data["input"] + " [guarded]"}
+
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=pre_call_hook)
+        spend_logger = MagicMock(spec=ProxyDBLogger)
+        spend_logger.async_post_call_failure_hook = AsyncMock()
+        rate_limiter = MagicMock()
+        rate_limiter.async_post_call_failure_hook = AsyncMock()
+        user_api_key_dict = MagicMock()
+        refusal = RateLimitError(message="crossed budget", llm_provider="", model="")
+        guard = _responses_ws_frame_guard(
+            {"model": "gpt-4o-mini", "litellm_metadata": {}}, user_api_key_dict, proxy_logging_obj
+        )
+
+        guarded = await guard(json.dumps({"type": "response.create", "input": "hi"}))
+        assert guarded.bill_refusal is not None
+        with patch.object(litellm, "callbacks", [rate_limiter, spend_logger]):
+            await guarded.bill_refusal(refusal)
+
+        rate_limiter.async_post_call_failure_hook.assert_not_awaited()
+        spend_logger.async_post_call_failure_hook.assert_awaited_once()
+        failure = spend_logger.async_post_call_failure_hook.await_args.kwargs
+        user_api_key_dict.model_copy.assert_called_once_with(update={"budget_reservation": None})
+        assert failure["user_api_key_dict"] is user_api_key_dict.model_copy.return_value
+        assert failure["original_exception"] is refusal
+        assert failure["request_data"]["litellm_metadata"]["standard_logging_guardrail_information"] == [
+            {"guardrail_cost": 0.5}
+        ]
+        assert failure["request_data"]["input"] == "hi [guarded]"
+
+    @pytest.mark.asyncio
     async def test_frame_guard_guards_the_nested_response_body_and_copies_back_tools(self):
         from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
 

@@ -1962,11 +1962,6 @@ def _turn_rejection_frame(rejection: Exception) -> str:
             return _turn_admission_error_frame(rejection)
 
 
-async def _answer_rejected_turn(websocket: ResponsesClientWebSocket, rejection: Exception) -> None:
-    with contextlib.suppress(Exception):
-        await websocket.send_text(_turn_rejection_frame(rejection))
-
-
 RESPONSES_WS_LOGGED_EVENT_TYPES: Final = [
     "response.created",
     "response.completed",
@@ -2039,15 +2034,27 @@ def _unmask_responses_event(response_str: str, pii_tokens: Mapping[str, str], un
 @dataclass(frozen=True, slots=True)
 class GuardedResponsesWsFrame:
     """A ``response.create`` frame after the proxy's pre_call guardrails ran on it: the frame to forward (guardrails
-    may rewrite ``input`` and ``instructions``), the guardrail records that bill against this turn only, and the
-    Presidio ``pii_tokens`` the walk masked with, which the handler needs to unmask the provider's reply."""
+    may rewrite ``input`` and ``instructions``), the guardrail records that bill against this turn only, the
+    Presidio ``pii_tokens`` the walk masked with, which the handler needs to unmask the provider's reply, and how
+    to bill those guardrail records when the deployment then refuses the turn."""
 
     frame: str
     guardrail_information: tuple[Mapping[str, object], ...] = ()
     pii_tokens: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
+    bill_refusal: Callable[[Exception], Awaitable[None]] | None = None
 
 
 ResponsesWsFrameGuard: TypeAlias = Callable[[str], Awaitable[GuardedResponsesWsFrame]]
+
+
+async def _reject_guarded_turn(
+    websocket: ResponsesClientWebSocket, guarded: GuardedResponsesWsFrame, rejection: Exception
+) -> None:
+    with contextlib.suppress(Exception):
+        await websocket.send_text(_turn_rejection_frame(rejection))
+    if guarded.guardrail_information and guarded.bill_refusal is not None:
+        await guarded.bill_refusal(rejection)
+
 
 _RESPONSES_WS_TERMINAL_EVENT_TYPES: Final = _HISTORY_TERMINAL_EVENT_TYPES | _RESPONSES_WS_FAILURE_EVENT_TYPES
 
@@ -2310,7 +2317,7 @@ class ResponsesWebSocketStreaming:
         self, message: str, turn_admission: Callable[[], Awaitable[None]] | None = None
     ) -> None:
         guarded: Final = await self._guard_frame(message)
-        if guarded is None or not await self._admit_or_reject_turn(message, turn_admission):
+        if guarded is None or not await self._admit_or_reject_turn(guarded, message, turn_admission):
             return
         if guarded.pii_tokens:
             self._remember_pii_tokens(guarded.pii_tokens)
@@ -2708,13 +2715,15 @@ class ResponsesWebSocketStreaming:
             return False
         return True
 
-    async def _admit_or_reject_turn(self, message: str, turn_admission: Callable[[], Awaitable[None]] | None) -> bool:
+    async def _admit_or_reject_turn(
+        self, guarded: GuardedResponsesWsFrame, message: str, turn_admission: Callable[[], Awaitable[None]] | None
+    ) -> bool:
         rejection: Final = await _admit_frame_turn(turn_admission, message)
         if rejection is None:
             return True
         if self._failure is None:
             self._failure = rejection
-        await _answer_rejected_turn(self.websocket, rejection)
+        await _reject_guarded_turn(self.websocket, guarded, rejection)
         return False
 
     async def _send_turn_refusal(self, refusal: RateLimitError) -> None:
@@ -3290,7 +3299,7 @@ class ManagedResponsesWebSocketHandler:
         if rejection is not None:
             if self._failure is None:
                 self._failure = rejection
-            await _answer_rejected_turn(self.websocket, rejection)
+            await _reject_guarded_turn(self.websocket, guarded, rejection)
             return
         if guarded.pii_tokens:
             self._pii_tokens = {**self._pii_tokens, **guarded.pii_tokens}

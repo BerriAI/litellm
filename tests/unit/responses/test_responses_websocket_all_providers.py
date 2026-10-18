@@ -1632,6 +1632,17 @@ def _guard_blocking(word: str):
     return guard
 
 
+def _guard_recording(guardrail_information: tuple[Mapping[str, object], ...], bill_refusal: object):
+    from litellm.responses.streaming_iterator import GuardedResponsesWsFrame
+
+    async def guard(frame: str) -> GuardedResponsesWsFrame:
+        return GuardedResponsesWsFrame(
+            frame=frame, guardrail_information=guardrail_information, bill_refusal=bill_refusal
+        )
+
+    return guard
+
+
 def _errors(websocket: _ClientSocket) -> list[tuple[object, object]]:
     return [(frame.get("status"), frame["error"]) for frame in websocket.sent if frame.get("type") == "error"]
 
@@ -1832,6 +1843,90 @@ class TestWebSocketTurnAdmission:
             (429, "rate_limit_exceeded"),
         ]
 
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("guardrail_information", "billed"), [(({"guardrail_cost": 0.5},), True), ((), False)]
+    )
+    async def test_native_relay_bills_the_guardrails_of_a_turn_the_deployment_refuses(
+        self, guardrail_information: tuple[Mapping[str, object], ...], billed: bool
+    ):
+        from unittest.mock import AsyncMock, call
+
+        from litellm.exceptions import RateLimitError
+
+        first, second, third = _turn_frames()
+        refusal: Final = RateLimitError(message="crossed budget", llm_provider="", model="")
+        bill_refusal: Final = AsyncMock()
+        backend_ws: Final = MagicMock()
+        backend_ws.send = AsyncMock()
+        handler: Final = _make_streaming(
+            websocket=_ClientSocket(second, third),
+            backend_ws=backend_ws,
+            request_data={},
+            first_message=first,
+            frame_guard=_guard_recording(guardrail_information, bill_refusal),
+            turn_admission=AsyncMock(side_effect=[refusal, None]),
+        )
+
+        await handler.client_to_backend()
+
+        assert [json.loads(sent.args[0])["input"] for sent in backend_ws.send.await_args_list] == ["one", "three"]
+        assert bill_refusal.await_args_list == ([call(refusal)] if billed else [])
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("guardrail_information", "billed"), [(({"guardrail_cost": 0.5},), True), ((), False)]
+    )
+    async def test_managed_relay_bills_the_guardrails_of_a_turn_the_deployment_refuses(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        guardrail_information: tuple[Mapping[str, object], ...],
+        billed: bool,
+    ):
+        from unittest.mock import AsyncMock, call
+
+        import litellm
+        from litellm.exceptions import RateLimitError
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.responses.streaming_iterator import ManagedResponsesWebSocketHandler
+
+        answered: Final[list[object]] = []
+
+        async def fake_aresponses(*args: object, **kwargs: object):
+            answered.append(kwargs.get("input"))
+
+            async def _empty():
+                return
+                yield
+
+            return _empty()
+
+        monkeypatch.setattr(litellm, "aresponses", fake_aresponses)
+        first, second, third = _turn_frames()
+        refusal: Final = RateLimitError(message="crossed budget", llm_provider="", model="")
+        bill_refusal: Final = AsyncMock()
+        handler: Final = ManagedResponsesWebSocketHandler(
+            websocket=_ClientSocket(second, third),
+            model="test-model",
+            logging_obj=Logging(
+                model="test-model",
+                messages=[],
+                stream=True,
+                call_type="aresponses",
+                start_time=0,
+                litellm_call_id="test-id",
+                function_id="test-func",
+            ),
+            first_message=first,
+            frame_guard=_guard_recording(guardrail_information, bill_refusal),
+            turn_admission=AsyncMock(side_effect=[refusal, None]),
+        )
+
+        await handler.run()
+
+        assert answered == ["one", "three"]
+        assert bill_refusal.await_args_list == ([call(refusal)] if billed else [])
 
     @pytest.mark.asyncio
     async def test_native_relay_answers_a_crashed_turn_check_with_a_500_and_keeps_serving(self):
