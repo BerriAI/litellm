@@ -1604,6 +1604,141 @@ async def test_can_key_call_model_via_access_group_ids():
         )
 
 
+@pytest.mark.asyncio
+async def test_can_key_call_model_empty_models_empty_access_groups_denied():
+    """Test can_key_call_model fails closed (denies) when key has empty models and access_group_ids resolve to empty."""
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.proxy.auth.auth_checks import can_key_call_model
+    from litellm.proxy._types import ProxyException
+
+    user_api_key_object = UserAPIKeyAuth(
+        token="test-token",
+        models=[],
+        access_group_ids=["ag-empty"],
+    )
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "openai/gpt-4", "api_key": "test"},
+            }
+        ]
+    )
+
+    with patch(
+        "litellm.proxy.auth.auth_checks.get_models_from_access_groups",
+        new_callable=AsyncMock,
+        return_value=[],
+    ):
+        with pytest.raises(ProxyException):
+            await can_key_call_model(
+                model="gpt-4",
+                llm_model_list=[],
+                valid_token=user_api_key_object,
+                llm_router=router,
+            )
+
+
+@pytest.mark.asyncio
+async def test_can_key_call_model_disjoint_models_and_access_groups_denied():
+    """Test can_key_call_model denies when key models and access_group_ids models are disjoint."""
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.proxy.auth.auth_checks import can_key_call_model
+    from litellm.proxy._types import ProxyException
+
+    user_api_key_object = UserAPIKeyAuth(
+        token="test-token",
+        models=["gpt-3.5-turbo"],
+        access_group_ids=["ag-claude-only"],
+    )
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "claude-3",
+                "litellm_params": {"model": "anthropic/claude-3", "api_key": "test"},
+            }
+        ]
+    )
+
+    with patch(
+        "litellm.proxy.auth.auth_checks.get_models_from_access_groups",
+        new_callable=AsyncMock,
+        return_value=["claude-3"],
+    ):
+        with pytest.raises(ProxyException):
+            await can_key_call_model(
+                model="claude-3",
+                llm_model_list=[],
+                valid_token=user_api_key_object,
+                llm_router=router,
+            )
+
+
+@pytest.mark.asyncio
+async def test_can_team_access_model_empty_models_empty_access_groups_denied():
+    """Test can_team_access_model fails closed (denies) when team has empty models and access_group_ids resolve to empty."""
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.proxy.auth.auth_checks import can_team_access_model
+    from litellm.proxy._types import ProxyException
+
+    team_object = LiteLLM_TeamTable(
+        team_id="test-team",
+        models=[],
+        access_group_ids=["ag-empty"],
+    )
+
+    with patch(
+        "litellm.proxy.auth.auth_checks.get_models_from_access_groups",
+        new_callable=AsyncMock,
+        return_value=[],
+    ):
+        with pytest.raises(ProxyException):
+            await can_team_access_model(
+                model="gpt-4",
+                team_object=team_object,
+                llm_router=None,
+                team_model_aliases=None,
+            )
+
+
+@pytest.mark.asyncio
+async def test_can_team_access_model_union_preserves_both_team_and_group_models():
+    """Test can_team_access_model preserves union semantics when team_models and access_group_ids are both set."""
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.proxy.auth.auth_checks import can_team_access_model
+
+    team_object = LiteLLM_TeamTable(
+        team_id="test-team",
+        models=["gpt-4"],
+        access_group_ids=["ag-claude"],
+    )
+
+    with patch(
+        "litellm.proxy.auth.auth_checks.get_models_from_access_groups",
+        new_callable=AsyncMock,
+        return_value=["claude-3"],
+    ):
+        # Access gpt-4 (from team_models)
+        assert await can_team_access_model(
+            model="gpt-4",
+            team_object=team_object,
+            llm_router=None,
+            team_model_aliases=None,
+        ) is True
+
+        # Access claude-3 (from access_group_ids)
+        assert await can_team_access_model(
+            model="claude-3",
+            team_object=team_object,
+            llm_router=None,
+            team_model_aliases=None,
+        ) is True
+
+
 # ---------------------------------------------------------------------------
 # _key_access_group_grants_model (key access group overriding team restriction)
 # ---------------------------------------------------------------------------

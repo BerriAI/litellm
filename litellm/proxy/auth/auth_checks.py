@@ -5411,11 +5411,33 @@ async def can_key_call_model(
             prisma_client=prisma_client,
         )
         if models_from_groups is not None:
-            allowed_models = (
-                [m for m in key_models if m in models_from_groups]
-                if key_models
-                else models_from_groups
-            )
+            if not models_from_groups:
+                raise ModelAccessDeniedProxyException(
+                    message=model_access_denied_client_message(model=model),
+                    internal_message=(
+                        f"key not allowed to access model. Key has access_group_ids={key_access_group_ids} "
+                        f"which resolved to no models. Tried to access {model}"
+                    ),
+                    type=ProxyErrorTypes.get_model_access_error_type_for_object(object_type="key"),
+                    param="model",
+                    code=status.HTTP_403_FORBIDDEN,
+                )
+            if key_models:
+                allowed_models = [m for m in key_models if m in models_from_groups]
+                if not allowed_models:
+                    raise ModelAccessDeniedProxyException(
+                        message=model_access_denied_client_message(model=model),
+                        internal_message=(
+                            f"key not allowed to access model. Key models={key_models} have no intersection "
+                            f"with access_group_ids models={models_from_groups}. Tried to access {model}"
+                        ),
+                        type=ProxyErrorTypes.get_model_access_error_type_for_object(object_type="key"),
+                        param="model",
+                        code=status.HTTP_403_FORBIDDEN,
+                    )
+            else:
+                allowed_models = models_from_groups
+
             return can_object_call_model(
                 model=model,
                 llm_router=llm_router,
@@ -5632,11 +5654,21 @@ async def can_team_access_model(
             prisma_client=prisma_client,
         )
         if models_from_groups is not None:
-            allowed_models = (
-                [m for m in team_models if m in models_from_groups]
-                if team_models
-                else models_from_groups
-            )
+            if team_models:
+                allowed_models = list(dict.fromkeys([*team_models, *models_from_groups]))
+            elif models_from_groups:
+                allowed_models = models_from_groups
+            else:
+                raise ModelAccessDeniedProxyException(
+                    message=model_access_denied_client_message(model=model),
+                    internal_message=(
+                        f"team not allowed to access model. Team has access_group_ids={team_access_group_ids} "
+                        f"which resolved to no models. Tried to access {model}"
+                    ),
+                    type=ProxyErrorTypes.get_model_access_error_type_for_object(object_type="team"),
+                    param="model",
+                    code=status.HTTP_403_FORBIDDEN,
+                )
             return can_object_call_model(
                 model=model,
                 llm_router=llm_router,
